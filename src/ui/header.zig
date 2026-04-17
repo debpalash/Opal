@@ -255,6 +255,14 @@ pub fn renderHeader() void {
     // ════════════════════════════════════════
     // (AI chat bot icon removed — chat lives inline with input surface.)
 
+    // Info button — toggles keyword shortcuts popover
+    {
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"info", .{}, .{}, ico.btn(state.app.cheatsheet_open, &wd))) {
+            state.app.cheatsheet_open = !state.app.cheatsheet_open;
+        }
+        components.tip(@src(), wd, "Keyword shortcuts");
+    }
+
     // Voice mode toggle — persistent, color reflects phase
     {
         const voice = @import("../services/ai_voice.zig");

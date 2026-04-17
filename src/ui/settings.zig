@@ -1696,16 +1696,58 @@ pub fn renderCheatSheet() void {
             .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
         });
         defer row.deinit();
-        
+
         // Key label (fixed width feel via padding)
         _ = dvui.label(@src(), "{s}", .{sc[0]}, .{
             .id_extra = idx,
             .color_text = theme.colors.accent,
             .min_size_content = .{ .w = 140, .h = 0 },
         });
-        
+
         _ = dvui.label(@src(), "{s}", .{sc[1]}, .{
             .id_extra = idx + 1000,
+            .color_text = theme.colors.text_main,
+        });
+    }
+
+    // ── AI chat keyword shortcuts ──
+    _ = dvui.label(@src(), "AI Keywords (type in input)", .{}, .{
+        .color_text = theme.colors.accent,
+        .margin = .{ .y = 16 },
+    });
+
+    const kw = [_][2][]const u8{
+        .{ "play X", "Search + play best match" },
+        .{ "watch X", "Same as play" },
+        .{ "find X", "Search only, don't auto-play" },
+        .{ "search X", "Same as find" },
+        .{ "recommend me X", "TMDB-based recommendations" },
+        .{ "next episode", "Play next episode of current show" },
+        .{ "replay", "Restart last played item" },
+        .{ "pause / play", "Instant: control current player" },
+        .{ "seek 30s / -30s", "Instant: jump in timeline" },
+        .{ "volume up / down", "Instant: adjust volume" },
+        .{ "fullscreen", "Instant: toggle fullscreen" },
+        .{ "mute", "Instant: toggle mute" },
+        .{ "magnet:…", "Direct magnet load, no AI" },
+        .{ "http(s)://…", "URL load (video / stream)" },
+        .{ "/path/to/file", "Local file load" },
+        .{ "anything else", "Conversational AI response" },
+    };
+    for (kw, 0..) |k, idx| {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = idx + 5000,
+            .expand = .horizontal,
+            .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
+        });
+        defer row.deinit();
+        _ = dvui.label(@src(), "{s}", .{k[0]}, .{
+            .id_extra = idx,
+            .color_text = theme.colors.accent,
+            .min_size_content = .{ .w = 180, .h = 0 },
+        });
+        _ = dvui.label(@src(), "{s}", .{k[1]}, .{
+            .id_extra = idx + 6000,
             .color_text = theme.colors.text_main,
         });
     }

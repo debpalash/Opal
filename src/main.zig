@@ -782,19 +782,21 @@ fn appFrame() !dvui.App.Result {
     ui.renderWorkspaceModals();
     ui.renderToast();
 
-    // ── AI Chat: floating dropdown anchored to navbar input.
-    // Only rendered in video-playing mode (splash has its own inline chat).
-    // Acts as a popover that hovers over the video, dismissable via X.
+    // ── AI Chat: input-extension dropdown.
+    // Behaves like the input box with chat history attached:
+    // shows ONLY while user is typing, voice mode is live, or
+    // an AI response is currently streaming. Hides as soon as
+    // user clears input + no activity, even if messages linger.
     if (state.app.fullscreen_player_idx == null) {
         const header_mod = @import("ui/header.zig");
         if (!header_mod.shouldUrlInputBeInGrid()) {
             const ai_chat_mod = @import("services/ai_chat.zig");
             const voice_mod = @import("services/ai_voice.zig");
-            const has_content = ai_chat_mod.message_count > 0 or
-                ai_chat_mod.is_generating or
-                voice_mod.conv_phase != .idle or
-                voice_mod.is_recording;
-            if (has_content and ai_chat_mod.is_bubble_open) {
+            const text_len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
+            const is_typing = text_len > 0;
+            const voice_active = voice_mod.conv_phase != .idle or voice_mod.is_recording;
+            const is_thinking = ai_chat_mod.is_generating;
+            if (is_typing or voice_active or is_thinking) {
                 renderChatDropdown();
             }
         }
