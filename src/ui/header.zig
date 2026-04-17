@@ -396,8 +396,10 @@ pub fn renderUrlInput(is_large: bool) void {
             .color_text = mic_color,
             .color_fill = transparent,
             .border = dvui.Rect.all(0),
-            .padding = .{ .x = 3, .y = 4, .w = 3, .h = 4 },
+            .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
+            .min_size_content = .{ .w = 18, .h = 18 },
         })) {
+            @import("../core/logs.zig").pushLog("info", "mic", "button clicked", true);
             voice.toggleMicRecording();
             ai_chat_mod.is_bubble_open = true;
         }
