@@ -63,6 +63,9 @@ fn renderInlineChat() void {
             .margin = .{ .x = 4, .y = 4, .w = 0, .h = 0 },
         });
     }
+
+    // Torrent / stream cards from fast-path or tool_call results
+    ai_chat.renderInlineResults();
 }
 
 pub fn computeGridColumns() usize {

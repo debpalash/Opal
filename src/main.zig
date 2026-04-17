@@ -373,6 +373,9 @@ fn renderChatDropdown() void {
             .color_text = theme.colors.text_main,
         });
     }
+
+    // Torrent / stream result cards (fast-path output)
+    ai_chat_mod.renderInlineResults();
 }
 
 /// DEPRECATED: inline dock. Kept unused to avoid churn; renderChatDropdown

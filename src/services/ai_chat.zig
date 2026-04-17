@@ -816,7 +816,7 @@ fn renderMessage(mi: usize) void {
 }
 
 // ── Inline search results widget (from find_and_play tool) ──
-fn renderInlineResults() void {
+pub fn renderInlineResults() void {
     if (!chat_results_active or chat_result_count == 0) return;
 
     const source_label = struct {

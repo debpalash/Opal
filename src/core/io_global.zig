@@ -168,10 +168,22 @@ pub fn readAll(file: anytype, buf: []u8) !usize {
 /// on the next).
 pub fn read(file: anytype, buf: []u8) !usize {
     var vec: [1][]u8 = .{buf};
-    return file.readStreaming(io(), &vec) catch |err| switch (err) {
-        error.EndOfStream, error.WouldBlock => 0,
-        else => err,
-    };
+    // WouldBlock: pipe has no data YET but not EOF. Retry with 1ms
+    // nanosleep so caller's byte-loop doesn't exit prematurely.
+    var retries: u32 = 0;
+    while (retries < 10_000) : (retries += 1) {
+        const n = file.readStreaming(io(), &vec) catch |err| switch (err) {
+            error.EndOfStream => return 0,
+            error.WouldBlock => {
+                const ts: std.c.timespec = .{ .sec = 0, .nsec = 1_000_000 };
+                _ = std.c.nanosleep(&ts, null);
+                continue;
+            },
+            else => return err,
+        };
+        return n;
+    }
+    return 0;
 }
 
 pub fn writeAll(file: anytype, bytes: []const u8) !void {
