@@ -1039,6 +1039,9 @@ fn queueChatResult(idx: usize) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn trySendMessage() void {
+    // Ensure path detection has run (renderChatBody normally does this,
+    // but input submit may fire before the drawer is ever opened).
+    server.checkPaths();
     // Auto-start server if not running
     if (!server.server_running and server.model_exists and server.llama_server_exists) {
         server.startServer();

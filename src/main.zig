@@ -248,9 +248,134 @@ fn sdlEventWatch(_: ?*anyopaque, event: [*c]c.sdl.SDL_Event) callconv(.c) c_int 
     return 1;
 }
 
-/// Inline chat panel docked below navbar when a video is playing.
-/// Renders context chip (Seeing: X), status line, last messages, compose
-/// row with mic/stop. Inline in main column — NOT a floating widget.
+/// Dropdown chat panel — floats below navbar input, overlays video.
+/// User dismisses via close (X) button OR by clearing input + idle state.
+fn renderChatDropdown() void {
+    const ai_chat_mod = @import("services/ai_chat.zig");
+    const voice_mod = @import("services/ai_voice.zig");
+    
+
+    // Anchor near top, centered horizontally, fixed max width.
+    const vw = dvui.windowRectPixels().w;
+    const w: f32 = @min(780, vw * 0.75);
+    const x: f32 = (vw - w) / 2;
+
+    const ns = dvui.windowNaturalScale();
+    var drop_rect = dvui.Rect{ .x = x / ns, .y = 52 / ns, .w = w / ns, .h = 340 / ns };
+    var fw = dvui.floatingWindow(@src(), .{
+        .rect = &drop_rect,
+        .stay_above_parent_window = false,
+    }, .{
+        .background = true,
+        .color_fill = dvui.Color{ .r = 14, .g = 14, .b = 20, .a = 245 },
+        .color_border = theme.colors.accent,
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(10),
+        .box_shadow = .{
+            .color = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 180 },
+            .offset = .{ .x = 0, .y = 6 },
+            .fade = 24,
+        },
+    });
+    defer fw.deinit();
+
+    var pad = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .both,
+        .padding = .{ .x = 14, .y = 10, .w = 14, .h = 10 },
+    });
+    defer pad.deinit();
+
+    // Top row: Seeing chip + close X
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .margin = .{ .h = 6 },
+            .gravity_y = 0.5,
+        });
+        defer row.deinit();
+
+        if (state.app.players.items.len > 0) {
+            const ap = state.app.players.items[state.app.active_player_idx];
+            var title_buf: [128]u8 = undefined;
+            const tl = ap.getMediaTitle(&title_buf);
+            if (tl > 0) {
+                _ = dvui.icon(@src(), "", @import("icons").tvg.lucide.@"bot", .{}, .{
+                    .color_text = theme.colors.accent,
+                    .min_size_content = .{ .w = 14, .h = 14 },
+                    .margin = .{ .w = 6 },
+                    .gravity_y = 0.5,
+                });
+                _ = dvui.label(@src(), "Seeing: {s}", .{title_buf[0..tl]}, .{
+                    .color_text = theme.colors.text_muted,
+                    .gravity_y = 0.5,
+                });
+            }
+        }
+        { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+        if (dvui.buttonIcon(@src(), "", @import("icons").tvg.lucide.@"x", .{}, .{}, .{
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = dvui.Color{ .r = 220, .g = 90, .b = 90, .a = 255 },
+            .border = dvui.Rect.all(0),
+            .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
+            .min_size_content = .{ .w = 16, .h = 16 },
+        })) {
+            ai_chat_mod.is_bubble_open = false;
+        }
+    }
+
+    // Status line
+    const phase_txt: ?[]const u8 = switch (voice_mod.conv_phase) {
+        .listening => "Listening…",
+        .transcribing => "Transcribing…",
+        .thinking => "Thinking…",
+        .speaking => "Speaking…",
+        .idle => if (ai_chat_mod.is_generating) "Thinking…" else null,
+    };
+    if (phase_txt) |txt| {
+        _ = dvui.label(@src(), "〰 {s}", .{txt}, .{
+            .color_text = theme.colors.accent,
+            .margin = .{ .y = 2 },
+        });
+    }
+
+    // Last 5 messages, scrollable
+    var scroll = dvui.scrollArea(@src(), .{}, .{
+        .expand = .both,
+    });
+    defer scroll.deinit();
+
+    const start: usize = if (ai_chat_mod.message_count > 5) ai_chat_mod.message_count - 5 else 0;
+    var mi: usize = start;
+    while (mi < ai_chat_mod.message_count) : (mi += 1) {
+        const m = ai_chat_mod.messages[mi];
+        if (m.text_len == 0) continue;
+        const is_user = m.role == .user;
+        var msg_box = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = mi + 90000,
+            .expand = .horizontal,
+            .margin = .{ .y = 3 },
+            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
+            .background = true,
+            .color_fill = if (is_user)
+                dvui.Color{ .r = 26, .g = 26, .b = 38, .a = 255 }
+            else
+                dvui.Color{ .r = 16, .g = 20, .b = 28, .a = 255 },
+            .corner_radius = dvui.Rect.all(6),
+        });
+        defer msg_box.deinit();
+        _ = dvui.label(@src(), "{s}", .{if (is_user) "You" else "AI"}, .{
+            .id_extra = mi,
+            .color_text = if (is_user) theme.colors.accent else theme.colors.text_muted,
+        });
+        _ = dvui.label(@src(), "{s}", .{m.text[0..m.text_len]}, .{
+            .id_extra = mi + 1,
+            .color_text = theme.colors.text_main,
+        });
+    }
+}
+
+/// DEPRECATED: inline dock. Kept unused to avoid churn; renderChatDropdown
+/// is the floating variant actually used.
 fn renderInlineChatDock() void {
     const ai_chat_mod = @import("services/ai_chat.zig");
     const voice_mod = @import("services/ai_voice.zig");
@@ -604,22 +729,6 @@ fn appFrame() !dvui.App.Result {
 
     if (state.app.fullscreen_player_idx == null) {
         ui.renderHeader();
-
-        // Navbar-docked inline chat panel — renders only when a video is
-        // playing (splash screen has its own inline chat surface) AND the
-        // chat has content or voice/generation is active.
-        const header_mod = @import("ui/header.zig");
-        if (!header_mod.shouldUrlInputBeInGrid()) {
-            const ai_chat_mod = @import("services/ai_chat.zig");
-            const voice_mod = @import("services/ai_voice.zig");
-            const has_content = ai_chat_mod.message_count > 0 or
-                ai_chat_mod.is_generating or
-                voice_mod.conv_phase != .idle or
-                voice_mod.is_recording;
-            if (has_content and ai_chat_mod.is_bubble_open) {
-                renderInlineChatDock();
-            }
-        }
     }
 
     // Horizontal split: grid takes remaining space, drawer takes fixed width on the right
@@ -671,9 +780,23 @@ fn appFrame() !dvui.App.Result {
     ui.renderWorkspaceModals();
     ui.renderToast();
 
-    // ── AI Chat: unified inline surface — no floating widget.
-    // Chat content lives inside the splash input panel (grid.zig empty
-    // state) or the navbar-docked expansion when a video is playing.
+    // ── AI Chat: floating dropdown anchored to navbar input.
+    // Only rendered in video-playing mode (splash has its own inline chat).
+    // Acts as a popover that hovers over the video, dismissable via X.
+    if (state.app.fullscreen_player_idx == null) {
+        const header_mod = @import("ui/header.zig");
+        if (!header_mod.shouldUrlInputBeInGrid()) {
+            const ai_chat_mod = @import("services/ai_chat.zig");
+            const voice_mod = @import("services/ai_voice.zig");
+            const has_content = ai_chat_mod.message_count > 0 or
+                ai_chat_mod.is_generating or
+                voice_mod.conv_phase != .idle or
+                voice_mod.is_recording;
+            if (has_content and ai_chat_mod.is_bubble_open) {
+                renderChatDropdown();
+            }
+        }
+    }
 
     // Reset Drag state on global release
     for (dvui.events()) |*e| {

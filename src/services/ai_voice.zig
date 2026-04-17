@@ -520,6 +520,7 @@ fn micRecordWorker() void {
     const input_fmt = if (is_macos) "avfoundation" else "pulse";
     const input_dev = if (is_macos) ":0" else "default";
 
+    logs.pushLog("info", "voice", "Mic: starting ffmpeg capture", true);
     var record_child = @import("../core/io_global.zig").Child.init(
         &.{ "ffmpeg", "-y",
             "-f", input_fmt,
@@ -528,10 +529,15 @@ fn micRecordWorker() void {
             MIC_WAV_PATH },
         @import("../core/alloc.zig").allocator,
     );
+    // stderr piped so ffmpeg errors surface in logs (permission denials,
+    // device-not-found, etc). Previously .Ignore hid all diagnostics.
     record_child.stdout_behavior = .Ignore;
-    record_child.stderr_behavior = .Ignore;
-    record_child.spawn() catch {
-        setError("Failed to start mic (install ffmpeg)");
+    record_child.stderr_behavior = .Inherit;
+    record_child.spawn() catch |err| {
+        var eb: [128]u8 = undefined;
+        const em = std.fmt.bufPrint(&eb, "ffmpeg spawn failed: {s}", .{@errorName(err)}) catch "ffmpeg spawn failed";
+        setError(em);
+        logs.pushLog("error", "voice", em, false);
         return;
     };
 
@@ -541,13 +547,14 @@ fn micRecordWorker() void {
 
     _ = record_child.kill() catch {};
     _ = record_child.wait() catch {};
+    logs.pushLog("info", "voice", "Mic: ffmpeg stopped, checking output", true);
 
     if (@import("../core/io_global.zig").cwdAccess(MIC_WAV_PATH, .{})) |_| {
         is_transcribing = true;
         defer { is_transcribing = false; }
         transcribeAndSend();
     } else |_| {
-        setError("No audio recorded");
+        setError("No audio recorded — check mic permission in System Settings → Privacy & Security → Microphone");
     }
 }
 
