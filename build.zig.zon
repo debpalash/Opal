@@ -3,7 +3,8 @@
     .version = "0.0.1",
     .dependencies = .{
         .dvui = .{
-            .path = "dvui",
+            .url = "git+https://github.com/debpalash/dvui#9c827098dcdc6778e27c76cdaa2405cdbef4935c",
+            .hash = "dvui-0.5.0-dev-AQFJmenc4QAdz7kLjGfKiKtCf0zlpbPLRS01RkoMfT9i",
         },
         .icons = .{
             .url = "git+https://github.com/nat3github/zig-lib-icons#b7299b19fa11caa5be93ef49743d8fc31a4bf9a0",
