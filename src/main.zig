@@ -394,7 +394,7 @@ fn appFrame() !dvui.App.Result {
                     const new_pl = @import("core/alloc.zig").allocator.create(m3u.M3UPlaylist) catch null;
                     if (new_pl) |pl| {
                         pl.* = m3u.M3UPlaylist.init(@import("core/alloc.zig").allocator);
-                        pl.loadFile(fpath) catch {};
+                        pl.loadFile(@import("core/io_global.zig").io(), fpath) catch {};
                         state.app.playlist = pl;
                         state.app.playlist_drawer_open = true;
                         logs.pushLog("info", "m3u", "Loaded M3U playlist", false);

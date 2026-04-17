@@ -28,9 +28,10 @@ pub const M3UPlaylist = struct {
         self.entries.deinit(self.allocator);
     }
 
-    pub fn loadFile(self: *M3UPlaylist, file_path: []const u8) !void {
-        const io = @import("../core/io_global.zig").io();
-        // Dropped paths are always absolute
+    /// Caller passes io so this file stays self-contained (unit tests
+    /// build m3u.zig as a standalone module — imports outside its
+    /// dir would violate module boundaries).
+    pub fn loadFile(self: *M3UPlaylist, io: std.Io, file_path: []const u8) !void {
         const file = if (file_path.len > 0 and file_path[0] == '/')
             try std.Io.Dir.openFileAbsolute(io, file_path, .{})
         else
