@@ -162,14 +162,15 @@ pub fn readAll(file: anytype, buf: []u8) !usize {
 }
 
 /// Partial read (up to buf.len bytes). Returns 0 on EOF.
-/// Uses streaming reader — works on pipes (not seekable).
+/// Uses readStreaming directly — no Reader buffering, so byte-at-a-time
+/// callers don't lose data (each call was creating a new Reader with a
+/// fresh tmp buf, so bytes read ahead into tmp on one call were lost
+/// on the next).
 pub fn read(file: anytype, buf: []u8) !usize {
-    var tmp: [1024]u8 = undefined;
-    var r = file.readerStreaming(io(), &tmp);
     var vec: [1][]u8 = .{buf};
-    return r.interface.readVec(&vec) catch |err| switch (err) {
-        error.EndOfStream => 0,
-        error.ReadFailed => 0,
+    return file.readStreaming(io(), &vec) catch |err| switch (err) {
+        error.EndOfStream, error.WouldBlock => 0,
+        else => err,
     };
 }
 
