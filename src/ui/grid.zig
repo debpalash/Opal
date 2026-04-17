@@ -27,6 +27,7 @@ fn renderInlineChat() void {
     while (mi < ai_chat.message_count) : (mi += 1) {
         const m = ai_chat.messages[mi];
         if (m.text_len == 0) continue;
+        if (m.role == .system) continue; // tool-response internals, not shown to user
         const is_user = m.role == .user;
 
         var bubble = dvui.box(@src(), .{ .dir = .vertical }, .{

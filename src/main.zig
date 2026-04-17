@@ -349,6 +349,7 @@ fn renderChatDropdown() void {
     while (mi < ai_chat_mod.message_count) : (mi += 1) {
         const m = ai_chat_mod.messages[mi];
         if (m.text_len == 0) continue;
+        if (m.role == .system) continue;
         const is_user = m.role == .user;
         var msg_box = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = mi + 90000,
@@ -443,6 +444,7 @@ fn renderInlineChatDock() void {
     while (mi < ai_chat_mod.message_count) : (mi += 1) {
         const m = ai_chat_mod.messages[mi];
         if (m.text_len == 0) continue;
+        if (m.role == .system) continue;
         const is_user = m.role == .user;
         var msg_box = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = mi + 80000,
