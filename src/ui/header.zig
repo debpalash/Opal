@@ -469,7 +469,8 @@ pub fn renderUrlInput(is_large: bool) void {
                 @memcpy(ai_chat.input_buf[0..copy_len], text[0..copy_len]);
                 ai_chat.input_len = copy_len;
                 // Chat renders inline in empty player card — no floating window.
-                ai_chat.sendMessage();
+                // trySendMessage auto-starts apfel/llama-server if not running.
+                ai_chat.trySendMessage();
                 @memset(&state.app.magnet_buf, 0);
                 return;
             }

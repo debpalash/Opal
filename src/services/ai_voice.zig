@@ -512,52 +512,18 @@ fn conversationLoopV1() void {
 fn micRecordWorker() void {
     defer { is_recording = false; }
 
-    // Use sox `rec` with silence detection (VAD):
-    //   silence 1 0.2 2%  → wait for sound above 2% to start recording
-    //   1 1.0 2%          → stop after 1.0s of silence below 2%
-    //   trim 0 15         → max 15 seconds
+    // ffmpeg-primary mic capture. Platform-specific input:
+    //   macOS   → avfoundation (":0" = default audio)
+    //   linux   → pulse (pulseaudio default)
+    // Fixed 15s ceiling; user clicks mic again to stop early.
+    const is_macos = @import("builtin").os.tag == .macos;
+    const input_fmt = if (is_macos) "avfoundation" else "pulse";
+    const input_dev = if (is_macos) ":0" else "default";
+
     var record_child = @import("../core/io_global.zig").Child.init(
-        &.{ "rec", "-q",
-            MIC_WAV_PATH,
-            "rate", "16000",       // 16kHz for whisper
-            "channels", "1",       // mono
-            "silence", "1", "0.2", "2%",  // start on voice
-            "1", "1.0", "2%",             // stop after 1.0s silence
-            "trim", "0", "15" },          // max 15s
-        @import("../core/alloc.zig").allocator,
-    );
-    record_child.stdout_behavior = .Ignore;
-    record_child.stderr_behavior = .Ignore;
-
-    record_child.spawn() catch {
-        // Fallback to ffmpeg if sox not available
-        micRecordFfmpegFallback();
-        return;
-    };
-
-    // sox will auto-exit when it detects silence after speech.
-    // We just wait for it. User can also click mic again to force stop.
-    const result = record_child.wait() catch {
-        setError("Recording failed");
-        return;
-    };
-    _ = result;
-    is_recording = false;
-
-    // Check we got a WAV file
-    if (@import("../core/io_global.zig").cwdAccess(MIC_WAV_PATH, .{})) |_| {
-        is_transcribing = true;
-        defer { is_transcribing = false; }
-        transcribeAndSend();
-    } else |_| {
-        setError("No audio recorded");
-    }
-}
-
-fn micRecordFfmpegFallback() void {
-    // Fallback: ffmpeg with manual stop (no VAD)
-    var record_child = @import("../core/io_global.zig").Child.init(
-        &.{ "ffmpeg", "-y", "-f", "pulse", "-i", "default",
+        &.{ "ffmpeg", "-y",
+            "-f", input_fmt,
+            "-i", input_dev,
             "-ar", "16000", "-ac", "1", "-t", "15",
             MIC_WAV_PATH },
         @import("../core/alloc.zig").allocator,
@@ -565,7 +531,7 @@ fn micRecordFfmpegFallback() void {
     record_child.stdout_behavior = .Ignore;
     record_child.stderr_behavior = .Ignore;
     record_child.spawn() catch {
-        setError("Failed to start mic (install sox or ffmpeg)");
+        setError("Failed to start mic (install ffmpeg)");
         return;
     };
 

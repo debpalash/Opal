@@ -1038,7 +1038,7 @@ fn queueChatResult(idx: usize) void {
 //  LLM Backend
 // ══════════════════════════════════════════════════════════
 
-fn trySendMessage() void {
+pub fn trySendMessage() void {
     // Auto-start server if not running
     if (!server.server_running and server.model_exists and server.llama_server_exists) {
         server.startServer();
