@@ -1,0 +1,48 @@
+# Opal — dev shortcuts
+#   just <task>   (run `just` alone for list)
+# Requires: `brew install just`
+
+zig := "/opt/homebrew/bin/zig"
+
+# List tasks
+default:
+    @just --list
+
+# Normal dev run (fswatch-based, survives C changes + build.zig edits)
+run:
+    ./dev.sh
+
+# Native zig 0.16 HMR — millisecond rebuilds on .zig edits.
+# Bails on C/build.zig changes; use `just run` for those.
+hot:
+    {{zig}} build run --watch -fincremental --error-style minimal_clear
+
+# Release build (stripped, optimized)
+release:
+    {{zig}} build -Doptimize=ReleaseFast
+
+# Unit tests (m3u, paths)
+test:
+    {{zig}} build test
+
+# Format all .zig in src/
+fmt:
+    {{zig}} fmt src/ build.zig
+
+# Nuke all caches — slow recovery, use after upstream zig update
+clean:
+    rm -rf .zig-cache zig-out zig-pkg /Users/user4/.cache/zig/o
+
+# Build with verbose error traces (debug spurious compile errors)
+debug-build:
+    {{zig}} build -freference-trace=20
+
+# Tail last build log
+log:
+    tail -f /tmp/opal-build.log
+
+# Git pre-commit hook install
+hooks:
+    cp scripts/pre-commit .git/hooks/pre-commit
+    chmod +x .git/hooks/pre-commit
+    @echo "pre-commit installed — will run 'zig build' before each commit"

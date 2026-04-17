@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Opal pre-commit — block commits that don't compile.
+# Install: just hooks
+set -e
+
+ZIG=/opt/homebrew/bin/zig
+
+# Only run on .zig changes — C/build.zig get full attention already via dev.sh.
+if ! git diff --cached --name-only | grep -qE '\.zig$|build\.zig|\.zig\.zon$'; then
+    exit 0
+fi
+
+echo "[pre-commit] zig build (silent)…"
+if ! "$ZIG" build 2>/tmp/opal-precommit.log; then
+    echo "[pre-commit] BUILD FAILED — commit blocked. Details:"
+    tail -40 /tmp/opal-precommit.log | sed 's/^/  /'
+    echo
+    echo "[pre-commit] Bypass with: git commit --no-verify (not recommended)"
+    exit 1
+fi
+echo "[pre-commit] build ok ✓"

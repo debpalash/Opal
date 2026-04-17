@@ -1,0 +1,174 @@
+{
+  "timestamp": "2026-04-04T18:06:37",
+  "total": 18,
+  "passed": 18,
+  "failed": 0,
+  "warnings": 0,
+  "skipped": 0,
+  "categories": {
+    "Connectivity": {
+      "pass": 3,
+      "fail": 0,
+      "warn": 0,
+      "skip": 0
+    },
+    "LLM Chat": {
+      "pass": 3,
+      "fail": 0,
+      "warn": 0,
+      "skip": 0
+    },
+    "LLM Perf": {
+      "pass": 2,
+      "fail": 0,
+      "warn": 0,
+      "skip": 0
+    },
+    "Memory": {
+      "pass": 4,
+      "fail": 0,
+      "warn": 0,
+      "skip": 0
+    },
+    "Config": {
+      "pass": 3,
+      "fail": 0,
+      "warn": 0,
+      "skip": 0
+    },
+    "Integration": {
+      "pass": 3,
+      "fail": 0,
+      "warn": 0,
+      "skip": 0
+    }
+  },
+  "tests": [
+    {
+      "name": "LLM Server Online",
+      "category": "Connectivity",
+      "status": "pass",
+      "detail": "Status: ok",
+      "duration_ms": 19
+    },
+    {
+      "name": "Embedding Server Online",
+      "category": "Connectivity",
+      "status": "pass",
+      "detail": "Dim: 768",
+      "duration_ms": 21
+    },
+    {
+      "name": "Voice Server Socket",
+      "category": "Connectivity",
+      "status": "pass",
+      "detail": "Connected to voice server",
+      "duration_ms": 0
+    },
+    {
+      "name": "Basic Chat Response",
+      "category": "LLM Chat",
+      "status": "pass",
+      "detail": "\"I am ZigZag, a media assistant. I help with conten...\"",
+      "duration_ms": 859
+    },
+    {
+      "name": "Media Awareness",
+      "category": "LLM Chat",
+      "status": "pass",
+      "detail": "\"I can help you find movie information, but I can't...\"",
+      "duration_ms": 324
+    },
+    {
+      "name": "Tool Call Format",
+      "category": "LLM Chat",
+      "status": "pass",
+      "detail": "Contains tool call pattern",
+      "duration_ms": 201
+    },
+    {
+      "name": "First Token Latency",
+      "category": "LLM Perf",
+      "status": "pass",
+      "detail": "TTFT: 27ms, Total: 215ms",
+      "duration_ms": 27
+    },
+    {
+      "name": "Generation Throughput",
+      "category": "LLM Perf",
+      "status": "pass",
+      "detail": "~103 tok/s (54 tokens in 526ms)",
+      "duration_ms": 526
+    },
+    {
+      "name": "Conversation Log",
+      "category": "Memory",
+      "status": "pass",
+      "detail": "1 entries. Latest: assistant:Continuing...",
+      "duration_ms": 0
+    },
+    {
+      "name": "Preference Learning",
+      "category": "Memory",
+      "status": "pass",
+      "detail": "active_hour=11:00 (w:1)",
+      "duration_ms": 0
+    },
+    {
+      "name": "Proactive Suggestions",
+      "category": "Memory",
+      "status": "pass",
+      "detail": "\"Loki (2021) - S02E06 - \" at 66%, pos 0min",
+      "duration_ms": 0
+    },
+    {
+      "name": "Watch History Depth",
+      "category": "Memory",
+      "status": "pass",
+      "detail": "27 entries: 23 deep (>50%), 21 completed (>90%)",
+      "duration_ms": 0
+    },
+    {
+      "name": "Theme Persistence",
+      "category": "Config",
+      "status": "pass",
+      "detail": "Active: Midnight",
+      "duration_ms": 0
+    },
+    {
+      "name": "TTS Config",
+      "category": "Config",
+      "status": "pass",
+      "detail": "Voice: Bella, Speed: 1.00x",
+      "duration_ms": 0
+    },
+    {
+      "name": "Config Key Count",
+      "category": "Config",
+      "status": "pass",
+      "detail": "33 keys: asr_enabled, auto_advance, deband_enabled, download_rate_limit, drawer_open, drawer_width_px, dubbing_enabled, eq_preset...",
+      "duration_ms": 0
+    },
+    {
+      "name": "Chat \u2192 Memory Pipeline",
+      "category": "Integration",
+      "status": "pass",
+      "detail": "Reply: 174 chars, Memory: 209\u2192209",
+      "duration_ms": 2423
+    },
+    {
+      "name": "Multi-Turn Coherence",
+      "category": "Integration",
+      "status": "pass",
+      "detail": "Remembered: \"Your name is Alex.\"",
+      "duration_ms": 231
+    },
+    {
+      "name": "Sequential Requests",
+      "category": "Integration",
+      "status": "pass",
+      "detail": "3/3 succeeded in 226ms total",
+      "duration_ms": 226
+    }
+  ]
+}

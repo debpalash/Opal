@@ -1,0 +1,22 @@
+pub fn Page(ctx: zx.PageContext) zx.Component {
+    return (
+        <div @allocator={ctx.arena}>
+            <div class="card-header">
+                <h1>📋 Queue</h1>
+                <div style="display:flex; gap:8px">
+                    <button class="btn" onclick="refreshQueue()">↻ Refresh</button>
+                </div>
+            </div>
+            <div id="queue-list" style="margin-top: 16px">
+                <div class="queue-item">
+                    <div class="thumb">🎬</div>
+                    <div class="meta">
+                        <div class="name" style="color: var(--text-dim)">Loading queue...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+const zx = @import("zx");

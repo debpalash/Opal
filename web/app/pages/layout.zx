@@ -1,0 +1,46 @@
+pub fn Layout(ctx: zx.PageContext) zx.Component {
+    return (
+        <html @allocator={ctx.arena} lang="en">
+            <head>
+                <meta charset="utf-8" />
+                <meta name="viewport" content="width=device-width, initial-scale=1" />
+                <title>ZigZag — Media Console</title>
+                <meta name="description" content="ZigZag Media Console — Remote Web UI" />
+                <link rel="stylesheet" href="/static/styles.css" />
+            </head>
+            <body>
+                <div class="app-shell">
+                    <Sidebar />
+                    <main class="main-content">
+                        {ctx.children}
+                    </main>
+                </div>
+                <script src="/static/app.js" />
+            </body>
+        </html>
+    );
+}
+
+fn Sidebar(allocator: zx.Allocator) zx.Component {
+    return (
+        <nav @allocator={allocator} class="sidebar" id="sidebar">
+            <div class="sidebar-brand">
+                <h1>⚡ ZigZag</h1>
+                <small>Media Console</small>
+            </div>
+            <ul class="nav-links">
+                <li><a href="/" class="active"><span class="icon">🏠</span> Dashboard</a></li>
+                <li><a href="/search"><span class="icon">🔍</span> Search</a></li>
+                <li><a href="/player"><span class="icon">▶️</span> Player</a></li>
+                <li><a href="/queue"><span class="icon">📋</span> Queue</a></li>
+                <li><a href="/history"><span class="icon">📖</span> History</a></li>
+                <li><a href="/transfers"><span class="icon">📥</span> Transfers</a></li>
+                <li><a href="/party"><span class="icon">🎉</span> Watch Party</a></li>
+                <li><a href="/cast"><span class="icon">📺</span> Cast</a></li>
+                <li><a href="/settings"><span class="icon">⚙️</span> Settings</a></li>
+            </ul>
+        </nav>
+    );
+}
+
+const zx = @import("zx");

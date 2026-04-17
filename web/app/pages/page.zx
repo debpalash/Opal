@@ -1,0 +1,61 @@
+pub fn Page(ctx: zx.PageContext) zx.Component {
+    return (
+        <div @allocator={ctx.arena}>
+            <div class="now-playing" id="now-playing">
+                <div class="poster">🎬</div>
+                <div class="info">
+                    <div class="title" id="np-title">Nothing Playing</div>
+                    <div class="subtitle" id="np-time">--:-- / --:--</div>
+                    <div class="progress-bar" id="seek-bar" onclick="seekTo(event)">
+                        <div class="fill" id="np-progress" style="width: 0%" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="controls">
+                <button class="btn btn-icon" onclick="api('back')" title="Back 10s">⏪</button>
+                <button class="btn btn-play" onclick="api('toggle')" id="btn-play" title="Play/Pause">⏯</button>
+                <button class="btn btn-icon" onclick="api('fwd')" title="Forward 10s">⏩</button>
+                <button class="btn btn-icon" onclick="api('vol_down')" title="Volume Down">🔉</button>
+                <button class="btn btn-icon" onclick="api('mute')" title="Mute">🔇</button>
+                <button class="btn btn-icon" onclick="api('vol_up')" title="Volume Up">🔊</button>
+            </div>
+
+            <div class="grid grid-3" style="margin-top: 24px">
+                <div class="card stat-card">
+                    <div class="value" id="stat-vol">--</div>
+                    <div class="label">Volume</div>
+                </div>
+                <div class="card stat-card">
+                    <div class="value" id="stat-pos">--:--</div>
+                    <div class="label">Position</div>
+                </div>
+                <div class="card stat-card">
+                    <div class="value" id="stat-dur">--:--</div>
+                    <div class="label">Duration</div>
+                </div>
+            </div>
+
+            <div class="grid grid-2" style="margin-top: 24px">
+                <a href="/search" class="card" style="text-decoration:none; color:inherit">
+                    <h2>🔍 Search</h2>
+                    <p style="color: var(--text-muted); margin-top: 8px">Find and stream content</p>
+                </a>
+                <a href="/queue" class="card" style="text-decoration:none; color:inherit">
+                    <h2>📋 Queue</h2>
+                    <p style="color: var(--text-muted); margin-top: 8px">Manage your playlist</p>
+                </a>
+                <a href="/transfers" class="card" style="text-decoration:none; color:inherit">
+                    <h2>📥 Transfers</h2>
+                    <p style="color: var(--text-muted); margin-top: 8px">Active downloads</p>
+                </a>
+                <a href="/party" class="card" style="text-decoration:none; color:inherit">
+                    <h2>🎉 Watch Party</h2>
+                    <p style="color: var(--text-muted); margin-top: 8px">Sync with friends on LAN</p>
+                </a>
+            </div>
+        </div>
+    );
+}
+
+const zx = @import("zx");

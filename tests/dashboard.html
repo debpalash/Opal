@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZigZag — Test Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-app: #0e0e14;
+    --bg-card: #16161e;
+    --bg-header: #12121a;
+    --border: #262634;
+    --accent: #38bdf8;
+    --accent-glow: rgba(56, 189, 248, 0.15);
+    --text: #ededf5;
+    --text-muted: #787894;
+    --pass: #22c55e;
+    --fail: #ef4444;
+    --warn: #fab005;
+    --skip: #6366f1;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg-app);
+    color: var(--text);
+    font-family: 'Inter', -apple-system, sans-serif;
+    min-height: 100vh;
+  }
+
+  .header {
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border);
+    padding: 20px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    backdrop-filter: blur(12px);
+  }
+
+  .header h1 {
+    font-size: 1.4rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--accent), #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .header h1 .logo {
+    font-size: 1.6rem;
+  }
+
+  .header-actions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+
+  .btn {
+    padding: 8px 18px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .btn:hover { border-color: var(--accent); background: var(--accent-glow); }
+  .btn.primary { background: var(--accent); color: var(--bg-app); border: none; }
+  .btn.primary:hover { opacity: 0.9; transform: translateY(-1px); }
+
+  .timestamp {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  main {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 24px;
+  }
+
+  /* ── Summary Cards ── */
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+
+  .stat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.2s, border-color 0.2s;
+  }
+
+  .stat-card:hover { transform: translateY(-2px); }
+  .stat-card.pass { border-color: var(--pass); }
+  .stat-card.fail { border-color: var(--fail); }
+  .stat-card.warn { border-color: var(--warn); }
+  .stat-card.skip { border-color: var(--skip); }
+
+  .stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+  }
+  .stat-card.pass::before { background: var(--pass); }
+  .stat-card.fail::before { background: var(--fail); }
+  .stat-card.warn::before { background: var(--warn); }
+  .stat-card.skip::before { background: var(--skip); }
+
+  .stat-number {
+    font-size: 2.4rem;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .stat-card.pass .stat-number { color: var(--pass); }
+  .stat-card.fail .stat-number { color: var(--fail); }
+  .stat-card.warn .stat-number { color: var(--warn); }
+  .stat-card.skip .stat-number { color: var(--skip); }
+
+  .stat-label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 600;
+  }
+
+  /* ── Progress Bar ── */
+  .progress-wrap {
+    margin-bottom: 28px;
+    background: var(--bg-card);
+    border-radius: 10px;
+    overflow: hidden;
+    height: 8px;
+    border: 1px solid var(--border);
+  }
+
+  .progress-bar {
+    height: 100%;
+    display: flex;
+    transition: width 0.6s ease;
+  }
+
+  .progress-bar .seg-pass { background: var(--pass); }
+  .progress-bar .seg-warn { background: var(--warn); }
+  .progress-bar .seg-fail { background: var(--fail); }
+  .progress-bar .seg-skip { background: var(--skip); }
+
+  /* ── Category Sections ── */
+  .category {
+    margin-bottom: 24px;
+  }
+
+  .category-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    padding: 0 4px;
+  }
+
+  .category-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .category-badge {
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 99px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .test-grid {
+    display: grid;
+    gap: 6px;
+  }
+
+  /* ── Accordion Test Items ── */
+  .test-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+
+  .test-item:hover { border-color: rgba(56, 189, 248, 0.3); }
+  .test-item.expanded { border-color: var(--accent); }
+
+  .test-row {
+    padding: 12px 16px;
+    display: grid;
+    grid-template-columns: 28px 1fr auto 28px;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+  }
+
+  .test-row:hover { background: rgba(56, 189, 248, 0.04); }
+
+  .test-icon { font-size: 1.1rem; text-align: center; }
+
+  .test-name {
+    font-weight: 500;
+    font-size: 0.88rem;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .test-name .badge {
+    font-size: 0.65rem;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+  }
+
+  .badge-pass { background: rgba(34,197,94,0.15); color: var(--pass); }
+  .badge-fail { background: rgba(239,68,68,0.15); color: var(--fail); }
+  .badge-warn { background: rgba(250,176,5,0.15); color: var(--warn); }
+  .badge-skip { background: rgba(99,102,241,0.15); color: var(--skip); }
+
+  .test-time {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    font-family: 'JetBrains Mono', monospace;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .test-chevron {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    transition: transform 0.25s;
+    text-align: center;
+  }
+
+  .test-item.expanded .test-chevron { transform: rotate(180deg); }
+
+  .test-row.status-pass .test-name { color: var(--pass); }
+  .test-row.status-fail .test-name { color: var(--fail); }
+  .test-row.status-warn .test-name { color: var(--warn); }
+  .test-row.status-skip .test-name { color: var(--skip); }
+
+  /* ── Accordion Detail Panel ── */
+  .test-detail-panel {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .test-item.expanded .test-detail-panel { max-height: 400px; }
+
+  .test-detail-inner {
+    padding: 0 16px 16px;
+    border-top: 1px solid var(--border);
+    margin-top: 0;
+    padding-top: 14px;
+  }
+
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 6px 12px;
+    font-size: 0.82rem;
+  }
+
+  .detail-label {
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding-top: 2px;
+  }
+
+  .detail-value {
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    word-break: break-all;
+    line-height: 1.5;
+  }
+
+  .detail-value.status-pass { color: var(--pass); }
+  .detail-value.status-fail { color: var(--fail); }
+  .detail-value.status-warn { color: var(--warn); }
+  .detail-value.status-skip { color: var(--skip); }
+
+  .detail-value code {
+    background: rgba(56, 189, 248, 0.08);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.78rem;
+  }
+
+  /* ── Loading State ── */
+  .loading {
+    text-align: center;
+    padding: 80px 20px;
+    color: var(--text-muted);
+  }
+
+  .loading .spinner {
+    display: inline-block;
+    width: 40px;
+    height: 40px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-bottom: 16px;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .loading p { font-size: 0.9rem; }
+
+  /* ── Empty State ── */
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-muted);
+  }
+
+  .empty-state .icon { font-size: 3rem; margin-bottom: 12px; }
+  .empty-state p { font-size: 0.9rem; margin-bottom: 16px; }
+
+  /* ── Responsive ── */
+  @media (max-width: 768px) {
+    .summary { grid-template-columns: repeat(2, 1fr); }
+    .test-row { grid-template-columns: 28px 1fr 28px; }
+    .test-time { display: none; }
+    .detail-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1><span class="logo">⚡</span> ZigZag Test Dashboard</h1>
+  <div class="header-actions">
+    <span class="timestamp" id="timestamp">—</span>
+    <button class="btn" onclick="loadResults()">↻ Refresh</button>
+    <button class="btn" onclick="runTests('/run')">🔧 Features</button>
+    <button class="btn" onclick="runTests('/run-realtime')">🧠 Realtime</button>
+    <button class="btn primary" onclick="runTests('/run-all')">⚡ Run All</button>
+  </div>
+</div>
+
+<main>
+  <div id="content">
+    <div class="empty-state">
+      <div class="icon">🧪</div>
+      <p>No test results yet. Click <strong>Run Tests</strong> to start.</p>
+    </div>
+  </div>
+</main>
+
+<script>
+const STATUS_ICONS = { pass: '✅', fail: '❌', warn: '⚠️', skip: '⏭️' };
+
+let isRunning = false;
+
+async function runTests(endpoint = '/run') {
+  if (isRunning) return;
+  isRunning = true;
+
+  const labels = {'/run': 'Feature', '/run-realtime': 'Realtime', '/run-all': 'All'};
+
+  document.getElementById('content').innerHTML = `
+    <div class="loading">
+      <div class="spinner"></div>
+      <p>Running ${labels[endpoint] || ''} tests...</p>
+    </div>
+  `;
+
+  try {
+    const resp = await fetch(endpoint);
+    if (resp.ok) {
+      await new Promise(r => setTimeout(r, 500));
+      await loadResults();
+    } else {
+      document.getElementById('content').innerHTML = `
+        <div class="empty-state">
+          <div class="icon">❌</div>
+          <p>Test runner failed. Check terminal.</p>
+        </div>
+      `;
+    }
+  } catch (e) {
+    document.getElementById('content').innerHTML = `
+      <div class="empty-state">
+        <div class="icon">❌</div>
+        <p>Connection error: ${e.message}</p>
+      </div>
+    `;
+  }
+  isRunning = false;
+}
+
+async function loadResults() {
+  try {
+    const resp = await fetch('/results');
+    if (!resp.ok) throw new Error('No results');
+    const data = await resp.json();
+    renderResults(data);
+  } catch (e) {
+    // silent fail on auto-load
+  }
+}
+
+function renderResults(data) {
+  const { timestamp, total, passed, failed, warnings, skipped, tests } = data;
+
+  document.getElementById('timestamp').textContent = timestamp;
+
+  // Group by category
+  const cats = {};
+  tests.forEach(t => {
+    if (!cats[t.category]) cats[t.category] = [];
+    cats[t.category].push(t);
+  });
+
+  const passRate = ((passed / total) * 100).toFixed(0);
+
+  let html = `
+    <!-- Summary -->
+    <div class="summary">
+      <div class="stat-card pass">
+        <div class="stat-number">${passed}</div>
+        <div class="stat-label">Passed</div>
+      </div>
+      <div class="stat-card fail">
+        <div class="stat-number">${failed}</div>
+        <div class="stat-label">Failed</div>
+      </div>
+      <div class="stat-card warn">
+        <div class="stat-number">${warnings}</div>
+        <div class="stat-label">Warnings</div>
+      </div>
+      <div class="stat-card skip">
+        <div class="stat-number">${skipped}</div>
+        <div class="stat-label">Skipped</div>
+      </div>
+    </div>
+
+    <!-- Progress -->
+    <div class="progress-wrap">
+      <div class="progress-bar">
+        <div class="seg-pass" style="width:${(passed/total)*100}%"></div>
+        <div class="seg-warn" style="width:${(warnings/total)*100}%"></div>
+        <div class="seg-fail" style="width:${(failed/total)*100}%"></div>
+        <div class="seg-skip" style="width:${(skipped/total)*100}%"></div>
+      </div>
+    </div>
+  `;
+
+  // Category order
+  const order = ['Database', 'Memory', 'Config', 'Build', 'Voice', 'LLM', 'Theming', 'Commands', 'Integration'];
+  const sortedCats = Object.keys(cats).sort((a, b) => {
+    const ai = order.indexOf(a), bi = order.indexOf(b);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+
+  for (const cat of sortedCats) {
+    const catTests = cats[cat];
+    const catPass = catTests.filter(t => t.status === 'pass').length;
+    const badgeColor = catPass === catTests.length ? 'var(--pass)' :
+                       catTests.some(t => t.status === 'fail') ? 'var(--fail)' : 'var(--warn)';
+
+    html += `
+      <div class="category">
+        <div class="category-header">
+          <div class="category-title">
+            ${cat}
+            <span class="category-badge" style="background:${badgeColor}20;color:${badgeColor}">${catPass}/${catTests.length}</span>
+          </div>
+        </div>
+        <div class="test-grid">
+    `;
+
+    for (const t of catTests) {
+      const id = `test_${cat}_${t.name}`.replace(/[^a-zA-Z0-9]/g, '_');
+      const statusLabel = { pass: 'PASSED', fail: 'FAILED', warn: 'WARNING', skip: 'SKIPPED' }[t.status];
+      const statusDesc = {
+        pass: 'This test completed successfully with no issues.',
+        fail: 'This test failed — the feature may be broken or missing.',
+        warn: 'This test passed with a warning — expected but worth noting.',
+        skip: 'This test was skipped — the required service is not running.'
+      }[t.status];
+
+      // Build source file hint from category
+      const sourceMap = {
+        'Database': 'src/core/db.zig',
+        'Memory': 'src/services/ai_memory.zig',
+        'Config': 'src/core/config.zig',
+        'Build': 'build.zig',
+        'Voice': 'src/services/ai_voice.zig',
+        'LLM': 'src/services/ai_server.zig',
+        'Theming': 'src/ui/theme.zig',
+        'Commands': 'src/services/ai_context.zig',
+        'Integration': 'src/services/ai_context.zig'
+      };
+      const source = sourceMap[t.category] || '—';
+
+      html += `
+        <div class="test-item" id="${id}">
+          <div class="test-row status-${t.status}" onclick="toggleAccordion('${id}')">
+            <div class="test-icon">${STATUS_ICONS[t.status]}</div>
+            <div class="test-name">
+              ${t.name}
+              <span class="badge badge-${t.status}">${statusLabel}</span>
+            </div>
+            <div class="test-time">${t.duration_ms}ms</div>
+            <div class="test-chevron">▼</div>
+          </div>
+          <div class="test-detail-panel">
+            <div class="test-detail-inner">
+              <div class="detail-grid">
+                <div class="detail-label">Status</div>
+                <div class="detail-value status-${t.status}">${statusDesc}</div>
+                <div class="detail-label">Result</div>
+                <div class="detail-value">${t.detail || '—'}</div>
+                <div class="detail-label">Category</div>
+                <div class="detail-value">${t.category}</div>
+                <div class="detail-label">Source</div>
+                <div class="detail-value"><code>${source}</code></div>
+                <div class="detail-label">Duration</div>
+                <div class="detail-value">${t.duration_ms < 1 ? '<1ms' : t.duration_ms + 'ms'}${t.duration_ms > 1000 ? ' ⚠️ slow' : t.duration_ms > 100 ? ' — moderate' : ' — fast'}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    html += '</div></div>';
+  }
+
+  document.getElementById('content').innerHTML = html;
+}
+
+function toggleAccordion(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.toggle('expanded');
+}
+
+// Auto-load on page open
+loadResults();
+</script>
+</body>
+</html>

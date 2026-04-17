@@ -1,0 +1,55 @@
+from PIL import Image, ImageDraw, ImageFont
+import os
+os.makedirs("/tmp/comic_test", exist_ok=True)
+try:
+    font_big = ImageFont.truetype('/usr/share/fonts/TTF/DejaVuSans-Bold.ttf', 28)
+    font = ImageFont.truetype('/usr/share/fonts/TTF/DejaVuSans.ttf', 22)
+except:
+    font_big = ImageFont.load_default(size=28)
+    font = ImageFont.load_default(size=22)
+
+img = Image.new('RGB', (800, 1200), (240, 235, 225))
+draw = ImageDraw.Draw(img)
+draw.rounded_rectangle([40, 40, 760, 400], 20, fill='white', outline='black', width=3)
+draw.text((70, 60), "MARK, YOU NEED TO", fill='black', font=font_big)
+draw.text((70, 100), "UNDERSTAND SOMETHING.", fill='black', font=font_big)
+draw.text((70, 180), "With great power comes", fill='black', font=font)
+draw.text((70, 210), "great responsibility.", fill='black', font=font)
+draw.text((70, 280), "Your father was the greatest", fill='black', font=font)
+draw.text((70, 310), "hero this world has ever known.", fill='black', font=font)
+draw.rounded_rectangle([40, 440, 760, 750], 20, fill='white', outline='black', width=3)
+draw.text((70, 460), "I KNOW, MOM.", fill='black', font=font_big)
+draw.text((70, 520), "But I just got my powers", fill='black', font=font)
+draw.text((70, 550), "last week. I need time", fill='black', font=font)
+draw.text((70, 580), "to figure this out.", fill='black', font=font)
+draw.rounded_rectangle([40, 790, 760, 1160], 20, fill='white', outline='black', width=3)
+draw.text((70, 810), "THE WORLD CANT WAIT", fill='black', font=font_big)
+draw.text((70, 850), "FOR YOU TO BE READY.", fill='black', font=font_big)
+draw.text((70, 930), "Viltrumites dont get the", fill='black', font=font)
+draw.text((70, 960), "luxury of choosing when", fill='black', font=font)
+draw.text((70, 990), "to fight.", fill='black', font=font)
+img.save("/tmp/comic_test/page1.png")
+print(f"page1: {os.path.getsize('/tmp/comic_test/page1.png')} bytes")
+
+img2 = Image.new('RGB', (800, 1200), (200, 200, 210))
+draw2 = ImageDraw.Draw(img2)
+draw2.rounded_rectangle([50, 50, 350, 150], 15, fill='yellow', outline='black', width=3)
+draw2.text((70, 70), "BOOM!", fill='red', font=font_big)
+draw2.rounded_rectangle([400, 800, 750, 1100], 15, fill='white', outline='black', width=3)
+draw2.text((420, 820), "Is everyone okay?", fill='black', font=font)
+draw2.text((420, 860), "That explosion was", fill='black', font=font)
+draw2.text((420, 900), "way too close.", fill='black', font=font)
+draw2.text((420, 970), "We need to evacuate", fill='black', font=font)
+draw2.text((420, 1000), "the building NOW!", fill='black', font=font_big)
+img2.save("/tmp/comic_test/page2.png")
+print(f"page2: {os.path.getsize('/tmp/comic_test/page2.png')} bytes")
+
+img3 = Image.new('RGB', (800, 1200), (250, 248, 240))
+draw3 = ImageDraw.Draw(img3)
+lines = ["The Global Defense Agency", "has been monitoring your", "activity since Tuesday.", "", "We know about the bank", "robbery you stopped on", "Fifth Avenue.", "", "And the alien invasion", "you prevented last night", "in downtown Chicago."]
+for i, text in enumerate(lines):
+    if text:
+        draw3.text((70, 60 + i * 40), text, fill='black', font=font)
+img3.save("/tmp/comic_test/page3.png")
+print(f"page3: {os.path.getsize('/tmp/comic_test/page3.png')} bytes")
+print("Done")

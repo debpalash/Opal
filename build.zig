@@ -1,0 +1,124 @@
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    const exe = b.addExecutable(.{
+        .name = "zigzag",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    exe.use_llvm = true;
+
+    // System SDL2 integration. On Wayland compositors (COSMIC DE, etc.) the bundled SDL2
+    // only has X11 support (runs under XWayland) and window title updates are ignored.
+    // Build with: zig build -fsys=sdl2
+    // This uses the system's sdl2-compat (SDL3) with native Wayland support.
+    _ = b.systemIntegrationOption("sdl2", .{});
+    const dvui_dep = b.dependency("dvui", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Add Homebrew prefix manually for Apple Silicon devices
+    if (target.result.os.tag == .macos) {
+        exe.root_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/lib" });
+        exe.root_module.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include" });
+    } else {
+        // Non-macOS: link system SDL2. On macOS, dvui's bundled SDL2 is used
+        // (avoids duplicate-class ObjC warnings when both static + dyn SDL2 load).
+        exe.root_module.linkSystemLibrary("SDL2", .{});
+    }
+
+    // Add dvui_sdl2 which is a fully bundled standalone backend
+    exe.root_module.addImport("dvui", dvui_dep.module("dvui_sdl2"));
+
+    // Fetch and bind TVG Icons library
+    const icons_dep = b.dependency("icons", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.root_module.addImport("icons", icons_dep.module("icons"));
+
+    // Link MPV and SQLite
+    exe.root_module.linkSystemLibrary("mpv", .{});
+    exe.root_module.linkSystemLibrary("sqlite3", .{});
+
+    // SQLite Vector DB
+    exe.root_module.addCSourceFile(.{
+        .file = b.path("src/core/sqlite/sqlite-vec.c"),
+        .flags = &[_][]const u8{"-O3", "-fomit-frame-pointer"},
+    });
+    
+    // Libtorrent & C++ Linkage (Dynamic Shared Object isolating GCC C++ ABIs)
+    // Checking modification times avoids recompiling the heavy C++ wrapper on every `zig build` iteration
+    const compile_cmd = if (target.result.os.tag == .macos)
+        "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -I/opt/homebrew/include -L/opt/homebrew/lib src/torrent_wrapper.cpp -o libtorrent_wrapper.so -ltorrent-rasterbar; fi"
+    else
+        "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC src/torrent_wrapper.cpp -o libtorrent_wrapper.so -ltorrent-rasterbar; fi";
+        
+    const compile_wrapper = b.addSystemCommand(&.{
+        "sh", "-c", compile_cmd
+    });
+    exe.step.dependOn(&compile_wrapper.step);
+    
+    exe.root_module.addLibraryPath(b.path("."));
+    exe.root_module.linkSystemLibrary("torrent_wrapper", .{});
+    exe.root_module.addRPath(b.path(".")); // Ensure the binary can find the locally compiled wrapper
+
+    // OCR via ONNX Runtime (PP-OCR pipeline)
+    exe.root_module.addCSourceFile(.{
+        .file = b.path("ort/ocr_ort.c"),
+        .flags = &[_][]const u8{"-O2", "-Wno-unused-result"},
+    });
+    exe.root_module.addIncludePath(b.path("ort"));
+    exe.root_module.addLibraryPath(b.path("ort"));
+    exe.root_module.linkSystemLibrary("onnxruntime", .{});
+    exe.root_module.addRPath(b.path("ort"));
+
+    exe.root_module.addIncludePath(b.path("src"));
+
+
+
+    b.installArtifact(exe);
+
+    const run_cmd = b.addRunArtifact(exe);
+    run_cmd.step.dependOn(b.getInstallStep());
+
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+
+    const run_step = b.step("run", "Run the app");
+    run_step.dependOn(&run_cmd.step);
+    // ── Fast build: use `zig build -Doptimize=ReleaseSafe` ──
+    // Note: a separate exe with different optimize level causes UBSan
+    // linker mismatch with dvui's bundled SDL2, so we use the standard
+    // -Doptimize flag instead.
+
+    // ── Unit Tests (pure Zig modules only) ──
+    const test_step = b.step("test", "Run unit tests");
+
+    const test_m3u = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/m3u.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_m3u).step);
+
+    const test_paths = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/paths.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_paths).step);
+}

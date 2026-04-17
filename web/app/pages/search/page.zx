@@ -1,0 +1,29 @@
+pub fn Page(ctx: zx.PageContext) zx.Component {
+    return (
+        <div @allocator={ctx.arena}>
+            <h1 style="margin-bottom: 20px">🔍 Search</h1>
+            <div class="search-bar">
+                <input class="search-input" type="text" id="search-input" placeholder="Search for movies, shows, anime..." />
+                <button class="btn btn-primary" onclick="doSearch()">Search</button>
+            </div>
+            <div id="search-results">
+                <table class="results-table">
+                    <thead>
+                        <tr>
+                            <th>Title</th>
+                            <th>Size</th>
+                            <th>Seeds</th>
+                            <th>Source</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="results-body">
+                        <tr><td colspan="5" style="text-align:center; color: var(--text-dim); padding: 40px">Enter a search query above</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+}
+
+const zx = @import("zx");

@@ -1,0 +1,94 @@
+# === Zig ===
+zig-out/
+.zig-cache/
+
+# === Secrets ===
+.env
+
+# === Python ===
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# === Compiled objects & shared libs ===
+*.o
+*.so
+*.dll
+*.dylib
+
+# === ONNX Runtime (headers kept, binaries ignored) ===
+ort/*.so
+ort/*.so.*
+
+# === Build logs & error dumps ===
+*.log
+build_log.txt
+build_err.txt
+build_error.txt
+build_errors.log
+build.out
+build_out
+errors.txt
+errors2.txt
+errors3.txt
+err.txt
+err2.txt
+raw_error.txt
+semantic_errors.txt
+
+# === Vendored dependencies ===
+KittenTTS/
+llama.cpp/
+
+# === Runtime binaries & models ===
+bin/
+models/
+
+# === Training datasets (large, regenerable) ===
+scripts/bubble_dataset/
+
+# === Research / scratch ===
+research/
+tools/
+
+# === Jellyfin config/data ===
+jellyfin/
+
+# === Large / generated files ===
+philosophies.md
+test.zig
+onnx
+qBittorrent
+/io
+screenshot_demo.png
+.claude/
+
+# === Built binaries (root-level) ===
+/main
+/zigzag
+
+# === Test binaries ===
+tests/test_ocr
+
+# === Editor / IDE ===
+imgui.ini
+*.swp
+*.swo
+*.bak
+*~
+.vscode/
+.idea/
+
+# === OS ===
+.DS_Store
+Thumbs.db
+# === Arch Packages ===
+pkg/
+*.pkg.tar.*
+src/zigzag/pkg/
+zig-pkg/
+.research/
+
+# === AI assistant config ===
+CLAUDE.md

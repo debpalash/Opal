@@ -1,0 +1,16 @@
+pub fn Page(ctx: zx.PageContext) zx.Component {
+    return (
+        <div @allocator={ctx.arena}>
+            <h1 style="margin-bottom: 20px">📥 Active Transfers</h1>
+            <div id="transfers-list">
+                <div class="transfer-item">
+                    <div style="display:flex; justify-content:space-between">
+                        <span style="color: var(--text-dim)">Loading transfers...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+const zx = @import("zx");

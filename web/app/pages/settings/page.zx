@@ -1,0 +1,63 @@
+pub fn Page(ctx: zx.PageContext) zx.Component {
+    return (
+        <div @allocator={ctx.arena}>
+            <h1 style="margin-bottom: 20px">⚙️ Settings</h1>
+
+            <div class="card" style="margin-bottom: 20px">
+                <h2 style="margin-bottom: 16px">Playback</h2>
+                <div class="setting-row">
+                    <div>
+                        <div class="label">Auto-Advance Queue</div>
+                        <div class="desc">Play next item when current finishes</div>
+                    </div>
+                    <div class="toggle active" id="toggle-autoadvance" onclick="toggleSetting('auto_advance')" />
+                </div>
+                <div class="setting-row">
+                    <div>
+                        <div class="label">SponsorBlock (YouTube)</div>
+                        <div class="desc">Skip sponsored segments</div>
+                    </div>
+                    <div class="toggle" id="toggle-sponsorblock" onclick="toggleSetting('sponsorblock')" />
+                </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 20px">
+                <h2 style="margin-bottom: 16px">Network</h2>
+                <div class="setting-row">
+                    <div>
+                        <div class="label">Download Speed Limit</div>
+                        <div class="desc">0 = unlimited</div>
+                    </div>
+                    <input class="search-input" type="number" style="width: 120px" id="speed-limit" placeholder="0" />
+                </div>
+                <div class="setting-row">
+                    <div>
+                        <div class="label">Proxy (yt-dlp)</div>
+                        <div class="desc">SOCKS5 or HTTP proxy for yt-dlp</div>
+                    </div>
+                    <input class="search-input" type="text" style="width: 200px" id="proxy-input" placeholder="socks5://..." />
+                </div>
+            </div>
+
+            <div class="card">
+                <h2 style="margin-bottom: 16px">Data</h2>
+                <div class="setting-row">
+                    <div>
+                        <div class="label">Download Path</div>
+                        <div class="desc">Where completed downloads are saved</div>
+                    </div>
+                    <input class="search-input" type="text" style="width: 250px" id="dl-path" placeholder="~/Downloads/zigzag" />
+                </div>
+                <div class="setting-row">
+                    <div>
+                        <div class="label">Incognito Mode</div>
+                        <div class="desc">Don't save watch history</div>
+                    </div>
+                    <div class="toggle" id="toggle-incognito" onclick="toggleSetting('incognito')" />
+                </div>
+            </div>
+        </div>
+    );
+}
+
+const zx = @import("zx");

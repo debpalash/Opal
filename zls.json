@@ -1,0 +1,21 @@
+{
+    "zig_exe_path": "/opt/homebrew/bin/zig",
+    "zig_lib_path": "/opt/homebrew/Cellar/zig/0.16.0/lib/zig",
+    "enable_build_on_save": false,
+    "enable_autofix": true,
+    "enable_snippets": true,
+    "enable_argument_placeholders": true,
+    "enable_ast_check_diagnostics": true,
+    "enable_semantic_tokens": true,
+    "enable_inlay_hints": true,
+    "inlay_hints_show_parameter_name": true,
+    "inlay_hints_show_builtin": true,
+    "inlay_hints_exclude_single_argument": true,
+    "inlay_hints_hide_redundant_param_names": true,
+    "operator_completions": true,
+    "include_at_in_builtins": false,
+    "skip_std_references": false,
+    "highlight_global_var_declarations": false,
+    "prefer_ast_check_as_child_process": true,
+    "builtin_path": "/opt/homebrew/Cellar/zig/0.16.0/lib/zig/builtin.zig"
+}
