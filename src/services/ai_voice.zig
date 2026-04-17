@@ -560,7 +560,9 @@ fn micRecordWorker() void {
 
 // ── Whisper Hallucination Filter ──
 // Whisper often hallucinates these when given noise/silence
-fn isHallucination(text: []const u8) bool {
+pub const isHallucination = @import("voice_filter.zig").isHallucination;
+
+fn isHallucinationLocal(text: []const u8) bool {
     if (text.len < 4) return true;
 
     // Filter text entirely wrapped in parens or brackets: (machine whirring), [BLANK_AUDIO]
@@ -680,8 +682,23 @@ fn transcribeAndSend() void {
         break :blk "bin/whisper.cpp/models/ggml-tiny.en.bin";
     };
 
+    // Pick first available whisper binary: local build, then brew's whisper-cpp.
+    const whisper_bin = blk: {
+        if (@import("../core/io_global.zig").cwdAccess("bin/whisper.cpp/build/bin/whisper-cli", .{})) |_| {
+            break :blk "bin/whisper.cpp/build/bin/whisper-cli";
+        } else |_| {}
+        if (@import("../core/io_global.zig").cwdAccess("/opt/homebrew/bin/whisper-cpp", .{})) |_| {
+            break :blk "/opt/homebrew/bin/whisper-cpp";
+        } else |_| {}
+        if (@import("../core/io_global.zig").cwdAccess("/opt/homebrew/bin/whisper-cli", .{})) |_| {
+            break :blk "/opt/homebrew/bin/whisper-cli";
+        } else |_| {}
+        setError("No ASR: install via `brew install whisper-cpp` then download a ggml model to bin/whisper.cpp/models/");
+        return;
+    };
+
     var w_child = @import("../core/io_global.zig").Child.init(
-        &.{ "bin/whisper.cpp/build/bin/whisper-cli",
+        &.{ whisper_bin,
             "-m", model,
             "-f", MIC_WAV_PATH,
             "-t", "4",
@@ -693,7 +710,7 @@ fn transcribeAndSend() void {
     w_child.stdout_behavior = .Ignore;
     w_child.stderr_behavior = .Ignore;
     _ = w_child.spawnAndWait() catch {
-        setError("No ASR engine available (install faster-whisper or whisper.cpp)");
+        setError("whisper failed — check model at bin/whisper.cpp/models/ggml-tiny.en.bin");
         return;
     };
 
@@ -772,6 +789,20 @@ fn ttsWorker() void {
 
     const state = @import("../core/state.zig");
     const text = tts_text_buf[0..tts_text_len];
+
+    // Strategy 0 (macOS): native `say` — always present, zero setup.
+    if (@import("builtin").os.tag == .macos) {
+        var say_child = @import("../core/io_global.zig").Child.init(
+            &.{ "say", text },
+            @import("../core/alloc.zig").allocator,
+        );
+        say_child.stdout_behavior = .Ignore;
+        say_child.stderr_behavior = .Ignore;
+        if (say_child.spawnAndWait()) |_| {
+            logs.pushLog("info", "voice", "Spoke via macOS say", false);
+            return;
+        } else |_| {}
+    }
 
     // Strategy 1: Persistent TTS server (instant — model already loaded)
     if (tts_server_started and speakViaServer(text)) {

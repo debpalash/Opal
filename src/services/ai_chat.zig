@@ -863,8 +863,8 @@ pub fn renderInlineResults() void {
         const name = item.name[0..item.name_len];
         const is_recommended = if (recommended_idx) |ri| ri == ci else false;
 
-        // ── Two-row card layout: name on top, metadata + actions on bottom ──
-        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+        // Single-row card: name (flex) · pct · source · quality · seeds · [+] [▶]
+        var card = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = ci + 9600,
             .expand = .horizontal,
             .background = true,
@@ -879,128 +879,101 @@ pub fn renderInlineResults() void {
             .border = dvui.Rect.all(1),
             .corner_radius = dvui.Rect.all(8),
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
-            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
         });
         defer card.deinit();
 
-        // ── Row 1: Name (full width, with optional star) ──
-        {
-            var name_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = ci + 9650,
-                .expand = .horizontal,
-            });
-            defer name_row.deinit();
-
-            // Star for recommended
-            if (is_recommended) {
-                _ = dvui.label(@src(), "★", .{}, .{
-                    .id_extra = ci + 9700,
-                    .color_text = dvui.Color{ .r = 255, .g = 200, .b = 50, .a = 255 },
-                    .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-                });
-            }
-
-            // Name — uses full width, no artificial truncation
-            _ = dvui.label(@src(), "{s}", .{name}, .{
-                .id_extra = ci + 9800,
-                .expand = .horizontal,
-                .color_text = dvui.Color{ .r = 220, .g = 225, .b = 240, .a = 255 },
+        if (is_recommended) {
+            _ = dvui.label(@src(), "★", .{}, .{
+                .id_extra = ci + 9700,
+                .color_text = dvui.Color{ .r = 255, .g = 200, .b = 50, .a = 255 },
+                .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
+                .gravity_y = 0.5,
             });
         }
 
-        // ── Row 2: Metadata badges + Action buttons ──
+        // Name — flex-grow via expand. Single line, fades on overflow.
+        _ = dvui.label(@src(), "{s}", .{name}, .{
+            .id_extra = ci + 9800,
+            .expand = .horizontal,
+            .color_text = dvui.Color{ .r = 220, .g = 225, .b = 240, .a = 255 },
+            .gravity_y = 0.5,
+        });
+
+        // Match % badge
         {
-            var meta_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = ci + 9850,
-                .expand = .horizontal,
-                .margin = .{ .x = 0, .y = 3, .w = 0, .h = 0 },
+            const pct = item.match_pct;
+            const pct_color = if (pct >= 80)
+                dvui.Color{ .r = 80, .g = 200, .b = 120, .a = 255 }
+            else if (pct >= 50)
+                dvui.Color{ .r = 220, .g = 180, .b = 50, .a = 255 }
+            else
+                dvui.Color{ .r = 180, .g = 100, .b = 80, .a = 255 };
+            _ = dvui.label(@src(), "{d}%", .{pct}, .{
+                .id_extra = ci + 10200,
+                .color_text = pct_color,
+                .margin = .{ .x = 6, .y = 0, .w = 6, .h = 0 },
                 .gravity_y = 0.5,
             });
-            defer meta_row.deinit();
+        }
 
-            // Match % badge
-            {
-                const pct = item.match_pct;
-                const pct_color = if (pct >= 80)
-                    dvui.Color{ .r = 80, .g = 200, .b = 120, .a = 255 } // green
-                else if (pct >= 50)
-                    dvui.Color{ .r = 220, .g = 180, .b = 50, .a = 255 } // yellow
-                else
-                    dvui.Color{ .r = 180, .g = 100, .b = 80, .a = 255 }; // red
-                _ = dvui.label(@src(), "{d}%", .{pct}, .{
-                    .id_extra = ci + 10200,
-                    .color_text = pct_color,
+        _ = dvui.label(@src(), "{s}", .{source_label(item.source)}, .{
+            .id_extra = ci + 9900,
+            .color_text = dvui.Color{ .r = 140, .g = 145, .b = 165, .a = 200 },
+            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            .gravity_y = 0.5,
+        });
+
+        {
+            const qlbl = quality_label(item.quality);
+            if (qlbl.len > 0) {
+                _ = dvui.label(@src(), "{s}", .{qlbl}, .{
+                    .id_extra = ci + 10000,
+                    .color_text = dvui.Color{ .r = 100, .g = 180, .b = 255, .a = 220 },
                     .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+                    .gravity_y = 0.5,
                 });
             }
+        }
 
-            // Source badge
-            _ = dvui.label(@src(), "{s}", .{source_label(item.source)}, .{
-                .id_extra = ci + 9900,
-                .color_text = dvui.Color{ .r = 140, .g = 145, .b = 165, .a = 200 },
-                .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
+        if (item.seeds > 0) {
+            _ = dvui.label(@src(), "↑{d}", .{item.seeds}, .{
+                .id_extra = ci + 10300,
+                .color_text = if (item.seeds > 20)
+                    dvui.Color{ .r = 80, .g = 200, .b = 120, .a = 220 }
+                else
+                    dvui.Color{ .r = 200, .g = 180, .b = 60, .a = 220 },
+                .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+                .gravity_y = 0.5,
             });
+        }
 
-            // Quality badge
-            {
-                const qlbl = quality_label(item.quality);
-                if (qlbl.len > 0) {
-                    _ = dvui.label(@src(), "{s}", .{qlbl}, .{
-                        .id_extra = ci + 10000,
-                        .color_text = dvui.Color{ .r = 100, .g = 180, .b = 255, .a = 220 },
-                        .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
-                    });
-                }
-            }
+        // Queue
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"plus", .{}, .{}, .{
+            .id_extra = ci + 10400,
+            .color_fill = dvui.Color{ .r = 35, .g = 40, .b = 55, .a = 255 },
+            .color_text = dvui.Color{ .r = 160, .g = 170, .b = 200, .a = 255 },
+            .corner_radius = dvui.Rect.all(6),
+            .padding = .{ .x = 5, .y = 5, .w = 5, .h = 5 },
+            .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
+            .min_size_content = .{ .w = 14, .h = 14 },
+            .gravity_y = 0.5,
+        })) {
+            queueChatResult(ci);
+        }
 
-            // Seeds badge
-            if (item.seeds > 0) {
-                _ = dvui.label(@src(), "↑{d}", .{item.seeds}, .{
-                    .id_extra = ci + 10300,
-                    .color_text = if (item.seeds > 20)
-                        dvui.Color{ .r = 80, .g = 200, .b = 120, .a = 220 }
-                    else
-                        dvui.Color{ .r = 200, .g = 180, .b = 60, .a = 220 },
-                    .margin = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
-                });
-            }
-
-            // Spacer — push action buttons to the right
-            {
-                var spacer = dvui.box(@src(), .{}, .{
-                    .id_extra = ci + 10350,
-                    .expand = .horizontal,
-                });
-                spacer.deinit();
-            }
-
-            // ── Action buttons (always visible on right) ──
-
-            // Queue button
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"plus", .{}, .{}, .{
-                .id_extra = ci + 10400,
-                .color_fill = dvui.Color{ .r = 35, .g = 40, .b = 55, .a = 255 },
-                .color_text = dvui.Color{ .r = 160, .g = 170, .b = 200, .a = 255 },
-                .corner_radius = dvui.Rect.all(6),
-                .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
-                .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
-                .min_size_content = .{ .w = 14, .h = 14 },
-            })) {
-                queueChatResult(ci);
-            }
-
-            // Play button
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"play", .{}, .{}, .{
-                .id_extra = ci + 10100,
-                .color_fill = theme.colors.accent,
-                .color_text = dvui.Color.white,
-                .corner_radius = dvui.Rect.all(6),
-                .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
-                .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
-                .min_size_content = .{ .w = 14, .h = 14 },
-            })) {
-                playChatResult(ci);
-            }
+        // Play
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"play", .{}, .{}, .{
+            .id_extra = ci + 10100,
+            .color_fill = theme.colors.accent,
+            .color_text = dvui.Color.white,
+            .corner_radius = dvui.Rect.all(6),
+            .padding = .{ .x = 5, .y = 5, .w = 5, .h = 5 },
+            .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
+            .min_size_content = .{ .w = 14, .h = 14 },
+            .gravity_y = 0.5,
+        })) {
+            playChatResult(ci);
         }
     }
 }
