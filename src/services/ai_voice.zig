@@ -234,15 +234,22 @@ pub fn toggleConversation() void {
         voice_mode = true;
         conv_phase = .listening;
 
-        // Servers are launched inside the conv thread to avoid freezing the UI
-        conv_thread = std.Thread.spawn(.{}, conversationLoopV2, .{}) catch {
+        // Pick loop: streaming if active backend supports it + deps ready,
+        // else fall back to the legacy ffmpeg-record + STT-server v2 path.
+        const vb = @import("voice_backend.zig");
+        const deps = @import("../core/deps.zig");
+        const use_streaming = vb.active().supports_streaming and deps.check().sherpa_stream_model;
+        conv_thread = (if (use_streaming)
+            std.Thread.spawn(.{}, conversationLoopSherpa, .{})
+        else
+            std.Thread.spawn(.{}, conversationLoopV2, .{})) catch {
             conversation_active = false;
             conv_phase = .idle;
             setError("Failed to start conversation mode");
             return;
         };
         conv_thread.?.detach();
-        logs.pushLog("info", "voice", "Conversation mode v2 started", true);
+        logs.pushLog("info", "voice", if (use_streaming) "Conv mode: sherpa streaming" else "Conv mode: v2 (legacy)", true);
     }
 }
 
@@ -270,6 +277,73 @@ pub fn notifyMediaState(media_playing: bool) void {
 
 /// V3 conversation loop: event-driven with barge-in support.
 /// Voice server keeps VAD running during TTS for interrupt detection.
+/// Sherpa streaming conversation loop — phase 4b.
+/// Spawns sherpa-onnx-microphone via voice_backend.spawnStreamingConvo,
+/// reads its stdout line-by-line, dispatches each final transcript to
+/// ai_chat just like the user typed it. No fixed record ceiling — VAD
+/// driven, runs until user toggles convo off.
+fn conversationLoopSherpa() void {
+    defer {
+        conv_phase = .idle;
+        conversation_active = false;
+        is_recording = false;
+    }
+
+    const vb = @import("voice_backend.zig");
+    const S = struct {
+        fn onTranscript(_: []const u8) void {} // placeholder; real dispatch inline below
+    };
+    var child = vb.spawnStreamingConvo(&S.onTranscript) orelse {
+        logs.pushLog("error", "voice", "Sherpa streaming spawn failed — falling back to v2", false);
+        conversationLoopV2();
+        return;
+    };
+    defer _ = child.kill() catch {};
+
+    const stdout = child.stdout orelse {
+        logs.pushLog("error", "voice", "Sherpa child has no stdout pipe", false);
+        return;
+    };
+
+    // sherpa-onnx-microphone output format:
+    //   "0:Text here"     → interim partial
+    //   "OK"               → silence/pause boundary
+    // We dispatch on each non-empty text line that looks like a final.
+    var reader_buf: [4096]u8 = undefined;
+    var reader = stdout.reader(@import("../core/io_global.zig").io(), &reader_buf);
+
+    conv_phase = .listening;
+    while (conversation_active) {
+        const line = reader.interface.takeDelimiter('\n') catch break orelse break;
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+
+        // Strip sherpa's "N:" prefix (chunk counter)
+        const text = blk: {
+            if (std.mem.indexOfScalar(u8, trimmed, ':')) |idx| {
+                break :blk std.mem.trim(u8, trimmed[idx + 1 ..], " \t");
+            }
+            break :blk trimmed;
+        };
+        if (text.len < 3) continue;
+        if (@import("voice_filter.zig").isHallucination(text)) continue;
+
+        conv_phase = .transcribing;
+        if (on_transcribed_fn) |f| f(text);
+        // Wait for LLM to finish before listening again so TTS doesn't
+        // compete with mic input.
+        conv_phase = .thinking;
+        var wait: usize = 0;
+        const chat = @import("ai_chat.zig");
+        while (chat.is_generating and conversation_active and wait < 300) : (wait += 1) {
+            @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
+        }
+        // Response queued; TTS fires from ai_chat.setResponseText path.
+        // Return to listening for the next turn.
+        conv_phase = .listening;
+    }
+}
+
 fn conversationLoopV2() void {
     const c_pkg = @import("../core/c.zig");
     const state = @import("../core/state.zig");
