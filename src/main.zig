@@ -42,6 +42,17 @@ fn appInit(win: *dvui.Window) !void {
     // Skips if already present. Binaries (apfel/ffmpeg/whisper-cpp) must
     // come via brew — we only surface install hints via deps.installCmd.
     @import("core/deps.zig").fetchWhisperModelAsync();
+
+    // Phase 5 default-promotion — if every sherpa piece is present
+    // (CLIs + STT + TTS + streaming models), switch voice backend to
+    // sherpa-onnx silently. User can still override in Settings.
+    {
+        const deps = @import("core/deps.zig");
+        const vb = @import("services/voice_backend.zig");
+        if (deps.sherpaReady(deps.check())) {
+            vb.active_kind = .sherpa_onnx;
+        }
+    }
     state.app.players = .empty;
     search.search_results = .empty;
 

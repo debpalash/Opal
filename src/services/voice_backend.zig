@@ -36,6 +36,11 @@ pub const Backend = struct {
     /// Human-readable name for settings UI.
     name: []const u8,
 
+    /// Whether this backend can run VAD-driven streaming transcription
+    /// for live convo mode (no 15s fixed record ceiling). Checked via
+    /// deps.sherpaReady at runtime.
+    supports_streaming: bool = false,
+
     pub fn transcribe(b: Backend, wav_path: []const u8, out_buf: []u8) ?[]const u8 {
         return b.transcribeFn(wav_path, out_buf);
     }
@@ -269,7 +274,8 @@ const sherpa_onnx_backend: Backend = .{
     .kind = .sherpa_onnx,
     .transcribeFn = sherpaOnnxTranscribe,
     .speakFn = sherpaOnnxSpeak,
-    .name = "sherpa-onnx (streaming + Kokoro)",
+    .name = "sherpa-onnx (streaming + VITS)",
+    .supports_streaming = true,
 };
 
 const apple_native_backend: Backend = .{
@@ -300,6 +306,58 @@ pub fn active() Backend {
 
 pub fn allKinds() []const Kind {
     return &.{ .whisper_cpp_plus_say, .sherpa_onnx, .apple_native, .speaches };
+}
+
+/// Spawn sherpa-onnx-microphone in the background for continuous,
+/// VAD-driven transcription. Emits one transcript per voiced turn via
+/// the provided callback. Returns the spawned Child so caller can kill
+/// it on convo-mode exit. Returns null if prerequisites missing.
+pub fn spawnStreamingConvo(
+    on_transcript: *const fn ([]const u8) void,
+) ?io_global.Child {
+    _ = on_transcript;
+    const deps = @import("../core/deps.zig");
+    const s = deps.check();
+    if (!(s.sherpa_mic_cli and s.sherpa_stream_model)) {
+        logs.pushLog("warn", "voice_backend", "streaming convo needs sherpa-onnx-microphone + zipformer model", false);
+        return null;
+    }
+
+    var home_buf: [64]u8 = undefined;
+    _ = &home_buf;
+    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+
+    var enc_buf: [512]u8 = undefined;
+    var dec_buf: [512]u8 = undefined;
+    var join_buf: [512]u8 = undefined;
+    var tok_buf: [512]u8 = undefined;
+    const enc = std.fmt.bufPrintZ(&enc_buf, "{s}/.config/opal/models/sherpa-stream-zipformer/encoder.onnx", .{home}) catch return null;
+    const dec = std.fmt.bufPrintZ(&dec_buf, "{s}/.config/opal/models/sherpa-stream-zipformer/decoder.onnx", .{home}) catch return null;
+    const join = std.fmt.bufPrintZ(&join_buf, "{s}/.config/opal/models/sherpa-stream-zipformer/joiner.onnx", .{home}) catch return null;
+    const tok = std.fmt.bufPrintZ(&tok_buf, "{s}/.config/opal/models/sherpa-stream-zipformer/tokens.txt", .{home}) catch return null;
+
+    var enc_arg: [640]u8 = undefined;
+    var dec_arg: [640]u8 = undefined;
+    var join_arg: [640]u8 = undefined;
+    var tok_arg: [640]u8 = undefined;
+    const a_enc = std.fmt.bufPrint(&enc_arg, "--encoder={s}", .{enc}) catch return null;
+    const a_dec = std.fmt.bufPrint(&dec_arg, "--decoder={s}", .{dec}) catch return null;
+    const a_join = std.fmt.bufPrint(&join_arg, "--joiner={s}", .{join}) catch return null;
+    const a_tok = std.fmt.bufPrint(&tok_arg, "--tokens={s}", .{tok}) catch return null;
+
+    var child = io_global.Child.init(&.{
+        "/opt/homebrew/bin/sherpa-onnx-microphone",
+        a_tok, a_enc, a_dec, a_join,
+    }, @import("../core/alloc.zig").allocator);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return null;
+
+    // Reader loop belongs to a caller thread in ai_voice when we wire
+    // this into conversation mode. Parser reads lines of form
+    // "Partial: …" / "Final: …" and calls on_transcript on Final.
+    logs.pushLog("info", "voice_backend", "streaming convo started", true);
+    return child;
 }
 
 test "default backend is whisper_cpp_plus_say" {

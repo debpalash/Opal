@@ -16,7 +16,17 @@ pub const Status = struct {
     sherpa_onnx: bool = false,
     sherpa_model: bool = false,
     sherpa_tts_model: bool = false,
+    sherpa_stream_model: bool = false,
+    sherpa_mic_cli: bool = false,
 };
+
+/// Returns true when the full sherpa stack (CLI + STT + TTS + streaming
+/// + mic CLI) is present — allows voice_backend to auto-promote sherpa
+/// to default.
+pub fn sherpaReady(s: Status) bool {
+    return s.sherpa_onnx and s.sherpa_model and s.sherpa_tts_model and
+        s.sherpa_stream_model and s.sherpa_mic_cli;
+}
 
 pub fn check() Status {
     var s: Status = .{};
@@ -40,6 +50,12 @@ pub fn check() Status {
     if (std.fmt.bufPrintZ(&sherpa_tts_buf, "{s}/.config/opal/models/sherpa-vits-piper/en_US-lessac-medium.onnx", .{home2})) |p| {
         s.sherpa_tts_model = have(p);
     } else |_| {}
+    var sherpa_stream_buf: [512]u8 = undefined;
+    if (std.fmt.bufPrintZ(&sherpa_stream_buf, "{s}/.config/opal/models/sherpa-stream-zipformer/encoder.onnx", .{home2})) |p| {
+        s.sherpa_stream_model = have(p);
+    } else |_| {}
+    s.sherpa_mic_cli = have("/opt/homebrew/bin/sherpa-onnx-microphone") or
+        have("/usr/local/bin/sherpa-onnx-microphone");
 
     var home_buf: [512]u8 = undefined;
     const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
@@ -202,6 +218,68 @@ pub fn fetchSherpaTtsAsync() void {
     };
     _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
         sherpa_tts_downloading = false;
+    };
+}
+
+/// Fetch sherpa streaming Zipformer bundle (~80MB) for live-convo
+/// (VAD-driven real-time transcription, replaces the fixed 15s record).
+pub var sherpa_stream_downloading: bool = false;
+
+pub fn fetchSherpaStreamAsync() void {
+    if (sherpa_stream_downloading) return;
+    sherpa_stream_downloading = true;
+    const S = struct {
+        fn worker() void {
+            defer sherpa_stream_downloading = false;
+            var home_buf: [512]u8 = undefined;
+            const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return;
+            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
+            io_global.makeDirAbsolute(models_dir) catch {};
+
+            var tar_buf: [512]u8 = undefined;
+            const tar_path = std.fmt.bufPrintZ(&tar_buf, "{s}/sherpa-stream-zipformer.tar.bz2", .{models_dir}) catch return;
+
+            var check_buf: [512]u8 = undefined;
+            const check_path = std.fmt.bufPrintZ(&check_buf, "{s}/sherpa-stream-zipformer/encoder.onnx", .{models_dir}) catch return;
+            if (io_global.cwdAccess(check_path, .{})) |_| return else |_| {}
+
+            logs.pushLog("info", "deps", "Fetching streaming Zipformer (~80MB)…", true);
+            var curl = io_global.Child.init(&.{
+                "curl", "-L", "--fail", "--silent", "--show-error",
+                "-o", tar_path,
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2",
+            }, @import("alloc.zig").allocator);
+            curl.stdout_behavior = .Ignore;
+            curl.stderr_behavior = .Ignore;
+            curl.spawn() catch {
+                logs.pushLog("error", "deps", "curl missing — can't fetch streaming model", false);
+                return;
+            };
+            _ = curl.wait() catch {};
+
+            var untar = io_global.Child.init(&.{
+                "tar", "-xjf", tar_path, "-C", models_dir,
+            }, @import("alloc.zig").allocator);
+            untar.stdout_behavior = .Ignore;
+            untar.stderr_behavior = .Ignore;
+            _ = untar.spawnAndWait() catch {};
+
+            // Upstream archive dir name is long; rename to short stable path.
+            var src_buf: [512]u8 = undefined;
+            const src = std.fmt.bufPrintZ(&src_buf, "{s}/sherpa-onnx-streaming-zipformer-en-2023-06-26", .{models_dir}) catch return;
+            var dst_buf: [512]u8 = undefined;
+            const dst = std.fmt.bufPrintZ(&dst_buf, "{s}/sherpa-stream-zipformer", .{models_dir}) catch return;
+            var mv = io_global.Child.init(&.{ "mv", "-f", src, dst }, @import("alloc.zig").allocator);
+            mv.stdout_behavior = .Ignore;
+            mv.stderr_behavior = .Ignore;
+            _ = mv.spawnAndWait() catch {};
+
+            io_global.deleteFileAbsolute(tar_path) catch {};
+            logs.pushLog("info", "deps", "Streaming Zipformer model ready", true);
+        }
+    };
+    _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
+        sherpa_stream_downloading = false;
     };
 }
 
