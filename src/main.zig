@@ -476,10 +476,31 @@ fn renderChatDropdown() void {
             .corner_radius = dvui.Rect.all(6),
         });
         defer msg_box.deinit();
-        _ = dvui.label(@src(), "{s}", .{if (is_user) "You" else "AI"}, .{
-            .id_extra = mi,
-            .color_text = if (is_user) theme.colors.accent else theme.colors.text_muted,
-        });
+        // Header row: role label + regenerate on AI replies
+        {
+            var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = mi + 91500,
+                .expand = .horizontal,
+            });
+            defer hdr.deinit();
+            _ = dvui.label(@src(), "{s}", .{if (is_user) "You" else "AI"}, .{
+                .id_extra = mi,
+                .color_text = if (is_user) theme.colors.accent else theme.colors.text_muted,
+            });
+            if (!is_user) {
+                { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+                if (dvui.buttonIcon(@src(), "", @import("icons").tvg.lucide.@"rotate-ccw", .{}, .{}, .{
+                    .id_extra = mi + 91800,
+                    .color_text = theme.colors.text_muted,
+                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .border = dvui.Rect.all(0),
+                    .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
+                    .min_size_content = .{ .w = 12, .h = 12 },
+                })) {
+                    ai_chat_mod.regenerateFrom(mi);
+                }
+            }
+        }
         _ = dvui.label(@src(), "{s}", .{m.text[0..m.text_len]}, .{
             .id_extra = mi + 1,
             .color_text = theme.colors.text_main,
