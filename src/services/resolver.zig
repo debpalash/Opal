@@ -450,78 +450,67 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
         return;
     };
 
-    // Stream results line-by-line as they come in (don't wait for all)
-    var line_buf: [2048]u8 = undefined;
-    var line_pos: usize = 0;
-    const stdout_file = child.stdout.?;
+    // Use the same reader.interface.takeDelimiter pattern that search.zig
+    // uses — it's 0.16-native and known to work (drawer search pulls 200+
+    // rows reliably). Byte-by-byte reads via our shim were dropping data
+    // on pipe WouldBlock + reader-buffer resets.
+    var child_reader_buf: [2048]u8 = undefined;
+    var reader = child.stdout.?.reader(@import("../core/io_global.zig").io(), &child_reader_buf);
+
     var found: usize = 0;
-
     while (found < 15) {
-        var byte: [1]u8 = undefined;
-        const n = @import("../core/io_global.zig").read(stdout_file, &byte) catch break;
-        if (n == 0) break;
+        const line = reader.interface.takeDelimiter('\n') catch break orelse break;
+        if (line.len < 10) continue;
 
-        if (byte[0] == '\n') {
-            const line = line_buf[0..line_pos];
-            line_pos = 0;
-            if (line.len < 10) continue;
+        // Parse pipe-delimited: link|name|size|seeds|leech|engine
+        var it = std.mem.splitScalar(u8, line, '|');
+        const link = it.next() orelse continue;
+        const name = it.next() orelse continue;
+        _ = it.next(); // size
+        const seeds_str = it.next() orelse continue;
+        _ = it.next(); // leech
+        const engine = it.next() orelse continue;
 
-            // Parse pipe-delimited: link|name|size|seeds|leech|engine
-            var it = std.mem.splitScalar(u8, line, '|');
-            const link = it.next() orelse continue;
-            const name = it.next() orelse continue;
-            _ = it.next(); // size
-            const seeds_str = it.next() orelse continue;
-            _ = it.next(); // leech
-            const engine = it.next() orelse continue;
+        if (name.len < 3 or link.len < 5) continue;
 
-            if (name.len < 3 or link.len < 5) continue;
+        var item = std.mem.zeroes(ResolvedItem);
+        item.source = .torrent;
 
-            var item = std.mem.zeroes(ResolvedItem);
-            item.source = .torrent;
+        const nlen = @min(name.len, 255);
+        @memcpy(item.name[0..nlen], name[0..nlen]);
+        item.name_len = nlen;
 
-            const nlen = @min(name.len, 255);
-            @memcpy(item.name[0..nlen], name[0..nlen]);
-            item.name_len = nlen;
+        const ulen = @min(link.len, 511);
+        @memcpy(item.url[0..ulen], link[0..ulen]);
+        item.url_len = ulen;
 
-            const ulen = @min(link.len, 511);
-            @memcpy(item.url[0..ulen], link[0..ulen]);
-            item.url_len = ulen;
+        item.quality = detectQuality(name);
+        item.seeds = std.fmt.parseInt(u16, seeds_str, 10) catch 0;
 
-            item.quality = detectQuality(name);
-            item.seeds = std.fmt.parseInt(u16, seeds_str, 10) catch 0;
-
-            // Clean engine name from URL
-            var eng_buf: [32]u8 = undefined;
-            var eng_name: []const u8 = engine;
-            if (std.mem.indexOf(u8, engine, "://")) |_| {
-                // It's a URL, extract domain
-                var s = engine;
-                if (std.mem.indexOf(u8, s, "://")) |pi| s = s[pi + 3 ..];
-                if (std.mem.startsWith(u8, s, "www.")) s = s[4..];
-                var end: usize = s.len;
-                for (s, 0..) |ch, j| {
-                    if (ch == '.' or ch == '/') { end = j; break; }
-                }
-                const elen = @min(end, 31);
-                @memcpy(eng_buf[0..elen], s[0..elen]);
-                eng_name = eng_buf[0..elen];
+        // Clean engine name from URL
+        var eng_buf: [32]u8 = undefined;
+        var eng_name: []const u8 = engine;
+        if (std.mem.indexOf(u8, engine, "://")) |_| {
+            var s = engine;
+            if (std.mem.indexOf(u8, s, "://")) |pi| s = s[pi + 3 ..];
+            if (std.mem.startsWith(u8, s, "www.")) s = s[4..];
+            var end: usize = s.len;
+            for (s, 0..) |ch, j| {
+                if (ch == '.' or ch == '/') { end = j; break; }
             }
-
-            var det: [128]u8 = undefined;
-            const dstr = std.fmt.bufPrint(&det, "Torrent · {s} · {s} seeds", .{ eng_name, seeds_str }) catch "Torrent";
-            const dlen = @min(dstr.len, 127);
-            @memcpy(item.detail[0..dlen], dstr[0..dlen]);
-            item.detail_len = dlen;
-
-            pushResult(item);
-            found += 1;
-        } else {
-            if (line_pos < line_buf.len) {
-                line_buf[line_pos] = byte[0];
-                line_pos += 1;
-            }
+            const elen = @min(end, 31);
+            @memcpy(eng_buf[0..elen], s[0..elen]);
+            eng_name = eng_buf[0..elen];
         }
+
+        var det: [128]u8 = undefined;
+        const dstr = std.fmt.bufPrint(&det, "Torrent · {s} · {s} seeds", .{ eng_name, seeds_str }) catch "Torrent";
+        const dlen = @min(dstr.len, 127);
+        @memcpy(item.detail[0..dlen], dstr[0..dlen]);
+        item.detail_len = dlen;
+
+        pushResult(item);
+        found += 1;
     }
 
     _ = child.wait() catch {};
