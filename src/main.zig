@@ -68,6 +68,10 @@ fn appInit(win: *dvui.Window) !void {
             const database = @import("core/db.zig");
             database.init();
 
+            // Restore starred AI chat messages before anything else touches
+            // the message array.
+            @import("services/ai_chat.zig").loadStarredFromDb();
+
             // Migrate old flat files → SQLite (one-time, idempotent)
             const config = @import("core/config.zig");
             config.migrateFromTsv();

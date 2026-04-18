@@ -32,6 +32,60 @@ pub const Message = struct {
 pub fn toggleStar(idx: usize) void {
     if (idx >= message_count) return;
     messages[idx].starred = !messages[idx].starred;
+    if (messages[idx].starred) {
+        saveStarredToDb(messages[idx]);
+    } else {
+        removeStarredFromDb(messages[idx]);
+    }
+}
+
+// ── SQLite persistence for starred messages ──
+
+const db = @import("../core/db.zig");
+
+fn roleToInt(r: Role) c_int {
+    return switch (r) { .user => 0, .assistant => 1, .system => 2 };
+}
+
+fn intToRole(n: c_int) Role {
+    return switch (n) { 0 => .user, 1 => .assistant, else => .system };
+}
+
+fn saveStarredToDb(m: Message) void {
+    const stmt = db.prepare("INSERT INTO ai_chat_starred (role, text) VALUES (?, ?)") orelse return;
+    defer db.finalize(stmt);
+    db.bindInt(stmt, 1, roleToInt(m.role));
+    db.bindText(stmt, 2, m.text[0..m.text_len]);
+    _ = db.step(stmt);
+}
+
+fn removeStarredFromDb(m: Message) void {
+    const stmt = db.prepare("DELETE FROM ai_chat_starred WHERE role = ? AND text = ?") orelse return;
+    defer db.finalize(stmt);
+    db.bindInt(stmt, 1, roleToInt(m.role));
+    db.bindText(stmt, 2, m.text[0..m.text_len]);
+    _ = db.step(stmt);
+}
+
+/// Load starred messages from SQLite into the message array at startup.
+/// Called once from main.appInit after db.init().
+pub fn loadStarredFromDb() void {
+    const stmt = db.prepare("SELECT role, text FROM ai_chat_starred ORDER BY created_at ASC") orelse return;
+    defer db.finalize(stmt);
+    while (db.step(stmt) == 100) { // SQLITE_ROW = 100
+        if (message_count >= MAX_MESSAGES) break;
+        const role_int = db.columnInt(stmt, 0);
+        const text = db.columnText(stmt, 1) orelse continue;
+        if (text.len == 0) continue;
+        const m = &messages[message_count];
+        m.role = intToRole(role_int);
+        const n = @min(text.len, MAX_MSG_LEN);
+        @memset(&m.text, 0);
+        @memcpy(m.text[0..n], text[0..n]);
+        m.text_len = n;
+        m.starred = true;
+        message_count += 1;
+    }
 }
 
 // ── Chat state ──

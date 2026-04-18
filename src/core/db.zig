@@ -217,6 +217,19 @@ fn createTables() void {
         \\)
     );
     exec("CREATE INDEX IF NOT EXISTS idx_wsess_at ON watch_sessions(started_at DESC)");
+
+    // AI chat — persist starred messages so pins survive restart.
+    // role: 0=user, 1=assistant, 2=system. Only starred rows saved.
+    const ai_chat_schema =
+        \\CREATE TABLE IF NOT EXISTS ai_chat_starred (
+        \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+        \\  role INTEGER NOT NULL,
+        \\  text TEXT NOT NULL,
+        \\  created_at INTEGER DEFAULT (strftime('%s','now'))
+        \\)
+    ;
+    exec(ai_chat_schema);
+    exec("CREATE INDEX IF NOT EXISTS idx_ai_chat_starred_at ON ai_chat_starred(created_at DESC)");
 }
 
 // ══════════════════════════════════════════════════════════
