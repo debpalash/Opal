@@ -33,6 +33,23 @@ pub var message_count: usize = 0;
 pub var input_buf: [MAX_INPUT_LEN]u8 = std.mem.zeroes([MAX_INPUT_LEN]u8);
 pub var input_len: usize = 0;
 pub var is_generating: bool = false;
+
+/// Fine-grained phase reporting so the UI can show what the AI is
+/// actually doing, not just "Thinking…". Set at transitions in
+/// ai_context.generateResponse + fastPathResolve. Voicebox pattern.
+pub const Phase = enum { idle, searching, waiting_server, thinking, tool_calling, streaming };
+pub var phase: Phase = .idle;
+
+pub fn phaseLabel(p: Phase) []const u8 {
+    return switch (p) {
+        .idle => "",
+        .searching => "Searching…",
+        .waiting_server => "Starting AI…",
+        .thinking => "Thinking…",
+        .tool_calling => "Running tool…",
+        .streaming => "Writing…",
+    };
+}
 pub var llm_thread: ?std.Thread = null;
 
 // ── Error state ──
@@ -1010,6 +1027,35 @@ fn queueChatResult(idx: usize) void {
 // ══════════════════════════════════════════════════════════
 //  LLM Backend
 // ══════════════════════════════════════════════════════════
+
+/// Take-again: drop the last assistant reply + re-run generation from
+/// the user prompt just before it. Message index passed in because
+/// dropdown + grid chat both render lists and need to target one msg.
+pub fn regenerateFrom(assistant_idx: usize) void {
+    if (assistant_idx >= message_count) return;
+    if (is_generating) return;
+    if (messages[assistant_idx].role != .assistant) return;
+    // Need a user message before it.
+    if (assistant_idx == 0 or messages[assistant_idx - 1].role != .user) return;
+
+    // Clear just the assistant's text — keep the slot, generateResponse
+    // writes into the last assistant slot.
+    messages[assistant_idx].text_len = 0;
+    // Trim everything after (tool-call tails, etc.)
+    message_count = assistant_idx + 1;
+
+    is_generating = true;
+    phase = .waiting_server;
+    last_error_len = 0;
+
+    llm_thread = std.Thread.spawn(.{}, ai_context.generateResponse, .{}) catch {
+        is_generating = false;
+        phase = .idle;
+        setError("Regenerate: failed to spawn thread");
+        return;
+    };
+    llm_thread.?.detach();
+}
 
 pub fn trySendMessage() void {
     // Ensure path detection has run (renderChatBody normally does this,

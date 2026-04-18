@@ -720,6 +720,56 @@ fn renderPlaybackTab() void {
             state.showToast("Press L to set A-B loop, then export");
         }
     }
+
+    // ── Voice Backend Card ──
+    sectionHeader("Voice Backend", "STT + TTS engine for mic / conversation mode", 24, @src());
+    {
+        const vb = @import("../services/voice_backend.zig");
+        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .horizontal, .background = true, .color_fill = card_bg,
+            .color_border = card_border, .border = dvui.Rect.all(1),
+            .corner_radius = dvui.Rect.all(8),
+            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+        });
+        defer card.deinit();
+
+        for (vb.allKinds(), 0..) |kind, i| {
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = 4000 + i,
+                .expand = .horizontal,
+                .margin = .{ .y = 2 },
+            });
+            defer row.deinit();
+
+            const active = kind == vb.active_kind;
+            const dot = if (active) "●" else "○";
+            _ = dvui.label(@src(), "{s}", .{dot}, .{
+                .id_extra = i,
+                .color_text = if (active) theme.colors.accent else muted_text,
+                .min_size_content = .{ .w = 16, .h = 0 },
+                .gravity_y = 0.5,
+            });
+
+            // Build backend instance just to read .name
+            const tmp_kind = vb.active_kind;
+            vb.active_kind = kind;
+            const b = vb.active();
+            vb.active_kind = tmp_kind;
+
+            if (dvui.button(@src(), b.name, .{}, .{
+                .id_extra = i,
+                .color_fill = if (active) btn_active else btn_inactive,
+                .color_text = if (active) btn_text_active else label_text,
+                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                .corner_radius = dvui.Rect.all(6),
+                .expand = .horizontal,
+            })) {
+                vb.active_kind = kind;
+                state.showToast("Voice backend changed — restart conversation mode to apply");
+            }
+        }
+    }
 }
 
 fn renderNetworkTab() void {

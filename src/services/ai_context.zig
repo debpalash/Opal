@@ -755,7 +755,8 @@ pub fn tryFastPath(raw_input: []const u8) bool {
 }
 
 fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, action: FastPathAction) void {
-    defer { chat.is_generating = false; }
+    chat.phase = .searching;
+    defer { chat.is_generating = false; chat.phase = .idle; }
 
     const query = query_buf[0..query_len];
     resolver.resolve(query, "auto");
@@ -863,14 +864,17 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
 var tool_depth: u8 = 0;
 
 pub fn generateResponse() void {
+    chat.phase = .waiting_server;
     // Serialize every model-touching call across the app. Other callers
     // (TTS speak, STT transcribe, tool-chain recursion) acquire the same
     // mutex so we never have two concurrent inference paths hitting apfel.
     server.inference_mutex.lock();
     defer server.inference_mutex.unlock();
+    chat.phase = .thinking;
 
     defer {
         chat.is_generating = false;
+        chat.phase = .idle;
         tool_depth = 0;  // Reset depth when the chain completes
     }
 
@@ -1323,6 +1327,7 @@ pub fn generateResponse() void {
                     chat.messages[chat.message_count] = .{ .role = .assistant, .text_len = 0 };
                     chat.message_count += 1;
                     tool_depth += 1;
+                    chat.phase = .tool_calling;
                     generateResponse();
                     return;
                 }

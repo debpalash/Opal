@@ -253,6 +253,109 @@ fn sdlEventWatch(_: ?*anyopaque, event: [*c]c.sdl.SDL_Event) callconv(.c) c_int 
     return 1;
 }
 
+/// Slash command menu — shows a floating list of known commands when
+/// input starts with '/'. Click fills the input with the command.
+fn renderSlashMenu() void {
+    const text_len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
+    if (text_len == 0) return;
+    if (state.app.magnet_buf[0] != '/') return;
+
+    const Cmd = struct { key: []const u8, desc: []const u8 };
+    const cmds = [_]Cmd{
+        .{ .key = "/play ",       .desc = "Search + play best match — play iron man 3" },
+        .{ .key = "/find ",       .desc = "Search only, show results" },
+        .{ .key = "/watch ",      .desc = "Alias for /play" },
+        .{ .key = "/pause",       .desc = "Pause current playback" },
+        .{ .key = "/resume",      .desc = "Resume playback" },
+        .{ .key = "/seek ",       .desc = "Jump to time — /seek 1:23" },
+        .{ .key = "/volume ",     .desc = "Set volume 0-100" },
+        .{ .key = "/mute",        .desc = "Toggle mute" },
+        .{ .key = "/fullscreen",  .desc = "Toggle fullscreen" },
+        .{ .key = "/subtitles",   .desc = "Cycle subtitle tracks" },
+        .{ .key = "/queue ",      .desc = "Add URL to queue" },
+        .{ .key = "/next",        .desc = "Next episode / playlist item" },
+        .{ .key = "/recommend ",  .desc = "TMDB-based suggestions" },
+    };
+
+    const typed = state.app.magnet_buf[0..text_len];
+    const lower = blk: {
+        var lb: [128]u8 = undefined;
+        const n = @min(typed.len, lb.len);
+        for (0..n) |i| lb[i] = std.ascii.toLower(typed[i]);
+        break :blk lb[0..n];
+    };
+
+    const vw = dvui.windowRectPixels().w;
+    const w: f32 = @min(560, vw * 0.6);
+    const x: f32 = (vw - w) / 2;
+    const ns = dvui.windowNaturalScale();
+    var rect = dvui.Rect{ .x = x / ns, .y = 56 / ns, .w = w / ns, .h = 240 / ns };
+
+    var fw = dvui.floatingWindow(@src(), .{
+        .rect = &rect,
+        .stay_above_parent_window = false,
+    }, .{
+        .background = true,
+        .color_fill = dvui.Color{ .r = 14, .g = 14, .b = 20, .a = 248 },
+        .color_border = theme.colors.accent,
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(10),
+    });
+    defer fw.deinit();
+
+    var pad = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .both,
+        .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
+    });
+    defer pad.deinit();
+
+    _ = dvui.label(@src(), "Commands", .{}, .{
+        .color_text = theme.colors.accent,
+        .margin = .{ .h = 6 },
+    });
+
+    var any_shown = false;
+    for (cmds, 0..) |cmd, i| {
+        // Prefix-filter by typed input
+        const prefix_len = @min(lower.len, cmd.key.len);
+        if (!std.mem.startsWith(u8, cmd.key, lower[0..prefix_len])) continue;
+        any_shown = true;
+
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i,
+            .expand = .horizontal,
+            .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
+        });
+        defer row.deinit();
+
+        if (dvui.button(@src(), cmd.key, .{}, .{
+            .id_extra = i,
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = theme.colors.accent,
+            .border = dvui.Rect.all(0),
+            .padding = .{ .x = 4, .y = 0, .w = 4, .h = 0 },
+            .min_size_content = .{ .w = 140, .h = 0 },
+            .gravity_y = 0.5,
+        })) {
+            @memset(&state.app.magnet_buf, 0);
+            @memcpy(state.app.magnet_buf[0..cmd.key.len], cmd.key);
+        }
+        _ = dvui.label(@src(), "{s}", .{cmd.desc}, .{
+            .id_extra = i + 100,
+            .color_text = theme.colors.text_muted,
+            .gravity_y = 0.5,
+        });
+    }
+
+    if (!any_shown) {
+        _ = dvui.label(@src(), "No commands match.", .{}, .{
+            .color_text = theme.colors.text_muted,
+            .gravity_x = 0.5,
+            .margin = .{ .y = 12 },
+        });
+    }
+}
+
 /// Dropdown chat panel — floats below navbar input, overlays video.
 /// User dismisses via close (X) button OR by clearing input + idle state.
 fn renderChatDropdown() void {
@@ -334,7 +437,11 @@ fn renderChatDropdown() void {
         .transcribing => "Transcribing…",
         .thinking => "Thinking…",
         .speaking => "Speaking…",
-        .idle => if (ai_chat_mod.is_generating) "Thinking…" else null,
+        .idle => blk: {
+            const chat_phase_label = ai_chat_mod.phaseLabel(ai_chat_mod.phase);
+            if (chat_phase_label.len > 0) break :blk chat_phase_label;
+            break :blk null;
+        },
     };
     if (phase_txt) |txt| {
         _ = dvui.label(@src(), "〰 {s}", .{txt}, .{
@@ -430,7 +537,11 @@ fn renderInlineChatDock() void {
         .transcribing => "Transcribing…",
         .thinking => "Thinking…",
         .speaking => "Speaking…",
-        .idle => if (ai_chat_mod.is_generating) "Thinking…" else null,
+        .idle => blk: {
+            const chat_phase_label = ai_chat_mod.phaseLabel(ai_chat_mod.phase);
+            if (chat_phase_label.len > 0) break :blk chat_phase_label;
+            break :blk null;
+        },
     };
     if (phase_txt) |txt| {
         _ = dvui.label(@src(), "〰 {s}", .{txt}, .{
@@ -817,6 +928,9 @@ fn appFrame() !dvui.App.Result {
             if (is_typing or voice_active or is_thinking) {
                 renderChatDropdown();
             }
+            // Slash-command autocomplete popover — shows only when input
+            // first char is '/'. Independent of the chat dropdown.
+            renderSlashMenu();
         }
     }
 
