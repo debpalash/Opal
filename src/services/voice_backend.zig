@@ -74,15 +74,94 @@ fn sayTtsSpeak(text: []const u8) void {
 // ────────── Impl: sherpa-onnx (stub) ──────────
 
 fn sherpaOnnxTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
-    _ = wav_path;
-    _ = out_buf;
-    logs.pushLog("warn", "voice_backend", "sherpa-onnx backend not yet implemented", false);
+    // Locate CLI
+    const bin: []const u8 = blk: {
+        if (io_global.cwdAccess("/opt/homebrew/bin/sherpa-onnx-offline", .{})) |_| {
+            break :blk "/opt/homebrew/bin/sherpa-onnx-offline";
+        } else |_| {}
+        if (io_global.cwdAccess("/usr/local/bin/sherpa-onnx-offline", .{})) |_| {
+            break :blk "/usr/local/bin/sherpa-onnx-offline";
+        } else |_| {}
+        logs.pushLog("error", "voice_backend", "sherpa-onnx-offline not on PATH — brew install sherpa-onnx", false);
+        return null;
+    };
+
+    // Locate whisper-tiny model dir (sherpa-onnx bundles tokens.txt +
+    // encoder/decoder.onnx). User-installed at ~/.config/opal/models/.
+    var home_buf: [256]u8 = undefined;
+    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+    var enc_buf: [512]u8 = undefined;
+    var dec_buf: [512]u8 = undefined;
+    var tok_buf: [512]u8 = undefined;
+    _ = &home_buf;
+    const enc = std.fmt.bufPrintZ(&enc_buf, "{s}/.config/opal/models/sherpa-whisper-tiny/tiny-encoder.onnx", .{home}) catch return null;
+    const dec = std.fmt.bufPrintZ(&dec_buf, "{s}/.config/opal/models/sherpa-whisper-tiny/tiny-decoder.onnx", .{home}) catch return null;
+    const tok = std.fmt.bufPrintZ(&tok_buf, "{s}/.config/opal/models/sherpa-whisper-tiny/tiny-tokens.txt", .{home}) catch return null;
+    io_global.cwdAccess(enc, .{}) catch {
+        logs.pushLog("warn", "voice_backend", "sherpa whisper model missing — see docs for model install", false);
+        return null;
+    };
+
+    var enc_arg_buf: [768]u8 = undefined;
+    var dec_arg_buf: [768]u8 = undefined;
+    var tok_arg_buf: [768]u8 = undefined;
+    const enc_arg = std.fmt.bufPrint(&enc_arg_buf, "--whisper-encoder={s}", .{enc}) catch return null;
+    const dec_arg = std.fmt.bufPrint(&dec_arg_buf, "--whisper-decoder={s}", .{dec}) catch return null;
+    const tok_arg = std.fmt.bufPrint(&tok_arg_buf, "--tokens={s}", .{tok}) catch return null;
+
+    var child = io_global.Child.init(&.{
+        bin, enc_arg, dec_arg, tok_arg, wav_path,
+    }, @import("../core/alloc.zig").allocator);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch |err| {
+        var eb: [128]u8 = undefined;
+        const em = std.fmt.bufPrint(&eb, "sherpa spawn: {s}", .{@errorName(err)}) catch "sherpa spawn fail";
+        logs.pushLog("error", "voice_backend", em, false);
+        return null;
+    };
+    defer _ = child.wait() catch {};
+
+    // sherpa-onnx-offline output format: "audio.wav\nTranscription:\ntext..."
+    // Find the "Transcription" line, take what follows until EOF.
+    const stdout = child.stdout orelse return null;
+    var full_buf: [4096]u8 = undefined;
+    const n = io_global.readAll(stdout, &full_buf) catch 0;
+    if (n == 0) return null;
+    const raw = full_buf[0..n];
+    // Find first instance of a line that isn't a header.
+    var parts = std.mem.splitScalar(u8, raw, '\n');
+    while (parts.next()) |line| {
+        const t = std.mem.trim(u8, line, " \t\r");
+        if (t.len == 0) continue;
+        if (std.mem.indexOf(u8, t, ".wav")) |_| continue;
+        if (std.mem.startsWith(u8, t, "Transcription")) continue;
+        if (std.mem.startsWith(u8, t, "Elapsed")) continue;
+        if (std.mem.startsWith(u8, t, "Audio duration")) continue;
+        if (std.mem.startsWith(u8, t, "Real time")) continue;
+        if (std.mem.startsWith(u8, t, "----")) continue;
+        const copy_len = @min(t.len, out_buf.len);
+        @memcpy(out_buf[0..copy_len], t[0..copy_len]);
+        return out_buf[0..copy_len];
+    }
     return null;
 }
 
 fn sherpaOnnxSpeak(text: []const u8) void {
-    _ = text;
-    logs.pushLog("warn", "voice_backend", "sherpa-onnx backend not yet implemented", false);
+    // sherpa-onnx-offline-tts path — if not present, fall through to `say`.
+    const bin: []const u8 = blk: {
+        if (io_global.cwdAccess("/opt/homebrew/bin/sherpa-onnx-offline-tts", .{})) |_| {
+            break :blk "/opt/homebrew/bin/sherpa-onnx-offline-tts";
+        } else |_| {}
+        break :blk "";
+    };
+    if (bin.len == 0) {
+        sayTtsSpeak(text);
+        return;
+    }
+    // TTS requires a Matcha/VITS/Kokoro model — phase 2 work. For now
+    // just defer to `say`.
+    sayTtsSpeak(text);
 }
 
 // ────────── Impl: apple_native (stub) ──────────

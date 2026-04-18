@@ -1811,7 +1811,8 @@ pub fn renderDepsModal() void {
     if (!state.app.deps_modal_open) return;
     const deps = @import("../core/deps.zig");
     const s = deps.check();
-    // Auto-dismiss when everything is green — user installed + came back.
+    // Auto-dismiss when core deps are green. sherpa-onnx is optional
+    // (better-quality backend); don't block on it.
     if (s.apfel and s.ffmpeg and s.whisper and s.whisper_model) {
         state.app.deps_modal_open = false;
         state.showToast("All set — voice mode ready");
@@ -1853,10 +1854,12 @@ pub fn renderDepsModal() void {
         pending: bool = false, // model being downloaded
     };
     const rows = [_]DepRow{
-        .{ .name = "apfel",         .desc = "LLM backend (Apple Intelligence)", .ok = s.apfel },
-        .{ .name = "ffmpeg",        .desc = "Mic capture for voice mode",       .ok = s.ffmpeg },
-        .{ .name = "whisper-cpp",   .desc = "Speech-to-text for voice mode",    .ok = s.whisper },
-        .{ .name = "ggml-tiny.en",  .desc = "STT model (auto-downloading)",     .ok = s.whisper_model, .pending = !s.whisper_model },
+        .{ .name = "apfel",             .desc = "LLM backend (Apple Intelligence)", .ok = s.apfel },
+        .{ .name = "ffmpeg",            .desc = "Mic capture for voice mode",       .ok = s.ffmpeg },
+        .{ .name = "whisper-cpp",       .desc = "STT engine (default)",             .ok = s.whisper },
+        .{ .name = "ggml-tiny.en",      .desc = "whisper model (auto-downloading)", .ok = s.whisper_model, .pending = !s.whisper_model },
+        .{ .name = "sherpa-onnx",       .desc = "STT engine (optional — streaming + Kokoro TTS)", .ok = s.sherpa_onnx },
+        .{ .name = "sherpa model",      .desc = "~/.config/opal/models/sherpa-whisper-tiny/", .ok = s.sherpa_model },
     };
 
     for (rows, 0..) |r, i| {

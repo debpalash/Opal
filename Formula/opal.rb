@@ -21,9 +21,11 @@ class Opal < Formula
   # NB: apfel lives at https://github.com/debpalash/homebrew-tap once published.
   # Until then, `brew install opal/tap/apfel` or a manual install is needed.
 
-  # Voice pipeline (both optional; voice mode degrades gracefully if missing)
+  # Voice pipeline (all optional; voice mode degrades gracefully if missing)
   depends_on "ffmpeg" => :recommended       # mic capture via avfoundation
-  depends_on "whisper-cpp" => :recommended  # STT fallback
+  depends_on "whisper-cpp" => :recommended  # STT default backend
+  # sherpa-onnx is an optional alternative backend (streaming STT + Kokoro TTS).
+  # Not in core homebrew; install via `brew install k2-fsa/tap/sherpa-onnx`.
 
   # macOS-only; on Linux, depends_on would include pulseaudio/pipewire
   on_macos do

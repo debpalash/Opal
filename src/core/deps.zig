@@ -13,6 +13,8 @@ pub const Status = struct {
     ffmpeg: bool = false,
     whisper: bool = false,
     whisper_model: bool = false,
+    sherpa_onnx: bool = false,
+    sherpa_model: bool = false,
 };
 
 pub fn check() Status {
@@ -23,6 +25,16 @@ pub fn check() Status {
     s.whisper = have("/opt/homebrew/bin/whisper-cpp") or
         have("/opt/homebrew/bin/whisper-cli") or
         have("bin/whisper.cpp/build/bin/whisper-cli");
+
+    s.sherpa_onnx = have("/opt/homebrew/bin/sherpa-onnx-offline") or
+        have("/usr/local/bin/sherpa-onnx-offline");
+
+    // sherpa model: look for a dir under ~/.config/opal/models/sherpa-*
+    var sherpa_home_buf: [512]u8 = undefined;
+    const home2 = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+    if (std.fmt.bufPrintZ(&sherpa_home_buf, "{s}/.config/opal/models/sherpa-whisper-tiny/tokens.txt", .{home2})) |p| {
+        s.sherpa_model = have(p);
+    } else |_| {}
 
     var home_buf: [512]u8 = undefined;
     const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
@@ -40,11 +52,11 @@ fn have(path: []const u8) bool {
 
 /// One-liner brew install command for missing deps. Copy-paste ready.
 pub fn installCmd(buf: []u8, s: Status) []const u8 {
-    var parts: [4][]const u8 = undefined;
+    var parts: [8][]const u8 = undefined;
     var n: usize = 0;
-    if (!s.apfel) { parts[n] = "apfel"; n += 1; }
-    if (!s.ffmpeg) { parts[n] = "ffmpeg"; n += 1; }
-    if (!s.whisper) { parts[n] = "whisper-cpp"; n += 1; }
+    if (!s.apfel) { if (n < parts.len) { parts[n] = "apfel"; n += 1; } }
+    if (!s.ffmpeg) { if (n < parts.len) { parts[n] = "ffmpeg"; n += 1; } }
+    if (!s.whisper) { if (n < parts.len) { parts[n] = "whisper-cpp"; n += 1; } }
     if (n == 0) return "";
 
     var off: usize = 0;
