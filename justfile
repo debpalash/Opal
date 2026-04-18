@@ -46,3 +46,14 @@ hooks:
     cp scripts/pre-commit .git/hooks/pre-commit
     chmod +x .git/hooks/pre-commit
     @echo "pre-commit installed — will run 'zig build' before each commit"
+
+# Build Opal.app macOS bundle (ReleaseFast + Info.plist + dylibs).
+# Optional: export CODESIGN_IDENTITY="Developer ID Application: Your Name" before running to sign.
+# Optional: `brew install create-dmg` to get a distributable .dmg.
+app:
+    ./scripts/build-app.sh
+    @echo "Bundle ready → dist/Opal.app"
+
+# Build .app + open it
+app-run: app
+    open dist/Opal.app
