@@ -786,6 +786,16 @@ fn appFrame() !dvui.App.Result {
     settings.renderSettingsModal();
     settings.renderCheatSheet();
     settings.renderMediaInfo();
+    settings.renderDepsModal();
+
+    // First-run deps check — open setup modal once if something is missing.
+    if (!state.app.deps_modal_checked) {
+        state.app.deps_modal_checked = true;
+        const d = @import("core/deps.zig").check();
+        if (!(d.apfel and d.ffmpeg and d.whisper)) {
+            state.app.deps_modal_open = true;
+        }
+    }
 
     ui.renderWorkspaceModals();
     ui.renderToast();

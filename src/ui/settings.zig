@@ -1754,6 +1754,116 @@ pub fn renderCheatSheet() void {
 }
 
 // ══════════════════════════════════════════════════════════
+// Dependency Setup Modal — first-run install hints
+// ══════════════════════════════════════════════════════════
+
+pub fn renderDepsModal() void {
+    if (!state.app.deps_modal_open) return;
+    const deps = @import("../core/deps.zig");
+    const s = deps.check();
+    if (s.apfel and s.ffmpeg and s.whisper) { state.app.deps_modal_open = false; return; }
+
+    var win = dvui.floatingWindow(@src(), .{
+        .modal = true,
+        .open_flag = &state.app.deps_modal_open,
+    }, .{
+        .min_size_content = .{ .w = 540, .h = 360 },
+        .color_fill = theme.colors.bg_drawer,
+        .color_border = theme.colors.accent,
+    });
+    defer win.deinit();
+
+    win.dragAreaSet(dvui.windowHeader("Setup — Missing Dependencies", "", &state.app.deps_modal_open));
+
+    var pad_scale: f32 = 1.2;
+    var scale_w = dvui.scale(@src(), .{ .scale = &pad_scale }, .{ .expand = .both });
+    defer scale_w.deinit();
+
+    _ = dvui.label(@src(), "Opal works best with these installed:", .{}, .{
+        .color_text = theme.colors.text_main,
+        .margin = .{ .x = 8, .y = 6, .w = 8, .h = 10 },
+    });
+
+    const rows = [_]struct { name: []const u8, desc: []const u8, ok: bool }{
+        .{ .name = "apfel", .desc = "LLM backend (Apple Intelligence)", .ok = s.apfel },
+        .{ .name = "ffmpeg", .desc = "Mic capture for voice mode", .ok = s.ffmpeg },
+        .{ .name = "whisper-cpp", .desc = "Speech-to-text for voice mode", .ok = s.whisper },
+        .{ .name = "ggml-tiny.en.bin", .desc = "STT model (auto-downloaded)", .ok = s.whisper_model },
+    };
+
+    for (rows, 0..) |r, i| {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i,
+            .expand = .horizontal,
+            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+        });
+        defer row.deinit();
+
+        _ = dvui.label(@src(), "{s}", .{if (r.ok) "✓" else "✗"}, .{
+            .id_extra = i,
+            .color_text = if (r.ok)
+                dvui.Color{ .r = 100, .g = 200, .b = 130, .a = 255 }
+            else
+                dvui.Color{ .r = 220, .g = 100, .b = 100, .a = 255 },
+            .min_size_content = .{ .w = 20, .h = 0 },
+        });
+        _ = dvui.label(@src(), "{s}", .{r.name}, .{
+            .id_extra = i + 1000,
+            .color_text = theme.colors.accent,
+            .min_size_content = .{ .w = 140, .h = 0 },
+        });
+        _ = dvui.label(@src(), "{s}", .{r.desc}, .{
+            .id_extra = i + 2000,
+            .color_text = theme.colors.text_muted,
+        });
+    }
+
+    // Install one-liner
+    var cmd_buf: [256]u8 = undefined;
+    const cmd = deps.installCmd(&cmd_buf, s);
+    if (cmd.len > 0) {
+        _ = dvui.label(@src(), "Install the missing pieces:", .{}, .{
+            .color_text = theme.colors.text_main,
+            .margin = .{ .x = 8, .y = 14, .w = 8, .h = 4 },
+        });
+        var code_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .background = true,
+            .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 26, .a = 255 },
+            .color_border = dvui.Color{ .r = 50, .g = 50, .b = 70, .a = 200 },
+            .border = dvui.Rect.all(1),
+            .corner_radius = dvui.Rect.all(6),
+            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
+            .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
+        });
+        defer code_row.deinit();
+
+        _ = dvui.label(@src(), "{s}", .{cmd}, .{
+            .color_text = dvui.Color{ .r = 180, .g = 220, .b = 180, .a = 255 },
+            .expand = .horizontal,
+            .gravity_y = 0.5,
+        });
+
+        if (dvui.button(@src(), "Copy", .{}, .{
+            .color_fill = theme.colors.accent,
+            .color_text = dvui.Color.white,
+            .corner_radius = dvui.Rect.all(4),
+            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            .gravity_y = 0.5,
+        })) {
+            dvui.clipboardTextSet(cmd);
+            state.showToast("Copied — paste in Terminal");
+        }
+    }
+
+    // Don't show again checkbox (stored in config via deps_modal_checked)
+    _ = dvui.label(@src(), "Voice mode degrades gracefully if missing — safe to skip.", .{}, .{
+        .color_text = theme.colors.text_muted,
+        .margin = .{ .x = 8, .y = 16, .w = 8, .h = 0 },
+    });
+}
+
+// ══════════════════════════════════════════════════════════
 // Media Info Panel (I key)
 // ══════════════════════════════════════════════════════════
 
