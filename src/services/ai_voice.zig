@@ -633,6 +633,10 @@ fn transcribeViaServer() ?[]const u8 {
 }
 
 fn transcribeAndSend() void {
+    const server = @import("ai_server.zig");
+    server.inference_mutex.lock();
+    defer server.inference_mutex.unlock();
+
     // Try persistent server first (fast — model already loaded)
     if (stt_server_started) {
         if (transcribeViaServer()) |transcribed| {
@@ -785,6 +789,10 @@ pub fn speakResponse(text: []const u8) void {
 }
 
 fn ttsWorker() void {
+    const server = @import("ai_server.zig");
+    server.inference_mutex.lock();
+    defer server.inference_mutex.unlock();
+
     defer { is_speaking = false; }
 
     const state = @import("../core/state.zig");

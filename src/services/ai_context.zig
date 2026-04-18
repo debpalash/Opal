@@ -863,6 +863,12 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
 var tool_depth: u8 = 0;
 
 pub fn generateResponse() void {
+    // Serialize every model-touching call across the app. Other callers
+    // (TTS speak, STT transcribe, tool-chain recursion) acquire the same
+    // mutex so we never have two concurrent inference paths hitting apfel.
+    server.inference_mutex.lock();
+    defer server.inference_mutex.unlock();
+
     defer {
         chat.is_generating = false;
         tool_depth = 0;  // Reset depth when the chain completes

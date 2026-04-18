@@ -18,6 +18,14 @@ pub const DEFAULT_MODELS_DIR = "models";
 // ── Server state ──
 pub var server_process: ?@import("../core/io_global.zig").Child = null;
 pub var server_running: bool = false;
+
+/// Serializes all inference calls through apfel (LLM), whisper-cpp (STT),
+/// and `say`/TTS backends. Voicebox-pattern: one worker touches models at
+/// a time. Prevents:
+///   - two generateResponse threads racing a single apfel instance
+///   - mic recording while TTS is speaking (echo loop)
+///   - whisper-cpp model reload on concurrent transcribe
+pub var inference_mutex: @import("../core/sync.zig").Mutex = .{};
 pub var server_port: u16 = 41592;
 pub var gpu_layers: i32 = 99;
 pub var last_health_check: i64 = 0;
