@@ -37,6 +37,11 @@ fn appInit(win: *dvui.Window) !void {
     
     theme.setTheme();
     logs.logs_allocator = @import("core/alloc.zig").allocator;
+
+    // Bootstrap: fetch whisper tiny model (39MB) in background if missing.
+    // Skips if already present. Binaries (apfel/ffmpeg/whisper-cpp) must
+    // come via brew — we only surface install hints via deps.installCmd.
+    @import("core/deps.zig").fetchWhisperModelAsync();
     state.app.players = .empty;
     search.search_results = .empty;
 
