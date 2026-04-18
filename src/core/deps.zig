@@ -73,6 +73,72 @@ pub fn installCmd(buf: []u8, s: Status) []const u8 {
 
 /// Download whisper tiny model to ~/.config/opal/models/ on a background
 /// thread. Idempotent — no-op if present.
+/// Fetch + extract the sherpa-onnx whisper-tiny bundle
+/// (tokens + encoder + decoder) to ~/.config/opal/models/sherpa-whisper-tiny/.
+/// ~40 MB compressed. Runs on a background thread. Idempotent.
+pub var sherpa_model_downloading: bool = false;
+
+pub fn fetchSherpaWhisperAsync() void {
+    if (sherpa_model_downloading) return;
+    sherpa_model_downloading = true;
+    const S = struct {
+        fn worker() void {
+            defer sherpa_model_downloading = false;
+            var home_buf: [512]u8 = undefined;
+            const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return;
+            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
+            io_global.makeDirAbsolute(models_dir) catch {};
+
+            var tar_buf: [512]u8 = undefined;
+            const tar_path = std.fmt.bufPrintZ(&tar_buf, "{s}/sherpa-whisper-tiny.tar.bz2", .{models_dir}) catch return;
+
+            // If model already extracted, no-op.
+            var check_buf: [512]u8 = undefined;
+            const check_path = std.fmt.bufPrintZ(&check_buf, "{s}/sherpa-whisper-tiny/tiny-encoder.onnx", .{models_dir}) catch return;
+            if (io_global.cwdAccess(check_path, .{})) |_| return else |_| {}
+
+            logs.pushLog("info", "deps", "Fetching sherpa whisper-tiny (~40MB)…", true);
+            var curl = io_global.Child.init(&.{
+                "curl", "-L", "--fail", "--silent", "--show-error",
+                "-o", tar_path,
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2",
+            }, @import("alloc.zig").allocator);
+            curl.stdout_behavior = .Ignore;
+            curl.stderr_behavior = .Ignore;
+            curl.spawn() catch {
+                logs.pushLog("error", "deps", "curl missing — can't fetch sherpa model", false);
+                return;
+            };
+            _ = curl.wait() catch {};
+
+            // Extract via tar -xjf (bzip2) into models/. The archive
+            // unpacks to sherpa-onnx-whisper-tiny.en/ — we rename for
+            // a shorter stable path.
+            var untar = io_global.Child.init(&.{
+                "tar", "-xjf", tar_path, "-C", models_dir,
+            }, @import("alloc.zig").allocator);
+            untar.stdout_behavior = .Ignore;
+            untar.stderr_behavior = .Ignore;
+            _ = untar.spawnAndWait() catch {};
+
+            var src_buf: [512]u8 = undefined;
+            const src = std.fmt.bufPrintZ(&src_buf, "{s}/sherpa-onnx-whisper-tiny.en", .{models_dir}) catch return;
+            var dst_buf: [512]u8 = undefined;
+            const dst = std.fmt.bufPrintZ(&dst_buf, "{s}/sherpa-whisper-tiny", .{models_dir}) catch return;
+            var mv = io_global.Child.init(&.{ "mv", "-f", src, dst }, @import("alloc.zig").allocator);
+            mv.stdout_behavior = .Ignore;
+            mv.stderr_behavior = .Ignore;
+            _ = mv.spawnAndWait() catch {};
+
+            io_global.deleteFileAbsolute(tar_path) catch {};
+            logs.pushLog("info", "deps", "Sherpa whisper-tiny ready", true);
+        }
+    };
+    _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
+        sherpa_model_downloading = false;
+    };
+}
+
 pub fn fetchWhisperModelAsync() void {
     const S = struct {
         fn worker() void {

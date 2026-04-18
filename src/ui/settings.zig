@@ -1853,13 +1853,15 @@ pub fn renderDepsModal() void {
         ok: bool,
         pending: bool = false, // model being downloaded
     };
+    const deps_mod = @import("../core/deps.zig");
+    const sherpa_dl = deps_mod.sherpa_model_downloading;
     const rows = [_]DepRow{
         .{ .name = "apfel",             .desc = "LLM backend (Apple Intelligence)", .ok = s.apfel },
         .{ .name = "ffmpeg",            .desc = "Mic capture for voice mode",       .ok = s.ffmpeg },
         .{ .name = "whisper-cpp",       .desc = "STT engine (default)",             .ok = s.whisper },
         .{ .name = "ggml-tiny.en",      .desc = "whisper model (auto-downloading)", .ok = s.whisper_model, .pending = !s.whisper_model },
         .{ .name = "sherpa-onnx",       .desc = "STT engine (optional — streaming + Kokoro TTS)", .ok = s.sherpa_onnx },
-        .{ .name = "sherpa model",      .desc = "~/.config/opal/models/sherpa-whisper-tiny/", .ok = s.sherpa_model },
+        .{ .name = "sherpa model",      .desc = if (sherpa_dl) "Downloading sherpa whisper-tiny…" else "~/.config/opal/models/sherpa-whisper-tiny/ (click Download)", .ok = s.sherpa_model, .pending = sherpa_dl },
     };
 
     for (rows, 0..) |r, i| {
@@ -1905,7 +1907,23 @@ pub fn renderDepsModal() void {
             .id_extra = i + 2000,
             .color_text = theme.colors.text_muted,
             .gravity_y = 0.5,
+            .expand = .horizontal,
         });
+
+        // Download button only on the sherpa-model row when missing + not downloading + CLI present.
+        if (std.mem.eql(u8, r.name, "sherpa model") and !r.ok and !r.pending and s.sherpa_onnx) {
+            if (dvui.button(@src(), "Download", .{}, .{
+                .id_extra = i,
+                .color_fill = theme.colors.accent,
+                .color_text = dvui.Color.white,
+                .corner_radius = dvui.Rect.all(4),
+                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                .gravity_y = 0.5,
+            })) {
+                deps_mod.fetchSherpaWhisperAsync();
+                state.showToast("Downloading sherpa whisper-tiny — ~40MB");
+            }
+        }
     }
 
     // Install one-liner + actions row
