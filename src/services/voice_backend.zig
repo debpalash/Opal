@@ -148,20 +148,84 @@ fn sherpaOnnxTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
 }
 
 fn sherpaOnnxSpeak(text: []const u8) void {
-    // sherpa-onnx-offline-tts path — if not present, fall through to `say`.
+    if (text.len == 0) return;
+    // Locate CLI + TTS model
     const bin: []const u8 = blk: {
         if (io_global.cwdAccess("/opt/homebrew/bin/sherpa-onnx-offline-tts", .{})) |_| {
             break :blk "/opt/homebrew/bin/sherpa-onnx-offline-tts";
         } else |_| {}
-        break :blk "";
-    };
-    if (bin.len == 0) {
+        if (io_global.cwdAccess("/usr/local/bin/sherpa-onnx-offline-tts", .{})) |_| {
+            break :blk "/usr/local/bin/sherpa-onnx-offline-tts";
+        } else |_| {}
         sayTtsSpeak(text);
         return;
-    }
-    // TTS requires a Matcha/VITS/Kokoro model — phase 2 work. For now
-    // just defer to `say`.
-    sayTtsSpeak(text);
+    };
+
+    var home_buf: [128]u8 = undefined;
+    _ = &home_buf;
+    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+
+    var vm_buf: [512]u8 = undefined;
+    var lex_buf: [512]u8 = undefined;
+    var tok_buf: [512]u8 = undefined;
+    var dd_buf: [512]u8 = undefined;
+    var out_buf: [512]u8 = undefined;
+    const vits_model = std.fmt.bufPrintZ(&vm_buf, "{s}/.config/opal/models/sherpa-vits-piper/en_US-lessac-medium.onnx", .{home}) catch {
+        sayTtsSpeak(text);
+        return;
+    };
+    const lexicon = std.fmt.bufPrintZ(&lex_buf, "{s}/.config/opal/models/sherpa-vits-piper/lexicon.txt", .{home}) catch {
+        sayTtsSpeak(text);
+        return;
+    };
+    const tokens_p = std.fmt.bufPrintZ(&tok_buf, "{s}/.config/opal/models/sherpa-vits-piper/tokens.txt", .{home}) catch {
+        sayTtsSpeak(text);
+        return;
+    };
+    const data_dir = std.fmt.bufPrintZ(&dd_buf, "{s}/.config/opal/models/sherpa-vits-piper/espeak-ng-data", .{home}) catch {
+        sayTtsSpeak(text);
+        return;
+    };
+    const out_wav = std.fmt.bufPrintZ(&out_buf, "{s}/.config/opal/tts_out.wav", .{home}) catch {
+        sayTtsSpeak(text);
+        return;
+    };
+
+    // Model missing → graceful fallback
+    io_global.cwdAccess(vits_model, .{}) catch {
+        sayTtsSpeak(text);
+        return;
+    };
+
+    var vm_arg: [640]u8 = undefined;
+    var lex_arg: [640]u8 = undefined;
+    var tok_arg: [640]u8 = undefined;
+    var dd_arg: [640]u8 = undefined;
+    var out_arg: [640]u8 = undefined;
+    const a_vm = std.fmt.bufPrint(&vm_arg, "--vits-model={s}", .{vits_model}) catch return;
+    const a_lex = std.fmt.bufPrint(&lex_arg, "--vits-lexicon={s}", .{lexicon}) catch return;
+    const a_tok = std.fmt.bufPrint(&tok_arg, "--vits-tokens={s}", .{tokens_p}) catch return;
+    const a_dd = std.fmt.bufPrint(&dd_arg, "--vits-data-dir={s}", .{data_dir}) catch return;
+    const a_out = std.fmt.bufPrint(&out_arg, "--output-filename={s}", .{out_wav}) catch return;
+
+    var synth = io_global.Child.init(&.{
+        bin, a_vm, a_lex, a_tok, a_dd, a_out, text,
+    }, @import("../core/alloc.zig").allocator);
+    synth.stdout_behavior = .Ignore;
+    synth.stderr_behavior = .Ignore;
+    synth.spawn() catch {
+        sayTtsSpeak(text);
+        return;
+    };
+    _ = synth.wait() catch {};
+
+    // Play resulting WAV via afplay (macOS built-in). No need for mpv.
+    var play = io_global.Child.init(&.{
+        "/usr/bin/afplay", out_wav,
+    }, @import("../core/alloc.zig").allocator);
+    play.stdout_behavior = .Ignore;
+    play.stderr_behavior = .Ignore;
+    _ = play.spawnAndWait() catch {};
 }
 
 // ────────── Impl: apple_native (stub) ──────────

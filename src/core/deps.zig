@@ -15,6 +15,7 @@ pub const Status = struct {
     whisper_model: bool = false,
     sherpa_onnx: bool = false,
     sherpa_model: bool = false,
+    sherpa_tts_model: bool = false,
 };
 
 pub fn check() Status {
@@ -29,11 +30,15 @@ pub fn check() Status {
     s.sherpa_onnx = have("/opt/homebrew/bin/sherpa-onnx-offline") or
         have("/usr/local/bin/sherpa-onnx-offline");
 
-    // sherpa model: look for a dir under ~/.config/opal/models/sherpa-*
+    // sherpa STT + TTS models — probe a canonical file per bundle.
     var sherpa_home_buf: [512]u8 = undefined;
     const home2 = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
-    if (std.fmt.bufPrintZ(&sherpa_home_buf, "{s}/.config/opal/models/sherpa-whisper-tiny/tokens.txt", .{home2})) |p| {
+    if (std.fmt.bufPrintZ(&sherpa_home_buf, "{s}/.config/opal/models/sherpa-whisper-tiny/tiny-tokens.txt", .{home2})) |p| {
         s.sherpa_model = have(p);
+    } else |_| {}
+    var sherpa_tts_buf: [512]u8 = undefined;
+    if (std.fmt.bufPrintZ(&sherpa_tts_buf, "{s}/.config/opal/models/sherpa-vits-piper/en_US-lessac-medium.onnx", .{home2})) |p| {
+        s.sherpa_tts_model = have(p);
     } else |_| {}
 
     var home_buf: [512]u8 = undefined;
@@ -136,6 +141,67 @@ pub fn fetchSherpaWhisperAsync() void {
     };
     _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
         sherpa_model_downloading = false;
+    };
+}
+
+/// Fetch + extract Piper VITS en_US-lessac-medium TTS bundle
+/// (~40MB) to ~/.config/opal/models/sherpa-vits-piper/.
+pub var sherpa_tts_downloading: bool = false;
+
+pub fn fetchSherpaTtsAsync() void {
+    if (sherpa_tts_downloading) return;
+    sherpa_tts_downloading = true;
+    const S = struct {
+        fn worker() void {
+            defer sherpa_tts_downloading = false;
+            var home_buf: [512]u8 = undefined;
+            const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return;
+            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
+            io_global.makeDirAbsolute(models_dir) catch {};
+
+            var tar_buf: [512]u8 = undefined;
+            const tar_path = std.fmt.bufPrintZ(&tar_buf, "{s}/sherpa-vits-piper.tar.bz2", .{models_dir}) catch return;
+
+            var check_buf: [512]u8 = undefined;
+            const check_path = std.fmt.bufPrintZ(&check_buf, "{s}/sherpa-vits-piper/en_US-lessac-medium.onnx", .{models_dir}) catch return;
+            if (io_global.cwdAccess(check_path, .{})) |_| return else |_| {}
+
+            logs.pushLog("info", "deps", "Fetching sherpa Piper-VITS (~40MB)…", true);
+            var curl = io_global.Child.init(&.{
+                "curl", "-L", "--fail", "--silent", "--show-error",
+                "-o", tar_path,
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-medium.tar.bz2",
+            }, @import("alloc.zig").allocator);
+            curl.stdout_behavior = .Ignore;
+            curl.stderr_behavior = .Ignore;
+            curl.spawn() catch {
+                logs.pushLog("error", "deps", "curl missing — can't fetch TTS model", false);
+                return;
+            };
+            _ = curl.wait() catch {};
+
+            var untar = io_global.Child.init(&.{
+                "tar", "-xjf", tar_path, "-C", models_dir,
+            }, @import("alloc.zig").allocator);
+            untar.stdout_behavior = .Ignore;
+            untar.stderr_behavior = .Ignore;
+            _ = untar.spawnAndWait() catch {};
+
+            var src_buf: [512]u8 = undefined;
+            const src = std.fmt.bufPrintZ(&src_buf, "{s}/vits-piper-en_US-lessac-medium", .{models_dir}) catch return;
+            var dst_buf: [512]u8 = undefined;
+            const dst = std.fmt.bufPrintZ(&dst_buf, "{s}/sherpa-vits-piper", .{models_dir}) catch return;
+            var mv = io_global.Child.init(&.{ "mv", "-f", src, dst }, @import("alloc.zig").allocator);
+            mv.stdout_behavior = .Ignore;
+            mv.stderr_behavior = .Ignore;
+            _ = mv.spawnAndWait() catch {};
+
+            io_global.deleteFileAbsolute(tar_path) catch {};
+            logs.pushLog("info", "deps", "Sherpa TTS model ready", true);
+        }
+    };
+    _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
+        sherpa_tts_downloading = false;
     };
 }
 
