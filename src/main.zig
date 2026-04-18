@@ -260,20 +260,30 @@ fn renderSlashMenu() void {
     if (text_len == 0) return;
     if (state.app.magnet_buf[0] != '/') return;
 
-    const Cmd = struct { key: []const u8, desc: []const u8 };
+    const Cmd = struct {
+        key: []const u8,
+        desc: []const u8,
+        /// Single-word no-arg command — clicking runs it immediately
+        /// via ai_chat's unified submit (which routes through
+        /// tryInstantCommand). Commands with a trailing space require
+        /// user input after — just fill the box, don't execute.
+        instant: bool = false,
+        /// Plain-text form to dispatch (drops the '/').
+        send_as: []const u8 = "",
+    };
     const cmds = [_]Cmd{
         .{ .key = "/play ",       .desc = "Search + play best match — play iron man 3" },
         .{ .key = "/find ",       .desc = "Search only, show results" },
         .{ .key = "/watch ",      .desc = "Alias for /play" },
-        .{ .key = "/pause",       .desc = "Pause current playback" },
-        .{ .key = "/resume",      .desc = "Resume playback" },
+        .{ .key = "/pause",       .desc = "Pause current playback",        .instant = true, .send_as = "pause" },
+        .{ .key = "/resume",      .desc = "Resume playback",                .instant = true, .send_as = "play" },
         .{ .key = "/seek ",       .desc = "Jump to time — /seek 1:23" },
         .{ .key = "/volume ",     .desc = "Set volume 0-100" },
-        .{ .key = "/mute",        .desc = "Toggle mute" },
-        .{ .key = "/fullscreen",  .desc = "Toggle fullscreen" },
-        .{ .key = "/subtitles",   .desc = "Cycle subtitle tracks" },
+        .{ .key = "/mute",        .desc = "Toggle mute",                    .instant = true, .send_as = "mute" },
+        .{ .key = "/fullscreen",  .desc = "Toggle fullscreen",              .instant = true, .send_as = "fullscreen" },
+        .{ .key = "/subtitles",   .desc = "Cycle subtitle tracks",          .instant = true, .send_as = "next subtitle" },
         .{ .key = "/queue ",      .desc = "Add URL to queue" },
-        .{ .key = "/next",        .desc = "Next episode / playlist item" },
+        .{ .key = "/next",        .desc = "Next episode / playlist item",   .instant = true, .send_as = "next episode" },
         .{ .key = "/recommend ",  .desc = "TMDB-based suggestions" },
     };
 
@@ -337,8 +347,20 @@ fn renderSlashMenu() void {
             .min_size_content = .{ .w = 140, .h = 0 },
             .gravity_y = 0.5,
         })) {
-            @memset(&state.app.magnet_buf, 0);
-            @memcpy(state.app.magnet_buf[0..cmd.key.len], cmd.key);
+            if (cmd.instant and cmd.send_as.len > 0) {
+                // Clear the input, dispatch through ai_chat with the
+                // plain-text form so fast-path / tryInstantCommand fires.
+                @memset(&state.app.magnet_buf, 0);
+                const ai_chat = @import("services/ai_chat.zig");
+                const n = @min(cmd.send_as.len, ai_chat.input_buf.len - 1);
+                @memset(&ai_chat.input_buf, 0);
+                @memcpy(ai_chat.input_buf[0..n], cmd.send_as[0..n]);
+                ai_chat.input_len = n;
+                ai_chat.trySendMessage();
+            } else {
+                @memset(&state.app.magnet_buf, 0);
+                @memcpy(state.app.magnet_buf[0..cmd.key.len], cmd.key);
+            }
         }
         _ = dvui.label(@src(), "{s}", .{cmd.desc}, .{
             .id_extra = i + 100,
@@ -489,6 +511,19 @@ fn renderChatDropdown() void {
             });
             if (!is_user) {
                 { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+                if (dvui.buttonIcon(@src(), "", @import("icons").tvg.lucide.@"star", .{}, .{}, .{
+                    .id_extra = mi + 91700,
+                    .color_text = if (m.starred)
+                        dvui.Color{ .r = 255, .g = 200, .b = 80, .a = 255 }
+                    else
+                        theme.colors.text_muted,
+                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .border = dvui.Rect.all(0),
+                    .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
+                    .min_size_content = .{ .w = 12, .h = 12 },
+                })) {
+                    ai_chat_mod.toggleStar(mi);
+                }
                 if (dvui.buttonIcon(@src(), "", @import("icons").tvg.lucide.@"rotate-ccw", .{}, .{}, .{
                     .id_extra = mi + 91800,
                     .color_text = theme.colors.text_muted,

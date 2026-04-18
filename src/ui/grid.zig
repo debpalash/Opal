@@ -59,6 +59,20 @@ fn renderInlineChat() void {
             });
             if (!is_user) {
                 { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+                // Star toggle
+                if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"star", .{}, .{}, .{
+                    .id_extra = mi + 71700,
+                    .color_text = if (m.starred)
+                        dvui.Color{ .r = 255, .g = 200, .b = 80, .a = 255 }
+                    else
+                        theme.colors.text_muted,
+                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .border = dvui.Rect.all(0),
+                    .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
+                    .min_size_content = .{ .w = 12, .h = 12 },
+                })) {
+                    ai_chat.toggleStar(mi);
+                }
                 if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"rotate-ccw", .{}, .{}, .{
                     .id_extra = mi + 71800,
                     .color_text = theme.colors.text_muted,
@@ -660,16 +674,32 @@ pub fn renderGrid() !void {
                 }
 
                 if (has_chat) {
-                    // Clear chat button
-                    if (dvui.button(@src(), "Clear chat", .{}, .{
-                        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                        .color_text = theme.colors.text_muted,
+                    // Clear chat — two-step confirm to avoid accidental wipe.
+                    // Uses a static Guard var so the confirm state survives
+                    // across frames but resets if user clicks elsewhere.
+                    const Guard = struct { var armed: bool = false; };
+                    const label: []const u8 = if (Guard.armed) "Click again to confirm" else "Clear chat";
+                    if (dvui.button(@src(), label, .{}, .{
+                        .color_fill = if (Guard.armed)
+                            dvui.Color{ .r = 55, .g = 20, .b = 20, .a = 255 }
+                        else
+                            dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                        .color_text = if (Guard.armed)
+                            dvui.Color{ .r = 255, .g = 140, .b = 140, .a = 255 }
+                        else
+                            theme.colors.text_muted,
                         .border = dvui.Rect.all(0),
                         .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
                         .margin = .{ .y = 8 },
                         .gravity_x = 0.5,
+                        .corner_radius = dvui.Rect.all(4),
                     })) {
-                        ai_chat.clearHistory();
+                        if (Guard.armed) {
+                            ai_chat.clearHistory();
+                            Guard.armed = false;
+                        } else {
+                            Guard.armed = true;
+                        }
                     }
                 }
 

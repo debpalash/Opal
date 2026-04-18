@@ -25,7 +25,14 @@ pub const Message = struct {
     role: Role = .user,
     text: [MAX_MSG_LEN]u8 = std.mem.zeroes([MAX_MSG_LEN]u8),
     text_len: usize = 0,
+    /// Starred / pinned by user. Survives clearHistory (see toggleStar).
+    starred: bool = false,
 };
+
+pub fn toggleStar(idx: usize) void {
+    if (idx >= message_count) return;
+    messages[idx].starred = !messages[idx].starred;
+}
 
 // ── Chat state ──
 pub var messages: [MAX_MESSAGES]Message = std.mem.zeroes([MAX_MESSAGES]Message);
@@ -63,8 +70,17 @@ pub var incognito_mode: bool = false;
 pub var is_bubble_open: bool = false;
 
 pub fn clearHistory() void {
-    message_count = 0;
-    @memset(std.mem.asBytes(&messages), 0);
+    // Preserve starred messages by compacting them to the front before wipe.
+    var kept: usize = 0;
+    for (0..message_count) |i| {
+        if (messages[i].starred and messages[i].text_len > 0) {
+            if (kept != i) messages[kept] = messages[i];
+            kept += 1;
+        }
+    }
+    // Zero the tail
+    for (kept..MAX_MESSAGES) |i| messages[i] = .{};
+    message_count = kept;
     @memset(&input_buf, 0);
     input_len = 0;
     is_generating = false;
