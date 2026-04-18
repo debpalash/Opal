@@ -1811,70 +1811,107 @@ pub fn renderDepsModal() void {
     if (!state.app.deps_modal_open) return;
     const deps = @import("../core/deps.zig");
     const s = deps.check();
-    if (s.apfel and s.ffmpeg and s.whisper) { state.app.deps_modal_open = false; return; }
+    // Auto-dismiss when everything is green — user installed + came back.
+    if (s.apfel and s.ffmpeg and s.whisper and s.whisper_model) {
+        state.app.deps_modal_open = false;
+        state.showToast("All set — voice mode ready");
+        return;
+    }
 
     var win = dvui.floatingWindow(@src(), .{
         .modal = true,
         .open_flag = &state.app.deps_modal_open,
     }, .{
-        .min_size_content = .{ .w = 540, .h = 360 },
+        .min_size_content = .{ .w = 580, .h = 400 },
         .color_fill = theme.colors.bg_drawer,
         .color_border = theme.colors.accent,
+        .corner_radius = dvui.Rect.all(10),
     });
     defer win.deinit();
 
-    win.dragAreaSet(dvui.windowHeader("Setup — Missing Dependencies", "", &state.app.deps_modal_open));
+    win.dragAreaSet(dvui.windowHeader("Setup", "", &state.app.deps_modal_open));
 
-    var pad_scale: f32 = 1.2;
+    var pad_scale: f32 = 1.15;
     var scale_w = dvui.scale(@src(), .{ .scale = &pad_scale }, .{ .expand = .both });
     defer scale_w.deinit();
 
+    var pad = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .both,
+        .padding = .{ .x = 16, .y = 12, .w = 16, .h = 12 },
+    });
+    defer pad.deinit();
+
     _ = dvui.label(@src(), "Opal works best with these installed:", .{}, .{
         .color_text = theme.colors.text_main,
-        .margin = .{ .x = 8, .y = 6, .w = 8, .h = 10 },
+        .margin = .{ .y = 4 },
     });
 
-    const rows = [_]struct { name: []const u8, desc: []const u8, ok: bool }{
-        .{ .name = "apfel", .desc = "LLM backend (Apple Intelligence)", .ok = s.apfel },
-        .{ .name = "ffmpeg", .desc = "Mic capture for voice mode", .ok = s.ffmpeg },
-        .{ .name = "whisper-cpp", .desc = "Speech-to-text for voice mode", .ok = s.whisper },
-        .{ .name = "ggml-tiny.en.bin", .desc = "STT model (auto-downloaded)", .ok = s.whisper_model },
+    const DepRow = struct {
+        name: []const u8,
+        desc: []const u8,
+        ok: bool,
+        pending: bool = false, // model being downloaded
+    };
+    const rows = [_]DepRow{
+        .{ .name = "apfel",         .desc = "LLM backend (Apple Intelligence)", .ok = s.apfel },
+        .{ .name = "ffmpeg",        .desc = "Mic capture for voice mode",       .ok = s.ffmpeg },
+        .{ .name = "whisper-cpp",   .desc = "Speech-to-text for voice mode",    .ok = s.whisper },
+        .{ .name = "ggml-tiny.en",  .desc = "STT model (auto-downloading)",     .ok = s.whisper_model, .pending = !s.whisper_model },
     };
 
     for (rows, 0..) |r, i| {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i,
             .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+            .padding = .{ .x = 4, .y = 6, .w = 4, .h = 6 },
+            .margin = .{ .y = 1 },
+            .background = i % 2 == 0,
+            .color_fill = dvui.Color{ .r = 16, .g = 16, .b = 24, .a = 100 },
+            .corner_radius = dvui.Rect.all(4),
         });
         defer row.deinit();
 
-        _ = dvui.label(@src(), "{s}", .{if (r.ok) "✓" else "✗"}, .{
+        // Status icon — lucide glyph, colored by state
+        const icon_data = if (r.ok)
+            icons.tvg.lucide.@"circle-check-big"
+        else if (r.pending)
+            icons.tvg.lucide.@"loader-circle"
+        else
+            icons.tvg.lucide.@"circle-x";
+        const icon_color = if (r.ok)
+            dvui.Color{ .r = 100, .g = 210, .b = 140, .a = 255 }
+        else if (r.pending)
+            dvui.Color{ .r = 230, .g = 190, .b = 80, .a = 255 }
+        else
+            dvui.Color{ .r = 220, .g = 110, .b = 110, .a = 255 };
+
+        _ = dvui.icon(@src(), "", icon_data, .{}, .{
             .id_extra = i,
-            .color_text = if (r.ok)
-                dvui.Color{ .r = 100, .g = 200, .b = 130, .a = 255 }
-            else
-                dvui.Color{ .r = 220, .g = 100, .b = 100, .a = 255 },
-            .min_size_content = .{ .w = 20, .h = 0 },
+            .color_text = icon_color,
+            .min_size_content = .{ .w = 18, .h = 18 },
+            .gravity_y = 0.5,
+            .margin = .{ .w = 10 },
         });
         _ = dvui.label(@src(), "{s}", .{r.name}, .{
             .id_extra = i + 1000,
             .color_text = theme.colors.accent,
             .min_size_content = .{ .w = 140, .h = 0 },
+            .gravity_y = 0.5,
         });
-        _ = dvui.label(@src(), "{s}", .{r.desc}, .{
+        _ = dvui.label(@src(), "{s}", .{if (r.pending) "Downloading…" else r.desc}, .{
             .id_extra = i + 2000,
             .color_text = theme.colors.text_muted,
+            .gravity_y = 0.5,
         });
     }
 
-    // Install one-liner
+    // Install one-liner + actions row
     var cmd_buf: [256]u8 = undefined;
     const cmd = deps.installCmd(&cmd_buf, s);
     if (cmd.len > 0) {
-        _ = dvui.label(@src(), "Install the missing pieces:", .{}, .{
+        _ = dvui.label(@src(), "Install missing with Homebrew:", .{}, .{
             .color_text = theme.colors.text_main,
-            .margin = .{ .x = 8, .y = 14, .w = 8, .h = 4 },
+            .margin = .{ .y = 14 },
         });
         var code_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
@@ -1883,8 +1920,8 @@ pub fn renderDepsModal() void {
             .color_border = dvui.Color{ .r = 50, .g = 50, .b = 70, .a = 200 },
             .border = dvui.Rect.all(1),
             .corner_radius = dvui.Rect.all(6),
-            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
-            .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
+            .padding = .{ .x = 10, .y = 8, .w = 6, .h = 8 },
+            .margin = .{ .y = 4 },
         });
         defer code_row.deinit();
 
@@ -1894,23 +1931,67 @@ pub fn renderDepsModal() void {
             .gravity_y = 0.5,
         });
 
-        if (dvui.button(@src(), "Copy", .{}, .{
+        // Run in Terminal — launch Terminal.app with AppleScript + pre-fill command
+        if (dvui.button(@src(), "Run", .{}, .{
             .color_fill = theme.colors.accent,
             .color_text = dvui.Color.white,
             .corner_radius = dvui.Rect.all(4),
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            .margin = .{ .w = 4 },
+            .gravity_y = 0.5,
+        })) {
+            // `osascript -e 'tell app "Terminal" to do script "CMD"'`
+            var script_buf: [512]u8 = undefined;
+            const script = std.fmt.bufPrint(
+                &script_buf,
+                "tell application \"Terminal\" to do script \"{s}\"",
+                .{cmd},
+            ) catch "";
+            if (script.len > 0) {
+                var osa = @import("../core/io_global.zig").Child.init(
+                    &.{ "osascript", "-e", script },
+                    @import("../core/alloc.zig").allocator,
+                );
+                osa.stdout_behavior = .Ignore;
+                osa.stderr_behavior = .Ignore;
+                _ = osa.spawnAndWait() catch {};
+                state.showToast("Running in Terminal — come back when done");
+            }
+        }
+
+        if (dvui.button(@src(), "Copy", .{}, .{
+            .color_fill = dvui.Color{ .r = 35, .g = 35, .b = 48, .a = 255 },
+            .color_text = theme.colors.text_main,
+            .corner_radius = dvui.Rect.all(4),
+            .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
             .gravity_y = 0.5,
         })) {
             dvui.clipboardTextSet(cmd);
-            state.showToast("Copied — paste in Terminal");
+            state.showToast("Copied to clipboard");
         }
     }
 
-    // Don't show again checkbox (stored in config via deps_modal_checked)
-    _ = dvui.label(@src(), "Voice mode degrades gracefully if missing — safe to skip.", .{}, .{
-        .color_text = theme.colors.text_muted,
-        .margin = .{ .x = 8, .y = 16, .w = 8, .h = 0 },
+    // Footer row: auto-recheck hint + skip button
+    var footer = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .margin = .{ .y = 14 },
     });
+    defer footer.deinit();
+
+    _ = dvui.label(@src(), "Checking continuously — installs show up live.", .{}, .{
+        .color_text = theme.colors.text_muted,
+        .gravity_y = 0.5,
+    });
+    { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+    if (dvui.button(@src(), "Skip for now", .{}, .{
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_text = theme.colors.text_muted,
+        .border = dvui.Rect.all(0),
+        .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+        .gravity_y = 0.5,
+    })) {
+        state.app.deps_modal_open = false;
+    }
 }
 
 // ══════════════════════════════════════════════════════════
