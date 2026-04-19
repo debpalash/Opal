@@ -92,3 +92,7 @@ zig-pkg/
 
 # === AI assistant config ===
 CLAUDE.md
+# macOS .app build output
+dist/
+*.dmg
+
