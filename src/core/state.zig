@@ -476,28 +476,52 @@ pub fn loadTmdbTokenFromEnv() void {
     loadTmdbFromDotEnv();
 }
 
-fn loadTmdbFromDotEnv() void {
+fn readFileAll(dir_path: []const u8, name: []const u8, buf: []u8) ?[]const u8 {
     const io = @import("io_global.zig").io();
-    const file = std.Io.Dir.cwd().openFile(io, ".env", .{}) catch return;
+    var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{}) catch return null;
+    defer dir.close(io);
+    const file = dir.openFile(io, name, .{}) catch return null;
     defer file.close(io);
-    var buf: [1024]u8 = undefined;
-    const n = file.readPositionalAll(io, &buf, 0) catch return;
-    const content = buf[0..n];
-    
-    // Look for TMDB_API_TOKEN= or ZIGZAG_TMDB_TOKEN=
-    const keys = [_][]const u8{ "TMDB_API_TOKEN=", "ZIGZAG_TMDB_TOKEN=" };
-    for (keys) |key| {
-        if (std.mem.indexOf(u8, content, key)) |idx| {
-            const val_start = idx + key.len;
-            var val_end = val_start;
-            while (val_end < content.len and content[val_end] != '\n' and content[val_end] != '\r') val_end += 1;
-            const token = content[val_start..val_end];
-            if (token.len > 0) {
+    const n = file.readPositionalAll(io, buf, 0) catch return null;
+    return buf[0..n];
+}
+
+fn loadTmdbFromDotEnv() void {
+    // Search order: cwd (dev: `zig build run`) → ~/.config/zigzag (bundle / installed).
+    // First hit wins; later locations are fallbacks.
+    var buf: [4096]u8 = undefined;
+    var cfg_buf: [512]u8 = undefined;
+    const cfg_dir = paths.configDir(&cfg_buf);
+
+    const content = blk: {
+        // Try cwd first
+        if (readFileAll(".", ".env", &buf)) |bytes| break :blk bytes;
+        // Then ~/.config/zigzag/.env
+        if (readFileAll(cfg_dir, ".env", &buf)) |bytes| break :blk bytes;
+        return;
+    };
+
+    const env = @import("env.zig");
+
+    // TMDB — only if not already set from process env
+    if (app.tmdb.api_key_len == 0) {
+        const keys = [_][]const u8{ "TMDB_API_TOKEN=", "ZIGZAG_TMDB_TOKEN=" };
+        for (keys) |key| {
+            if (env.findValue(content, key)) |token| {
                 const len = @min(token.len, app.tmdb.api_key.len);
                 @memcpy(app.tmdb.api_key[0..len], token[0..len]);
                 app.tmdb.api_key_len = len;
-                return;
+                break;
             }
+        }
+    }
+
+    // OpenSubtitles key — same pattern
+    if (app.opensub_api_key_len == 0) {
+        if (env.findValue(content, "OPENSUB_API_KEY=")) |token| {
+            const len = @min(token.len, app.opensub_api_key.len);
+            @memcpy(app.opensub_api_key[0..len], token[0..len]);
+            app.opensub_api_key_len = len;
         }
     }
 }

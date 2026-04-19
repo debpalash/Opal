@@ -4,235 +4,20 @@ const resolver = @import("resolver.zig");
 const voice = @import("ai_voice.zig");
 const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
+const pure = @import("ai_intent_pure.zig");
 
 // ══════════════════════════════════════════════════════════
 //  AI Intent — Classification, Normalization, Smart Routing
 // ══════════════════════════════════════════════════════════
 //
-// Instead of blindly forwarding user text to torrent search,
-// classify what the user actually wants and route accordingly.
+// Pure classification/normalization lives in ai_intent_pure.zig
+// (testable without crossing src/ module boundaries). This file
+// keeps the I/O-heavy recommendation handler.
 
-pub const Intent = enum {
-    specific_title,   // "play the boys S01E01" — search for a specific thing
-    recommendation,   // "play some movies" / "recommend something" — use TMDB trending
-    browse_genre,     // "find sci-fi movies" — TMDB genre browse
-    search_title,     // "find iron man" — multi-source search
-    contextual_nav,   // "next episode" — already handled by resolveContextual
-    unknown,          // fallback — let LLM handle it
-};
-
-// ── Number word lookup ──
-const NumberWord = struct { word: []const u8, val: u8 };
-const number_words = [_]NumberWord{
-    .{ .word = "one", .val = 1 },     .{ .word = "two", .val = 2 },
-    .{ .word = "three", .val = 3 },   .{ .word = "four", .val = 4 },
-    .{ .word = "five", .val = 5 },    .{ .word = "six", .val = 6 },
-    .{ .word = "seven", .val = 7 },   .{ .word = "eight", .val = 8 },
-    .{ .word = "nine", .val = 9 },    .{ .word = "ten", .val = 10 },
-    .{ .word = "eleven", .val = 11 }, .{ .word = "twelve", .val = 12 },
-    .{ .word = "thirteen", .val = 13 }, .{ .word = "fourteen", .val = 14 },
-    .{ .word = "fifteen", .val = 15 }, .{ .word = "sixteen", .val = 16 },
-    .{ .word = "seventeen", .val = 17 }, .{ .word = "eighteen", .val = 18 },
-    .{ .word = "nineteen", .val = 19 }, .{ .word = "twenty", .val = 20 },
-    .{ .word = "first", .val = 1 },   .{ .word = "second", .val = 2 },
-    .{ .word = "third", .val = 3 },   .{ .word = "fourth", .val = 4 },
-    .{ .word = "fifth", .val = 5 },   .{ .word = "sixth", .val = 6 },
-    .{ .word = "seventh", .val = 7 }, .{ .word = "eighth", .val = 8 },
-    .{ .word = "ninth", .val = 9 },   .{ .word = "tenth", .val = 10 },
-};
-
-fn wordToNumber(word: []const u8) ?u8 {
-    var lower: [32]u8 = undefined;
-    const wl = @min(word.len, 31);
-    for (0..wl) |i| lower[i] = std.ascii.toLower(word[i]);
-    const lw = lower[0..wl];
-    for (number_words) |nw| {
-        if (std.mem.eql(u8, lw, nw.word)) return nw.val;
-    }
-    return null;
-}
-
-// ── Recommendation trigger phrases ──
-const rec_phrases = [_][]const u8{
-    "some movies", "some shows", "some anime", "some series",
-    "recommend", "suggest", "something to watch", "what should i watch",
-    "what to watch", "anything good", "random movie", "random show",
-    "movies to watch", "shows to watch", "popular movies", "trending",
-    "top movies", "best movies", "best shows", "best anime",
-    "new movies", "new shows", "latest movies", "whats popular",
-    "what's popular", "what is trending", "whats trending",
-    "play something", "put something on", "surprise me",
-};
-
-// ── Genre keywords ──
-const GenreEntry = struct { keyword: []const u8, genre: []const u8 };
-const genre_keywords = [_]GenreEntry{
-    .{ .keyword = "sci-fi", .genre = "Science Fiction" },
-    .{ .keyword = "scifi", .genre = "Science Fiction" },
-    .{ .keyword = "science fiction", .genre = "Science Fiction" },
-    .{ .keyword = "horror", .genre = "Horror" },
-    .{ .keyword = "comedy", .genre = "Comedy" },
-    .{ .keyword = "action", .genre = "Action" },
-    .{ .keyword = "thriller", .genre = "Thriller" },
-    .{ .keyword = "romance", .genre = "Romance" },
-    .{ .keyword = "drama", .genre = "Drama" },
-    .{ .keyword = "animation", .genre = "Animation" },
-    .{ .keyword = "documentary", .genre = "Documentary" },
-    .{ .keyword = "fantasy", .genre = "Fantasy" },
-    .{ .keyword = "mystery", .genre = "Mystery" },
-    .{ .keyword = "western", .genre = "Western" },
-    .{ .keyword = "crime", .genre = "Crime" },
-    .{ .keyword = "war", .genre = "War" },
-};
-
-// ── Filler prefixes to strip from queries ──
-const filler_prefixes = [_][]const u8{
-    "can you play ", "could you play ", "i want to watch ",
-    "i wanna watch ", "put on ", "let me watch ",
-    "can you find ", "can you search ", "please play ",
-    "please find ", "yo play ", "hey play ",
-    "play me ", "show me ",
-};
-
-/// Classify intent from user input (lowercase).
-pub fn classifyIntent(input_lower: []const u8) Intent {
-    // Check recommendation triggers first
-    for (rec_phrases) |phrase| {
-        if (std.mem.indexOf(u8, input_lower, phrase) != null) return .recommendation;
-    }
-
-    // Check genre browse: "find <genre> movies/shows"
-    for (genre_keywords) |gk| {
-        if (std.mem.indexOf(u8, input_lower, gk.keyword) != null) {
-            // Only if also mentions movies/shows/anime (genre browse)
-            // vs "play horror movie name" (specific title)
-            const has_media_word = std.mem.indexOf(u8, input_lower, "movies") != null or
-                std.mem.indexOf(u8, input_lower, "shows") != null or
-                std.mem.indexOf(u8, input_lower, "anime") != null or
-                std.mem.indexOf(u8, input_lower, "series") != null or
-                std.mem.indexOf(u8, input_lower, "films") != null;
-            if (has_media_word) return .browse_genre;
-        }
-    }
-
-    // Default: it's a specific title or search
-    return .specific_title;
-}
-
-/// Normalize a query: strip filler, convert word numbers to SxxExx format.
-/// Returns the normalized query in buf.
-pub fn normalizeQuery(raw: []const u8, buf: *[256]u8) []const u8 {
-    if (raw.len == 0) return raw;
-
-    // Step 1: strip filler prefixes
-    var input = raw;
-    var lower_copy: [512]u8 = undefined;
-    const clen = @min(raw.len, 511);
-    for (0..clen) |i| lower_copy[i] = std.ascii.toLower(raw[i]);
-    const lc = lower_copy[0..clen];
-
-    for (filler_prefixes) |fp| {
-        if (std.mem.startsWith(u8, lc, fp)) {
-            input = raw[fp.len..];
-            break;
-        }
-    }
-
-    // Step 2: convert word numbers in "season X episode Y" patterns
-    // Work on lowered input
-    var work: [256]u8 = undefined;
-    const wlen = @min(input.len, 255);
-    for (0..wlen) |i| work[i] = std.ascii.toLower(input[i]);
-    const src = work[0..wlen];
-
-    // Check for "season <word/num>" pattern
-    if (std.mem.indexOf(u8, src, "season ")) |season_pos| {
-        // Copy everything before "season "
-        const prefix = std.mem.trim(u8, input[0..season_pos], " ");
-        var out: usize = 0;
-
-        // Copy title prefix
-        for (prefix) |ch| {
-            if (out < 255) { buf[out] = ch; out += 1; }
-        }
-        if (out > 0 and buf[out - 1] != ' ') { buf[out] = ' '; out += 1; }
-
-        // Parse season number (word or digit)
-        const after_season = src[season_pos + 7..]; // skip "season "
-        var season_num: ?u8 = null;
-        var consumed: usize = 0;
-
-        // Try digit first
-        if (after_season.len > 0 and std.ascii.isDigit(after_season[0])) {
-            var end: usize = 0;
-            var val: u8 = 0;
-            while (end < after_season.len and std.ascii.isDigit(after_season[end])) : (end += 1) {
-                val = val * 10 + (after_season[end] - '0');
-            }
-            season_num = val;
-            consumed = end;
-        } else {
-            // Try word number
-            var end: usize = 0;
-            while (end < after_season.len and after_season[end] != ' ') end += 1;
-            if (end > 0) {
-                season_num = wordToNumber(after_season[0..end]);
-                if (season_num != null) consumed = end;
-            }
-        }
-
-        if (season_num) |sn| {
-            // Write S##
-            buf[out] = 'S'; out += 1;
-            if (sn < 10) { buf[out] = '0'; out += 1; }
-            const sn_str = std.fmt.bufPrint(buf[out..], "{d}", .{sn}) catch "";
-            out += sn_str.len;
-
-            // Now look for episode pattern
-            var ep_rest = after_season[consumed..];
-            // skip spaces
-            while (ep_rest.len > 0 and ep_rest[0] == ' ') ep_rest = ep_rest[1..];
-
-            const ep_prefixes = [_][]const u8{ "episode ", "ep " };
-            for (ep_prefixes) |ep_prefix| {
-                if (std.mem.startsWith(u8, ep_rest, ep_prefix)) {
-                    const after_ep = ep_rest[ep_prefix.len..];
-                    var ep_num: ?u8 = null;
-
-                    // Try digit
-                    if (after_ep.len > 0 and std.ascii.isDigit(after_ep[0])) {
-                        var end2: usize = 0;
-                        var val2: u8 = 0;
-                        while (end2 < after_ep.len and std.ascii.isDigit(after_ep[end2])) : (end2 += 1) {
-                            val2 = val2 * 10 + (after_ep[end2] - '0');
-                        }
-                        ep_num = val2;
-                    } else {
-                        var end2: usize = 0;
-                        while (end2 < after_ep.len and after_ep[end2] != ' ') end2 += 1;
-                        if (end2 > 0) ep_num = wordToNumber(after_ep[0..end2]);
-                    }
-
-                    if (ep_num) |en| {
-                        buf[out] = 'E'; out += 1;
-                        if (en < 10) { buf[out] = '0'; out += 1; }
-                        const en_str = std.fmt.bufPrint(buf[out..], "{d}", .{en}) catch "";
-                        out += en_str.len;
-                    }
-                    break;
-                }
-            }
-
-            return buf[0..out];
-        }
-    }
-
-    // No season/episode pattern — just return with filler stripped
-    const trimmed = std.mem.trim(u8, input, " ");
-    const tlen = @min(trimmed.len, 255);
-    @memcpy(buf[0..tlen], trimmed[0..tlen]);
-    return buf[0..tlen];
-}
+pub const Intent = pure.Intent;
+pub const classifyIntent = pure.classifyIntent;
+pub const normalizeQuery = pure.normalizeQuery;
+pub const parseNavIndex = pure.parseNavIndex;
 
 /// Handle recommendation intent — use TMDB trending data.
 /// Populates chat results with trending movies/shows instead of torrent garbage.
@@ -361,24 +146,58 @@ fn recommendationWorker(assistant_idx: usize) void {
     }
 }
 
-/// Check if a result name looks like an error message rather than real content.
-pub fn isErrorResult(name: []const u8) bool {
-    const error_markers = [_][]const u8{
-        "api key error", "Jackett:", "jackett:", "API key",
-        "error!", "Error!", "ERROR", "configuration",
-        "Right-click this", "right-click this",
-        "indexer error", "Indexer Error",
-    };
-    for (error_markers) |marker| {
-        if (std.mem.indexOf(u8, name, marker) != null) return true;
-    }
-    return false;
-}
+pub const isErrorResult = pure.isErrorResult;
+pub const findGenre = pure.findGenre;
 
-/// Find genre from input text, returns genre name or null.
-pub fn findGenre(input_lower: []const u8) ?[]const u8 {
-    for (genre_keywords) |gk| {
-        if (std.mem.indexOf(u8, input_lower, gk.keyword) != null) return gk.genre;
+/// Handle browse_genre intent — open TMDB drawer in search mode keyed by
+/// the detected genre. Genuine discover-by-genre-id would need a TMDB
+/// category variant (todo); for now we piggyback on the existing search
+/// path, which still beats dropping "sci-fi movies" into torrent search.
+pub fn handleGenreBrowse(raw_input: []const u8) bool {
+    if (chat.message_count + 1 >= chat.MAX_MESSAGES) return false;
+
+    var lower: [256]u8 = undefined;
+    const llen = @min(raw_input.len, 255);
+    for (0..llen) |i| lower[i] = std.ascii.toLower(raw_input[i]);
+    const genre = pure.findGenre(lower[0..llen]) orelse return false;
+
+    // Push user msg + assistant slot
+    chat.messages[chat.message_count] = .{ .role = .user, .text_len = @min(raw_input.len, chat.MAX_MSG_LEN) };
+    @memcpy(chat.messages[chat.message_count].text[0..chat.messages[chat.message_count].text_len], raw_input[0..chat.messages[chat.message_count].text_len]);
+    chat.message_count += 1;
+
+    const assistant_idx = chat.message_count;
+    chat.messages[chat.message_count] = .{ .role = .assistant, .text_len = 0 };
+    chat.message_count += 1;
+
+    @memset(&chat.input_buf, 0);
+    chat.input_len = 0;
+
+    // Require TMDB key — else surface clear error instead of silent torrent search
+    if (state.app.tmdb.api_key_len == 0) {
+        const msg = "Set a TMDB API key in settings to browse by genre.";
+        chat.messages[assistant_idx].text_len = msg.len;
+        @memcpy(chat.messages[assistant_idx].text[0..msg.len], msg);
+        return true;
     }
-    return null;
+
+    // Open TMDB drawer, seed search with genre keyword
+    state.app.drawer_open = true;
+    state.app.drawer_tab = .TMDB;
+    state.app.tmdb.view = .Search;
+    state.app.tmdb.page = 1;
+    @memset(&state.app.tmdb.search_buf, 0);
+    const glen = @min(genre.len, state.app.tmdb.search_buf.len - 1);
+    @memcpy(state.app.tmdb.search_buf[0..glen], genre[0..glen]);
+
+    const tmdb_api = @import("tmdb_api.zig");
+    tmdb_api.fetchCurrentView(false);
+
+    var resp_buf: [256]u8 = undefined;
+    const resp = std.fmt.bufPrint(&resp_buf, "Opened TMDB search for {s}. Browse posters and say 'play <title>' to start.", .{genre}) catch "Opened TMDB genre browse.";
+    chat.messages[assistant_idx].text_len = @min(resp.len, chat.MAX_MSG_LEN);
+    @memcpy(chat.messages[assistant_idx].text[0..chat.messages[assistant_idx].text_len], resp[0..chat.messages[assistant_idx].text_len]);
+
+    if (voice.voice_mode) voice.speakResponse(chat.messages[assistant_idx].text[0..chat.messages[assistant_idx].text_len]);
+    return true;
 }

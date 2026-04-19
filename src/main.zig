@@ -101,6 +101,12 @@ fn appInit(win: *dvui.Window) !void {
             const watch = @import("player/watch_history.zig");
             watch.migrateFromTsv();
 
+            // One-time cleanup of LLM-plumbing strings that leaked into
+            // conversation_log in prior sessions (pre-filter fix). Without
+            // this, "[tool_call]/[tool_response]" stubs show up in the
+            // Past Sessions context and the model echoes the pattern.
+            @import("services/ai_memory.zig").purgeJunkConversations();
+
             // Load all persistent data from SQLite
             config.load();
             hist.loadSearchHistory();

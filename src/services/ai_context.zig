@@ -704,6 +704,37 @@ pub fn tryFastPath(raw_input: []const u8) bool {
         return intent.handleRecommendation(raw_input);
     }
 
+    // Handle genre browse — open TMDB drawer with genre keyword
+    if (user_intent == .browse_genre) {
+        return intent.handleGenreBrowse(raw_input);
+    }
+
+    // Handle contextual nav — pick from existing chat_results, skip search
+    if (user_intent == .contextual_nav) {
+        if (!chat.chat_results_active or chat.chat_result_count == 0) {
+            addInstantResponse(raw_input, "No results to pick from — search first.");
+            return true;
+        }
+        const current = chat.recommended_idx orelse 0;
+        const picked = intent.parseNavIndex(fl, current) orelse {
+            addInstantResponse(raw_input, "Didn't catch which one — try 'play the first' or 'next'.");
+            return true;
+        };
+        if (picked >= chat.chat_result_count) {
+            var msg_buf: [96]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "Only {d} result(s) on screen.", .{chat.chat_result_count}) catch "Out of range.";
+            addInstantResponse(raw_input, msg);
+            return true;
+        }
+        const ai_chat = @import("ai_chat.zig");
+        ai_chat.playChatResult(picked);
+        var ok_buf: [128]u8 = undefined;
+        const name_slice = chat.chat_results[picked].name[0..@min(chat.chat_results[picked].name_len, 80)];
+        const ok = std.fmt.bufPrint(&ok_buf, "Playing #{d}: {s}", .{ picked + 1, name_slice }) catch "Playing.";
+        addInstantResponse(raw_input, ok);
+        return true;
+    }
+
     // ── Normalize query first (strips "can you play ", etc.) ──
     var norm_buf: [256]u8 = undefined;
     const normalized = intent.normalizeQuery(fl, &norm_buf);
@@ -761,12 +792,25 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
     const query = query_buf[0..query_len];
     resolver.resolve(query, "auto");
 
-    // Wait for results — early exit when we have enough good results
+    // Wait for results. Torrent aggregators routinely take 10-20s — the old
+    // 5s cap caused "0 results" fallbacks while the side panel was still
+    // filling. New policy:
+    //   • Keep going as long as resolver is still working (up to 30s cap).
+    //   • Early exit only when we have enough (≥5 results) OR when
+    //     resolver has finished AND we've waited ≥1s for slow backends.
+    const io = @import("../core/io_global.zig");
     var waited: usize = 0;
-    while (resolver.is_resolving and waited < 50) : (waited += 1) {
-        // Early exit: if we already have ≥3 results, stop waiting
-        if (resolver.result_count >= 3 and waited >= 15) break;
-        @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
+    const max_ticks: usize = 300; // 300 × 100ms = 30s hard cap
+    while (waited < max_ticks) : (waited += 1) {
+        const rc = resolver.result_count;
+        const done = !resolver.is_resolving;
+        // Plenty of results — don't keep users waiting on slow trackers
+        if (rc >= 5 and waited >= 10) break;
+        // Resolver finished. Give one extra tick for late mutex writers, then stop.
+        if (done and waited >= 10) break;
+        // Resolver finished with something — exit
+        if (done and rc > 0) break;
+        io.sleep(100 * std.time.ns_per_ms);
     }
 
     // Copy results to chat, filtering out error/garbage results
@@ -827,17 +871,34 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
                 return;
             }
         } else if (action == .play_best) {
-            const best = chat.chat_results[0].name[0..chat.chat_results[0].name_len];
-            const seeds = chat.chat_results[0].seeds;
-            const match = chat.chat_results[0].match_pct;
-            const qlbl: []const u8 = switch (chat.chat_results[0].quality) {
-                4 => "4K", 3 => "1080p", 2 => "720p", 1 => "480p", else => "",
+            // Show the pick with reasoning + up to 2 runner-ups so user
+            // can see why it was chosen (title/year/quality/seeds). The
+            // ranking already scored on relevance + quality + seeds.
+            var w = std.Io.Writer.fixed(&resp_buf);
+            const best_item = chat.chat_results[0];
+            const best = best_item.name[0..best_item.name_len];
+            const best_q: []const u8 = switch (best_item.quality) {
+                4 => "4K", 3 => "1080p", 2 => "720p", 1 => "480p", else => "SD",
             };
-            const r = std.fmt.bufPrint(&resp_buf,
-                "Best match ({d}%): **{s}** · {s} · {d} seeds\nSay **play** or **yes** to start watching.",
-                .{ match, best, qlbl, seeds },
-            ) catch "Found a match. Say 'play' to start.";
-            resp_len = r.len;
+            w.print(
+                "Picked **{s}** ({d}% title match · {s} · {d} seeds).\n",
+                .{ best, best_item.match_pct, best_q, best_item.seeds },
+            ) catch {};
+            if (filtered_count > 1) {
+                w.writeAll("Other candidates:\n") catch {};
+                const show_n = @min(filtered_count, 3);
+                var ri: usize = 1;
+                while (ri < show_n) : (ri += 1) {
+                    const it = chat.chat_results[ri];
+                    const nm = it.name[0..it.name_len];
+                    const q: []const u8 = switch (it.quality) {
+                        4 => "4K", 3 => "1080p", 2 => "720p", 1 => "480p", else => "SD",
+                    };
+                    w.print("· {s} ({d}% · {s} · {d} seeds)\n", .{ nm, it.match_pct, q, it.seeds }) catch {};
+                }
+            }
+            w.writeAll("Say **play** or **yes** to start. Or click another.") catch {};
+            resp_len = w.buffered().len;
         } else {
             const r = std.fmt.bufPrint(&resp_buf, "Found {d} results. Pick one from the list or click ▶ to play.", .{filtered_count}) catch "Results ready.";
             resp_len = r.len;
@@ -1079,6 +1140,11 @@ pub fn generateResponse() void {
         // .system role = tool responses, sent as "user" to LLM but hidden from UI
         const role_str = if (msg.role == .assistant) "assistant" else "user";
         const text = msg.text[0..msg.text_len];
+
+        // Skip corrupted assistant turns that are just "[tool_call]/[tool_response]"
+        // stubs. Feeding them back to the model causes it to echo the pattern.
+        // `.system` role messages are legitimate tool JSON and must still pass through.
+        if (msg.role == .assistant and memory.isJunkTurn(text)) continue;
 
         var escaped: [2048]u8 = undefined;
         var elen: usize = 0;

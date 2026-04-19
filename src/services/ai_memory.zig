@@ -123,6 +123,7 @@ fn ingestWorker(args: IngestArgs) void {
 /// Asynchronously ingest a message into the vector DB (non-blocking).
 pub fn ingestMemory(role: []const u8, content: []const u8, context_type: []const u8, media_title: []const u8) void {
     if (content.len == 0) return;
+    if (isJunkTurn(content)) return; // same poison filter as saveConversation
     const allocator = @import("../core/alloc.zig").allocator;
     const args = IngestArgs{
         .role = allocator.dupe(u8, role) catch return,
@@ -234,16 +235,50 @@ pub fn buildContext(allocator: std.mem.Allocator, user_prompt: []const u8) ?[]u8
 // Cross-Session Conversation Persistence
 // ══════════════════════════════════════════════════════════
 
+/// Reject content that's LLM plumbing, not human-readable dialogue.
+/// Tool-call placeholders, tool-response JSON blobs, and similar framing
+/// leak into the prompt as past-session context and poison future turns —
+/// the model echoes the pattern it sees ("[tool_call] [tool_response]" loop).
+pub fn isJunkTurn(content: []const u8) bool {
+    const trimmed = std.mem.trim(u8, content, " \t\r\n");
+    if (trimmed.len == 0) return true;
+    if (std.mem.startsWith(u8, trimmed, "[tool_call")) return true;
+    if (std.mem.startsWith(u8, trimmed, "[tool_response")) return true;
+    if (std.mem.startsWith(u8, trimmed, "{\"tool_call\"")) return true;
+    if (std.mem.startsWith(u8, trimmed, "{\"tool_response\"")) return true;
+    // Fallback: high density of tool-call markers anywhere in text
+    var count: usize = 0;
+    var i: usize = 0;
+    while (std.mem.indexOfPos(u8, trimmed, i, "[tool_")) |p| : (i = p + 6) count += 1;
+    if (count >= 2) return true;
+    return false;
+}
+
 /// Save a conversation exchange to the persistent log.
 /// Only saves substantial messages (>10 chars) to avoid noise.
 pub fn saveConversation(role: []const u8, content: []const u8) void {
     if (content.len < 10) return; // skip trivial messages
-    const sql = "INSERT INTO conversation_log(role, content) VALUES(?1, ?2)";
-    const stmt = db.prepare(sql) orelse return;
+    if (isJunkTurn(content)) return; // reject tool-plumbing poison
+    const q = "INSERT INTO conversation_log(role, content) VALUES(?1, ?2)";
+    const stmt = db.prepare(q) orelse return;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, role);
     db.bindText(stmt, 2, content);
     _ = db.step(stmt);
+}
+
+/// One-time purge of already-poisoned rows. Idempotent — WHERE clause is
+/// a no-op once the store is clean.
+pub fn purgeJunkConversations() void {
+    const q =
+        \\DELETE FROM conversation_log
+        \\WHERE content LIKE '[tool_call%'
+        \\   OR content LIKE '[tool_response%'
+        \\   OR content LIKE '{"tool_call"%'
+        \\   OR content LIKE '{"tool_response"%'
+        \\   OR content LIKE '%[tool_call]%[tool_response]%'
+    ;
+    db.exec(q);
 }
 
 /// Get recent conversation history from past sessions for context injection.
@@ -260,6 +295,7 @@ pub fn getRecentConversations(allocator: std.mem.Allocator) ?[]u8 {
     while (db.step(stmt) == db.c.SQLITE_ROW) {
         const role = db.columnText(stmt, 0) orelse continue;
         const content = db.columnText(stmt, 1) orelse continue;
+        if (isJunkTurn(content)) continue; // belt-and-suspenders: skip legacy poison
         const ts = db.columnInt(stmt, 2);
         
         // Time ago

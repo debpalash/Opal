@@ -167,6 +167,7 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     const qlen = @min(normalized.len, 255);
     @memcpy(resolver_query[0..qlen], normalized[0..qlen]);
     resolver_query_len = qlen;
+    std.debug.print("[resolver] query='{s}' intent='{s}'\n", .{ normalized, intent });
     
     // Save intent (e.g. "show", "movie", "auto")
     const ilen = @min(intent.len, 31);
@@ -196,18 +197,18 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     _ = std.Thread.spawn(.{}, resolveStremio, .{ resolver_query, qlen }) catch {};
 }
 
-fn pushResult(item: ResolvedItem) void {
+fn pushResult(item: ResolvedItem) bool {
     results_mutex.lock();
     defer results_mutex.unlock();
-    if (result_count >= 64) return;
+    if (result_count >= 64) return false;
 
     // Filter out error/garbage results at the source
     const name = item.name[0..@min(item.name_len, 256)];
-    if (isErrorResult(name)) return;
+    if (isErrorResult(name)) return false;
 
     var scored_item = item;
     const match_info = computeMatch(scored_item);
-    if (match_info.match_pct == 0) return; // No keywords matched — skip
+    if (match_info.match_pct == 0) return false;
 
     scored_item.match_pct = match_info.match_pct;
     const score = match_info.score;
@@ -230,6 +231,7 @@ fn pushResult(item: ResolvedItem) void {
     }
     results[insert_at] = scored_item;
     result_count += 1;
+    return true;
 }
 
 fn checkAllDone() void {
@@ -294,8 +296,25 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
         if (word.len == 1 and !std.ascii.isDigit(word[0])) continue;
         if (isStopWord(word)) continue;
         total_words += 1;
-        if (std.mem.indexOf(u8, lower_name[0..nlen], word) != null) {
-            match_words += 1;
+
+        // Fully-numeric tokens (e.g. "2" in "iron man 2") must match on
+        // word boundaries — otherwise "2" matches inside "2008" and ruins
+        // ranking for sequels.
+        var is_numeric = true;
+        for (word) |ch| if (!std.ascii.isDigit(ch)) { is_numeric = false; break; };
+
+        const hay = lower_name[0..nlen];
+        if (is_numeric) {
+            var hi: usize = 0;
+            while (std.mem.indexOfPos(u8, hay, hi, word)) |p| {
+                const before_ok = (p == 0) or !std.ascii.isDigit(hay[p - 1]);
+                const after_idx = p + word.len;
+                const after_ok = (after_idx >= hay.len) or !std.ascii.isDigit(hay[after_idx]);
+                if (before_ok and after_ok) { match_words += 1; break; }
+                hi = p + 1;
+            }
+        } else {
+            if (std.mem.indexOf(u8, hay, word) != null) match_words += 1;
         }
     }
 
@@ -325,13 +344,15 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
         4 => 2, 3 => 0, 2 => 5, 1 => 10, else => 15,
     };
 
-    // Seed bonus: more seeds = better
-    const seed_bonus: u32 = if (item.seeds > 100) 50
-        else if (item.seeds > 50) 40
-        else if (item.seeds > 20) 30
-        else if (item.seeds > 10) 20
-        else if (item.seeds > 5) 10
-        else if (item.seeds > 0) 5
+    // Seed bonus capped at 7 so a well-seeded torrent can't leapfrog an
+    // equal-match jellyfin item (torrent source_w=8 gap must survive).
+    // Inter-torrent ordering is still preserved via the remaining spread.
+    const seed_bonus: u32 = if (item.seeds > 100) 7
+        else if (item.seeds > 50) 6
+        else if (item.seeds > 20) 5
+        else if (item.seeds > 10) 4
+        else if (item.seeds > 5) 3
+        else if (item.seeds > 0) 1
         else 0;
 
     const raw = relevance + source_w + quality_bonus;
@@ -422,7 +443,7 @@ fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
             item.detail_len = dstr.len;
         }
 
-        if (item.name_len > 0) pushResult(item);
+        if (item.name_len > 0) _ = pushResult(item);
         pos = obj_end;
     }
 }
@@ -458,8 +479,10 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
     var reader = child.stdout.?.reader(@import("../core/io_global.zig").io(), &child_reader_buf);
 
     var found: usize = 0;
-    while (found < 15) {
+    var scanned: usize = 0;
+    while (scanned < 200) {
         const line = reader.interface.takeDelimiter('\n') catch break orelse break;
+        scanned += 1;
         if (line.len < 10) continue;
 
         // Parse pipe-delimited: link|name|size|seeds|leech|engine
@@ -509,11 +532,14 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
         @memcpy(item.detail[0..dlen], dstr[0..dlen]);
         item.detail_len = dlen;
 
-        pushResult(item);
-        found += 1;
+        if (pushResult(item)) {
+            found += 1;
+            if (found >= 25) break;
+        }
     }
 
     _ = child.wait() catch {};
+    std.debug.print("[resolver] nova2 scanned={d} pushed={d}\n", .{ scanned, found });
     if (found > 0) {
         logs.pushLog("info", "resolver", "nova2 torrents found", false);
     }
@@ -641,7 +667,7 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
                 @memcpy(item.detail[0..dlen], dstr[0..dlen]);
                 item.detail_len = dlen;
 
-                pushResult(item);
+                _ = pushResult(item);
                 found += 1;
             }
         }
@@ -734,7 +760,7 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
             @memcpy(item.detail[0..dlen], dstr[0..dlen]);
             item.detail_len = dlen;
 
-            pushResult(item);
+            _ = pushResult(item);
             found += 1;
         }
         pos = he + 1;
@@ -815,7 +841,7 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
             @memcpy(item.detail[0..detail.len], detail);
             item.detail_len = detail.len;
 
-            pushResult(item);
+            _ = pushResult(item);
             found += 1;
         }
         pos = abs + name_end;
@@ -878,7 +904,7 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
             const detail = "YouTube";
             @memcpy(item.detail[0..detail.len], detail);
             item.detail_len = detail.len;
-            pushResult(item);
+            _ = pushResult(item);
             found += 1;
         }
     }
@@ -1038,7 +1064,7 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
             }
 
             item.quality = detectQuality(item.name[0..item.name_len]);
-            if (item.url_len > 0) pushResult(item);
+            if (item.url_len > 0) _ = pushResult(item);
             spos = uabs + ue;
         }
     }

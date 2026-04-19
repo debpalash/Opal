@@ -1065,7 +1065,7 @@ pub fn renderInlineResults() void {
     }
 }
 
-fn playChatResult(idx: usize) void {
+pub fn playChatResult(idx: usize) void {
     if (idx >= chat_result_count) return;
     // Copy item into resolver's global results slot 0 and play
     resolver.results_mutex.lock();

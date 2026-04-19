@@ -140,6 +140,43 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_deps).step);
 
+    const test_env = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/env.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_env).step);
+
+    const test_intent = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/ai_intent_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_intent).step);
+
+    const test_rank = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/resolver_rank.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_rank).step);
+
+    // Pipeline test imports ai_intent_pure + resolver_rank siblings.
+    const test_pipeline = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/ai_pipeline_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_pipeline).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main

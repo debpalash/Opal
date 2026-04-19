@@ -249,9 +249,12 @@ fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h: f3
     });
     defer card.deinit();
 
-    // Poster image area — clickable to search torrents
+    // Poster image area — single clickable button-widget that hosts the
+    // image as its child. Prior implementation stacked a dvui.button +
+    // a sibling box, producing two rectangles per card.
     {
-        const poster_clicked = dvui.button(@src(), "", .{}, .{
+        var bw: dvui.ButtonWidget = undefined;
+        bw.init(@src(), .{}, .{
             .id_extra = idx + 100,
             .background = true,
             .color_fill = dvui.Color{ .r = 18 + h1 / 8, .g = 22 + h2 / 10, .b = 32 + h1 / 6, .a = 255 },
@@ -260,13 +263,8 @@ fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h: f3
             .max_size_content = .{ .w = card_w, .h = poster_h },
             .padding = dvui.Rect.all(0),
         });
-
-        var poster_area = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 101,
-            .min_size_content = .{ .w = card_w, .h = poster_h },
-            .max_size_content = .{ .w = card_w, .h = poster_h },
-        });
-        defer poster_area.deinit();
+        bw.processEvents();
+        bw.drawBackground();
 
         // Upload texture if pixels are ready
         if (item.poster_tex == null and item.poster_pixels != null) {
@@ -277,13 +275,11 @@ fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h: f3
         }
 
         if (item.poster_tex) |*tex| {
-            // Poster image display
             _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
                 .id_extra = idx + 150, .expand = .both, .corner_radius = dvui.Rect.all(8),
             });
         } else {
             if (!item.poster_fetching and item.poster_path_len > 0) api.fetchPoster(item);
-            // Placeholder icon
             dvui.icon(@src(), "", icons.tvg.lucide.@"film", .{}, .{
                 .id_extra = idx + 150, .gravity_x = 0.5, .gravity_y = 0.5,
                 .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 60 },
@@ -291,9 +287,10 @@ fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h: f3
             });
         }
 
-        if (poster_clicked) {
-            sendToSearch(item);
-        }
+        const poster_clicked = bw.clicked();
+        bw.drawFocus();
+        bw.deinit();
+        if (poster_clicked) sendToSearch(item);
     }
 
     // Rating badge + type label
