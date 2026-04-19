@@ -770,6 +770,60 @@ fn renderPlaybackTab() void {
             }
         }
     }
+
+    // ── Kokoro Voice Picker (only when Kokoro model installed) ──
+    {
+        const deps = @import("../core/deps.zig");
+        const vb = @import("../services/voice_backend.zig");
+        if (deps.check().sherpa_kokoro_model) {
+            sectionHeader("Kokoro Voice", "Pick a speaker ID from the Kokoro pack (0–53)", 18, @src());
+            var kcard = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .expand = .horizontal, .background = true, .color_fill = card_bg,
+                .color_border = card_border, .border = dvui.Rect.all(1),
+                .corner_radius = dvui.Rect.all(8),
+                .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
+                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+            });
+            defer kcard.deinit();
+
+            var label_buf: [32]u8 = undefined;
+            const lbl = std.fmt.bufPrint(&label_buf, "sid = {d}", .{vb.kokoro_sid}) catch "sid = ?";
+            _ = dvui.label(@src(), "{s}", .{lbl}, .{
+                .color_text = theme.colors.accent,
+                .min_size_content = .{ .w = 80, .h = 0 },
+                .gravity_y = 0.5,
+            });
+
+            if (dvui.button(@src(), "−", .{}, .{
+                .color_fill = btn_inactive, .color_text = label_text,
+                .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+                .corner_radius = dvui.Rect.all(4),
+                .margin = .{ .w = 4 },
+                .gravity_y = 0.5,
+            })) {
+                if (vb.kokoro_sid > 0) vb.kokoro_sid -= 1;
+            }
+            if (dvui.button(@src(), "+", .{}, .{
+                .color_fill = btn_inactive, .color_text = label_text,
+                .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+                .corner_radius = dvui.Rect.all(4),
+                .margin = .{ .w = 4 },
+                .gravity_y = 0.5,
+            })) {
+                if (vb.kokoro_sid < 53) vb.kokoro_sid += 1;
+            }
+            { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+            if (dvui.button(@src(), "Preview", .{}, .{
+                .color_fill = btn_active, .color_text = btn_text_active,
+                .padding = .{ .x = 14, .y = 4, .w = 14, .h = 4 },
+                .corner_radius = dvui.Rect.all(4),
+                .gravity_y = 0.5,
+            })) {
+                const b = vb.active();
+                b.speak("Opal voice preview.");
+            }
+        }
+    }
 }
 
 fn renderNetworkTab() void {
