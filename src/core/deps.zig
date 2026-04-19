@@ -15,7 +15,8 @@ pub const Status = struct {
     whisper_model: bool = false,
     sherpa_onnx: bool = false,
     sherpa_model: bool = false,
-    sherpa_tts_model: bool = false,
+    sherpa_tts_model: bool = false,      // Piper VITS lessac-medium
+    sherpa_kokoro_model: bool = false,    // Kokoro multi-voice TTS
     sherpa_stream_model: bool = false,
     sherpa_mic_cli: bool = false,
 };
@@ -53,6 +54,10 @@ pub fn check() Status {
     var sherpa_stream_buf: [512]u8 = undefined;
     if (std.fmt.bufPrintZ(&sherpa_stream_buf, "{s}/.config/opal/models/sherpa-stream-zipformer/encoder.onnx", .{home2})) |p| {
         s.sherpa_stream_model = have(p);
+    } else |_| {}
+    var sherpa_kokoro_buf: [512]u8 = undefined;
+    if (std.fmt.bufPrintZ(&sherpa_kokoro_buf, "{s}/.config/opal/models/sherpa-kokoro/model.onnx", .{home2})) |p| {
+        s.sherpa_kokoro_model = have(p);
     } else |_| {}
     s.sherpa_mic_cli = have("/opt/homebrew/bin/sherpa-onnx-microphone") or
         have("/usr/local/bin/sherpa-onnx-microphone");
@@ -218,6 +223,65 @@ pub fn fetchSherpaTtsAsync() void {
     };
     _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
         sherpa_tts_downloading = false;
+    };
+}
+
+/// Fetch Kokoro multi-voice TTS bundle (~330MB) for highest-quality
+/// synthesis. Has 53+ English speakers selectable via --sid. Opt-in —
+/// Piper stays the default because of size.
+pub var sherpa_kokoro_downloading: bool = false;
+
+pub fn fetchSherpaKokoroAsync() void {
+    if (sherpa_kokoro_downloading) return;
+    sherpa_kokoro_downloading = true;
+    const S = struct {
+        fn worker() void {
+            defer sherpa_kokoro_downloading = false;
+            var home_buf: [512]u8 = undefined;
+            const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return;
+            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
+            io_global.makeDirAbsolute(models_dir) catch {};
+
+            var tar_buf: [512]u8 = undefined;
+            const tar_path = std.fmt.bufPrintZ(&tar_buf, "{s}/sherpa-kokoro.tar.bz2", .{models_dir}) catch return;
+
+            var check_buf: [512]u8 = undefined;
+            const check_path = std.fmt.bufPrintZ(&check_buf, "{s}/sherpa-kokoro/model.onnx", .{models_dir}) catch return;
+            if (io_global.cwdAccess(check_path, .{})) |_| return else |_| {}
+
+            logs.pushLog("info", "deps", "Fetching Kokoro TTS (~330MB)…", true);
+            var curl = io_global.Child.init(&.{
+                "curl", "-L", "--fail", "--silent", "--show-error",
+                "-o", tar_path,
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2",
+            }, @import("alloc.zig").allocator);
+            curl.stdout_behavior = .Ignore;
+            curl.stderr_behavior = .Ignore;
+            curl.spawn() catch return;
+            _ = curl.wait() catch {};
+
+            var untar = io_global.Child.init(&.{
+                "tar", "-xjf", tar_path, "-C", models_dir,
+            }, @import("alloc.zig").allocator);
+            untar.stdout_behavior = .Ignore;
+            untar.stderr_behavior = .Ignore;
+            _ = untar.spawnAndWait() catch {};
+
+            var src_buf: [512]u8 = undefined;
+            const src = std.fmt.bufPrintZ(&src_buf, "{s}/kokoro-en-v0_19", .{models_dir}) catch return;
+            var dst_buf: [512]u8 = undefined;
+            const dst = std.fmt.bufPrintZ(&dst_buf, "{s}/sherpa-kokoro", .{models_dir}) catch return;
+            var mv = io_global.Child.init(&.{ "mv", "-f", src, dst }, @import("alloc.zig").allocator);
+            mv.stdout_behavior = .Ignore;
+            mv.stderr_behavior = .Ignore;
+            _ = mv.spawnAndWait() catch {};
+
+            io_global.deleteFileAbsolute(tar_path) catch {};
+            logs.pushLog("info", "deps", "Kokoro model ready (53+ voices)", true);
+        }
+    };
+    _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
+        sherpa_kokoro_downloading = false;
     };
 }
 

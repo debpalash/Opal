@@ -152,9 +152,12 @@ fn sherpaOnnxTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
     return null;
 }
 
+/// Selected Kokoro speaker ID. 0–53 in the English v0_19 release.
+pub var kokoro_sid: u16 = 0;
+
 fn sherpaOnnxSpeak(text: []const u8) void {
     if (text.len == 0) return;
-    // Locate CLI + TTS model
+    // Locate CLI
     const bin: []const u8 = blk: {
         if (io_global.cwdAccess("/opt/homebrew/bin/sherpa-onnx-offline-tts", .{})) |_| {
             break :blk "/opt/homebrew/bin/sherpa-onnx-offline-tts";
@@ -166,55 +169,84 @@ fn sherpaOnnxSpeak(text: []const u8) void {
         return;
     };
 
-    var home_buf: [128]u8 = undefined;
-    _ = &home_buf;
     const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
-
-    var vm_buf: [512]u8 = undefined;
-    var lex_buf: [512]u8 = undefined;
-    var tok_buf: [512]u8 = undefined;
-    var dd_buf: [512]u8 = undefined;
     var out_buf: [512]u8 = undefined;
-    const vits_model = std.fmt.bufPrintZ(&vm_buf, "{s}/.config/opal/models/sherpa-vits-piper/en_US-lessac-medium.onnx", .{home}) catch {
-        sayTtsSpeak(text);
-        return;
-    };
-    const lexicon = std.fmt.bufPrintZ(&lex_buf, "{s}/.config/opal/models/sherpa-vits-piper/lexicon.txt", .{home}) catch {
-        sayTtsSpeak(text);
-        return;
-    };
-    const tokens_p = std.fmt.bufPrintZ(&tok_buf, "{s}/.config/opal/models/sherpa-vits-piper/tokens.txt", .{home}) catch {
-        sayTtsSpeak(text);
-        return;
-    };
-    const data_dir = std.fmt.bufPrintZ(&dd_buf, "{s}/.config/opal/models/sherpa-vits-piper/espeak-ng-data", .{home}) catch {
-        sayTtsSpeak(text);
-        return;
-    };
     const out_wav = std.fmt.bufPrintZ(&out_buf, "{s}/.config/opal/tts_out.wav", .{home}) catch {
         sayTtsSpeak(text);
         return;
     };
+    var out_arg_buf: [640]u8 = undefined;
+    const a_out = std.fmt.bufPrint(&out_arg_buf, "--output-filename={s}", .{out_wav}) catch return;
 
-    // Model missing → graceful fallback
+    // Prefer Kokoro (higher quality, multi-voice) if installed.
+    var km_buf: [512]u8 = undefined;
+    const kokoro_model = std.fmt.bufPrintZ(&km_buf, "{s}/.config/opal/models/sherpa-kokoro/model.onnx", .{home}) catch "";
+    const has_kokoro = kokoro_model.len > 0 and (io_global.cwdAccess(kokoro_model, .{}) catch null) != null;
+
+    if (has_kokoro) {
+        var voices_buf: [512]u8 = undefined;
+        var tok_buf: [512]u8 = undefined;
+        var dd_buf: [512]u8 = undefined;
+        const voices = std.fmt.bufPrintZ(&voices_buf, "{s}/.config/opal/models/sherpa-kokoro/voices.bin", .{home}) catch return;
+        const tokens_p = std.fmt.bufPrintZ(&tok_buf, "{s}/.config/opal/models/sherpa-kokoro/tokens.txt", .{home}) catch return;
+        const data_dir = std.fmt.bufPrintZ(&dd_buf, "{s}/.config/opal/models/sherpa-kokoro/espeak-ng-data", .{home}) catch return;
+        var km_arg: [640]u8 = undefined;
+        var v_arg: [640]u8 = undefined;
+        var tk_arg: [640]u8 = undefined;
+        var dd_arg: [640]u8 = undefined;
+        var sid_arg: [32]u8 = undefined;
+        const a_km = std.fmt.bufPrint(&km_arg, "--kokoro-model={s}", .{kokoro_model}) catch return;
+        const a_v = std.fmt.bufPrint(&v_arg, "--kokoro-voices={s}", .{voices}) catch return;
+        const a_tk = std.fmt.bufPrint(&tk_arg, "--kokoro-tokens={s}", .{tokens_p}) catch return;
+        const a_dd = std.fmt.bufPrint(&dd_arg, "--kokoro-data-dir={s}", .{data_dir}) catch return;
+        const a_sid = std.fmt.bufPrint(&sid_arg, "--sid={d}", .{kokoro_sid}) catch return;
+
+        var synth = io_global.Child.init(&.{
+            bin, a_km, a_v, a_tk, a_dd, a_sid, a_out, text,
+        }, @import("../core/alloc.zig").allocator);
+        synth.stdout_behavior = .Ignore;
+        synth.stderr_behavior = .Ignore;
+        synth.spawn() catch {
+            playPiperOrSay(bin, a_out, out_wav, text);
+            return;
+        };
+        _ = synth.wait() catch {};
+        playWav(out_wav);
+        return;
+    }
+
+    // Fallback: Piper VITS
+    playPiperOrSay(bin, a_out, out_wav, text);
+}
+
+fn playPiperOrSay(bin: []const u8, out_arg: []const u8, out_wav: []const u8, text: []const u8) void {
+    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+    var vm_buf: [512]u8 = undefined;
+    var lex_buf: [512]u8 = undefined;
+    var tok_buf: [512]u8 = undefined;
+    var dd_buf: [512]u8 = undefined;
+    const vits_model = std.fmt.bufPrintZ(&vm_buf, "{s}/.config/opal/models/sherpa-vits-piper/en_US-lessac-medium.onnx", .{home}) catch {
+        sayTtsSpeak(text);
+        return;
+    };
     io_global.cwdAccess(vits_model, .{}) catch {
         sayTtsSpeak(text);
         return;
     };
-
+    const lexicon = std.fmt.bufPrintZ(&lex_buf, "{s}/.config/opal/models/sherpa-vits-piper/lexicon.txt", .{home}) catch return;
+    const tokens_p = std.fmt.bufPrintZ(&tok_buf, "{s}/.config/opal/models/sherpa-vits-piper/tokens.txt", .{home}) catch return;
+    const data_dir = std.fmt.bufPrintZ(&dd_buf, "{s}/.config/opal/models/sherpa-vits-piper/espeak-ng-data", .{home}) catch return;
     var vm_arg: [640]u8 = undefined;
     var lex_arg: [640]u8 = undefined;
-    var tok_arg: [640]u8 = undefined;
+    var tk_arg: [640]u8 = undefined;
     var dd_arg: [640]u8 = undefined;
-    var out_arg: [640]u8 = undefined;
     const a_vm = std.fmt.bufPrint(&vm_arg, "--vits-model={s}", .{vits_model}) catch return;
     const a_lex = std.fmt.bufPrint(&lex_arg, "--vits-lexicon={s}", .{lexicon}) catch return;
-    const a_tok = std.fmt.bufPrint(&tok_arg, "--vits-tokens={s}", .{tokens_p}) catch return;
+    const a_tk = std.fmt.bufPrint(&tk_arg, "--vits-tokens={s}", .{tokens_p}) catch return;
     const a_dd = std.fmt.bufPrint(&dd_arg, "--vits-data-dir={s}", .{data_dir}) catch return;
-    const a_out = std.fmt.bufPrint(&out_arg, "--output-filename={s}", .{out_wav}) catch return;
 
     var synth = io_global.Child.init(&.{
-        bin, a_vm, a_lex, a_tok, a_dd, a_out, text,
+        bin, a_vm, a_lex, a_tk, a_dd, out_arg, text,
     }, @import("../core/alloc.zig").allocator);
     synth.stdout_behavior = .Ignore;
     synth.stderr_behavior = .Ignore;
@@ -223,10 +255,12 @@ fn sherpaOnnxSpeak(text: []const u8) void {
         return;
     };
     _ = synth.wait() catch {};
+    playWav(out_wav);
+}
 
-    // Play resulting WAV via afplay (macOS built-in). No need for mpv.
+fn playWav(path: []const u8) void {
     var play = io_global.Child.init(&.{
-        "/usr/bin/afplay", out_wav,
+        "/usr/bin/afplay", path,
     }, @import("../core/alloc.zig").allocator);
     play.stdout_behavior = .Ignore;
     play.stderr_behavior = .Ignore;

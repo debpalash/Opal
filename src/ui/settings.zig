@@ -1865,6 +1865,7 @@ pub fn renderDepsModal() void {
         .{ .name = "sherpa STT model",  .desc = if (sherpa_dl) "Downloading sherpa whisper-tiny…" else "~/.config/opal/models/sherpa-whisper-tiny/ (click Download)", .ok = s.sherpa_model, .pending = sherpa_dl },
         .{ .name = "sherpa TTS model",  .desc = if (tts_dl) "Downloading Piper-VITS en_US-lessac-medium…" else "~/.config/opal/models/sherpa-vits-piper/ (click Download)", .ok = s.sherpa_tts_model, .pending = tts_dl },
         .{ .name = "sherpa streaming",  .desc = if (deps_mod.sherpa_stream_downloading) "Downloading streaming Zipformer…" else "~/.config/opal/models/sherpa-stream-zipformer/ (live convo mode)", .ok = s.sherpa_stream_model, .pending = deps_mod.sherpa_stream_downloading },
+        .{ .name = "sherpa Kokoro",     .desc = if (deps_mod.sherpa_kokoro_downloading) "Downloading Kokoro (~330MB)…" else "~/.config/opal/models/sherpa-kokoro/ (premium TTS, 53+ voices)", .ok = s.sherpa_kokoro_model, .pending = deps_mod.sherpa_kokoro_downloading },
     };
 
     for (rows, 0..) |r, i| {
@@ -1950,6 +1951,18 @@ pub fn renderDepsModal() void {
                 })) {
                     deps_mod.fetchSherpaStreamAsync();
                     state.showToast("Downloading streaming Zipformer — ~80MB");
+                }
+            } else if (std.mem.eql(u8, r.name, "sherpa Kokoro")) {
+                if (dvui.button(@src(), "Download", .{}, .{
+                    .id_extra = i,
+                    .color_fill = theme.colors.accent,
+                    .color_text = dvui.Color.white,
+                    .corner_radius = dvui.Rect.all(4),
+                    .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                    .gravity_y = 0.5,
+                })) {
+                    deps_mod.fetchSherpaKokoroAsync();
+                    state.showToast("Downloading Kokoro — ~330MB (grab coffee)");
                 }
             }
         }
