@@ -102,6 +102,21 @@ done
 # Also bundle the torrent wrapper shared lib if present
 [ -f "$ROOT/libtorrent_wrapper.so" ] && cp "$ROOT/libtorrent_wrapper.so" "$DYLIB_DIR/"
 
+# ── 5b. Embed OpalMenubar helper (LSUIElement) ────────────────
+# Built separately by scripts/build-menubar.sh. Embedded as LoginItem
+# so macOS 13+ SMAppService can register it for auto-launch later.
+HELPER_SRC="$ROOT/dist/OpalMenubar.app"
+if [ ! -d "$HELPER_SRC" ] && [ -x "$ROOT/scripts/build-menubar.sh" ]; then
+    echo "[build-app] Helper missing — building it now…"
+    "$ROOT/scripts/build-menubar.sh" || echo "[build-app] (menubar build failed — continuing without helper)"
+fi
+if [ -d "$HELPER_SRC" ]; then
+    echo "[build-app] Embedding OpalMenubar helper…"
+    LOGIN_ITEMS="$APP_DIR/Contents/Library/LoginItems"
+    mkdir -p "$LOGIN_ITEMS"
+    cp -R "$HELPER_SRC" "$LOGIN_ITEMS/"
+fi
+
 # ── 6. Optional codesign ───────────────────────────────────────
 if [ -n "${CODESIGN_IDENTITY:-}" ]; then
     echo "[build-app] Codesigning with identity: $CODESIGN_IDENTITY"

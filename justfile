@@ -57,3 +57,16 @@ app:
 # Build .app + open it
 app-run: app
     open dist/Opal.app
+
+# Build OpalMenubar.app standalone (Swift helper, LSUIElement).
+menubar:
+    ./scripts/build-menubar.sh
+    @echo "Helper ready → dist/OpalMenubar.app"
+
+# Build menubar helper + open it (runs detached, shows in macOS menu bar).
+menubar-run: menubar
+    open dist/OpalMenubar.app
+
+# Full bundle: menubar helper + Opal.app with helper embedded as LoginItem.
+app-full: menubar app
+    @echo "Full bundle ready → dist/Opal.app (menubar embedded)"

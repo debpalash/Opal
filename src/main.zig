@@ -67,6 +67,13 @@ fn appInit(win: *dvui.Window) !void {
 
     std.Io.Dir.cwd().createDirPath(@import("core/io_global.zig").io(), state.app.save_path_buf[0..state.app.save_path_len]) catch {};
     try state.app.players.append(@import("core/alloc.zig").allocator, try player.MediaPlayer.init(@import("core/alloc.zig").allocator));
+
+    // Auto-start Web Remote API so the OpalMenubar helper can reach us without
+    // manual Settings toggling. Default state.web_remote_enabled=true; user can
+    // still disable in Settings (which calls remote.stop()).
+    if (state.app.web_remote_enabled) {
+        @import("services/remote.zig").start();
+    }
     
     // Register SDL Event Watch for file drops (must be on main thread)
     _ = c.sdl.SDL_EventState(c.sdl.SDL_DROPFILE, c.sdl.SDL_ENABLE);

@@ -22,6 +22,10 @@ pub fn stop() void {
     running = false;
 }
 
+pub fn isRunning() bool {
+    return running;
+}
+
 fn serverLoop() void {
     const addr = std.Io.net.IpAddress.parseIp4("0.0.0.0", port) catch return;
     var server = addr.listen(@import("../core/io_global.zig").io(), .{ .reuse_address = true }) catch return;
@@ -113,6 +117,16 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     if (std.mem.eql(u8, api_path, "/settings/toggle")) {
         apiSettingsToggle(query);
         sendJson(stream, "{\"ok\":true}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/settings/open")) {
+        state.app.settings_open = true;
+        sendJson(stream, "{\"ok\":true,\"action\":\"settings_open\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/settings/close")) {
+        state.app.settings_open = false;
+        sendJson(stream, "{\"ok\":true,\"action\":\"settings_close\"}");
         return;
     }
     // TMDB

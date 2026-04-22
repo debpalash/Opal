@@ -314,7 +314,7 @@ pub const AppState = struct {
     sponsorblock_enabled: bool = true,
     deband_enabled: bool = true,
     video_scaler: u8 = 0, // 0=ewa_lanczossharp, 1=bilinear, 2=spline36
-    web_remote_enabled: bool = false,
+    web_remote_enabled: bool = true,
     party_host_ip_buf: [46]u8 = std.mem.zeroes([46]u8),
 
     // ── Comics ──
