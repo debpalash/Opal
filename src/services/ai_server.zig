@@ -5,15 +5,60 @@ const logs = @import("../core/logs.zig");
 
 // ══════════════════════════════════════════════════════════
 //  AI Server — Lifecycle Management for LLM + Embedding
-//  macOS: uses apfel (Apple Intelligence via FoundationModels)
-//  Linux/Windows: uses Bonsai-8B + llama-server
+//  Backends:
+//    - apfel        (macOS only) Apple Intelligence via FoundationModels
+//    - gemma_llama  Gemma 4 E2B (UD-Q4_K_XL ~3.2GB) via llama-server.
+//                   Cross-platform; the preferred quality backend.
+//  Bonsai-8B is no longer the default — it remains reachable by dropping
+//  its GGUF into the models/ dir and pointing the legacy server at it.
 // ══════════════════════════════════════════════════════════
 
 pub const is_macos = builtin.os.tag == .macos;
 
-const MODEL_URL = "https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B.gguf";
-const MODEL_FILENAME = "Bonsai-8B.gguf";
+pub const BackendKind = enum { apfel, gemma_llama };
+
+/// Default backend per OS. macOS stays on apfel for zero-install UX; users
+/// can switch to Gemma in Settings. Other OSes have no apfel so Gemma wins.
+pub var backend_kind: BackendKind = if (is_macos) .apfel else .gemma_llama;
+
+// Gemma 4 E2B (Unsloth dynamic 4-bit, ~3.2GB). Multimodal-capable; this build
+// uses text-only via llama-server /v1/chat/completions.
+const GEMMA_MODEL_URL = "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-UD-Q4_K_XL.gguf";
+const GEMMA_MODEL_FILENAME = "gemma-4-E2B-it-UD-Q4_K_XL.gguf";
+const GEMMA_MODEL_SIZE_LABEL = "3.17 GB";
+
 pub const DEFAULT_MODELS_DIR = "models";
+
+fn activeModelFilename() []const u8 {
+    return switch (backend_kind) {
+        .apfel => "",
+        .gemma_llama => GEMMA_MODEL_FILENAME,
+    };
+}
+
+fn activeModelUrl() []const u8 {
+    return switch (backend_kind) {
+        .apfel => "",
+        .gemma_llama => GEMMA_MODEL_URL,
+    };
+}
+
+fn activeModelSizeLabel() []const u8 {
+    return switch (backend_kind) {
+        .apfel => "",
+        .gemma_llama => GEMMA_MODEL_SIZE_LABEL,
+    };
+}
+
+/// Call after switching backend_kind so path/exist state refreshes.
+pub fn resetDetection() void {
+    checked_paths = false;
+    llama_server_exists = false;
+    model_exists = false;
+    llama_server_path_len = 0;
+    model_path_len = 0;
+    checkPaths();
+}
 
 // ── Server state ──
 pub var server_process: ?@import("../core/io_global.zig").Child = null;
@@ -71,99 +116,102 @@ pub fn checkPaths() void {
     if (checked_paths) return;
     checked_paths = true;
 
-    if (is_macos) {
-        // ── macOS: Apple Intelligence via apfel ──
-        // No model download needed — Foundation Models are built into macOS 26+
-        model_exists = true;
+    switch (backend_kind) {
+        .apfel => detectApfel(),
+        .gemma_llama => detectGemmaLlama(),
+    }
+}
 
-        // Look for apfel binary
-        const apfel_paths = [_][]const u8{
-            "/opt/homebrew/bin/apfel",
-            "/usr/local/bin/apfel",
-        };
-        for (apfel_paths) |apfel_path| {
-            if (@import("../core/io_global.zig").cwdAccess(apfel_path, .{})) |_| {
-                const slen = apfel_path.len;
-                @memcpy(llama_server_path_buf[0..slen], apfel_path);
-                llama_server_path_len = slen;
-                llama_server_exists = true;
-                std.debug.print("[AI] apfel found: {s}\n", .{apfel_path});
-                return;
-            } else |_| {}
-        }
+fn detectApfel() void {
+    // Apple Intelligence: no model download; Foundation Models are built into
+    // macOS 26+. We only need to locate the apfel CLI.
+    model_exists = true;
 
-        // Fallback: check PATH
-        var which_child = @import("../core/io_global.zig").Child.init(&.{ "which", "apfel" }, @import("../core/alloc.zig").allocator);
-        which_child.stdout_behavior = .Pipe;
-        which_child.stderr_behavior = .Pipe;
-        if (which_child.spawn()) |_| {} else |_| return;
-        if (which_child.stdout) |*stdout| {
-            const out = @import("../core/io_global.zig").readToEndAlloc(stdout, @import("../core/alloc.zig").allocator, 1024) catch return;
-            defer @import("../core/alloc.zig").allocator.free(out);
-            const trimmed = std.mem.trimEnd(u8, out, "\n\r ");
-            if (trimmed.len > 0) {
-                const plen = @min(trimmed.len, 512);
-                @memcpy(llama_server_path_buf[0..plen], trimmed[0..plen]);
-                llama_server_path_len = plen;
-                llama_server_exists = true;
-                std.debug.print("[AI] apfel found in PATH: {s}\n", .{trimmed});
-            }
-        }
-        _ = which_child.wait() catch {};
-    } else {
-        // ── Linux/Windows: Bonsai-8B + llama-server ──
-        const model_path = std.fmt.bufPrintZ(&model_path_buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, MODEL_FILENAME }) catch return;
-        model_path_len = model_path.len;
-
-        if (@import("../core/io_global.zig").cwdAccess(model_path, .{})) |_| {
-            model_exists = true;
-            std.debug.print("[AI] Model found: {s}\n", .{model_path});
-        } else |_| {
-            model_exists = false;
-        }
-
-        const prism_server = "bin/prism/llama-prism-b8194-1179bfc/llama-server";
-        const bin_server = "bin/shimmy";
-        const local_server = "llama.cpp/build/bin/llama-server";
-
-        if (@import("../core/io_global.zig").cwdAccess(prism_server, .{})) |_| {
-            const slen = prism_server.len;
-            @memcpy(llama_server_path_buf[0..slen], prism_server);
+    const apfel_paths = [_][]const u8{
+        "/opt/homebrew/bin/apfel",
+        "/usr/local/bin/apfel",
+    };
+    for (apfel_paths) |apfel_path| {
+        if (@import("../core/io_global.zig").cwdAccess(apfel_path, .{})) |_| {
+            const slen = apfel_path.len;
+            @memcpy(llama_server_path_buf[0..slen], apfel_path);
             llama_server_path_len = slen;
             llama_server_exists = true;
-            std.debug.print("[AI] PrismML llama-server found: {s}\n", .{prism_server});
-        } else |_| if (@import("../core/io_global.zig").cwdAccess(bin_server, .{})) |_| {
-            const slen = bin_server.len;
-            @memcpy(llama_server_path_buf[0..slen], bin_server);
-            llama_server_path_len = slen;
+            std.debug.print("[AI] apfel found: {s}\n", .{apfel_path});
+            return;
+        } else |_| {}
+    }
+
+    var which_child = @import("../core/io_global.zig").Child.init(&.{ "which", "apfel" }, @import("../core/alloc.zig").allocator);
+    which_child.stdout_behavior = .Pipe;
+    which_child.stderr_behavior = .Pipe;
+    if (which_child.spawn()) |_| {} else |_| return;
+    if (which_child.stdout) |*stdout| {
+        const out = @import("../core/io_global.zig").readToEndAlloc(stdout, @import("../core/alloc.zig").allocator, 1024) catch return;
+        defer @import("../core/alloc.zig").allocator.free(out);
+        const trimmed = std.mem.trimEnd(u8, out, "\n\r ");
+        if (trimmed.len > 0) {
+            const plen = @min(trimmed.len, 512);
+            @memcpy(llama_server_path_buf[0..plen], trimmed[0..plen]);
+            llama_server_path_len = plen;
             llama_server_exists = true;
-            std.debug.print("[AI] Shimmy found: {s}\n", .{bin_server});
-        } else |_| if (@import("../core/io_global.zig").cwdAccess(local_server, .{})) |_| {
-            const slen = local_server.len;
-            @memcpy(llama_server_path_buf[0..slen], local_server);
-            llama_server_path_len = slen;
-            llama_server_exists = true;
-            std.debug.print("[AI] llama-server found: {s}\n", .{local_server});
-        } else |_| {
-            var which_child = @import("../core/io_global.zig").Child.init(&.{ "which", "llama-server" }, @import("../core/alloc.zig").allocator);
-            which_child.stdout_behavior = .Pipe;
-            which_child.stderr_behavior = .Pipe;
-            if (which_child.spawn()) |_| {} else |_| return;
-            if (which_child.stdout) |*stdout| {
-                const out = @import("../core/io_global.zig").readToEndAlloc(stdout, @import("../core/alloc.zig").allocator, 1024) catch return;
-                defer @import("../core/alloc.zig").allocator.free(out);
-                const trimmed = std.mem.trimEnd(u8, out, "\n\r ");
-                if (trimmed.len > 0) {
-                    const plen = @min(trimmed.len, 512);
-                    @memcpy(llama_server_path_buf[0..plen], trimmed[0..plen]);
-                    llama_server_path_len = plen;
-                    llama_server_exists = true;
-                    std.debug.print("[AI] llama-server found in PATH: {s}\n", .{trimmed});
-                }
-            }
-            _ = which_child.wait() catch {};
+            std.debug.print("[AI] apfel found in PATH: {s}\n", .{trimmed});
         }
     }
+    _ = which_child.wait() catch {};
+}
+
+fn detectGemmaLlama() void {
+    // Gemma via llama-server: works on macOS, Linux, Windows. Same detection
+    // path on all three — the only per-OS bit is the brew prefix.
+    const model_path = std.fmt.bufPrintZ(&model_path_buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, GEMMA_MODEL_FILENAME }) catch return;
+    model_path_len = model_path.len;
+
+    if (@import("../core/io_global.zig").cwdAccess(model_path, .{})) |_| {
+        model_exists = true;
+        std.debug.print("[AI] Gemma model found: {s}\n", .{model_path});
+    } else |_| {
+        model_exists = false;
+    }
+
+    // Search order matches the previous Linux/Windows flow, plus Homebrew on
+    // macOS. First hit wins.
+    const candidates = [_][]const u8{
+        "/opt/homebrew/bin/llama-server",
+        "/usr/local/bin/llama-server",
+        "bin/prism/llama-prism-b8194-1179bfc/llama-server",
+        "bin/shimmy",
+        "llama.cpp/build/bin/llama-server",
+    };
+    for (candidates) |cand| {
+        if (@import("../core/io_global.zig").cwdAccess(cand, .{})) |_| {
+            const slen = cand.len;
+            @memcpy(llama_server_path_buf[0..slen], cand);
+            llama_server_path_len = slen;
+            llama_server_exists = true;
+            std.debug.print("[AI] llama-server found: {s}\n", .{cand});
+            return;
+        } else |_| {}
+    }
+
+    // PATH fallback
+    var which_child = @import("../core/io_global.zig").Child.init(&.{ "which", "llama-server" }, @import("../core/alloc.zig").allocator);
+    which_child.stdout_behavior = .Pipe;
+    which_child.stderr_behavior = .Pipe;
+    if (which_child.spawn()) |_| {} else |_| return;
+    if (which_child.stdout) |*stdout| {
+        const out = @import("../core/io_global.zig").readToEndAlloc(stdout, @import("../core/alloc.zig").allocator, 1024) catch return;
+        defer @import("../core/alloc.zig").allocator.free(out);
+        const trimmed = std.mem.trimEnd(u8, out, "\n\r ");
+        if (trimmed.len > 0) {
+            const plen = @min(trimmed.len, 512);
+            @memcpy(llama_server_path_buf[0..plen], trimmed[0..plen]);
+            llama_server_path_len = plen;
+            llama_server_exists = true;
+            std.debug.print("[AI] llama-server found in PATH: {s}\n", .{trimmed});
+        }
+    }
+    _ = which_child.wait() catch {};
 }
 
 pub fn startServer() void {
@@ -175,7 +223,7 @@ pub fn startServer() void {
     var port_buf: [8]u8 = undefined;
     const port_str = std.fmt.bufPrintZ(&port_buf, "{d}", .{server_port}) catch "41592";
 
-    if (is_macos) {
+    if (backend_kind == .apfel) {
         // ── macOS: Apple Intelligence via apfel ──
         // Kill any orphaned apfel serve processes
         var pkill = @import("../core/io_global.zig").Child.init(&.{ "pkill", "-f", "apfel --serve" }, @import("../core/alloc.zig").allocator);
@@ -309,23 +357,22 @@ pub fn stopServer() void {
         embed_server_process = null;
     }
 
-    if (is_macos) {
-        var pkill = @import("../core/io_global.zig").Child.init(&.{ "pkill", "-f", "apfel --serve" }, @import("../core/alloc.zig").allocator);
-        pkill.stdout_behavior = .Pipe;
-        pkill.stderr_behavior = .Pipe;
-        if (pkill.spawn()) |_| {} else |_| {}
-        _ = pkill.wait() catch {};
-    } else {
-        var pkill = @import("../core/io_global.zig").Child.init(&.{ "pkill", "-f", "llama-server" }, @import("../core/alloc.zig").allocator);
-        pkill.stdout_behavior = .Pipe;
-        pkill.stderr_behavior = .Pipe;
-        if (pkill.spawn()) |_| {} else |_| {}
-        _ = pkill.wait() catch {};
-    }
+    const pkill_pattern: []const u8 = switch (backend_kind) {
+        .apfel => "apfel --serve",
+        .gemma_llama => "llama-server",
+    };
+    var pkill = @import("../core/io_global.zig").Child.init(&.{ "pkill", "-f", pkill_pattern }, @import("../core/alloc.zig").allocator);
+    pkill.stdout_behavior = .Pipe;
+    pkill.stderr_behavior = .Pipe;
+    if (pkill.spawn()) |_| {} else |_| {}
+    _ = pkill.wait() catch {};
 
     server_running = false;
     model_status = .offline;
-    const stop_msg = if (is_macos) "Apple Intelligence stopped" else "llama-server stopped";
+    const stop_msg = switch (backend_kind) {
+        .apfel => "Apple Intelligence stopped",
+        .gemma_llama => "Gemma (llama-server) stopped",
+    };
     logs.pushLog("info", "ai", stop_msg, true);
     state.showToast("AI server stopped");
 }
@@ -349,10 +396,16 @@ pub fn startModelDownload() void {
 fn downloadModelThread() void {
     defer { model_downloading = false; }
 
+    // apfel backend needs no download — guard so the UI can't kick this off.
+    if (backend_kind == .apfel) {
+        setError("No model download needed for Apple Intelligence");
+        return;
+    }
+
     @import("../core/io_global.zig").cwdMakePath(DEFAULT_MODELS_DIR) catch {};
 
     var out_path_buf: [512]u8 = undefined;
-    const out_path = std.fmt.bufPrintZ(&out_path_buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, MODEL_FILENAME }) catch {
+    const out_path = std.fmt.bufPrintZ(&out_path_buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, activeModelFilename() }) catch {
         setError("Path too long");
         return;
     };
@@ -360,7 +413,7 @@ fn downloadModelThread() void {
     const argv = [_][]const u8{
         "curl", "-L", "--progress-bar",
         "-o", out_path,
-        MODEL_URL,
+        activeModelUrl(),
     };
 
     var child = @import("../core/io_global.zig").Child.init(&argv, @import("../core/alloc.zig").allocator);
@@ -371,7 +424,8 @@ fn downloadModelThread() void {
         return;
     };
 
-    const prog = "Downloading 1.16 GB...";
+    var prog_buf: [64]u8 = undefined;
+    const prog = std.fmt.bufPrint(&prog_buf, "Downloading {s}...", .{activeModelSizeLabel()}) catch "Downloading...";
     @memcpy(download_progress_buf[0..prog.len], prog);
     download_progress_len = prog.len;
 
@@ -385,7 +439,11 @@ fn downloadModelThread() void {
         const done = "Download complete!";
         @memcpy(download_progress_buf[0..done.len], done);
         download_progress_len = done.len;
-        logs.pushLog("info", "ai", "Bonsai-8B model downloaded", true);
+        const log_msg = switch (backend_kind) {
+            .apfel => "",
+            .gemma_llama => "Gemma 4 E2B model downloaded",
+        };
+        logs.pushLog("info", "ai", log_msg, true);
         state.showToast("Model downloaded!");
     } else {
         setError("Download failed (curl exit error)");
@@ -408,6 +466,87 @@ pub fn installLlamaServer() void {
 fn installThread() void {
     defer { server_installing = false; }
 
+    if (is_macos) {
+        installLlamaServerMac();
+    } else {
+        installLlamaServerShimmy();
+    }
+}
+
+/// macOS path — use Homebrew's llama.cpp formula. All Opal users already
+/// have brew (mpv/sqlite/libtorrent-rasterbar come from there).
+fn installLlamaServerMac() void {
+    // Pre-check: maybe it's already on PATH after a previous install.
+    if (macLlamaServerOnPath()) |path| {
+        applyFoundPath(path);
+        state.showToast("llama-server already installed");
+        return;
+    }
+
+    // Find brew binary (Apple Silicon vs Intel prefix).
+    const brew_candidates = [_][]const u8{
+        "/opt/homebrew/bin/brew",
+        "/usr/local/bin/brew",
+    };
+    var brew_path: []const u8 = "";
+    for (brew_candidates) |cand| {
+        if (@import("../core/io_global.zig").cwdAccess(cand, .{})) |_| {
+            brew_path = cand;
+            break;
+        } else |_| {}
+    }
+    if (brew_path.len == 0) {
+        setError("Homebrew not found — install brew first (https://brew.sh)");
+        return;
+    }
+
+    state.showToast("Running brew install llama.cpp (~30s)...");
+    const install_argv = [_][]const u8{ brew_path, "install", "llama.cpp" };
+    var install = @import("../core/io_global.zig").Child.init(&install_argv, @import("../core/alloc.zig").allocator);
+    install.stdout_behavior = .Inherit;
+    install.stderr_behavior = .Inherit;
+    install.spawn() catch {
+        setError("Failed to spawn brew");
+        return;
+    };
+    const result = install.wait() catch {
+        setError("brew install failed");
+        return;
+    };
+    if (result.exited != 0) {
+        setError("brew install llama.cpp exited non-zero");
+        return;
+    }
+
+    // Re-detect after install.
+    if (macLlamaServerOnPath()) |path| {
+        applyFoundPath(path);
+        state.showToast("llama-server installed!");
+    } else {
+        setError("brew install succeeded but llama-server not found");
+    }
+}
+
+fn macLlamaServerOnPath() ?[]const u8 {
+    const hits = [_][]const u8{
+        "/opt/homebrew/bin/llama-server",
+        "/usr/local/bin/llama-server",
+    };
+    for (hits) |h| {
+        if (@import("../core/io_global.zig").cwdAccess(h, .{})) |_| return h else |_| {}
+    }
+    return null;
+}
+
+fn applyFoundPath(path: []const u8) void {
+    const plen = @min(path.len, 512);
+    @memcpy(llama_server_path_buf[0..plen], path[0..plen]);
+    llama_server_path_len = plen;
+    llama_server_exists = true;
+}
+
+/// Linux/Windows path — fetch the shimmy binary (drop-in llama-server).
+fn installLlamaServerShimmy() void {
     const bin_dir = "bin";
     const bin_path = bin_dir ++ "/shimmy";
 
@@ -427,10 +566,7 @@ fn installThread() void {
             return;
         };
         if (which_result.exited == 0) {
-            const plen = bin_path.len;
-            @memcpy(llama_server_path_buf[0..plen], bin_path);
-            llama_server_path_len = plen;
-            llama_server_exists = true;
+            applyFoundPath(bin_path);
             state.showToast("llama-server found!");
             return;
         }
@@ -438,10 +574,7 @@ fn installThread() void {
         return;
     };
 
-    const plen = bin_path.len;
-    @memcpy(llama_server_path_buf[0..plen], bin_path);
-    llama_server_path_len = plen;
-    llama_server_exists = true;
+    applyFoundPath(bin_path);
     state.showToast("llama-server ready!");
 }
 

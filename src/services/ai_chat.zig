@@ -266,7 +266,7 @@ pub fn renderChatBody() void {
             .min_size_content = .{ .w = 16, .h = 16 },
             .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
         });
-        _ = dvui.label(@src(), if (server.is_macos) "Apple Intelligence" else "Bonsai 8B", .{}, .{
+        _ = dvui.label(@src(), switch (server.backend_kind) { .apfel => "Apple Intelligence", .gemma_llama => "Gemma 4 E2B" }, .{}, .{
             .color_text = theme.colors.text_main,
             .expand = .horizontal,
         });
@@ -594,7 +594,7 @@ fn renderControlPanel() void {
             .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
         });
 
-        if (server.is_macos) {
+        if (server.backend_kind == .apfel) {
             // macOS: Apple Intelligence — model is built-in
             _ = dvui.label(@src(), "Apple Intelligence (on-device)", .{}, .{
                 .color_text = theme.colors.text_main,
@@ -649,7 +649,7 @@ fn renderControlPanel() void {
             .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
         });
 
-        if (server.is_macos) {
+        if (server.backend_kind == .apfel) {
             // macOS: show apfel binary status
             if (server.llama_server_exists) {
                 _ = dvui.label(@src(), "apfel", .{}, .{
@@ -850,7 +850,7 @@ fn renderMessage(mi: usize) void {
             .margin = .{ .x = 0, .y = 6, .w = 0, .h = 2 },
         });
     } else {
-        _ = dvui.label(@src(), if (server.is_macos) "Apple AI" else "Bonsai", .{}, .{
+        _ = dvui.label(@src(), switch (server.backend_kind) { .apfel => "Apple AI", .gemma_llama => "Gemma" }, .{}, .{
             .id_extra = mi + 7000,
             .expand = .horizontal,
             .color_text = dvui.Color{ .r = 100, .g = 200, .b = 130, .a = 255 },

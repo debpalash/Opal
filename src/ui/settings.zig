@@ -1438,6 +1438,50 @@ fn renderScriptsTab() void {
         }
     }
 
+    // ── AI Backend picker ──
+    settingRow("AI Backend", 71, @src());
+    {
+        const ai_server = @import("../services/ai_server.zig");
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.0 });
+        defer row.deinit();
+
+        if (ai_server.is_macos) {
+            const apfel_active = ai_server.backend_kind == .apfel;
+            if (dvui.button(@src(), if (apfel_active) "● Apple Intelligence" else "○ Apple Intelligence", .{}, .{
+                .color_fill = if (apfel_active) theme.colors.accent_hover else dvui.Color{ .r = 60, .g = 56, .b = 54, .a = 200 },
+                .color_text = if (apfel_active) theme.colors.bg_header else theme.colors.text_muted,
+                .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+                .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            })) {
+                if (!apfel_active) {
+                    ai_server.stopServer();
+                    ai_server.backend_kind = .apfel;
+                    ai_server.resetDetection();
+                    state.showToast("AI backend: Apple Intelligence");
+                }
+            }
+        }
+
+        const gemma_active = ai_server.backend_kind == .gemma_llama;
+        const gemma_label = if (gemma_active) "● Gemma 4 E2B (3.2GB)" else "○ Gemma 4 E2B (3.2GB)";
+        if (dvui.button(@src(), gemma_label, .{}, .{
+            .color_fill = if (gemma_active) theme.colors.accent_hover else dvui.Color{ .r = 60, .g = 56, .b = 54, .a = 200 },
+            .color_text = if (gemma_active) theme.colors.bg_header else theme.colors.text_muted,
+            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+        })) {
+            if (!gemma_active) {
+                ai_server.stopServer();
+                ai_server.backend_kind = .gemma_llama;
+                ai_server.resetDetection();
+                if (!ai_server.model_exists) {
+                    state.showToast("Gemma selected — download model in AI panel");
+                } else {
+                    state.showToast("AI backend: Gemma 4 E2B");
+                }
+            }
+        }
+    }
+
     // ── Web Remote Control ──
     settingRow("Web Remote Control", 72, @src());
     {
@@ -2017,6 +2061,125 @@ pub fn renderDepsModal() void {
                 })) {
                     deps_mod.fetchSherpaKokoroAsync();
                     state.showToast("Downloading Kokoro — ~330MB (grab coffee)");
+                }
+            }
+        }
+    }
+
+    // ── Gemma backend rows (llama-server + model) ──
+    // Only surfaces when the user has picked the Gemma backend. Keeps the
+    // modal clean for apfel users on macOS.
+    {
+        const ai_server = @import("../services/ai_server.zig");
+        if (ai_server.backend_kind == .gemma_llama) {
+            // Force a fresh detection each render so the rows reflect post-install reality.
+            if (!ai_server.checked_paths) ai_server.checkPaths();
+
+            const rows_base = [_]struct {
+                name: []const u8,
+                desc: []const u8,
+                ok: bool,
+                pending: bool,
+                action: enum { install_server, download_model },
+            }{
+                .{
+                    .name = "llama-server",
+                    .desc = if (ai_server.server_installing) "Installing via Homebrew…" else "LLM runtime (brew install llama.cpp)",
+                    .ok = ai_server.llama_server_exists,
+                    .pending = ai_server.server_installing,
+                    .action = .install_server,
+                },
+                .{
+                    .name = "Gemma 4 E2B",
+                    .desc = if (ai_server.model_downloading) "Downloading Gemma (~3.2GB)…" else "GGUF model (~3.2GB) — one-time download",
+                    .ok = ai_server.model_exists,
+                    .pending = ai_server.model_downloading,
+                    .action = .download_model,
+                },
+            };
+
+            for (rows_base, 0..) |r, gi| {
+                var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                    .id_extra = 9000 + gi,
+                    .expand = .horizontal,
+                    .padding = .{ .x = 4, .y = 6, .w = 4, .h = 6 },
+                    .margin = .{ .y = 1 },
+                    .background = gi % 2 == 0,
+                    .color_fill = dvui.Color{ .r = 16, .g = 16, .b = 24, .a = 100 },
+                    .corner_radius = dvui.Rect.all(4),
+                });
+                defer row.deinit();
+
+                const icon_data = if (r.ok)
+                    icons.tvg.lucide.@"circle-check-big"
+                else if (r.pending)
+                    icons.tvg.lucide.@"loader-circle"
+                else
+                    icons.tvg.lucide.@"circle-x";
+                const icon_color = if (r.ok)
+                    dvui.Color{ .r = 100, .g = 210, .b = 140, .a = 255 }
+                else if (r.pending)
+                    dvui.Color{ .r = 230, .g = 190, .b = 80, .a = 255 }
+                else
+                    dvui.Color{ .r = 220, .g = 110, .b = 110, .a = 255 };
+
+                _ = dvui.icon(@src(), "", icon_data, .{}, .{
+                    .id_extra = 9000 + gi,
+                    .color_text = icon_color,
+                    .min_size_content = .{ .w = 18, .h = 18 },
+                    .gravity_y = 0.5,
+                    .margin = .{ .w = 10 },
+                });
+                _ = dvui.label(@src(), "{s}", .{r.name}, .{
+                    .id_extra = 9100 + gi,
+                    .color_text = theme.colors.accent,
+                    .min_size_content = .{ .w = 140, .h = 0 },
+                    .gravity_y = 0.5,
+                });
+                _ = dvui.label(@src(), "{s}", .{r.desc}, .{
+                    .id_extra = 9200 + gi,
+                    .color_text = theme.colors.text_muted,
+                    .gravity_y = 0.5,
+                    .expand = .horizontal,
+                });
+
+                if (!r.ok and !r.pending) {
+                    const btn_label = switch (r.action) {
+                        .install_server => "Install",
+                        .download_model => "Download",
+                    };
+                    if (dvui.button(@src(), btn_label, .{}, .{
+                        .id_extra = 9300 + gi,
+                        .color_fill = theme.colors.accent,
+                        .color_text = dvui.Color.white,
+                        .corner_radius = dvui.Rect.all(4),
+                        .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                        .gravity_y = 0.5,
+                    })) {
+                        switch (r.action) {
+                            .install_server => ai_server.installLlamaServer(),
+                            .download_model => ai_server.startModelDownload(),
+                        }
+                    }
+                }
+            }
+
+            // Start / Stop button once both pieces are ready.
+            if (ai_server.llama_server_exists and ai_server.model_exists) {
+                var act_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                    .expand = .horizontal,
+                    .padding = .{ .x = 4, .y = 8, .w = 4, .h = 4 },
+                });
+                defer act_row.deinit();
+                const running = ai_server.server_running;
+                const btn = if (running) "Stop Gemma Server" else "Start Gemma Server";
+                if (dvui.button(@src(), btn, .{}, .{
+                    .color_fill = if (running) dvui.Color{ .r = 180, .g = 60, .b = 60, .a = 255 } else theme.colors.accent,
+                    .color_text = dvui.Color.white,
+                    .corner_radius = dvui.Rect.all(4),
+                    .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+                })) {
+                    if (running) ai_server.stopServer() else ai_server.startServer();
                 }
             }
         }

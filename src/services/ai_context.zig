@@ -1165,7 +1165,10 @@ pub fn generateResponse() void {
     }
 
     // Model name
-    var active_model: []const u8 = if (server.is_macos) "apple-foundationmodel" else "Bonsai-8B";
+    var active_model: []const u8 = switch (server.backend_kind) {
+        .apfel => "apple-foundationmodel",
+        .gemma_llama => "gemma-4-e2b",
+    };
     if (server.cached_model_name_len > 0) {
         active_model = server.cached_model_name[0..server.cached_model_name_len];
     }
