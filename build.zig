@@ -70,6 +70,14 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addLibraryPath(b.path("."));
     exe.root_module.linkSystemLibrary("torrent_wrapper", .{});
     exe.root_module.addRPath(b.path(".")); // Ensure the binary can find the locally compiled wrapper
+    // For .app bundles: let the binary find libtorrent_wrapper.so in
+    // Contents/Frameworks/ when launched via Finder/NSWorkspace (CWD=/).
+    if (target.result.os.tag == .macos) {
+        exe.root_module.addRPathSpecial("@executable_path/../Frameworks");
+        // Reserve enough header space so install_name_tool can rewrite LC_LOAD_DYLIB
+        // entries after the bundle is laid out (scripts/build-app.sh).
+        exe.headerpad_max_install_names = true;
+    }
 
     // OCR via ONNX Runtime (PP-OCR pipeline)
     exe.root_module.addCSourceFile(.{

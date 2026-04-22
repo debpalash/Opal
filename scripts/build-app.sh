@@ -99,8 +99,30 @@ for DEP in $(otool -L "$APP_DIR/Contents/MacOS/Opal" 2>/dev/null | awk 'NR>1 {pr
             "$APP_DIR/Contents/MacOS/Opal"
     fi
 done
-# Also bundle the torrent wrapper shared lib if present
-[ -f "$ROOT/libtorrent_wrapper.so" ] && cp "$ROOT/libtorrent_wrapper.so" "$DYLIB_DIR/"
+# Also bundle the torrent wrapper shared lib if present.
+# The binary links it with a bare install_name ("libtorrent_wrapper.so"), so
+# launching via Finder/NSWorkspace (CWD=/) cannot find it. Rewrite the path.
+if [ -f "$ROOT/libtorrent_wrapper.so" ]; then
+    cp "$ROOT/libtorrent_wrapper.so" "$DYLIB_DIR/"
+    install_name_tool -change "libtorrent_wrapper.so" \
+        "@executable_path/../Frameworks/libtorrent_wrapper.so" \
+        "$APP_DIR/Contents/MacOS/Opal" 2>/dev/null || true
+fi
+
+# Rewrite any transitive homebrew links inside bundled dylibs so they also
+# resolve via @executable_path instead of /opt/homebrew (required on hosts
+# without the same brew layout).
+for LIB in "$DYLIB_DIR"/*.dylib "$DYLIB_DIR"/*.so; do
+    [ -f "$LIB" ] || continue
+    for SUB in $(otool -L "$LIB" 2>/dev/null | awk 'NR>1 {print $1}' | grep -E "^/opt/homebrew|^/usr/local" || true); do
+        SUB_NAME="$(basename "$SUB")"
+        # Copy transitive dep if missing
+        if [ ! -f "$DYLIB_DIR/$SUB_NAME" ] && [ -f "$SUB" ]; then
+            cp -L "$SUB" "$DYLIB_DIR/$SUB_NAME"
+        fi
+        install_name_tool -change "$SUB" "@executable_path/../Frameworks/$SUB_NAME" "$LIB" 2>/dev/null || true
+    done
+done
 
 # ── 5b. Embed OpalMenubar helper (LSUIElement) ────────────────
 # Built separately by scripts/build-menubar.sh. Embedded as LoginItem
