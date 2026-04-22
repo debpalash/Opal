@@ -1910,8 +1910,16 @@ pub fn renderDepsModal() void {
     const deps = @import("../core/deps.zig");
     const s = deps.check();
     // Auto-dismiss when core deps are green. sherpa-onnx is optional
-    // (better-quality backend); don't block on it.
-    if (s.apfel and s.ffmpeg and s.whisper and s.whisper_model) {
+    // (better-quality backend); don't block on it. The LLM-backend leg of
+    // this check is backend-aware: apfel users need the apfel binary,
+    // Gemma users need llama-server + the GGUF model (validated in the
+    // Gemma rows below and via ai_server state).
+    const ai_server = @import("../services/ai_server.zig");
+    const llm_ready = switch (ai_server.backend_kind) {
+        .apfel => s.apfel,
+        .gemma_llama => ai_server.llama_server_exists and ai_server.model_exists,
+    };
+    if (llm_ready and s.ffmpeg and s.whisper and s.whisper_model) {
         state.app.deps_modal_open = false;
         state.showToast("All set — voice mode ready");
         return;
@@ -2068,9 +2076,9 @@ pub fn renderDepsModal() void {
 
     // ── Gemma backend rows (llama-server + model) ──
     // Only surfaces when the user has picked the Gemma backend. Keeps the
-    // modal clean for apfel users on macOS.
+    // modal clean for apfel users on macOS. `ai_server` is already imported
+    // earlier in this function for the auto-dismiss gate.
     {
-        const ai_server = @import("../services/ai_server.zig");
         if (ai_server.backend_kind == .gemma_llama) {
             // Force a fresh detection each render so the rows reflect post-install reality.
             if (!ai_server.checked_paths) ai_server.checkPaths();

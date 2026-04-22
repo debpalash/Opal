@@ -62,10 +62,21 @@ final class StatusController: NSObject, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
         if let button = statusItem.button {
-            // Emoji + text — maximally distinctive for notched menu bars.
-            button.title = "💎 Opal"
-            button.image = nil
-            button.imagePosition = .noImage
+            // Prefer the bundled template icon; fall back to a short text tag
+            // if the resource is missing. Keep the status item narrow so it
+            // survives a crowded, notched menu bar.
+            if let iconURL = Bundle.main.url(forResource: "MenubarIcon", withExtension: "png"),
+               let img = NSImage(contentsOf: iconURL) {
+                img.size = NSSize(width: 18, height: 18)
+                img.isTemplate = true
+                button.image = img
+                button.title = ""
+                button.imagePosition = .imageOnly
+            } else {
+                button.title = "◆"
+                button.image = nil
+                button.imagePosition = .noImage
+            }
         }
         statusItem.menu = buildMenu()
         startPolling()
@@ -144,7 +155,10 @@ final class StatusController: NSObject, NSMenuDelegate {
             posItem.title = "Enable Web Remote in settings"
             toggleItem.title = "Play"
             toggleItem.isEnabled = false
-            statusItem.button?.title = "💎 Opal"
+            // Keep narrow: icon-only when unreachable; text tag only if no icon.
+            if statusItem.button?.image == nil {
+                statusItem.button?.title = "◆"
+            }
             return
         }
         toggleItem.isEnabled = true
@@ -153,7 +167,15 @@ final class StatusController: NSObject, NSMenuDelegate {
                                s.paused ? "paused" : "playing",
                                fmtTime(s.pos), fmtTime(s.dur), s.vol)
         toggleItem.title = s.paused ? "Play" : "Pause"
-        statusItem.button?.title = s.paused ? "💎 Opal" : "▶ " + truncate(s.title, max: 28)
+        // When playing, squeeze a tiny title snippet beside the icon. When
+        // paused, show icon only to stay narrow.
+        if s.paused {
+            statusItem.button?.title = statusItem.button?.image == nil ? "◆" : ""
+        } else {
+            let snippet = " " + truncate(s.title, max: 20)
+            statusItem.button?.title = snippet
+            statusItem.button?.imagePosition = .imageLeft
+        }
     }
 
     private func fmtTime(_ sec: Double) -> String {

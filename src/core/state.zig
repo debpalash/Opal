@@ -168,6 +168,7 @@ pub const AppState = struct {
     video_fill_mode: VideoFillMode = .fit,
     cheatsheet_open: bool = false,
     media_info_open: bool = false,
+    sub_picker_open: bool = false,
     playlist_drawer_open: bool = false,
     last_mouse_x: f32 = 0,
     last_mouse_y: f32 = 0,

@@ -602,6 +602,8 @@ pub fn renderGrid() !void {
 
                 header.renderUrlInput(true);
 
+                renderContinueWatching();
+
                 // ── Context chip: shows what AI "sees" (current media + time) ──
                 {
                     const voice = @import("../services/ai_voice.zig");
@@ -759,4 +761,106 @@ pub fn renderGrid() !void {
     }
     
     if (current_row != null) current_row.?.deinit();
+}
+
+/// "Continue Watching" strip rendered on the empty home screen. Surfaces the
+/// top few in-progress items from watch history with a progress bar; click
+/// resumes at the saved position (player.tryResumePosition handles the seek).
+fn renderContinueWatching() void {
+    const watch_history = @import("../player/watch_history.zig");
+    if (watch_history.count == 0) return;
+
+    // Collect up to 6 entries that are not already completed. Treat >=95% as
+    // finished so the row stays curated.
+    const MAX_SHOW: usize = 6;
+    var show_idx: [MAX_SHOW]usize = undefined;
+    var show_count: usize = 0;
+    var wi: usize = 0;
+    while (wi < watch_history.count and show_count < MAX_SHOW) : (wi += 1) {
+        const e = watch_history.entries[wi];
+        if (e.name_len == 0) continue;
+        if (e.percent >= 95.0) continue;
+        show_idx[show_count] = wi;
+        show_count += 1;
+    }
+    if (show_count == 0) return;
+
+    _ = dvui.label(@src(), "Continue Watching", .{}, .{
+        .color_text = theme.colors.text_main,
+        .margin = .{ .x = 0, .y = 16, .w = 0, .h = 4 },
+        .gravity_x = 0.0,
+    });
+
+    var strip = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .margin = .{ .y = 4 },
+    });
+    defer strip.deinit();
+
+    for (0..show_count) |si| {
+        const idx = show_idx[si];
+        const e = watch_history.entries[idx];
+        const name = e.name[0..e.name_len];
+
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = si + 43000,
+            .expand = .horizontal,
+            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
+            .margin = .{ .y = 2 },
+            .background = true,
+            .color_fill = dvui.Color{ .r = 22, .g = 22, .b = 32, .a = 180 },
+            .color_border = dvui.Color{ .r = 50, .g = 50, .b = 70, .a = 160 },
+            .border = dvui.Rect.all(1),
+            .corner_radius = dvui.Rect.all(6),
+        });
+        defer row.deinit();
+
+        _ = dvui.icon(@src(), "", icons.tvg.lucide.@"play", .{}, .{
+            .id_extra = si + 43100,
+            .color_text = theme.colors.accent,
+            .min_size_content = .{ .w = 16, .h = 16 },
+            .margin = .{ .w = 8 },
+            .gravity_y = 0.5,
+        });
+
+        // Display a shortened name so long torrent file names don't break layout.
+        const disp_len = @min(name.len, 64);
+        _ = dvui.label(@src(), "{s}", .{name[0..disp_len]}, .{
+            .id_extra = si + 43200,
+            .color_text = theme.colors.text_main,
+            .gravity_y = 0.5,
+            .expand = .horizontal,
+        });
+
+        const pct = @as(u8, @intFromFloat(std.math.clamp(e.percent, 0.0, 100.0)));
+        var pct_buf: [16]u8 = undefined;
+        const pct_str = std.fmt.bufPrint(&pct_buf, "{d}%", .{pct}) catch "0%";
+        const pct_color = if (pct < 50)
+            dvui.Color{ .r = 220, .g = 110, .b = 110, .a = 255 }
+        else if (pct < 90)
+            dvui.Color{ .r = 230, .g = 190, .b = 80, .a = 255 }
+        else
+            dvui.Color{ .r = 100, .g = 210, .b = 140, .a = 255 };
+        _ = dvui.label(@src(), "{s}", .{pct_str}, .{
+            .id_extra = si + 43300,
+            .color_text = pct_color,
+            .gravity_y = 0.5,
+            .margin = .{ .w = 8 },
+        });
+
+        if (dvui.button(@src(), "Resume", .{}, .{
+            .id_extra = si + 43400,
+            .color_fill = theme.colors.accent,
+            .color_text = dvui.Color.white,
+            .corner_radius = dvui.Rect.all(4),
+            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            .gravity_y = 0.5,
+        })) {
+            if (state.app.active_player_idx < state.app.players.items.len) {
+                const browser = @import("../services/browser.zig");
+                browser.loadContent(name);
+                state.showToast("Resuming...");
+            }
+        }
+    }
 }

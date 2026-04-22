@@ -192,6 +192,22 @@ pub fn playlistDropdownMenu(p: *player.MediaPlayer) void {
     }
 }
 
+/// Footer "Get subtitles" button — opens the floating picker + triggers an
+/// auto-search against the currently playing media.
+pub fn subtitlesButton() void {
+    if (dvui.button(@src(), "Subs", .{}, .{
+        .id_extra = 301,
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_text = theme.colors.text_muted,
+        .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+        .gravity_y = 0.5,
+    })) {
+        state.app.sub_picker_open = true;
+        const subs = @import("../services/subtitles.zig");
+        if (!subs.is_searching) subs.autoSearchFromPlayer();
+    }
+}
+
 pub fn subLanguageDropdown() void {
     const current_lang = state.app.sub_lang_buf[0..state.app.sub_lang_len];
     var btn_lbl: [16]u8 = undefined;
@@ -210,6 +226,165 @@ pub fn subLanguageDropdown() void {
             if (dvui.menuItemLabel(@src(), lang_names[k], .{}, .{ .id_extra = k, .expand = .horizontal, .color_text = theme.colors.text_main })) |_| {
                 @memcpy(state.app.sub_lang_buf[0..l.len], l);
                 state.app.sub_lang_len = l.len;
+            }
+        }
+    }
+}
+
+/// Quick-access subtitle picker. Triggered from the footer toolbar — one
+/// click kicks off an auto-search and opens a floating modal listing hits.
+pub fn renderSubPicker() void {
+    if (!state.app.sub_picker_open) return;
+    const subs = @import("../services/subtitles.zig");
+
+    var win = dvui.floatingWindow(@src(), .{
+        .modal = true,
+        .open_flag = &state.app.sub_picker_open,
+    }, .{
+        .min_size_content = .{ .w = 560, .h = 420 },
+        .color_fill = theme.colors.bg_drawer,
+        .color_border = theme.colors.accent,
+        .corner_radius = dvui.Rect.all(10),
+    });
+    defer win.deinit();
+
+    win.dragAreaSet(dvui.windowHeader("Subtitles", "", &state.app.sub_picker_open));
+
+    var pad = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .both,
+        .padding = .{ .x = 14, .y = 10, .w = 14, .h = 10 },
+    });
+    defer pad.deinit();
+
+    var ctrl_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .margin = .{ .y = 4 },
+    });
+    {
+        defer ctrl_row.deinit();
+        const lang = if (state.app.sub_lang_len > 0) state.app.sub_lang_buf[0..state.app.sub_lang_len] else "eng";
+        var lbl_buf: [32]u8 = undefined;
+        const lbl = std.fmt.bufPrint(&lbl_buf, "Lang: {s}", .{lang}) catch "Lang: eng";
+        _ = dvui.label(@src(), "{s}", .{lbl}, .{
+            .color_text = theme.colors.text_muted,
+            .gravity_y = 0.5,
+            .margin = .{ .w = 12 },
+        });
+        if (dvui.button(@src(), if (subs.is_searching) "Searching…" else "Auto-search", .{}, .{
+            .color_fill = theme.colors.accent,
+            .color_text = dvui.Color.white,
+            .corner_radius = dvui.Rect.all(4),
+            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            .gravity_y = 0.5,
+            .margin = .{ .w = 6 },
+        })) {
+            if (!subs.is_searching) subs.autoSearchFromPlayer();
+        }
+
+        const auto_subs = @import("../services/auto_subs.zig");
+        const gen_label = if (auto_subs.in_progress) "Generating…" else "Generate (whisper)";
+        if (dvui.button(@src(), gen_label, .{}, .{
+            .color_fill = theme.colors.accent_hover,
+            .color_text = theme.colors.bg_header,
+            .corner_radius = dvui.Rect.all(4),
+            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            .gravity_y = 0.5,
+        })) {
+            if (!auto_subs.in_progress) auto_subs.transcribeCurrent();
+        }
+    }
+
+    if (@import("../services/auto_subs.zig").status_len > 0) {
+        const as_mod = @import("../services/auto_subs.zig");
+        _ = dvui.label(@src(), "{s}", .{as_mod.status_buf[0..as_mod.status_len]}, .{
+            .color_text = theme.colors.text_muted,
+            .margin = .{ .y = 4 },
+        });
+    }
+
+    if (subs.search_error_len > 0) {
+        _ = dvui.label(@src(), "{s}", .{subs.search_error[0..subs.search_error_len]}, .{
+            .color_text = theme.colors.warning,
+            .margin = .{ .y = 4 },
+        });
+    }
+
+    if (subs.result_count == 0 and !subs.is_searching) {
+        _ = dvui.label(@src(), "No results yet. Click Auto-search.", .{}, .{
+            .color_text = theme.colors.text_muted,
+            .margin = .{ .y = 8 },
+            .gravity_x = 0.5,
+        });
+        return;
+    }
+
+    var scroll = dvui.scrollArea(@src(), .{}, .{
+        .expand = .both,
+        .color_fill = dvui.Color{ .r = 14, .g = 14, .b = 22, .a = 220 },
+    });
+    defer scroll.deinit();
+
+    for (0..subs.result_count) |ri| {
+        const r = &subs.results[ri];
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = ri + 58000,
+            .expand = .horizontal,
+            .background = true,
+            .color_fill = dvui.Color{ .r = 22, .g = 22, .b = 34, .a = 200 },
+            .color_border = dvui.Color{ .r = 50, .g = 50, .b = 70, .a = 160 },
+            .border = dvui.Rect.all(1),
+            .corner_radius = dvui.Rect.all(6),
+            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
+            .margin = .{ .y = 2 },
+        });
+        defer row.deinit();
+
+        if (r.lang_len > 0) {
+            _ = dvui.label(@src(), "{s}", .{r.language[0..r.lang_len]}, .{
+                .id_extra = ri + 58100,
+                .color_text = theme.colors.accent,
+                .gravity_y = 0.5,
+                .margin = .{ .w = 6 },
+            });
+        }
+        if (r.release_len > 0) {
+            const show_len = @min(r.release_len, 70);
+            _ = dvui.label(@src(), "{s}", .{r.release[0..show_len]}, .{
+                .id_extra = ri + 58200,
+                .color_text = theme.colors.text_main,
+                .gravity_y = 0.5,
+                .expand = .horizontal,
+            });
+        }
+        if (r.download_count > 0) {
+            var dc_buf: [16]u8 = undefined;
+            const dc_str = std.fmt.bufPrint(&dc_buf, "↓{d}", .{r.download_count}) catch "";
+            _ = dvui.label(@src(), "{s}", .{dc_str}, .{
+                .id_extra = ri + 58300,
+                .color_text = theme.colors.text_muted,
+                .gravity_y = 0.5,
+                .margin = .{ .w = 4 },
+            });
+        }
+        if (r.hearing_impaired) {
+            _ = dvui.label(@src(), "CC", .{}, .{
+                .id_extra = ri + 58400,
+                .color_text = theme.colors.warning,
+                .gravity_y = 0.5,
+                .margin = .{ .w = 4 },
+            });
+        }
+        if (dvui.button(@src(), if (subs.is_downloading) "…" else "Load", .{}, .{
+            .id_extra = ri + 58500,
+            .color_fill = theme.colors.accent_hover,
+            .color_text = theme.colors.bg_header,
+            .corner_radius = dvui.Rect.all(4),
+            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            .gravity_y = 0.5,
+        })) {
+            if (!subs.is_downloading and r.file_id > 0) {
+                subs.downloadSubtitle(r.file_id);
+                state.app.sub_picker_open = false;
             }
         }
     }
@@ -609,11 +784,12 @@ pub fn renderLiquidGlassOverlay() void {
             grp.deinit();
         }
 
-        // Subtitle language
+        // Subtitle language + quick picker
         {
             var grp = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5, .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 } });
             dvui.icon(@src(), "", icons.tvg.lucide.@"globe", .{}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
             subLanguageDropdown();
+            subtitlesButton();
             grp.deinit();
         }
 

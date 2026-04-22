@@ -23,6 +23,12 @@ fi
 swiftc "${SWIFTC_FLAGS[@]}" "$SRC" -o "$OUT_DIR/Contents/MacOS/OpalMenubar"
 chmod +x "$OUT_DIR/Contents/MacOS/OpalMenubar"
 
+# Bundle resources (menubar icon png variants).
+RES_SRC="$ROOT/helper/OpalMenubar/Resources"
+if [ -d "$RES_SRC" ]; then
+    cp "$RES_SRC"/*.png "$OUT_DIR/Contents/Resources/" 2>/dev/null || true
+fi
+
 cat > "$OUT_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

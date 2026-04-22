@@ -982,6 +982,7 @@ fn appFrame() !dvui.App.Result {
     settings.renderCheatSheet();
     settings.renderMediaInfo();
     settings.renderDepsModal();
+    @import("ui/footer.zig").renderSubPicker();
 
     // First-run deps check — open setup modal once if something is missing.
     if (!state.app.deps_modal_checked) {
