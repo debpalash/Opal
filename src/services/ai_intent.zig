@@ -149,10 +149,8 @@ fn recommendationWorker(assistant_idx: usize) void {
 pub const isErrorResult = pure.isErrorResult;
 pub const findGenre = pure.findGenre;
 
-/// Handle browse_genre intent — open TMDB drawer in search mode keyed by
-/// the detected genre. Genuine discover-by-genre-id would need a TMDB
-/// category variant (todo); for now we piggyback on the existing search
-/// path, which still beats dropping "sci-fi movies" into torrent search.
+/// Handle browse_genre intent — open TMDB drawer with discover-by-genre.
+/// Uses TMDB genre IDs for proper categorized results instead of text search.
 pub fn handleGenreBrowse(raw_input: []const u8) bool {
     if (chat.message_count + 1 >= chat.MAX_MESSAGES) return false;
 
@@ -181,23 +179,74 @@ pub fn handleGenreBrowse(raw_input: []const u8) bool {
         return true;
     }
 
-    // Open TMDB drawer, seed search with genre keyword
+    // Map genre name to TMDB genre ID for /discover/movie endpoint
+    const genre_id = genreNameToId(genre);
+
+    // Use discover API via direct fetch instead of search piggyback
     state.app.drawer_open = true;
     state.app.drawer_tab = .TMDB;
     state.app.tmdb.view = .Search;
     state.app.tmdb.page = 1;
-    @memset(&state.app.tmdb.search_buf, 0);
-    const glen = @min(genre.len, state.app.tmdb.search_buf.len - 1);
-    @memcpy(state.app.tmdb.search_buf[0..glen], genre[0..glen]);
 
-    const tmdb_api = @import("tmdb_api.zig");
-    tmdb_api.fetchCurrentView(false);
+    if (genre_id > 0) {
+        // Set response message before spawning thread (no closure captures)
+        var resp_buf2: [256]u8 = undefined;
+        const resp2 = std.fmt.bufPrint(&resp_buf2, "Here are popular {s} titles! Browse the TMDB drawer.", .{genre}) catch "Opened genre browse.";
+        chat.messages[assistant_idx].text_len = @min(resp2.len, chat.MAX_MSG_LEN);
+        @memcpy(chat.messages[assistant_idx].text[0..chat.messages[assistant_idx].text_len], resp2[0..chat.messages[assistant_idx].text_len]);
+
+        // Spawn worker to call /discover/movie?with_genres=ID
+        const S = struct { var gid: u32 = 0; };
+        S.gid = genre_id;
+        _ = std.Thread.spawn(.{}, struct {
+            fn worker() void {
+                const tmdb_api = @import("tmdb_api.zig");
+                tmdb_api.fetchDiscover(S.gid);
+            }
+        }.worker, .{}) catch {};
+    } else {
+        // Fallback to search by genre keyword
+        @memset(&state.app.tmdb.search_buf, 0);
+        const glen = @min(genre.len, state.app.tmdb.search_buf.len - 1);
+        @memcpy(state.app.tmdb.search_buf[0..glen], genre[0..glen]);
+        const tmdb_api = @import("tmdb_api.zig");
+        tmdb_api.fetchCurrentView(false);
+    }
 
     var resp_buf: [256]u8 = undefined;
-    const resp = std.fmt.bufPrint(&resp_buf, "Opened TMDB search for {s}. Browse posters and say 'play <title>' to start.", .{genre}) catch "Opened TMDB genre browse.";
+    const resp = std.fmt.bufPrint(&resp_buf, "Browsing {s} — check the TMDB drawer. Say 'play <title>' to start.", .{genre}) catch "Opened TMDB genre browse.";
     chat.messages[assistant_idx].text_len = @min(resp.len, chat.MAX_MSG_LEN);
     @memcpy(chat.messages[assistant_idx].text[0..chat.messages[assistant_idx].text_len], resp[0..chat.messages[assistant_idx].text_len]);
 
     if (voice.voice_mode) voice.speakResponse(chat.messages[assistant_idx].text[0..chat.messages[assistant_idx].text_len]);
     return true;
+}
+
+/// TMDB movie genre IDs (from https://api.themoviedb.org/3/genre/movie/list)
+fn genreNameToId(genre: []const u8) u32 {
+    const Map = struct { name: []const u8, id: u32 };
+    const table = [_]Map{
+        .{ .name = "Action", .id = 28 },
+        .{ .name = "Adventure", .id = 12 },
+        .{ .name = "Animation", .id = 16 },
+        .{ .name = "Comedy", .id = 35 },
+        .{ .name = "Crime", .id = 80 },
+        .{ .name = "Documentary", .id = 99 },
+        .{ .name = "Drama", .id = 18 },
+        .{ .name = "Family", .id = 10751 },
+        .{ .name = "Fantasy", .id = 14 },
+        .{ .name = "History", .id = 36 },
+        .{ .name = "Horror", .id = 27 },
+        .{ .name = "Music", .id = 10402 },
+        .{ .name = "Mystery", .id = 9648 },
+        .{ .name = "Romance", .id = 10749 },
+        .{ .name = "Science Fiction", .id = 878 },
+        .{ .name = "Thriller", .id = 53 },
+        .{ .name = "War", .id = 10752 },
+        .{ .name = "Western", .id = 37 },
+    };
+    for (table) |entry| {
+        if (std.mem.eql(u8, genre, entry.name)) return entry.id;
+    }
+    return 0;
 }

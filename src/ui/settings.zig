@@ -552,6 +552,66 @@ fn renderPlaybackTab() void {
         }
     }
     
+    // ── About / Updater Card ──
+    sectionHeader("About", "Installed version + update check", 25, @src());
+    {
+        const updater = @import("../services/updater.zig");
+        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .horizontal, .background = true, .color_fill = card_bg,
+            .color_border = card_border, .border = dvui.Rect.all(1),
+            .corner_radius = dvui.Rect.all(8),
+            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+        });
+        defer card.deinit();
+
+        // Version row
+        {
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+            defer row.deinit();
+            _ = dvui.label(@src(), "Version", .{}, .{ .color_text = label_text, .gravity_y = 0.5 });
+            _ = dvui.label(@src(), "  v{s}", .{updater.APP_VERSION}, .{ .id_extra = 2510, .color_text = theme.colors.text_main, .gravity_y = 0.5 });
+            { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+            if (updater.is_checking) {
+                _ = dvui.label(@src(), "Checking…", .{}, .{ .id_extra = 2511, .color_text = theme.colors.accent, .gravity_y = 0.5 });
+            } else if (dvui.button(@src(), "Check for Updates", .{}, .{
+                .id_extra = 2512, .color_fill = btn_inactive, .color_text = theme.colors.accent,
+                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 }, .corner_radius = dvui.Rect.all(6),
+            })) {
+                updater.checkAsync();
+            }
+        }
+
+        // Status row — only show once we have a signal.
+        if (updater.has_update) {
+            { var sep = dvui.box(@src(), .{}, .{ .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 1 }, .background = true, .color_fill = card_border, .margin = .{ .x = 0, .y = 8, .w = 0, .h = 8 } }); sep.deinit(); }
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+            defer row.deinit();
+            _ = dvui.label(@src(), "Latest", .{}, .{ .color_text = label_text, .gravity_y = 0.5 });
+            _ = dvui.label(@src(), "  v{s} ✨", .{updater.latestTag()}, .{ .id_extra = 2520, .color_text = theme.colors.success, .gravity_y = 0.5 });
+            { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+            if (updater.is_downloading) {
+                _ = dvui.label(@src(), "Downloading…", .{}, .{ .id_extra = 2521, .color_text = theme.colors.accent, .gravity_y = 0.5 });
+            } else if (updater.dl_url_len > 0) {
+                if (dvui.button(@src(), "Download & Install", .{}, .{
+                    .id_extra = 2522, .color_fill = btn_active, .color_text = btn_text_active,
+                    .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 }, .corner_radius = dvui.Rect.all(6),
+                })) {
+                    updater.downloadAndOpenAsync();
+                }
+            } else {
+                _ = dvui.label(@src(), "No .dmg asset on release", .{}, .{ .id_extra = 2523, .color_text = theme.colors.warning, .gravity_y = 0.5 });
+            }
+        } else if (updater.last_check_ts > 0 and !updater.is_checking) {
+            { var sep = dvui.box(@src(), .{}, .{ .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 1 }, .background = true, .color_fill = card_border, .margin = .{ .x = 0, .y = 8, .w = 0, .h = 8 } }); sep.deinit(); }
+            _ = dvui.label(@src(), "Up to date", .{}, .{ .id_extra = 2530, .color_text = theme.colors.success });
+        }
+
+        if (updater.last_error_len > 0) {
+            _ = dvui.label(@src(), "  {s}", .{updater.lastError()}, .{ .id_extra = 2540, .color_text = theme.colors.warning, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
+        }
+    }
+
     // ── Shortcuts Card ──
     sectionHeader("Keyboard Shortcuts", "", 21, @src());
     {
@@ -710,14 +770,25 @@ fn renderPlaybackTab() void {
             }
         }
 
-        // Clip export hint
-        if (dvui.button(@src(), "Clip (L -> set loop)", .{}, .{
-            .id_extra = 3202,
-            .color_fill = btn_inactive, .color_text = muted_text,
-            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
-            .corner_radius = dvui.Rect.all(6),
-        })) {
-            state.showToast("Press L to set A-B loop, then export");
+        // Clip export
+        {
+            const has_loop = if (state.app.active_player_idx < state.app.players.items.len) blk: {
+                const ap = state.app.players.items[state.app.active_player_idx];
+                break :blk ap.loop_a >= 0 and ap.loop_b >= 0;
+            } else false;
+
+            const clip_label = if (has_loop) "Export Clip ✂" else "Clip (L → set loop)";
+            if (dvui.button(@src(), clip_label, .{}, .{
+                .id_extra = 3202,
+                .color_fill = if (has_loop) btn_active else btn_inactive,
+                .color_text = if (has_loop) btn_text_active else muted_text,
+                .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
+                .corner_radius = dvui.Rect.all(6),
+            })) {
+                if (state.app.active_player_idx < state.app.players.items.len) {
+                    state.app.players.items[state.app.active_player_idx].exportClip();
+                }
+            }
         }
     }
 
@@ -892,6 +963,38 @@ fn renderNetworkTab() void {
 }
 
 fn renderSubtitlesTab() void {
+    // ── First-run banner when API key is missing ──
+    if (state.app.opensub_api_key_len == 0) {
+        var banner = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .horizontal,
+            .background = true,
+            .color_fill = dvui.Color{ .r = 20, .g = 30, .b = 50, .a = 255 },
+            .color_border = theme.colors.accent,
+            .border = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
+            .corner_radius = dvui.Rect.all(8),
+            .padding = .{ .x = 14, .y = 10, .w = 14, .h = 10 },
+            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 12 },
+        });
+        defer banner.deinit();
+        _ = dvui.label(@src(), "⚡ Set up OpenSubtitles to unlock subtitle search", .{}, .{
+            .id_extra = 4190,
+            .color_text = theme.colors.text_main,
+        });
+        _ = dvui.label(@src(), "1. Go to opensubtitles.com and create a free account", .{}, .{
+            .id_extra = 4191,
+            .color_text = theme.colors.text_muted,
+            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
+        });
+        _ = dvui.label(@src(), "2. Navigate to Profile → API Consumers → Create", .{}, .{
+            .id_extra = 4192,
+            .color_text = theme.colors.text_muted,
+        });
+        _ = dvui.label(@src(), "3. Paste the API key in the field below", .{}, .{
+            .id_extra = 4193,
+            .color_text = theme.colors.text_muted,
+        });
+    }
+
     // ── OpenSubtitles API Key ──
     settingRow("OpenSubtitles API Key", 42, @src());
     {
@@ -1799,12 +1902,15 @@ pub fn renderCheatSheet() void {
         .{ "Up / Down", "Volume +5 / -5" },
         .{ "M", "Mute" },
         .{ "J / Shift+J", "Cycle Subs / Search Subs" },
-        .{ "A", "Cycle Audio Track" },
+        .{ "U", "Cycle Audio Track" },
+        .{ "V", "Cycle Subtitle Track" },
+        .{ "K / Shift+K", "Sub Delay +100ms / -100ms" },
         .{ "N / Shift+N", "Next / Prev Episode" },
         .{ "[ / ]", "Decrease / Increase Speed" },
         .{ "Backspace", "Reset Speed to 1.0x" },
         .{ ", / .", "Frame Back / Forward" },
         .{ "L", "Set A-B Loop (press 3x)" },
+        .{ "PgUp / PgDn", "Previous / Next Chapter" },
         .{ "+ / -", "Zoom In / Out" },
         .{ "0", "Reset Zoom & Pan" },
         .{ "Shift+Arrows", "Pan Video" },
@@ -1812,6 +1918,7 @@ pub fn renderCheatSheet() void {
         .{ "T", "Flip Video" },
         .{ "P", "Screenshot" },
         .{ "Ctrl+I", "Media Info Panel" },
+        .{ "A", "Toggle AI Bubble" },
         .{ "S", "Toggle Search Drawer" },
         .{ "D", "Toggle Downloads Drawer" },
         .{ "H", "Toggle Watch History" },
@@ -1833,7 +1940,7 @@ pub fn renderCheatSheet() void {
         .{ "Ctrl+Q", "Quit" },
         .{ "Ctrl+V", "Paste URL / Magnet" },
         .{ "P", "Toggle Playlist Drawer" },
-        .{ "?", "This Cheat Sheet" },
+        .{ "Shift+I", "This Cheat Sheet" },
         .{ "Esc", "Close Overlay / Drawer" },
     };
     

@@ -16,6 +16,12 @@ const hist = @import("services/history.zig");
 // Window reference for SDL position/size persistence
 var dvui_win: ?*dvui.Window = null;
 
+// ── CLI open-file deferred buffer ──
+// Stored in appInit, consumed in appFrame once players are ready.
+var cli_open_buf: [2048]u8 = std.mem.zeroes([2048]u8);
+var cli_open_len: usize = 0;
+var cli_open_done: bool = false;
+
 pub const dvui_app: dvui.App = .{
     .config = .{ .options = .{ .size = .{ .w = 1400.0, .h = 820.0 }, .title = "⚡ ZigZag Media Console" } },
     .initFn = appInit,
@@ -125,9 +131,27 @@ fn appInit(win: *dvui.Window) !void {
             const ytdlp = @import("services/ytdlp.zig");
             ytdlp.ensureAvailable();
 
+            // Probe GitHub for a newer release (non-blocking). Result
+            // surfaces in Settings → About.
+            @import("services/updater.zig").checkAsync();
+
             logs.pushLog("info", "init", "Background init complete", false);
         }
     }.worker, .{}) catch {};
+
+    // ── CLI argument handling ──
+    // `zigzag /path/to/file.mp4` or `zigzag https://example.com/stream`
+    // Deferred: store in buffer, appFrame loads after player is ready.
+    if (dvui.App.main_init) |init_data| {
+        var args_iter = init_data.minimal.args.iterate();
+        _ = args_iter.next(); // skip argv[0] (binary name)
+        if (args_iter.next()) |arg| {
+            const len = @min(arg.len, cli_open_buf.len - 1);
+            @memcpy(cli_open_buf[0..len], arg[0..len]);
+            cli_open_len = len;
+            std.debug.print("[CLI] Will open: {s}\n", .{cli_open_buf[0..len]});
+        }
+    }
 }
 
 fn appDeinit() void {
@@ -152,6 +176,11 @@ fn appDeinit() void {
     state.app.tmdb.watching.deinit(@import("core/alloc.zig").allocator);
     state.app.yt.results.deinit(@import("core/alloc.zig").allocator);
     
+    // Join search thread so its defers (free query, deinit argv) run cleanly
+    search.search_abort = true;
+    if (search.search_thread) |t| t.join();
+    search.search_thread = null;
+
     search.clearResults();
     search.search_results.deinit(@import("core/alloc.zig").allocator);
     
@@ -767,6 +796,18 @@ fn appFrame() !dvui.App.Result {
             }
         }
         state.app.dropped_file_lock.unlock();
+    }
+
+    // Process CLI file argument (deferred from appInit)
+    if (!cli_open_done and cli_open_len > 0 and state.app.players.items.len > 0) {
+        cli_open_done = true;
+        const fpath = cli_open_buf[0..cli_open_len];
+        if (state.app.active_player_idx < state.app.players.items.len) {
+            const browser = @import("services/browser.zig");
+            browser.loadContent(fpath);
+            logs.pushLog("info", "open", "Loaded file from CLI", false);
+            state.showToast("Playing from CLI");
+        }
     }
 
     // Process deferred player removal (safe: before any rendering)

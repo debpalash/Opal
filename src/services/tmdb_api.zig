@@ -117,6 +117,40 @@ fn buildApiUrl(buf: *[512]u8, mode: FetchMode, query: []const u8, cat: state.Tmd
 }
 
 // ══════════════════════════════════════════════════════════
+// Genre Discover
+// ══════════════════════════════════════════════════════════
+
+/// Fetch movies by TMDB genre ID (e.g. 28 = Action, 878 = Sci-Fi).
+/// Populates the same results grid as the search/browse views.
+pub fn fetchDiscover(genre_id: u32) void {
+    if (state.app.tmdb.is_loading) return;
+    if (state.app.tmdb.api_key_len == 0) return;
+    state.app.tmdb.is_loading = true;
+
+    const S = struct { var gid: u32 = 0; };
+    S.gid = genre_id;
+
+    state.app.tmdb.thread = std.Thread.spawn(.{}, struct {
+        fn worker() void {
+            defer { state.app.tmdb.is_loading = false; }
+            const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
+            var url_buf: [512]u8 = undefined;
+            const url = std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org/3/discover/movie?with_genres={d}&sort_by=popularity.desc&page=1", .{S.gid}) catch return;
+
+            const body = httpGet(url, key) orelse return;
+            defer alloc.free(body);
+
+            state.app.tmdb.results.clearRetainingCapacity();
+            state.app.tmdb.total_pages = @intCast(@max(1, parse.extractJsonInt(body, "\"total_pages\":")));
+            parse.parseTmdbResponse(body);
+        }
+    }.worker, .{}) catch blk: {
+        state.app.tmdb.is_loading = false;
+        break :blk null;
+    };
+}
+
+// ══════════════════════════════════════════════════════════
 // Poster Fetching
 // ══════════════════════════════════════════════════════════
 

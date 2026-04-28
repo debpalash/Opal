@@ -410,6 +410,89 @@ pub const MediaPlayer = struct {
         } else |_| {}
     }
 
+    /// Export A-B loop segment to file using ffmpeg (background thread).
+    pub fn exportClip(self: *MediaPlayer) void {
+        if (self.loop_a < 0 or self.loop_b < 0 or self.loop_b <= self.loop_a) {
+            state.showToast("Set A-B loop first (L key)");
+            return;
+        }
+        if (self.current_url_len == 0) {
+            state.showToast("No media loaded");
+            return;
+        }
+
+        // Build output path in download directory
+        const paths = @import("../core/paths.zig");
+        var dir_buf: [512]u8 = undefined;
+        const dl_dir = paths.defaultSavePath(&dir_buf);
+
+        // Generate output filename with timestamps
+        const a_sec = @as(u32, @intFromFloat(@max(0, self.loop_a)));
+        const b_sec = @as(u32, @intFromFloat(@max(0, self.loop_b)));
+        
+        const ExportCtx = struct {
+            var src: [2048]u8 = undefined;
+            var src_len: usize = 0;
+            var out: [512]u8 = undefined;
+            var out_len: usize = 0;
+            var ss_buf: [32]u8 = undefined;
+            var ss_len: usize = 0;
+            var to_buf: [32]u8 = undefined;
+            var to_len: usize = 0;
+        };
+
+        @memcpy(ExportCtx.src[0..self.current_url_len], self.current_url[0..self.current_url_len]);
+        ExportCtx.src_len = self.current_url_len;
+
+        const ss = std.fmt.bufPrintZ(&ExportCtx.ss_buf, "{d:.2}", .{self.loop_a}) catch return;
+        ExportCtx.ss_len = ss.len;
+        const to = std.fmt.bufPrintZ(&ExportCtx.to_buf, "{d:.2}", .{self.loop_b}) catch return;
+        ExportCtx.to_len = to.len;
+
+        const out_path = std.fmt.bufPrintZ(&ExportCtx.out, "{s}/clip_{d:0>2}m{d:0>2}s-{d:0>2}m{d:0>2}s.mp4", .{
+            dl_dir, a_sec / 60, a_sec % 60, b_sec / 60, b_sec % 60,
+        }) catch return;
+        ExportCtx.out_len = out_path.len;
+
+        state.showToast("Exporting clip...");
+
+        _ = std.Thread.spawn(.{}, struct {
+            fn worker() void {
+                const io_global = @import("../core/io_global.zig");
+                const alloc = @import("../core/alloc.zig").allocator;
+
+                var child = io_global.Child.init(
+                    &.{ "ffmpeg", "-y",
+                         "-ss", ExportCtx.ss_buf[0..ExportCtx.ss_len],
+                         "-to", ExportCtx.to_buf[0..ExportCtx.to_len],
+                         "-i", ExportCtx.src[0..ExportCtx.src_len],
+                         "-c", "copy",
+                         "-avoid_negative_ts", "make_zero",
+                         ExportCtx.out[0..ExportCtx.out_len] },
+                    alloc,
+                );
+                child.stdout_behavior = .Ignore;
+                child.stderr_behavior = .Ignore;
+                child.spawn() catch {
+                    state.showToast("ffmpeg not found — install it");
+                    return;
+                };
+                const term = child.wait() catch {
+                    state.showToast("Clip export failed");
+                    return;
+                };
+                if (term.exited == 0) {
+                    state.showToast("✓ Clip exported!");
+                    logs.pushLog("info", "clip", "Clip exported successfully", false);
+                } else {
+                    state.showToast("Clip export failed (ffmpeg error)");
+                }
+            }
+        }.worker, .{}) catch {
+            state.showToast("Failed to spawn export thread");
+        };
+    }
+
     pub fn deinit(self: *MediaPlayer, allocator: std.mem.Allocator) void {
         self.saveCurrentPosition();
         c.mpv.mpv_render_context_free(self.mpv_gl);

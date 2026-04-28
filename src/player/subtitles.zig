@@ -184,7 +184,7 @@ fn searchThread(engine: *SubtitleEngine) void {
     
     // HTTP GET with User-Agent header
     const headers = [_]std.http.Header{
-        .{ .name = "User-Agent", .value = "TemporaryUserAgent" },
+        .{ .name = "User-Agent", .value = "Opal/1.0" },
     };
     
     var response_buf: [128 * 1024]u8 = undefined;
@@ -277,7 +277,7 @@ fn downloadThread(engine: *SubtitleEngine) void {
     
     // Download the subtitle file via HTTP
     const headers = [_]std.http.Header{
-        .{ .name = "User-Agent", .value = "TemporaryUserAgent" },
+        .{ .name = "User-Agent", .value = "Opal/1.0" },
     };
     
     var response_buf: [512 * 1024]u8 = undefined;

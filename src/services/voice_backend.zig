@@ -52,13 +52,49 @@ pub const Backend = struct {
 // ────────── Impl: whisper-cpp + say ──────────
 
 fn whisperCppTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
-    _ = wav_path;
-    _ = out_buf;
-    // ai_voice.transcribeAndSend already contains the full whisper-cpp
-    // fallback chain. Leaving this as an extraction point — the existing
-    // logic can be moved here once ai_voice is refactored to dispatch
-    // through this interface.
-    return null;
+    // Find whisper binary
+    const whisper_bin: []const u8 = blk: {
+        if (io_global.cwdAccess("bin/whisper.cpp/build/bin/whisper-cli", .{})) |_| break :blk "bin/whisper.cpp/build/bin/whisper-cli" else |_| {}
+        if (io_global.cwdAccess("/opt/homebrew/bin/whisper-cli", .{})) |_| break :blk "/opt/homebrew/bin/whisper-cli" else |_| {}
+        if (io_global.cwdAccess("/opt/homebrew/bin/whisper-cpp", .{})) |_| break :blk "/opt/homebrew/bin/whisper-cpp" else |_| {}
+        if (io_global.cwdAccess("/usr/local/bin/whisper-cli", .{})) |_| break :blk "/usr/local/bin/whisper-cli" else |_| {}
+        logs.pushLog("warn", "voice_backend", "whisper-cli not found — brew install whisper-cpp", false);
+        return null;
+    };
+
+    // Find best model
+    const model: []const u8 = blk: {
+        if (io_global.cwdAccess("bin/whisper.cpp/models/ggml-small.en.bin", .{})) |_| break :blk "bin/whisper.cpp/models/ggml-small.en.bin" else |_| {}
+        if (io_global.cwdAccess("bin/whisper.cpp/models/ggml-base.en.bin", .{})) |_| break :blk "bin/whisper.cpp/models/ggml-base.en.bin" else |_| {}
+        if (io_global.cwdAccess("bin/whisper.cpp/models/ggml-tiny.en.bin", .{})) |_| break :blk "bin/whisper.cpp/models/ggml-tiny.en.bin" else |_| {}
+        // Check user config dir
+        const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+        var mb: [512]u8 = undefined;
+        const mp = std.fmt.bufPrintZ(&mb, "{s}/.config/opal/models/ggml-tiny.en.bin", .{home}) catch return null;
+        if (io_global.cwdAccess(mp, .{})) |_| break :blk mp else |_| {}
+        logs.pushLog("warn", "voice_backend", "No whisper model found", false);
+        return null;
+    };
+
+    const alloc = @import("../core/alloc.zig").allocator;
+    var child = io_global.Child.init(&.{
+        whisper_bin, "-m", model, "-f", wav_path,
+        "-t", "4", "--no-timestamps", "--no-prints",
+    }, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return null;
+    defer _ = child.wait() catch {};
+
+    const stdout = child.stdout orelse return null;
+    var read_buf: [4096]u8 = undefined;
+    const n = io_global.readAll(stdout, &read_buf) catch 0;
+    if (n == 0) return null;
+
+    const trimmed = std.mem.trim(u8, read_buf[0..n], " \t\r\n");
+    if (trimmed.len == 0 or trimmed.len >= out_buf.len) return null;
+    @memcpy(out_buf[0..trimmed.len], trimmed);
+    return out_buf[0..trimmed.len];
 }
 
 fn sayTtsSpeak(text: []const u8) void {
@@ -267,32 +303,135 @@ fn playWav(path: []const u8) void {
     _ = play.spawnAndWait() catch {};
 }
 
-// ────────── Impl: apple_native (stub) ──────────
+// ────────── Impl: apple_native ──────────
 
 fn appleNativeTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
-    _ = wav_path;
-    _ = out_buf;
-    logs.pushLog("warn", "voice_backend", "apple_native backend needs opal-stt helper binary", false);
-    return null;
+    // Use macOS SFSpeechRecognizer via xcrun swift
+    // This invokes a tiny Swift script that uses the Speech framework.
+    const alloc = @import("../core/alloc.zig").allocator;
+    const swift_code =
+        \\import Speech
+        \\import Foundation
+        \\let sem = DispatchSemaphore(value: 0)
+        \\let url = URL(fileURLWithPath: CommandLine.arguments[1])
+        \\let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))!
+        \\let request = SFSpeechURLRecognitionRequest(url: url)
+        \\request.shouldReportPartialResults = false
+        \\recognizer.recognitionTask(with: request) { result, error in
+        \\    if let result = result, result.isFinal {
+        \\        print(result.bestTranscription.formattedString)
+        \\    }
+        \\    sem.signal()
+        \\}
+        \\sem.wait()
+    ;
+
+    var child = io_global.Child.init(&.{
+        "xcrun", "swift", "-e", swift_code, wav_path,
+    }, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch {
+        logs.pushLog("warn", "voice_backend", "xcrun swift failed — Speech framework unavailable", false);
+        // Fallback to whisper
+        return whisperCppTranscribe(wav_path, out_buf);
+    };
+    defer _ = child.wait() catch {};
+
+    const stdout = child.stdout orelse return null;
+    var read_buf: [4096]u8 = undefined;
+    const n = io_global.readAll(stdout, &read_buf) catch 0;
+    if (n == 0) return null;
+
+    const trimmed = std.mem.trim(u8, read_buf[0..n], " \t\r\n");
+    if (trimmed.len == 0 or trimmed.len >= out_buf.len) return null;
+    @memcpy(out_buf[0..trimmed.len], trimmed);
+    return out_buf[0..trimmed.len];
 }
 
 fn appleNativeSpeak(text: []const u8) void {
-    // `say` already is apple native — reuse
+    // macOS AVSpeechSynthesizer via `say` — already native
     sayTtsSpeak(text);
 }
 
-// ────────── Impl: speaches (stub) ──────────
+// ────────── Impl: speaches (OpenAI-compatible server) ──────────
+
+/// Speaches endpoint. Default localhost:8000; override with SPEACHES_URL env.
+fn speachesBaseUrl() []const u8 {
+    return if (std.c.getenv("SPEACHES_URL")) |u| std.mem.span(u) else "http://localhost:8000";
+}
 
 fn speachesTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
-    _ = wav_path;
-    _ = out_buf;
-    logs.pushLog("warn", "voice_backend", "speaches backend not yet implemented", false);
-    return null;
+    // POST multipart/form-data to /v1/audio/transcriptions
+    const alloc = @import("../core/alloc.zig").allocator;
+    const base = speachesBaseUrl();
+    var url_buf: [256]u8 = undefined;
+    const url = std.fmt.bufPrintZ(&url_buf, "{s}/v1/audio/transcriptions", .{base}) catch return null;
+
+    var child = io_global.Child.init(&.{
+        "curl", "-s", "-X", "POST", url,
+        "-F", "model=whisper-1",
+        "-F", "response_format=text",
+        "-F", std.fmt.bufPrintZ(&(struct { var b: [2200]u8 = undefined; }).b, "file=@{s}", .{wav_path}) catch return null,
+    }, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch {
+        logs.pushLog("warn", "voice_backend", "speaches: curl failed — is server running?", false);
+        return null;
+    };
+    defer _ = child.wait() catch {};
+
+    const stdout = child.stdout orelse return null;
+    var read_buf: [4096]u8 = undefined;
+    const n = io_global.readAll(stdout, &read_buf) catch 0;
+    if (n == 0) return null;
+
+    const trimmed = std.mem.trim(u8, read_buf[0..n], " \t\r\n");
+    if (trimmed.len == 0 or trimmed.len >= out_buf.len) return null;
+    @memcpy(out_buf[0..trimmed.len], trimmed);
+    return out_buf[0..trimmed.len];
 }
 
 fn speachesSpeak(text: []const u8) void {
-    _ = text;
-    logs.pushLog("warn", "voice_backend", "speaches backend not yet implemented", false);
+    if (text.len == 0) return;
+    // POST to /v1/audio/speech, save WAV, play with afplay
+    const alloc = @import("../core/alloc.zig").allocator;
+    const base = speachesBaseUrl();
+    var url_buf: [256]u8 = undefined;
+    const url = std.fmt.bufPrintZ(&url_buf, "{s}/v1/audio/speech", .{base}) catch return;
+    const out_path = "/tmp/opal_speaches_tts.wav";
+
+    // Build JSON body
+    var json_buf: [1024]u8 = undefined;
+    // Escape text for JSON (basic: replace quotes)
+    var escaped: [768]u8 = undefined;
+    var ei: usize = 0;
+    for (text) |ch| {
+        if (ei + 2 >= escaped.len) break;
+        if (ch == '"') { escaped[ei] = '\\'; ei += 1; escaped[ei] = '"'; ei += 1; }
+        else if (ch == '\n') { escaped[ei] = ' '; ei += 1; }
+        else { escaped[ei] = ch; ei += 1; }
+    }
+    const json = std.fmt.bufPrintZ(&json_buf, "{{\"model\":\"tts-1\",\"input\":\"{s}\",\"voice\":\"alloy\",\"response_format\":\"wav\"}}", .{escaped[0..ei]}) catch return;
+
+    var child = io_global.Child.init(&.{
+        "curl", "-s", "-X", "POST", url,
+        "-H", "Content-Type: application/json",
+        "-d", json,
+        "-o", out_path,
+    }, alloc);
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch {
+        logs.pushLog("warn", "voice_backend", "speaches TTS: curl failed", false);
+        sayTtsSpeak(text); // fallback
+        return;
+    };
+    _ = child.wait() catch {};
+
+    // Play the WAV
+    playWav(out_path);
 }
 
 // ────────── Registry ──────────

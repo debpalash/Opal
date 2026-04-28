@@ -155,6 +155,114 @@ pub fn load() void {
     }
 }
 
+/// Export watch history as JSON to ~/Downloads/zigzag/watch_history.json
+pub fn exportJson() void {
+    var dir_buf: [512]u8 = undefined;
+    const dl_dir = paths.defaultSavePath(&dir_buf);
+    @import("../core/io_global.zig").cwdMakePath(dl_dir) catch {};
+
+    var out_buf: [512]u8 = undefined;
+    const out_path = std.fmt.bufPrintZ(&out_buf, "{s}/watch_history.json", .{dl_dir}) catch return;
+
+    // Build JSON manually (no JSON library needed for simple format)
+    const alloc = @import("../core/alloc.zig").allocator;
+    var json = std.ArrayList(u8).init(alloc);
+    defer json.deinit();
+
+    json.appendSlice("[") catch return;
+    for (0..count) |i| {
+        if (i > 0) json.appendSlice(",") catch return;
+        json.appendSlice("{\"name\":\"") catch return;
+        // Escape name for JSON
+        for (entries[i].name[0..entries[i].name_len]) |ch| {
+            if (ch == '"') { json.appendSlice("\\\"") catch return; }
+            else if (ch == '\\') { json.appendSlice("\\\\") catch return; }
+            else if (ch == '\n') { json.appendSlice("\\n") catch return; }
+            else { json.append(ch) catch return; }
+        }
+        var pct_buf: [32]u8 = undefined;
+        const pct_str = std.fmt.bufPrint(&pct_buf, "\",\"percent\":{d:.2},\"link\":\"", .{entries[i].percent}) catch continue;
+        json.appendSlice(pct_str) catch return;
+        for (entries[i].link[0..entries[i].link_len]) |ch| {
+            if (ch == '"') { json.appendSlice("\\\"") catch return; }
+            else if (ch == '\\') { json.appendSlice("\\\\") catch return; }
+            else { json.append(ch) catch return; }
+        }
+        json.appendSlice("\"}") catch return;
+    }
+    json.appendSlice("]") catch return;
+
+    if (@import("../core/io_global.zig").cwdCreateFile(out_path, .{})) |f| {
+        _ = @import("../core/io_global.zig").writeAll(f, json.items) catch {};
+        f.close(@import("../core/io_global.zig").io());
+        state.showToast("✓ Watch history exported");
+    } else |_| {
+        state.showToast("Export failed — check permissions");
+    }
+}
+
+/// Import watch history from a JSON file. Merges with existing data.
+pub fn importJson(path: []const u8) void {
+    const file = @import("../core/io_global.zig").cwdOpenFile(path, .{}) catch {
+        state.showToast("Could not open import file");
+        return;
+    };
+    defer file.close(@import("../core/io_global.zig").io());
+
+    const alloc = @import("../core/alloc.zig").allocator;
+    var buf: [256 * 1024]u8 = undefined;
+    const n = @import("../core/io_global.zig").readAll(file, &buf) catch return;
+    if (n < 3) return;
+    _ = alloc;
+
+    // Simple JSON array parser: find each {"name":"...", "percent":N, "link":"..."}
+    const data = buf[0..n];
+    var pos: usize = 0;
+    var imported: usize = 0;
+    while (pos < data.len) {
+        // Find next "name":"
+        const name_key = std.mem.indexOfPos(u8, data, pos, "\"name\":\"") orelse break;
+        const name_start = name_key + 8;
+        const name_end = findUnescapedQuote(data, name_start) orelse break;
+        const name = data[name_start..name_end];
+
+        // Find percent
+        const pct_key = std.mem.indexOfPos(u8, data, name_end, "\"percent\":") orelse break;
+        const pct_start = pct_key + 10;
+        var pct_end = pct_start;
+        while (pct_end < data.len and (data[pct_end] == '.' or (data[pct_end] >= '0' and data[pct_end] <= '9'))) pct_end += 1;
+        const pct = std.fmt.parseFloat(f64, data[pct_start..pct_end]) catch 0;
+
+        // Find link (optional)
+        var link: []const u8 = "";
+        if (std.mem.indexOfPos(u8, data, pct_end, "\"link\":\"")) |link_key| {
+            const link_start = link_key + 8;
+            if (findUnescapedQuote(data, link_start)) |link_end| {
+                link = data[link_start..link_end];
+            }
+        }
+
+        if (name.len > 0 and name.len < MAX_NAME_LEN and pct >= 0.5) {
+            savePosition(name, pct, link);
+            imported += 1;
+        }
+
+        pos = pct_end + 1;
+    }
+
+    var msg_buf: [64]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, "✓ Imported {d} entries", .{imported}) catch "Imported";
+    state.showToast(msg);
+}
+
+fn findUnescapedQuote(data: []const u8, start: usize) ?usize {
+    var i = start;
+    while (i < data.len) : (i += 1) {
+        if (data[i] == '"' and (i == 0 or data[i - 1] != '\\')) return i;
+    }
+    return null;
+}
+
 // ══════════════════════════════════════════════════════════
 // Migration from old watch_history.tsv
 // ══════════════════════════════════════════════════════════

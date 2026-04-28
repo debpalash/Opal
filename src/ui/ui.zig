@@ -33,28 +33,47 @@ const FileOpenState = struct {
     var pending: bool = false;
     var running: bool = false;
     var thread: ?std.Thread = null;
-    
-    fn zenityWorker() void {
-        var child = @import("../core/io_global.zig").Child.init(
-            &.{ "zenity", "--file-selection", "--title=Open Media File",
-                 "--file-filter=Media files|*.mp4 *.mkv *.avi *.webm *.mov *.flv *.m3u *.m3u8 *.ts *.mp3 *.flac *.wav *.ogg" },
-            @import("../core/alloc.zig").allocator,
-        );
+
+    const builtin = @import("builtin");
+
+    fn dialogWorker() void {
+        const io_global = @import("../core/io_global.zig");
+        const alloc = @import("../core/alloc.zig").allocator;
+
+        var child = if (comptime builtin.os.tag == .macos) blk: {
+            // macOS: native file dialog via osascript + AppleScript
+            const script =
+                "set theFile to choose file with prompt \"Open Media File\" of type " ++
+                "{\"mp4\",\"mkv\",\"avi\",\"webm\",\"mov\",\"flv\",\"m3u\",\"m3u8\"," ++
+                "\"ts\",\"mp3\",\"flac\",\"wav\",\"ogg\",\"m4a\",\"opus\",\"aac\"}\n" ++
+                "return POSIX path of theFile";
+            break :blk io_global.Child.init(
+                &.{ "osascript", "-e", script },
+                alloc,
+            );
+        } else blk: {
+            // Linux: zenity file chooser
+            break :blk io_global.Child.init(
+                &.{ "zenity", "--file-selection", "--title=Open Media File",
+                     "--file-filter=Media files|*.mp4 *.mkv *.avi *.webm *.mov *.flv *.m3u *.m3u8 *.ts *.mp3 *.flac *.wav *.ogg *.m4a *.opus" },
+                alloc,
+            );
+        };
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Ignore;
         child.spawn() catch {
             running = false;
             return;
         };
-        
+
         // Read stdout BEFORE wait — wait() may close the pipe
         var n: usize = 0;
         if (child.stdout) |*stdout| {
-            n = @import("../core/io_global.zig").readAll(stdout, &file_path) catch 0;
+            n = io_global.readAll(stdout, &file_path) catch 0;
         }
-        
+
         _ = child.wait() catch {};
-        
+
         if (n > 0) {
             var plen = n;
             while (plen > 0 and (file_path[plen - 1] == '\n' or file_path[plen - 1] == '\r')) plen -= 1;
@@ -71,7 +90,7 @@ const FileOpenState = struct {
 pub fn triggerFileOpen() void {
     if (!FileOpenState.running) {
         FileOpenState.running = true;
-        FileOpenState.thread = std.Thread.spawn(.{}, FileOpenState.zenityWorker, .{}) catch blk: {
+        FileOpenState.thread = std.Thread.spawn(.{}, FileOpenState.dialogWorker, .{}) catch blk: {
             FileOpenState.running = false;
             break :blk null;
         };

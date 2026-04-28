@@ -11,6 +11,67 @@ const theme = @import("theme.zig");
 const metadata_dialog = @import("metadata_dialog.zig");
 const components = @import("components.zig");
 
+pub fn chapterDropdownMenu(ctx: *c.mpv.mpv_handle) void {
+    var ch_count: i64 = 0;
+    _ = c.mpv.mpv_get_property(ctx, "chapter-list/count", c.mpv.MPV_FORMAT_INT64, &ch_count);
+    if (ch_count <= 0) return;
+
+    var current_ch: i64 = -1;
+    _ = c.mpv.mpv_get_property(ctx, "chapter", c.mpv.MPV_FORMAT_INT64, &current_ch);
+
+    var btn_lbl: [32]u8 = undefined;
+    const label = std.fmt.bufPrintZ(&btn_lbl, "Ch {d}/{d}", .{current_ch + 1, ch_count}) catch "Ch";
+
+    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = 50, .gravity_y = 0.5, .color_fill = dvui.Color{ .r=0, .g=0, .b=0, .a=0 }, .color_text = theme.colors.text_muted })) |r| {
+        var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
+        defer fw.deinit();
+        var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_drawer, .border = dvui.Rect.all(1), .color_border = theme.colors.border_drawer });
+        defer menu.deinit();
+
+        var ci: usize = 0;
+        while (ci < @as(usize, @intCast(ch_count))) : (ci += 1) {
+            // Get chapter title
+            var qtitle_buf: [64]u8 = undefined;
+            const title_q = std.fmt.bufPrintZ(&qtitle_buf, "chapter-list/{d}/title", .{ci}) catch continue;
+            const title_c = c.mpv.mpv_get_property_string(ctx, title_q.ptr);
+
+            // Get chapter time
+            var qtime_buf: [64]u8 = undefined;
+            const time_q = std.fmt.bufPrintZ(&qtime_buf, "chapter-list/{d}/time", .{ci}) catch continue;
+            var ch_time: f64 = 0;
+            _ = c.mpv.mpv_get_property(ctx, time_q.ptr, c.mpv.MPV_FORMAT_DOUBLE, &ch_time);
+
+            const safe_time = @max(0.0, if (std.math.isNan(ch_time)) 0.0 else ch_time);
+            const t_sec = @as(u32, @intFromFloat(safe_time));
+
+            var ch_label: [80]u8 = undefined;
+            if (title_c != null) {
+                defer c.mpv.mpv_free(@ptrCast(title_c));
+                const ts = std.mem.span(title_c);
+                _ = std.fmt.bufPrintZ(&ch_label, "{d:0>2}:{d:0>2}:{d:0>2} — {s}", .{
+                    t_sec / 3600, (t_sec % 3600) / 60, t_sec % 60, ts,
+                }) catch continue;
+            } else {
+                _ = std.fmt.bufPrintZ(&ch_label, "{d:0>2}:{d:0>2}:{d:0>2} — Chapter {d}", .{
+                    t_sec / 3600, (t_sec % 3600) / 60, t_sec % 60, ci + 1,
+                }) catch continue;
+            }
+
+            const is_current = ci == @as(usize, @intCast(@max(0, current_ch)));
+            if (dvui.menuItemLabel(@src(), std.mem.sliceTo(&ch_label, 0), .{}, .{
+                .id_extra = ci,
+                .expand = .horizontal,
+                .color_text = if (is_current) theme.colors.accent else theme.colors.text_main,
+            })) |_| {
+                var set_cmd_buf: [32]u8 = undefined;
+                if (std.fmt.bufPrintZ(&set_cmd_buf, "set chapter {d}", .{ci})) |cmd| {
+                    _ = c.mpv.mpv_command_string(ctx, cmd.ptr);
+                } else |_| {}
+            }
+        }
+    }
+}
+
 pub fn aspectDropdownMenu(ctx: *c.mpv.mpv_handle, id_extra: usize) void {
     const aspect_c = c.mpv.mpv_get_property_string(ctx, "video-aspect-override");
     defer if (aspect_c != null) c.mpv.mpv_free(@ptrCast(aspect_c));
@@ -765,6 +826,14 @@ pub fn renderLiquidGlassOverlay() void {
             var grp = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5, .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 } });
             dvui.icon(@src(), "", icons.tvg.lucide.@"ratio", .{}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
             aspectDropdownMenu(active_p.mpv_ctx, 3);
+            grp.deinit();
+        }
+
+        // Chapters (MKV/MP4 with embedded chapters)
+        {
+            var grp = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5, .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 } });
+            dvui.icon(@src(), "", icons.tvg.lucide.@"bookmark", .{}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
+            chapterDropdownMenu(active_p.mpv_ctx);
             grp.deinit();
         }
 

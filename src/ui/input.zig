@@ -464,6 +464,15 @@ pub fn processGlobalInputs() void {
                                 _ = c.mpv.mpv_command_string(p.mpv_ctx, "playlist-next");
                             }
                         },
+                        // Chapter navigation
+                        .page_up => {
+                            _ = c.mpv.mpv_command_string(p.mpv_ctx, "add chapter -1");
+                            state.showToast("⏮ Previous chapter");
+                        },
+                        .page_down => {
+                            _ = c.mpv.mpv_command_string(p.mpv_ctx, "add chapter 1");
+                            state.showToast("⏭ Next chapter");
+                        },
                         else => {}
                     }
                 }

@@ -23,6 +23,9 @@ fn renderInlineChat() void {
     });
     defer scroll.deinit();
 
+    // Inline results cards with play buttons — render at top for visibility
+    ai_chat.renderInlineResults();
+
     var mi: usize = 0;
     while (mi < ai_chat.message_count) : (mi += 1) {
         const m = ai_chat.messages[mi];
@@ -101,9 +104,6 @@ fn renderInlineChat() void {
             });
         }
     }
-
-    // Torrent / stream cards from fast-path or tool_call results
-    ai_chat.renderInlineResults();
 }
 
 pub fn computeGridColumns() usize {
@@ -785,11 +785,34 @@ fn renderContinueWatching() void {
     }
     if (show_count == 0) return;
 
-    _ = dvui.label(@src(), "Continue Watching", .{}, .{
-        .color_text = theme.colors.text_main,
-        .margin = .{ .x = 0, .y = 16, .w = 0, .h = 4 },
-        .gravity_x = 0.0,
-    });
+    // Header row: "Continue Watching" + Clear button
+    {
+        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = 16, .w = 0, .h = 4 },
+        });
+        defer hdr.deinit();
+
+        _ = dvui.label(@src(), "Continue Watching", .{}, .{
+            .color_text = theme.colors.text_main,
+            .gravity_y = 0.5,
+            .expand = .horizontal,
+        });
+
+        if (dvui.button(@src(), "Clear", .{}, .{
+            .id_extra = 43900,
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = theme.colors.text_muted,
+            .border = dvui.Rect.all(0),
+            .corner_radius = dvui.Rect.all(4),
+            .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+            .gravity_y = 0.5,
+        })) {
+            watch_history.clearAll();
+            state.showToast("Watch history cleared");
+            return;
+        }
+    }
 
     var strip = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,

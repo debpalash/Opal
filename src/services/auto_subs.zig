@@ -10,9 +10,21 @@ const c = @import("../core/c.zig");
 // Runs in a background thread; UI observes `in_progress` + `status_buf`.
 // ══════════════════════════════════════════════════════════
 
+/// Whisper language for transcription. "auto" = auto-detect, "en" = English, etc.
+pub var whisper_lang: [8]u8 = .{ 'e', 'n', 0, 0, 0, 0, 0, 0 };
+pub var whisper_lang_len: usize = 2;
+
+/// Model size preference: "tiny", "base", "small", "medium"
+pub var whisper_model_size: [8]u8 = .{ 't', 'i', 'n', 'y', 0, 0, 0, 0 };
+pub var whisper_model_size_len: usize = 4;
+
 pub var in_progress: bool = false;
 pub var status_buf: [128]u8 = std.mem.zeroes([128]u8);
 pub var status_len: usize = 0;
+
+/// Path of the last generated .srt file (for export UI)
+pub var last_srt_path: [600]u8 = std.mem.zeroes([600]u8);
+pub var last_srt_path_len: usize = 0;
 
 fn setStatus(msg: []const u8) void {
     const n = @min(msg.len, status_buf.len);
@@ -38,8 +50,26 @@ fn resolveWhisperBin() ?[]const u8 {
 fn resolveWhisperModel(buf: *[512]u8) ?[]const u8 {
     const io = @import("../core/io_global.zig");
     const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
-    const p = std.fmt.bufPrintZ(buf, "{s}/.config/opal/models/ggml-tiny.en.bin", .{home}) catch return null;
-    if (io.cwdAccess(p, .{})) |_| return p else |_| return null;
+    const lang = whisper_lang[0..whisper_lang_len];
+    const size = whisper_model_size[0..whisper_model_size_len];
+    const is_en = std.mem.eql(u8, lang, "en");
+
+    // Try language-specific model first (e.g. ggml-tiny.en.bin for English)
+    if (is_en) {
+        const p = std.fmt.bufPrintZ(buf, "{s}/.config/opal/models/ggml-{s}.en.bin", .{home, size}) catch return null;
+        if (io.cwdAccess(p, .{})) |_| return p else |_| {}
+    }
+    // Try multilingual model (e.g. ggml-tiny.bin)
+    {
+        const p = std.fmt.bufPrintZ(buf, "{s}/.config/opal/models/ggml-{s}.bin", .{home, size}) catch return null;
+        if (io.cwdAccess(p, .{})) |_| return p else |_| {}
+    }
+    // Fallback: any tiny model
+    {
+        const p = std.fmt.bufPrintZ(buf, "{s}/.config/opal/models/ggml-tiny.en.bin", .{home}) catch return null;
+        if (io.cwdAccess(p, .{})) |_| return p else |_| {}
+    }
+    return null;
 }
 
 /// Kick off transcription of the currently playing media. Safe to call from
@@ -151,14 +181,26 @@ fn worker(args: *WorkerArgs) void {
     }
 
     setStatus("Transcribing (whisper.cpp)...");
+    // Build whisper-cli args with language flag
+    const lang = whisper_lang[0..whisper_lang_len];
+    const use_lang = !std.mem.eql(u8, lang, "en") and !std.mem.eql(u8, lang, "auto");
     // whisper-cli writes <basename>.srt next to the WAV when -osrt passed.
-    const wh_argv = [_][]const u8{
+    const wh_argv = if (use_lang) [_][]const u8{
+        whisper_bin,
+        "-m", model_path,
+        "-f", tmp_wav,
+        "-osrt",
+        "-l", lang,
+        "-t", "4",
+        "--no-prints",
+    } else [_][]const u8{
         whisper_bin,
         "-m", model_path,
         "-f", tmp_wav,
         "-osrt",
         "-t", "4",
         "--no-prints",
+        "", "", // padding for array size match
     };
     var wh = @import("../core/io_global.zig").Child.init(&wh_argv, alloc);
     wh.stdout_behavior = .Ignore;
@@ -195,6 +237,12 @@ fn worker(args: *WorkerArgs) void {
 
     const io = @import("../core/io_global.zig");
     const load_target = if (io.cwdAccess(final_srt, .{})) |_| final_srt else |_| srt_path;
+
+    // Track last generated SRT for export UI
+    const target_len = @min(load_target.len, last_srt_path.len);
+    @memcpy(last_srt_path[0..target_len], load_target[0..target_len]);
+    last_srt_path_len = target_len;
+
     setStatus("Loading subtitles...");
     if (state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];

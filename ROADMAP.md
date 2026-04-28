@@ -21,78 +21,80 @@
 
 ---
 
-## 🔨 Milestone 2 — Media Center Essentials
+## ✅ Milestone 2 — Media Center Essentials (DONE)
 
 ### 2.1 — Subtitle Engine
-- [ ] OpenSubtitles API integration (auto-search by filename hash)
-- [ ] Subtitle track picker UI (embedded + external subs)
-- [ ] Subtitle delay/sync adjustment
-- [ ] Auto-download best match on play
+- [x] OpenSubtitles API integration (v1 REST + legacy search)
+- [x] Subtitle track picker UI (embedded + external subs)
+- [x] Subtitle delay/sync adjustment (K/Shift+K)
+- [x] Auto-download best match on play (Shift+J)
 
 ### 2.2 — Metadata & Poster Art
-- [ ] TMDB API integration (movies + TV shows)
+- [x] TMDB API integration (movies + TV shows)
 - [ ] TVDB fallback for anime/obscure shows
-- [ ] Poster grid view (Netflix-style browsable library)
-- [ ] Metadata panel: synopsis, rating, cast, year, genre
-- [ ] Auto-match filenames to TMDB IDs (fuzzy match)
+- [x] Poster grid view (Netflix-style browsable library)
+- [x] Metadata panel: synopsis, rating, cast, year, genre
+- [x] Auto-match filenames to TMDB IDs (fuzzy match)
 
 ### 2.3 — Series Tracking & Continue Watching
-- [ ] Per-file watch progress persistence (resume points)
-- [ ] "Continue Watching" row on home screen
-- [ ] Season/episode navigation for series folders
-- [ ] Auto-play next episode
-- [ ] Watched/unwatched markers
+- [x] Per-file watch progress persistence (SQLite-backed resume)
+- [x] "Continue Watching" row on home screen
+- [x] Season/episode navigation for series folders
+- [x] Auto-play next episode
+- [x] Watched/unwatched markers
 
 ### 2.4 — Player UX Polish
-- [ ] Audio track picker UI
-- [ ] Chapter navigation (if MKV has chapters)
-- [ ] Keyboard shortcuts (space, arrows, F, S, M, etc.)
-- [ ] Screenshot capture (save frame to disk)
-- [ ] Playback speed controls in UI
+- [x] Audio track picker UI (footer dropdown + U key)
+- [x] Chapter navigation (footer dropdown + PgUp/PgDn)
+- [x] Keyboard shortcuts (40+ shortcuts, cheatsheet: Shift+I)
+- [x] Screenshot capture (P key + Settings → Capture)
+- [x] Playback speed controls in UI ([ ] keys + footer display)
+- [x] Clip export (A-B loop → ffmpeg → file)
+- [x] Video filters (brightness, contrast, saturation, gamma)
+- [x] Audio equalizer presets
 
 ---
 
 ## 🧠 Milestone 3 — AI Features (The Differentiator)
 
 ### 3.1 — Local LLM Integration (Bonsai-8B via llama.cpp)
-- [ ] Bundle/link llama.cpp as C library (PrismML fork for 1-bit kernels)
-- [ ] Model manager: download/load GGUF models from settings
-- [ ] Natural language search: "find me something like Invincible"
-- [ ] Smart recommendations based on watch history
-- [ ] Chat assistant panel: ask questions about media, get suggestions
-- [ ] Filename parser: intelligently extract show/season/episode from messy names
+- [x] Bundle/link llama.cpp as C library (PrismML fork for 1-bit kernels)
+- [x] Model manager: download/load GGUF models from settings
+- [ ] Natural language search: "find me something like Invincible" (needs embedding model)
+- [x] Smart recommendations based on watch history
+- [x] Chat assistant panel: ask questions about media, get suggestions
+- [x] Filename parser: intelligently extract show/season/episode from messy names
 
 ### 3.2 — Whisper Auto-Subtitles
-- [ ] whisper.cpp integration (C library, runs on GPU)
-- [ ] Generate subtitles for ANY local file with no internet
-- [ ] Language detection + multi-language support
-- [ ] Export generated subs as .srt files
-- [ ] Real-time live transcription mode
+- [x] whisper.cpp integration (C library, runs on GPU)
+- [x] Generate subtitles for ANY local file with no internet
+- [x] Language detection + multi-language support (configurable model + lang flag)
+- [x] Export generated subs as .srt files (auto-saved, trackable path)
+- [ ] Real-time live transcription mode (streaming pipeline needed)
 
 ### 3.3 — Smart Media Intelligence
-- [ ] Auto-skip intro/outro detection (audio fingerprinting)
-- [ ] Content tagging: auto-detect genre, quality, language from content
-- [ ] Duplicate detection across library
-- [ ] Smart collections: auto-group related media
+- [ ] Auto-skip intro/outro detection (audio fingerprinting — future)
+- [ ] Content tagging: auto-detect genre, quality, language from content (ML — future)
+- [ ] Duplicate detection across library (perceptual hashing — future)
+- [ ] Smart collections: auto-group related media (depends on tagging)
 
 ---
 
 ## 🌐 Milestone 4 — Ecosystem & Connectivity
 
 ### 4.1 — External Service Sync
-- [ ] Trakt.tv integration (scrobble watch progress)
-- [ ] AniList sync (anime tracking)
-- [ ] SIMKL integration
-- [ ] Import/export watch history
+- [x] Trakt.tv integration (OAuth device flow + scrobble API)
+- [x] AniList sync (GraphQL mutations for anime progress)
+- [x] SIMKL integration (REST API checkin + watchlist)
+- [x] Import/export watch history (JSON export/import)
 
 ### 4.2 — Remote Access & Casting
-- [ ] Web remote control (extend existing web/ UI)
-- [ ] DLNA/UPnP renderer discovery + casting
-- [ ] Chromecast support
-- [ ] Transcoding pipeline (FFmpeg → serve to other devices)
+- [x] Web remote control (extend existing web/ UI)
+- [x] Chromecast/DLNA support (via catt)
+- [ ] Transcoding pipeline (FFmpeg → serve to other devices — future)
 
 ### 4.3 — Multi-User & Profiles
-- [ ] User profile system (separate watch history, preferences)
+- [ ] User profile system (separate watch history, preferences — future)
 - [ ] PIN-protected profiles
 - [ ] Per-user recommendations
 
@@ -101,16 +103,22 @@
 ## 🔮 Milestone 5 — Future Vision
 
 ### 5.1 — Plugin System
-- [ ] Lua/WASM plugin API for custom sources
+- [x] Lua plugin API for custom sources (43KB, full implementation)
 - [ ] Community addon repository
 - [ ] Custom UI panels via plugins
 
 ### 5.2 — Social Features
-- [ ] Watch party (sync playback over network)
+- [x] Watch party (sync playback over network)
 - [ ] Share clips/timestamps
 - [ ] Activity feed
 
-### 5.3 — Mobile Companion
+### 5.3 — Voice Backends
+- [x] whisper.cpp + macOS say (default, fully implemented)
+- [x] sherpa-onnx (streaming STT + Kokoro/Piper TTS)
+- [x] Apple native (SFSpeechRecognizer via xcrun swift)
+- [x] speaches (OpenAI-compatible server at localhost:8000)
+
+### 5.4 — Mobile Companion
 - [ ] Android client (stream from ZigZag server)
 - [ ] iOS client
 - [ ] Offline sync (download for mobile playback)
@@ -123,3 +131,5 @@
 - [ ] Improve error handling across resolver backends
 - [ ] Add test suite for resolver/search logic
 - [ ] Documentation (README, build guide, architecture)
+- [x] Fix TemporaryUserAgent in OpenSubtitles requests
+- [x] Clean sqlite-vec.h TODO

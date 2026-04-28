@@ -46,6 +46,23 @@ pub var search_buf = std.mem.zeroes([1024]u8);
 pub const SortType = enum { Seeds, Size, Peers, Health, Time };
 pub var current_sort: SortType = .Seeds;
 
+// ── Minimum seed filter ──
+pub var min_seed_filter: i64 = 0;
+const seed_thresholds = [_]i64{ 0, 5, 10, 50 };
+
+/// Detect quality from torrent name (2160p→4, 1080p→3, 720p→2, 480p→1, else 0)
+fn detectQuality(name: []const u8) u8 {
+    var lower_buf: [512]u8 = undefined;
+    const check_len = @min(name.len, 511);
+    for (0..check_len) |i| lower_buf[i] = std.ascii.toLower(name[i]);
+    const lower = lower_buf[0..check_len];
+    if (std.mem.indexOf(u8, lower, "2160p") != null or std.mem.indexOf(u8, lower, "4k") != null or std.mem.indexOf(u8, lower, "uhd") != null) return 4;
+    if (std.mem.indexOf(u8, lower, "1080p") != null) return 3;
+    if (std.mem.indexOf(u8, lower, "720p") != null) return 2;
+    if (std.mem.indexOf(u8, lower, "480p") != null or std.mem.indexOf(u8, lower, "dvdrip") != null) return 1;
+    return 0;
+}
+
 // ── Engine filter ──
 pub const EngineFilter = enum(u4) {
     all = 0,
@@ -241,6 +258,7 @@ pub fn asyncSearchTask(query: []const u8) void {
     std.sort.block(SearchResult, search_results.items, {}, sortResults);
     search_results_mutex.unlock();
     is_searching = false;
+    search_thread = null; // Allow join/cleanup on next trigger or shutdown
 }
 
 fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator) void {
@@ -356,11 +374,10 @@ fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator) void {
 pub fn triggerSearch(query_text: []const u8) void {
     if (query_text.len == 0) return;
 
-    // Abort any running search
+    // Abort any running search — join the thread so its defers free memory
     if (is_searching) {
         search_abort = true;
-        // Wait briefly for the thread to notice
-        if (search_thread) |t| t.detach();
+        if (search_thread) |t| t.join();
         search_thread = null;
         is_searching = false;
     }
@@ -562,6 +579,40 @@ pub fn renderSearchContent() void {
 
         { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
 
+        // Min seed filter toggle
+        {
+            var seed_label_buf: [16]u8 = undefined;
+            const seed_lbl = std.fmt.bufPrintZ(&seed_label_buf, "{d}+ seeds", .{min_seed_filter}) catch "0+";
+            if (dvui.button(@src(), seed_lbl, .{}, .{
+                .id_extra = 8900,
+                .color_fill = if (min_seed_filter > 0) dvui.Color{ .r = 40, .g = 80, .b = 50, .a = 255 } else theme.colors.bg_glass,
+                .color_text = if (min_seed_filter > 0) dvui.Color{ .r = 80, .g = 220, .b = 120, .a = 255 } else theme.colors.text_muted,
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+                .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
+            })) {
+                // Cycle through thresholds
+                var next_idx: usize = 0;
+                for (seed_thresholds, 0..) |t, ti| {
+                    if (t == min_seed_filter) { next_idx = ti + 1; break; }
+                }
+                if (next_idx >= seed_thresholds.len) next_idx = 0;
+                min_seed_filter = seed_thresholds[next_idx];
+            }
+        }
+
+        // NSFW filter toggle
+        if (dvui.button(@src(), if (state.app.nsfw_filter_enabled) "NSFW: Off" else "NSFW: On", .{}, .{
+            .id_extra = 8950,
+            .color_fill = if (state.app.nsfw_filter_enabled) dvui.Color{ .r = 60, .g = 30, .b = 30, .a = 255 } else dvui.Color{ .r = 50, .g = 30, .b = 50, .a = 255 },
+            .color_text = if (state.app.nsfw_filter_enabled) dvui.Color{ .r = 220, .g = 80, .b = 80, .a = 255 } else dvui.Color{ .r = 180, .g = 100, .b = 180, .a = 255 },
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
+        })) {
+            state.app.nsfw_filter_enabled = !state.app.nsfw_filter_enabled;
+        }
+
         // Engine filter selector
         if (dvui.button(@src(), engine_filter.label(), .{}, .{
             .id_extra = 9000,
@@ -580,11 +631,20 @@ pub fn renderSearchContent() void {
     defer search_results_mutex.unlock();
 
     // ── Status line ──
-    if (!is_searching and search_results.items.len > 0) {
-        // Count visible results
+    if (is_searching) {
+        var live_buf: [64]u8 = undefined;
+        const live_lbl = std.fmt.bufPrintZ(&live_buf, "Searching… ({d} found)", .{search_results.items.len}) catch "Searching…";
+        _ = dvui.label(@src(), "{s}", .{live_lbl}, .{
+            .color_text = theme.colors.warning,
+            .padding = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
+        });
+    } else if (search_results.items.len > 0) {
+        // Count visible results (after filters)
         var visible_count: usize = 0;
         for (search_results.items) |r| {
             if (state.app.nsfw_filter_enabled and r.is_nsfw) continue;
+            const s_num_chk = std.fmt.parseInt(i64, r.seeds, 10) catch 0;
+            if (s_num_chk < min_seed_filter) continue;
             visible_count += 1;
         }
         var count_buf: [48]u8 = undefined;
@@ -736,6 +796,9 @@ pub fn renderSearchContent() void {
         for (search_results.items[start_idx..end_idx], start_idx..) |r, idx| {
         // Skip NSFW when filter is on
         if (state.app.nsfw_filter_enabled and r.is_nsfw) continue;
+        // Skip below min seed threshold
+        const s_num_filter = std.fmt.parseInt(i64, r.seeds, 10) catch 0;
+        if (s_num_filter < min_seed_filter) continue;
 
         // ── Card container ──
         var row = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -755,6 +818,31 @@ pub fn renderSearchContent() void {
             .expand = .horizontal,
             .color_text = if (r.is_nsfw) theme.colors.warning else theme.colors.text_main,
         });
+
+        // ── Row 1b: Quality badge (if detected) ──
+        {
+            const quality = detectQuality(r.name);
+            if (quality > 0) {
+                const q_text: []const u8 = switch (quality) {
+                    4 => "4K",
+                    3 => "1080p",
+                    2 => "720p",
+                    1 => "480p",
+                    else => "",
+                };
+                const q_color = switch (quality) {
+                    4 => dvui.Color{ .r = 255, .g = 215, .b = 0, .a = 255 },
+                    3 => dvui.Color{ .r = 100, .g = 200, .b = 255, .a = 255 },
+                    2 => dvui.Color{ .r = 180, .g = 200, .b = 140, .a = 255 },
+                    else => theme.colors.text_muted,
+                };
+                _ = dvui.label(@src(), "{s}", .{q_text}, .{
+                    .id_extra = idx + 80000,
+                    .color_text = q_color,
+                    .margin = .{ .x = 0, .y = 1, .w = 0, .h = 2 },
+                });
+            }
+        }
 
         // ── Row 2: Meta chips ──
         {
@@ -842,7 +930,38 @@ pub fn renderSearchContent() void {
                 .padding = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
             });
 
-            // Load button
+            // Copy magnet button
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"clipboard", .{}, .{}, .{
+                .id_extra = idx + 90000,
+                .color_fill = dvui.Color{ .r = 30, .g = 30, .b = 45, .a = 255 },
+                .color_text = theme.colors.text_muted,
+                .corner_radius = theme.dims.rad_sm,
+                .padding = dvui.Rect.all(4),
+                .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+                .min_size_content = .{ .w = 13, .h = 13 },
+                .gravity_y = 0.5,
+            })) {
+                dvui.clipboardTextSet(r.link);
+                state.showToast("Magnet link copied");
+            }
+
+            // Add to queue button
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"plus", .{}, .{}, .{
+                .id_extra = idx + 70000,
+                .color_fill = dvui.Color{ .r = 30, .g = 35, .b = 50, .a = 255 },
+                .color_text = dvui.Color{ .r = 160, .g = 170, .b = 200, .a = 255 },
+                .corner_radius = theme.dims.rad_sm,
+                .padding = dvui.Rect.all(4),
+                .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
+                .min_size_content = .{ .w = 13, .h = 13 },
+                .gravity_y = 0.5,
+            })) {
+                const queue = @import("queue.zig");
+                queue.addToQueue(r.link, r.name, r.engine);
+                state.showToast("Added to queue");
+            }
+
+            // Play button
             if (dvui.button(@src(), "Play", .{}, .{
                 .id_extra = idx,
                 .color_fill = theme.colors.accent,

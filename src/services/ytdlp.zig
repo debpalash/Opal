@@ -79,6 +79,9 @@ fn downloadWorker() void {
     const dir_path = std.fmt.bufPrintZ(&dir_buf, "{s}/.config/zigzag/bin", .{home}) catch return;
     @import("../core/io_global.zig").cwdMakePath(dir_path) catch {};
 
+    const builtin = @import("builtin");
+    const dl_url = if (comptime builtin.os.tag == .macos) YTDLP_URL_MACOS else YTDLP_URL_LINUX;
+
     // Use curl to download (most reliable cross-platform)
     const argv = [_][]const u8{
         "curl",
@@ -89,7 +92,7 @@ fn downloadWorker() void {
         "120",
         "-o",
         path,
-        YTDLP_URL_LINUX,
+        dl_url,
     };
 
     var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
