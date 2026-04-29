@@ -180,7 +180,7 @@ pub fn stopAll() void {
     voice.is_recording = false;
     voice.is_transcribing = false;
     is_generating = false;
-    voice.conv_phase = .idle;
+    voice.setPhase(.idle);
 
     // Pause v2 voice server
     if (voice.voice_socket) |s| {
@@ -191,7 +191,7 @@ pub fn stopAll() void {
     _ = std.Thread.spawn(.{}, struct {
         fn run() void {
             var kill_aplay = @import("../core/io_global.zig").Child.init(
-                &.{ "pkill", "-f", "aplay.*zigzag" },
+                &.{ "pkill", "-f", if (@import("builtin").os.tag == .macos) "say" else "aplay.*zigzag" },
                 @import("../core/alloc.zig").allocator,
             );
             kill_aplay.stdout_behavior = .Ignore;
@@ -218,9 +218,12 @@ pub fn renderChatBody() void {
     initCallbacks();
     { // Kill zombie servers from previous runs — once at startup only
         const K = struct { var done: bool = false; };
-        if (!K.done) { K.done = true; voice.killStaleServers(); }
+        if (!K.done) {
+            K.done = true;
+            voice.killStaleServers();
+            voice.preWarmServers();  // Start STT/TTS servers in background early
+        }
     }
-    voice.preWarmServers();  // Start STT/TTS servers in background early
 
     // Proactive startup greeting (once per session, fires on first frame with empty chat)
     {

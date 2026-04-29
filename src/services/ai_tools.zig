@@ -440,7 +440,9 @@ fn executeTmdbLookup(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
                          std.mem.indexOf(u8, json_str[search_start..], "\"name\":\"");
         if (name_idx == null) break;
         
-        search_start += name_idx.? + 9;
+        // Key lengths: '"title":"' = 10, '"name":"' = 8
+        const key_len: usize = if (std.mem.indexOf(u8, json_str[search_start..], "\"title\":\"") != null) 10 else 8;
+        search_start += name_idx.? + key_len;
         const name_end = std.mem.indexOfScalarPos(u8, json_str, search_start, '"') orelse break;
         const title = json_str[search_start..name_end];
         
@@ -572,6 +574,16 @@ fn extractStringArg(json: []const u8, key: []const u8) ?[]const u8 {
 //  New Tool Executors — App Control
 // ══════════════════════════════════════════════════════════
 
+/// Validate that a string contains only digits, dots, minus signs.
+/// Returns the input if safe, or a fallback if not.
+fn sanitizeNumeric(val: []const u8, fallback: []const u8) []const u8 {
+    if (val.len == 0 or val.len > 16) return fallback;
+    for (val) |ch| {
+        if (!((ch >= '0' and ch <= '9') or ch == '.' or ch == '-')) return fallback;
+    }
+    return val;
+}
+
 fn executePlayerControl(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     const c = @import("../core/c.zig");
     const action = extractStringArg(tc.args_json[0..tc.args_len], "action") orelse
@@ -598,31 +610,31 @@ fn executePlayerControl(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         return std.fmt.allocPrint(alloc, "Stopped", .{}) catch null;
     } else if (std.mem.eql(u8, action, "seek_forward")) {
         var cmd_buf: [64]u8 = undefined;
-        const secs = value orelse "10";
+        const secs = sanitizeNumeric(value orelse "10", "10");
         const cmd = std.fmt.bufPrintZ(&cmd_buf, "seek {s}", .{secs}) catch return null;
         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
         return std.fmt.allocPrint(alloc, "Seeked forward {s}s", .{secs}) catch null;
     } else if (std.mem.eql(u8, action, "seek_backward")) {
         var cmd_buf: [64]u8 = undefined;
-        const secs = value orelse "10";
+        const secs = sanitizeNumeric(value orelse "10", "10");
         const cmd = std.fmt.bufPrintZ(&cmd_buf, "seek -{s}", .{secs}) catch return null;
         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
         return std.fmt.allocPrint(alloc, "Seeked backward {s}s", .{secs}) catch null;
     } else if (std.mem.eql(u8, action, "seek_to")) {
         var cmd_buf: [64]u8 = undefined;
-        const pos = value orelse "0";
+        const pos = sanitizeNumeric(value orelse "0", "0");
         const cmd = std.fmt.bufPrintZ(&cmd_buf, "seek {s} absolute", .{pos}) catch return null;
         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
         return std.fmt.allocPrint(alloc, "Seeked to {s}", .{pos}) catch null;
     } else if (std.mem.eql(u8, action, "set_volume")) {
         var cmd_buf: [64]u8 = undefined;
-        const vol = value orelse "100";
+        const vol = sanitizeNumeric(value orelse "100", "100");
         const cmd = std.fmt.bufPrintZ(&cmd_buf, "set volume {s}", .{vol}) catch return null;
         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
         return std.fmt.allocPrint(alloc, "Volume set to {s}%", .{vol}) catch null;
     } else if (std.mem.eql(u8, action, "set_speed")) {
         var cmd_buf: [64]u8 = undefined;
-        const spd = value orelse "1.0";
+        const spd = sanitizeNumeric(value orelse "1.0", "1.0");
         const cmd = std.fmt.bufPrintZ(&cmd_buf, "set speed {s}", .{spd}) catch return null;
         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
         return std.fmt.allocPrint(alloc, "Speed set to {s}x", .{spd}) catch null;
@@ -696,12 +708,7 @@ fn executeNavigate(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         else if (std.mem.eql(u8, target, "history")) .History
         else if (std.mem.eql(u8, target, "rss")) .RSS
         else if (std.mem.eql(u8, target, "jellyfin")) .Jellyfin
-        else if (std.mem.eql(u8, target, "ai")) {
-            // AI is now a floating bubble, not a drawer tab
-            const ai_chat = @import("ai_chat.zig");
-            ai_chat.is_bubble_open = !ai_chat.is_bubble_open;
-            return std.fmt.allocPrint(alloc, "Toggled AI bubble", .{}) catch null;
-        }
+        else if (std.mem.eql(u8, target, "ai")) .AI
         else null;
 
     if (tab) |t| {

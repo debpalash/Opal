@@ -14,6 +14,8 @@ const TTS_SOCKET = "/tmp/zigzag-tts.sock";
 const VOICE_SOCKET = "/tmp/zigzag-voice.sock";
 
 // ── Voice state (shared with ai_chat.zig) ──
+// Thread safety: conv_phase mutations must go through setPhase() which
+// holds state_mutex. Single-byte bools are naturally atomic on x86/ARM.
 pub var voice_mode: bool = false;
 pub var is_recording: bool = false;
 pub var is_transcribing: bool = false;
@@ -22,7 +24,14 @@ pub var conversation_active: bool = false;
 pub var conv_phase: ConvPhase = .idle;
 pub var partial_text: [512]u8 = undefined;
 pub var partial_text_len: usize = 0;
-pub var state_mutex: @import("../core/sync.zig").Mutex = .{}; // Protects partial_text + phase state
+pub var state_mutex: @import("../core/sync.zig").Mutex = .{};
+
+/// Thread-safe phase transition. All conv_phase writes must go through here.
+pub fn setPhase(p: ConvPhase) void {
+    state_mutex.lock();
+    conv_phase = p;
+    state_mutex.unlock();
+}
 var mic_thread: ?std.Thread = null;
 var tts_thread: ?std.Thread = null;
 var conv_thread: ?std.Thread = null;
@@ -104,96 +113,65 @@ pub fn preWarmServers() void {
 fn ensureVoiceServer() void {
     server_start_mutex.lock();
     defer server_start_mutex.unlock();
-    // Re-check under lock — another thread may have started it while we waited
-    if (voice_server_started) {
-        logs.pushLog("info", "voice", "Voice server already started", false);
-        return;
-    }
+    if (voice_server_started) return;
     if (@import("../core/io_global.zig").cwdAccess(VOICE_SOCKET, .{})) |_| {
         voice_server_started = true;
-        logs.pushLog("info", "voice", "Voice socket exists, reusing", true);
         return;
     } else |_| {}
-
-    logs.pushLog("info", "voice", "Spawning voice server process...", true);
+    @import("../core/io_global.zig").cwdAccess("bin/zigzag-voice-server.py", .{}) catch {
+        logs.pushLog("warn", "voice", "voice-server.py not found — skipping", true);
+        return;
+    };
     var child = @import("../core/io_global.zig").Child.init(
         &.{ "python3", "bin/zigzag-voice-server.py" },
         @import("../core/alloc.zig").allocator,
     );
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
-    child.spawn() catch {
-        logs.pushLog("warn", "voice", "Failed to spawn voice server process", true);
-        return;
-    };
-    logs.pushLog("info", "voice", "Voice server spawned, waiting for socket...", true);
-    // Wait for socket to appear (max 90s for first-run model download)
+    child.spawn() catch { return; };
     var attempts: usize = 0;
-    while (attempts < 900) : (attempts += 1) {
+    while (attempts < 300) : (attempts += 1) {
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
-        if (@import("../core/io_global.zig").cwdAccess(VOICE_SOCKET, .{})) |_| {
-            logs.pushLog("info", "voice", "Voice socket appeared!", true);
-            break;
-        } else |_| {}
+        if (@import("../core/io_global.zig").cwdAccess(VOICE_SOCKET, .{})) |_| break else |_| {}
     }
-    if (attempts >= 900) {
-        logs.pushLog("warn", "voice", "Voice server socket timeout (90s)", true);
-    }
+    if (attempts >= 300) return;
     voice_server_started = true;
-    logs.pushLog("info", "voice", "Voice server v2 started", true);
 }
 
 pub fn ensureSttServer() void {
     if (stt_server_started) return;
-    if (@import("../core/io_global.zig").cwdAccess(STT_SOCKET, .{})) |_| {
-        stt_server_started = true;
-        return;
-    } else |_| {}
-
+    if (@import("../core/io_global.zig").cwdAccess(STT_SOCKET, .{})) |_| { stt_server_started = true; return; } else |_| {}
+    @import("../core/io_global.zig").cwdAccess("bin/zigzag-stt-server.py", .{}) catch { return; };
     var child = @import("../core/io_global.zig").Child.init(
-        &.{ "python3", "bin/zigzag-stt-server.py" },
-        @import("../core/alloc.zig").allocator,
+        &.{ "python3", "bin/zigzag-stt-server.py" }, @import("../core/alloc.zig").allocator,
     );
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
-    child.spawn() catch {
-        logs.pushLog("warn", "voice", "Failed to start STT server", true);
-        return;
-    };
-    // Wait for socket to appear (max 15s for model load)
+    child.spawn() catch { return; };
     var attempts: usize = 0;
     while (attempts < 150) : (attempts += 1) {
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
         if (@import("../core/io_global.zig").cwdAccess(STT_SOCKET, .{})) |_| break else |_| {}
     }
     stt_server_started = true;
-    logs.pushLog("info", "voice", "STT server started", false);
 }
 
 pub fn ensureTtsServer() void {
     if (tts_server_started) return;
-    if (@import("../core/io_global.zig").cwdAccess(TTS_SOCKET, .{})) |_| {
-        tts_server_started = true;
-        return;
-    } else |_| {}
-
+    if (@import("../core/io_global.zig").cwdAccess(TTS_SOCKET, .{})) |_| { tts_server_started = true; return; } else |_| {}
+    @import("../core/io_global.zig").cwdAccess("bin/zigzag-tts-server.py", .{}) catch { return; };
     var child = @import("../core/io_global.zig").Child.init(
-        &.{ "python3", "bin/zigzag-tts-server.py" },
-        @import("../core/alloc.zig").allocator,
+        &.{ "python3", "bin/zigzag-tts-server.py" }, @import("../core/alloc.zig").allocator,
     );
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
-    child.spawn() catch {
-        logs.pushLog("warn", "voice", "Failed to start TTS server", true);
-        return;
-    };
+    child.spawn() catch { return; };
     var attempts: usize = 0;
     while (attempts < 150) : (attempts += 1) {
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
         if (@import("../core/io_global.zig").cwdAccess(TTS_SOCKET, .{})) |_| break else |_| {}
     }
     tts_server_started = true;
-    logs.pushLog("info", "voice", "TTS server started", false);
 }
 
 // ── Mic Recording with VAD ──
@@ -222,29 +200,40 @@ pub fn toggleConversation() void {
         conversation_active = false;
         is_recording = false;
         voice_mode = false;
-        conv_phase = .idle;
+        setPhase(.idle);
         // Tell voice server to pause
         if (voice_socket) |s| {
             @import("../core/io_global.zig").streamWriteAll(s, "PAUSE\n") catch {};
         }
         logs.pushLog("info", "voice", "Conversation mode stopped", true);
     } else {
+        // Pre-check: ensure at least one voice path is viable
+        const vb = @import("voice_backend.zig");
+        const deps = @import("../core/deps.zig");
+        const ds = deps.check();
+        const b = vb.active();
+        const has_streaming = b.supports_streaming and ds.sherpa_stream_model;
+        const has_whisper = ds.whisper or ds.whisper_model or ds.sherpa_model;
+        if (!has_streaming and !has_whisper) {
+            const state_mod = @import("../core/state.zig");
+            state_mod.showToast("No voice backend ready — install a model in AI tab first");
+            return;
+        }
+
         // Start conversation
         conversation_active = true;
         voice_mode = true;
-        conv_phase = .listening;
+        setPhase(.listening);
 
         // Pick loop: streaming if active backend supports it + deps ready,
         // else fall back to the legacy ffmpeg-record + STT-server v2 path.
-        const vb = @import("voice_backend.zig");
-        const deps = @import("../core/deps.zig");
-        const use_streaming = vb.active().supports_streaming and deps.check().sherpa_stream_model;
+        const use_streaming = has_streaming;
         conv_thread = (if (use_streaming)
             std.Thread.spawn(.{}, conversationLoopSherpa, .{})
         else
             std.Thread.spawn(.{}, conversationLoopV2, .{})) catch {
             conversation_active = false;
-            conv_phase = .idle;
+            setPhase(.idle);
             setError("Failed to start conversation mode");
             return;
         };
@@ -253,7 +242,7 @@ pub fn toggleConversation() void {
     }
 }
 
-pub var auto_conversation: bool = true;
+pub var auto_conversation: bool = false;
 
 pub fn autoStartConversation() void {
     if (auto_conversation and !conversation_active) {
@@ -284,7 +273,7 @@ pub fn notifyMediaState(media_playing: bool) void {
 /// driven, runs until user toggles convo off.
 fn conversationLoopSherpa() void {
     defer {
-        conv_phase = .idle;
+        setPhase(.idle);
         conversation_active = false;
         is_recording = false;
     }
@@ -312,7 +301,7 @@ fn conversationLoopSherpa() void {
     var reader_buf: [4096]u8 = undefined;
     var reader = stdout.reader(@import("../core/io_global.zig").io(), &reader_buf);
 
-    conv_phase = .listening;
+    setPhase(.listening);
     while (conversation_active) {
         const line = reader.interface.takeDelimiter('\n') catch break orelse break;
         const trimmed = std.mem.trim(u8, line, " \t\r");
@@ -328,11 +317,11 @@ fn conversationLoopSherpa() void {
         if (text.len < 3) continue;
         if (@import("voice_filter.zig").isHallucination(text)) continue;
 
-        conv_phase = .transcribing;
+        setPhase(.transcribing);
         if (on_transcribed_fn) |f| f(text);
         // Wait for LLM to finish before listening again so TTS doesn't
         // compete with mic input.
-        conv_phase = .thinking;
+        setPhase(.thinking);
         var wait: usize = 0;
         const chat = @import("ai_chat.zig");
         while (chat.is_generating and conversation_active and wait < 300) : (wait += 1) {
@@ -340,7 +329,7 @@ fn conversationLoopSherpa() void {
         }
         // Response queued; TTS fires from ai_chat.setResponseText path.
         // Return to listening for the next turn.
-        conv_phase = .listening;
+        setPhase(.listening);
     }
 }
 
@@ -375,14 +364,14 @@ fn conversationLoopV2() void {
     defer {
         stream.close(@import("../core/io_global.zig").io());
         voice_socket = null;
-        conv_phase = .idle;
+        setPhase(.idle);
         conversation_active = false;
         is_recording = false;
     }
 
     // Tell voice server to start listening
     @import("../core/io_global.zig").streamWriteAll(stream, "RESUME\n") catch {};
-    conv_phase = .listening;
+    setPhase(.listening);
     is_recording = true;
     logs.pushLog("info", "voice", "Connected to voice server v3 — listening", true);
 
@@ -404,7 +393,7 @@ fn conversationLoopV2() void {
                 is_speaking = false;
                 // Kill aplay
                 var kill_aplay = @import("../core/io_global.zig").Child.init(
-                    &.{ "pkill", "-f", "aplay.*zigzag" },
+                    &.{ "pkill", "-f", if (@import("builtin").os.tag == .macos) "say" else "aplay.*zigzag" },
                     @import("../core/alloc.zig").allocator,
                 );
                 kill_aplay.stdout_behavior = .Ignore;
@@ -415,7 +404,7 @@ fn conversationLoopV2() void {
                 // cooldown will handle the transition back to listening.
 
             } else if (std.mem.startsWith(u8, line, "VAD:start")) {
-                conv_phase = .listening;
+                setPhase(.listening);
                 is_recording = true;
                 partial_text_len = 0; // Clear partial on new speech
                 // Duck media volume (save current level first)
@@ -428,7 +417,7 @@ fn conversationLoopV2() void {
                 }
 
             } else if (std.mem.startsWith(u8, line, "VAD:end")) {
-                conv_phase = .transcribing;
+                setPhase(.transcribing);
                 is_recording = false;
                 // Restore media volume to saved level
                 const has_player = state.app.players.items.len > 0;
@@ -462,13 +451,13 @@ fn conversationLoopV2() void {
                     // Wait for LLM and TTS to finish in a separate thread so we don't block the socket!
                     const S = struct {
                         fn waiter(s: std.Io.net.Stream) void {
-                            conv_phase = .thinking;
+                            setPhase(.thinking);
                             var wait: usize = 0;
                             while (@import("ai_chat.zig").is_generating and conversation_active and wait < 300) : (wait += 1) {
                                 @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
                             }
                             if (conversation_active) {
-                                conv_phase = .speaking;
+                                setPhase(.speaking);
                             }
                             while (is_speaking and conversation_active) {
                                 @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
@@ -478,7 +467,7 @@ fn conversationLoopV2() void {
                             @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
                             
                             if (conversation_active) {
-                                conv_phase = .listening;
+                                setPhase(.listening);
                                 is_recording = true;
                             }
                         }
@@ -513,7 +502,7 @@ fn conversationLoopV1() void {
     ensureSttServer();
 
     while (conversation_active) {
-        conv_phase = .speaking;
+        setPhase(.speaking);
         while ((is_speaking or chat.is_generating) and conversation_active) {
             @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
         }
@@ -529,11 +518,15 @@ fn conversationLoopV1() void {
             _ = c_pkg.mpv.mpv_command_string(state.app.players.items[p_idx].mpv_ctx, "set volume 15");
         }
 
-        conv_phase = .listening;
+        setPhase(.listening);
         is_recording = true;
+        // Use ffmpeg for mic capture (cross-platform; sox 'rec' is rarely installed)
+        const is_macos = @import("builtin").os.tag == .macos;
+        const input_fmt = if (is_macos) "avfoundation" else "pulse";
+        const input_dev = if (is_macos) ":0" else "default";
         var record_child = @import("../core/io_global.zig").Child.init(
-            &.{ "rec", "-q", MIC_WAV_PATH, "rate", "16000", "channels", "1",
-                "silence", "1", "0.1", "3%", "1", "0.5", "3%", "trim", "0", "12" },
+            &.{ "ffmpeg", "-y", "-f", input_fmt, "-i", input_dev,
+                "-ar", "16000", "-ac", "1", "-t", "12", MIC_WAV_PATH },
             @import("../core/alloc.zig").allocator,
         );
         record_child.stdout_behavior = .Ignore;
@@ -565,20 +558,20 @@ fn conversationLoopV1() void {
         }
         if (!conversation_active) break;
 
-        conv_phase = .transcribing;
+        setPhase(.transcribing);
         is_transcribing = true;
         transcribeAndSend();
         is_transcribing = false;
         if (!conversation_active) break;
 
-        conv_phase = .thinking;
+        setPhase(.thinking);
         var wait_count: usize = 0;
         while (chat.is_generating and conversation_active and wait_count < 300) : (wait_count += 1) {
             @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
         }
     }
 
-    conv_phase = .idle;
+    setPhase(.idle);
     conversation_active = false;
     is_recording = false;
 }
@@ -632,57 +625,8 @@ fn micRecordWorker() void {
     }
 }
 
-// ── Whisper Hallucination Filter ──
-// Whisper often hallucinates these when given noise/silence
 pub const isHallucination = @import("voice_filter.zig").isHallucination;
 
-fn isHallucinationLocal(text: []const u8) bool {
-    if (text.len < 4) return true;
-
-    // Filter text entirely wrapped in parens or brackets: (machine whirring), [BLANK_AUDIO]
-    if ((text[0] == '(' and text[text.len - 1] == ')') or
-        (text[0] == '[' and text[text.len - 1] == ']'))
-        return true;
-
-    // Common Whisper hallucination phrases (lowercase check)
-    var lower: [256]u8 = undefined;
-    const tlen = @min(text.len, 255);
-    for (0..tlen) |i| lower[i] = std.ascii.toLower(text[i]);
-    const lc = lower[0..tlen];
-
-    // Exact short hallucinations
-    const trimmed = std.mem.trim(u8, lc, " .!?,");
-    if (trimmed.len < 3) return true;
-    if (std.mem.eql(u8, trimmed, "you")) return true;
-    if (std.mem.eql(u8, trimmed, "hmm")) return true;
-    if (std.mem.eql(u8, trimmed, "yeah")) return true;
-    if (std.mem.eql(u8, trimmed, "okay")) return true;
-    if (std.mem.eql(u8, trimmed, "oh")) return true;
-
-    const hallucinations = [_][]const u8{
-        "machine whirring", "silence", "blank audio", "music",
-        "applause",         "laughter",  "coughing",    "breathing",
-        "thank you for watching",  "thanks for watching",
-        "thank you for listening", "subscribe",
-        "please subscribe", "like and subscribe",
-        "see you next time", "bye bye",  "goodbye",
-        "feature of zigzag", "zigzag",   "nando",
-        "...",               "um,",      "uh,",
-    };
-
-    for (hallucinations) |h| {
-        if (std.mem.indexOf(u8, lc, h) != null) return true;
-    }
-
-    // Reject if mostly punctuation/commas (garbage like "UI, zigzag, feature")
-    var punct_count: usize = 0;
-    for (text) |ch| {
-        if (ch == ',' or ch == '.' or ch == ' ') punct_count += 1;
-    }
-    if (punct_count * 2 > text.len) return true;
-
-    return false;
-}
 
 // ── ASR via persistent server (Unix socket) ──
 
@@ -872,7 +816,19 @@ fn ttsWorker() void {
     const state = @import("../core/state.zig");
     const text = tts_text_buf[0..tts_text_len];
 
-    // Strategy 0 (macOS): native `say` — always present, zero setup.
+    // Strategy 0: Use the active voice backend's TTS (respects user's
+    // Kokoro/sherpa/speaches selection and voice/speed settings).
+    // Only whisper_cpp_plus_say and apple_native fall through to `say`.
+    const vb = @import("voice_backend.zig");
+    const backend_kind = vb.active_kind;
+    if (backend_kind != .whisper_cpp_plus_say and backend_kind != .apple_native) {
+        const b = vb.active();
+        b.speak(text);
+        logs.pushLog("info", "voice", "Spoke via voice backend", false);
+        return;
+    }
+
+    // Strategy 0b (macOS): native `say` — for whisper_cpp_plus_say / apple_native backends.
     if (@import("builtin").os.tag == .macos) {
         var say_child = @import("../core/io_global.zig").Child.init(
             &.{ "say", text },
@@ -890,7 +846,7 @@ fn ttsWorker() void {
     if (tts_server_started and speakViaServer(text)) {
         // WAV generated, play it
         var play = @import("../core/io_global.zig").Child.init(
-            &.{ "aplay", "-q", TTS_WAV_PATH },
+            &.{ if (@import("builtin").os.tag == .macos) "afplay" else "aplay", TTS_WAV_PATH },
             @import("../core/alloc.zig").allocator,
         );
         _ = play.spawnAndWait() catch {};
@@ -952,7 +908,7 @@ fn ttsWorker() void {
 
     // Play the generated audio
     var play = @import("../core/io_global.zig").Child.init(
-        &.{ "aplay", "-q", TTS_WAV_PATH },
+        &.{ if (@import("builtin").os.tag == .macos) "afplay" else "aplay", TTS_WAV_PATH },
         @import("../core/alloc.zig").allocator,
     );
     _ = play.spawnAndWait() catch {};
