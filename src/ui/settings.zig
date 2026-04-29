@@ -9,122 +9,84 @@ const paths = @import("../core/paths.zig");
 const fileassoc = @import("settings_fileassoc.zig");
 
 // ══════════════════════════════════════════════════════════
-// Premium Settings Modal — always-centered dark overlay
+// Settings — lives inside the drawer as a tab
 // ══════════════════════════════════════════════════════════
 
+/// Legacy entry point — opens the drawer to the Settings tab.
+/// Called from places that set `settings_open = true`.
 pub fn renderSettingsModal() void {
     if (!state.app.settings_open) return;
-    state.markConfigDirty(); // auto-save any setting changes
-    
-    // Use floatingWindow for proper modal behavior (blocks input behind, movable)
-    var win = dvui.floatingWindow(@src(), .{
-        .modal = true,
-        .open_flag = &state.app.settings_open,
-    }, .{
-        .expand = .both,
-        .min_size_content = .{ .w = 600, .h = 400 },
-        .color_fill = theme.colors.bg_drawer,
-        .color_border = theme.colors.border_card,
-        .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(12),
-    });
-    defer win.deinit();
-    
-    // ── Custom dark header (replaces windowHeader which forces light theme) ──
-    {
-        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .background = true,
-            .color_fill = theme.colors.bg_header,
-            .padding = .{ .x = 12, .y = 8, .w = 8, .h = 8 },
-            .color_border = theme.colors.bg_header_border,
-            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        });
-        defer hdr.deinit();
-        
-        dvui.icon(@src(), "", icons.tvg.lucide.@"settings", .{}, .{
-            .color_text = theme.colors.accent,
-            .gravity_y = 0.5,
-        });
-        _ = dvui.label(@src(), " Settings", .{}, .{
-            .color_text = theme.colors.text_main,
-            .gravity_y = 0.5,
-        });
-        
-        { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
-        
-        if (dvui.buttonIcon(@src(), "Close", icons.tvg.lucide.@"x", .{}, .{}, .{
-            .color_text = theme.colors.text_muted,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .border = dvui.Rect.all(0),
-            .gravity_y = 0.5,
-        })) {
-            state.app.settings_open = false;
-        }
-    }
-    
-    // Scale contents
-    var settings_scale: f32 = 1.5;
-    var scale_w = dvui.scale(@src(), .{ .scale = &settings_scale }, .{ .expand = .both });
-    defer scale_w.deinit();
-    
-    // ── Tab bar with icon + text ──
+    // Redirect to drawer
+    state.app.drawer_open = true;
+    state.app.drawer_tab = .Settings;
+    state.app.settings_open = false;
+    state.markConfigDirty();
+}
+
+/// Drawer-hosted settings content — rendered by drawer.zig
+/// when drawer_tab == .Settings.
+pub fn renderSettingsContent() void {
+    state.markConfigDirty();
+
+    // ── Settings sub-tab bar (horizontal, inside the drawer content area) ──
     {
         var tab_container = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
-            .margin = .{ .x = 4, .y = 4, .w = 4, .h = 0 },
+            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
             .background = true,
-            .color_fill = theme.colors.bg_app,
-            .corner_radius = dvui.Rect.all(8),
+            .color_fill = theme.colors.bg_header,
+            .color_border = theme.colors.divider,
+            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         });
         defer tab_container.deinit();
-        
-        // Each tab rendered individually with icon + text via button
+
+        dvui.icon(@src(), "", icons.tvg.lucide.@"settings", .{}, .{
+            .color_text = theme.colors.accent,
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
+        });
+
         const tabs = .{
-            .{ state.SettingsTab.General, "General", icons.tvg.lucide.@"sliders-horizontal" },
-            .{ state.SettingsTab.Playback, "Playback", icons.tvg.lucide.@"play" },
-            .{ state.SettingsTab.Network, "Network", icons.tvg.lucide.@"globe" },
-            .{ state.SettingsTab.Subtitles, "Subs", icons.tvg.lucide.@"captions" },
-            .{ state.SettingsTab.Storage, "Storage", icons.tvg.lucide.@"hard-drive" },
-            .{ state.SettingsTab.Scripts, "Scripts", icons.tvg.lucide.@"file-code" },
-            .{ state.SettingsTab.LangLearn, "Lang", icons.tvg.lucide.@"languages" },
-            .{ state.SettingsTab.FileAssoc, "File Types", icons.tvg.lucide.@"file-cog" },
+            .{ state.SettingsTab.General, "General" },
+            .{ state.SettingsTab.Playback, "Playback" },
+            .{ state.SettingsTab.Network, "Network" },
+            .{ state.SettingsTab.Subtitles, "Subs" },
+            .{ state.SettingsTab.Storage, "Storage" },
+            .{ state.SettingsTab.Scripts, "Scripts" },
+            .{ state.SettingsTab.LangLearn, "Lang" },
+            .{ state.SettingsTab.FileAssoc, "Files" },
         };
-        
+
         inline for (tabs, 0..) |tab, idx| {
             const is_active = state.app.settings_tab == tab[0];
-            const tab_text_color = if (is_active) theme.colors.bg_app else theme.colors.text_muted;
-            const tab_bg_color = if (is_active) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
-            
-            if (dvui.buttonIcon(@src(), tab[1], tab[2], .{}, .{}, .{
+            if (dvui.button(@src(), tab[1], .{}, .{
                 .id_extra = idx,
-                .color_fill = tab_bg_color,
-                .color_text = tab_text_color,
-                .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
-                .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 },
+                .color_fill = if (is_active) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_text = if (is_active) dvui.Color.white else theme.colors.text_muted,
+                .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
+                .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
                 .corner_radius = dvui.Rect.all(99),
             })) {
                 state.app.settings_tab = tab[0];
             }
         }
     }
-    
-    // ── Tab content (scrollable, dark bg) ──
+
     {
+
         var scroll = dvui.scrollArea(@src(), .{}, .{
             .expand = .both,
-            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
+            .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
             .background = true,
             .color_fill = theme.colors.bg_drawer,
         });
         defer scroll.deinit();
-        
+
         var content = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
         });
         defer content.deinit();
-        
+
         switch (state.app.settings_tab) {
             .General   => renderGeneralTab(),
             .Playback  => renderPlaybackTab(),
@@ -134,6 +96,403 @@ pub fn renderSettingsModal() void {
             .Scripts   => renderScriptsTab(),
             .LangLearn => renderLangLearnTab(),
             .FileAssoc => renderFileAssocTab(),
+        }
+    }
+}
+
+/// Drawer-hosted AI tab — Voice, ASR, TTS, Language Learning
+pub fn renderAIContent() void {
+    const btn_active = theme.colors.accent;
+    const btn_inactive = dvui.Color{ .r = 35, .g = 35, .b = 48, .a = 255 };
+    const btn_text_active = dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 };
+
+    // Header
+    {
+        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
+            .background = true,
+            .color_fill = theme.colors.bg_header,
+            .color_border = theme.colors.divider,
+            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+        });
+        defer hdr.deinit();
+
+        dvui.icon(@src(), "", icons.tvg.lucide.@"brain", .{}, .{
+            .color_text = theme.colors.accent,
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
+        });
+        _ = dvui.label(@src(), "AI & Voice", .{}, .{
+            .color_text = theme.colors.text_main,
+            .gravity_y = 0.5,
+        });
+    }
+
+    // Scrollable content
+    var scroll = dvui.scrollArea(@src(), .{}, .{
+        .expand = .both,
+        .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
+        .background = true,
+        .color_fill = theme.colors.bg_drawer,
+    });
+    defer scroll.deinit();
+
+    var content = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+    });
+    defer content.deinit();
+
+    // ── Voice Backend ──
+    aiSectionWithIcon(icons.tvg.lucide.@"mic", "Voice Backend", "STT + TTS engine for mic / conversation mode", 24, @src());
+    {
+        const vb = @import("../services/voice_backend.zig");
+        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .horizontal, .background = true, .color_fill = card_bg,
+            .color_border = card_border, .border = dvui.Rect.all(1),
+            .corner_radius = dvui.Rect.all(8),
+            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+        });
+        defer card.deinit();
+
+        for (vb.allKinds(), 0..) |kind, i| {
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = 4000 + i,
+                .expand = .horizontal,
+                .margin = .{ .y = 2 },
+            });
+            defer row.deinit();
+
+            const active = kind == vb.active_kind;
+            const dot = if (active) "●" else "○";
+            _ = dvui.label(@src(), "{s}", .{dot}, .{
+                .id_extra = i,
+                .color_text = if (active) theme.colors.accent else muted_text,
+                .min_size_content = .{ .w = 16, .h = 0 },
+                .gravity_y = 0.5,
+            });
+
+            const tmp_kind = vb.active_kind;
+            vb.active_kind = kind;
+            const b = vb.active();
+            vb.active_kind = tmp_kind;
+
+            if (dvui.button(@src(), b.name, .{}, .{
+                .id_extra = i,
+                .color_fill = if (active) btn_active else btn_inactive,
+                .color_text = if (active) btn_text_active else label_text,
+                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                .corner_radius = dvui.Rect.all(6),
+                .expand = .horizontal,
+            })) {
+                vb.active_kind = kind;
+                state.showToast("Voice backend changed");
+            }
+        }
+
+        // MLX Whisper setup
+        if (vb.active_kind == .mlx_whisper) {
+            const deps = @import("../core/deps.zig");
+            const dep_status = deps.check();
+
+            var mlx_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .expand = .horizontal,
+                .margin = .{ .y = 6 },
+                .padding = .{ .x = 20 },
+            });
+            defer mlx_row.deinit();
+
+            if (dep_status.mlx_whisper_model and dep_status.mlx_whisper_cli) {
+                _ = dvui.label(@src(), "✓ Ready", .{}, .{
+                    .color_text = theme.colors.success,
+                    .gravity_y = 0.5,
+                });
+            } else if (deps.mlx_whisper_downloading) {
+                const status_len = std.mem.indexOfScalar(u8, &deps.mlx_whisper_status, 0) orelse 0;
+                const status_txt = if (status_len > 0) deps.mlx_whisper_status[0..status_len] else "Setting up…";
+                _ = dvui.label(@src(), "{s}", .{status_txt}, .{
+                    .color_text = theme.colors.warning,
+                    .gravity_y = 0.5,
+                });
+            } else {
+                if (dvui.button(@src(), "↓ Setup (~1.6GB)", .{}, .{
+                    .color_fill = theme.colors.accent,
+                    .color_text = dvui.Color.white,
+                    .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                    .corner_radius = dvui.Rect.all(6),
+                })) {
+                    deps.fetchMlxWhisperModelAsync();
+                    state.showToast("Setting up MLX Whisper (venv + model)…");
+                }
+            }
+        }
+    }
+
+    // ── Kokoro Voice Picker ──
+    {
+        const deps = @import("../core/deps.zig");
+        const vb = @import("../services/voice_backend.zig");
+        if (deps.check().sherpa_kokoro_model) {
+            aiSectionWithIcon(icons.tvg.lucide.@"audio-lines", "Kokoro Voice", "Pick a speaker ID from the Kokoro pack (0–53)", 18, @src());
+            var kcard = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .expand = .horizontal, .background = true, .color_fill = card_bg,
+                .color_border = card_border, .border = dvui.Rect.all(1),
+                .corner_radius = dvui.Rect.all(8),
+                .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
+                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+            });
+            defer kcard.deinit();
+
+            var label_buf: [32]u8 = undefined;
+            const lbl = std.fmt.bufPrint(&label_buf, "sid = {d}", .{vb.kokoro_sid}) catch "sid = ?";
+            _ = dvui.label(@src(), "{s}", .{lbl}, .{
+                .color_text = theme.colors.accent,
+                .min_size_content = .{ .w = 80, .h = 0 },
+                .gravity_y = 0.5,
+            });
+
+            if (dvui.button(@src(), "−", .{}, .{
+                .color_fill = btn_inactive, .color_text = label_text,
+                .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+                .corner_radius = dvui.Rect.all(4), .margin = .{ .w = 4 }, .gravity_y = 0.5,
+            })) { if (vb.kokoro_sid > 0) vb.kokoro_sid -= 1; }
+            if (dvui.button(@src(), "+", .{}, .{
+                .color_fill = btn_inactive, .color_text = label_text,
+                .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+                .corner_radius = dvui.Rect.all(4), .margin = .{ .w = 4 }, .gravity_y = 0.5,
+            })) { if (vb.kokoro_sid < 53) vb.kokoro_sid += 1; }
+            { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+            if (dvui.button(@src(), "Preview", .{}, .{
+                .color_fill = btn_active, .color_text = btn_text_active,
+                .padding = .{ .x = 14, .y = 4, .w = 14, .h = 4 },
+                .corner_radius = dvui.Rect.all(4), .gravity_y = 0.5,
+            })) {
+                const b = vb.active();
+                b.speak("Opal voice preview.");
+            }
+        }
+    }
+
+    // ── Language Learning ──
+    aiSectionWithIcon(icons.tvg.lucide.@"languages", "Language Learning", "ASR, dubbing, and translation for video", 60, @src());
+
+    settingRow("Language Learning Mode", 60, @src());
+    {
+        const label = if (state.app.lang_learn_enabled) "[ON] Enabled" else "[OFF] Disabled";
+        if (dvui.button(@src(), label, .{}, .{
+            .color_fill = if (state.app.lang_learn_enabled) theme.colors.accent_hover else dvui.Color{ .r=60, .g=56, .b=54, .a=200 },
+            .color_text = if (state.app.lang_learn_enabled) theme.colors.bg_header else theme.colors.text_muted,
+            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+        })) {
+            state.app.lang_learn_enabled = !state.app.lang_learn_enabled;
+            const lang_learn = @import("../services/lang_learn.zig");
+            lang_learn.onToggle(state.app.lang_learn_enabled);
+        }
+    }
+
+    settingRow("Translate To", 64, @src());
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 24 },
+        });
+        defer row.deinit();
+        const lang_codes = [_][]const u8{ "en", "es", "fr", "de", "it", "pt", "ru", "ja", "ko", "zh-CN", "ar", "hi", "tr", "vi" };
+        const lang_labels = [_][]const u8{ "EN", "ES", "FR", "DE", "IT", "PT", "RU", "JA", "KO", "ZH", "AR", "HI", "TR", "VI" };
+        const current_tl = state.app.translate_lang_buf[0..state.app.translate_lang_len];
+        for (lang_codes, 0..) |code, idx| {
+            const is_active = std.mem.eql(u8, current_tl, code);
+            if (dvui.button(@src(), lang_labels[idx], .{}, .{
+                .id_extra = idx + 200,
+                .color_fill = if (is_active) theme.colors.accent_hover else dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
+                .color_text = if (is_active) theme.colors.bg_header else theme.colors.text_muted,
+                .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
+                .padding = .{ .x = 5, .y = 3, .w = 5, .h = 3 },
+            })) {
+                @memcpy(state.app.translate_lang_buf[0..code.len], code);
+                state.app.translate_lang_len = code.len;
+            }
+        }
+    }
+
+    settingRow("Translation", 66, @src());
+    {
+        const label = if (state.app.translate_enabled) "[ON] Enabled" else "[OFF] Disabled";
+        if (dvui.button(@src(), label, .{}, .{
+            .color_fill = if (state.app.translate_enabled) theme.colors.accent_hover else dvui.Color{ .r=60, .g=56, .b=54, .a=200 },
+            .color_text = if (state.app.translate_enabled) theme.colors.bg_header else theme.colors.text_muted,
+            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+        })) {
+            state.app.translate_enabled = !state.app.translate_enabled;
+        }
+    }
+
+    settingRow("Speech Recognition (ASR)", 67, @src());
+    {
+        const label = if (state.app.asr_enabled) "[ON] Enabled" else "[OFF] Disabled";
+        if (dvui.button(@src(), label, .{}, .{
+            .color_fill = if (state.app.asr_enabled) theme.colors.accent_hover else dvui.Color{ .r=60, .g=56, .b=54, .a=200 },
+            .color_text = if (state.app.asr_enabled) theme.colors.bg_header else theme.colors.text_muted,
+            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+        })) {
+            state.app.asr_enabled = !state.app.asr_enabled;
+        }
+    }
+
+    settingRow("Audio Dubbing", 68, @src());
+    {
+        const label = if (state.app.dubbing_enabled) "[ON] Enabled" else "[OFF] Disabled";
+        if (dvui.button(@src(), label, .{}, .{
+            .color_fill = if (state.app.dubbing_enabled) dvui.Color{ .r=180, .g=120, .b=40, .a=230 } else dvui.Color{ .r=60, .g=56, .b=54, .a=200 },
+            .color_text = if (state.app.dubbing_enabled) theme.colors.bg_header else theme.colors.text_muted,
+            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+        })) {
+            state.app.dubbing_enabled = !state.app.dubbing_enabled;
+            if (state.app.dubbing_enabled) state.app.dub_last_hash = 0;
+        }
+    }
+
+    settingRow("TTS Voice", 61, @src());
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 24 },
+        });
+        defer row.deinit();
+        const voices = [_][]const u8{ "Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo" };
+        for (voices, 0..) |voice, idx| {
+            const current = state.app.tts_voice_buf[0..state.app.tts_voice_len];
+            const is_active = std.mem.eql(u8, current, voice);
+            if (dvui.button(@src(), voice, .{}, .{
+                .id_extra = idx,
+                .color_fill = if (is_active) theme.colors.accent_hover else dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
+                .color_text = if (is_active) theme.colors.bg_header else theme.colors.text_muted,
+                .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
+                .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
+            })) {
+                @memcpy(state.app.tts_voice_buf[0..voice.len], voice);
+                state.app.tts_voice_len = voice.len;
+            }
+        }
+    }
+
+    settingRow("Speech Speed", 62, @src());
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 24 },
+        });
+        defer row.deinit();
+        const speeds = [_]f32{ 0.5, 0.75, 1.0, 1.25, 1.5 };
+        const speed_labels = [_][]const u8{ "0.5x", "0.75x", "1.0x", "1.25x", "1.5x" };
+        for (speeds, 0..) |spd, idx| {
+            const is_active = @abs(state.app.tts_speed - spd) < 0.05;
+            if (dvui.button(@src(), speed_labels[idx], .{}, .{
+                .id_extra = idx,
+                .color_fill = if (is_active) theme.colors.accent_hover else dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
+                .color_text = if (is_active) theme.colors.bg_header else theme.colors.text_muted,
+                .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
+                .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+            })) {
+                state.app.tts_speed = spd;
+            }
+        }
+    }
+
+    settingRow("TTS Server", 63, @src());
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal, .gravity_y = 0.5,
+        });
+        defer row.deinit();
+        if (state.app.tts_server_ok) {
+            _ = dvui.label(@src(), "[OK] Running", .{}, .{ .color_text = theme.colors.success });
+        } else {
+            _ = dvui.label(@src(), "[--] Not running", .{}, .{ .color_text = theme.colors.text_muted });
+        }
+        { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+        const lang_learn = @import("../services/lang_learn.zig");
+        if (!state.app.tts_server_ok) {
+            if (dvui.button(@src(), "Start Server", .{}, .{
+                .color_fill = theme.colors.accent_hover,
+                .color_text = theme.colors.bg_header,
+                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            })) { lang_learn.startServer(); }
+        } else {
+            if (dvui.button(@src(), "Stop Server", .{}, .{
+                .color_fill = dvui.Color{ .r=60, .g=30, .b=30, .a=200 },
+                .color_text = theme.colors.danger,
+                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            })) { lang_learn.stopServer(); }
+        }
+    }
+    _ = dvui.label(@src(), "KittenTTS (80MB) | Cohere ASR (2B) | Google Translate", .{}, .{
+        .color_text = theme.colors.text_muted,
+    });
+
+    // ── Models Management ──
+    aiSectionWithIcon(icons.tvg.lucide.@"hard-drive", "Models & Dependencies", "Install, update, or remove AI models", 80, @src());
+    {
+        const deps = @import("../core/deps.zig");
+        const ds = deps.check();
+        // Whisper.cpp tiny model (~39MB)
+        modelRow("Whisper Tiny (39MB)", icons.tvg.lucide.@"audio-waveform", ds.whisper_model, deps.sherpa_model_downloading, 5000, @src());
+        // Sherpa STT model (~40MB)
+        modelRow("Sherpa STT (40MB)", icons.tvg.lucide.@"mic", ds.sherpa_model, deps.sherpa_model_downloading, 5001, @src());
+        // Sherpa Piper TTS (~40MB)
+        modelRow("Piper TTS (40MB)", icons.tvg.lucide.@"volume-2", ds.sherpa_tts_model, deps.sherpa_tts_downloading, 5002, @src());
+        // Kokoro TTS (~330MB)
+        modelRow("Kokoro TTS (330MB)", icons.tvg.lucide.@"audio-lines", ds.sherpa_kokoro_model, deps.sherpa_kokoro_downloading, 5003, @src());
+        // Streaming Zipformer (~80MB)
+        modelRow("Stream ASR (80MB)", icons.tvg.lucide.@"radio", ds.sherpa_stream_model, deps.sherpa_stream_downloading, 5004, @src());
+        // MLX Whisper (~1.6GB) — custom row with live status
+        {
+            const mlx_installed = ds.mlx_whisper_model and ds.mlx_whisper_cli;
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = 5005,
+                .expand = .horizontal,
+                .background = true,
+                .color_fill = card_bg,
+                .color_border = card_border,
+                .border = dvui.Rect.all(1),
+                .corner_radius = dvui.Rect.all(6),
+                .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
+                .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+            });
+            defer row.deinit();
+
+            dvui.icon(@src(), "", icons.tvg.lucide.@"cpu", .{}, .{
+                .id_extra = 5015,
+                .color_text = if (mlx_installed) theme.colors.accent else muted_text,
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            });
+            _ = dvui.label(@src(), "MLX Whisper (1.6GB)", .{}, .{
+                .id_extra = 5025,
+                .color_text = label_text,
+                .gravity_y = 0.5,
+            });
+            { var sp = dvui.box(@src(), .{}, .{ .id_extra = 5035, .expand = .horizontal }); sp.deinit(); }
+
+            if (deps.mlx_whisper_downloading) {
+                const slen = std.mem.indexOfScalar(u8, &deps.mlx_whisper_status, 0) orelse 0;
+                const stxt = if (slen > 0) deps.mlx_whisper_status[0..slen] else "Setting up…";
+                _ = dvui.label(@src(), "⟳ {s}", .{stxt}, .{
+                    .id_extra = 5045,
+                    .color_text = theme.colors.warning,
+                    .gravity_y = 0.5,
+                });
+            } else if (mlx_installed) {
+                _ = dvui.label(@src(), "✓ Installed", .{}, .{
+                    .id_extra = 5045,
+                    .color_text = theme.colors.success,
+                    .gravity_y = 0.5,
+                });
+            } else {
+                _ = dvui.label(@src(), "○ Not installed", .{}, .{
+                    .id_extra = 5045,
+                    .color_text = muted_text,
+                    .gravity_y = 0.5,
+                });
+            }
         }
     }
 }
@@ -181,6 +540,86 @@ fn settingRow(comptime label_text_str: []const u8, id_extra: usize, src: std.bui
         .color_text = label_text,
         .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
     });
+}
+
+fn aiSectionWithIcon(icon_data: anytype, comptime title: []const u8, comptime subtitle: []const u8, id_extra: usize, src: std.builtin.SourceLocation) void {
+    var hdr = dvui.box(src, .{ .dir = .horizontal }, .{
+        .id_extra = id_extra + 900,
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .color_border = theme.colors.accent,
+        .border = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
+        .corner_radius = .{ .x = 4, .y = 0, .w = 0, .h = 4 },
+        .padding = .{ .x = 10, .y = 8, .w = 8, .h = 8 },
+        .margin = .{ .x = 0, .y = 10, .w = 0, .h = 4 },
+    });
+    defer hdr.deinit();
+
+    dvui.icon(src, "", icon_data, .{}, .{
+        .id_extra = id_extra + 950,
+        .color_text = theme.colors.accent,
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+    });
+
+    var txt_col = dvui.box(src, .{ .dir = .vertical }, .{ .id_extra = id_extra + 960 });
+    defer txt_col.deinit();
+    _ = dvui.label(src, title, .{}, .{ .id_extra = id_extra, .color_text = theme.colors.text_main });
+    if (subtitle.len > 0) {
+        _ = dvui.label(src, subtitle, .{}, .{ .id_extra = id_extra + 1, .color_text = theme.colors.text_dim });
+    }
+}
+
+fn modelRow(comptime name: []const u8, icon_data: anytype, installed: bool, downloading: bool, id_extra: usize, src: std.builtin.SourceLocation) void {
+    var row = dvui.box(src, .{ .dir = .horizontal }, .{
+        .id_extra = id_extra,
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = card_bg,
+        .color_border = card_border,
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(6),
+        .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
+        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+    });
+    defer row.deinit();
+
+    // Icon
+    dvui.icon(src, "", icon_data, .{}, .{
+        .id_extra = id_extra + 10,
+        .color_text = if (installed) theme.colors.accent else muted_text,
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+    });
+    // Name
+    _ = dvui.label(src, name, .{}, .{
+        .id_extra = id_extra + 20,
+        .color_text = label_text,
+        .gravity_y = 0.5,
+    });
+    // Spacer
+    { var sp = dvui.box(src, .{}, .{ .id_extra = id_extra + 30, .expand = .horizontal }); sp.deinit(); }
+    // Status badge
+    if (downloading) {
+        _ = dvui.label(src, "⟳ Downloading…", .{}, .{
+            .id_extra = id_extra + 40,
+            .color_text = theme.colors.warning,
+            .gravity_y = 0.5,
+        });
+    } else if (installed) {
+        _ = dvui.label(src, "✓ Installed", .{}, .{
+            .id_extra = id_extra + 40,
+            .color_text = theme.colors.success,
+            .gravity_y = 0.5,
+        });
+    } else {
+        _ = dvui.label(src, "○ Not installed", .{}, .{
+            .id_extra = id_extra + 40,
+            .color_text = muted_text,
+            .gravity_y = 0.5,
+        });
+    }
 }
 
 fn renderGeneralTab() void {
@@ -788,110 +1227,6 @@ fn renderPlaybackTab() void {
                 if (state.app.active_player_idx < state.app.players.items.len) {
                     state.app.players.items[state.app.active_player_idx].exportClip();
                 }
-            }
-        }
-    }
-
-    // ── Voice Backend Card ──
-    sectionHeader("Voice Backend", "STT + TTS engine for mic / conversation mode", 24, @src());
-    {
-        const vb = @import("../services/voice_backend.zig");
-        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal, .background = true, .color_fill = card_bg,
-            .color_border = card_border, .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(8),
-            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
-        });
-        defer card.deinit();
-
-        for (vb.allKinds(), 0..) |kind, i| {
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = 4000 + i,
-                .expand = .horizontal,
-                .margin = .{ .y = 2 },
-            });
-            defer row.deinit();
-
-            const active = kind == vb.active_kind;
-            const dot = if (active) "●" else "○";
-            _ = dvui.label(@src(), "{s}", .{dot}, .{
-                .id_extra = i,
-                .color_text = if (active) theme.colors.accent else muted_text,
-                .min_size_content = .{ .w = 16, .h = 0 },
-                .gravity_y = 0.5,
-            });
-
-            // Build backend instance just to read .name
-            const tmp_kind = vb.active_kind;
-            vb.active_kind = kind;
-            const b = vb.active();
-            vb.active_kind = tmp_kind;
-
-            if (dvui.button(@src(), b.name, .{}, .{
-                .id_extra = i,
-                .color_fill = if (active) btn_active else btn_inactive,
-                .color_text = if (active) btn_text_active else label_text,
-                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-                .corner_radius = dvui.Rect.all(6),
-                .expand = .horizontal,
-            })) {
-                vb.active_kind = kind;
-                state.showToast("Voice backend changed — restart conversation mode to apply");
-            }
-        }
-    }
-
-    // ── Kokoro Voice Picker (only when Kokoro model installed) ──
-    {
-        const deps = @import("../core/deps.zig");
-        const vb = @import("../services/voice_backend.zig");
-        if (deps.check().sherpa_kokoro_model) {
-            sectionHeader("Kokoro Voice", "Pick a speaker ID from the Kokoro pack (0–53)", 18, @src());
-            var kcard = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal, .background = true, .color_fill = card_bg,
-                .color_border = card_border, .border = dvui.Rect.all(1),
-                .corner_radius = dvui.Rect.all(8),
-                .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
-                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
-            });
-            defer kcard.deinit();
-
-            var label_buf: [32]u8 = undefined;
-            const lbl = std.fmt.bufPrint(&label_buf, "sid = {d}", .{vb.kokoro_sid}) catch "sid = ?";
-            _ = dvui.label(@src(), "{s}", .{lbl}, .{
-                .color_text = theme.colors.accent,
-                .min_size_content = .{ .w = 80, .h = 0 },
-                .gravity_y = 0.5,
-            });
-
-            if (dvui.button(@src(), "−", .{}, .{
-                .color_fill = btn_inactive, .color_text = label_text,
-                .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-                .corner_radius = dvui.Rect.all(4),
-                .margin = .{ .w = 4 },
-                .gravity_y = 0.5,
-            })) {
-                if (vb.kokoro_sid > 0) vb.kokoro_sid -= 1;
-            }
-            if (dvui.button(@src(), "+", .{}, .{
-                .color_fill = btn_inactive, .color_text = label_text,
-                .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-                .corner_radius = dvui.Rect.all(4),
-                .margin = .{ .w = 4 },
-                .gravity_y = 0.5,
-            })) {
-                if (vb.kokoro_sid < 53) vb.kokoro_sid += 1;
-            }
-            { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
-            if (dvui.button(@src(), "Preview", .{}, .{
-                .color_fill = btn_active, .color_text = btn_text_active,
-                .padding = .{ .x = 14, .y = 4, .w = 14, .h = 4 },
-                .corner_radius = dvui.Rect.all(4),
-                .gravity_y = 0.5,
-            })) {
-                const b = vb.active();
-                b.speak("Opal voice preview.");
             }
         }
     }

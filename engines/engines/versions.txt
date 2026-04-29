@@ -1,3 +1,4 @@
+apibay: 1.0
 eztv: 1.23
 jackett: 4.9
 limetorrents: 4.14
@@ -8,4 +9,5 @@ solidtorrents: 2.8
 torlock: 2.28
 torrentproject: 1.91
 torrentscsv: 1.8
+uindex: 1.0
 yts: 1.3

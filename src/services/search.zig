@@ -76,6 +76,8 @@ pub const EngineFilter = enum(u4) {
     kickass = 8,
     solidtorrents = 9,
     torrentscsv = 10,
+    apibay = 11,
+    uindex = 12,
 
     pub fn label(self: EngineFilter) []const u8 {
         return switch (self) {
@@ -90,6 +92,8 @@ pub const EngineFilter = enum(u4) {
             .kickass => "KickAss",
             .solidtorrents => "SolidTorrents",
             .torrentscsv => "TorrentsCSV",
+            .apibay => "APIBay",
+            .uindex => "UIndex",
         };
     }
 
@@ -106,6 +110,8 @@ pub const EngineFilter = enum(u4) {
             .kickass => "kickass",
             .solidtorrents => "solidtorrents",
             .torrentscsv => "torrentscsv",
+            .apibay => "apibay",
+            .uindex => "uindex",
         };
     }
 };
@@ -166,6 +172,8 @@ fn engineColor(name: []const u8) dvui.Color {
     if (std.mem.eql(u8, name, "solidtorrents")) return dvui.Color{ .r = 80, .g = 200, .b = 220, .a = 255 };
     if (std.mem.eql(u8, name, "torrentscsv")) return dvui.Color{ .r = 200, .g = 200, .b = 100, .a = 255 };
     if (std.mem.eql(u8, name, "EZTV API")) return dvui.Color{ .r = 100, .g = 180, .b = 255, .a = 255 };
+    if (std.mem.eql(u8, name, "apibay")) return dvui.Color{ .r = 255, .g = 180, .b = 50, .a = 255 };
+    if (std.mem.eql(u8, name, "uindex")) return dvui.Color{ .r = 80, .g = 210, .b = 210, .a = 255 };
     return dvui.Color{ .r = 140, .g = 150, .b = 170, .a = 200 };
 }
 
@@ -262,12 +270,12 @@ pub fn asyncSearchTask(query: []const u8) void {
 }
 
 fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator) void {
-    // Build API URL: https://eztv.wf/api/get-torrents?limit=50&page=1
+    // Build API URL: https://eztvx.to/api/get-torrents?limit=50&page=1
     // EZTV API doesn't support search by name — only by IMDB ID or listing all.
     // For name search, use the search page with scraping (already done by Python engine).
     // But we can supplement by querying pages and filtering client-side.
     var url_buf: [512]u8 = undefined;
-    const api_url = std.fmt.bufPrint(&url_buf, "https://eztv.wf/api/get-torrents?limit=100&page=1", .{}) catch return;
+    const api_url = std.fmt.bufPrint(&url_buf, "https://eztvx.to/api/get-torrents?limit=100&page=1", .{}) catch return;
 
     var client = std.http.Client{ .allocator = allocator , .io = @import("../core/io_global.zig").io() };
     defer client.deinit();
@@ -623,7 +631,7 @@ pub fn renderSearchContent() void {
         })) {
             // Cycle to next engine
             const cur = @intFromEnum(engine_filter);
-            engine_filter = @enumFromInt(if (cur >= 10) 0 else cur + 1);
+            engine_filter = @enumFromInt(if (cur >= 12) 0 else cur + 1);
         }
     }
 

@@ -21,6 +21,8 @@ pub const Kind = enum {
     apple_native,
     /// speaches — OpenAI-compatible server at localhost:8000
     speaches,
+    /// MLX Whisper — Apple Silicon native (whisper-large-v3-turbo via MLX)
+    mlx_whisper,
 };
 
 pub const Backend = struct {
@@ -434,6 +436,80 @@ fn speachesSpeak(text: []const u8) void {
     playWav(out_path);
 }
 
+// ────────── Impl: MLX Whisper (Apple Silicon) ──────────
+
+fn mlxWhisperTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
+    const alloc_mod = @import("../core/alloc.zig");
+    const deps = @import("../core/deps.zig");
+
+    // Use the managed venv path (or system-wide fallback)
+    var bin_buf: [512]u8 = undefined;
+    const mlx_bin = deps.mlxWhisperBinPath(&bin_buf) orelse {
+        logs.pushLog("warn", "voice_backend", "mlx_whisper not found — use Settings → Download Model", false);
+        return whisperCppTranscribe(wav_path, out_buf);
+    };
+
+    // mlx_whisper outputs a .txt file in --output_dir.
+    // Usage: mlx_whisper --model mlx-community/whisper-large-v3-turbo \
+    //                    --output_format txt --output_dir /tmp \
+    //                    --language en \
+    //                    <wav_path>
+    const out_dir = "/tmp/opal_mlx_whisper";
+    // Ensure output dir exists
+    io_global.makeDirAbsolute(out_dir) catch {};
+
+    var child = io_global.Child.init(&.{
+        mlx_bin,
+        "--model", "mlx-community/whisper-large-v3-turbo",
+        "--output_format", "txt",
+        "--output_dir", out_dir,
+        "--language", "en",
+        wav_path,
+    }, alloc_mod.allocator);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch |err| {
+        var eb: [128]u8 = undefined;
+        const em = std.fmt.bufPrint(&eb, "mlx_whisper spawn: {s}", .{@errorName(err)}) catch "mlx_whisper failed";
+        logs.pushLog("error", "voice_backend", em, false);
+        return whisperCppTranscribe(wav_path, out_buf);
+    };
+    _ = child.wait() catch {
+        return whisperCppTranscribe(wav_path, out_buf);
+    };
+
+    // mlx_whisper creates a .txt file named after the input:
+    // e.g. /tmp/opal_mlx_whisper/zigzag_ai_mic.txt
+    // Extract basename from wav_path, change extension to .txt
+    var txt_path_buf: [512]u8 = undefined;
+    const basename = blk: {
+        // Find last '/' to get filename
+        var last_slash: usize = 0;
+        for (wav_path, 0..) |ch, idx| {
+            if (ch == '/') last_slash = idx + 1;
+        }
+        break :blk wav_path[last_slash..];
+    };
+    // Strip .wav extension
+    const stem = if (std.mem.endsWith(u8, basename, ".wav"))
+        basename[0 .. basename.len - 4]
+    else
+        basename;
+    const txt_path = std.fmt.bufPrintZ(&txt_path_buf, "{s}/{s}.txt", .{ out_dir, stem }) catch return null;
+
+    // Read the output text file
+    const file = io_global.openFileAbsolute(txt_path, .{}) catch return null;
+    defer file.close(io_global.io());
+    var read_buf: [4096]u8 = undefined;
+    const n = io_global.readAll(file, &read_buf) catch 0;
+    if (n == 0) return null;
+
+    const trimmed = std.mem.trim(u8, read_buf[0..n], " \t\r\n");
+    if (trimmed.len == 0 or trimmed.len >= out_buf.len) return null;
+    @memcpy(out_buf[0..trimmed.len], trimmed);
+    return out_buf[0..trimmed.len];
+}
+
 // ────────── Registry ──────────
 
 const whisper_cpp_plus_say_backend: Backend = .{
@@ -465,6 +541,13 @@ const speaches_backend: Backend = .{
     .name = "speaches (OpenAI-compatible server)",
 };
 
+const mlx_whisper_backend: Backend = .{
+    .kind = .mlx_whisper,
+    .transcribeFn = mlxWhisperTranscribe,
+    .speakFn = sayTtsSpeak, // Reuse macOS `say` for TTS (or Kokoro if available)
+    .name = "MLX Whisper (Apple Silicon · large-v3-turbo)",
+};
+
 /// Runtime selection — default to the one that ships with brew today.
 pub var active_kind: Kind = .whisper_cpp_plus_say;
 
@@ -474,11 +557,12 @@ pub fn active() Backend {
         .sherpa_onnx => sherpa_onnx_backend,
         .apple_native => apple_native_backend,
         .speaches => speaches_backend,
+        .mlx_whisper => mlx_whisper_backend,
     };
 }
 
 pub fn allKinds() []const Kind {
-    return &.{ .whisper_cpp_plus_say, .sherpa_onnx, .apple_native, .speaches };
+    return &.{ .whisper_cpp_plus_say, .sherpa_onnx, .apple_native, .speaches, .mlx_whisper };
 }
 
 /// Spawn sherpa-onnx-microphone in the background for continuous,

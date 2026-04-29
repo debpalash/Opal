@@ -17,6 +17,7 @@ const ai_chat = @import("../services/ai_chat.zig");
 const plugin_mod = @import("../services/plugins.zig");
 const logs = @import("../core/logs.zig");
 const components = @import("components.zig");
+const settings_mod = @import("settings.zig");
 
 var drawer_last_mouse_x: f32 = -1;
 
@@ -143,37 +144,47 @@ pub fn renderDrawer() void {
 
 
 
-        // ── Content Group ──
+        // ── Find & Manage ──
         renderRailTab(.Search,    icons.tvg.lucide.@"search",   "Search",    0);
         renderRailTab(.Downloads, icons.tvg.lucide.@"download", "Downloads", 1);
         renderRailTab(.Queue,     icons.tvg.lucide.@"list",     "Queue",     2);
+        renderRailTab(.History,   icons.tvg.lucide.@"clock",    "History",   9);
 
         railDivider(0);
 
-        // ── Discovery Group ──
-        renderRailTab(.TMDB,     icons.tvg.lucide.@"film",   "Movies/TV (TMDB)", 3);
-        renderRailTab(.YouTube,  icons.tvg.lucide.@"play",   "YouTube",          4);
-        renderRailTab(.Anime,    icons.tvg.lucide.@"zap",    "Anime",            5);
-        renderRailTab(.Comics,   icons.tvg.lucide.@"image",  "Comics",           6);
-        renderRailTab(.RSS,      icons.tvg.lucide.@"rss",    "RSS Feeds",        7);
-        renderRailTab(.Jellyfin, icons.tvg.lucide.@"server", "Jellyfin",         8);
+        // ── Sources ──
+        renderRailTab(.TMDB,     icons.tvg.lucide.@"film",   "TMDB",     3);
+        renderRailTab(.YouTube,  icons.tvg.lucide.@"play",   "YouTube",  4);
+        renderRailTab(.Anime,    icons.tvg.lucide.@"zap",    "Anime",    5);
+        renderRailTab(.Comics,   icons.tvg.lucide.@"image",  "Comics",   6);
+        renderRailTab(.RSS,      icons.tvg.lucide.@"rss",    "RSS",      7);
+        renderRailTab(.Jellyfin, icons.tvg.lucide.@"server", "Jellyfin", 8);
 
         railDivider(1);
 
-        // ── Tools Group ──
-        renderRailTab(.History, icons.tvg.lucide.@"clock", "History", 9);
-
-        railDivider(2);
-
-        // ── System Group ──
-        renderRailTab(.Plugins, icons.tvg.lucide.@"package",  "Plugins", 11);
-        renderRailTab(.Logs,    icons.tvg.lucide.@"terminal", "Console", 12);
+        // ── Configure ──
+        renderRailTab(.AI,       icons.tvg.lucide.@"brain",    "AI",       14);
+        renderRailTab(.Plugins,  icons.tvg.lucide.@"package",  "Plugins",  11);
+        renderRailTab(.Settings, icons.tvg.lucide.@"settings", "Settings", 13);
 
         // Spacer to push controls to bottom
         { var spacer = dvui.box(@src(), .{}, .{ .expand = .vertical }); spacer.deinit(); }
 
-        // Bottom controls: Expand + Close
+        // Bottom controls: Console + Expand + Close
         {
+            // Console toggle (moved from rail to bottom bar)
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"terminal", .{}, .{}, .{
+                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_text = if (state.app.drawer_tab == .Logs) theme.colors.accent else theme.colors.text_muted,
+                .border = dvui.Rect.all(0),
+                .padding = dvui.Rect.all(8),
+                .margin = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
+                .min_size_content = .{ .w = 20, .h = 20 },
+                .gravity_x = 0.5,
+            })) {
+                state.app.drawer_tab = .Logs;
+            }
+
             // Expand toggle
             const expand_icon = if (state.app.drawer_expanded) icons.tvg.lucide.@"minimize-2" else icons.tvg.lucide.@"maximize-2";
             if (dvui.buttonIcon(@src(), "", expand_icon, .{}, .{}, .{
@@ -236,6 +247,8 @@ pub fn renderDrawer() void {
             // AI removed from drawer — now a floating overlay
             .Plugins => plugin_mod.renderContent(),
             .Logs => renderLogsContent(),
+            .Settings => settings_mod.renderSettingsContent(),
+            .AI => settings_mod.renderAIContent(),
         }
     }
 }

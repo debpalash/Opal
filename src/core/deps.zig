@@ -19,6 +19,8 @@ pub const Status = struct {
     sherpa_kokoro_model: bool = false,    // Kokoro multi-voice TTS
     sherpa_stream_model: bool = false,
     sherpa_mic_cli: bool = false,
+    mlx_whisper_cli: bool = false,      // pip install mlx-whisper (Apple Silicon)
+    mlx_whisper_model: bool = false,    // HF cache: mlx-community/whisper-large-v3-turbo
 };
 
 /// Returns true when the full sherpa stack (CLI + STT + TTS + streaming
@@ -67,6 +69,14 @@ pub fn check() Status {
     if (std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models/ggml-tiny.en.bin", .{home})) |model_path| {
         s.whisper_model = have(model_path);
     } else |_| {}
+
+    // MLX Whisper (Apple Silicon only — harmless no-op on other platforms)
+    s.mlx_whisper_cli = have("/opt/homebrew/bin/mlx_whisper") or
+        have("/usr/local/bin/mlx_whisper");
+
+    // Check HuggingFace cache for MLX Whisper model
+    // Cache layout: ~/.cache/huggingface/hub/models--mlx-community--whisper-large-v3-turbo/
+    s.mlx_whisper_model = mlxWhisperModelCached(home2);
 
     return s;
 }
@@ -379,4 +389,233 @@ pub fn fetchWhisperModelAsync() void {
         }
     };
     _ = std.Thread.spawn(.{}, S.worker, .{}) catch {};
+}
+
+// ══════════════════════════════════════════════════════════
+// MLX Whisper model management
+// ══════════════════════════════════════════════════════════
+
+const MLX_WHISPER_HF_REPO = "mlx-community/whisper-large-v3-turbo";
+const MLX_WHISPER_CACHE_DIR = "models--mlx-community--whisper-large-v3-turbo";
+
+/// Scan HuggingFace cache for the MLX Whisper model.
+/// Returns true if the model weights exist in any snapshot.
+fn mlxWhisperModelCached(home: []const u8) bool {
+    // HF cache: ~/.cache/huggingface/hub/models--mlx-community--whisper-large-v3-turbo/snapshots/*/weights.safetensors
+    // Also check XDG override: $HF_HOME/hub/ or $HF_HUB_CACHE/
+    var cache_buf: [512]u8 = undefined;
+    const cache_base = if (std.c.getenv("HF_HUB_CACHE")) |c|
+        std.mem.span(c)
+    else if (std.c.getenv("HF_HOME")) |h| blk: {
+        break :blk std.fmt.bufPrintZ(&cache_buf, "{s}/hub", .{std.mem.span(h)}) catch home;
+    } else blk: {
+        break :blk std.fmt.bufPrintZ(&cache_buf, "{s}/.cache/huggingface/hub", .{home}) catch home;
+    };
+
+    // Check for snapshots dir
+    var snap_buf: [512]u8 = undefined;
+    const snap_dir = std.fmt.bufPrintZ(&snap_buf, "{s}/{s}/snapshots", .{ cache_base, MLX_WHISPER_CACHE_DIR }) catch return false;
+
+    // Open snapshots dir and iterate to find any hash dir with weights.safetensors
+    var dir = io_global.openDirAbsolute(snap_dir, .{ .iterate = true }) catch return false;
+    defer dir.close(io_global.io());
+
+    var iter = dir.iterate();
+    while (iter.next(io_global.io()) catch null) |entry| {
+        if (entry.kind != .directory) continue;
+        // Check for weights.safetensors inside this snapshot
+        var weights_buf: [768]u8 = undefined;
+        const weights_path = std.fmt.bufPrintZ(&weights_buf, "{s}/{s}/weights.safetensors", .{ snap_dir, entry.name }) catch continue;
+        if (io_global.cwdAccess(weights_path, .{})) |_| return true else |_| {}
+    }
+    return false;
+}
+
+/// Download MLX Whisper model AND install the mlx-whisper package
+/// using `uv` (astral.sh) — never touches the user's system Python.
+/// Flow: ensure uv → uv venv → uv pip install → huggingface-cli download.
+pub var mlx_whisper_downloading: bool = false;
+pub var mlx_whisper_status: [128]u8 = [_]u8{0} ** 128;
+pub var mlx_whisper_step: u8 = 0; // 0=idle, 1=uv, 2=venv, 3=pip, 4=model, 5=done
+
+fn setStatus(comptime fmt: []const u8, args: anytype) void {
+    const s = std.fmt.bufPrintZ(&mlx_whisper_status, fmt, args) catch return;
+    _ = s;
+}
+
+/// Path to the managed mlx-whisper binary inside our uv venv.
+/// Returns null if not installed yet.
+pub fn mlxWhisperBinPath(buf: []u8) ?[]const u8 {
+    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return null;
+    // Check managed venv first
+    const venv_bin = std.fmt.bufPrintZ(buf, "{s}/.config/opal/mlx-venv/bin/mlx_whisper", .{home}) catch return null;
+    if (io_global.cwdAccess(venv_bin, .{})) |_| return venv_bin else |_| {}
+    // Check system-wide
+    if (io_global.cwdAccess("/opt/homebrew/bin/mlx_whisper", .{})) |_| return "/opt/homebrew/bin/mlx_whisper" else |_| {}
+    if (io_global.cwdAccess("/usr/local/bin/mlx_whisper", .{})) |_| return "/usr/local/bin/mlx_whisper" else |_| {}
+    return null;
+}
+
+/// Find the uv binary. Checks common install locations.
+fn findUv(buf: []u8) ?[]const u8 {
+    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+    // uv official installer puts it here
+    const cargo_uv = std.fmt.bufPrintZ(buf, "{s}/.local/bin/uv", .{home}) catch return null;
+    if (io_global.cwdAccess(cargo_uv, .{})) |_| return cargo_uv else |_| {}
+    // Homebrew / system
+    if (io_global.cwdAccess("/opt/homebrew/bin/uv", .{})) |_| return "/opt/homebrew/bin/uv" else |_| {}
+    if (io_global.cwdAccess("/usr/local/bin/uv", .{})) |_| return "/usr/local/bin/uv" else |_| {}
+    return null;
+}
+
+pub fn fetchMlxWhisperModelAsync() void {
+    if (mlx_whisper_downloading) return;
+    mlx_whisper_downloading = true;
+    const S = struct {
+        fn worker() void {
+            defer mlx_whisper_downloading = false;
+
+            const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return;
+            const alloc = @import("alloc.zig").allocator;
+
+            // ── Step 1: Ensure `uv` is installed ──
+            var uv_buf: [512]u8 = undefined;
+            var uv_bin = findUv(&uv_buf);
+
+            if (uv_bin == null) {
+                mlx_whisper_step = 1;
+                setStatus("Installing uv…", .{});
+                logs.pushLog("info", "deps", "Installing uv (Python package manager)…", true);
+                // Official installer: curl -LsSf https://astral.sh/uv/install.sh | sh
+                var uv_install = io_global.Child.init(&.{
+                    "sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh",
+                }, alloc);
+                uv_install.stdout_behavior = .Ignore;
+                uv_install.stderr_behavior = .Ignore;
+                _ = uv_install.spawnAndWait() catch {
+                    logs.pushLog("error", "deps", "Failed to install uv — check internet connection", true);
+                    return;
+                };
+                // Re-check after install
+                uv_bin = findUv(&uv_buf);
+                if (uv_bin == null) {
+                    logs.pushLog("error", "deps", "uv installed but not found at ~/.local/bin/uv", true);
+                    return;
+                }
+                logs.pushLog("info", "deps", "uv installed ✓", true);
+            }
+
+            const uv = uv_bin.?;
+
+            // ── Step 2: Create venv with uv (downloads its own Python) ──
+            var venv_buf: [512]u8 = undefined;
+            const venv_dir = std.fmt.bufPrintZ(&venv_buf, "{s}/.config/opal/mlx-venv", .{home}) catch return;
+
+            var pip_check_buf: [512]u8 = undefined;
+            const venv_python = std.fmt.bufPrintZ(&pip_check_buf, "{s}/bin/python", .{venv_dir}) catch return;
+
+            if (io_global.cwdAccess(venv_python, .{})) |_| {
+                // venv already exists
+            } else |_| {
+                mlx_whisper_step = 2;
+                setStatus("Creating Python venv…", .{});
+                logs.pushLog("info", "deps", "Creating isolated Python environment…", true);
+                var venv_create = io_global.Child.init(&.{
+                    uv, "venv", venv_dir, "--python", "3.12",
+                }, alloc);
+                venv_create.stdout_behavior = .Ignore;
+                venv_create.stderr_behavior = .Ignore;
+                _ = venv_create.spawnAndWait() catch {
+                    logs.pushLog("error", "deps", "uv venv creation failed", true);
+                    return;
+                };
+                logs.pushLog("info", "deps", "Python venv ready ✓", true);
+            }
+
+            // ── Step 3: Install mlx-whisper into the venv ──
+            var bin_check_buf: [512]u8 = undefined;
+            if (mlxWhisperBinPath(&bin_check_buf) == null) {
+                mlx_whisper_step = 3;
+                setStatus("Installing mlx-whisper…", .{});
+                logs.pushLog("info", "deps", "Installing mlx-whisper…", true);
+                var pip_install = io_global.Child.init(&.{
+                    uv, "pip", "install", "mlx-whisper",
+                    "--python", venv_python,
+                }, alloc);
+                pip_install.stdout_behavior = .Ignore;
+                pip_install.stderr_behavior = .Ignore;
+                _ = pip_install.spawnAndWait() catch {
+                    logs.pushLog("error", "deps", "mlx-whisper install failed", true);
+                    return;
+                };
+                logs.pushLog("info", "deps", "mlx-whisper installed ✓", true);
+            }
+
+            // ── Step 4: Download the model ──
+            if (mlxWhisperModelCached(home)) {
+                logs.pushLog("info", "deps", "MLX Whisper model already cached ✓", true);
+                return;
+            }
+
+            mlx_whisper_step = 4;
+            setStatus("Downloading model (~1.6GB)…", .{});
+            logs.pushLog("info", "deps", "Downloading MLX Whisper large-v3-turbo (~1.6GB)…", true);
+
+            // Use the venv's huggingface-cli (installed as mlx-whisper dependency)
+            var hf_cli_buf: [512]u8 = undefined;
+            const venv_hf = std.fmt.bufPrintZ(&hf_cli_buf, "{s}/bin/huggingface-cli", .{venv_dir}) catch return;
+
+            var hf_cli = io_global.Child.init(&.{
+                venv_hf, "download", MLX_WHISPER_HF_REPO,
+            }, alloc);
+            hf_cli.stdout_behavior = .Ignore;
+            hf_cli.stderr_behavior = .Ignore;
+            if (hf_cli.spawnAndWait()) |_| {
+                if (mlxWhisperModelCached(home)) {
+                    logs.pushLog("info", "deps", "MLX Whisper model ready ✓", true);
+                    return;
+                }
+            } else |_| {}
+
+            // Fallback: direct curl download
+            var model_dir_buf: [512]u8 = undefined;
+            const model_dir = std.fmt.bufPrintZ(&model_dir_buf, "{s}/.cache/huggingface/hub/{s}/snapshots/main", .{ home, MLX_WHISPER_CACHE_DIR }) catch return;
+            var mkp = io_global.Child.init(&.{ "mkdir", "-p", model_dir }, alloc);
+            mkp.stdout_behavior = .Ignore;
+            mkp.stderr_behavior = .Ignore;
+            _ = mkp.spawnAndWait() catch {};
+
+            // config.json
+            var cfg_buf: [768]u8 = undefined;
+            const cfg_path = std.fmt.bufPrintZ(&cfg_buf, "{s}/config.json", .{model_dir}) catch return;
+            var cfg_dl = io_global.Child.init(&.{
+                "curl", "-L", "--fail", "--silent", "--show-error", "-o", cfg_path,
+                "https://huggingface.co/mlx-community/whisper-large-v3-turbo/resolve/main/config.json",
+            }, alloc);
+            cfg_dl.stdout_behavior = .Ignore;
+            cfg_dl.stderr_behavior = .Ignore;
+            _ = cfg_dl.spawnAndWait() catch {};
+
+            // weights.safetensors (~1.6GB)
+            var wt_buf: [768]u8 = undefined;
+            const wt_path = std.fmt.bufPrintZ(&wt_buf, "{s}/weights.safetensors", .{model_dir}) catch return;
+            var wt_dl = io_global.Child.init(&.{
+                "curl", "-L", "--fail", "--show-error", "-o", wt_path,
+                "https://huggingface.co/mlx-community/whisper-large-v3-turbo/resolve/main/weights.safetensors",
+            }, alloc);
+            wt_dl.stdout_behavior = .Ignore;
+            wt_dl.stderr_behavior = .Ignore;
+            _ = wt_dl.spawnAndWait() catch {
+                logs.pushLog("error", "deps", "Failed to download MLX Whisper weights", true);
+                return;
+            };
+
+            mlx_whisper_step = 5;
+            setStatus("✓ Ready", .{});
+            logs.pushLog("info", "deps", "MLX Whisper model ready ✓", true);
+        }
+    };
+    _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
+        mlx_whisper_downloading = false;
+    };
 }

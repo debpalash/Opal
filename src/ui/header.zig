@@ -292,8 +292,13 @@ pub fn renderHeader() void {
     }
     components.tip(@src(), wd, "Theme");
 
-    if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"settings", .{}, .{}, ico.btn(state.app.settings_open, &wd))) {
-        state.app.settings_open = !state.app.settings_open;
+    if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"settings", .{}, .{}, ico.btn(state.app.drawer_open and state.app.drawer_tab == .Settings, &wd))) {
+        if (state.app.drawer_open and state.app.drawer_tab == .Settings) {
+            state.app.drawer_open = false;
+        } else {
+            state.app.drawer_open = true;
+            state.app.drawer_tab = .Settings;
+        }
     }
     components.tip(@src(), wd, "Settings");
 }

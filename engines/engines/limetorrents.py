@@ -13,7 +13,7 @@ from novaprinter import prettyPrinter
 
 
 class limetorrents:
-    url = "https://www.limetorrents.lol"
+    url = "https://www.limetorrent.in"
     name = "LimeTorrents"
     supported_categories = {'all': 'all',
                             'anime': 'anime',

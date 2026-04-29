@@ -28,7 +28,7 @@ pub const ResolvedItem = struct {
     name_len: usize = 0,
     detail: [128]u8 = std.mem.zeroes([128]u8),  // size, seeds, source addon, etc.
     detail_len: usize = 0,
-    url: [512]u8 = std.mem.zeroes([512]u8),       // magnet/http/jf item id
+    url: [2048]u8 = std.mem.zeroes([2048]u8),       // magnet/http/jf item id
     url_len: usize = 0,
     source: SourceType = .torrent,
     quality: u8 = 0,  // 0=unknown, 1=480, 2=720, 3=1080, 4=4K
@@ -57,6 +57,8 @@ pub var status_stremio: SourceStatus = .idle;
 pub var status_torrent: SourceStatus = .idle;
 pub var status_anime: SourceStatus = .idle;
 pub var status_yt: SourceStatus = .idle;
+pub var status_1337x: SourceStatus = .idle;
+pub var status_yts: SourceStatus = .idle;
 
 pub const SourceStatus = enum { idle, searching, done, failed };
 
@@ -180,11 +182,16 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     results_mutex.unlock();
 
     is_resolving = true;
-    status_jf = .idle;
-    status_stremio = .idle;
-    status_torrent = .idle;
-    status_anime = .idle;
-    status_yt = .idle;
+    // IMPORTANT: Set ALL to .searching BEFORE spawning any thread.
+    // Otherwise a fast-finishing thread (e.g. no Jellyfin) calls
+    // checkAllDone() before others start → premature is_resolving=false.
+    status_jf = .searching;
+    status_stremio = .searching;
+    status_torrent = .searching;
+    status_anime = .searching;
+    status_yt = .searching;
+    status_1337x = .searching;
+    status_yts = .searching;
 
     // Fire all backends in parallel — 7 threads for maximum speed
     _ = std.Thread.spawn(.{}, resolveJellyfin, .{ resolver_query, qlen }) catch {};
@@ -237,7 +244,8 @@ fn pushResult(item: ResolvedItem) bool {
 fn checkAllDone() void {
     if (status_jf != .searching and status_stremio != .searching and
         status_torrent != .searching and status_anime != .searching and
-        status_yt != .searching)
+        status_yt != .searching and status_1337x != .searching and
+        status_yts != .searching)
     {
         is_resolving = false;
     }
@@ -366,12 +374,9 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
 // ══════════════════════════════════════════════════════════
 
 fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
-    status_jf = .searching;
     defer { status_jf = .done; checkAllDone(); }
 
     if (!state.app.jf.connected or state.app.jf.server_url_len == 0) {
-        status_jf = .idle;
-        checkAllDone();
         return;
     }
 
@@ -454,7 +459,6 @@ fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
 
 // Main torrent thread: uses nova2.py (same proven engine as Torrent Only tab)
 fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
-    status_torrent = .searching;
     defer { status_torrent = .done; checkAllDone(); }
 
     const query = query_buf[0..qlen];
@@ -503,7 +507,7 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
         @memcpy(item.name[0..nlen], name[0..nlen]);
         item.name_len = nlen;
 
-        const ulen = @min(link.len, 511);
+        const ulen = @min(link.len, 2047);
         @memcpy(item.url[0..ulen], link[0..ulen]);
         item.url_len = ulen;
 
@@ -550,7 +554,7 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
-    defer checkAllDone();
+    defer { status_1337x = .done; checkAllDone(); }
 
     const query = query_buf[0..qlen];
 
@@ -654,7 +658,7 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
                 @memcpy(item.name[0..nlen], clean_title[0..nlen]);
                 item.name_len = nlen;
 
-                const ulen = @min(magnet.len, 511);
+                const ulen = @min(magnet.len, 2047);
                 @memcpy(item.url[0..ulen], magnet[0..ulen]);
                 item.url_len = ulen;
 
@@ -682,7 +686,7 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
 
 // YTS API — fast movie search (runs in parallel)
 fn resolveYts(query_buf: [256]u8, qlen: usize) void {
-    defer checkAllDone();
+    defer { status_yts = .done; checkAllDone(); }
 
     const query = query_buf[0..qlen];
 
@@ -748,7 +752,7 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
             // Build magnet link from hash
             var magnet_buf: [512]u8 = undefined;
             const magnet = std.fmt.bufPrint(&magnet_buf, "magnet:?xt=urn:btih:{s}", .{hash}) catch "";
-            const ulen = @min(magnet.len, 511);
+            const ulen = @min(magnet.len, 2047);
             @memcpy(item.url[0..ulen], magnet[0..ulen]);
             item.url_len = ulen;
 
@@ -772,7 +776,6 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
-    status_anime = .searching;
     defer { status_anime = .done; checkAllDone(); }
 
     const query = query_buf[0..qlen];
@@ -853,7 +856,6 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
-    status_yt = .searching;
     defer { status_yt = .done; checkAllDone(); }
 
     const query = query_buf[0..qlen];
@@ -889,13 +891,13 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
             item.name_len = tlen;
         }
         if (extractStr(line, "\"url\": \"")) |url| {
-            const ulen = @min(url.len, 511);
+            const ulen = @min(url.len, 2047);
             @memcpy(item.url[0..ulen], url[0..ulen]);
             item.url_len = ulen;
         } else if (extractStr(line, "\"id\": \"")) |vid_id| {
             var yt_url: [128]u8 = undefined;
             const yt = std.fmt.bufPrint(&yt_url, "https://www.youtube.com/watch?v={s}", .{vid_id}) catch "";
-            const ulen = @min(yt.len, 511);
+            const ulen = @min(yt.len, 2047);
             @memcpy(item.url[0..ulen], yt[0..ulen]);
             item.url_len = ulen;
         }
@@ -915,7 +917,6 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
-    status_stremio = .searching;
     defer { status_stremio = .done; checkAllDone(); }
 
     const stremio = @import("stremio.zig");
@@ -1033,7 +1034,7 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
             var item = std.mem.zeroes(ResolvedItem);
             item.source = .stremio;
 
-            const ulen = @min(ue, 511);
+            const ulen = @min(ue, 2047);
             @memcpy(item.url[0..ulen], sbuf[uabs..uabs + ulen]);
             item.url_len = ulen;
 
@@ -1103,7 +1104,7 @@ pub fn playItem(idx: usize) void {
             // Direct URL — load into mpv
             if (state.app.players.items.len > 0) {
                 const p = state.app.players.items[state.app.active_player_idx];
-                var url_z: [513]u8 = undefined;
+                var url_z: [2049]u8 = undefined;
                 const ulen = item.url_len;
                 @memcpy(url_z[0..ulen], item.url[0..ulen]);
                 url_z[ulen] = 0;
