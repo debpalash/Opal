@@ -255,18 +255,23 @@ pub fn asyncSearchTask(query: []const u8) void {
         search_results_mutex.unlock();
     }
 
+    if (search_abort) {
+        _ = child.kill() catch {};
+    }
     _ = child.wait() catch {};
-    
+
     // Also query EZTV JSON API directly (faster, no scraping)
     // Skip if engine filter is set to a non-EZTV specific engine
-    if (engine_filter == .all or engine_filter == .eztv)
+    if (!search_abort and (engine_filter == .all or engine_filter == .eztv))
         queryEztvApi(query, allocator);
     
-    search_results_mutex.lock();
-    std.sort.block(SearchResult, search_results.items, {}, sortResults);
-    search_results_mutex.unlock();
+    if (!search_abort) {
+        search_results_mutex.lock();
+        std.sort.block(SearchResult, search_results.items, {}, sortResults);
+        search_results_mutex.unlock();
+    }
     is_searching = false;
-    search_thread = null; // Allow join/cleanup on next trigger or shutdown
+    search_thread = null;
 }
 
 fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator) void {
@@ -382,11 +387,12 @@ fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator) void {
 pub fn triggerSearch(query_text: []const u8) void {
     if (query_text.len == 0) return;
 
-    // Abort any running search — join the thread so its defers free memory
+    // Abort any running search — detach instead of join to avoid blocking UI
     if (is_searching) {
         search_abort = true;
-        if (search_thread) |t| t.join();
+        if (search_thread) |t| t.detach();
         search_thread = null;
+        // Give abort flag a moment to propagate (non-blocking)
         is_searching = false;
     }
 
