@@ -62,6 +62,133 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <string>public.app-category.entertainment</string>
     <key>NSCameraUsageDescription</key>
     <string>Not used — declared for future video features.</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Video</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.movie</string>
+                <string>public.video</string>
+                <string>public.mpeg-4</string>
+                <string>com.apple.quicktime-movie</string>
+                <string>public.avi</string>
+                <string>org.matroska.mkv</string>
+                <string>public.mpeg</string>
+                <string>public.mpeg-2-video</string>
+            </array>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>mp4</string>
+                <string>m4v</string>
+                <string>mov</string>
+                <string>avi</string>
+                <string>mkv</string>
+                <string>wmv</string>
+                <string>flv</string>
+                <string>webm</string>
+                <string>mpg</string>
+                <string>mpeg</string>
+                <string>3gp</string>
+                <string>ts</string>
+                <string>mts</string>
+                <string>m2ts</string>
+                <string>vob</string>
+                <string>ogv</string>
+                <string>rmvb</string>
+                <string>asf</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Audio</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.audio</string>
+                <string>public.mp3</string>
+                <string>public.mpeg-4-audio</string>
+                <string>com.apple.m4a-audio</string>
+                <string>org.xiph.flac</string>
+            </array>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>mp3</string>
+                <string>m4a</string>
+                <string>aac</string>
+                <string>flac</string>
+                <string>ogg</string>
+                <string>opus</string>
+                <string>wav</string>
+                <string>wma</string>
+                <string>aiff</string>
+                <string>mka</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Subtitle</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>srt</string>
+                <string>ass</string>
+                <string>ssa</string>
+                <string>sub</string>
+                <string>vtt</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Playlist</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>m3u</string>
+                <string>m3u8</string>
+                <string>pls</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Torrent</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>torrent</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Comic Archive</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>cbz</string>
+                <string>cbr</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST
@@ -147,7 +274,8 @@ if [ -n "${CODESIGN_IDENTITY:-}" ]; then
         --entitlements "$ROOT/scripts/opal.entitlements" \
         "$APP_DIR"
 else
-    echo "[build-app] (no CODESIGN_IDENTITY env — skipping codesign; app runs locally but won't pass Gatekeeper on other Macs)"
+    echo "[build-app] No CODESIGN_IDENTITY — ad-hoc signing (required after install_name_tool)"
+    codesign --force --deep --sign - "$APP_DIR"
 fi
 
 # ── 7. Optional DMG ────────────────────────────────────────────

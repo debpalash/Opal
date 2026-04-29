@@ -2,45 +2,55 @@ const std = @import("std");
 const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 const theme = @import("theme.zig");
+const builtin = @import("builtin");
 
 // ── design tokens (matching settings.zig) ─────────────────
 const card_bg     = dvui.Color{ .r = 24, .g = 24, .b = 32, .a = 255 };
 const card_border = dvui.Color{ .r = 45, .g = 45, .b = 60, .a = 180 };
 const muted_text  = dvui.Color{ .r = 120, .g = 120, .b = 145, .a = 255 };
 
+const is_macos = builtin.os.tag == .macos;
+
 const DESKTOP_ID = "zigzag.desktop";
+const BUNDLE_ID  = "com.debpalash.opal";
 
 const MimeGroup = struct {
     label:   []const u8,
     desc:    []const u8,
-    mimes:   []const []const u8,
+    mimes:   []const []const u8,      // Linux MIME types
+    utis:    []const []const u8,      // macOS UTI identifiers
     id_base: usize,
 };
 
+// ── Linux MIME types ──────────────────────────────────────
 const VIDEO_MIMES    = &[_][]const u8{ "video/mp4","video/x-matroska","video/x-msvideo","video/webm","video/quicktime","video/mpeg","video/ogg","video/x-flv","video/x-ms-wmv","video/3gpp" };
 const AUDIO_MIMES    = &[_][]const u8{ "audio/mpeg","audio/flac","audio/ogg","audio/wav","audio/x-wav","audio/aac","audio/mp4","audio/x-m4a","audio/opus","audio/webm" };
 const TORRENT_MIMES  = &[_][]const u8{ "application/x-bittorrent","x-scheme-handler/magnet" };
 const PLAYLIST_MIMES = &[_][]const u8{ "audio/x-mpegurl","application/x-mpegurl","audio/mpegurl","application/vnd.apple.mpegurl" };
 const COMICS_MIMES   = &[_][]const u8{ "application/x-cbz","application/x-cbr","application/x-cb7","application/x-cbt","application/vnd.comicbook+zip","application/vnd.comicbook-rar" };
 
+// ── macOS UTI identifiers ─────────────────────────────────
+const VIDEO_UTIS    = &[_][]const u8{ "public.movie","public.video","public.mpeg-4","com.apple.quicktime-movie","public.avi","org.matroska.mkv","org.webmproject.webm","com.adobe.flash.video","public.mpeg","public.mpeg-2-video","com.microsoft.windows-media-wmv","public.mpeg-2-transport-stream" };
+const AUDIO_UTIS    = &[_][]const u8{ "public.audio","public.mp3","public.mpeg-4-audio","com.apple.m4a-audio","org.xiph.flac","org.xiph.ogg-vorbis","org.xiph.opus","com.microsoft.waveform-audio","public.aiff-audio","com.microsoft.windows-media-wma" };
+const TORRENT_UTIS  = &[_][]const u8{ "org.bittorrent.torrent" };
+const PLAYLIST_UTIS = &[_][]const u8{ "public.m3u-playlist","public.pls-playlist" };
+const COMICS_UTIS   = &[_][]const u8{ "com.yacreader.cbz","com.yacreader.cbr" };
+
 const mime_groups = [_]MimeGroup{
-    .{ .label = "Video",            .desc = "mp4, mkv, avi, webm, mov",    .mimes = VIDEO_MIMES,    .id_base = 70000 },
-    .{ .label = "Audio",            .desc = "mp3, flac, ogg, wav, aac",    .mimes = AUDIO_MIMES,    .id_base = 71000 },
-    .{ .label = "Torrent / Magnet", .desc = ".torrent + magnet: links",    .mimes = TORRENT_MIMES,  .id_base = 72000 },
-    .{ .label = "Playlists (M3U)",  .desc = "m3u, m3u8 playlist files",    .mimes = PLAYLIST_MIMES, .id_base = 73000 },
-    .{ .label = "Comics",           .desc = "cbz, cbr, cb7, cbt archives", .mimes = COMICS_MIMES,   .id_base = 74000 },
+    .{ .label = "Video",            .desc = "mp4, mkv, avi, webm, mov",    .mimes = VIDEO_MIMES,    .utis = VIDEO_UTIS,    .id_base = 70000 },
+    .{ .label = "Audio",            .desc = "mp3, flac, ogg, wav, aac",    .mimes = AUDIO_MIMES,    .utis = AUDIO_UTIS,    .id_base = 71000 },
+    .{ .label = "Torrent / Magnet", .desc = ".torrent + magnet: links",    .mimes = TORRENT_MIMES,  .utis = TORRENT_UTIS,  .id_base = 72000 },
+    .{ .label = "Playlists (M3U)",  .desc = "m3u, m3u8 playlist files",    .mimes = PLAYLIST_MIMES, .utis = PLAYLIST_UTIS, .id_base = 73000 },
+    .{ .label = "Comics",           .desc = "cbz, cbr archives",           .mimes = COMICS_MIMES,   .utis = COMICS_UTIS,   .id_base = 74000 },
 };
 
 // ── Background-thread state ────────────────────────────────
-// All blocking operations run on a dedicated thread.
-// The render thread only reads cached results (never blocks).
-
 const AssocState = struct {
     mutex:          @import("../core/sync.zig").Mutex = .{},
     status:         [mime_groups.len]bool = [_]bool{false} ** mime_groups.len,
     checking:       bool = false,
     last_check_ms:  i64  = 0,
-    action_pending: bool = false,   // true while register/unregister is running
+    action_pending: bool = false,
 };
 
 var g: AssocState = .{};
@@ -50,7 +60,10 @@ var g: AssocState = .{};
 fn bgCheckAll(_: void) void {
     var tmp: [mime_groups.len]bool = undefined;
     inline for (mime_groups, 0..) |grp, gi| {
-        tmp[gi] = checkGroupBlocking(grp.mimes);
+        if (is_macos)
+            tmp[gi] = checkGroupBlockingMac(grp.utis)
+        else
+            tmp[gi] = checkGroupBlocking(grp.mimes);
     }
     g.mutex.lock();
     g.status = tmp;
@@ -60,17 +73,25 @@ fn bgCheckAll(_: void) void {
 }
 
 fn bgRegisterAll(_: void) void {
-    ensureDesktopFileBlocking();
-    inline for (mime_groups) |grp| registerGroupBlocking(grp.mimes);
+    if (is_macos) {
+        inline for (mime_groups) |grp| registerGroupBlockingMac(grp.utis);
+    } else {
+        ensureDesktopFileBlocking();
+        inline for (mime_groups) |grp| registerGroupBlocking(grp.mimes);
+    }
     g.mutex.lock();
     g.action_pending = false;
-    g.last_check_ms = 0; // force recheck
+    g.last_check_ms = 0;
     g.mutex.unlock();
     bgCheckAll({});
 }
 
 fn bgUnregisterAll(_: void) void {
-    inline for (mime_groups) |grp| unregisterGroupBlocking(grp.mimes);
+    if (is_macos) {
+        inline for (mime_groups) |grp| unregisterGroupBlockingMac(grp.utis);
+    } else {
+        inline for (mime_groups) |grp| unregisterGroupBlocking(grp.mimes);
+    }
     g.mutex.lock();
     g.action_pending = false;
     g.last_check_ms = 0;
@@ -80,12 +101,17 @@ fn bgUnregisterAll(_: void) void {
 
 const GroupAction = struct { idx: usize, register: bool };
 fn bgGroupAction(act: GroupAction) void {
-    const mimes = mime_groups[act.idx].mimes;
-    if (act.register) {
-        ensureDesktopFileBlocking();
-        registerGroupBlocking(mimes);
+    if (is_macos) {
+        const utis = mime_groups[act.idx].utis;
+        if (act.register) registerGroupBlockingMac(utis) else unregisterGroupBlockingMac(utis);
     } else {
-        unregisterGroupBlocking(mimes);
+        const mimes = mime_groups[act.idx].mimes;
+        if (act.register) {
+            ensureDesktopFileBlocking();
+            registerGroupBlocking(mimes);
+        } else {
+            unregisterGroupBlocking(mimes);
+        }
     }
     g.mutex.lock();
     g.action_pending = false;
@@ -143,7 +169,83 @@ fn triggerGroupAction(idx: usize, register: bool) void {
     t.detach();
 }
 
-// ── Blocking helpers (only called from bg threads) ────────
+// ══════════════════════════════════════════════════════════
+//  macOS — uses swift -e + CoreServices (always available)
+// ══════════════════════════════════════════════════════════
+
+fn checkGroupBlockingMac(utis: []const []const u8) bool {
+    const allocator = @import("../core/alloc.zig").allocator;
+    for (utis) |uti| {
+        var script_buf: [512]u8 = undefined;
+        const script = std.fmt.bufPrint(&script_buf,
+            "import Foundation;import CoreServices;let h=LSCopyDefaultRoleHandlerForContentType(\"{s}\" as CFString,.all);print((h?.takeRetainedValue() as String?) ?? \"\")",
+            .{uti}) catch continue;
+
+        var child = @import("../core/io_global.zig").Child.init(
+            &.{ "swift", "-e", script },
+            allocator,
+        );
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Ignore;
+        child.spawn() catch return false;
+        var rbuf: [256]u8 = undefined;
+        var rdr = child.stdout.?.reader(@import("../core/io_global.zig").io(), &rbuf);
+        const line = rdr.interface.takeDelimiter('\n') catch {
+            _ = child.wait() catch {};
+            return false;
+        } orelse {
+            _ = child.wait() catch {};
+            return false;
+        };
+        _ = child.wait() catch {};
+        const trimmed = std.mem.trim(u8, line, " \t\r\n");
+        if (!std.ascii.eqlIgnoreCase(trimmed, BUNDLE_ID)) return false;
+    }
+    return true;
+}
+
+fn registerGroupBlockingMac(utis: []const []const u8) void {
+    const allocator = @import("../core/alloc.zig").allocator;
+    for (utis) |uti| {
+        var script_buf: [512]u8 = undefined;
+        const script = std.fmt.bufPrint(&script_buf,
+            "import Foundation;import CoreServices;LSSetDefaultRoleHandlerForContentType(\"{s}\" as CFString,.all,\"{s}\" as CFString)",
+            .{ uti, BUNDLE_ID }) catch continue;
+
+        var child = @import("../core/io_global.zig").Child.init(
+            &.{ "swift", "-e", script },
+            allocator,
+        );
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Ignore;
+        child.spawn() catch continue;
+        _ = child.wait() catch {};
+    }
+}
+
+fn unregisterGroupBlockingMac(utis: []const []const u8) void {
+    // Reset each UTI to no handler (reverts to macOS default)
+    const allocator = @import("../core/alloc.zig").allocator;
+    for (utis) |uti| {
+        var script_buf: [512]u8 = undefined;
+        const script = std.fmt.bufPrint(&script_buf,
+            "import Foundation;import CoreServices;LSSetDefaultRoleHandlerForContentType(\"{s}\" as CFString,.all,\"\" as CFString)",
+            .{uti}) catch continue;
+
+        var child = @import("../core/io_global.zig").Child.init(
+            &.{ "swift", "-e", script },
+            allocator,
+        );
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Ignore;
+        child.spawn() catch continue;
+        _ = child.wait() catch {};
+    }
+}
+
+// ══════════════════════════════════════════════════════════
+//  Linux — uses xdg-mime
+// ══════════════════════════════════════════════════════════
 
 fn checkGroupBlocking(mimes: []const []const u8) bool {
     const allocator = @import("../core/alloc.zig").allocator;
@@ -238,7 +340,9 @@ fn ensureDesktopFileBlocking() void {
     @import("../core/io_global.zig").cwdWriteFile(.{ .sub_path = fp, .data = ct }) catch {};
 }
 
-// ── Render — NEVER blocks the UI thread ──────────────────
+// ══════════════════════════════════════════════════════════
+//  Render — NEVER blocks the UI thread
+// ══════════════════════════════════════════════════════════
 
 pub fn render() void {
     // Kick off a background check every 5 seconds (non-blocking)
@@ -270,7 +374,11 @@ pub fn render() void {
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 10 },
         });
         defer info.deinit();
-        _ = dvui.label(@src(), "Uses xdg-mime (Linux). Writes to ~/.config/mimeapps.list", .{}, .{
+        const desc = if (is_macos)
+            "Sets Opal as default handler via macOS LaunchServices."
+        else
+            "Uses xdg-mime (Linux). Writes to ~/.config/mimeapps.list";
+        _ = dvui.label(@src(), desc, .{}, .{
             .color_text = dvui.Color{ .r = 140, .g = 180, .b = 240, .a = 255 },
         });
     }
@@ -310,7 +418,7 @@ pub fn render() void {
         }
     }
 
-    // Per-group cards — read from mutex-protected snapshot (no blocking)
+    // Per-group cards
     inline for (mime_groups, 0..) |grp, gi| {
         const is_reg = status_snap[gi];
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
