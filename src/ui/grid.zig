@@ -16,8 +16,8 @@ fn renderInlineChat() void {
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = 220 },
-        .max_size_content = .{ .w = std.math.floatMax(f32), .h = 360 },
+        .min_size_content = .{ .w = 0, .h = 240 },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = 480 },
         .background = false,
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 10 },
     });
@@ -38,37 +38,49 @@ fn renderInlineChat() void {
             .expand = .horizontal,
             .background = true,
             .color_fill = if (is_user)
-                dvui.Color{ .r = 26, .g = 26, .b = 38, .a = 255 }
+                theme.colors.bg_surface
             else
-                dvui.Color{ .r = 16, .g = 20, .b = 28, .a = 255 },
-            .color_border = if (is_user) theme.colors.accent else dvui.Color{ .r = 40, .g = 50, .b = 70, .a = 200 },
-            .border = .{ .x = if (is_user) @as(f32, 2) else 0, .y = 0, .w = 0, .h = 0 },
-            .corner_radius = dvui.Rect.all(8),
-            .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
-            .margin = .{ .x = 0, .y = 3, .w = 0, .h = 3 },
+                theme.colors.bg_card,
+            .color_border = if (is_user) theme.colors.accent else theme.colors.border_card,
+            .border = .{ .x = if (is_user) @as(f32, 3) else 0, .y = 0, .w = 0, .h = 0 },
+            .corner_radius = dvui.Rect.all(10),
+            .padding = .{ .x = 14, .y = 10, .w = 14, .h = 10 },
+            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
         });
         defer bubble.deinit();
 
-        // Role label + regen icon on assistant rows
+        // Role label with colored dot indicator + action icons on assistant rows
         {
             var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = mi + 71500,
                 .expand = .horizontal,
             });
             defer hdr.deinit();
+
+            // Colored dot indicator for sender distinction
+            const dot_color = if (is_user) theme.colors.accent else theme.colors.success;
+            _ = dvui.label(@src(), "●", .{}, .{
+                .id_extra = mi + 70900,
+                .color_text = dot_color,
+                .margin = .{ .w = 6 },
+                .gravity_y = 0.5,
+            });
             _ = dvui.label(@src(), "{s}", .{if (is_user) "You" else "AI"}, .{
                 .id_extra = mi + 71000,
                 .color_text = if (is_user) theme.colors.accent else theme.colors.text_muted,
+                .gravity_y = 0.5,
             });
             if (!is_user) {
                 { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
                 // Star toggle
+                var star_wd: dvui.WidgetData = undefined;
                 if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"star", .{}, .{}, .{
                     .id_extra = mi + 71700,
+                    .data_out = &star_wd,
                     .color_text = if (m.starred)
                         dvui.Color{ .r = 255, .g = 200, .b = 80, .a = 255 }
                     else
-                        theme.colors.text_muted,
+                        theme.colors.text_dim,
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .border = dvui.Rect.all(0),
                     .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
@@ -76,9 +88,12 @@ fn renderInlineChat() void {
                 })) {
                     ai_chat.toggleStar(mi);
                 }
+                components.tip(@src(), star_wd, if (m.starred) "Unfavorite" else "Favorite");
+                var regen_wd: dvui.WidgetData = undefined;
                 if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"rotate-ccw", .{}, .{}, .{
                     .id_extra = mi + 71800,
-                    .color_text = theme.colors.text_muted,
+                    .data_out = &regen_wd,
+                    .color_text = theme.colors.text_dim,
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .border = dvui.Rect.all(0),
                     .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
@@ -86,6 +101,7 @@ fn renderInlineChat() void {
                 })) {
                     ai_chat.regenerateFrom(mi);
                 }
+                components.tip(@src(), regen_wd, "Regenerate");
             }
         }
         _ = dvui.label(@src(), "{s}", .{m.text[0..m.text_len]}, .{
@@ -277,7 +293,7 @@ pub fn renderGrid() !void {
                                 var last_click_cell: usize = 999;
                             };
                             const now_ms = @import("../core/io_global.zig").milliTimestamp();
-                            if (DblClick.last_click_cell == i and now_ms - DblClick.last_click_ms < 400) {
+                            if (DblClick.last_click_cell == i and now_ms - DblClick.last_click_ms < 500) {
                                 // Double-click: toggle fullscreen
                                 if (state.app.fullscreen_player_idx == null) {
                                     state.app.fullscreen_player_idx = i;
@@ -287,7 +303,7 @@ pub fn renderGrid() !void {
                                 DblClick.last_click_ms = 0; // reset to prevent triple-click
                             } else {
                                 // Single click: toggle pause
-                                _ = c.mpv.mpv_command_string(p.mpv_ctx, "cycle pause");
+                                p.togglePause();
                                 DblClick.last_click_ms = now_ms;
                                 DblClick.last_click_cell = i;
                             }
@@ -580,29 +596,28 @@ pub fn renderGrid() !void {
                     .max_size_content = .{ .w = 760, .h = std.math.floatMax(f32) },
                 });
 
+                // Input bar first — primary action, immediately reachable
+                header.renderUrlInput(true);
+
+                // Continue Watching — returning users want this front and center
+                renderContinueWatching();
+
                 if (!has_chat) {
+                    // Compact drop zone hint below the content
+                    { var gap = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 0, .h = 8 }, .expand = .horizontal }); gap.deinit(); }
                     _ = dvui.icon(@src(), "", icons.tvg.lucide.@"cloud-upload", .{}, .{
-                        .color_text = theme.colors.accent,
-                        .min_size_content = .{ .w = 56, .h = 56 },
+                        .color_text = theme.colors.text_dim,
+                        .min_size_content = .{ .w = 28, .h = 28 },
                         .gravity_x = 0.5,
                     });
-                    _ = dvui.label(@src(), "Drop, paste, or ask", .{}, .{
-                        .color_text = theme.colors.text_main,
-                        .margin = .{ .y = 10 },
-                        .gravity_x = 0.5,
-                    });
-                    _ = dvui.label(@src(), "Media routes to player. Anything else becomes an AI chat.", .{}, .{
-                        .color_text = theme.colors.text_muted,
-                        .margin = .{ .y = 0 },
+                    _ = dvui.label(@src(), "Drop media or paste a URL", .{}, .{
+                        .color_text = theme.colors.text_dim,
+                        .margin = .{ .y = 4 },
                         .gravity_x = 0.5,
                     });
                 } else {
                     renderInlineChat();
                 }
-
-                header.renderUrlInput(true);
-
-                renderContinueWatching();
 
                 // ── Context chip: shows what AI "sees" (current media + time) ──
                 {
@@ -713,7 +728,7 @@ pub fn renderGrid() !void {
                         (if (p.has_metadata) "Buffering first video parts..." else "Loading torrent metadata...")
                     else (if (is_audio_only) "🎵 Audio Stream Playing" else "Buffering video stream..."))
                     else "Drop media or paste magnet";
-                if (dvui.button(@src(), placeholder_text, .{}, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .expand = .both, .gravity_x = 0.5, .gravity_y = 0.5, .color_fill = theme.colors.bg_drawer, .color_text = theme.colors.text_muted, .corner_radius = theme.dims.rad_sm })) {
+                if (dvui.button(@src(), placeholder_text, .{}, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .expand = .both, .gravity_x = 0.5, .gravity_y = 0.5, .color_fill = theme.colors.bg_drawer, .color_text = theme.colors.text_main, .corner_radius = theme.dims.rad_sm })) {
                     state.app.active_player_idx = i;
                 }
             }
@@ -789,7 +804,7 @@ fn renderContinueWatching() void {
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .margin = .{ .x = 0, .y = 16, .w = 0, .h = 4 },
+            .margin = .{ .x = 0, .y = 12, .w = 0, .h = 4 },
         });
         defer hdr.deinit();
 
@@ -816,74 +831,156 @@ fn renderContinueWatching() void {
 
     var strip = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
-        .margin = .{ .y = 4 },
+        .margin = .{ .y = 2 },
     });
     defer strip.deinit();
 
     for (0..show_count) |si| {
         const idx = show_idx[si];
         const e = watch_history.entries[idx];
-        const name = e.name[0..e.name_len];
+        const raw_name = e.name[0..e.name_len];
 
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        // ── Clean the display name ──
+        // 1. Extract basename from path (after last '/')
+        // 2. Strip file extension (.mkv, .mp4, etc.)
+        // 3. Replace dots and underscores with spaces
+        var clean_buf: [128]u8 = undefined;
+        var clean_len: usize = 0;
+        {
+            // Step 1: Find basename
+            var basename_start: usize = 0;
+            for (raw_name, 0..) |ch, ci| {
+                if (ch == '/' or ch == '\\') basename_start = ci + 1;
+            }
+            const basename = raw_name[basename_start..];
+
+            // Step 2: Strip extension (last '.' if after the basename start)
+            var name_end: usize = basename.len;
+            {
+                var last_dot: ?usize = null;
+                for (basename, 0..) |ch, ci| {
+                    if (ch == '.') last_dot = ci;
+                }
+                if (last_dot) |dot| {
+                    // Only strip if the extension part is short (<=5 chars like .webm)
+                    if (basename.len - dot <= 6) name_end = dot;
+                }
+            }
+            const stripped = basename[0..name_end];
+
+            // Step 3: Replace dots, underscores with spaces; collapse multiples
+            for (stripped) |ch| {
+                if (clean_len >= clean_buf.len - 1) break;
+                const out_ch: u8 = if (ch == '.' or ch == '_') ' ' else ch;
+                // Collapse consecutive spaces
+                if (out_ch == ' ' and clean_len > 0 and clean_buf[clean_len - 1] == ' ') continue;
+                clean_buf[clean_len] = out_ch;
+                clean_len += 1;
+            }
+            // Trim leading/trailing spaces
+            while (clean_len > 0 and clean_buf[clean_len - 1] == ' ') clean_len -= 1;
+            var trim_start: usize = 0;
+            while (trim_start < clean_len and clean_buf[trim_start] == ' ') trim_start += 1;
+            if (trim_start > 0 and trim_start < clean_len) {
+                std.mem.copyForwards(u8, clean_buf[0..clean_len - trim_start], clean_buf[trim_start..clean_len]);
+                clean_len -= trim_start;
+            }
+        }
+        const display_name = if (clean_len > 0) clean_buf[0..clean_len] else raw_name;
+        // Truncate for display
+        const disp = display_name[0..@min(display_name.len, 56)];
+
+        const pct_f = std.math.clamp(e.percent, 0.0, 100.0);
+        const pct = @as(u8, @intFromFloat(pct_f));
+
+        // ── Card container ──
+        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = si + 43000,
             .expand = .horizontal,
-            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
+            .padding = .{ .x = 12, .y = 8, .w = 12, .h = 6 },
             .margin = .{ .y = 2 },
             .background = true,
-            .color_fill = dvui.Color{ .r = 22, .g = 22, .b = 32, .a = 180 },
-            .color_border = dvui.Color{ .r = 50, .g = 50, .b = 70, .a = 160 },
+            .color_fill = dvui.Color{ .r = 22, .g = 22, .b = 32, .a = 200 },
+            .color_border = dvui.Color{ .r = 50, .g = 50, .b = 70, .a = 120 },
             .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(6),
+            .corner_radius = dvui.Rect.all(8),
         });
-        defer row.deinit();
+        defer card.deinit();
 
-        _ = dvui.icon(@src(), "", icons.tvg.lucide.@"play", .{}, .{
-            .id_extra = si + 43100,
-            .color_text = theme.colors.accent,
-            .min_size_content = .{ .w = 16, .h = 16 },
-            .margin = .{ .w = 8 },
-            .gravity_y = 0.5,
-        });
+        // Top row: play icon + title + percentage + resume button
+        {
+            var top_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = si + 43050,
+                .expand = .horizontal,
+            });
+            defer top_row.deinit();
 
-        // Display a shortened name so long torrent file names don't break layout.
-        const disp_len = @min(name.len, 64);
-        _ = dvui.label(@src(), "{s}", .{name[0..disp_len]}, .{
-            .id_extra = si + 43200,
-            .color_text = theme.colors.text_main,
-            .gravity_y = 0.5,
-            .expand = .horizontal,
-        });
+            _ = dvui.icon(@src(), "", icons.tvg.lucide.@"play", .{}, .{
+                .id_extra = si + 43100,
+                .color_text = theme.colors.accent,
+                .min_size_content = .{ .w = 14, .h = 14 },
+                .margin = .{ .w = 8 },
+                .gravity_y = 0.5,
+            });
 
-        const pct = @as(u8, @intFromFloat(std.math.clamp(e.percent, 0.0, 100.0)));
-        var pct_buf: [16]u8 = undefined;
-        const pct_str = std.fmt.bufPrint(&pct_buf, "{d}%", .{pct}) catch "0%";
-        const pct_color = if (pct < 50)
-            dvui.Color{ .r = 220, .g = 110, .b = 110, .a = 255 }
-        else if (pct < 90)
-            dvui.Color{ .r = 230, .g = 190, .b = 80, .a = 255 }
-        else
-            dvui.Color{ .r = 100, .g = 210, .b = 140, .a = 255 };
-        _ = dvui.label(@src(), "{s}", .{pct_str}, .{
-            .id_extra = si + 43300,
-            .color_text = pct_color,
-            .gravity_y = 0.5,
-            .margin = .{ .w = 8 },
-        });
+            _ = dvui.label(@src(), "{s}", .{disp}, .{
+                .id_extra = si + 43200,
+                .color_text = theme.colors.text_main,
+                .gravity_y = 0.5,
+                .expand = .horizontal,
+            });
 
-        if (dvui.button(@src(), "Resume", .{}, .{
-            .id_extra = si + 43400,
-            .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
-            .corner_radius = dvui.Rect.all(4),
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-            .gravity_y = 0.5,
-        })) {
-            if (state.app.active_player_idx < state.app.players.items.len) {
-                const browser = @import("../services/browser.zig");
-                browser.loadContent(name);
-                state.showToast("Resuming...");
+            var pct_buf: [16]u8 = undefined;
+            const pct_str = std.fmt.bufPrint(&pct_buf, "{d}%", .{pct}) catch "0%";
+            _ = dvui.label(@src(), "{s}", .{pct_str}, .{
+                .id_extra = si + 43300,
+                .color_text = theme.colors.text_dim,
+                .gravity_y = 0.5,
+                .margin = .{ .w = 8 },
+            });
+
+            if (dvui.button(@src(), "Resume", .{}, .{
+                .id_extra = si + 43400,
+                .color_fill = theme.colors.accent,
+                .color_text = dvui.Color.white,
+                .corner_radius = dvui.Rect.all(4),
+                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                .gravity_y = 0.5,
+            })) {
+                if (state.app.active_player_idx < state.app.players.items.len) {
+                    const browser = @import("../services/browser.zig");
+                    browser.loadContent(raw_name);
+                    state.showToast("Resuming...");
+                }
             }
+        }
+
+        // Bottom: thin progress bar spanning full width
+        {
+            const bar_h: f32 = 3;
+            var bar_track = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = si + 43500,
+                .expand = .horizontal,
+                .background = true,
+                .color_fill = dvui.Color{ .r = 40, .g = 40, .b = 55, .a = 200 },
+                .corner_radius = dvui.Rect.all(2),
+                .min_size_content = .{ .w = 0, .h = bar_h },
+                .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
+            });
+
+            // Fill portion
+            const fill_frac: f32 = @floatCast(pct_f / 100.0);
+            var fill_box = dvui.box(@src(), .{}, .{
+                .id_extra = si + 43600,
+                .background = true,
+                .color_fill = theme.colors.accent,
+                .corner_radius = dvui.Rect.all(2),
+                .min_size_content = .{ .w = fill_frac * 600, .h = bar_h },
+            });
+            fill_box.deinit();
+
+            bar_track.deinit();
         }
     }
 }
+

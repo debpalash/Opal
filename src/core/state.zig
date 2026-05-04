@@ -168,10 +168,12 @@ pub const AppState = struct {
     video_fill_mode: VideoFillMode = .fit,
     cheatsheet_open: bool = false,
     media_info_open: bool = false,
+    stats_overlay_open: bool = false,
     sub_picker_open: bool = false,
     playlist_drawer_open: bool = false,
     last_mouse_x: f32 = 0,
     last_mouse_y: f32 = 0,
+    last_mouse_move_ms: i64 = 0,
     magnet_buf: [2048]u8 = std.mem.zeroes([2048]u8),
     drawer_open: bool = false,
     drawer_tab: DrawerTab = .Search,
@@ -205,6 +207,7 @@ pub const AppState = struct {
     toast_buf: [128]u8 = std.mem.zeroes([128]u8),
     toast_len: usize = 0,
     toast_expire: i64 = 0,
+    toast_type: ToastType = .info,
     config_dirty: bool = false,
     last_config_save: i64 = 0,
     proxy_url: [128]u8 = std.mem.zeroes([128]u8), // e.g. "socks5://127.0.0.1:1080"
@@ -543,11 +546,44 @@ pub fn getSavePath() [*c]const u8 {
 }
 
 /// Show a toast notification for 3 seconds.
+pub const ToastType = enum(u8) {
+    info,
+    success,
+    warning,
+    err,
+};
+
 pub fn showToast(msg: []const u8) void {
+    showToastTyped(msg, .info);
+}
+
+pub fn showToastTyped(msg: []const u8, toast_type: ToastType) void {
     const copy_len = @min(msg.len, app.toast_buf.len - 1);
     @memcpy(app.toast_buf[0..copy_len], msg[0..copy_len]);
     app.toast_len = copy_len;
     app.toast_expire = @import("io_global.zig").timestamp() + 3;
+    // Auto-detect type from common emoji prefixes if caller used .info
+    if (toast_type == .info and copy_len >= 2) {
+        const txt = app.toast_buf[0..copy_len];
+        if (std.mem.startsWith(u8, txt, "\xe2\x9c\x93") or   // ✓
+            std.mem.startsWith(u8, txt, "\xf0\x9f\x93\xb8") or // 📸
+            std.mem.startsWith(u8, txt, "\xe2\x9c\x85"))       // ✅
+        {
+            app.toast_type = .success;
+        } else if (std.mem.startsWith(u8, txt, "\xe2\x9a\xa0") or // ⚠
+                   std.mem.startsWith(u8, txt, "\xf0\x9f\x95\xb6"))  // 🕶
+        {
+            app.toast_type = .warning;
+        } else if (std.mem.indexOf(u8, txt, "ailed") != null or
+                   std.mem.indexOf(u8, txt, "rror") != null)
+        {
+            app.toast_type = .err;
+        } else {
+            app.toast_type = .info;
+        }
+    } else {
+        app.toast_type = toast_type;
+    }
 }
 
 pub fn markConfigDirty() void {

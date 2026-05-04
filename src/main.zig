@@ -935,6 +935,7 @@ fn appFrame() !dvui.App.Result {
             has_mouse_movement = true;
             state.app.last_mouse_x = e.evt.mouse.p.x;
             state.app.last_mouse_y = e.evt.mouse.p.y;
+            state.app.last_mouse_move_ms = @import("core/io_global.zig").milliTimestamp();
         }
     }
     
@@ -975,6 +976,7 @@ fn appFrame() !dvui.App.Result {
 
     if (state.app.fullscreen_player_idx == null) {
         ui.renderHeader();
+        ui.renderTabBar();
     }
 
     // Horizontal split: grid takes remaining space, drawer takes fixed width on the right
@@ -991,6 +993,7 @@ fn appFrame() !dvui.App.Result {
                 var grid_inner = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
                 try ui.renderGrid();
                 ui.renderLiquidGlassOverlay();
+                ui.renderStatsOverlay();
                 grid_inner.deinit();
             }
             
@@ -1064,6 +1067,20 @@ fn appFrame() !dvui.App.Result {
     for (dvui.events()) |*e| {
         if (e.evt == .mouse and e.evt.mouse.action == .release and e.evt.mouse.button == .left) {
             state.app.dragging_magnet_len = 0;
+        }
+    }
+
+    // Continuous refresh: when any player is actively playing (not paused),
+    // request another frame immediately so the video texture keeps updating.
+    // Without this, dvui only redraws on input events and the video freezes.
+    for (state.app.players.items) |p| {
+        if (p.provider == .mpv) {
+            var paused: i64 = 1;
+            _ = c.mpv.mpv_get_property(p.mpv_ctx, "pause", c.mpv.MPV_FORMAT_FLAG, &paused);
+            if (paused == 0) {
+                dvui.refresh(null, @src(), null);
+                break;
+            }
         }
     }
 

@@ -444,8 +444,8 @@ pub fn processGlobalInputs() void {
                             _ = c.mpv.mpv_command_string(p.mpv_ctx, "screenshot");
                             state.showToast("📸 Screenshot saved");
                         },
-                        // Video info overlay toggle
-                        .i => { _ = c.mpv.mpv_command_string(p.mpv_ctx, "script-binding stats/display-stats-toggle"); },
+                        // Stats for Nerds overlay toggle
+                        .i => { state.app.stats_overlay_open = !state.app.stats_overlay_open; },
                         // Zoom
                         .equal => { _ = c.mpv.mpv_command_string(p.mpv_ctx, "add video-zoom 0.1"); },
                         .minus => { _ = c.mpv.mpv_command_string(p.mpv_ctx, "add video-zoom -0.1"); },

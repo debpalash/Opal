@@ -13,6 +13,7 @@ const components = @import("components.zig");
 
 
 pub const renderHeader = @import("header.zig").renderHeader;
+pub const renderTabBar = @import("header.zig").renderTabBar;
 pub const handleClipboardPaste = @import("header.zig").handleClipboardPaste;
 
 pub const renderGrid = @import("grid.zig").renderGrid;
@@ -26,6 +27,7 @@ pub const subLanguageDropdown = @import("footer.zig").subLanguageDropdown;
 pub const renderLiquidGlassOverlay = @import("footer.zig").renderLiquidGlassOverlay;
 pub const renderGlobalBottomTray = @import("footer.zig").renderGlobalBottomTray;
 pub const renderToast = @import("footer.zig").renderToast;
+pub const renderStatsOverlay = @import("footer.zig").renderStatsOverlay;
 
 const FileOpenState = struct {
     var file_path: [2048]u8 = undefined;
@@ -43,9 +45,8 @@ const FileOpenState = struct {
         var child = if (comptime builtin.os.tag == .macos) blk: {
             // macOS: native file dialog via osascript + AppleScript
             const script =
-                "set theFile to choose file with prompt \"Open Media File\" of type " ++
-                "{\"mp4\",\"mkv\",\"avi\",\"webm\",\"mov\",\"flv\",\"m3u\",\"m3u8\"," ++
-                "\"ts\",\"mp3\",\"flac\",\"wav\",\"ogg\",\"m4a\",\"opus\",\"aac\"}\n" ++
+                "activate\n" ++
+                "set theFile to choose file with prompt \"Open Media File\"\n" ++
                 "return POSIX path of theFile";
             break :blk io_global.Child.init(
                 &.{ "osascript", "-e", script },
@@ -60,19 +61,45 @@ const FileOpenState = struct {
             );
         };
         child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Ignore;
-        child.spawn() catch {
+        child.stderr_behavior = .Pipe;
+        child.spawn() catch |err| {
+            std.debug.print("[FileOpen] spawn failed: {}\n", .{err});
             running = false;
             return;
         };
 
-        // Read stdout BEFORE wait — wait() may close the pipe
+        // Read stdout using streaming reads (readAll uses positional I/O
+        // which silently returns 0 on pipes). Read BEFORE wait to avoid
+        // pipe buffer deadlock.
         var n: usize = 0;
         if (child.stdout) |*stdout| {
-            n = io_global.readAll(stdout, &file_path) catch 0;
+            while (n < file_path.len) {
+                const chunk = io_global.read(stdout, file_path[n..]) catch break;
+                if (chunk == 0) break; // EOF
+                n += chunk;
+            }
         }
 
-        _ = child.wait() catch {};
+        // Also capture stderr for debugging
+        var err_buf: [512]u8 = undefined;
+        var err_n: usize = 0;
+        if (child.stderr) |*stderr_pipe| {
+            while (err_n < err_buf.len) {
+                const chunk = io_global.read(stderr_pipe, err_buf[err_n..]) catch break;
+                if (chunk == 0) break;
+                err_n += chunk;
+            }
+        }
+
+        const term = child.wait() catch |err| {
+            std.debug.print("[FileOpen] wait failed: {}\n", .{err});
+            running = false;
+            return;
+        };
+
+        if (err_n > 0) {
+            std.debug.print("[FileOpen] stderr: {s}\n", .{err_buf[0..err_n]});
+        }
 
         if (n > 0) {
             var plen = n;
@@ -81,7 +108,7 @@ const FileOpenState = struct {
             std.debug.print("[FileOpen] Got path: {s}\n", .{file_path[0..plen]});
             pending = true;
         } else {
-            std.debug.print("[FileOpen] No file selected (cancelled)\n", .{});
+            std.debug.print("[FileOpen] No file selected (cancelled) exit={}\n", .{term});
         }
         running = false;
     }

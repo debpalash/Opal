@@ -362,6 +362,10 @@ pub const MediaPlayer = struct {
         }
     }
 
+    pub fn togglePause(self: *MediaPlayer) void {
+        _ = c.mpv.mpv_command_string(self.mpv_ctx, "cycle pause");
+    }
+
     pub fn cycleRotation(self: *MediaPlayer) void {
         self.rotation = @mod(self.rotation + 90, 360);
         var cmd_buf: [64]u8 = undefined;

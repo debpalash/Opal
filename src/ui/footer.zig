@@ -467,6 +467,14 @@ pub fn renderLiquidGlassOverlay() void {
 
     const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
+    // ── Check auto-hide ──
+    var is_paused: c_int = 0;
+    _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "pause", c.mpv.MPV_FORMAT_FLAG, &is_paused);
+    const now_ms = @import("../core/io_global.zig").milliTimestamp();
+    
+    // Auto-hide if playing and mouse hasn't moved in 2.5s
+    if (is_paused == 0 and now_ms - state.app.last_mouse_move_ms > 2500) return;
+
     // Outer wrapper: push panel to bottom of video cell
     var anchor = dvui.box(@src(), .{ .dir = .vertical }, .{ .gravity_y = 1.0, .expand = .horizontal });
     defer anchor.deinit();
@@ -495,25 +503,18 @@ pub fn renderLiquidGlassOverlay() void {
             .mouse => |mouse| {
                 switch (mouse.action) {
                     .wheel_y => |wy| {
-                        // Check if mouse is over the seekbar area (top ~16px of panel)
+                        // Check if mouse is over the seekbar area (top ~12px of panel)
                         const panel_rect = panel.data().contentRectScale().r;
                         const mouse_y_in_panel = mouse.p.y - panel_rect.y;
-                        if (mouse_y_in_panel >= 0 and mouse_y_in_panel < 20) {
+                        if (mouse_y_in_panel >= 0 and mouse_y_in_panel < 12) {
                             // Scroll on seekbar → seek ±5 seconds
                             if (wy > 0) {
                                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek 5");
                             } else {
                                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek -5");
                             }
-                        } else {
-                            // Scroll elsewhere on panel → volume ±5
-                            if (wy > 0) {
-                                _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "add volume 5");
-                            } else {
-                                _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "add volume -5");
-                            }
+                            ev.handled = true;
                         }
-                        ev.handled = true;
                     },
                     else => {},
                 }
@@ -523,8 +524,6 @@ pub fn renderLiquidGlassOverlay() void {
     }
 
     // Query mpv properties — seekbar-critical props every frame, slow props cached
-    var is_paused: c_int = 0;
-    _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "pause", c.mpv.MPV_FORMAT_FLAG, &is_paused);
     var percent_pos: f64 = 0.0;
     _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "percent-pos", c.mpv.MPV_FORMAT_DOUBLE, &percent_pos);
     var time_pos: f64 = 0.0;
@@ -616,7 +615,6 @@ pub fn renderLiquidGlassOverlay() void {
             .min_size_content = .{ .w = 100, .h = 8 },
             .color_fill = transparent,
         })) {
-            const now_ms = @import("../core/io_global.zig").milliTimestamp();
             const S = struct { var last_seek_ms: i64 = 0; var last_seek_pct: f64 = -1.0; };
             const seek_pct = @as(f64, slider_pct * 100.0);
 
@@ -635,6 +633,32 @@ pub fn renderLiquidGlassOverlay() void {
                 S.last_seek_pct = seek_pct;
             }
         }
+
+        // Seekbar hover timestamp — show time at cursor position
+        if (duration > 0) {
+            const seek_rect = seek_row.data().contentRectScale().r;
+            const mouse_x = state.app.last_mouse_x;
+            const mouse_y = state.app.last_mouse_y;
+            // Check if mouse is within seekbar vertical range (plus a bit of tolerance)
+            if (mouse_y >= seek_rect.y - 20 and mouse_y <= seek_rect.y + seek_rect.h + 10 and
+                mouse_x >= seek_rect.x and mouse_x <= seek_rect.x + seek_rect.w)
+            {
+                const frac = @max(0.0, @min(1.0, (mouse_x - seek_rect.x) / @max(1.0, seek_rect.w)));
+                const hover_time = frac * @as(f32, @floatCast(duration));
+                const ht_sec = @as(u32, @intFromFloat(@max(0.0, hover_time)));
+                var ht_buf: [16]u8 = undefined;
+                const ht_str = std.fmt.bufPrint(&ht_buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{
+                    ht_sec / 3600, (ht_sec % 3600) / 60, ht_sec % 60,
+                }) catch "00:00:00";
+
+                // Position the label at the mouse X, above the seekbar
+                _ = dvui.label(@src(), "{s}", .{ht_str}, .{
+                    .color_text = theme.colors.text_main,
+                    .gravity_x = frac,
+                    .gravity_y = 0.0,
+                });
+            }
+        }
     }
 
     // 4px gap
@@ -646,8 +670,8 @@ pub fn renderLiquidGlassOverlay() void {
     {
         var ctrl_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 24 },
-            .max_size_content = .{ .w = 0, .h = 24 },
+            .min_size_content = .{ .w = 0, .h = 40 },
+            .max_size_content = .{ .w = 0, .h = 40 },
         });
         defer ctrl_row.deinit();
 
@@ -681,11 +705,12 @@ pub fn renderLiquidGlassOverlay() void {
         components.tip(@src(), wd, "−10s");
 
         // Play/Pause
-        if (dvui.buttonIcon(@src(), "", toggle_icon, .{}, .{}, .{
+        if (dvui.buttonIcon(@src(), "Play/Pause", toggle_icon, .{}, .{}, .{
             .data_out = &wd, .color_fill = transparent, .color_text = theme.colors.text_main,
-            .border = dvui.Rect.all(0), .gravity_y = 0.5, .padding = ctrl_pad,
+            .corner_radius = dvui.Rect.all(6), .border = dvui.Rect.all(0), .gravity_y = 0.5,
+            .padding = ctrl_pad,
         })) {
-            _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "cycle pause");
+            active_p.togglePause();
         }
         components.tip(@src(), wd, if (is_paused != 0) "Play" else "Pause");
 
@@ -771,7 +796,16 @@ pub fn renderLiquidGlassOverlay() void {
         })) {
             _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "cycle mute");
         }
-        components.tip(@src(), wd, if (is_muted == 1) "Unmute" else "Mute");
+        // Dynamic tooltip showing current volume level
+        {
+            var mute_tip_buf: [32]u8 = undefined;
+            const vol_int = @as(i32, @intFromFloat(@max(0.0, @min(100.0, SlowProps.volume))));
+            const mute_tip = if (is_muted == 1)
+                "Unmute"
+            else
+                (std.fmt.bufPrint(&mute_tip_buf, "Mute ({d}%)", .{vol_int}) catch "Mute");
+            components.tip(@src(), wd, mute_tip);
+        }
 
         const vol_f64: f64 = SlowProps.volume;
         var vol_val: f32 = @floatCast(@max(0.0, @min(1.0, vol_f64 / 100.0)));
@@ -786,40 +820,26 @@ pub fn renderLiquidGlassOverlay() void {
             } else |_| {}
         }
 
+        // Volume percentage label
+        {
+            const vol_pct = @as(i32, @intFromFloat(@max(0.0, @min(100.0, vol_f64))));
+            var vol_pct_buf: [8]u8 = undefined;
+            const vol_pct_str = std.fmt.bufPrint(&vol_pct_buf, "{d}%", .{vol_pct}) catch "0%";
+            _ = dvui.label(@src(), "{s}", .{vol_pct_str}, .{
+                .color_text = theme.colors.text_dim,
+                .gravity_y = 0.5,
+                .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
+            });
+        }
+
         // Spacer
         { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
 
         // Dropdown menus — compact
         var hook_menu = dvui.menu(@src(), .horizontal, .{ .background = false });
 
-        // Resolution badge (from cache)
-        {
-            const width_v = SlowProps.width;
-            const height_v = SlowProps.height;
-            if (width_v > 0 and height_v > 0) {
-                var grp = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5, .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 } });
-                dvui.icon(@src(), "", icons.tvg.lucide.@"monitor", .{}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
-                var res_buf: [32]u8 = undefined;
-                if (std.fmt.bufPrintZ(&res_buf, "{d}×{d}", .{ width_v, height_v })) |res| {
-                    _ = dvui.label(@src(), "{s}", .{res}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5, .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 } });
-                } else |_| {}
-                grp.deinit();
-            }
-        }
-
-        // FPS badge (from cache)
-        {
-            const fps_v = SlowProps.fps;
-            if (fps_v > 0) {
-                var grp = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5, .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 } });
-                dvui.icon(@src(), "", icons.tvg.lucide.@"gauge", .{}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
-                var fps_buf: [16]u8 = undefined;
-                if (std.fmt.bufPrintZ(&fps_buf, "{d:.0}fps", .{fps_v})) |fp| {
-                    _ = dvui.label(@src(), "{s}", .{fp}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5, .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 } });
-                } else |_| {}
-                grp.deinit();
-            }
-        }
+        // Technical Badges (Resolution, FPS) removed from main toolbar
+        // They should be added to a "Stats for Nerds" overlay in the future.
 
         // Aspect ratio
         {
@@ -1024,22 +1044,36 @@ pub fn renderToast() void {
     var toast_anchor = dvui.overlay(@src(), .{ .expand = .both });
     defer toast_anchor.deinit();
 
+    // Semantic colors based on toast type
+    const toast_color = switch (state.app.toast_type) {
+        .info => theme.colors.accent,
+        .success => theme.colors.success,
+        .warning => theme.colors.warning,
+        .err => theme.colors.danger,
+    };
+    const toast_icon = switch (state.app.toast_type) {
+        .info => icons.tvg.lucide.@"info",
+        .success => icons.tvg.lucide.@"circle-check-big",
+        .warning => icons.tvg.lucide.@"info",
+        .err => icons.tvg.lucide.@"x",
+    };
+
     // Glass-style toast container — top-center, semi-transparent
     var toast_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .gravity_x = 0.5,
         .gravity_y = 0.06,
         .background = true,
         .color_fill = theme.colors.bg_glass,
-        .color_border = theme.colors.accent,
+        .color_border = toast_color,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
         .corner_radius = dvui.Rect.all(10),
         .padding = .{ .x = 14, .y = 10, .w = 14, .h = 10 },
     });
     defer toast_box.deinit();
 
-    // Icon prefix
-    _ = dvui.icon(@src(), "", icons.tvg.lucide.@"info", .{}, .{
-        .color_text = theme.colors.accent,
+    // Icon prefix — color matches toast type
+    _ = dvui.icon(@src(), "", toast_icon, .{}, .{
+        .color_text = toast_color,
         .min_size_content = .{ .w = 14, .h = 14 },
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
@@ -1048,5 +1082,111 @@ pub fn renderToast() void {
     _ = dvui.label(@src(), "{s}", .{state.app.toast_buf[0..state.app.toast_len]}, .{
         .color_text = theme.colors.text_main,
         .gravity_y = 0.5,
+    });
+}
+
+/// Stats for Nerds — semi-transparent HUD in top-left corner.
+/// Toggle with Ctrl+I (already wired in input.zig as media_info_open toggle —
+/// this overlay uses a separate `stats_overlay_open` flag).
+pub fn renderStatsOverlay() void {
+    if (!state.app.stats_overlay_open) return;
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
+    const p = state.app.players.items[state.app.active_player_idx];
+    if (p.provider != .mpv) return;
+
+    var overlay_anchor = dvui.overlay(@src(), .{ .expand = .both });
+    defer overlay_anchor.deinit();
+
+    var stats_box = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .gravity_x = 0.02,
+        .gravity_y = 0.04,
+        .background = true,
+        .color_fill = dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 200 },
+        .color_border = theme.colors.border_glass,
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(8),
+        .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
+        .min_size_content = .{ .w = 220, .h = 0 },
+    });
+    defer stats_box.deinit();
+
+    // Title
+    _ = dvui.label(@src(), "Stats for Nerds", .{}, .{
+        .color_text = theme.colors.accent,
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
+    });
+
+    // Helper: query a string prop from mpv
+    const stat_props = [_][2][]const u8{
+        .{ "video-codec", "Video" },
+        .{ "audio-codec-name", "Audio" },
+        .{ "hwdec-current", "HW Dec" },
+    };
+
+    // Resolution + FPS (from cached SlowProps would be ideal, but we query directly here)
+    {
+        var w: i64 = 0;
+        var h: i64 = 0;
+        var fps: f64 = 0;
+        _ = c.mpv.mpv_get_property(p.mpv_ctx, "width", c.mpv.MPV_FORMAT_INT64, &w);
+        _ = c.mpv.mpv_get_property(p.mpv_ctx, "height", c.mpv.MPV_FORMAT_INT64, &h);
+        _ = c.mpv.mpv_get_property(p.mpv_ctx, "estimated-vf-fps", c.mpv.MPV_FORMAT_DOUBLE, &fps);
+
+        var res_buf: [48]u8 = undefined;
+        const res_str = std.fmt.bufPrint(&res_buf, "{d}×{d} @ {d:.1} fps", .{ w, h, fps }) catch "—";
+        renderStatRow("Resolution", res_str, 0);
+    }
+
+    // Bitrate
+    {
+        var vbr: f64 = 0;
+        var abr: f64 = 0;
+        _ = c.mpv.mpv_get_property(p.mpv_ctx, "video-bitrate", c.mpv.MPV_FORMAT_DOUBLE, &vbr);
+        _ = c.mpv.mpv_get_property(p.mpv_ctx, "audio-bitrate", c.mpv.MPV_FORMAT_DOUBLE, &abr);
+        const vbr_kbps = @as(i64, @intFromFloat(vbr / 1000.0));
+        const abr_kbps = @as(i64, @intFromFloat(abr / 1000.0));
+        var br_buf: [48]u8 = undefined;
+        const br_str = std.fmt.bufPrint(&br_buf, "V: {d} kb/s  A: {d} kb/s", .{ vbr_kbps, abr_kbps }) catch "—";
+        renderStatRow("Bitrate", br_str, 1);
+    }
+
+    // Dropped frames
+    {
+        var dropped: i64 = 0;
+        _ = c.mpv.mpv_get_property(p.mpv_ctx, "frame-drop-count", c.mpv.MPV_FORMAT_INT64, &dropped);
+        var drop_buf: [24]u8 = undefined;
+        const drop_str = std.fmt.bufPrint(&drop_buf, "{d}", .{dropped}) catch "0";
+        renderStatRow("Dropped", drop_str, 2);
+    }
+
+    // String props (codec, hwdec)
+    for (stat_props, 0..) |prop, idx| {
+        const val_ptr: ?[*:0]u8 = @ptrCast(c.mpv.mpv_get_property_string(p.mpv_ctx, @ptrCast(prop[0].ptr)));
+        if (val_ptr) |vp| {
+            const val_str = std.mem.span(vp);
+            renderStatRow(prop[1], val_str, idx + 10);
+            c.mpv.mpv_free(vp);
+        } else {
+            renderStatRow(prop[1], "—", idx + 10);
+        }
+    }
+}
+
+fn renderStatRow(label: []const u8, value: []const u8, id_extra: usize) void {
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = id_extra,
+        .expand = .horizontal,
+        .padding = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+    });
+    defer row.deinit();
+
+    _ = dvui.label(@src(), "{s}", .{label}, .{
+        .id_extra = id_extra + 100,
+        .color_text = theme.colors.text_muted,
+        .min_size_content = .{ .w = 80, .h = 0 },
+    });
+    _ = dvui.label(@src(), "{s}", .{value}, .{
+        .id_extra = id_extra + 200,
+        .color_text = theme.colors.text_main,
     });
 }

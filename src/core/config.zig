@@ -59,7 +59,7 @@ pub fn save() void {
     setKey("win_y", fmtInt(@as(usize, @intCast(@max(0, state.app.win_y)))));
     setKey("win_w", fmtInt(@as(usize, @intCast(@max(100, state.app.win_w)))));
     setKey("win_h", fmtInt(@as(usize, @intCast(@max(100, state.app.win_h)))));
-    setKey("drawer_open", if (state.app.drawer_open) "1" else "0");
+    // drawer_open intentionally not persisted — always start with sidebar closed
     setKey("theme_preset", theme.presetName(theme.active_preset));
 
     saveSessionUrls();
@@ -226,7 +226,7 @@ fn applyConfig(key: []const u8, val: []const u8) void {
     } else if (std.mem.eql(u8, key, "win_h")) {
         state.app.win_h = std.fmt.parseInt(i32, val, 10) catch 800;
     } else if (std.mem.eql(u8, key, "drawer_open")) {
-        state.app.drawer_open = std.mem.eql(u8, val, "1");
+        // Ignored — sidebar always starts closed for a clean first impression
     } else if (std.mem.startsWith(u8, key, "session_url_")) {
         const idx_str = key["session_url_".len..];
         const idx = std.fmt.parseInt(usize, idx_str, 10) catch return;

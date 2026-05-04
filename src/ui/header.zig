@@ -60,7 +60,7 @@ pub fn renderHeader() void {
                 .color_text = if (active) dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 } else theme.colors.text_muted,
                 .corner_radius = dvui.Rect.all(6),
                 .border = dvui.Rect.all(0),
-                .padding = .{ .x = 5, .y = 4, .w = 5, .h = 4 },
+                .padding = .{ .x = 6, .y = 5, .w = 6, .h = 5 },
                 .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
             };
         }
@@ -185,10 +185,30 @@ pub fn renderHeader() void {
             } else if (std.mem.lastIndexOfScalar(u8, full_path, '\\')) |bslash| {
                 basename = full_path[bslash + 1 ..];
             }
-            // Truncate for display
-            const display_len = @min(basename.len, 50);
-            const display = basename[0..display_len];
-            const suffix: []const u8 = if (basename.len > 50) "…" else "";
+            // Strip extension (last dot if extension <= 5 chars)
+            var name_end: usize = basename.len;
+            {
+                var last_dot: ?usize = null;
+                for (basename, 0..) |bch, bci| {
+                    if (bch == '.') last_dot = bci;
+                }
+                if (last_dot) |dot| {
+                    if (basename.len - dot <= 6) name_end = dot;
+                }
+            }
+            // Replace dots/underscores with spaces, collapse multiples
+            var clean_buf: [80]u8 = undefined;
+            var clean_len: usize = 0;
+            for (basename[0..name_end]) |bch| {
+                if (clean_len >= clean_buf.len - 1) break;
+                const out_ch: u8 = if (bch == '.' or bch == '_') ' ' else bch;
+                if (out_ch == ' ' and clean_len > 0 and clean_buf[clean_len - 1] == ' ') continue;
+                clean_buf[clean_len] = out_ch;
+                clean_len += 1;
+            }
+            while (clean_len > 0 and clean_buf[clean_len - 1] == ' ') clean_len -= 1;
+            const display = if (clean_len > 0) clean_buf[0..@min(clean_len, 50)] else basename[0..@min(basename.len, 50)];
+            const suffix: []const u8 = if (display.len >= 50) "…" else "";
             var name_buf: [64]u8 = undefined;
             if (std.fmt.bufPrintZ(&name_buf, "{s}{s}", .{ display, suffix })) |name| {
                 _ = dvui.label(@src(), "{s}", .{name}, .{
@@ -535,3 +555,68 @@ pub fn renderUrlInput(is_large: bool) void {
     }
 }
 
+/// Slim tab strip below the header — only rendered when 2+ players exist.
+pub fn renderTabBar() void {
+    if (state.app.players.items.len < 2) return;
+
+    var tab_bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .color_border = theme.colors.divider,
+        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+        .padding = .{ .x = 4, .y = 0, .w = 4, .h = 0 },
+    });
+    defer tab_bar.deinit();
+
+    for (state.app.players.items, 0..) |p, i| {
+        const is_active = i == state.app.active_player_idx;
+
+        // Extract cleaned name from URL
+        var tab_label: []const u8 = "Empty";
+        var clean_buf: [40]u8 = undefined;
+        var clean_len: usize = 0;
+
+        if (p.current_url_len > 0 and p.current_url_len <= 2048) {
+            const full = p.current_url[0..p.current_url_len];
+            var basename: []const u8 = full;
+            if (std.mem.lastIndexOfScalar(u8, full, '/')) |sl| {
+                basename = full[sl + 1 ..];
+            }
+            // Strip extension
+            var name_end: usize = basename.len;
+            {
+                var ld: ?usize = null;
+                for (basename, 0..) |bch, bi| { if (bch == '.') ld = bi; }
+                if (ld) |d| { if (basename.len - d <= 6) name_end = d; }
+            }
+            // Replace dots/underscores
+            for (basename[0..@min(name_end, clean_buf.len)]) |bch| {
+                if (clean_len >= clean_buf.len - 1) break;
+                const out: u8 = if (bch == '.' or bch == '_') ' ' else bch;
+                if (out == ' ' and clean_len > 0 and clean_buf[clean_len - 1] == ' ') continue;
+                clean_buf[clean_len] = out;
+                clean_len += 1;
+            }
+            while (clean_len > 0 and clean_buf[clean_len - 1] == ' ') clean_len -= 1;
+            if (clean_len > 0) {
+                // Truncate to ~25 chars
+                tab_label = clean_buf[0..@min(clean_len, 25)];
+            }
+        }
+
+        // Tab button
+        if (dvui.button(@src(), tab_label, .{}, .{
+            .id_extra = i,
+            .color_fill = if (is_active) theme.colors.bg_card else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = if (is_active) theme.colors.accent else theme.colors.text_muted,
+            .color_border = if (is_active) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .border = .{ .x = 0, .y = 0, .w = 0, .h = if (is_active) @as(f32, 2) else 0 },
+            .corner_radius = .{ .x = 4, .y = 4, .w = 0, .h = 0 },
+            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
+        })) {
+            state.app.active_player_idx = i;
+        }
+    }
+}

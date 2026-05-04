@@ -236,20 +236,34 @@ if [ -f "$ROOT/libtorrent_wrapper.so" ]; then
         "$APP_DIR/Contents/MacOS/Opal" 2>/dev/null || true
 fi
 
-# Rewrite any transitive homebrew links inside bundled dylibs so they also
-# resolve via @executable_path instead of /opt/homebrew (required on hosts
-# without the same brew layout).
-for LIB in "$DYLIB_DIR"/*.dylib "$DYLIB_DIR"/*.so; do
-    [ -f "$LIB" ] || continue
-    for SUB in $(otool -L "$LIB" 2>/dev/null | awk 'NR>1 {print $1}' | grep -E "^/opt/homebrew|^/usr/local" || true); do
-        SUB_NAME="$(basename "$SUB")"
-        # Copy transitive dep if missing
-        if [ ! -f "$DYLIB_DIR/$SUB_NAME" ] && [ -f "$SUB" ]; then
-            cp -L "$SUB" "$DYLIB_DIR/$SUB_NAME"
-        fi
-        install_name_tool -change "$SUB" "@executable_path/../Frameworks/$SUB_NAME" "$LIB" 2>/dev/null || true
+# Rewrite transitive homebrew links inside bundled dylibs. Libraries can have
+# deep dependency chains (e.g. libavdevice→libavfilter→libavutil→libssl), so
+# we loop until no new dependencies are discovered (max 10 passes).
+PASS=0
+while [ $PASS -lt 10 ]; do
+    PASS=$((PASS + 1))
+    FOUND_NEW=0
+    for LIB in "$DYLIB_DIR"/*.dylib "$DYLIB_DIR"/*.so; do
+        [ -f "$LIB" ] || continue
+        for SUB in $(otool -L "$LIB" 2>/dev/null | awk 'NR>1 {print $1}' | grep -E "^/opt/homebrew|^/usr/local" || true); do
+            SUB_NAME="$(basename "$SUB")"
+            # Copy transitive dep if missing
+            if [ ! -f "$DYLIB_DIR/$SUB_NAME" ] && [ -f "$SUB" ]; then
+                cp -L "$SUB" "$DYLIB_DIR/$SUB_NAME"
+                FOUND_NEW=1
+            fi
+            install_name_tool -change "$SUB" "@executable_path/../Frameworks/$SUB_NAME" "$LIB" 2>/dev/null || true
+        done
+        # Also fix the library's own install name if it points to homebrew
+        OWN_ID=$(otool -D "$LIB" 2>/dev/null | tail -1)
+        case "$OWN_ID" in /opt/homebrew*|/usr/local*)
+            install_name_tool -id "@executable_path/../Frameworks/$(basename "$LIB")" "$LIB" 2>/dev/null || true
+        ;; esac
     done
+    [ $FOUND_NEW -eq 0 ] && break
+    echo "[build-app]   dylib pass $PASS — found new deps, continuing…"
 done
+echo "[build-app]   dylib resolution done after $PASS pass(es)"
 
 # ── 5b. Embed OpalMenubar helper (LSUIElement) ────────────────
 # Built separately by scripts/build-menubar.sh. Embedded as LoginItem

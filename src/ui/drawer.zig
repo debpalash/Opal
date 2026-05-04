@@ -47,13 +47,14 @@ pub fn renderDrawer() void {
 
     // Resize Handle Bar (hide when expanded)
     if (!state.app.drawer_expanded) {
+        const is_resizing = state.app.is_drawer_resizing;
         var drag_bar = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .vertical,
-            .min_size_content = .{ .w = 8, .h = 10 },
+            .min_size_content = .{ .w = 14, .h = 10 },
             .background = true,
             .color_fill = theme.colors.bg_header,
-            .color_border = theme.colors.border_drawer,
-            .border = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
+            .color_border = if (is_resizing) theme.colors.accent else theme.colors.divider,
+            .border = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
         });
 
         const drag_bar_rect = drag_bar.data().borderRectScale().r;
@@ -73,7 +74,7 @@ pub fn renderDrawer() void {
                     .background = true,
                     .color_fill = handle_color,
                     .corner_radius = dvui.Rect.all(99),
-                    .margin = .{ .x = 2, .y = 1, .w = 2, .h = 1 },
+                    .margin = .{ .x = 4, .y = 1, .w = 4, .h = 1 },
                     .gravity_x = 0.5,
                 });
                 dot.deinit();
@@ -81,11 +82,14 @@ pub fn renderDrawer() void {
             { var spacer_bot = dvui.box(@src(), .{}, .{ .expand = .vertical }); spacer_bot.deinit(); }
         }
 
+        // Use global mouse state for reliable drag detection — dvui.events()
+        // only delivers events within the widget's clip rect, which is too narrow
+        // for comfortable dragging.
         for (dvui.events()) |*e| {
             if (e.evt == .mouse) {
-                // Set resize cursor when hovering over drag bar
+                // Set resize cursor when hovering anywhere near the drag bar
                 if (e.evt.mouse.action == .motion) {
-                    if (e.evt.mouse.p.x >= drag_bar_rect.x - 10 and e.evt.mouse.p.x <= drag_bar_rect.x + drag_bar_rect.w + 10 and
+                    if (e.evt.mouse.p.x >= drag_bar_rect.x - 6 and e.evt.mouse.p.x <= drag_bar_rect.x + drag_bar_rect.w + 6 and
                         e.evt.mouse.p.y >= drag_bar_rect.y and e.evt.mouse.p.y <= drag_bar_rect.y + drag_bar_rect.h)
                     {
                         dvui.cursorSet(.arrow_w_e);
@@ -94,28 +98,44 @@ pub fn renderDrawer() void {
 
                 if (e.evt.mouse.button == .left) {
                     if (e.evt.mouse.action == .press) {
-                        if (e.evt.mouse.p.x >= drag_bar_rect.x - 20 and e.evt.mouse.p.x <= drag_bar_rect.x + 20) {
+                        // Wide hit target for initial grab
+                        if (e.evt.mouse.p.x >= drag_bar_rect.x - 8 and e.evt.mouse.p.x <= drag_bar_rect.x + drag_bar_rect.w + 8 and
+                            e.evt.mouse.p.y >= drag_bar_rect.y and e.evt.mouse.p.y <= drag_bar_rect.y + drag_bar_rect.h)
+                        {
                             state.app.is_drawer_resizing = true;
                             drawer_last_mouse_x = e.evt.mouse.p.x;
+                            e.handled = true;
                         }
-                    } else if (e.evt.mouse.action == .release) {
-                        state.app.is_drawer_resizing = false;
                     }
-                }
-                
-                if (e.evt.mouse.action == .motion and state.app.is_drawer_resizing) {
-                    dvui.cursorSet(.arrow_w_e);
-                    if (drawer_last_mouse_x >= 0) {
-                        const delta = drawer_last_mouse_x - e.evt.mouse.p.x;
-                        var new_w = state.app.drawer_width_px + delta;
-                        if (new_w < 300) new_w = 300;
-                        if (new_w > max_drawer_w) new_w = max_drawer_w;
-                        state.app.drawer_width_px = new_w;
-                    }
-                    drawer_last_mouse_x = e.evt.mouse.p.x;
                 }
             }
         }
+
+        // Handle drag motion and release globally (not clipped to widget)
+        if (state.app.is_drawer_resizing) {
+            dvui.cursorSet(.arrow_w_e);
+            const mouse_x = state.app.last_mouse_x;
+
+            // Check for mouse release via global mouse state
+            // dvui events may miss release if cursor left the widget
+            for (dvui.events()) |*e| {
+                if (e.evt == .mouse and e.evt.mouse.button == .left and e.evt.mouse.action == .release) {
+                    state.app.is_drawer_resizing = false;
+                    state.markConfigDirty();
+                }
+            }
+
+            // Track drag delta using global mouse position
+            if (drawer_last_mouse_x >= 0 and mouse_x != drawer_last_mouse_x) {
+                const delta = drawer_last_mouse_x - mouse_x;
+                var new_w = state.app.drawer_width_px + delta;
+                if (new_w < 300) new_w = 300;
+                if (new_w > max_drawer_w) new_w = max_drawer_w;
+                state.app.drawer_width_px = new_w;
+                drawer_last_mouse_x = mouse_x;
+            }
+        }
+
         drag_bar.deinit();
     }
 
