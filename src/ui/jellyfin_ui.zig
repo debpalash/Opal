@@ -3,6 +3,7 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("theme.zig");
+const components = @import("components.zig");
 const jf = @import("../services/jellyfin.zig");
 
 // ══════════════════════════════════════════════════════════
@@ -187,10 +188,7 @@ fn renderLibraries() void {
     }
 
     if (state.app.jf.is_loading and state.app.jf.library_count == 0) {
-        _ = dvui.label(@src(), "Loading libraries...", .{}, .{
-            .color_text = theme.colors.text_muted,
-            .padding = .{ .x = 16, .y = 20, .w = 0, .h = 0 },
-        });
+        renderSkeletonRows();
         return;
     }
 
@@ -198,6 +196,16 @@ fn renderLibraries() void {
         .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer,
     });
     defer scroll.deinit();
+
+    // Fully-empty state — connected, nothing loading, nothing to show.
+    if (state.app.jf.library_count == 0 and state.app.jf.resume_count == 0) {
+        components.emptyState(
+            icons.tvg.lucide.@"library-big",
+            "No items yet",
+            "Connect Jellyfin or search to start.",
+        );
+        return;
+    }
 
     // ── Continue Watching Section ──
     if (state.app.jf.resume_count > 0) {
@@ -313,11 +321,25 @@ fn renderItems() void {
         }
     }
 
+    if (state.app.jf.is_loading and state.app.jf.item_count == 0) {
+        renderSkeletonRows();
+        return;
+    }
+
     if (state.app.jf.item_count == 0 and !state.app.jf.is_loading) {
-        _ = dvui.label(@src(), "No items found", .{}, .{
-            .color_text = theme.colors.text_muted,
-            .padding = .{ .x = 16, .y = 16, .w = 0, .h = 0 },
-        });
+        if (state.app.jf.view == .Search) {
+            components.emptyState(
+                icons.tvg.lucide.@"search-x",
+                "No matches",
+                "Try a broader query or check your spelling.",
+            );
+        } else {
+            components.emptyState(
+                icons.tvg.lucide.@"library-big",
+                "No items yet",
+                "Try a different search.",
+            );
+        }
         return;
     }
 
@@ -329,6 +351,74 @@ fn renderItems() void {
     for (0..state.app.jf.item_count) |i| {
         const item = &state.app.jf.items[i];
         renderItemCard(item, i);
+    }
+}
+
+// ══════════════════════════════════════════════════════════
+// Skeleton tiles — placeholder cards while fetching
+// ══════════════════════════════════════════════════════════
+
+fn renderSkeletonRows() void {
+    var scroll = dvui.scrollArea(@src(), .{}, .{
+        .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer,
+    });
+    defer scroll.deinit();
+
+    // 8 skeleton row-tiles mirroring renderItemCard layout (poster + info column).
+    const SKELETONS: usize = 8;
+    var i: usize = 0;
+    while (i < SKELETONS) : (i += 1) {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i + 91000,
+            .expand = .horizontal,
+            .background = true,
+            .color_fill = theme.colors.bg_card,
+            .color_border = theme.colors.bg_header_border,
+            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
+        });
+        defer row.deinit();
+
+        // Skeleton poster block
+        var poster = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = i + 91100,
+            .background = true,
+            .color_fill = theme.colors.bg_elevated,
+            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .min_size_content = .{ .w = 50, .h = 75 },
+            .max_size_content = .{ .w = 50, .h = 75 },
+        });
+        poster.deinit();
+
+        // Info column — title bar + meta bar
+        var info = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = i + 91200,
+            .expand = .horizontal,
+            .gravity_y = 0.5,
+            .padding = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
+        });
+        defer info.deinit();
+
+        var title_bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i + 91210,
+            .background = true,
+            .color_fill = theme.colors.bg_elevated,
+            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .min_size_content = .{ .w = 160, .h = 12 },
+            .max_size_content = .{ .w = 220, .h = 12 },
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
+        });
+        title_bar.deinit();
+
+        var meta_bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i + 91220,
+            .background = true,
+            .color_fill = theme.colors.bg_elevated,
+            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .min_size_content = .{ .w = 80, .h = 8 },
+            .max_size_content = .{ .w = 120, .h = 8 },
+        });
+        meta_bar.deinit();
     }
 }
 

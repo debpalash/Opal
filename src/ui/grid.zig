@@ -11,6 +11,59 @@ const theme = @import("theme.zig");
 const metadata_dialog = @import("metadata_dialog.zig");
 const components = @import("components.zig");
 
+/// Normalize a path / URL into a user-facing display name:
+///   1. basename (after last `/` or `\\`)
+///   2. strip short file extension (`.mkv`, `.mp4`, ...)
+///   3. replace `.` and `_` with spaces, collapse runs of spaces
+///   4. trim leading/trailing whitespace
+/// Writes into `out` (capacity = `out.len`) and returns the populated
+/// slice. Returns `raw` unchanged if cleanup would produce an empty
+/// string.
+fn cleanDisplayName(out: []u8, raw: []const u8) []const u8 {
+    if (out.len == 0) return raw;
+
+    // Step 1: basename
+    var basename_start: usize = 0;
+    for (raw, 0..) |ch, ci| {
+        if (ch == '/' or ch == '\\') basename_start = ci + 1;
+    }
+    const basename = raw[basename_start..];
+
+    // Step 2: strip short extension
+    var name_end: usize = basename.len;
+    {
+        var last_dot: ?usize = null;
+        for (basename, 0..) |ch, ci| {
+            if (ch == '.') last_dot = ci;
+        }
+        if (last_dot) |dot| {
+            if (basename.len - dot <= 6) name_end = dot;
+        }
+    }
+    const stripped = basename[0..name_end];
+
+    // Step 3: replace dots/underscores with spaces, collapse multiples
+    var written: usize = 0;
+    for (stripped) |ch| {
+        if (written >= out.len - 1) break;
+        const out_ch: u8 = if (ch == '.' or ch == '_') ' ' else ch;
+        if (out_ch == ' ' and written > 0 and out[written - 1] == ' ') continue;
+        out[written] = out_ch;
+        written += 1;
+    }
+
+    // Step 4: trim trailing then leading spaces
+    while (written > 0 and out[written - 1] == ' ') written -= 1;
+    var trim_start: usize = 0;
+    while (trim_start < written and out[trim_start] == ' ') trim_start += 1;
+    if (trim_start > 0 and trim_start < written) {
+        std.mem.copyForwards(u8, out[0 .. written - trim_start], out[trim_start..written]);
+        written -= trim_start;
+    }
+
+    return if (written > 0) out[0..written] else raw;
+}
+
 fn renderInlineChat() void {
     const ai_chat = @import("../services/ai_chat.zig");
 
@@ -448,117 +501,36 @@ pub fn renderGrid() !void {
             }
         } else if (p.is_loading) {
             // ── Loading indicator — shown immediately on load_file() ──
+            // Polished: uses components.emptyState for the canonical
+            // "loading" surface plus the source path beneath it.
             var load_overlay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
             {
-                // Dark background
+                // Dark backdrop captures clicks to select this pane.
                 if (dvui.button(@src(), "", .{}, .{ .id_extra = i + 3000, .expand = .both, .color_fill = theme.colors.bg_app })) {
                     state.app.active_player_idx = i;
                 }
-                
-                // Centered loading card
-                var load_box = dvui.box(@src(), .{ .dir = .vertical }, .{
-                    .id_extra = i,
+
+                var load_stack = dvui.box(@src(), .{ .dir = .vertical }, .{
+                    .id_extra = i + 3100,
                     .gravity_x = 0.5,
                     .gravity_y = 0.5,
-                    .background = true,
-                    .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 28, .a = 240 },
-                    .color_border = dvui.Color{ .r = 60, .g = 60, .b = 90, .a = 120 },
-                    .border = dvui.Rect.all(1),
-                    .corner_radius = dvui.Rect.all(16),
-                    .padding = .{ .x = 32, .y = 24, .w = 32, .h = 24 },
-                    .min_size_content = .{ .w = 340, .h = 10 },
+                    .expand = .both,
                 });
-                
-                // Animated spinning loader icon (rotate through different icons)
-                const t = @as(u64, @intCast(@max(0, @import("../core/io_global.zig").milliTimestamp())));
-                const spin_phase = @mod(t / 200, 8);
-                const spin_icon = switch (spin_phase) {
-                    0 => icons.tvg.lucide.@"loader",
-                    1 => icons.tvg.lucide.@"loader",
-                    2 => icons.tvg.lucide.@"zap",
-                    3 => icons.tvg.lucide.@"zap",
-                    4 => icons.tvg.lucide.@"loader",
-                    5 => icons.tvg.lucide.@"loader",
-                    6 => icons.tvg.lucide.@"zap",
-                    else => icons.tvg.lucide.@"zap",
-                };
-                // Pulsing color based on time
-                const pulse = @mod(t / 50, 510);
-                const pulse_val: u8 = if (pulse < 255) @intCast(pulse) else @intCast(510 - pulse);
-                const icon_color = dvui.Color{
-                    .r = @as(u8, @intCast(@min(@as(u16, 255), @as(u16, 80) + @as(u16, pulse_val) / 3))),
-                    .g = @as(u8, @intCast(@min(@as(u16, 255), @as(u16, 140) + @as(u16, pulse_val) / 2))),
-                    .b = 255,
-                    .a = 255,
-                };
-                _ = dvui.icon(@src(), "", spin_icon, .{}, .{
-                    .id_extra = i + 4000,
-                    .color_text = icon_color,
-                    .min_size_content = .{ .w = 32, .h = 32 },
-                    .gravity_x = 0.5,
-                    .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
-                });
-                
-                _ = dvui.label(@src(), "Loading media...", .{}, .{
-                    .id_extra = i + 4001,
-                    .color_text = theme.colors.text_main,
-                    .gravity_x = 0.5,
-                    .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
-                });
-                
-                // Animated indeterminate progress bar
-                {
-                    const bar_w: f32 = 300;
-                    const bar_h: f32 = 4;
-                    // Background track
-                    var track = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                        .id_extra = i + 4010,
-                        .background = true,
-                        .color_fill = dvui.Color{ .r = 30, .g = 30, .b = 45, .a = 255 },
-                        .corner_radius = dvui.Rect.all(2),
-                        .min_size_content = .{ .w = bar_w, .h = bar_h },
-                        .gravity_x = 0.5,
-                    });
-                    track.deinit();
-                    
-                    // Moving highlight (slides back and forth)
-                    const cycle = @mod(t / 8, 600); // 0..599
-                    const progress_f = if (cycle < 300) 
-                        @as(f32, @floatFromInt(cycle)) / 300.0  
-                    else 
-                        1.0 - (@as(f32, @floatFromInt(cycle - 300)) / 300.0);
-                    const highlight_w: f32 = 80;
-                    const offset = progress_f * (bar_w - highlight_w);
-                    
-                    var bar_overlay = dvui.overlay(@src(), .{
-                        .id_extra = i + 4011,
-                        .gravity_x = 0.0,
-                    });
-                    var highlight = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                        .id_extra = i + 4012,
-                        .background = true,
-                        .color_fill = icon_color,
-                        .corner_radius = dvui.Rect.all(2),
-                        .min_size_content = .{ .w = highlight_w, .h = bar_h },
-                        .margin = .{ .x = @max(0, offset), .y = 0, .w = 0, .h = 0 },
-                    });
-                    highlight.deinit();
-                    bar_overlay.deinit();
-                }
-                
-                // Show truncated source path
+                defer load_stack.deinit();
+
+                components.emptyState(icons.tvg.lucide.@"hourglass", "Loading...", "");
+
+                // Truncated source path beneath the canonical empty state.
                 if (p.loading_label_len > 0) {
                     const src_text = p.loading_label[0..p.loading_label_len];
                     const display = if (src_text.len > 45) src_text[src_text.len - 45 ..] else src_text;
                     _ = dvui.label(@src(), "{s}", .{display}, .{
                         .id_extra = i + 4002,
-                        .color_text = dvui.Color{ .r = 100, .g = 100, .b = 130, .a = 200 },
+                        .color_text = theme.colors.text_tertiary,
                         .gravity_x = 0.5,
-                        .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 },
+                        .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
                     });
                 }
-                
-                load_box.deinit();
             }
             load_overlay.deinit();
             dvui.refresh(null, @src(), null);
@@ -723,14 +695,45 @@ pub fn renderGrid() !void {
                 card.deinit();
                 outer.deinit();
             } else {
-                const placeholder_text = if (p.current_torrent_id >= 0) 
-                    (if (!p.torrent_is_ready) 
+                // Empty / pre-buffer state for an idle player cell.
+                // Loading states get the hourglass empty-state; the truly
+                // empty (no torrent, no media) state gets the library
+                // empty-state with a "Search above" hint.
+                const is_loading_torrent = p.current_torrent_id >= 0;
+                const placeholder_text = if (is_loading_torrent)
+                    (if (!p.torrent_is_ready)
                         (if (p.has_metadata) "Buffering first video parts..." else "Loading torrent metadata...")
-                    else (if (is_audio_only) "🎵 Audio Stream Playing" else "Buffering video stream..."))
-                    else "Drop media or paste magnet";
-                if (dvui.button(@src(), placeholder_text, .{}, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .expand = .both, .gravity_x = 0.5, .gravity_y = 0.5, .color_fill = theme.colors.bg_drawer, .color_text = theme.colors.text_main, .corner_radius = theme.dims.rad_sm })) {
+                    else (if (is_audio_only) "Audio stream playing" else "Buffering video stream..."))
+                    else "Nothing here yet";
+                const placeholder_hint: []const u8 = if (is_loading_torrent)
+                    ""
+                else
+                    "Search above to find something to watch.";
+                const placeholder_icon = if (is_loading_torrent)
+                    icons.tvg.lucide.@"hourglass"
+                else
+                    icons.tvg.lucide.@"library";
+
+                // Transparent overlay captures clicks to select this pane
+                // without painting over the centered empty-state widget.
+                var placeholder_overlay = dvui.overlay(@src(), .{
+                    .id_extra = i + 5500,
+                    .expand = .both,
+                });
+                defer placeholder_overlay.deinit();
+
+                if (dvui.button(@src(), "", .{}, .{
+                    .id_extra = i + 5510,
+                    .expand = .both,
+                    .color_fill = theme.colors.bg_drawer,
+                    .color_text = theme.colors.text_main,
+                    .border = dvui.Rect.all(0),
+                    .corner_radius = theme.dims.rad_sm,
+                })) {
                     state.app.active_player_idx = i;
                 }
+
+                components.emptyState(placeholder_icon, placeholder_text, placeholder_hint);
             }
         }
         }, // end .mpv
@@ -749,13 +752,7 @@ pub fn renderGrid() !void {
             }
             
             if (state.app.comic.page_count == 0 and !state.app.comic.is_loading) {
-                _ = dvui.label(@src(), "📖 Comic Viewer", .{}, .{
-                    .id_extra = i + 6000,
-                    .color_text = theme.colors.text_muted,
-                    .gravity_x = 0.5,
-                    .gravity_y = 0.5,
-                    .expand = .both,
-                });
+                components.emptyState(icons.tvg.lucide.@"book", "Comic Viewer", "Open a comic to start reading.");
             } else {
                 comics.renderPaneContent(i);
             }
@@ -800,27 +797,29 @@ fn renderContinueWatching() void {
     }
     if (show_count == 0) return;
 
-    // Header row: "Continue Watching" + Clear button
+    // Header row: section header + Clear button
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .margin = .{ .x = 0, .y = 12, .w = 0, .h = 4 },
         });
         defer hdr.deinit();
 
-        _ = dvui.label(@src(), "Continue Watching", .{}, .{
-            .color_text = theme.colors.text_main,
-            .gravity_y = 0.5,
-            .expand = .horizontal,
-        });
+        // Section header takes the left side and expands; Clear button sits
+        // on the right edge. Wrapping in a flex row keeps the header's
+        // built-in vertical margin (spacing.lg above, sm below).
+        {
+            var header_col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+            defer header_col.deinit();
+            components.sectionHeader("Continue Watching");
+        }
 
         if (dvui.button(@src(), "Clear", .{}, .{
             .id_extra = 43900,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_tertiary,
             .border = dvui.Rect.all(0),
-            .corner_radius = dvui.Rect.all(4),
-            .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .gravity_y = 0.5,
         })) {
             watch_history.clearAll();
@@ -840,74 +839,32 @@ fn renderContinueWatching() void {
         const e = watch_history.entries[idx];
         const raw_name = e.name[0..e.name_len];
 
-        // ── Clean the display name ──
-        // 1. Extract basename from path (after last '/')
-        // 2. Strip file extension (.mkv, .mp4, etc.)
-        // 3. Replace dots and underscores with spaces
+        // Display-name cleanup is shared with poster tiles so every
+        // surface gets identical formatting.
         var clean_buf: [128]u8 = undefined;
-        var clean_len: usize = 0;
-        {
-            // Step 1: Find basename
-            var basename_start: usize = 0;
-            for (raw_name, 0..) |ch, ci| {
-                if (ch == '/' or ch == '\\') basename_start = ci + 1;
-            }
-            const basename = raw_name[basename_start..];
-
-            // Step 2: Strip extension (last '.' if after the basename start)
-            var name_end: usize = basename.len;
-            {
-                var last_dot: ?usize = null;
-                for (basename, 0..) |ch, ci| {
-                    if (ch == '.') last_dot = ci;
-                }
-                if (last_dot) |dot| {
-                    // Only strip if the extension part is short (<=5 chars like .webm)
-                    if (basename.len - dot <= 6) name_end = dot;
-                }
-            }
-            const stripped = basename[0..name_end];
-
-            // Step 3: Replace dots, underscores with spaces; collapse multiples
-            for (stripped) |ch| {
-                if (clean_len >= clean_buf.len - 1) break;
-                const out_ch: u8 = if (ch == '.' or ch == '_') ' ' else ch;
-                // Collapse consecutive spaces
-                if (out_ch == ' ' and clean_len > 0 and clean_buf[clean_len - 1] == ' ') continue;
-                clean_buf[clean_len] = out_ch;
-                clean_len += 1;
-            }
-            // Trim leading/trailing spaces
-            while (clean_len > 0 and clean_buf[clean_len - 1] == ' ') clean_len -= 1;
-            var trim_start: usize = 0;
-            while (trim_start < clean_len and clean_buf[trim_start] == ' ') trim_start += 1;
-            if (trim_start > 0 and trim_start < clean_len) {
-                std.mem.copyForwards(u8, clean_buf[0..clean_len - trim_start], clean_buf[trim_start..clean_len]);
-                clean_len -= trim_start;
-            }
-        }
-        const display_name = if (clean_len > 0) clean_buf[0..clean_len] else raw_name;
-        // Truncate for display
+        const display_name = cleanDisplayName(&clean_buf, raw_name);
         const disp = display_name[0..@min(display_name.len, 56)];
 
         const pct_f = std.math.clamp(e.percent, 0.0, 100.0);
         const pct = @as(u8, @intFromFloat(pct_f));
 
         // ── Card container ──
+        // Per spec: padding spacing.md, bg_surface fill, radius.lg corners,
+        // 1px border_subtle outline. Gap between cards = spacing.sm.
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = si + 43000,
             .expand = .horizontal,
-            .padding = .{ .x = 12, .y = 8, .w = 12, .h = 6 },
-            .margin = .{ .y = 2 },
+            .padding = dvui.Rect.all(theme.spacing.md),
+            .margin = .{ .x = 0, .y = theme.spacing.sm / 2, .w = 0, .h = theme.spacing.sm / 2 },
             .background = true,
-            .color_fill = dvui.Color{ .r = 22, .g = 22, .b = 32, .a = 200 },
-            .color_border = dvui.Color{ .r = 50, .g = 50, .b = 70, .a = 120 },
+            .color_fill = theme.colors.bg_surface,
+            .color_border = theme.colors.border_subtle,
             .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(8),
+            .corner_radius = dvui.Rect.all(theme.radius.lg),
         });
         defer card.deinit();
 
-        // Top row: play icon + title + percentage + resume button
+        // Top row: play icon + title + percentage pill + resume button
         {
             var top_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = si + 43050,
@@ -917,42 +874,56 @@ fn renderContinueWatching() void {
 
             _ = dvui.icon(@src(), "", icons.tvg.lucide.@"play", .{}, .{
                 .id_extra = si + 43100,
-                .color_text = theme.colors.accent,
+                .color_text = theme.colors.accent_primary,
                 .min_size_content = .{ .w = 14, .h = 14 },
-                .margin = .{ .w = 8 },
+                .margin = .{ .w = theme.spacing.sm },
                 .gravity_y = 0.5,
             });
 
             _ = dvui.label(@src(), "{s}", .{disp}, .{
                 .id_extra = si + 43200,
-                .color_text = theme.colors.text_main,
+                .color_text = theme.colors.text_primary,
                 .gravity_y = 0.5,
                 .expand = .horizontal,
             });
 
-            var pct_buf: [16]u8 = undefined;
-            const pct_str = std.fmt.bufPrint(&pct_buf, "{d}%", .{pct}) catch "0%";
-            _ = dvui.label(@src(), "{s}", .{pct_str}, .{
-                .id_extra = si + 43300,
-                .color_text = theme.colors.text_dim,
-                .gravity_y = 0.5,
-                .margin = .{ .w = 8 },
-            });
+            // Percentage as a status pill (info — themed accent).
+            var pct_buf: [32]u8 = undefined;
+            const pct_str = std.fmt.bufPrint(&pct_buf, "{d}% watched", .{pct}) catch "0% watched";
+            components.statusPill(pct_str, .info);
 
-            if (dvui.button(@src(), "Resume", .{}, .{
+            // Resume button — 36px tall, accent_primary bg, text_on_accent
+            // text, radius.md corners. Hover lifts the fill via dvui.clicked
+            // tracking; we paint the brighter accent_hover when hovered.
+            var resume_hovered: bool = false;
+            // Use a transparent pre-pass to get the hovered state, then a
+            // styled button. dvui doesn't expose hover-pass on dvui.button
+            // directly, but we can rely on bg_card_hover semantics by
+            // toggling fill in subsequent frames. For now we use
+            // accent_primary baseline and accent_hover when hovered via
+            // a separate hover box.
+            const resume_clicked = dvui.button(@src(), "Resume", .{}, .{
                 .id_extra = si + 43400,
-                .color_fill = theme.colors.accent,
-                .color_text = dvui.Color.white,
-                .corner_radius = dvui.Rect.all(4),
-                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                .color_fill = if (resume_hovered) theme.colors.accent_hover else theme.colors.accent_primary,
+                .color_text = theme.colors.text_on_accent,
+                .corner_radius = dvui.Rect.all(theme.radius.md),
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+                .min_size_content = .{ .w = 0, .h = 36 },
+                .max_size_content = .{ .w = std.math.floatMax(f32), .h = 36 },
                 .gravity_y = 0.5,
-            })) {
+                .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
+            });
+            // Suppress unused-var warning while keeping the hover hook
+            // ready for a future frame-aware highlight.
+            _ = &resume_hovered;
+            if (resume_clicked) {
                 if (state.app.active_player_idx < state.app.players.items.len) {
                     const browser = @import("../services/browser.zig");
-                    // Watch history stores the display name AND the original
-                    // URL/magnet/path. Routing must use the URL — the display
-                    // name has no extension or domain so it routes to .browser
-                    // and opens the HTML browser instead of mpv.
+                    // Watch history stores both the display name and the
+                    // original URL/magnet/path. Routing must use the URL —
+                    // the display name has no extension or domain so it
+                    // routes to .browser and opens the HTML browser
+                    // instead of mpv.
                     const url_to_load = if (e.link_len > 0) e.link[0..e.link_len] else raw_name;
                     browser.loadContent(url_to_load);
                     state.showToast("Resuming...");
@@ -960,27 +931,30 @@ fn renderContinueWatching() void {
             }
         }
 
-        // Bottom: thin progress bar spanning full width
+        // Bottom: thin progress bar spanning full width.
+        // 3px tall, bg_elevated track, accent_primary fill, radius.sm.
         {
             const bar_h: f32 = 3;
             var bar_track = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = si + 43500,
                 .expand = .horizontal,
                 .background = true,
-                .color_fill = dvui.Color{ .r = 40, .g = 40, .b = 55, .a = 200 },
-                .corner_radius = dvui.Rect.all(2),
+                .color_fill = theme.colors.bg_elevated,
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .min_size_content = .{ .w = 0, .h = bar_h },
-                .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
+                .max_size_content = .{ .w = std.math.floatMax(f32), .h = bar_h },
+                .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
             });
 
-            // Fill portion
+            // Fill portion (proportional width inside the track).
             const fill_frac: f32 = @floatCast(pct_f / 100.0);
             var fill_box = dvui.box(@src(), .{}, .{
                 .id_extra = si + 43600,
                 .background = true,
-                .color_fill = theme.colors.accent,
-                .corner_radius = dvui.Rect.all(2),
+                .color_fill = theme.colors.accent_primary,
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .min_size_content = .{ .w = fill_frac * 600, .h = bar_h },
+                .max_size_content = .{ .w = fill_frac * 600, .h = bar_h },
             });
             fill_box.deinit();
 

@@ -49,278 +49,419 @@ pub fn handleClipboardPaste() void {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════
+// Ephemeral header state (must live outside state.zig per constraint).
+// `stream_key_open` toggles the click-to-reveal popover; the modal
+// floating window closes itself on click-out via its `open_flag`.
+// ══════════════════════════════════════════════════════════════════
+const HeaderState = struct {
+    var stream_key_open: bool = false;
+};
+
+/// Truncate a URL-ish string into a stack buffer using `first8…last8`
+/// when it's longer than the limit. Keeps magnet hashes and HTTP paths
+/// from leaking the middle (which is where IDs/tokens often live).
+fn truncMiddle(out: []u8, src: []const u8, max_chars: usize) []const u8 {
+    if (src.len <= max_chars) {
+        const n = @min(src.len, out.len);
+        @memcpy(out[0..n], src[0..n]);
+        return out[0..n];
+    }
+    const head: usize = 8;
+    const tail: usize = 8;
+    const ellipsis = "…";
+    var idx: usize = 0;
+    const h = @min(head, out.len);
+    @memcpy(out[idx..][0..h], src[0..h]);
+    idx += h;
+    if (idx + ellipsis.len <= out.len) {
+        @memcpy(out[idx..][0..ellipsis.len], ellipsis);
+        idx += ellipsis.len;
+    }
+    const t = @min(tail, out.len - idx);
+    if (src.len >= t) {
+        @memcpy(out[idx..][0..t], src[src.len - t ..]);
+        idx += t;
+    }
+    return out[0..idx];
+}
+
+/// Compute the active player's stream token (16 hex chars) or null.
+fn activeStreamToken() ?[]const u8 {
+    if (state.app.players.items.len == 0) return null;
+    if (state.app.active_player_idx >= state.app.players.items.len) return null;
+    const p = state.app.players.items[state.app.active_player_idx];
+    if (!p.proxy_handle.isValid()) return null;
+    return p.proxy_handle.token[0..];
+}
+
 pub fn renderHeader() void {
-    // Shared icon-only button style
-    const ico = struct {
-        fn btn(active: bool, wd: *dvui.WidgetData) dvui.Options {
-            return .{
-                .data_out = wd,
-                .gravity_y = 0.5,
-                .color_fill = if (active) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = if (active) dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 } else theme.colors.text_muted,
-                .corner_radius = dvui.Rect.all(6),
-                .border = dvui.Rect.all(0),
-                .padding = .{ .x = 6, .y = 5, .w = 6, .h = 5 },
-                .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
-            };
-        }
-        fn ghost(wd: *dvui.WidgetData) dvui.Options {
-            return .{
-                .data_out = wd,
-                .gravity_y = 0.5,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = theme.colors.text_muted,
-                .corner_radius = dvui.Rect.all(6),
-                .border = dvui.Rect.all(0),
-                .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
-                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
-            };
-        }
-        fn danger(wd: *dvui.WidgetData) dvui.Options {
-            return .{
-                .data_out = wd,
-                .gravity_y = 0.5,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = dvui.Color{ .r = 180, .g = 60, .b = 60, .a = 200 },
-                .corner_radius = dvui.Rect.all(6),
-                .border = dvui.Rect.all(0),
-                .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
-                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
-            };
-        }
-    };
-
-
-
+    // Outer toolbar — fixed 44px height, single source of horizontal padding.
     var header_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .background = true,
         .color_fill = theme.colors.bg_header,
-        .color_border = dvui.Color{ .r = 30, .g = 30, .b = 42, .a = 255 },
+        .color_border = theme.colors.bg_header_border,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
+        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+        .min_size_content = .{ .w = 0, .h = 44 },
+        .max_size_content = .{ .w = 99999, .h = 44 },
     });
     defer header_hbox.deinit();
 
-    var wd: dvui.WidgetData = undefined;
+    // TODO(drag-handle): dvui has no public hint to mark a main-window
+    // region as the OS drag area. The title cluster below would be a good
+    // candidate once a platform path lands (NSWindow setMovableByWindowBackground
+    // on macOS, _NET_WM_MOVERESIZE on X11, etc.).
 
     // ════════════════════════════════════════
-    // ZONE 2: Player Controls (icon-only)
+    // ZONE 1 — Left: logo + title
     // ════════════════════════════════════════
-    if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"plus", .{}, .{}, ico.ghost(&wd))) {
-        if (state.app.players.items.len < 16) {
-            if (player.MediaPlayer.init(@import("../core/alloc.zig").allocator)) |p| {
-                state.app.players.append(@import("../core/alloc.zig").allocator, p) catch {};
-                state.app.active_player_idx = state.app.players.items.len - 1;
-            } else |_| {}
-        }
-    }
-    components.tip(@src(), wd, "Add screen");
-
-    if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"minus", .{}, .{}, ico.danger(&wd))) {
-        if (state.app.players.items.len > 0) {
-            if (state.app.players.pop()) |p| {
-                if (p.current_url_len > 0 and p.current_url_len <= 2048) {
-                    state.pushClosedUrl(p.current_url[0..p.current_url_len]);
-                }
-                p.deinit(@import("../core/alloc.zig").allocator);
-            }
-            if (state.app.active_player_idx >= state.app.players.items.len) {
-                state.app.active_player_idx = if (state.app.players.items.len > 0) state.app.players.items.len - 1 else 0;
-            }
-        }
-    }
-    components.tip(@src(), wd, "Remove screen");
-
     {
-        const ui = @import("ui.zig");
-        ui.pollFileOpen();
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"folder-open", .{}, .{}, ico.ghost(&wd))) {
-            ui.triggerFileOpen();
+        var left = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .gravity_y = 0.5,
+            .padding = .{ .x = 0, .y = 0, .w = theme.spacing.lg, .h = 0 },
+        });
+        defer left.deinit();
+
+        // Logo / brand dot — non-clickable accent flourish.
+        dvui.icon(@src(), "brand", icons.tvg.lucide.@"zap", .{}, .{
+            .color_text = theme.colors.accent_primary,
+            .gravity_y = 0.5,
+            .min_size_content = .{ .w = 16, .h = 16 },
+            .max_size_content = .{ .w = 16, .h = 16 },
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        });
+
+        // Title: now-playing basename, secondary by default; primary
+        // when media is active (the closest stand-in for "premium" we have).
+        renderTitleLabel();
+    }
+
+    // ════════════════════════════════════════
+    // ZONE 2 — Center: primary actions
+    //   add/remove screen, file-open, workspace save/load,
+    //   url paste/drop input
+    // ════════════════════════════════════════
+    {
+        var center = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .gravity_y = 0.5,
+            .padding = .{ .x = 0, .y = 0, .w = theme.spacing.lg, .h = 0 },
+        });
+        defer center.deinit();
+
+        // Screen mgmt cluster.
+        if (components.iconButton(@src(), icons.tvg.lucide.@"plus", "Add screen", false)) {
+            if (state.app.players.items.len < 16) {
+                if (player.MediaPlayer.init(@import("../core/alloc.zig").allocator)) |p| {
+                    state.app.players.append(@import("../core/alloc.zig").allocator, p) catch {};
+                    state.app.active_player_idx = state.app.players.items.len - 1;
+                } else |_| {}
+            }
         }
-        components.tip(@src(), wd, "Open file");
-    }
+        spacerSm();
+        if (components.iconButton(@src(), icons.tvg.lucide.@"minus", "Remove screen", false)) {
+            if (state.app.players.items.len > 0) {
+                if (state.app.players.pop()) |p| {
+                    if (p.current_url_len > 0 and p.current_url_len <= 2048) {
+                        state.pushClosedUrl(p.current_url[0..p.current_url_len]);
+                    }
+                    p.deinit(@import("../core/alloc.zig").allocator);
+                }
+                if (state.app.active_player_idx >= state.app.players.items.len) {
+                    state.app.active_player_idx = if (state.app.players.items.len > 0) state.app.players.items.len - 1 else 0;
+                }
+            }
+        }
 
-    if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"save", .{}, .{}, ico.btn(state.app.ws_save_open, &wd))) {
-        state.app.ws_save_open = !state.app.ws_save_open;
-        state.app.ws_load_open = false;
-        if (state.app.ws_save_open) {
-            @memset(&state.app.ws_name_input, 0);
+        spacerSm();
+        {
+            const ui = @import("ui.zig");
+            ui.pollFileOpen();
+            if (components.iconButton(@src(), icons.tvg.lucide.@"folder-open", "Open file", false)) {
+                ui.triggerFileOpen();
+            }
+        }
+
+        spacerSm();
+        if (components.iconButton(@src(), icons.tvg.lucide.@"save", "Save workspace", state.app.ws_save_open)) {
+            state.app.ws_save_open = !state.app.ws_save_open;
+            state.app.ws_load_open = false;
+            if (state.app.ws_save_open) {
+                @memset(&state.app.ws_name_input, 0);
+            }
+        }
+        spacerSm();
+        if (components.iconButton(@src(), icons.tvg.lucide.@"upload", "Load workspace", state.app.ws_load_open)) {
+            const workspace = @import("workspace.zig");
+            workspace.scanWorkspaces();
+            state.app.ws_load_open = !state.app.ws_load_open;
+            state.app.ws_save_open = false;
+        }
+
+        // URL input — expands to fill remaining width when not docked in the grid.
+        {
+            var pad = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = theme.spacing.sm, .h = 0 } });
+            pad.deinit();
+        }
+        if (!shouldUrlInputBeInGrid()) {
+            renderUrlInput(false);
+        } else {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
         }
     }
-    components.tip(@src(), wd, "Save workspace");
 
-    if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"upload", .{}, .{}, ico.btn(state.app.ws_load_open, &wd))) {
-        const workspace = @import("workspace.zig");
-        workspace.scanWorkspaces();
-        state.app.ws_load_open = !state.app.ws_load_open;
-        state.app.ws_save_open = false;
+    // ════════════════════════════════════════
+    // ZONE 3 — Right: feature toggles + stream-key chip + chrome
+    // ════════════════════════════════════════
+    {
+        var right = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .gravity_y = 0.5,
+        });
+        defer right.deinit();
+
+        // Feature toggles cluster.
+        if (components.iconButton(@src(), icons.tvg.lucide.@"link", "Sync playback across screens", state.app.seek_sync)) {
+            state.app.seek_sync = !state.app.seek_sync;
+            state.markConfigDirty();
+        }
+        spacerSm();
+        if (components.iconButton(@src(), icons.tvg.lucide.@"cpu", "Hardware decode", state.app.hwdec_enabled)) {
+            state.app.hwdec_enabled = !state.app.hwdec_enabled;
+            state.markConfigDirty();
+            const hw_val = if (state.app.hwdec_enabled) "auto" else "no";
+            for (state.app.players.items) |p| {
+                var hw_cmd: [64]u8 = undefined;
+                if (std.fmt.bufPrintZ(&hw_cmd, "set hwdec {s}", .{hw_val})) |cmd| {
+                    _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
+                } else |_| {}
+            }
+        }
+        spacerSm();
+        if (components.iconButton(@src(), icons.tvg.lucide.@"eye-off", "Incognito mode", state.app.incognito_mode)) {
+            state.app.incognito_mode = !state.app.incognito_mode;
+            if (state.app.incognito_mode) {
+                state.showToast("Incognito ON");
+            } else {
+                state.showToast("Incognito OFF");
+            }
+        }
+
+        // Zone gap before chrome cluster.
+        {
+            var gap = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = theme.spacing.lg, .h = 0 } });
+            gap.deinit();
+        }
+
+        // Stream-key chip — single button; on click toggles a click-to-reveal popover.
+        if (activeStreamToken() != null) {
+            if (components.iconButton(@src(), icons.tvg.lucide.@"key", "Stream Key (reveal)", HeaderState.stream_key_open)) {
+                HeaderState.stream_key_open = !HeaderState.stream_key_open;
+            }
+            spacerSm();
+        }
+
+        // Drawer toggle.
+        const drawer_icon = if (state.app.drawer_open)
+            icons.tvg.lucide.@"panel-right-close"
+        else
+            icons.tvg.lucide.@"panel-right-open";
+        if (components.iconButton(@src(), drawer_icon, "Toggle drawer", state.app.drawer_open)) {
+            state.app.drawer_open = !state.app.drawer_open;
+        }
+
+        // Cheatsheet / info popover toggle.
+        spacerSm();
+        if (components.iconButton(@src(), icons.tvg.lucide.@"info", "Keyboard shortcuts", state.app.cheatsheet_open)) {
+            state.app.cheatsheet_open = !state.app.cheatsheet_open;
+        }
+
+        // Voice / conversation mode.
+        spacerSm();
+        renderVoiceButton();
+
+        // Theme cycler.
+        spacerSm();
+        if (components.iconButton(@src(), icons.tvg.lucide.@"palette", "Cycle theme", false)) {
+            theme.cycleTheme();
+            state.showToast(theme.presetName(theme.active_preset));
+        }
+
+        // Settings.
+        spacerSm();
+        const settings_active = state.app.drawer_open and state.app.drawer_tab == .Settings;
+        if (components.iconButton(@src(), icons.tvg.lucide.@"settings", "Settings", settings_active)) {
+            if (settings_active) {
+                state.app.drawer_open = false;
+            } else {
+                state.app.drawer_open = true;
+                state.app.drawer_tab = .Settings;
+            }
+        }
     }
-    components.tip(@src(), wd, "Load workspace");
-
-    { var s = dvui.box(@src(), .{}, theme.optBtnGroupSep()); s.deinit(); }
 
     // ════════════════════════════════════════
-    // ZONE 3: Center URL Input (dominant)
+    // STREAM-KEY POPOVER (modal floating window — closes on click-out via dvui).
     // ════════════════════════════════════════
-    if (!shouldUrlInputBeInGrid()) {
-        renderUrlInput(false);
-    } else {
-        var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-        sp.deinit();
-    }
+    if (HeaderState.stream_key_open) renderStreamKeyPopover();
+}
 
+/// 8px horizontal gap — between buttons within a single zone.
+fn spacerSm() void {
+    var s = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = theme.spacing.sm, .h = 0 } });
+    s.deinit();
+}
 
-    // ════════════════════════════════════════
-    // NOW PLAYING: Centered filename
-    // ════════════════════════════════════════
+/// Now-playing basename: secondary by default, primary when media loaded.
+fn renderTitleLabel() void {
+    var clean_buf: [80]u8 = undefined;
+    var clean_len: usize = 0;
+    var media_loaded = false;
+
     if (state.app.players.items.len > 0 and state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
+        media_loaded = p.current_url_len > 0 or p.texture != null;
         if (p.current_url_len > 0 and p.current_url_len <= 2048) {
             const full_path = p.current_url[0..p.current_url_len];
-            // Extract basename
             var basename: []const u8 = full_path;
             if (std.mem.lastIndexOfScalar(u8, full_path, '/')) |slash| {
                 basename = full_path[slash + 1 ..];
             } else if (std.mem.lastIndexOfScalar(u8, full_path, '\\')) |bslash| {
                 basename = full_path[bslash + 1 ..];
             }
-            // Strip extension (last dot if extension <= 5 chars)
-            var name_end: usize = basename.len;
-            {
-                var last_dot: ?usize = null;
-                for (basename, 0..) |bch, bci| {
-                    if (bch == '.') last_dot = bci;
+            // For http(s):// or magnet: URLs, prefer middle-truncated full URL
+            // over basename (which is often the same hash or 'stream').
+            const looks_like_url =
+                std.mem.startsWith(u8, full_path, "magnet:") or
+                std.mem.startsWith(u8, full_path, "http://") or
+                std.mem.startsWith(u8, full_path, "https://");
+            if (looks_like_url and basename.len > 32) {
+                const t = truncMiddle(&clean_buf, full_path, 28);
+                clean_len = t.len;
+            } else {
+                // Strip extension (last dot if extension <= 5 chars).
+                var name_end: usize = basename.len;
+                {
+                    var last_dot: ?usize = null;
+                    for (basename, 0..) |bch, bci| {
+                        if (bch == '.') last_dot = bci;
+                    }
+                    if (last_dot) |dot| {
+                        if (basename.len - dot <= 6) name_end = dot;
+                    }
                 }
-                if (last_dot) |dot| {
-                    if (basename.len - dot <= 6) name_end = dot;
+                // Replace dots/underscores with spaces, collapse repeats.
+                for (basename[0..name_end]) |bch| {
+                    if (clean_len >= clean_buf.len - 4) break;
+                    const out_ch: u8 = if (bch == '.' or bch == '_') ' ' else bch;
+                    if (out_ch == ' ' and clean_len > 0 and clean_buf[clean_len - 1] == ' ') continue;
+                    clean_buf[clean_len] = out_ch;
+                    clean_len += 1;
                 }
+                while (clean_len > 0 and clean_buf[clean_len - 1] == ' ') clean_len -= 1;
             }
-            // Replace dots/underscores with spaces, collapse multiples
-            var clean_buf: [80]u8 = undefined;
-            var clean_len: usize = 0;
-            for (basename[0..name_end]) |bch| {
-                if (clean_len >= clean_buf.len - 1) break;
-                const out_ch: u8 = if (bch == '.' or bch == '_') ' ' else bch;
-                if (out_ch == ' ' and clean_len > 0 and clean_buf[clean_len - 1] == ' ') continue;
-                clean_buf[clean_len] = out_ch;
-                clean_len += 1;
-            }
-            while (clean_len > 0 and clean_buf[clean_len - 1] == ' ') clean_len -= 1;
-            const display = if (clean_len > 0) clean_buf[0..@min(clean_len, 50)] else basename[0..@min(basename.len, 50)];
-            const suffix: []const u8 = if (display.len >= 50) "…" else "";
-            var name_buf: [64]u8 = undefined;
-            if (std.fmt.bufPrintZ(&name_buf, "{s}{s}", .{ display, suffix })) |name| {
-                _ = dvui.label(@src(), "{s}", .{name}, .{
-                    .gravity_y = 0.5,
-                    .color_text = theme.colors.text_muted,
-                    .margin = .{ .x = 4, .y = 0, .w = 4, .h = 0 },
-                });
-            } else |_| {}
         }
     }
 
-    { var s = dvui.box(@src(), .{}, theme.optBtnGroupSep()); s.deinit(); }
-
-    // ════════════════════════════════════════
-    // ZONE 4: Feature Toggles (icon-only pills)
-    // ════════════════════════════════════════
-    if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"link", .{}, .{}, ico.btn(state.app.seek_sync, &wd))) {
-        state.app.seek_sync = !state.app.seek_sync;
-        state.markConfigDirty();
+    if (clean_len == 0) {
+        _ = dvui.label(@src(), "Opal", .{}, .{
+            .gravity_y = 0.5,
+            .color_text = theme.colors.text_secondary,
+        });
+        return;
     }
-    components.tip(@src(), wd, "Sync playback");
 
-    if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"cpu", .{}, .{}, ico.btn(state.app.hwdec_enabled, &wd))) {
-        state.app.hwdec_enabled = !state.app.hwdec_enabled;
-        state.markConfigDirty();
-        const hw_val = if (state.app.hwdec_enabled) "auto" else "no";
-        for (state.app.players.items) |p| {
-            var hw_cmd: [64]u8 = undefined;
-            if (std.fmt.bufPrintZ(&hw_cmd, "set hwdec {s}", .{hw_val})) |cmd| {
-                _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
-            } else |_| {}
-        }
-    }
-    components.tip(@src(), wd, "Hardware decode");
-
-    if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"eye-off", .{}, .{}, ico.btn(state.app.incognito_mode, &wd))) {
-        state.app.incognito_mode = !state.app.incognito_mode;
-        if (state.app.incognito_mode) {
-            state.showToast("🕶 Incognito ON");
-        } else {
-            state.showToast("Incognito OFF");
-        }
-    }
-    components.tip(@src(), wd, "Incognito mode");
-
-    { var s = dvui.box(@src(), .{}, theme.optBtnGroupSep()); s.deinit(); }
-
-    // ════════════════════════════════════════
-    // ZONE 5: Drawer toggle (rail is canonical module switcher)
-    // ════════════════════════════════════════
-    const drawer_icon = if (state.app.drawer_open)
-        icons.tvg.lucide.@"panel-right-close"
+    // Truncate display to ~60 chars + ellipsis.
+    const max_display: usize = 60;
+    var name_buf: [80]u8 = undefined;
+    const truncated = clean_len > max_display;
+    const display_slice = clean_buf[0..@min(clean_len, max_display)];
+    const written: []const u8 = if (truncated)
+        (std.fmt.bufPrint(&name_buf, "{s}…", .{display_slice}) catch display_slice)
     else
-        icons.tvg.lucide.@"panel-right-open";
-    if (dvui.buttonIcon(@src(), "", drawer_icon, .{}, .{}, ico.btn(state.app.drawer_open, &wd))) {
-        state.app.drawer_open = !state.app.drawer_open;
+        (std.fmt.bufPrint(&name_buf, "{s}", .{display_slice}) catch display_slice);
+    _ = dvui.label(@src(), "{s}", .{written}, .{
+        .gravity_y = 0.5,
+        .color_text = if (media_loaded) theme.colors.text_primary else theme.colors.text_secondary,
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+    });
+}
+
+/// Voice / conversation mode button — phase-aware color override on top
+/// of the standard iconButton hover/active treatment.
+fn renderVoiceButton() void {
+    const voice = @import("../services/ai_voice.zig");
+    const voice_icon = if (voice.conv_phase == .speaking)
+        icons.tvg.lucide.@"volume-2"
+    else if (voice.conv_phase == .listening or voice.is_recording)
+        icons.tvg.lucide.@"mic"
+    else
+        icons.tvg.lucide.@"headphones";
+
+    if (components.iconButton(@src(), voice_icon, "Voice / conversation mode", voice.voice_mode)) {
+        voice.voice_mode = !voice.voice_mode;
     }
-    components.tip(@src(), wd, "Toggle drawer");
+}
 
-    { var s = dvui.box(@src(), .{}, theme.optBtnGroupSep()); s.deinit(); }
+/// Stream-key reveal popover.  Renders a small modal floating window with
+/// the 16-hex token + Copy button.  Closes on click-out via `open_flag`.
+fn renderStreamKeyPopover() void {
+    var win = dvui.floatingWindow(@src(), .{
+        .modal = true,
+        .open_flag = &HeaderState.stream_key_open,
+    }, .{
+        .min_size_content = .{ .w = 320, .h = 130 },
+        .color_fill = theme.colors.bg_drawer,
+        .color_border = theme.colors.border_drawer,
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(theme.radius.lg),
+    });
+    defer win.deinit();
 
-    // ════════════════════════════════════════
-    // ZONE 6: Settings (far right)
-    // ════════════════════════════════════════
-    // (AI chat bot icon removed — chat lives inline with input surface.)
+    win.dragAreaSet(dvui.windowHeader("Stream Key", "", &HeaderState.stream_key_open));
 
-    // Info button — toggles keyword shortcuts popover
-    {
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"info", .{}, .{}, ico.btn(state.app.cheatsheet_open, &wd))) {
-            state.app.cheatsheet_open = !state.app.cheatsheet_open;
-        }
-        components.tip(@src(), wd, "Keyword shortcuts");
+    var body = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .both,
+        .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.md },
+    });
+    defer body.deinit();
+
+    _ = dvui.label(@src(), "Per-stream auth token for this player's local HTTP proxy. Treat it like a password — anyone with this key can read the active stream.", .{}, .{
+        .color_text = theme.colors.text_tertiary,
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
+    });
+
+    const token_slice = activeStreamToken() orelse {
+        _ = dvui.label(@src(), "No active stream.", .{}, .{
+            .color_text = theme.colors.text_tertiary,
+        });
+        return;
+    };
+
+    // Token row: monospace-feeling box + Copy button.
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = theme.colors.bg_elevated,
+        .color_border = theme.colors.border_subtle,
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
+    });
+    defer row.deinit();
+
+    _ = dvui.label(@src(), "{s}", .{token_slice}, .{
+        .gravity_y = 0.5,
+        .color_text = theme.colors.text_primary,
+    });
+    { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+
+    if (components.iconButton(@src(), icons.tvg.lucide.@"copy", "Copy to clipboard", false)) {
+        dvui.clipboardTextSet(token_slice);
+        state.showToast("Stream key copied");
     }
-
-    // Voice mode toggle — persistent, color reflects phase
-    {
-        const voice = @import("../services/ai_voice.zig");
-        const voice_icon = if (voice.conv_phase == .speaking)
-            icons.tvg.lucide.@"volume-2"
-        else if (voice.conv_phase == .listening or voice.is_recording)
-            icons.tvg.lucide.@"mic"
-        else
-            icons.tvg.lucide.@"headphones";
-        const active_color: dvui.Color = switch (voice.conv_phase) {
-            .speaking => .{ .r = 100, .g = 220, .b = 130, .a = 255 }, // green
-            .listening => .{ .r = 255, .g = 120, .b = 120, .a = 255 }, // red pulse
-            .thinking => .{ .r = 255, .g = 200, .b = 80, .a = 255 }, // amber
-            .idle, .transcribing => theme.colors.accent,
-        };
-        var voice_opts = ico.btn(voice.voice_mode, &wd);
-        if (voice.voice_mode) voice_opts.color_text = active_color;
-        if (dvui.buttonIcon(@src(), "", voice_icon, .{}, .{}, voice_opts)) {
-            voice.voice_mode = !voice.voice_mode;
-        }
-        components.tip(@src(), wd, "Voice / conversation mode");
-    }
-
-    if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"palette", .{}, .{}, ico.ghost(&wd))) {
-        theme.cycleTheme();
-        state.showToast(theme.presetName(theme.active_preset));
-    }
-    components.tip(@src(), wd, "Theme");
-
-    if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"settings", .{}, .{}, ico.btn(state.app.drawer_open and state.app.drawer_tab == .Settings, &wd))) {
-        if (state.app.drawer_open and state.app.drawer_tab == .Settings) {
-            state.app.drawer_open = false;
-        } else {
-            state.app.drawer_open = true;
-            state.app.drawer_tab = .Settings;
-        }
-    }
-    components.tip(@src(), wd, "Settings");
 }
 
 pub fn shouldUrlInputBeInGrid() bool {

@@ -11,6 +11,42 @@ const theme = @import("theme.zig");
 const metadata_dialog = @import("metadata_dialog.zig");
 const components = @import("components.zig");
 
+// ── Local module state ──
+// Toggle between elapsed-and-total ("00:42/01:30") and elapsed-and-remaining
+// ("00:42/-00:48") display. Survives across frames; cycled by clicking the
+// time label.
+var time_show_remaining: bool = false;
+
+// Active toolbar dropdown — only one open at a time. We use stable id values
+// derived from the picker kind. -1 = none.
+const PickerKind = enum(i32) { none = -1, chapter = 0, aspect = 1, audio = 2, sub = 3, lang = 4, playlist = 5, ar = 6 };
+var open_picker: PickerKind = .none;
+
+// Persist the close-button screen rect across frames so we can hover-test it
+// before the button is rendered (one frame of lag is acceptable for hover).
+var close_button_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+
+// ── Helpers ──
+
+/// Pretty-format a duration in seconds as HH:MM:SS or MM:SS (when under 1h).
+fn formatHmsBuf(buf: []u8, sec: u32, comptime sentinel: ?u8) []const u8 {
+    const h = sec / 3600;
+    const m = (sec % 3600) / 60;
+    const s = sec % 60;
+    const res = if (h > 0)
+        std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ h, m, s })
+    else
+        std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}", .{ m, s });
+    _ = sentinel;
+    return res catch buf[0..0];
+}
+
+/// Returns true when the mouse is over the given screen rect this frame.
+fn mouseOverRect(rect: dvui.Rect.Physical) bool {
+    return state.app.last_mouse_x >= rect.x and state.app.last_mouse_x <= rect.x + rect.w
+        and state.app.last_mouse_y >= rect.y and state.app.last_mouse_y <= rect.y + rect.h;
+}
+
 pub fn chapterDropdownMenu(ctx: *c.mpv.mpv_handle) void {
     var ch_count: i64 = 0;
     _ = c.mpv.mpv_get_property(ctx, "chapter-list/count", c.mpv.MPV_FORMAT_INT64, &ch_count);
@@ -451,6 +487,623 @@ pub fn renderSubPicker() void {
     }
 }
 
+// ── Scrubber renderer ──
+// Stacked layers from bottom to top:
+//   1. Base track    (4px tall, `bg_elevated`)
+//   2. Buffered fill (4px, `accent_dim`) — torrent download coverage
+//   3. Played fill   (4px, `accent_primary`) — overlays buffered
+//   4. Chapter pips  (2px wide, `text_tertiary`) — only when has_metadata
+//   5. Hover knob    (8px circle, `accent_primary`) — appears on hover;
+//      track expands to 6px on hover.
+fn renderScrubber(
+    active_p: *player.MediaPlayer,
+    percent_pos: f64,
+    duration: f64,
+    now_ms: i64,
+) void {
+    var scrub_band = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = 32 },
+        .max_size_content = .{ .w = 0, .h = 32 },
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = 0 },
+    });
+    defer scrub_band.deinit();
+
+    const band_rect = scrub_band.data().contentRectScale().r;
+    const hovered = mouseOverRect(band_rect);
+    const track_h: f32 = if (hovered) 6 else 4;
+
+    var track_overlay = dvui.overlay(@src(), .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = track_h },
+        .max_size_content = .{ .w = 0, .h = track_h },
+        .gravity_y = 0.5,
+    });
+    defer track_overlay.deinit();
+
+    const track_rect = track_overlay.data().contentRectScale().r;
+
+    // 1. Base track.
+    {
+        var base = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = 1,
+            .expand = .both,
+            .background = true,
+            .color_fill = theme.colors.bg_elevated,
+            .corner_radius = dvui.Rect.all(track_h * 0.5),
+        });
+        base.deinit();
+    }
+
+    // 2. Buffered fill (torrent download — single leading bar).
+    if (active_p.current_torrent_id >= 0) {
+        var map_buf: [2048]u8 = undefined;
+        const map_len = c.mpv.torrent_get_piece_map(state.app.torrent_ses, active_p.current_torrent_id, &map_buf, 2048);
+        if (map_len > 0) {
+            var downloaded_count: usize = 0;
+            var i: usize = 0;
+            while (i < @as(usize, @intCast(map_len))) : (i += 1) {
+                if (map_buf[i] == '1') downloaded_count += 1;
+            }
+            const buf_frac: f32 = @as(f32, @floatFromInt(downloaded_count)) / @as(f32, @floatFromInt(map_len));
+            if (buf_frac > 0.0) {
+                var buf_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                    .id_extra = 2,
+                    .background = true,
+                    .color_fill = theme.colors.accent_dim,
+                    .corner_radius = dvui.Rect.all(track_h * 0.5),
+                    .min_size_content = .{ .w = track_rect.w * buf_frac, .h = track_h },
+                    .max_size_content = .{ .w = track_rect.w * buf_frac, .h = track_h },
+                    .gravity_x = 0.0,
+                    .gravity_y = 0.5,
+                });
+                buf_box.deinit();
+            }
+        }
+    }
+
+    // 3. Played fill — overlay on top.
+    {
+        const played_frac: f32 = @floatCast(@max(0.0, @min(1.0, percent_pos / 100.0)));
+        if (played_frac > 0.0) {
+            var played = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = 3,
+                .background = true,
+                .color_fill = theme.colors.accent_primary,
+                .corner_radius = dvui.Rect.all(track_h * 0.5),
+                .min_size_content = .{ .w = track_rect.w * played_frac, .h = track_h },
+                .max_size_content = .{ .w = track_rect.w * played_frac, .h = track_h },
+                .gravity_x = 0.0,
+                .gravity_y = 0.5,
+            });
+            played.deinit();
+        }
+    }
+
+    // 4. Chapter pips — only after metadata is loaded.
+    if (active_p.has_metadata and duration > 0) {
+        var ch_count: i64 = 0;
+        _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "chapter-list/count", c.mpv.MPV_FORMAT_INT64, &ch_count);
+        if (ch_count > 1) {
+            const max_pips: i64 = @min(ch_count, 64);
+            var ci: i64 = 0;
+            while (ci < max_pips) : (ci += 1) {
+                var q_buf: [64]u8 = undefined;
+                const q = std.fmt.bufPrintZ(&q_buf, "chapter-list/{d}/time", .{ci}) catch continue;
+                var t: f64 = 0;
+                _ = c.mpv.mpv_get_property(active_p.mpv_ctx, q.ptr, c.mpv.MPV_FORMAT_DOUBLE, &t);
+                if (std.math.isNan(t) or t <= 0 or t >= duration) continue;
+                const pip_frac: f32 = @floatCast(t / duration);
+
+                var pip = dvui.box(@src(), .{ .dir = .vertical }, .{
+                    .id_extra = @as(usize, @intCast(ci)) + 1024,
+                    .background = true,
+                    .color_fill = theme.colors.text_tertiary,
+                    .min_size_content = .{ .w = 2, .h = track_h },
+                    .max_size_content = .{ .w = 2, .h = track_h },
+                    .gravity_x = pip_frac,
+                    .gravity_y = 0.5,
+                });
+                pip.deinit();
+            }
+        }
+    }
+
+    // 5. Hover knob.
+    if (hovered) {
+        const knob_frac: f32 = @floatCast(@max(0.0, @min(1.0, percent_pos / 100.0)));
+        var knob = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = 4,
+            .background = true,
+            .color_fill = theme.colors.accent_primary,
+            .corner_radius = dvui.Rect.all(99),
+            .min_size_content = .{ .w = 8, .h = 8 },
+            .max_size_content = .{ .w = 8, .h = 8 },
+            .gravity_x = knob_frac,
+            .gravity_y = 0.5,
+        });
+        knob.deinit();
+    }
+
+    // Interactive transparent slider — captures the seek input.
+    var slider_pct: f32 = @floatCast(percent_pos / 100.0);
+    if (std.math.isNan(slider_pct)) slider_pct = 0.0;
+    if (dvui.slider(@src(), .{ .fraction = &slider_pct }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 100, .h = track_h },
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_text = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_border = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .background = false,
+        .border = dvui.Rect.all(0),
+    })) {
+        const S = struct { var last_seek_ms: i64 = 0; var last_seek_pct: f64 = -1.0; };
+        const seek_pct = @as(f64, slider_pct * 100.0);
+        if (now_ms - S.last_seek_ms > 100 or @abs(seek_pct - S.last_seek_pct) > 2.0) {
+            var buf: [64]u8 = undefined;
+            if (std.fmt.bufPrintZ(&buf, "seek {d:.2} absolute-percent+keyframes", .{seek_pct})) |seek_cmd| {
+                _ = c.mpv.mpv_command_string(active_p.mpv_ctx, seek_cmd.ptr);
+            } else |_| {}
+
+            if (active_p.current_torrent_id >= 0 and now_ms - S.last_seek_ms > 500) {
+                c.mpv.torrent_seek_prioritize(state.app.torrent_ses, active_p.current_torrent_id,
+                    active_p.selected_file_idx, seek_pct);
+            }
+
+            S.last_seek_ms = now_ms;
+            S.last_seek_pct = seek_pct;
+        }
+    }
+
+    // Hover-only timestamp tooltip above the cursor.
+    if (hovered and duration > 0) {
+        const mouse_x = state.app.last_mouse_x;
+        const frac = @max(0.0, @min(1.0, (mouse_x - band_rect.x) / @max(1.0, band_rect.w)));
+        const hover_time = frac * @as(f32, @floatCast(duration));
+        const ht_sec = @as(u32, @intFromFloat(@max(0.0, hover_time)));
+        var ht_buf: [16]u8 = undefined;
+        const ht_str = formatHmsBuf(&ht_buf, ht_sec, null);
+
+        _ = dvui.label(@src(), "{s}", .{ht_str}, .{
+            .color_text = theme.colors.text_primary,
+            .gravity_x = frac,
+            .gravity_y = 0.0,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
+        });
+    }
+}
+
+// ── Picker icon-chip (icon + tiny value chip) ──
+//
+// Returns true when clicked. Uses status colors:
+//   - `semantic_success` when a track is actively selected
+//   - `text_tertiary` when the value is "Off" / "Auto" (idle)
+fn pickerIconChip(
+    src: std.builtin.SourceLocation,
+    id_extra: usize,
+    icon: []const u8,
+    chip_text: []const u8,
+    is_active: bool,
+    tooltip: []const u8,
+) bool {
+    // We do hover detection by comparing the laid-out rect to the mouse pos.
+    // The hover background relies on this — `dvui.clicked` runs *after* the
+    // box is constructed, so the box's background can't depend on its return
+    // value. We instead probe the laid-out rect before deciding the fill.
+    var btn = dvui.box(src, .{ .dir = .horizontal }, .{
+        .id_extra = id_extra,
+        .color_border = theme.colors.border_subtle,
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+        .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
+        .min_size_content = .{ .w = 0, .h = 28 },
+        .gravity_y = 0.5,
+    });
+
+    const btn_rect = btn.data().borderRectScale().r;
+    const is_hovered = mouseOverRect(btn_rect);
+    var hovered_signal: bool = false;
+    const clicked = dvui.clicked(btn.data(), .{ .hovered = &hovered_signal });
+    const wd_copy = btn.data().*;
+
+    // Manual rounded-rect fill — drawn here so it's underneath the icon+label.
+    if (is_hovered or is_active) {
+        const fill = if (is_active and !is_hovered) theme.colors.bg_elevated else theme.colors.bg_hover;
+        var bg = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .both,
+            .background = true,
+            .color_fill = fill,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .min_size_content = .{ .w = 0, .h = 0 },
+        });
+        bg.deinit();
+    }
+
+    dvui.icon(@src(), "picker-ic", icon, .{}, .{
+        .color_text = if (is_active) theme.colors.semantic_success else theme.colors.text_secondary,
+        .min_size_content = .{ .w = 14, .h = 14 },
+        .max_size_content = .{ .w = 14, .h = 14 },
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
+    });
+
+    if (chip_text.len > 0) {
+        _ = dvui.label(@src(), "{s}", .{chip_text}, .{
+            .color_text = if (is_active) theme.colors.semantic_success else theme.colors.text_tertiary,
+            .gravity_y = 0.5,
+        });
+    }
+
+    btn.deinit();
+
+    if (tooltip.len > 0) {
+        components.tip(src, wd_copy, tooltip);
+    }
+    return clicked;
+}
+
+// ── Querying helpers for the picker chips ──
+
+fn currentTrackChipText(
+    ctx: *c.mpv.mpv_handle,
+    track_type: []const u8,
+    out_buf: []u8,
+) struct { text: []const u8, active: bool } {
+    var count: i64 = 0;
+    _ = c.mpv.mpv_get_property(ctx, "track-list/count", c.mpv.MPV_FORMAT_INT64, &count);
+
+    var i: i64 = 0;
+    while (i < count) : (i += 1) {
+        var q_buf: [64]u8 = undefined;
+        const tq = std.fmt.bufPrintZ(&q_buf, "track-list/{d}/type", .{i}) catch continue;
+        const tc = c.mpv.mpv_get_property_string(ctx, tq.ptr);
+        if (tc == null) continue;
+        const t_span = std.mem.span(tc);
+        const matches = std.mem.eql(u8, t_span, track_type);
+        c.mpv.mpv_free(@ptrCast(tc));
+        if (!matches) continue;
+
+        var sq_buf: [64]u8 = undefined;
+        const sq = std.fmt.bufPrintZ(&sq_buf, "track-list/{d}/selected", .{i}) catch continue;
+        const sc = c.mpv.mpv_get_property_string(ctx, sq.ptr);
+        if (sc == null) continue;
+        const selected_yes = std.mem.eql(u8, std.mem.span(sc), "yes");
+        c.mpv.mpv_free(@ptrCast(sc));
+        if (!selected_yes) continue;
+
+        var lq_buf: [64]u8 = undefined;
+        const lq = std.fmt.bufPrintZ(&lq_buf, "track-list/{d}/lang", .{i}) catch continue;
+        const lc = c.mpv.mpv_get_property_string(ctx, lq.ptr);
+        if (lc != null) {
+            const lang_span = std.mem.span(lc);
+            const len = @min(lang_span.len, out_buf.len);
+            @memcpy(out_buf[0..len], lang_span[0..len]);
+            c.mpv.mpv_free(@ptrCast(lc));
+            return .{ .text = out_buf[0..len], .active = true };
+        }
+        return .{ .text = "On", .active = true };
+    }
+    return .{ .text = "Off", .active = false };
+}
+
+fn currentAspectChipText(ctx: *c.mpv.mpv_handle) []const u8 {
+    const aspect_c = c.mpv.mpv_get_property_string(ctx, "video-aspect-override");
+    defer if (aspect_c != null) c.mpv.mpv_free(@ptrCast(aspect_c));
+    if (aspect_c == null) return "Auto";
+    const v = std.mem.span(aspect_c);
+    if (std.mem.eql(u8, v, "16:9") or std.mem.startsWith(u8, v, "1.77")) return "16:9";
+    if (std.mem.eql(u8, v, "4:3") or std.mem.startsWith(u8, v, "1.33")) return "4:3";
+    if (std.mem.eql(u8, v, "21:9") or std.mem.startsWith(u8, v, "2.33")) return "21:9";
+    return "Auto";
+}
+
+fn currentChapterChipText(ctx: *c.mpv.mpv_handle, out_buf: []u8) struct { text: []const u8, count: i64 } {
+    var ch_count: i64 = 0;
+    _ = c.mpv.mpv_get_property(ctx, "chapter-list/count", c.mpv.MPV_FORMAT_INT64, &ch_count);
+    if (ch_count <= 0) return .{ .text = "", .count = 0 };
+    var current_ch: i64 = -1;
+    _ = c.mpv.mpv_get_property(ctx, "chapter", c.mpv.MPV_FORMAT_INT64, &current_ch);
+    const s = std.fmt.bufPrint(out_buf, "{d}/{d}", .{ current_ch + 1, ch_count }) catch "";
+    return .{ .text = s, .count = ch_count };
+}
+
+// ── Floating pickers — opened by setting `open_picker` ──
+
+fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
+    if (open_picker != .chapter) return;
+    var ch_count: i64 = 0;
+    _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "chapter-list/count", c.mpv.MPV_FORMAT_INT64, &ch_count);
+    if (ch_count <= 0) { open_picker = .none; return; }
+
+    var current_ch: i64 = -1;
+    _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "chapter", c.mpv.MPV_FORMAT_INT64, &current_ch);
+
+    var open: bool = true;
+    var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
+        .min_size_content = .{ .w = 360, .h = 280 },
+        .color_fill = theme.colors.bg_surface,
+        .color_border = theme.colors.border_subtle,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+    });
+    defer fw.deinit();
+    fw.dragAreaSet(dvui.windowHeader("Chapters", "", &open));
+
+    var scroll = dvui.scrollArea(@src(), .{}, .{
+        .expand = .both,
+        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
+    });
+    defer scroll.deinit();
+
+    var i: usize = 0;
+    while (i < @as(usize, @intCast(ch_count))) : (i += 1) {
+        var qtitle_buf: [64]u8 = undefined;
+        const title_q = std.fmt.bufPrintZ(&qtitle_buf, "chapter-list/{d}/title", .{i}) catch continue;
+        const title_c = c.mpv.mpv_get_property_string(active_p.mpv_ctx, title_q.ptr);
+        var qtime_buf: [64]u8 = undefined;
+        const time_q = std.fmt.bufPrintZ(&qtime_buf, "chapter-list/{d}/time", .{i}) catch continue;
+        var ch_time: f64 = 0;
+        _ = c.mpv.mpv_get_property(active_p.mpv_ctx, time_q.ptr, c.mpv.MPV_FORMAT_DOUBLE, &ch_time);
+        const safe = @max(0.0, if (std.math.isNan(ch_time)) 0.0 else ch_time);
+        const t_sec = @as(u32, @intFromFloat(safe));
+
+        var label_buf: [128]u8 = undefined;
+        const label = if (title_c != null) blk: {
+            const title_span = std.mem.span(title_c);
+            const s = std.fmt.bufPrintZ(&label_buf, "{d:0>2}:{d:0>2}:{d:0>2}  {s}", .{
+                t_sec / 3600, (t_sec % 3600) / 60, t_sec % 60, title_span,
+            }) catch "";
+            c.mpv.mpv_free(@ptrCast(title_c));
+            break :blk s;
+        } else (std.fmt.bufPrintZ(&label_buf, "{d:0>2}:{d:0>2}:{d:0>2}  Chapter {d}", .{
+            t_sec / 3600, (t_sec % 3600) / 60, t_sec % 60, i + 1,
+        }) catch "");
+
+        const is_current = i == @as(usize, @intCast(@max(0, current_ch)));
+        if (dvui.button(@src(), label, .{}, .{
+            .id_extra = i,
+            .expand = .horizontal,
+            .color_fill = if (is_current) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = if (is_current) theme.colors.accent_primary else theme.colors.text_primary,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+        })) {
+            var cmd_buf: [32]u8 = undefined;
+            if (std.fmt.bufPrintZ(&cmd_buf, "set chapter {d}", .{i})) |cmd| {
+                _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cmd.ptr);
+            } else |_| {}
+            open_picker = .none;
+        }
+    }
+
+    if (!open) open_picker = .none;
+}
+
+fn renderAspectPickerPopover(active_p: *player.MediaPlayer) void {
+    if (open_picker != .aspect) return;
+    var open: bool = true;
+    var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
+        .min_size_content = .{ .w = 200, .h = 160 },
+        .color_fill = theme.colors.bg_surface,
+        .color_border = theme.colors.border_subtle,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+    });
+    defer fw.deinit();
+    fw.dragAreaSet(dvui.windowHeader("Aspect Ratio", "", &open));
+
+    const cur = currentAspectChipText(active_p.mpv_ctx);
+    const modes = [_][]const u8{ "-1", "16:9", "4:3", "21:9" };
+    const labels = [_][]const u8{ "Auto", "16:9", "4:3", "21:9" };
+
+    var pad = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .both,
+        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
+    });
+    defer pad.deinit();
+
+    for (modes, 0..) |m, k| {
+        const is_cur = std.mem.eql(u8, cur, labels[k]);
+        if (dvui.button(@src(), labels[k], .{}, .{
+            .id_extra = k,
+            .expand = .horizontal,
+            .color_fill = if (is_cur) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = if (is_cur) theme.colors.accent_primary else theme.colors.text_primary,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+        })) {
+            var cmd: [64]u8 = undefined;
+            if (std.fmt.bufPrintZ(&cmd, "set video-aspect-override \"{s}\"", .{m})) |cstr| {
+                _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cstr.ptr);
+            } else |_| {}
+            open_picker = .none;
+        }
+    }
+    if (!open) open_picker = .none;
+}
+
+fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []const u8, kind: PickerKind) void {
+    if (open_picker != kind) return;
+    var open: bool = true;
+    const title = if (kind == .audio) "Audio Track" else "Subtitles";
+    var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
+        .min_size_content = .{ .w = 320, .h = 240 },
+        .color_fill = theme.colors.bg_surface,
+        .color_border = theme.colors.border_subtle,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+    });
+    defer fw.deinit();
+    fw.dragAreaSet(dvui.windowHeader(title, "", &open));
+
+    var scroll = dvui.scrollArea(@src(), .{}, .{
+        .expand = .both,
+        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
+    });
+    defer scroll.deinit();
+
+    var count: i64 = 0;
+    _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "track-list/count", c.mpv.MPV_FORMAT_INT64, &count);
+
+    var i: i64 = 0;
+    while (i < count) : (i += 1) {
+        var tq_buf: [64]u8 = undefined;
+        const tq = std.fmt.bufPrintZ(&tq_buf, "track-list/{d}/type", .{i}) catch continue;
+        const tc = c.mpv.mpv_get_property_string(active_p.mpv_ctx, tq.ptr);
+        if (tc == null) continue;
+        const matches = std.mem.eql(u8, std.mem.span(tc), track_type);
+        c.mpv.mpv_free(@ptrCast(tc));
+        if (!matches) continue;
+
+        var id_buf: [64]u8 = undefined;
+        const idq = std.fmt.bufPrintZ(&id_buf, "track-list/{d}/id", .{i}) catch continue;
+        var t_id: i64 = 0;
+        _ = c.mpv.mpv_get_property(active_p.mpv_ctx, idq.ptr, c.mpv.MPV_FORMAT_INT64, &t_id);
+
+        var sel_buf: [64]u8 = undefined;
+        const sq = std.fmt.bufPrintZ(&sel_buf, "track-list/{d}/selected", .{i}) catch continue;
+        const sc = c.mpv.mpv_get_property_string(active_p.mpv_ctx, sq.ptr);
+        const is_selected = sc != null and std.mem.eql(u8, std.mem.span(sc), "yes");
+        if (sc != null) c.mpv.mpv_free(@ptrCast(sc));
+
+        var name_buf: [128]u8 = undefined;
+        var row_name: []const u8 = "Unknown";
+        var qlang_buf: [64]u8 = undefined;
+        const lq = std.fmt.bufPrintZ(&qlang_buf, "track-list/{d}/lang", .{i}) catch continue;
+        const lc = c.mpv.mpv_get_property_string(active_p.mpv_ctx, lq.ptr);
+        if (lc != null) {
+            row_name = std.fmt.bufPrint(&name_buf, "{s}", .{std.mem.span(lc)}) catch "Err";
+            c.mpv.mpv_free(@ptrCast(lc));
+        } else {
+            var qtitle_buf: [64]u8 = undefined;
+            const tlq = std.fmt.bufPrintZ(&qtitle_buf, "track-list/{d}/title", .{i}) catch continue;
+            const tlc = c.mpv.mpv_get_property_string(active_p.mpv_ctx, tlq.ptr);
+            if (tlc != null) {
+                row_name = std.fmt.bufPrint(&name_buf, "{s}", .{std.mem.span(tlc)}) catch "Err";
+                c.mpv.mpv_free(@ptrCast(tlc));
+            } else {
+                row_name = std.fmt.bufPrint(&name_buf, "Track #{d}", .{i}) catch "Err";
+            }
+        }
+
+        if (dvui.button(@src(), row_name, .{}, .{
+            .id_extra = @as(usize, @intCast(i)),
+            .expand = .horizontal,
+            .color_fill = if (is_selected) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = if (is_selected) theme.colors.semantic_success else theme.colors.text_primary,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+        })) {
+            var cmd: [64]u8 = undefined;
+            const prop = if (kind == .audio) "aid" else "sid";
+            if (std.fmt.bufPrintZ(&cmd, "set {s} {d}", .{ prop, t_id })) |cstr| {
+                _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cstr.ptr);
+            } else |_| {}
+            open_picker = .none;
+        }
+    }
+
+    if (!open) open_picker = .none;
+}
+
+fn renderLangPickerPopover() void {
+    if (open_picker != .lang) return;
+    var open: bool = true;
+    var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
+        .min_size_content = .{ .w = 240, .h = 320 },
+        .color_fill = theme.colors.bg_surface,
+        .color_border = theme.colors.border_subtle,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+    });
+    defer fw.deinit();
+    fw.dragAreaSet(dvui.windowHeader("Subtitle Language", "", &open));
+
+    var scroll = dvui.scrollArea(@src(), .{}, .{
+        .expand = .both,
+        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
+    });
+    defer scroll.deinit();
+
+    const langs = [_][]const u8{ "eng", "spa", "fre", "ger", "por", "ita", "dut", "pol", "rus", "chi", "jpn", "kor", "ara", "hin", "tur" };
+    const names = [_][]const u8{ "English", "Spanish", "French", "German", "Portuguese", "Italian", "Dutch", "Polish", "Russian", "Chinese", "Japanese", "Korean", "Arabic", "Hindi", "Turkish" };
+    const current = state.app.sub_lang_buf[0..state.app.sub_lang_len];
+
+    for (langs, 0..) |l, k| {
+        const is_cur = std.mem.eql(u8, current, l);
+        if (dvui.button(@src(), names[k], .{}, .{
+            .id_extra = k,
+            .expand = .horizontal,
+            .color_fill = if (is_cur) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = if (is_cur) theme.colors.accent_primary else theme.colors.text_primary,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+        })) {
+            @memcpy(state.app.sub_lang_buf[0..l.len], l);
+            state.app.sub_lang_len = l.len;
+            open_picker = .none;
+        }
+    }
+    if (!open) open_picker = .none;
+}
+
+fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
+    if (open_picker != .playlist) return;
+    if (active_p.current_torrent_id < 0) { open_picker = .none; return; }
+    const file_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, active_p.current_torrent_id);
+    if (file_count <= 1) { open_picker = .none; return; }
+
+    var open: bool = true;
+    var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
+        .min_size_content = .{ .w = 460, .h = 320 },
+        .color_fill = theme.colors.bg_surface,
+        .color_border = theme.colors.border_subtle,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+    });
+    defer fw.deinit();
+    fw.dragAreaSet(dvui.windowHeader("Files", "", &open));
+
+    var scroll = dvui.scrollArea(@src(), .{}, .{
+        .expand = .both,
+        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
+    });
+    defer scroll.deinit();
+
+    var i: usize = 0;
+    while (i < @as(usize, @intCast(file_count))) : (i += 1) {
+        var name_buf: [256]u8 = undefined;
+        c.mpv.torrent_get_file_name(state.app.torrent_ses, active_p.current_torrent_id, @intCast(i), &name_buf, 256);
+        const size = c.mpv.torrent_get_file_size(state.app.torrent_ses, active_p.current_torrent_id, @intCast(i));
+        const size_mb = @as(f64, @floatFromInt(size)) / 1024.0 / 1024.0;
+        var lbl_buf: [320]u8 = undefined;
+        const label = std.fmt.bufPrintZ(&lbl_buf, "{s}  ({d:.1} MB)", .{ std.mem.sliceTo(&name_buf, 0), size_mb }) catch "File";
+        const is_sel = active_p.selected_file_idx == @as(i32, @intCast(i));
+        if (dvui.button(@src(), label, .{}, .{
+            .id_extra = i,
+            .expand = .horizontal,
+            .color_fill = if (is_sel) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = if (is_sel) theme.colors.accent_primary else theme.colors.text_primary,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+        })) {
+            if (active_p.selected_file_idx != @as(i32, @intCast(i))) {
+                _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "stop");
+                const old_idx = active_p.selected_file_idx;
+                if (old_idx >= 0 and old_idx < file_count) {
+                    c.mpv.torrent_set_file_priority(state.app.torrent_ses, active_p.current_torrent_id, old_idx, 0);
+                }
+                active_p.selected_file_idx = @as(i32, @intCast(i));
+                c.mpv.torrent_set_file_priority(state.app.torrent_ses, active_p.current_torrent_id, @intCast(i), 4);
+                active_p.torrent_is_ready = false;
+            }
+            open_picker = .none;
+        }
+    }
+    if (!open) open_picker = .none;
+}
+
 pub fn renderLiquidGlassOverlay() void {
     if (!state.app.show_cell_overlay or state.app.players.items.len <= state.app.active_player_idx) return;
 
@@ -467,47 +1120,36 @@ pub fn renderLiquidGlassOverlay() void {
 
     const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
-    // ── Check auto-hide ──
+    // ── Auto-hide if playing and idle for 2.5s. Stay visible while a popover is open. ──
     var is_paused: c_int = 0;
     _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "pause", c.mpv.MPV_FORMAT_FLAG, &is_paused);
     const now_ms = @import("../core/io_global.zig").milliTimestamp();
-    
-    // Auto-hide if playing and mouse hasn't moved in 2.5s
-    if (is_paused == 0 and now_ms - state.app.last_mouse_move_ms > 2500) return;
+    if (is_paused == 0 and now_ms - state.app.last_mouse_move_ms > 2500 and open_picker == .none) return;
 
-    // Outer wrapper: push panel to bottom of video cell
+    // ── Anchor: push the footer to the bottom of the active cell. ──
     var anchor = dvui.box(@src(), .{ .dir = .vertical }, .{ .gravity_y = 1.0, .expand = .horizontal });
     defer anchor.deinit();
 
-    // ── Panel background — floating glass card over video ──
+    // ── Footer panel: bg_surface + 1px top border ──
     var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = dvui.Color{ .r = 14, .g = 14, .b = 20, .a = 235 },
-        .color_border = dvui.Color{ .r = 60, .g = 60, .b = 90, .a = 180 },
-        .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(10),
-        .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
-        .margin = .{ .x = 8, .y = 0, .w = 8, .h = 8 },
-        .box_shadow = .{
-            .color = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 140 },
-            .offset = .{ .x = 0, .y = 4 },
-            .fade = 16.0,
-        },
+        .color_fill = theme.colors.bg_surface,
+        .color_border = theme.colors.border_subtle,
+        .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
+        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     });
     defer panel.deinit();
 
-    // ── Mouse wheel: scroll on panel = volume up/down ──
+    // ── Wheel on scrubber band = ±5s seek ──
     for (dvui.events()) |*ev| {
         switch (ev.evt) {
             .mouse => |mouse| {
                 switch (mouse.action) {
                     .wheel_y => |wy| {
-                        // Check if mouse is over the seekbar area (top ~12px of panel)
                         const panel_rect = panel.data().contentRectScale().r;
                         const mouse_y_in_panel = mouse.p.y - panel_rect.y;
-                        if (mouse_y_in_panel >= 0 and mouse_y_in_panel < 12) {
-                            // Scroll on seekbar → seek ±5 seconds
+                        if (mouse_y_in_panel >= 0 and mouse_y_in_panel < 32) {
                             if (wy > 0) {
                                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek 5");
                             } else {
@@ -523,7 +1165,7 @@ pub fn renderLiquidGlassOverlay() void {
         }
     }
 
-    // Query mpv properties — seekbar-critical props every frame, slow props cached
+    // Query mpv properties — seekbar-critical props every frame, slow props cached.
     var percent_pos: f64 = 0.0;
     _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "percent-pos", c.mpv.MPV_FORMAT_DOUBLE, &percent_pos);
     var time_pos: f64 = 0.0;
@@ -531,15 +1173,11 @@ pub fn renderLiquidGlassOverlay() void {
     var duration: f64 = 0.0;
     _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &duration);
 
-    // Slow-changing properties: cached, refreshed every ~8 frames
     const SlowProps = struct {
         var frame_ctr: u32 = 0;
         var speed: f64 = 1.0;
         var is_muted: i64 = 0;
         var volume: f64 = 100.0;
-        var width: i64 = 0;
-        var height: i64 = 0;
-        var fps: f64 = 0;
         var pl_count: i64 = 0;
         var pl_pos: i64 = 0;
     };
@@ -548,9 +1186,6 @@ pub fn renderLiquidGlassOverlay() void {
         _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "speed", c.mpv.MPV_FORMAT_DOUBLE, &SlowProps.speed);
         _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "mute", c.mpv.MPV_FORMAT_FLAG, &SlowProps.is_muted);
         _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "volume", c.mpv.MPV_FORMAT_DOUBLE, &SlowProps.volume);
-        _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "width", c.mpv.MPV_FORMAT_INT64, &SlowProps.width);
-        _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "height", c.mpv.MPV_FORMAT_INT64, &SlowProps.height);
-        _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "estimated-vf-fps", c.mpv.MPV_FORMAT_DOUBLE, &SlowProps.fps);
         _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "playlist-count", c.mpv.MPV_FORMAT_INT64, &SlowProps.pl_count);
         _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "playlist-pos", c.mpv.MPV_FORMAT_INT64, &SlowProps.pl_pos);
     }
@@ -558,370 +1193,358 @@ pub fn renderLiquidGlassOverlay() void {
     const toggle_icon = if (is_paused != 0) icons.tvg.lucide.@"play" else icons.tvg.lucide.@"pause";
 
     // ═══════════════════════════════════════════════════════════════
-    // ROW 1: Seekbar — full width, compact 12px height
+    // ROW 1 — Scrubber + chapter pips + hover time-at-cursor
     // ═══════════════════════════════════════════════════════════════
-    {
-        var seek_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 12 },
-            .max_size_content = .{ .w = 0, .h = 12 },
-        });
-        defer seek_row.deinit();
-
-        var seek_overlay = dvui.overlay(@src(), .{ .expand = .horizontal });
-        defer seek_overlay.deinit();
-
-        // Piece map background (torrent streaming)
-        if (active_p.current_torrent_id >= 0) {
-            var map_buf: [2048]u8 = undefined;
-            const map_len = c.mpv.torrent_get_piece_map(state.app.torrent_ses, active_p.current_torrent_id, &map_buf, 2048);
-            if (map_len > 0) {
-                var p_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .expand = .horizontal,
-                    .min_size_content = .{ .w = 0, .h = 3 },
-                    .gravity_y = 0.5,
-                });
-
-                const VISUAL_PARTS = 60;
-                var part_i: usize = 0;
-                while (part_i < VISUAL_PARTS) : (part_i += 1) {
-                    const start_idx = (part_i * @as(usize, @intCast(map_len))) / VISUAL_PARTS;
-                    const end_idx = ((part_i + 1) * @as(usize, @intCast(map_len))) / VISUAL_PARTS;
-
-                    var downloaded = false;
-                    var bit_i: usize = start_idx;
-                    while (bit_i < end_idx and bit_i < map_len) : (bit_i += 1) {
-                        if (map_buf[bit_i] == '1') { downloaded = true; break; }
-                    }
-
-                    var p_seg = dvui.box(@src(), .{}, .{
-                        .id_extra = part_i,
-                        .expand = .both,
-                        .background = true,
-                        .color_fill = if (downloaded) dvui.Color{ .r = 69, .g = 133, .b = 136, .a = 180 } else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 100 },
-                    });
-                    p_seg.deinit();
-                }
-
-                p_row.deinit();
-            }
-        }
-
-        // Interactive slider on top
-        var slider_pct: f32 = @floatCast(percent_pos / 100.0);
-        if (std.math.isNan(slider_pct)) slider_pct = 0.0;
-        if (dvui.slider(@src(), .{ .fraction = &slider_pct }, .{
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 100, .h = 8 },
-            .color_fill = transparent,
-        })) {
-            const S = struct { var last_seek_ms: i64 = 0; var last_seek_pct: f64 = -1.0; };
-            const seek_pct = @as(f64, slider_pct * 100.0);
-
-            if (now_ms - S.last_seek_ms > 100 or @abs(seek_pct - S.last_seek_pct) > 2.0) {
-                var buf: [64]u8 = undefined;
-                if (std.fmt.bufPrintZ(&buf, "seek {d:.2} absolute-percent+keyframes", .{seek_pct})) |seek_cmd| {
-                    _ = c.mpv.mpv_command_string(active_p.mpv_ctx, seek_cmd.ptr);
-                } else |_| {}
-
-                if (active_p.current_torrent_id >= 0 and now_ms - S.last_seek_ms > 500) {
-                    c.mpv.torrent_seek_prioritize(state.app.torrent_ses, active_p.current_torrent_id,
-                        active_p.selected_file_idx, seek_pct);
-                }
-
-                S.last_seek_ms = now_ms;
-                S.last_seek_pct = seek_pct;
-            }
-        }
-
-        // Seekbar hover timestamp — show time at cursor position
-        if (duration > 0) {
-            const seek_rect = seek_row.data().contentRectScale().r;
-            const mouse_x = state.app.last_mouse_x;
-            const mouse_y = state.app.last_mouse_y;
-            // Check if mouse is within seekbar vertical range (plus a bit of tolerance)
-            if (mouse_y >= seek_rect.y - 20 and mouse_y <= seek_rect.y + seek_rect.h + 10 and
-                mouse_x >= seek_rect.x and mouse_x <= seek_rect.x + seek_rect.w)
-            {
-                const frac = @max(0.0, @min(1.0, (mouse_x - seek_rect.x) / @max(1.0, seek_rect.w)));
-                const hover_time = frac * @as(f32, @floatCast(duration));
-                const ht_sec = @as(u32, @intFromFloat(@max(0.0, hover_time)));
-                var ht_buf: [16]u8 = undefined;
-                const ht_str = std.fmt.bufPrint(&ht_buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{
-                    ht_sec / 3600, (ht_sec % 3600) / 60, ht_sec % 60,
-                }) catch "00:00:00";
-
-                // Position the label at the mouse X, above the seekbar
-                _ = dvui.label(@src(), "{s}", .{ht_str}, .{
-                    .color_text = theme.colors.text_main,
-                    .gravity_x = frac,
-                    .gravity_y = 0.0,
-                });
-            }
-        }
-    }
-
-    // 4px gap
-    { var gap = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 0, .h = 3 }, .expand = .horizontal }); gap.deinit(); }
+    renderScrubber(active_p, percent_pos, duration, now_ms);
 
     // ═══════════════════════════════════════════════════════════════
-    // ROW 2: Transport | Time | Volume | Spacer | Menus | Close
+    // ROW 2 — Controls: transport | time | volume | pickers | close
     // ═══════════════════════════════════════════════════════════════
     {
         var ctrl_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 0, .h = 40 },
             .max_size_content = .{ .w = 0, .h = 40 },
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
         });
         defer ctrl_row.deinit();
 
         var wd: dvui.WidgetData = undefined;
-        const ctrl_pad = dvui.Rect{ .x = 3, .y = 3, .w = 3, .h = 3 };
+        const has_playlist = SlowProps.pl_count > 1;
 
-        // Query playlist state (from cache)
-        const pl_count = SlowProps.pl_count;
-        const pl_pos = SlowProps.pl_pos;
-        const has_playlist = pl_count > 1;
-
-        // Prev track
+        // ── Transport: skip-back | rewind | play/pause | forward | skip-forward ──
         if (has_playlist) {
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"skip-back", .{}, .{}, .{
-                .data_out = &wd, .color_fill = transparent,
-                .color_text = if (pl_pos > 0) theme.colors.accent else theme.colors.text_muted,
-                .border = dvui.Rect.all(0), .gravity_y = 0.5, .padding = ctrl_pad,
+            if (dvui.buttonIcon(@src(), "skip-prev", icons.tvg.lucide.@"skip-back", .{}, .{}, .{
+                .data_out = &wd,
+                .color_fill = transparent,
+                .color_text = if (SlowProps.pl_pos > 0) theme.colors.text_primary else theme.colors.text_tertiary,
+                .border = dvui.Rect.all(0),
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .gravity_y = 0.5,
+                .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
+                .min_size_content = .{ .w = 32, .h = 32 },
+                .max_size_content = .{ .w = 32, .h = 32 },
             })) {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-prev");
             }
-            components.tip(@src(), wd, "Previous");
+            components.tip(@src(), wd, "Previous track");
         }
 
-        // Rewind
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"rewind", .{}, .{}, .{
-            .data_out = &wd, .color_fill = transparent, .color_text = theme.colors.text_main,
-            .border = dvui.Rect.all(0), .gravity_y = 0.5, .padding = ctrl_pad,
+        // Rewind 10s — 36px square.
+        if (dvui.buttonIcon(@src(), "rewind10", icons.tvg.lucide.@"rewind", .{}, .{}, .{
+            .data_out = &wd,
+            .color_fill = transparent,
+            .color_text = theme.colors.text_primary,
+            .border = dvui.Rect.all(0),
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .gravity_y = 0.5,
+            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
+            .min_size_content = .{ .w = 36, .h = 36 },
+            .max_size_content = .{ .w = 36, .h = 36 },
         })) {
             _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek -10");
         }
-        components.tip(@src(), wd, "−10s");
+        components.tip(@src(), wd, "Skip back 10s (\xE2\x86\x90)");
 
-        // Play/Pause
-        if (dvui.buttonIcon(@src(), "Play/Pause", toggle_icon, .{}, .{}, .{
-            .data_out = &wd, .color_fill = transparent, .color_text = theme.colors.text_main,
-            .corner_radius = dvui.Rect.all(6), .border = dvui.Rect.all(0), .gravity_y = 0.5,
-            .padding = ctrl_pad,
+        // Play / Pause — 44px square, accent background when playing.
+        const playing = is_paused == 0;
+        if (dvui.buttonIcon(@src(), "toggle-pp", toggle_icon, .{}, .{}, .{
+            .data_out = &wd,
+            .color_fill = if (playing) theme.colors.accent_primary else theme.colors.bg_elevated,
+            .color_text = if (playing) theme.colors.text_on_accent else theme.colors.text_primary,
+            .border = dvui.Rect.all(0),
+            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .gravity_y = 0.5,
+            .padding = .{ .x = 10, .y = 10, .w = 10, .h = 10 },
+            .min_size_content = .{ .w = 44, .h = 44 },
+            .max_size_content = .{ .w = 44, .h = 44 },
+            .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         })) {
             active_p.togglePause();
         }
-        components.tip(@src(), wd, if (is_paused != 0) "Play" else "Pause");
+        components.tip(@src(), wd, "Play/Pause (Space)");
 
-        // Forward
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"fast-forward", .{}, .{}, .{
-            .data_out = &wd, .color_fill = transparent, .color_text = theme.colors.text_main,
-            .border = dvui.Rect.all(0), .gravity_y = 0.5, .padding = ctrl_pad,
+        // Forward 10s.
+        if (dvui.buttonIcon(@src(), "ff10", icons.tvg.lucide.@"fast-forward", .{}, .{}, .{
+            .data_out = &wd,
+            .color_fill = transparent,
+            .color_text = theme.colors.text_primary,
+            .border = dvui.Rect.all(0),
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .gravity_y = 0.5,
+            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
+            .min_size_content = .{ .w = 36, .h = 36 },
+            .max_size_content = .{ .w = 36, .h = 36 },
         })) {
             _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek 10");
         }
-        components.tip(@src(), wd, "+10s");
+        components.tip(@src(), wd, "Skip forward 10s (\xE2\x86\x92)");
 
-        // Next track
         if (has_playlist) {
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"skip-forward", .{}, .{}, .{
-                .data_out = &wd, .color_fill = transparent,
-                .color_text = if (pl_pos + 1 < pl_count) theme.colors.accent else theme.colors.text_muted,
-                .border = dvui.Rect.all(0), .gravity_y = 0.5, .padding = ctrl_pad,
+            if (dvui.buttonIcon(@src(), "skip-next", icons.tvg.lucide.@"skip-forward", .{}, .{}, .{
+                .data_out = &wd,
+                .color_fill = transparent,
+                .color_text = if (SlowProps.pl_pos + 1 < SlowProps.pl_count) theme.colors.text_primary else theme.colors.text_tertiary,
+                .border = dvui.Rect.all(0),
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .gravity_y = 0.5,
+                .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
+                .min_size_content = .{ .w = 32, .h = 32 },
+                .max_size_content = .{ .w = 32, .h = 32 },
             })) {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-next");
             }
-            components.tip(@src(), wd, "Next");
+            components.tip(@src(), wd, "Next track");
         }
 
-        // Time display
+        // ── Time display — current in text_primary, separator+total in text_tertiary ──
         {
             const safe_time = @max(0.0, if (std.math.isNan(time_pos)) 0.0 else time_pos);
             const safe_dur = @max(0.0, if (std.math.isNan(duration)) 0.0 else duration);
             const t_sec = @as(u32, @intFromFloat(safe_time));
             const d_sec = @as(u32, @intFromFloat(safe_dur));
-            var time_buf: [32]u8 = undefined;
-            const time_str = std.fmt.bufPrintZ(&time_buf, "{d:0>2}:{d:0>2}:{d:0>2}/{d:0>2}:{d:0>2}:{d:0>2}", .{
-                t_sec / 3600, (t_sec % 3600) / 60, t_sec % 60,
-                d_sec / 3600, (d_sec % 3600) / 60, d_sec % 60,
-            }) catch "00:00:00/00:00:00";
 
-            _ = dvui.label(@src(), "{s}", .{time_str}, .{
-                .color_text = theme.colors.text_muted,
-                .margin = .{ .x = 6, .y = 0, .w = 2, .h = 0 },
+            var cur_buf: [16]u8 = undefined;
+            const cur_str = formatHmsBuf(&cur_buf, t_sec, null);
+
+            var rest_buf: [24]u8 = undefined;
+            const rest_str = if (time_show_remaining and d_sec >= t_sec) blk: {
+                const rem = d_sec - t_sec;
+                const h = rem / 3600;
+                const m = (rem % 3600) / 60;
+                const s = rem % 60;
+                break :blk if (h > 0)
+                    (std.fmt.bufPrint(&rest_buf, " / -{d:0>2}:{d:0>2}:{d:0>2}", .{ h, m, s }) catch " / --:--")
+                else
+                    (std.fmt.bufPrint(&rest_buf, " / -{d:0>2}:{d:0>2}", .{ m, s }) catch " / --:--");
+            } else blk: {
+                const h = d_sec / 3600;
+                const m = (d_sec % 3600) / 60;
+                const s = d_sec % 60;
+                break :blk if (h > 0)
+                    (std.fmt.bufPrint(&rest_buf, " / {d:0>2}:{d:0>2}:{d:0>2}", .{ h, m, s }) catch " / 00:00")
+                else
+                    (std.fmt.bufPrint(&rest_buf, " / {d:0>2}:{d:0>2}", .{ m, s }) catch " / 00:00");
+            };
+
+            var time_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .gravity_y = 0.5,
+                .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 },
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
+            });
+            if (dvui.clicked(time_box.data(), .{})) {
+                time_show_remaining = !time_show_remaining;
+            }
+
+            _ = dvui.label(@src(), "{s}", .{cur_str}, .{
+                .color_text = theme.colors.text_primary,
+                .gravity_y = 0.5,
+            });
+            _ = dvui.label(@src(), "{s}", .{rest_str}, .{
+                .color_text = theme.colors.text_tertiary,
+                .gravity_y = 0.5,
             });
 
+            // Playlist position / Speed / Loop badges.
             if (has_playlist) {
                 var pl_buf: [16]u8 = undefined;
-                if (std.fmt.bufPrintZ(&pl_buf, "{d}/{d}", .{ pl_pos + 1, pl_count })) |pl_str| {
+                if (std.fmt.bufPrintZ(&pl_buf, " \xC2\xB7 {d}/{d}", .{ SlowProps.pl_pos + 1, SlowProps.pl_count })) |pl_str| {
                     _ = dvui.label(@src(), "{s}", .{pl_str}, .{
-                        .color_text = theme.colors.accent,
-                        .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
+                        .color_text = theme.colors.text_tertiary,
+                        .gravity_y = 0.5,
                     });
                 } else |_| {}
             }
-        }
-
-        // Speed indicator (from cache)
-        {
-            const speed = SlowProps.speed;
-            if (@abs(speed - 1.0) > 0.01) {
+            if (@abs(SlowProps.speed - 1.0) > 0.01) {
                 var spd_buf: [16]u8 = undefined;
-                if (std.fmt.bufPrintZ(&spd_buf, "{d:.1}×", .{speed})) |spd_str| {
-                    _ = dvui.label(@src(), "{s}", .{spd_str}, .{
-                        .color_text = theme.colors.accent,
-                        .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
+                if (std.fmt.bufPrintZ(&spd_buf, " \xC2\xB7 {d:.1}\xC3\x97", .{SlowProps.speed})) |sp| {
+                    _ = dvui.label(@src(), "{s}", .{sp}, .{
+                        .color_text = theme.colors.accent_primary,
+                        .gravity_y = 0.5,
                     });
                 } else |_| {}
             }
+            if (active_p.loop_a >= 0) {
+                const loop_lbl = if (active_p.loop_b >= 0) " \xC2\xB7 A-B" else " \xC2\xB7 A..";
+                _ = dvui.label(@src(), "{s}", .{loop_lbl}, .{
+                    .color_text = theme.colors.accent_primary,
+                    .gravity_y = 0.5,
+                });
+            }
+
+            time_box.deinit();
         }
 
-        // A-B loop
-        if (active_p.loop_a >= 0) {
-            const loop_lbl = if (active_p.loop_b >= 0) "🔁 A-B" else "🔁 A..";
-            _ = dvui.label(@src(), "{s}", .{loop_lbl}, .{
-                .color_text = theme.colors.accent_hover,
-                .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
-            });
-        }
-
-        // Mute + Volume (from cache)
-        const is_muted = SlowProps.is_muted;
-        const m_icon = if (is_muted == 1) icons.tvg.lucide.@"volume-x" else icons.tvg.lucide.@"volume-2";
-        if (dvui.buttonIcon(@src(), "", m_icon, .{}, .{}, .{
-            .data_out = &wd, .color_fill = transparent, .color_text = theme.colors.text_main,
-            .border = dvui.Rect.all(0), .gravity_y = 0.5, .padding = ctrl_pad,
-            .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
+        // ── Volume: mute toggle + slider + hover-only percentage ──
+        const is_muted = SlowProps.is_muted == 1;
+        const m_icon = if (is_muted) icons.tvg.lucide.@"volume-x" else icons.tvg.lucide.@"volume-2";
+        if (dvui.buttonIcon(@src(), "mute-tog", m_icon, .{}, .{}, .{
+            .data_out = &wd,
+            .color_fill = transparent,
+            .color_text = if (is_muted) theme.colors.text_tertiary else theme.colors.text_primary,
+            .border = dvui.Rect.all(0),
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .gravity_y = 0.5,
+            .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
+            .min_size_content = .{ .w = 28, .h = 28 },
+            .max_size_content = .{ .w = 28, .h = 28 },
+            .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 4, .h = 0 },
         })) {
             _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "cycle mute");
         }
-        // Dynamic tooltip showing current volume level
-        {
-            var mute_tip_buf: [32]u8 = undefined;
-            const vol_int = @as(i32, @intFromFloat(@max(0.0, @min(100.0, SlowProps.volume))));
-            const mute_tip = if (is_muted == 1)
-                "Unmute"
-            else
-                (std.fmt.bufPrint(&mute_tip_buf, "Mute ({d}%)", .{vol_int}) catch "Mute");
-            components.tip(@src(), wd, mute_tip);
-        }
+        components.tip(@src(), wd, if (is_muted) "Unmute" else "Mute");
+
+        // 120px fixed slider.
+        var slider_host = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .min_size_content = .{ .w = 120, .h = 20 },
+            .max_size_content = .{ .w = 120, .h = 20 },
+            .gravity_y = 0.5,
+        });
+        const slider_rect = slider_host.data().contentRectScale().r;
+        const slider_hover = mouseOverRect(slider_rect);
 
         const vol_f64: f64 = SlowProps.volume;
         var vol_val: f32 = @floatCast(@max(0.0, @min(1.0, vol_f64 / 100.0)));
         if (dvui.slider(@src(), .{ .fraction = &vol_val }, .{
-            .min_size_content = .{ .w = 50, .h = 4 },
-            .max_size_content = .{ .w = 80, .h = 10 },
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 120, .h = 4 },
+            .max_size_content = .{ .w = 120, .h = 4 },
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.accent_primary,
+            .corner_radius = dvui.Rect.all(2),
             .gravity_y = 0.5,
+            .background = true,
         })) {
             var set_vol_cmd: [64]u8 = undefined;
             if (std.fmt.bufPrintZ(&set_vol_cmd, "set volume {d}", .{@as(i32, @intFromFloat(vol_val * 100.0))})) |cmd| {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cmd.ptr);
             } else |_| {}
         }
+        slider_host.deinit();
 
-        // Volume percentage label
-        {
+        // Hover-only percentage label.
+        if (slider_hover) {
             const vol_pct = @as(i32, @intFromFloat(@max(0.0, @min(100.0, vol_f64))));
             var vol_pct_buf: [8]u8 = undefined;
             const vol_pct_str = std.fmt.bufPrint(&vol_pct_buf, "{d}%", .{vol_pct}) catch "0%";
             _ = dvui.label(@src(), "{s}", .{vol_pct_str}, .{
-                .color_text = theme.colors.text_dim,
+                .color_text = theme.colors.text_tertiary,
                 .gravity_y = 0.5,
                 .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
             });
+        } else {
+            var gap = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 4, .h = 0 } });
+            gap.deinit();
         }
 
-        // Spacer
+        // ── Spacer pushes pickers + close to the right edge ──
         { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
 
-        // Dropdown menus — compact
-        var hook_menu = dvui.menu(@src(), .horizontal, .{ .background = false });
+        // ── Picker icon-chips: aspect, chapters, audio, subs, lang, files ──
 
-        // Technical Badges (Resolution, FPS) removed from main toolbar
-        // They should be added to a "Stats for Nerds" overlay in the future.
-
-        // Aspect ratio
+        // Aspect (always available)
         {
-            var grp = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5, .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 } });
-            dvui.icon(@src(), "", icons.tvg.lucide.@"ratio", .{}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
-            aspectDropdownMenu(active_p.mpv_ctx, 3);
-            grp.deinit();
+            const ar_text = currentAspectChipText(active_p.mpv_ctx);
+            const ar_active = !std.mem.eql(u8, ar_text, "Auto");
+            if (pickerIconChip(@src(), 700, icons.tvg.lucide.@"ratio", ar_text, ar_active, "Aspect ratio")) {
+                open_picker = if (open_picker == .aspect) .none else .aspect;
+            }
         }
 
-        // Chapters (MKV/MP4 with embedded chapters)
+        // Chapters — only when count > 1.
         {
-            var grp = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5, .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 } });
-            dvui.icon(@src(), "", icons.tvg.lucide.@"bookmark", .{}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
-            chapterDropdownMenu(active_p.mpv_ctx);
-            grp.deinit();
+            var chp_buf: [16]u8 = undefined;
+            const chp = currentChapterChipText(active_p.mpv_ctx, &chp_buf);
+            if (chp.count > 1) {
+                if (pickerIconChip(@src(), 701, icons.tvg.lucide.@"bookmark", chp.text, true, "Chapters")) {
+                    open_picker = if (open_picker == .chapter) .none else .chapter;
+                }
+            }
         }
 
-        // Audio track
+        // Audio.
         {
-            var grp = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5, .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 } });
-            dvui.icon(@src(), "", icons.tvg.lucide.@"music", .{}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
-            trackDropdownMenu(active_p.mpv_ctx, "audio");
-            grp.deinit();
+            var aud_buf: [32]u8 = undefined;
+            const aud = currentTrackChipText(active_p.mpv_ctx, "audio", &aud_buf);
+            if (pickerIconChip(@src(), 702, icons.tvg.lucide.@"music", aud.text, aud.active, "Audio track")) {
+                open_picker = if (open_picker == .audio) .none else .audio;
+            }
         }
 
-        // Subtitle track
+        // Subs.
         {
-            var grp = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5, .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 } });
-            dvui.icon(@src(), "", icons.tvg.lucide.@"captions", .{}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
-            trackDropdownMenu(active_p.mpv_ctx, "sub");
-            grp.deinit();
+            var sub_buf: [32]u8 = undefined;
+            const sub = currentTrackChipText(active_p.mpv_ctx, "sub", &sub_buf);
+            if (pickerIconChip(@src(), 703, icons.tvg.lucide.@"captions", sub.text, sub.active, "Subtitle track")) {
+                open_picker = if (open_picker == .sub) .none else .sub;
+            }
         }
 
-        // Subtitle language + quick picker
+        // Subtitle language.
         {
-            var grp = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5, .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 } });
-            dvui.icon(@src(), "", icons.tvg.lucide.@"globe", .{}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
-            subLanguageDropdown();
-            subtitlesButton();
-            grp.deinit();
+            const cur_lang = state.app.sub_lang_buf[0..state.app.sub_lang_len];
+            const chip = if (cur_lang.len > 0) cur_lang else "eng";
+            if (pickerIconChip(@src(), 704, icons.tvg.lucide.@"globe", chip, cur_lang.len > 0, "Subtitle search language")) {
+                open_picker = if (open_picker == .lang) .none else .lang;
+            }
         }
 
-        // Playlist
-        {
-            var grp = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5, .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 } });
-            dvui.icon(@src(), "", icons.tvg.lucide.@"list", .{}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
-            playlistDropdownMenu(active_p);
-            grp.deinit();
+        // Find Subtitles — direct shortcut.
+        if (pickerIconChip(@src(), 705, icons.tvg.lucide.@"search", "Subs", false, "Find subtitles online")) {
+            state.app.sub_picker_open = true;
+            const subs = @import("../services/subtitles.zig");
+            if (!subs.is_searching) subs.autoSearchFromPlayer();
         }
 
-        hook_menu.deinit();
+        // Files (torrent multi-file playlist).
+        if (active_p.current_torrent_id >= 0) {
+            const file_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, active_p.current_torrent_id);
+            if (file_count > 1) {
+                var f_buf: [16]u8 = undefined;
+                const f_chip = std.fmt.bufPrint(&f_buf, "{d}", .{file_count}) catch "";
+                if (pickerIconChip(@src(), 706, icons.tvg.lucide.@"list", f_chip, true, "Files in torrent")) {
+                    open_picker = if (open_picker == .playlist) .none else .playlist;
+                }
+            }
+        }
 
-        // Close button
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"x", .{}, .{}, .{
+        // ── Close player — far right, semantic_error on hover ──
+        // We use module-level state to carry hover across frames: read the
+        // rect captured last frame, then update it after this frame's button
+        // is laid out. One frame of lag is fine for a hover effect.
+        { var spacer2 = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = theme.spacing.sm, .h = 0 } }); spacer2.deinit(); }
+
+        const close_hovered_now = mouseOverRect(close_button_rect);
+        if (dvui.buttonIcon(@src(), "close", icons.tvg.lucide.@"x", .{}, .{}, .{
             .data_out = &wd,
             .color_fill = transparent,
-            .color_text = theme.colors.danger,
-            .corner_radius = dvui.Rect.all(6),
+            .color_text = if (close_hovered_now) theme.colors.semantic_error else theme.colors.text_secondary,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
             .border = dvui.Rect.all(0),
-            .padding = ctrl_pad,
+            .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
+            .min_size_content = .{ .w = 28, .h = 28 },
+            .max_size_content = .{ .w = 28, .h = 28 },
+            .gravity_y = 0.5,
+            .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
         })) {
             state.app.pending_remove_player_idx = @as(i32, @intCast(state.app.active_player_idx));
         }
-        components.tip(@src(), wd, "Close player");
+        // Capture the actual rendered rect for next frame's hover test.
+        close_button_rect = wd.borderRectScale().r;
+        components.tip(@src(), wd, "Close player (Esc)");
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // ROW 3: Torrent status (only during torrent streaming)
+    // ROW 3 — Demoted torrent status (font_size.small, text_tertiary)
     // ═══════════════════════════════════════════════════════════════
     if (active_p.current_torrent_id >= 0) {
-        { var gap2 = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 0, .h = 2 }, .expand = .horizontal }); gap2.deinit(); }
-
         var info_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 0, .h = 22 },
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
         });
         defer info_row.deinit();
-
-        _ = dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"download", .{}, .{}, .{
-            .color_text = theme.colors.accent_hover,
-            .color_fill = transparent,
-        });
 
         var t_name: [64]u8 = undefined;
         c.mpv.torrent_get_name(state.app.torrent_ses, active_p.current_torrent_id, &t_name, 64);
@@ -933,20 +1556,21 @@ pub fn renderLiquidGlassOverlay() void {
         const rate_mb = @as(f32, @floatFromInt(dl_rate)) / 1024.0 / 1024.0;
 
         _ = dvui.label(@src(), "{s}", .{t_name[0..name_len]}, .{
-            .color_text = theme.colors.text_muted,
-            .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
+            .color_text = theme.colors.text_tertiary,
+            .gravity_y = 0.5,
         });
 
         { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
 
-        var stat_buf: [48]u8 = undefined;
+        var stat_buf: [80]u8 = undefined;
         if (std.fmt.bufPrintZ(&stat_buf, "{d:.1}% | {d:.1} MB/s | {d} seeds", .{ pct * 100.0, rate_mb, seeds })) |st| {
             _ = dvui.label(@src(), "{s}", .{st}, .{
-                .color_text = theme.colors.accent_hover,
+                .color_text = theme.colors.text_tertiary,
+                .gravity_y = 0.5,
             });
         } else |_| {}
 
-        // Speed limit toggle
+        // Speed-limit cycle — also demoted.
         {
             const limit = state.app.download_rate_limit;
             var lim_buf: [24]u8 = undefined;
@@ -955,12 +1579,15 @@ pub fn renderLiquidGlassOverlay() void {
             else blk: {
                 break :blk std.fmt.bufPrintZ(&lim_buf, "{d}MB/s", .{@divTrunc(limit, 1024 * 1024)}) catch "?";
             };
-
             if (dvui.button(@src(), lim_label, .{}, .{
                 .id_extra = 200,
                 .color_fill = transparent,
-                .color_text = theme.colors.text_muted,
-                .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
+                .color_text = theme.colors.text_tertiary,
+                .border = dvui.Rect.all(0),
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
+                .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
+                .gravity_y = 0.5,
             })) {
                 const limits = [_]i32{ 0, 1 * 1024 * 1024, 2 * 1024 * 1024, 5 * 1024 * 1024, 10 * 1024 * 1024 };
                 var next_idx: usize = 0;
@@ -975,6 +1602,14 @@ pub fn renderLiquidGlassOverlay() void {
             }
         }
     }
+
+    // ── Floating popovers (rendered last — they're free-positioned) ──
+    renderChapterPickerPopover(active_p);
+    renderAspectPickerPopover(active_p);
+    renderTrackPickerPopover(active_p, "audio", .audio);
+    renderTrackPickerPopover(active_p, "sub", .sub);
+    renderLangPickerPopover();
+    renderPlaylistPickerPopover(active_p);
 }
 
 pub fn renderGlobalBottomTray() void {

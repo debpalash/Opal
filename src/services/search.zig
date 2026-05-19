@@ -5,6 +5,7 @@ const c = @import("../core/c.zig");
 const state = @import("../core/state.zig");
 const player = @import("../player/player.zig");
 const theme = @import("../ui/theme.zig");
+const components = @import("../ui/components.zig");
 const history = @import("history.zig");
 
 pub const SearchResult = struct {
@@ -743,6 +744,22 @@ pub fn renderSearchContent() void {
         return;
     }
 
+    // ── No-results empty state ──
+    // When the user has a query in the box but the result list is empty
+    // and nothing is in flight, show the canonical "no matches" surface
+    // rather than a blank scroll area.
+    if (search_results.items.len == 0 and !is_searching) {
+        const buf_has_text = std.mem.indexOfScalar(u8, &search_buf, 0) != @as(?usize, 0);
+        if (buf_has_text) {
+            components.emptyState(
+                icons.tvg.lucide.@"search-x",
+                "No matches",
+                "Try a broader query or check your spelling.",
+            );
+            return;
+        }
+    }
+
     // ── Pagination Controls (inline with search bar) ──
     const search_len = search_results.items.len;
     const total_pages = if (search_len == 0) 1 else (search_len + SEARCH_ITEMS_PER_PAGE - 1) / SEARCH_ITEMS_PER_PAGE;
@@ -1082,20 +1099,29 @@ fn renderUniversalResults() void {
             .padding = .{ .x = 12, .y = 6, .w = 12, .h = 4 },
         });
     } else if (!resolver.is_resolving and resolver.resolver_query_len > 0) {
-        _ = dvui.label(@src(), "No results found.", .{}, .{
-            .id_extra = 9002,
-            .color_text = theme.colors.text_muted,
-            .padding = .{ .x = 12, .y = 12, .w = 12, .h = 8 },
+        // Canonical empty state — search-x icon + canonical copy.
+        components.emptyState(
+            icons.tvg.lucide.@"search-x",
+            "No matches",
+            "Try a broader query or check your spelling.",
+        );
+        // Retry affordance stays — wrap in a centering row.
+        var retry_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .gravity_x = 0.5,
+            .padding = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.md },
         });
+        defer retry_row.deinit();
         if (dvui.button(@src(), "Retry Universal Search", .{}, .{
             .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
+            .color_text = theme.colors.text_on_accent,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
+            .gravity_x = 0.5,
         })) {
             resolver.resolve(resolver.resolver_query[0..resolver.resolver_query_len], "auto");
         }
-        return; 
+        return;
     } else {
         return; // Nothing to show
     }
