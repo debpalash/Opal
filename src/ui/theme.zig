@@ -20,19 +20,24 @@ pub const ThemePreset = enum(u8) {
     ember,          // Dark warm, amber/orange accent
 };
 
-/// Complete color palette for a theme
+/// Complete color palette for a theme (design tokens — runtime resolved per preset)
 pub const ThemeColors = struct {
-    // Backgrounds (6-level depth)
+    // Background tiers — lowest to highest elevation
+    bg_deep:         dvui.Color,  // app frame (darkest)
     bg_app:          dvui.Color,
     bg_header:       dvui.Color,
+    bg_muted:        dvui.Color,  // empty states
     bg_drawer:       dvui.Color,
-    bg_surface:      dvui.Color,  // between app and card
+    bg_surface:      dvui.Color,  // drawers, cards
     bg_card:         dvui.Color,
     bg_card_hover:   dvui.Color,
-    bg_elevated:     dvui.Color,  // floating panels
+    bg_hover:        dvui.Color,  // generic hover state
+    bg_elevated:     dvui.Color,  // floating panels, buttons, inputs
 
-    // Borders
+    // Border tiers — subtle to strong
     bg_header_border: dvui.Color,
+    border_subtle:    dvui.Color,
+    border_strong:    dvui.Color,
     border_drawer:    dvui.Color,
     border_card:      dvui.Color,
     border_input:     dvui.Color,
@@ -46,34 +51,49 @@ pub const ThemeColors = struct {
     // Input fields
     bg_input:        dvui.Color,
 
-    // Accent
+    // Accent tiers — electric cyan, with dim variant
     accent:          dvui.Color,
+    accent_primary:  dvui.Color,
+    accent_dim:      dvui.Color,
     accent_hover:    dvui.Color,
     accent_glow:     dvui.Color,  // 20% accent for focus rings
     active_border:   dvui.Color,
 
-    // Text
+    // Text tiers — primary to tertiary, plus on-accent
     text_main:       dvui.Color,
+    text_primary:    dvui.Color,
+    text_secondary:  dvui.Color,
+    text_tertiary:   dvui.Color,
+    text_on_accent:  dvui.Color,
     text_muted:      dvui.Color,
     text_dim:        dvui.Color,  // timestamps, metadata
 
-    // Semantic
+    // Semantic colors
     danger:          dvui.Color,
     success:         dvui.Color,
     warning:         dvui.Color,
+    semantic_success: dvui.Color,
+    semantic_warn:    dvui.Color,
+    semantic_error:   dvui.Color,
+    semantic_info:    dvui.Color,
 };
 
 // ── Theme Presets ──
 
 const midnight_colors = ThemeColors{
+    .bg_deep         = .{ .r = 10,  .g = 10,  .b = 15,  .a = 255 },
     .bg_app          = .{ .r = 14,  .g = 14,  .b = 20,  .a = 255 },
     .bg_header       = .{ .r = 18,  .g = 18,  .b = 26,  .a = 255 },
+    .bg_muted        = .{ .r = 13,  .g = 13,  .b = 19,  .a = 255 },
     .bg_drawer       = .{ .r = 22,  .g = 22,  .b = 30,  .a = 255 },
-    .bg_surface      = .{ .r = 20,  .g = 20,  .b = 28,  .a = 255 },
+    .bg_surface      = .{ .r = 21,  .g = 21,  .b = 28,  .a = 255 },
     .bg_card         = .{ .r = 28,  .g = 28,  .b = 38,  .a = 255 },
     .bg_card_hover   = .{ .r = 36,  .g = 36,  .b = 48,  .a = 255 },
-    .bg_elevated     = .{ .r = 34,  .g = 34,  .b = 46,  .a = 255 },
+    .bg_hover        = .{ .r = 38,  .g = 38,  .b = 50,  .a = 255 },
+    .bg_elevated     = .{ .r = 31,  .g = 31,  .b = 41,  .a = 255 },
     .bg_header_border = .{ .r = 38,  .g = 38,  .b = 52,  .a = 255 },
+    .border_subtle    = .{ .r = 31,  .g = 31,  .b = 41,  .a = 255 },
+    .border_strong    = .{ .r = 60,  .g = 60,  .b = 80,  .a = 255 },
     .border_drawer    = .{ .r = 42,  .g = 42,  .b = 56,  .a = 255 },
     .border_card      = .{ .r = 48,  .g = 48,  .b = 64,  .a = 200 },
     .border_input     = .{ .r = 52,  .g = 52,  .b = 70,  .a = 255 },
@@ -82,27 +102,42 @@ const midnight_colors = ThemeColors{
     .border_glass    = .{ .r = 60,  .g = 60,  .b = 82,  .a = 180 },
     .overlay         = .{ .r = 0,   .g = 0,   .b = 0,   .a = 160 },
     .bg_input        = .{ .r = 16,  .g = 16,  .b = 24,  .a = 255 },
-    .accent          = .{ .r = 70,  .g = 140, .b = 170, .a = 255 }, // muted sky
-    .accent_hover    = .{ .r = 95,  .g = 160, .b = 185, .a = 255 },
-    .accent_glow     = .{ .r = 70,  .g = 140, .b = 170, .a = 35 },
-    .active_border   = .{ .r = 70,  .g = 140, .b = 170, .a = 70 },
-    .text_main       = .{ .r = 210, .g = 210, .b = 218, .a = 255 },
-    .text_muted      = .{ .r = 105, .g = 105, .b = 130, .a = 255 },
-    .text_dim        = .{ .r = 70,  .g = 70,  .b = 92,  .a = 255 },
-    .danger          = .{ .r = 180, .g = 75,  .b = 75,  .a = 255 },
-    .success         = .{ .r = 60,  .g = 145, .b = 90,  .a = 255 },
-    .warning         = .{ .r = 185, .g = 145, .b = 50,  .a = 255 },
+    .accent          = .{ .r = 93,  .g = 208, .b = 255, .a = 255 }, // electric cyan
+    .accent_primary  = .{ .r = 93,  .g = 208, .b = 255, .a = 255 },
+    .accent_dim      = .{ .r = 93,  .g = 208, .b = 255, .a = 100 },
+    .accent_hover    = .{ .r = 130, .g = 220, .b = 255, .a = 255 },
+    .accent_glow     = .{ .r = 93,  .g = 208, .b = 255, .a = 35 },
+    .active_border   = .{ .r = 93,  .g = 208, .b = 255, .a = 70 },
+    .text_main       = .{ .r = 250, .g = 250, .b = 250, .a = 255 },
+    .text_primary    = .{ .r = 250, .g = 250, .b = 250, .a = 255 },
+    .text_secondary  = .{ .r = 168, .g = 168, .b = 178, .a = 255 },
+    .text_tertiary   = .{ .r = 110, .g = 110, .b = 120, .a = 255 },
+    .text_on_accent  = .{ .r = 10,  .g = 10,  .b = 15,  .a = 255 },
+    .text_muted      = .{ .r = 168, .g = 168, .b = 178, .a = 255 },
+    .text_dim        = .{ .r = 110, .g = 110, .b = 120, .a = 255 },
+    .danger          = .{ .r = 255, .g = 107, .b = 138, .a = 255 },
+    .success         = .{ .r = 93,  .g = 255, .b = 161, .a = 255 },
+    .warning         = .{ .r = 255, .g = 204, .b = 93,  .a = 255 },
+    .semantic_success = .{ .r = 93,  .g = 255, .b = 161, .a = 255 },
+    .semantic_warn    = .{ .r = 255, .g = 204, .b = 93,  .a = 255 },
+    .semantic_error   = .{ .r = 255, .g = 107, .b = 138, .a = 255 },
+    .semantic_info    = .{ .r = 93,  .g = 208, .b = 255, .a = 255 },
 };
 
 const abyss_colors = ThemeColors{
+    .bg_deep         = .{ .r = 0,   .g = 0,   .b = 0,   .a = 255 },
     .bg_app          = .{ .r = 0,   .g = 0,   .b = 0,   .a = 255 },
     .bg_header       = .{ .r = 6,   .g = 6,   .b = 6,   .a = 255 },
+    .bg_muted        = .{ .r = 2,   .g = 2,   .b = 2,   .a = 255 },
     .bg_drawer       = .{ .r = 10,  .g = 10,  .b = 10,  .a = 255 },
-    .bg_surface      = .{ .r = 5,   .g = 5,   .b = 5,   .a = 255 },
+    .bg_surface      = .{ .r = 10,  .g = 10,  .b = 10,  .a = 255 },
     .bg_card         = .{ .r = 16,  .g = 16,  .b = 16,  .a = 255 },
     .bg_card_hover   = .{ .r = 24,  .g = 24,  .b = 24,  .a = 255 },
+    .bg_hover        = .{ .r = 28,  .g = 28,  .b = 28,  .a = 255 },
     .bg_elevated     = .{ .r = 20,  .g = 20,  .b = 20,  .a = 255 },
     .bg_header_border = .{ .r = 30,  .g = 30,  .b = 30,  .a = 255 },
+    .border_subtle    = .{ .r = 22,  .g = 22,  .b = 22,  .a = 255 },
+    .border_strong    = .{ .r = 48,  .g = 48,  .b = 48,  .a = 255 },
     .border_drawer    = .{ .r = 32,  .g = 32,  .b = 32,  .a = 255 },
     .border_card      = .{ .r = 38,  .g = 38,  .b = 38,  .a = 200 },
     .border_input     = .{ .r = 42,  .g = 42,  .b = 42,  .a = 255 },
@@ -112,26 +147,41 @@ const abyss_colors = ThemeColors{
     .overlay         = .{ .r = 0,   .g = 0,   .b = 0,   .a = 180 },
     .bg_input        = .{ .r = 4,   .g = 4,   .b = 4,   .a = 255 },
     .accent          = .{ .r = 50,  .g = 160, .b = 110, .a = 255 }, // muted green
+    .accent_primary  = .{ .r = 50,  .g = 160, .b = 110, .a = 255 },
+    .accent_dim      = .{ .r = 50,  .g = 160, .b = 110, .a = 100 },
     .accent_hover    = .{ .r = 70,  .g = 180, .b = 130, .a = 255 },
     .accent_glow     = .{ .r = 50,  .g = 160, .b = 110, .a = 30 },
     .active_border   = .{ .r = 50,  .g = 160, .b = 110, .a = 60 },
     .text_main       = .{ .r = 200, .g = 200, .b = 200, .a = 255 },
+    .text_primary    = .{ .r = 220, .g = 220, .b = 220, .a = 255 },
+    .text_secondary  = .{ .r = 140, .g = 140, .b = 140, .a = 255 },
+    .text_tertiary   = .{ .r = 90,  .g = 90,  .b = 90,  .a = 255 },
+    .text_on_accent  = .{ .r = 0,   .g = 0,   .b = 0,   .a = 255 },
     .text_muted      = .{ .r = 90,  .g = 90,  .b = 90,  .a = 255 },
     .text_dim        = .{ .r = 55,  .g = 55,  .b = 55,  .a = 255 },
     .danger          = .{ .r = 175, .g = 65,  .b = 65,  .a = 255 },
     .success         = .{ .r = 50,  .g = 155, .b = 95,  .a = 255 },
     .warning         = .{ .r = 180, .g = 150, .b = 40,  .a = 255 },
+    .semantic_success = .{ .r = 50,  .g = 155, .b = 95,  .a = 255 },
+    .semantic_warn    = .{ .r = 180, .g = 150, .b = 40,  .a = 255 },
+    .semantic_error   = .{ .r = 175, .g = 65,  .b = 65,  .a = 255 },
+    .semantic_info    = .{ .r = 50,  .g = 160, .b = 110, .a = 255 },
 };
 
 const phantom_colors = ThemeColors{
+    .bg_deep         = .{ .r = 10,  .g = 6,   .b = 18,  .a = 255 },
     .bg_app          = .{ .r = 16,  .g = 12,  .b = 24,  .a = 255 },
     .bg_header       = .{ .r = 22,  .g = 16,  .b = 32,  .a = 255 },
+    .bg_muted        = .{ .r = 14,  .g = 10,  .b = 22,  .a = 255 },
     .bg_drawer       = .{ .r = 26,  .g = 20,  .b = 38,  .a = 255 },
-    .bg_surface      = .{ .r = 20,  .g = 14,  .b = 30,  .a = 255 },
+    .bg_surface      = .{ .r = 24,  .g = 18,  .b = 36,  .a = 255 },
     .bg_card         = .{ .r = 34,  .g = 26,  .b = 48,  .a = 255 },
     .bg_card_hover   = .{ .r = 44,  .g = 34,  .b = 60,  .a = 255 },
+    .bg_hover        = .{ .r = 46,  .g = 36,  .b = 62,  .a = 255 },
     .bg_elevated     = .{ .r = 40,  .g = 30,  .b = 56,  .a = 255 },
     .bg_header_border = .{ .r = 48,  .g = 36,  .b = 64,  .a = 255 },
+    .border_subtle    = .{ .r = 40,  .g = 30,  .b = 56,  .a = 255 },
+    .border_strong    = .{ .r = 72,  .g = 56,  .b = 96,  .a = 255 },
     .border_drawer    = .{ .r = 52,  .g = 40,  .b = 70,  .a = 255 },
     .border_card      = .{ .r = 60,  .g = 46,  .b = 80,  .a = 200 },
     .border_input     = .{ .r = 64,  .g = 50,  .b = 86,  .a = 255 },
@@ -141,26 +191,41 @@ const phantom_colors = ThemeColors{
     .overlay         = .{ .r = 8,   .g = 4,   .b = 16,  .a = 170 },
     .bg_input        = .{ .r = 12,  .g = 8,   .b = 20,  .a = 255 },
     .accent          = .{ .r = 125, .g = 110, .b = 185, .a = 255 }, // muted violet
+    .accent_primary  = .{ .r = 125, .g = 110, .b = 185, .a = 255 },
+    .accent_dim      = .{ .r = 125, .g = 110, .b = 185, .a = 100 },
     .accent_hover    = .{ .r = 150, .g = 138, .b = 200, .a = 255 },
     .accent_glow     = .{ .r = 125, .g = 110, .b = 185, .a = 35 },
     .active_border   = .{ .r = 125, .g = 110, .b = 185, .a = 65 },
     .text_main       = .{ .r = 210, .g = 208, .b = 220, .a = 255 },
+    .text_primary    = .{ .r = 230, .g = 226, .b = 240, .a = 255 },
+    .text_secondary  = .{ .r = 165, .g = 155, .b = 185, .a = 255 },
+    .text_tertiary   = .{ .r = 115, .g = 105, .b = 140, .a = 255 },
+    .text_on_accent  = .{ .r = 10,  .g = 6,   .b = 18,  .a = 255 },
     .text_muted      = .{ .r = 115, .g = 105, .b = 140, .a = 255 },
     .text_dim        = .{ .r = 80,  .g = 68,  .b = 100, .a = 255 },
     .danger          = .{ .r = 185, .g = 95,  .b = 110, .a = 255 },
     .success         = .{ .r = 65,  .g = 165, .b = 105, .a = 255 },
     .warning         = .{ .r = 190, .g = 150, .b = 95,  .a = 255 },
+    .semantic_success = .{ .r = 65,  .g = 165, .b = 105, .a = 255 },
+    .semantic_warn    = .{ .r = 190, .g = 150, .b = 95,  .a = 255 },
+    .semantic_error   = .{ .r = 185, .g = 95,  .b = 110, .a = 255 },
+    .semantic_info    = .{ .r = 125, .g = 110, .b = 185, .a = 255 },
 };
 
 const nord_colors = ThemeColors{
+    .bg_deep         = .{ .r = 36,  .g = 42,  .b = 54,  .a = 255 },
     .bg_app          = .{ .r = 46,  .g = 52,  .b = 64,  .a = 255 }, // nord0
     .bg_header       = .{ .r = 59,  .g = 66,  .b = 82,  .a = 255 }, // nord1
+    .bg_muted        = .{ .r = 40,  .g = 46,  .b = 58,  .a = 255 },
     .bg_drawer       = .{ .r = 67,  .g = 76,  .b = 94,  .a = 255 }, // nord2
-    .bg_surface      = .{ .r = 52,  .g = 58,  .b = 72,  .a = 255 },
+    .bg_surface      = .{ .r = 59,  .g = 66,  .b = 82,  .a = 255 },
     .bg_card         = .{ .r = 76,  .g = 86,  .b = 106, .a = 255 }, // nord3
     .bg_card_hover   = .{ .r = 86,  .g = 96,  .b = 116, .a = 255 },
+    .bg_hover        = .{ .r = 92,  .g = 102, .b = 122, .a = 255 },
     .bg_elevated     = .{ .r = 82,  .g = 92,  .b = 112, .a = 255 },
     .bg_header_border = .{ .r = 76,  .g = 86,  .b = 106, .a = 255 },
+    .border_subtle    = .{ .r = 67,  .g = 76,  .b = 94,  .a = 255 },
+    .border_strong    = .{ .r = 100, .g = 110, .b = 130, .a = 255 },
     .border_drawer    = .{ .r = 76,  .g = 86,  .b = 106, .a = 200 },
     .border_card      = .{ .r = 86,  .g = 96,  .b = 116, .a = 180 },
     .border_input     = .{ .r = 76,  .g = 86,  .b = 106, .a = 255 },
@@ -170,26 +235,41 @@ const nord_colors = ThemeColors{
     .overlay         = .{ .r = 30,  .g = 34,  .b = 44,  .a = 160 },
     .bg_input        = .{ .r = 46,  .g = 52,  .b = 64,  .a = 255 },
     .accent          = .{ .r = 110, .g = 150, .b = 165, .a = 255 }, // muted frost
+    .accent_primary  = .{ .r = 110, .g = 150, .b = 165, .a = 255 },
+    .accent_dim      = .{ .r = 110, .g = 150, .b = 165, .a = 100 },
     .accent_hover    = .{ .r = 125, .g = 160, .b = 165, .a = 255 },
     .accent_glow     = .{ .r = 110, .g = 150, .b = 165, .a = 35 },
     .active_border   = .{ .r = 110, .g = 150, .b = 165, .a = 65 },
     .text_main       = .{ .r = 210, .g = 215, .b = 222, .a = 255 },
+    .text_primary    = .{ .r = 229, .g = 233, .b = 240, .a = 255 },
+    .text_secondary  = .{ .r = 170, .g = 178, .b = 192, .a = 255 },
+    .text_tertiary   = .{ .r = 130, .g = 138, .b = 150, .a = 255 },
+    .text_on_accent  = .{ .r = 36,  .g = 42,  .b = 54,  .a = 255 },
     .text_muted      = .{ .r = 145, .g = 152, .b = 165, .a = 255 },
     .text_dim        = .{ .r = 105, .g = 112, .b = 128, .a = 255 },
     .danger          = .{ .r = 160, .g = 85,  .b = 95,  .a = 255 },
     .success         = .{ .r = 130, .g = 155, .b = 115, .a = 255 },
     .warning         = .{ .r = 190, .g = 170, .b = 120, .a = 255 },
+    .semantic_success = .{ .r = 130, .g = 155, .b = 115, .a = 255 },
+    .semantic_warn    = .{ .r = 190, .g = 170, .b = 120, .a = 255 },
+    .semantic_error   = .{ .r = 160, .g = 85,  .b = 95,  .a = 255 },
+    .semantic_info    = .{ .r = 110, .g = 150, .b = 165, .a = 255 },
 };
 
 const solarized_colors = ThemeColors{
+    .bg_deep         = .{ .r = 0,   .g = 36,  .b = 46,  .a = 255 },
     .bg_app          = .{ .r = 0,   .g = 43,  .b = 54,  .a = 255 }, // base03
     .bg_header       = .{ .r = 7,   .g = 54,  .b = 66,  .a = 255 }, // base02
+    .bg_muted        = .{ .r = 0,   .g = 38,  .b = 48,  .a = 255 },
     .bg_drawer       = .{ .r = 7,   .g = 54,  .b = 66,  .a = 255 },
-    .bg_surface      = .{ .r = 3,   .g = 48,  .b = 60,  .a = 255 },
+    .bg_surface      = .{ .r = 10,  .g = 58,  .b = 70,  .a = 255 },
     .bg_card         = .{ .r = 18,  .g = 64,  .b = 76,  .a = 255 },
     .bg_card_hover   = .{ .r = 28,  .g = 74,  .b = 86,  .a = 255 },
+    .bg_hover        = .{ .r = 36,  .g = 82,  .b = 94,  .a = 255 },
     .bg_elevated     = .{ .r = 22,  .g = 68,  .b = 80,  .a = 255 },
     .bg_header_border = .{ .r = 18,  .g = 64,  .b = 76,  .a = 255 },
+    .border_subtle    = .{ .r = 22,  .g = 68,  .b = 80,  .a = 255 },
+    .border_strong    = .{ .r = 68,  .g = 114, .b = 126, .a = 255 },
     .border_drawer    = .{ .r = 28,  .g = 74,  .b = 86,  .a = 200 },
     .border_card      = .{ .r = 58,  .g = 104, .b = 116, .a = 180 },
     .border_input     = .{ .r = 68,  .g = 114, .b = 126, .a = 255 },
@@ -199,26 +279,41 @@ const solarized_colors = ThemeColors{
     .overlay         = .{ .r = 0,   .g = 20,  .b = 28,  .a = 170 },
     .bg_input        = .{ .r = 0,   .g = 43,  .b = 54,  .a = 255 },
     .accent          = .{ .r = 160, .g = 85,  .b = 50,  .a = 255 }, // muted orange
+    .accent_primary  = .{ .r = 160, .g = 85,  .b = 50,  .a = 255 },
+    .accent_dim      = .{ .r = 160, .g = 85,  .b = 50,  .a = 100 },
     .accent_hover    = .{ .r = 180, .g = 105, .b = 65,  .a = 255 },
     .accent_glow     = .{ .r = 160, .g = 85,  .b = 50,  .a = 35 },
     .active_border   = .{ .r = 160, .g = 85,  .b = 50,  .a = 65 },
     .text_main       = .{ .r = 215, .g = 210, .b = 200, .a = 255 },
+    .text_primary    = .{ .r = 238, .g = 232, .b = 213, .a = 255 },
+    .text_secondary  = .{ .r = 165, .g = 175, .b = 175, .a = 255 },
+    .text_tertiary   = .{ .r = 110, .g = 125, .b = 130, .a = 255 },
+    .text_on_accent  = .{ .r = 0,   .g = 36,  .b = 46,  .a = 255 },
     .text_muted      = .{ .r = 130, .g = 140, .b = 140, .a = 255 },
     .text_dim        = .{ .r = 90,  .g = 105, .b = 110, .a = 255 },
     .danger          = .{ .r = 170, .g = 65,  .b = 60,  .a = 255 },
     .success         = .{ .r = 110, .g = 130, .b = 50,  .a = 255 },
     .warning         = .{ .r = 150, .g = 120, .b = 40,  .a = 255 },
+    .semantic_success = .{ .r = 110, .g = 130, .b = 50,  .a = 255 },
+    .semantic_warn    = .{ .r = 150, .g = 120, .b = 40,  .a = 255 },
+    .semantic_error   = .{ .r = 170, .g = 65,  .b = 60,  .a = 255 },
+    .semantic_info    = .{ .r = 160, .g = 85,  .b = 50,  .a = 255 },
 };
 
 const rose_colors = ThemeColors{
+    .bg_deep         = .{ .r = 12,  .g = 6,   .b = 12,  .a = 255 },
     .bg_app          = .{ .r = 18,  .g = 10,  .b = 16,  .a = 255 },
     .bg_header       = .{ .r = 26,  .g = 14,  .b = 22,  .a = 255 },
+    .bg_muted        = .{ .r = 16,  .g = 8,   .b = 14,  .a = 255 },
     .bg_drawer       = .{ .r = 30,  .g = 18,  .b = 26,  .a = 255 },
-    .bg_surface      = .{ .r = 24,  .g = 12,  .b = 20,  .a = 255 },
+    .bg_surface      = .{ .r = 28,  .g = 16,  .b = 24,  .a = 255 },
     .bg_card         = .{ .r = 40,  .g = 24,  .b = 34,  .a = 255 },
     .bg_card_hover   = .{ .r = 52,  .g = 32,  .b = 44,  .a = 255 },
+    .bg_hover        = .{ .r = 56,  .g = 36,  .b = 48,  .a = 255 },
     .bg_elevated     = .{ .r = 46,  .g = 28,  .b = 40,  .a = 255 },
     .bg_header_border = .{ .r = 50,  .g = 30,  .b = 42,  .a = 255 },
+    .border_subtle    = .{ .r = 46,  .g = 28,  .b = 40,  .a = 255 },
+    .border_strong    = .{ .r = 84,  .g = 52,  .b = 70,  .a = 255 },
     .border_drawer    = .{ .r = 56,  .g = 34,  .b = 48,  .a = 255 },
     .border_card      = .{ .r = 66,  .g = 40,  .b = 56,  .a = 200 },
     .border_input     = .{ .r = 70,  .g = 44,  .b = 60,  .a = 255 },
@@ -228,26 +323,41 @@ const rose_colors = ThemeColors{
     .overlay         = .{ .r = 12,  .g = 4,   .b = 10,  .a = 170 },
     .bg_input        = .{ .r = 14,  .g = 6,   .b = 12,  .a = 255 },
     .accent          = .{ .r = 175, .g = 100, .b = 140, .a = 255 }, // muted rose
+    .accent_primary  = .{ .r = 175, .g = 100, .b = 140, .a = 255 },
+    .accent_dim      = .{ .r = 175, .g = 100, .b = 140, .a = 100 },
     .accent_hover    = .{ .r = 195, .g = 130, .b = 165, .a = 255 },
     .accent_glow     = .{ .r = 175, .g = 100, .b = 140, .a = 35 },
     .active_border   = .{ .r = 175, .g = 100, .b = 140, .a = 65 },
     .text_main       = .{ .r = 215, .g = 205, .b = 212, .a = 255 },
+    .text_primary    = .{ .r = 240, .g = 230, .b = 238, .a = 255 },
+    .text_secondary  = .{ .r = 170, .g = 140, .b = 158, .a = 255 },
+    .text_tertiary   = .{ .r = 120, .g = 90,  .b = 105, .a = 255 },
+    .text_on_accent  = .{ .r = 12,  .g = 6,   .b = 12,  .a = 255 },
     .text_muted      = .{ .r = 135, .g = 100, .b = 120, .a = 255 },
     .text_dim        = .{ .r = 100, .g = 68,  .b = 85,  .a = 255 },
     .danger          = .{ .r = 185, .g = 75,  .b = 75,  .a = 255 },
     .success         = .{ .r = 90,  .g = 170, .b = 140, .a = 255 },
     .warning         = .{ .r = 190, .g = 150, .b = 95,  .a = 255 },
+    .semantic_success = .{ .r = 90,  .g = 170, .b = 140, .a = 255 },
+    .semantic_warn    = .{ .r = 190, .g = 150, .b = 95,  .a = 255 },
+    .semantic_error   = .{ .r = 185, .g = 75,  .b = 75,  .a = 255 },
+    .semantic_info    = .{ .r = 175, .g = 100, .b = 140, .a = 255 },
 };
 
 const ember_colors = ThemeColors{
+    .bg_deep         = .{ .r = 14,  .g = 10,  .b = 6,   .a = 255 },
     .bg_app          = .{ .r = 20,  .g = 14,  .b = 10,  .a = 255 },
     .bg_header       = .{ .r = 28,  .g = 20,  .b = 14,  .a = 255 },
+    .bg_muted        = .{ .r = 18,  .g = 12,  .b = 8,   .a = 255 },
     .bg_drawer       = .{ .r = 34,  .g = 24,  .b = 18,  .a = 255 },
-    .bg_surface      = .{ .r = 26,  .g = 18,  .b = 12,  .a = 255 },
+    .bg_surface      = .{ .r = 32,  .g = 22,  .b = 16,  .a = 255 },
     .bg_card         = .{ .r = 44,  .g = 32,  .b = 24,  .a = 255 },
     .bg_card_hover   = .{ .r = 56,  .g = 40,  .b = 30,  .a = 255 },
+    .bg_hover        = .{ .r = 60,  .g = 44,  .b = 32,  .a = 255 },
     .bg_elevated     = .{ .r = 50,  .g = 36,  .b = 28,  .a = 255 },
     .bg_header_border = .{ .r = 52,  .g = 38,  .b = 28,  .a = 255 },
+    .border_subtle    = .{ .r = 50,  .g = 36,  .b = 28,  .a = 255 },
+    .border_strong    = .{ .r = 90,  .g = 64,  .b = 48,  .a = 255 },
     .border_drawer    = .{ .r = 58,  .g = 42,  .b = 32,  .a = 255 },
     .border_card      = .{ .r = 68,  .g = 50,  .b = 38,  .a = 200 },
     .border_input     = .{ .r = 74,  .g = 54,  .b = 42,  .a = 255 },
@@ -257,15 +367,25 @@ const ember_colors = ThemeColors{
     .overlay         = .{ .r = 10,  .g = 6,   .b = 4,   .a = 170 },
     .bg_input        = .{ .r = 16,  .g = 10,  .b = 6,   .a = 255 },
     .accent          = .{ .r = 185, .g = 120, .b = 65,  .a = 255 }, // muted amber
+    .accent_primary  = .{ .r = 185, .g = 120, .b = 65,  .a = 255 },
+    .accent_dim      = .{ .r = 185, .g = 120, .b = 65,  .a = 100 },
     .accent_hover    = .{ .r = 200, .g = 150, .b = 95,  .a = 255 },
     .accent_glow     = .{ .r = 185, .g = 120, .b = 65,  .a = 35 },
     .active_border   = .{ .r = 185, .g = 120, .b = 65,  .a = 60 },
     .text_main       = .{ .r = 215, .g = 205, .b = 190, .a = 255 },
+    .text_primary    = .{ .r = 240, .g = 228, .b = 210, .a = 255 },
+    .text_secondary  = .{ .r = 175, .g = 150, .b = 120, .a = 255 },
+    .text_tertiary   = .{ .r = 125, .g = 105, .b = 78,  .a = 255 },
+    .text_on_accent  = .{ .r = 14,  .g = 10,  .b = 6,   .a = 255 },
     .text_muted      = .{ .r = 140, .g = 115, .b = 90,  .a = 255 },
     .text_dim        = .{ .r = 100, .g = 80,  .b = 58,  .a = 255 },
     .danger          = .{ .r = 185, .g = 95,  .b = 95,  .a = 255 },
     .success         = .{ .r = 65,  .g = 165, .b = 105, .a = 255 },
     .warning         = .{ .r = 190, .g = 160, .b = 50,  .a = 255 },
+    .semantic_success = .{ .r = 65,  .g = 165, .b = 105, .a = 255 },
+    .semantic_warn    = .{ .r = 190, .g = 160, .b = 50,  .a = 255 },
+    .semantic_error   = .{ .r = 185, .g = 95,  .b = 95,  .a = 255 },
+    .semantic_info    = .{ .r = 185, .g = 120, .b = 65,  .a = 255 },
 };
 
 // ── Active Theme State ──
@@ -337,7 +457,37 @@ pub fn iconSize(s: IconSize) dvui.Size {
     };
 }
 
-// ── Dimensions ──
+// ── Spacing tokens — 4px-based scale ──
+
+pub const spacing = struct {
+    pub const xs: f32 = 4;
+    pub const sm: f32 = 8;
+    pub const md: f32 = 12;
+    pub const lg: f32 = 16;
+    pub const xl: f32 = 24;
+    pub const xxl: f32 = 32;
+};
+
+// ── Radius tokens — corner radii ──
+
+pub const radius = struct {
+    pub const sm: f32 = 4;
+    pub const md: f32 = 8;
+    pub const lg: f32 = 12;
+    pub const pill: f32 = 999;
+};
+
+// ── Font size tokens — type ramp ──
+
+pub const font_size = struct {
+    pub const micro: f32 = 10;
+    pub const small: f32 = 11;
+    pub const body: f32 = 13;
+    pub const title: f32 = 15;
+    pub const display: f32 = 22;
+};
+
+// ── Dimensions (legacy dvui.Rect helpers) ──
 
 pub const dims = struct {
     pub const rad_sm = dvui.Rect.all(4);

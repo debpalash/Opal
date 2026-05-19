@@ -43,6 +43,9 @@ pub const std_options: std.Options = .{ .logFn = dvui.App.logFn, .log_level = .w
 fn appInit(win: *dvui.Window) !void {
     // Store window ref for position/size persistence
     dvui_win = win;
+    // Also mirror into state.app so worker threads (mpv render-update
+    // callback, etc.) can wake the UI via dvui.refresh from any thread.
+    state.app.dvui_win = win;
 
     // Runtime initialization (env vars can't be read at comptime)
     state.initPaths();

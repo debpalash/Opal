@@ -249,6 +249,13 @@ pub const MediaPlayer = struct {
         if (c.mpv.mpv_render_context_create(&self.mpv_gl, self.mpv_ctx, &params) < 0) {
             @panic("fail render");
         }
+        // Wake the UI loop whenever mpv has a new frame ready. Without
+        // this, dvui sleeps on input idle (no mouse movement) and the
+        // texture freezes even though audio keeps playing because the
+        // pixel-buffer transfer in ui/grid.zig only happens inside a
+        // dvui frame. The callback fires on an mpv-owned thread, so we
+        // use the cross-thread form of dvui.refresh (passing *Window).
+        c.mpv.mpv_render_context_set_update_callback(self.mpv_gl, &mpvRenderUpdateCallback, null);
         return self;
     }
 
@@ -513,6 +520,18 @@ pub const MediaPlayer = struct {
         allocator.destroy(self);
     }
 };
+
+/// Invoked by mpv (on an mpv-owned thread) whenever a new video frame is
+/// ready for rendering. We wake the dvui main loop so that the
+/// pixel-buffer transfer in ui/grid.zig runs and the on-screen texture
+/// updates. Without this, dvui's SDL backend sleeps on input idle and
+/// the video freezes while audio continues. dvui.refresh is explicitly
+/// thread-safe when a *Window is passed (see dvui/src/dvui.zig).
+fn mpvRenderUpdateCallback(_: ?*anyopaque) callconv(.c) void {
+    if (state.app.dvui_win) |win| {
+        dvui.refresh(win, @src(), null);
+    }
+}
 
 pub fn updateTorrentBackgroundTasks() void {
     for (state.app.players.items) |p| {

@@ -21,6 +21,30 @@ const settings_mod = @import("settings.zig");
 
 var drawer_last_mouse_x: f32 = -1;
 
+// ══════════════════════════════════════════════════════════
+// Rail layout constants (production polish — Phase: drawer)
+// ══════════════════════════════════════════════════════════
+// Rail = 48px (32px button + 8px padding each side).
+// Each icon button is 32×32 with a 16px glyph centered.
+// Spacing.xs (4px) between icons within a group; spacing.lg
+// (16px) gaps between groups (no dividers).
+// Active state: 2px accent left border + bg_elevated fill.
+// Hover state: bg_hover lift. Focus: dvui's built-in ring on
+// tab_index'd buttons (uses theme `focus` color).
+// All literals below are TODO'd to canonical theme tokens
+// (theme.spacing.*, theme.radius.sm) once the integrator
+// finalizes the token surface in theme.zig.
+const RAIL_W: f32 = 48;
+const RAIL_SIDE_PAD: f32 = 8;
+const BTN_SIZE: f32 = 32;
+const ICON_GLYPH: f32 = 16;
+const ICON_GAP: f32 = 4;   // TODO: theme.spacing.xs when ready
+const GROUP_GAP: f32 = 16; // TODO: theme.spacing.lg when ready
+const RADIUS_SM = dvui.Rect.all(4); // TODO: theme.radius.sm when ready
+
+// Transparent color used as the "no fill" baseline for icon buttons.
+const TRANSPARENT: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+
 pub fn renderDrawer() void {
     if (!state.app.drawer_open) return;
 
@@ -148,31 +172,31 @@ pub fn renderDrawer() void {
     defer content.deinit();
 
     // ══════════════════════════════════════════════════════════
-    // Vertical Tab Rail (left side, fixed width ~44px)
+    // Vertical Tab Rail (left side, fixed 48px wide).
+    // Panel has no corner radius (touches window edge — requirement 4).
     // ══════════════════════════════════════════════════════════
     {
         var rail = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .vertical,
-            .min_size_content = .{ .w = 52, .h = 10 },
-            .max_size_content = .{ .w = 52, .h = std.math.floatMax(f32) },
+            .min_size_content = .{ .w = RAIL_W, .h = 10 },
+            .max_size_content = .{ .w = RAIL_W, .h = std.math.floatMax(f32) },
             .background = true,
-            .color_fill = theme.colors.bg_header,
-            .color_border = theme.colors.divider,
+            .color_fill = theme.colors.bg_header, // TODO: theme.colors.bg_surface when ready
+            .color_border = theme.colors.divider, // TODO: theme.colors.border_subtle when ready
             .border = .{ .x = 0, .y = 0, .w = 1, .h = 0 },
+            .padding = .{ .x = 0, .y = RAIL_SIDE_PAD, .w = 0, .h = RAIL_SIDE_PAD },
         });
         defer rail.deinit();
 
-
-
-        // ── Find & Manage ──
+        // ── Group 1: Find & Manage ──
         renderRailTab(.Search,    icons.tvg.lucide.@"search",   "Search",    0);
         renderRailTab(.Downloads, icons.tvg.lucide.@"download", "Downloads", 1);
         renderRailTab(.Queue,     icons.tvg.lucide.@"list",     "Queue",     2);
         renderRailTab(.History,   icons.tvg.lucide.@"clock",    "History",   9);
 
-        railDivider(0);
+        railGroupGap(0);
 
-        // ── Sources ──
+        // ── Group 2: Sources ──
         renderRailTab(.TMDB,     icons.tvg.lucide.@"film",   "TMDB",     3);
         renderRailTab(.YouTube,  icons.tvg.lucide.@"play",   "YouTube",  4);
         renderRailTab(.Anime,    icons.tvg.lucide.@"zap",    "Anime",    5);
@@ -180,65 +204,35 @@ pub fn renderDrawer() void {
         renderRailTab(.RSS,      icons.tvg.lucide.@"rss",    "RSS",      7);
         renderRailTab(.Jellyfin, icons.tvg.lucide.@"server", "Jellyfin", 8);
 
-        railDivider(1);
+        railGroupGap(1);
 
-        // ── Configure ──
+        // ── Group 3: Configure ──
         renderRailTab(.AI,       icons.tvg.lucide.@"brain",    "AI",       14);
         renderRailTab(.Plugins,  icons.tvg.lucide.@"package",  "Plugins",  11);
         renderRailTab(.Settings, icons.tvg.lucide.@"settings", "Settings", 13);
 
-        // Spacer to push controls to bottom
+        // Spacer to push bottom controls to the bottom of the rail.
         { var spacer = dvui.box(@src(), .{}, .{ .expand = .vertical }); spacer.deinit(); }
 
-        // Bottom controls: Console + Expand + Close
-        {
-            // Console toggle (moved from rail to bottom bar)
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"terminal", .{}, .{}, .{
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = if (state.app.drawer_tab == .Logs) theme.colors.accent else theme.colors.text_muted,
-                .border = dvui.Rect.all(0),
-                .padding = dvui.Rect.all(8),
-                .margin = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
-                .min_size_content = .{ .w = 20, .h = 20 },
-                .gravity_x = 0.5,
-            })) {
-                state.app.drawer_tab = .Logs;
-            }
-
-            // Expand toggle
-            const expand_icon = if (state.app.drawer_expanded) icons.tvg.lucide.@"minimize-2" else icons.tvg.lucide.@"maximize-2";
-            if (dvui.buttonIcon(@src(), "", expand_icon, .{}, .{}, .{
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = if (state.app.drawer_expanded) theme.colors.accent else theme.colors.text_muted,
-                .border = dvui.Rect.all(0),
-                .padding = dvui.Rect.all(8),
-                .margin = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
-                .min_size_content = .{ .w = 20, .h = 20 },
-                .gravity_x = 0.5,
-            })) {
-                if (state.app.drawer_expanded) {
-                    state.app.drawer_expanded = false;
-                    state.app.drawer_width_px = state.app.drawer_saved_width;
-                } else {
-                    state.app.drawer_saved_width = state.app.drawer_width_px;
-                    state.app.drawer_expanded = true;
-                }
-            }
-
-            // Minimize (hide drawer)
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"panel-right-close", .{}, .{}, .{
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = theme.colors.text_muted,
-                .border = dvui.Rect.all(0),
-                .padding = dvui.Rect.all(8),
-                .margin = .{ .x = 4, .y = 2, .w = 4, .h = 6 },
-                .min_size_content = .{ .w = 20, .h = 20 },
-                .gravity_x = 0.5,
-            })) {
-                state.app.drawer_open = false;
-                state.app.drawer_expanded = false;
-            }
-        }
+        // ── Bottom controls group (Console / Expand / Close) ──
+        renderBottomIcon(
+            .{ .Tab = .Logs },
+            icons.tvg.lucide.@"terminal",
+            "Developer Console",
+            100,
+        );
+        renderBottomIcon(
+            .ExpandToggle,
+            if (state.app.drawer_expanded) icons.tvg.lucide.@"minimize-2" else icons.tvg.lucide.@"maximize-2",
+            if (state.app.drawer_expanded) "Collapse drawer" else "Expand drawer",
+            101,
+        );
+        renderBottomIcon(
+            .CloseDrawer,
+            icons.tvg.lucide.@"panel-right-close",
+            "Hide drawer",
+            102,
+        );
     }
 
     // ══════════════════════════════════════════════════════════
@@ -274,84 +268,151 @@ pub fn renderDrawer() void {
 }
 
 // ══════════════════════════════════════════════════════════
-// Tab Badge Helpers
-// ══════════════════════════════════════════════════════════
-
-// ══════════════════════════════════════════════════════════
 // Rail Tab Helpers
 // ══════════════════════════════════════════════════════════
 
+/// Render one tab in the vertical rail.
+///   - Active: 2px accent_primary left border + bg_elevated fill on the row.
+///   - Hover:  bg_hover lift via dvui's color_fill_hover.
+///   - Focus:  dvui draws its theme.focus ring automatically on tab_index'd buttons.
+///   - Tooltip after 300ms hover via components.tip().
 fn renderRailTab(tab: state.DrawerTab, icon_data: anytype, label: []const u8, id: usize) void {
     const active = state.app.drawer_tab == tab;
     const has_badge = tabHasBadge(tab);
 
-    // Tab item container — active state gets subtle fill for clear selection.
+    // Row container — sized so a 32px square button + 2px indicator fits with the rail's 8px side padding.
+    // Vertical gap between rows is theme.spacing.xs (4px).
     var tab_item = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = id,
         .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = 40 },
-        .background = true,
-        .color_fill = if (active) theme.colors.bg_card else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .min_size_content = .{ .w = RAIL_W - 2 * RAIL_SIDE_PAD, .h = BTN_SIZE },
+        .background = active,
+        .color_fill = if (active) theme.colors.bg_elevated else TRANSPARENT,
+        .corner_radius = RADIUS_SM,
+        .margin = .{ .x = RAIL_SIDE_PAD, .y = ICON_GAP / 2, .w = RAIL_SIDE_PAD, .h = ICON_GAP / 2 },
     });
     defer tab_item.deinit();
 
-    // Active indicator bar (left edge, fixed width — doesn't shift icon)
+    // 2px accent left border for the active tab. Reserves 2px on the inactive
+    // tabs too so the icon never shifts when selection changes.
     {
         var indicator = dvui.box(@src(), .{}, .{
             .id_extra = id + 3000,
             .expand = .vertical,
-            .min_size_content = .{ .w = 3, .h = 0 },
+            .min_size_content = .{ .w = 2, .h = 0 },
             .background = active,
-            .color_fill = if (active) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .corner_radius = .{ .x = 0, .y = 0, .w = 2, .h = 2 },
+            .color_fill = if (active) theme.colors.accent else TRANSPARENT, // TODO: theme.colors.accent_primary
         });
         indicator.deinit();
     }
 
-    // Icon button (clickable) — centered in remaining space
+    // 32×32 icon button. The glyph itself is min-sized to 16×16 and centered.
+    // tab_index is set so keyboard nav can land here; dvui will draw its
+    // built-in focus ring (uses theme.focus color) when the button has focus.
     var wd: dvui.WidgetData = undefined;
     if (dvui.buttonIcon(@src(), "", icon_data, .{}, .{}, .{
         .data_out = &wd,
         .id_extra = id + 1000,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_text = if (active) theme.colors.accent else theme.colors.text_muted,
+        .color_fill = TRANSPARENT,
+        .color_fill_hover = theme.colors.bg_card_hover, // TODO: theme.colors.bg_hover when ready
+        .color_text = if (active) theme.colors.accent // TODO: theme.colors.accent_primary
+                      else theme.colors.text_muted,    // TODO: theme.colors.text_secondary
         .border = dvui.Rect.all(0),
-        .padding = dvui.Rect.all(6),
-        .expand = .both,
-        .min_size_content = .{ .w = 20, .h = 20 },
+        .corner_radius = RADIUS_SM,
+        .padding = dvui.Rect.all((BTN_SIZE - ICON_GLYPH) / 2),
+        .min_size_content = .{ .w = BTN_SIZE, .h = BTN_SIZE },
+        .max_size_content = .{ .w = BTN_SIZE, .h = BTN_SIZE },
         .gravity_x = 0.5,
         .gravity_y = 0.5,
+        .tab_index = @intCast(id + 1),
     })) {
         state.app.drawer_tab = tab;
     }
+    // Tooltip appears after the user hovers for >300ms (dvui default delay).
     components.tip(@src(), wd, label);
 
-    // Notification badge (overlapping right edge)
+    // Notification dot — small, overlapping the right side of the row.
     if (has_badge) {
         const badge_color = tabBadgeColor(tab);
         var badge = dvui.box(@src(), .{}, .{
             .id_extra = id + 5000,
-            .min_size_content = .{ .w = 7, .h = 7 },
+            .min_size_content = .{ .w = 6, .h = 6 },
             .background = true,
             .color_fill = badge_color,
             .corner_radius = dvui.Rect.all(99),
             .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
         });
         badge.deinit();
     }
 }
 
-fn railDivider(id: usize) void {
-    var div = dvui.box(@src(), .{}, .{
+/// 16px gap between groups in the vertical rail. NO divider line — gaps only,
+/// per polish requirement #5.
+fn railGroupGap(id: usize) void {
+    var gap = dvui.box(@src(), .{}, .{
         .id_extra = id + 9000,
         .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = 1 },
-        .background = true,
-        .color_fill = theme.colors.divider,
-        .margin = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+        .min_size_content = .{ .w = 0, .h = GROUP_GAP },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = GROUP_GAP },
     });
-    div.deinit();
+    gap.deinit();
+}
+
+/// Bottom-rail action identifier — distinguishes click handlers without a
+/// new state struct (per project convention).
+const BottomAction = union(enum) {
+    Tab: state.DrawerTab,
+    ExpandToggle,
+    CloseDrawer,
+};
+
+/// Render one of the bottom-rail action icons. Shares the rail tab visual
+/// language (hover lift, 32px button, 16px glyph, accent when active).
+fn renderBottomIcon(action: BottomAction, icon_data: anytype, label: []const u8, id: usize) void {
+    const is_active = switch (action) {
+        .Tab => |t| state.app.drawer_tab == t,
+        .ExpandToggle => state.app.drawer_expanded,
+        .CloseDrawer => false,
+    };
+
+    var wd: dvui.WidgetData = undefined;
+    const clicked = dvui.buttonIcon(@src(), "", icon_data, .{}, .{}, .{
+        .data_out = &wd,
+        .id_extra = id + 1000,
+        .color_fill = TRANSPARENT,
+        .color_fill_hover = theme.colors.bg_card_hover, // TODO: theme.colors.bg_hover when ready
+        .color_text = if (is_active) theme.colors.accent // TODO: theme.colors.accent_primary
+                      else theme.colors.text_muted,      // TODO: theme.colors.text_secondary
+        .border = dvui.Rect.all(0),
+        .corner_radius = RADIUS_SM,
+        .padding = dvui.Rect.all((BTN_SIZE - ICON_GLYPH) / 2),
+        .min_size_content = .{ .w = BTN_SIZE, .h = BTN_SIZE },
+        .max_size_content = .{ .w = BTN_SIZE, .h = BTN_SIZE },
+        .margin = .{ .x = RAIL_SIDE_PAD, .y = ICON_GAP / 2, .w = RAIL_SIDE_PAD, .h = ICON_GAP / 2 },
+        .gravity_x = 0.5,
+        .tab_index = @intCast(id + 1),
+    });
+    components.tip(@src(), wd, label);
+
+    if (clicked) {
+        switch (action) {
+            .Tab => |t| state.app.drawer_tab = t,
+            .ExpandToggle => {
+                if (state.app.drawer_expanded) {
+                    state.app.drawer_expanded = false;
+                    state.app.drawer_width_px = state.app.drawer_saved_width;
+                } else {
+                    state.app.drawer_saved_width = state.app.drawer_width_px;
+                    state.app.drawer_expanded = true;
+                }
+            },
+            .CloseDrawer => {
+                state.app.drawer_open = false;
+                state.app.drawer_expanded = false;
+            },
+        }
+    }
 }
 
 

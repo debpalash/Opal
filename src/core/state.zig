@@ -179,6 +179,11 @@ pub const AppState = struct {
     drawer_tab: DrawerTab = .Search,
     drawer_width_px: f32 = 380.0,
 
+    // dvui window handle — set once in appInit. Stored here so worker
+    // threads (e.g. the mpv render-update callback) can wake the UI loop
+    // via dvui.refresh(win, @src(), null) from any thread.
+    dvui_win: ?*dvui.Window = null,
+
     // Window geometry persistence
     win_x: i32 = 0,
     win_y: i32 = 0,
