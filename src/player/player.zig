@@ -43,6 +43,10 @@ pub const MediaPlayer = struct {
     save_counter: u32 = 0, // periodic save every N frames
     provider: state.ContentProvider = .mpv,
 
+    // v2: handle to the per-player torrent HTTP proxy stream (multi-tenant).
+    // INVALID_HANDLE means no proxy is currently running for this player.
+    proxy_handle: @import("stream_proxy.zig").Handle = @import("stream_proxy.zig").INVALID_HANDLE,
+
     // ── Per-player browser state ──
     browser_url_buf: [2048]u8 = std.mem.zeroes([2048]u8),
     browser_url_len: usize = 0,
@@ -499,6 +503,10 @@ pub const MediaPlayer = struct {
 
     pub fn deinit(self: *MediaPlayer, allocator: std.mem.Allocator) void {
         self.saveCurrentPosition();
+        if (self.proxy_handle.isValid()) {
+            @import("stream_proxy.zig").stopProxy(self.proxy_handle);
+            self.proxy_handle = @import("stream_proxy.zig").INVALID_HANDLE;
+        }
         c.mpv.mpv_render_context_free(self.mpv_gl);
         c.mpv.mpv_terminate_destroy(self.mpv_ctx);
         allocator.free(self.pixels);
@@ -669,10 +677,17 @@ pub fn updateTorrentBackgroundTasks() void {
                     
                     // ── Streaming Proxy: serve torrent via HTTP for smooth playback ──
                     // The proxy blocks reads until pieces arrive — no holes, no corruption.
+                    // v2: each player owns its proxy handle so multi-stream split-view works,
+                    // and the URL carries a per-stream token so foreign processes can't read it.
                     const stream_proxy = @import("stream_proxy.zig");
-                    if (stream_proxy.startProxy(p.current_torrent_id, p.selected_file_idx)) |_| {
+                    if (p.proxy_handle.isValid()) {
+                        stream_proxy.stopProxy(p.proxy_handle);
+                        p.proxy_handle = stream_proxy.INVALID_HANDLE;
+                    }
+                    if (stream_proxy.startProxy(p.current_torrent_id, p.selected_file_idx)) |h| {
+                        p.proxy_handle = h;
                         var url_buf: [128]u8 = undefined;
-                        if (stream_proxy.getStreamUrl(&url_buf)) |stream_url| {
+                        if (stream_proxy.getStreamUrl(h, &url_buf)) |stream_url| {
                             var url_z: [128]u8 = undefined;
                             const ul = @min(stream_url.len, 127);
                             @memcpy(url_z[0..ul], stream_url[0..ul]);

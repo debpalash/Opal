@@ -576,6 +576,9 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
     var url_buf: [512]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "https://1337x.to/search/{s}/1/", .{enc[0..el]}) catch return;
 
+    // v2: throttle to ≤1 req/sec per origin so parallel queries don't trip rate limits.
+    @import("../core/rate_limit.zig").acquire("1337x", 1.0);
+
     // Fetch search page
     var page_buf: [128 * 1024]u8 = undefined;
     const page = @import("../core/http.zig").fetch(url, &page_buf, .{

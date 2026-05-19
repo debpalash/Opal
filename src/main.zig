@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const c = @import("core/c.zig");
 const state = @import("core/state.zig");
@@ -12,6 +13,12 @@ const input = @import("ui/input.zig");
 const theme = @import("ui/theme.zig");
 const drawer = @import("ui/drawer.zig");
 const hist = @import("services/history.zig");
+
+// v2: rolling-window frame timing for the debug HUD.
+const HUD_WINDOW: usize = 60;
+var hud_samples: [HUD_WINDOW]f32 = std.mem.zeroes([HUD_WINDOW]f32);
+var hud_cursor: usize = 0;
+var hud_last_ms: i64 = 0;
 
 // Window reference for SDL position/size persistence
 var dvui_win: ?*dvui.Window = null;
@@ -718,6 +725,20 @@ fn appFrame() !dvui.App.Result {
         while (i < state.app.session_restore_count) : (i += 1) {
             const url_len = state.app.session_restore_lens[i];
             if (url_len == 0 or url_len >= 2048) continue;
+            const url = state.app.session_restore_urls[i][0..url_len];
+            // Skip local files that no longer exist — avoids noisy mpv errors
+            // for media deleted between sessions.
+            const is_local = url.len > 0 and (url[0] == '/' or std.mem.startsWith(u8, url, "file://"));
+            if (is_local) {
+                const fs_path = if (std.mem.startsWith(u8, url, "file://")) url[7..] else url;
+                const io_g = @import("core/io_global.zig");
+                if (io_g.openFileAbsolute(fs_path, .{})) |f| {
+                    f.close(io_g.io());
+                } else |_| {
+                    logs.pushLog("info", "session", "Skipping missing file from previous session", false);
+                    continue;
+                }
+            }
             const p = player.MediaPlayer.init(@import("core/alloc.zig").allocator) catch continue;
             // Start paused; mpv honors the pause property across loadfile.
             _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "pause", "yes");
@@ -726,7 +747,6 @@ fn appFrame() !dvui.App.Result {
                 continue;
             };
             state.app.active_player_idx = state.app.players.items.len - 1;
-            const url = state.app.session_restore_urls[i][0..url_len];
             browser.loadContent(url);
         }
         if (state.app.players.items.len > 0) {
@@ -1084,5 +1104,46 @@ fn appFrame() !dvui.App.Result {
         }
     }
 
+    if (builtin.mode == .Debug) renderHudOverlay();
+
     return .ok;
+}
+
+// v2: lightweight frame-time overlay. Debug builds only — ~30 LOC, no allocs.
+fn renderHudOverlay() void {
+    const io_g = @import("core/io_global.zig");
+    const t = io_g.milliTimestamp();
+    if (hud_last_ms != 0) {
+        const dt: f32 = @floatFromInt(t - hud_last_ms);
+        hud_samples[hud_cursor] = dt;
+        hud_cursor = (hud_cursor + 1) % HUD_WINDOW;
+    }
+    hud_last_ms = t;
+
+    var sum: f32 = 0;
+    var peak: f32 = 0;
+    for (hud_samples) |s| {
+        sum += s;
+        if (s > peak) peak = s;
+    }
+    const avg = sum / @as(f32, @floatFromInt(HUD_WINDOW));
+    const last = hud_samples[(hud_cursor + HUD_WINDOW - 1) % HUD_WINDOW];
+
+    var buf: [64]u8 = undefined;
+    const txt = std.fmt.bufPrint(&buf, "{d:.1} ms  avg {d:.1}  peak {d:.0}", .{ last, avg, peak }) catch return;
+
+    var box = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .gravity_x = 1.0,
+        .gravity_y = 0.0,
+        .margin = .{ .x = 0, .y = 4, .w = 8, .h = 0 },
+        .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
+        .corner_radius = dvui.Rect.all(4),
+        .background = true,
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 },
+    });
+    defer box.deinit();
+    _ = dvui.label(@src(), "{s}", .{txt}, .{
+        .color_text = dvui.Color{ .r = 0, .g = 255, .b = 100, .a = 255 },
+        .font = (dvui.Font{}).withSize(11),
+    });
 }
