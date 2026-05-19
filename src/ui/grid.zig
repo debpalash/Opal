@@ -949,7 +949,12 @@ fn renderContinueWatching() void {
             })) {
                 if (state.app.active_player_idx < state.app.players.items.len) {
                     const browser = @import("../services/browser.zig");
-                    browser.loadContent(raw_name);
+                    // Watch history stores the display name AND the original
+                    // URL/magnet/path. Routing must use the URL — the display
+                    // name has no extension or domain so it routes to .browser
+                    // and opens the HTML browser instead of mpv.
+                    const url_to_load = if (e.link_len > 0) e.link[0..e.link_len] else raw_name;
+                    browser.loadContent(url_to_load);
                     state.showToast("Resuming...");
                 }
             }

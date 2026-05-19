@@ -34,10 +34,10 @@ var drawer_last_mouse_x: f32 = -1;
 // All literals below are TODO'd to canonical theme tokens
 // (theme.spacing.*, theme.radius.sm) once the integrator
 // finalizes the token surface in theme.zig.
-const RAIL_W: f32 = 48;
+const RAIL_W: f32 = 56;
 const RAIL_SIDE_PAD: f32 = 8;
-const BTN_SIZE: f32 = 32;
-const ICON_GLYPH: f32 = 16;
+const BTN_SIZE: f32 = 40;
+const ICON_GLYPH: f32 = 22;
 const ICON_GAP: f32 = 4;   // TODO: theme.spacing.xs when ready
 const GROUP_GAP: f32 = 16; // TODO: theme.spacing.lg when ready
 const RADIUS_SM = dvui.Rect.all(4); // TODO: theme.radius.sm when ready
