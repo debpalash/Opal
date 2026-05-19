@@ -408,6 +408,7 @@ fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
     }) catch return;
 
     var buf: [64 * 1024]u8 = undefined;
+    @import("../core/rate_limit.zig").acquire("jellyfin", 5.0);
     const body = @import("../core/http.zig").fetch(url, &buf, .{ .timeout_secs = 5 }) orelse return;
     const n = body.len;
 
@@ -639,6 +640,7 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
 
         // Fetch the detail page to get magnet link
         var det_buf: [128 * 1024]u8 = undefined;
+        @import("../core/rate_limit.zig").acquire("1337x", 1.0);
         const det_page = @import("../core/http.zig").fetch(du, &det_buf, .{
             .timeout_secs = 6,
             .user_agent = "Mozilla/5.0",
@@ -709,6 +711,7 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
     }) catch return;
 
     var buf: [64 * 1024]u8 = undefined;
+    @import("../core/rate_limit.zig").acquire("yts", 1.0);
     const body = @import("../core/http.zig").fetch(url, &buf, .{
         .timeout_secs = 6,
         .user_agent = "ZigZag/1.0",
@@ -803,6 +806,7 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
     const url = std.fmt.bufPrint(&final_url_buf, "https://api.allanime.day/api?variables={s}&query={s}", .{ vars_enc, query_enc }) catch return;
 
     var buf: [64 * 1024]u8 = undefined;
+    @import("../core/rate_limit.zig").acquire("allanime", 1.0); // scrape-class — be gentle
     const body = @import("../core/http.zig").fetch(url, &buf, .{
         .timeout_secs = 8,
         .referer = "https://allmanga.to",
@@ -946,6 +950,7 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
     }) catch return;
 
     var buf: [32 * 1024]u8 = undefined;
+    @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
     const t_body = @import("../core/http.zig").fetch(turl, &buf, .{ .timeout_secs = 5 }) orelse return;
     const n = t_body.len;
 
@@ -986,6 +991,7 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
     }) catch return;
 
     var buf2: [4096]u8 = undefined;
+    @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
     const e_body = @import("../core/http.zig").fetch(eurl, &buf2, .{ .timeout_secs = 5 }) orelse return;
     const n2 = e_body.len;
 
@@ -1021,6 +1027,7 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
         }) catch continue;
 
         var sbuf: [64 * 1024]u8 = undefined;
+        @import("../core/rate_limit.zig").acquire("stremio", 1.0); // third-party addon — be gentle
         const s_body = @import("../core/http.zig").fetch(surl, &sbuf, .{ .timeout_secs = 8 }) orelse continue;
         const sn = s_body.len;
 

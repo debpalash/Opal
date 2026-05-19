@@ -75,6 +75,7 @@ pub const Plugin = struct {
     // State
     enabled: bool = true,
     loaded: bool = false,
+    allow_unsafe: bool = false,
 };
 
 // ── Global Plugin State ──
@@ -138,6 +139,9 @@ pub fn scanPlugins() void {
         extractJsonString(json, "version", &p.version, &p.version_len);
         extractJsonString(json, "description", &p.description, &p.description_len);
         extractJsonString(json, "author", &p.author, &p.author_len);
+        if (extractField(json, "allow_unsafe")) |v| {
+            p.allow_unsafe = std.mem.eql(u8, v, "true");
+        }
         
         if (p.name_len == 0) {
             // Use directory name as fallback
@@ -183,6 +187,78 @@ fn fileExists(dir: []const u8, name: []const u8) bool {
 // Plugin Execution
 // ══════════════════════════════════════════════════════════
 
+// Lua sandbox prelude — nils dangerous globals before the plugin
+// chunk runs. Plugins are community-supplied; without this, a
+// malicious "media search" plugin can `os.execute("rm -rf $HOME")`.
+//
+// Defense-in-depth only: a sandboxed Lua plugin can still consume
+// CPU/memory and the OS-level uid is unchanged. Real isolation
+// needs a per-spawn OS sandbox (macOS sandbox-exec / Linux
+// bubblewrap) — see TODO below.
+//
+// `require` is replaced with a deny-all hook (empty allow-list by
+// default; manifest opt-in for specific modules in a later pass).
+//
+// NOTE: this only fires when the plugin executable is interpreted
+// by `lua` (detected via `.lua` suffix or a `lua` shebang). Native
+// binaries and non-Lua interpreters bypass this and need OS sandbox
+// hardening instead.
+//
+// TODO(security): per-spawn OS sandboxing (macOS `sandbox-exec -p`
+// / Linux `bwrap`), manifest `require` allow-list, and a one-time
+// user consent prompt for `allow_unsafe = true` plugins.
+const LUA_SANDBOX_PRELUDE: []const u8 =
+    \\os.execute=nil os.remove=nil os.rename=nil os.exit=nil os.tmpname=nil
+    \\io.popen=nil io.open=nil io.input=nil io.output=nil io.lines=nil
+    \\if package then package.loadlib=nil end
+    \\dofile=nil loadfile=nil loadstring=nil load=nil
+    \\require=function(m) error("require denied: "..tostring(m)) end
+    \\
+;
+
+/// Detect whether `exec_path` points at a Lua script (by `.lua`
+/// suffix or a shebang line containing `lua`). Used to decide
+/// whether the sandbox prelude needs to wrap the invocation.
+fn detectLuaScript(exec_path: []const u8) bool {
+    if (std.mem.endsWith(u8, exec_path, ".lua")) return true;
+    const f = @import("../core/io_global.zig").cwdOpenFile(exec_path, .{}) catch return false;
+    defer f.close(@import("../core/io_global.zig").io());
+    var hdr: [128]u8 = undefined;
+    const n = @import("../core/io_global.zig").readAll(f, &hdr) catch return false;
+    if (n < 4) return false;
+    if (hdr[0] != '#' or hdr[1] != '!') return false;
+    const line_end = std.mem.indexOfScalar(u8, hdr[0..n], '\n') orelse n;
+    return std.mem.indexOf(u8, hdr[0..line_end], "lua") != null;
+}
+
+/// Build an argv that runs `exec_path` under the sandboxed Lua VM:
+/// `lua -e <PRELUDE> -- <script> <extras...>`. Caller-supplied
+/// `out_argv` must have at least `4 + extras.len` slots.
+fn buildSandboxedLuaArgv(
+    out_argv: [][]const u8,
+    exec_path: []const u8,
+    extras: []const []const u8,
+) []const []const u8 {
+    out_argv[0] = "lua";
+    out_argv[1] = "-e";
+    out_argv[2] = LUA_SANDBOX_PRELUDE;
+    out_argv[3] = exec_path;
+    for (extras, 0..) |a, i| out_argv[4 + i] = a;
+    return out_argv[0 .. 4 + extras.len];
+}
+
+fn logSandboxed(name: []const u8) void {
+    var buf: [128]u8 = undefined;
+    const msg = std.fmt.bufPrintZ(&buf, "Sandboxed: {s}", .{name}) catch "Sandboxed";
+    logs.pushLog("info", "plugins", msg, false);
+}
+
+fn logUnsafeWarn(name: []const u8) void {
+    var buf: [160]u8 = undefined;
+    const msg = std.fmt.bufPrintZ(&buf, "Lua sandbox skipped (allow_unsafe): {s}", .{name}) catch "Lua sandbox skipped";
+    logs.pushLog("warn", "plugins", msg, false);
+}
+
 pub fn runPluginSearch(query: []const u8) void {
     if (active_plugin >= plugin_count) return;
     if (!plugins[active_plugin].has_search) return;
@@ -194,13 +270,22 @@ pub fn runPluginSearch(query: []const u8) void {
     _ = std.Thread.spawn(.{}, struct {
         fn worker(q: []const u8, pidx: usize) void {
             defer is_loading = false;
-            
+
             const p = plugins[pidx];
             var exec_buf: [600]u8 = undefined;
             const exec = std.fmt.bufPrint(&exec_buf, "{s}/search", .{p.path[0..p.path_len]}) catch return;
-            
-            const argv = [_][]const u8{ exec, q };
-            executeAndParse(&argv);
+
+            if (detectLuaScript(exec) and !p.allow_unsafe) {
+                var sandbox_argv: [8][]const u8 = undefined;
+                const extras = [_][]const u8{q};
+                const argv = buildSandboxedLuaArgv(&sandbox_argv, exec, &extras);
+                logSandboxed(p.name[0..p.name_len]);
+                executeAndParse(argv);
+            } else {
+                if (p.allow_unsafe) logUnsafeWarn(p.name[0..p.name_len]);
+                const argv = [_][]const u8{ exec, q };
+                executeAndParse(&argv);
+            }
         }
     }.worker, .{ query, active_plugin }) catch {
         is_loading = false;
@@ -218,13 +303,21 @@ pub fn runPluginTrending() void {
     _ = std.Thread.spawn(.{}, struct {
         fn worker(pidx: usize) void {
             defer is_loading = false;
-            
+
             const p = plugins[pidx];
             var exec_buf: [600]u8 = undefined;
             const exec = std.fmt.bufPrint(&exec_buf, "{s}/trending", .{p.path[0..p.path_len]}) catch return;
-            
-            const argv = [_][]const u8{exec};
-            executeAndParse(&argv);
+
+            if (detectLuaScript(exec) and !p.allow_unsafe) {
+                var sandbox_argv: [8][]const u8 = undefined;
+                const argv = buildSandboxedLuaArgv(&sandbox_argv, exec, &.{});
+                logSandboxed(p.name[0..p.name_len]);
+                executeAndParse(argv);
+            } else {
+                if (p.allow_unsafe) logUnsafeWarn(p.name[0..p.name_len]);
+                const argv = [_][]const u8{exec};
+                executeAndParse(&argv);
+            }
         }
     }.worker, .{active_plugin}) catch {
         is_loading = false;
@@ -252,9 +345,19 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
             const p = plugins[pidx];
             var exec_buf: [600]u8 = undefined;
             const exec = std.fmt.bufPrint(&exec_buf, "{s}/resolve", .{p.path[0..p.path_len]}) catch return;
-            
-            const argv = [_][]const u8{ exec, rid, rep };
-            var child = @import("../core/io_global.zig").Child.init(&argv, c_alloc);
+
+            const direct_argv = [_][]const u8{ exec, rid, rep };
+            var sandbox_argv: [8][]const u8 = undefined;
+            const argv: []const []const u8 = blk: {
+                if (detectLuaScript(exec) and !p.allow_unsafe) {
+                    const extras = [_][]const u8{ rid, rep };
+                    logSandboxed(p.name[0..p.name_len]);
+                    break :blk buildSandboxedLuaArgv(&sandbox_argv, exec, &extras);
+                }
+                if (p.allow_unsafe) logUnsafeWarn(p.name[0..p.name_len]);
+                break :blk &direct_argv;
+            };
+            var child = @import("../core/io_global.zig").Child.init(argv, c_alloc);
             child.stdout_behavior = .Pipe;
             child.stderr_behavior = .Ignore;
             _ = child.spawn() catch return;

@@ -2,6 +2,10 @@ const std = @import("std");
 const state = @import("../core/state.zig");
 const c = @import("../core/c.zig");
 const player = @import("../player/player.zig");
+const paths_mod = @import("../core/paths.zig");
+const logs = @import("../core/logs.zig");
+const sync = @import("../core/sync.zig");
+const io_g = @import("../core/io_global.zig");
 
 // ══════════════════════════════════════════════════════════
 // Web Remote Control — JSON API for ZigZag Web UI
@@ -12,8 +16,168 @@ var server_thread: ?std.Thread = null;
 var running: bool = false;
 pub var port: u16 = 41595;
 
+// ── Bearer-token auth ──
+// 32 hex chars = 128 bits of entropy. Generated on first launch, persisted to
+// ~/.config/zigzag/api.token (mode 0600), reused on subsequent runs.
+const TOKEN_HEX_LEN: usize = 32;
+var api_token: [TOKEN_HEX_LEN]u8 = std.mem.zeroes([TOKEN_HEX_LEN]u8);
+var api_token_ready: bool = false;
+var csprng_init: bool = false;
+var csprng: std.Random.DefaultCsprng = undefined;
+var csprng_mutex = sync.Mutex{};
+
+fn seedCsprng() void {
+    var seed: [std.Random.DefaultCsprng.secret_seed_length]u8 = undefined;
+    var seeded = false;
+    if (io_g.openFileAbsolute("/dev/urandom", .{})) |f| {
+        var fh = f;
+        defer fh.close(io_g.io());
+        const n = io_g.readAll(fh, &seed) catch 0;
+        if (n == seed.len) seeded = true;
+    } else |_| {}
+    if (!seeded) {
+        const t = io_g.milliTimestamp();
+        const tid = std.Thread.getCurrentId();
+        var i: usize = 0;
+        while (i < seed.len) : (i += 1) {
+            const mix: u64 = @as(u64, @bitCast(t)) ^ tid ^ (i *% 0x9e3779b97f4a7c15);
+            seed[i] = @truncate(mix >> @as(u6, @intCast(i % 8)) * 8);
+        }
+    }
+    csprng = std.Random.DefaultCsprng.init(seed);
+}
+
+fn fillRandomHex(out: *[TOKEN_HEX_LEN]u8) void {
+    csprng_mutex.lock();
+    defer csprng_mutex.unlock();
+    if (!csprng_init) {
+        seedCsprng();
+        csprng_init = true;
+    }
+    var bytes: [TOKEN_HEX_LEN / 2]u8 = undefined;
+    csprng.fill(&bytes);
+    const hex = "0123456789abcdef";
+    for (bytes, 0..) |b, i| {
+        out[i * 2] = hex[b >> 4];
+        out[i * 2 + 1] = hex[b & 0x0f];
+    }
+}
+
+fn tokenPath(buf: []u8) []const u8 {
+    var dir_buf: [512]u8 = undefined;
+    const dir = paths_mod.configDir(&dir_buf);
+    return std.fmt.bufPrint(buf, "{s}/api.token", .{dir}) catch "/tmp/zigzag_api.token";
+}
+
+fn isHexAll(s: []const u8) bool {
+    for (s) |ch| {
+        const ok = (ch >= '0' and ch <= '9') or (ch >= 'a' and ch <= 'f') or (ch >= 'A' and ch <= 'F');
+        if (!ok) return false;
+    }
+    return true;
+}
+
+fn loadOrCreateToken() void {
+    if (api_token_ready) return;
+    var path_buf: [768]u8 = undefined;
+    const tok_path = tokenPath(&path_buf);
+
+    // Reuse existing token if present and well-formed.
+    if (io_g.openFileAbsolute(tok_path, .{})) |f| {
+        var fh = f;
+        defer fh.close(io_g.io());
+        var read_buf: [TOKEN_HEX_LEN]u8 = undefined;
+        const n = io_g.readAll(fh, &read_buf) catch 0;
+        if (n == TOKEN_HEX_LEN and isHexAll(read_buf[0..TOKEN_HEX_LEN])) {
+            @memcpy(&api_token, &read_buf);
+            api_token_ready = true;
+            var msg_buf: [768]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "API token loaded from {s}", .{tok_path}) catch tok_path;
+            logs.pushLog("info", "remote", msg, false);
+            return;
+        }
+    } else |_| {}
+
+    // Ensure config dir exists before writing.
+    var dir_buf: [512]u8 = undefined;
+    const dir = paths_mod.configDir(&dir_buf);
+    io_g.cwdMakePath(dir) catch {};
+
+    fillRandomHex(&api_token);
+    api_token_ready = true;
+
+    // Create with mode 0600; chmod again after write in case umask widened it.
+    const file = io_g.createFileAbsolute(tok_path, .{
+        .read = false,
+        .truncate = true,
+        .permissions = std.Io.File.Permissions.fromMode(0o600),
+    }) catch {
+        logs.pushLog("error", "remote", "Failed to persist API token (in-memory only)", true);
+        return;
+    };
+    defer file.close(io_g.io());
+    io_g.writeAll(file, &api_token) catch {
+        logs.pushLog("error", "remote", "Failed to write API token", true);
+        return;
+    };
+    file.setPermissions(io_g.io(), std.Io.File.Permissions.fromMode(0o600)) catch {};
+
+    var msg_buf: [768]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, "API token generated at {s}", .{tok_path}) catch tok_path;
+    logs.pushLog("info", "remote", msg, false);
+}
+
+/// Constant-time byte comparison — always inspects every byte to avoid
+/// leaking which byte mismatched via response timing.
+fn constantTimeEqual(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    var diff: u8 = 0;
+    for (a, b) |x, y| diff |= x ^ y;
+    return diff == 0;
+}
+
+fn extractBearer(request: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, request, '\n');
+    _ = lines.next(); // request line
+    while (lines.next()) |raw_line| {
+        var line = raw_line;
+        if (line.len > 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
+        if (line.len == 0) break; // end of headers
+        const name = "authorization:";
+        if (line.len < name.len) continue;
+        var match = true;
+        var i: usize = 0;
+        while (i < name.len) : (i += 1) {
+            const cc = line[i];
+            const lc: u8 = if (cc >= 'A' and cc <= 'Z') cc + 32 else cc;
+            if (lc != name[i]) { match = false; break; }
+        }
+        if (!match) continue;
+        var value = line[name.len..];
+        while (value.len > 0 and (value[0] == ' ' or value[0] == '\t')) value = value[1..];
+        const prefix = "bearer ";
+        if (value.len <= prefix.len) return null;
+        var bp = true;
+        var j: usize = 0;
+        while (j < prefix.len) : (j += 1) {
+            const cc = value[j];
+            const lc: u8 = if (cc >= 'A' and cc <= 'Z') cc + 32 else cc;
+            if (lc != prefix[j]) { bp = false; break; }
+        }
+        if (!bp) return null;
+        return value[prefix.len..];
+    }
+    return null;
+}
+
+fn sendUnauthorized(stream: std.Io.net.Stream) void {
+    const resp = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 24\r\n\r\n{\"error\":\"unauthorized\"}";
+    _ = io_g.streamWriteAll(stream, resp) catch {};
+}
+
 pub fn start() void {
     if (running) return;
+    loadOrCreateToken();
     running = true;
     server_thread = std.Thread.spawn(.{}, serverLoop, .{}) catch null;
 }
@@ -28,22 +192,22 @@ pub fn isRunning() bool {
 
 fn serverLoop() void {
     const addr = std.Io.net.IpAddress.parseIp4("0.0.0.0", port) catch return;
-    var server = addr.listen(@import("../core/io_global.zig").io(), .{ .reuse_address = true }) catch return;
-    defer server.deinit(@import("../core/io_global.zig").io());
+    var server = addr.listen(io_g.io(), .{ .reuse_address = true }) catch return;
+    defer server.deinit(io_g.io());
 
     std.debug.print("[remote] JSON API listening on http://0.0.0.0:{d}\n", .{port});
     std.debug.print("[remote] Web UI: cd web && zig build dev (http://0.0.0.0:3000)\n", .{});
 
     while (running) {
-        const conn = server.accept(@import("../core/io_global.zig").io()) catch continue;
-        defer conn.close(@import("../core/io_global.zig").io());
+        const conn = server.accept(io_g.io()) catch continue;
+        defer conn.close(io_g.io());
         handleRequest(conn) catch {};
     }
 }
 
 fn handleRequest(stream: std.Io.net.Stream) !void {
     var buf: [4096]u8 = undefined;
-    const n = @import("../core/io_global.zig").streamReadAll(stream, &buf) catch return;
+    const n = io_g.streamReadAll(stream, &buf) catch return;
     if (n == 0) return;
     const request = buf[0..n];
 
@@ -58,13 +222,29 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
     const path = path_parts.next() orelse return;
     const query = path_parts.next() orelse "";
 
+    // /health is the sole unauthenticated endpoint, for liveness probes.
+    if (std.mem.eql(u8, path, "/health")) {
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
+
+    // All other endpoints require Bearer auth.
+    const presented = extractBearer(request) orelse {
+        sendUnauthorized(stream);
+        return;
+    };
+    if (!api_token_ready or !constantTimeEqual(presented, api_token[0..])) {
+        sendUnauthorized(stream);
+        return;
+    }
+
     if (std.mem.eql(u8, path, "/") or std.mem.eql(u8, path, "/index.html")) {
         serveStaticFile(stream, "web/index.html", "text/html");
     } else if (std.mem.startsWith(u8, path, "/api/")) {
         handleApi(stream, path[4..], query);
     } else {
         const resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
-        _ = @import("../core/io_global.zig").streamWriteAll(stream, resp) catch {};
+        _ = io_g.streamWriteAll(stream, resp) catch {};
     }
 }
 
