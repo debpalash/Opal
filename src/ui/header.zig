@@ -160,7 +160,7 @@ pub fn renderHeader() void {
                 } else |_| {}
             }
         }
-        spacerSm();
+        spacerSm(@src());
         if (components.iconButton(@src(), icons.tvg.lucide.@"minus", "Remove screen", false)) {
             if (state.app.players.items.len > 0) {
                 if (state.app.players.pop()) |p| {
@@ -175,7 +175,7 @@ pub fn renderHeader() void {
             }
         }
 
-        spacerSm();
+        spacerSm(@src());
         {
             const ui = @import("ui.zig");
             ui.pollFileOpen();
@@ -184,7 +184,7 @@ pub fn renderHeader() void {
             }
         }
 
-        spacerSm();
+        spacerSm(@src());
         if (components.iconButton(@src(), icons.tvg.lucide.@"save", "Save workspace", state.app.ws_save_open)) {
             state.app.ws_save_open = !state.app.ws_save_open;
             state.app.ws_load_open = false;
@@ -192,7 +192,7 @@ pub fn renderHeader() void {
                 @memset(&state.app.ws_name_input, 0);
             }
         }
-        spacerSm();
+        spacerSm(@src());
         if (components.iconButton(@src(), icons.tvg.lucide.@"upload", "Load workspace", state.app.ws_load_open)) {
             const workspace = @import("workspace.zig");
             workspace.scanWorkspaces();
@@ -227,7 +227,7 @@ pub fn renderHeader() void {
             state.app.seek_sync = !state.app.seek_sync;
             state.markConfigDirty();
         }
-        spacerSm();
+        spacerSm(@src());
         if (components.iconButton(@src(), icons.tvg.lucide.@"cpu", "Hardware decode", state.app.hwdec_enabled)) {
             state.app.hwdec_enabled = !state.app.hwdec_enabled;
             state.markConfigDirty();
@@ -239,7 +239,7 @@ pub fn renderHeader() void {
                 } else |_| {}
             }
         }
-        spacerSm();
+        spacerSm(@src());
         if (components.iconButton(@src(), icons.tvg.lucide.@"eye-off", "Incognito mode", state.app.incognito_mode)) {
             state.app.incognito_mode = !state.app.incognito_mode;
             if (state.app.incognito_mode) {
@@ -260,7 +260,7 @@ pub fn renderHeader() void {
             if (components.iconButton(@src(), icons.tvg.lucide.@"key", "Stream Key (reveal)", HeaderState.stream_key_open)) {
                 HeaderState.stream_key_open = !HeaderState.stream_key_open;
             }
-            spacerSm();
+            spacerSm(@src());
         }
 
         // Drawer toggle.
@@ -273,24 +273,24 @@ pub fn renderHeader() void {
         }
 
         // Cheatsheet / info popover toggle.
-        spacerSm();
+        spacerSm(@src());
         if (components.iconButton(@src(), icons.tvg.lucide.@"info", "Keyboard shortcuts", state.app.cheatsheet_open)) {
             state.app.cheatsheet_open = !state.app.cheatsheet_open;
         }
 
         // Voice / conversation mode.
-        spacerSm();
+        spacerSm(@src());
         renderVoiceButton();
 
         // Theme cycler.
-        spacerSm();
+        spacerSm(@src());
         if (components.iconButton(@src(), icons.tvg.lucide.@"palette", "Cycle theme", false)) {
             theme.cycleTheme();
             state.showToast(theme.presetName(theme.active_preset));
         }
 
         // Settings.
-        spacerSm();
+        spacerSm(@src());
         const settings_active = state.app.drawer_open and state.app.drawer_tab == .Settings;
         if (components.iconButton(@src(), icons.tvg.lucide.@"settings", "Settings", settings_active)) {
             if (settings_active) {
@@ -309,8 +309,11 @@ pub fn renderHeader() void {
 }
 
 /// 8px horizontal gap — between buttons within a single zone.
-fn spacerSm() void {
-    var s = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = theme.spacing.sm, .h = 0 } });
+/// Caller passes @src() so each spacer gets a unique widget id (dvui would
+/// otherwise complain about duplicate IDs since this function is called many
+/// times from one parent).
+fn spacerSm(src: std.builtin.SourceLocation) void {
+    var s = dvui.box(src, .{}, .{ .min_size_content = .{ .w = theme.spacing.sm, .h = 0 } });
     s.deinit();
 }
 

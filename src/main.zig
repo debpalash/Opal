@@ -1145,8 +1145,9 @@ fn renderHudOverlay() void {
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 },
     });
     defer box.deinit();
+    // Inherit font from dvui's current theme (an empty Font{} has no name and
+    // triggers the "Font not in dvui database, using fallback" warning).
     _ = dvui.label(@src(), "{s}", .{txt}, .{
         .color_text = dvui.Color{ .r = 0, .g = 255, .b = 100, .a = 255 },
-        .font = (dvui.Font{}).withSize(11),
     });
 }
