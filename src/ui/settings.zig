@@ -70,7 +70,10 @@ pub fn renderSettingsModal() void {
 /// Two-column layout: left nav (search + vertical tab list) and right
 /// pane (scrollable content, centered at max-width 720 px).
 pub fn renderSettingsContent() void {
-    state.markConfigDirty();
+    // NOTE: Do NOT mark the config dirty here. Doing so unconditionally every
+    // frame rewrites the entire config to SQLite every 2s while Settings is
+    // open. markConfigDirty() is instead called at the specific control sites
+    // below that actually mutate persisted state.
 
     // Outer horizontal split: left nav + right content.
     var outer = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -261,8 +264,9 @@ fn renderRightPane() void {
     }
 
     // ── Footer: auto-save indicator ──
-    // Config is auto-saved on every frame (state.markConfigDirty above), so
-    // a discreet always-visible message is honest. No new state plumbing.
+    // Config is auto-saved when a control mutates state (each control site
+    // calls state.markConfigDirty), so a discreet always-visible message is
+    // honest. No new state plumbing.
     {
         var footer = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
@@ -291,10 +295,6 @@ fn bigTitle(title: []const u8) void {
 
 /// Drawer-hosted AI tab — Voice, ASR, TTS, Language Learning
 pub fn renderAIContent() void {
-    const btn_active = theme.colors.accent;
-    const btn_inactive = dvui.Color{ .r = 35, .g = 35, .b = 48, .a = 255 };
-    const btn_text_active = dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 };
-
     // Header
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -336,31 +336,17 @@ pub fn renderAIContent() void {
     aiSectionWithIcon(icons.tvg.lucide.@"mic", "Voice Backend", "STT + TTS engine for mic / conversation mode", 24, @src());
     {
         const vb = @import("../services/voice_backend.zig");
-        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal, .background = true, .color_fill = card_bg,
-            .color_border = card_border, .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(8),
-            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+        // Calm: spacing-only list, no card chrome. Each backend is a clickable
+        // row; the active one carries a quiet bg_elevated fill + accent text
+        // (the single accent affordance), inactive rows are transparent.
+        var list = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
         });
-        defer card.deinit();
+        defer list.deinit();
 
         for (vb.allKinds(), 0..) |kind, i| {
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = 4000 + i,
-                .expand = .horizontal,
-                .margin = .{ .y = 2 },
-            });
-            defer row.deinit();
-
             const active = kind == vb.active_kind;
-            const dot = if (active) "●" else "○";
-            _ = dvui.label(@src(), "{s}", .{dot}, .{
-                .id_extra = i,
-                .color_text = if (active) theme.colors.accent else muted_text,
-                .min_size_content = .{ .w = 16, .h = 0 },
-                .gravity_y = 0.5,
-            });
 
             const tmp_kind = vb.active_kind;
             vb.active_kind = kind;
@@ -368,12 +354,15 @@ pub fn renderAIContent() void {
             vb.active_kind = tmp_kind;
 
             if (dvui.button(@src(), b.name, .{}, .{
-                .id_extra = i,
-                .color_fill = if (active) btn_active else btn_inactive,
-                .color_text = if (active) btn_text_active else label_text,
-                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-                .corner_radius = dvui.Rect.all(6),
+                .id_extra = 4000 + i,
+                .color_fill = if (active) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_text = if (active) theme.colors.accent else theme.colors.text_secondary,
+                .border = dvui.Rect.all(0),
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+                .corner_radius = theme.dims.rad_sm,
+                .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
                 .expand = .horizontal,
+                .gravity_x = 0.0,
             })) {
                 vb.active_kind = kind;
                 state.showToast("Voice backend changed");
@@ -393,23 +382,21 @@ pub fn renderAIContent() void {
             defer mlx_row.deinit();
 
             if (dep_status.mlx_whisper_model and dep_status.mlx_whisper_cli) {
-                _ = dvui.label(@src(), "✓ Ready", .{}, .{
-                    .color_text = theme.colors.success,
-                    .gravity_y = 0.5,
-                });
+                components.statusPill("Ready", .success);
             } else if (deps.mlx_whisper_downloading) {
                 const status_len = std.mem.indexOfScalar(u8, &deps.mlx_whisper_status, 0) orelse 0;
                 const status_txt = if (status_len > 0) deps.mlx_whisper_status[0..status_len] else "Setting up…";
                 _ = dvui.label(@src(), "{s}", .{status_txt}, .{
-                    .color_text = theme.colors.warning,
+                    .color_text = theme.colors.semantic_warn,
                     .gravity_y = 0.5,
                 });
             } else {
-                if (dvui.button(@src(), "↓ Setup (~1.6GB)", .{}, .{
+                if (dvui.button(@src(), "Set up (~1.6GB)", .{}, .{
                     .color_fill = theme.colors.accent,
-                    .color_text = dvui.Color.white,
-                    .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-                    .corner_radius = dvui.Rect.all(6),
+                    .color_text = theme.colors.text_on_accent,
+                    .border = dvui.Rect.all(0),
+                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                    .corner_radius = theme.dims.rad_md,
                 })) {
                     deps.fetchMlxWhisperModelAsync();
                     state.showToast("Setting up MLX Whisper (venv + model)…");
@@ -424,38 +411,40 @@ pub fn renderAIContent() void {
         const vb = @import("../services/voice_backend.zig");
         if (deps.check().sherpa_kokoro_model) {
             aiSectionWithIcon(icons.tvg.lucide.@"audio-lines", "Kokoro Voice", "Pick a speaker ID from the Kokoro pack (0–53)", 18, @src());
+            // Calm: spacing-only row, no card chrome. −/+ steppers are neutral
+            // bg_elevated fills; Preview is the single accent affordance.
             var kcard = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal, .background = true, .color_fill = card_bg,
-                .color_border = card_border, .border = dvui.Rect.all(1),
-                .corner_radius = dvui.Rect.all(8),
-                .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
-                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+                .expand = .horizontal,
+                .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.sm },
             });
             defer kcard.deinit();
 
             var label_buf: [32]u8 = undefined;
             const lbl = std.fmt.bufPrint(&label_buf, "sid = {d}", .{vb.kokoro_sid}) catch "sid = ?";
             _ = dvui.label(@src(), "{s}", .{lbl}, .{
-                .color_text = theme.colors.accent,
+                .color_text = theme.colors.text_primary,
                 .min_size_content = .{ .w = 80, .h = 0 },
                 .gravity_y = 0.5,
             });
 
             if (dvui.button(@src(), "−", .{}, .{
-                .color_fill = btn_inactive, .color_text = label_text,
-                .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-                .corner_radius = dvui.Rect.all(4), .margin = .{ .w = 4 }, .gravity_y = 0.5,
-            })) { if (vb.kokoro_sid > 0) vb.kokoro_sid -= 1; }
+                .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary,
+                .border = dvui.Rect.all(0),
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                .corner_radius = theme.dims.rad_sm, .margin = .{ .w = theme.spacing.xs }, .gravity_y = 0.5,
+            })) { if (vb.kokoro_sid > 0) { vb.kokoro_sid -= 1; state.markConfigDirty(); } }
             if (dvui.button(@src(), "+", .{}, .{
-                .color_fill = btn_inactive, .color_text = label_text,
-                .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-                .corner_radius = dvui.Rect.all(4), .margin = .{ .w = 4 }, .gravity_y = 0.5,
-            })) { if (vb.kokoro_sid < 53) vb.kokoro_sid += 1; }
+                .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary,
+                .border = dvui.Rect.all(0),
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                .corner_radius = theme.dims.rad_sm, .margin = .{ .w = theme.spacing.xs }, .gravity_y = 0.5,
+            })) { if (vb.kokoro_sid < 53) { vb.kokoro_sid += 1; state.markConfigDirty(); } }
             { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
             if (dvui.button(@src(), "Preview", .{}, .{
-                .color_fill = btn_active, .color_text = btn_text_active,
-                .padding = .{ .x = 14, .y = 4, .w = 14, .h = 4 },
-                .corner_radius = dvui.Rect.all(4), .gravity_y = 0.5,
+                .color_fill = theme.colors.accent, .color_text = theme.colors.text_on_accent,
+                .border = dvui.Rect.all(0),
+                .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.xs, .w = theme.spacing.lg, .h = theme.spacing.xs },
+                .corner_radius = theme.dims.rad_md, .gravity_y = 0.5,
             })) {
                 const b = vb.active();
                 b.speak("Opal voice preview.");
@@ -466,125 +455,49 @@ pub fn renderAIContent() void {
     // ── Language Learning ──
     aiSectionWithIcon(icons.tvg.lucide.@"languages", "Language Learning", "ASR, dubbing, and translation for video", 60, @src());
 
-    settingRow("Language Learning Mode", 60, @src());
+    // Language Learning Mode toggle — flips a bool then runs onToggle.
     {
-        const label = if (state.app.lang_learn_enabled) "[ON] Enabled" else "[OFF] Disabled";
-        if (dvui.button(@src(), label, .{}, .{
-            .color_fill = if (state.app.lang_learn_enabled) theme.colors.accent_hover else dvui.Color{ .r=60, .g=56, .b=54, .a=200 },
-            .color_text = if (state.app.lang_learn_enabled) theme.colors.bg_header else theme.colors.text_muted,
-            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-        })) {
-            state.app.lang_learn_enabled = !state.app.lang_learn_enabled;
+        const before = state.app.lang_learn_enabled;
+        components.toggleRow(@src(), "Language Learning Mode", "ASR + dubbing + translation while watching", &state.app.lang_learn_enabled);
+        if (state.app.lang_learn_enabled != before) {
             const lang_learn = @import("../services/lang_learn.zig");
             lang_learn.onToggle(state.app.lang_learn_enabled);
+            state.markConfigDirty();
         }
     }
 
     settingRow("Translate To", 64, @src());
+    langSegment(&state.app.translate_lang_buf, &state.app.translate_lang_len, 200);
+
+    // Translation toggle — pure bool flip.
     {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 24 },
-        });
-        defer row.deinit();
-        const lang_codes = [_][]const u8{ "en", "es", "fr", "de", "it", "pt", "ru", "ja", "ko", "zh-CN", "ar", "hi", "tr", "vi" };
-        const lang_labels = [_][]const u8{ "EN", "ES", "FR", "DE", "IT", "PT", "RU", "JA", "KO", "ZH", "AR", "HI", "TR", "VI" };
-        const current_tl = state.app.translate_lang_buf[0..state.app.translate_lang_len];
-        for (lang_codes, 0..) |code, idx| {
-            const is_active = std.mem.eql(u8, current_tl, code);
-            if (dvui.button(@src(), lang_labels[idx], .{}, .{
-                .id_extra = idx + 200,
-                .color_fill = if (is_active) theme.colors.accent_hover else dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
-                .color_text = if (is_active) theme.colors.bg_header else theme.colors.text_muted,
-                .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
-                .padding = .{ .x = 5, .y = 3, .w = 5, .h = 3 },
-            })) {
-                @memcpy(state.app.translate_lang_buf[0..code.len], code);
-                state.app.translate_lang_len = code.len;
-            }
-        }
+        const before = state.app.translate_enabled;
+        components.toggleRow(@src(), "Translation", "Enable subtitle translation", &state.app.translate_enabled);
+        if (state.app.translate_enabled != before) state.markConfigDirty();
     }
 
-    settingRow("Translation", 66, @src());
+    // ASR toggle — pure bool flip.
     {
-        const label = if (state.app.translate_enabled) "[ON] Enabled" else "[OFF] Disabled";
-        if (dvui.button(@src(), label, .{}, .{
-            .color_fill = if (state.app.translate_enabled) theme.colors.accent_hover else dvui.Color{ .r=60, .g=56, .b=54, .a=200 },
-            .color_text = if (state.app.translate_enabled) theme.colors.bg_header else theme.colors.text_muted,
-            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-        })) {
-            state.app.translate_enabled = !state.app.translate_enabled;
-        }
+        const before = state.app.asr_enabled;
+        components.toggleRow(@src(), "Speech Recognition (ASR)", "Transcribe audio when no subtitles (Cohere 2B)", &state.app.asr_enabled);
+        if (state.app.asr_enabled != before) state.markConfigDirty();
     }
 
-    settingRow("Speech Recognition (ASR)", 67, @src());
+    // Audio Dubbing toggle — bool flip + reset dub hash on enable.
     {
-        const label = if (state.app.asr_enabled) "[ON] Enabled" else "[OFF] Disabled";
-        if (dvui.button(@src(), label, .{}, .{
-            .color_fill = if (state.app.asr_enabled) theme.colors.accent_hover else dvui.Color{ .r=60, .g=56, .b=54, .a=200 },
-            .color_text = if (state.app.asr_enabled) theme.colors.bg_header else theme.colors.text_muted,
-            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-        })) {
-            state.app.asr_enabled = !state.app.asr_enabled;
-        }
-    }
-
-    settingRow("Audio Dubbing", 68, @src());
-    {
-        const label = if (state.app.dubbing_enabled) "[ON] Enabled" else "[OFF] Disabled";
-        if (dvui.button(@src(), label, .{}, .{
-            .color_fill = if (state.app.dubbing_enabled) dvui.Color{ .r=180, .g=120, .b=40, .a=230 } else dvui.Color{ .r=60, .g=56, .b=54, .a=200 },
-            .color_text = if (state.app.dubbing_enabled) theme.colors.bg_header else theme.colors.text_muted,
-            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-        })) {
-            state.app.dubbing_enabled = !state.app.dubbing_enabled;
+        const before = state.app.dubbing_enabled;
+        components.toggleRow(@src(), "Audio Dubbing", "Speak translated subtitles via TTS", &state.app.dubbing_enabled);
+        if (state.app.dubbing_enabled != before) {
             if (state.app.dubbing_enabled) state.app.dub_last_hash = 0;
+            state.markConfigDirty();
         }
     }
 
     settingRow("TTS Voice", 61, @src());
-    {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 24 },
-        });
-        defer row.deinit();
-        const voices = [_][]const u8{ "Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo" };
-        for (voices, 0..) |voice, idx| {
-            const current = state.app.tts_voice_buf[0..state.app.tts_voice_len];
-            const is_active = std.mem.eql(u8, current, voice);
-            if (dvui.button(@src(), voice, .{}, .{
-                .id_extra = idx,
-                .color_fill = if (is_active) theme.colors.accent_hover else dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
-                .color_text = if (is_active) theme.colors.bg_header else theme.colors.text_muted,
-                .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
-                .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
-            })) {
-                @memcpy(state.app.tts_voice_buf[0..voice.len], voice);
-                state.app.tts_voice_len = voice.len;
-            }
-        }
-    }
+    ttsVoiceSegment(0);
 
     settingRow("Speech Speed", 62, @src());
-    {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 24 },
-        });
-        defer row.deinit();
-        const speeds = [_]f32{ 0.5, 0.75, 1.0, 1.25, 1.5 };
-        const speed_labels = [_][]const u8{ "0.5x", "0.75x", "1.0x", "1.25x", "1.5x" };
-        for (speeds, 0..) |spd, idx| {
-            const is_active = @abs(state.app.tts_speed - spd) < 0.05;
-            if (dvui.button(@src(), speed_labels[idx], .{}, .{
-                .id_extra = idx,
-                .color_fill = if (is_active) theme.colors.accent_hover else dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
-                .color_text = if (is_active) theme.colors.bg_header else theme.colors.text_muted,
-                .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
-                .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
-            })) {
-                state.app.tts_speed = spd;
-            }
-        }
-    }
+    ttsSpeedSegment(0);
 
     settingRow("TTS Server", 63, @src());
     {
@@ -593,28 +506,32 @@ pub fn renderAIContent() void {
         });
         defer row.deinit();
         if (state.app.tts_server_ok) {
-            _ = dvui.label(@src(), "[OK] Running", .{}, .{ .color_text = theme.colors.success });
+            components.statusPill("Running", .success);
         } else {
-            _ = dvui.label(@src(), "[--] Not running", .{}, .{ .color_text = theme.colors.text_muted });
+            components.statusPill("Not running", .info);
         }
         { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
         const lang_learn = @import("../services/lang_learn.zig");
         if (!state.app.tts_server_ok) {
             if (dvui.button(@src(), "Start Server", .{}, .{
-                .color_fill = theme.colors.accent_hover,
-                .color_text = theme.colors.bg_header,
-                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                .color_fill = theme.colors.accent,
+                .color_text = theme.colors.text_on_accent,
+                .border = dvui.Rect.all(0),
+                .corner_radius = theme.dims.rad_md,
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             })) { lang_learn.startServer(); }
         } else {
             if (dvui.button(@src(), "Stop Server", .{}, .{
-                .color_fill = dvui.Color{ .r=60, .g=30, .b=30, .a=200 },
+                .color_fill = theme.colors.bg_elevated,
                 .color_text = theme.colors.danger,
-                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                .border = dvui.Rect.all(0),
+                .corner_radius = theme.dims.rad_md,
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             })) { lang_learn.stopServer(); }
         }
     }
     _ = dvui.label(@src(), "KittenTTS (80MB) | Cohere ASR (2B) | Google Translate", .{}, .{
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_tertiary,
     });
 
     // ── Models Management ──
@@ -638,25 +555,19 @@ pub fn renderAIContent() void {
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = 5005,
                 .expand = .horizontal,
-                .background = true,
-                .color_fill = card_bg,
-                .color_border = card_border,
-                .border = dvui.Rect.all(1),
-                .corner_radius = dvui.Rect.all(6),
-                .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
-                .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+                .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.sm },
             });
             defer row.deinit();
 
             dvui.icon(@src(), "", icons.tvg.lucide.@"cpu", .{}, .{
                 .id_extra = 5015,
-                .color_text = if (mlx_installed) theme.colors.accent else muted_text,
+                .color_text = if (mlx_installed) theme.colors.accent else mutedText(),
                 .gravity_y = 0.5,
-                .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
             });
             _ = dvui.label(@src(), "MLX Whisper (1.6GB)", .{}, .{
                 .id_extra = 5025,
-                .color_text = label_text,
+                .color_text = labelText(),
                 .gravity_y = 0.5,
             });
             { var sp = dvui.box(@src(), .{}, .{ .id_extra = 5035, .expand = .horizontal }); sp.deinit(); }
@@ -664,23 +575,15 @@ pub fn renderAIContent() void {
             if (deps.mlx_whisper_downloading) {
                 const slen = std.mem.indexOfScalar(u8, &deps.mlx_whisper_status, 0) orelse 0;
                 const stxt = if (slen > 0) deps.mlx_whisper_status[0..slen] else "Setting up…";
-                _ = dvui.label(@src(), "⟳ {s}", .{stxt}, .{
+                _ = dvui.label(@src(), "{s}", .{stxt}, .{
                     .id_extra = 5045,
-                    .color_text = theme.colors.warning,
+                    .color_text = theme.colors.semantic_warn,
                     .gravity_y = 0.5,
                 });
             } else if (mlx_installed) {
-                _ = dvui.label(@src(), "✓ Installed", .{}, .{
-                    .id_extra = 5045,
-                    .color_text = theme.colors.success,
-                    .gravity_y = 0.5,
-                });
+                components.statusPill("Installed", .success);
             } else {
-                _ = dvui.label(@src(), "○ Not installed", .{}, .{
-                    .id_extra = 5045,
-                    .color_text = muted_text,
-                    .gravity_y = 0.5,
-                });
+                components.statusPill("Not installed", .info);
             }
         }
     }
@@ -695,23 +598,12 @@ pub fn renderAIContent() void {
 // (theme.colors.text_primary, bg_surface, border_subtle, …) and / or
 // delegate to components.zig.
 
-// Token-aligned constants used by the per-tab bodies. Originally these
-// were hand-mixed RGB values; the new values are tuned to match the
-// canonical midnight palette `theme.colors.bg_surface`,
-// `border_subtle`, `text_secondary`, `text_primary` so the surface
-// feels coherent with the rest of the new theming work. The constants
-// remain compile-time-known (theme.colors is runtime-mutable) — when
-// the theme integrator wires `theme.spacing/radius/font_size`, these
-// aliases can be deleted in favour of direct token reads.
-//
-// TODO: needs theme.colors.bg_surface (was hand-rgb)
-const card_bg     = dvui.Color{ .r = 21, .g = 21, .b = 28,  .a = 255 };
-// TODO: needs theme.colors.border_subtle
-const card_border = dvui.Color{ .r = 31, .g = 31, .b = 41,  .a = 255 };
-// TODO: needs theme.colors.text_secondary
-const muted_text  = dvui.Color{ .r = 168, .g = 168, .b = 178, .a = 255 };
-// TODO: needs theme.colors.text_primary
-const label_text  = dvui.Color{ .r = 250, .g = 250, .b = 250, .a = 255 };
+// Token accessors — runtime-resolved from the active theme so the surface
+// stays coherent with the rest of the calmed UI. Card chrome is gone
+// (sections are defined by whitespace + sectionHeader); these two map the
+// former muted/label colors onto the canonical text ramp.
+inline fn mutedText() dvui.Color { return theme.colors.text_secondary; }
+inline fn labelText() dvui.Color { return theme.colors.text_primary; }
 
 /// Section header used inside a tab content pane.  Wraps
 /// `components.sectionHeader` (uppercase, tracked-out, text_tertiary)
@@ -748,418 +640,317 @@ fn settingRow(comptime label_text_str: []const u8, id_extra: usize, src: std.bui
 }
 
 fn aiSectionWithIcon(icon_data: anytype, comptime title: []const u8, comptime subtitle: []const u8, id_extra: usize, src: std.builtin.SourceLocation) void {
-    var hdr = dvui.box(src, .{ .dir = .horizontal }, .{
+    // Calm: drop the left-bar accent banner + icon box. A section is just an
+    // uppercase header + a quiet subtitle, separated by whitespace.
+    _ = icon_data;
+    var wrap = dvui.box(src, .{ .dir = .vertical }, .{
         .id_extra = id_extra + 900,
         .expand = .horizontal,
-        .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.accent,
-        .border = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
-        .corner_radius = .{ .x = 4, .y = 0, .w = 0, .h = 4 },
-        .padding = .{ .x = 10, .y = 8, .w = 8, .h = 8 },
-        .margin = .{ .x = 0, .y = 10, .w = 0, .h = 4 },
+        .margin = .{ .x = 0, .y = theme.spacing.xl, .w = 0, .h = 0 },
     });
-    defer hdr.deinit();
+    defer wrap.deinit();
 
-    dvui.icon(src, "", icon_data, .{}, .{
-        .id_extra = id_extra + 950,
-        .color_text = theme.colors.accent,
-        .gravity_y = 0.5,
-        .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-    });
-
-    var txt_col = dvui.box(src, .{ .dir = .vertical }, .{ .id_extra = id_extra + 960 });
-    defer txt_col.deinit();
-    _ = dvui.label(src, title, .{}, .{ .id_extra = id_extra, .color_text = theme.colors.text_main });
+    components.sectionHeader(title);
     if (subtitle.len > 0) {
-        _ = dvui.label(src, subtitle, .{}, .{ .id_extra = id_extra + 1, .color_text = theme.colors.text_dim });
+        _ = dvui.label(src, subtitle, .{}, .{
+            .id_extra = id_extra + 1,
+            .color_text = theme.colors.text_tertiary,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
+        });
     }
 }
 
 fn modelRow(comptime name: []const u8, icon_data: anytype, installed: bool, downloading: bool, id_extra: usize, src: std.builtin.SourceLocation) void {
+    // Calm: a spacing-only row (no card fill / border / radius). The icon
+    // tint + a text-only status pill carry the state.
     var row = dvui.box(src, .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
         .expand = .horizontal,
-        .background = true,
-        .color_fill = card_bg,
-        .color_border = card_border,
-        .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(6),
-        .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
-        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+        .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.sm },
     });
     defer row.deinit();
 
     // Icon
     dvui.icon(src, "", icon_data, .{}, .{
         .id_extra = id_extra + 10,
-        .color_text = if (installed) theme.colors.accent else muted_text,
+        .color_text = if (installed) theme.colors.accent else mutedText(),
         .gravity_y = 0.5,
-        .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
     });
     // Name
     _ = dvui.label(src, name, .{}, .{
         .id_extra = id_extra + 20,
-        .color_text = label_text,
+        .color_text = labelText(),
         .gravity_y = 0.5,
     });
     // Spacer
     { var sp = dvui.box(src, .{}, .{ .id_extra = id_extra + 30, .expand = .horizontal }); sp.deinit(); }
-    // Status badge
+    // Status — text-only pill.
     if (downloading) {
-        _ = dvui.label(src, "⟳ Downloading…", .{}, .{
-            .id_extra = id_extra + 40,
-            .color_text = theme.colors.warning,
-            .gravity_y = 0.5,
-        });
+        components.statusPill("Downloading", .warn);
     } else if (installed) {
-        _ = dvui.label(src, "✓ Installed", .{}, .{
-            .id_extra = id_extra + 40,
-            .color_text = theme.colors.success,
-            .gravity_y = 0.5,
-        });
+        components.statusPill("Installed", .success);
     } else {
-        _ = dvui.label(src, "○ Not installed", .{}, .{
-            .id_extra = id_extra + 40,
-            .color_text = muted_text,
-            .gravity_y = 0.5,
-        });
+        components.statusPill("Not installed", .info);
+    }
+}
+
+// ── Shared selects (used by both the AI drawer tab and the Language tab) ──
+// All preserve their exact persistence behavior — they write the same buffers
+// / fields and call markConfigDirty on change, just through the calm
+// components.segment() instead of a row of filled pills.
+
+const translate_codes = [_][]const u8{ "en", "es", "fr", "de", "it", "pt", "ru", "ja", "ko", "zh-CN", "ar", "hi", "tr", "vi" };
+const translate_labels = [_][]const u8{ "EN", "ES", "FR", "DE", "IT", "PT", "RU", "JA", "KO", "ZH", "AR", "HI", "TR", "VI" };
+const tts_voices = [_][]const u8{ "Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo" };
+const tts_speeds = [_]f32{ 0.5, 0.75, 1.0, 1.25, 1.5 };
+const tts_speed_labels = [_][]const u8{ "0.5x", "0.75x", "1.0x", "1.25x", "1.5x" };
+
+/// Translate-to language picker — writes the code into `buf`/`len`.
+fn langSegment(buf: []u8, len: *usize, id_base: usize) void {
+    _ = id_base;
+    const current = buf[0..len.*];
+    var sel: usize = 0;
+    for (translate_codes, 0..) |code, idx| {
+        if (std.mem.eql(u8, current, code)) { sel = idx; break; }
+    }
+    if (components.segment(@src(), &translate_labels, sel)) |clicked| {
+        const code = translate_codes[clicked];
+        @memcpy(buf[0..code.len], code);
+        len.* = code.len;
+        state.markConfigDirty();
+    }
+}
+
+/// TTS voice picker — writes the voice name into tts_voice_buf/len.
+fn ttsVoiceSegment(id_base: usize) void {
+    _ = id_base;
+    const current = state.app.tts_voice_buf[0..state.app.tts_voice_len];
+    var sel: usize = 0;
+    for (tts_voices, 0..) |voice, idx| {
+        if (std.mem.eql(u8, current, voice)) { sel = idx; break; }
+    }
+    if (components.segment(@src(), &tts_voices, sel)) |clicked| {
+        const voice = tts_voices[clicked];
+        @memcpy(state.app.tts_voice_buf[0..voice.len], voice);
+        state.app.tts_voice_len = voice.len;
+        state.markConfigDirty();
+    }
+}
+
+/// TTS speech-speed picker — writes the float into tts_speed.
+fn ttsSpeedSegment(id_base: usize) void {
+    _ = id_base;
+    var sel: usize = 0;
+    for (tts_speeds, 0..) |spd, idx| {
+        if (@abs(state.app.tts_speed - spd) < 0.05) { sel = idx; break; }
+    }
+    if (components.segment(@src(), &tts_speed_labels, sel)) |clicked| {
+        state.app.tts_speed = tts_speeds[clicked];
+        state.markConfigDirty();
     }
 }
 
 fn renderGeneralTab() void {
-    // ── Interface Card ──
+    // ── Interface ── (whitespace-separated, no card chrome)
     sectionHeader("Interface", "Customize how ZigZag looks and feels", 10, @src());
-    {
-        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal,
-            .background = true,
-            .color_fill = card_bg,
-            .color_border = card_border,
-            .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(8),
-            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
-        });
-        defer card.deinit();
-        
-        // UI Scale
-        _ = dvui.label(@src(), "UI Scale", .{}, .{ .color_text = muted_text, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 } });
-        {
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal,
-            });
-            defer row.deinit();
-            
-            const scales = [_]f32{ 1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 2.0 };
-            for (scales, 0..) |s, idx| {
-                var lbl: [8]u8 = undefined;
-                const txt = std.fmt.bufPrintZ(&lbl, "{d:.1}x", .{s}) catch "?";
-                const is_active = @abs(state.app.ui_scale - s) < 0.05;
-                if (dvui.button(@src(), txt, .{}, .{
-                    .id_extra = idx,
-                    .color_fill = if (is_active) theme.colors.accent else dvui.Color{ .r = 35, .g = 35, .b = 48, .a = 255 },
-                    .color_text = if (is_active) dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 } else muted_text,
-                    .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-                    .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
-                    .corner_radius = dvui.Rect.all(6),
-                })) {
-                    state.app.ui_scale = s;
-                }
-            }
-        }
-        
-        // Separator
-        components.divider();
 
-        // Grid Layout
-        _ = dvui.label(@src(), "Grid Layout", .{}, .{ .id_extra = 11, .color_text = muted_text, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 } });
-        {
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal,
-            });
-            defer row.deinit();
-            
-            const modes = [_]state.GridMode{ .auto, .cols_1, .cols_2, .cols_3, .cols_4 };
-            const mode_names = [_][]const u8{ "Auto", "1 Col", "2 Col", "3 Col", "4 Col" };
-            for (modes, 0..) |m, idx| {
-                const is_active = state.app.grid_mode == m;
-                if (dvui.button(@src(), mode_names[idx], .{}, .{
-                    .id_extra = idx,
-                    .color_fill = if (is_active) theme.colors.accent else dvui.Color{ .r = 35, .g = 35, .b = 48, .a = 255 },
-                    .color_text = if (is_active) dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 } else muted_text,
-                    .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-                    .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
-                    .corner_radius = dvui.Rect.all(6),
-                })) {
-                    state.app.grid_mode = m;
-                }
-            }
+    // UI Scale — short ramp via segment.
+    settingRow("UI Scale", 100, @src());
+    {
+        const scales = [_]f32{ 1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 2.0 };
+        const scale_labels = [_][]const u8{ "1.0x", "1.1x", "1.2x", "1.3x", "1.5x", "1.7x", "2.0x" };
+        var sel: usize = 0;
+        for (scales, 0..) |s, idx| {
+            if (@abs(state.app.ui_scale - s) < 0.05) { sel = idx; break; }
         }
-        
-        // Separator
-        components.divider();
-        
-        // Theme Picker
-        _ = dvui.label(@src(), "Theme", .{}, .{ .id_extra = 1500, .color_text = muted_text, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 } });
-        {
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal,
-            });
-            defer row.deinit();
-            
-            const presets = [_]theme.ThemePreset{ .midnight, .abyss, .phantom, .nord, .solarized, .rose, .ember };
-            for (presets, 0..) |preset, idx| {
-                const is_active = theme.active_preset == preset;
-                const pc = theme.getThemeColors(preset);
-                const name = theme.presetName(preset);
-                
-                // Button with accent color preview
-                if (dvui.button(@src(), name, .{}, .{
-                    .id_extra = idx + 1510,
-                    .color_fill = if (is_active) pc.accent else dvui.Color{ .r = 35, .g = 35, .b = 48, .a = 255 },
-                    .color_text = if (is_active) pc.bg_app else pc.accent,
-                    .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-                    .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
-                    .corner_radius = dvui.Rect.all(6),
-                })) {
-                    theme.setPreset(preset);
-                    state.showToast(name);
-                }
-            }
+        if (components.segment(@src(), &scale_labels, sel)) |clicked| {
+            state.app.ui_scale = scales[clicked];
+            state.markConfigDirty();
         }
     }
-    
-    // ── Behavior Card ──
+
+    // Grid Layout — short ramp via segment.
+    settingRow("Grid Layout", 11, @src());
+    {
+        const modes = [_]state.GridMode{ .auto, .cols_1, .cols_2, .cols_3, .cols_4 };
+        const mode_names = [_][]const u8{ "Auto", "1 Col", "2 Col", "3 Col", "4 Col" };
+        var sel: usize = 0;
+        for (modes, 0..) |m, idx| {
+            if (state.app.grid_mode == m) { sel = idx; break; }
+        }
+        if (components.segment(@src(), &mode_names, sel)) |clicked| {
+            state.app.grid_mode = modes[clicked];
+            state.markConfigDirty();
+        }
+    }
+
+    // Theme — segment of preset names (no per-preset accent swatches; one
+    // accent, carried by the active segment's calm fill).
+    settingRow("Theme", 1500, @src());
+    {
+        const presets = [_]theme.ThemePreset{ .midnight, .abyss, .phantom, .nord, .solarized, .rose, .ember };
+        const preset_names = [_][]const u8{ "Midnight", "Abyss", "Phantom", "Nord", "Solarized", "Rosé", "Ember" };
+        var sel: usize = 0;
+        for (presets, 0..) |preset, idx| {
+            if (theme.active_preset == preset) { sel = idx; break; }
+        }
+        if (components.segment(@src(), &preset_names, sel)) |clicked| {
+            theme.setPreset(presets[clicked]);
+            state.showToast(theme.presetName(presets[clicked]));
+            state.markConfigDirty();
+        }
+    }
+
+    // ── Behavior ──
     sectionHeader("Behavior", "Toggles that control app behavior", 12, @src());
-    {
-        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal,
-            .background = true,
-            .color_fill = card_bg,
-            .color_border = card_border,
-            .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(8),
-            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
-        });
-        defer card.deinit();
-        
-        // Seek Sync toggle — pure bool flip, no side effects.
-        components.toggleRow(@src(), "Seek Sync", "Sync all player positions", &state.app.seek_sync);
 
-        // NSFW Filter toggle — pure bool flip.
-        components.toggleRow(@src(), "NSFW Filter", "Hide adult content in search", &state.app.nsfw_filter_enabled);
-    }
-    
-    // ── TMDB API Card ──
-    sectionHeader("TMDB Integration", "Connect to The Movie Database for rich metadata", 14, @src());
+    // Seek Sync toggle — pure bool flip, no side effects.
     {
-        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal,
-            .background = true,
-            .color_fill = card_bg,
-            .color_border = card_border,
-            .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(8),
-            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
-        });
-        defer card.deinit();
-        
-        _ = dvui.label(@src(), "API Key", .{}, .{ .id_extra = 140, .color_text = muted_text, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 } });
+        const before = state.app.seek_sync;
+        components.toggleRow(@src(), "Seek Sync", "Sync all player positions", &state.app.seek_sync);
+        if (state.app.seek_sync != before) state.markConfigDirty();
+    }
+
+    // NSFW Filter toggle — pure bool flip.
+    {
+        const before = state.app.nsfw_filter_enabled;
+        components.toggleRow(@src(), "NSFW Filter", "Hide adult content in search", &state.app.nsfw_filter_enabled);
+        if (state.app.nsfw_filter_enabled != before) state.markConfigDirty();
+    }
+
+    // ── TMDB Integration ──
+    sectionHeader("TMDB Integration", "Connect to The Movie Database for rich metadata", 14, @src());
+
+    settingRow("API Key", 140, @src());
+    {
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.tmdb.api_key } }, .{
             .id_extra = 142,
             .expand = .horizontal,
             .min_size_content = .{ .w = 300, .h = 20 },
-            .color_fill = dvui.Color{ .r = 15, .g = 15, .b = 22, .a = 255 },
-            .color_border = card_border,
-            .color_text = label_text,
+            .color_fill = theme.colors.bg_input,
+            .color_border = theme.colors.border_input,
+            .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(6),
+            .corner_radius = theme.dims.rad_sm,
         });
+        const tmdb_changed = te.text_changed;
         te.deinit();
         state.app.tmdb.api_key_len = std.mem.indexOfScalar(u8, &state.app.tmdb.api_key, 0) orelse 0;
+        if (tmdb_changed) state.markConfigDirty();
         _ = dvui.label(@src(), "Free key from themoviedb.org/settings/api", .{}, .{
             .id_extra = 143,
-            .color_text = dvui.Color{ .r = 80, .g = 140, .b = 200, .a = 200 },
+            .color_text = theme.colors.text_tertiary,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
         });
     }
 }
 
 fn renderPlaybackTab() void {
+    // One accent, token fills. `btn_*` kept for the few primary actions that
+    // remain in this tab (download / install). Inactive segments are handled
+    // by components.segment() now.
     const btn_active = theme.colors.accent;
-    const btn_inactive = dvui.Color{ .r = 35, .g = 35, .b = 48, .a = 255 };
-    const btn_text_active = dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 };
+    const btn_inactive = theme.colors.bg_elevated;
+    const btn_text_active = theme.colors.text_on_accent;
 
-    // ── Video Processing Card ──
+    // ── Video Processing ──
     sectionHeader("Video Processing", "GPU acceleration and image quality", 20, @src());
+
+    // HW Decode — neutral toggle row; applies mpv option on change.
     {
-        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal, .background = true, .color_fill = card_bg,
-            .color_border = card_border, .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(8),
-            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
-        });
-        defer card.deinit();
-        
-        // HW Decode toggle row
-        {
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-            defer row.deinit();
-            _ = dvui.label(@src(), "Hardware Decoding", .{}, .{ .color_text = label_text, .gravity_y = 0.5 });
-            { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
-            const hw_l = if (state.app.hwdec_enabled) "ON" else "OFF";
-            if (dvui.button(@src(), hw_l, .{}, .{
-                .color_fill = if (state.app.hwdec_enabled) btn_active else dvui.Color{ .r = 55, .g = 45, .b = 45, .a = 220 },
-                .color_text = if (state.app.hwdec_enabled) btn_text_active else dvui.Color{ .r = 160, .g = 100, .b = 100, .a = 255 },
-                .padding = .{ .x = 14, .y = 5, .w = 14, .h = 5 }, .corner_radius = dvui.Rect.all(12),
-            })) {
-                state.app.hwdec_enabled = !state.app.hwdec_enabled;
-                for (state.app.players.items) |p| {
-                    _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "hwdec", if (state.app.hwdec_enabled) "auto" else "no");
-                }
+        const before = state.app.hwdec_enabled;
+        components.toggleRow(@src(), "Hardware Decoding", "GPU video decode (auto)", &state.app.hwdec_enabled);
+        if (state.app.hwdec_enabled != before) {
+            for (state.app.players.items) |p| {
+                _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "hwdec", if (state.app.hwdec_enabled) "auto" else "no");
             }
-        }
-        components.divider();
-        // Deband toggle row
-        {
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-            defer row.deinit();
-            _ = dvui.label(@src(), "Deband Filter", .{}, .{ .color_text = label_text, .gravity_y = 0.5 });
-            { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
-            const db_l = if (state.app.deband_enabled) "ON" else "OFF";
-            if (dvui.button(@src(), db_l, .{}, .{
-                .color_fill = if (state.app.deband_enabled) btn_active else dvui.Color{ .r = 55, .g = 45, .b = 45, .a = 220 },
-                .color_text = if (state.app.deband_enabled) btn_text_active else dvui.Color{ .r = 160, .g = 100, .b = 100, .a = 255 },
-                .padding = .{ .x = 14, .y = 5, .w = 14, .h = 5 }, .corner_radius = dvui.Rect.all(12),
-            })) {
-                state.app.deband_enabled = !state.app.deband_enabled;
-                for (state.app.players.items) |p| {
-                    _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "deband", if (state.app.deband_enabled) "yes" else "no");
-                }
-            }
-        }
-        components.divider();
-        // Auto-Advance toggle row — pure bool flip, no side effects.
-        components.toggleRow(@src(), "Auto-Advance", "Play next on end", &state.app.auto_advance);
-        components.divider();
-        // Scaler selector
-        _ = dvui.label(@src(), "Video Scaler", .{}, .{ .id_extra = 250, .color_text = muted_text, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 } });
-        {
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-            defer row.deinit();
-            const sn = [_][]const u8{ "EWA Lanczos (HQ)", "Bilinear (Fast)", "Spline36" };
-            const sv = [_][]const u8{ "ewa_lanczossharp", "bilinear", "spline36" };
-            for (sn, 0..) |name, idx| {
-                const is_a = state.app.video_scaler == @as(u8, @intCast(idx));
-                if (dvui.button(@src(), name, .{}, .{
-                    .id_extra = idx, .color_fill = if (is_a) btn_active else btn_inactive,
-                    .color_text = if (is_a) btn_text_active else muted_text,
-                    .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-                    .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 }, .corner_radius = dvui.Rect.all(6),
-                })) {
-                    state.app.video_scaler = @intCast(idx);
-                    for (state.app.players.items) |p| { _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "scale", @ptrCast(sv[idx].ptr)); }
-                }
-            }
+            state.markConfigDirty();
         }
     }
-    
-    // ── Audio Card ──
+
+    // Deband — neutral toggle row; applies mpv option on change.
+    {
+        const before = state.app.deband_enabled;
+        components.toggleRow(@src(), "Deband Filter", "Smooth color banding", &state.app.deband_enabled);
+        if (state.app.deband_enabled != before) {
+            for (state.app.players.items) |p| {
+                _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "deband", if (state.app.deband_enabled) "yes" else "no");
+            }
+            state.markConfigDirty();
+        }
+    }
+
+    // Auto-Advance toggle row — pure bool flip, no side effects.
+    {
+        const before = state.app.auto_advance;
+        components.toggleRow(@src(), "Auto-Advance", "Play next on end", &state.app.auto_advance);
+        if (state.app.auto_advance != before) state.markConfigDirty();
+    }
+
+    // Video Scaler — segment.
+    settingRow("Video Scaler", 250, @src());
+    {
+        const sn = [_][]const u8{ "EWA Lanczos (HQ)", "Bilinear (Fast)", "Spline36" };
+        const sv = [_][]const u8{ "ewa_lanczossharp", "bilinear", "spline36" };
+        const sel: usize = @intCast(@min(state.app.video_scaler, sn.len - 1));
+        if (components.segment(@src(), &sn, sel)) |clicked| {
+            state.app.video_scaler = @intCast(clicked);
+            for (state.app.players.items) |p| { _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "scale", @ptrCast(sv[clicked].ptr)); }
+            state.markConfigDirty();
+        }
+    }
+
+    // ── Audio Equalizer ──
     sectionHeader("Audio Equalizer", "Quick presets for different content types", 22, @src());
     {
-        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal, .background = true, .color_fill = card_bg,
-            .color_border = card_border, .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(8),
-            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
-        });
-        defer card.deinit();
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-        defer row.deinit();
         const en = [_][]const u8{ "Flat", "Bass+", "Voice", "Cinema", "Loud" };
         const ec = [_][]const u8{ "af set \"\"", "af set superequalizer=1b=6:2b=5:3b=4:4b=2", "af set superequalizer=3b=3:4b=4:5b=5:6b=4:7b=3", "af set superequalizer=1b=4:2b=3:6b=2:7b=3:8b=4", "af set loudnorm" };
-        for (en, 0..) |name, idx| {
-            const is_a = state.app.eq_preset == idx;
-            if (dvui.button(@src(), name, .{}, .{
-                .id_extra = idx, .color_fill = if (is_a) btn_active else btn_inactive,
-                .color_text = if (is_a) btn_text_active else muted_text,
-                .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-                .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 }, .corner_radius = dvui.Rect.all(6),
-            })) {
-                state.app.eq_preset = idx;
-                for (state.app.players.items) |p| { _ = c.mpv.mpv_command_string(p.mpv_ctx, @ptrCast(ec[idx].ptr)); }
-            }
+        const sel: usize = @min(state.app.eq_preset, en.len - 1);
+        if (components.segment(@src(), &en, sel)) |clicked| {
+            state.app.eq_preset = clicked;
+            for (state.app.players.items) |p| { _ = c.mpv.mpv_command_string(p.mpv_ctx, @ptrCast(ec[clicked].ptr)); }
+            state.markConfigDirty();
         }
     }
-    
-    // ── Streaming Card ──
+
+    // ── Streaming ──
     sectionHeader("Streaming", "yt-dlp backend for web streams", 23, @src());
+
+    settingRow("Stream Quality", 230, @src());
     {
-        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal, .background = true, .color_fill = card_bg,
-            .color_border = card_border, .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(8),
-            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
-        });
-        defer card.deinit();
-        _ = dvui.label(@src(), "Stream Quality", .{}, .{ .id_extra = 230, .color_text = muted_text, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 } });
-        {
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-            defer row.deinit();
-            const qn = [_][]const u8{ "720p", "1080p", "4K", "Audio" };
-            for (qn, 0..) |name, idx| {
-                const is_a = state.app.ytdl_format_idx == idx;
-                if (dvui.button(@src(), name, .{}, .{
-                    .id_extra = idx, .color_fill = if (is_a) btn_active else btn_inactive,
-                    .color_text = if (is_a) btn_text_active else muted_text,
-                    .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-                    .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 }, .corner_radius = dvui.Rect.all(6),
-                })) {
-                    state.app.ytdl_format_idx = idx;
-                    for (state.app.players.items) |p| { p.applyYtdlFormat(); }
-                }
-            }
+        const qn = [_][]const u8{ "720p", "1080p", "4K", "Audio" };
+        const sel: usize = @min(state.app.ytdl_format_idx, qn.len - 1);
+        if (components.segment(@src(), &qn, sel)) |clicked| {
+            state.app.ytdl_format_idx = clicked;
+            for (state.app.players.items) |p| { p.applyYtdlFormat(); }
+            state.markConfigDirty();
         }
-        components.divider();
-        // yt-dlp status row
-        {
-            const ytdlp = @import("../services/ytdlp.zig");
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-            defer row.deinit();
-            _ = dvui.label(@src(), "yt-dlp", .{}, .{ .color_text = label_text, .gravity_y = 0.5 });
-            if (ytdlp.isDownloading()) {
-                _ = dvui.label(@src(), "  Downloading...", .{}, .{ .id_extra = 2900, .color_text = theme.colors.accent, .gravity_y = 0.5 });
-            } else if (ytdlp.getPath() != null) {
-                _ = dvui.label(@src(), "  Installed ✓", .{}, .{ .id_extra = 2900, .color_text = theme.colors.success, .gravity_y = 0.5 });
-                { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
-                if (dvui.button(@src(), "Update", .{}, .{ .id_extra = 2901, .color_fill = btn_inactive, .color_text = theme.colors.accent, .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 }, .corner_radius = dvui.Rect.all(6) })) { ytdlp.update(); }
-            } else {
-                _ = dvui.label(@src(), "  Not installed", .{}, .{ .id_extra = 2900, .color_text = theme.colors.warning, .gravity_y = 0.5 });
-                { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
-                if (dvui.button(@src(), "Download", .{}, .{ .id_extra = 2902, .color_fill = btn_active, .color_text = btn_text_active, .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 }, .corner_radius = dvui.Rect.all(6) })) { ytdlp.ensureAvailable(); }
-            }
+    }
+    // yt-dlp status row
+    {
+        const ytdlp = @import("../services/ytdlp.zig");
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        defer row.deinit();
+        _ = dvui.label(@src(), "yt-dlp", .{}, .{ .color_text = labelText(), .gravity_y = 0.5 });
+        { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+        if (ytdlp.isDownloading()) {
+            components.statusPill("Downloading", .info);
+        } else if (ytdlp.getPath() != null) {
+            components.statusPill("Installed", .success);
+            if (dvui.button(@src(), "Update", .{}, .{ .id_extra = 2901, .color_fill = btn_inactive, .color_text = theme.colors.accent, .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md })) { ytdlp.update(); }
+        } else {
+            components.statusPill("Not installed", .warn);
+            if (dvui.button(@src(), "Download", .{}, .{ .id_extra = 2902, .color_fill = btn_active, .color_text = btn_text_active, .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md })) { ytdlp.ensureAvailable(); }
         }
     }
     
-    // ── About / Updater Card ──
+    // ── About / Updater ── (no card chrome; whitespace + the brand row)
     sectionHeader("About", "Installed version + update check", 25, @src());
     {
         const updater = @import("../services/updater.zig");
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal, .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .color_border = theme.colors.border_subtle,
-            .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(theme.radius.lg), // spec: cards use radius.lg
-            .padding = .{
-                .x = theme.spacing.lg, .y = theme.spacing.lg,
-                .w = theme.spacing.lg, .h = theme.spacing.lg,
-            }, // spec: card padding spacing.lg
+            .expand = .horizontal,
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
         });
         defer card.deinit();
@@ -1192,14 +983,15 @@ fn renderPlaybackTab() void {
         {
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
             defer row.deinit();
-            _ = dvui.label(@src(), "Version", .{}, .{ .color_text = label_text, .gravity_y = 0.5 });
-            _ = dvui.label(@src(), "  v{s}", .{updater.APP_VERSION}, .{ .id_extra = 2510, .color_text = theme.colors.text_main, .gravity_y = 0.5 });
+            _ = dvui.label(@src(), "Version", .{}, .{ .color_text = labelText(), .gravity_y = 0.5 });
+            _ = dvui.label(@src(), "  v{s}", .{updater.APP_VERSION}, .{ .id_extra = 2510, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
             { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
             if (updater.is_checking) {
-                _ = dvui.label(@src(), "Checking…", .{}, .{ .id_extra = 2511, .color_text = theme.colors.accent, .gravity_y = 0.5 });
+                _ = dvui.label(@src(), "Checking…", .{}, .{ .id_extra = 2511, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
             } else if (dvui.button(@src(), "Check for Updates", .{}, .{
-                .id_extra = 2512, .color_fill = btn_inactive, .color_text = theme.colors.accent,
-                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 }, .corner_radius = dvui.Rect.all(6),
+                .id_extra = 2512, .color_fill = btn_inactive, .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(0),
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md,
             })) {
                 updater.checkAsync();
             }
@@ -1223,55 +1015,46 @@ fn renderPlaybackTab() void {
             components.divider();
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
             defer row.deinit();
-            _ = dvui.label(@src(), "Latest", .{}, .{ .color_text = label_text, .gravity_y = 0.5 });
-            _ = dvui.label(@src(), "  v{s} ✨", .{updater.latestTag()}, .{ .id_extra = 2520, .color_text = theme.colors.success, .gravity_y = 0.5 });
+            _ = dvui.label(@src(), "Latest", .{}, .{ .color_text = labelText(), .gravity_y = 0.5 });
+            _ = dvui.label(@src(), "  v{s}", .{updater.latestTag()}, .{ .id_extra = 2520, .color_text = theme.colors.semantic_success, .gravity_y = 0.5 });
             { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
             if (updater.is_downloading) {
-                _ = dvui.label(@src(), "Downloading…", .{}, .{ .id_extra = 2521, .color_text = theme.colors.accent, .gravity_y = 0.5 });
+                _ = dvui.label(@src(), "Downloading…", .{}, .{ .id_extra = 2521, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
             } else if (updater.dl_url_len > 0) {
                 if (dvui.button(@src(), "Download & Install", .{}, .{
                     .id_extra = 2522, .color_fill = btn_active, .color_text = btn_text_active,
-                    .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 }, .corner_radius = dvui.Rect.all(6),
+                    .border = dvui.Rect.all(0),
+                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md,
                 })) {
                     updater.downloadAndOpenAsync();
                 }
             } else {
-                _ = dvui.label(@src(), "No .dmg asset on release", .{}, .{ .id_extra = 2523, .color_text = theme.colors.warning, .gravity_y = 0.5 });
+                _ = dvui.label(@src(), "No .dmg asset on release", .{}, .{ .id_extra = 2523, .color_text = theme.colors.semantic_warn, .gravity_y = 0.5 });
             }
         } else if (updater.last_check_ts > 0 and !updater.is_checking) {
             components.divider();
-            _ = dvui.label(@src(), "Up to date", .{}, .{ .id_extra = 2530, .color_text = theme.colors.success });
+            _ = dvui.label(@src(), "Up to date", .{}, .{ .id_extra = 2530, .color_text = theme.colors.semantic_success });
         }
 
         if (updater.last_error_len > 0) {
-            _ = dvui.label(@src(), "  {s}", .{updater.lastError()}, .{ .id_extra = 2540, .color_text = theme.colors.warning, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
+            _ = dvui.label(@src(), "  {s}", .{updater.lastError()}, .{ .id_extra = 2540, .color_text = theme.colors.semantic_warn, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
         }
     }
 
-    // ── Shortcuts Card ──
+    // ── Keyboard Shortcuts ── (quiet text, no card chrome)
     sectionHeader("Keyboard Shortcuts", "", 21, @src());
     {
-        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal, .background = true, .color_fill = card_bg,
-            .color_border = card_border, .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(8),
-            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
-        });
-        defer card.deinit();
-        _ = dvui.label(@src(), "Space=Pause  Arrows=Seek  Up/Down=Vol  M=Mute", .{}, .{ .id_extra = 2100, .color_text = muted_text });
-        _ = dvui.label(@src(), "+/-=Zoom  0=Reset  Shift+Arrows=Pan", .{}, .{ .id_extra = 2101, .color_text = muted_text });
-        _ = dvui.label(@src(), "V=Subs  K=SubDelay  []=Speed  L=Loop  R=Rotate  T=Flip", .{}, .{ .id_extra = 2102, .color_text = muted_text });
-        _ = dvui.label(@src(), "A=AI  D=Drawer  Shift+I=Info  Ctrl+O=Open  Ctrl+Q=Quit", .{}, .{ .id_extra = 2103, .color_text = muted_text });
+        _ = dvui.label(@src(), "Space=Pause  Arrows=Seek  Up/Down=Vol  M=Mute", .{}, .{ .id_extra = 2100, .color_text = mutedText() });
+        _ = dvui.label(@src(), "+/-=Zoom  0=Reset  Shift+Arrows=Pan", .{}, .{ .id_extra = 2101, .color_text = mutedText() });
+        _ = dvui.label(@src(), "V=Subs  K=SubDelay  []=Speed  L=Loop  R=Rotate  T=Flip", .{}, .{ .id_extra = 2102, .color_text = mutedText() });
+        _ = dvui.label(@src(), "A=AI  D=Drawer  Shift+I=Info  Ctrl+O=Open  Ctrl+Q=Quit", .{}, .{ .id_extra = 2103, .color_text = mutedText() });
     }
 
-    // ── Video Filters Card ──
+    // ── Video Filters ── (no card chrome)
     sectionHeader("Video Filters", "Brightness, contrast, saturation, gamma", 24, @src());
     {
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal, .background = true, .color_fill = card_bg,
-            .color_border = card_border, .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(8),
-            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
+            .expand = .horizontal,
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
         });
         defer card.deinit();
@@ -1292,17 +1075,18 @@ fn renderPlaybackTab() void {
             defer row.deinit();
 
             _ = dvui.label(@src(), "{s}", .{f.name}, .{
-                .id_extra = f.idx + 3010, .color_text = label_text,
+                .id_extra = f.idx + 3010, .color_text = labelText(),
                 .min_size_content = .{ .w = 90, .h = 0 }, .gravity_y = 0.5,
             });
 
             // "−" button
             if (dvui.button(@src(), "−", .{}, .{
                 .id_extra = f.idx + 3020,
-                .color_fill = btn_inactive, .color_text = muted_text,
-                .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
-                .corner_radius = dvui.Rect.all(4),
-                .margin = .{ .x = 4, .y = 0, .w = 2, .h = 0 },
+                .color_fill = btn_inactive, .color_text = mutedText(),
+                .border = dvui.Rect.all(0),
+                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                .corner_radius = theme.dims.rad_sm,
+                .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 2, .h = 0 },
             })) {
                 var cmd_buf: [64]u8 = undefined;
                 if (std.fmt.bufPrintZ(&cmd_buf, "add {s} -5", .{f.prop})) |cmd| {
@@ -1329,9 +1113,10 @@ fn renderPlaybackTab() void {
             // "+" button
             if (dvui.button(@src(), "+", .{}, .{
                 .id_extra = f.idx + 3040,
-                .color_fill = btn_inactive, .color_text = muted_text,
-                .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
-                .corner_radius = dvui.Rect.all(4),
+                .color_fill = btn_inactive, .color_text = mutedText(),
+                .border = dvui.Rect.all(0),
+                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                .corner_radius = theme.dims.rad_sm,
                 .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
             })) {
                 var cmd_buf: [64]u8 = undefined;
@@ -1347,10 +1132,11 @@ fn renderPlaybackTab() void {
         components.divider();
         if (dvui.button(@src(), "Reset All Filters", .{}, .{
             .id_extra = 3099,
-            .color_fill = dvui.Color{ .r = 60, .g = 35, .b = 35, .a = 220 },
+            .color_fill = theme.colors.bg_elevated,
             .color_text = theme.colors.danger,
-            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
-            .corner_radius = dvui.Rect.all(6),
+            .border = dvui.Rect.all(0),
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+            .corner_radius = theme.dims.rad_md,
         })) {
             if (state.app.active_player_idx < state.app.players.items.len) {
                 const p = state.app.players.items[state.app.active_player_idx];
@@ -1362,27 +1148,23 @@ fn renderPlaybackTab() void {
         }
     }
 
-    // ── Clip Export Card ──
+    // ── Capture ── (no card chrome)
     sectionHeader("Capture", "Screenshot and clip export", 25, @src());
     {
-        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal, .background = true, .color_fill = card_bg,
-            .color_border = card_border, .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(8),
-            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
         });
-        defer card.deinit();
-
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer row.deinit();
 
-        // Screenshot button
+        // Screenshot button — the single primary action.
         if (dvui.button(@src(), "Screenshot (P)", .{}, .{
             .id_extra = 3200,
             .color_fill = btn_active, .color_text = btn_text_active,
-            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
-            .corner_radius = dvui.Rect.all(6),
-            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            .border = dvui.Rect.all(0),
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+            .corner_radius = theme.dims.rad_md,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         })) {
             if (state.app.active_player_idx < state.app.players.items.len) {
                 _ = c.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, "screenshot");
@@ -1393,10 +1175,11 @@ fn renderPlaybackTab() void {
         // Screenshot without subs
         if (dvui.button(@src(), "Screenshot (no subs)", .{}, .{
             .id_extra = 3201,
-            .color_fill = btn_inactive, .color_text = muted_text,
-            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
-            .corner_radius = dvui.Rect.all(6),
-            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            .color_fill = btn_inactive, .color_text = mutedText(),
+            .border = dvui.Rect.all(0),
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+            .corner_radius = theme.dims.rad_md,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         })) {
             if (state.app.active_player_idx < state.app.players.items.len) {
                 _ = c.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, "screenshot video");
@@ -1411,13 +1194,14 @@ fn renderPlaybackTab() void {
                 break :blk ap.loop_a >= 0 and ap.loop_b >= 0;
             } else false;
 
-            const clip_label = if (has_loop) "Export Clip ✂" else "Clip (L → set loop)";
+            const clip_label = if (has_loop) "Export Clip" else "Clip (L → set loop)";
             if (dvui.button(@src(), clip_label, .{}, .{
                 .id_extra = 3202,
                 .color_fill = if (has_loop) btn_active else btn_inactive,
-                .color_text = if (has_loop) btn_text_active else muted_text,
-                .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
-                .corner_radius = dvui.Rect.all(6),
+                .color_text = if (has_loop) btn_text_active else mutedText(),
+                .border = dvui.Rect.all(0),
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+                .corner_radius = theme.dims.rad_md,
             })) {
                 if (state.app.active_player_idx < state.app.players.items.len) {
                     state.app.players.items[state.app.active_player_idx].exportClip();
@@ -1428,42 +1212,31 @@ fn renderPlaybackTab() void {
 }
 
 fn renderNetworkTab() void {
-    // Download Speed Limit
+    // Download Speed Limit — short ramp via segment.
     settingRow("Download Speed Limit", 30, @src());
     {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 24 },
-        });
-        defer row.deinit();
-        
         const limits = [_]i32{ 0, 1*1024*1024, 2*1024*1024, 5*1024*1024, 10*1024*1024, 20*1024*1024 };
         const limit_names = [_][]const u8{ "No Limit", "1 MB/s", "2 MB/s", "5 MB/s", "10 MB/s", "20 MB/s" };
-        
+        var sel: usize = 0;
         for (limits, 0..) |l, idx| {
-            const is_active = state.app.download_rate_limit == l;
-            if (dvui.button(@src(), limit_names[idx], .{}, .{
-                .id_extra = idx,
-                .color_fill = if (is_active) theme.colors.accent_hover else dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
-                .color_text = if (is_active) theme.colors.bg_header else theme.colors.text_muted,
-                .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-                .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-            })) {
-                state.app.download_rate_limit = l;
-                c.mpv.torrent_set_download_limit(state.app.torrent_ses, l);
-            }
+            if (state.app.download_rate_limit == l) { sel = idx; break; }
+        }
+        if (components.segment(@src(), &limit_names, sel)) |clicked| {
+            state.app.download_rate_limit = limits[clicked];
+            c.mpv.torrent_set_download_limit(state.app.torrent_ses, limits[clicked]);
+            state.markConfigDirty();
         }
     }
-    
+
     // Tracker info
     settingRow("Custom Trackers", 31, @src());
     _ = dvui.label(@src(), "8 public trackers auto-added to every torrent", .{}, .{
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_secondary,
     });
     _ = dvui.label(@src(), "opentrackr, stealth, torrent.eu, dler, exodus, demonii...", .{}, .{
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_tertiary,
     });
-    
+
     // Proxy URL
     settingRow("Proxy (yt-dlp)", 32, @src());
     {
@@ -1472,56 +1245,52 @@ fn renderNetworkTab() void {
             .min_size_content = .{ .w = 0, .h = 24 },
         });
         defer row.deinit();
-        
+
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.proxy_url } }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 250, .h = 20 },
             .color_fill = theme.colors.bg_input,
             .color_border = theme.colors.border_input,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_sm,
         });
+        const proxy_changed = te.text_changed;
         te.deinit();
-        
+
         // Update proxy_url_len from null-terminated buffer
         state.app.proxy_url_len = std.mem.indexOfScalar(u8, &state.app.proxy_url, 0) orelse 0;
+        if (proxy_changed) state.markConfigDirty();
     }
     _ = dvui.label(@src(), "e.g. socks5://127.0.0.1:1080 — used for yt-dlp and playlist extraction", .{}, .{
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_tertiary,
     });
 }
 
 fn renderSubtitlesTab() void {
-    // ── First-run banner when API key is missing ──
+    // ── First-run hint when API key is missing ── (plain text, no banner)
     if (state.app.opensub_api_key_len == 0) {
         var banner = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
-            .background = true,
-            .color_fill = dvui.Color{ .r = 20, .g = 30, .b = 50, .a = 255 },
-            .color_border = theme.colors.accent,
-            .border = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
-            .corner_radius = dvui.Rect.all(8),
-            .padding = .{ .x = 14, .y = 10, .w = 14, .h = 10 },
-            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 12 },
+            .margin = .{ .x = 0, .y = 4, .w = 0, .h = theme.spacing.md },
         });
         defer banner.deinit();
-        _ = dvui.label(@src(), "⚡ Set up OpenSubtitles to unlock subtitle search", .{}, .{
+        _ = dvui.label(@src(), "Set up OpenSubtitles to unlock subtitle search", .{}, .{
             .id_extra = 4190,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
         });
         _ = dvui.label(@src(), "1. Go to opensubtitles.com and create a free account", .{}, .{
             .id_extra = 4191,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
         });
         _ = dvui.label(@src(), "2. Navigate to Profile → API Consumers → Create", .{}, .{
             .id_extra = 4192,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
         });
         _ = dvui.label(@src(), "3. Paste the API key in the field below", .{}, .{
             .id_extra = 4193,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
         });
     }
 
@@ -1539,44 +1308,36 @@ fn renderSubtitlesTab() void {
             .min_size_content = .{ .w = 250, .h = 20 },
             .color_fill = theme.colors.bg_input,
             .color_border = theme.colors.border_input,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_sm,
         });
+        const opensub_changed = te.text_changed;
         te.deinit();
         state.app.opensub_api_key_len = std.mem.indexOfScalar(u8, &state.app.opensub_api_key, 0) orelse 0;
+        if (opensub_changed) state.markConfigDirty();
     }
     _ = dvui.label(@src(), "Get free key: opensubtitles.com → Profile → API Consumers", .{}, .{
         .id_extra = 4200,
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_tertiary,
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 8 },
     });
 
-    // ── Subtitle Language ──
+    // ── Subtitle Language ── (short codes via segment)
     settingRow("Search Language", 40, @src());
     {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 24 },
-        });
-        defer row.deinit();
-        
         const langs = [_][]const u8{ "eng", "spa", "fre", "ger", "por", "ita", "rus", "chi", "jpn", "kor", "hin", "ara", "tur" };
         const lang_names = [_][]const u8{ "EN", "ES", "FR", "DE", "PT", "IT", "RU", "ZH", "JA", "KO", "HI", "AR", "TR" };
         const current = state.app.sub_lang_buf[0..state.app.sub_lang_len];
-        
+        var sel: usize = 0;
         for (langs, 0..) |l, idx| {
-            const is_active = std.mem.eql(u8, current, l);
-            if (dvui.button(@src(), lang_names[idx], .{}, .{
-                .id_extra = idx,
-                .color_fill = if (is_active) theme.colors.accent_hover else dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
-                .color_text = if (is_active) theme.colors.bg_header else theme.colors.text_muted,
-                .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
-                .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
-            })) {
-                @memcpy(state.app.sub_lang_buf[0..l.len], l);
-                state.app.sub_lang_len = l.len;
-            }
+            if (std.mem.eql(u8, current, l)) { sel = idx; break; }
+        }
+        if (components.segment(@src(), &lang_names, sel)) |clicked| {
+            const l = langs[clicked];
+            @memcpy(state.app.sub_lang_buf[0..l.len], l);
+            state.app.sub_lang_len = l.len;
+            state.markConfigDirty();
         }
     }
 
@@ -1603,24 +1364,26 @@ fn renderSubtitlesTab() void {
         const enter = te.enter_pressed;
         te.deinit();
 
-        // Search button
+        // Search button — primary affordance.
         const search_clicked = dvui.button(@src(), if (subs.is_searching) "..." else "Search", .{}, .{
             .id_extra = 4301,
-            .color_fill = theme.colors.accent_hover,
-            .color_text = theme.colors.bg_header,
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-            .margin = .{ .x = 4, .y = 0, .w = 2, .h = 0 },
-            .corner_radius = dvui.Rect.all(6),
+            .color_fill = theme.colors.accent,
+            .color_text = theme.colors.text_on_accent,
+            .border = dvui.Rect.all(0),
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+            .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 2, .h = 0 },
+            .corner_radius = theme.dims.rad_md,
         });
 
-        // Auto-detect from player
+        // Auto-detect from player — secondary (text-only).
         if (dvui.button(@src(), "Auto", .{}, .{
             .id_extra = 4302,
             .color_fill = dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
-            .color_text = theme.colors.accent,
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+            .color_text = theme.colors.text_secondary,
+            .border = dvui.Rect.all(0),
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
-            .corner_radius = dvui.Rect.all(6),
+            .corner_radius = theme.dims.rad_md,
         })) {
             subs.autoSearchFromPlayer();
         }
@@ -1641,7 +1404,7 @@ fn renderSubtitlesTab() void {
         if (subs.search_error_len > 0) {
             _ = dvui.label(@src(), "{s}", .{subs.search_error[0..subs.search_error_len]}, .{
                 .id_extra = 4400,
-                .color_text = theme.colors.warning,
+                .color_text = theme.colors.semantic_warn,
                 .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
             });
         }
@@ -1649,7 +1412,7 @@ fn renderSubtitlesTab() void {
         if (subs.is_searching) {
             _ = dvui.label(@src(), "Searching...", .{}, .{
                 .id_extra = 4401,
-                .color_text = theme.colors.accent,
+                .color_text = theme.colors.text_secondary,
                 .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
             });
         }
@@ -1659,30 +1422,30 @@ fn renderSubtitlesTab() void {
             const count_str = std.fmt.bufPrintZ(&count_buf, "{d} results", .{subs.result_count}) catch "results";
             _ = dvui.label(@src(), "{s}", .{count_str}, .{
                 .id_extra = 4402,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_tertiary,
                 .margin = .{ .x = 0, .y = 6, .w = 0, .h = 2 },
             });
 
             for (0..subs.result_count) |ri| {
                 const r = &subs.results[ri];
+                // Calm: a spacing-only row separated by a faint fill tier — no
+                // per-row border. (Encode the boundary once: fill, not border.)
                 var res_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .id_extra = ri + 4500,
                     .expand = .horizontal,
                     .background = true,
-                    .color_fill = theme.colors.bg_card,
-                    .color_border = theme.colors.divider,
-                    .border = dvui.Rect.all(1),
-                    .corner_radius = dvui.Rect.all(6),
-                    .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
+                    .color_fill = theme.colors.bg_surface,
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
                     .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
                 });
                 defer res_row.deinit();
 
-                // Language badge
+                // Language badge — demoted to secondary text (not accent).
                 if (r.lang_len > 0) {
                     _ = dvui.label(@src(), "{s}", .{r.language[0..r.lang_len]}, .{
                         .id_extra = ri + 4600,
-                        .color_text = theme.colors.accent,
+                        .color_text = theme.colors.text_secondary,
                         .gravity_y = 0.5,
                         .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
                     });
@@ -1693,20 +1456,20 @@ fn renderSubtitlesTab() void {
                     const show_len = @min(r.release_len, 60);
                     _ = dvui.label(@src(), "{s}", .{r.release[0..show_len]}, .{
                         .id_extra = ri + 4700,
-                        .color_text = theme.colors.text_main,
+                        .color_text = theme.colors.text_primary,
                         .gravity_y = 0.5,
                     });
                 }
 
                 { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
 
-                // Download count
+                // Download count — quiet metadata, no glyph.
                 if (r.download_count > 0) {
                     var dc_buf: [16]u8 = undefined;
-                    const dc_str = std.fmt.bufPrintZ(&dc_buf, "↓{d}", .{r.download_count}) catch "";
+                    const dc_str = std.fmt.bufPrintZ(&dc_buf, "{d}", .{r.download_count}) catch "";
                     _ = dvui.label(@src(), "{s}", .{dc_str}, .{
                         .id_extra = ri + 4800,
-                        .color_text = theme.colors.text_dim,
+                        .color_text = theme.colors.text_tertiary,
                         .gravity_y = 0.5,
                         .margin = .{ .x = 6, .y = 0, .w = 4, .h = 0 },
                     });
@@ -1716,19 +1479,20 @@ fn renderSubtitlesTab() void {
                 if (r.hearing_impaired) {
                     _ = dvui.label(@src(), "CC", .{}, .{
                         .id_extra = ri + 4900,
-                        .color_text = theme.colors.warning,
+                        .color_text = theme.colors.text_tertiary,
                         .gravity_y = 0.5,
                         .margin = .{ .x = 2, .y = 0, .w = 4, .h = 0 },
                     });
                 }
 
-                // Download button
-                if (dvui.button(@src(), if (subs.is_downloading) "..." else "⬇", .{}, .{
+                // Download button — accent, the single primary action per row.
+                if (dvui.button(@src(), if (subs.is_downloading) "..." else "Get", .{}, .{
                     .id_extra = ri + 5000,
-                    .color_fill = theme.colors.accent_hover,
-                    .color_text = theme.colors.bg_header,
-                    .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
-                    .corner_radius = dvui.Rect.all(4),
+                    .color_fill = theme.colors.accent,
+                    .color_text = theme.colors.text_on_accent,
+                    .border = dvui.Rect.all(0),
+                    .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                    .corner_radius = theme.dims.rad_sm,
                     .gravity_y = 0.5,
                 })) {
                     if (!subs.is_downloading and r.file_id > 0) {
@@ -1753,13 +1517,13 @@ fn renderSubtitlesTab() void {
             subtitles_engine.SubState.failed => "Not found",
         };
         _ = dvui.label(@src(), "{s}", .{status_text}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
         });
     }
-    
+
     _ = dvui.label(@src(), "Shift+J = Search subs for current video | J = Cycle tracks", .{}, .{
         .id_extra = 4201,
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_tertiary,
         .margin = .{ .x = 0, .y = 8, .w = 0, .h = 0 },
     });
 }
@@ -1770,39 +1534,29 @@ fn renderStorageTab() void {
     {
         const path = state.app.save_path_buf[0..state.app.save_path_len];
         _ = dvui.label(@src(), "{s}", .{path}, .{
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_secondary,
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
         });
         
-        // Path presets
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 24 },
-        });
-        defer row.deinit();
-        
-        // Path presets (resolved at runtime)
+        // Path presets (resolved at runtime) — segment.
         var dl_path_buf: [256]u8 = undefined;
         var vid_path_buf: [256]u8 = undefined;
         const dl_path = paths.defaultSavePath(&dl_path_buf);
         const vid_path = paths.videosSavePath(&vid_path_buf);
         const preset_paths = [_][]const u8{ dl_path, vid_path, "/tmp/zigzag_torrents" };
         const path_names = [_][]const u8{ "~/Downloads (default)", "~/Videos", "/tmp (tmpfs)" };
-        
+
+        var sel: usize = path_names.len; // none-active sentinel
         for (preset_paths, 0..) |p, idx| {
-            const is_active = std.mem.eql(u8, path, p);
-            if (dvui.button(@src(), path_names[idx], .{}, .{
-                .id_extra = idx,
-                .color_fill = if (is_active) theme.colors.accent_hover else dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
-                .color_text = if (is_active) theme.colors.bg_header else theme.colors.text_muted,
-                .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-                .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-            })) {
-                @memcpy(state.app.save_path_buf[0..p.len], p);
-                state.app.save_path_len = p.len;
-                // Create dir if it doesn't exist
-                @import("../core/io_global.zig").cwdMakePath(p) catch {};
-            }
+            if (std.mem.eql(u8, path, p)) { sel = idx; break; }
+        }
+        if (components.segment(@src(), &path_names, sel)) |clicked| {
+            const p = preset_paths[clicked];
+            @memcpy(state.app.save_path_buf[0..p.len], p);
+            state.app.save_path_len = p.len;
+            // Create dir if it doesn't exist
+            @import("../core/io_global.zig").cwdMakePath(p) catch {};
+            state.markConfigDirty();
         }
     }
     // Watch History Stats
@@ -1812,13 +1566,15 @@ fn renderStorageTab() void {
         var count_buf: [48]u8 = undefined;
         const count_str = std.fmt.bufPrintZ(&count_buf, "{d} entries saved", .{watch.getCount()}) catch "?";
         _ = dvui.label(@src(), "{s}", .{count_str}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
         });
-        
+
         if (dvui.button(@src(), "Clear Watch History", .{}, .{
-            .color_fill = dvui.Color{ .r=80, .g=30, .b=30, .a=200 },
+            .color_fill = theme.colors.bg_elevated,
             .color_text = theme.colors.danger,
-            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+            .border = dvui.Rect.all(0),
+            .corner_radius = theme.dims.rad_md,
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
         })) {
             watch.clearAll();
             state.showToast("Watch history cleared");
@@ -1828,163 +1584,79 @@ fn renderStorageTab() void {
     // Database info
     settingRow("Database", 52, @src());
     _ = dvui.label(@src(), "SQLite: ~/.config/zigzag/zigzag.db", .{}, .{
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_tertiary,
     });
 }
 
 fn renderLangLearnTab() void {
-    settingRow("Language Learning Mode", 60, @src());
+    // Language Learning Mode toggle — flips a bool then runs onToggle.
     {
-        const label = if (state.app.lang_learn_enabled) "[ON] Enabled" else "[OFF] Disabled";
-        if (dvui.button(@src(), label, .{}, .{
-            .color_fill = if (state.app.lang_learn_enabled) theme.colors.accent_hover else dvui.Color{ .r=60, .g=56, .b=54, .a=200 },
-            .color_text = if (state.app.lang_learn_enabled) theme.colors.bg_header else theme.colors.text_muted,
-            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-        })) {
-            state.app.lang_learn_enabled = !state.app.lang_learn_enabled;
+        const before = state.app.lang_learn_enabled;
+        components.toggleRow(@src(), "Language Learning Mode", "ASR + dubbing + translation while watching", &state.app.lang_learn_enabled);
+        if (state.app.lang_learn_enabled != before) {
             const lang_learn = @import("../services/lang_learn.zig");
             lang_learn.onToggle(state.app.lang_learn_enabled);
+            state.markConfigDirty();
         }
     }
 
-    // Translation Target Language
+    // Translation Target Language — segment.
     settingRow("Translate To", 64, @src());
-    {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 24 },
-        });
-        defer row.deinit();
-        
-        const lang_codes = [_][]const u8{ "en", "es", "fr", "de", "it", "pt", "ru", "ja", "ko", "zh-CN", "ar", "hi", "tr", "vi" };
-        const lang_labels = [_][]const u8{ "EN", "ES", "FR", "DE", "IT", "PT", "RU", "JA", "KO", "ZH", "AR", "HI", "TR", "VI" };
-        const current_tl = state.app.translate_lang_buf[0..state.app.translate_lang_len];
-        
-        for (lang_codes, 0..) |code, idx| {
-            const is_active = std.mem.eql(u8, current_tl, code);
-            if (dvui.button(@src(), lang_labels[idx], .{}, .{
-                .id_extra = idx + 200,
-                .color_fill = if (is_active) theme.colors.accent_hover else dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
-                .color_text = if (is_active) theme.colors.bg_header else theme.colors.text_muted,
-                .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
-                .padding = .{ .x = 5, .y = 3, .w = 5, .h = 3 },
-            })) {
-                @memcpy(state.app.translate_lang_buf[0..code.len], code);
-                state.app.translate_lang_len = code.len;
-            }
-        }
-    }
+    langSegment(&state.app.translate_lang_buf, &state.app.translate_lang_len, 200);
 
     // Translation toggle — pure bool flip.
-    components.toggleRow(@src(), "Translation", "Enable subtitle translation", &state.app.translate_enabled);
+    {
+        const before = state.app.translate_enabled;
+        components.toggleRow(@src(), "Translation", "Enable subtitle translation", &state.app.translate_enabled);
+        if (state.app.translate_enabled != before) state.markConfigDirty();
+    }
 
-    // Subtitle Track Selector
+    // Subtitle Track Selector — stateless setter (issues mpv commands).
     settingRow("Active Subtitle Track", 65, @src());
     {
         if (state.app.active_player_idx < state.app.players.items.len) {
             const p = state.app.players.items[state.app.active_player_idx];
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal,
-                .min_size_content = .{ .w = 0, .h = 24 },
-            });
-            defer row.deinit();
-
             const track_labels = [_][]const u8{ "None", "Track 1", "Track 2", "Track 3", "Track 4", "Track 5" };
-            for (track_labels, 0..) |tl, idx| {
-                if (dvui.button(@src(), tl, .{}, .{
-                    .id_extra = idx + 300,
-                    .color_fill = dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
-                    .color_text = theme.colors.text_muted,
-                    .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
-                    .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
-                })) {
-                    var cmd_buf: [64]u8 = undefined;
-                    if (idx == 0) {
-                        _ = c.mpv.mpv_command_string(p.mpv_ctx, "set sid no");
-                    } else {
-                        if (std.fmt.bufPrintZ(&cmd_buf, "set sid {d}", .{idx})) |cmd| {
-                            _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
-                        } else |_| {}
-                    }
+            // No persisted selection here — leave nothing highlighted.
+            if (components.segment(@src(), &track_labels, track_labels.len)) |clicked| {
+                var cmd_buf: [64]u8 = undefined;
+                if (clicked == 0) {
+                    _ = c.mpv.mpv_command_string(p.mpv_ctx, "set sid no");
+                } else {
+                    if (std.fmt.bufPrintZ(&cmd_buf, "set sid {d}", .{clicked})) |cmd| {
+                        _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
+                    } else |_| {}
                 }
             }
         } else {
-            _ = dvui.label(@src(), "No active player", .{}, .{ .color_text = theme.colors.text_muted });
+            _ = dvui.label(@src(), "No active player", .{}, .{ .color_text = theme.colors.text_tertiary });
         }
     }
 
-    // ASR Toggle
     // ASR toggle — pure bool flip (hint shown inline).
-    components.toggleRow(@src(), "Speech Recognition (ASR)", "Auto-transcribe audio when no subtitles available (Cohere 2B)", &state.app.asr_enabled);
-
-    // Dubbing Toggle
-    settingRow("Audio Dubbing", 68, @src());
     {
-        const label = if (state.app.dubbing_enabled) "[ON] Enabled" else "[OFF] Disabled";
-        if (dvui.button(@src(), label, .{}, .{
-            .color_fill = if (state.app.dubbing_enabled) dvui.Color{ .r=180, .g=120, .b=40, .a=230 } else dvui.Color{ .r=60, .g=56, .b=54, .a=200 },
-            .color_text = if (state.app.dubbing_enabled) theme.colors.bg_header else theme.colors.text_muted,
-            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-        })) {
-            state.app.dubbing_enabled = !state.app.dubbing_enabled;
+        const before = state.app.asr_enabled;
+        components.toggleRow(@src(), "Speech Recognition (ASR)", "Auto-transcribe audio when no subtitles available (Cohere 2B)", &state.app.asr_enabled);
+        if (state.app.asr_enabled != before) state.markConfigDirty();
+    }
+
+    // Audio Dubbing toggle — bool flip + reset dub hash on enable.
+    {
+        const before = state.app.dubbing_enabled;
+        components.toggleRow(@src(), "Audio Dubbing", "Translate subtitles and speak via TTS (lowers video volume)", &state.app.dubbing_enabled);
+        if (state.app.dubbing_enabled != before) {
             if (state.app.dubbing_enabled) state.app.dub_last_hash = 0;
+            state.markConfigDirty();
         }
     }
-    _ = dvui.label(@src(), "Translate subtitles and speak via TTS (lowers video volume)", .{}, .{
-        .id_extra = 9002,
-        .color_text = theme.colors.text_muted,
-    });
 
-    // Voice Selector
+    // Voice Selector — segment.
     settingRow("TTS Voice", 61, @src());
-    {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 24 },
-        });
-        defer row.deinit();
-        
-        const voices = [_][]const u8{ "Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo" };
-        for (voices, 0..) |voice, idx| {
-            const current = state.app.tts_voice_buf[0..state.app.tts_voice_len];
-            const is_active = std.mem.eql(u8, current, voice);
-            if (dvui.button(@src(), voice, .{}, .{
-                .id_extra = idx,
-                .color_fill = if (is_active) theme.colors.accent_hover else dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
-                .color_text = if (is_active) theme.colors.bg_header else theme.colors.text_muted,
-                .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
-                .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
-            })) {
-                @memcpy(state.app.tts_voice_buf[0..voice.len], voice);
-                state.app.tts_voice_len = voice.len;
-            }
-        }
-    }
+    ttsVoiceSegment(0);
 
-    // Speed Control
+    // Speed Control — segment.
     settingRow("Speech Speed", 62, @src());
-    {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 24 },
-        });
-        defer row.deinit();
-        
-        const speeds = [_]f32{ 0.5, 0.75, 1.0, 1.25, 1.5 };
-        const speed_labels = [_][]const u8{ "0.5x", "0.75x", "1.0x", "1.25x", "1.5x" };
-        for (speeds, 0..) |spd, idx| {
-            const is_active = @abs(state.app.tts_speed - spd) < 0.05;
-            if (dvui.button(@src(), speed_labels[idx], .{}, .{
-                .id_extra = idx,
-                .color_fill = if (is_active) theme.colors.accent_hover else dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
-                .color_text = if (is_active) theme.colors.bg_header else theme.colors.text_muted,
-                .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
-                .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
-            })) {
-                state.app.tts_speed = spd;
-            }
-        }
-    }
+    ttsSpeedSegment(0);
 
     // Server Status
     settingRow("TTS Server", 63, @src());
@@ -1994,36 +1666,40 @@ fn renderLangLearnTab() void {
             .gravity_y = 0.5,
         });
         defer row.deinit();
-        
+
         if (state.app.tts_server_ok) {
-            _ = dvui.label(@src(), "[OK] Running", .{}, .{ .color_text = theme.colors.success });
+            components.statusPill("Running", .success);
         } else {
-            _ = dvui.label(@src(), "[--] Not running", .{}, .{ .color_text = theme.colors.text_muted });
+            components.statusPill("Not running", .info);
         }
-        
+
         { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
-        
+
         const lang_learn = @import("../services/lang_learn.zig");
         if (!state.app.tts_server_ok) {
             if (dvui.button(@src(), "Start Server", .{}, .{
-                .color_fill = theme.colors.accent_hover,
-                .color_text = theme.colors.bg_header,
-                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                .color_fill = theme.colors.accent,
+                .color_text = theme.colors.text_on_accent,
+                .border = dvui.Rect.all(0),
+                .corner_radius = theme.dims.rad_md,
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             })) {
                 lang_learn.startServer();
             }
         } else {
             if (dvui.button(@src(), "Stop Server", .{}, .{
-                .color_fill = dvui.Color{ .r=60, .g=30, .b=30, .a=200 },
+                .color_fill = theme.colors.bg_elevated,
                 .color_text = theme.colors.danger,
-                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                .border = dvui.Rect.all(0),
+                .corner_radius = theme.dims.rad_md,
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             })) {
                 lang_learn.stopServer();
             }
         }
     }
     _ = dvui.label(@src(), "KittenTTS (80MB) | Cohere ASR (2B) | Google Translate", .{}, .{
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_tertiary,
     });
 }
 
@@ -2036,7 +1712,11 @@ fn renderScriptsTab() void {
     }
 
     // ── SponsorBlock Master Toggle ──
-    components.toggleRow(@src(), "SponsorBlock (YouTube)", "Auto-skip sponsor segments", &state.app.sponsorblock_enabled);
+    {
+        const before = state.app.sponsorblock_enabled;
+        components.toggleRow(@src(), "SponsorBlock (YouTube)", "Auto-skip sponsor segments", &state.app.sponsorblock_enabled);
+        if (state.app.sponsorblock_enabled != before) state.markConfigDirty();
+    }
 
     // ── AI Backend picker ──
     settingRow("AI Backend", 71, @src());
@@ -2045,13 +1725,17 @@ fn renderScriptsTab() void {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.0 });
         defer row.deinit();
 
+        // Active backend = accent text on a quiet bg_elevated fill (the one
+        // accent affordance); inactive = transparent + secondary text.
         if (ai_server.is_macos) {
             const apfel_active = ai_server.backend_kind == .apfel;
-            if (dvui.button(@src(), if (apfel_active) "● Apple Intelligence" else "○ Apple Intelligence", .{}, .{
-                .color_fill = if (apfel_active) theme.colors.accent_hover else dvui.Color{ .r = 60, .g = 56, .b = 54, .a = 200 },
-                .color_text = if (apfel_active) theme.colors.bg_header else theme.colors.text_muted,
-                .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-                .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            if (dvui.button(@src(), "Apple Intelligence", .{}, .{
+                .color_fill = if (apfel_active) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_text = if (apfel_active) theme.colors.accent else theme.colors.text_secondary,
+                .border = dvui.Rect.all(0),
+                .corner_radius = theme.dims.rad_md,
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
             })) {
                 if (!apfel_active) {
                     ai_server.stopServer();
@@ -2063,11 +1747,12 @@ fn renderScriptsTab() void {
         }
 
         const gemma_active = ai_server.backend_kind == .gemma_llama;
-        const gemma_label = if (gemma_active) "● Gemma 4 E2B (3.2GB)" else "○ Gemma 4 E2B (3.2GB)";
-        if (dvui.button(@src(), gemma_label, .{}, .{
-            .color_fill = if (gemma_active) theme.colors.accent_hover else dvui.Color{ .r = 60, .g = 56, .b = 54, .a = 200 },
-            .color_text = if (gemma_active) theme.colors.bg_header else theme.colors.text_muted,
-            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+        if (dvui.button(@src(), "Gemma 4 E2B (3.2GB)", .{}, .{
+            .color_fill = if (gemma_active) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = if (gemma_active) theme.colors.accent else theme.colors.text_secondary,
+            .border = dvui.Rect.all(0),
+            .corner_radius = theme.dims.rad_md,
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
         })) {
             if (!gemma_active) {
                 ai_server.stopServer();
@@ -2082,17 +1767,13 @@ fn renderScriptsTab() void {
         }
     }
 
-    // ── Web Remote Control ──
-    settingRow("Web Remote Control", 72, @src());
+    // ── Web Remote Control ── (toggle row; address shown as a quiet hint)
     {
         const remote = @import("../services/remote.zig");
-        const label = if (state.app.web_remote_enabled) "[ON] http://0.0.0.0:41595" else "[OFF] Disabled";
-        if (dvui.button(@src(), label, .{}, .{
-            .color_fill = if (state.app.web_remote_enabled) theme.colors.accent_hover else dvui.Color{ .r = 60, .g = 56, .b = 54, .a = 200 },
-            .color_text = if (state.app.web_remote_enabled) theme.colors.bg_header else theme.colors.text_muted,
-            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-        })) {
-            state.app.web_remote_enabled = !state.app.web_remote_enabled;
+        const hint = if (state.app.web_remote_enabled) "http://0.0.0.0:41595" else "Off";
+        const before = state.app.web_remote_enabled;
+        components.toggleRow(@src(), "Web Remote Control", hint, &state.app.web_remote_enabled);
+        if (state.app.web_remote_enabled != before) {
             if (state.app.web_remote_enabled) {
                 remote.start();
                 state.showToast("Web Remote started on :41595");
@@ -2111,9 +1792,9 @@ fn renderScriptsTab() void {
         const status = party.statusText(&status_buf);
         _ = dvui.label(@src(), "{s}", .{status}, .{
             .color_text = switch (party.role) {
-                .none => theme.colors.text_muted,
+                .none => theme.colors.text_tertiary,
                 .host => theme.colors.accent,
-                .client => theme.colors.text_main,
+                .client => theme.colors.text_secondary,
             },
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
         });
@@ -2124,49 +1805,56 @@ fn renderScriptsTab() void {
         });
 
         if (party.role == .none) {
-            // Host button
+            // Host button — primary accent action.
             if (dvui.button(@src(), "Host Party", .{}, .{
-                .color_fill = theme.colors.accent_hover,
-                .color_text = theme.colors.bg_header,
-                .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-                .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+                .color_fill = theme.colors.accent,
+                .color_text = theme.colors.text_on_accent,
+                .border = dvui.Rect.all(0),
+                .corner_radius = theme.dims.rad_md,
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
             })) {
                 party.hostParty();
             }
 
             // Join input + button
             _ = dvui.label(@src(), "Join:", .{}, .{
-                .color_text = theme.colors.text_muted,
-                .padding = .{ .x = 6, .y = 4, .w = 2, .h = 4 },
+                .color_text = theme.colors.text_secondary,
+                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = 2, .h = theme.spacing.xs },
             });
             var host_ip_input = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.party_host_ip_buf } }, .{
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 120, .h = 20 },
-                .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-                .color_fill = dvui.Color{ .r = 15, .g = 15, .b = 22, .a = 255 },
+                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                .color_fill = theme.colors.bg_input,
+                .color_border = theme.colors.border_input,
                 .border = dvui.Rect.all(1),
-                .corner_radius = dvui.Rect.all(6),
+                .corner_radius = theme.dims.rad_md,
             });
             const ip_enter = host_ip_input.enter_pressed;
             host_ip_input.deinit();
             const ip_len = std.mem.indexOfScalar(u8, &state.app.party_host_ip_buf, 0) orelse 0;
             if (ip_len > 0) {
                 const clicked_join = dvui.button(@src(), "Join", .{}, .{
-                    .color_fill = dvui.Color{ .r = 80, .g = 160, .b = 80, .a = 255 },
-                    .color_text = theme.colors.bg_header,
-                    .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-                    .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
+                    .color_fill = theme.colors.bg_elevated,
+                    .color_text = theme.colors.text_primary,
+                    .border = dvui.Rect.all(0),
+                    .corner_radius = theme.dims.rad_md,
+                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                    .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
                 });
                 if (clicked_join or ip_enter) {
                     party.joinParty(state.app.party_host_ip_buf[0..ip_len]);
                 }
             }
         } else {
-            // Leave button
+            // Leave button — danger as TEXT on a quiet fill (not a red box).
             if (dvui.button(@src(), "Leave Party", .{}, .{
-                .color_fill = dvui.Color{ .r = 180, .g = 60, .b = 60, .a = 255 },
-                .color_text = theme.colors.text_main,
-                .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+                .color_fill = theme.colors.bg_elevated,
+                .color_text = theme.colors.danger,
+                .border = dvui.Rect.all(0),
+                .corner_radius = theme.dims.rad_md,
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             })) {
                 party.leaveParty();
             }
@@ -2178,7 +1866,7 @@ fn renderScriptsTab() void {
             components.divider();
 
             _ = dvui.label(@src(), "Chat", .{}, .{
-                .id_extra = 7400, .color_text = label_text,
+                .id_extra = 7400, .color_text = labelText(),
                 .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
             });
 
@@ -2187,9 +1875,9 @@ fn renderScriptsTab() void {
                 var chat_box = dvui.box(@src(), .{ .dir = .vertical }, .{
                     .id_extra = 7500, .expand = .horizontal,
                     .background = true,
-                    .color_fill = dvui.Color{ .r = 12, .g = 12, .b = 18, .a = 255 },
-                    .corner_radius = dvui.Rect.all(4),
-                    .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
+                    .color_fill = theme.colors.bg_input,
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
                     .min_size_content = .{ .w = 0, .h = 80 },
                     .max_size_content = .{ .w = std.math.floatMax(f32), .h = 100 },
                 });
@@ -2201,7 +1889,7 @@ fn renderScriptsTab() void {
                     const is_sys = msg.len > 2 and msg[0] == '>' and msg[1] == '>';
                     _ = dvui.label(@src(), "{s}", .{msg}, .{
                         .id_extra = ci + 7600,
-                        .color_text = if (is_sys) theme.colors.text_muted else theme.colors.text_main,
+                        .color_text = if (is_sys) theme.colors.text_tertiary else theme.colors.text_primary,
                     });
                 }
             }
@@ -2216,10 +1904,11 @@ fn renderScriptsTab() void {
 
                 var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &party.chat_input } }, .{
                     .expand = .horizontal,
-                    .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-                    .color_fill = dvui.Color{ .r = 15, .g = 15, .b = 22, .a = 255 },
+                    .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                    .color_fill = theme.colors.bg_input,
+                    .color_border = theme.colors.border_input,
                     .border = dvui.Rect.all(1),
-                    .corner_radius = dvui.Rect.all(4),
+                    .corner_radius = theme.dims.rad_sm,
                 });
                 const chat_enter = te.enter_pressed;
                 te.deinit();
@@ -2227,25 +1916,27 @@ fn renderScriptsTab() void {
                 const clicked_send = dvui.button(@src(), "Send", .{}, .{
                     .id_extra = 7710,
                     .color_fill = theme.colors.accent,
-                    .color_text = dvui.Color.white,
-                    .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-                    .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
-                    .corner_radius = dvui.Rect.all(4),
+                    .color_text = theme.colors.text_on_accent,
+                    .border = dvui.Rect.all(0),
+                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                    .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
+                    .corner_radius = theme.dims.rad_sm,
                 });
                 if (clicked_send or chat_enter) {
                     party.sendChat();
                 }
             }
 
-            // Sync URL button (host only)
+            // Sync URL button (host only) — secondary action, neutral fill.
             if (party.role == .host) {
                 if (dvui.button(@src(), "Sync Current Video to All", .{}, .{
                     .id_extra = 7720,
-                    .color_fill = dvui.Color{ .r = 40, .g = 120, .b = 180, .a = 255 },
-                    .color_text = dvui.Color.white,
-                    .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
-                    .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 },
-                    .corner_radius = dvui.Rect.all(6),
+                    .color_fill = theme.colors.bg_elevated,
+                    .color_text = theme.colors.text_primary,
+                    .border = dvui.Rect.all(0),
+                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                    .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
+                    .corner_radius = theme.dims.rad_md,
                 })) {
                     if (state.app.active_player_idx < state.app.players.items.len) {
                         const p = state.app.players.items[state.app.active_player_idx];
@@ -2263,7 +1954,7 @@ fn renderScriptsTab() void {
 
     if (state.app.script_count == 0) {
         _ = dvui.label(@src(), "No scripts found in ~/.config/mpv/scripts/ or ~/.config/zigzag/scripts/", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_tertiary,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
         });
     } else {
@@ -2281,18 +1972,21 @@ fn renderScriptsTab() void {
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = i,
                 .expand = .horizontal,
-                .padding = .{ .x = 4, .y = 3, .w = 4, .h = 3 },
+                .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = theme.spacing.xs, .h = theme.spacing.xs },
             });
             defer row.deinit();
 
-            // Toggle button
-            const toggle_label = if (enabled) "[ON]" else "[OFF]";
+            // Compact text toggle — accent text when on (single affordance),
+            // tertiary when off; transparent fill, no box.
+            const toggle_label = if (enabled) "On" else "Off";
             if (dvui.button(@src(), toggle_label, .{}, .{
                 .id_extra = i + 7000,
-                .color_fill = if (enabled) theme.colors.accent_hover else dvui.Color{ .r = 50, .g = 46, .b = 44, .a = 200 },
-                .color_text = if (enabled) theme.colors.bg_header else theme.colors.text_muted,
-                .padding = .{ .x = 8, .y = 2, .w = 8, .h = 2 },
-                .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_text = if (enabled) theme.colors.accent else theme.colors.text_tertiary,
+                .border = dvui.Rect.all(0),
+                .min_size_content = .{ .w = 32, .h = 0 },
+                .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
+                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
             })) {
                 state.app.script_enabled[i] = !state.app.script_enabled[i];
                 scripts.saveScriptState(i);
@@ -2301,7 +1995,7 @@ fn renderScriptsTab() void {
             // Script name
             _ = dvui.labelNoFmt(@src(), name, .{}, .{
                 .id_extra = i + 7100,
-                .color_text = if (enabled) theme.colors.text_main else theme.colors.text_muted,
+                .color_text = if (enabled) theme.colors.text_primary else theme.colors.text_tertiary,
             });
         }
     }
@@ -2309,7 +2003,7 @@ fn renderScriptsTab() void {
     // ── Recommended Scripts ──
     settingRow("Recommended Scripts", 72, @src());
     _ = dvui.label(@src(), "One-click install popular mpv scripts", .{}, .{
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_tertiary,
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
     });
 
@@ -2317,7 +2011,7 @@ fn renderScriptsTab() void {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i + 8000,
             .expand = .horizontal,
-            .padding = .{ .x = 4, .y = 3, .w = 4, .h = 3 },
+            .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = theme.spacing.xs, .h = theme.spacing.xs },
         });
         defer row.deinit();
 
@@ -2332,18 +2026,16 @@ fn renderScriptsTab() void {
         }
 
         if (installed) {
-            _ = dvui.label(@src(), "  Installed  ", .{}, .{
-                .id_extra = i + 8100,
-                .color_text = theme.colors.success,
-                .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-            });
+            components.statusPill("Installed", .success);
         } else {
             if (dvui.button(@src(), "Install", .{}, .{
                 .id_extra = i + 8100,
                 .color_fill = theme.colors.accent,
-                .color_text = theme.colors.bg_header,
-                .padding = .{ .x = 8, .y = 2, .w = 8, .h = 2 },
-                .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+                .color_text = theme.colors.text_on_accent,
+                .border = dvui.Rect.all(0),
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 2 },
+                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
             })) {
                 scripts.installScript(i);
             }
@@ -2351,20 +2043,20 @@ fn renderScriptsTab() void {
 
         _ = dvui.label(@src(), "{s}", .{rec.name}, .{
             .id_extra = i + 8200,
-            .color_text = theme.colors.text_main,
-            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+            .color_text = theme.colors.text_primary,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
 
         _ = dvui.label(@src(), "{s}", .{rec.description}, .{
             .id_extra = i + 8300,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_tertiary,
         });
     }
 
     // Info footer
     _ = dvui.label(@src(), "Scripts load on next player creation. Restart app to apply changes.", .{}, .{
         .id_extra = 8999,
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_tertiary,
         .margin = .{ .x = 0, .y = 12, .w = 0, .h = 0 },
     });
 }
@@ -2579,18 +2271,16 @@ pub fn renderDepsModal() void {
     };
 
     for (rows, 0..) |r, i| {
+        // Calm: no zebra striping — rows separated by whitespace alone.
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i,
             .expand = .horizontal,
             .padding = .{ .x = 4, .y = 6, .w = 4, .h = 6 },
             .margin = .{ .y = 1 },
-            .background = i % 2 == 0,
-            .color_fill = dvui.Color{ .r = 16, .g = 16, .b = 24, .a = 100 },
-            .corner_radius = dvui.Rect.all(4),
         });
         defer row.deinit();
 
-        // Status icon — lucide glyph, colored by state
+        // Status icon — lucide glyph, colored by semantic token.
         const icon_data = if (r.ok)
             icons.tvg.lucide.@"circle-check-big"
         else if (r.pending)
@@ -2598,11 +2288,11 @@ pub fn renderDepsModal() void {
         else
             icons.tvg.lucide.@"circle-x";
         const icon_color = if (r.ok)
-            dvui.Color{ .r = 100, .g = 210, .b = 140, .a = 255 }
+            theme.colors.semantic_success
         else if (r.pending)
-            dvui.Color{ .r = 230, .g = 190, .b = 80, .a = 255 }
+            theme.colors.semantic_warn
         else
-            dvui.Color{ .r = 220, .g = 110, .b = 110, .a = 255 };
+            theme.colors.semantic_error;
 
         _ = dvui.icon(@src(), "", icon_data, .{}, .{
             .id_extra = i,
@@ -2613,13 +2303,13 @@ pub fn renderDepsModal() void {
         });
         _ = dvui.label(@src(), "{s}", .{r.name}, .{
             .id_extra = i + 1000,
-            .color_text = theme.colors.accent,
+            .color_text = theme.colors.text_primary,
             .min_size_content = .{ .w = 140, .h = 0 },
             .gravity_y = 0.5,
         });
         _ = dvui.label(@src(), "{s}", .{if (r.pending) "Downloading…" else r.desc}, .{
             .id_extra = i + 2000,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
             .expand = .horizontal,
         });
@@ -2630,9 +2320,10 @@ pub fn renderDepsModal() void {
                 if (dvui.button(@src(), "Download", .{}, .{
                     .id_extra = i,
                     .color_fill = theme.colors.accent,
-                    .color_text = dvui.Color.white,
-                    .corner_radius = dvui.Rect.all(4),
-                    .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                    .color_text = theme.colors.text_on_accent,
+                    .border = dvui.Rect.all(0),
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                     .gravity_y = 0.5,
                 })) {
                     deps_mod.fetchSherpaWhisperAsync();
@@ -2642,9 +2333,10 @@ pub fn renderDepsModal() void {
                 if (dvui.button(@src(), "Download", .{}, .{
                     .id_extra = i,
                     .color_fill = theme.colors.accent,
-                    .color_text = dvui.Color.white,
-                    .corner_radius = dvui.Rect.all(4),
-                    .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                    .color_text = theme.colors.text_on_accent,
+                    .border = dvui.Rect.all(0),
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                     .gravity_y = 0.5,
                 })) {
                     deps_mod.fetchSherpaTtsAsync();
@@ -2654,9 +2346,10 @@ pub fn renderDepsModal() void {
                 if (dvui.button(@src(), "Download", .{}, .{
                     .id_extra = i,
                     .color_fill = theme.colors.accent,
-                    .color_text = dvui.Color.white,
-                    .corner_radius = dvui.Rect.all(4),
-                    .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                    .color_text = theme.colors.text_on_accent,
+                    .border = dvui.Rect.all(0),
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                     .gravity_y = 0.5,
                 })) {
                     deps_mod.fetchSherpaStreamAsync();
@@ -2666,9 +2359,10 @@ pub fn renderDepsModal() void {
                 if (dvui.button(@src(), "Download", .{}, .{
                     .id_extra = i,
                     .color_fill = theme.colors.accent,
-                    .color_text = dvui.Color.white,
-                    .corner_radius = dvui.Rect.all(4),
-                    .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                    .color_text = theme.colors.text_on_accent,
+                    .border = dvui.Rect.all(0),
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                     .gravity_y = 0.5,
                 })) {
                     deps_mod.fetchSherpaKokoroAsync();
@@ -2711,14 +2405,12 @@ pub fn renderDepsModal() void {
             };
 
             for (rows_base, 0..) |r, gi| {
+                // Calm: no zebra striping.
                 var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .id_extra = 9000 + gi,
                     .expand = .horizontal,
                     .padding = .{ .x = 4, .y = 6, .w = 4, .h = 6 },
                     .margin = .{ .y = 1 },
-                    .background = gi % 2 == 0,
-                    .color_fill = dvui.Color{ .r = 16, .g = 16, .b = 24, .a = 100 },
-                    .corner_radius = dvui.Rect.all(4),
                 });
                 defer row.deinit();
 
@@ -2729,11 +2421,11 @@ pub fn renderDepsModal() void {
                 else
                     icons.tvg.lucide.@"circle-x";
                 const icon_color = if (r.ok)
-                    dvui.Color{ .r = 100, .g = 210, .b = 140, .a = 255 }
+                    theme.colors.semantic_success
                 else if (r.pending)
-                    dvui.Color{ .r = 230, .g = 190, .b = 80, .a = 255 }
+                    theme.colors.semantic_warn
                 else
-                    dvui.Color{ .r = 220, .g = 110, .b = 110, .a = 255 };
+                    theme.colors.semantic_error;
 
                 _ = dvui.icon(@src(), "", icon_data, .{}, .{
                     .id_extra = 9000 + gi,
@@ -2744,13 +2436,13 @@ pub fn renderDepsModal() void {
                 });
                 _ = dvui.label(@src(), "{s}", .{r.name}, .{
                     .id_extra = 9100 + gi,
-                    .color_text = theme.colors.accent,
+                    .color_text = theme.colors.text_primary,
                     .min_size_content = .{ .w = 140, .h = 0 },
                     .gravity_y = 0.5,
                 });
                 _ = dvui.label(@src(), "{s}", .{r.desc}, .{
                     .id_extra = 9200 + gi,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .gravity_y = 0.5,
                     .expand = .horizontal,
                 });
@@ -2763,9 +2455,10 @@ pub fn renderDepsModal() void {
                     if (dvui.button(@src(), btn_label, .{}, .{
                         .id_extra = 9300 + gi,
                         .color_fill = theme.colors.accent,
-                        .color_text = dvui.Color.white,
-                        .corner_radius = dvui.Rect.all(4),
-                        .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                        .color_text = theme.colors.text_on_accent,
+                        .border = dvui.Rect.all(0),
+                        .corner_radius = theme.dims.rad_sm,
+                        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                         .gravity_y = 0.5,
                     })) {
                         switch (r.action) {
@@ -2786,10 +2479,11 @@ pub fn renderDepsModal() void {
                 const running = ai_server.server_running;
                 const btn = if (running) "Stop Gemma Server" else "Start Gemma Server";
                 if (dvui.button(@src(), btn, .{}, .{
-                    .color_fill = if (running) dvui.Color{ .r = 180, .g = 60, .b = 60, .a = 255 } else theme.colors.accent,
-                    .color_text = dvui.Color.white,
-                    .corner_radius = dvui.Rect.all(4),
-                    .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+                    .color_fill = if (running) theme.colors.bg_elevated else theme.colors.accent,
+                    .color_text = if (running) theme.colors.danger else theme.colors.text_on_accent,
+                    .border = dvui.Rect.all(0),
+                    .corner_radius = theme.dims.rad_md,
+                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                 })) {
                     if (running) ai_server.stopServer() else ai_server.startServer();
                 }
@@ -2802,23 +2496,22 @@ pub fn renderDepsModal() void {
     const cmd = deps.installCmd(&cmd_buf, s);
     if (cmd.len > 0) {
         _ = dvui.label(@src(), "Install missing with Homebrew:", .{}, .{
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .margin = .{ .y = 14 },
         });
+        // Code block — a single fill tier delimits it (no border).
         var code_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 26, .a = 255 },
-            .color_border = dvui.Color{ .r = 50, .g = 50, .b = 70, .a = 200 },
-            .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(6),
-            .padding = .{ .x = 10, .y = 8, .w = 6, .h = 8 },
+            .color_fill = theme.colors.bg_input,
+            .corner_radius = theme.dims.rad_md,
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
             .margin = .{ .y = 4 },
         });
         defer code_row.deinit();
 
         _ = dvui.label(@src(), "{s}", .{cmd}, .{
-            .color_text = dvui.Color{ .r = 180, .g = 220, .b = 180, .a = 255 },
+            .color_text = theme.colors.text_secondary,
             .expand = .horizontal,
             .gravity_y = 0.5,
         });
@@ -2826,9 +2519,10 @@ pub fn renderDepsModal() void {
         // Run in Terminal — launch Terminal.app with AppleScript + pre-fill command
         if (dvui.button(@src(), "Run", .{}, .{
             .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
-            .corner_radius = dvui.Rect.all(4),
-            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            .color_text = theme.colors.text_on_accent,
+            .border = dvui.Rect.all(0),
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .margin = .{ .w = 4 },
             .gravity_y = 0.5,
         })) {
@@ -2852,10 +2546,11 @@ pub fn renderDepsModal() void {
         }
 
         if (dvui.button(@src(), "Copy", .{}, .{
-            .color_fill = dvui.Color{ .r = 35, .g = 35, .b = 48, .a = 255 },
-            .color_text = theme.colors.text_main,
-            .corner_radius = dvui.Rect.all(4),
-            .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_primary,
+            .border = dvui.Rect.all(0),
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .gravity_y = 0.5,
         })) {
             dvui.clipboardTextSet(cmd);
@@ -2871,15 +2566,15 @@ pub fn renderDepsModal() void {
     defer footer.deinit();
 
     _ = dvui.label(@src(), "Checking continuously — installs show up live.", .{}, .{
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_tertiary,
         .gravity_y = 0.5,
     });
     { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
     if (dvui.button(@src(), "Skip for now", .{}, .{
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_secondary,
         .border = dvui.Rect.all(0),
-        .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
         .gravity_y = 0.5,
     })) {
         state.app.deps_modal_open = false;
@@ -2900,7 +2595,7 @@ pub fn renderMediaInfo() void {
         .open_flag = &state.app.media_info_open,
     }, .{
         .min_size_content = .{ .w = 420, .h = 320 },
-        .color_fill = dvui.Color{ .r = 20, .g = 22, .b = 28, .a = 240 },
+        .color_fill = theme.colors.bg_surface,
         .color_border = theme.colors.border_drawer,
     });
     defer win.deinit();

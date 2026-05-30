@@ -60,7 +60,27 @@ fn fontAt(size: f32) dvui.Font {
 //        if (dvui.buttonIcon(@src(), "lbl", ic, .{}, .{}, .{ .data_out = &wd, ... })) { ... }
 //        tip(@src(), wd, "Full description");
 pub fn tip(src: std.builtin.SourceLocation, wd: dvui.WidgetData, text: []const u8) void {
-    dvui.tooltip(src, .{ .active_rect = wd.borderRectScale().r }, "{s}", .{text}, .{
+    tipId(src, wd, text, 0);
+}
+
+/// Same as `tip`, but takes an explicit `id_extra` so callers that emit many
+/// tooltips from one source location under one parent (e.g. the drawer rail's
+/// tab/bottom-icon helpers) can give each tooltip a distinct, collision-free
+/// id. Without this they all hash to the same FloatingTooltip id and dvui logs
+/// "duplicate widget id" every frame a tooltip is shown.
+pub fn tipId(src: std.builtin.SourceLocation, wd: dvui.WidgetData, text: []const u8, id_extra: usize) void {
+    // FloatingTooltipWidget derives its widget id from the source location
+    // alone — it builds its WidgetData from a fixed Options and ignores any
+    // caller-supplied .id_extra. So a tooltip that reuses its owner widget's
+    // @src() (as iconButton() does: buttonIcon(src) then tip(src)) hashes to
+    // the *same* id as that widget under the same parent, and dvui logs
+    // "duplicate widget id ... FloatingTooltip" on every frame the tooltip is
+    // shown. Offset the column to give the tooltip a distinct, collision-free
+    // id without disturbing the owner widget's id; fold in id_extra so repeated
+    // calls from one source location stay distinct.
+    var tip_src = src;
+    tip_src.column +%= 0x1000 +% @as(u32, @truncate(id_extra));
+    dvui.tooltip(tip_src, .{ .active_rect = wd.borderRectScale().r }, "{s}", .{text}, .{
         .color_fill = tk.bg_elevated(),
         .color_text = tk.text_primary(),
         .color_border = tk.border_subtle(),
@@ -71,76 +91,8 @@ pub fn tip(src: std.builtin.SourceLocation, wd: dvui.WidgetData, text: []const u
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// Legacy primitives (preserved)
+// Legacy primitives (preserved — live callers only)
 // ══════════════════════════════════════════════════════════════════════
-
-pub fn initCard(src: std.builtin.SourceLocation) !dvui.BoxWidget {
-    const b = dvui.box(src, .{ .dir = .vertical }, .{
-        .expand = .horizontal,
-        .background = true,
-        .color_fill = theme.colors.bg_card,
-        .color_border = theme.colors.border_card,
-        .border = dvui.Rect.all(1),
-        .corner_radius = theme.dims.rad_md,
-        .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
-        .padding = theme.dims.pad_md
-    });
-    return b;
-}
-
-pub fn initGlassPanel(src: std.builtin.SourceLocation) !dvui.BoxWidget {
-    const b = dvui.box(src, .{ .dir = .vertical }, .{
-        .expand = .both,
-        .background = true,
-        .color_fill = theme.colors.bg_glass,
-        .color_border = theme.colors.border_glass,
-        .border = dvui.Rect.all(1),
-        .corner_radius = theme.dims.rad_lg,
-        .padding = theme.dims.pad_md,
-        .box_shadow = .{ .color = dvui.Color{ .r=0, .g=0, .b=0, .a=180 }, .offset = .{ .x=0, .y=4 }, .fade = 12.0 },
-    });
-    return b;
-}
-
-pub fn initDrawer(src: std.builtin.SourceLocation, override_width: ?f32) !dvui.BoxWidget {
-    const w = if (override_width) |ov| ov else 480;
-    const b = dvui.box(src, .{ .dir = .vertical }, .{
-        .min_size_content = .{ .w = w, .h = 10 },
-        .expand = .vertical,
-        .background = true,
-        .color_fill = theme.colors.bg_drawer,
-        .color_border = theme.colors.border_drawer,
-        .border = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
-        .padding = theme.dims.pad_lg,
-    });
-    return b;
-}
-
-pub fn IconBtn(src: std.builtin.SourceLocation, name: []const u8, icon: anytype, color_text: dvui.Color, color_fill: dvui.Color) bool {
-    const opts = dvui.Options{ .color_text = color_text, .color_fill = color_fill };
-    return dvui.buttonIcon(src, name, icon, .{}, .{}, opts);
-}
-
-pub fn AlertCard(src: std.builtin.SourceLocation, msg: []const u8, level: enum { warning, danger, success }) void {
-    const col = switch(level) {
-        .warning => theme.colors.warning,
-        .danger => theme.colors.danger,
-        .success => theme.colors.success,
-    };
-
-    var b = dvui.box(src, .{ .dir = .horizontal }, .{
-        .expand = .horizontal,
-        .background = true,
-        .color_fill = theme.colors.bg_input,
-        .color_border = col,
-        .border = .{ .x=2, .y=0, .w=0, .h=0 }, // Left edge accent
-        .padding = theme.dims.pad_sm,
-        .margin = .{ .x=0, .y=4, .w=0, .h=4 }
-    });
-    defer b.deinit();
-
-    _ = dvui.label(src, "{s}", .{msg}, .{ .color_text = col });
-}
 
 pub fn ProgressBar(src: std.builtin.SourceLocation, fraction: f32, label: []const u8, id_extra: usize) void {
     var container = dvui.box(src, .{ .dir = .vertical }, .{ .id_extra = id_extra, .expand = .horizontal, .margin = .{ .x=0, .y=4, .w=0, .h=4 } });
@@ -158,84 +110,6 @@ pub fn ProgressBar(src: std.builtin.SourceLocation, fraction: f32, label: []cons
         .color_fill = theme.colors.bg_input,
         .color_text = theme.colors.accent,
         .corner_radius = dvui.Rect.all(4)
-    });
-}
-
-/// Small colored pill badge for status display.
-/// Usage: StatusBadge(@src(), "LIVE", .success);
-pub fn StatusBadge(src: std.builtin.SourceLocation, label: []const u8, level: enum { info, success, warning, danger }) void {
-    const col = switch (level) {
-        .info => theme.colors.accent,
-        .success => theme.colors.success,
-        .warning => theme.colors.warning,
-        .danger => theme.colors.danger,
-    };
-    var b = dvui.box(src, .{ .dir = .horizontal }, .{
-        .background = true,
-        .color_fill = dvui.Color{ .r = col.r, .g = col.g, .b = col.b, .a = 30 },
-        .color_border = col,
-        .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(99),
-        .padding = .{ .x = 8, .y = 2, .w = 8, .h = 2 },
-        .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-    });
-    defer b.deinit();
-    _ = dvui.label(src, "{s}", .{label}, .{ .color_text = col });
-}
-
-/// Horizontal divider line with themed color (legacy signature).
-pub fn Divider(src: std.builtin.SourceLocation) void {
-    var d = dvui.box(src, .{ .dir = .horizontal }, .{
-        .expand = .horizontal,
-        .background = true,
-        .color_fill = theme.colors.divider,
-        .min_size_content = .{ .w = 0, .h = 1 },
-        .max_size_content = .{ .w = 0, .h = 1 },
-        .margin = .{ .x = 0, .y = 6, .w = 0, .h = 6 },
-    });
-    d.deinit();
-}
-
-/// Empty state placeholder with icon + message (legacy signature).
-pub fn EmptyState(src: std.builtin.SourceLocation, icon: anytype, title: []const u8, subtitle: []const u8) void {
-    var container = dvui.box(src, .{ .dir = .vertical }, .{
-        .expand = .both,
-        .gravity_x = 0.5,
-        .gravity_y = 0.4,
-        .padding = dvui.Rect.all(20),
-    });
-    defer container.deinit();
-
-    _ = dvui.icon(src, "", icon, .{}, .{
-        .color_text = theme.colors.text_dim,
-        .min_size_content = .{ .w = 36, .h = 36 },
-        .gravity_x = 0.5,
-        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
-    });
-    _ = dvui.label(src, "{s}", .{title}, .{
-        .color_text = theme.colors.text_muted,
-        .gravity_x = 0.5,
-        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
-    });
-    if (subtitle.len > 0) {
-        _ = dvui.label(src, "{s}", .{subtitle}, .{
-            .color_text = theme.colors.text_dim,
-            .gravity_x = 0.5,
-        });
-    }
-}
-
-/// Compact inline progress indicator (thin bar, no label).
-pub fn MiniProgress(src: std.builtin.SourceLocation, fraction: f32, color: dvui.Color) void {
-    var pct = std.math.clamp(fraction, 0.0, 1.0);
-    _ = dvui.slider(src, .{ .fraction = &pct }, .{
-        .expand = .horizontal,
-        .min_size_content = .{ .w = 10, .h = 3 },
-        .max_size_content = .{ .w = 9999, .h = 4 },
-        .color_fill = theme.colors.bg_input,
-        .color_text = color,
-        .corner_radius = dvui.Rect.all(2),
-        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
     });
 }
 
@@ -351,9 +225,9 @@ pub fn toggleRow(
         var pill = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .gravity_y = 0.5,
             .background = true,
+            // Fill alone signals state — accent when on, bg_elevated when off.
+            // No border (calm: avoid the extra hairline ring around the pill).
             .color_fill = if (value.*) tk.accent_primary() else tk.bg_elevated(),
-            .color_border = if (value.*) tk.accent_primary() else tk.border_strong(),
-            .border = dvui.Rect.all(1),
             .corner_radius = tk.rad_pill,
             .min_size_content = .{ .w = pill_w, .h = pill_h },
             .max_size_content = .{ .w = pill_w, .h = pill_h },
@@ -420,10 +294,9 @@ pub fn selectRow(
         const dd_changed = dvui.dropdown(@src(), options, .{ .choice = selected }, .{}, .{
             .gravity_y = 0.5,
             .min_size_content = .{ .w = 120, .h = 24 },
+            // Calm: bg_elevated fill + rad_md alone delimit the control — no border.
             .color_fill = tk.bg_elevated(),
             .color_text = tk.text_primary(),
-            .color_border = tk.border_strong(),
-            .border = dvui.Rect.all(1),
             .corner_radius = tk.rad_md,
             .padding = .{ .x = tk.sp_md, .y = tk.sp_xs, .w = tk.sp_md, .h = tk.sp_xs },
         });
@@ -435,9 +308,64 @@ pub fn selectRow(
     row.deinit();
 }
 
-/// 32px square icon button.  Hover: bg_elevated; active: bg_elevated +
-/// 2px accent_primary border.  Returns true on click.  Tooltip uses
-/// `dvui.tooltip` via the local `tip` helper.
+/// Minimal segmented control — replaces saturated filled-pill single-selects.
+/// A single bg_surface container (rad_sm, no border) holds N segments laid out
+/// horizontally. The active segment carries a quiet bg_elevated fill +
+/// text_primary; inactive segments are transparent + text_secondary. No
+/// per-segment border, no accent fill (calm). Returns the index the user
+/// clicked this frame, or null when nothing was clicked.
+pub fn segment(
+    src: std.builtin.SourceLocation,
+    options: []const []const u8,
+    selected: usize,
+) ?usize {
+    var clicked_index: ?usize = null;
+
+    var bar = dvui.box(src, .{ .dir = .horizontal }, .{
+        .background = true,
+        .color_fill = tk.bg_surface(),
+        .corner_radius = tk.rad_sm,
+        .padding = dvui.Rect.all(tk.sp_xs),
+    });
+    defer bar.deinit();
+
+    for (options, 0..) |opt, i| {
+        const is_active = i == selected;
+        var hovered: bool = false;
+
+        var seg = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i,
+            .background = true,
+            // Active = subtle bg_elevated fill; inactive = transparent.
+            // No per-segment border (calm).
+            .color_fill = if (is_active) tk.bg_elevated() else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .corner_radius = tk.rad_sm,
+            .padding = .{ .x = tk.sp_md, .y = tk.sp_xs, .w = tk.sp_md, .h = tk.sp_xs },
+            .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
+        });
+
+        if (dvui.clicked(seg.data(), .{ .hovered = &hovered })) {
+            clicked_index = i;
+        }
+        seg.drawBackground();
+
+        _ = dvui.label(@src(), "{s}", .{opt}, .{
+            .id_extra = i,
+            .gravity_y = 0.5,
+            .color_text = if (is_active) tk.text_primary() else tk.text_secondary(),
+            .font = fontAt(tk.fs_small),
+        });
+
+        seg.deinit();
+    }
+
+    return clicked_index;
+}
+
+/// 32px square icon button.  Active: subtle bg_elevated fill + accent_primary
+/// glyph, no border.  Inactive: transparent fill + text_secondary glyph, no
+/// border.  Returns true on click.  Tooltip uses `dvui.tooltip` via the local
+/// `tip` helper.
 pub fn iconButton(
     src: std.builtin.SourceLocation,
     icon: []const u8,
@@ -445,12 +373,13 @@ pub fn iconButton(
     active: bool,
 ) bool {
     var wd: dvui.WidgetData = undefined;
+    // Calm: active state is carried by the glyph color (accent) over a quiet
+    // bg_elevated fill — no accent border ring. Inactive is fully transparent.
     const clicked = dvui.buttonIcon(src, "iconButton", icon, .{}, .{}, .{
         .data_out = &wd,
         .color_fill = if (active) tk.bg_elevated() else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = if (active) tk.accent_primary() else tk.text_secondary(),
-        .color_border = if (active) tk.accent_primary() else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .border = if (active) dvui.Rect.all(2) else dvui.Rect.all(0),
+        .border = dvui.Rect.all(0),
         .corner_radius = tk.rad_sm,
         .min_size_content = .{ .w = 32, .h = 32 },
         .max_size_content = .{ .w = 32, .h = 32 },
@@ -462,23 +391,19 @@ pub fn iconButton(
     return clicked;
 }
 
-/// Small status pill — info / success / warn / err.
+/// Small status label — info / success / warn / err.
+/// Calm: colored TEXT only (no box, no border, no fill). `.info` reads as a
+/// neutral secondary label; the semantic kinds use their muted colors so the
+/// status reads without shouting. Horizontal padding preserved.
 pub fn statusPill(label: []const u8, kind: enum { info, success, warn, err }) void {
     const fg = switch (kind) {
-        .info    => tk.accent_dim(),
+        .info    => tk.text_secondary(),
         .success => tk.semantic_success(),
         .warn    => tk.semantic_warn(),
         .err     => tk.semantic_error(),
     };
-    // Render with a faint translucent background of the same hue.
-    const bg = dvui.Color{ .r = fg.r, .g = fg.g, .b = fg.b, .a = 40 };
 
     var pill = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .background = true,
-        .color_fill = bg,
-        .color_border = fg,
-        .border = dvui.Rect.all(1),
-        .corner_radius = tk.rad_pill,
         .padding = .{ .x = tk.sp_sm, .y = tk.sp_xs, .w = tk.sp_sm, .h = tk.sp_xs },
         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
     });
@@ -590,10 +515,6 @@ pub fn searchInput(
     len.* = text_slice.len;
 
     te.deinit();
-
-    if (changed and builtin.mode == .Debug) {
-        std.debug.print("[components.searchInput] changed len={d}\n", .{len.*});
-    }
 
     return changed;
 }

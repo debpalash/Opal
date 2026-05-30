@@ -33,11 +33,13 @@ pub fn save() void {
     setKey("translate_enabled", if (state.app.translate_enabled) "1" else "0");
     setKey("tts_voice", state.app.tts_voice_buf[0..state.app.tts_voice_len]);
     setKey("tts_speed", fmtFloat(state.app.tts_speed));
+    setKey("kokoro_sid", fmtInt(@as(usize, @import("../services/voice_backend.zig").kokoro_sid)));
     setKey("lang_learn", if (state.app.lang_learn_enabled) "1" else "0");
     setKey("asr_enabled", if (state.app.asr_enabled) "1" else "0");
     setKey("dubbing_enabled", if (state.app.dubbing_enabled) "1" else "0");
     setKey("eq_preset", fmtInt(state.app.eq_preset));
     setKey("download_rate_limit", fmtInt(@as(usize, @intCast(state.app.download_rate_limit))));
+    setKey("proxy_url", state.app.proxy_url[0..state.app.proxy_url_len]);
     setKey("ytdl_format_idx", fmtInt(state.app.ytdl_format_idx));
     setKey("drawer_width_px", fmtFloat(state.app.drawer_width_px));
     setKey("tmdb_api_key", state.app.tmdb.api_key[0..state.app.tmdb.api_key_len]);
@@ -166,6 +168,9 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         }
     } else if (std.mem.eql(u8, key, "tts_speed")) {
         state.app.tts_speed = std.fmt.parseFloat(f32, val) catch 1.0;
+    } else if (std.mem.eql(u8, key, "kokoro_sid")) {
+        const sid = std.fmt.parseInt(u16, val, 10) catch 0;
+        @import("../services/voice_backend.zig").kokoro_sid = if (sid <= 53) sid else 53;
     } else if (std.mem.eql(u8, key, "lang_learn")) {
         state.app.lang_learn_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "asr_enabled")) {
@@ -176,6 +181,11 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.eq_preset = std.fmt.parseInt(usize, val, 10) catch 0;
     } else if (std.mem.eql(u8, key, "download_rate_limit")) {
         state.app.download_rate_limit = std.fmt.parseInt(i32, val, 10) catch 0;
+    } else if (std.mem.eql(u8, key, "proxy_url")) {
+        if (val.len > 0 and val.len < state.app.proxy_url.len) {
+            @memcpy(state.app.proxy_url[0..val.len], val);
+            state.app.proxy_url_len = val.len;
+        }
     } else if (std.mem.eql(u8, key, "ytdl_format_idx")) {
         const idx = std.fmt.parseInt(usize, val, 10) catch 1;
         state.app.ytdl_format_idx = if (idx < 4) idx else 1;

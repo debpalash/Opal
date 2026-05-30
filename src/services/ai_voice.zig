@@ -40,7 +40,48 @@ var conv_thread: ?std.Thread = null;
 var stt_server_started: bool = false;
 var tts_server_started: bool = false;
 var voice_server_started: bool = false;
-pub var voice_socket: ?std.Io.net.Stream = null;
+/// Owned by the conversation worker (conversationLoopV2). Written by the worker
+/// (set on connect, null+close in its defer) and read/written by the UI thread
+/// (toggleConversation stop, notifyMediaState, enrollSpeaker). ALL access must
+/// go through the socket_mutex-guarded helpers below — never touch this var
+/// directly — to avoid a use-after-close race when the worker closes the stream
+/// while the UI thread is mid-write.
+var voice_socket: ?std.Io.net.Stream = null;
+var socket_mutex: @import("../core/sync.zig").Mutex = .{};
+
+/// Publish the connected stream so the UI thread can write to it.
+fn setVoiceSocket(s: std.Io.net.Stream) void {
+    socket_mutex.lock();
+    voice_socket = s;
+    socket_mutex.unlock();
+}
+
+/// Null-then-close the stream: snapshot + null under the lock so no UI-thread
+/// write can race the close, then close() outside the lock once the var is
+/// already null and unreachable by other threads.
+fn clearVoiceSocket() void {
+    socket_mutex.lock();
+    const s = voice_socket;
+    voice_socket = null;
+    socket_mutex.unlock();
+    if (s) |stream| stream.close(@import("../core/io_global.zig").io());
+}
+
+/// Snapshot the socket under the lock and write to it while still holding the
+/// lock, so a concurrent clearVoiceSocket()/close() cannot fire mid-write.
+fn voiceSocketWrite(msg: []const u8) void {
+    socket_mutex.lock();
+    defer socket_mutex.unlock();
+    if (voice_socket) |s| {
+        @import("../core/io_global.zig").streamWriteAll(s, msg) catch {};
+    }
+}
+
+/// Public, thread-safe "PAUSE" to the v2 voice server. ai_chat.zig calls this
+/// on stop instead of touching voice_socket directly (which is now private).
+pub fn pauseVoiceServer() void {
+    voiceSocketWrite("PAUSE\n");
+}
 
 pub const ConvPhase = enum {
     idle,
@@ -77,6 +118,7 @@ pub fn killStaleServers() void {
     // Remove stale sockets so ensureXxx doesn't think they're alive
     @import("../core/io_global.zig").deleteFileAbsolute(VOICE_SOCKET) catch {};
     @import("../core/io_global.zig").deleteFileAbsolute(TTS_SOCKET) catch {};
+    @import("../core/io_global.zig").deleteFileAbsolute(STT_SOCKET) catch {};
     // Kill any running python server processes by script name
     var kv = @import("../core/io_global.zig").Child.init(
         &.{ "pkill", "-f", "zigzag-voice-server.py" },
@@ -92,9 +134,19 @@ pub fn killStaleServers() void {
     kt.stdout_behavior = .Ignore;
     kt.stderr_behavior = .Ignore;
     _ = kt.spawnAndWait() catch {};
+    // STT server is spawned later by ensureSttServer — kill any leftover too,
+    // otherwise it accumulates as a zombie zigzag-stt-server.py across runs.
+    var ks = @import("../core/io_global.zig").Child.init(
+        &.{ "pkill", "-f", "zigzag-stt-server.py" },
+        @import("../core/alloc.zig").allocator,
+    );
+    ks.stdout_behavior = .Ignore;
+    ks.stderr_behavior = .Ignore;
+    _ = ks.spawnAndWait() catch {};
     // Reset flags
     voice_server_started = false;
     tts_server_started = false;
+    stt_server_started = false;
     logs.pushLog("info", "voice", "Stale servers killed", true);
 }
 
@@ -201,10 +253,8 @@ pub fn toggleConversation() void {
         is_recording = false;
         voice_mode = false;
         setPhase(.idle);
-        // Tell voice server to pause
-        if (voice_socket) |s| {
-            @import("../core/io_global.zig").streamWriteAll(s, "PAUSE\n") catch {};
-        }
+        // Tell voice server to pause (guarded — worker may be closing the socket)
+        voiceSocketWrite("PAUSE\n");
         logs.pushLog("info", "voice", "Conversation mode stopped", true);
     } else {
         // Pre-check: ensure at least one voice path is viable
@@ -255,13 +305,8 @@ var last_media_state: bool = false;
 pub fn notifyMediaState(media_playing: bool) void {
     if (media_playing == last_media_state) return;
     last_media_state = media_playing;
-    if (voice_socket) |s| {
-        if (media_playing) {
-            @import("../core/io_global.zig").streamWriteAll(s, "DUCK\n") catch {};
-        } else {
-            @import("../core/io_global.zig").streamWriteAll(s, "UNDUCK\n") catch {};
-        }
-    }
+    // Guarded write — worker may be closing the socket concurrently.
+    voiceSocketWrite(if (media_playing) "DUCK\n" else "UNDUCK\n");
 }
 
 /// V3 conversation loop: event-driven with barge-in support.
@@ -279,10 +324,9 @@ fn conversationLoopSherpa() void {
     }
 
     const vb = @import("voice_backend.zig");
-    const S = struct {
-        fn onTranscript(_: []const u8) void {} // placeholder; real dispatch inline below
-    };
-    var child = vb.spawnStreamingConvo(&S.onTranscript) orelse {
+    // Transcripts are dispatched inline below (reading child.stdout), so
+    // spawnStreamingConvo no longer takes a callback.
+    var child = vb.spawnStreamingConvo() orelse {
         logs.pushLog("error", "voice", "Sherpa streaming spawn failed — falling back to v2", false);
         conversationLoopV2();
         return;
@@ -360,17 +404,18 @@ fn conversationLoopV2() void {
         conversationLoopV1();
         return;
     };
-    voice_socket = stream;
+    setVoiceSocket(stream);
     defer {
-        stream.close(@import("../core/io_global.zig").io());
-        voice_socket = null;
+        // Null-then-close under the socket lock so a UI-thread write can't
+        // race the close (use-after-close). clearVoiceSocket does both.
+        clearVoiceSocket();
         setPhase(.idle);
         conversation_active = false;
         is_recording = false;
     }
 
     // Tell voice server to start listening
-    @import("../core/io_global.zig").streamWriteAll(stream, "RESUME\n") catch {};
+    voiceSocketWrite("RESUME\n");
     setPhase(.listening);
     is_recording = true;
     logs.pushLog("info", "voice", "Connected to voice server v3 — listening", true);
@@ -399,7 +444,7 @@ fn conversationLoopV2() void {
                 kill_aplay.stdout_behavior = .Ignore;
                 kill_aplay.stderr_behavior = .Ignore;
                 _ = kill_aplay.spawnAndWait() catch {};
-                @import("../core/io_global.zig").streamWriteAll(stream, "DONE_SPEAKING\n") catch {};
+                voiceSocketWrite("DONE_SPEAKING\n");
                 // Don't set conv_phase here — the waiter thread + voice server
                 // cooldown will handle the transition back to listening.
 
@@ -442,15 +487,17 @@ fn conversationLoopV2() void {
                 if (text.len > 0) {
                     logs.pushLog("info", "voice", "V3 transcript", false);
                     // Tell server we're about to speak (enables barge-in detection)
-                    @import("../core/io_global.zig").streamWriteAll(stream, "SPEAKING\n") catch {};
+                    voiceSocketWrite("SPEAKING\n");
                     is_recording = false;
 
                     // Send to chat
                     if (on_transcribed_fn) |f| f(text);
 
                     // Wait for LLM and TTS to finish in a separate thread so we don't block the socket!
+                    // The waiter no longer captures the raw stream — it writes via
+                    // voiceSocketWrite so its DONE_SPEAKING can't race the worker's close.
                     const S = struct {
-                        fn waiter(s: std.Io.net.Stream) void {
+                        fn waiter() void {
                             setPhase(.thinking);
                             var wait: usize = 0;
                             while (@import("ai_chat.zig").is_generating and conversation_active and wait < 300) : (wait += 1) {
@@ -462,17 +509,17 @@ fn conversationLoopV2() void {
                             while (is_speaking and conversation_active) {
                                 @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
                             }
-                            
-                            @import("../core/io_global.zig").streamWriteAll(s, "DONE_SPEAKING\n") catch {};
+
+                            voiceSocketWrite("DONE_SPEAKING\n");
                             @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
-                            
+
                             if (conversation_active) {
                                 setPhase(.listening);
                                 is_recording = true;
                             }
                         }
                     };
-                    _ = std.Thread.spawn(.{}, S.waiter, .{stream}) catch {};
+                    _ = std.Thread.spawn(.{}, S.waiter, .{}) catch {};
                 }
             }
         } else {
@@ -486,10 +533,9 @@ fn conversationLoopV2() void {
 
 /// Request speaker enrollment from the voice server
 pub fn enrollSpeaker() void {
-    if (voice_socket) |s| {
-        @import("../core/io_global.zig").streamWriteAll(s, "ENROLL\n") catch {};
-        logs.pushLog("info", "voice", "Speaker enrollment requested", true);
-    }
+    // Guarded write — worker may be closing the socket concurrently.
+    voiceSocketWrite("ENROLL\n");
+    logs.pushLog("info", "voice", "Speaker enrollment requested", true);
 }
 
 /// V1 fallback conversation loop (sox rec + STT server)

@@ -239,7 +239,7 @@ fn executeFindAndPlay(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
 
     // Wait for results — max 5s, early exit when ≥3 results after 1.5s
     var waited: usize = 0;
-    while (resolver.is_resolving and waited < 50) : (waited += 1) {
+    while (resolver.isResolving() and waited < 50) : (waited += 1) {
         if (resolver.result_count >= 3 and waited >= 15) break;
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
     }

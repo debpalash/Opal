@@ -3,7 +3,6 @@ const dvui = @import("dvui");
 const c = @import("../core/c.zig");
 const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
-const thumbnail = @import("thumbnail.zig");
 
 pub const video_w = 1920;
 pub const video_h = 1080;
@@ -781,28 +780,12 @@ pub fn updateTorrentBackgroundTasks() void {
         }
     }
 
-    // Poll thumbnail generation (non-blocking check)
-    thumbnail.pollGeneration(&state.app.thumb_state);
-
-    // If active player has a torrent playing and thumbs not started yet, try starting
-    if (state.app.active_player_idx < state.app.players.items.len) {
-        const ap = state.app.players.items[state.app.active_player_idx];
-        if (ap.current_torrent_id >= 0 and ap.torrent_is_ready and
-            !state.app.thumb_state.generating and !state.app.thumb_state.ready)
-        {
-            var dur: f64 = 0;
-            _ = c.mpv.mpv_get_property(ap.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur);
-            if (dur > 10.0) {
-                // Get the file path from torrent
-                var fpath: [512]u8 = undefined;
-                const poll_r = c.mpv.torrent_poll(state.app.torrent_ses, ap.current_torrent_id, ap.selected_file_idx, &fpath, 512, null, null, null);
-                if (poll_r == 1) {
-                    const fpath_len = std.mem.indexOfScalar(u8, &fpath, 0) orelse fpath.len;
-                    thumbnail.startGeneration(&state.app.thumb_state, fpath[0..fpath_len], @intFromFloat(dur));
-                }
-            }
-        }
-    }
+    // Seek-preview thumbnail generation is DISABLED: getThumbPath() has no
+    // consumer (no seek-preview UI was ever wired), so generating thumbnails
+    // was pure wasted work — and pollGeneration() blocked the UI thread on a
+    // per-frame child.wait() until ffmpeg finished. Leaving the thumbnail
+    // module + state intact for a future seek-preview feature; just not
+    // invoking generation/poll. (H8 + S10)
 
     // Auto-load subtitles when download completes
     if (state.app.sub_engine.state == .ready) {

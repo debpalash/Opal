@@ -24,23 +24,22 @@ var drawer_last_mouse_x: f32 = -1;
 // ══════════════════════════════════════════════════════════
 // Rail layout constants (production polish — Phase: drawer)
 // ══════════════════════════════════════════════════════════
-// Rail = 48px (32px button + 8px padding each side).
-// Each icon button is 32×32 with a 16px glyph centered.
-// Spacing.xs (4px) between icons within a group; spacing.lg
-// (16px) gaps between groups (no dividers).
-// Active state: 2px accent left border + bg_elevated fill.
-// Hover state: bg_hover lift. Focus: dvui's built-in ring on
-// tab_index'd buttons (uses theme `focus` color).
-// All literals below are TODO'd to canonical theme tokens
-// (theme.spacing.*, theme.radius.sm) once the integrator
-// finalizes the token surface in theme.zig.
-const RAIL_W: f32 = 56;
-const RAIL_SIDE_PAD: f32 = 8;
-const BTN_SIZE: f32 = 40;
-const ICON_GLYPH: f32 = 22;
-const ICON_GAP: f32 = 4;   // TODO: theme.spacing.xs when ready
-const GROUP_GAP: f32 = 16; // TODO: theme.spacing.lg when ready
-const RADIUS_SM = dvui.Rect.all(4); // TODO: theme.radius.sm when ready
+// Rail = fixed-geometry: a square icon button + side padding each side.
+// Spacing within/between groups and the corner radius come from theme tokens
+// (no inline magic numbers). Active state: a single 2px accent left indicator
+// (no boxed fill). Hover: bg_hover lift. Focus: dvui's built-in ring on
+// tab_index'd buttons.
+const RAIL_W: f32 = 56;             // fixed control width
+const RAIL_SIDE_PAD: f32 = theme.spacing.sm;
+const BTN_SIZE: f32 = 40;           // fixed control size
+const ICON_GLYPH: f32 = 22;         // fixed glyph size
+const ICON_GAP: f32 = theme.spacing.xs;
+const GROUP_GAP: f32 = theme.spacing.lg;
+const RADIUS_SM = theme.dims.rad_sm;
+
+// Minimum drawer content width — used both as the auto-clamp floor and as the
+// interactive drag minimum so they can't drift apart.
+const MIN_DRAWER_W: f32 = 300;
 
 // Transparent color used as the "no fill" baseline for icon buttons.
 const TRANSPARENT: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
@@ -53,7 +52,7 @@ pub fn renderDrawer() void {
     const max_w = @as(f32, @floatFromInt(@max(state.app.win_w, 400)));
     const max_drawer_w = max_w * 0.85; // Allow up to 85% of window
     const w = if (is_expanded) @as(f32, 5000.0) else blk: {
-        if (state.app.drawer_width_px < 200) state.app.drawer_width_px = 200;
+        if (state.app.drawer_width_px < MIN_DRAWER_W) state.app.drawer_width_px = MIN_DRAWER_W;
         if (state.app.drawer_width_px > max_drawer_w) state.app.drawer_width_px = max_drawer_w;
         break :blk state.app.drawer_width_px;
     };
@@ -71,14 +70,12 @@ pub fn renderDrawer() void {
 
     // Resize Handle Bar (hide when expanded)
     if (!state.app.drawer_expanded) {
-        const is_resizing = state.app.is_drawer_resizing;
         var drag_bar = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .vertical,
             .min_size_content = .{ .w = 14, .h = 10 },
             .background = true,
-            .color_fill = theme.colors.bg_header,
-            .color_border = if (is_resizing) theme.colors.accent else theme.colors.divider,
-            .border = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
+            // Borderless: separated by fill-tier alone (bg_app sits below bg_drawer).
+            .color_fill = theme.colors.bg_app,
         });
 
         const drag_bar_rect = drag_bar.data().borderRectScale().r;
@@ -153,7 +150,7 @@ pub fn renderDrawer() void {
             if (drawer_last_mouse_x >= 0 and mouse_x != drawer_last_mouse_x) {
                 const delta = drawer_last_mouse_x - mouse_x;
                 var new_w = state.app.drawer_width_px + delta;
-                if (new_w < 300) new_w = 300;
+                if (new_w < MIN_DRAWER_W) new_w = MIN_DRAWER_W;
                 if (new_w > max_drawer_w) new_w = max_drawer_w;
                 state.app.drawer_width_px = new_w;
                 drawer_last_mouse_x = mouse_x;
@@ -181,8 +178,9 @@ pub fn renderDrawer() void {
             .min_size_content = .{ .w = RAIL_W, .h = 10 },
             .max_size_content = .{ .w = RAIL_W, .h = std.math.floatMax(f32) },
             .background = true,
-            .color_fill = theme.colors.bg_header, // TODO: theme.colors.bg_surface when ready
-            .color_border = theme.colors.divider, // TODO: theme.colors.border_subtle when ready
+            .color_fill = theme.colors.bg_surface,
+            // One hairline at the rail|content seam — a true structural break.
+            .color_border = theme.colors.border_subtle,
             .border = .{ .x = 0, .y = 0, .w = 1, .h = 0 },
             .padding = .{ .x = 0, .y = RAIL_SIDE_PAD, .w = 0, .h = RAIL_SIDE_PAD },
         });
@@ -258,10 +256,10 @@ pub fn renderDrawer() void {
             .History => renderHistoryContent(),
             .RSS => rss.renderContent(),
             .Jellyfin => jellyfin_ui.renderContent(),
-            // AI removed from drawer — now a floating overlay
             .Plugins => plugin_mod.renderContent(),
             .Logs => renderLogsContent(),
             .Settings => settings_mod.renderSettingsContent(),
+            // AI tab is live — renders the AI settings/config panel.
             .AI => settings_mod.renderAIContent(),
         }
     }
@@ -282,18 +280,17 @@ fn renderRailTab(tab: state.DrawerTab, icon_data: anytype, label: []const u8, id
 
     // Row container — sized so a 32px square button + 2px indicator fits with the rail's 8px side padding.
     // Vertical gap between rows is theme.spacing.xs (4px).
+    // No boxed fill on the active row — the accent glyph + the 2px left
+    // indicator carry selection (calm: state is signalled once, not boxed).
     var tab_item = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = id,
         .expand = .horizontal,
         .min_size_content = .{ .w = RAIL_W - 2 * RAIL_SIDE_PAD, .h = BTN_SIZE },
-        .background = active,
-        .color_fill = if (active) theme.colors.bg_elevated else TRANSPARENT,
-        .corner_radius = RADIUS_SM,
         .margin = .{ .x = RAIL_SIDE_PAD, .y = ICON_GAP / 2, .w = RAIL_SIDE_PAD, .h = ICON_GAP / 2 },
     });
     defer tab_item.deinit();
 
-    // 2px accent left border for the active tab. Reserves 2px on the inactive
+    // 2px accent left indicator for the active tab. Reserves 2px on the inactive
     // tabs too so the icon never shifts when selection changes.
     {
         var indicator = dvui.box(@src(), .{}, .{
@@ -301,7 +298,7 @@ fn renderRailTab(tab: state.DrawerTab, icon_data: anytype, label: []const u8, id
             .expand = .vertical,
             .min_size_content = .{ .w = 2, .h = 0 },
             .background = active,
-            .color_fill = if (active) theme.colors.accent else TRANSPARENT, // TODO: theme.colors.accent_primary
+            .color_fill = if (active) theme.colors.accent_primary else TRANSPARENT,
         });
         indicator.deinit();
     }
@@ -314,9 +311,9 @@ fn renderRailTab(tab: state.DrawerTab, icon_data: anytype, label: []const u8, id
         .data_out = &wd,
         .id_extra = id + 1000,
         .color_fill = TRANSPARENT,
-        .color_fill_hover = theme.colors.bg_card_hover, // TODO: theme.colors.bg_hover when ready
-        .color_text = if (active) theme.colors.accent // TODO: theme.colors.accent_primary
-                      else theme.colors.text_muted,    // TODO: theme.colors.text_secondary
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_text = if (active) theme.colors.accent_primary
+                      else theme.colors.text_secondary,
         .border = dvui.Rect.all(0),
         .corner_radius = RADIUS_SM,
         .padding = dvui.Rect.all((BTN_SIZE - ICON_GLYPH) / 2),
@@ -329,7 +326,9 @@ fn renderRailTab(tab: state.DrawerTab, icon_data: anytype, label: []const u8, id
         state.app.drawer_tab = tab;
     }
     // Tooltip appears after the user hovers for >300ms (dvui default delay).
-    components.tip(@src(), wd, label);
+    // All rail tabs share this source location + parent, so pass the tab id as
+    // id_extra to avoid duplicate FloatingTooltip ids each frame.
+    components.tipId(@src(), wd, label, id);
 
     // Notification dot — small, overlapping the right side of the row.
     if (has_badge) {
@@ -381,9 +380,9 @@ fn renderBottomIcon(action: BottomAction, icon_data: anytype, label: []const u8,
         .data_out = &wd,
         .id_extra = id + 1000,
         .color_fill = TRANSPARENT,
-        .color_fill_hover = theme.colors.bg_card_hover, // TODO: theme.colors.bg_hover when ready
-        .color_text = if (is_active) theme.colors.accent // TODO: theme.colors.accent_primary
-                      else theme.colors.text_muted,      // TODO: theme.colors.text_secondary
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_text = if (is_active) theme.colors.accent_primary
+                      else theme.colors.text_secondary,
         .border = dvui.Rect.all(0),
         .corner_radius = RADIUS_SM,
         .padding = dvui.Rect.all((BTN_SIZE - ICON_GLYPH) / 2),
@@ -393,7 +392,9 @@ fn renderBottomIcon(action: BottomAction, icon_data: anytype, label: []const u8,
         .gravity_x = 0.5,
         .tab_index = @intCast(id + 1),
     });
-    components.tip(@src(), wd, label);
+    // All bottom icons share this source location + parent, so pass the icon id
+    // as id_extra to avoid duplicate FloatingTooltip ids each frame.
+    components.tipId(@src(), wd, label, id);
 
     if (clicked) {
         switch (action) {
@@ -426,9 +427,9 @@ fn tabHasBadge(tab: state.DrawerTab) bool {
 
 fn tabBadgeColor(tab: state.DrawerTab) dvui.Color {
     return switch (tab) {
-        .Search => theme.colors.accent,
-        .Queue => theme.colors.accent,
-        else => theme.colors.text_muted,
+        .Search => theme.colors.accent_primary,
+        .Queue => theme.colors.accent_primary,
+        else => theme.colors.text_secondary,
     };
 }
 
@@ -437,31 +438,35 @@ fn tabBadgeColor(tab: state.DrawerTab) dvui.Color {
 // ══════════════════════════════════════════════════════════
 
 fn renderHistoryContent() void {
-    // Header
+    // Masthead — sectionHeader title on the left, count + text-only Clear on
+    // the right. No header fill: separated by whitespace and fill-tier.
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
-            .background = true,
-            .color_fill = theme.colors.bg_drawer,
+            .padding = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = 0 },
         });
         defer hdr.deinit();
 
-        var count_buf: [40]u8 = undefined;
-        const count_str = std.fmt.bufPrintZ(&count_buf, "Watch History ({d})", .{watch_history.count}) catch "Watch History";
-        _ = dvui.label(@src(), "{s}", .{count_str}, .{
-            .color_text = theme.colors.text_main,
-            .gravity_y = 0.5,
-        });
+        components.sectionHeader("Watch History");
 
         { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
 
         if (watch_history.count > 0) {
+            var count_buf: [16]u8 = undefined;
+            const count_str = std.fmt.bufPrintZ(&count_buf, "{d}", .{watch_history.count}) catch "";
+            _ = dvui.label(@src(), "{s}", .{count_str}, .{
+                .color_text = theme.colors.text_tertiary,
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.md, .h = 0 },
+            });
+
+            // Text-only danger — transient action, not a resting red fill.
             if (dvui.button(@src(), "Clear All", .{}, .{
-                .color_fill = dvui.Color{ .r=80, .g=30, .b=30, .a=200 },
+                .color_fill = TRANSPARENT,
                 .color_text = theme.colors.danger,
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+                .corner_radius = RADIUS_SM,
+                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                .gravity_y = 0.5,
             })) {
                 watch_history.clearAll();
             }
@@ -469,10 +474,7 @@ fn renderHistoryContent() void {
     }
 
     if (watch_history.count == 0) {
-        _ = dvui.label(@src(), "No watch history yet", .{}, .{
-            .color_text = theme.colors.text_muted,
-            .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
-        });
+        components.emptyState(icons.tvg.lucide.@"clock", "No watch history yet", "Played items will appear here");
         return;
     }
 
@@ -489,33 +491,31 @@ fn renderHistoryContent() void {
         const name = entry.name[0..entry.name_len];
         const pct = @as(u8, @intFromFloat(std.math.clamp(entry.percent, 0.0, 100.0)));
 
-        // Clickable row — click to resume playback
+        // Clickable row — click to resume playback. Spacing-only list: no
+        // resting fill and no per-row border; hover lifts the background.
         const clicked = dvui.button(@src(), "", .{}, .{
             .id_extra = i + 10000,
             .expand = .horizontal,
-            .color_fill = theme.colors.bg_card,
-            .color_border = theme.colors.bg_header_border,
-            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+            .color_fill = TRANSPARENT,
+            .color_fill_hover = theme.colors.bg_hover,
+            .border = dvui.Rect.all(0),
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
-            .corner_radius = dvui.Rect.all(0),
+            .corner_radius = RADIUS_SM,
         });
 
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i,
             .expand = .horizontal,
-            .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
         });
         defer row.deinit();
 
-        // Progress indicator
-        const pct_color = if (pct >= 90) theme.colors.success
-                     else if (pct >= 50) theme.colors.warning
-                     else theme.colors.accent;
+        // Progress — quiet metadata, not a resting status hue.
         var pct_buf: [8]u8 = undefined;
         const pct_str = std.fmt.bufPrintZ(&pct_buf, "{d}%", .{pct}) catch "?";
         _ = dvui.label(@src(), "{s}", .{pct_str}, .{
             .id_extra = i + 5000,
-            .color_text = pct_color,
+            .color_text = theme.colors.text_tertiary,
             .min_size_content = .{ .w = 32, .h = 0 },
             .gravity_y = 0.5,
         });
@@ -528,7 +528,7 @@ fn renderHistoryContent() void {
         const show_len = @min(display_name.len, 50);
         _ = dvui.label(@src(), "{s}", .{display_name[0..show_len]}, .{
             .id_extra = i + 6000,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .expand = .horizontal,
             .gravity_y = 0.5,
         });
@@ -536,9 +536,9 @@ fn renderHistoryContent() void {
         // Remove button
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"x", .{}, .{}, .{
             .id_extra = i + 7000,
-            .color_fill = dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
-            .color_text = theme.colors.text_muted,
-            .padding = dvui.Rect.all(2),
+            .color_fill = TRANSPARENT,
+            .color_text = theme.colors.text_secondary,
+            .padding = dvui.Rect.all(theme.spacing.xs),
         })) {
             watch_history.remove(i);
             return; // list shifted
@@ -560,48 +560,40 @@ fn renderHistoryContent() void {
 // ══════════════════════════════════════════════════════════
 
 fn renderLogsContent() void {
-    // Controls header
+    // Controls masthead — sectionHeader title, no header fill/border.
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
-            .background = true,
-            .color_fill = theme.colors.bg_header,
-            .color_border = theme.colors.divider,
-            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+            .padding = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = 0 },
         });
         defer hdr.deinit();
 
-        _ = dvui.icon(@src(), "", icons.tvg.lucide.@"terminal", .{}, .{
-            .color_text = theme.colors.accent,
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-        });
-        _ = dvui.label(@src(), "Developer Console", .{}, .{
-            .color_text = theme.colors.text_main,
-            .gravity_y = 0.5,
-        });
+        components.sectionHeader("Developer Console");
 
         { var s = dvui.box(@src(), .{}, .{ .expand = .horizontal }); s.deinit(); }
 
-        // Filter toggle
+        // Filter toggle — calm active state: accent glyph on a subtle
+        // bg_elevated fill (no saturated pill). Reserve accent for this single
+        // active affordance.
         if (dvui.buttonIcon(@src(), if (logs.show_only_errors) "Errors" else "All", icons.tvg.lucide.@"eye", .{}, .{}, .{
-            .color_fill = if (logs.show_only_errors) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (logs.show_only_errors) theme.colors.bg_app else theme.colors.text_muted,
-            .corner_radius = dvui.Rect.all(99),
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+            .color_fill = if (logs.show_only_errors) theme.colors.bg_elevated else TRANSPARENT,
+            .color_text = if (logs.show_only_errors) theme.colors.accent_primary else theme.colors.text_secondary,
+            .corner_radius = RADIUS_SM,
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+            .gravity_y = 0.5,
         })) {
             logs.show_only_errors = !logs.show_only_errors;
         }
 
-        // Clear button
+        // Clear button — text-only danger.
         if (dvui.buttonIcon(@src(), "Clear", icons.tvg.lucide.@"trash-2", .{}, .{}, .{
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = TRANSPARENT,
             .color_text = theme.colors.danger,
-            .corner_radius = dvui.Rect.all(99),
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+            .corner_radius = RADIUS_SM,
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
+            .gravity_y = 0.5,
         })) {
             logs.clearAll();
         }
@@ -610,15 +602,15 @@ fn renderLogsContent() void {
     // Log entries
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_app });
     defer scroll.deinit();
-    var inner = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 } });
+    var inner = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs } });
     defer inner.deinit();
 
     const count = logs.logCount();
     if (count == 0) {
         _ = dvui.label(@src(), "No logs yet", .{}, .{
-            .color_text = theme.colors.text_dim,
+            .color_text = theme.colors.text_tertiary,
             .gravity_x = 0.5,
-            .margin = .{ .x = 0, .y = 20, .w = 0, .h = 0 },
+            .margin = .{ .x = 0, .y = theme.spacing.xl, .w = 0, .h = 0 },
         });
         return;
     }

@@ -25,14 +25,19 @@ pub fn processGlobalInputs() void {
 
             // ── Always-active shortcuts (work even when text is focused) ──
 
-            // Escape = defocus + close panels
+            // Escape = staged close. Defocus first, then peel panels one at a
+            // time (playlist → settings → drawer) so a single Escape doesn't
+            // nuke everything at once.
             if (key == .escape) {
                 if (dvui.focusedWidgetId() != null) {
                     dvui.focusWidget(null, null, null);
+                } else if (state.app.playlist_drawer_open) {
+                    state.app.playlist_drawer_open = false;
+                } else if (state.app.settings_open) {
+                    state.app.settings_open = false;
+                } else {
+                    state.app.drawer_open = false;
                 }
-                state.app.drawer_open = false;
-                state.app.settings_open = false;
-                state.app.playlist_drawer_open = false;
                 dvui.refresh(null, @src(), null);
                 continue;
             }
@@ -58,27 +63,6 @@ pub fn processGlobalInputs() void {
             if (dvui.focusedWidgetId() != null) {
                 continue;
             }
-            
-            // Escape closes settings/drawer
-            if (key == .escape) {
-                if (state.app.playlist_drawer_open) {
-                    state.app.playlist_drawer_open = false;
-                    dvui.refresh(null, @src(), null);
-                    continue;
-                }
-                if (state.app.settings_open) {
-                    state.app.settings_open = false;
-                    dvui.refresh(null, @src(), null);
-                    continue;
-                }
-            }
-            
-            // Ctrl+comma = Settings
-            if (key == .comma and mod.control()) {
-                state.app.settings_open = !state.app.settings_open;
-                dvui.refresh(null, @src(), null);
-                continue;
-            }
 
             // D = Toggle drawer
             if (key == .d and !mod.control() and !mod.shift()) {
@@ -93,18 +77,6 @@ pub fn processGlobalInputs() void {
                 ai_chat.is_bubble_open = !ai_chat.is_bubble_open;
                 dvui.refresh(null, @src(), null);
                 continue;
-            }
-
-            // Ctrl+O = Open file dialog
-            if (key == .o and mod.control()) {
-                ui.triggerFileOpen();
-                dvui.refresh(null, @src(), null);
-                continue;
-            }
-
-            // Ctrl+Q = Quit
-            if (key == .q and mod.control()) {
-                gracefulShutdown();
             }
 
             // Ctrl+W = Close active player (like browser tab close)
@@ -160,11 +132,7 @@ pub fn processGlobalInputs() void {
                         state.app.players.append(@import("../core/alloc.zig").allocator, p) catch {};
                         state.app.active_player_idx = state.app.players.items.len - 1;
 
-                        // Load the restored URL into the new player
-                        var null_term: [2048]u8 = undefined;
-                        @memcpy(null_term[0..url.len], url);
-                        null_term[url.len] = 0;
-
+                        // Load the restored URL into the new player.
                         const browser = @import("../services/browser.zig");
                         browser.loadContent(url);
                         state.showToast("Restored closed player");

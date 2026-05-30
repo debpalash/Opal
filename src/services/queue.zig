@@ -27,6 +27,9 @@ pub const QueueItem = struct {
     thumb_w: u32 = 0,
     thumb_h: u32 = 0,
     thumb_fetching: bool = false,
+    // Set once a thumbnail fetch has terminally failed, so the per-frame
+    // render loop does not respawn a fetch thread for it every frame.
+    thumb_failed: bool = false,
     duration: i64 = 0,
     added_at: i64 = 0,
     played: bool = false,
@@ -397,8 +400,9 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
                 .id_extra = idx + 510, .expand = .both, .corner_radius = dvui.Rect.all(4),
             });
         } else {
-            // Trigger background fetch
-            if (!item.thumb_fetching and item.thumb_url_len > 0) fetchQueueThumb(item);
+            // Trigger background fetch (skip items already fetching or that
+            // have terminally failed, so we don't respawn threads each frame)
+            if (!item.thumb_fetching and !item.thumb_failed and item.thumb_url_len > 0) fetchQueueThumb(item);
             dvui.icon(@src(), "", icons.tvg.lucide.@"image", .{}, .{
                 .id_extra = idx + 510, .gravity_x = 0.5, .gravity_y = 0.5,
                 .color_text = theme.colors.bg_glass,
@@ -502,47 +506,61 @@ fn playQueueItem(item: *QueueItem) void {
     state.showToast("Playing from queue");
 }
 
+/// Run a single UPDATE inside an already-open transaction. Returns true on
+/// success (prepared + stepped to SQLITE_DONE).
+fn swapStep(sql: [*c]const u8, bind1: ?i64, bind2: ?i64) bool {
+    var stmt: ?*c.sqlite.sqlite3_stmt = null;
+    if (c.sqlite.sqlite3_prepare_v2(db.?, sql, -1, &stmt, null) != c.sqlite.SQLITE_OK) return false;
+    defer _ = c.sqlite.sqlite3_finalize(stmt);
+    if (bind1) |v| _ = c.sqlite.sqlite3_bind_int64(stmt, 1, v);
+    if (bind2) |v| _ = c.sqlite.sqlite3_bind_int64(stmt, 2, v);
+    return c.sqlite.sqlite3_step(stmt) == c.sqlite.SQLITE_DONE;
+}
+
 fn swapQueueItems(idx_a: usize, idx_b: usize) void {
     if (idx_a >= queue_count or idx_b >= queue_count) return;
+    if (idx_a == idx_b) return;
 
-    // Swap in-memory
-    const tmp = queue_items[idx_a];
-    queue_items[idx_a] = queue_items[idx_b];
-    queue_items[idx_b] = tmp;
-
-    // Swap IDs in DB (exchange the two row IDs so order persists)
-    if (db == null) return;
+    // Original row IDs, before any swap. We exchange the two row IDs in the DB
+    // (using -1 as a temp to dodge the PK unique constraint) so display order
+    // persists, then mirror the swap in memory only after a clean COMMIT.
     const id_a = queue_items[idx_a].id;
     const id_b = queue_items[idx_b].id;
 
-    // Use temp ID to avoid unique constraint
-    const sql1 = "UPDATE queue SET id = -1 WHERE id = ?1;";
-    const sql2 = "UPDATE queue SET id = ?1 WHERE id = ?2;";
-    const sql3 = "UPDATE queue SET id = ?1 WHERE id = -1;";
-
-    var s1: ?*c.sqlite.sqlite3_stmt = null;
-    if (c.sqlite.sqlite3_prepare_v2(db.?, sql1, -1, &s1, null) == c.sqlite.SQLITE_OK) {
-        _ = c.sqlite.sqlite3_bind_int64(s1, 1, id_a);
-        _ = c.sqlite.sqlite3_step(s1);
-        _ = c.sqlite.sqlite3_finalize(s1);
-    }
-    var s2: ?*c.sqlite.sqlite3_stmt = null;
-    if (c.sqlite.sqlite3_prepare_v2(db.?, sql2, -1, &s2, null) == c.sqlite.SQLITE_OK) {
-        _ = c.sqlite.sqlite3_bind_int64(s2, 1, id_a);
-        _ = c.sqlite.sqlite3_bind_int64(s2, 2, id_b);
-        _ = c.sqlite.sqlite3_step(s2);
-        _ = c.sqlite.sqlite3_finalize(s2);
-    }
-    var s3: ?*c.sqlite.sqlite3_stmt = null;
-    if (c.sqlite.sqlite3_prepare_v2(db.?, sql3, -1, &s3, null) == c.sqlite.SQLITE_OK) {
-        _ = c.sqlite.sqlite3_bind_int64(s3, 1, id_b);
-        _ = c.sqlite.sqlite3_step(s3);
-        _ = c.sqlite.sqlite3_finalize(s3);
+    // If there is no DB, just swap in memory (nothing to persist atomically).
+    if (db == null) {
+        const tmp = queue_items[idx_a];
+        queue_items[idx_a] = queue_items[idx_b];
+        queue_items[idx_b] = tmp;
+        queue_items[idx_a].id = id_b;
+        queue_items[idx_b].id = id_a;
+        return;
     }
 
-    // Update in-memory IDs
-    queue_items[idx_a].id = id_a;
-    queue_items[idx_b].id = id_b;
+    // All three UPDATEs run inside one transaction; roll back on any failure
+    // so the persisted IDs never end up half-swapped.
+    if (c.sqlite.sqlite3_exec(db.?, "BEGIN;", null, null, null) != c.sqlite.SQLITE_OK) return;
+
+    const ok = swapStep("UPDATE queue SET id = -1 WHERE id = ?1;", id_a, null) and
+        swapStep("UPDATE queue SET id = ?1 WHERE id = ?2;", id_a, id_b) and
+        swapStep("UPDATE queue SET id = ?1 WHERE id = -1;", id_b, null);
+
+    if (!ok) {
+        _ = c.sqlite.sqlite3_exec(db.?, "ROLLBACK;", null, null, null);
+        return;
+    }
+    if (c.sqlite.sqlite3_exec(db.?, "COMMIT;", null, null, null) != c.sqlite.SQLITE_OK) {
+        _ = c.sqlite.sqlite3_exec(db.?, "ROLLBACK;", null, null, null);
+        return;
+    }
+
+    // Commit succeeded — now mirror the swap in memory, fixing up the IDs that
+    // were exchanged in the DB.
+    const tmp = queue_items[idx_a];
+    queue_items[idx_a] = queue_items[idx_b];
+    queue_items[idx_b] = tmp;
+    queue_items[idx_a].id = id_b;
+    queue_items[idx_b].id = id_a;
 }
 
 const thumb_cache_dir = "/tmp/zigzag_thumbs/queue";
@@ -551,13 +569,33 @@ fn thumbCachePath(item_id: i64, out: *[384]u8) ?[]const u8 {
     return std.fmt.bufPrintZ(out, thumb_cache_dir ++ "/{d}.jpg", .{item_id}) catch null;
 }
 
+// Cap concurrent thumbnail-fetch threads so a full queue can't spawn 200
+// network threads at once. Reserved/released around each worker.
+const MAX_THUMB_THREADS: i64 = 4;
+var thumb_threads_active: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+
 fn fetchQueueThumb(item: *QueueItem) void {
-    if (item.thumb_url_len == 0 or item.thumb_fetching) return;
+    if (item.thumb_url_len == 0 or item.thumb_fetching or item.thumb_failed) return;
+
+    // Reserve a thread slot; if we're at the cap, leave the item untouched so
+    // a later frame retries once a slot frees (it is NOT marked failed).
+    const prev = thumb_threads_active.fetchAdd(1, .acq_rel);
+    if (prev >= MAX_THUMB_THREADS) {
+        _ = thumb_threads_active.fetchSub(1, .acq_rel);
+        return;
+    }
+
     item.thumb_fetching = true;
 
     _ = std.Thread.spawn(.{}, struct {
         fn worker(ptr: *QueueItem) void {
-            defer ptr.thumb_fetching = false;
+            defer {
+                // A thumbnail that produced no pixels is a terminal failure;
+                // mark it so the render loop stops respawning a fetch for it.
+                if (ptr.thumb_pixels == null and ptr.thumb_tex == null) ptr.thumb_failed = true;
+                ptr.thumb_fetching = false;
+                _ = thumb_threads_active.fetchSub(1, .acq_rel);
+            }
 
             // 1) Check disk cache first
             var path_buf: [384]u8 = undefined;
@@ -632,7 +670,11 @@ fn fetchQueueThumb(item: *QueueItem) void {
             ptr.thumb_h = @intCast(h);
             ptr.thumb_pixels = p_slice;
         }
-    }.worker, .{item}) catch {};
+    }.worker, .{item}) catch {
+        // Spawn failed: release the reserved slot and re-arm for a later frame.
+        item.thumb_fetching = false;
+        _ = thumb_threads_active.fetchSub(1, .acq_rel);
+    };
 }
 
 // ══════════════════════════════════════════════════════════

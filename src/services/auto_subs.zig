@@ -49,7 +49,7 @@ fn resolveWhisperBin() ?[]const u8 {
 
 fn resolveWhisperModel(buf: *[512]u8) ?[]const u8 {
     const io = @import("../core/io_global.zig");
-    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+    const home = io.getenv("HOME") orelse "/tmp";
     const lang = whisper_lang[0..whisper_lang_len];
     const size = whisper_model_size[0..whisper_model_size_len];
     const is_en = std.mem.eql(u8, lang, "en");

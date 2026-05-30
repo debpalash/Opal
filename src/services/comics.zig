@@ -155,7 +155,9 @@ fn tryPluginsInDir(dir_path: []const u8, url: []const u8) bool {
         
         // Parse JSON response
         if (parsePluginJson(json_buf[0..json_len])) {
-            std.debug.print("[comics] Plugin matched: {s}\n", .{name});
+            var msg_buf: [320]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "Plugin matched: {s}", .{name}) catch "Plugin matched";
+            logs.pushLog("info", "comics", msg, false);
             return true;
         }
     }

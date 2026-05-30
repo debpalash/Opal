@@ -6,6 +6,7 @@ const theme = @import("../ui/theme.zig");
 const logs = @import("../core/logs.zig");
 const player = @import("../player/player.zig");
 const paths = @import("../core/paths.zig");
+const sync = @import("../core/sync.zig");
 
 // ══════════════════════════════════════════════════════════
 // ZigZag Plugin System
@@ -84,11 +85,36 @@ pub var plugin_count: usize = 0;
 pub var active_plugin: usize = 0;
 pub var scanned: bool = false;
 
-// Per-plugin results
+// Per-plugin results.
+//
+// `results`/`result_count`/`is_loading` are read by the UI thread every
+// frame and written by background plugin workers. All access goes through
+// `results_mutex`. `is_loading` doubles as a spawn gate: it is set to true
+// under the lock only if it was previously false (compare-and-set), so two
+// rapid clicks cannot launch two workers racing on the same buffers.
 pub var results: [MAX_RESULTS]PluginResult = std.mem.zeroes([MAX_RESULTS]PluginResult);
 pub var result_count: usize = 0;
 pub var is_loading: bool = false;
+pub var results_mutex = sync.Mutex{};
 pub var search_buf: [256]u8 = std.mem.zeroes([256]u8);
+
+/// Atomically claim the loading slot. Returns true if the caller now owns
+/// it (was idle), false if a worker is already running. Caller must release
+/// via `endLoading()` when done.
+fn beginLoading() bool {
+    results_mutex.lock();
+    defer results_mutex.unlock();
+    if (is_loading) return false;
+    is_loading = true;
+    result_count = 0;
+    return true;
+}
+
+fn endLoading() void {
+    results_mutex.lock();
+    defer results_mutex.unlock();
+    is_loading = false;
+}
 
 // ══════════════════════════════════════════════════════════
 // Plugin Discovery
@@ -259,17 +285,30 @@ fn logUnsafeWarn(name: []const u8) void {
     logs.pushLog("warn", "plugins", msg, false);
 }
 
+/// Surface a plugin/child-process spawn failure (e.g. missing `lua` or
+/// `curl`, or a non-executable plugin script) instead of swallowing it.
+fn logSpawnFail(argv0: []const u8) void {
+    var buf: [256]u8 = undefined;
+    const msg = std.fmt.bufPrintZ(&buf, "spawn failed: {s} not found or not executable", .{argv0}) catch "plugin spawn failed";
+    logs.pushLog("error", "plugin", msg, true);
+}
+
 pub fn runPluginSearch(query: []const u8) void {
     if (active_plugin >= plugin_count) return;
     if (!plugins[active_plugin].has_search) return;
-    if (is_loading) return;
-    
-    is_loading = true;
-    result_count = 0;
-    
+    if (!beginLoading()) return;
+
+    // Copy the query into a fixed buffer passed *by value* to the worker —
+    // the caller's `query` aliases the live `search_buf`, which keeps
+    // mutating as the user types.
+    var q_buf: [256]u8 = std.mem.zeroes([256]u8);
+    const qlen = @min(query.len, q_buf.len);
+    @memcpy(q_buf[0..qlen], query[0..qlen]);
+
     _ = std.Thread.spawn(.{}, struct {
-        fn worker(q: []const u8, pidx: usize) void {
-            defer is_loading = false;
+        fn worker(q_owned: [256]u8, q_len: usize, pidx: usize) void {
+            defer endLoading();
+            const q = q_owned[0..q_len];
 
             const p = plugins[pidx];
             var exec_buf: [600]u8 = undefined;
@@ -287,22 +326,19 @@ pub fn runPluginSearch(query: []const u8) void {
                 executeAndParse(&argv);
             }
         }
-    }.worker, .{ query, active_plugin }) catch {
-        is_loading = false;
+    }.worker, .{ q_buf, qlen, active_plugin }) catch {
+        endLoading();
     };
 }
 
 pub fn runPluginTrending() void {
     if (active_plugin >= plugin_count) return;
     if (!plugins[active_plugin].has_trending) return;
-    if (is_loading) return;
-    
-    is_loading = true;
-    result_count = 0;
-    
+    if (!beginLoading()) return;
+
     _ = std.Thread.spawn(.{}, struct {
         fn worker(pidx: usize) void {
-            defer is_loading = false;
+            defer endLoading();
 
             const p = plugins[pidx];
             var exec_buf: [600]u8 = undefined;
@@ -320,7 +356,7 @@ pub fn runPluginTrending() void {
             }
         }
     }.worker, .{active_plugin}) catch {
-        is_loading = false;
+        endLoading();
     };
 }
 
@@ -340,8 +376,20 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
         pl.loading_label_len = lbl.len;
     }
     
+    // Copy id/episode into fixed buffers passed *by value* — the caller's
+    // slices alias `results[*]` (a live, worker-mutated array) and a stack
+    // temporary that is gone the moment this function returns.
+    var id_buf: [128]u8 = std.mem.zeroes([128]u8);
+    const id_len = @min(id.len, id_buf.len);
+    @memcpy(id_buf[0..id_len], id[0..id_len]);
+    var ep_buf: [32]u8 = std.mem.zeroes([32]u8);
+    const ep_len = @min(episode.len, ep_buf.len);
+    @memcpy(ep_buf[0..ep_len], episode[0..ep_len]);
+
     _ = std.Thread.spawn(.{}, struct {
-        fn worker(rid: []const u8, rep: []const u8, pidx: usize) void {
+        fn worker(rid_buf: [128]u8, rid_len: usize, rep_buf: [32]u8, rep_len: usize, pidx: usize) void {
+            const rid = rid_buf[0..rid_len];
+            const rep = rep_buf[0..rep_len];
             const p = plugins[pidx];
             var exec_buf: [600]u8 = undefined;
             const exec = std.fmt.bufPrint(&exec_buf, "{s}/resolve", .{p.path[0..p.path_len]}) catch return;
@@ -360,8 +408,11 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
             var child = @import("../core/io_global.zig").Child.init(argv, c_alloc);
             child.stdout_behavior = .Pipe;
             child.stderr_behavior = .Ignore;
-            _ = child.spawn() catch return;
-            
+            _ = child.spawn() catch {
+                logSpawnFail(argv[0]);
+                return;
+            };
+
             var buf: [8192]u8 = undefined;
             const len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &buf) catch 0 else 0;
             _ = child.wait() catch {};
@@ -475,7 +526,10 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                                             var child2 = @import("../core/io_global.zig").Child.init(&argv2, a);
                                             child2.stdout_behavior = .Pipe;
                                             child2.stderr_behavior = .Ignore;
-                                            _ = child2.spawn() catch return;
+                                            _ = child2.spawn() catch {
+                                                logSpawnFail(argv2[0]);
+                                                return;
+                                            };
                                             const max_img = 5 * 1024 * 1024;
                                             const tmp = a.alloc(u8, max_img) catch return;
                                             defer a.free(tmp);
@@ -550,6 +604,7 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                         logs.pushLog("info", "plugin", "Torrent magnet added", false);
                     } else {
                         logs.pushLog("error", "plugin", "Failed to add magnet", false);
+                        state.showToast("Couldn't add torrent (invalid or duplicate magnet)");
                     }
                 } else {
                     // Regular URL → mpv loadfile
@@ -563,14 +618,17 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                 logs.pushLog("error", "plugin", "Resolve: no URL in response", false);
             }
         }
-    }.worker, .{ id, episode, active_plugin }) catch {};
+    }.worker, .{ id_buf, id_len, ep_buf, ep_len, active_plugin }) catch {};
 }
 
 fn executeAndParse(argv: []const []const u8) void {
     var child = @import("../core/io_global.zig").Child.init(argv, c_alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return;
+    _ = child.spawn() catch {
+        if (argv.len > 0) logSpawnFail(argv[0]);
+        return;
+    };
     
     var buf: [64 * 1024]u8 = undefined;
     const len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &buf) catch 0 else 0;
@@ -578,12 +636,16 @@ fn executeAndParse(argv: []const []const u8) void {
     
     if (len < 5) return;
     const json = buf[0..len];
-    
+
     // Parse JSON array of results
     // Expected format: [{"id":"..","title":"..","overview":"..","poster":"..","episodes":N,"score":F},...]
+    // Hold results_mutex across the parse so the UI thread never observes a
+    // half-written `results`/`result_count` pair.
+    results_mutex.lock();
+    defer results_mutex.unlock();
     var pos: usize = 0;
     result_count = 0;
-    
+
     while (pos < json.len and result_count < MAX_RESULTS) {
         // Find next object boundary
         const obj_start = std.mem.indexOfScalarPos(u8, json, pos, '{') orelse break;
@@ -695,8 +757,11 @@ pub fn fetchPoster(item: *PluginResult) void {
             var child = @import("../core/io_global.zig").Child.init(&argv, c_alloc);
             child.stdout_behavior = .Pipe;
             child.stderr_behavior = .Ignore;
-            _ = child.spawn() catch return;
-            
+            _ = child.spawn() catch {
+                logSpawnFail(argv[0]);
+                return;
+            };
+
             var img_buf: [512 * 1024]u8 = undefined;
             const img_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &img_buf) catch 0 else 0;
             _ = child.wait() catch {};
@@ -786,7 +851,11 @@ pub fn renderContent() void {
                     .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
                 })) {
                     active_plugin = pi;
-                    result_count = 0;
+                    {
+                        results_mutex.lock();
+                        result_count = 0;
+                        results_mutex.unlock();
+                    }
                     // Auto-trending on select
                     if (plugins[pi].has_trending) runPluginTrending();
                 }
@@ -822,28 +891,42 @@ pub fn renderContent() void {
         }
     }
     
+    // Snapshot the worker-shared state under the lock so the rest of the
+    // frame renders against a consistent (loading, count) pair.
+    results_mutex.lock();
+    const loading_now = is_loading;
+    const count_now = result_count;
+    results_mutex.unlock();
+
     // Loading
-    if (is_loading) {
+    if (loading_now) {
         _ = dvui.label(@src(), "Loading...", .{}, .{
             .color_text = theme.colors.accent,
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
         });
         return;
     }
-    
+
     // Results
-    if (result_count == 0 and !is_loading) {
+    if (count_now == 0) {
         _ = dvui.label(@src(), "Search or browse content from plugins", .{}, .{
             .color_text = theme.colors.text_muted,
             .padding = .{ .x = 12, .y = 12, .w = 0, .h = 0 },
         });
         return;
     }
-    
+
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
     defer scroll.deinit();
-    
-    for (0..result_count) |idx| {
+
+    // Hold the lock across the render loop: a worker only ever rewrites
+    // `results` while holding `results_mutex` (see executeAndParse), so this
+    // prevents the UI from reading a `results[idx]` that is being overwritten
+    // mid-frame. The dvui calls below do not re-enter `results_mutex`.
+    results_mutex.lock();
+    defer results_mutex.unlock();
+    var idx: usize = 0;
+    while (idx < count_now and idx < MAX_RESULTS) : (idx += 1) {
         renderPluginCard(&results[idx], idx);
     }
 }

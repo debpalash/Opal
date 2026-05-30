@@ -29,7 +29,7 @@ var close_button_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 // ── Helpers ──
 
 /// Pretty-format a duration in seconds as HH:MM:SS or MM:SS (when under 1h).
-fn formatHmsBuf(buf: []u8, sec: u32, comptime sentinel: ?u8) []const u8 {
+fn formatHmsBuf(buf: []u8, sec: u32) []const u8 {
     const h = sec / 3600;
     const m = (sec % 3600) / 60;
     const s = sec % 60;
@@ -37,7 +37,6 @@ fn formatHmsBuf(buf: []u8, sec: u32, comptime sentinel: ?u8) []const u8 {
         std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ h, m, s })
     else
         std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}", .{ m, s });
-    _ = sentinel;
     return res catch buf[0..0];
 }
 
@@ -45,67 +44,6 @@ fn formatHmsBuf(buf: []u8, sec: u32, comptime sentinel: ?u8) []const u8 {
 fn mouseOverRect(rect: dvui.Rect.Physical) bool {
     return state.app.last_mouse_x >= rect.x and state.app.last_mouse_x <= rect.x + rect.w
         and state.app.last_mouse_y >= rect.y and state.app.last_mouse_y <= rect.y + rect.h;
-}
-
-pub fn chapterDropdownMenu(ctx: *c.mpv.mpv_handle) void {
-    var ch_count: i64 = 0;
-    _ = c.mpv.mpv_get_property(ctx, "chapter-list/count", c.mpv.MPV_FORMAT_INT64, &ch_count);
-    if (ch_count <= 0) return;
-
-    var current_ch: i64 = -1;
-    _ = c.mpv.mpv_get_property(ctx, "chapter", c.mpv.MPV_FORMAT_INT64, &current_ch);
-
-    var btn_lbl: [32]u8 = undefined;
-    const label = std.fmt.bufPrintZ(&btn_lbl, "Ch {d}/{d}", .{current_ch + 1, ch_count}) catch "Ch";
-
-    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = 50, .gravity_y = 0.5, .color_fill = dvui.Color{ .r=0, .g=0, .b=0, .a=0 }, .color_text = theme.colors.text_muted })) |r| {
-        var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
-        defer fw.deinit();
-        var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_drawer, .border = dvui.Rect.all(1), .color_border = theme.colors.border_drawer });
-        defer menu.deinit();
-
-        var ci: usize = 0;
-        while (ci < @as(usize, @intCast(ch_count))) : (ci += 1) {
-            // Get chapter title
-            var qtitle_buf: [64]u8 = undefined;
-            const title_q = std.fmt.bufPrintZ(&qtitle_buf, "chapter-list/{d}/title", .{ci}) catch continue;
-            const title_c = c.mpv.mpv_get_property_string(ctx, title_q.ptr);
-
-            // Get chapter time
-            var qtime_buf: [64]u8 = undefined;
-            const time_q = std.fmt.bufPrintZ(&qtime_buf, "chapter-list/{d}/time", .{ci}) catch continue;
-            var ch_time: f64 = 0;
-            _ = c.mpv.mpv_get_property(ctx, time_q.ptr, c.mpv.MPV_FORMAT_DOUBLE, &ch_time);
-
-            const safe_time = @max(0.0, if (std.math.isNan(ch_time)) 0.0 else ch_time);
-            const t_sec = @as(u32, @intFromFloat(safe_time));
-
-            var ch_label: [80]u8 = undefined;
-            if (title_c != null) {
-                defer c.mpv.mpv_free(@ptrCast(title_c));
-                const ts = std.mem.span(title_c);
-                _ = std.fmt.bufPrintZ(&ch_label, "{d:0>2}:{d:0>2}:{d:0>2} — {s}", .{
-                    t_sec / 3600, (t_sec % 3600) / 60, t_sec % 60, ts,
-                }) catch continue;
-            } else {
-                _ = std.fmt.bufPrintZ(&ch_label, "{d:0>2}:{d:0>2}:{d:0>2} — Chapter {d}", .{
-                    t_sec / 3600, (t_sec % 3600) / 60, t_sec % 60, ci + 1,
-                }) catch continue;
-            }
-
-            const is_current = ci == @as(usize, @intCast(@max(0, current_ch)));
-            if (dvui.menuItemLabel(@src(), std.mem.sliceTo(&ch_label, 0), .{}, .{
-                .id_extra = ci,
-                .expand = .horizontal,
-                .color_text = if (is_current) theme.colors.accent else theme.colors.text_main,
-            })) |_| {
-                var set_cmd_buf: [32]u8 = undefined;
-                if (std.fmt.bufPrintZ(&set_cmd_buf, "set chapter {d}", .{ci})) |cmd| {
-                    _ = c.mpv.mpv_command_string(ctx, cmd.ptr);
-                } else |_| {}
-            }
-        }
-    }
 }
 
 pub fn aspectDropdownMenu(ctx: *c.mpv.mpv_handle, id_extra: usize) void {
@@ -289,22 +227,6 @@ pub fn playlistDropdownMenu(p: *player.MediaPlayer) void {
     }
 }
 
-/// Footer "Get subtitles" button — opens the floating picker + triggers an
-/// auto-search against the currently playing media.
-pub fn subtitlesButton() void {
-    if (dvui.button(@src(), "Subs", .{}, .{
-        .id_extra = 301,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_text = theme.colors.text_muted,
-        .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
-        .gravity_y = 0.5,
-    })) {
-        state.app.sub_picker_open = true;
-        const subs = @import("../services/subtitles.zig");
-        if (!subs.is_searching) subs.autoSearchFromPlayer();
-    }
-}
-
 pub fn subLanguageDropdown() void {
     const current_lang = state.app.sub_lang_buf[0..state.app.sub_lang_len];
     var btn_lbl: [16]u8 = undefined;
@@ -339,9 +261,8 @@ pub fn renderSubPicker() void {
         .open_flag = &state.app.sub_picker_open,
     }, .{
         .min_size_content = .{ .w = 560, .h = 420 },
-        .color_fill = theme.colors.bg_drawer,
-        .color_border = theme.colors.accent,
-        .corner_radius = dvui.Rect.all(10),
+        .color_fill = theme.colors.bg_surface,
+        .corner_radius = dvui.Rect.all(theme.radius.lg),
     });
     defer win.deinit();
 
@@ -349,13 +270,13 @@ pub fn renderSubPicker() void {
 
     var pad = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
-        .padding = .{ .x = 14, .y = 10, .w = 14, .h = 10 },
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
     });
     defer pad.deinit();
 
     var ctrl_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
-        .margin = .{ .y = 4 },
+        .margin = .{ .y = theme.spacing.xs },
     });
     {
         defer ctrl_row.deinit();
@@ -363,28 +284,30 @@ pub fn renderSubPicker() void {
         var lbl_buf: [32]u8 = undefined;
         const lbl = std.fmt.bufPrint(&lbl_buf, "Lang: {s}", .{lang}) catch "Lang: eng";
         _ = dvui.label(@src(), "{s}", .{lbl}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
-            .margin = .{ .w = 12 },
+            .margin = .{ .w = theme.spacing.md },
         });
+        // Primary action — the single accent affordance in this view.
         if (dvui.button(@src(), if (subs.is_searching) "Searching…" else "Auto-search", .{}, .{
             .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
-            .corner_radius = dvui.Rect.all(4),
-            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            .color_text = theme.colors.text_on_accent,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .gravity_y = 0.5,
-            .margin = .{ .w = 6 },
+            .margin = .{ .w = theme.spacing.sm },
         })) {
             if (!subs.is_searching) subs.autoSearchFromPlayer();
         }
 
+        // Secondary action — quiet filled, demoted from accent.
         const auto_subs = @import("../services/auto_subs.zig");
         const gen_label = if (auto_subs.in_progress) "Generating…" else "Generate (whisper)";
         if (dvui.button(@src(), gen_label, .{}, .{
-            .color_fill = theme.colors.accent_hover,
-            .color_text = theme.colors.bg_header,
-            .corner_radius = dvui.Rect.all(4),
-            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_secondary,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .gravity_y = 0.5,
         })) {
             if (!auto_subs.in_progress) auto_subs.transcribeCurrent();
@@ -394,22 +317,22 @@ pub fn renderSubPicker() void {
     if (@import("../services/auto_subs.zig").status_len > 0) {
         const as_mod = @import("../services/auto_subs.zig");
         _ = dvui.label(@src(), "{s}", .{as_mod.status_buf[0..as_mod.status_len]}, .{
-            .color_text = theme.colors.text_muted,
-            .margin = .{ .y = 4 },
+            .color_text = theme.colors.text_secondary,
+            .margin = .{ .y = theme.spacing.xs },
         });
     }
 
     if (subs.search_error_len > 0) {
         _ = dvui.label(@src(), "{s}", .{subs.search_error[0..subs.search_error_len]}, .{
-            .color_text = theme.colors.warning,
-            .margin = .{ .y = 4 },
+            .color_text = theme.colors.semantic_warn,
+            .margin = .{ .y = theme.spacing.xs },
         });
     }
 
     if (subs.result_count == 0 and !subs.is_searching) {
         _ = dvui.label(@src(), "No results yet. Click Auto-search.", .{}, .{
-            .color_text = theme.colors.text_muted,
-            .margin = .{ .y = 8 },
+            .color_text = theme.colors.text_secondary,
+            .margin = .{ .y = theme.spacing.sm },
             .gravity_x = 0.5,
         });
         return;
@@ -417,21 +340,20 @@ pub fn renderSubPicker() void {
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
-        .color_fill = dvui.Color{ .r = 14, .g = 14, .b = 22, .a = 220 },
+        .color_fill = theme.colors.bg_app,
     });
     defer scroll.deinit();
 
     for (0..subs.result_count) |ri| {
         const r = &subs.results[ri];
+        // Borderless row — separated by fill-tier + spacing, no chrome.
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = ri + 58000,
             .expand = .horizontal,
             .background = true,
-            .color_fill = dvui.Color{ .r = 22, .g = 22, .b = 34, .a = 200 },
-            .color_border = dvui.Color{ .r = 50, .g = 50, .b = 70, .a = 160 },
-            .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(6),
-            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
+            .color_fill = theme.colors.bg_elevated,
+            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .y = 2 },
         });
         defer row.deinit();
@@ -439,44 +361,53 @@ pub fn renderSubPicker() void {
         if (r.lang_len > 0) {
             _ = dvui.label(@src(), "{s}", .{r.language[0..r.lang_len]}, .{
                 .id_extra = ri + 58100,
-                .color_text = theme.colors.accent,
+                .color_text = theme.colors.text_secondary,
                 .gravity_y = 0.5,
-                .margin = .{ .w = 6 },
+                .margin = .{ .w = theme.spacing.sm },
             });
         }
         if (r.release_len > 0) {
             const show_len = @min(r.release_len, 70);
             _ = dvui.label(@src(), "{s}", .{r.release[0..show_len]}, .{
                 .id_extra = ri + 58200,
-                .color_text = theme.colors.text_main,
+                .color_text = theme.colors.text_primary,
                 .gravity_y = 0.5,
                 .expand = .horizontal,
             });
         }
         if (r.download_count > 0) {
             var dc_buf: [16]u8 = undefined;
-            const dc_str = std.fmt.bufPrint(&dc_buf, "↓{d}", .{r.download_count}) catch "";
+            const dc_str = std.fmt.bufPrint(&dc_buf, "{d}", .{r.download_count}) catch "";
+            _ = dvui.icon(@src(), "dl-ic", icons.tvg.lucide.@"arrow-down", .{}, .{
+                .id_extra = ri + 58350,
+                .color_text = theme.colors.text_tertiary,
+                .min_size_content = .{ .w = 12, .h = 12 },
+                .max_size_content = .{ .w = 12, .h = 12 },
+                .gravity_y = 0.5,
+            });
             _ = dvui.label(@src(), "{s}", .{dc_str}, .{
                 .id_extra = ri + 58300,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_tertiary,
                 .gravity_y = 0.5,
-                .margin = .{ .w = 4 },
+                .margin = .{ .w = theme.spacing.xs },
             });
         }
         if (r.hearing_impaired) {
             _ = dvui.label(@src(), "CC", .{}, .{
                 .id_extra = ri + 58400,
-                .color_text = theme.colors.warning,
+                .color_text = theme.colors.text_tertiary,
                 .gravity_y = 0.5,
-                .margin = .{ .w = 4 },
+                .margin = .{ .w = theme.spacing.xs },
             });
         }
+        // Per-row load — only the selected primary action carries accent; rows
+        // are secondary here, so use a quiet filled button.
         if (dvui.button(@src(), if (subs.is_downloading) "…" else "Load", .{}, .{
             .id_extra = ri + 58500,
-            .color_fill = theme.colors.accent_hover,
-            .color_text = theme.colors.bg_header,
-            .corner_radius = dvui.Rect.all(4),
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            .color_fill = theme.colors.bg_surface,
+            .color_text = theme.colors.text_primary,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .gravity_y = 0.5,
         })) {
             if (!subs.is_downloading and r.file_id > 0) {
@@ -662,7 +593,7 @@ fn renderScrubber(
         const hover_time = frac * @as(f32, @floatCast(duration));
         const ht_sec = @as(u32, @intFromFloat(@max(0.0, hover_time)));
         var ht_buf: [16]u8 = undefined;
-        const ht_str = formatHmsBuf(&ht_buf, ht_sec, null);
+        const ht_str = formatHmsBuf(&ht_buf, ht_sec);
 
         _ = dvui.label(@src(), "{s}", .{ht_str}, .{
             .color_text = theme.colors.text_primary,
@@ -675,9 +606,10 @@ fn renderScrubber(
 
 // ── Picker icon-chip (icon + tiny value chip) ──
 //
-// Returns true when clicked. Uses status colors:
-//   - `semantic_success` when a track is actively selected
-//   - `text_tertiary` when the value is "Off" / "Auto" (idle)
+// Returns true when clicked. No resting chrome — the chip is bare text+icon,
+// separated only by spacing. Hover paints a faint fill; the active (selected)
+// value reads in text_primary while idle values stay text_tertiary. No accent
+// here — accent is reserved for the single primary affordance (play/pause).
 fn pickerIconChip(
     src: std.builtin.SourceLocation,
     id_extra: usize,
@@ -692,9 +624,6 @@ fn pickerIconChip(
     // value. We instead probe the laid-out rect before deciding the fill.
     var btn = dvui.box(src, .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
-        .color_border = theme.colors.border_subtle,
-        .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(theme.radius.sm),
         .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
         .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
         .min_size_content = .{ .w = 0, .h = 28 },
@@ -707,13 +636,12 @@ fn pickerIconChip(
     const clicked = dvui.clicked(btn.data(), .{ .hovered = &hovered_signal });
     const wd_copy = btn.data().*;
 
-    // Manual rounded-rect fill — drawn here so it's underneath the icon+label.
-    if (is_hovered or is_active) {
-        const fill = if (is_active and !is_hovered) theme.colors.bg_elevated else theme.colors.bg_hover;
+    // Hover-only fill — drawn here so it's underneath the icon+label.
+    if (is_hovered) {
         var bg = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .both,
             .background = true,
-            .color_fill = fill,
+            .color_fill = theme.colors.bg_hover,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .min_size_content = .{ .w = 0, .h = 0 },
         });
@@ -721,7 +649,7 @@ fn pickerIconChip(
     }
 
     dvui.icon(@src(), "picker-ic", icon, .{}, .{
-        .color_text = if (is_active) theme.colors.semantic_success else theme.colors.text_secondary,
+        .color_text = if (is_active) theme.colors.text_primary else theme.colors.text_tertiary,
         .min_size_content = .{ .w = 14, .h = 14 },
         .max_size_content = .{ .w = 14, .h = 14 },
         .gravity_y = 0.5,
@@ -730,7 +658,7 @@ fn pickerIconChip(
 
     if (chip_text.len > 0) {
         _ = dvui.label(@src(), "{s}", .{chip_text}, .{
-            .color_text = if (is_active) theme.colors.semantic_success else theme.colors.text_tertiary,
+            .color_text = if (is_active) theme.colors.text_primary else theme.colors.text_tertiary,
             .gravity_y = 0.5,
         });
     }
@@ -823,7 +751,6 @@ fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
     var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
         .min_size_content = .{ .w = 360, .h = 280 },
         .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_subtle,
         .corner_radius = dvui.Rect.all(theme.radius.md),
     });
     defer fw.deinit();
@@ -886,7 +813,6 @@ fn renderAspectPickerPopover(active_p: *player.MediaPlayer) void {
     var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
         .min_size_content = .{ .w = 200, .h = 160 },
         .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_subtle,
         .corner_radius = dvui.Rect.all(theme.radius.md),
     });
     defer fw.deinit();
@@ -930,7 +856,6 @@ fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []const u
     var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
         .min_size_content = .{ .w = 320, .h = 240 },
         .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_subtle,
         .corner_radius = dvui.Rect.all(theme.radius.md),
     });
     defer fw.deinit();
@@ -990,7 +915,7 @@ fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []const u
             .id_extra = @as(usize, @intCast(i)),
             .expand = .horizontal,
             .color_fill = if (is_selected) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (is_selected) theme.colors.semantic_success else theme.colors.text_primary,
+            .color_text = if (is_selected) theme.colors.accent_primary else theme.colors.text_primary,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
@@ -1013,7 +938,6 @@ fn renderLangPickerPopover() void {
     var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
         .min_size_content = .{ .w = 240, .h = 320 },
         .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_subtle,
         .corner_radius = dvui.Rect.all(theme.radius.md),
     });
     defer fw.deinit();
@@ -1058,7 +982,6 @@ fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
     var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
         .min_size_content = .{ .w = 460, .h = 320 },
         .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_subtle,
         .corner_radius = dvui.Rect.all(theme.radius.md),
     });
     defer fw.deinit();
@@ -1246,12 +1169,12 @@ pub fn renderLiquidGlassOverlay() void {
         }
         components.tip(@src(), wd, "Skip back 10s (\xE2\x86\x90)");
 
-        // Play / Pause — 44px square, accent background when playing.
-        const playing = is_paused == 0;
+        // Play / Pause — 44px square. The single accent affordance of the
+        // footer; carries the accent fill in BOTH play and pause states.
         if (dvui.buttonIcon(@src(), "toggle-pp", toggle_icon, .{}, .{}, .{
             .data_out = &wd,
-            .color_fill = if (playing) theme.colors.accent_primary else theme.colors.bg_elevated,
-            .color_text = if (playing) theme.colors.text_on_accent else theme.colors.text_primary,
+            .color_fill = theme.colors.accent_primary,
+            .color_text = theme.colors.text_on_accent,
             .border = dvui.Rect.all(0),
             .corner_radius = dvui.Rect.all(theme.radius.md),
             .gravity_y = 0.5,
@@ -1305,7 +1228,7 @@ pub fn renderLiquidGlassOverlay() void {
             const d_sec = @as(u32, @intFromFloat(safe_dur));
 
             var cur_buf: [16]u8 = undefined;
-            const cur_str = formatHmsBuf(&cur_buf, t_sec, null);
+            const cur_str = formatHmsBuf(&cur_buf, t_sec);
 
             var rest_buf: [24]u8 = undefined;
             const rest_str = if (time_show_remaining and d_sec >= t_sec) blk: {
@@ -1360,7 +1283,7 @@ pub fn renderLiquidGlassOverlay() void {
                 var spd_buf: [16]u8 = undefined;
                 if (std.fmt.bufPrintZ(&spd_buf, " \xC2\xB7 {d:.1}\xC3\x97", .{SlowProps.speed})) |sp| {
                     _ = dvui.label(@src(), "{s}", .{sp}, .{
-                        .color_text = theme.colors.accent_primary,
+                        .color_text = theme.colors.text_tertiary,
                         .gravity_y = 0.5,
                     });
                 } else |_| {}
@@ -1368,7 +1291,7 @@ pub fn renderLiquidGlassOverlay() void {
             if (active_p.loop_a >= 0) {
                 const loop_lbl = if (active_p.loop_b >= 0) " \xC2\xB7 A-B" else " \xC2\xB7 A..";
                 _ = dvui.label(@src(), "{s}", .{loop_lbl}, .{
-                    .color_text = theme.colors.accent_primary,
+                    .color_text = theme.colors.text_tertiary,
                     .gravity_y = 0.5,
                 });
             }
@@ -1376,7 +1299,7 @@ pub fn renderLiquidGlassOverlay() void {
             time_box.deinit();
         }
 
-        // ── Volume: mute toggle + slider + hover-only percentage ──
+        // ── Volume: mute toggle + barely-there track, visually grouped ──
         const is_muted = SlowProps.is_muted == 1;
         const m_icon = if (is_muted) icons.tvg.lucide.@"volume-x" else icons.tvg.lucide.@"volume-2";
         if (dvui.buttonIcon(@src(), "mute-tog", m_icon, .{}, .{}, .{
@@ -1389,13 +1312,14 @@ pub fn renderLiquidGlassOverlay() void {
             .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
             .min_size_content = .{ .w = 28, .h = 28 },
             .max_size_content = .{ .w = 28, .h = 28 },
-            .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 4, .h = 0 },
+            .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
         })) {
             _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "cycle mute");
         }
         components.tip(@src(), wd, if (is_muted) "Unmute" else "Mute");
 
-        // 120px fixed slider.
+        // 120px fixed slider — grouped tight against the mute icon, no boxed
+        // chrome: faint trough, secondary (non-accent) fill.
         var slider_host = dvui.box(@src(), .{ .dir = .vertical }, .{
             .min_size_content = .{ .w = 120, .h = 20 },
             .max_size_content = .{ .w = 120, .h = 20 },
@@ -1411,7 +1335,7 @@ pub fn renderLiquidGlassOverlay() void {
             .min_size_content = .{ .w = 120, .h = 4 },
             .max_size_content = .{ .w = 120, .h = 4 },
             .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.accent_primary,
+            .color_text = theme.colors.text_secondary,
             .corner_radius = dvui.Rect.all(2),
             .gravity_y = 0.5,
             .background = true,
@@ -1563,7 +1487,7 @@ pub fn renderLiquidGlassOverlay() void {
         { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
 
         var stat_buf: [80]u8 = undefined;
-        if (std.fmt.bufPrintZ(&stat_buf, "{d:.1}% | {d:.1} MB/s | {d} seeds", .{ pct * 100.0, rate_mb, seeds })) |st| {
+        if (std.fmt.bufPrintZ(&stat_buf, "{d:.1}% \xC2\xB7 {d:.1} MB/s \xC2\xB7 {d} seeds", .{ pct * 100.0, rate_mb, seeds })) |st| {
             _ = dvui.label(@src(), "{s}", .{st}, .{
                 .color_text = theme.colors.text_tertiary,
                 .gravity_y = 0.5,
@@ -1641,31 +1565,34 @@ pub fn renderGlobalBottomTray() void {
         }
     }
 
+    // Single accent — the leading "Active" indicator. Everything else reads
+    // on the neutral text ramp (rate brightens to text_primary when live).
     _ = dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"activity", .{}, .{}, .{
         .gravity_y = 0.5, .color_fill = transparent, .color_text = theme.colors.accent, .padding = dvui.Rect.all(2),
     });
-    _ = dvui.label(@src(), "{d} Active", .{total_active}, .{ .color_text = theme.colors.text_main, .gravity_y = 0.5 });
+    _ = dvui.label(@src(), "{d} Active", .{total_active}, .{ .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
 
     { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
 
     const mb_s = total_dl / (1024.0 * 1024.0);
+    const rate_color = if (mb_s > 0.1) theme.colors.text_primary else theme.colors.text_tertiary;
     _ = dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"download", .{}, .{}, .{
         .gravity_y = 0.5, .color_fill = transparent,
-        .color_text = if (mb_s > 0.1) theme.colors.success else theme.colors.text_muted,
+        .color_text = rate_color,
         .padding = dvui.Rect.all(2),
     });
     var mb_str: [32]u8 = undefined;
     if (std.fmt.bufPrintZ(&mb_str, "{d:.2} MB/s", .{mb_s})) |msg| {
         _ = dvui.label(@src(), "{s}", .{msg}, .{
-            .color_text = if (mb_s > 0.1) theme.colors.success else theme.colors.text_muted,
-            .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+            .color_text = rate_color,
+            .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
     } else |_| {}
 
     _ = dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"users", .{}, .{}, .{
-        .gravity_y = 0.5, .color_fill = transparent, .color_text = theme.colors.accent, .padding = dvui.Rect.all(2),
+        .gravity_y = 0.5, .color_fill = transparent, .color_text = theme.colors.text_tertiary, .padding = dvui.Rect.all(2),
     });
-    _ = dvui.label(@src(), "{d} Peers", .{total_peers}, .{ .color_text = theme.colors.accent, .gravity_y = 0.5 });
+    _ = dvui.label(@src(), "{d} Peers", .{total_peers}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
 }
 
 pub fn renderToast() void {
@@ -1693,29 +1620,33 @@ pub fn renderToast() void {
         .err => icons.tvg.lucide.@"x",
     };
 
-    // Glass-style toast container — top-center, semi-transparent
+    // Toast container — top-center, flat elevated surface + one soft shadow.
+    // No colored border; the type is conveyed by the icon hue alone.
     var toast_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .gravity_x = 0.5,
         .gravity_y = 0.06,
         .background = true,
-        .color_fill = theme.colors.bg_glass,
-        .color_border = toast_color,
-        .border = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
-        .corner_radius = dvui.Rect.all(10),
-        .padding = .{ .x = 14, .y = 10, .w = 14, .h = 10 },
+        .color_fill = theme.colors.bg_elevated,
+        .corner_radius = dvui.Rect.all(theme.radius.lg),
+        .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.md },
+        .box_shadow = .{
+            .color = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 },
+            .offset = .{ .x = 0, .y = 4 },
+            .fade = 20,
+        },
     });
     defer toast_box.deinit();
 
-    // Icon prefix — color matches toast type
+    // Icon prefix — color carries the (transient) toast type signal.
     _ = dvui.icon(@src(), "", toast_icon, .{}, .{
         .color_text = toast_color,
         .min_size_content = .{ .w = 14, .h = 14 },
         .gravity_y = 0.5,
-        .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
     });
 
     _ = dvui.label(@src(), "{s}", .{state.app.toast_buf[0..state.app.toast_len]}, .{
-        .color_text = theme.colors.text_main,
+        .color_text = theme.colors.text_primary,
         .gravity_y = 0.5,
     });
 }
@@ -1736,19 +1667,22 @@ pub fn renderStatsOverlay() void {
         .gravity_x = 0.02,
         .gravity_y = 0.04,
         .background = true,
-        .color_fill = dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 200 },
-        .color_border = theme.colors.border_glass,
-        .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(8),
-        .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
+        .color_fill = theme.colors.bg_elevated,
+        .corner_radius = dvui.Rect.all(theme.radius.lg),
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
         .min_size_content = .{ .w = 220, .h = 0 },
+        .box_shadow = .{
+            .color = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 },
+            .offset = .{ .x = 0, .y = 4 },
+            .fade = 20,
+        },
     });
     defer stats_box.deinit();
 
-    // Title
+    // Title — the single accent in this overlay.
     _ = dvui.label(@src(), "Stats for Nerds", .{}, .{
         .color_text = theme.colors.accent,
-        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xs },
     });
 
     // Helper: query a string prop from mpv

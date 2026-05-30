@@ -118,6 +118,65 @@ fn searchThread(query: []const u8) void {
     logs.pushLog("info", "anime", "Search done (Jikan API)", false);
 }
 
+/// Decode common JSON string escapes (\" \\ \/ \n \r \t \b \f \uXXXX) from
+/// `src` into `dst`, returning the number of bytes written. Bounded by dst.len.
+/// Anything that isn't a recognized escape is copied verbatim (the backslash is
+/// kept) so we never silently corrupt content.
+fn decodeJsonEscapes(src: []const u8, dst: []u8) usize {
+    var out: usize = 0;
+    var i: usize = 0;
+    while (i < src.len and out < dst.len) {
+        const ch = src[i];
+        if (ch != '\\' or i + 1 >= src.len) {
+            dst[out] = ch;
+            out += 1;
+            i += 1;
+            continue;
+        }
+        const esc = src[i + 1];
+        switch (esc) {
+            '"' => { dst[out] = '"'; out += 1; i += 2; },
+            '\\' => { dst[out] = '\\'; out += 1; i += 2; },
+            '/' => { dst[out] = '/'; out += 1; i += 2; },
+            'n' => { dst[out] = '\n'; out += 1; i += 2; },
+            'r' => { dst[out] = '\r'; out += 1; i += 2; },
+            't' => { dst[out] = '\t'; out += 1; i += 2; },
+            'b' => { dst[out] = 0x08; out += 1; i += 2; },
+            'f' => { dst[out] = 0x0c; out += 1; i += 2; },
+            'u' => {
+                // \uXXXX — decode 4 hex digits to a codepoint, then UTF-8 encode.
+                if (i + 6 <= src.len) {
+                    if (std.fmt.parseInt(u21, src[i + 2 .. i + 6], 16)) |cp| {
+                        var utf8_buf: [4]u8 = undefined;
+                        const n = std.unicode.utf8Encode(cp, &utf8_buf) catch 0;
+                        if (n > 0 and out + n <= dst.len) {
+                            @memcpy(dst[out .. out + n], utf8_buf[0..n]);
+                            out += n;
+                        }
+                        i += 6;
+                    } else |_| {
+                        // Malformed — keep the backslash and continue.
+                        dst[out] = '\\';
+                        out += 1;
+                        i += 1;
+                    }
+                } else {
+                    dst[out] = '\\';
+                    out += 1;
+                    i += 1;
+                }
+            },
+            else => {
+                // Unknown escape — preserve the backslash verbatim.
+                dst[out] = '\\';
+                out += 1;
+                i += 1;
+            },
+        }
+    }
+    return out;
+}
+
 fn parseJikanData(json: []const u8) void {
     var count: usize = 0;
     var pos: usize = 0;
@@ -126,8 +185,9 @@ fn parseJikanData(json: []const u8) void {
     for (0..state.app.anime.results.len) |i| {
         state.app.anime.results[i].poster_fetching = false;
         state.app.anime.results[i].expanded = false;
-        if (state.app.anime.results[i].poster_tex) |_| { // keep texture if possible, but actually we should null it so dvui handles
-             state.app.anime.results[i].poster_tex = null;
+        if (state.app.anime.results[i].poster_tex) |tex| {
+            dvui.textureDestroyLater(tex);
+            state.app.anime.results[i].poster_tex = null;
         }
     }
     
@@ -228,16 +288,8 @@ fn parseJikanData(json: []const u8) void {
             @memcpy(item.id[0..id_str.len], id_str);
             item.id_len = id_str.len;
             
-            // Clean escaped chars in name roughly
-            var nm_len: usize = 0;
-            var cx: usize = 0;
-            while (cx < name_str.len) : (cx += 1) {
-                if (name_str[cx] != '\\') {
-                    item.name[nm_len] = name_str[cx];
-                    nm_len += 1;
-                }
-            }
-            item.name_len = nm_len;
+            // Decode JSON escapes in name (\" \\ \/ \n \t \uXXXX, etc.)
+            item.name_len = decodeJsonEscapes(name_str, &item.name);
             item.episodes = ep_count;
             item.score = score;
             
@@ -245,20 +297,12 @@ fn parseJikanData(json: []const u8) void {
             @memcpy(item.poster_url[0..purl], poster_url[0..purl]);
             item.poster_url_len = purl;
             
-            // Clean synopsis
-            var syn_len: usize = 0;
-            var sx: usize = 0;
-            while (sx < synopsis.len and syn_len < 512) : (sx += 1) {
-                if (synopsis[sx] != '\\') {
-                    item.overview[syn_len] = synopsis[sx];
-                    syn_len += 1;
-                }
-            }
-            item.overview_len = syn_len;
+            // Decode JSON escapes in synopsis (\" \\ \/ \n \t \uXXXX, etc.)
+            item.overview_len = decodeJsonEscapes(synopsis, &item.overview);
             
             item.poster_fetching = false;
             if (item.poster_tex) |tx| {
-                _ = tx;
+                dvui.textureDestroyLater(tx);
             }
             item.poster_tex = null;
             item.expanded = false;
@@ -441,7 +485,7 @@ fn fetchStreamThread(ep_buf: [8]u8, ep_len: usize) void {
     resolver.resolve(query, "anime");
 
     var waited: usize = 0;
-    while (resolver.is_resolving and waited < 100) : (waited += 1) {
+    while (resolver.isResolving() and waited < 100) : (waited += 1) {
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
     }
 

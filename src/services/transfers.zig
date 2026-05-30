@@ -56,10 +56,12 @@ fn renderTopBar() void {
         .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
     });
 
-    const limits = [_]i32{ 0, 1, 5, 20 };
+    // Single source of truth: state.app.download_rate_limit, stored in BYTES/sec
+    // (same unit as the settings + footer controls and the FFI call below).
+    const limits = [_]i32{ 0, 1 * 1024 * 1024, 5 * 1024 * 1024, 20 * 1024 * 1024 };
     const labels = [_][]const u8{ "∞", "1MB/s", "5MB/s", "20MB/s" };
     for (limits, 0..) |lim, k| {
-        const active = state.app.global_download_limit == lim;
+        const active = state.app.download_rate_limit == lim;
         if (dvui.button(@src(), labels[k], .{}, .{
             .id_extra = k,
             .color_fill = if (active) theme.colors.accent else dvui.Color{ .r = 24, .g = 24, .b = 34, .a = 255 },
@@ -71,8 +73,8 @@ fn renderTopBar() void {
             .margin = .{ .x = 0, .y = 0, .w = 5, .h = 0 },
             .gravity_y = 0.5,
         })) {
-            state.app.global_download_limit = lim;
-            c.mpv.torrent_set_download_limit(state.app.torrent_ses, lim * 1024 * 1024);
+            state.app.download_rate_limit = lim;
+            c.mpv.torrent_set_download_limit(state.app.torrent_ses, lim);
         }
     }
 }
@@ -379,6 +381,10 @@ fn renderActiveInline() void {
     while (i < t_count) : (i += 1) {
         const ui: usize = @intCast(i);
 
+        // STABLE-SLOT model: removed torrents keep their id slot but report
+        // dead — skip them so no ghost rows render.
+        if (c.mpv.torrent_is_alive(state.app.torrent_ses, i) == 0) continue;
+
         var t_name: [256]u8 = undefined;
         c.mpv.torrent_get_name(state.app.torrent_ses, i, &t_name, 256);
         const name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse 255;
@@ -522,15 +528,16 @@ fn renderActiveInline() void {
         })) {
             history.addDownloadHistory(name, "");
             c.mpv.torrent_remove(state.app.torrent_ses, i);
+            // STABLE-SLOT model: torrent ids are never renumbered on remove, so
+            // other handles stay valid — only clear the one that was deleted.
             for (state.app.players.items) |p| {
                 if (p.current_torrent_id == i) {
                     p.current_torrent_id = -1; p.torrent_is_ready = false;
                     p.has_metadata = false;
                     _ = c.mpv.mpv_command_string(p.mpv_ctx, "stop");
-                } else if (p.current_torrent_id > i) p.current_torrent_id -= 1;
+                }
             }
-            if (expanded_torrent_id == i) expanded_torrent_id = -1
-            else if (expanded_torrent_id > i) { expanded_torrent_id -= 1; }
+            if (expanded_torrent_id == i) expanded_torrent_id = -1;
             return;
         }
     }

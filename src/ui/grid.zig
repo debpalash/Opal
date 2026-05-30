@@ -82,10 +82,17 @@ fn renderInlineChat() void {
     var mi: usize = 0;
     while (mi < ai_chat.message_count) : (mi += 1) {
         const m = ai_chat.messages[mi];
-        if (m.text_len == 0) continue;
         if (m.role == .system) continue; // tool-response internals, not shown to user
+        // Keep the in-flight assistant bubble visible (shows "Thinking…" below)
+        // so a reply-in-progress never looks like a blank/dead bubble; older
+        // empty messages are still skipped.
+        const active_empty = m.text_len == 0 and m.role == .assistant and
+            ai_chat.is_generating and mi + 1 == ai_chat.message_count;
+        if (m.text_len == 0 and !active_empty) continue;
         const is_user = m.role == .user;
 
+        // Calm: borderless bubbles differentiated only by fill tier —
+        // user rows lift to bg_surface, assistant rows sit on the app bg.
         var bubble = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = mi + 70000,
             .expand = .horizontal,
@@ -93,16 +100,15 @@ fn renderInlineChat() void {
             .color_fill = if (is_user)
                 theme.colors.bg_surface
             else
-                theme.colors.bg_card,
-            .color_border = if (is_user) theme.colors.accent else theme.colors.border_card,
-            .border = .{ .x = if (is_user) @as(f32, 3) else 0, .y = 0, .w = 0, .h = 0 },
-            .corner_radius = dvui.Rect.all(10),
-            .padding = .{ .x = 14, .y = 10, .w = 14, .h = 10 },
-            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
+                theme.colors.bg_app,
+            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+            .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xs },
         });
         defer bubble.deinit();
 
-        // Role label with colored dot indicator + action icons on assistant rows
+        // Role label carries the sender distinction (no colored dot); action
+        // icons sit on assistant rows via the calm iconButton.
         {
             var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = mi + 71500,
@@ -110,33 +116,23 @@ fn renderInlineChat() void {
             });
             defer hdr.deinit();
 
-            // Colored dot indicator for sender distinction
-            const dot_color = if (is_user) theme.colors.accent else theme.colors.success;
-            _ = dvui.label(@src(), "●", .{}, .{
-                .id_extra = mi + 70900,
-                .color_text = dot_color,
-                .margin = .{ .w = 6 },
-                .gravity_y = 0.5,
-            });
             _ = dvui.label(@src(), "{s}", .{if (is_user) "You" else "AI"}, .{
                 .id_extra = mi + 71000,
-                .color_text = if (is_user) theme.colors.accent else theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .gravity_y = 0.5,
             });
             if (!is_user) {
                 { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
-                // Star toggle
+                // Star toggle — warning token only when starred, else neutral.
                 var star_wd: dvui.WidgetData = undefined;
                 if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"star", .{}, .{}, .{
                     .id_extra = mi + 71700,
                     .data_out = &star_wd,
-                    .color_text = if (m.starred)
-                        dvui.Color{ .r = 255, .g = 200, .b = 80, .a = 255 }
-                    else
-                        theme.colors.text_dim,
+                    .color_text = if (m.starred) theme.colors.warning else theme.colors.text_secondary,
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .border = dvui.Rect.all(0),
-                    .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
                     .min_size_content = .{ .w = 12, .h = 12 },
                 })) {
                     ai_chat.toggleStar(mi);
@@ -146,10 +142,11 @@ fn renderInlineChat() void {
                 if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"rotate-ccw", .{}, .{}, .{
                     .id_extra = mi + 71800,
                     .data_out = &regen_wd,
-                    .color_text = theme.colors.text_dim,
+                    .color_text = theme.colors.text_secondary,
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .border = dvui.Rect.all(0),
-                    .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
                     .min_size_content = .{ .w = 12, .h = 12 },
                 })) {
                     ai_chat.regenerateFrom(mi);
@@ -157,19 +154,28 @@ fn renderInlineChat() void {
                 components.tip(@src(), regen_wd, "Regenerate");
             }
         }
-        _ = dvui.label(@src(), "{s}", .{m.text[0..m.text_len]}, .{
-            .id_extra = mi + 72000,
-            .color_text = theme.colors.text_main,
-            .margin = .{ .y = 2 },
-        });
+        if (m.text_len == 0) {
+            // Active assistant bubble awaiting its first streamed token.
+            _ = dvui.label(@src(), "Thinking…", .{}, .{
+                .id_extra = mi + 72000,
+                .color_text = theme.colors.text_tertiary,
+                .margin = .{ .y = 2 },
+            });
+        } else {
+            _ = dvui.label(@src(), "{s}", .{m.text[0..m.text_len]}, .{
+                .id_extra = mi + 72000,
+                .color_text = theme.colors.text_primary,
+                .margin = .{ .y = 2 },
+            });
+        }
     }
 
     {
         const label = ai_chat.phaseLabel(ai_chat.phase);
         if (label.len > 0) {
             _ = dvui.label(@src(), "{s}", .{label}, .{
-                .color_text = theme.colors.text_muted,
-                .margin = .{ .x = 4, .y = 4, .w = 0, .h = 0 },
+                .color_text = theme.colors.text_tertiary,
+                .margin = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = 0, .h = 0 },
             });
         }
     }
@@ -257,8 +263,9 @@ pub fn renderGrid() !void {
         draw_col += 1;
 
         const is_active = i == state.app.active_player_idx and state.app.players.items.len > 1;
-        const cell_color = if (is_active) theme.colors.active_border else theme.colors.bg_app;
-        // Top-only 2px accent for active cell. Full border bled into player UI edges.
+        // Active cell carries a single 2px accent hairline along its top edge —
+        // the one accent affordance for "which pane is live". Inactive = none.
+        const cell_color = if (is_active) theme.colors.accent else theme.colors.bg_deep;
         const border_rect: dvui.Rect = if (is_active)
             .{ .x = 0, .y = 2, .w = 0, .h = 0 }
         else
@@ -268,7 +275,7 @@ pub fn renderGrid() !void {
         const grid_w = grid_wrapper.data().borderRectScale().r.w;
         const max_cell_w: f32 = if (grid_columns > 0 and grid_w > 0) grid_w / @as(f32, @floatFromInt(grid_columns)) else 9999;
         
-        var cell_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .max_size_content = .{ .w = max_cell_w, .h = std.math.floatMax(f32) }, .expand = .both, .background = true, .color_fill = dvui.Color.black, .color_border = cell_color, .border = border_rect, .margin = dvui.Rect.all(2), .corner_radius = dvui.Rect.all(2) });
+        var cell_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .max_size_content = .{ .w = max_cell_w, .h = std.math.floatMax(f32) }, .expand = .both, .background = true, .color_fill = theme.colors.bg_deep, .color_border = cell_color, .border = border_rect, .margin = dvui.Rect.all(2), .corner_radius = theme.dims.rad_sm });
         
         // Single wrapper overlay — ensures video content and control badges layer
         // rather than splitting the cell height vertically
@@ -372,47 +379,53 @@ pub fn renderGrid() !void {
 
             if (p.is_torrent and (!p.torrent_is_ready or p.is_buffering_paused)) {
                 // Background darkener overlay
-                var dim_box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .expand = .both, .background = true, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 210 }, .corner_radius = theme.dims.rad_sm });
+                var dim_box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .expand = .both, .background = true, .color_fill = theme.colors.overlay, .corner_radius = theme.dims.rad_sm });
                 dim_box.deinit();
-                
+
                 var o_lay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
                 defer o_lay.deinit();
-                
-                var loading_box = dvui.box(@src(), .{ .dir = .vertical }, .{ 
+
+                // Borderless elevated panel — separated from the dim backdrop by
+                // its fill tier and whitespace alone (no glass outline).
+                var loading_box = dvui.box(@src(), .{ .dir = .vertical }, .{
                     .id_extra = i,
-                    .gravity_y = 0.5, 
-                    .gravity_x = 0.5, 
-                    .background = true, 
-                    .color_fill = theme.colors.bg_glass,
-                    .color_border = theme.colors.border_glass,
-                    .border = dvui.Rect.all(1),
+                    .gravity_y = 0.5,
+                    .gravity_x = 0.5,
+                    .background = true,
+                    .color_fill = theme.colors.bg_elevated,
                     .padding = theme.dims.pad_lg,
-                    .margin = dvui.Rect.all(20),
+                    .margin = dvui.Rect.all(theme.spacing.xl),
                     .corner_radius = theme.dims.rad_lg,
                     .min_size_content = .{ .w = 320, .h = 10 }
                 });
-                
+
                 var t_name: [256]u8 = undefined;
                 c.mpv.torrent_get_name(state.app.torrent_ses, p.current_torrent_id, &t_name, 256);
                 const name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse 255;
-                
-                _ = dvui.label(@src(), "{s}", .{t_name[0..name_len]}, .{ .color_text = theme.colors.text_main, .margin = dvui.Rect{ .x=0, .y=4, .w=0, .h=0 } });
-                
+
+                _ = dvui.label(@src(), "{s}", .{t_name[0..name_len]}, .{ .color_text = theme.colors.text_primary, .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 } });
+
                 var buf_pct: f32 = 0;
                 var dl_rate: i32 = 0;
                 var peers: i32 = 0;
                 var buf_path: [512]u8 = undefined;
-                
+
                 if (p.current_torrent_id >= 0) {
                     _ = c.mpv.torrent_poll(state.app.torrent_ses, p.current_torrent_id, p.selected_file_idx, &buf_path, 512, &buf_pct, &dl_rate, &peers);
                 }
-                
+
                 const is_dead = p.metadata_start_time > 0 and @import("../core/io_global.zig").timestamp() - p.metadata_start_time > 15 and peers == 0 and !p.has_metadata;
 
                 if (is_dead) {
-                    _ = dvui.label(@src(), "Dead Torrent ❌", .{}, .{ .color_text = theme.colors.danger, .margin = dvui.Rect{ .x=0, .y=8, .w=0, .h=0 } });
-                    _ = dvui.label(@src(), "No peers found after 15 seconds.", .{}, .{ .color_text = theme.colors.text_muted, .margin = dvui.Rect{ .x=0, .y=8, .w=0, .h=0 } });
-                    if (dvui.button(@src(), "Close Stream", .{}, .{ .color_fill = theme.colors.danger, .color_text = dvui.Color.white })) {
+                    // Transient failure — danger as text only, no resting fill.
+                    _ = dvui.label(@src(), "Dead torrent", .{}, .{ .color_text = theme.colors.danger, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
+                    _ = dvui.label(@src(), "No peers found after 15 seconds.", .{}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
+                    if (dvui.button(@src(), "Close Stream", .{}, .{
+                        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                        .color_text = theme.colors.danger,
+                        .border = dvui.Rect.all(0),
+                        .corner_radius = theme.dims.rad_sm,
+                    })) {
                         p.current_torrent_id = -1;
                         p.is_torrent = false;
                         p.torrent_is_ready = false;
@@ -424,28 +437,28 @@ pub fn renderGrid() !void {
                     const dr_mb = @as(f32, @floatFromInt(dl_rate)) / (1024.0 * 1024.0);
                     var status_lb: [128]u8 = undefined;
                     if (std.fmt.bufPrintZ(&status_lb, "Downloading: {d:.1} MB/s | {d} Peers", .{dr_mb, peers})) |msg| {
-                        _ = dvui.label(@src(), "{s}", .{msg}, .{ .color_text = theme.colors.accent, .margin = .{ .y=8 } });
+                        _ = dvui.label(@src(), "{s}", .{msg}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .y = theme.spacing.sm } });
                     } else |_| {}
-                    
+
                     var prog_lb: [64]u8 = undefined;
                     if (std.fmt.bufPrintZ(&prog_lb, "Buffer: {d}%", .{@as(i32, @intFromFloat(buf_pct * 100.0))})) |msg| {
                         components.ProgressBar(@src(), buf_pct, msg, i);
                     } else |_| {}
                 }
-                
+
                 loading_box.deinit();
 
             } else if (p.is_buffering_paused) {
-                var loading_box = dvui.box(@src(), .{ .dir = .horizontal }, .{ 
+                var loading_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .id_extra = i,
-                    .gravity_y = 0.5, 
-                    .gravity_x = 0.5, 
-                    .background = true, 
-                    .color_fill = theme.colors.bg_glass,
+                    .gravity_y = 0.5,
+                    .gravity_x = 0.5,
+                    .background = true,
+                    .color_fill = theme.colors.bg_elevated,
                     .padding = theme.dims.pad_md,
                     .corner_radius = theme.dims.rad_md
                 });
-                _ = dvui.label(@src(), "⏳ Initializing network...", .{}, .{ .color_text = theme.colors.text_muted });
+                _ = dvui.label(@src(), "Initializing network…", .{}, .{ .color_text = theme.colors.text_secondary });
                 loading_box.deinit();
             }
 
@@ -461,12 +474,12 @@ pub fn renderGrid() !void {
                 var x_bg = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .id_extra = i,
                     .background = true,
-                    .color_fill = dvui.Color{ .r=20, .g=20, .b=20, .a=180 },
-                    .corner_radius = dvui.Rect.all(99),
+                    .color_fill = theme.colors.overlay,
+                    .corner_radius = dvui.Rect.all(theme.radius.pill),
                     .padding = theme.dims.pad_xs
                 });
 
-                if (dvui.buttonIcon(@src(), "CellClose", icons.tvg.lucide.@"x", .{}, .{}, .{ .id_extra = i, .color_text = theme.colors.danger, .color_fill = .{ .r=0,.g=0,.b=0,.a=0 }, .border = dvui.Rect.all(0) })) {
+                if (dvui.buttonIcon(@src(), "CellClose", icons.tvg.lucide.@"x", .{}, .{}, .{ .id_extra = i, .color_text = theme.colors.text_secondary, .color_fill = .{ .r=0,.g=0,.b=0,.a=0 }, .border = dvui.Rect.all(0) })) {
                     state.app.pending_remove_player_idx = @as(i32, @intCast(i));
                 }
                 
@@ -486,14 +499,23 @@ pub fn renderGrid() !void {
                         .gravity_x = 0.0,
                         .gravity_y = 0.0,
                         .background = true,
-                        .color_fill = dvui.Color{ .r = 180, .g = 20, .b = 20, .a = 200 },
-                        .corner_radius = dvui.Rect.all(6),
-                        .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-                        .margin = .{ .x = 8, .y = 8, .w = 0, .h = 0 },
+                        .color_fill = theme.colors.overlay,
+                        .corner_radius = theme.dims.rad_md,
+                        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                        .margin = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = 0, .h = 0 },
                     });
-                    _ = dvui.label(@src(), "● REC", .{}, .{
+                    // Transient capture status — danger as text/icon only.
+                    _ = dvui.icon(@src(), "", icons.tvg.lucide.@"circle", .{}, .{
+                        .id_extra = i + 7003,
+                        .color_text = theme.colors.danger,
+                        .min_size_content = .{ .w = 10, .h = 10 },
+                        .margin = .{ .w = theme.spacing.xs },
+                        .gravity_y = 0.5,
+                    });
+                    _ = dvui.label(@src(), "REC", .{}, .{
                         .id_extra = i + 7002,
-                        .color_text = dvui.Color{ .r = 255, .g = 255, .b = 255, .a = 255 },
+                        .color_text = theme.colors.danger,
+                        .gravity_y = 0.5,
                     });
                     rec_box.deinit();
                     rec_overlay.deinit();
@@ -506,7 +528,7 @@ pub fn renderGrid() !void {
             var load_overlay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
             {
                 // Dark backdrop captures clicks to select this pane.
-                if (dvui.button(@src(), "", .{}, .{ .id_extra = i + 3000, .expand = .both, .color_fill = theme.colors.bg_app })) {
+                if (dvui.button(@src(), "", .{}, .{ .id_extra = i + 3000, .expand = .both, .color_fill = theme.colors.bg_deep })) {
                     state.app.active_player_idx = i;
                 }
 
@@ -560,10 +582,14 @@ pub fn renderGrid() !void {
                 var card = dvui.box(@src(), .{ .dir = .vertical }, .{
                     .id_extra = i,
                     .gravity_x = 0.5,
-                    .gravity_y = 0.5,
+                    // Empty state stays vertically centered; once a conversation
+                    // starts, anchor near the top so the growing chat expands
+                    // downward instead of creeping up under the toolbar.
+                    .gravity_y = if (has_chat) @as(f32, 0.04) else 0.5,
                     .background = false,
                     .border = dvui.Rect.all(0),
                     .padding = .{ .x = 24, .y = 20, .w = 24, .h = 20 },
+                    .margin = .{ .x = 0, .y = if (has_chat) @as(f32, 10) else 0, .w = 0, .h = 0 },
                     .min_size_content = .{ .w = 620, .h = 0 },
                     .max_size_content = .{ .w = 760, .h = std.math.floatMax(f32) },
                 });
@@ -574,25 +600,17 @@ pub fn renderGrid() !void {
                 // Continue Watching — returning users want this front and center
                 renderContinueWatching();
 
-                if (!has_chat) {
-                    // Compact drop zone hint below the content
-                    { var gap = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 0, .h = 8 }, .expand = .horizontal }); gap.deinit(); }
-                    _ = dvui.icon(@src(), "", icons.tvg.lucide.@"cloud-upload", .{}, .{
-                        .color_text = theme.colors.text_dim,
-                        .min_size_content = .{ .w = 28, .h = 28 },
-                        .gravity_x = 0.5,
-                    });
-                    _ = dvui.label(@src(), "Drop media or paste a URL", .{}, .{
-                        .color_text = theme.colors.text_dim,
-                        .margin = .{ .y = 4 },
-                        .gravity_x = 0.5,
-                    });
-                } else {
+                // Empty home: the hero input above is the single focal point —
+                // no separate drop-zone hint (the input placeholder carries it).
+                // The inline chat only appears once a conversation exists.
+                if (has_chat) {
                     renderInlineChat();
                 }
 
-                // ── Context chip: shows what AI "sees" (current media + time) ──
-                {
+                // ── Context line + voice phase ──
+                // Both are conversation affordances — suppressed entirely on the
+                // empty home so the hero input stays the single focal point.
+                if (has_chat) {
                     const voice = @import("../services/ai_voice.zig");
                     const has_media = state.app.players.items.len > 0;
                     if (has_media) {
@@ -604,32 +622,17 @@ pub fn renderGrid() !void {
                         if (media_label.len > 0) {
                             const chip_txt = std.fmt.bufPrint(&chip_buf, "Seeing: {s}", .{media_label}) catch "";
                             if (chip_txt.len > 0) {
-                                var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                                    .margin = .{ .y = 6 },
-                                    .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-                                    .background = true,
-                                    .color_fill = dvui.Color{ .r = 24, .g = 24, .b = 38, .a = 180 },
-                                    .color_border = dvui.Color{ .r = 50, .g = 50, .b = 70, .a = 180 },
-                                    .border = dvui.Rect.all(1),
-                                    .corner_radius = dvui.Rect.all(6),
-                                    .gravity_x = 0.5,
-                                });
-                                defer chip.deinit();
-                                _ = dvui.icon(@src(), "", icons.tvg.lucide.@"bot", .{}, .{
-                                    .color_text = theme.colors.accent,
-                                    .min_size_content = .{ .w = 12, .h = 12 },
-                                    .margin = .{ .w = 6 },
-                                    .gravity_y = 0.5,
-                                });
+                                // Borderless, quiet context line.
                                 _ = dvui.label(@src(), "{s}", .{chip_txt}, .{
-                                    .color_text = theme.colors.text_muted,
-                                    .gravity_y = 0.5,
+                                    .color_text = theme.colors.text_tertiary,
+                                    .margin = .{ .y = theme.spacing.xs },
+                                    .gravity_x = 0.5,
                                 });
                             }
                         }
                     }
 
-                    // Status line (Listening / Thinking / Speaking)
+                    // Voice phase — one quiet text_tertiary line.
                     const ai_chat_mod = @import("../services/ai_chat.zig");
                     const phase_txt: ?[]const u8 = switch (voice.conv_phase) {
                         .listening => "Listening…",
@@ -639,25 +642,10 @@ pub fn renderGrid() !void {
                         .idle => if (ai_chat_mod.is_generating) "Thinking…" else null,
                     };
                     if (phase_txt) |txt| {
-                        var status_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                            .margin = .{ .y = 4 },
-                            .gravity_x = 0.5,
-                        });
-                        defer status_row.deinit();
-                        const phase_color: dvui.Color = switch (voice.conv_phase) {
-                            .listening => .{ .r = 100, .g = 220, .b = 130, .a = 255 },
-                            .speaking => .{ .r = 130, .g = 180, .b = 255, .a = 255 },
-                            else => theme.colors.accent,
-                        };
-                        _ = dvui.icon(@src(), "", icons.tvg.lucide.@"activity", .{}, .{
-                            .color_text = phase_color,
-                            .min_size_content = .{ .w = 14, .h = 14 },
-                            .margin = .{ .w = 6 },
-                            .gravity_y = 0.5,
-                        });
                         _ = dvui.label(@src(), "{s}", .{txt}, .{
-                            .color_text = phase_color,
-                            .gravity_y = 0.5,
+                            .color_text = theme.colors.text_tertiary,
+                            .margin = .{ .y = theme.spacing.xs },
+                            .gravity_x = 0.5,
                         });
                     }
                 }
@@ -668,20 +656,16 @@ pub fn renderGrid() !void {
                     // across frames but resets if user clicks elsewhere.
                     const Guard = struct { var armed: bool = false; };
                     const label: []const u8 = if (Guard.armed) "Click again to confirm" else "Clear chat";
+                    // Calm: ghost button. Armed state reads as danger TEXT only —
+                    // no resting red fill.
                     if (dvui.button(@src(), label, .{}, .{
-                        .color_fill = if (Guard.armed)
-                            dvui.Color{ .r = 55, .g = 20, .b = 20, .a = 255 }
-                        else
-                            dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                        .color_text = if (Guard.armed)
-                            dvui.Color{ .r = 255, .g = 140, .b = 140, .a = 255 }
-                        else
-                            theme.colors.text_muted,
+                        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                        .color_text = if (Guard.armed) theme.colors.danger else theme.colors.text_secondary,
                         .border = dvui.Rect.all(0),
-                        .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-                        .margin = .{ .y = 8 },
+                        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                        .margin = .{ .y = theme.spacing.sm },
                         .gravity_x = 0.5,
-                        .corner_radius = dvui.Rect.all(4),
+                        .corner_radius = theme.dims.rad_sm,
                     })) {
                         if (Guard.armed) {
                             ai_chat.clearHistory();
@@ -725,7 +709,7 @@ pub fn renderGrid() !void {
                 if (dvui.button(@src(), "", .{}, .{
                     .id_extra = i + 5510,
                     .expand = .both,
-                    .color_fill = theme.colors.bg_drawer,
+                    .color_fill = theme.colors.bg_deep,
                     .color_text = theme.colors.text_main,
                     .border = dvui.Rect.all(0),
                     .corner_radius = theme.dims.rad_sm,
@@ -849,8 +833,8 @@ fn renderContinueWatching() void {
         const pct = @as(u8, @intFromFloat(pct_f));
 
         // ── Card container ──
-        // Per spec: padding spacing.md, bg_surface fill, radius.lg corners,
-        // 1px border_subtle outline. Gap between cards = spacing.sm.
+        // Calm: borderless — the bg_surface fill (over the bg_app card area)
+        // and inter-card whitespace carry the boundary. md radius, no outline.
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = si + 43000,
             .expand = .horizontal,
@@ -858,9 +842,7 @@ fn renderContinueWatching() void {
             .margin = .{ .x = 0, .y = theme.spacing.sm / 2, .w = 0, .h = theme.spacing.sm / 2 },
             .background = true,
             .color_fill = theme.colors.bg_surface,
-            .color_border = theme.colors.border_subtle,
-            .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(theme.radius.lg),
+            .corner_radius = dvui.Rect.all(theme.radius.md),
         });
         defer card.deinit();
 
@@ -872,9 +854,11 @@ fn renderContinueWatching() void {
             });
             defer top_row.deinit();
 
+            // Play glyph demoted to neutral — the progress fill is the single
+            // accent in this row.
             _ = dvui.icon(@src(), "", icons.tvg.lucide.@"play", .{}, .{
                 .id_extra = si + 43100,
-                .color_text = theme.colors.accent_primary,
+                .color_text = theme.colors.text_secondary,
                 .min_size_content = .{ .w = 14, .h = 14 },
                 .margin = .{ .w = theme.spacing.sm },
                 .gravity_y = 0.5,
@@ -887,35 +871,26 @@ fn renderContinueWatching() void {
                 .expand = .horizontal,
             });
 
-            // Percentage as a status pill (info — themed accent).
+            // Percentage as quiet neutral text (statusPill .info reads as
+            // text_secondary — no fill, no box).
             var pct_buf: [32]u8 = undefined;
             const pct_str = std.fmt.bufPrint(&pct_buf, "{d}% watched", .{pct}) catch "0% watched";
             components.statusPill(pct_str, .info);
 
-            // Resume button — 36px tall, accent_primary bg, text_on_accent
-            // text, radius.md corners. Hover lifts the fill via dvui.clicked
-            // tracking; we paint the brighter accent_hover when hovered.
-            var resume_hovered: bool = false;
-            // Use a transparent pre-pass to get the hovered state, then a
-            // styled button. dvui doesn't expose hover-pass on dvui.button
-            // directly, but we can rely on bg_card_hover semantics by
-            // toggling fill in subsequent frames. For now we use
-            // accent_primary baseline and accent_hover when hovered via
-            // a separate hover box.
+            // Resume — ghost/text button. The play glyph + progress fill already
+            // signal resumability; the action stays neutral.
             const resume_clicked = dvui.button(@src(), "Resume", .{}, .{
                 .id_extra = si + 43400,
-                .color_fill = if (resume_hovered) theme.colors.accent_hover else theme.colors.accent_primary,
-                .color_text = theme.colors.text_on_accent,
-                .corner_radius = dvui.Rect.all(theme.radius.md),
+                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_text = theme.colors.text_secondary,
+                .border = dvui.Rect.all(0),
+                .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
                 .min_size_content = .{ .w = 0, .h = 36 },
                 .max_size_content = .{ .w = std.math.floatMax(f32), .h = 36 },
                 .gravity_y = 0.5,
                 .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
             });
-            // Suppress unused-var warning while keeping the hover hook
-            // ready for a future frame-aware highlight.
-            _ = &resume_hovered;
             if (resume_clicked) {
                 if (state.app.active_player_idx < state.app.players.items.len) {
                     const browser = @import("../services/browser.zig");
@@ -946,15 +921,19 @@ fn renderContinueWatching() void {
                 .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
             });
 
-            // Fill portion (proportional width inside the track).
-            const fill_frac: f32 = @floatCast(pct_f / 100.0);
+            // Fill portion — sized proportionally against the laid-out track
+            // width (no hardcoded pixel width). One frame of lag on first paint
+            // is acceptable; contentRectScale().r.w is the real track width.
+            const fill_frac: f32 = @max(0.0, @min(1.0, @as(f32, @floatCast(pct_f / 100.0))));
+            const track_w = bar_track.data().contentRectScale().r.w;
+            const fill_w = fill_frac * track_w;
             var fill_box = dvui.box(@src(), .{}, .{
                 .id_extra = si + 43600,
                 .background = true,
                 .color_fill = theme.colors.accent_primary,
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
-                .min_size_content = .{ .w = fill_frac * 600, .h = bar_h },
-                .max_size_content = .{ .w = fill_frac * 600, .h = bar_h },
+                .min_size_content = .{ .w = fill_w, .h = bar_h },
+                .max_size_content = .{ .w = fill_w, .h = bar_h },
             });
             fill_box.deinit();
 

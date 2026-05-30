@@ -130,6 +130,22 @@ pub fn fetchCatalog() void {
     }.worker, .{}) catch {};
 }
 
+/// Ensure at least the well-known addons are installed so streaming sources
+/// work without manual UI setup. Idempotent: no-op once any addon is installed.
+/// Populates installed_addons directly (the universal resolver reads that list).
+pub fn ensureDefaultAddons() void {
+    if (installed_count > 0) return;
+    if (addon_count == 0) addKnownAddons();
+    for (0..addon_count) |i| {
+        if (installed_count >= 16) break;
+        var inst = &installed_addons[installed_count];
+        inst.* = addons[i];
+        inst.installed = true;
+        addons[i].installed = true;
+        installed_count += 1;
+    }
+}
+
 /// Add well-known addons as fallback when the catalog API is unavailable
 fn addKnownAddons() void {
     const known = [_]struct { name: []const u8, desc: []const u8, url: []const u8, types: []const u8 }{

@@ -356,9 +356,14 @@
 
 <script>
 const API = location.origin;
+// Bearer token injected by the server into the served HTML (see remote.zig
+// serveStaticFile). Falls back to empty if the page was opened without the
+// server substituting the placeholder.
+const API_TOKEN = (function(){ const t = '__ZIGZAG_API_TOKEN__'; return /^[0-9a-fA-F]{32}$/.test(t) ? t : ''; })();
+const AUTH_HEADERS = API_TOKEN ? { 'Authorization': 'Bearer ' + API_TOKEN } : {};
 const el = id => document.getElementById(id);
 const enc = s => encodeURIComponent(s);
-function api(a) { return fetch(API+'/api/'+a).then(r=>r.json()).catch(()=>({})); }
+function api(a) { return fetch(API+'/api/'+a, { headers: AUTH_HEADERS }).then(r=>r.json()).catch(()=>({})); }
 function fmt(s) { if(!s||s<0)return'--:--'; const m=Math.floor(s/60),ss=Math.floor(s%60); return m+':'+(ss<10?'0':'')+ss; }
 function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML;}
 function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),3000);}

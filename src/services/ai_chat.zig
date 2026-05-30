@@ -3,6 +3,7 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
+const components = @import("../ui/components.zig");
 const logs = @import("../core/logs.zig");
 const server = @import("ai_server.zig");
 const memory = @import("ai_memory.zig");
@@ -182,10 +183,8 @@ pub fn stopAll() void {
     is_generating = false;
     voice.setPhase(.idle);
 
-    // Pause v2 voice server
-    if (voice.voice_socket) |s| {
-        @import("../core/io_global.zig").streamWriteAll(s, "PAUSE\n") catch {};
-    }
+    // Pause v2 voice server (thread-safe; voice_socket is now private + mutex-guarded)
+    voice.pauseVoiceServer();
 
     // Kill aplay + recording in background thread to avoid blocking render
     _ = std.Thread.spawn(.{}, struct {
@@ -251,15 +250,11 @@ pub fn renderChatBody() void {
     const state_mod = @import("../core/state.zig");
     voice.notifyMediaState(state_mod.app.players.items.len > 0);
 
-    // ── Compact header ──
+    // ── Compact header ── (no filled bar; one hairline divider below)
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
-            .background = true,
-            .color_fill = dvui.Color{ .r = 14, .g = 14, .b = 20, .a = 255 },
-            .color_border = dvui.Color{ .r = 30, .g = 30, .b = 45, .a = 180 },
-            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
             .gravity_y = 0.5,
         });
         defer hdr.deinit();
@@ -267,66 +262,53 @@ pub fn renderChatBody() void {
         _ = dvui.icon(@src(), "", icons.tvg.lucide.@"cpu", .{}, .{
             .color_text = theme.colors.accent,
             .min_size_content = .{ .w = 16, .h = 16 },
-            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
         _ = dvui.label(@src(), switch (server.backend_kind) { .apfel => "Apple Intelligence", .gemma_llama => "Gemma 4 E2B" }, .{}, .{
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .expand = .horizontal,
         });
 
-        // Status indicator
+        // Status indicator — two-state quiet text dot.
         if (server.model_status == .online) {
-            _ = dvui.label(@src(), "●", .{}, .{ .color_text = theme.colors.success });
-        } else if (server.server_running) {
-            _ = dvui.label(@src(), "◌", .{}, .{ .color_text = theme.colors.accent });
+            _ = dvui.label(@src(), "Online", .{}, .{ .color_text = theme.colors.semantic_success });
         } else {
-            _ = dvui.label(@src(), "○", .{}, .{ .color_text = dvui.Color{ .r = 80, .g = 50, .b = 50, .a = 200 } });
+            _ = dvui.label(@src(), if (server.server_running) "Starting" else "Offline", .{}, .{ .color_text = theme.colors.text_tertiary });
         }
 
         // Settings gear
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"settings", .{}, .{}, .{
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = dvui.Color{ .r = 60, .g = 60, .b = 80, .a = 200 },
-            .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
-            .min_size_content = .{ .w = 14, .h = 14 },
-            .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
-        })) {
+        if (components.iconButton(@src(), icons.tvg.lucide.@"settings", "Settings", show_controls)) {
             show_controls = !show_controls;
         }
 
-        // Voice toggle
-        if (dvui.button(@src(), if (voice.voice_mode) "VOICE ON" else "VOICE", .{}, .{
-            .color_fill = if (voice.voice_mode) dvui.Color{ .r = 20, .g = 40, .b = 25, .a = 255 } else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (voice.voice_mode) dvui.Color{ .r = 100, .g = 220, .b = 130, .a = 255 } else dvui.Color{ .r = 60, .g = 60, .b = 80, .a = 200 },
-            .corner_radius = dvui.Rect.all(4),
-            .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
-            .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
+        // Voice toggle — plain accent toggle.
+        if (dvui.button(@src(), "Voice", .{}, .{
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = if (voice.voice_mode) theme.colors.accent else theme.colors.text_secondary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+            .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
         })) {
             voice.voice_mode = !voice.voice_mode;
         }
 
-        // Incognito toggle
-        if (dvui.button(@src(), if (incognito_mode) "🕶 INCOG" else "INCOG", .{}, .{
-            .color_fill = if (incognito_mode) dvui.Color{ .r = 40, .g = 20, .b = 50, .a = 255 } else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (incognito_mode) dvui.Color{ .r = 180, .g = 130, .b = 220, .a = 255 } else dvui.Color{ .r = 60, .g = 60, .b = 80, .a = 200 },
-            .corner_radius = dvui.Rect.all(4),
-            .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
-            .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
+        // Incognito toggle — plain accent toggle.
+        if (dvui.button(@src(), "Incognito", .{}, .{
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = if (incognito_mode) theme.colors.accent else theme.colors.text_secondary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+            .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
         })) {
             incognito_mode = !incognito_mode;
         }
 
         // Clear chat
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"trash-2", .{}, .{}, .{
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = dvui.Color{ .r = 60, .g = 60, .b = 80, .a = 200 },
-            .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
-            .min_size_content = .{ .w = 14, .h = 14 },
-            .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
-        })) {
+        if (components.iconButton(@src(), icons.tvg.lucide.@"trash-2", "Clear chat", false)) {
             clearHistory();
         }
     }
+    components.divider();
 
     // ── Control panel (collapsible) ──
     if (show_controls) {
@@ -350,103 +332,101 @@ pub fn renderChatBody() void {
     }
 
     if (show_status_bar) {
+        // Spacing-only row (no fill, no border). Status text is quiet and transient.
         var status_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-            .background = true,
-            .color_fill = dvui.Color{ .r = 20, .g = 20, .b = 30, .a = 255 },
-            .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
-            .color_border = dvui.Color{ .r = 40, .g = 40, .b = 60, .a = 150 },
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
         });
         defer status_box.deinit();
 
         _ = dvui.icon(@src(), "", icons.tvg.lucide.@"activity", .{}, .{
             .color_text = theme.colors.accent,
             .min_size_content = .{ .w = 14, .h = 14 },
-            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
 
         if (voice.conversation_active) {
             if (voice.conv_phase == .listening) {
                 if (voice.partial_text_len > 0) {
                     _ = dvui.label(@src(), "Listening: {s}", .{voice.partial_text[0..voice.partial_text_len]}, .{
-                        .color_text = dvui.Color{ .r = 200, .g = 255, .b = 200, .a = 255 },
+                        .color_text = theme.colors.text_secondary,
                         .expand = .horizontal,
                     });
                 } else {
                     _ = dvui.label(@src(), "Listening...", .{}, .{
-                        .color_text = dvui.Color{ .r = 60, .g = 220, .b = 140, .a = 255 },
+                        .color_text = theme.colors.text_secondary,
                     });
                 }
             } else if (voice.conv_phase == .transcribing) {
                 _ = dvui.label(@src(), "Transcribing...", .{}, .{
-                    .color_text = dvui.Color{ .r = 255, .g = 200, .b = 60, .a = 255 },
+                    .color_text = theme.colors.text_secondary,
                 });
             } else if (voice.conv_phase == .thinking) {
                 _ = dvui.label(@src(), "Thinking...", .{}, .{
-                    .color_text = dvui.Color{ .r = 100, .g = 160, .b = 255, .a = 255 },
+                    .color_text = theme.colors.text_secondary,
                 });
             } else if (voice.conv_phase == .speaking) {
                 _ = dvui.label(@src(), "Speaking...", .{}, .{
-                    .color_text = dvui.Color{ .r = 200, .g = 120, .b = 255, .a = 255 },
+                    .color_text = theme.colors.text_secondary,
                 });
             } else {
                 _ = dvui.label(@src(), "Voice Active (Ready)", .{}, .{
-                    .color_text = dvui.Color{ .r = 120, .g = 120, .b = 140, .a = 255 },
+                    .color_text = theme.colors.text_tertiary,
                 });
             }
         } else if (is_generating) {
             _ = dvui.label(@src(), "Thinking...", .{}, .{
-                .color_text = dvui.Color{ .r = 100, .g = 160, .b = 255, .a = 255 },
+                .color_text = theme.colors.text_secondary,
             });
         } else if (voice.is_speaking) {
             _ = dvui.label(@src(), "Speaking...", .{}, .{
-                .color_text = dvui.Color{ .r = 200, .g = 120, .b = 255, .a = 255 },
+                .color_text = theme.colors.text_secondary,
             });
         }
     }
 
-    // ── Input bar (sticky at top) ──
+    // ── Input bar (sticky at top) — spacing only, no fill/border ──
     {
         var input_bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = 9005,
             .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
-            .background = true,
-            .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 26, .a = 255 },
-            .color_border = dvui.Color{ .r = 55, .g = 55, .b = 75, .a = 200 },
-            .border = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
         });
         defer input_bar.deinit();
 
+        // Calm text entry — hairline resting border, accent focus ring,
+        // bg_elevated fill (matches searchInput). Keeps enter_pressed/id.
+        var has_focus = false;
         var te = dvui.textEntry(@src(), .{
             .text = .{ .buffer = &input_buf },
         }, .{
             .id_extra = 9006,
             .expand = .horizontal,
-            .color_fill = dvui.Color{ .r = 26, .g = 26, .b = 36, .a = 255 },
-            .color_text = dvui.Color{ .r = 220, .g = 225, .b = 240, .a = 255 },
-            .color_border = dvui.Color{ .r = 70, .g = 70, .b = 95, .a = 200 },
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_primary,
+            .color_border = if (has_focus) theme.colors.accent else theme.colors.border_subtle,
             .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(10),
-            .padding = .{ .x = 14, .y = 10, .w = 14, .h = 10 },
-            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            .corner_radius = theme.dims.rad_md,
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
         const enter_pressed = te.enter_pressed;
+        if (dvui.focusedWidgetIdInCurrentSubwindow()) |fid| {
+            has_focus = te.data().id == fid;
+        }
         input_len = std.mem.indexOfScalar(u8, &input_buf, 0) orelse MAX_INPUT_LEN;
         te.deinit();
 
         const can_send = input_len > 0 and !is_generating;
 
-        // Send button
+        // Send button — the single accent affordance in this row.
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"send", .{}, .{}, .{
-            .color_fill = if (can_send) theme.colors.accent else dvui.Color{ .r = 30, .g = 30, .b = 42, .a = 255 },
-            .color_text = if (can_send) dvui.Color.white else dvui.Color{ .r = 140, .g = 145, .b = 160, .a = 220 },
-            .corner_radius = dvui.Rect.all(8),
-            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
+            .color_fill = if (can_send) theme.colors.accent else theme.colors.bg_elevated,
+            .color_text = if (can_send) theme.colors.text_on_accent else theme.colors.text_tertiary,
+            .corner_radius = theme.dims.rad_md,
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
             .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
-            .color_border = dvui.Color{ .r = 60, .g = 60, .b = 80, .a = 150 },
-            .border = dvui.Rect.all(1),
+            .border = dvui.Rect.all(0),
         })) {
             if (can_send) trySendMessage();
         }
@@ -456,70 +436,44 @@ pub fn renderChatBody() void {
             trySendMessage();
         }
 
-        // Mic button
+        // Mic / conversation / stop — borderless icon buttons.
+        // Recording/stopping use the danger token only while active.
         {
-            const mic_color = if (voice.is_recording)
-                dvui.Color{ .r = 220, .g = 40, .b = 40, .a = 255 }
-            else if (voice.is_transcribing)
-                dvui.Color{ .r = 40, .g = 180, .b = 80, .a = 255 }
-            else
-                dvui.Color{ .r = 30, .g = 30, .b = 42, .a = 255 };
-
-            const mic_icon_color = if (voice.is_recording)
-                dvui.Color.white
-            else if (voice.is_transcribing)
-                dvui.Color.white
-            else
-                dvui.Color{ .r = 160, .g = 165, .b = 185, .a = 255 };
-
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"mic", .{}, .{}, .{
                 .id_extra = 9007,
-                .color_fill = mic_color,
-                .color_text = mic_icon_color,
-                .corner_radius = dvui.Rect.all(8),
-                .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
-                .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
-                .color_border = if (voice.is_recording) dvui.Color{ .r = 255, .g = 80, .b = 80, .a = 200 } else dvui.Color{ .r = 60, .g = 60, .b = 80, .a = 150 },
-                .border = dvui.Rect.all(1),
+                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_text = if (voice.is_recording) theme.colors.danger else if (voice.is_transcribing) theme.colors.accent else theme.colors.text_secondary,
+                .corner_radius = theme.dims.rad_md,
+                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
+                .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
+                .border = dvui.Rect.all(0),
             })) {
                 voice.toggleMicRecording();
             }
 
             // Conversation mode toggle (live hands-free voice loop)
-            const conv_color = if (voice.conversation_active)
-                dvui.Color{ .r = 30, .g = 200, .b = 120, .a = 255 }
-            else
-                dvui.Color{ .r = 30, .g = 30, .b = 42, .a = 255 };
-
-            const conv_icon_color = if (voice.conversation_active)
-                dvui.Color.white
-            else
-                dvui.Color{ .r = 120, .g = 125, .b = 145, .a = 255 };
-
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"headphones", .{}, .{}, .{
                 .id_extra = 9008,
-                .color_fill = conv_color,
-                .color_text = conv_icon_color,
-                .corner_radius = dvui.Rect.all(8),
-                .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
+                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_text = if (voice.conversation_active) theme.colors.accent else theme.colors.text_secondary,
+                .corner_radius = theme.dims.rad_md,
+                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
                 .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
-                .color_border = if (voice.conversation_active) dvui.Color{ .r = 40, .g = 220, .b = 140, .a = 200 } else dvui.Color{ .r = 60, .g = 60, .b = 80, .a = 150 },
-                .border = dvui.Rect.all(1),
+                .border = dvui.Rect.all(0),
             })) {
                 voice.toggleConversation();
             }
 
-            // Stop button
+            // Stop button — danger token only when something is active.
             const is_active = is_generating or voice.is_speaking or voice.is_recording or voice.is_transcribing;
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"square", .{}, .{}, .{
                 .id_extra = 9009,
-                .color_fill = if (is_active) dvui.Color{ .r = 180, .g = 30, .b = 30, .a = 255 } else dvui.Color{ .r = 30, .g = 30, .b = 42, .a = 255 },
-                .color_text = if (is_active) dvui.Color.white else dvui.Color{ .r = 80, .g = 80, .b = 100, .a = 200 },
-                .corner_radius = dvui.Rect.all(8),
-                .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
+                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_text = if (is_active) theme.colors.danger else theme.colors.text_tertiary,
+                .corner_radius = theme.dims.rad_md,
+                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
                 .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
-                .color_border = if (is_active) dvui.Color{ .r = 220, .g = 60, .b = 60, .a = 200 } else dvui.Color{ .r = 60, .g = 60, .b = 80, .a = 150 },
-                .border = dvui.Rect.all(1),
+                .border = dvui.Rect.all(0),
             })) {
                 stopAll();
             }
@@ -530,35 +484,30 @@ pub fn renderChatBody() void {
     {
         var scroll = dvui.scrollArea(@src(), .{}, .{
             .expand = .both,
-            .color_fill = dvui.Color{ .r = 12, .g = 12, .b = 18, .a = 255 },
+            .color_fill = theme.colors.bg_app,
             .background = true,
         });
         defer scroll.deinit();
 
         var content_box = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
         });
         defer content_box.deinit();
 
         if (message_count == 0) {
             renderEmptyState();
         } else {
-            // Error display (at top — most urgent)
+            // Error display (at top — most urgent). Transient semantic text only.
             if (last_error_len > 0) {
                 _ = dvui.label(@src(), "{s}", .{last_error[0..last_error_len]}, .{
-                    .color_text = dvui.Color{ .r = 255, .g = 100, .b = 100, .a = 255 },
+                    .color_text = theme.colors.semantic_error,
                     .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
                 });
             }
 
-            // Generating indicator (at top — latest activity)
-            if (is_generating) {
-                _ = dvui.label(@src(), "⟳ Thinking...", .{}, .{
-                    .color_text = theme.colors.accent,
-                    .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
-                });
-            }
+            // Generating indicator handled in-bubble (renderMessage) — no
+            // duplicate top-of-list spinner.
 
             // Inline search results (at top — latest results)
             renderInlineResults();
@@ -580,43 +529,41 @@ pub fn renderChatBody() void {
 // ══════════════════════════════════════════════════════════
 
 fn renderControlPanel() void {
-    // Row 1: Model
+    // Row 1: Model — spacing only, separated by whitespace.
     {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
-            .background = true,
-            .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 26, .a = 255 },
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
             .gravity_y = 0.5,
         });
         defer row.deinit();
 
         _ = dvui.icon(@src(), "", icons.tvg.lucide.@"hard-drive", .{}, .{
-            .color_text = theme.colors.accent,
+            .color_text = theme.colors.text_tertiary,
             .min_size_content = .{ .w = 14, .h = 14 },
-            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
 
         if (server.backend_kind == .apfel) {
             // macOS: Apple Intelligence — model is built-in
             _ = dvui.label(@src(), "Apple Intelligence (on-device)", .{}, .{
-                .color_text = theme.colors.text_main,
+                .color_text = theme.colors.text_primary,
                 .expand = .horizontal,
             });
             _ = dvui.label(@src(), "Ready", .{}, .{
-                .color_text = theme.colors.success,
+                .color_text = theme.colors.semantic_success,
             });
         } else if (server.model_exists) {
             _ = dvui.label(@src(), "TinyLlama 1.1B  669 MB", .{}, .{
-                .color_text = theme.colors.text_main,
+                .color_text = theme.colors.text_primary,
                 .expand = .horizontal,
             });
             _ = dvui.label(@src(), "Ready", .{}, .{
-                .color_text = theme.colors.success,
+                .color_text = theme.colors.semantic_success,
             });
         } else if (server.model_downloading) {
             _ = dvui.label(@src(), "{s}", .{server.download_progress_buf[0..server.download_progress_len]}, .{
-                .color_text = theme.colors.accent,
+                .color_text = theme.colors.text_secondary,
                 .expand = .horizontal,
             });
         } else {
@@ -626,9 +573,9 @@ fn renderControlPanel() void {
             });
             if (dvui.button(@src(), "Download", .{}, .{
                 .color_fill = theme.colors.accent,
-                .color_text = dvui.Color.white,
-                .corner_radius = dvui.Rect.all(4),
-                .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+                .color_text = theme.colors.text_on_accent,
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             })) {
                 server.startModelDownload();
             }
@@ -639,28 +586,26 @@ fn renderControlPanel() void {
     {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
-            .background = true,
-            .color_fill = dvui.Color{ .r = 16, .g = 16, .b = 22, .a = 255 },
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
             .gravity_y = 0.5,
         });
         defer row.deinit();
 
         _ = dvui.icon(@src(), "", icons.tvg.lucide.@"server", .{}, .{
-            .color_text = theme.colors.accent,
+            .color_text = theme.colors.text_tertiary,
             .min_size_content = .{ .w = 14, .h = 14 },
-            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
 
         if (server.backend_kind == .apfel) {
             // macOS: show apfel binary status
             if (server.llama_server_exists) {
                 _ = dvui.label(@src(), "apfel", .{}, .{
-                    .color_text = theme.colors.text_main,
+                    .color_text = theme.colors.text_primary,
                     .expand = .horizontal,
                 });
                 _ = dvui.label(@src(), "Found", .{}, .{
-                    .color_text = theme.colors.success,
+                    .color_text = theme.colors.semantic_success,
                 });
             } else {
                 _ = dvui.label(@src(), "apfel not found", .{}, .{
@@ -668,16 +613,16 @@ fn renderControlPanel() void {
                     .expand = .horizontal,
                 });
                 _ = dvui.label(@src(), "brew install apfel", .{}, .{
-                    .color_text = theme.colors.accent,
+                    .color_text = theme.colors.text_secondary,
                 });
             }
         } else if (server.llama_server_exists) {
             _ = dvui.label(@src(), "Shimmy", .{}, .{
-                .color_text = theme.colors.text_main,
+                .color_text = theme.colors.text_primary,
                 .expand = .horizontal,
             });
             _ = dvui.label(@src(), "Found", .{}, .{
-                .color_text = theme.colors.success,
+                .color_text = theme.colors.semantic_success,
             });
         } else {
             _ = dvui.label(@src(), "Shimmy missing", .{}, .{
@@ -685,10 +630,10 @@ fn renderControlPanel() void {
                 .expand = .horizontal,
             });
             if (dvui.button(@src(), "Install", .{}, .{
-                .color_fill = dvui.Color{ .r = 40, .g = 40, .b = 55, .a = 255 },
+                .color_fill = theme.colors.bg_elevated,
                 .color_text = theme.colors.accent,
-                .corner_radius = dvui.Rect.all(4),
-                .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             })) {
                 server.installLlamaServer();
             }
@@ -699,9 +644,7 @@ fn renderControlPanel() void {
     {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-            .background = true,
-            .color_fill = dvui.Color{ .r = 14, .g = 14, .b = 20, .a = 255 },
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .gravity_y = 0.5,
         });
         defer row.deinit();
@@ -712,19 +655,19 @@ fn renderControlPanel() void {
         const gpu_str = std.fmt.bufPrintZ(&gpu_buf, "{d}", .{server.gpu_layers}) catch "99";
 
         _ = dvui.label(@src(), "Port", .{}, .{
-            .color_text = dvui.Color{ .r = 70, .g = 70, .b = 90, .a = 255 },
-            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
+            .color_text = theme.colors.text_tertiary,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
         });
         _ = dvui.label(@src(), "{s}", .{port_str}, .{
-            .color_text = theme.colors.text_main,
-            .margin = .{ .x = 0, .y = 0, .w = 16, .h = 0 },
+            .color_text = theme.colors.text_primary,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.lg, .h = 0 },
         });
         _ = dvui.label(@src(), "GPU", .{}, .{
-            .color_text = dvui.Color{ .r = 70, .g = 70, .b = 90, .a = 255 },
-            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
+            .color_text = theme.colors.text_tertiary,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
         });
         _ = dvui.label(@src(), "{s}", .{gpu_str}, .{
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .expand = .horizontal,
         });
     }
@@ -736,37 +679,34 @@ fn renderControlPanel() void {
 
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-            .background = true,
-            .color_fill = dvui.Color{ .r = 14, .g = 14, .b = 20, .a = 255 },
-            .color_border = dvui.Color{ .r = 30, .g = 30, .b = 45, .a = 180 },
-            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .gravity_y = 0.5,
         });
         defer row.deinit();
 
         if (dvui.button(@src(), "Start", .{}, .{
             .expand = .horizontal,
-            .color_fill = if (can_start) theme.colors.success else dvui.Color{ .r = 25, .g = 30, .b = 25, .a = 200 },
-            .color_text = if (can_start) dvui.Color.white else dvui.Color{ .r = 60, .g = 80, .b = 60, .a = 150 },
-            .corner_radius = dvui.Rect.all(6),
-            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
-            .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
+            .color_fill = if (can_start) theme.colors.accent else theme.colors.bg_elevated,
+            .color_text = if (can_start) theme.colors.text_on_accent else theme.colors.text_tertiary,
+            .corner_radius = theme.dims.rad_md,
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
         })) {
             if (can_start) server.startServer();
         }
 
         if (dvui.button(@src(), "Stop", .{}, .{
             .expand = .horizontal,
-            .color_fill = if (can_stop) dvui.Color{ .r = 180, .g = 50, .b = 50, .a = 255 } else dvui.Color{ .r = 30, .g = 20, .b = 20, .a = 200 },
-            .color_text = if (can_stop) dvui.Color.white else dvui.Color{ .r = 80, .g = 50, .b = 50, .a = 150 },
-            .corner_radius = dvui.Rect.all(6),
-            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
-            .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = if (can_stop) theme.colors.danger else theme.colors.text_tertiary,
+            .corner_radius = theme.dims.rad_md,
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+            .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
         })) {
             if (can_stop) server.stopServer();
         }
     }
+    components.divider();
 }
 
 // ══════════════════════════════════════════════════════════
@@ -774,42 +714,13 @@ fn renderControlPanel() void {
 // ══════════════════════════════════════════════════════════
 
 fn renderEmptyState() void {
-    {
-        var welcome_box = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 20, .y = 30, .w = 20, .h = 20 },
-            .gravity_x = 0.5,
-        });
-        defer welcome_box.deinit();
+    components.emptyState(
+        icons.tvg.lucide.@"cpu",
+        "ZigZag AI",
+        if (server.model_status == .online) "Ask me anything about media" else "Start the server to begin chatting",
+    );
 
-        _ = dvui.icon(@src(), "", icons.tvg.lucide.@"cpu", .{}, .{
-            .color_text = dvui.Color{ .r = 60, .g = 80, .b = 120, .a = 150 },
-            .min_size_content = .{ .w = 40, .h = 40 },
-            .gravity_x = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 12 },
-        });
-        _ = dvui.label(@src(), "ZigZag AI", .{}, .{
-            .color_text = theme.colors.text_main,
-            .gravity_x = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
-        });
-
-        if (server.model_status == .online) {
-            _ = dvui.label(@src(), "Ask me anything about media", .{}, .{
-                .color_text = theme.colors.text_muted,
-                .gravity_x = 0.5,
-                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 20 },
-            });
-        } else {
-            _ = dvui.label(@src(), "Start the server to begin chatting", .{}, .{
-                .color_text = theme.colors.text_muted,
-                .gravity_x = 0.5,
-                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 20 },
-            });
-        }
-    }
-
-    // Suggestion chips
+    // Suggestion text-links — borderless, no fill, separated by whitespace.
     if (server.model_status == .online) {
         const suggestions = [_][]const u8{
             "Recommend anime like Invincible",
@@ -822,13 +733,11 @@ fn renderEmptyState() void {
             if (dvui.button(@src(), sug, .{}, .{
                 .id_extra = idx + 8000,
                 .expand = .horizontal,
-                .color_fill = dvui.Color{ .r = 20, .g = 22, .b = 30, .a = 255 },
-                .color_border = dvui.Color{ .r = 40, .g = 45, .b = 65, .a = 150 },
-                .border = dvui.Rect.all(1),
-                .corner_radius = dvui.Rect.all(10),
-                .padding = .{ .x = 14, .y = 10, .w = 14, .h = 10 },
-                .margin = .{ .x = 8, .y = 0, .w = 8, .h = 6 },
-                .color_text = theme.colors.text_main,
+                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+                .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                .color_text = theme.colors.text_secondary,
             })) {
                 const slen = @min(sug.len, MAX_INPUT_LEN);
                 @memcpy(input_buf[0..slen], sug[0..slen]);
@@ -845,20 +754,28 @@ fn renderMessage(mi: usize) void {
     const is_user = msg.role == .user;
     const text = msg.text[0..msg.text_len];
 
-    if (is_user) {
-        _ = dvui.label(@src(), "You", .{}, .{
+    // Author tag — one quiet label; hierarchy via muting, not colored tags.
+    {
+        const author: []const u8 = if (is_user) "You" else switch (server.backend_kind) { .apfel => "Apple AI", .gemma_llama => "Gemma" };
+        _ = dvui.label(@src(), "{s}", .{author}, .{
             .id_extra = mi + 7000,
             .expand = .horizontal,
-            .color_text = dvui.Color{ .r = 130, .g = 160, .b = 220, .a = 255 },
-            .margin = .{ .x = 0, .y = 6, .w = 0, .h = 2 },
+            .color_text = theme.colors.text_tertiary,
+            .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 2 },
         });
-    } else {
-        _ = dvui.label(@src(), switch (server.backend_kind) { .apfel => "Apple AI", .gemma_llama => "Gemma" }, .{}, .{
-            .id_extra = mi + 7000,
+    }
+
+    // Empty assistant bubble — show status instead of a blank line so a
+    // reply-in-progress or failed reply never renders as nothing.
+    if (msg.text_len == 0) {
+        const ph: []const u8 = if (is_generating and mi + 1 == message_count) "Thinking…" else "(no response)";
+        _ = dvui.label(@src(), "{s}", .{ph}, .{
+            .id_extra = mi + 7100,
             .expand = .horizontal,
-            .color_text = dvui.Color{ .r = 100, .g = 200, .b = 130, .a = 255 },
-            .margin = .{ .x = 0, .y = 6, .w = 0, .h = 2 },
+            .color_text = theme.colors.text_muted,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
         });
+        return;
     }
 
     // Word-wrap into lines
@@ -898,7 +815,7 @@ fn renderMessage(mi: usize) void {
     dvui.labelEx(@src(), "{s}", .{wrapped[0..wpos]}, .{ .ellipsize = false }, .{
         .id_extra = mi + 7100,
         .expand = .horizontal,
-        .color_text = dvui.Color{ .r = 210, .g = 215, .b = 225, .a = 255 },
+        .color_text = if (is_user) theme.colors.text_secondary else theme.colors.text_primary,
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
     });
 
@@ -936,16 +853,12 @@ pub fn renderInlineResults() void {
     var results_box = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = 9500,
         .expand = .horizontal,
-        .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
+        .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.sm },
     });
     defer results_box.deinit();
 
     // Header
-    _ = dvui.label(@src(), "Results", .{}, .{
-        .id_extra = 9501,
-        .color_text = dvui.Color{ .r = 100, .g = 200, .b = 130, .a = 255 },
-        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
-    });
+    components.sectionHeader("Results");
 
     for (0..chat_result_count) |ci| {
         const item = &chat_results[ci];
@@ -953,115 +866,100 @@ pub fn renderInlineResults() void {
         const name = item.name[0..item.name_len];
         const is_recommended = if (recommended_idx) |ri| ri == ci else false;
 
-        // Single-row card: name (flex) · pct · source · quality · seeds · [+] [▶]
+        // Vertical row: name (+ accent edge if recommended) over one
+        // muted middot metadata line, with queue/play actions on the right.
         var card = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = ci + 9600,
             .expand = .horizontal,
-            .background = true,
-            .color_fill = if (is_recommended)
-                dvui.Color{ .r = 25, .g = 35, .b = 55, .a = 255 }
-            else
-                dvui.Color{ .r = 22, .g = 22, .b = 34, .a = 255 },
-            .color_border = if (is_recommended)
-                theme.colors.accent
-            else
-                dvui.Color{ .r = 50, .g = 50, .b = 70, .a = 180 },
-            .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(8),
-            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
+            // Recommended row carries the only quiet accent edge (left).
+            .background = is_recommended,
+            .color_fill = if (is_recommended) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_border = theme.colors.accent,
+            .border = if (is_recommended) .{ .x = 2, .y = 0, .w = 0, .h = 0 } else dvui.Rect.all(0),
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
         });
         defer card.deinit();
 
-        if (is_recommended) {
-            _ = dvui.label(@src(), "★", .{}, .{
-                .id_extra = ci + 9700,
-                .color_text = dvui.Color{ .r = 255, .g = 200, .b = 50, .a = 255 },
-                .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
+        // Name + metadata column.
+        {
+            var col = dvui.box(@src(), .{ .dir = .vertical }, .{
+                .id_extra = ci + 9650,
+                .expand = .horizontal,
                 .gravity_y = 0.5,
             });
-        }
+            defer col.deinit();
 
-        // Name — flex-grow via expand. Single line, fades on overflow.
-        _ = dvui.label(@src(), "{s}", .{name}, .{
-            .id_extra = ci + 9800,
-            .expand = .horizontal,
-            .color_text = dvui.Color{ .r = 220, .g = 225, .b = 240, .a = 255 },
-            .gravity_y = 0.5,
-        });
-
-        // Match % badge
-        {
-            const pct = item.match_pct;
-            const pct_color = if (pct >= 80)
-                dvui.Color{ .r = 80, .g = 200, .b = 120, .a = 255 }
-            else if (pct >= 50)
-                dvui.Color{ .r = 220, .g = 180, .b = 50, .a = 255 }
-            else
-                dvui.Color{ .r = 180, .g = 100, .b = 80, .a = 255 };
-            _ = dvui.label(@src(), "{d}%", .{pct}, .{
-                .id_extra = ci + 10200,
-                .color_text = pct_color,
-                .margin = .{ .x = 6, .y = 0, .w = 6, .h = 0 },
-                .gravity_y = 0.5,
+            _ = dvui.label(@src(), "{s}", .{name}, .{
+                .id_extra = ci + 9800,
+                .expand = .horizontal,
+                .color_text = theme.colors.text_primary,
             });
-        }
 
-        _ = dvui.label(@src(), "{s}", .{source_label(item.source)}, .{
-            .id_extra = ci + 9900,
-            .color_text = dvui.Color{ .r = 140, .g = 145, .b = 165, .a = 200 },
-            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
-            .gravity_y = 0.5,
-        });
+            // One muted metadata line: pct · source · quality · seeds.
+            {
+                var meta_buf: [96]u8 = undefined;
+                var w: usize = 0;
+                const appendStr = struct {
+                    fn f(buf: []u8, pos: *usize, s: []const u8) void {
+                        if (pos.* > 0) {
+                            const sep = " · ";
+                            const n0 = @min(sep.len, buf.len - pos.*);
+                            @memcpy(buf[pos.*..][0..n0], sep[0..n0]);
+                            pos.* += n0;
+                        }
+                        const n = @min(s.len, buf.len - pos.*);
+                        @memcpy(buf[pos.*..][0..n], s[0..n]);
+                        pos.* += n;
+                    }
+                }.f;
 
-        {
-            const qlbl = quality_label(item.quality);
-            if (qlbl.len > 0) {
-                _ = dvui.label(@src(), "{s}", .{qlbl}, .{
-                    .id_extra = ci + 10000,
-                    .color_text = dvui.Color{ .r = 100, .g = 180, .b = 255, .a = 220 },
-                    .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
-                    .gravity_y = 0.5,
+                var pct_buf: [8]u8 = undefined;
+                const pct_str = std.fmt.bufPrint(&pct_buf, "{d}%", .{item.match_pct}) catch "";
+                if (pct_str.len > 0) appendStr(&meta_buf, &w, pct_str);
+                appendStr(&meta_buf, &w, source_label(item.source));
+                const qlbl = quality_label(item.quality);
+                if (qlbl.len > 0) appendStr(&meta_buf, &w, qlbl);
+                if (item.seeds > 0) {
+                    var seed_buf: [16]u8 = undefined;
+                    const seed_str = std.fmt.bufPrint(&seed_buf, "{d} seeds", .{item.seeds}) catch "";
+                    if (seed_str.len > 0) appendStr(&meta_buf, &w, seed_str);
+                }
+
+                _ = dvui.label(@src(), "{s}", .{meta_buf[0..w]}, .{
+                    .id_extra = ci + 9900,
+                    .color_text = theme.colors.text_muted,
                 });
             }
         }
 
-        if (item.seeds > 0) {
-            _ = dvui.label(@src(), "↑{d}", .{item.seeds}, .{
-                .id_extra = ci + 10300,
-                .color_text = if (item.seeds > 20)
-                    dvui.Color{ .r = 80, .g = 200, .b = 120, .a = 220 }
-                else
-                    dvui.Color{ .r = 200, .g = 180, .b = 60, .a = 220 },
-                .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-                .gravity_y = 0.5,
-            });
-        }
-
-        // Queue
+        // Queue — borderless quiet action.
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"plus", .{}, .{}, .{
             .id_extra = ci + 10400,
-            .color_fill = dvui.Color{ .r = 35, .g = 40, .b = 55, .a = 255 },
-            .color_text = dvui.Color{ .r = 160, .g = 170, .b = 200, .a = 255 },
-            .corner_radius = dvui.Rect.all(6),
-            .padding = .{ .x = 5, .y = 5, .w = 5, .h = 5 },
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = theme.colors.text_secondary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = theme.spacing.xs, .h = theme.spacing.xs },
             .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
             .min_size_content = .{ .w = 14, .h = 14 },
             .gravity_y = 0.5,
+            .border = dvui.Rect.all(0),
         })) {
             queueChatResult(ci);
         }
 
-        // Play
+        // Play — accent action.
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"play", .{}, .{}, .{
             .id_extra = ci + 10100,
-            .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
-            .corner_radius = dvui.Rect.all(6),
-            .padding = .{ .x = 5, .y = 5, .w = 5, .h = 5 },
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = theme.colors.accent,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = theme.spacing.xs, .h = theme.spacing.xs },
             .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
             .min_size_content = .{ .w = 14, .h = 14 },
             .gravity_y = 0.5,
+            .border = dvui.Rect.all(0),
         })) {
             playChatResult(ci);
         }
@@ -1221,6 +1119,18 @@ pub fn setError(err: []const u8) void {
     logs.pushLog("error", "ai", err, true);
 }
 
+/// Surface a generation failure *inside* the assistant bubble (not just the
+/// log / last_error), so a failed reply shows the user why instead of leaving
+/// a silent blank bubble. `assistant_idx` is the pre-created assistant slot.
+pub fn setAssistantError(assistant_idx: usize, err: []const u8) void {
+    setError(err);
+    if (assistant_idx >= MAX_MESSAGES) return;
+    const elen = @min(err.len, MAX_MSG_LEN);
+    messages[assistant_idx].role = .assistant;
+    @memcpy(messages[assistant_idx].text[0..elen], err[0..elen]);
+    messages[assistant_idx].text_len = elen;
+}
+
 // ── Voice callback: ASR result → chat input ──
 fn onTranscribed(transcribed: []const u8) void {
     if (message_count >= MAX_MESSAGES) return;
@@ -1305,7 +1215,6 @@ pub fn renderFloatingBubble() void {
             .color_border = theme.colors.border_glass,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_lg,
-            .box_shadow = .{ .color = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 180 }, .offset = .{ .x = 0, .y = 6 }, .fade = 24.0 },
         });
         defer chat_win.deinit();
 
@@ -1313,9 +1222,7 @@ pub fn renderFloatingBubble() void {
         {
             var ctx_hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .expand = .horizontal,
-                .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
-                .background = true,
-                .color_fill = theme.colors.bg_header,
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
                 .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
                 .color_border = theme.colors.divider,
             });

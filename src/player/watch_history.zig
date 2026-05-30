@@ -166,31 +166,31 @@ pub fn exportJson() void {
 
     // Build JSON manually (no JSON library needed for simple format)
     const alloc = @import("../core/alloc.zig").allocator;
-    var json = std.ArrayList(u8).init(alloc);
-    defer json.deinit();
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(alloc);
 
-    json.appendSlice("[") catch return;
+    json.appendSlice(alloc, "[") catch return;
     for (0..count) |i| {
-        if (i > 0) json.appendSlice(",") catch return;
-        json.appendSlice("{\"name\":\"") catch return;
+        if (i > 0) json.appendSlice(alloc, ",") catch return;
+        json.appendSlice(alloc, "{\"name\":\"") catch return;
         // Escape name for JSON
         for (entries[i].name[0..entries[i].name_len]) |ch| {
-            if (ch == '"') { json.appendSlice("\\\"") catch return; }
-            else if (ch == '\\') { json.appendSlice("\\\\") catch return; }
-            else if (ch == '\n') { json.appendSlice("\\n") catch return; }
-            else { json.append(ch) catch return; }
+            if (ch == '"') { json.appendSlice(alloc, "\\\"") catch return; }
+            else if (ch == '\\') { json.appendSlice(alloc, "\\\\") catch return; }
+            else if (ch == '\n') { json.appendSlice(alloc, "\\n") catch return; }
+            else { json.append(alloc, ch) catch return; }
         }
         var pct_buf: [32]u8 = undefined;
         const pct_str = std.fmt.bufPrint(&pct_buf, "\",\"percent\":{d:.2},\"link\":\"", .{entries[i].percent}) catch continue;
-        json.appendSlice(pct_str) catch return;
+        json.appendSlice(alloc, pct_str) catch return;
         for (entries[i].link[0..entries[i].link_len]) |ch| {
-            if (ch == '"') { json.appendSlice("\\\"") catch return; }
-            else if (ch == '\\') { json.appendSlice("\\\\") catch return; }
-            else { json.append(ch) catch return; }
+            if (ch == '"') { json.appendSlice(alloc, "\\\"") catch return; }
+            else if (ch == '\\') { json.appendSlice(alloc, "\\\\") catch return; }
+            else { json.append(alloc, ch) catch return; }
         }
-        json.appendSlice("\"}") catch return;
+        json.appendSlice(alloc, "\"}") catch return;
     }
-    json.appendSlice("]") catch return;
+    json.appendSlice(alloc, "]") catch return;
 
     if (@import("../core/io_global.zig").cwdCreateFile(out_path, .{})) |f| {
         _ = @import("../core/io_global.zig").writeAll(f, json.items) catch {};

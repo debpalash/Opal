@@ -83,13 +83,28 @@ pub fn resolveStreamUrl(url: []const u8) ?[]const u8 {
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
 
-    child.spawn() catch {
-        std.log.warn("[streamlink] Failed to spawn resolver", .{});
+    const logs = @import("../core/logs.zig");
+    child.spawn() catch |err| {
+        if (err == error.FileNotFound) {
+            logs.pushLog("ERROR", "streamlink", "python3 not installed (or not in PATH) — cannot resolve live stream", true);
+        } else {
+            logs.pushLog("ERROR", "streamlink", "failed to spawn resolver helper", true);
+        }
+        std.log.warn("[streamlink] Failed to spawn resolver: {s}", .{@errorName(err)});
         return null;
     };
 
     const bytes_read = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &S.result_buf) catch 0 else 0;
-    _ = child.wait() catch {};
+    const term = child.wait() catch |err| blk: {
+        std.log.warn("[streamlink] resolver wait() failed: {s}", .{@errorName(err)});
+        break :blk @import("../core/io_global.zig").Child.Term{ .unknown = 0 };
+    };
+    switch (term) {
+        .exited => |code| if (code != 0) {
+            logs.pushLog("WARN", "streamlink", "resolver exited with a non-zero status", false);
+        },
+        else => logs.pushLog("WARN", "streamlink", "resolver terminated abnormally", false),
+    }
 
     const trimmed = std.mem.trim(u8, S.result_buf[0..bytes_read], " \t\r\n");
     if (trimmed.len == 0) return null;
@@ -139,7 +154,16 @@ pub fn resolveStreamUrlAsync(url: []const u8, player_idx: usize) void {
                 }
             } else {
                 std.log.warn("[streamlink] Failed to resolve stream", .{});
-                // Show toast on main thread
+                // Clear the stuck "Resolving live stream..." state — mpv never gets
+                // a loadfile on failure, so is_loading would otherwise never clear.
+                if (state.app.players.items.len > p_idx) {
+                    const p = state.app.players.items[p_idx];
+                    p.is_loading = false;
+                    const fail = "Stream offline or unavailable";
+                    @memset(&p.loading_label, 0);
+                    @memcpy(p.loading_label[0..fail.len], fail);
+                    p.loading_label_len = fail.len;
+                }
                 state.showToast("Stream offline or unavailable");
             }
         }
@@ -165,10 +189,17 @@ pub var recording_url_len: usize = 0;
 pub var recording_child: ?@import("../core/io_global.zig").Child = null;
 pub var recording_filename: [256]u8 = std.mem.zeroes([256]u8);
 pub var recording_filename_len: usize = 0;
+/// Guards is_recording + recording_child against the UI/bg thread race.
+/// stopRecording (UI thread) only kills via pid + signal; recordWorker (bg)
+/// is the SOLE caller of child.wait().
+var recording_mutex: @import("../core/sync.zig").Mutex = .{};
 
 /// Start recording a stream URL using streamlink --record
 pub fn startRecording(url: []const u8) void {
-    if (is_recording) {
+    recording_mutex.lock();
+    const already = is_recording;
+    recording_mutex.unlock();
+    if (already) {
         state.showToast("Already recording!");
         return;
     }
@@ -182,22 +213,28 @@ pub fn startRecording(url: []const u8) void {
     };
 }
 
-/// Stop current recording
+/// Stop current recording.
+/// UI thread: only signals the child via pid. recordWorker (bg) is the SOLE
+/// caller of child.wait() and is responsible for clearing recording_child /
+/// is_recording once the process exits.
 pub fn stopRecording() void {
-    if (!is_recording) return;
-    if (recording_child) |*child| {
-        // Send SIGTERM to gracefully stop
-        const pid = child.id;
-        const kill_argv: []const []const u8 = &.{ "kill", "-TERM" };
-        _ = kill_argv;
-        // Use posix kill
-        std.posix.kill(pid, std.posix.SIG.TERM) catch {};
-        _ = child.wait() catch {};
-        recording_child = null;
+    recording_mutex.lock();
+    if (!is_recording) {
+        recording_mutex.unlock();
+        return;
     }
-    is_recording = false;
+    // Snapshot the pid under the lock, then release before signalling so we
+    // never block the UI thread holding the mutex.
+    const pid: ?std.posix.pid_t = if (recording_child) |*child| child.id else null;
+    recording_mutex.unlock();
+
+    if (pid) |p| {
+        // Send SIGTERM to gracefully stop; recordWorker's wait() will observe
+        // the exit and tear down the shared state.
+        std.posix.kill(p, std.posix.SIG.TERM) catch {};
+    }
     state.showToast("Recording saved");
-    std.log.info("[streamlink] Recording stopped: {s}", .{recording_filename[0..recording_filename_len]});
+    std.log.info("[streamlink] Recording stop requested: {s}", .{recording_filename[0..recording_filename_len]});
 }
 
 fn recordWorker() void {
@@ -230,19 +267,34 @@ fn recordWorker() void {
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
 
-    child.spawn() catch {
-        std.log.warn("[streamlink] Failed to spawn streamlink for recording", .{});
+    child.spawn() catch |err| {
+        const logs = @import("../core/logs.zig");
+        if (err == error.FileNotFound) {
+            logs.pushLog("ERROR", "streamlink", "streamlink not installed (or not in PATH) — cannot record", true);
+        } else {
+            logs.pushLog("ERROR", "streamlink", "failed to spawn streamlink for recording", true);
+        }
+        std.log.warn("[streamlink] Failed to spawn streamlink for recording: {s}", .{@errorName(err)});
         return;
     };
 
+    // Publish recording_child BEFORE is_recording=true so a concurrent
+    // stopRecording() never sees is_recording without a valid child to signal.
+    recording_mutex.lock();
     recording_child = child;
     is_recording = true;
+    recording_mutex.unlock();
+
     state.showToast("Recording started...");
     std.log.info("[streamlink] Recording to: {s}", .{fname});
 
-    // Wait for it to finish (or be killed)
+    // recordWorker is the SOLE caller of child.wait(). stopRecording only
+    // signals the child; we observe the exit here and tear down shared state.
     _ = child.wait() catch {};
+
+    recording_mutex.lock();
     is_recording = false;
     recording_child = null;
+    recording_mutex.unlock();
     std.log.info("[streamlink] Recording finished: {s}", .{fname});
 }

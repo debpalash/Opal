@@ -58,6 +58,12 @@ const HeaderState = struct {
     var stream_key_open: bool = false;
 };
 
+// Tracks URL-input focus across frames so the outer box can show the accent
+// focus ring (resting = hairline). One-frame lag, matching components.searchInput.
+const UrlInputState = struct {
+    var had_focus: bool = false;
+};
+
 /// Truncate a URL-ish string into a stack buffer using `first8…last8`
 /// when it's longer than the limit. Keeps magnet hashes and HTTP paths
 /// from leaking the middle (which is where IDs/tokens often live).
@@ -100,8 +106,8 @@ pub fn renderHeader() void {
     var header_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_header,
-        .color_border = theme.colors.bg_header_border,
+        .color_fill = theme.colors.bg_app,
+        .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
         .min_size_content = .{ .w = 0, .h = 44 },
@@ -124,9 +130,9 @@ pub fn renderHeader() void {
         });
         defer left.deinit();
 
-        // Logo / brand dot — non-clickable accent flourish.
+        // Logo / brand mark — quiet, not the view's accent.
         dvui.icon(@src(), "brand", icons.tvg.lucide.@"zap", .{}, .{
-            .color_text = theme.colors.accent_primary,
+            .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
             .min_size_content = .{ .w = 16, .h = 16 },
             .max_size_content = .{ .w = 16, .h = 16 },
@@ -403,8 +409,8 @@ fn renderVoiceButton() void {
     else
         icons.tvg.lucide.@"headphones";
 
-    if (components.iconButton(@src(), voice_icon, "Voice / conversation mode", voice.voice_mode)) {
-        voice.voice_mode = !voice.voice_mode;
+    if (components.iconButton(@src(), voice_icon, "Voice / conversation mode", voice.conversation_active)) {
+        voice.toggleConversation();
     }
 }
 
@@ -416,9 +422,7 @@ fn renderStreamKeyPopover() void {
         .open_flag = &HeaderState.stream_key_open,
     }, .{
         .min_size_content = .{ .w = 320, .h = 130 },
-        .color_fill = theme.colors.bg_drawer,
-        .color_border = theme.colors.border_drawer,
-        .border = dvui.Rect.all(1),
+        .color_fill = theme.colors.bg_surface,
         .corner_radius = dvui.Rect.all(theme.radius.lg),
     });
     defer win.deinit();
@@ -443,13 +447,11 @@ fn renderStreamKeyPopover() void {
         return;
     };
 
-    // Token row: monospace-feeling box + Copy button.
+    // Token row: distinguished by fill-tier alone (no border).
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .background = true,
         .color_fill = theme.colors.bg_elevated,
-        .color_border = theme.colors.border_subtle,
-        .border = dvui.Rect.all(1),
         .corner_radius = dvui.Rect.all(theme.radius.md),
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
     });
@@ -481,12 +483,16 @@ pub fn shouldUrlInputBeInGrid() bool {
 pub fn renderUrlInput(is_large: bool) void {
     const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
+    // Resting = hairline; focus = accent ring. Lags one frame (matches the
+    // foundation's components.searchInput convention).
+    const has_focus = UrlInputState.had_focus;
+
     var box_opts = dvui.Options{
         .background = true,
-        .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 26, .a = 255 },
-        .corner_radius = dvui.Rect.all(8),
+        .color_fill = theme.colors.bg_input,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
         .border = dvui.Rect.all(1),
-        .color_border = dvui.Color{ .r = 40, .g = 40, .b = 55, .a = 180 },
+        .color_border = if (has_focus) theme.colors.accent else theme.colors.border_subtle,
         .padding = .{ .x = 2, .y = 1, .w = 2, .h = 1 },
         .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
     };
@@ -496,15 +502,6 @@ pub fn renderUrlInput(is_large: bool) void {
         box_opts.padding = .{ .x = 10, .y = 6, .w = 8, .h = 6 };
         box_opts.margin = .{ .x = 0, .y = 18, .w = 0, .h = 0 };
         box_opts.gravity_x = 0.5;
-        box_opts.corner_radius = dvui.Rect.all(14);
-        box_opts.color_fill = dvui.Color{ .r = 20, .g = 20, .b = 28, .a = 255 };
-        box_opts.color_border = theme.colors.accent;
-        box_opts.border = dvui.Rect.all(1);
-        box_opts.box_shadow = .{
-            .color = theme.colors.accent,
-            .offset = .{ .x = 0, .y = 0 },
-            .fade = 22.0,
-        };
     } else {
         box_opts.expand = .horizontal;
     }
@@ -516,8 +513,8 @@ pub fn renderUrlInput(is_large: bool) void {
         .expand = .both,
         .color_fill = transparent,
         .color_border = transparent,
-        .color_text = theme.colors.text_main,
-        .color_text_press = theme.colors.text_main,
+        .color_text = theme.colors.text_primary,
+        .color_text_press = theme.colors.text_primary,
         .background = false,
         .border = dvui.Rect.all(0),
         .corner_radius = dvui.Rect.all(0),
@@ -530,6 +527,11 @@ pub fn renderUrlInput(is_large: bool) void {
 
     var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.magnet_buf }, .placeholder = if (is_large) "Paste link, drop file, or ask AI…" else "Paste, drop, or ask…" }, te_opts);
     const enter_pressed = te.enter_pressed;
+    if (dvui.focusedWidgetIdInCurrentSubwindow()) |fid| {
+        UrlInputState.had_focus = te.data().id == fid;
+    } else {
+        UrlInputState.had_focus = false;
+    }
     te.deinit();
 
     // Inline play button
@@ -549,7 +551,7 @@ pub fn renderUrlInput(is_large: bool) void {
     if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"clipboard-paste", .{}, .{}, .{
         .data_out = &paste_wd,
         .gravity_y = 0.5,
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_tertiary,
         .color_fill = transparent,
         .border = dvui.Rect.all(0),
         .padding = .{ .x = 3, .y = 4, .w = 5, .h = 4 },
@@ -563,9 +565,9 @@ pub fn renderUrlInput(is_large: bool) void {
         const voice = @import("../services/ai_voice.zig");
         const ai_chat_mod = @import("../services/ai_chat.zig");
         const mic_color: dvui.Color = if (voice.is_recording)
-            .{ .r = 255, .g = 120, .b = 120, .a = 255 }
+            theme.colors.danger
         else
-            theme.colors.text_muted;
+            theme.colors.text_tertiary;
         var mic_wd: dvui.WidgetData = undefined;
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"mic", .{}, .{}, .{
             .data_out = &mic_wd,
@@ -589,7 +591,7 @@ pub fn renderUrlInput(is_large: bool) void {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"square", .{}, .{}, .{
                 .data_out = &stop_wd,
                 .gravity_y = 0.5,
-                .color_text = .{ .r = 255, .g = 120, .b = 120, .a = 255 },
+                .color_text = theme.colors.danger,
                 .color_fill = transparent,
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = 3, .y = 4, .w = 3, .h = 4 },
@@ -706,10 +708,10 @@ pub fn renderTabBar() void {
     var tab_bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.divider,
+        .color_fill = theme.colors.bg_app,
+        .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        .padding = .{ .x = 4, .y = 0, .w = 4, .h = 0 },
+        .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = 0 },
     });
     defer tab_bar.deinit();
 
@@ -749,15 +751,16 @@ pub fn renderTabBar() void {
             }
         }
 
-        // Tab button
+        // Tab button — active = accent TEXT only (no fill, no underline box).
+        const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
         if (dvui.button(@src(), tab_label, .{}, .{
             .id_extra = i,
-            .color_fill = if (is_active) theme.colors.bg_card else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (is_active) theme.colors.accent else theme.colors.text_muted,
-            .color_border = if (is_active) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .border = .{ .x = 0, .y = 0, .w = 0, .h = if (is_active) @as(f32, 2) else 0 },
-            .corner_radius = .{ .x = 4, .y = 4, .w = 0, .h = 0 },
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            .color_fill = transparent,
+            .color_text = if (is_active) theme.colors.accent else theme.colors.text_tertiary,
+            .color_border = transparent,
+            .border = dvui.Rect.all(0),
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
         })) {
             state.app.active_player_idx = i;

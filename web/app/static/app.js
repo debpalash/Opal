@@ -1,8 +1,16 @@
 /* ZigZag Web UI — Client-side API bridge */
-const API = 'http://' + window.location.hostname + ':9876';
+const API = 'http://' + window.location.hostname + ':41595';
+
+// Bearer token injected by the server into the served HTML (see remote.zig
+// serveStaticFile, placeholder __ZIGZAG_API_TOKEN__). Empty if not injected.
+const API_TOKEN = (function () {
+  const t = '__ZIGZAG_API_TOKEN__';
+  return /^[0-9a-fA-F]{32}$/.test(t) ? t : '';
+})();
+const AUTH_HEADERS = API_TOKEN ? { 'Authorization': 'Bearer ' + API_TOKEN } : {};
 
 function api(action) {
-  return fetch(API + '/api/' + action).then(r => r.json()).catch(() => ({}));
+  return fetch(API + '/api/' + action, { headers: AUTH_HEADERS }).then(r => r.json()).catch(() => ({}));
 }
 
 function fmt(s) {

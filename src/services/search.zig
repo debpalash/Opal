@@ -44,6 +44,13 @@ pub var search_abort: bool = false;
 pub var search_thread: ?std.Thread = null;
 pub var search_buf = std.mem.zeroes([1024]u8);
 
+// Each search gets a monotonically-increasing generation. A worker only
+// touches shared state (search_results, is_searching, search_thread) while it
+// is still the current generation. A superseded worker that was detached writes
+// nowhere and never frees buffers the new worker owns — avoids the UAF/
+// double-free when triggerSearch aborts-and-respawns. (H2)
+pub var search_generation = std.atomic.Value(u64).init(0);
+
 pub const SortType = enum { Seeds, Size, Peers, Health, Time };
 pub var current_sort: SortType = .Seeds;
 
@@ -127,7 +134,7 @@ const nsfw_keywords = [_][]const u8{
     "lesbian", "threesome", "foursome", "stripshow", "cam girl",
 };
 
-fn isNsfwName(name: []const u8) bool {
+pub fn isNsfwName(name: []const u8) bool {
     // Convert to lowercase for matching
     var lower_buf: [512]u8 = undefined;
     const check_len = @min(name.len, 511);
@@ -203,11 +210,15 @@ fn sortResults(context: void, a: SearchResult, b: SearchResult) bool {
     }
 }
 
-pub fn asyncSearchTask(query: []const u8) void {
-    is_searching = true;
+pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
     const allocator = @import("../core/alloc.zig").allocator;
     defer allocator.free(query);
 
+    // If a newer search already superseded us before we even started, bail
+    // without touching any shared state.
+    if (search_generation.load(.acquire) != my_gen) return;
+
+    is_searching = true;
     clearResults();
 
     var argv = std.ArrayListUnmanaged([]const u8).empty;
@@ -228,12 +239,12 @@ pub fn asyncSearchTask(query: []const u8) void {
     var reader = child.stdout.?.reader(@import("../core/io_global.zig").io(), &child_reader_buf);
 
     while (reader.interface.takeDelimiter('\n') catch null) |line| {
-        // Check abort flag each line
-        if (search_abort) break;
+        // Stop the moment a newer search supersedes us (also covers explicit abort).
+        if (search_abort or search_generation.load(.acquire) != my_gen) break;
 
         if (line.len == 0) continue;
         var it = std.mem.splitScalar(u8, line, '|');
-        
+
         const link = it.next() orelse continue;
         const name = it.next() orelse continue;
         const size_bytes = it.next() orelse continue;
@@ -252,30 +263,59 @@ pub fn asyncSearchTask(query: []const u8) void {
         };
 
         search_results_mutex.lock();
-        search_results.append(allocator, item) catch { search_results_mutex.unlock(); continue; };
+        // Re-check generation under the lock: if we were superseded, the new
+        // worker owns the list — drop our dupe rather than append/leak it.
+        if (search_generation.load(.acquire) != my_gen) {
+            search_results_mutex.unlock();
+            freeSearchResult(item, allocator);
+            break;
+        }
+        search_results.append(allocator, item) catch {
+            search_results_mutex.unlock();
+            freeSearchResult(item, allocator);
+            continue;
+        };
         search_results_mutex.unlock();
     }
 
-    if (search_abort) {
+    const superseded = search_generation.load(.acquire) != my_gen;
+
+    if (search_abort or superseded) {
         _ = child.kill() catch {};
     }
     _ = child.wait() catch {};
 
+    // A superseded worker must not touch shared state any further.
+    if (superseded) return;
+
     // Also query EZTV JSON API directly (faster, no scraping)
     // Skip if engine filter is set to a non-EZTV specific engine
     if (!search_abort and (engine_filter == .all or engine_filter == .eztv))
-        queryEztvApi(query, allocator);
-    
-    if (!search_abort) {
+        queryEztvApi(query, allocator, my_gen);
+
+    if (!search_abort and search_generation.load(.acquire) == my_gen) {
         search_results_mutex.lock();
         std.sort.block(SearchResult, search_results.items, {}, sortResults);
         search_results_mutex.unlock();
     }
-    is_searching = false;
-    search_thread = null;
+    // Only the current generation owns is_searching / search_thread.
+    if (search_generation.load(.acquire) == my_gen) {
+        is_searching = false;
+        search_thread = null;
+    }
 }
 
-fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator) void {
+/// Free the owned buffers of a SearchResult that was never appended to the list.
+fn freeSearchResult(r: SearchResult, allocator: std.mem.Allocator) void {
+    allocator.free(r.name);
+    allocator.free(r.size);
+    allocator.free(r.seeds);
+    allocator.free(r.leech);
+    allocator.free(r.link);
+    allocator.free(r.engine);
+}
+
+fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator, my_gen: u64) void {
     // Build API URL: https://eztvx.to/api/get-torrents?limit=50&page=1
     // EZTV API doesn't support search by name — only by IMDB ID or listing all.
     // For name search, use the search page with scraping (already done by Python engine).
@@ -380,7 +420,17 @@ fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator) void {
         };
 
         search_results_mutex.lock();
-        search_results.append(allocator, item) catch { search_results_mutex.unlock(); continue; };
+        // Drop our dupe if a newer search took over the list (H2).
+        if (search_generation.load(.acquire) != my_gen) {
+            search_results_mutex.unlock();
+            freeSearchResult(item, allocator);
+            return;
+        }
+        search_results.append(allocator, item) catch {
+            search_results_mutex.unlock();
+            freeSearchResult(item, allocator);
+            continue;
+        };
         search_results_mutex.unlock();
     }
 }
@@ -388,19 +438,23 @@ fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator) void {
 pub fn triggerSearch(query_text: []const u8) void {
     if (query_text.len == 0) return;
 
-    // Abort any running search — detach instead of join to avoid blocking UI
+    // Bump the generation FIRST: any in-flight worker is now superseded and will
+    // observe the new value before it touches shared state. Then detach (rather
+    // than join, to keep the UI responsive) — the stale worker writes nowhere
+    // and frees only its own un-appended dupes. (H2)
+    const new_gen = search_generation.fetchAdd(1, .acq_rel) + 1;
+
     if (is_searching) {
         search_abort = true;
         if (search_thread) |t| t.detach();
         search_thread = null;
-        // Give abort flag a moment to propagate (non-blocking)
         is_searching = false;
     }
 
     search_abort = false;
     history.addSearchHistory(query_text);
     const query = @import("../core/alloc.zig").allocator.dupe(u8, query_text) catch return;
-    search_thread = std.Thread.spawn(.{}, asyncSearchTask, .{query}) catch {
+    search_thread = std.Thread.spawn(.{}, asyncSearchTask, .{ query, new_gen }) catch {
         @import("../core/alloc.zig").allocator.free(query);
         return;
     };
@@ -458,13 +512,13 @@ pub fn renderSearchContent() void {
         { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
 
         // Source status indicators (universal mode)
-        if (uni_active and resolver.is_resolving) {
+        if (uni_active and resolver.isResolving()) {
             const dots = [_]struct { name: []const u8, st: resolver.SourceStatus, color: dvui.Color }{
-                .{ .name = "JF", .st = resolver.status_jf, .color = dvui.Color{ .r = 100, .g = 180, .b = 255, .a = 255 } },
-                .{ .name = "ST", .st = resolver.status_stremio, .color = dvui.Color{ .r = 100, .g = 220, .b = 100, .a = 255 } },
-                .{ .name = "TR", .st = resolver.status_torrent, .color = dvui.Color{ .r = 255, .g = 180, .b = 80, .a = 255 } },
-                .{ .name = "AN", .st = resolver.status_anime, .color = dvui.Color{ .r = 255, .g = 120, .b = 180, .a = 255 } },
-                .{ .name = "YT", .st = resolver.status_yt, .color = dvui.Color{ .r = 255, .g = 80, .b = 80, .a = 255 } },
+                .{ .name = "JF", .st = resolver.status_jf.load(.acquire), .color = dvui.Color{ .r = 100, .g = 180, .b = 255, .a = 255 } },
+                .{ .name = "ST", .st = resolver.status_stremio.load(.acquire), .color = dvui.Color{ .r = 100, .g = 220, .b = 100, .a = 255 } },
+                .{ .name = "TR", .st = resolver.status_torrent.load(.acquire), .color = dvui.Color{ .r = 255, .g = 180, .b = 80, .a = 255 } },
+                .{ .name = "AN", .st = resolver.status_anime.load(.acquire), .color = dvui.Color{ .r = 255, .g = 120, .b = 180, .a = 255 } },
+                .{ .name = "YT", .st = resolver.status_yt.load(.acquire), .color = dvui.Color{ .r = 255, .g = 80, .b = 80, .a = 255 } },
             };
             for (dots, 0..) |d, di| {
                 const tc = switch (d.st) {
@@ -557,7 +611,7 @@ pub fn renderSearchContent() void {
             })) {
                 @memset(&search_buf, 0);
                 clearResults();
-                resolver.result_count = 0;
+                resolver.clearResults();
             }
         }
     }
@@ -1084,7 +1138,7 @@ fn renderUniversalResults() void {
     const resolver = @import("resolver.zig");
 
     // Status / loading indicator
-    if (resolver.is_resolving) {
+    if (resolver.isResolving()) {
         _ = dvui.label(@src(), "Searching all sources...", .{}, .{
             .id_extra = 9000,
             .color_text = theme.colors.accent,
@@ -1098,7 +1152,7 @@ fn renderUniversalResults() void {
             .color_text = theme.colors.text_muted,
             .padding = .{ .x = 12, .y = 6, .w = 12, .h = 4 },
         });
-    } else if (!resolver.is_resolving and resolver.resolver_query_len > 0) {
+    } else if (!resolver.isResolving() and resolver.resolver_query_len > 0) {
         // Canonical empty state — search-x icon + canonical copy.
         components.emptyState(
             icons.tvg.lucide.@"search-x",
@@ -1133,9 +1187,17 @@ fn renderUniversalResults() void {
     var list_layout = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = .{ .x = 0, .y = 4, .w = 0, .h = 100 } });
     defer list_layout.deinit();
 
-    for (0..resolver.result_count) |idx| {
+    // Hold the results lock for the read loop so resolver workers can't shift
+    // the array out from under us. Snapshot the count under the lock.
+    resolver.results_mutex.lock();
+    defer resolver.results_mutex.unlock();
+    const snap_count = resolver.result_count;
+
+    for (0..snap_count) |idx| {
         const item = &resolver.results[idx];
         if (item.name_len == 0) continue;
+        // NSFW filter (S16) — hide adult-named items when the filter is on.
+        if (state.app.nsfw_filter_enabled and item.is_nsfw) continue;
 
         // Source badge colors
         const badge_color = switch (item.source) {
@@ -1448,6 +1510,7 @@ fn addMagnetToEngine(magnet_link: []const u8) void {
         hist.addDownloadHistory(magnet_link[0..@min(magnet_link.len, 64)], magnet_link);
     } else {
         logs.pushLog("error", "search", "Failed to add torrent - invalid magnet or already added", true);
+        state.showToast("Couldn't add torrent (invalid or duplicate magnet)");
     }
 }
 

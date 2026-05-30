@@ -566,13 +566,10 @@ pub fn allKinds() []const Kind {
 }
 
 /// Spawn sherpa-onnx-microphone in the background for continuous,
-/// VAD-driven transcription. Emits one transcript per voiced turn via
-/// the provided callback. Returns the spawned Child so caller can kill
-/// it on convo-mode exit. Returns null if prerequisites missing.
-pub fn spawnStreamingConvo(
-    on_transcript: *const fn ([]const u8) void,
-) ?io_global.Child {
-    _ = on_transcript;
+/// VAD-driven transcription. Returns the spawned Child so the caller can read
+/// its stdout (one transcript per voiced turn) and kill it on convo-mode exit.
+/// Returns null if prerequisites missing.
+pub fn spawnStreamingConvo() ?io_global.Child {
     const deps = @import("../core/deps.zig");
     const s = deps.check();
     if (!(s.sherpa_mic_cli and s.sherpa_stream_model)) {

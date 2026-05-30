@@ -238,6 +238,8 @@ pub fn loadWorkspaceNamed(allocator: std.mem.Allocator, name: []const u8) void {
                         p.last_load_time = 0;
                         p.is_torrent = true;
                         p.resume_percent = wsp.playback_percent;
+                    } else {
+                        @import("../core/logs.zig").pushLog("error", "workspace", "Failed to restore torrent (invalid/duplicate magnet)", true);
                     }
                 } else {
                     p.is_torrent = false;

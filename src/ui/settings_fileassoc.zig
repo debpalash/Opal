@@ -2,12 +2,10 @@ const std = @import("std");
 const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 const theme = @import("theme.zig");
+const components = @import("components.zig");
 const builtin = @import("builtin");
 
-// ── design tokens (matching settings.zig) ─────────────────
-const card_bg     = dvui.Color{ .r = 24, .g = 24, .b = 32, .a = 255 };
-const card_border = dvui.Color{ .r = 45, .g = 45, .b = 60, .a = 180 };
-const muted_text  = dvui.Color{ .r = 120, .g = 120, .b = 145, .a = 255 };
+const TRANSPARENT: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
 const is_macos = builtin.os.tag == .macos;
 
@@ -359,78 +357,68 @@ pub fn render() void {
     }
 
     const busy = checking or pending;
-    const busy_col = dvui.Color{ .r = 80, .g = 80, .b = 100, .a = 200 };
 
-    // Info banner
+    // Instruction line — quiet tertiary text, no banner box (calm: separate by
+    // whitespace, not a colored bordered panel).
     {
-        var info = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .background = true,
-            .color_fill = dvui.Color{ .r = 18, .g = 28, .b = 48, .a = 255 },
-            .color_border = dvui.Color{ .r = 40, .g = 80, .b = 160, .a = 200 },
-            .border = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
-            .corner_radius = dvui.Rect.all(6),
-            .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 10 },
-        });
-        defer info.deinit();
         const desc = if (is_macos)
             "Sets Opal as default handler via macOS LaunchServices."
         else
             "Uses xdg-mime (Linux). Writes to ~/.config/mimeapps.list";
         _ = dvui.label(@src(), desc, .{}, .{
-            .color_text = dvui.Color{ .r = 140, .g = 180, .b = 240, .a = 255 },
+            .color_text = theme.colors.text_tertiary,
+            .margin = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = theme.spacing.md },
         });
     }
 
-    // Bulk action row
+    // Bulk action row. Register-all = the single accent affordance; Unregister
+    // = quiet text-only danger; busy state is transient text.
     {
         var brow = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 10 },
+            .padding = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = 0 },
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.md },
         });
         defer brow.deinit();
 
         if (dvui.button(@src(), if (busy) "Working…" else "Register All", .{}, .{
-            .color_fill = if (busy) busy_col else theme.colors.accent,
-            .color_text = dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 },
-            .corner_radius = dvui.Rect.all(6),
-            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
-            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+            .color_fill = if (busy) theme.colors.bg_elevated else theme.colors.accent_primary,
+            .color_text = if (busy) theme.colors.text_secondary else theme.colors.text_on_accent,
+            .corner_radius = theme.dims.rad_md,
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         })) {
             if (!busy) triggerRegisterAll();
         }
 
         if (dvui.button(@src(), "Unregister All", .{}, .{
-            .color_fill = dvui.Color{ .r = 35, .g = 35, .b = 48, .a = 255 },
-            .color_text = if (busy) busy_col else dvui.Color{ .r = 200, .g = 80, .b = 80, .a = 255 },
-            .corner_radius = dvui.Rect.all(6),
-            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
+            .color_fill = TRANSPARENT,
+            .color_text = if (busy) theme.colors.text_tertiary else theme.colors.danger,
+            .corner_radius = theme.dims.rad_md,
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
         })) {
             if (!busy) triggerUnregisterAll();
         }
 
         if (busy) {
-            _ = dvui.label(@src(), "  ⟳ checking…", .{}, .{
-                .color_text = muted_text,
+            _ = dvui.label(@src(), "  checking…", .{}, .{
+                .color_text = theme.colors.text_tertiary,
                 .gravity_y = 0.5,
             });
         }
     }
 
-    // Per-group cards
+    // Per-group list — quiet token-driven rows. No per-row border/fill/zebra;
+    // separated by whitespace, with one hairline divider between groups.
     inline for (mime_groups, 0..) |grp, gi| {
         const is_reg = status_snap[gi];
+
+        if (gi > 0) components.divider();
+
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = grp.id_base,
             .expand = .horizontal,
-            .background = true,
-            .color_fill = card_bg,
-            .color_border = if (is_reg) dvui.Color{ .r = 50, .g = 150, .b = 70, .a = 140 } else card_border,
-            .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(8),
-            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
         });
         defer card.deinit();
 
@@ -445,19 +433,18 @@ pub fn render() void {
             _ = dvui.label(@src(), "{s}", .{grp.label}, .{
                 .id_extra = grp.id_base + 2,
                 .expand = .horizontal,
-                .color_text = theme.colors.text_main,
+                .color_text = theme.colors.text_primary,
                 .gravity_y = 0.5,
             });
 
             {
-                const sl: []const u8 = if (is_reg) "● Default" else "○ Not set";
+                // Status as quiet text — success only when set, secondary
+                // otherwise. No glyph, no fill.
+                const sl: []const u8 = if (is_reg) "Default" else "Not set";
                 _ = dvui.label(@src(), "{s}", .{sl}, .{
                     .id_extra = grp.id_base + 3,
-                    .color_text = if (is_reg)
-                        dvui.Color{ .r = 80, .g = 200, .b = 100, .a = 255 }
-                    else
-                        dvui.Color{ .r = 120, .g = 120, .b = 145, .a = 255 },
-                    .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+                    .color_text = if (is_reg) theme.colors.semantic_success else theme.colors.text_tertiary,
+                    .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
                     .gravity_y = 0.5,
                 });
             }
@@ -465,10 +452,10 @@ pub fn render() void {
             if (!is_reg) {
                 if (dvui.button(@src(), "Register", .{}, .{
                     .id_extra = grp.id_base + 4,
-                    .color_fill = if (pending) busy_col else theme.colors.accent,
-                    .color_text = dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 },
-                    .corner_radius = dvui.Rect.all(6),
-                    .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                    .color_fill = if (pending) theme.colors.bg_elevated else theme.colors.accent_primary,
+                    .color_text = if (pending) theme.colors.text_secondary else theme.colors.text_on_accent,
+                    .corner_radius = theme.dims.rad_md,
+                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                     .gravity_y = 0.5,
                 })) {
                     if (!pending) triggerGroupAction(gi, true);
@@ -476,10 +463,10 @@ pub fn render() void {
             } else {
                 if (dvui.button(@src(), "Remove", .{}, .{
                     .id_extra = grp.id_base + 4,
-                    .color_fill = dvui.Color{ .r = 35, .g = 35, .b = 48, .a = 255 },
-                    .color_text = if (pending) busy_col else dvui.Color{ .r = 200, .g = 80, .b = 80, .a = 255 },
-                    .corner_radius = dvui.Rect.all(6),
-                    .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                    .color_fill = TRANSPARENT,
+                    .color_text = if (pending) theme.colors.text_tertiary else theme.colors.danger,
+                    .corner_radius = theme.dims.rad_md,
+                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
                     .gravity_y = 0.5,
                 })) {
                     if (!pending) triggerGroupAction(gi, false);
@@ -489,8 +476,8 @@ pub fn render() void {
 
         _ = dvui.label(@src(), "{s}", .{grp.desc}, .{
             .id_extra = grp.id_base + 5,
-            .color_text = muted_text,
-            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
+            .color_text = theme.colors.text_tertiary,
+            .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
         });
     }
 }

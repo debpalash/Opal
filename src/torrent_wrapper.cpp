@@ -17,17 +17,25 @@
 #include <memory>
 #include <thread>
 #include <chrono>
+#include <mutex>
 
 struct TorrentNode {
     lt::torrent_handle handle;
     bool ready_flag;
+    bool alive;              // false once torrent_remove() is called; slot is never reused
     std::string cached_path;
     int last_deadline_piece; // Track last piece we set deadlines for (avoid redundant calls)
+    // Persistent read handle for the HTTP streaming proxy (torrent_read_bytes).
+    // Opened once per (node,file) and reused, instead of a fresh ifstream per chunk.
+    std::ifstream read_stream;
+    int read_stream_file_idx = -1;
 };
 
 struct SessionContext {
     lt::session* ses;
     std::vector<std::shared_ptr<TorrentNode>> torrents;
+    // Guards session add/remove against concurrent reads in torrent_read_bytes.
+    std::mutex mtx;
 };
 
 // ─── Helper: Get file piece range ───
@@ -131,7 +139,9 @@ extern "C" int torrent_add_magnet(TorrentSession session, const char* magnet_url
     lt::error_code ec;
     lt::add_torrent_params atp = lt::parse_magnet_uri(magnet_url, ec);
     if (ec) {
+#ifdef TORRENT_WRAPPER_DEBUG
         std::cerr << "Failed to parse magnet: " << ec.message() << std::endl;
+#endif
         return -1;
     }
     
@@ -149,9 +159,13 @@ extern "C" int torrent_add_magnet(TorrentSession session, const char* magnet_url
     }
 
     auto node = std::make_shared<TorrentNode>();
-    node->handle = ctx->ses->add_torrent(atp, ec);
+    {
+        std::lock_guard<std::mutex> lk(ctx->mtx);
+        node->handle = ctx->ses->add_torrent(atp, ec);
+    }
     node->cached_path = cached_path;
     node->ready_flag = false;
+    node->alive = true;
     node->last_deadline_piece = -1;
     
     if (!ec && node->handle.is_valid()) {
@@ -187,8 +201,12 @@ extern "C" int torrent_add_magnet(TorrentSession session, const char* magnet_url
     
     if (ec) return -1;
 
+    // STABLE-SLOT model: ids are vector indices that are NEVER reused or
+    // renumbered. torrent_remove() marks a slot dead but keeps it in place,
+    // so external id holders (players, UI) stay valid across deletes.
+    std::lock_guard<std::mutex> lk(ctx->mtx);
     ctx->torrents.push_back(node);
-    return ctx->torrents.size() - 1;
+    return static_cast<int>(ctx->torrents.size()) - 1;
 }
 
 extern "C" int torrent_count(TorrentSession session) {
@@ -199,12 +217,13 @@ extern "C" int torrent_count(TorrentSession session) {
 
 extern "C" void torrent_get_name(TorrentSession session, int torrent_id, char* out_name, int max_len) {
     if (!session || torrent_id < 0 || !out_name || max_len <= 0) return;
+    out_name[0] = '\0';
     SessionContext* ctx = static_cast<SessionContext*>(session);
     if ((size_t)torrent_id >= ctx->torrents.size()) return;
 
     try {
         auto node = ctx->torrents[torrent_id];
-        if (node->handle.is_valid()) {
+        if (node->alive && node->handle.is_valid()) {
             std::string name = node->handle.status().name;
             if (name.empty()) name = "Fetching Metadata...";
             std::strncpy(out_name, name.c_str(), max_len);
@@ -223,10 +242,10 @@ extern "C" int torrent_poll(TorrentSession session, int torrent_id, int target_f
     
     try {
         auto node = ctx->torrents[torrent_id];
-        if (!node->handle.is_valid()) return -1;
+        if (!node->alive || !node->handle.is_valid()) return -1;
 
         lt::torrent_status st = node->handle.status();
-        
+
         if (out_progress) *out_progress = st.progress;
         if (out_dl_rate) *out_dl_rate = st.download_rate;
         if (out_seeds) *out_seeds = st.num_seeds;
@@ -301,6 +320,7 @@ extern "C" int torrent_get_file_count(TorrentSession session, int torrent_id) {
     if ((size_t)torrent_id >= ctx->torrents.size()) return 0;
     try {
         auto node = ctx->torrents[torrent_id];
+        if (!node->alive || !node->handle.is_valid()) return 0;
         std::shared_ptr<const lt::torrent_info> ti = node->handle.torrent_file();
         if (!ti) return 0;
         return ti->files().num_files();
@@ -309,10 +329,12 @@ extern "C" int torrent_get_file_count(TorrentSession session, int torrent_id) {
 
 extern "C" void torrent_get_file_name(TorrentSession session, int torrent_id, int file_idx, char* out_name, int max_len) {
     if (!session || torrent_id < 0 || !out_name || max_len <= 0) return;
+    out_name[0] = '\0';
     SessionContext* ctx = static_cast<SessionContext*>(session);
     if ((size_t)torrent_id >= ctx->torrents.size()) return;
     try {
         auto node = ctx->torrents[torrent_id];
+        if (!node->alive || !node->handle.is_valid()) return;
         std::shared_ptr<const lt::torrent_info> ti = node->handle.torrent_file();
         if (!ti || file_idx < 0 || file_idx >= ti->files().num_files()) return;
         std::string path = ti->files().file_path(lt::file_index_t(file_idx));
@@ -332,6 +354,7 @@ extern "C" long long torrent_get_file_size(TorrentSession session, int torrent_i
     if ((size_t)torrent_id >= ctx->torrents.size()) return 0;
     try {
         auto node = ctx->torrents[torrent_id];
+        if (!node->alive || !node->handle.is_valid()) return 0;
         std::shared_ptr<const lt::torrent_info> ti = node->handle.torrent_file();
         if (!ti || file_idx < 0 || file_idx >= ti->files().num_files()) return 0;
         return ti->files().file_size(lt::file_index_t(file_idx));
@@ -342,13 +365,31 @@ extern "C" void torrent_remove(TorrentSession session, int torrent_id) {
     if (!session || torrent_id < 0) return;
     SessionContext* ctx = static_cast<SessionContext*>(session);
     if ((size_t)torrent_id >= ctx->torrents.size()) return;
-    
+
     try {
+        // STABLE-SLOT model: mark the slot dead and drop it from the session,
+        // but NEVER erase or renumber the vector. The id remains valid (and dead)
+        // forever, so other id holders are not corrupted.
+        std::lock_guard<std::mutex> lk(ctx->mtx);
         auto node = ctx->torrents[torrent_id];
+        node->alive = false;
+        if (node->read_stream.is_open()) node->read_stream.close();
+        node->read_stream_file_idx = -1;
         if (node->handle.is_valid()) {
             ctx->ses->remove_torrent(node->handle);
         }
     } catch(...) {}
+}
+
+extern "C" int torrent_is_alive(TorrentSession session, int torrent_id) {
+    if (!session || torrent_id < 0) return 0;
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+    if ((size_t)torrent_id >= ctx->torrents.size()) return 0;
+    try {
+        auto node = ctx->torrents[torrent_id];
+        return (node->alive && node->handle.is_valid()) ? 1 : 0;
+    } catch(...) {}
+    return 0;
 }
 
 extern "C" void torrent_destroy(TorrentSession session) {
@@ -367,7 +408,7 @@ extern "C" void torrent_set_file_priority(TorrentSession session, int torrent_id
     
     try {
         auto node = ctx->torrents[torrent_id];
-        if (node->handle.is_valid()) {
+        if (node->alive && node->handle.is_valid()) {
             node->handle.file_priority(lt::file_index_t(file_idx), lt::download_priority_t(priority));
             // When setting max priority, reset ready_flag so torrent_poll
             // re-applies the streaming deadline window for this file
@@ -386,7 +427,7 @@ extern "C" float torrent_get_file_progress(TorrentSession session, int torrent_i
     
     try {
         auto node = ctx->torrents[torrent_id];
-        if (node->handle.is_valid()) {
+        if (node->alive && node->handle.is_valid()) {
             std::vector<std::int64_t> progress;
             node->handle.file_progress(progress, lt::torrent_handle::piece_granularity);
             
@@ -421,7 +462,7 @@ extern "C" int torrent_get_piece_map(TorrentSession session, int torrent_id, cha
     
     try {
         auto node = ctx->torrents[torrent_id];
-        if (node->handle.is_valid()) {
+        if (node->alive && node->handle.is_valid()) {
             lt::torrent_status st = node->handle.status();
             int num_pieces = st.pieces.size();
             int copy_len = num_pieces > max_len - 1 ? max_len - 1 : num_pieces;
@@ -447,7 +488,7 @@ extern "C" int torrent_ensure_streaming_buffer(TorrentSession session, int torre
 
     try {
         auto node = ctx->torrents[torrent_id];
-        if (!node->handle.is_valid()) return 0;
+        if (!node->alive || !node->handle.is_valid()) return 0;
 
         int first_piece, last_piece, total_pieces;
         if (!get_file_piece_range(node->handle, file_idx, first_piece, last_piece, total_pieces))
@@ -488,7 +529,7 @@ extern "C" void torrent_seek_prioritize(TorrentSession session, int torrent_id, 
 
     try {
         auto node = ctx->torrents[torrent_id];
-        if (!node->handle.is_valid()) return;
+        if (!node->alive || !node->handle.is_valid()) return;
 
         int first_piece, last_piece, total_pieces;
         if (!get_file_piece_range(node->handle, file_idx, first_piece, last_piece, total_pieces))
@@ -517,7 +558,8 @@ extern "C" void torrent_pause(TorrentSession session, int torrent_id) {
     SessionContext* ctx = static_cast<SessionContext*>(session);
     if ((size_t)torrent_id >= ctx->torrents.size()) return;
     try {
-        ctx->torrents[torrent_id]->handle.pause();
+        auto node = ctx->torrents[torrent_id];
+        if (node->alive && node->handle.is_valid()) node->handle.pause();
     } catch (...) {}
 }
 
@@ -526,7 +568,8 @@ extern "C" void torrent_resume(TorrentSession session, int torrent_id) {
     SessionContext* ctx = static_cast<SessionContext*>(session);
     if ((size_t)torrent_id >= ctx->torrents.size()) return;
     try {
-        ctx->torrents[torrent_id]->handle.resume();
+        auto node = ctx->torrents[torrent_id];
+        if (node->alive && node->handle.is_valid()) node->handle.resume();
     } catch (...) {}
 }
 
@@ -535,7 +578,9 @@ extern "C" int torrent_is_paused(TorrentSession session, int torrent_id) {
     SessionContext* ctx = static_cast<SessionContext*>(session);
     if ((size_t)torrent_id >= ctx->torrents.size()) return 0;
     try {
-        auto flags = ctx->torrents[torrent_id]->handle.flags();
+        auto node = ctx->torrents[torrent_id];
+        if (!node->alive || !node->handle.is_valid()) return 0;
+        auto flags = node->handle.flags();
         return (flags & lt::torrent_flags::paused) ? 1 : 0;
     } catch (...) {}
     return 0;
@@ -546,7 +591,9 @@ extern "C" int torrent_get_num_peers(TorrentSession session, int torrent_id) {
     SessionContext* ctx = static_cast<SessionContext*>(session);
     if ((size_t)torrent_id >= ctx->torrents.size()) return 0;
     try {
-        return ctx->torrents[torrent_id]->handle.status().num_peers;
+        auto node = ctx->torrents[torrent_id];
+        if (!node->alive || !node->handle.is_valid()) return 0;
+        return node->handle.status().num_peers;
     } catch (...) {}
     return 0;
 }
@@ -556,7 +603,9 @@ extern "C" int torrent_get_upload_rate(TorrentSession session, int torrent_id) {
     SessionContext* ctx = static_cast<SessionContext*>(session);
     if ((size_t)torrent_id >= ctx->torrents.size()) return 0;
     try {
-        return ctx->torrents[torrent_id]->handle.status().upload_rate;
+        auto node = ctx->torrents[torrent_id];
+        if (!node->alive || !node->handle.is_valid()) return 0;
+        return node->handle.status().upload_rate;
     } catch (...) {}
     return 0;
 }
@@ -566,7 +615,9 @@ extern "C" long long torrent_get_total_size(TorrentSession session, int torrent_
     SessionContext* ctx = static_cast<SessionContext*>(session);
     if ((size_t)torrent_id >= ctx->torrents.size()) return 0;
     try {
-        auto ti = ctx->torrents[torrent_id]->handle.torrent_file();
+        auto node = ctx->torrents[torrent_id];
+        if (!node->alive || !node->handle.is_valid()) return 0;
+        auto ti = node->handle.torrent_file();
         if (ti) return ti->total_size();
     } catch (...) {}
     return 0;
@@ -579,7 +630,9 @@ extern "C" int torrent_get_piece_size(TorrentSession session, int torrent_id) {
     SessionContext* ctx = static_cast<SessionContext*>(session);
     if ((size_t)torrent_id >= ctx->torrents.size()) return 0;
     try {
-        auto ti = ctx->torrents[torrent_id]->handle.torrent_file();
+        auto node = ctx->torrents[torrent_id];
+        if (!node->alive || !node->handle.is_valid()) return 0;
+        auto ti = node->handle.torrent_file();
         if (ti) return ti->piece_length();
     } catch (...) {}
     return 0;
@@ -590,7 +643,9 @@ extern "C" long long torrent_get_file_offset(TorrentSession session, int torrent
     SessionContext* ctx = static_cast<SessionContext*>(session);
     if ((size_t)torrent_id >= ctx->torrents.size()) return -1;
     try {
-        auto ti = ctx->torrents[torrent_id]->handle.torrent_file();
+        auto node = ctx->torrents[torrent_id];
+        if (!node->alive || !node->handle.is_valid()) return -1;
+        auto ti = node->handle.torrent_file();
         if (!ti || file_idx >= ti->files().num_files()) return -1;
         return ti->files().file_offset(lt::file_index_t(file_idx));
     } catch (...) {}
@@ -608,7 +663,10 @@ extern "C" int torrent_read_bytes(TorrentSession session, int torrent_id, int fi
 
     try {
         auto node = ctx->torrents[torrent_id];
-        if (!node->handle.is_valid()) return -1;
+        {
+            std::lock_guard<std::mutex> lk(ctx->mtx);
+            if (!node->alive || !node->handle.is_valid()) return -1;
+        }
 
         auto ti = node->handle.torrent_file();
         if (!ti) return -1;
@@ -618,7 +676,7 @@ extern "C" int torrent_read_bytes(TorrentSession session, int torrent_id, int fi
 
         std::int64_t file_size = files.file_size(lt::file_index_t(file_idx));
         if (offset >= file_size) return 0; // EOF
-        
+
         // Clamp read to file bounds
         int to_read = buf_len;
         if (offset + to_read > file_size) to_read = static_cast<int>(file_size - offset);
@@ -639,39 +697,48 @@ extern "C" int torrent_read_bytes(TorrentSession session, int torrent_id, int fi
             node->handle.piece_priority(lt::piece_index_t(p), lt::download_priority_t(7));
         }
 
-        // Wait for all pieces to arrive (poll at 25ms intervals, timeout after 30s)
-        for (int attempt = 0; attempt < 1200; ++attempt) {
-            lt::torrent_status st = node->handle.status();
-            bool all_ready = true;
-            for (int p = first_piece; p <= last_piece; ++p) {
-                if (!st.pieces.get_bit(p)) {
-                    all_ready = false;
-                    break;
+        // Wait for all pieces to arrive (poll at 25ms intervals, timeout after 30s).
+        // status() and liveness are read under ctx->mtx so a concurrent
+        // torrent_remove() can't tear the handle down mid-access; the lock is
+        // released during the sleep so add/remove are not starved.
+        bool ready = false;
+        for (int attempt = 0; attempt < 1200 && !ready; ++attempt) {
+            {
+                std::lock_guard<std::mutex> lk(ctx->mtx);
+                if (!node->alive || !node->handle.is_valid()) return -1;
+                lt::torrent_status st = node->handle.status();
+                bool all_ready = true;
+                for (int p = first_piece; p <= last_piece; ++p) {
+                    if (!st.pieces.get_bit(p)) { all_ready = false; break; }
                 }
+                ready = all_ready;
             }
-            if (all_ready) break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            if (!ready) std::this_thread::sleep_for(std::chrono::milliseconds(25));
         }
+        if (!ready) return -1; // Timeout — pieces not available
 
-        // Double-check pieces arrived
+        // Read from disk via a persistent stream kept on the node — opened once
+        // per (node,file_index) and reused across chunks instead of reopening
+        // an ifstream on every 512KB request.
         {
-            lt::torrent_status st = node->handle.status();
-            for (int p = first_piece; p <= last_piece; ++p) {
-                if (!st.pieces.get_bit(p)) return -1; // Timeout — pieces not available
-            }
-        }
+            std::lock_guard<std::mutex> lk(ctx->mtx);
+            if (!node->alive || !node->handle.is_valid()) return -1;
 
-        // Read from disk — the file path comes from save_path + file_path
-        lt::torrent_status st = node->handle.status();
-        std::string full_path = st.save_path + "/" + files.file_path(lt::file_index_t(file_idx));
-        
-        std::ifstream f(full_path, std::ios::binary);
-        if (!f.is_open()) return -1;
-        
-        f.seekg(offset, std::ios::beg);
-        f.read(out_buf, to_read);
-        int read_count = static_cast<int>(f.gcount());
-        return read_count;
+            if (!node->read_stream.is_open() || node->read_stream_file_idx != file_idx) {
+                if (node->read_stream.is_open()) node->read_stream.close();
+                lt::torrent_status st = node->handle.status();
+                std::string full_path = st.save_path + "/" + files.file_path(lt::file_index_t(file_idx));
+                node->read_stream.clear();
+                node->read_stream.open(full_path, std::ios::binary);
+                if (!node->read_stream.is_open()) return -1;
+                node->read_stream_file_idx = file_idx;
+            }
+
+            node->read_stream.clear(); // clear any prior EOF/fail bits before seeking
+            node->read_stream.seekg(offset, std::ios::beg);
+            node->read_stream.read(out_buf, to_read);
+            return static_cast<int>(node->read_stream.gcount());
+        }
 
     } catch (...) {}
     return -1;

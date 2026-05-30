@@ -152,6 +152,7 @@ fn renderPlaylistTab() void {
         rendered += 1;
 
         var row = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = i,
             .expand = .horizontal,
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });

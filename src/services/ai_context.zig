@@ -525,7 +525,7 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
         voice.conversation_active = false;
         voice.is_recording = false;
         voice.voice_mode = false;
-        voice.conv_phase = .idle;
+        voice.setPhase(.idle);
         addInstantResponse(raw_input, "Conversation mode off. Click 🎧 to restart.");
         return true;
     }
@@ -803,7 +803,7 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
     const max_ticks: usize = 300; // 300 × 100ms = 30s hard cap
     while (waited < max_ticks) : (waited += 1) {
         const rc = resolver.result_count;
-        const done = !resolver.is_resolving;
+        const done = !resolver.isResolving();
         // Plenty of results — don't keep users waiting on slow trackers
         if (rc >= 5 and waited >= 10) break;
         // Resolver finished. Give one extra tick for late mutex writers, then stop.
@@ -1174,7 +1174,7 @@ pub fn generateResponse() void {
     }
 
     const json_str = std.fmt.bufPrintZ(&json_buf, "{{\"model\":\"{s}\",\"messages\":[{s}],\"max_tokens\":256,\"temperature\":0.3,\"top_p\":0.9,\"stream\":true,\"response_format\":{{\"type\":\"json_object\"}}}}", .{ active_model, msg_part[0..msg_off] }) catch {
-        chat.setError("Failed to build request");
+        chat.setAssistantError(assistant_idx, "Couldn't build the AI request.");
         return;
     };
 
@@ -1187,7 +1187,10 @@ pub fn generateResponse() void {
     var srv_buf: [128]u8 = undefined;
     const srv_url = server.getServerUrl(&srv_buf);
     var url_buf: [192]u8 = undefined;
-    const url = std.fmt.bufPrintZ(&url_buf, "{s}/v1/chat/completions", .{srv_url}) catch return;
+    const url = std.fmt.bufPrintZ(&url_buf, "{s}/v1/chat/completions", .{srv_url}) catch {
+        chat.setAssistantError(assistant_idx, "Invalid AI server URL.");
+        return;
+    };
 
     // Wait for server to become healthy if it was just (re)started
     {
@@ -1224,7 +1227,7 @@ pub fn generateResponse() void {
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     child.spawn() catch {
-        chat.setError("Failed to connect to AI server");
+        chat.setAssistantError(assistant_idx, "Can't reach the AI server. Start it (or set an API key) in Settings > AI.");
         return;
     };
 
@@ -1348,7 +1351,7 @@ pub fn generateResponse() void {
     server.model_status = .online;
 
     if (resp_len == 0) {
-        chat.setError("No response received");
+        chat.setAssistantError(assistant_idx, "The AI server returned no response. Is it running?");
         return;
     }
 
@@ -1357,6 +1360,12 @@ pub fn generateResponse() void {
     // If the state machine didn't find a proper "message" value (e.g. model didn't output JSON),
     // fall back to showing the raw response
     if (chat.messages[assistant_idx].text_len == 0) {
+        // If the raw response is actually an API error envelope, surface its
+        // message via setError rather than dumping raw JSON into the chat.
+        if (extractError(response_text)) |emsg| {
+            chat.setAssistantError(assistant_idx, emsg);
+            return;
+        }
         // Fallback: show whatever raw text was received
         const fallback_len = @min(resp_len, chat.MAX_MSG_LEN);
         @memcpy(chat.messages[assistant_idx].text[0..fallback_len], response_text[0..fallback_len]);

@@ -34,6 +34,8 @@ pub const ResolvedItem = struct {
     quality: u8 = 0,  // 0=unknown, 1=480, 2=720, 3=1080, 4=4K
     seeds: u16 = 0,
     match_pct: u8 = 0, // 0-100% keyword match score for UI display
+    score: u32 = 9999, // cached composite sort score (lower = better)
+    is_nsfw: bool = false, // computed at insert from item name
     // For Jellyfin items
     jf_item_id: [64]u8 = std.mem.zeroes([64]u8),
     jf_item_id_len: usize = 0,
@@ -44,23 +46,37 @@ pub var results: [64]ResolvedItem = std.mem.zeroes([64]ResolvedItem);
 pub var result_count: usize = 0;
 pub var results_mutex = @import("../core/sync.zig").Mutex{};
 
-// Search state
-pub var is_resolving: bool = false;
+// Search state — shared across 7 worker threads + UI; access via atomics.
+pub var is_resolving = std.atomic.Value(bool).init(false);
 pub var resolver_query: [256]u8 = std.mem.zeroes([256]u8);
 pub var resolver_query_len: usize = 0;
 pub var resolver_intent: [32]u8 = std.mem.zeroes([32]u8);
 pub var resolver_intent_len: usize = 0;
 
-// Per-source status
-pub var status_jf: SourceStatus = .idle;
-pub var status_stremio: SourceStatus = .idle;
-pub var status_torrent: SourceStatus = .idle;
-pub var status_anime: SourceStatus = .idle;
-pub var status_yt: SourceStatus = .idle;
-pub var status_1337x: SourceStatus = .idle;
-pub var status_yts: SourceStatus = .idle;
+// Per-source status — atomics; load with .acquire, store with .release.
+pub var status_jf = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_stremio = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_torrent = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_anime = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_yt = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_1337x = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_yts = std.atomic.Value(SourceStatus).init(.idle);
 
-pub const SourceStatus = enum { idle, searching, done, failed };
+// Explicit u8 backing so std.atomic.Value(SourceStatus) is byte-atomic.
+pub const SourceStatus = enum(u8) { idle, searching, done, failed };
+
+/// Atomic accessor for is_resolving (UI reads, workers clear via checkAllDone).
+pub fn isResolving() bool {
+    return is_resolving.load(.acquire);
+}
+
+/// Reset the universal-result list under the results lock so a concurrent
+/// worker insert can't race the UI clear-button.
+pub fn clearResults() void {
+    results_mutex.lock();
+    defer results_mutex.unlock();
+    result_count = 0;
+}
 
 /// Normalize a search query for torrent compatibility:
 /// - "season 2 episode 5" → "S02E05"
@@ -161,7 +177,7 @@ fn normalizeQuery(raw: []const u8, buf: *[256]u8) []const u8 {
 
 /// Main entry: fire all backends in parallel
 pub fn resolve(query: []const u8, intent: []const u8) void {
-    if (query.len == 0 or is_resolving) return;
+    if (query.len == 0 or is_resolving.load(.acquire)) return;
 
     // Save query — normalize "season X episode Y" → "SXXEYY"
     var norm_buf: [256]u8 = undefined;
@@ -169,7 +185,11 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     const qlen = @min(normalized.len, 255);
     @memcpy(resolver_query[0..qlen], normalized[0..qlen]);
     resolver_query_len = qlen;
-    std.debug.print("[resolver] query='{s}' intent='{s}'\n", .{ normalized, intent });
+    {
+        var qlog: [320]u8 = undefined;
+        const m = std.fmt.bufPrint(&qlog, "query='{s}' intent='{s}'", .{ normalized, intent }) catch "query";
+        logs.pushLog("info", "resolver", m, false);
+    }
     
     // Save intent (e.g. "show", "movie", "auto")
     const ilen = @min(intent.len, 31);
@@ -181,17 +201,17 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     result_count = 0;
     results_mutex.unlock();
 
-    is_resolving = true;
+    is_resolving.store(true, .release);
     // IMPORTANT: Set ALL to .searching BEFORE spawning any thread.
     // Otherwise a fast-finishing thread (e.g. no Jellyfin) calls
     // checkAllDone() before others start → premature is_resolving=false.
-    status_jf = .searching;
-    status_stremio = .searching;
-    status_torrent = .searching;
-    status_anime = .searching;
-    status_yt = .searching;
-    status_1337x = .searching;
-    status_yts = .searching;
+    status_jf.store(.searching, .release);
+    status_stremio.store(.searching, .release);
+    status_torrent.store(.searching, .release);
+    status_anime.store(.searching, .release);
+    status_yt.store(.searching, .release);
+    status_1337x.store(.searching, .release);
+    status_yts.store(.searching, .release);
 
     // Fire all backends in parallel — 7 threads for maximum speed
     _ = std.Thread.spawn(.{}, resolveJellyfin, .{ resolver_query, qlen }) catch {};
@@ -219,12 +239,14 @@ fn pushResult(item: ResolvedItem) bool {
 
     scored_item.match_pct = match_info.match_pct;
     const score = match_info.score;
+    scored_item.score = score; // cache so re-inserts don't recompute (S45)
+    scored_item.is_nsfw = @import("search.zig").isNsfwName(name); // S16
 
-    // Insert sorted by score (lower = better)
+    // Insert sorted by score (lower = better) — compare cached scores, O(n)
     var insert_at: usize = result_count;
     var i: usize = 0;
     while (i < result_count) : (i += 1) {
-        if (computeMatch(results[i]).score > score) {
+        if (results[i].score > score) {
             insert_at = i;
             break;
         }
@@ -242,12 +264,12 @@ fn pushResult(item: ResolvedItem) bool {
 }
 
 fn checkAllDone() void {
-    if (status_jf != .searching and status_stremio != .searching and
-        status_torrent != .searching and status_anime != .searching and
-        status_yt != .searching and status_1337x != .searching and
-        status_yts != .searching)
+    if (status_jf.load(.acquire) != .searching and status_stremio.load(.acquire) != .searching and
+        status_torrent.load(.acquire) != .searching and status_anime.load(.acquire) != .searching and
+        status_yt.load(.acquire) != .searching and status_1337x.load(.acquire) != .searching and
+        status_yts.load(.acquire) != .searching)
     {
-        is_resolving = false;
+        is_resolving.store(false, .release);
     }
 }
 
@@ -374,7 +396,7 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
 // ══════════════════════════════════════════════════════════
 
 fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
-    defer { status_jf = .done; checkAllDone(); }
+    defer { status_jf.store(.done, .release); checkAllDone(); }
 
     if (!state.app.jf.connected or state.app.jf.server_url_len == 0) {
         return;
@@ -460,7 +482,7 @@ fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
 
 // Main torrent thread: uses nova2.py (same proven engine as Torrent Only tab)
 fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
-    defer { status_torrent = .done; checkAllDone(); }
+    defer { status_torrent.store(.done, .release); checkAllDone(); }
 
     const query = query_buf[0..qlen];
 
@@ -544,9 +566,10 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
     }
 
     _ = child.wait() catch {};
-    std.debug.print("[resolver] nova2 scanned={d} pushed={d}\n", .{ scanned, found });
-    if (found > 0) {
-        logs.pushLog("info", "resolver", "nova2 torrents found", false);
+    {
+        var slog: [64]u8 = undefined;
+        const m = std.fmt.bufPrint(&slog, "nova2 scanned={d} pushed={d}", .{ scanned, found }) catch "nova2";
+        logs.pushLog("info", "resolver", m, false);
     }
 }
 
@@ -555,7 +578,7 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
-    defer { status_1337x = .done; checkAllDone(); }
+    defer { status_1337x.store(.done, .release); checkAllDone(); }
 
     const query = query_buf[0..qlen];
 
@@ -691,23 +714,17 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
 
 // YTS API — fast movie search (runs in parallel)
 fn resolveYts(query_buf: [256]u8, qlen: usize) void {
-    defer { status_yts = .done; checkAllDone(); }
+    defer { status_yts.store(.done, .release); checkAllDone(); }
 
     const query = query_buf[0..qlen];
 
-    // URL-encode query
+    // URL-encode query — percent-encode all non-unreserved bytes ('+' for space)
     var enc: [512]u8 = undefined;
-    var el: usize = 0;
-    for (query) |ch| {
-        if (el + 3 >= enc.len) break;
-        if (ch == ' ') { enc[el] = '+'; el += 1; }
-        else if (std.ascii.isAlphanumeric(ch)) { enc[el] = ch; el += 1; }
-        else { enc[el] = ch; el += 1; }
-    }
+    const enc_q = @import("../core/http.zig").urlEncode(query, &enc);
 
     var url_buf: [512]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "https://yts.mx/api/v2/list_movies.json?query_term={s}&limit=8&sort_by=seeds", .{
-        enc[0..el],
+        enc_q,
     }) catch return;
 
     var buf: [64 * 1024]u8 = undefined;
@@ -782,7 +799,7 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
-    defer { status_anime = .done; checkAllDone(); }
+    defer { status_anime.store(.done, .release); checkAllDone(); }
 
     const query = query_buf[0..qlen];
 
@@ -863,7 +880,7 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
-    defer { status_yt = .done; checkAllDone(); }
+    defer { status_yt.store(.done, .release); checkAllDone(); }
 
     const query = query_buf[0..qlen];
     var search_arg: [300]u8 = undefined;
@@ -924,9 +941,12 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
-    defer { status_stremio = .done; checkAllDone(); }
+    defer { status_stremio.store(.done, .release); checkAllDone(); }
 
     const stremio = @import("stremio.zig");
+    // Lazily install the well-known addons so the stremio source works
+    // out of the box without separate UI wiring (S15). Idempotent.
+    stremio.ensureDefaultAddons();
     if (stremio.installed_count == 0) return;
 
     const query = query_buf[0..qlen];
@@ -1098,11 +1118,15 @@ pub fn playItem(idx: usize) void {
             // URL is a 1337x detail page — need to resolve magnet
             // For now, load directly (the search.zig loadTorrentToPlayer handles magnets)
             const url = item.url[0..item.url_len];
-            if (std.mem.startsWith(u8, url, "magnet:")) {
+            if (std.mem.startsWith(u8, url, "magnet:") or
+                std.mem.startsWith(u8, url, "http://") or
+                std.mem.startsWith(u8, url, "https://"))
+            {
+                // loadTorrentToPlayer handles magnets directly and resolves
+                // http(s) detail-page URLs to a magnet in the background.
                 const search = @import("search.zig");
                 search.loadTorrentToPlayer(url);
             } else {
-                // It's a detail page URL — toast (future: resolve magnet from page)
                 state.showToast("Open in browser to get magnet link");
             }
         },

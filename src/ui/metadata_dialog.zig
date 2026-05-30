@@ -5,6 +5,8 @@ const state = @import("../core/state.zig");
 const theme = @import("theme.zig");
 const icons = @import("icons");
 
+const TRANSPARENT: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+
 pub fn renderMetadataDialog() void {
     if (state.app.pending_magnet_tid < 0) return;
 
@@ -12,20 +14,25 @@ pub fn renderMetadataDialog() void {
     var backdrop = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .both,
         .background = true,
-        .color_fill = dvui.Color{ .r = 0, .g=0, .b=0, .a=180 }
+        .color_fill = theme.colors.overlay,
     });
     defer backdrop.deinit();
 
+    // True modal: no border — separated by the elevated fill + a single soft
+    // shadow (the one legitimate shadow per the calm rules).
     var win = dvui.box(@src(), .{ .dir = .vertical }, .{
         .background = true,
-        .color_fill = theme.colors.bg_drawer,
-        .color_border = theme.colors.border_drawer,
-        .border = dvui.Rect.all(1),
-        .corner_radius = theme.dims.rad_md,
-        .margin = dvui.Rect.all(20),
-        .padding = dvui.Rect.all(12),
+        .color_fill = theme.colors.bg_elevated,
+        .corner_radius = theme.dims.rad_lg,
+        .margin = dvui.Rect.all(theme.spacing.xl),
+        .padding = dvui.Rect.all(theme.spacing.md),
         .min_size_content = .{ .w = 600, .h = 400 },
-        .expand = .both
+        .expand = .both,
+        .box_shadow = .{
+            .color = theme.colors.overlay,
+            .offset = .{ .x = 0, .y = 6 },
+            .fade = 28,
+        },
     });
     defer win.deinit();
 
@@ -33,11 +40,12 @@ pub fn renderMetadataDialog() void {
     defer col.deinit();
 
     if (!state.app.pending_has_metadata) {
-        _ = dvui.label(@src(), "Fetching Torrent Metadata...", .{}, .{ .expand = .both, .color_text = theme.colors.text_main, .gravity_x = 0.5, .gravity_y = 0.5 });
-        
+        _ = dvui.label(@src(), "Fetching Torrent Metadata...", .{}, .{ .expand = .both, .color_text = theme.colors.text_primary, .gravity_x = 0.5, .gravity_y = 0.5 });
+
         var footer = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 1.0 });
         defer footer.deinit();
-        if (dvui.button(@src(), "Cancel", .{}, .{ .color_fill = theme.colors.danger, .color_text = theme.colors.text_main, .padding = theme.dims.pad_sm })) {
+        // Ghost Cancel — text-only danger, no resting fill.
+        if (dvui.button(@src(), "Cancel", .{}, .{ .color_fill = TRANSPARENT, .color_text = theme.colors.danger, .padding = theme.dims.pad_sm })) {
             c.mpv.torrent_remove(state.app.torrent_ses, state.app.pending_magnet_tid);
             state.app.pending_magnet_tid = -1;
         }
@@ -48,10 +56,10 @@ pub fn renderMetadataDialog() void {
     c.mpv.torrent_get_name(state.app.torrent_ses, state.app.pending_magnet_tid, &t_name, 256);
     const name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse 255;
 
-    _ = dvui.label(@src(), "Pre-Download Filter", .{}, .{ .color_text = theme.colors.text_main });
-    _ = dvui.label(@src(), "{s}", .{t_name[0..name_len]}, .{ .color_text = theme.colors.text_muted, .margin = .{ .x=0, .y=0, .w=0, .h=12 } });
+    _ = dvui.label(@src(), "Pre-Download Filter", .{}, .{ .color_text = theme.colors.text_primary });
+    _ = dvui.label(@src(), "{s}", .{t_name[0..name_len]}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .x=0, .y=0, .w=0, .h=theme.spacing.md } });
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_input });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     
     var f_list = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = theme.dims.pad_sm });
     
@@ -72,7 +80,7 @@ pub fn renderMetadataDialog() void {
         
         var f_buf: [300]u8 = undefined;
         if (std.fmt.bufPrintZ(&f_buf, "{s} ({d:.1} MB)", .{f_name[0..f_len], sz_mb})) |n| {
-            _ = dvui.label(@src(), "{s}", .{n}, .{ .color_text = theme.colors.text_main, .expand = .horizontal });
+            _ = dvui.label(@src(), "{s}", .{n}, .{ .color_text = theme.colors.text_primary, .expand = .horizontal });
         } else |_| {}
         
         f_row.deinit();
@@ -81,17 +89,20 @@ pub fn renderMetadataDialog() void {
     f_list.deinit();
     scroll.deinit();
 
-    var footer = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x=0, .y=12, .w=0, .h=0 } });
+    var footer = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x=0, .y=theme.spacing.md, .w=0, .h=0 } });
     defer footer.deinit();
-    
-    _ = dvui.label(@src(), "Select files to allocate your disk space.", .{}, .{ .color_text = theme.colors.warning, .expand = .horizontal, .gravity_y = 0.5 });
-    
-    if (dvui.button(@src(), "Cancel", .{}, .{ .color_fill = theme.colors.danger, .color_text = theme.colors.text_main, .padding = theme.dims.pad_md })) {
+
+    // Quiet instruction line — not a resting warning hue.
+    _ = dvui.label(@src(), "Select files to allocate your disk space.", .{}, .{ .color_text = theme.colors.text_tertiary, .expand = .horizontal, .gravity_y = 0.5 });
+
+    // Ghost Cancel — text-only danger.
+    if (dvui.button(@src(), "Cancel", .{}, .{ .color_fill = TRANSPARENT, .color_text = theme.colors.danger, .padding = theme.dims.pad_md })) {
         c.mpv.torrent_remove(state.app.torrent_ses, state.app.pending_magnet_tid);
         state.app.pending_magnet_tid = -1;
     }
-    
-    if (dvui.button(@src(), "Start Download", .{}, .{ .color_fill = theme.colors.success, .color_text = dvui.Color.black, .padding = theme.dims.pad_md, .margin = .{ .x=8, .y=0, .w=0, .h=0 } })) {
+
+    // Primary action — the single accent affordance of the dialog.
+    if (dvui.button(@src(), "Start Download", .{}, .{ .color_fill = theme.colors.accent_primary, .color_text = theme.colors.text_on_accent, .padding = theme.dims.pad_md, .margin = .{ .x=theme.spacing.sm, .y=0, .w=0, .h=0 } })) {
         var fi: i32 = 0;
         while (fi < f_count) : (fi += 1) {
             if (!state.app.pending_files_selection[@as(usize, @intCast(fi))]) {

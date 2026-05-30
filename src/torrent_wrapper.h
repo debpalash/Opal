@@ -18,6 +18,11 @@ int torrent_count(TorrentSession session);
 // Stop and remove a specific torrent
 void torrent_remove(TorrentSession session, int torrent_id);
 
+// Returns non-zero if the torrent id refers to a live (non-removed) torrent.
+// Ids are stable slots that are never reused/renumbered, so callers can probe
+// liveness after a remove instead of assuming compaction.
+int torrent_is_alive(TorrentSession session, int torrent_id);
+
 // Poll for playback readiness and gather qBittorrent-style stats.
 // target_file_idx: if >= 0, specifically poll that file index. If -1, finds largest file.
 // Returns:

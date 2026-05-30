@@ -103,12 +103,17 @@ pub fn startGeneration(thumb: *ThumbnailState, file_path: []const u8, duration_s
     thumb.pid = child;
 }
 
-/// Poll for thumbnail generation completion. Call each frame.
+/// Poll for thumbnail generation completion.
+/// NOTE: child.wait() here BLOCKS until ffmpeg exits, so this must NOT be
+/// called per-frame from the UI thread (it freezes the UI). Generation is
+/// currently disabled in player.zig; if re-enabling for a seek-preview
+/// feature, run generation+wait on a background thread and have this only
+/// read a thread-set `ready` flag. (H8)
 pub fn pollGeneration(thumb: *ThumbnailState) void {
     if (!thumb.generating) return;
 
     if (thumb.pid) |*child| {
-        // Check if process has terminated (non-blocking)
+        // BLOCKING wait — see note above. Only safe off the UI thread.
         const result = child.wait() catch {
             thumb.generating = false;
             thumb.pid = null;

@@ -24,8 +24,17 @@ fn activePlayer() ?*player_mod.MediaPlayer {
 // Replaces LightPanda with real Firefox rendering + anti-bot
 // ══════════════════════════════════════════════════════════
 
-const VENV_PYTHON = "/home/pal/.config/zigzag/venv/bin/python3";
 const BRIDGE_SCRIPT = "camoufox_bridge.py";
+
+// Resolve the venv python under the zigzag config dir (~/.config/zigzag/venv/bin/python3).
+// Returns null if $HOME is unset. Falls back to bare "python3" handled by callers.
+fn getVenvPython() ?[]const u8 {
+    const home = @import("../core/io_global.zig").getenv("HOME") orelse return null;
+    const S = struct {
+        var buf: [512]u8 = undefined;
+    };
+    return std.fmt.bufPrint(&S.buf, "{s}/.config/zigzag/venv/bin/python3", .{home}) catch null;
+}
 
 // Bridge process state (singleton — one browser instance shared across all panes)
 var bridge_process: ?@import("../core/io_global.zig").Child = null;
@@ -54,15 +63,25 @@ var pending_url_len: usize = 0;
 // ── Bridge lifecycle ──
 
 fn getBridgePath() ?[]const u8 {
-    // Look for camoufox_bridge.py relative to the binary or in the scripts dir
-    const paths = [_][]const u8{
-        "scripts/camoufox_bridge.py",
-        "/home/pal/Documents/stuffs/cmr/zigzag/scripts/camoufox_bridge.py",
-    };
-    for (paths) |p| {
-        @import("../core/io_global.zig").cwdAccess(p, .{}) catch continue;
-        return p;
+    const io = @import("../core/io_global.zig");
+
+    // 1) Look for camoufox_bridge.py relative to the working dir (bundled scripts dir).
+    const rel = "scripts/" ++ BRIDGE_SCRIPT;
+    if (io.cwdAccess(rel, .{})) |_| {
+        return rel;
+    } else |_| {}
+
+    // 2) Look under the zigzag config dir (~/.config/zigzag/scripts/camoufox_bridge.py).
+    if (io.getenv("HOME")) |home| {
+        const S = struct {
+            var buf: [512]u8 = undefined;
+        };
+        const p = std.fmt.bufPrint(&S.buf, "{s}/.config/zigzag/scripts/{s}", .{ home, BRIDGE_SCRIPT }) catch return null;
+        if (io.cwdAccess(p, .{})) |_| {
+            return p;
+        } else |_| {}
     }
+
     return null;
 }
 
@@ -84,15 +103,19 @@ fn startBridgeThread() void {
         return;
     };
     
-    // Check if venv python exists
-    @import("../core/io_global.zig").cwdAccess(VENV_PYTHON, .{}) catch {
+    // Resolve and check the venv python under the zigzag config dir.
+    const venv_python = getVenvPython() orelse {
+        logs.pushLog("error", "browser", "$HOME not set — cannot locate Python venv", false);
+        return;
+    };
+    @import("../core/io_global.zig").cwdAccess(venv_python, .{}) catch {
         logs.pushLog("error", "browser", "Python venv not found — run install", false);
         return;
     };
-    
+
     logs.pushLog("info", "browser", "Starting Camoufox browser...", true);
-    
-    const argv = [_][]const u8{ VENV_PYTHON, script_path };
+
+    const argv = [_][]const u8{ venv_python, script_path };
     var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;

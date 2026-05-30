@@ -45,6 +45,9 @@ pub var is_fetching: bool = false;
 pub var page_title: [256]u8 = std.mem.zeroes([256]u8);
 pub var page_title_len: usize = 0;
 pub var probing_started: bool = false;
+// Tracks the modal's open state across frames so we can clean up probe torrents
+// when it is closed via window chrome (X / click-outside) rather than the Play button.
+var was_open: bool = false;
 
 /// Check if a URL is a projectjav movie page
 pub fn isProjectJavUrl(url: []const u8) bool {
@@ -448,7 +451,18 @@ fn formatSize(bytes: i64, buf: []u8) []const u8 {
 // ══════════════════════════════════════════════════════════
 
 pub fn renderModal() void {
-    if (!modal_open) return;
+    if (!modal_open) {
+        // Detect a close via window chrome (X / click-outside flips modal_open
+        // without going through the Play button's cleanup). Clean up orphaned
+        // probe torrents exactly once on the open -> closed transition.
+        if (was_open) {
+            cleanupProbes();
+            probing_started = false;
+            was_open = false;
+        }
+        return;
+    }
+    was_open = true;
 
     // Start probing once fetch is done and we have torrents
     if (!is_fetching and torrent_count > 0 and !probing_started) {

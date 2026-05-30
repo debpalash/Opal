@@ -63,6 +63,21 @@ pub fn joinParty(host_ip: []const u8) void {
 pub fn leaveParty() void {
     if (role == .host) {
         host_running = false;
+        // Kick the blocking accept() awake with a throwaway local connection
+        // so hostLoop can observe host_running=false and exit, then join the
+        // thread (mirrors stream_proxy.stopProxy). Without this the listening
+        // socket + host thread leak until process exit.
+        {
+            const io_g = @import("../core/io_global.zig");
+            if (std.Io.net.IpAddress.parseIp4("127.0.0.1", party_port)) |addr| {
+                if (addr.connect(io_g.io(), .{ .mode = .stream })) |conn| {
+                    var c2 = conn;
+                    c2.close(io_g.io());
+                } else |_| {}
+            } else |_| {}
+        }
+        if (host_thread) |t| t.join();
+        host_thread = null;
         for (&client_streams) |*cs| {
             if (cs.*) |s| {
                 s.close(@import("../core/io_global.zig").io());
@@ -171,6 +186,12 @@ fn hostLoop() void {
 
     while (host_running) {
         const conn = server.accept(@import("../core/io_global.zig").io()) catch continue;
+        // Re-check after accept: leaveParty() kicks accept() awake with a
+        // throwaway connection — don't register it as a phantom client.
+        if (!host_running) {
+            conn.close(@import("../core/io_global.zig").io());
+            break;
+        }
         if (client_count >= 8) {
             conn.close(@import("../core/io_global.zig").io());
             continue;
