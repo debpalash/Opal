@@ -362,9 +362,9 @@ pub fn render() void {
     // whitespace, not a colored bordered panel).
     {
         const desc = if (is_macos)
-            "Sets Opal as default handler via macOS LaunchServices."
+            "Make Opal the default app for these file types."
         else
-            "Uses xdg-mime (Linux). Writes to ~/.config/mimeapps.list";
+            "Make Opal the default app (via xdg-mime).";
         _ = dvui.label(@src(), desc, .{}, .{
             .color_text = theme.colors.text_tertiary,
             .margin = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = theme.spacing.md },
@@ -432,10 +432,14 @@ pub fn render() void {
 
             _ = dvui.label(@src(), "{s}", .{grp.label}, .{
                 .id_extra = grp.id_base + 2,
-                .expand = .horizontal,
                 .color_text = theme.colors.text_primary,
                 .gravity_y = 0.5,
             });
+
+            // Flexible spacer absorbs the slack so the status + button keep
+            // their natural size (label was expanding and squeezing the button
+            // to a clipped sliver for long labels like "Torrent / Magnet").
+            { var sp = dvui.box(@src(), .{}, .{ .id_extra = grp.id_base + 6, .expand = .horizontal }); sp.deinit(); }
 
             {
                 // Status as quiet text — success only when set, secondary
@@ -456,6 +460,7 @@ pub fn render() void {
                     .color_text = if (pending) theme.colors.text_secondary else theme.colors.text_on_accent,
                     .corner_radius = theme.dims.rad_md,
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                    .min_size_content = .{ .w = 76, .h = 0 },
                     .gravity_y = 0.5,
                 })) {
                     if (!pending) triggerGroupAction(gi, true);
@@ -467,6 +472,7 @@ pub fn render() void {
                     .color_text = if (pending) theme.colors.text_tertiary else theme.colors.danger,
                     .corner_radius = theme.dims.rad_md,
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                    .min_size_content = .{ .w = 76, .h = 0 },
                     .gravity_y = 0.5,
                 })) {
                     if (!pending) triggerGroupAction(gi, false);

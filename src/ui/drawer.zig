@@ -39,7 +39,7 @@ const RADIUS_SM = theme.dims.rad_sm;
 
 // Minimum drawer content width — used both as the auto-clamp floor and as the
 // interactive drag minimum so they can't drift apart.
-const MIN_DRAWER_W: f32 = 300;
+const MIN_DRAWER_W: f32 = 560;
 
 // Transparent color used as the "no fill" baseline for icon buttons.
 const TRANSPARENT: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };

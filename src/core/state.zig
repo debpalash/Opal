@@ -177,7 +177,7 @@ pub const AppState = struct {
     magnet_buf: [2048]u8 = std.mem.zeroes([2048]u8),
     drawer_open: bool = false,
     drawer_tab: DrawerTab = .Search,
-    drawer_width_px: f32 = 380.0,
+    drawer_width_px: f32 = 640.0,
 
     // dvui window handle — set once in appInit. Stored here so worker
     // threads (e.g. the mpv render-update callback) can wake the UI loop
@@ -192,7 +192,7 @@ pub const AppState = struct {
     win_restore_pending: bool = false,
     is_drawer_resizing: bool = false,
     drawer_expanded: bool = false,
-    drawer_saved_width: f32 = 480.0,
+    drawer_saved_width: f32 = 640.0,
     rss_show_add: bool = false,
     dragging_magnet_buf: [4096]u8 = std.mem.zeroes([4096]u8),
     dragging_magnet_len: usize = 0,

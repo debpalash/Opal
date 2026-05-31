@@ -149,13 +149,20 @@ pub fn sectionHeader(label: []const u8) void {
 
 /// 1px horizontal rule. Color: border_subtle.
 /// Vertical margin: spacing.sm above and below.
+// Every divider() call shares THIS function's @src(), so two dividers under the
+// same parent would hash to the same widget id and dvui flags the collision by
+// drawing a red box (the "empty red boxes" seen in Settings). A monotonic
+// sequence number as id_extra keeps each call's id unique within a frame.
+var divider_seq: usize = 0;
 pub fn divider() void {
+    divider_seq +%= 1;
     var d = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = divider_seq,
         .expand = .horizontal,
         .background = true,
         .color_fill = tk.border_subtle(),
         .min_size_content = .{ .w = 0, .h = 1 },
-        .max_size_content = .{ .w = 0, .h = 1 },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = 1 },
         .margin = .{ .x = 0, .y = tk.sp_sm, .w = 0, .h = tk.sp_sm },
     });
     d.deinit();

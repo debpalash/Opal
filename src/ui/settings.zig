@@ -92,8 +92,8 @@ pub fn renderSettingsContent() void {
 fn renderLeftNav() void {
     // Sidebar column.
     var nav = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .min_size_content = .{ .w = 180, .h = 0 },
-        .max_size_content = .{ .w = 200, .h = std.math.floatMax(f32) },
+        .min_size_content = .{ .w = 148, .h = 0 },
+        .max_size_content = .{ .w = 164, .h = std.math.floatMax(f32) },
         .expand = .vertical,
         .background = true,
         .color_fill = theme.colors.bg_surface,
