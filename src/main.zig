@@ -539,9 +539,12 @@ fn renderChatDropdown() void {
         });
     }
 
-    // Last 5 messages, scrollable
+    // Last 5 messages, scrollable. background=false so the overlay's own dark
+    // fill shows through — otherwise the scrollArea paints dvui's default
+    // (light) theme background and an empty conversation renders as a white box.
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
+        .background = false,
     });
     defer scroll.deinit();
 

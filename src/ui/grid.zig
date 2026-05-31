@@ -585,7 +585,7 @@ pub fn renderGrid() !void {
                     // Empty state stays vertically centered; once a conversation
                     // starts, anchor near the top so the growing chat expands
                     // downward instead of creeping up under the toolbar.
-                    .gravity_y = if (has_chat) @as(f32, 0.04) else 0.5,
+                    .gravity_y = if (has_chat) @as(f32, 0.04) else 0.34,
                     .background = false,
                     .border = dvui.Rect.all(0),
                     .padding = .{ .x = 24, .y = 20, .w = 24, .h = 20 },

@@ -513,6 +513,10 @@ fn applyToDvui() void {
     t.fill_hover = colors.bg_card_hover;
     t.fill_press = colors.bg_header_border;
     t.border = colors.border_input;
+    // The accent/focus color drives slider fills, focus rings and other dvui
+    // built-ins. Without this it stays dvui's default BLUE — which is why the
+    // scrubber and volume slider rendered blue instead of the theme accent.
+    t.focus = colors.accent;
     dvui.themeSet(t);
 }
 
