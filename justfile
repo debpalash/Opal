@@ -2,7 +2,7 @@
 #   just <task>   (run `just` alone for list)
 # Requires: `brew install just`
 
-zig := "/opt/homebrew/bin/zig"
+zig := env("ZIG", "zig")
 
 # List tasks
 default:
@@ -31,7 +31,7 @@ fmt:
 
 # Nuke all caches — slow recovery, use after upstream zig update
 clean:
-    rm -rf .zig-cache zig-out zig-pkg /Users/user4/.cache/zig/o
+    rm -rf .zig-cache zig-out zig-pkg $HOME/.cache/zig/o
 
 # Build with verbose error traces (debug spurious compile errors)
 debug-build:

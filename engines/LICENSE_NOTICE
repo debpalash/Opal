@@ -1,0 +1,6 @@
+The search engine plugins in this directory are based on the qBittorrent
+search plugin API. Original authors are credited in individual files.
+
+These plugins are distributed under the same terms as the parent project (MIT).
+Some plugins may have been adapted from GPL-licensed qBittorrent plugins;
+where applicable, the original license terms are preserved.

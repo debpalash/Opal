@@ -4,7 +4,7 @@
 # Optional DMG packaging via create-dmg (brew install create-dmg) if present.
 set -euo pipefail
 
-ZIG=/opt/homebrew/bin/zig
+ZIG=${ZIG:-zig}
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_DIR="$ROOT/dist/Opal.app"
 BIN_PATH="$ROOT/zig-out/bin/zigzag"

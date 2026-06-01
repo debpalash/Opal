@@ -36,6 +36,34 @@ Opal pushes the boundary of what's possible in modern desktop client engineering
 | **ONNX Runtime**| Local machine learning execution. |
 | **sqlite-vec** | SQLite extension for lightning-fast embedded vector search mapping. |
 
+## Prerequisites
+
+| Dependency | Version | Notes |
+|------------|---------|-------|
+| [Zig](https://ziglang.org/) | 0.16.x | Build toolchain |
+| [SDL2](https://www.libsdl.org/) | 2.x | Window/input/rendering backend |
+| [mpv](https://mpv.io/) | 0.30+ | Media playback (libmpv) |
+| [SQLite3](https://sqlite.org/) | 3.x | Local database |
+| [ONNX Runtime](https://onnxruntime.ai/) | 1.x | AI/OCR inference (optional) |
+
+### macOS (Homebrew)
+```bash
+brew install zig mpv sqlite onnxruntime sdl2
+```
+
+### Arch Linux
+```bash
+pacman -S zig mpv sqlite sdl2
+yay -S onnxruntime  # AUR
+```
+
+### Ubuntu/Debian
+```bash
+# Zig: download from https://ziglang.org/download/
+sudo apt install libmpv-dev libsqlite3-dev libsdl2-dev
+# ONNX Runtime: download from https://github.com/microsoft/onnxruntime/releases
+```
+
 ## 🚀 Getting Started
 
 Opal features an instant hot-module-replacement (HMR) development loop.

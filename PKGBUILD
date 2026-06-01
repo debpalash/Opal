@@ -4,7 +4,7 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc="All-in-one media suite — torrent streaming, video player, manga reader, cam grid, AI assistant"
 arch=('x86_64')
-url="https://github.com/pal/zigzag"
+url="https://github.com/debpalash/Opal"
 license=('MIT')
 depends=(
     'mpv'

@@ -27,7 +27,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 BIN="./zig-out/bin/zigzag"
-WATCH_PATHS=(src tools build./opt/homebrew/bin/zig build.zig.zon)
+WATCH_PATHS=(src tools build.${ZIG:-zig} build.zig.zon)
 PID=""
 BUILD_N=0
 DEBOUNCE_MS=150
@@ -100,11 +100,11 @@ build_and_launch() {
 
     if (( VERBOSE )); then
         echo
-        /opt/homebrew/bin/zig build $OPTIMIZE
+        ${ZIG:-zig} build $OPTIMIZE
         rc=$?
         out=""
     else
-        out=$(/opt/homebrew/bin/zig build $OPTIMIZE 2>&1)
+        out=$(${ZIG:-zig} build $OPTIMIZE 2>&1)
         rc=$?
     fi
 
@@ -187,6 +187,6 @@ case "$WATCHER" in
             --ignore '*.swp' --ignore '*~' \
             --watch src --watch tools --watch build.zig --watch build.zig.zon \
             --on-busy-update restart --stop-signal SIGTERM \
-            -- bash -c "/opt/homebrew/bin/zig build $OPTIMIZE && exec $BIN ${PASSTHROUGH[*]:-}"
+            -- bash -c "${ZIG:-zig} build $OPTIMIZE && exec $BIN ${PASSTHROUGH[*]:-}"
         ;;
 esac

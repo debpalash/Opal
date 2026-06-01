@@ -92,6 +92,11 @@ zig-pkg/
 
 # === AI assistant config ===
 CLAUDE.md
+.antigravitycli/
+
+# === IDE config (machine-specific) ===
+zls.json
+
 # macOS .app build output
 dist/
 *.dmg
