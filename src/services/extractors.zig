@@ -57,6 +57,10 @@ pub fn isPlaylistUrl(url: []const u8) bool {
 // Playlist Extraction (yt-dlp --flat-playlist)
 // ══════════════════════════════════════════════════════════
 
+// NOTE: extract_url_buf/extract_url_len are written by extractPlaylist() on the
+// UI thread and read by extractThread().  The extract_thread guard ensures only
+// one extraction runs at a time — callers MUST only invoke extractPlaylist()
+// from the UI thread.
 var extract_url_buf: [2048]u8 = undefined;
 var extract_url_len: usize = 0;
 var extract_thread: ?std.Thread = null;
@@ -93,16 +97,16 @@ fn extractThread() void {
     
     const argv_proxy = [_][]const u8{
         "yt-dlp", "--flat-playlist", "-j",
-        "--no-warnings", "--no-check-certificates",
+        "--no-warnings",
         "--cookies-from-browser", "firefox",
         "--proxy", proxy_str,
-        url,
+        "--", url,
     };
     const argv_direct = [_][]const u8{
         "yt-dlp", "--flat-playlist", "-j",
-        "--no-warnings", "--no-check-certificates",
+        "--no-warnings",
         "--cookies-from-browser", "firefox",
-        url,
+        "--", url,
     };
     const argv: []const []const u8 = if (has_proxy) &argv_proxy else &argv_direct;
 

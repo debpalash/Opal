@@ -764,8 +764,9 @@ pub fn fetchPoster(item: *PluginResult) void {
                 return;
             };
 
-            var img_buf: [512 * 1024]u8 = undefined;
-            const img_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &img_buf) catch 0 else 0;
+            const img_buf = c_alloc.alloc(u8, 512 * 1024) catch return;
+            defer c_alloc.free(img_buf);
+            const img_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, img_buf) catch 0 else 0;
             _ = child.wait() catch {};
             if (img_len < 100) return;
             

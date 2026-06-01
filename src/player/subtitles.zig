@@ -282,8 +282,14 @@ fn downloadThread(engine: *SubtitleEngine) void {
         .{ .name = "User-Agent", .value = "Opal/1.0" },
     };
     
-    var response_buf: [512 * 1024]u8 = undefined;
-    const data = httpGet(url, &headers, &response_buf) catch {
+    const alloc = @import("../core/alloc.zig").allocator;
+    const response_buf = alloc.alloc(u8, 512 * 1024) catch {
+        engine.state = .failed;
+        logs.pushLog("error", "subs", "Failed to allocate buffer", true);
+        return;
+    };
+    defer alloc.free(response_buf);
+    const data = httpGet(url, &headers, response_buf) catch {
         engine.state = .failed;
         logs.pushLog("error", "subs", "Failed to download subtitle", true);
         return;

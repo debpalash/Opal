@@ -285,8 +285,9 @@ fn ttsWorker(word_idx: usize) void {
         state.app.tts_speed,
     }) catch return;
     
-    var wav_buf: [512 * 1024]u8 = undefined;
-    const body_len = httpGetRaw(url, &wav_buf) catch {
+    const wav_buf = @import("../core/alloc.zig").allocator.alloc(u8, 512 * 1024) catch return;
+    defer @import("../core/alloc.zig").allocator.free(wav_buf);
+    const body_len = httpGetRaw(url, wav_buf) catch {
         logs.pushLog("warn", "tts", "TTS server not running (start tools/lang_server.py)", true);
         return;
     };
@@ -348,8 +349,9 @@ fn ttsLineWorker() void {
         state.app.tts_speed,
     }) catch return;
     
-    var wav_buf: [1024 * 1024]u8 = undefined;
-    const body_len = httpGetRaw(url, &wav_buf) catch return;
+    const wav_buf = @import("../core/alloc.zig").allocator.alloc(u8, 1024 * 1024) catch return;
+    defer @import("../core/alloc.zig").allocator.free(wav_buf);
+    const body_len = httpGetRaw(url, wav_buf) catch return;
     if (body_len < 44) return;
     
     // TODO: use unique temp paths for security (predictable /tmp names on multi-user systems)
@@ -392,8 +394,9 @@ fn translateWorker() void {
         target_lang,
     }) catch return;
     
-    var response_buf: [4096]u8 = undefined;
-    const body_len = httpGetRaw(url, &response_buf) catch return;
+    const response_buf = @import("../core/alloc.zig").allocator.alloc(u8, 4096) catch return;
+    defer @import("../core/alloc.zig").allocator.free(response_buf);
+    const body_len = httpGetRaw(url, response_buf) catch return;
     if (body_len == 0) return;
     
     const body = response_buf[0..body_len];
@@ -488,8 +491,9 @@ fn asrWorker() void {
     const file = @import("../core/io_global.zig").openFileAbsolute(wav_path, .{}) catch return;
     defer file.close(@import("../core/io_global.zig").io());
     
-    var wav_buf: [512 * 1024]u8 = undefined;
-    const wav_len = @import("../core/io_global.zig").readAll(file, &wav_buf) catch return;
+    const wav_buf = @import("../core/alloc.zig").allocator.alloc(u8, 512 * 1024) catch return;
+    defer @import("../core/alloc.zig").allocator.free(wav_buf);
+    const wav_len = @import("../core/io_global.zig").readAll(file, wav_buf) catch return;
     if (wav_len < 100) return;
     
     // Write WAV data to temp file for curl upload
@@ -619,8 +623,9 @@ fn dubWorker() void {
         state.app.tts_voice_buf[0..state.app.tts_voice_len], state.app.tts_speed,
     }) catch return;
     
-    var wav_buf: [1024 * 1024]u8 = undefined;
-    const wav_len = httpGetRaw(tts_url, &wav_buf) catch return;
+    const wav_buf = @import("../core/alloc.zig").allocator.alloc(u8, 1024 * 1024) catch return;
+    defer @import("../core/alloc.zig").allocator.free(wav_buf);
+    const wav_len = httpGetRaw(tts_url, wav_buf) catch return;
     if (wav_len < 44) return;
     
     // Save WAV

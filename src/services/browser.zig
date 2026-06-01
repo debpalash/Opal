@@ -38,8 +38,8 @@ fn getVenvPython() ?[]const u8 {
 
 // Bridge process state (singleton — one browser instance shared across all panes)
 var bridge_process: ?@import("../core/io_global.zig").Child = null;
-var bridge_ready: bool = false;
-var bridge_starting: bool = false;
+var bridge_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var bridge_starting: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var bridge_reader_thread: ?std.Thread = null;
 
 // Frame buffer — latest screenshot from Camoufox
@@ -48,13 +48,13 @@ var frame_jpeg_len: usize = 0;
 var frame_texture: ?dvui.Texture = null;
 var frame_w: u32 = 0;
 var frame_h: u32 = 0;
-var frame_dirty: bool = false;
+var frame_dirty: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var frame_lock: @import("../core/sync.zig").Mutex = .{};
 
 // JSON response buffer
 var json_response: [8192]u8 = undefined;
 var json_response_len: usize = 0;
-var json_response_ready: bool = false;
+var json_response_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 // Pending navigate URL (queued before bridge is ready)
 var pending_url: [2048]u8 = undefined;
@@ -86,17 +86,17 @@ fn getBridgePath() ?[]const u8 {
 }
 
 pub fn ensureBridge() void {
-    if (bridge_ready or bridge_starting) return;
-    bridge_starting = true;
+    if (bridge_ready.load(.acquire) or bridge_starting.load(.acquire)) return;
+    bridge_starting.store(true, .release);
     
     _ = std.Thread.spawn(.{}, startBridgeThread, .{}) catch {
-        bridge_starting = false;
+        bridge_starting.store(false, .release);
         logs.pushLog("error", "browser", "Failed to spawn bridge thread", false);
     };
 }
 
 fn startBridgeThread() void {
-    defer bridge_starting = false;
+    defer bridge_starting.store(false, .release);
     
     const script_path = getBridgePath() orelse {
         logs.pushLog("error", "browser", "camoufox_bridge.py not found", false);
@@ -134,13 +134,15 @@ fn startBridgeThread() void {
     // Wait for ready signal (up to 15 seconds)
     var waited: usize = 0;
     while (waited < 150) : (waited += 1) {
-        if (bridge_ready) {
+        if (bridge_ready.load(.acquire)) {
             logs.pushLog("info", "browser", "Camoufox ready 🦊", true);
             
             // Send any pending navigate command
             if (pending_url_len > 0) {
-                var cmd_buf: [2200]u8 = undefined;
-                const pcmd = std.fmt.bufPrint(&cmd_buf, "{{\"cmd\":\"navigate\",\"url\":\"{s}\"}}", .{pending_url[0..pending_url_len]}) catch return;
+                var esc_buf: [4096]u8 = undefined;
+                const esc_url = escapeJsonString(pending_url[0..pending_url_len], &esc_buf);
+                var cmd_buf: [4200]u8 = undefined;
+                const pcmd = std.fmt.bufPrint(&cmd_buf, "{{\"cmd\":\"navigate\",\"url\":\"{s}\"}}", .{esc_url}) catch return;
                 sendCommand(pcmd);
                 pending_url_len = 0;
             }
@@ -179,7 +181,7 @@ fn bridgeReaderThread() void {
             if (pos > 0) {
                 // Check for ready signal
                 if (std.mem.indexOf(u8, buf[0..pos], "\"ready\"")) |_| {
-                    bridge_ready = true;
+                    bridge_ready.store(true, .release);
                 }
                 
                 // Check for title update (navigate response)
@@ -208,7 +210,7 @@ fn bridgeReaderThread() void {
                 // Store for general use
                 @memcpy(json_response[0..pos], buf[0..pos]);
                 json_response_len = pos;
-                json_response_ready = true;
+                json_response_ready.store(true, .release);
             }
         } else if (tag[0] == 'F') {
             // Frame: 4-byte big-endian length + JPEG data
@@ -242,7 +244,7 @@ fn bridgeReaderThread() void {
                 if (frame_jpeg) |old| alloc.free(old);
                 frame_jpeg = jpeg_buf;
                 frame_jpeg_len = frame_size;
-                frame_dirty = true;
+                frame_dirty.store(true, .release);
                 frame_lock.unlock();
                 
                 // Mark loading done
@@ -255,7 +257,7 @@ fn bridgeReaderThread() void {
         }
     }
     
-    bridge_ready = false;
+    bridge_ready.store(false, .release);
     logs.pushLog("info", "browser", "Camoufox bridge disconnected", false);
 }
 
@@ -290,6 +292,29 @@ fn extractJsonField(json: []const u8, field: []const u8) ?[]const u8 {
     return json[pos .. pos + end];
 }
 
+/// Escape a string for safe JSON interpolation — escapes \\ and \"
+fn escapeJsonString(input: []const u8, buf: *[4096]u8) []const u8 {
+    var out: usize = 0;
+    for (input) |ch| {
+        if (out + 2 > buf.len) break;
+        if (ch == '\\') {
+            buf[out] = '\\';
+            out += 1;
+            buf[out] = '\\';
+            out += 1;
+        } else if (ch == '"') {
+            buf[out] = '\\';
+            out += 1;
+            buf[out] = '"';
+            out += 1;
+        } else {
+            buf[out] = ch;
+            out += 1;
+        }
+    }
+    return buf[0..out];
+}
+
 // ── Public API ──
 
 pub fn navigate(url: []const u8) void {
@@ -318,10 +343,12 @@ pub fn navigate(url: []const u8) void {
     p.provider = .browser;
     fetch_player_idx = state.app.active_player_idx;
     
-    if (bridge_ready) {
+    if (bridge_ready.load(.acquire)) {
         // Bridge is running — send navigate immediately
-        var cmd_buf: [2200]u8 = undefined;
-        const cmd = std.fmt.bufPrint(&cmd_buf, "{{\"cmd\":\"navigate\",\"url\":\"{s}\"}}", .{url}) catch return;
+        var esc_buf: [4096]u8 = undefined;
+        const esc_url = escapeJsonString(url, &esc_buf);
+        var cmd_buf: [4200]u8 = undefined;
+        const cmd = std.fmt.bufPrint(&cmd_buf, "{{\"cmd\":\"navigate\",\"url\":\"{s}\"}}", .{esc_url}) catch return;
         sendCommand(cmd);
     } else {
         // Bridge not ready yet — queue URL for when it starts
@@ -333,37 +360,41 @@ pub fn navigate(url: []const u8) void {
 }
 
 pub fn sendClick(x: f32, y: f32) void {
-    if (!bridge_ready) return;
+    if (!bridge_ready.load(.acquire)) return;
     sendCommandFmt("{{\"cmd\":\"click\",\"x\":{d},\"y\":{d}}}", .{ @as(i32, @intFromFloat(x)), @as(i32, @intFromFloat(y)) });
 }
 
 pub fn sendScroll(dy: f32) void {
-    if (!bridge_ready) return;
+    if (!bridge_ready.load(.acquire)) return;
     sendCommandFmt("{{\"cmd\":\"scroll\",\"dx\":0,\"dy\":{d}}}", .{@as(i32, @intFromFloat(dy * 100))});
 }
 
 pub fn sendKeypress(key: []const u8) void {
-    if (!bridge_ready) return;
-    sendCommandFmt("{{\"cmd\":\"keypress\",\"key\":\"{s}\"}}", .{key});
+    if (!bridge_ready.load(.acquire)) return;
+    var esc_buf: [4096]u8 = undefined;
+    const esc_key = escapeJsonString(key, &esc_buf);
+    sendCommandFmt("{{\"cmd\":\"keypress\",\"key\":\"{s}\"}}", .{esc_key});
 }
 
 pub fn sendType(text: []const u8) void {
-    if (!bridge_ready) return;
-    sendCommandFmt("{{\"cmd\":\"type\",\"text\":\"{s}\"}}", .{text});
+    if (!bridge_ready.load(.acquire)) return;
+    var esc_buf: [4096]u8 = undefined;
+    const esc_text = escapeJsonString(text, &esc_buf);
+    sendCommandFmt("{{\"cmd\":\"type\",\"text\":\"{s}\"}}", .{esc_text});
 }
 
 pub fn requestScreenshot() void {
-    if (!bridge_ready) return;
+    if (!bridge_ready.load(.acquire)) return;
     sendCommand("{\"cmd\":\"screenshot\"}");
 }
 
 pub fn goBack() void {
-    if (!bridge_ready) return;
+    if (!bridge_ready.load(.acquire)) return;
     sendCommand("{\"cmd\":\"back\"}");
 }
 
 pub fn goForward() void {
-    if (!bridge_ready) return;
+    if (!bridge_ready.load(.acquire)) return;
     sendCommand("{\"cmd\":\"forward\"}");
 }
 
@@ -378,8 +409,8 @@ pub fn killBridge() void {
         _ = proc.wait() catch {};
         bridge_process = null;
     }
-    bridge_ready = false;
-    bridge_starting = false;
+    bridge_ready.store(false, .release);
+    bridge_starting.store(false, .release);
 }
 
 const enums = @import("dvui").enums;
@@ -429,8 +460,8 @@ fn updateFrameTexture() void {
     frame_lock.lock();
     defer frame_lock.unlock();
     
-    if (!frame_dirty) return;
-    frame_dirty = false;
+    if (!frame_dirty.load(.acquire)) return;
+    frame_dirty.store(false, .release);
     
     const jpeg = frame_jpeg orelse return;
     if (jpeg.len < 100) return;
@@ -502,12 +533,12 @@ pub fn renderPaneContent(pane_idx: usize) void {
         
         // Status indicator: 🦊 green if ready, orange if loading
         {
-            if (bridge_ready) {
+            if (bridge_ready.load(.acquire)) {
                 _ = dvui.label(@src(), "🦊", .{}, .{
                     .color_text = theme.colors.accent,
                     .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
                 });
-            } else if (bridge_starting) {
+            } else if (bridge_starting.load(.acquire)) {
                 _ = dvui.label(@src(), "⏳", .{}, .{
                     .id_extra = 99,
                     .color_text = dvui.Color{ .r = 255, .g = 165, .b = 0, .a = 255 },
@@ -674,7 +705,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
         });
         
-        if (bridge_ready) {
+        if (bridge_ready.load(.acquire)) {
             _ = dvui.label(@src(), "Powered by Camoufox — Anti-detect Firefox", .{}, .{
                 .id_extra = 3,
                 .color_text = theme.colors.accent,
@@ -687,7 +718,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 .gravity_x = 0.5,
                 .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
             });
-        } else if (bridge_starting) {
+        } else if (bridge_starting.load(.acquire)) {
             _ = dvui.label(@src(), "Starting Camoufox browser engine...", .{}, .{
                 .id_extra = 3,
                 .color_text = theme.colors.text_muted,

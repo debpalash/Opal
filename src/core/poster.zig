@@ -32,8 +32,9 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
         fn worker(args: Args) void {
             defer args.flag.* = false;
             
-            var img_buf: [512 * 1024]u8 = undefined;
-            const data = http.fetchImage(args.url_ptr, &img_buf) orelse return;
+            const img_buf = c_alloc.alloc(u8, 512 * 1024) catch return;
+            defer c_alloc.free(img_buf);
+            const data = http.fetchImage(args.url_ptr, img_buf) orelse return;
             
             var w: c_int = 0;
             var h: c_int = 0;

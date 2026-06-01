@@ -13,7 +13,7 @@ const io_g = @import("../core/io_global.zig");
 // ══════════════════════════════════════════════════════════
 
 var server_thread: ?std.Thread = null;
-var running: bool = false;
+var running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 pub var port: u16 = 41595;
 
 // ── Bearer-token auth ──
@@ -21,8 +21,8 @@ pub var port: u16 = 41595;
 // ~/.config/zigzag/api.token (mode 0600), reused on subsequent runs.
 const TOKEN_HEX_LEN: usize = 32;
 var api_token: [TOKEN_HEX_LEN]u8 = std.mem.zeroes([TOKEN_HEX_LEN]u8);
-var api_token_ready: bool = false;
-var csprng_init: bool = false;
+var api_token_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var csprng_init: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var csprng: std.Random.DefaultCsprng = undefined;
 var csprng_mutex = sync.Mutex{};
 
@@ -50,9 +50,9 @@ fn seedCsprng() void {
 fn fillRandomHex(out: *[TOKEN_HEX_LEN]u8) void {
     csprng_mutex.lock();
     defer csprng_mutex.unlock();
-    if (!csprng_init) {
+    if (!csprng_init.load(.acquire)) {
         seedCsprng();
-        csprng_init = true;
+        csprng_init.store(true, .release);
     }
     var bytes: [TOKEN_HEX_LEN / 2]u8 = undefined;
     csprng.fill(&bytes);
@@ -78,7 +78,7 @@ fn isHexAll(s: []const u8) bool {
 }
 
 fn loadOrCreateToken() void {
-    if (api_token_ready) return;
+    if (api_token_ready.load(.acquire)) return;
     var path_buf: [768]u8 = undefined;
     const tok_path = tokenPath(&path_buf);
 
@@ -90,7 +90,7 @@ fn loadOrCreateToken() void {
         const n = io_g.readAll(fh, &read_buf) catch 0;
         if (n == TOKEN_HEX_LEN and isHexAll(read_buf[0..TOKEN_HEX_LEN])) {
             @memcpy(&api_token, &read_buf);
-            api_token_ready = true;
+            api_token_ready.store(true, .release);
             var msg_buf: [768]u8 = undefined;
             const msg = std.fmt.bufPrint(&msg_buf, "API token loaded from {s}", .{tok_path}) catch tok_path;
             logs.pushLog("info", "remote", msg, false);
@@ -104,7 +104,7 @@ fn loadOrCreateToken() void {
     io_g.cwdMakePath(dir) catch {};
 
     fillRandomHex(&api_token);
-    api_token_ready = true;
+    api_token_ready.store(true, .release);
 
     // Create with mode 0600; chmod again after write in case umask widened it.
     const file = io_g.createFileAbsolute(tok_path, .{
@@ -176,15 +176,15 @@ fn sendUnauthorized(stream: std.Io.net.Stream) void {
 }
 
 pub fn start() void {
-    if (running) return;
+    if (running.load(.acquire)) return;
     loadOrCreateToken();
-    running = true;
+    running.store(true, .release);
     server_thread = std.Thread.spawn(.{}, serverLoop, .{}) catch null;
 }
 
 pub fn stop() void {
-    if (!running) return;
-    running = false;
+    if (!running.load(.acquire)) return;
+    running.store(false, .release);
     // Kick accept() awake by making a local connection.
     const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", port) catch return;
     if (addr.connect(io_g.io(), .{ .mode = .stream })) |conn| {
@@ -198,7 +198,7 @@ pub fn stop() void {
 }
 
 pub fn isRunning() bool {
-    return running;
+    return running.load(.acquire);
 }
 
 fn serverLoop() void {
@@ -209,7 +209,7 @@ fn serverLoop() void {
     std.debug.print("[remote] JSON API listening on http://127.0.0.1:{d}\n", .{port});
     std.debug.print("[remote] Web UI: cd web && zig build dev (http://0.0.0.0:3000)\n", .{});
 
-    while (running) {
+    while (running.load(.acquire)) {
         const conn = server.accept(io_g.io()) catch continue;
         defer conn.close(io_g.io());
         handleRequest(conn) catch {};
@@ -254,7 +254,7 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
         sendUnauthorized(stream);
         return;
     };
-    if (!api_token_ready or !constantTimeEqual(presented, api_token[0..])) {
+    if (!api_token_ready.load(.acquire) or !constantTimeEqual(presented, api_token[0..])) {
         sendUnauthorized(stream);
         return;
     }
@@ -408,8 +408,10 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     // ── Volume set ──
     } else if (std.mem.eql(u8, api_path, "/volume")) {
         if (getQueryParam(query, "v")) |v_str| {
+            const vol = std.fmt.parseFloat(f64, v_str) catch return;
+            if (vol < 0 or vol > 150) return;
             var cmd_buf: [64]u8 = undefined;
-            const cmd = std.fmt.bufPrintZ(&cmd_buf, "set volume {s}", .{v_str}) catch return;
+            const cmd = std.fmt.bufPrintZ(&cmd_buf, "set volume {d:.1}", .{vol}) catch return;
             _ = c.mpv.mpv_command_string(ap.mpv_ctx, cmd.ptr);
         }
         sendJson(stream, "{\"ok\":true,\"action\":\"volume\"}");
@@ -475,8 +477,9 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         while (i < queue_svc.queue_count) : (i += 1) {
             const item = queue_svc.queue_items[i];
             if (i > 0) w.writeAll(",") catch return;
-            w.print("{{\"url\":\"{s}\",\"played\":{s}}}", .{
-                item.url[0..item.url_len],
+            w.writeAll("{\"url\":\"") catch return;
+            escJsonWrite(&w, item.url[0..item.url_len]);
+            w.print("\",\"played\":{s}}}", .{
                 if (item.played) "true" else "false",
             }) catch return;
         }
@@ -532,7 +535,7 @@ fn serveStaticFile(stream: std.Io.net.Stream, path: []const u8, content_type: []
     var body: []const u8 = raw;
     var injected: ?[]u8 = null;
     defer if (injected) |buf| alloc.free(buf);
-    if (api_token_ready and std.mem.indexOf(u8, raw, TOKEN_PLACEHOLDER) != null) {
+    if (api_token_ready.load(.acquire) and std.mem.indexOf(u8, raw, TOKEN_PLACEHOLDER) != null) {
         const new_body = std.mem.replaceOwned(u8, alloc, raw, TOKEN_PLACEHOLDER, api_token[0..]) catch null;
         if (new_body) |nb| {
             injected = nb;
@@ -661,7 +664,9 @@ fn apiRssList(stream: std.Io.net.Stream) void {
     for (0..rss.feed_count) |fi| {
         const f = &rss.feeds[fi];
         if (fi > 0) w.writeAll(",") catch return;
-        w.print("\"{s}\"", .{f.name[0..f.name_len]}) catch return;
+        w.writeAll("\"") catch return;
+        escJsonWrite(&w, f.name[0..f.name_len]);
+        w.writeAll("\"") catch return;
     }
     w.writeAll("],\"items\":[") catch return;
     for (0..rss.item_count) |ri| {
@@ -690,6 +695,7 @@ fn apiDownloads(stream: std.Io.net.Stream, query: []const u8) void {
         paths.defaultSavePath(&path_buf);
 
     const subdir = getQueryParam(query, "dir") orelse "";
+    if (std.mem.indexOf(u8, subdir, "..") != null) return;
     var full_path_buf: [1024]u8 = undefined;
     const browse_path = if (subdir.len > 0)
         std.fmt.bufPrintZ(&full_path_buf, "{s}/{s}", .{ dl_path, subdir }) catch dl_path
@@ -747,9 +753,10 @@ fn apiDownloadsPlay(stream: std.Io.net.Stream, query: []const u8) void {
             paths.defaultSavePath(&path_buf);
         var decoded: [512]u8 = undefined;
         const file_name = urlDecode(file_raw, &decoded) orelse file_raw;
+        if (std.mem.indexOf(u8, file_name, "..") != null) return;
         var full_buf: [1024]u8 = undefined;
         if (std.fmt.bufPrintZ(&full_buf, "{s}/{s}", .{ dl_path, file_name })) |full_path| {
-            if (state.app.players.items.len > 0) {
+            if (state.app.active_player_idx < state.app.players.items.len) {
                 const plyr = state.app.players.items[state.app.active_player_idx];
                 plyr.load_file(full_path.ptr);
             }

@@ -98,8 +98,9 @@ pub fn fetchTorrents(url: []const u8) void {
             };
 
             // Read up to 2MB
-            var html_buf: [2 * 1024 * 1024]u8 = undefined;
-            const html_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &html_buf) catch 0 else 0;
+            const html_buf = std.heap.c_allocator.alloc(u8, 2 * 1024 * 1024) catch return;
+            defer std.heap.c_allocator.free(html_buf);
+            const html_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, html_buf) catch 0 else 0;
             _ = child.wait() catch {};
 
             if (html_len < 100) {

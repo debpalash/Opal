@@ -13,18 +13,18 @@ pub var party_port: u16 = 41596;
 
 // Host state
 var host_thread: ?std.Thread = null;
-var host_running: bool = false;
+var host_running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var client_streams: [8]?std.Io.net.Stream = .{null} ** 8;
 var client_count: usize = 0;
 var clients_mutex: @import("../core/sync.zig").Mutex = .{};
 
 // Client state
 var client_thread: ?std.Thread = null;
-var client_running: bool = false;
+var client_running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var client_stream: ?std.Io.net.Stream = null;
 
 // Chat buffer (visible in UI)
-pub var chat_msgs: [32][128]u8 = undefined;
+pub var chat_msgs: [32][128]u8 = std.mem.zeroes([32][128]u8);
 pub var chat_msg_lens: [32]u8 = .{0} ** 32;
 pub var chat_count: usize = 0;
 pub var chat_input: [128]u8 = std.mem.zeroes([128]u8);
@@ -39,7 +39,7 @@ const MSG_PREFIX_CHAT = "CHAT "; // followed by message
 pub fn hostParty() void {
     if (role != .none) return;
     role = .host;
-    host_running = true;
+    host_running.store(true, .release);
     client_count = 0;
     chat_count = 0;
     host_thread = std.Thread.spawn(.{}, hostLoop, .{}) catch null;
@@ -51,7 +51,7 @@ pub fn joinParty(host_ip: []const u8) void {
     if (role != .none) return;
     if (host_ip.len == 0 or host_ip.len > 45) return;
     role = .client;
-    client_running = true;
+    client_running.store(true, .release);
     chat_count = 0;
 
     var ip_buf: [46]u8 = undefined;
@@ -63,7 +63,7 @@ pub fn joinParty(host_ip: []const u8) void {
 
 pub fn leaveParty() void {
     if (role == .host) {
-        host_running = false;
+        host_running.store(false, .release);
         // Kick the blocking accept() awake with a throwaway local connection
         // so hostLoop can observe host_running=false and exit, then join the
         // thread (mirrors stream_proxy.stopProxy). Without this the listening
@@ -89,7 +89,7 @@ pub fn leaveParty() void {
         client_count = 0;
         clients_mutex.unlock();
     } else if (role == .client) {
-        client_running = false;
+        client_running.store(false, .release);
         if (client_stream) |s| {
             s.close(@import("../core/io_global.zig").io());
             client_stream = null;
@@ -156,6 +156,8 @@ pub fn sendChat() void {
 }
 
 pub fn pushChat(msg: []const u8) void {
+    clients_mutex.lock();
+    defer clients_mutex.unlock();
     if (chat_count >= 32) {
         // Shift messages up
         for (0..31) |i| {
@@ -185,15 +187,15 @@ fn broadcast(msg: []const u8) void {
 }
 
 fn hostLoop() void {
-    const addr = std.Io.net.IpAddress.parseIp4("0.0.0.0", party_port) catch return;
+    const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", party_port) catch return;
     var server = addr.listen(@import("../core/io_global.zig").io(), .{ .reuse_address = true }) catch return;
     defer server.deinit(@import("../core/io_global.zig").io());
 
-    while (host_running) {
+    while (host_running.load(.acquire)) {
         const conn = server.accept(@import("../core/io_global.zig").io()) catch continue;
         // Re-check after accept: leaveParty() kicks accept() awake with a
         // throwaway connection — don't register it as a phantom client.
-        if (!host_running) {
+        if (!host_running.load(.acquire)) {
             conn.close(@import("../core/io_global.zig").io());
             break;
         }
@@ -238,7 +240,7 @@ fn hostLoop() void {
 
 fn hostClientReader(stream: std.Io.net.Stream) void {
     var line_buf: [256]u8 = undefined;
-    while (host_running) {
+    while (host_running.load(.acquire)) {
         const n = @import("../core/io_global.zig").streamRead(stream, &line_buf) catch break;
         if (n == 0) break;
 
@@ -277,7 +279,7 @@ fn clientLoop(ip_buf: [46]u8, ip_len: usize) void {
     pushChat(">> Connected to party");
 
     var line_buf: [4096]u8 = undefined;
-    while (client_running) {
+    while (client_running.load(.acquire)) {
         const n = @import("../core/io_global.zig").streamRead(stream, &line_buf) catch break;
         if (n == 0) break;
 
@@ -319,6 +321,8 @@ fn applyCommand(cmd: []const u8) void {
         _ = c.mpv.mpv_command_string(ap.mpv_ctx, seek_cmd.ptr);
     } else if (std.mem.startsWith(u8, cmd, "LOAD ")) {
         const url = cmd[5..];
+        // Validate URL scheme to prevent loading arbitrary protocols
+        if (!std.mem.startsWith(u8, url, "http://") and !std.mem.startsWith(u8, url, "https://")) return;
         if (url.len > 5) {
             var url_z: [2049]u8 = undefined;
             const ulen = @min(url.len, 2048);

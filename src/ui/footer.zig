@@ -88,7 +88,7 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
     var active_title: []const u8 = "None";
     var active_buf: [32]u8 = undefined;
     
-    for (0..@intCast(count)) |i| {
+    for (0..@as(usize, @intCast(@max(@as(i64, 0), count)))) |i| {
         var qtype_buf: [64]u8 = undefined;
         const type_query = std.fmt.bufPrintZ(&qtype_buf, "track-list/{d}/type", .{i}) catch continue;
         const t_type_c = c.mpv.mpv_get_property_string(ctx, type_query.ptr);
@@ -135,7 +135,7 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
         var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_drawer, .border = dvui.Rect.all(1), .color_border = theme.colors.border_drawer });
         defer menu.deinit();
 
-        for (0..@intCast(count)) |i| {
+        for (0..@as(usize, @intCast(@max(@as(i64, 0), count)))) |i| {
             var qtype_buf: [64]u8 = undefined;
             const type_query = std.fmt.bufPrintZ(&qtype_buf, "track-list/{d}/type", .{i}) catch continue;
             const t_type_c = c.mpv.mpv_get_property_string(ctx, type_query.ptr);
@@ -196,7 +196,7 @@ pub fn playlistDropdownMenu(p: *player.MediaPlayer) void {
         var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_drawer, .border = dvui.Rect.all(1), .color_border = theme.colors.border_drawer });
         defer menu.deinit();
 
-        for (0..@intCast(file_count)) |i| {
+        for (0..@as(usize, @intCast(@max(@as(c_int, 0), file_count)))) |i| {
             var name_buf: [256]u8 = undefined;
             c.mpv.torrent_get_file_name(state.app.torrent_ses, p.current_torrent_id, @intCast(i), &name_buf, 256);
             
@@ -473,7 +473,7 @@ fn renderScrubber(
         if (map_len > 0) {
             var downloaded_count: usize = 0;
             var i: usize = 0;
-            while (i < @as(usize, @intCast(map_len))) : (i += 1) {
+            while (i < @as(usize, @intCast(@max(@as(c_int, 0), map_len)))) : (i += 1) {
                 if (map_buf[i] == '1') downloaded_count += 1;
             }
             const buf_frac: f32 = @as(f32, @floatFromInt(downloaded_count)) / @as(f32, @floatFromInt(map_len));
@@ -763,7 +763,7 @@ fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
     defer scroll.deinit();
 
     var i: usize = 0;
-    while (i < @as(usize, @intCast(ch_count))) : (i += 1) {
+    while (i < @as(usize, @intCast(@max(@as(i64, 0), ch_count)))) : (i += 1) {
         var qtitle_buf: [64]u8 = undefined;
         const title_q = std.fmt.bufPrintZ(&qtitle_buf, "chapter-list/{d}/title", .{i}) catch continue;
         const title_c = c.mpv.mpv_get_property_string(active_p.mpv_ctx, title_q.ptr);
@@ -994,7 +994,7 @@ fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
     defer scroll.deinit();
 
     var i: usize = 0;
-    while (i < @as(usize, @intCast(file_count))) : (i += 1) {
+    while (i < @as(usize, @intCast(@max(@as(c_int, 0), file_count)))) : (i += 1) {
         var name_buf: [256]u8 = undefined;
         c.mpv.torrent_get_file_name(state.app.torrent_ses, active_p.current_torrent_id, @intCast(i), &name_buf, 256);
         const size = c.mpv.torrent_get_file_size(state.app.torrent_ses, active_p.current_torrent_id, @intCast(i));

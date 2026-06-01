@@ -101,6 +101,7 @@ fn whisperCppTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
 
 fn sayTtsSpeak(text: []const u8) void {
     if (text.len == 0) return;
+    if (text.len > 200_000) return; // too long for argv
     var child = io_global.Child.init(
         &.{ "say", text },
         @import("../core/alloc.zig").allocator,
@@ -239,6 +240,7 @@ fn sherpaOnnxSpeak(text: []const u8) void {
         const a_dd = std.fmt.bufPrint(&dd_arg, "--kokoro-data-dir={s}", .{data_dir}) catch return;
         const a_sid = std.fmt.bufPrint(&sid_arg, "--sid={d}", .{kokoro_sid}) catch return;
 
+        if (text.len > 200_000) return; // too long for argv
         var synth = io_global.Child.init(&.{
             bin, a_km, a_v, a_tk, a_dd, a_sid, a_out, text,
         }, @import("../core/alloc.zig").allocator);
@@ -283,6 +285,7 @@ fn playPiperOrSay(bin: []const u8, out_arg: []const u8, out_wav: []const u8, tex
     const a_tk = std.fmt.bufPrint(&tk_arg, "--vits-tokens={s}", .{tokens_p}) catch return;
     const a_dd = std.fmt.bufPrint(&dd_arg, "--vits-data-dir={s}", .{data_dir}) catch return;
 
+    if (text.len > 200_000) return; // too long for argv
     var synth = io_global.Child.init(&.{
         bin, a_vm, a_lex, a_tk, a_dd, out_arg, text,
     }, @import("../core/alloc.zig").allocator);
@@ -374,7 +377,10 @@ fn speachesTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
         "curl", "-s", "-X", "POST", url,
         "-F", "model=whisper-1",
         "-F", "response_format=text",
-        "-F", std.fmt.bufPrintZ(&(struct { var b: [2200]u8 = undefined; }).b, "file=@{s}", .{wav_path}) catch return null,
+        "-F", blk: {
+            var file_arg_buf: [2200]u8 = undefined;
+            break :blk std.fmt.bufPrintZ(&file_arg_buf, "file=@{s}", .{wav_path}) catch return null;
+        },
     }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;

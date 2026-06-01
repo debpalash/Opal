@@ -5,6 +5,26 @@ const player = @import("../player/player.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
+fn escapeJsonStr(input: []const u8, out: *[256]u8) []const u8 {
+    var o: usize = 0;
+    for (input) |ch| {
+        if (o + 2 > out.len) break;
+        if (ch == '\\') {
+            out[o] = '\\';
+            out[o + 1] = '\\';
+            o += 2;
+        } else if (ch == '"') {
+            out[o] = '\\';
+            out[o + 1] = '"';
+            o += 2;
+        } else {
+            out[o] = ch;
+            o += 1;
+        }
+    }
+    return out[0..o];
+}
+
 // ══════════════════════════════════════════════════════════
 // Authentication
 // ══════════════════════════════════════════════════════════
@@ -42,8 +62,12 @@ pub fn authenticate() void {
             }
 
             // Build POST body: {"Username": "xxx", "Pw": "yyy"}
+            var safe_user: [256]u8 = undefined;
+            var safe_pass: [256]u8 = undefined;
+            const su = escapeJsonStr(user, &safe_user);
+            const sp = escapeJsonStr(pass, &safe_pass);
             var body_buf: [512]u8 = undefined;
-            const body = std.fmt.bufPrint(&body_buf, "{{\"Username\":\"{s}\",\"Pw\":\"{s}\"}}", .{ user, pass }) catch {
+            const body = std.fmt.bufPrint(&body_buf, "{{\"Username\":\"{s}\",\"Pw\":\"{s}\"}}", .{ su, sp }) catch {
                 setLoginError("Failed to build request");
                 return;
             };
@@ -408,8 +432,9 @@ pub fn fetchPoster(item: *state.JfItem) void {
             var url_buf: [512]u8 = undefined;
             const url = std.fmt.bufPrint(&url_buf, "{s}/Items/{s}/Images/Primary?maxWidth=200&quality=80&api_key={s}", .{ server, item_id, token }) catch return;
 
-            var img_buf: [512 * 1024]u8 = undefined;
-            const img = @import("../core/http.zig").fetch(url, &img_buf, .{ .timeout_secs = 8 }) orelse return;
+            const img_buf = alloc.alloc(u8, 512 * 1024) catch return;
+            defer alloc.free(img_buf);
+            const img = @import("../core/http.zig").fetch(url, img_buf, .{ .timeout_secs = 8 }) orelse return;
             const img_len = img.len;
 
             var w: c_int = 0;
@@ -544,8 +569,9 @@ fn jfGet(url: []const u8) ?[]u8 {
     var auth_buf: [600]u8 = undefined;
     const auth = std.fmt.bufPrint(&auth_buf, "X-Emby-Authorization: MediaBrowser Client=\"ZigZag\", Device=\"Desktop\", DeviceId=\"zigzag-001\", Version=\"1.0\", Token=\"{s}\"", .{token}) catch return null;
 
-    var resp_buf: [256 * 1024]u8 = undefined; // 256KB max
-    const resp = @import("../core/http.zig").fetch(url, &resp_buf, .{
+    const resp_buf = alloc.alloc(u8, 256 * 1024) catch return null;
+    defer alloc.free(resp_buf);
+    const resp = @import("../core/http.zig").fetch(url, resp_buf, .{
         .timeout_secs = 15,
         .accept = "application/json",
         .auth_header = auth,

@@ -112,8 +112,12 @@ fn fetchWorker(idx: usize) void {
         fetch_error = true;
         return;
     };
-    var body_buf: [512 * 1024]u8 = undefined; // 512KB should be plenty for RSS
-    const body_len = @import("../core/io_global.zig").readAll(stdout, &body_buf) catch 0;
+    const body_buf = alloc.alloc(u8, 512 * 1024) catch {
+        fetch_error = true;
+        return;
+    };
+    defer alloc.free(body_buf);
+    const body_len = @import("../core/io_global.zig").readAll(stdout, body_buf) catch 0;
     _ = child.wait() catch {};
 
     if (body_len == 0) {

@@ -67,8 +67,9 @@ pub fn fetchCatalog() void {
                 return;
             };
 
-            var buf: [256 * 1024]u8 = undefined;
-            const n = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &buf) catch 0 else 0;
+            const buf = alloc.alloc(u8, 256 * 1024) catch return;
+            defer alloc.free(buf);
+            const n = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
             _ = child.wait() catch {};
 
             if (n < 10) {
@@ -84,6 +85,7 @@ pub fn fetchCatalog() void {
             // Format: [{"name":"...","description":"...","transportUrl":"...","types":["movie","series"]}]
             var pos: usize = 0;
             results_mutex.lock();
+            defer results_mutex.unlock();
             while (pos < n and addon_count < 32) {
                 const name_key = "\"name\":\"";
                 const next = std.mem.indexOf(u8, buf[pos..], name_key) orelse break;
@@ -130,7 +132,7 @@ pub fn fetchCatalog() void {
 
             if (addon_count == 0) addKnownAddons();
             catalog_loaded = true;
-            results_mutex.unlock();
+
             logs.pushLog("info", "stremio", "Catalog loaded", false);
         }
     }.worker, .{}) catch {};

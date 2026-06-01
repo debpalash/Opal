@@ -7,6 +7,27 @@ const logs = @import("../core/logs.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
+fn percentEncode(input: []const u8, out: []u8) usize {
+    const hex = "0123456789ABCDEF";
+    var o: usize = 0;
+    for (input) |ch| {
+        if (o + 3 > out.len) break;
+        if (ch == ' ') {
+            out[o] = '+';
+            o += 1;
+        } else if (ch == '&' or ch == '=' or ch == '#' or ch == '?' or ch == '%' or ch == '"' or ch == '<' or ch == '>') {
+            out[o] = '%';
+            out[o + 1] = hex[ch >> 4];
+            out[o + 2] = hex[ch & 0x0F];
+            o += 3;
+        } else {
+            out[o] = ch;
+            o += 1;
+        }
+    }
+    return o;
+}
+
 // ══════════════════════════════════════════════════════════
 // Comics Reader — readallcomics.com scraper + native viewer
 // Uses curl subprocess to bypass Cloudflare
@@ -82,8 +103,9 @@ fn fetchComicThread() void {
         return;
     };
     
-    var html_buf: [512 * 1024]u8 = undefined;
-    const html_bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &html_buf) catch 0 else 0;
+    const html_buf = alloc.alloc(u8, 512 * 1024) catch return;
+    defer alloc.free(html_buf);
+    const html_bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, html_buf) catch 0 else 0;
     _ = child.wait() catch {};
     
     if (html_bytes == 0) {
@@ -146,8 +168,9 @@ fn tryPluginsInDir(dir_path: []const u8, url: []const u8) bool {
         child.stderr_behavior = .Ignore;
         _ = child.spawn() catch continue;
         
-        var json_buf: [256 * 1024]u8 = undefined;
-        const json_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &json_buf) catch 0 else 0;
+        const json_buf = alloc.alloc(u8, 256 * 1024) catch continue;
+        defer alloc.free(json_buf);
+        const json_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, json_buf) catch 0 else 0;
         const term = child.wait() catch continue;
         
         // Plugin exited non-zero = "not my domain", try next
@@ -373,7 +396,9 @@ pub fn searchComics(query: []const u8) void {
     
     // readallcomics.com search URL: https://readallcomics.com/?story=QUERY&s=&type=comic
     var url_buf: [512]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "https://readallcomics.com/?story={s}&s=&type=comic", .{query}) catch return;
+    var encoded_query: [512]u8 = undefined;
+    const enc_len = percentEncode(query, &encoded_query);
+    const url = std.fmt.bufPrint(&url_buf, "https://readallcomics.com/?story={s}&s=&type=comic", .{encoded_query[0..enc_len]}) catch return;
     
     // For now — load search results as a comic URL
     // In future, parse search results page to show a list

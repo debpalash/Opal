@@ -165,8 +165,9 @@ pub fn fetchPoster(item: *state.TmdbItem) void {
             var url_buf: [256]u8 = undefined;
             const url = std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w185{s}", .{ptr.poster_path[0..ptr.poster_path_len]}) catch return;
 
-            var img_buf: [512 * 1024]u8 = undefined; // 512KB max poster
-            const img_content = @import("../core/http.zig").fetchImage(url, &img_buf) orelse return;
+            const img_buf = alloc.alloc(u8, 512 * 1024) catch return;
+            defer alloc.free(img_buf);
+            const img_content = @import("../core/http.zig").fetchImage(url, img_buf) orelse return;
             const img_len = img_content.len;
 
             var w: c_int = 0;
