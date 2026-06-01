@@ -84,7 +84,7 @@ pub fn scanDevices() void {
 /// Cast current video URL to a device
 pub fn castTo(device_idx: usize) void {
     if (device_idx >= device_count) return;
-    if (state.app.players.items.len == 0) return;
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
     
     const p = state.app.players.items[state.app.active_player_idx];
     if (p.current_url_len == 0) {

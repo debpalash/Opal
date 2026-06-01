@@ -78,6 +78,17 @@ fn checkWorker() void {
     };
     const normalized_tag = stripLeadingV(tag);
 
+    // Validate tag contains only safe path characters
+    for (normalized_tag) |ch| {
+        switch (ch) {
+            'a'...'z', 'A'...'Z', '0'...'9', '.', '-', '_' => {},
+            else => {
+                setError("invalid tag name");
+                return;
+            },
+        }
+    }
+
     const dl = findDmgAssetUrl(body) orelse "";
 
     const tn = @min(normalized_tag.len, latest_tag_buf.len);

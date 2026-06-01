@@ -130,8 +130,30 @@ pub const WorkPool = struct {
             const item = self.queue[self.head];
             self.head = (self.head + 1) % self.queue.len;
             self.count -= 1;
+            const shutting_down = !self.running.load(.seq_cst);
             self.mu.unlock();
 
+            item.func(item.ctx);
+
+            // If shutting down, drain remaining items then exit.
+            if (shutting_down) {
+                self.drainRemaining();
+                return;
+            }
+        }
+    }
+
+    fn drainRemaining(self: *WorkPool) void {
+        while (true) {
+            self.mu.lock();
+            if (self.count == 0) {
+                self.mu.unlock();
+                return;
+            }
+            const item = self.queue[self.head];
+            self.head = (self.head + 1) % self.queue.len;
+            self.count -= 1;
+            self.mu.unlock();
             item.func(item.ctx);
         }
     }

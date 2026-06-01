@@ -35,18 +35,18 @@ pub fn handleRecommendation(raw_input: []const u8) bool {
 
     @memset(&chat.input_buf, 0);
     chat.input_len = 0;
-    chat.is_generating = true;
+    chat.is_generating.store(true, .release);
     chat.last_error_len = 0;
 
     _ = std.Thread.spawn(.{}, recommendationWorker, .{chat.message_count - 1}) catch {
-        chat.is_generating = false;
+        chat.is_generating.store(false, .release);
         return false;
     };
     return true;
 }
 
 fn recommendationWorker(assistant_idx: usize) void {
-    defer { chat.is_generating = false; }
+    defer { chat.is_generating.store(false, .release); }
 
     // Strategy 1: Use TMDB trending if API key is configured
     if (state.app.tmdb.api_key_len > 0) {

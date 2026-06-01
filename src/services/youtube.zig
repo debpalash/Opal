@@ -536,7 +536,7 @@ fn renderCard(item: *state.YtItem, idx: usize) void {
 }
 
 fn sendToPlayer(item: *state.YtItem, appendToPlaylist: bool) void {
-    if (state.app.players.items.len == 0) return;
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
     const ap = state.app.players.items[state.app.active_player_idx];
     const queue_svc = @import("queue.zig");
     

@@ -19,6 +19,9 @@ const allanime_api = "https://api.allanime.day";
 const allanime_refr = "https://allmanga.to";
 const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0";
 
+// NOTE: state.app.anime.is_loading / stream_loading / episodes_loading are plain
+// bools in the global state struct, shared between UI and bg threads without
+// atomics. Acceptable — worst case is one stale UI frame before the flag is seen.
 pub var has_loaded_trending: bool = false;
 
 pub fn loadTrendingAnime() void {
@@ -52,8 +55,9 @@ fn trendingThread() void {
     child.stderr_behavior = .Ignore;
     _ = child.spawn() catch return;
     
-    var buf: [256 * 1024]u8 = undefined;
-    const bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &buf) catch 0 else 0;
+    const buf = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(buf);
+    const bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
     _ = child.wait() catch {};
     
     if (bytes == 0) return;
@@ -71,24 +75,45 @@ pub fn searchAnime(query: []const u8) void {
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
     
-    state.app.anime.thread = std.Thread.spawn(.{}, searchThread, .{query}) catch {
+    // Copy query into a static buffer so the spawned thread doesn't read
+    // from the potentially-mutated UI search_buf.
+    const safe_len = @min(query.len, search_query_buf.len);
+    @memcpy(search_query_buf[0..safe_len], query[0..safe_len]);
+    search_query_len = safe_len;
+    
+    state.app.anime.thread = std.Thread.spawn(.{}, searchThread, .{}) catch {
         state.app.anime.is_loading = false;
         return;
     };
 }
 
-fn searchThread(query: []const u8) void {
+var search_query_buf: [256]u8 = undefined;
+var search_query_len: usize = 0;
+
+fn searchThread() void {
     defer state.app.anime.is_loading = false;
+    const query = search_query_buf[0..search_query_len];
     
     const jikan_api = "https://api.jikan.moe/v4/anime";
     
-    var enc_buf: [256]u8 = undefined;
+    var enc_buf: [768]u8 = undefined;
     var enc_len: usize = 0;
     for (query) |c| {
-        if (c == ' ') {
+        if (enc_len + 3 > enc_buf.len) break;
+        const pct: ?[2]u8 = switch (c) {
+            '%' => .{ '2', '5' },
+            ' ' => .{ '2', '0' },
+            '&' => .{ '2', '6' },
+            '=' => .{ '3', 'D' },
+            '#' => .{ '2', '3' },
+            '?' => .{ '3', 'F' },
+            '+' => .{ '2', 'B' },
+            else => null,
+        };
+        if (pct) |hex| {
             enc_buf[enc_len] = '%';
-            enc_buf[enc_len+1] = '2';
-            enc_buf[enc_len+2] = '0';
+            enc_buf[enc_len + 1] = hex[0];
+            enc_buf[enc_len + 2] = hex[1];
             enc_len += 3;
         } else {
             enc_buf[enc_len] = c;
@@ -108,8 +133,9 @@ fn searchThread(query: []const u8) void {
     child.stderr_behavior = .Ignore;
     _ = child.spawn() catch return;
     
-    var buf: [256 * 1024]u8 = undefined;
-    const bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &buf) catch 0 else 0;
+    const buf = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(buf);
+    const bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
     _ = child.wait() catch {};
     
     if (bytes == 0) return;
@@ -991,11 +1017,17 @@ pub fn fetchPoster(item: *state.AnimeResult) void {
     if (item.poster_url_len == 0 or item.poster_fetching) return;
     item.poster_fetching = true;
 
-    _ = std.Thread.spawn(.{}, struct {
-        fn worker(ptr: *state.AnimeResult) void {
-            defer ptr.poster_fetching = false;
+    // Copy URL and index into struct statics so the thread doesn't hold a
+    // pointer into the mutable results array (which can be overwritten by a
+    // new search/trending load).
+    const S = struct {
+        var poster_url_buf: [512]u8 = undefined;
+        var poster_url_len: usize = 0;
+        var result_idx: usize = 0;
 
-            const url = ptr.poster_url[0..ptr.poster_url_len];
+        fn worker() void {
+            const idx = @This().result_idx;
+            const url = @This().poster_url_buf[0..@This().poster_url_len];
 
             const argv = [_][]const u8{
                 "curl", "-sL", "--max-time", "10", url,
@@ -1003,28 +1035,92 @@ pub fn fetchPoster(item: *state.AnimeResult) void {
             var child = @import("../core/io_global.zig").Child.init(&argv, std.heap.c_allocator);
             child.stdout_behavior = .Pipe;
             child.stderr_behavior = .Ignore;
-            _ = child.spawn() catch return;
+            _ = child.spawn() catch {
+                markDone(idx, url);
+                return;
+            };
 
-            var img_buf: [512 * 1024]u8 = undefined;
-            const img_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &img_buf) catch 0 else 0;
+            const img_buf = @import("../core/alloc.zig").allocator.alloc(u8, 512 * 1024) catch {
+                _ = child.wait() catch {};
+                markDone(idx, url);
+                return;
+            };
+            defer @import("../core/alloc.zig").allocator.free(img_buf);
+            const img_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, img_buf) catch 0 else 0;
             _ = child.wait() catch {};
 
-            if (img_len < 100) return;
+            if (img_len < 100) {
+                markDone(idx, url);
+                return;
+            }
 
             var w: c_int = 0;
             var h: c_int = 0;
             var comp: c_int = 0;
             const pixels = dvui.c.stbi_load_from_memory(img_buf[0..img_len].ptr, @intCast(img_len), &w, &h, &comp, 4);
-            if (pixels == null) return;
+            if (pixels == null) {
+                markDone(idx, url);
+                return;
+            }
             defer dvui.c.stbi_image_free(pixels);
 
             const p_len: usize = @intCast(w * h * 4);
-            const p_slice = std.heap.c_allocator.alloc(u8, p_len) catch return;
+            const p_slice = std.heap.c_allocator.alloc(u8, p_len) catch {
+                markDone(idx, url);
+                return;
+            };
             @memcpy(p_slice, pixels[0..p_len]);
 
-            ptr.poster_w = @intCast(w);
-            ptr.poster_h = @intCast(h);
-            ptr.poster_pixels = p_slice;
+            // Verify the result at this index still has the same URL
+            if (idx < state.app.anime.result_count) {
+                const ptr = &state.app.anime.results[idx];
+                if (ptr.poster_url_len == url.len and
+                    std.mem.eql(u8, ptr.poster_url[0..ptr.poster_url_len], url))
+                {
+                    ptr.poster_w = @intCast(w);
+                    ptr.poster_h = @intCast(h);
+                    ptr.poster_pixels = p_slice;
+                    ptr.poster_fetching = false;
+                    return;
+                }
+            }
+            // Mismatch or out of bounds — free pixels
+            std.heap.c_allocator.free(p_slice);
         }
-    }.worker, .{item}) catch {};
+
+        fn markDone(idx: usize, url: []const u8) void {
+            if (idx < state.app.anime.result_count) {
+                const ptr = &state.app.anime.results[idx];
+                if (ptr.poster_url_len == url.len and
+                    std.mem.eql(u8, ptr.poster_url[0..ptr.poster_url_len], url))
+                {
+                    ptr.poster_fetching = false;
+                }
+            }
+        }
+    };
+
+    // Find the index of this item in the results array
+    const results = state.app.anime.results[0..state.app.anime.result_count];
+    var found_idx: ?usize = null;
+    for (results, 0..) |*r, i| {
+        if (r == item) { found_idx = i; break; }
+    }
+    const idx = found_idx orelse {
+        item.poster_fetching = false;
+        return;
+    };
+
+    const url = item.poster_url[0..item.poster_url_len];
+    if (url.len > S.poster_url_buf.len) {
+        item.poster_fetching = false;
+        return;
+    }
+    @memcpy(S.poster_url_buf[0..url.len], url);
+    S.poster_url_len = url.len;
+    S.result_idx = idx;
+
+    _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
+        item.poster_fetching = false;
+    };
 }

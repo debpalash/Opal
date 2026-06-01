@@ -4,6 +4,8 @@ const logs = @import("../core/logs.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
+var results_mutex: @import("../core/sync.zig").Mutex = .{};
+
 // ══════════════════════════════════════════════════════════
 // Stremio Addon Catalog — browse community addons and
 // install them to get streaming sources
@@ -71,14 +73,17 @@ pub fn fetchCatalog() void {
 
             if (n < 10) {
                 // Fallback: add well-known community addons
+                results_mutex.lock();
                 addKnownAddons();
                 catalog_loaded = true;
+                results_mutex.unlock();
                 return;
             }
 
             // Parse JSON array of addons
             // Format: [{"name":"...","description":"...","transportUrl":"...","types":["movie","series"]}]
             var pos: usize = 0;
+            results_mutex.lock();
             while (pos < n and addon_count < 32) {
                 const name_key = "\"name\":\"";
                 const next = std.mem.indexOf(u8, buf[pos..], name_key) orelse break;
@@ -125,6 +130,7 @@ pub fn fetchCatalog() void {
 
             if (addon_count == 0) addKnownAddons();
             catalog_loaded = true;
+            results_mutex.unlock();
             logs.pushLog("info", "stremio", "Catalog loaded", false);
         }
     }.worker, .{}) catch {};
@@ -284,6 +290,7 @@ pub fn queryStreams(imdb_id: []const u8, media_type: []const u8) void {
                     const uabs = pos + next + url_key.len;
                     const ue = std.mem.indexOfScalar(u8, resp_buf[uabs..], '"') orelse break;
 
+                    results_mutex.lock();
                     var sr = &streams[stream_count];
                     sr.* = std.mem.zeroes(StreamResult);
 
@@ -306,6 +313,7 @@ pub fn queryStreams(imdb_id: []const u8, media_type: []const u8) void {
                     sr.addon_name_len = anlen;
 
                     stream_count += 1;
+                    results_mutex.unlock();
                     pos = uabs + ue;
                 }
             }

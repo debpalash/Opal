@@ -66,11 +66,22 @@ pub fn pushLog(level: []const u8, prefix: []const u8, text: []const u8, is_error
         logs_allocator.free(old.text);
     }
 
+    const new_level = logs_allocator.dupe(u8, level) catch return;
+    const new_prefix = logs_allocator.dupe(u8, prefix) catch {
+        logs_allocator.free(new_level);
+        return;
+    };
+    const new_text = logs_allocator.dupe(u8, clean_text) catch {
+        logs_allocator.free(new_level);
+        logs_allocator.free(new_prefix);
+        return;
+    };
+
     log_ring[log_head] = .{
         .timestamp = @import("io_global.zig").milliTimestamp(),
-        .level = logs_allocator.dupe(u8, level) catch return,
-        .prefix = logs_allocator.dupe(u8, prefix) catch return,
-        .text = logs_allocator.dupe(u8, clean_text) catch return,
+        .level = new_level,
+        .prefix = new_prefix,
+        .text = new_text,
         .is_error = is_error,
     };
     log_head = (log_head + 1) % MAX_LOGS;
@@ -104,15 +115,9 @@ pub fn renderDevLogWindow() void {
             show_only_errors = !show_only_errors;
         }
         if (dvui.button(@src(), "Clear", .{}, .{})) {
-            var ci: usize = 0;
-            while (ci < log_count) : (ci += 1) {
-                const entry = getLogAt(ci);
-                logs_allocator.free(entry.level);
-                logs_allocator.free(entry.prefix);
-                logs_allocator.free(entry.text);
-            }
-            log_count = 0;
-            log_head = 0;
+            log_mutex.lock();
+            defer log_mutex.unlock();
+            clearAll();
         }
         if (dvui.button(@src(), "Close", .{}, .{})) {
             show_logs_ui = false;

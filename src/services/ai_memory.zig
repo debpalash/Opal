@@ -66,6 +66,10 @@ pub fn getEmbedding(text: []const u8, floats_out: *[EMBED_DIM]f32) bool {
     const resp_file = @import("../core/io_global.zig").openFileAbsolute(resp_path, .{}) catch return false;
     defer resp_file.close(@import("../core/io_global.zig").io());
 
+    // Clean up temp files
+    defer @import("../core/io_global.zig").deleteFileAbsolute(req_path) catch {};
+    defer @import("../core/io_global.zig").deleteFileAbsolute(resp_path) catch {};
+
     var resp_buf: [32768]u8 = undefined;
     const resp_len = @import("../core/io_global.zig").readAll(resp_file, &resp_buf) catch return false;
     if (resp_len == 0) return false;
@@ -326,12 +330,7 @@ pub fn getRecentConversations(allocator: std.mem.Allocator) ?[]u8 {
 
 /// Generate a proactive suggestion based on user patterns.
 /// Returns a natural language suggestion or null if nothing to suggest.
-pub fn getProactiveSuggestion() ?[]const u8 {
-    const S = struct {
-        var buf: [256]u8 = undefined;
-        var name_buf: [128]u8 = undefined;
-    };
-
+pub fn getProactiveSuggestion(buf: []u8, name_buf: []u8) ?[]const u8 {
     // Strategy 1: Continue watching (unfinished content > 10% < 90%)
     const continue_sql = "SELECT name, percent, position_secs, duration_secs FROM watch_history WHERE percent > 0.1 AND percent < 0.9 ORDER BY updated_at DESC LIMIT 1";
     const stmt1 = db.prepare(continue_sql);
@@ -343,9 +342,9 @@ pub fn getProactiveSuggestion() ?[]const u8 {
             const pos = db.columnDouble(stmt1, 2);
             if (pct > 0.1) {
                 // Copy name before finalize invalidates the pointer
-                const nlen = @min(name_raw.len, S.name_buf.len);
-                @memcpy(S.name_buf[0..nlen], name_raw[0..nlen]);
-                var clean: []const u8 = S.name_buf[0..nlen];
+                const nlen = @min(name_raw.len, name_buf.len);
+                @memcpy(name_buf[0..nlen], name_raw[0..nlen]);
+                var clean: []const u8 = name_buf[0..nlen];
                 
                 // Extract filename from path
                 if (std.mem.lastIndexOfScalar(u8, clean, '/')) |slash| {
@@ -359,7 +358,7 @@ pub fn getProactiveSuggestion() ?[]const u8 {
                 const pos_min: u32 = @intFromFloat(pos / 60);
                 const pct_int: u32 = @intFromFloat(pct * 100);
 
-                const msg = std.fmt.bufPrint(&S.buf, "You left off at {d}min ({d}%) of \"{s}\". Want to continue?", .{ pos_min, pct_int, clean[0..@min(clean.len, 80)] }) catch return null;
+                const msg = std.fmt.bufPrint(buf, "You left off at {d}min ({d}%) of \"{s}\". Want to continue?", .{ pos_min, pct_int, clean[0..@min(clean.len, 80)] }) catch return null;
                 return msg;
             }
         }
@@ -369,13 +368,7 @@ pub fn getProactiveSuggestion() ?[]const u8 {
 }
 
 /// Get the URL and position of the most recent unfinished content for resuming.
-pub fn getResumeTarget() ?struct { url: []const u8, position: f64 } {
-    const S = struct {
-        var url_buf: [512]u8 = undefined;
-        var url_len: usize = 0;
-        var pos: f64 = 0;
-    };
-
+pub fn getResumeTarget(url_buf: []u8) ?struct { url: []const u8, position: f64 } {
     const sql = "SELECT name, position_secs FROM watch_history WHERE percent > 0.1 AND percent < 0.9 ORDER BY updated_at DESC LIMIT 1";
     const stmt = db.prepare(sql);
     if (stmt != null) {
@@ -383,11 +376,9 @@ pub fn getResumeTarget() ?struct { url: []const u8, position: f64 } {
         if (db.step(stmt) == db.c.SQLITE_ROW) {
             const url_raw = db.columnText(stmt, 0) orelse return null;
             const pos = db.columnDouble(stmt, 1);
-            const ulen = @min(url_raw.len, S.url_buf.len);
-            @memcpy(S.url_buf[0..ulen], url_raw[0..ulen]);
-            S.url_len = ulen;
-            S.pos = pos;
-            return .{ .url = S.url_buf[0..ulen], .position = pos };
+            const ulen = @min(url_raw.len, url_buf.len);
+            @memcpy(url_buf[0..ulen], url_raw[0..ulen]);
+            return .{ .url = url_buf[0..ulen], .position = pos };
         }
     }
     return null;

@@ -63,6 +63,7 @@ pub fn parseToolCall(text: []const u8) ?ToolCall {
     while (end < text.len) : (end += 1) {
         if (text[end] == '{') depth += 1;
         if (text[end] == '}') {
+            if (depth == 0) return null;
             depth -= 1;
             if (depth == 0) {
                 const json_text = text[start .. end + 1];
@@ -95,6 +96,7 @@ pub fn parseToolCall(text: []const u8) ?ToolCall {
                         while (bi < after_args.len) : (bi += 1) {
                             if (after_args[bi] == '{') a_depth += 1;
                             if (after_args[bi] == '}') {
+                                if (a_depth == 0) return null;
                                 a_depth -= 1;
                                 if (a_depth == 0) {
                                     const args_json = after_args[brace_start .. bi + 1];
@@ -125,39 +127,61 @@ pub fn executeTool(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     const name = tc.name[0..tc.name_len];
 
     if (std.mem.eql(u8, name, "find_and_play")) {
-        return executeFindAndPlay(alloc, tc);
+        return normResult(alloc, executeFindAndPlay(alloc, tc));
     } else if (std.mem.eql(u8, name, "search_media") or std.mem.eql(u8, name, "play_media")) {
-        return executeFindAndPlay(alloc, tc);
+        return normResult(alloc, executeFindAndPlay(alloc, tc));
     } else if (std.mem.eql(u8, name, "player_control")) {
-        return executePlayerControl(alloc, tc);
+        return normResult(alloc, executePlayerControl(alloc, tc));
     } else if (std.mem.eql(u8, name, "player_info")) {
-        return executePlayerInfo(alloc);
+        return normResult(alloc, executePlayerInfo(alloc));
     } else if (std.mem.eql(u8, name, "navigate")) {
-        return executeNavigate(alloc, tc);
+        return normResult(alloc, executeNavigate(alloc, tc));
     } else if (std.mem.eql(u8, name, "queue_manage")) {
-        return executeQueueManage(alloc, tc);
+        return normResult(alloc, executeQueueManage(alloc, tc));
     } else if (std.mem.eql(u8, name, "youtube_search")) {
-        return executeYoutubeSearch(alloc, tc);
+        return normResult(alloc, executeYoutubeSearch(alloc, tc));
     } else if (std.mem.eql(u8, name, "anime_search")) {
-        return executeAnimeSearch(alloc, tc);
+        return normResult(alloc, executeAnimeSearch(alloc, tc));
     } else if (std.mem.eql(u8, name, "jellyfin_browse")) {
-        return executeJellyfinBrowse(alloc, tc);
+        return normResult(alloc, executeJellyfinBrowse(alloc, tc));
     } else if (std.mem.eql(u8, name, "get_watch_history")) {
-        return executeGetWatchHistory(alloc, tc);
+        return normResult(alloc, executeGetWatchHistory(alloc, tc));
     } else if (std.mem.eql(u8, name, "tmdb_lookup")) {
-        return executeTmdbLookup(alloc, tc);
+        return normResult(alloc, executeTmdbLookup(alloc, tc));
     } else if (std.mem.eql(u8, name, "browse_tmdb")) {
-        return executeBrowseTmdb(alloc, tc);
+        return normResult(alloc, executeBrowseTmdb(alloc, tc));
     } else if (std.mem.eql(u8, name, "read_webpage")) {
-        return executeReadWebpage(alloc, tc);
+        return normResult(alloc, executeReadWebpage(alloc, tc));
     } else if (std.mem.eql(u8, name, "comic_control")) {
-        return executeComicControl(alloc, tc);
+        return normResult(alloc, executeComicControl(alloc, tc));
     } else if (std.mem.eql(u8, name, "comic_info")) {
-        return executeComicInfo(alloc);
+        return normResult(alloc, executeComicInfo(alloc));
     }
 
     // Unknown tool
     return std.fmt.allocPrint(alloc, "Unknown tool: {s}", .{name}) catch null;
+}
+
+/// Normalize a tool result so callers can free it with alloc.free(result).
+/// Sub-functions return result[0..off] from alloc(u8, MAX_TOOL_RESULT) —
+/// the GPA requires free-length == alloc-length. We copy into an exact-
+/// sized buffer and free the original MAX_TOOL_RESULT-sized allocation.
+/// Note: allocPrint results from error paths within sub-functions also pass
+/// through here; for those the original alloc size != MAX_TOOL_RESULT, so we
+/// just return them as-is (they're already exact-sized and freeable).
+fn normResult(alloc: std.mem.Allocator, raw: ?[]u8) ?[]u8 {
+    const result = raw orelse return null;
+    // If the result fills the entire buffer, it's already exact-sized
+    if (result.len == MAX_TOOL_RESULT) return result;
+    // Copy into an exact-sized allocation
+    const exact = alloc.alloc(u8, result.len) catch return null;
+    @memcpy(exact, result);
+    // Free the original buffer. Sub-functions that allocate MAX_TOOL_RESULT
+    // bytes return result[0..off] where result.ptr is the start of the
+    // MAX_TOOL_RESULT-sized allocation.
+    const original: []u8 = result.ptr[0..MAX_TOOL_RESULT];
+    alloc.free(original);
+    return exact;
 }
 
 /// Format tool result as a message for the LLM (sanitized for JSON safety)
@@ -184,26 +208,28 @@ pub fn formatToolResponse(buf: []u8, tool_name: []const u8, result: []const u8) 
     off += mid.len;
 
     // Write sanitized result (escape quotes, strip non-ASCII/control chars)
+    // Reserve space for suffix to guarantee valid JSON closure
+    const max_content = if (buf.len > off + suffix.len) buf.len - off - suffix.len else 0;
+    var content_written: usize = 0;
     for (result) |ch| {
-        if (off + 2 >= buf.len) break;
+        if (content_written + 2 >= max_content) break;
         if (ch == '"') {
-            buf[off] = '\\'; off += 1;
-            buf[off] = '"'; off += 1;
+            buf[off] = '\\'; off += 1; content_written += 1;
+            buf[off] = '"'; off += 1; content_written += 1;
         } else if (ch == '\\') {
-            buf[off] = '\\'; off += 1;
-            buf[off] = '\\'; off += 1;
+            buf[off] = '\\'; off += 1; content_written += 1;
+            buf[off] = '\\'; off += 1; content_written += 1;
         } else if (ch == '\n') {
-            buf[off] = ' '; off += 1;
+            buf[off] = ' '; off += 1; content_written += 1;
         } else if (ch < 32 or ch > 126) {
             // Skip non-ASCII and control chars — prevents UTF-8 parse errors
             continue;
         } else {
-            buf[off] = ch; off += 1;
+            buf[off] = ch; off += 1; content_written += 1;
         }
     }
 
-    // Write suffix
-    if (off + suffix.len > buf.len) return off;
+    // Write suffix — space is guaranteed reserved above
     @memcpy(buf[off..off + suffix.len], suffix);
     off += suffix.len;
 
@@ -403,9 +429,16 @@ fn executeTmdbLookup(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     var escaped_query: [256]u8 = undefined;
     var eq_len: usize = 0;
     for (query) |c| {
-        if (c == ' ') { escaped_query[eq_len] = '+'; eq_len += 1; }
-        else { escaped_query[eq_len] = c; eq_len += 1; }
-        if (eq_len >= 255) break; 
+        if (eq_len >= 253) break;
+        switch (c) {
+            ' ' => { escaped_query[eq_len] = '+'; eq_len += 1; },
+            '&' => { escaped_query[eq_len] = '%'; escaped_query[eq_len + 1] = '2'; escaped_query[eq_len + 2] = '6'; eq_len += 3; },
+            '=' => { escaped_query[eq_len] = '%'; escaped_query[eq_len + 1] = '3'; escaped_query[eq_len + 2] = 'D'; eq_len += 3; },
+            '#' => { escaped_query[eq_len] = '%'; escaped_query[eq_len + 1] = '2'; escaped_query[eq_len + 2] = '3'; eq_len += 3; },
+            '?' => { escaped_query[eq_len] = '%'; escaped_query[eq_len + 1] = '3'; escaped_query[eq_len + 2] = 'F'; eq_len += 3; },
+            '%' => { escaped_query[eq_len] = '%'; escaped_query[eq_len + 1] = '2'; escaped_query[eq_len + 2] = '5'; eq_len += 3; },
+            else => { escaped_query[eq_len] = c; eq_len += 1; },
+        }
     }
     
     const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
@@ -488,12 +521,19 @@ fn executeReadWebpage(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     if (!std.mem.startsWith(u8, url, "http://") and !std.mem.startsWith(u8, url, "https://")) {
         return std.fmt.allocPrint(alloc, "Error: only http:// and https:// URLs are supported", .{}) catch null;
     }
-    // Block requests to localhost/private IPs
-    if (std.mem.indexOf(u8, url, "127.0.0.1") != null or
-        std.mem.indexOf(u8, url, "localhost") != null or
-        std.mem.indexOf(u8, url, "0.0.0.0") != null)
-    {
-        return std.fmt.allocPrint(alloc, "Error: cannot access local URLs", .{}) catch null;
+    // Block SSRF: loopback, private networks, cloud metadata, encoded IPs
+    const blocked = [_][]const u8{
+        "127.0.0.1", "localhost", "0.0.0.0", "[::1]",
+        "169.254.169.254",
+        "10.", "192.168.", "172.16.", "172.17.", "172.18.", "172.19.",
+        "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.",
+        "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
+        "0x", "0177.",
+    };
+    for (blocked) |pat| {
+        if (std.mem.indexOf(u8, url, pat) != null) {
+            return std.fmt.allocPrint(alloc, "Error: cannot access local URLs", .{}) catch null;
+        }
     }
 
     // Use Jina Reader (free, no API key) to extract web content

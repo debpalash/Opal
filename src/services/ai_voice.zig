@@ -22,7 +22,7 @@ pub var is_transcribing: bool = false;
 pub var is_speaking: bool = false;
 pub var conversation_active: bool = false;
 pub var conv_phase: ConvPhase = .idle;
-pub var partial_text: [512]u8 = undefined;
+pub var partial_text: [512]u8 = std.mem.zeroes([512]u8);
 pub var partial_text_len: usize = 0;
 pub var state_mutex: @import("../core/sync.zig").Mutex = .{};
 
@@ -205,7 +205,7 @@ pub fn ensureSttServer() void {
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
         if (@import("../core/io_global.zig").cwdAccess(STT_SOCKET, .{})) |_| break else |_| {}
     }
-    stt_server_started = true;
+    stt_server_started = (attempts < 150);
 }
 
 pub fn ensureTtsServer() void {
@@ -223,7 +223,7 @@ pub fn ensureTtsServer() void {
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
         if (@import("../core/io_global.zig").cwdAccess(TTS_SOCKET, .{})) |_| break else |_| {}
     }
-    tts_server_started = true;
+    tts_server_started = (attempts < 150);
 }
 
 // ── Mic Recording with VAD ──
@@ -368,7 +368,7 @@ fn conversationLoopSherpa() void {
         setPhase(.thinking);
         var wait: usize = 0;
         const chat = @import("ai_chat.zig");
-        while (chat.is_generating and conversation_active and wait < 300) : (wait += 1) {
+        while (chat.is_generating.load(.acquire) and conversation_active and wait < 300) : (wait += 1) {
             @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
         }
         // Response queued; TTS fires from ai_chat.setResponseText path.
@@ -500,7 +500,7 @@ fn conversationLoopV2() void {
                         fn waiter() void {
                             setPhase(.thinking);
                             var wait: usize = 0;
-                            while (@import("ai_chat.zig").is_generating and conversation_active and wait < 300) : (wait += 1) {
+                            while (@import("ai_chat.zig").is_generating.load(.acquire) and conversation_active and wait < 300) : (wait += 1) {
                                 @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
                             }
                             if (conversation_active) {
@@ -549,7 +549,7 @@ fn conversationLoopV1() void {
 
     while (conversation_active) {
         setPhase(.speaking);
-        while ((is_speaking or chat.is_generating) and conversation_active) {
+        while ((is_speaking or chat.is_generating.load(.acquire)) and conversation_active) {
             @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
         }
         if (!conversation_active) break;
@@ -579,7 +579,7 @@ fn conversationLoopV1() void {
         record_child.stderr_behavior = .Ignore;
         record_child.spawn() catch {
             is_recording = false;
-            if (has_player) {
+            if (has_player and p_idx < state.app.players.items.len) {
                 var rv_buf: [64]u8 = undefined;
                 const rv_cmd = std.fmt.bufPrintZ(&rv_buf, "set volume {d:.0}", .{saved_vol}) catch "set volume 100";
                 _ = c_pkg.mpv.mpv_command_string(state.app.players.items[p_idx].mpv_ctx, rv_cmd.ptr);
@@ -589,7 +589,7 @@ fn conversationLoopV1() void {
         };
         _ = record_child.wait() catch {
             is_recording = false;
-            if (has_player) {
+            if (has_player and p_idx < state.app.players.items.len) {
                 var rv_buf: [64]u8 = undefined;
                 const rv_cmd = std.fmt.bufPrintZ(&rv_buf, "set volume {d:.0}", .{saved_vol}) catch "set volume 100";
                 _ = c_pkg.mpv.mpv_command_string(state.app.players.items[p_idx].mpv_ctx, rv_cmd.ptr);
@@ -597,7 +597,8 @@ fn conversationLoopV1() void {
             continue;
         };
         is_recording = false;
-        if (has_player) {
+        // Re-check player still exists after recording
+        if (has_player and p_idx < state.app.players.items.len) {
             var rv_buf: [64]u8 = undefined;
             const rv_cmd = std.fmt.bufPrintZ(&rv_buf, "set volume {d:.0}", .{saved_vol}) catch "set volume 100";
             _ = c_pkg.mpv.mpv_command_string(state.app.players.items[p_idx].mpv_ctx, rv_cmd.ptr);
@@ -612,7 +613,7 @@ fn conversationLoopV1() void {
 
         setPhase(.thinking);
         var wait_count: usize = 0;
-        while (chat.is_generating and conversation_active and wait_count < 300) : (wait_count += 1) {
+        while (chat.is_generating.load(.acquire) and conversation_active and wait_count < 300) : (wait_count += 1) {
             @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
         }
     }

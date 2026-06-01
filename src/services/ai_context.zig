@@ -244,8 +244,10 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
                     var u_buf: [1024]u8 = undefined;
                     var u_len: usize = 0;
                     var pi: usize = 0;
+                    var busy: bool = false;
 
                     fn worker() void {
+                        defer @This().busy = false;
                         // Modify the resolver to use requested quality
                         const argv2: []const []const u8 = &.{
                             "python3",
@@ -272,6 +274,7 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
                         }
                     }
                 };
+                if (S.busy) return true;
                 const ql = @min(quality.len, 15);
                 @memcpy(S.q_buf[0..ql], quality[0..ql]);
                 S.q_len = ql;
@@ -279,7 +282,9 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
                 @memcpy(S.u_buf[0..ul], p.current_url[0..ul]);
                 S.u_len = ul;
                 S.pi = p_idx;
-                _ = std.Thread.spawn(.{}, S.worker, .{}) catch {};
+                S.busy = true;
+                const t = std.Thread.spawn(.{}, S.worker, .{}) catch { S.busy = false; return true; };
+                t.detach();
 
                 var resp_buf2: [64]u8 = undefined;
                 const resp = std.fmt.bufPrint(&resp_buf2, "Switching to {s} quality...", .{quality}) catch "Switching quality...";
@@ -386,7 +391,9 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
     if (std.mem.eql(u8, fl, "suggest") or std.mem.eql(u8, fl, "recommend") or
         std.mem.eql(u8, fl, "what should i watch") or std.mem.eql(u8, fl, "what to watch"))
     {
-        if (memory.getProactiveSuggestion()) |suggestion| {
+        var sug_buf: [256]u8 = undefined;
+        var sug_name_buf: [128]u8 = undefined;
+        if (memory.getProactiveSuggestion(&sug_buf, &sug_name_buf)) |suggestion| {
             addInstantResponse(raw_input, suggestion);
         } else {
             addInstantResponse(raw_input, "Nothing to suggest yet — watch some content first!");
@@ -399,7 +406,8 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
         std.mem.eql(u8, fl, "continue watching") or std.mem.eql(u8, fl, "resume watching") or
         std.mem.eql(u8, fl, "yes continue") or std.mem.eql(u8, fl, "yes please"))
     {
-        if (memory.getResumeTarget()) |target| {
+        var resume_url_buf: [512]u8 = undefined;
+        if (memory.getResumeTarget(&resume_url_buf)) |target| {
             // Load the content into the player
             const player_mod = @import("../player/player.zig");
             if (state.app.players.items.len > 0) {
@@ -655,7 +663,7 @@ fn dispatchFastPath(raw_input: []const u8, query: []const u8, action: FastPathAc
 
     @memset(&chat.input_buf, 0);
     chat.input_len = 0;
-    chat.is_generating = true;
+    chat.is_generating.store(true, .release);
     chat.last_error_len = 0;
 
     // By-value copy of the query string so the thread doesn't read a dead stack frame
@@ -664,10 +672,11 @@ fn dispatchFastPath(raw_input: []const u8, query: []const u8, action: FastPathAc
     @memcpy(t_buf[0..qlen], query[0..qlen]);
 
     // Spawn fast-path thread
-    _ = std.Thread.spawn(.{}, fastPathResolve, .{ t_buf, qlen, chat.message_count - 1, action }) catch {
-        chat.is_generating = false;
+    const t = std.Thread.spawn(.{}, fastPathResolve, .{ t_buf, qlen, chat.message_count - 1, action }) catch {
+        chat.is_generating.store(false, .release);
         return false;
     };
+    t.detach();
 
     return true;
 }
@@ -787,7 +796,7 @@ pub fn tryFastPath(raw_input: []const u8) bool {
 
 fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, action: FastPathAction) void {
     chat.phase = .searching;
-    defer { chat.is_generating = false; chat.phase = .idle; }
+    defer { chat.is_generating.store(false, .release); chat.phase = .idle; }
 
     const query = query_buf[0..query_len];
     resolver.resolve(query, "auto");
@@ -853,7 +862,7 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
 
         if (filtered_count == 0) {
             // Smart Fallback: if fast path fails, simulate a tool failure and run LLM
-            chat.is_generating = true;
+            chat.is_generating.store(true, .release);
             
             var fallback_buf: [1024]u8 = undefined;
             const fallback_msg = std.fmt.bufPrint(&fallback_buf, "I automatically searched for streams of '{s}' but found 0 results. Provide a conversational response to the user, perhaps suggesting they search TMDB instead.", .{query}) catch "Search failed.";
@@ -934,7 +943,7 @@ pub fn generateResponse() void {
     chat.phase = .thinking;
 
     defer {
-        chat.is_generating = false;
+        chat.is_generating.store(false, .release);
         chat.phase = .idle;
         tool_depth = 0;  // Reset depth when the chain completes
     }
@@ -998,11 +1007,11 @@ pub fn generateResponse() void {
     for (dyn_str) |ch| {
         if (msg_off >= 5600) break;
         switch (ch) {
-            '"' => { msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '"'; msg_off += 1; },
-            '\n' => { msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = 'n'; msg_off += 1; },
+            '"' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '"'; msg_off += 1; },
+            '\n' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = 'n'; msg_off += 1; },
             '\r' => {},
-            '\\' => { msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '\\'; msg_off += 1; },
-            '\t' => { msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = 't'; msg_off += 1; },
+            '\\' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '\\'; msg_off += 1; },
+            '\t' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = 't'; msg_off += 1; },
             else => |c| {
                 if (c < 32) continue; // skip other control chars
                 msg_part[msg_off] = c; msg_off += 1;
@@ -1018,10 +1027,10 @@ pub fn generateResponse() void {
         for (ctx) |ch| {
             if (msg_off >= 5500) break;
             switch (ch) {
-                '"' => { msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '"'; msg_off += 1; },
-                '\n' => { msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = 'n'; msg_off += 1; },
+                '"' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '"'; msg_off += 1; },
+                '\n' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = 'n'; msg_off += 1; },
                 '\r' => {},
-                '\\' => { msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '\\'; msg_off += 1; },
+                '\\' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '\\'; msg_off += 1; },
                 else => |c| { if (c >= 32) { msg_part[msg_off] = c; msg_off += 1; } },
             }
         }
@@ -1040,10 +1049,10 @@ pub fn generateResponse() void {
                 for (cc) |ch| {
                     if (msg_off >= 5800) break;
                     switch (ch) {
-                        '"' => { msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '"'; msg_off += 1; },
-                        '\n' => { msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = 'n'; msg_off += 1; },
+                        '"' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '"'; msg_off += 1; },
+                        '\n' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = 'n'; msg_off += 1; },
                         '\r' => {},
-                        '\\' => { msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '\\'; msg_off += 1; },
+                        '\\' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '\\'; msg_off += 1; },
                         else => |c| { if (c >= 32) { msg_part[msg_off] = c; msg_off += 1; } },
                     }
                 }
@@ -1386,9 +1395,8 @@ pub fn generateResponse() void {
 
             // Execute the tool
             if (tools.executeTool(@import("../core/alloc.zig").allocator, &tc)) |result| {
-                // Copy result to stack buffer — result may be a sub-slice of a larger
-                // allocation, which means we cannot free it directly (GPA would panic).
-                // Instead we copy and let the allocation leak (it's bounded to MAX_TOOL_RESULT).
+                // executeTool returns an exact-sized allocation; free after copying.
+                defer @import("../core/alloc.zig").allocator.free(result);
                 var tool_result_buf: [2048]u8 = undefined;
                 const rlen = @min(result.len, tool_result_buf.len);
                 @memcpy(tool_result_buf[0..rlen], result[0..rlen]);

@@ -183,7 +183,18 @@ pub fn start() void {
 }
 
 pub fn stop() void {
+    if (!running) return;
     running = false;
+    // Kick accept() awake by making a local connection.
+    const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", port) catch return;
+    if (addr.connect(io_g.io(), .{ .mode = .stream })) |conn| {
+        var c2 = conn;
+        c2.close(io_g.io());
+    } else |_| {}
+    if (server_thread) |t| {
+        t.join();
+        server_thread = null;
+    }
 }
 
 pub fn isRunning() bool {
@@ -191,11 +202,11 @@ pub fn isRunning() bool {
 }
 
 fn serverLoop() void {
-    const addr = std.Io.net.IpAddress.parseIp4("0.0.0.0", port) catch return;
+    const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", port) catch return;
     var server = addr.listen(io_g.io(), .{ .reuse_address = true }) catch return;
     defer server.deinit(io_g.io());
 
-    std.debug.print("[remote] JSON API listening on http://0.0.0.0:{d}\n", .{port});
+    std.debug.print("[remote] JSON API listening on http://127.0.0.1:{d}\n", .{port});
     std.debug.print("[remote] Web UI: cd web && zig build dev (http://0.0.0.0:3000)\n", .{});
 
     while (running) {
@@ -353,7 +364,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     }
 
     // ── Player-dependent endpoints ──
-    if (state.app.players.items.len == 0) {
+    if (state.app.active_player_idx >= state.app.players.items.len) {
         sendJson(stream, "{\"error\":\"no player\"}");
         return;
     }
@@ -621,7 +632,7 @@ fn apiSearch(stream: std.Io.net.Stream, query: []const u8) void {
         if (count >= 50) break;
     }
     w.writeAll("],\"searching\":") catch return;
-    w.writeAll(if (search_svc.is_searching) "true" else "false") catch return;
+    w.writeAll(if (search_svc.is_searching.load(.acquire)) "true" else "false") catch return;
     w.writeAll("}") catch return;
     sendJson(stream, json_buf[0..w.end]);
 }
@@ -1131,7 +1142,7 @@ fn apiUnifiedSearch(stream: std.Io.net.Stream, query: []const u8) void {
 
     // Track loading state across all sources
     const search_svc = @import("search.zig");
-    const any_loading = search_svc.is_searching or
+    const any_loading = search_svc.is_searching.load(.acquire) or
         state.app.tmdb.is_loading or
         state.app.yt.is_loading or
         state.app.anime.is_loading or

@@ -250,6 +250,8 @@ fn searchThread(engine: *SubtitleEngine) void {
         logs.pushLog("info", "subs", msg, false);
         
         // Auto-download the first result
+        // NOTE: Download runs synchronously on the search thread (intentional —
+        // avoids an extra thread spawn and the search→download transition is seamless).
         downloadThread(engine);
     } else {
         engine.state = .failed;

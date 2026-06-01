@@ -30,10 +30,10 @@ pub const renderToast = @import("footer.zig").renderToast;
 pub const renderStatsOverlay = @import("footer.zig").renderStatsOverlay;
 
 const FileOpenState = struct {
-    var file_path: [2048]u8 = undefined;
+    var file_path: [2048]u8 = std.mem.zeroes([2048]u8);
     var file_path_len: usize = 0;
-    var pending: bool = false;
-    var running: bool = false;
+    var pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+    var running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
     var thread: ?std.Thread = null;
 
     const builtin = @import("builtin");
@@ -64,7 +64,7 @@ const FileOpenState = struct {
         child.stderr_behavior = .Pipe;
         child.spawn() catch |err| {
             std.debug.print("[FileOpen] spawn failed: {}\n", .{err});
-            running = false;
+            running.store(false, .release);
             return;
         };
 
@@ -93,7 +93,7 @@ const FileOpenState = struct {
 
         const term = child.wait() catch |err| {
             std.debug.print("[FileOpen] wait failed: {}\n", .{err});
-            running = false;
+            running.store(false, .release);
             return;
         };
 
@@ -106,32 +106,32 @@ const FileOpenState = struct {
             while (plen > 0 and (file_path[plen - 1] == '\n' or file_path[plen - 1] == '\r')) plen -= 1;
             file_path_len = plen;
             std.debug.print("[FileOpen] Got path: {s}\n", .{file_path[0..plen]});
-            pending = true;
+            pending.store(true, .release);
         } else {
             std.debug.print("[FileOpen] No file selected (cancelled) exit={}\n", .{term});
         }
-        running = false;
+        running.store(false, .release);
     }
 };
 
 pub fn triggerFileOpen() void {
-    if (!FileOpenState.running) {
-        FileOpenState.running = true;
+    if (!FileOpenState.running.load(.acquire)) {
+        FileOpenState.running.store(true, .release);
         FileOpenState.thread = std.Thread.spawn(.{}, FileOpenState.dialogWorker, .{}) catch blk: {
-            FileOpenState.running = false;
+            FileOpenState.running.store(false, .release);
             break :blk null;
         };
     }
 }
 
 pub fn pollFileOpen() void {
-    if (FileOpenState.pending) {
+    if (FileOpenState.pending.load(.acquire)) {
         if (FileOpenState.file_path_len > 0 and state.app.active_player_idx < state.app.players.items.len) {
             FileOpenState.file_path[FileOpenState.file_path_len] = 0;
             state.app.players.items[state.app.active_player_idx].load_file(@ptrCast(&FileOpenState.file_path[0]));
             logs.pushLog("info", "open", "Loaded local file", false);
         }
-        FileOpenState.pending = false;
+        FileOpenState.pending.store(false, .release);
         if (FileOpenState.thread) |t| { t.join(); FileOpenState.thread = null; }
     }
 }

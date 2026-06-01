@@ -133,6 +133,7 @@ pub fn resolveStreamUrl(url: []const u8) ?[]const u8 {
 /// then load the result into the player.
 pub fn resolveStreamUrlAsync(url: []const u8, player_idx: usize) void {
     const S = struct {
+        var busy: bool = false;
         var url_copy: [1024]u8 = undefined;
         var url_len: usize = 0;
         var p_idx: usize = 0;
@@ -141,6 +142,7 @@ pub fn resolveStreamUrlAsync(url: []const u8, player_idx: usize) void {
         var args_load: [3][*c]const u8 = undefined;
 
         fn worker() void {
+            defer @This().busy = false;
             std.log.info("[streamlink] Resolving: {s}", .{url_copy[0..url_len]});
             if (resolveStreamUrl(url_copy[0..url_len])) |stream_url| {
                 if (state.app.players.items.len > p_idx) {
@@ -169,12 +171,15 @@ pub fn resolveStreamUrlAsync(url: []const u8, player_idx: usize) void {
         }
     };
 
+    if (S.busy) return;
     if (url.len >= S.url_copy.len) return;
+    S.busy = true;
     @memcpy(S.url_copy[0..url.len], url);
     S.url_len = url.len;
     S.p_idx = player_idx;
 
     _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
+        S.busy = false;
         std.log.warn("[streamlink] Failed to spawn resolver thread", .{});
     };
 }

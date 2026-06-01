@@ -419,7 +419,7 @@ fn renderBottomIcon(action: BottomAction, icon_data: anytype, label: []const u8,
 
 fn tabHasBadge(tab: state.DrawerTab) bool {
     return switch (tab) {
-        .Search => search.is_searching,
+        .Search => search.is_searching.load(.acquire),
         .Queue => queue.queue_count > 0,
         else => false,
     };

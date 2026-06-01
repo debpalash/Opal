@@ -29,6 +29,8 @@ pub fn init() void {
 }
 
 /// Save or update a watch position.
+/// Thread-safety: only called from the UI/render thread (player.zig frame
+/// callback and importJson user action), so no internal locking is needed.
 pub fn savePosition(name: []const u8, percent: f64, link: []const u8) void {
     if (state.app.incognito_mode) return;
     if (name.len == 0 or name.len >= MAX_NAME_LEN) return;

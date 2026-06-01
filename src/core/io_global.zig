@@ -5,13 +5,12 @@ const std = @import("std");
 /// of them through Io. We keep a process-wide Threaded Io to avoid threading
 /// io through every function signature.
 var threaded: std.Io.Threaded = undefined;
-var initialized: bool = false;
+var initialized = std.atomic.Value(bool).init(false);
 
 pub fn io() std.Io {
-    if (!initialized) {
+    if (initialized.cmpxchgStrong(false, true, .seq_cst, .seq_cst) == null) {
         const alloc = @import("alloc.zig").allocator;
         threaded = std.Io.Threaded.init(alloc, .{});
-        initialized = true;
     }
     return threaded.io();
 }
@@ -139,6 +138,20 @@ pub fn streamWriteAll(stream: anytype, data: []const u8) !void {
 
 pub fn streamReadAll(stream: anytype, buf: []u8) !usize {
     var tmp: [1024]u8 = undefined;
+    var r = stream.reader(io(), &tmp);
+    var vec: [1][]u8 = .{buf};
+    return r.interface.readVec(&vec) catch |err| switch (err) {
+        error.EndOfStream => 0,
+        else => err,
+    };
+}
+
+/// Partial read from a network stream (returns available bytes, does not
+/// fill the entire buffer). Use this instead of streamReadAll for
+/// line-based protocols where blocking until the buffer is full would
+/// stall the reader loop.
+pub fn streamRead(stream: anytype, buf: []u8) !usize {
+    var tmp: [1]u8 = undefined;
     var r = stream.reader(io(), &tmp);
     var vec: [1][]u8 = .{buf};
     return r.interface.readVec(&vec) catch |err| switch (err) {

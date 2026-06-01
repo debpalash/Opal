@@ -172,12 +172,10 @@ fn appDeinit() void {
     voice.is_speaking = false;
 
     // Clean up players natively to prevent memory leaks
-    if (state.app.players.items.len > 0) {
-        for (state.app.players.items) |p| {
-            p.deinit(@import("core/alloc.zig").allocator);
-        }
-        state.app.players.deinit(@import("core/alloc.zig").allocator);
+    for (state.app.players.items) |p| {
+        p.deinit(@import("core/alloc.zig").allocator);
     }
+    state.app.players.deinit(@import("core/alloc.zig").allocator);
     
     // Clean up UI arrays
     state.app.tmdb.results.deinit(@import("core/alloc.zig").allocator);
@@ -187,7 +185,7 @@ fn appDeinit() void {
     state.app.yt.results.deinit(@import("core/alloc.zig").allocator);
     
     // Join search thread so its defers (free query, deinit argv) run cleanly
-    search.search_abort = true;
+    search.search_abort.store(true, .release);
     if (search.search_thread) |t| t.join();
     search.search_thread = null;
 
@@ -491,7 +489,7 @@ fn renderChatDropdown() void {
         });
         defer row.deinit();
 
-        if (state.app.players.items.len > 0) {
+        if (state.app.players.items.len > 0 and state.app.active_player_idx < state.app.players.items.len) {
             const ap = state.app.players.items[state.app.active_player_idx];
             var title_buf: [128]u8 = undefined;
             const tl = ap.getMediaTitle(&title_buf);
@@ -634,7 +632,7 @@ fn renderInlineChatDock() void {
     defer dock.deinit();
 
     // Seeing chip
-    if (state.app.players.items.len > 0) {
+    if (state.app.players.items.len > 0 and state.app.active_player_idx < state.app.players.items.len) {
         const ap = state.app.players.items[state.app.active_player_idx];
         var title_buf: [128]u8 = undefined;
         const tl = ap.getMediaTitle(&title_buf);
@@ -762,67 +760,66 @@ fn appFrame() !dvui.App.Result {
     }
 
     // Process dropped files
+    state.app.dropped_file_lock.lock();
     if (state.app.dropped_file_ready) {
-        state.app.dropped_file_lock.lock();
-        if (state.app.dropped_file_ready) {
-            state.app.dropped_file_ready = false;
-            if (state.app.dropped_file_len > 0 and state.app.active_player_idx < state.app.players.items.len) {
-                const fpath = state.app.dropped_file_path[0..state.app.dropped_file_len];
-                if (std.mem.endsWith(u8, fpath, ".m3u") or std.mem.endsWith(u8, fpath, ".m3u8")) {
-                    // It's an M3U file, load it!
-                    const m3u = @import("player/m3u.zig");
-                    if (state.app.playlist) |pl| {
-                        const mut_pl = @constCast(pl);
-                        mut_pl.deinit();
-                        @import("core/alloc.zig").allocator.destroy(mut_pl);
-                    }
-                    const new_pl = @import("core/alloc.zig").allocator.create(m3u.M3UPlaylist) catch null;
-                    if (new_pl) |pl| {
-                        pl.* = m3u.M3UPlaylist.init(@import("core/alloc.zig").allocator);
-                        pl.loadFile(@import("core/io_global.zig").io(), fpath) catch {};
+        state.app.dropped_file_ready = false;
+        if (state.app.dropped_file_len > 0 and state.app.active_player_idx < state.app.players.items.len) {
+            const fpath = state.app.dropped_file_path[0..state.app.dropped_file_len];
+            if (std.mem.endsWith(u8, fpath, ".m3u") or std.mem.endsWith(u8, fpath, ".m3u8")) {
+                // It's an M3U file, load it!
+                const m3u = @import("player/m3u.zig");
+                if (state.app.playlist) |pl| {
+                    const mut_pl = @constCast(pl);
+                    mut_pl.deinit();
+                    @import("core/alloc.zig").allocator.destroy(mut_pl);
+                }
+                const new_pl = @import("core/alloc.zig").allocator.create(m3u.M3UPlaylist) catch null;
+                if (new_pl) |pl| {
+                    pl.* = m3u.M3UPlaylist.init(@import("core/alloc.zig").allocator);
+                    pl.loadFile(@import("core/io_global.zig").io(), fpath) catch {};
+                    state.app.playlist = pl;
+                    state.app.playlist_drawer_open = true;
+                    logs.pushLog("info", "m3u", "Loaded M3U playlist", false);
+                    state.showToast("Playlist loaded!");
+                }
+            } else if (isDirectory(fpath)) {
+                // Folder drop — scan for media files and build auto-playlist
+                const m3u = @import("player/m3u.zig");
+                if (state.app.playlist) |pl| {
+                    const mut_pl = @constCast(pl);
+                    mut_pl.deinit();
+                    @import("core/alloc.zig").allocator.destroy(mut_pl);
+                }
+                const new_pl = @import("core/alloc.zig").allocator.create(m3u.M3UPlaylist) catch null;
+                if (new_pl) |pl| {
+                    pl.* = m3u.M3UPlaylist.init(@import("core/alloc.zig").allocator);
+                    scanDirForMedia(pl, fpath);
+                    if (pl.entries.items.len > 0) {
                         state.app.playlist = pl;
                         state.app.playlist_drawer_open = true;
-                        logs.pushLog("info", "m3u", "Loaded M3U playlist", false);
-                        state.showToast("Playlist loaded!");
+                        logs.pushLog("info", "folder", "Scanned folder for media", false);
+                        state.showToast("Folder loaded as playlist!");
+                    } else {
+                        pl.deinit();
+                        @import("core/alloc.zig").allocator.destroy(pl);
+                        state.app.playlist = null;
+                        logs.pushLog("warn", "folder", "No media files found", false);
                     }
-                } else if (isDirectory(fpath)) {
-                    // Folder drop — scan for media files and build auto-playlist
-                    const m3u = @import("player/m3u.zig");
-                    if (state.app.playlist) |pl| {
-                        const mut_pl = @constCast(pl);
-                        mut_pl.deinit();
-                        @import("core/alloc.zig").allocator.destroy(mut_pl);
-                    }
-                    const new_pl = @import("core/alloc.zig").allocator.create(m3u.M3UPlaylist) catch null;
-                    if (new_pl) |pl| {
-                        pl.* = m3u.M3UPlaylist.init(@import("core/alloc.zig").allocator);
-                        scanDirForMedia(pl, fpath);
-                        if (pl.entries.items.len > 0) {
-                            state.app.playlist = pl;
-                            state.app.playlist_drawer_open = true;
-                            logs.pushLog("info", "folder", "Scanned folder for media", false);
-                            state.showToast("Folder loaded as playlist!");
-                        } else {
-                            pl.deinit();
-                            @import("core/alloc.zig").allocator.destroy(pl);
-                            state.app.playlist = null;
-                            logs.pushLog("warn", "folder", "No media files found", false);
-                        }
-                    }
-                } else {
-                    // Clear resume position so dropped file starts fresh
-                    _ = c.mpv.mpv_set_option_string(
-                        state.app.players.items[state.app.active_player_idx].mpv_ctx,
-                        "start", "0",
-                    );
-                    state.app.players.items[state.app.active_player_idx].load_file(@ptrCast(&state.app.dropped_file_path[0]));
-                    logs.pushLog("info", "open", "Loaded dropped file", false);
-                    state.showToast("Playing dropped file");
                 }
+            } else {
+                // Clear resume position so dropped file starts fresh
+                _ = c.mpv.mpv_set_option_string(
+                    state.app.players.items[state.app.active_player_idx].mpv_ctx,
+                    "start", "0",
+                );
+                state.app.players.items[state.app.active_player_idx].load_file(@ptrCast(&state.app.dropped_file_path[0]));
+                logs.pushLog("info", "open", "Loaded dropped file", false);
+                state.showToast("Playing dropped file");
             }
         }
-        state.app.dropped_file_lock.unlock();
     }
+    state.app.dropped_file_lock.unlock();
+
 
     // Process CLI file argument (deferred from appInit)
     if (!cli_open_done and cli_open_len > 0 and state.app.players.items.len > 0) {
@@ -969,7 +966,7 @@ fn appFrame() !dvui.App.Result {
         state.app.overlay_hide_timer = 0;
         state.app.show_cell_overlay = true;
     } else {
-        state.app.overlay_hide_timer += 1;
+        if (state.app.overlay_hide_timer < 1000) state.app.overlay_hide_timer += 1;
         // ~3 seconds at 60fps
         if (state.app.overlay_hide_timer > 180) {
             state.app.show_cell_overlay = false;
@@ -1079,7 +1076,7 @@ fn appFrame() !dvui.App.Result {
             const text_len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
             const is_typing = text_len > 0;
             const voice_active = voice_mod.conv_phase != .idle or voice_mod.is_recording;
-            const is_thinking = ai_chat_mod.is_generating;
+            const is_thinking = ai_chat_mod.is_generating.load(.acquire);
             if (is_typing or voice_active or is_thinking) {
                 renderChatDropdown();
             }

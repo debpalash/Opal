@@ -125,8 +125,12 @@ fn extractThread() void {
     logs.pushLog("info", "playlist", "Extracting playlist...", false);
 
     // Read all stdout at once (playlist JSON is typically < 1MB)
-    var out_buf: [1024 * 1024]u8 = undefined;
-    const total_read = @import("../core/io_global.zig").readAll(stdout, &out_buf) catch 0;
+    const out_buf = alloc.alloc(u8, 1024 * 1024) catch {
+        state.showToast("Out of memory for playlist extraction");
+        return;
+    };
+    defer alloc.free(out_buf);
+    const total_read = @import("../core/io_global.zig").readAll(stdout, out_buf) catch 0;
     
     // Also read stderr for error reporting
     var err_buf: [4096]u8 = undefined;

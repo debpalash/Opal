@@ -445,44 +445,61 @@ pub const MediaPlayer = struct {
         const b_sec = @as(u32, @intFromFloat(@max(0, self.loop_b)));
         
         const ExportCtx = struct {
-            var src: [2048]u8 = undefined;
-            var src_len: usize = 0;
-            var out: [512]u8 = undefined;
-            var out_len: usize = 0;
-            var ss_buf: [32]u8 = undefined;
-            var ss_len: usize = 0;
-            var to_buf: [32]u8 = undefined;
-            var to_len: usize = 0;
+            src: [2048]u8 = undefined,
+            src_len: usize = 0,
+            out: [512]u8 = undefined,
+            out_len: usize = 0,
+            ss_buf: [32]u8 = undefined,
+            ss_len: usize = 0,
+            to_buf: [32]u8 = undefined,
+            to_len: usize = 0,
         };
 
-        @memcpy(ExportCtx.src[0..self.current_url_len], self.current_url[0..self.current_url_len]);
-        ExportCtx.src_len = self.current_url_len;
+        const ctx_alloc = @import("../core/alloc.zig").allocator;
+        const ectx = ctx_alloc.create(ExportCtx) catch {
+            state.showToast("Out of memory for clip export");
+            return;
+        };
+        ectx.* = .{};
 
-        const ss = std.fmt.bufPrintZ(&ExportCtx.ss_buf, "{d:.2}", .{self.loop_a}) catch return;
-        ExportCtx.ss_len = ss.len;
-        const to = std.fmt.bufPrintZ(&ExportCtx.to_buf, "{d:.2}", .{self.loop_b}) catch return;
-        ExportCtx.to_len = to.len;
+        @memcpy(ectx.src[0..self.current_url_len], self.current_url[0..self.current_url_len]);
+        ectx.src_len = self.current_url_len;
 
-        const out_path = std.fmt.bufPrintZ(&ExportCtx.out, "{s}/clip_{d:0>2}m{d:0>2}s-{d:0>2}m{d:0>2}s.mp4", .{
+        const ss = std.fmt.bufPrintZ(&ectx.ss_buf, "{d:.2}", .{self.loop_a}) catch {
+            ctx_alloc.destroy(ectx);
+            return;
+        };
+        ectx.ss_len = ss.len;
+        const to = std.fmt.bufPrintZ(&ectx.to_buf, "{d:.2}", .{self.loop_b}) catch {
+            ctx_alloc.destroy(ectx);
+            return;
+        };
+        ectx.to_len = to.len;
+
+        const out_path = std.fmt.bufPrintZ(&ectx.out, "{s}/clip_{d:0>2}m{d:0>2}s-{d:0>2}m{d:0>2}s.mp4", .{
             dl_dir, a_sec / 60, a_sec % 60, b_sec / 60, b_sec % 60,
-        }) catch return;
-        ExportCtx.out_len = out_path.len;
+        }) catch {
+            ctx_alloc.destroy(ectx);
+            return;
+        };
+        ectx.out_len = out_path.len;
 
         state.showToast("Exporting clip...");
 
         _ = std.Thread.spawn(.{}, struct {
-            fn worker() void {
+            fn worker(ec: *ExportCtx) void {
+                defer ctx_alloc.destroy(ec);
                 const io_global = @import("../core/io_global.zig");
                 const alloc = @import("../core/alloc.zig").allocator;
 
                 var child = io_global.Child.init(
                     &.{ "ffmpeg", "-y",
-                         "-ss", ExportCtx.ss_buf[0..ExportCtx.ss_len],
-                         "-to", ExportCtx.to_buf[0..ExportCtx.to_len],
-                         "-i", ExportCtx.src[0..ExportCtx.src_len],
+                         "-ss", ec.ss_buf[0..ec.ss_len],
+                         "-to", ec.to_buf[0..ec.to_len],
+                         "-i", ec.src[0..ec.src_len],
                          "-c", "copy",
                          "-avoid_negative_ts", "make_zero",
-                         ExportCtx.out[0..ExportCtx.out_len] },
+                         ec.out[0..ec.out_len] },
                     alloc,
                 );
                 child.stdout_behavior = .Ignore;
@@ -502,7 +519,8 @@ pub const MediaPlayer = struct {
                     state.showToast("Clip export failed (ffmpeg error)");
                 }
             }
-        }.worker, .{}) catch {
+        }.worker, .{ectx}) catch {
+            ctx_alloc.destroy(ectx);
             state.showToast("Failed to spawn export thread");
         };
     }
@@ -747,10 +765,9 @@ pub fn updateTorrentBackgroundTasks() void {
                 // so we no longer need to pause/unpause mpv — it buffers naturally via HTTP.
                 _ = c.mpv.torrent_ensure_streaming_buffer(state.app.torrent_ses, p.current_torrent_id, p.selected_file_idx, percent_pos);
                 
-                // Save position to watch history every ~5 seconds
-                const now_ms = @import("../core/io_global.zig").milliTimestamp();
-                const WS = struct { var last_save_ms: i64 = 0; };
-                if (percent_pos > 0.5 and now_ms - WS.last_save_ms > 5000) {
+                // Save position to watch history every ~300 frames (~5s at 60fps)
+                p.save_counter +%= 1;
+                if (percent_pos > 0.5 and p.save_counter % 300 == 0) {
                     const watch = @import("watch_history.zig");
                     var t_name3: [256]u8 = undefined;
                     c.mpv.torrent_get_name(state.app.torrent_ses, p.current_torrent_id, &t_name3, 256);
@@ -758,7 +775,6 @@ pub fn updateTorrentBackgroundTasks() void {
                     if (n3_len > 0) {
                         watch.savePosition(t_name3[0..n3_len], percent_pos, "");
                     }
-                    WS.last_save_ms = now_ms;
                 }
             }
         } else {

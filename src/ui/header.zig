@@ -26,6 +26,7 @@ pub fn handleClipboardPaste() void {
         } else |_| { return; }
     }
 
+    if (state.app.players.items.len == 0) return;
     if (state.app.active_player_idx >= state.app.players.items.len) {
         state.app.active_player_idx = state.app.players.items.len - 1;
     }
@@ -585,7 +586,7 @@ pub fn renderUrlInput(is_large: bool) void {
         if (!is_large) components.tip(@src(), mic_wd, "Mic / push-to-talk");
 
         // Emergency stop when anything is active
-        const is_active = voice.conversation_active or voice.is_recording or voice.is_speaking or ai_chat_mod.is_generating;
+        const is_active = voice.conversation_active or voice.is_recording or voice.is_speaking or ai_chat_mod.is_generating.load(.acquire);
         if (is_active) {
             var stop_wd: dvui.WidgetData = undefined;
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"square", .{}, .{}, .{
@@ -615,7 +616,7 @@ pub fn renderUrlInput(is_large: bool) void {
         const text_became_nonempty = ExpandState.last_text_len == 0 and first_zero > 0;
         const voice_started = ExpandState.last_conv_phase == .idle and voice.conv_phase != .idle;
         const text_became_empty = ExpandState.last_text_len > 0 and first_zero == 0;
-        const has_activity = first_zero > 0 or voice.conv_phase != .idle or voice.is_recording or ai_chat_mod.is_generating;
+        const has_activity = first_zero > 0 or voice.conv_phase != .idle or voice.is_recording or ai_chat_mod.is_generating.load(.acquire);
 
         if (text_became_nonempty or voice_started) ai_chat_mod.is_bubble_open = true;
         if (text_became_empty and !has_activity and ai_chat_mod.message_count == 0) ai_chat_mod.is_bubble_open = false;

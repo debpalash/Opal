@@ -214,14 +214,35 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     status_yts.store(.searching, .release);
 
     // Fire all backends in parallel — 7 threads for maximum speed
-    _ = std.Thread.spawn(.{}, resolveJellyfin, .{ resolver_query, qlen }) catch {};
-    _ = std.Thread.spawn(.{}, resolveTorrentsNova2, .{ resolver_query, qlen }) catch {};
-    _ = std.Thread.spawn(.{}, resolve1337x, .{ resolver_query, qlen }) catch {};
-    _ = std.Thread.spawn(.{}, resolveYts, .{ resolver_query, qlen }) catch {};
-    _ = std.Thread.spawn(.{}, resolveAnime, .{ resolver_query, qlen }) catch {};
-    _ = std.Thread.spawn(.{}, resolveYouTube, .{ resolver_query, qlen }) catch {};
+    _ = std.Thread.spawn(.{}, resolveJellyfin, .{ resolver_query, qlen }) catch {
+        status_jf.store(.failed, .release);
+        checkAllDone();
+    };
+    _ = std.Thread.spawn(.{}, resolveTorrentsNova2, .{ resolver_query, qlen }) catch {
+        status_torrent.store(.failed, .release);
+        checkAllDone();
+    };
+    _ = std.Thread.spawn(.{}, resolve1337x, .{ resolver_query, qlen }) catch {
+        status_1337x.store(.failed, .release);
+        checkAllDone();
+    };
+    _ = std.Thread.spawn(.{}, resolveYts, .{ resolver_query, qlen }) catch {
+        status_yts.store(.failed, .release);
+        checkAllDone();
+    };
+    _ = std.Thread.spawn(.{}, resolveAnime, .{ resolver_query, qlen }) catch {
+        status_anime.store(.failed, .release);
+        checkAllDone();
+    };
+    _ = std.Thread.spawn(.{}, resolveYouTube, .{ resolver_query, qlen }) catch {
+        status_yt.store(.failed, .release);
+        checkAllDone();
+    };
     // Stremio needs IMDB ID — queries TMDB first, then addons
-    _ = std.Thread.spawn(.{}, resolveStremio, .{ resolver_query, qlen }) catch {};
+    _ = std.Thread.spawn(.{}, resolveStremio, .{ resolver_query, qlen }) catch {
+        status_stremio.store(.failed, .release);
+        checkAllDone();
+    };
 }
 
 fn pushResult(item: ResolvedItem) bool {
@@ -803,6 +824,27 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
 
     const query = query_buf[0..qlen];
 
+    // Escape quotes and backslashes for JSON safety
+    var safe_q: [256]u8 = undefined;
+    var si: usize = 0;
+    for (query) |ch| {
+        if (si + 2 > safe_q.len) break;
+        if (ch == '"') {
+            safe_q[si] = '\\';
+            si += 1;
+            safe_q[si] = '"';
+            si += 1;
+        } else if (ch == '\\') {
+            safe_q[si] = '\\';
+            si += 1;
+            safe_q[si] = '\\';
+            si += 1;
+        } else {
+            safe_q[si] = ch;
+            si += 1;
+        }
+    }
+
     // Use allanime GraphQL API directly (same as anime.zig) — never call ani-cli
     // which would auto-play
     const search_gql = "query( $search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) { shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) { edges { _id name availableEpisodes __typename } }}";
@@ -810,7 +852,7 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
     var vars_buf: [512]u8 = undefined;
     const vars = std.fmt.bufPrint(&vars_buf,
         "{{\"search\":{{\"allowAdult\":false,\"allowUnknown\":false,\"query\":\"{s}\"}},\"limit\":6,\"page\":1,\"translationType\":\"sub\",\"countryOrigin\":\"ALL\"}}",
-        .{query},
+        .{safe_q[0..si]},
     ) catch return;
 
     var vars_enc_buf: [1024]u8 = undefined;
@@ -956,9 +998,23 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
     var el: usize = 0;
     for (query) |ch| {
         if (el + 3 >= enc.len) break;
-        if (ch == ' ') { enc[el] = '+'; el += 1; }
-        else if (std.ascii.isAlphanumeric(ch)) { enc[el] = ch; el += 1; }
-        else { enc[el] = ch; el += 1; }
+        if (ch == ' ') {
+            enc[el] = '+';
+            el += 1;
+        } else if (ch == '%') {
+            enc[el] = '%'; enc[el + 1] = '2'; enc[el + 2] = '5'; el += 3;
+        } else if (ch == '&') {
+            enc[el] = '%'; enc[el + 1] = '2'; enc[el + 2] = '6'; el += 3;
+        } else if (ch == '=') {
+            enc[el] = '%'; enc[el + 1] = '3'; enc[el + 2] = 'D'; el += 3;
+        } else if (ch == '#') {
+            enc[el] = '%'; enc[el + 1] = '2'; enc[el + 2] = '3'; el += 3;
+        } else if (ch == '?') {
+            enc[el] = '%'; enc[el + 1] = '3'; enc[el + 2] = 'F'; el += 3;
+        } else {
+            enc[el] = ch;
+            el += 1;
+        }
     }
 
     const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
@@ -983,16 +1039,10 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
     var media_type: [16]u8 = undefined;
     var media_type_len: usize = 0;
 
-    if (extractStr(buf[0..n], "\"id\":")) |id_str| {
-        // ID is a number, not quoted
-        var digit_len: usize = 0;
-        for (id_str) |ch| {
-            if (std.ascii.isDigit(ch) and digit_len < 15) {
-                tmdb_id[digit_len] = ch;
-                digit_len += 1;
-            } else break;
-        }
-        tmdb_id_len = digit_len;
+    if (extractNumStr(buf[0..n], "\"id\":")) |id_str| {
+        const clen = @min(id_str.len, 15);
+        @memcpy(tmdb_id[0..clen], id_str[0..clen]);
+        tmdb_id_len = clen;
     }
 
     if (extractStr(buf[0..n], "\"media_type\":\"")) |mt| {
@@ -1136,7 +1186,7 @@ pub fn playItem(idx: usize) void {
         },
         .youtube, .stremio => {
             // Direct URL — load into mpv
-            if (state.app.players.items.len > 0) {
+            if (state.app.active_player_idx < state.app.players.items.len) {
                 const p = state.app.players.items[state.app.active_player_idx];
                 var url_z: [2049]u8 = undefined;
                 const ulen = item.url_len;
@@ -1170,6 +1220,22 @@ fn extractStr(data: []const u8, key: []const u8) ?[]const u8 {
     if (start >= data.len) return null;
     const end = std.mem.indexOfScalar(u8, data[start..], '"') orelse return null;
     return data[start..start + end];
+}
+
+fn extractNumStr(data: []const u8, key: []const u8) ?[]const u8 {
+    const ki = std.mem.indexOf(u8, data, key) orelse return null;
+    const start = ki + key.len;
+    if (start >= data.len) return null;
+    // Find end: next comma, brace, bracket, or whitespace
+    var end = start;
+    while (end < data.len) : (end += 1) {
+        switch (data[end]) {
+            ',', '}', ']', ' ', '\n' => break,
+            else => {},
+        }
+    }
+    if (end == start) return null;
+    return data[start..end];
 }
 
 fn findObjEnd(data: []const u8, start: usize) usize {

@@ -87,7 +87,7 @@ fn renderInlineChat() void {
         // so a reply-in-progress never looks like a blank/dead bubble; older
         // empty messages are still skipped.
         const active_empty = m.text_len == 0 and m.role == .assistant and
-            ai_chat.is_generating and mi + 1 == ai_chat.message_count;
+            ai_chat.is_generating.load(.acquire) and mi + 1 == ai_chat.message_count;
         if (m.text_len == 0 and !active_empty) continue;
         const is_user = m.role == .user;
 
@@ -571,7 +571,7 @@ pub fn renderGrid() !void {
             const header = @import("header.zig");
             if (p.current_torrent_id < 0 and i == state.app.active_player_idx and header.shouldUrlInputBeInGrid()) {
                 const ai_chat = @import("../services/ai_chat.zig");
-                const has_chat = ai_chat.message_count > 0 or ai_chat.is_generating;
+                const has_chat = ai_chat.message_count > 0 or ai_chat.is_generating.load(.acquire);
 
                 var outer = dvui.box(@src(), .{ .dir = .vertical }, .{
                     .id_extra = i,
@@ -612,7 +612,7 @@ pub fn renderGrid() !void {
                 // empty home so the hero input stays the single focal point.
                 if (has_chat) {
                     const voice = @import("../services/ai_voice.zig");
-                    const has_media = state.app.players.items.len > 0;
+                    const has_media = state.app.active_player_idx < state.app.players.items.len;
                     if (has_media) {
                         const ap = state.app.players.items[state.app.active_player_idx];
                         var title_buf: [128]u8 = undefined;
@@ -639,7 +639,7 @@ pub fn renderGrid() !void {
                         .transcribing => "Transcribing…",
                         .thinking => "Thinking…",
                         .speaking => "Speaking…",
-                        .idle => if (ai_chat_mod.is_generating) "Thinking…" else null,
+                        .idle => if (ai_chat_mod.is_generating.load(.acquire)) "Thinking…" else null,
                     };
                     if (phase_txt) |txt| {
                         _ = dvui.label(@src(), "{s}", .{txt}, .{

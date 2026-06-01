@@ -1007,7 +1007,7 @@ fn ensureOcrInit() bool {
         return false;
     }
     ocr_initialized = true;
-    logs.pushLog("info", "comics", "OCR initialized (PP-OCRv4 ONNX)", false);
+    logs.pushLog("info", "comics", "OCR initialized (PP-OCRv5 ONNX)", false);
     return true;
 }
 
@@ -1067,6 +1067,7 @@ pub fn toggleNarration() void {
         state.app.comic.narrating = true;
         state.app.comic.narrate_page = state.app.comic.current_page;
         
+        if (state.app.comic.narrate_thread) |t| t.join();
         state.app.comic.narrate_thread = std.Thread.spawn(.{}, narrationThread, .{}) catch {
             state.app.comic.narrating = false;
             logs.pushLog("error", "comics", "Failed to start narration thread", true);
@@ -1194,6 +1195,9 @@ fn isDialogueLine(line: []const u8) bool {
 
 /// Background narration: OCR current page → TTS → wait → advance → repeat
 fn narrationThread() void {
+    // NOTE: `narrating` is read without synchronization — the worst case is
+    // one extra loop iteration before we notice cancellation.  Acceptable
+    // because the thread performs no destructive writes once cancelled.
     const ai_voice = @import("ai_voice.zig");
     
     // Ensure TTS server is warmed up (with timeout so we don't block forever)
@@ -1285,6 +1289,7 @@ pub fn ocrCurrentPage() void {
         return;
     }
     
+    if (state.app.comic.ocr_thread) |t| t.join();
     state.app.comic.ocr_thread = std.Thread.spawn(.{}, struct {
         fn run(page: usize) void {
             ocrPage(page);

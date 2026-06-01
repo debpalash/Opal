@@ -39,8 +39,8 @@ pub fn clearResults() void {
     search_results.clearRetainingCapacity();
 }
 
-pub var is_searching: bool = false;
-pub var search_abort: bool = false;
+pub var is_searching: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+pub var search_abort: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 pub var search_thread: ?std.Thread = null;
 pub var search_buf = std.mem.zeroes([1024]u8);
 
@@ -218,7 +218,7 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
     // without touching any shared state.
     if (search_generation.load(.acquire) != my_gen) return;
 
-    is_searching = true;
+    is_searching.store(true, .release);
     clearResults();
 
     var argv = std.ArrayListUnmanaged([]const u8).empty;
@@ -240,7 +240,7 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
 
     while (reader.interface.takeDelimiter('\n') catch null) |line| {
         // Stop the moment a newer search supersedes us (also covers explicit abort).
-        if (search_abort or search_generation.load(.acquire) != my_gen) break;
+        if (search_abort.load(.acquire) or search_generation.load(.acquire) != my_gen) break;
 
         if (line.len == 0) continue;
         var it = std.mem.splitScalar(u8, line, '|');
@@ -252,13 +252,20 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
         const leech = it.next() orelse continue;
         const engine = it.next() orelse continue;
 
+        const link_d = allocator.dupe(u8, link) catch continue;
+        const name_d = allocator.dupe(u8, name) catch { allocator.free(link_d); continue; };
+        const size_d = allocator.dupe(u8, size_bytes) catch { allocator.free(link_d); allocator.free(name_d); continue; };
+        const seeds_d = allocator.dupe(u8, seeds) catch { allocator.free(link_d); allocator.free(name_d); allocator.free(size_d); continue; };
+        const leech_d = allocator.dupe(u8, leech) catch { allocator.free(link_d); allocator.free(name_d); allocator.free(size_d); allocator.free(seeds_d); continue; };
+        const engine_d = allocator.dupe(u8, engine) catch { allocator.free(link_d); allocator.free(name_d); allocator.free(size_d); allocator.free(seeds_d); allocator.free(leech_d); continue; };
+
         const item = SearchResult{
-            .link = allocator.dupe(u8, link) catch continue,
-            .name = allocator.dupe(u8, name) catch continue,
-            .size = allocator.dupe(u8, size_bytes) catch continue,
-            .seeds = allocator.dupe(u8, seeds) catch continue,
-            .leech = allocator.dupe(u8, leech) catch continue,
-            .engine = allocator.dupe(u8, engine) catch continue,
+            .link = link_d,
+            .name = name_d,
+            .size = size_d,
+            .seeds = seeds_d,
+            .leech = leech_d,
+            .engine = engine_d,
             .is_nsfw = isNsfwName(name),
         };
 
@@ -280,7 +287,7 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
 
     const superseded = search_generation.load(.acquire) != my_gen;
 
-    if (search_abort or superseded) {
+    if (search_abort.load(.acquire) or superseded) {
         _ = child.kill() catch {};
     }
     _ = child.wait() catch {};
@@ -290,17 +297,17 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
 
     // Also query EZTV JSON API directly (faster, no scraping)
     // Skip if engine filter is set to a non-EZTV specific engine
-    if (!search_abort and (engine_filter == .all or engine_filter == .eztv))
+    if (!search_abort.load(.acquire) and (engine_filter == .all or engine_filter == .eztv))
         queryEztvApi(query, allocator, my_gen);
 
-    if (!search_abort and search_generation.load(.acquire) == my_gen) {
+    if (!search_abort.load(.acquire) and search_generation.load(.acquire) == my_gen) {
         search_results_mutex.lock();
         std.sort.block(SearchResult, search_results.items, {}, sortResults);
         search_results_mutex.unlock();
     }
     // Only the current generation owns is_searching / search_thread.
     if (search_generation.load(.acquire) == my_gen) {
-        is_searching = false;
+        is_searching.store(false, .release);
         search_thread = null;
     }
 }
@@ -408,13 +415,20 @@ fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator, my_gen: u64) vo
             date_ts = std.fmt.parseInt(i64, body[ds..de], 10) catch 0;
         }
 
+        const link_d = allocator.dupe(u8, magnet) catch continue;
+        const name_d = allocator.dupe(u8, title) catch { allocator.free(link_d); continue; };
+        const size_d = allocator.dupe(u8, size_str) catch { allocator.free(link_d); allocator.free(name_d); continue; };
+        const seeds_d = allocator.dupe(u8, seeds_str) catch { allocator.free(link_d); allocator.free(name_d); allocator.free(size_d); continue; };
+        const leech_d = allocator.dupe(u8, "0") catch { allocator.free(link_d); allocator.free(name_d); allocator.free(size_d); allocator.free(seeds_d); continue; };
+        const engine_d = allocator.dupe(u8, "EZTV API") catch { allocator.free(link_d); allocator.free(name_d); allocator.free(size_d); allocator.free(seeds_d); allocator.free(leech_d); continue; };
+
         const item = SearchResult{
-            .link = allocator.dupe(u8, magnet) catch continue,
-            .name = allocator.dupe(u8, title) catch continue,
-            .size = allocator.dupe(u8, size_str) catch continue,
-            .seeds = allocator.dupe(u8, seeds_str) catch continue,
-            .leech = allocator.dupe(u8, "0") catch continue,
-            .engine = allocator.dupe(u8, "EZTV API") catch continue,
+            .link = link_d,
+            .name = name_d,
+            .size = size_d,
+            .seeds = seeds_d,
+            .leech = leech_d,
+            .engine = engine_d,
             .is_nsfw = isNsfwName(title),
             .added_ts = date_ts,
         };
@@ -444,14 +458,14 @@ pub fn triggerSearch(query_text: []const u8) void {
     // and frees only its own un-appended dupes. (H2)
     const new_gen = search_generation.fetchAdd(1, .acq_rel) + 1;
 
-    if (is_searching) {
-        search_abort = true;
+    if (is_searching.load(.acquire)) {
+        search_abort.store(true, .release);
         if (search_thread) |t| t.detach();
         search_thread = null;
-        is_searching = false;
+        is_searching.store(false, .release);
     }
 
-    search_abort = false;
+    search_abort.store(false, .release);
     history.addSearchHistory(query_text);
     const query = @import("../core/alloc.zig").allocator.dupe(u8, query_text) catch return;
     search_thread = std.Thread.spawn(.{}, asyncSearchTask, .{ query, new_gen }) catch {
@@ -700,7 +714,7 @@ pub fn renderSearchContent() void {
     defer search_results_mutex.unlock();
 
     // ── Status line ──
-    if (is_searching) {
+    if (is_searching.load(.acquire)) {
         var live_buf: [64]u8 = undefined;
         const live_lbl = std.fmt.bufPrintZ(&live_buf, "Searching… ({d} found)", .{search_results.items.len}) catch "Searching…";
         _ = dvui.label(@src(), "{s}", .{live_lbl}, .{
@@ -725,7 +739,7 @@ pub fn renderSearchContent() void {
     }
 
     // ── Show search history when no results ──
-    if (search_results.items.len == 0 and !is_searching and state.app.search_history_count > 0) {
+    if (search_results.items.len == 0 and !is_searching.load(.acquire) and state.app.search_history_count > 0) {
         // Header
         {
             var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -802,7 +816,7 @@ pub fn renderSearchContent() void {
     // When the user has a query in the box but the result list is empty
     // and nothing is in flight, show the canonical "no matches" surface
     // rather than a blank scroll area.
-    if (search_results.items.len == 0 and !is_searching) {
+    if (search_results.items.len == 0 and !is_searching.load(.acquire)) {
         const buf_has_text = std.mem.indexOfScalar(u8, &search_buf, 0) != @as(?usize, 0);
         if (buf_has_text) {
             components.emptyState(
@@ -827,7 +841,7 @@ pub fn renderSearchContent() void {
         defer page_row.deinit();
 
         // "Searching..." or result count on the left
-        if (is_searching) {
+        if (is_searching.load(.acquire)) {
             _ = dvui.label(@src(), "Searching…", .{}, .{
                 .color_text = theme.colors.warning,
                 .gravity_y = 0.5,

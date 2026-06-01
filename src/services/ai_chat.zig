@@ -94,7 +94,7 @@ pub var messages: [MAX_MESSAGES]Message = std.mem.zeroes([MAX_MESSAGES]Message);
 pub var message_count: usize = 0;
 pub var input_buf: [MAX_INPUT_LEN]u8 = std.mem.zeroes([MAX_INPUT_LEN]u8);
 pub var input_len: usize = 0;
-pub var is_generating: bool = false;
+pub var is_generating: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 /// Fine-grained phase reporting so the UI can show what the AI is
 /// actually doing, not just "Thinking…". Set at transitions in
@@ -138,7 +138,7 @@ pub fn clearHistory() void {
     message_count = kept;
     @memset(&input_buf, 0);
     input_len = 0;
-    is_generating = false;
+    is_generating.store(false, .release);
     last_error_len = 0;
     chat_result_count = 0;
     chat_results_active = false;
@@ -180,14 +180,14 @@ pub fn stopAll() void {
     voice.is_speaking = false;
     voice.is_recording = false;
     voice.is_transcribing = false;
-    is_generating = false;
+    is_generating.store(false, .release);
     voice.setPhase(.idle);
 
     // Pause v2 voice server (thread-safe; voice_socket is now private + mutex-guarded)
     voice.pauseVoiceServer();
 
     // Kill aplay + recording in background thread to avoid blocking render
-    _ = std.Thread.spawn(.{}, struct {
+    const t = std.Thread.spawn(.{}, struct {
         fn run() void {
             var kill_aplay = @import("../core/io_global.zig").Child.init(
                 &.{ "pkill", "-f", if (@import("builtin").os.tag == .macos) "say" else "aplay.*zigzag" },
@@ -205,7 +205,8 @@ pub fn stopAll() void {
             kill_rec.stderr_behavior = .Ignore;
             _ = kill_rec.spawnAndWait() catch {};
         }
-    }.run, .{}) catch {};
+    }.run, .{}) catch { return; };
+    t.detach();
 }
 
 // ══════════════════════════════════════════════════════════
@@ -229,7 +230,9 @@ pub fn renderChatBody() void {
         const S = struct { var shown: bool = false; };
         if (!S.shown and message_count == 0) {
             S.shown = true;
-            if (memory.getProactiveSuggestion()) |suggestion| {
+            var sug_buf: [256]u8 = undefined;
+            var sug_name_buf: [128]u8 = undefined;
+            if (memory.getProactiveSuggestion(&sug_buf, &sug_name_buf)) |suggestion| {
                 // Inject as assistant greeting
                 var msg = &messages[0];
                 msg.role = .assistant;
@@ -327,7 +330,7 @@ pub fn renderChatBody() void {
     // ── Live Feedback / Progress Indicator ──
     // Moved out of the input horizontal row to its own dedicated space above input
     var show_status_bar = false;
-    if (voice.conversation_active or is_generating or voice.is_speaking) {
+    if (voice.conversation_active or is_generating.load(.acquire) or voice.is_speaking) {
         show_status_bar = true;
     }
 
@@ -374,7 +377,7 @@ pub fn renderChatBody() void {
                     .color_text = theme.colors.text_tertiary,
                 });
             }
-        } else if (is_generating) {
+        } else if (is_generating.load(.acquire)) {
             _ = dvui.label(@src(), "Thinking...", .{}, .{
                 .color_text = theme.colors.text_secondary,
             });
@@ -417,7 +420,7 @@ pub fn renderChatBody() void {
         input_len = std.mem.indexOfScalar(u8, &input_buf, 0) orelse MAX_INPUT_LEN;
         te.deinit();
 
-        const can_send = input_len > 0 and !is_generating;
+        const can_send = input_len > 0 and !is_generating.load(.acquire);
 
         // Send button — the single accent affordance in this row.
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"send", .{}, .{}, .{
@@ -465,7 +468,7 @@ pub fn renderChatBody() void {
             }
 
             // Stop button — danger token only when something is active.
-            const is_active = is_generating or voice.is_speaking or voice.is_recording or voice.is_transcribing;
+            const is_active = is_generating.load(.acquire) or voice.is_speaking or voice.is_recording or voice.is_transcribing;
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"square", .{}, .{}, .{
                 .id_extra = 9009,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -768,7 +771,7 @@ fn renderMessage(mi: usize) void {
     // Empty assistant bubble — show status instead of a blank line so a
     // reply-in-progress or failed reply never renders as nothing.
     if (msg.text_len == 0) {
-        const ph: []const u8 = if (is_generating and mi + 1 == message_count) "Thinking…" else "(no response)";
+        const ph: []const u8 = if (is_generating.load(.acquire) and mi + 1 == message_count) "Thinking…" else "(no response)";
         _ = dvui.label(@src(), "{s}", .{ph}, .{
             .id_extra = mi + 7100,
             .expand = .horizontal,
@@ -1004,7 +1007,7 @@ fn queueChatResult(idx: usize) void {
 /// dropdown + grid chat both render lists and need to target one msg.
 pub fn regenerateFrom(assistant_idx: usize) void {
     if (assistant_idx >= message_count) return;
-    if (is_generating) return;
+    if (is_generating.load(.acquire)) return;
     if (messages[assistant_idx].role != .assistant) return;
     // Need a user message before it.
     if (assistant_idx == 0 or messages[assistant_idx - 1].role != .user) return;
@@ -1015,12 +1018,12 @@ pub fn regenerateFrom(assistant_idx: usize) void {
     // Trim everything after (tool-call tails, etc.)
     message_count = assistant_idx + 1;
 
-    is_generating = true;
+    is_generating.store(true, .release);
     phase = .waiting_server;
     last_error_len = 0;
 
     llm_thread = std.Thread.spawn(.{}, ai_context.generateResponse, .{}) catch {
-        is_generating = false;
+        is_generating.store(false, .release);
         phase = .idle;
         setError("Regenerate: failed to spawn thread");
         return;
@@ -1040,7 +1043,7 @@ pub fn trySendMessage() void {
 }
 
 pub fn sendMessage() void {
-    if (input_len == 0 or is_generating) return;
+    if (input_len == 0 or is_generating.load(.acquire)) return;
 
     // Check if this is a confirmation response for play
     if (awaiting_confirmation and recommended_idx != null) {
@@ -1101,11 +1104,12 @@ pub fn sendMessage() void {
 
     @memset(&input_buf, 0);
     input_len = 0;
-    is_generating = true;
+    is_generating.store(true, .release);
     last_error_len = 0;
 
     llm_thread = std.Thread.spawn(.{}, ai_context.generateResponse, .{}) catch {
-        is_generating = false;
+        is_generating.store(false, .release);
+        if (message_count > 0) message_count -= 1;
         setError("Failed to start AI thread");
         return;
     };
@@ -1134,7 +1138,7 @@ pub fn setAssistantError(assistant_idx: usize, err: []const u8) void {
 // ── Voice callback: ASR result → chat input ──
 fn onTranscribed(transcribed: []const u8) void {
     if (message_count >= MAX_MESSAGES) return;
-    if (is_generating) return; // prevent overlap
+    if (is_generating.load(.acquire)) return; // prevent overlap
     const tlen = @min(transcribed.len, MAX_INPUT_LEN - 1);
     @memcpy(input_buf[0..tlen], transcribed[0..tlen]);
     @memset(input_buf[tlen..], 0);
@@ -1239,7 +1243,7 @@ pub fn renderFloatingBubble() void {
 
             // Read what's playing
             const state_mod = @import("../core/state.zig");
-            if (state_mod.app.players.items.len > 0) {
+            if (state_mod.app.active_player_idx < state_mod.app.players.items.len) {
                 const ap = state_mod.app.players.items[state_mod.app.active_player_idx];
                 var name_buf: [128]u8 = undefined;
                 var curr_title: []const u8 = "Media";

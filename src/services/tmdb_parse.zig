@@ -74,13 +74,12 @@ pub fn extractJsonFloat(json: []const u8, key: []const u8) f32 {
     return std.fmt.parseFloat(f32, after[start..i]) catch 0;
 }
 
-pub fn formatDate(iso: []const u8) []const u8 {
-    const S = struct { var buf: [16]u8 = undefined; };
+pub fn formatDate(out_buf: *[16]u8, iso: []const u8) []const u8 {
     if (iso.len < 10) return iso;
     const months = [_][]const u8{ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
     const mm = std.fmt.parseInt(u8, iso[5..7], 10) catch return iso;
     if (mm < 1 or mm > 12) return iso;
-    const result = std.fmt.bufPrint(&S.buf, "{s} {s}, {s}", .{ months[mm - 1], iso[8..10], iso[0..4] }) catch return iso;
+    const result = std.fmt.bufPrint(out_buf, "{s} {s}, {s}", .{ months[mm - 1], iso[8..10], iso[0..4] }) catch return iso;
     return result;
 }
 
@@ -135,7 +134,8 @@ fn parseAndAddItem(json_obj: []const u8) !void {
     if (extractJsonString(json_obj, "\"release_date\":")) |date| {
         if (date.len >= 4) { @memcpy(item.year[0..4], date[0..4]); item.year_len = 4; }
         if (date.len >= 10) {
-            const fdate = formatDate(date[0..10]);
+            var date_buf: [16]u8 = undefined;
+            const fdate = formatDate(&date_buf, date[0..10]);
             const flen = @min(fdate.len, 15);
             @memcpy(item.release_date[0..flen], fdate[0..flen]);
             item.release_date_len = flen;
@@ -143,7 +143,8 @@ fn parseAndAddItem(json_obj: []const u8) !void {
     } else if (extractJsonString(json_obj, "\"first_air_date\":")) |date| {
         if (date.len >= 4) { @memcpy(item.year[0..4], date[0..4]); item.year_len = 4; }
         if (date.len >= 10) {
-            const fdate = formatDate(date[0..10]);
+            var date_buf2: [16]u8 = undefined;
+            const fdate = formatDate(&date_buf2, date[0..10]);
             const flen = @min(fdate.len, 15);
             @memcpy(item.release_date[0..flen], fdate[0..flen]);
             item.release_date_len = flen;

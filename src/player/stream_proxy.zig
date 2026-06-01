@@ -328,7 +328,7 @@ fn handleConnectionThread(args: ConnArgs) void {
 }
 
 fn writeStatus(stream: std.Io.net.Stream, status: []const u8) void {
-    var buf: [64]u8 = undefined;
+    var buf: [128]u8 = undefined;
     const line = std.fmt.bufPrint(&buf, "HTTP/1.1 {s}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", .{status}) catch return;
     _ = io_g.streamWriteAll(stream, line) catch {};
 }

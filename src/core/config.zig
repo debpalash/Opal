@@ -18,8 +18,9 @@ pub fn save() void {
     _ = d;
 
     db.exec("BEGIN");
+    var fb: [64]u8 = undefined;
 
-    setKey("ui_scale", fmtFloat(state.app.ui_scale));
+    setKey("ui_scale", fmtFloat(&fb, state.app.ui_scale));
     setKey("grid_mode", switch (state.app.grid_mode) {
         .auto => "auto", .cols_1 => "1", .cols_2 => "2", .cols_3 => "3", .cols_4 => "4",
     });
@@ -32,21 +33,21 @@ pub fn save() void {
     setKey("translate_lang", state.app.translate_lang_buf[0..state.app.translate_lang_len]);
     setKey("translate_enabled", if (state.app.translate_enabled) "1" else "0");
     setKey("tts_voice", state.app.tts_voice_buf[0..state.app.tts_voice_len]);
-    setKey("tts_speed", fmtFloat(state.app.tts_speed));
-    setKey("kokoro_sid", fmtInt(@as(usize, @import("../services/voice_backend.zig").kokoro_sid)));
+    setKey("tts_speed", fmtFloat(&fb, state.app.tts_speed));
+    setKey("kokoro_sid", fmtInt(&fb, @as(usize, @import("../services/voice_backend.zig").kokoro_sid)));
     setKey("lang_learn", if (state.app.lang_learn_enabled) "1" else "0");
     setKey("asr_enabled", if (state.app.asr_enabled) "1" else "0");
     setKey("dubbing_enabled", if (state.app.dubbing_enabled) "1" else "0");
-    setKey("eq_preset", fmtInt(state.app.eq_preset));
-    setKey("download_rate_limit", fmtInt(@as(usize, @intCast(state.app.download_rate_limit))));
+    setKey("eq_preset", fmtInt(&fb, state.app.eq_preset));
+    setKey("download_rate_limit", fmtInt(&fb, @as(usize, @intCast(state.app.download_rate_limit))));
     setKey("proxy_url", state.app.proxy_url[0..state.app.proxy_url_len]);
-    setKey("ytdl_format_idx", fmtInt(state.app.ytdl_format_idx));
-    setKey("drawer_width_px", fmtFloat(state.app.drawer_width_px));
+    setKey("ytdl_format_idx", fmtInt(&fb, state.app.ytdl_format_idx));
+    setKey("drawer_width_px", fmtFloat(&fb, state.app.drawer_width_px));
     setKey("tmdb_api_key", state.app.tmdb.api_key[0..state.app.tmdb.api_key_len]);
     setKey("opensub_api_key", state.app.opensub_api_key[0..state.app.opensub_api_key_len]);
     setKey("sponsorblock_enabled", if (state.app.sponsorblock_enabled) "1" else "0");
     setKey("deband_enabled", if (state.app.deband_enabled) "1" else "0");
-    setKey("video_scaler", fmtInt(@as(usize, state.app.video_scaler)));
+    setKey("video_scaler", fmtInt(&fb, @as(usize, state.app.video_scaler)));
     setKey("jf_server_url", state.app.jf.server_url[0..state.app.jf.server_url_len]);
     setKey("jf_token", state.app.jf.token[0..state.app.jf.token_len]);
     setKey("jf_user_id", state.app.jf.user_id[0..state.app.jf.user_id_len]);
@@ -57,10 +58,10 @@ pub fn save() void {
     }
 
     // Window state
-    setKey("win_x", fmtInt(@as(usize, @intCast(@max(0, state.app.win_x)))));
-    setKey("win_y", fmtInt(@as(usize, @intCast(@max(0, state.app.win_y)))));
-    setKey("win_w", fmtInt(@as(usize, @intCast(@max(100, state.app.win_w)))));
-    setKey("win_h", fmtInt(@as(usize, @intCast(@max(100, state.app.win_h)))));
+    setKey("win_x", fmtInt(&fb, @as(usize, @intCast(@max(0, state.app.win_x)))));
+    setKey("win_y", fmtInt(&fb, @as(usize, @intCast(@max(0, state.app.win_y)))));
+    setKey("win_w", fmtInt(&fb, @as(usize, @intCast(@max(100, state.app.win_w)))));
+    setKey("win_h", fmtInt(&fb, @as(usize, @intCast(@max(100, state.app.win_h)))));
     // drawer_open intentionally not persisted — always start with sidebar closed
     setKey("theme_preset", theme.presetName(theme.active_preset));
 
@@ -307,12 +308,10 @@ pub fn migrateFromTsv() void {
 // Formatting helpers
 // ══════════════════════════════════════════════════════════
 
-var fmt_buf: [64]u8 = undefined;
-
-fn fmtFloat(v: f32) []const u8 {
-    return std.fmt.bufPrint(&fmt_buf, "{d:.2}", .{v}) catch "0";
+fn fmtFloat(buf: *[64]u8, v: f32) []const u8 {
+    return std.fmt.bufPrint(buf, "{d:.2}", .{v}) catch "0";
 }
 
-fn fmtInt(v: usize) []const u8 {
-    return std.fmt.bufPrint(&fmt_buf, "{d}", .{v}) catch "0";
+fn fmtInt(buf: *[64]u8, v: usize) []const u8 {
+    return std.fmt.bufPrint(buf, "{d}", .{v}) catch "0";
 }

@@ -213,6 +213,7 @@ fn tokenizeWords(text: []const u8) void {
 
 /// Perform HTTP GET using curl (reliable, handles encoding/redirects).
 fn httpGetRaw(url_str: []const u8, response_buf: []u8) !usize {
+    // TODO: use unique temp paths for security (predictable /tmp names on multi-user systems)
     const tmp_path = "/tmp/zigzag_http_resp";
     
     var child = @import("../core/io_global.zig").Child.init(
@@ -292,6 +293,7 @@ fn ttsWorker(word_idx: usize) void {
     
     if (body_len < 44) return;
     
+    // TODO: use unique temp paths for security (predictable /tmp names on multi-user systems)
     const wav_path = "/tmp/zigzag_tts_word.wav";
     const file = @import("../core/io_global.zig").cwdCreateFile(wav_path, .{ .truncate = true }) catch return;
     @import("../core/io_global.zig").writeAll(file, wav_buf[0..body_len]) catch { file.close(@import("../core/io_global.zig").io()); return; };
@@ -326,7 +328,13 @@ fn ttsLineWorker() void {
         speaking_word_idx = -1;
     }
     
-    const text = current_sub_text[0..current_sub_len];
+    // Snapshot subtitle text into a local buffer to avoid racing with
+    // the main thread's pollSubtitle() which may update current_sub_text.
+    var text_buf: [MAX_SUB_LEN]u8 = undefined;
+    const text_len = current_sub_len;
+    if (text_len == 0) return;
+    @memcpy(text_buf[0..text_len], current_sub_text[0..text_len]);
+    const text = text_buf[0..text_len];
     
     // URL-encode the full subtitle line
     var encoded_text: [2048]u8 = undefined;
@@ -344,6 +352,7 @@ fn ttsLineWorker() void {
     const body_len = httpGetRaw(url, &wav_buf) catch return;
     if (body_len < 44) return;
     
+    // TODO: use unique temp paths for security (predictable /tmp names on multi-user systems)
     const wav_path = "/tmp/zigzag_tts_line.wav";
     const file = @import("../core/io_global.zig").cwdCreateFile(wav_path, .{ .truncate = true }) catch return;
     @import("../core/io_global.zig").writeAll(file, wav_buf[0..body_len]) catch { file.close(@import("../core/io_global.zig").io()); return; };
@@ -362,8 +371,13 @@ fn translateWorker() void {
         translate_busy = false;
     }
     
-    const text = current_sub_text[0..current_sub_len];
-    if (text.len == 0) return;
+    // Snapshot subtitle text into a local buffer to avoid racing with
+    // the main thread's pollSubtitle() which may update current_sub_text.
+    var text_buf: [MAX_SUB_LEN]u8 = undefined;
+    const text_len = current_sub_len;
+    if (text_len == 0) return;
+    @memcpy(text_buf[0..text_len], current_sub_text[0..text_len]);
+    const text = text_buf[0..text_len];
     
     const target_lang = state.app.translate_lang_buf[0..state.app.translate_lang_len];
     
@@ -554,8 +568,13 @@ fn dubWorker() void {
         state.app.dub_busy = false;
     }
     
-    const text = current_sub_text[0..current_sub_len];
-    if (text.len == 0) return;
+    // Snapshot subtitle text into a local buffer to avoid racing with
+    // the main thread's pollSubtitle() which may update current_sub_text.
+    var text_buf: [MAX_SUB_LEN]u8 = undefined;
+    const text_len = current_sub_len;
+    if (text_len == 0) return;
+    @memcpy(text_buf[0..text_len], current_sub_text[0..text_len]);
+    const text = text_buf[0..text_len];
     
     const target_lang = state.app.translate_lang_buf[0..state.app.translate_lang_len];
     
@@ -885,8 +904,8 @@ pub fn saveSubtitleFlashcard() void {
     };
     defer file.close(@import("../core/io_global.zig").io());
     
-    // Seek to end — 0.16 removed seekFromEnd; use file length as offset elsewhere if needed
-    _ = file.length(@import("../core/io_global.zig").io()) catch 0;
+    // Get file length so we can append at the end (0.16 has no seekTo)
+    const file_len = file.length(@import("../core/io_global.zig").io()) catch 0;
 
     // Get current source (file name or stream)
     const source_name = p.source_url[0..p.source_url_len];
@@ -933,7 +952,7 @@ pub fn saveSubtitleFlashcard() void {
         esc_tl_buf[0..tl_idx]
     }) catch return;
 
-    @import("../core/io_global.zig").writeAll(file, line) catch {
+    file.writePositionalAll(@import("../core/io_global.zig").io(), line, file_len) catch {
         logs.pushLog("error", "lang", "Failed to write flashcard data", true);
         return;
     };

@@ -47,7 +47,6 @@ var db_initialized: bool = false;
 
 pub fn initDb() void {
     if (db_initialized) return;
-    db_initialized = true;
 
     const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
     var path_buf: [256]u8 = undefined;
@@ -62,6 +61,7 @@ pub fn initDb() void {
         db = null;
         return;
     }
+    db_initialized = true;
 
     // Create table
     const sql = "CREATE TABLE IF NOT EXISTS queue (" ++
@@ -237,8 +237,8 @@ pub fn renderContent() void {
     initDb();
 
     // Auto-trigger thumb backfill on first render
-    if (!thumb_backfill_done and !thumb_backfill_active and queue_count > 0) {
-        thumb_backfill_done = true;
+    if (!thumb_backfill_done.load(.acquire) and !thumb_backfill_active.load(.acquire) and queue_count > 0) {
+        thumb_backfill_done.store(true, .release);
         // Check if any items need thumbs
         for (queue_items[0..queue_count]) |*item| {
             if (item.thumb_url_len == 0 and item.url_len > 0) {
@@ -266,14 +266,14 @@ pub fn renderContent() void {
 
         { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
 
-        if (dvui.button(@src(), if (thumb_backfill_active) "Stop Fetch" else "Fetch Thumbs", .{}, .{
-            .color_fill = if (thumb_backfill_active) dvui.Color{ .r = 80, .g = 30, .b = 30, .a = 200 } else theme.colors.accent,
-            .color_text = if (thumb_backfill_active) theme.colors.danger else dvui.Color.white,
+        if (dvui.button(@src(), if (thumb_backfill_active.load(.acquire)) "Stop Fetch" else "Fetch Thumbs", .{}, .{
+            .color_fill = if (thumb_backfill_active.load(.acquire)) dvui.Color{ .r = 80, .g = 30, .b = 30, .a = 200 } else theme.colors.accent,
+            .color_text = if (thumb_backfill_active.load(.acquire)) theme.colors.danger else dvui.Color.white,
             .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
             .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
         })) {
-            if (thumb_backfill_active) {
-                thumb_backfill_cancel = true;
+            if (thumb_backfill_active.load(.acquire)) {
+                thumb_backfill_cancel.store(true, .release);
             } else {
                 startThumbBackfill();
             }
@@ -326,7 +326,7 @@ pub fn renderContent() void {
 }
 
 fn renderNowPlaying() void {
-    if (state.app.players.items.len == 0) return;
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
     const ap = state.app.players.items[state.app.active_player_idx];
 
     // Get media-title from mpv
@@ -491,7 +491,7 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
 
 fn playQueueItem(item: *QueueItem) void {
     const extractors = @import("extractors.zig");
-    if (state.app.players.items.len == 0) return;
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
     const ap = state.app.players.items[state.app.active_player_idx];
 
     const raw_url = item.url[0..item.url_len];
@@ -587,43 +587,54 @@ fn fetchQueueThumb(item: *QueueItem) void {
 
     item.thumb_fetching = true;
 
-    _ = std.Thread.spawn(.{}, struct {
-        fn worker(ptr: *QueueItem) void {
-            defer {
-                // A thumbnail that produced no pixels is a terminal failure;
-                // mark it so the render loop stops respawning a fetch for it.
-                if (ptr.thumb_pixels == null and ptr.thumb_tex == null) ptr.thumb_failed = true;
-                ptr.thumb_fetching = false;
-                _ = thumb_threads_active.fetchSub(1, .acq_rel);
+    // Copy ID and URL into struct statics so the thread doesn't hold a pointer
+    // into the mutable queue_items array (which can be rewritten by loadFromDb).
+    const S = struct {
+        var item_id: i64 = 0;
+        var url_buf: [512]u8 = undefined;
+        var url_len: usize = 0;
+
+        fn findById(id: i64) ?*QueueItem {
+            for (queue_items[0..queue_count]) |*qi| {
+                if (qi.id == id) return qi;
             }
+            return null;
+        }
+
+        fn worker() void {
+            defer _ = thumb_threads_active.fetchSub(1, .acq_rel);
+
+            const id = @This().item_id;
+            const url = @This().url_buf[0..@This().url_len];
 
             // 1) Check disk cache first
             var path_buf: [384]u8 = undefined;
-            if (thumbCachePath(ptr.id, &path_buf)) |cache_path| {
-                if (@import("../core/io_global.zig").cwdOpenFile(cache_path, .{})) |file| {
-                    defer file.close(@import("../core/io_global.zig").io());
-                    const stat = file.stat(@import("../core/io_global.zig").io()) catch return;
-                    if (stat.size > 100 and stat.size < 2 * 1024 * 1024) {
-                        const cached = alloc.alloc(u8, stat.size) catch return;
-                        const n = @import("../core/io_global.zig").readAll(file, cached) catch {
-                            alloc.free(cached);
-                            return;
-                        };
-                        if (n > 100) {
-                            decodeAndStore(ptr, cached[0..n]);
-                            alloc.free(cached);
-                            return;
-                        }
-                        alloc.free(cached);
-                    }
-                } else |_| {}
+            const cached_body = blk: {
+                const cache_path = thumbCachePath(id, &path_buf) orelse break :blk null;
+                const file = @import("../core/io_global.zig").cwdOpenFile(cache_path, .{}) catch break :blk null;
+                defer file.close(@import("../core/io_global.zig").io());
+                const stat = file.stat(@import("../core/io_global.zig").io()) catch break :blk null;
+                if (stat.size <= 100 or stat.size >= 2 * 1024 * 1024) break :blk null;
+                const cached = alloc.alloc(u8, stat.size) catch break :blk null;
+                const n = @import("../core/io_global.zig").readAll(file, cached) catch {
+                    alloc.free(cached);
+                    break :blk null;
+                };
+                if (n <= 100) { alloc.free(cached); break :blk null; }
+                break :blk cached[0..n];
+            };
+
+            if (cached_body) |body| {
+                defer alloc.free(body);
+                decodeAndStoreById(id, body);
+                return;
             }
 
             // 2) Download from network
-            var client = std.http.Client{ .allocator = alloc , .io = @import("../core/io_global.zig").io() };
+            var client = std.http.Client{ .allocator = alloc, .io = @import("../core/io_global.zig").io() };
             defer client.deinit();
 
-            const uri = std.Uri.parse(ptr.thumb_url[0..ptr.thumb_url_len]) catch return;
+            const uri = std.Uri.parse(url) catch return;
             var req = client.request(.GET, uri, .{ .extra_headers = &.{ .{ .name = "Accept", .value = "image/jpeg, image/webp" } } }) catch return;
             defer req.deinit();
             req.sendBodiless() catch return;
@@ -643,7 +654,7 @@ fn fetchQueueThumb(item: *QueueItem) void {
 
             // 3) Save to disk cache
             @import("../core/io_global.zig").cwdMakePath(thumb_cache_dir) catch {};
-            if (thumbCachePath(ptr.id, &path_buf)) |cache_path| {
+            if (thumbCachePath(id, &path_buf)) |cache_path| {
                 if (@import("../core/io_global.zig").cwdCreateFile(cache_path, .{})) |cf| {
                     _ = @import("../core/io_global.zig").writeAll(cf, body) catch {};
                     cf.close(@import("../core/io_global.zig").io());
@@ -651,10 +662,10 @@ fn fetchQueueThumb(item: *QueueItem) void {
             }
 
             // 4) Decode and store pixels
-            decodeAndStore(ptr, body);
+            decodeAndStoreById(id, body);
         }
 
-        fn decodeAndStore(ptr: *QueueItem, body: []const u8) void {
+        fn decodeAndStoreById(id: i64, body: []const u8) void {
             var w: c_int = 0;
             var h: c_int = 0;
             var comp: c_int = 0;
@@ -666,12 +677,31 @@ fn fetchQueueThumb(item: *QueueItem) void {
             const p_slice = alloc.alloc(u8, p_len) catch return;
             @memcpy(p_slice, pixels[0..p_len]);
 
-            ptr.thumb_w = @intCast(w);
-            ptr.thumb_h = @intCast(h);
-            ptr.thumb_pixels = p_slice;
+            // Look up item by ID — safe even if array was rewritten
+            if (@This().findById(id)) |ptr| {
+                ptr.thumb_w = @intCast(w);
+                ptr.thumb_h = @intCast(h);
+                ptr.thumb_pixels = p_slice;
+                ptr.thumb_fetching = false;
+                ptr.thumb_failed = false;
+            } else {
+                // Item no longer in queue — free the decoded pixels
+                alloc.free(p_slice);
+            }
         }
-    }.worker, .{item}) catch {
-        // Spawn failed: release the reserved slot and re-arm for a later frame.
+    };
+
+    S.item_id = item.id;
+    const url = item.thumb_url[0..item.thumb_url_len];
+    if (url.len > S.url_buf.len) {
+        item.thumb_fetching = false;
+        _ = thumb_threads_active.fetchSub(1, .acq_rel);
+        return;
+    }
+    @memcpy(S.url_buf[0..url.len], url);
+    S.url_len = url.len;
+
+    _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
         item.thumb_fetching = false;
         _ = thumb_threads_active.fetchSub(1, .acq_rel);
     };
@@ -681,20 +711,20 @@ fn fetchQueueThumb(item: *QueueItem) void {
 // Thumbnail Backfill (for items added before thumb support)
 // ══════════════════════════════════════════════════════════
 
-var thumb_backfill_active: bool = false;
-var thumb_backfill_done: bool = false;
-var thumb_backfill_cancel: bool = false;
+var thumb_backfill_active: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var thumb_backfill_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var thumb_backfill_cancel: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 fn startThumbBackfill() void {
-    if (thumb_backfill_active) return;
-    thumb_backfill_active = true;
-    thumb_backfill_cancel = false;
+    if (thumb_backfill_active.load(.acquire)) return;
+    thumb_backfill_active.store(true, .release);
+    thumb_backfill_cancel.store(false, .release);
     state.showToast("Fetching thumbnails...");
 
     _ = std.Thread.spawn(.{}, struct {
         fn worker() void {
             defer {
-                thumb_backfill_active = false;
+                thumb_backfill_active.store(false, .release);
                 state.showToast("Thumbnail fetch complete");
             }
 
@@ -717,7 +747,7 @@ fn startThumbBackfill() void {
             if (need_count == 0) return;
 
             for (0..need_count) |i| {
-                if (thumb_backfill_cancel) {
+                if (thumb_backfill_cancel.load(.acquire)) {
                     state.showToast("Thumbnail fetch cancelled");
                     return;
                 }
@@ -754,7 +784,7 @@ fn startThumbBackfill() void {
             }
         }
     }.worker, .{}) catch {
-        thumb_backfill_active = false;
+        thumb_backfill_active.store(false, .release);
     };
 }
 

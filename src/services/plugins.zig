@@ -608,6 +608,8 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                     }
                 } else {
                     // Regular URL → mpv loadfile
+                    // Reject URLs containing quotes to prevent mpv command injection
+                    if (std.mem.indexOfScalar(u8, url, '"') != null) return;
                     const pl = state.app.players.items[state.app.active_player_idx];
                     var cmd_buf2: [600]u8 = undefined;
                     const cmd = std.fmt.bufPrintZ(&cmd_buf2, "loadfile \"{s}\"", .{url}) catch return;
@@ -778,9 +780,11 @@ pub fn fetchPoster(item: *PluginResult) void {
             const p_slice = c_alloc.alloc(u8, p_len) catch return;
             @memcpy(p_slice, pixels[0..p_len]);
             
+            results_mutex.lock();
             ptr.poster_w = @intCast(w);
             ptr.poster_h = @intCast(h);
             ptr.poster_pixels = p_slice;
+            results_mutex.unlock();
         }
     }.worker, .{item}) catch {};
 }
@@ -999,10 +1003,13 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                 // If stream_url is already set, play directly
                 if (item.stream_url_len > 0) {
                     const cc = @import("../core/c.zig");
+                    // Reject URLs containing quotes to prevent mpv command injection
+                    const stream_slice = item.stream_url[0..item.stream_url_len];
+                    if (std.mem.indexOfScalar(u8, stream_slice, '"') != null) return;
                     if (state.app.players.items.len > 0 and state.app.active_player_idx < state.app.players.items.len) {
                         const p = state.app.players.items[state.app.active_player_idx];
                         var cmd_buf: [600]u8 = undefined;
-                        const cmd = std.fmt.bufPrintZ(&cmd_buf, "loadfile \"{s}\"", .{item.stream_url[0..item.stream_url_len]}) catch "";
+                        const cmd = std.fmt.bufPrintZ(&cmd_buf, "loadfile \"{s}\"", .{stream_slice}) catch "";
                         if (cmd.len > 0) _ = cc.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
                     }
                 } else if (item.episodes > 0) {

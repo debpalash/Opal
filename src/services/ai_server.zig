@@ -363,8 +363,8 @@ pub fn stopServer() void {
         .gemma_llama => "llama-server",
     };
     var pkill = @import("../core/io_global.zig").Child.init(&.{ "pkill", "-f", pkill_pattern }, @import("../core/alloc.zig").allocator);
-    pkill.stdout_behavior = .Pipe;
-    pkill.stderr_behavior = .Pipe;
+    pkill.stdout_behavior = .Ignore;
+    pkill.stderr_behavior = .Ignore;
     if (pkill.spawn()) |_| {} else |_| {}
     _ = pkill.wait() catch {};
 

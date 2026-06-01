@@ -1103,7 +1103,12 @@ pub fn renderLiquidGlassOverlay() void {
         var volume: f64 = 100.0;
         var pl_count: i64 = 0;
         var pl_pos: i64 = 0;
+        var last_player_idx: usize = 0;
     };
+    if (SlowProps.last_player_idx != state.app.active_player_idx) {
+        SlowProps.last_player_idx = state.app.active_player_idx;
+        SlowProps.frame_ctr = 8; // force refresh on next frame
+    }
     SlowProps.frame_ctr +%= 1;
     if (SlowProps.frame_ctr % 8 == 0) {
         _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "speed", c.mpv.MPV_FORMAT_DOUBLE, &SlowProps.speed);

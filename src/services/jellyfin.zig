@@ -343,7 +343,7 @@ pub fn playItem(item_id: []const u8) void {
     const url = std.fmt.bufPrintZ(&url_buf, "{s}/Videos/{s}/stream?static=true&api_key={s}", .{ server, item_id, token }) catch return;
 
     // Use the player module to load URL into mpv
-    if (state.app.players.items.len > 0) {
+    if (state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
         p.load_file(url.ptr);
         state.showToast("Playing from Jellyfin");
@@ -364,7 +364,7 @@ pub fn playAudioItem(item_id: []const u8) void {
         state.app.jf.user_id[0..state.app.jf.user_id_len],
     }) catch return;
 
-    if (state.app.players.items.len > 0) {
+    if (state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
         p.load_file(url.ptr);
         state.showToast("Playing audio from Jellyfin");

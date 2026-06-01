@@ -16,6 +16,7 @@ var host_thread: ?std.Thread = null;
 var host_running: bool = false;
 var client_streams: [8]?std.Io.net.Stream = .{null} ** 8;
 var client_count: usize = 0;
+var clients_mutex: @import("../core/sync.zig").Mutex = .{};
 
 // Client state
 var client_thread: ?std.Thread = null;
@@ -78,6 +79,7 @@ pub fn leaveParty() void {
         }
         if (host_thread) |t| t.join();
         host_thread = null;
+        clients_mutex.lock();
         for (&client_streams) |*cs| {
             if (cs.*) |s| {
                 s.close(@import("../core/io_global.zig").io());
@@ -85,6 +87,7 @@ pub fn leaveParty() void {
             }
         }
         client_count = 0;
+        clients_mutex.unlock();
     } else if (role == .client) {
         client_running = false;
         if (client_stream) |s| {
@@ -168,6 +171,8 @@ pub fn pushChat(msg: []const u8) void {
 }
 
 fn broadcast(msg: []const u8) void {
+    clients_mutex.lock();
+    defer clients_mutex.unlock();
     for (&client_streams) |*cs| {
         if (cs.*) |s| {
             _ = @import("../core/io_global.zig").streamWriteAll(s, msg) catch {
@@ -192,7 +197,9 @@ fn hostLoop() void {
             conn.close(@import("../core/io_global.zig").io());
             break;
         }
+        clients_mutex.lock();
         if (client_count >= 8) {
+            clients_mutex.unlock();
             conn.close(@import("../core/io_global.zig").io());
             continue;
         }
@@ -202,6 +209,7 @@ fn hostLoop() void {
                 client_count += 1;
                 var msg_buf: [64]u8 = undefined;
                 const toast_msg = std.fmt.bufPrint(&msg_buf, "Party: {d} viewers", .{client_count}) catch "Party: +1";
+                clients_mutex.unlock();
                 state.showToast(toast_msg);
 
                 var chat_buf: [64]u8 = undefined;
@@ -222,6 +230,8 @@ fn hostLoop() void {
                 _ = std.Thread.spawn(.{}, hostClientReader, .{conn}) catch {};
                 break;
             }
+        } else {
+            clients_mutex.unlock();
         }
     }
 }
@@ -229,7 +239,7 @@ fn hostLoop() void {
 fn hostClientReader(stream: std.Io.net.Stream) void {
     var line_buf: [256]u8 = undefined;
     while (host_running) {
-        const n = @import("../core/io_global.zig").streamReadAll(stream, &line_buf) catch break;
+        const n = @import("../core/io_global.zig").streamRead(stream, &line_buf) catch break;
         if (n == 0) break;
 
         var lines = std.mem.splitScalar(u8, line_buf[0..n], '\n');
@@ -268,7 +278,7 @@ fn clientLoop(ip_buf: [46]u8, ip_len: usize) void {
 
     var line_buf: [4096]u8 = undefined;
     while (client_running) {
-        const n = @import("../core/io_global.zig").streamReadAll(stream, &line_buf) catch break;
+        const n = @import("../core/io_global.zig").streamRead(stream, &line_buf) catch break;
         if (n == 0) break;
 
         var lines = std.mem.splitScalar(u8, line_buf[0..n], '\n');
@@ -286,7 +296,7 @@ fn clientLoop(ip_buf: [46]u8, ip_len: usize) void {
 }
 
 fn applyCommand(cmd: []const u8) void {
-    if (state.app.players.items.len == 0) return;
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
     const ap = state.app.players.items[state.app.active_player_idx];
 
     if (std.mem.eql(u8, cmd, "PAUSE")) {
@@ -294,8 +304,18 @@ fn applyCommand(cmd: []const u8) void {
     } else if (std.mem.eql(u8, cmd, "PLAY")) {
         _ = c.mpv.mpv_command_string(ap.mpv_ctx, "set pause no");
     } else if (std.mem.startsWith(u8, cmd, "SEEK ")) {
+        // Validate the seek value is numeric (prevent mpv command injection)
+        const seek_val = cmd[5..];
+        var valid = seek_val.len > 0;
+        for (seek_val) |ch| {
+            if (!std.ascii.isDigit(ch) and ch != '.' and ch != '-') {
+                valid = false;
+                break;
+            }
+        }
+        if (!valid) return;
         var seek_buf: [64]u8 = undefined;
-        const seek_cmd = std.fmt.bufPrintZ(&seek_buf, "seek {s} absolute", .{cmd[5..]}) catch return;
+        const seek_cmd = std.fmt.bufPrintZ(&seek_buf, "seek {s} absolute", .{seek_val}) catch return;
         _ = c.mpv.mpv_command_string(ap.mpv_ctx, seek_cmd.ptr);
     } else if (std.mem.startsWith(u8, cmd, "LOAD ")) {
         const url = cmd[5..];
@@ -318,7 +338,12 @@ fn applyCommand(cmd: []const u8) void {
 pub fn statusText(buf: *[64]u8) []const u8 {
     return switch (role) {
         .none => "No Party",
-        .host => std.fmt.bufPrint(buf, "Hosting ({d} viewers)", .{client_count}) catch "Hosting",
+        .host => blk: {
+            clients_mutex.lock();
+            const cc = client_count;
+            clients_mutex.unlock();
+            break :blk std.fmt.bufPrint(buf, "Hosting ({d} viewers)", .{cc}) catch "Hosting";
+        },
         .client => "Connected",
     };
 }

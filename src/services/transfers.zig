@@ -136,6 +136,13 @@ fn renderFilesInline() void {
         triggerFileScan(effective_path); // non-blocking — bg thread updates cache
     }
 
+    // Snapshot file-cache state under the mutex so the bg scan thread
+    // can't update it mid-render (the bg thread writes under files_mutex).
+    files_mutex.lock();
+    const snap_count = cached_files_count;
+    const snap_error = cached_files_error;
+    files_mutex.unlock();
+
     // Path bar — clickable breadcrumb opens folder in Finder/Files
     {
         var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -148,7 +155,7 @@ fn renderFilesInline() void {
         defer prow.deinit();
 
         var lbuf: [256]u8 = undefined;
-        const lbl = std.fmt.bufPrintZ(&lbuf, "  {s}  ({d} items)", .{ effective_path, cached_files_count }) catch effective_path;
+        const lbl = std.fmt.bufPrintZ(&lbuf, "  {s}  ({d} items)", .{ effective_path, snap_count }) catch effective_path;
         if (dvui.button(@src(), lbl, .{}, .{
             .expand = .horizontal,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -177,8 +184,8 @@ fn renderFilesInline() void {
         }
     }
 
-    if (cached_files_count == 0) {
-        if (cached_files_error) {
+    if (snap_count == 0) {
+        if (snap_error) {
             _ = dvui.label(@src(), "Cannot open download folder", .{}, .{
                 .color_text = theme.colors.danger,
                 .padding = .{ .x = 14, .y = 14, .w = 0, .h = 0 },
@@ -209,7 +216,7 @@ fn renderFilesInline() void {
 
     // File rows
     var fi: usize = 0;
-    while (fi < cached_files_count) : (fi += 1) {
+    while (fi < snap_count) : (fi += 1) {
         const name = cached_files_names[fi][0..cached_files_name_lens[fi]];
         const is_dir = cached_files_is_dir[fi];
         const fsize = cached_files_sizes[fi];
