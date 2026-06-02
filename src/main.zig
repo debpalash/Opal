@@ -719,6 +719,8 @@ fn appFrame() !dvui.App.Result {
     // accidentally toggles dvui debug panel.
     dvui.currentWindow().debug.widget_id = .zero;
 
+    @import("ui/components_gallery.zig").render();
+
     // Session restore: rehydrate players from last exit, paused.
     // Config loads async on a worker thread, so we re-check each frame
     // until session_restore_count becomes non-zero, then run once.
