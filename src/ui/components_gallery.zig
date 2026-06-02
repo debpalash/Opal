@@ -61,6 +61,13 @@ pub fn render() void {
         _ = components.checkbox(@src(), "Enable A", &G.a);
         _ = components.checkbox(@src(), "Enable B", &G.b);
     }
+    {
+        const G = struct {
+            var sel: usize = 0;
+            const opts = [_][]const u8{ "Low", "Medium", "High" };
+        };
+        _ = components.radioGroup(@src(), &G.opts, &G.sel);
+    }
     // Primitives are appended here by later tasks.
 
     if (!printed_marker) {

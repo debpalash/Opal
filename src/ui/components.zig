@@ -641,3 +641,52 @@ pub fn checkbox(
     row.deinit();
     return changed;
 }
+
+/// Vertical radio list. `selected` is the chosen index. Returns true when the
+/// selection changes this frame. Each option row is id_extra-disambiguated.
+pub fn radioGroup(
+    src: std.builtin.SourceLocation,
+    options: []const []const u8,
+    selected: *usize,
+) bool {
+    var changed = false;
+    if (selected.* >= options.len and options.len > 0) selected.* = 0;
+    var col = dvui.box(src, .{ .dir = .vertical }, .{ .expand = .horizontal });
+    defer col.deinit();
+
+    for (options, 0..) |opt, i| {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i,
+            .padding = .{ .x = tk.sp_sm, .y = tk.sp_xs, .w = tk.sp_sm, .h = tk.sp_xs },
+        });
+        if (dvui.clicked(row.data(), .{})) {
+            selected.* = i;
+            changed = true;
+        }
+        row.drawBackground();
+
+        const on = i == selected.*;
+        var dot = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i,
+            .gravity_y = 0.5,
+            .background = true,
+            .color_fill = if (on) tk.accent_primary() else theme.transparent,
+            .color_border = if (on) tk.accent_primary() else tk.border_strong(),
+            .border = dvui.Rect.all(1),
+            .corner_radius = tk.rad_pill,
+            .min_size_content = .{ .w = 14, .h = 14 },
+            .max_size_content = .{ .w = 14, .h = 14 },
+            .margin = .{ .x = 0, .y = 0, .w = tk.sp_sm, .h = 0 },
+        });
+        dot.deinit();
+
+        _ = dvui.label(@src(), "{s}", .{opt}, .{
+            .id_extra = i,
+            .gravity_y = 0.5,
+            .color_text = tk.text_primary(),
+            .font = fontAt(tk.fs_body),
+        });
+        row.deinit();
+    }
+    return changed;
+}
