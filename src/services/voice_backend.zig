@@ -57,10 +57,13 @@ fn whisperCppTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
     // Find whisper binary
     const whisper_bin: []const u8 = blk: {
         if (io_global.cwdAccess("bin/whisper.cpp/build/bin/whisper-cli", .{})) |_| break :blk "bin/whisper.cpp/build/bin/whisper-cli" else |_| {}
+        if (io_global.cwdAccess("/usr/bin/whisper-cli", .{})) |_| break :blk "/usr/bin/whisper-cli" else |_| {}
+        if (io_global.cwdAccess("/usr/local/bin/whisper-cli", .{})) |_| break :blk "/usr/local/bin/whisper-cli" else |_| {}
+        if (io_global.cwdAccess("/usr/bin/whisper-cpp", .{})) |_| break :blk "/usr/bin/whisper-cpp" else |_| {}
+        if (io_global.cwdAccess("/usr/local/bin/whisper-cpp", .{})) |_| break :blk "/usr/local/bin/whisper-cpp" else |_| {}
         if (io_global.cwdAccess("/opt/homebrew/bin/whisper-cli", .{})) |_| break :blk "/opt/homebrew/bin/whisper-cli" else |_| {}
         if (io_global.cwdAccess("/opt/homebrew/bin/whisper-cpp", .{})) |_| break :blk "/opt/homebrew/bin/whisper-cpp" else |_| {}
-        if (io_global.cwdAccess("/usr/local/bin/whisper-cli", .{})) |_| break :blk "/usr/local/bin/whisper-cli" else |_| {}
-        logs.pushLog("warn", "voice_backend", "whisper-cli not found — brew install whisper-cpp", false);
+        logs.pushLog("warn", "voice_backend", "whisper-cli not found — install whisper-cpp", false);
         return null;
     };
 
@@ -120,13 +123,16 @@ fn sayTtsSpeak(text: []const u8) void {
 fn sherpaOnnxTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
     // Locate CLI
     const bin: []const u8 = blk: {
-        if (io_global.cwdAccess("/opt/homebrew/bin/sherpa-onnx-offline", .{})) |_| {
-            break :blk "/opt/homebrew/bin/sherpa-onnx-offline";
+        if (io_global.cwdAccess("/usr/bin/sherpa-onnx-offline", .{})) |_| {
+            break :blk "/usr/bin/sherpa-onnx-offline";
         } else |_| {}
         if (io_global.cwdAccess("/usr/local/bin/sherpa-onnx-offline", .{})) |_| {
             break :blk "/usr/local/bin/sherpa-onnx-offline";
         } else |_| {}
-        logs.pushLog("error", "voice_backend", "sherpa-onnx-offline not on PATH — brew install sherpa-onnx", false);
+        if (io_global.cwdAccess("/opt/homebrew/bin/sherpa-onnx-offline", .{})) |_| {
+            break :blk "/opt/homebrew/bin/sherpa-onnx-offline";
+        } else |_| {}
+        logs.pushLog("error", "voice_backend", "sherpa-onnx-offline not found — install sherpa-onnx", false);
         return null;
     };
 
@@ -605,8 +611,17 @@ pub fn spawnStreamingConvo() ?io_global.Child {
     const a_join = std.fmt.bufPrint(&join_arg, "--joiner={s}", .{join}) catch return null;
     const a_tok = std.fmt.bufPrint(&tok_arg, "--tokens={s}", .{tok}) catch return null;
 
+    // Find sherpa-onnx-microphone binary
+    const mic_bin: []const u8 = blk: {
+        if (io_global.cwdAccess("/usr/bin/sherpa-onnx-microphone", .{})) |_| break :blk "/usr/bin/sherpa-onnx-microphone" else |_| {}
+        if (io_global.cwdAccess("/usr/local/bin/sherpa-onnx-microphone", .{})) |_| break :blk "/usr/local/bin/sherpa-onnx-microphone" else |_| {}
+        if (io_global.cwdAccess("/opt/homebrew/bin/sherpa-onnx-microphone", .{})) |_| break :blk "/opt/homebrew/bin/sherpa-onnx-microphone" else |_| {}
+        logs.pushLog("warn", "voice_backend", "sherpa-onnx-microphone not found", false);
+        return null;
+    };
+
     var child = io_global.Child.init(&.{
-        "/opt/homebrew/bin/sherpa-onnx-microphone",
+        mic_bin,
         a_tok, a_enc, a_dec, a_join,
     }, @import("../core/alloc.zig").allocator);
     child.stdout_behavior = .Pipe;

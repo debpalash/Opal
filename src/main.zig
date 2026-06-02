@@ -1055,7 +1055,10 @@ fn appFrame() !dvui.App.Result {
     if (!state.app.deps_modal_checked) {
         state.app.deps_modal_checked = true;
         const d = @import("core/deps.zig").check();
-        if (!(d.apfel and d.ffmpeg and d.whisper)) {
+        // On macOS, require apfel (Apple Intelligence). On Linux/Windows,
+        // LLM is opt-in (Gemma) so only gate on core voice deps.
+        const llm_ok = if (@import("builtin").os.tag == .macos) d.apfel else true;
+        if (!(llm_ok and d.ffmpeg and d.whisper)) {
             state.app.deps_modal_open = true;
         }
     }

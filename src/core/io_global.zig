@@ -171,7 +171,24 @@ pub fn parseIp(text: []const u8, port: u16) !std.Io.net.IpAddress {
 // anytype accepts both File and *File.
 
 pub fn readAll(file: anytype, buf: []u8) !usize {
-    return file.readPositionalAll(io(), buf, 0);
+    // Positional reads (pread) fail with Unseekable/ESPIPE on pipes.
+    // Fall back to streaming reads for pipes & unseekable file descriptors.
+    return file.readPositionalAll(io(), buf, 0) catch |err| switch (err) {
+        error.Unseekable => {
+            // Streaming fallback: read sequentially into buf
+            var reader_buf: [4096]u8 = undefined;
+            var reader = file.readerStreaming(io(), &reader_buf);
+            const body = try reader.interface.allocRemaining(
+                @import("alloc.zig").allocator,
+                std.Io.Limit.limited(buf.len),
+            );
+            defer @import("alloc.zig").allocator.free(body);
+            const n = @min(body.len, buf.len);
+            @memcpy(buf[0..n], body[0..n]);
+            return n;
+        },
+        else => err,
+    };
 }
 
 /// Partial read (up to buf.len bytes). Returns 0 on EOF.
@@ -213,11 +230,21 @@ pub fn closeDir(dir: anytype) void {
 
 // Read up to max_bytes from file into a freshly-allocated buffer.
 pub fn readToEndAlloc(file: anytype, gpa: std.mem.Allocator, max_bytes: usize) ![]u8 {
+    // Try positional read first (works for regular files)
     const size = file.length(io()) catch max_bytes;
     const len = @min(size, max_bytes);
     const buf = try gpa.alloc(u8, len);
     errdefer gpa.free(buf);
-    const n = try file.readPositionalAll(io(), buf, 0);
+    const n = file.readPositionalAll(io(), buf, 0) catch |err| switch (err) {
+        error.Unseekable => {
+            // Pipe fallback: use streaming reader
+            gpa.free(buf);
+            var reader_buf: [4096]u8 = undefined;
+            var reader = file.readerStreaming(io(), &reader_buf);
+            return reader.interface.allocRemaining(gpa, std.Io.Limit.limited(max_bytes));
+        },
+        else => return err,
+    };
     return buf[0..n];
 }
 
@@ -284,7 +311,13 @@ pub const Child = struct {
     pub fn kill(self: *Child) !Term {
         if (self.real) |*r| {
             r.kill(io());
-            return r.wait(io());
+            // After kill, the child may already have been reaped (e.g. it
+            // exited before we sent SIGKILL). std.process.Child.wait()
+            // asserts id != null, so guard against that.
+            if (r.id != null) {
+                return r.wait(io());
+            }
+            return .{ .exited = 1 };
         }
         return error.NotSpawned;
     }

@@ -519,21 +519,30 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
         return;
     };
 
-    // Use the same reader.interface.takeDelimiter pattern that search.zig
-    // uses — it's 0.16-native and known to work (drawer search pulls 200+
-    // rows reliably). Byte-by-byte reads via our shim were dropping data
-    // on pipe WouldBlock + reader-buffer resets.
-    var child_reader_buf: [2048]u8 = undefined;
-    var reader = child.stdout.?.reader(@import("../core/io_global.zig").io(), &child_reader_buf);
+    // Pipes don't support positional reads (pread → ESPIPE), so we MUST
+    // use readerStreaming, not reader() which tries positional first.
+    // Read all stdout at once via allocRemaining, then split by newline.
+    var reader_buf: [4096]u8 = undefined;
+    var reader = child.stdout.?.readerStreaming(@import("../core/io_global.zig").io(), &reader_buf);
+    const body = reader.interface.allocRemaining(alloc, std.Io.Limit.limited(128 * 1024)) catch null;
+    _ = child.wait() catch {};
+    defer if (body) |b| alloc.free(b);
+
+    const n = if (body) |b| b.len else 0;
+    if (n < 10) {
+        std.debug.print("[resolver] nova2 no output (read {d} bytes)\n", .{n});
+        return;
+    }
 
     var found: usize = 0;
     var scanned: usize = 0;
-    while (scanned < 200) {
-        const line = reader.interface.takeDelimiter('\n') catch break orelse break;
+    var lines = std.mem.splitScalar(u8, body.?, '\n');
+    while (lines.next()) |line| {
+        if (found >= 25) break;
         scanned += 1;
         if (line.len < 10) continue;
 
-        // Parse pipe-delimited: link|name|size|seeds|leech|engine
+        // Parse pipe-delimited: link|name|size|seeds|leech|engine|...
         var it = std.mem.splitScalar(u8, line, '|');
         const link = it.next() orelse continue;
         const name = it.next() orelse continue;
@@ -582,11 +591,9 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
 
         if (pushResult(item)) {
             found += 1;
-            if (found >= 25) break;
         }
     }
 
-    _ = child.wait() catch {};
     {
         var slog: [64]u8 = undefined;
         const m = std.fmt.bufPrint(&slog, "nova2 scanned={d} pushed={d}", .{ scanned, found }) catch "nova2";
@@ -936,14 +943,18 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
     child.stderr_behavior = .Ignore;
     _ = child.spawn() catch return;
 
-    var buf: [64 * 1024]u8 = undefined;
-    const n = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &buf) catch 0 else 0;
+    // Pipes need streaming reads (pread fails with ESPIPE on pipes)
+    var reader_buf: [4096]u8 = undefined;
+    var reader = child.stdout.?.readerStreaming(@import("../core/io_global.zig").io(), &reader_buf);
+    const yt_body = reader.interface.allocRemaining(alloc, std.Io.Limit.limited(64 * 1024)) catch null;
     _ = child.wait() catch {};
+    defer if (yt_body) |b| alloc.free(b);
 
+    const n = if (yt_body) |b| b.len else 0;
     if (n < 10) return;
 
     // Each line is a JSON object with "title", "url", "id"
-    var lines = std.mem.splitScalar(u8, buf[0..n], '\n');
+    var lines = std.mem.splitScalar(u8, yt_body.?, '\n');
     var found: usize = 0;
     while (lines.next()) |line| {
         if (found >= 5 or line.len < 10) continue;

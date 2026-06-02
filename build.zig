@@ -4,6 +4,9 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // OCR via ONNX Runtime — optional, auto-detected by default
+    const ocr_option = b.option(bool, "ocr", "Enable OCR via ONNX Runtime (default: auto-detect)");
+
     const exe = b.addExecutable(.{
         .name = "zigzag",
         .root_module = b.createModule(.{
@@ -79,15 +82,25 @@ pub fn build(b: *std.Build) void {
         exe.headerpad_max_install_names = true;
     }
 
-    // OCR via ONNX Runtime (PP-OCR pipeline)
-    exe.root_module.addCSourceFile(.{
-        .file = b.path("ort/ocr_ort.c"),
-        .flags = &[_][]const u8{"-O2", "-Wno-unused-result"},
-    });
-    exe.root_module.addIncludePath(b.path("ort"));
-    exe.root_module.addLibraryPath(b.path("ort"));
-    exe.root_module.linkSystemLibrary("onnxruntime", .{});
-    exe.root_module.addRPath(b.path("ort"));
+    // OCR via ONNX Runtime (PP-OCR pipeline) — optional
+    // Pass -Docr=true to enable (requires libonnxruntime installed)
+    const enable_ocr = ocr_option orelse false;
+
+    if (enable_ocr) {
+        exe.root_module.addCSourceFile(.{
+            .file = b.path("ort/ocr_ort.c"),
+            .flags = &[_][]const u8{"-O2", "-Wno-unused-result"},
+        });
+        exe.root_module.addIncludePath(b.path("ort"));
+        exe.root_module.addLibraryPath(b.path("ort"));
+        exe.root_module.linkSystemLibrary("onnxruntime", .{});
+        exe.root_module.addRPath(b.path("ort"));
+    }
+
+    // Pass OCR availability as a build option to Zig source
+    const ocr_options = b.addOptions();
+    ocr_options.addOption(bool, "has_ocr", enable_ocr);
+    exe.root_module.addOptions("ocr_build_options", ocr_options);
 
     exe.root_module.addIncludePath(b.path("src"));
 

@@ -36,10 +36,12 @@ fn resolveWhisperBin() ?[]const u8 {
     const io = @import("../core/io_global.zig");
     const cands = [_][]const u8{
         "bin/whisper.cpp/build/bin/whisper-cli",
-        "/opt/homebrew/bin/whisper-cli",
-        "/opt/homebrew/bin/whisper-cpp",
+        "/usr/bin/whisper-cli",
+        "/usr/bin/whisper-cpp",
         "/usr/local/bin/whisper-cli",
         "/usr/local/bin/whisper-cpp",
+        "/opt/homebrew/bin/whisper-cli",
+        "/opt/homebrew/bin/whisper-cpp",
     };
     for (cands) |p| {
         if (io.cwdAccess(p, .{})) |_| return p else |_| {}
@@ -137,7 +139,7 @@ fn worker(args: *WorkerArgs) void {
     }
 
     const whisper_bin = resolveWhisperBin() orelse {
-        setStatus("whisper-cli not found — brew install whisper-cpp");
+        setStatus("whisper-cli not found — install whisper-cpp");
         return;
     };
     var model_buf: [512]u8 = undefined;

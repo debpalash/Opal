@@ -5,8 +5,13 @@
 //! package manager; we only detect + surface helpful install hints.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const logs = @import("logs.zig");
 const io_global = @import("io_global.zig");
+
+const is_macos = builtin.os.tag == .macos;
+const is_linux = builtin.os.tag == .linux;
+const is_windows = builtin.os.tag == .windows;
 
 pub const Status = struct {
     apfel: bool = false,
@@ -34,14 +39,28 @@ pub fn sherpaReady(s: Status) bool {
 pub fn check() Status {
     var s: Status = .{};
 
-    s.apfel = have("/opt/homebrew/bin/apfel") or have("/usr/local/bin/apfel");
-    s.ffmpeg = have("/opt/homebrew/bin/ffmpeg") or have("/usr/local/bin/ffmpeg") or have("/usr/bin/ffmpeg");
-    s.whisper = have("/opt/homebrew/bin/whisper-cpp") or
-        have("/opt/homebrew/bin/whisper-cli") or
-        have("bin/whisper.cpp/build/bin/whisper-cli");
+    // apfel — macOS-only (Apple Intelligence)
+    if (is_macos) {
+        s.apfel = have("/opt/homebrew/bin/apfel") or have("/usr/local/bin/apfel");
+    }
 
-    s.sherpa_onnx = have("/opt/homebrew/bin/sherpa-onnx-offline") or
-        have("/usr/local/bin/sherpa-onnx-offline");
+    // ffmpeg — cross-platform
+    s.ffmpeg = have("/usr/bin/ffmpeg") or
+        have("/usr/local/bin/ffmpeg") or
+        (if (is_macos) have("/opt/homebrew/bin/ffmpeg") else false);
+
+    // whisper-cpp / whisper-cli — cross-platform
+    s.whisper = have("/usr/bin/whisper-cli") or
+        have("/usr/local/bin/whisper-cli") or
+        have("/usr/bin/whisper-cpp") or
+        have("/usr/local/bin/whisper-cpp") or
+        have("bin/whisper.cpp/build/bin/whisper-cli") or
+        (if (is_macos) (have("/opt/homebrew/bin/whisper-cpp") or have("/opt/homebrew/bin/whisper-cli")) else false);
+
+    // sherpa-onnx — cross-platform
+    s.sherpa_onnx = have("/usr/bin/sherpa-onnx-offline") or
+        have("/usr/local/bin/sherpa-onnx-offline") or
+        (if (is_macos) have("/opt/homebrew/bin/sherpa-onnx-offline") else false);
 
     // sherpa STT + TTS models — probe a canonical file per bundle.
     var sherpa_home_buf: [512]u8 = undefined;
@@ -61,8 +80,9 @@ pub fn check() Status {
     if (std.fmt.bufPrintZ(&sherpa_kokoro_buf, "{s}/.config/opal/models/sherpa-kokoro/model.onnx", .{home2})) |p| {
         s.sherpa_kokoro_model = have(p);
     } else |_| {}
-    s.sherpa_mic_cli = have("/opt/homebrew/bin/sherpa-onnx-microphone") or
-        have("/usr/local/bin/sherpa-onnx-microphone");
+    s.sherpa_mic_cli = have("/usr/bin/sherpa-onnx-microphone") or
+        have("/usr/local/bin/sherpa-onnx-microphone") or
+        (if (is_macos) have("/opt/homebrew/bin/sherpa-onnx-microphone") else false);
 
     var home_buf: [512]u8 = undefined;
     const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
@@ -70,13 +90,12 @@ pub fn check() Status {
         s.whisper_model = have(model_path);
     } else |_| {}
 
-    // MLX Whisper (Apple Silicon only — harmless no-op on other platforms)
-    s.mlx_whisper_cli = have("/opt/homebrew/bin/mlx_whisper") or
-        have("/usr/local/bin/mlx_whisper");
-
-    // Check HuggingFace cache for MLX Whisper model
-    // Cache layout: ~/.cache/huggingface/hub/models--mlx-community--whisper-large-v3-turbo/
-    s.mlx_whisper_model = mlxWhisperModelCached(home2);
+    // MLX Whisper (Apple Silicon only — no-op on Linux/Windows)
+    if (is_macos) {
+        s.mlx_whisper_cli = have("/opt/homebrew/bin/mlx_whisper") or
+            have("/usr/local/bin/mlx_whisper");
+        s.mlx_whisper_model = mlxWhisperModelCached(home2);
+    }
 
     return s;
 }
@@ -86,25 +105,65 @@ fn have(path: []const u8) bool {
     return true;
 }
 
-/// One-liner brew install command for missing deps. Copy-paste ready.
+/// One-liner install command for missing deps. OS-aware: brew on macOS,
+/// apt/dnf/pacman on Linux. Copy-paste ready.
 pub fn installCmd(buf: []u8, s: Status) []const u8 {
     var parts: [8][]const u8 = undefined;
     var n: usize = 0;
-    if (!s.apfel) { if (n < parts.len) { parts[n] = "apfel"; n += 1; } }
-    if (!s.ffmpeg) { if (n < parts.len) { parts[n] = "ffmpeg"; n += 1; } }
-    if (!s.whisper) { if (n < parts.len) { parts[n] = "whisper-cpp"; n += 1; } }
-    if (n == 0) return "";
 
-    var off: usize = 0;
-    const prefix = "brew install ";
-    @memcpy(buf[off..off + prefix.len], prefix);
-    off += prefix.len;
-    for (parts[0..n], 0..) |p, i| {
-        if (i > 0) { buf[off] = ' '; off += 1; }
-        @memcpy(buf[off..off + p.len], p);
-        off += p.len;
+    if (is_macos) {
+        // macOS: include apfel + brew package names
+        if (!s.apfel) { if (n < parts.len) { parts[n] = "apfel"; n += 1; } }
+        if (!s.ffmpeg) { if (n < parts.len) { parts[n] = "ffmpeg"; n += 1; } }
+        if (!s.whisper) { if (n < parts.len) { parts[n] = "whisper-cpp"; n += 1; } }
+        if (n == 0) return "";
+
+        var off: usize = 0;
+        const prefix = "brew install ";
+        @memcpy(buf[off..off + prefix.len], prefix);
+        off += prefix.len;
+        for (parts[0..n], 0..) |p, i| {
+            if (i > 0) { buf[off] = ' '; off += 1; }
+            @memcpy(buf[off..off + p.len], p);
+            off += p.len;
+        }
+        return buf[0..off];
+    } else if (is_linux) {
+        // Linux: detect package manager and emit appropriate command.
+        // Never include apfel (macOS-only).
+        if (!s.ffmpeg) { if (n < parts.len) { parts[n] = "ffmpeg"; n += 1; } }
+        if (n == 0) return "";
+
+        const pm = detectLinuxPkgManager();
+        var off: usize = 0;
+        @memcpy(buf[off..off + pm.prefix.len], pm.prefix);
+        off += pm.prefix.len;
+        for (parts[0..n], 0..) |p, i| {
+            if (i > 0) { buf[off] = ' '; off += 1; }
+            @memcpy(buf[off..off + p.len], p);
+            off += p.len;
+        }
+        return buf[0..off];
+    } else {
+        return "";
     }
-    return buf[0..off];
+}
+
+const PkgManager = struct {
+    prefix: []const u8,
+    name: []const u8,
+};
+
+fn detectLinuxPkgManager() PkgManager {
+    if (have("/usr/bin/apt") or have("/usr/bin/apt-get"))
+        return .{ .prefix = "sudo apt install ", .name = "apt" };
+    if (have("/usr/bin/dnf"))
+        return .{ .prefix = "sudo dnf install ", .name = "dnf" };
+    if (have("/usr/bin/pacman"))
+        return .{ .prefix = "sudo pacman -S ", .name = "pacman" };
+    if (have("/usr/bin/zypper"))
+        return .{ .prefix = "sudo zypper install ", .name = "zypper" };
+    return .{ .prefix = "# install: ", .name = "unknown" };
 }
 
 /// Download whisper tiny model to ~/.config/opal/models/ on a background

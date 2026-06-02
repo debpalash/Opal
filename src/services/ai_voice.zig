@@ -568,7 +568,7 @@ fn conversationLoopV1() void {
         is_recording = true;
         // Use ffmpeg for mic capture (cross-platform; sox 'rec' is rarely installed)
         const is_macos = @import("builtin").os.tag == .macos;
-        const input_fmt = if (is_macos) "avfoundation" else "pulse";
+        const input_fmt = if (is_macos) "avfoundation" else "alsa";
         const input_dev = if (is_macos) ":0" else "default";
         var record_child = @import("../core/io_global.zig").Child.init(
             &.{ "ffmpeg", "-y", "-f", input_fmt, "-i", input_dev,
@@ -631,7 +631,7 @@ fn micRecordWorker() void {
     //   linux   → pulse (pulseaudio default)
     // Fixed 15s ceiling; user clicks mic again to stop early.
     const is_macos = @import("builtin").os.tag == .macos;
-    const input_fmt = if (is_macos) "avfoundation" else "pulse";
+    const input_fmt = if (is_macos) "avfoundation" else "alsa";
     const input_dev = if (is_macos) ":0" else "default";
 
     logs.pushLog("info", "voice", "Mic: starting ffmpeg capture", true);
@@ -762,7 +762,7 @@ fn transcribeAndSend() void {
         if (@import("../core/io_global.zig").cwdAccess("/opt/homebrew/bin/whisper-cli", .{})) |_| {
             break :blk "/opt/homebrew/bin/whisper-cli";
         } else |_| {}
-        setError("No ASR: install via `brew install whisper-cpp` then download a ggml model to bin/whisper.cpp/models/");
+        setError("No ASR: install whisper-cpp then download a ggml model to bin/whisper.cpp/models/");
         return;
     };
 

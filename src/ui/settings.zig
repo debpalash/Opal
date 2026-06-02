@@ -2266,17 +2266,35 @@ pub fn renderDepsModal() void {
     const deps_mod = @import("../core/deps.zig");
     const sherpa_dl = deps_mod.sherpa_model_downloading;
     const tts_dl = deps_mod.sherpa_tts_downloading;
-    const rows = [_]DepRow{
-        .{ .name = "apfel",             .desc = "LLM backend (Apple Intelligence)", .ok = s.apfel },
-        .{ .name = "ffmpeg",            .desc = "Mic capture for voice mode",       .ok = s.ffmpeg },
-        .{ .name = "whisper-cpp",       .desc = "STT engine (default)",             .ok = s.whisper },
-        .{ .name = "ggml-tiny.en",      .desc = "whisper model (auto-downloading)", .ok = s.whisper_model, .pending = !s.whisper_model },
-        .{ .name = "sherpa-onnx",       .desc = "STT engine (optional — streaming + VITS TTS)", .ok = s.sherpa_onnx },
-        .{ .name = "sherpa STT model",  .desc = if (sherpa_dl) "Downloading sherpa whisper-tiny…" else "~/.config/opal/models/sherpa-whisper-tiny/ (click Download)", .ok = s.sherpa_model, .pending = sherpa_dl },
-        .{ .name = "sherpa TTS model",  .desc = if (tts_dl) "Downloading Piper-VITS en_US-lessac-medium…" else "~/.config/opal/models/sherpa-vits-piper/ (click Download)", .ok = s.sherpa_tts_model, .pending = tts_dl },
-        .{ .name = "sherpa streaming",  .desc = if (deps_mod.sherpa_stream_downloading) "Downloading streaming Zipformer…" else "~/.config/opal/models/sherpa-stream-zipformer/ (live convo mode)", .ok = s.sherpa_stream_model, .pending = deps_mod.sherpa_stream_downloading },
-        .{ .name = "sherpa Kokoro",     .desc = if (deps_mod.sherpa_kokoro_downloading) "Downloading Kokoro (~330MB)…" else "~/.config/opal/models/sherpa-kokoro/ (premium TTS, 53+ voices)", .ok = s.sherpa_kokoro_model, .pending = deps_mod.sherpa_kokoro_downloading },
-    };
+    const is_macos_os = @import("builtin").os.tag == .macos;
+
+    // Build rows array — skip platform-specific items that don't apply.
+    // apfel is macOS-only (Apple Intelligence).
+    var rows_storage: [12]DepRow = undefined;
+    var row_count: usize = 0;
+
+    if (is_macos_os) {
+        rows_storage[row_count] = .{ .name = "apfel", .desc = "LLM backend (Apple Intelligence)", .ok = s.apfel };
+        row_count += 1;
+    }
+    rows_storage[row_count] = .{ .name = "ffmpeg", .desc = "Mic capture for voice mode", .ok = s.ffmpeg };
+    row_count += 1;
+    rows_storage[row_count] = .{ .name = "whisper-cpp", .desc = "STT engine (default)", .ok = s.whisper };
+    row_count += 1;
+    rows_storage[row_count] = .{ .name = "ggml-tiny.en", .desc = "whisper model (auto-downloading)", .ok = s.whisper_model, .pending = !s.whisper_model };
+    row_count += 1;
+    rows_storage[row_count] = .{ .name = "sherpa-onnx", .desc = "STT engine (optional)", .ok = s.sherpa_onnx };
+    row_count += 1;
+    rows_storage[row_count] = .{ .name = "sherpa STT model", .desc = if (sherpa_dl) "Downloading…" else "~/.config/opal/models/sherpa-whisper-tiny/ (click Download)", .ok = s.sherpa_model, .pending = sherpa_dl };
+    row_count += 1;
+    rows_storage[row_count] = .{ .name = "sherpa TTS model", .desc = if (tts_dl) "Downloading…" else "~/.config/opal/models/sherpa-vits-piper/ (click Download)", .ok = s.sherpa_tts_model, .pending = tts_dl };
+    row_count += 1;
+    rows_storage[row_count] = .{ .name = "sherpa streaming", .desc = if (deps_mod.sherpa_stream_downloading) "Downloading…" else "~/.config/opal/models/sherpa-stream-zipformer/ (live convo mode)", .ok = s.sherpa_stream_model, .pending = deps_mod.sherpa_stream_downloading };
+    row_count += 1;
+    rows_storage[row_count] = .{ .name = "sherpa Kokoro", .desc = if (deps_mod.sherpa_kokoro_downloading) "Downloading Kokoro (~330MB)…" else "~/.config/opal/models/sherpa-kokoro/ (premium TTS, 53+ voices)", .ok = s.sherpa_kokoro_model, .pending = deps_mod.sherpa_kokoro_downloading };
+    row_count += 1;
+
+    const rows = rows_storage[0..row_count];
 
     for (rows, 0..) |r, i| {
         // Calm: no zebra striping — rows separated by whitespace alone.
@@ -2398,7 +2416,12 @@ pub fn renderDepsModal() void {
             }{
                 .{
                     .name = "llama-server",
-                    .desc = if (ai_server.server_installing) "Installing via Homebrew…" else "LLM runtime (brew install llama.cpp)",
+                    .desc = if (ai_server.server_installing)
+                        "Installing…"
+                    else if (@import("builtin").os.tag == .macos)
+                        "LLM runtime (brew install llama.cpp)"
+                    else
+                        "LLM runtime (llama-server)",
                     .ok = ai_server.llama_server_exists,
                     .pending = ai_server.server_installing,
                     .action = .install_server,
@@ -2503,8 +2526,12 @@ pub fn renderDepsModal() void {
     var cmd_buf: [256]u8 = undefined;
     const cmd = deps.installCmd(&cmd_buf, s);
     if (cmd.len > 0) {
-        _ = dvui.label(@src(), "Install missing with Homebrew:", .{}, .{
-            .color_text = theme.colors.text_primary,
+        const install_label = if (@import("builtin").os.tag == .macos)
+            "Install missing with Homebrew:"
+        else
+            "Install missing packages:";
+        _ = dvui.label(@src(), install_label, .{}, .{
+            .color_text = theme.colors.text_main,
             .margin = .{ .y = 14 },
         });
         // Code block — a single fill tier delimits it (no border).
@@ -2524,7 +2551,7 @@ pub fn renderDepsModal() void {
             .gravity_y = 0.5,
         });
 
-        // Run in Terminal — launch Terminal.app with AppleScript + pre-fill command
+        // Run in Terminal — OS-aware launcher
         if (dvui.button(@src(), "Run", .{}, .{
             .color_fill = theme.colors.accent,
             .color_text = theme.colors.text_on_accent,
@@ -2534,22 +2561,58 @@ pub fn renderDepsModal() void {
             .margin = .{ .w = 4 },
             .gravity_y = 0.5,
         })) {
-            // `osascript -e 'tell app "Terminal" to do script "CMD"'`
-            var script_buf: [512]u8 = undefined;
-            const script = std.fmt.bufPrint(
-                &script_buf,
-                "tell application \"Terminal\" to do script \"{s}\"",
-                .{cmd},
-            ) catch "";
-            if (script.len > 0) {
-                var osa = @import("../core/io_global.zig").Child.init(
-                    &.{ "osascript", "-e", script },
-                    @import("../core/alloc.zig").allocator,
-                );
-                osa.stdout_behavior = .Ignore;
-                osa.stderr_behavior = .Ignore;
-                _ = osa.spawnAndWait() catch {};
-                state.showToast("Running in Terminal — come back when done");
+            if (@import("builtin").os.tag == .macos) {
+                // macOS: osascript → Terminal.app
+                var script_buf: [512]u8 = undefined;
+                const script = std.fmt.bufPrint(
+                    &script_buf,
+                    "tell application \"Terminal\" to do script \"{s}\"",
+                    .{cmd},
+                ) catch "";
+                if (script.len > 0) {
+                    var osa = @import("../core/io_global.zig").Child.init(
+                        &.{ "osascript", "-e", script },
+                        @import("../core/alloc.zig").allocator,
+                    );
+                    osa.stdout_behavior = .Ignore;
+                    osa.stderr_behavior = .Ignore;
+                    _ = osa.spawnAndWait() catch {};
+                    state.showToast("Running in Terminal - come back when done");
+                }
+            } else {
+                // Linux: try common terminal emulators
+                var term_cmd_buf: [768]u8 = undefined;
+                const term_cmd = std.fmt.bufPrintZ(
+                    &term_cmd_buf,
+                    "{s}; echo '\nDone - press Enter to close'; read",
+                    .{cmd},
+                ) catch "";
+                if (term_cmd.len > 0) {
+                    // Try terminal emulators in priority order
+                    const terminals = [_][3][]const u8{
+                        .{ "x-terminal-emulator", "-e", term_cmd },
+                        .{ "gnome-terminal", "--", term_cmd },
+                        .{ "konsole", "-e", term_cmd },
+                        .{ "xterm", "-e", term_cmd },
+                    };
+                    var launched = false;
+                    for (terminals) |argv| {
+                        var term = @import("../core/io_global.zig").Child.init(
+                            &argv,
+                            @import("../core/alloc.zig").allocator,
+                        );
+                        term.stdout_behavior = .Ignore;
+                        term.stderr_behavior = .Ignore;
+                        term.spawn() catch continue;
+                        launched = true;
+                        state.showToast("Running in terminal - come back when done");
+                        break;
+                    }
+                    if (!launched) {
+                        dvui.clipboardTextSet(cmd);
+                        state.showToast("No terminal found - command copied to clipboard");
+                    }
+                }
             }
         }
 

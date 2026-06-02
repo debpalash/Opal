@@ -4,6 +4,7 @@ const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const icons = @import("icons");
 const logs = @import("../core/logs.zig");
+const ocr_build = @import("ocr_build_options");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -1011,14 +1012,18 @@ fn decodePageTexture(pg: usize) void {
 // OCR + TTS Narration
 // ══════════════════════════════════════════════════════════
 
-// Native ONNX Runtime OCR via C wrapper
-const ocr_c = @cImport({
+// Native ONNX Runtime OCR via C wrapper (conditional)
+const ocr_c = if (ocr_build.has_ocr) @cImport({
     @cInclude("ocr_ort.h");
-});
+}) else struct {};
 
 var ocr_initialized: bool = false;
 
 fn ensureOcrInit() bool {
+    if (!ocr_build.has_ocr) {
+        logs.pushLog("warn", "comics", "OCR unavailable — built without onnxruntime", true);
+        return false;
+    }
     if (ocr_initialized) return true;
     
     // Model paths: prefer PP-OCRv5 (much better accuracy), fall back to v4
@@ -1064,10 +1069,10 @@ pub fn ocrPage(pg: usize) void {
     defer dvui.c.stbi_image_free(rgba);
     
     // Run OCR via C wrapper
-    const result = ocr_c.ocr_recognize_rgba(
+    const result = if (ocr_build.has_ocr) ocr_c.ocr_recognize_rgba(
         @ptrCast(rgba),
         w, h,
-    );
+    ) else null;
     
     if (result != null) {
         const text: [*:0]const u8 = result.?;
@@ -1076,7 +1081,7 @@ pub fn ocrPage(pg: usize) void {
         const len = @min(trimmed.len, 4095);
         @memcpy(state.app.comic.ocr_texts[pg][0..len], trimmed[0..len]);
         state.app.comic.ocr_lens[pg] = len;
-        ocr_c.ocr_free_text(result);
+        if (ocr_build.has_ocr) ocr_c.ocr_free_text(result);
     }
     state.app.comic.ocr_done[pg] = true;
 }

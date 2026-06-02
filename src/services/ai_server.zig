@@ -348,13 +348,13 @@ pub fn stopServer() void {
 
     if (server_process) |*proc| {
         _ = proc.kill() catch {};
-        _ = proc.wait() catch {};
+        // Note: Child.kill() already waits internally — don't call wait() again
+        // or it panics with assert(child.id != null) on already-reaped process.
         server_process = null;
     }
 
     if (embed_server_process) |*proc| {
         _ = proc.kill() catch {};
-        _ = proc.wait() catch {};
         embed_server_process = null;
     }
 
