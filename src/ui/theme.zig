@@ -419,6 +419,32 @@ pub fn presetName(preset: ThemePreset) []const u8 {
 /// Runtime-resolved colors (always use these in UI code)
 pub var colors: ThemeColors = midnight_colors;
 
+pub const motion = @import("theme_pure.zig"); // duration.*, easeInOut, pulse, lineHeightPx
+
+/// Fully transparent — replaces inline `dvui.Color{ .r=0,.g=0,.b=0,.a=0 }`.
+pub const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+
+/// Single soft shadow spec — the ONLY shadow in the calm-flat system,
+/// reserved for true floating overlays (menus, toasts, modals).
+pub const shadow_overlay = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 90 };
+
+/// Keyboard focus-ring color — derived from the active accent.
+pub inline fn focus() dvui.Color {
+    return colors.accent;
+}
+
+/// Disabled control text — derived from the active text ramp (≈50%).
+pub inline fn textDisabled() dvui.Color {
+    var col = colors.text_tertiary;
+    col.a = @intFromFloat(@as(f32, @floatFromInt(col.a)) * 0.5);
+    return col;
+}
+
+/// Loading / shimmer tint — derived from the active accent.
+pub inline fn loading() dvui.Color {
+    return colors.accent_dim;
+}
+
 /// Switch to a new theme preset at runtime
 pub fn setPreset(preset: ThemePreset) void {
     active_preset = preset;
@@ -466,6 +492,7 @@ pub const spacing = struct {
     pub const lg: f32 = 16;
     pub const xl: f32 = 24;
     pub const xxl: f32 = 32;
+    pub const huge: f32 = 48;
 };
 
 // ── Radius tokens — corner radii ──
@@ -480,11 +507,18 @@ pub const radius = struct {
 // ── Font size tokens — type ramp ──
 
 pub const font_size = struct {
-    pub const micro: f32 = 11;
+    pub const micro: f32 = 10;
     pub const small: f32 = 11;
     pub const body: f32 = 13;
     pub const title: f32 = 17;
     pub const display: f32 = 24;
+};
+
+pub const font_weight = enum { regular, medium, semibold };
+
+pub const line_height = struct {
+    pub const tight: f32 = 1.15;
+    pub const normal: f32 = 1.4;
 };
 
 // ── Dimensions (legacy dvui.Rect helpers) ──
