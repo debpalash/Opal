@@ -534,3 +534,32 @@ pub fn searchInput(
 
     return changed;
 }
+
+pub const ButtonKind = enum { primary, secondary, ghost, danger };
+
+/// Flat calm button. `primary` = accent fill; `secondary` = bg_elevated;
+/// `ghost` = transparent; `danger` = error-tinted. Returns true on click.
+pub fn button(
+    src: std.builtin.SourceLocation,
+    label: []const u8,
+    kind: ButtonKind,
+) bool {
+    const fill = switch (kind) {
+        .primary   => tk.accent_primary(),
+        .secondary => tk.bg_elevated(),
+        .ghost     => theme.transparent,
+        .danger    => tk.semantic_error(),
+    };
+    const fg = switch (kind) {
+        .primary, .danger => tk.text_on_accent(),
+        .secondary        => tk.text_primary(),
+        .ghost            => tk.text_secondary(),
+    };
+    return dvui.button(src, label, .{}, .{
+        .color_fill = fill,
+        .color_text = fg,
+        .border = dvui.Rect.all(0),
+        .corner_radius = tk.rad_md,
+        .padding = .{ .x = tk.sp_lg, .y = tk.sp_sm, .w = tk.sp_lg, .h = tk.sp_sm },
+    });
+}

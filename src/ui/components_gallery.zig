@@ -30,6 +30,14 @@ pub fn render() void {
     defer scroll.deinit();
 
     components.sectionHeader("Gallery");
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .margin = dvui.Rect.all(theme.spacing.sm) });
+        defer row.deinit();
+        _ = components.button(@src(), "Primary", .primary);
+        _ = components.button(@src(), "Secondary", .secondary);
+        _ = components.button(@src(), "Ghost", .ghost);
+        _ = components.button(@src(), "Danger", .danger);
+    }
     // Primitives are appended here by later tasks.
 
     if (!printed_marker) {
