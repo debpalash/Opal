@@ -42,6 +42,15 @@ pub fn render() void {
         var c1 = components.card(@src()); _ = dvui.label(@src(), "Card one", .{}, .{ .color_text = theme.colors.text_primary }); c1.deinit();
         var c2 = components.card(@src()); _ = dvui.label(@src(), "Card two", .{}, .{ .color_text = theme.colors.text_primary }); c2.deinit();
     }
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .margin = dvui.Rect.all(theme.spacing.sm) });
+        defer row.deinit();
+        components.badge("Info", .info);
+        components.badge("OK", .success);
+        components.badge("Warn", .warn);
+        components.badge("Err", .err);
+        components.statusPill("Legacy", .info);
+    }
     // Primitives are appended here by later tasks.
 
     if (!printed_marker) {

@@ -407,28 +407,36 @@ pub fn iconButton(
     return clicked;
 }
 
-/// Small status label — info / success / warn / err.
-/// Calm: colored TEXT only (no box, no border, no fill). `.info` reads as a
-/// neutral secondary label; the semantic kinds use their muted colors so the
-/// status reads without shouting. Horizontal padding preserved.
-pub fn statusPill(label: []const u8, kind: enum { info, success, warn, err }) void {
+pub const BadgeKind = enum { info, success, warn, err };
+
+/// Small status label — colored text only (calm: no box/border/fill).
+/// `.info` reads as a neutral secondary label; the semantic kinds use their
+/// muted colors so the status reads without shouting. Horizontal padding
+/// preserved.
+// Every badge() shares this function's @src(); a monotonic id_extra (mirroring
+// the divider_seq/sectionheader_seq pattern) keeps multiple badges under one
+// parent from hashing to the same widget id.
+var badge_seq: usize = 0;
+pub fn badge(label: []const u8, kind: BadgeKind) void {
+    badge_seq +%= 1;
     const fg = switch (kind) {
         .info    => tk.text_secondary(),
         .success => tk.semantic_success(),
         .warn    => tk.semantic_warn(),
         .err     => tk.semantic_error(),
     };
-
     var pill = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = badge_seq,
         .padding = .{ .x = tk.sp_sm, .y = tk.sp_xs, .w = tk.sp_sm, .h = tk.sp_xs },
         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
     });
     defer pill.deinit();
+    _ = dvui.label(@src(), "{s}", .{label}, .{ .id_extra = badge_seq, .color_text = fg, .font = fontAt(tk.fs_small) });
+}
 
-    _ = dvui.label(@src(), "{s}", .{label}, .{
-        .color_text = fg,
-        .font = fontAt(tk.fs_small),
-    });
+/// Legacy alias — delegates to `badge`. Kept so existing callers compile.
+pub fn statusPill(label: []const u8, kind: enum { info, success, warn, err }) void {
+    badge(label, switch (kind) { .info => .info, .success => .success, .warn => .warn, .err => .err });
 }
 
 /// Centered empty-state placeholder.  Large icon + title + hint.
