@@ -5,7 +5,7 @@ const state = @import("../core/state.zig");
 const theme = @import("theme.zig");
 const icons = @import("icons");
 
-const TRANSPARENT: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+const TRANSPARENT: dvui.Color = theme.transparent;
 
 pub fn renderMetadataDialog() void {
     if (state.app.pending_magnet_tid < 0) return;

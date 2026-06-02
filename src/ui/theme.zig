@@ -578,7 +578,7 @@ pub fn optInput() dvui.Options {
 pub fn optIconBtnDanger() dvui.Options {
     return .{
         .color_text = colors.danger,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = transparent,
         .border = dvui.Rect.all(0),
     };
 }

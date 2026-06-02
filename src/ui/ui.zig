@@ -180,7 +180,7 @@ pub fn renderWorkspaceModals() void {
 
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"x", .{}, .{}, .{
                 .color_text = theme.colors.text_muted,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .border = dvui.Rect.all(0),
                 .gravity_y = 0.5,
             })) {
@@ -235,7 +235,7 @@ pub fn renderWorkspaceModals() void {
             { var s = dvui.box(@src(), .{}, .{ .expand = .horizontal }); s.deinit(); }
 
             if (dvui.button(@src(), "Cancel", .{}, .{
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_text = theme.colors.text_muted,
                 .corner_radius = dvui.Rect.all(6),
                 .border = dvui.Rect.all(1),
@@ -288,7 +288,7 @@ pub fn renderWorkspaceModals() void {
 
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"x", .{}, .{}, .{
                 .color_text = theme.colors.text_muted,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .border = dvui.Rect.all(0),
                 .gravity_y = 0.5,
             })) {

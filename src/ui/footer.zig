@@ -562,9 +562,9 @@ fn renderScrubber(
     if (dvui.slider(@src(), .{ .fraction = &slider_pct }, .{
         .expand = .horizontal,
         .min_size_content = .{ .w = 100, .h = track_h },
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_text = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_border = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
+        .color_text = theme.transparent,
+        .color_border = theme.transparent,
         .background = false,
         .border = dvui.Rect.all(0),
     })) {
@@ -790,7 +790,7 @@ fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
         if (dvui.button(@src(), label, .{}, .{
             .id_extra = i,
             .expand = .horizontal,
-            .color_fill = if (is_current) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = if (is_current) theme.colors.bg_elevated else theme.transparent,
             .color_text = if (is_current) theme.colors.accent_primary else theme.colors.text_primary,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
@@ -833,7 +833,7 @@ fn renderAspectPickerPopover(active_p: *player.MediaPlayer) void {
         if (dvui.button(@src(), labels[k], .{}, .{
             .id_extra = k,
             .expand = .horizontal,
-            .color_fill = if (is_cur) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = if (is_cur) theme.colors.bg_elevated else theme.transparent,
             .color_text = if (is_cur) theme.colors.accent_primary else theme.colors.text_primary,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
@@ -914,7 +914,7 @@ fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []const u
         if (dvui.button(@src(), row_name, .{}, .{
             .id_extra = @as(usize, @intCast(i)),
             .expand = .horizontal,
-            .color_fill = if (is_selected) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = if (is_selected) theme.colors.bg_elevated else theme.transparent,
             .color_text = if (is_selected) theme.colors.accent_primary else theme.colors.text_primary,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
@@ -958,7 +958,7 @@ fn renderLangPickerPopover() void {
         if (dvui.button(@src(), names[k], .{}, .{
             .id_extra = k,
             .expand = .horizontal,
-            .color_fill = if (is_cur) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = if (is_cur) theme.colors.bg_elevated else theme.transparent,
             .color_text = if (is_cur) theme.colors.accent_primary else theme.colors.text_primary,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
@@ -1005,7 +1005,7 @@ fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
         if (dvui.button(@src(), label, .{}, .{
             .id_extra = i,
             .expand = .horizontal,
-            .color_fill = if (is_sel) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = if (is_sel) theme.colors.bg_elevated else theme.transparent,
             .color_text = if (is_sel) theme.colors.accent_primary else theme.colors.text_primary,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
@@ -1041,7 +1041,7 @@ pub fn renderLiquidGlassOverlay() void {
         or active_p.is_loading;
     if (!has_media) return;
 
-    const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+    const transparent = theme.transparent;
 
     // ── Auto-hide if playing and idle for 2.5s. Stay visible while a popover is open. ──
     var is_paused: c_int = 0;
@@ -1542,7 +1542,7 @@ pub fn renderLiquidGlassOverlay() void {
 }
 
 pub fn renderGlobalBottomTray() void {
-    const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+    const transparent = theme.transparent;
 
     var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,

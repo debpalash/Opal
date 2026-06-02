@@ -179,8 +179,8 @@ fn navTabRow(tab: state.SettingsTab, label: []const u8, id_extra: usize) void {
         .expand = .horizontal,
         .min_size_content = .{ .w = 0, .h = 36 }, // spec: 36 px row height
         .background = true,
-        .color_fill = if (is_active) theme.colors.bg_elevated else .{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_border = if (is_active) theme.colors.accent_primary else .{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = if (is_active) theme.colors.bg_elevated else theme.transparent,
+        .color_border = if (is_active) theme.colors.accent_primary else theme.transparent,
         .border = if (is_active) .{ .x = 2, .y = 0, .w = 0, .h = 0 } else dvui.Rect.all(0),
         .corner_radius = dvui.Rect.all(theme.radius.sm),
         .padding = .{
@@ -195,7 +195,7 @@ fn navTabRow(tab: state.SettingsTab, label: []const u8, id_extra: usize) void {
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = id_extra + 600,
         .expand = .horizontal,
-        .color_fill = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_text = if (is_active) theme.colors.text_primary else theme.colors.text_secondary,
         // TODO: needs font_weight bold when dvui supports it — falling back to brighter text only.
         .border = dvui.Rect.all(0),
@@ -355,7 +355,7 @@ pub fn renderAIContent() void {
 
             if (dvui.button(@src(), b.name, .{}, .{
                 .id_extra = 4000 + i,
-                .color_fill = if (active) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = if (active) theme.colors.bg_elevated else theme.transparent,
                 .color_text = if (active) theme.colors.accent else theme.colors.text_secondary,
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
@@ -1738,7 +1738,7 @@ fn renderScriptsTab() void {
         if (ai_server.is_macos) {
             const apfel_active = ai_server.backend_kind == .apfel;
             if (dvui.button(@src(), "Apple Intelligence", .{}, .{
-                .color_fill = if (apfel_active) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = if (apfel_active) theme.colors.bg_elevated else theme.transparent,
                 .color_text = if (apfel_active) theme.colors.accent else theme.colors.text_secondary,
                 .border = dvui.Rect.all(0),
                 .corner_radius = theme.dims.rad_md,
@@ -1756,7 +1756,7 @@ fn renderScriptsTab() void {
 
         const gemma_active = ai_server.backend_kind == .gemma_llama;
         if (dvui.button(@src(), "Gemma 4 E2B (3.2GB)", .{}, .{
-            .color_fill = if (gemma_active) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = if (gemma_active) theme.colors.bg_elevated else theme.transparent,
             .color_text = if (gemma_active) theme.colors.accent else theme.colors.text_secondary,
             .border = dvui.Rect.all(0),
             .corner_radius = theme.dims.rad_md,
@@ -1989,7 +1989,7 @@ fn renderScriptsTab() void {
             const toggle_label = if (enabled) "On" else "Off";
             if (dvui.button(@src(), toggle_label, .{}, .{
                 .id_extra = i + 7000,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_text = if (enabled) theme.colors.accent else theme.colors.text_tertiary,
                 .border = dvui.Rect.all(0),
                 .min_size_content = .{ .w = 32, .h = 0 },
@@ -2642,7 +2642,7 @@ pub fn renderDepsModal() void {
     });
     { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
     if (dvui.button(@src(), "Skip for now", .{}, .{
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_text = theme.colors.text_secondary,
         .border = dvui.Rect.all(0),
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },

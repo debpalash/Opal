@@ -5,7 +5,7 @@ const theme = @import("theme.zig");
 const components = @import("components.zig");
 const builtin = @import("builtin");
 
-const TRANSPARENT: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+const TRANSPARENT: dvui.Color = theme.transparent;
 
 const is_macos = builtin.os.tag == .macos;
 

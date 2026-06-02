@@ -260,7 +260,7 @@ fn renderLibraries() void {
 
         if (dvui.button(@src(), name, .{}, .{
             .id_extra = i, .expand = .horizontal, .gravity_y = 0.5,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_text = theme.colors.text_main,
             .padding = dvui.Rect.all(0),
         })) {
@@ -544,7 +544,7 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
         if (item.is_folder) {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-right", .{}, .{}, .{
                 .id_extra = idx + 610,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_text = theme.colors.text_muted,
                 .padding = dvui.Rect.all(4),
             })) {
@@ -580,7 +580,7 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
         if (item.overview_len > 0) {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"info", .{}, .{}, .{
                 .id_extra = idx + 630,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_text = if (item.expanded) theme.colors.accent else theme.colors.text_muted,
                 .padding = dvui.Rect.all(3),
                 .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
@@ -652,7 +652,7 @@ fn renderPosterCard(item: *state.JfItem, idx: usize, show_progress: bool) void {
             // Clickable poster to play
             if (dvui.button(@src(), "", .{}, .{
                 .id_extra = idx + 60, .expand = .both,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
             })) {
                 const id = item.id[0..item.id_len];
                 jf.playItem(id);
@@ -665,7 +665,7 @@ fn renderPosterCard(item: *state.JfItem, idx: usize, show_progress: bool) void {
             // Play button as placeholder
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"play", .{}, .{}, .{
                 .id_extra = idx + 60, .gravity_x = 0.5, .gravity_y = 0.5,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_text = theme.colors.accent,
             })) {
                 const id = item.id[0..item.id_len];

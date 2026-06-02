@@ -42,7 +42,7 @@ const RADIUS_SM = theme.dims.rad_sm;
 const MIN_DRAWER_W: f32 = 560;
 
 // Transparent color used as the "no fill" baseline for icon buttons.
-const TRANSPARENT: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+const TRANSPARENT: dvui.Color = theme.transparent;
 
 pub fn renderDrawer() void {
     if (!state.app.drawer_open) return;

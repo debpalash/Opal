@@ -354,7 +354,7 @@ pub fn segment(
             .background = true,
             // Active = subtle bg_elevated fill; inactive = transparent.
             // No per-segment border (calm).
-            .color_fill = if (is_active) tk.bg_elevated() else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = if (is_active) tk.bg_elevated() else theme.transparent,
             .corner_radius = tk.rad_sm,
             .padding = .{ .x = tk.sp_md, .y = tk.sp_xs, .w = tk.sp_md, .h = tk.sp_xs },
             .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
@@ -393,7 +393,7 @@ pub fn iconButton(
     // bg_elevated fill — no accent border ring. Inactive is fully transparent.
     const clicked = dvui.buttonIcon(src, "iconButton", icon, .{}, .{}, .{
         .data_out = &wd,
-        .color_fill = if (active) tk.bg_elevated() else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = if (active) tk.bg_elevated() else theme.transparent,
         .color_text = if (active) tk.accent_primary() else tk.text_secondary(),
         .border = dvui.Rect.all(0),
         .corner_radius = tk.rad_sm,
@@ -512,9 +512,9 @@ pub fn searchInput(
     }, .{
         .expand = .horizontal,
         .gravity_y = 0.5,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_text = tk.text_primary(),
-        .color_border = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_border = theme.transparent,
         .border = dvui.Rect.all(0),
         .background = false,
         .min_size_content = .{ .w = 0, .h = 24 },

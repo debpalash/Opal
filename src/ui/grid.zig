@@ -129,7 +129,7 @@ fn renderInlineChat() void {
                     .id_extra = mi + 71700,
                     .data_out = &star_wd,
                     .color_text = if (m.starred) theme.colors.warning else theme.colors.text_secondary,
-                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .color_fill = theme.transparent,
                     .border = dvui.Rect.all(0),
                     .corner_radius = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
@@ -143,7 +143,7 @@ fn renderInlineChat() void {
                     .id_extra = mi + 71800,
                     .data_out = &regen_wd,
                     .color_text = theme.colors.text_secondary,
-                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .color_fill = theme.transparent,
                     .border = dvui.Rect.all(0),
                     .corner_radius = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
@@ -421,7 +421,7 @@ pub fn renderGrid() !void {
                     _ = dvui.label(@src(), "Dead torrent", .{}, .{ .color_text = theme.colors.danger, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
                     _ = dvui.label(@src(), "No peers found after 15 seconds.", .{}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
                     if (dvui.button(@src(), "Close Stream", .{}, .{
-                        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                        .color_fill = theme.transparent,
                         .color_text = theme.colors.danger,
                         .border = dvui.Rect.all(0),
                         .corner_radius = theme.dims.rad_sm,
@@ -479,7 +479,7 @@ pub fn renderGrid() !void {
                     .padding = theme.dims.pad_xs
                 });
 
-                if (dvui.buttonIcon(@src(), "CellClose", icons.tvg.lucide.@"x", .{}, .{}, .{ .id_extra = i, .color_text = theme.colors.text_secondary, .color_fill = .{ .r=0,.g=0,.b=0,.a=0 }, .border = dvui.Rect.all(0) })) {
+                if (dvui.buttonIcon(@src(), "CellClose", icons.tvg.lucide.@"x", .{}, .{}, .{ .id_extra = i, .color_text = theme.colors.text_secondary, .color_fill = theme.transparent, .border = dvui.Rect.all(0) })) {
                     state.app.pending_remove_player_idx = @as(i32, @intCast(i));
                 }
                 
@@ -576,7 +576,7 @@ pub fn renderGrid() !void {
                 var outer = dvui.box(@src(), .{ .dir = .vertical }, .{
                     .id_extra = i,
                     .expand = .both,
-                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .color_fill = theme.transparent,
                 });
 
                 var card = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -659,7 +659,7 @@ pub fn renderGrid() !void {
                     // Calm: ghost button. Armed state reads as danger TEXT only —
                     // no resting red fill.
                     if (dvui.button(@src(), label, .{}, .{
-                        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                        .color_fill = theme.transparent,
                         .color_text = if (Guard.armed) theme.colors.danger else theme.colors.text_secondary,
                         .border = dvui.Rect.all(0),
                         .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
@@ -799,7 +799,7 @@ fn renderContinueWatching() void {
 
         if (dvui.button(@src(), "Clear", .{}, .{
             .id_extra = 43900,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_text = theme.colors.text_tertiary,
             .border = dvui.Rect.all(0),
             .corner_radius = theme.dims.rad_sm,
@@ -881,7 +881,7 @@ fn renderContinueWatching() void {
             // signal resumability; the action stays neutral.
             const resume_clicked = dvui.button(@src(), "Resume", .{}, .{
                 .id_extra = si + 43400,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_text = theme.colors.text_secondary,
                 .border = dvui.Rect.all(0),
                 .corner_radius = theme.dims.rad_sm,
