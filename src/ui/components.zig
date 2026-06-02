@@ -594,3 +594,50 @@ pub fn card(src: std.builtin.SourceLocation) Card {
     });
     return .{ .box = b };
 }
+
+/// Square checkbox + label on one clickable row. Returns true on the frame
+/// the value toggles.
+pub fn checkbox(
+    src: std.builtin.SourceLocation,
+    label: []const u8,
+    value: *bool,
+) bool {
+    var changed = false;
+    var row = dvui.box(src, .{ .dir = .horizontal }, .{
+        .padding = .{ .x = tk.sp_sm, .y = tk.sp_xs, .w = tk.sp_sm, .h = tk.sp_xs },
+    });
+    if (dvui.clicked(row.data(), .{})) {
+        value.* = !value.*;
+        changed = true;
+    }
+    row.drawBackground();
+
+    var bx = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .gravity_y = 0.5,
+        .background = true,
+        .color_fill = if (value.*) tk.accent_primary() else theme.transparent,
+        .color_border = if (value.*) tk.accent_primary() else tk.border_strong(),
+        .border = dvui.Rect.all(1),
+        .corner_radius = tk.rad_sm,
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .max_size_content = .{ .w = 16, .h = 16 },
+        .margin = .{ .x = 0, .y = 0, .w = tk.sp_sm, .h = 0 },
+    });
+    if (value.*) {
+        dvui.icon(@src(), "check", icons.tvg.lucide.@"check", .{}, .{
+            .color_text = tk.text_on_accent(),
+            .min_size_content = .{ .w = 14, .h = 14 },
+            .gravity_x = 0.5,
+            .gravity_y = 0.5,
+        });
+    }
+    bx.deinit();
+
+    _ = dvui.label(@src(), "{s}", .{label}, .{
+        .gravity_y = 0.5,
+        .color_text = tk.text_primary(),
+        .font = fontAt(tk.fs_body),
+    });
+    row.deinit();
+    return changed;
+}

@@ -51,6 +51,16 @@ pub fn render() void {
         components.badge("Err", .err);
         components.statusPill("Legacy", .info);
     }
+    {
+        const G = struct {
+            var a: bool = false;
+            var b: bool = true;
+        };
+        var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .margin = dvui.Rect.all(theme.spacing.sm) });
+        defer col.deinit();
+        _ = components.checkbox(@src(), "Enable A", &G.a);
+        _ = components.checkbox(@src(), "Enable B", &G.b);
+    }
     // Primitives are appended here by later tasks.
 
     if (!printed_marker) {
