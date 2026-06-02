@@ -610,10 +610,17 @@ inline fn labelText() dvui.Color { return theme.colors.text_primary; }
 /// and renders an optional subtitle beneath it.  Spacing: `xl` top
 /// margin so consecutive sections sit on the same rhythm as
 /// the spec's "between any two sectionHeader → row group: theme.spacing.xl".
+// NOTE: call sites pass an id_extra, but the values aren't unique within a tab
+// (e.g. two "25"s both live in renderPlaybackTab), so they can't reliably
+// disambiguate. Like components.divider()/sectionHeader(), a monotonic seq is
+// the robust way to keep each header's wrap box + subtitle label unique.
+var sectionheader_seq: usize = 0;
 fn sectionHeader(comptime title: []const u8, comptime subtitle: []const u8, id_extra: usize, src: std.builtin.SourceLocation) void {
     _ = id_extra;
     _ = src;
+    sectionheader_seq +%= 1;
     var wrap = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = sectionheader_seq,
         .expand = .horizontal,
         .margin = .{ .x = 0, .y = theme.spacing.xl, .w = 0, .h = 0 },
     });
@@ -622,6 +629,7 @@ fn sectionHeader(comptime title: []const u8, comptime subtitle: []const u8, id_e
     components.sectionHeader(title);
     if (subtitle.len > 0) {
         _ = dvui.label(@src(), subtitle, .{}, .{
+            .id_extra = sectionheader_seq,
             .color_text = theme.colors.text_tertiary,
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
         });

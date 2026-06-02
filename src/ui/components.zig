@@ -131,8 +131,16 @@ fn upperBuf(buf: *[96]u8, label: []const u8) []const u8 {
 /// Uppercase tracked-out heading inside a panel.
 /// Color: text_tertiary, font_size.small.
 /// Padding: spacing.lg above, spacing.sm below.
+//
+// Like divider() below, every sectionHeader() call shares THIS function's
+// @src(), so two headers under the same parent hash to the same widget id and
+// dvui flags the collision (red box). A monotonic sequence number as id_extra
+// keeps each call's box + label unique within a frame.
+var sectionheader_seq: usize = 0;
 pub fn sectionHeader(label: []const u8) void {
+    sectionheader_seq +%= 1;
     var pad_box = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = sectionheader_seq,
         .expand = .horizontal,
         .margin = .{ .x = 0, .y = tk.sp_lg, .w = 0, .h = tk.sp_sm },
     });
@@ -142,6 +150,7 @@ pub fn sectionHeader(label: []const u8) void {
     const upper = upperBuf(&upper_buf, label);
 
     _ = dvui.label(@src(), "{s}", .{upper}, .{
+        .id_extra = sectionheader_seq,
         .color_text = tk.text_tertiary(),
         .font = fontAt(tk.fs_small),
     });
