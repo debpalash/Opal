@@ -68,6 +68,12 @@ pub fn render() void {
         };
         _ = components.radioGroup(@src(), &G.opts, &G.sel);
     }
+    {
+        const G = struct { var vol: f32 = 0.4; var bright: f32 = 0.7; };
+        _ = components.slider(@src(), "Volume", &G.vol, 0.0, 1.0);
+        _ = components.slider(@src(), "Brightness", &G.bright, 0.0, 1.0);
+        components.ProgressBar(@src(), 0.33, "Download", 0);
+    }
     // Primitives are appended here by later tasks.
 
     if (!printed_marker) {

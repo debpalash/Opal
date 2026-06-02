@@ -95,22 +95,9 @@ pub fn tipId(src: std.builtin.SourceLocation, wd: dvui.WidgetData, text: []const
 // ══════════════════════════════════════════════════════════════════════
 
 pub fn ProgressBar(src: std.builtin.SourceLocation, fraction: f32, label: []const u8, id_extra: usize) void {
-    var container = dvui.box(src, .{ .dir = .vertical }, .{ .id_extra = id_extra, .expand = .horizontal, .margin = .{ .x=0, .y=4, .w=0, .h=4 } });
-    defer container.deinit();
-
-    if (label.len > 0) {
-        _ = dvui.label(@src(), "{s}", .{label}, .{ .id_extra = id_extra, .color_text = theme.colors.text_muted });
-    }
-
-    var pct_val = std.math.clamp(fraction, 0.0, 1.0);
-    _ = dvui.slider(@src(), .{ .fraction = &pct_val }, .{
-        .id_extra = id_extra,
-        .expand = .horizontal,
-        .min_size_content = .{ .w = 10, .h = 8 },
-        .color_fill = theme.colors.bg_input,
-        .color_text = theme.colors.accent,
-        .corner_radius = dvui.Rect.all(4)
-    });
+    _ = id_extra;
+    var f = std.math.clamp(fraction, 0.0, 1.0);
+    _ = slider(src, label, &f, 0.0, 1.0);
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -688,5 +675,31 @@ pub fn radioGroup(
         });
         row.deinit();
     }
+    return changed;
+}
+
+/// Calm labeled slider mapping `value` within [min,max]. Returns true on change.
+pub fn slider(
+    src: std.builtin.SourceLocation,
+    label: []const u8,
+    value: *f32,
+    min: f32,
+    max: f32,
+) bool {
+    var box = dvui.box(src, .{ .dir = .vertical }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = tk.sp_xs, .w = 0, .h = tk.sp_xs } });
+    defer box.deinit();
+    if (label.len > 0) {
+        _ = dvui.label(@src(), "{s}", .{label}, .{ .color_text = tk.text_secondary(), .font = fontAt(tk.fs_small) });
+    }
+    const span = if (max > min) max - min else 1;
+    var frac = std.math.clamp((value.* - min) / span, 0.0, 1.0);
+    const changed = dvui.slider(@src(), .{ .fraction = &frac }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 10, .h = 8 },
+        .color_fill = tk.bg_elevated(),
+        .color_text = tk.accent_primary(),
+        .corner_radius = tk.rad_sm,
+    });
+    if (changed) value.* = min + frac * span;
     return changed;
 }
