@@ -703,3 +703,43 @@ pub fn slider(
     if (changed) value.* = min + frac * span;
     return changed;
 }
+
+/// Standard clickable row: hover lift, md padding, optional leading icon +
+/// trailing text. Returns true on click. Caller passes a unique `id_extra`
+/// when emitting in a loop.
+pub fn listItem(
+    src: std.builtin.SourceLocation,
+    id_extra: usize,
+    leading_icon: ?[]const u8,
+    label: []const u8,
+    trailing: []const u8,
+) bool {
+    var hovered = false;
+    var row = dvui.box(src, .{ .dir = .horizontal }, .{
+        .id_extra = id_extra,
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = if (hovered) tk.bg_hover() else theme.transparent,
+        .corner_radius = tk.rad_sm,
+        .padding = .{ .x = tk.sp_md, .y = tk.sp_sm, .w = tk.sp_md, .h = tk.sp_sm },
+        .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+    });
+    const clicked = dvui.clicked(row.data(), .{ .hovered = &hovered });
+    row.drawBackground();
+
+    if (leading_icon) |ic| {
+        dvui.icon(@src(), "li", ic, .{}, .{
+            .id_extra = id_extra,
+            .color_text = tk.text_secondary(),
+            .min_size_content = .{ .w = 16, .h = 16 }, .max_size_content = .{ .w = 16, .h = 16 },
+            .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = tk.sp_sm, .h = 0 },
+        });
+    }
+    _ = dvui.label(@src(), "{s}", .{label}, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_text = tk.text_primary(), .font = fontAt(tk.fs_body) });
+    { var s = dvui.box(@src(), .{}, .{ .id_extra = id_extra, .expand = .horizontal }); s.deinit(); }
+    if (trailing.len > 0) {
+        _ = dvui.label(@src(), "{s}", .{trailing}, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_text = tk.text_tertiary(), .font = fontAt(tk.fs_small) });
+    }
+    row.deinit();
+    return clicked;
+}

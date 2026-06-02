@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 const theme = @import("theme.zig");
 const components = @import("components.zig");
+const icons = @import("icons");
 
 /// Debug-only visual QA surface for the v2 primitives. Gated by the
 /// `ZZ_GALLERY` env var so it never shows in normal use. Renders each
@@ -73,6 +74,12 @@ pub fn render() void {
         _ = components.slider(@src(), "Volume", &G.vol, 0.0, 1.0);
         _ = components.slider(@src(), "Brightness", &G.bright, 0.0, 1.0);
         components.ProgressBar(@src(), 0.33, "Download", 0);
+    }
+    {
+        const names = [_][]const u8{ "First", "Second", "Third" };
+        for (names, 0..) |nm, i| {
+            _ = components.listItem(@src(), i, icons.tvg.lucide.@"file", nm, "›");
+        }
     }
     // Primitives are appended here by later tasks.
 
