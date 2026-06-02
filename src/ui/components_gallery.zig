@@ -38,6 +38,10 @@ pub fn render() void {
         _ = components.button(@src(), "Ghost", .ghost);
         _ = components.button(@src(), "Danger", .danger);
     }
+    {
+        var c1 = components.card(@src()); _ = dvui.label(@src(), "Card one", .{}, .{ .color_text = theme.colors.text_primary }); c1.deinit();
+        var c2 = components.card(@src()); _ = dvui.label(@src(), "Card two", .{}, .{ .color_text = theme.colors.text_primary }); c2.deinit();
+    }
     // Primitives are appended here by later tasks.
 
     if (!printed_marker) {

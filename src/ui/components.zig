@@ -563,3 +563,26 @@ pub fn button(
         .padding = .{ .x = tk.sp_lg, .y = tk.sp_sm, .w = tk.sp_lg, .h = tk.sp_sm },
     });
 }
+
+pub const Card = struct {
+    box: *dvui.BoxWidget,
+    pub fn deinit(self: *Card) void {
+        self.box.deinit();
+    }
+};
+
+/// Calm-flat surface: bg_surface + 1px border_subtle + md padding. No shadow.
+/// Usage: `var c = components.card(@src()); defer c.deinit();`
+pub fn card(src: std.builtin.SourceLocation) Card {
+    const b = dvui.box(src, .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = tk.bg_surface(),
+        .color_border = tk.border_subtle(),
+        .border = dvui.Rect.all(1),
+        .corner_radius = tk.rad_md,
+        .padding = dvui.Rect.all(tk.sp_md),
+        .margin = .{ .x = 0, .y = tk.sp_xs, .w = 0, .h = tk.sp_xs },
+    });
+    return .{ .box = b };
+}
