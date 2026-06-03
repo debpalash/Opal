@@ -304,7 +304,14 @@ pub const Child = struct {
     }
 
     pub fn wait(self: *Child) !Term {
-        if (self.real) |*r| return r.wait(io());
+        if (self.real) |*r| {
+            // The child may already have been reaped by a prior kill()/wait()
+            // (e.g. micRecordWorker does kill() then wait(), and kill() above
+            // reaps when id != null). std.process.Child.wait() asserts
+            // id != null, so guard against a double-reap instead of panicking.
+            if (r.id == null) return error.NotSpawned;
+            return r.wait(io());
+        }
         return error.NotSpawned;
     }
 
