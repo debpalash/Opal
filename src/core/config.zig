@@ -45,6 +45,11 @@ pub fn save() void {
     setKey("drawer_width_px", fmtFloat(&fb, state.app.drawer_width_px));
     setKey("tmdb_api_key", state.app.tmdb.api_key[0..state.app.tmdb.api_key_len]);
     setKey("opensub_api_key", state.app.opensub_api_key[0..state.app.opensub_api_key_len]);
+    {
+        const ai_server = @import("../services/ai_server.zig");
+        if (ai_server.selected_model < ai_server.models.len)
+            setKey("ai_model", ai_server.models[ai_server.selected_model].id);
+    }
     setKey("sponsorblock_enabled", if (state.app.sponsorblock_enabled) "1" else "0");
     setKey("deband_enabled", if (state.app.deband_enabled) "1" else "0");
     setKey("video_scaler", fmtInt(&fb, @as(usize, state.app.video_scaler)));
@@ -262,6 +267,14 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         for (presets) |p| {
             if (std.mem.eql(u8, val, p.name)) {
                 theme.setPreset(p.preset);
+                break;
+            }
+        }
+    } else if (std.mem.eql(u8, key, "ai_model")) {
+        const ai_server = @import("../services/ai_server.zig");
+        for (ai_server.models, 0..) |m, idx| {
+            if (std.mem.eql(u8, val, m.id)) {
+                ai_server.setModel(idx);
                 break;
             }
         }
