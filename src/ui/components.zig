@@ -4,6 +4,12 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const theme = @import("theme.zig");
 
+// v2 primitives (calm-flat): button, card, badge, checkbox, radioGroup, slider,
+// listItem, spinner, menu, modal + sectionHeader/divider/toggleRow/selectRow/
+// segment/iconButton/searchInput/emptyState/tip. Tokens live in theme.zig;
+// never inline dvui.Color{} / Rect.all(n) in screens — use theme.* / tk.*.
+// See docs/COMPONENTS.md for primitive signatures.
+//
 // Local shim — colors are runtime (read theme.colors per-frame); spacing/radii/fonts are comptime.
 
 const tk = struct {
