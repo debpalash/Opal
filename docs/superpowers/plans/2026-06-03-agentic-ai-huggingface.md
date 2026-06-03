@@ -2,6 +2,8 @@
 
 **Date:** 2026-06-03
 **Status:** Autopilot execution (overnight). Additive, non-breaking.
+
+> **Outcome (2026-06-03):** Final-verification pass for this workflow. The code from Tasks 1-5 is present in-tree (commits `4d6b4d3`..`a5c169a`) and was re-inspected during this pass: `ai_server.zig` carries the `ModelEntry`/`models[]` registry + `selected_model`/`setModel()` (registry-resolved `gemma_llama` accessors, legacy `GEMMA_MODEL_*` consts retained); `config.zig` reads/writes the `ai_model` id key; `settings.zig` builds its picker from `ai_server.models[].display_name` and calls `setModel`; `ai_tools.zig` has the added parse tests (fenced, prose-prefixed, OpenAI-style) and a system prompt that documents the `<tools>` catalog. Verification run this pass: `zig build` exited rc 0; RENDER-SMOKE grep returned 0; `zig build test` fails only on the known pre-existing `src/core/paths.zig` libc/getenv linker issue (unrelated to this work). The 4 HF resolve URLs each returned HTTP 200. Auto-download and remote inference remain out of scope per the plan.
 **Goal:** Make Opal's AI a stronger, user-selectable *agentic media assistant you can talk to*, by (1) turning the single hardcoded model into a data-driven registry of verified HuggingFace GGUF models — including newer, better-at-tool-calling models — selectable in Settings; (2) persisting the choice; (3) hardening the tool-call loop; (4) tightening the voice path. The system is **already** agentic (17 tools, JSON tool-call loop in `ai_tools.zig`, voice via `ai_voice.zig`/`voice_backend.zig`) and already downloads GGUF from HuggingFace — this plan upgrades *which* models and *how they're chosen*, without breaking the working path.
 
 ## Architecture (current → target)
