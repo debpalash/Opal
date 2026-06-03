@@ -29,24 +29,82 @@ const GEMMA_MODEL_SIZE_LABEL = "3.17 GB";
 
 pub const DEFAULT_MODELS_DIR = "models";
 
+// ── Data-driven HuggingFace model registry ──
+// All entries are verified GGUF files (HF resolve URLs confirmed). Index 0 is
+// byte-identical to the legacy GEMMA_MODEL_* consts so existing installs are
+// unaffected. The `.gemma_llama` backend resolves through models[selected_model].
+pub const ModelEntry = struct {
+    id: []const u8,
+    display_name: []const u8,
+    hf_url: []const u8,
+    filename: []const u8,
+    size_label: []const u8,
+    note: []const u8,
+};
+
+pub const models = [_]ModelEntry{
+    .{
+        .id = "gemma4_e2b",
+        .display_name = "Gemma 4 E2B (default)",
+        .hf_url = GEMMA_MODEL_URL,
+        .filename = GEMMA_MODEL_FILENAME,
+        .size_label = GEMMA_MODEL_SIZE_LABEL,
+        .note = "Current default; multimodal-capable.",
+    },
+    .{
+        .id = "qwen3_4b",
+        .display_name = "Qwen3 4B (best tools)",
+        .hf_url = "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf",
+        .filename = "Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf",
+        .size_label = "2.5 GB",
+        .note = "Apache-2.0; strongest agentic/function-calling in this size.",
+    },
+    .{
+        .id = "gemma3n_e4b",
+        .display_name = "Gemma 3n E4B",
+        .hf_url = "https://huggingface.co/unsloth/gemma-3n-E4B-it-GGUF/resolve/main/gemma-3n-E4B-it-UD-Q4_K_XL.gguf",
+        .filename = "gemma-3n-E4B-it-UD-Q4_K_XL.gguf",
+        .size_label = "4.2 GB",
+        .note = "On-device multimodal.",
+    },
+    .{
+        .id = "qwen25_3b",
+        .display_name = "Qwen2.5 3B (fast)",
+        .hf_url = "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
+        .filename = "qwen2.5-3b-instruct-q4_k_m.gguf",
+        .size_label = "2.0 GB",
+        .note = "Smallest/fastest fallback.",
+    },
+};
+
+pub var selected_model: usize = 0;
+
+/// Switch the active gemma_llama model by registry index. Bounds-checked;
+/// re-resolves model path state so the new filename takes effect.
+pub fn setModel(idx: usize) void {
+    if (idx >= models.len) return;
+    selected_model = idx;
+    resetDetection();
+}
+
 fn activeModelFilename() []const u8 {
     return switch (backend_kind) {
         .apfel => "",
-        .gemma_llama => GEMMA_MODEL_FILENAME,
+        .gemma_llama => if (selected_model < models.len) models[selected_model].filename else GEMMA_MODEL_FILENAME,
     };
 }
 
 fn activeModelUrl() []const u8 {
     return switch (backend_kind) {
         .apfel => "",
-        .gemma_llama => GEMMA_MODEL_URL,
+        .gemma_llama => if (selected_model < models.len) models[selected_model].hf_url else GEMMA_MODEL_URL,
     };
 }
 
 fn activeModelSizeLabel() []const u8 {
     return switch (backend_kind) {
         .apfel => "",
-        .gemma_llama => GEMMA_MODEL_SIZE_LABEL,
+        .gemma_llama => if (selected_model < models.len) models[selected_model].size_label else GEMMA_MODEL_SIZE_LABEL,
     };
 }
 
