@@ -142,109 +142,48 @@ pub fn renderWorkspaceModals() void {
     // ═══════════════════════════════════════════════════════
     // SAVE WORKSPACE MODAL
     // ═══════════════════════════════════════════════════════
-    if (state.app.ws_save_open) {
-        var win = dvui.floatingWindow(@src(), .{
-            .modal = true,
-            .open_flag = &state.app.ws_save_open,
-        }, .{
-            .min_size_content = .{ .w = 360, .h = 120 },
-            .color_fill = theme.colors.bg_drawer,
-            .color_border = theme.colors.border_card,
-            .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(12),
+    if (components.modal(@src(), "Save Workspace", &state.app.ws_save_open)) |m_val| {
+        var m = m_val;
+        var body = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.md },
         });
-        defer win.deinit();
 
-        // Header
-        {
-            var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal,
-                .background = true,
-                .color_fill = theme.colors.bg_header,
-                .padding = .{ .x = 12, .y = 8, .w = 8, .h = 8 },
-                .color_border = theme.colors.bg_header_border,
-                .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-            });
-            defer hdr.deinit();
+        _ = dvui.label(@src(), "Workspace name:", .{}, .{
+            .color_text = theme.colors.text_secondary,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xs },
+        });
 
-            dvui.icon(@src(), "", icons.tvg.lucide.@"save", .{}, .{
-                .color_text = theme.colors.accent,
-                .gravity_y = 0.5,
-            });
-            _ = dvui.label(@src(), " Save Workspace", .{}, .{
-                .color_text = theme.colors.text_main,
-                .gravity_y = 0.5,
-            });
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.ws_name_input } }, .{
+            .expand = .horizontal,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_primary,
+            .color_border = theme.colors.border_subtle,
+            .border = dvui.Rect.all(1),
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+        });
+        const enter_pressed = te.enter_pressed;
+        te.deinit();
 
-            { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+        { var gap = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 0, .h = theme.spacing.sm } }); gap.deinit(); }
 
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"x", .{}, .{}, .{
-                .color_text = theme.colors.text_muted,
-                .color_fill = theme.transparent,
-                .border = dvui.Rect.all(0),
-                .gravity_y = 0.5,
-            })) {
+        var btn_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        if (components.button(@src(), "Save", .primary) or enter_pressed) {
+            const name_len = std.mem.indexOfScalar(u8, &state.app.ws_name_input, 0) orelse state.app.ws_name_input.len;
+            if (name_len > 0) {
+                workspace.saveWorkspaceNamed(@import("../core/alloc.zig").allocator, state.app.ws_name_input[0..name_len]);
                 state.app.ws_save_open = false;
             }
         }
-
-        // Body
-        {
-            var body = dvui.box(@src(), .{ .dir = .vertical }, .{
-                .expand = .horizontal,
-                .padding = .{ .x = 16, .y = 12, .w = 16, .h = 12 },
-            });
-            defer body.deinit();
-
-            _ = dvui.label(@src(), "Workspace name:", .{}, .{
-                .color_text = theme.colors.text_muted,
-                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
-            });
-
-            var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.ws_name_input } }, .{
-                .expand = .horizontal,
-                .color_fill = theme.colors.bg_input,
-                .color_text = theme.colors.text_main,
-                .color_border = theme.colors.divider,
-                .border = dvui.Rect.all(1),
-                .corner_radius = dvui.Rect.all(6),
-                .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
-            });
-            const enter_pressed = te.enter_pressed;
-            te.deinit();
-
-            { var gap = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 0, .h = 10 } }); gap.deinit(); }
-
-            var btn_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-            defer btn_row.deinit();
-
-            if (dvui.button(@src(), "Save", .{}, .{
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.bg_app,
-                .corner_radius = dvui.Rect.all(6),
-                .border = dvui.Rect.all(0),
-                .padding = .{ .x = 16, .y = 6, .w = 16, .h = 6 },
-            }) or enter_pressed) {
-                const name_len = std.mem.indexOfScalar(u8, &state.app.ws_name_input, 0) orelse state.app.ws_name_input.len;
-                if (name_len > 0) {
-                    workspace.saveWorkspaceNamed(@import("../core/alloc.zig").allocator, state.app.ws_name_input[0..name_len]);
-                    state.app.ws_save_open = false;
-                }
-            }
-
-            { var s = dvui.box(@src(), .{}, .{ .expand = .horizontal }); s.deinit(); }
-
-            if (dvui.button(@src(), "Cancel", .{}, .{
-                .color_fill = theme.transparent,
-                .color_text = theme.colors.text_muted,
-                .corner_radius = dvui.Rect.all(6),
-                .border = dvui.Rect.all(1),
-                .color_border = theme.colors.divider,
-                .padding = .{ .x = 16, .y = 6, .w = 16, .h = 6 },
-            })) {
-                state.app.ws_save_open = false;
-            }
+        { var s = dvui.box(@src(), .{}, .{ .expand = .horizontal }); s.deinit(); }
+        if (components.button(@src(), "Cancel", .ghost)) {
+            state.app.ws_save_open = false;
         }
+        btn_row.deinit();
+
+        body.deinit();
+        m.deinit();
     }
 
     // ═══════════════════════════════════════════════════════
