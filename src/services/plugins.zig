@@ -947,7 +947,7 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
     var outer = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = idx + 1000, .expand = .horizontal, .background = true,
         .color_fill = if (item.expanded) theme.colors.bg_card_hover else theme.colors.bg_card,
-        .color_border = if (item.expanded) theme.colors.accent_glow else theme.colors.bg_header_border,
+        .color_border = theme.colors.bg_header_border,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .padding = .{ .x = 10, .y = 10, .w = 10, .h = 10 },
     });
