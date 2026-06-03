@@ -57,6 +57,11 @@ pub fn processGlobalInputs() void {
                 if (key == .q) {
                     gracefulShutdown();
                 }
+                if (key == .k) {
+                    state.app.command_palette_open = !state.app.command_palette_open;
+                    dvui.refresh(null, @src(), null);
+                    continue;
+                }
             }
 
             // ── If a text entry is focused, suppress single-key shortcuts ──
