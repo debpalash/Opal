@@ -755,10 +755,15 @@ pub fn listItem(
 /// continuously-refreshing frame for it to animate.
 pub fn spinner(src: std.builtin.SourceLocation) void {
     const io_global = @import("../core/io_global.zig");
-    const t: f32 = @floatFromInt(@as(u64, @bitCast(io_global.milliTimestamp())));
+    // Wrap the wall-clock ms into the cycle in i64 space first: an f32 only has
+    // 24 mantissa bits, so casting the raw ~1.7e12 ms timestamp would freeze the
+    // animation (ULP ~131s at that magnitude). Reducing modulo the period keeps
+    // t in 0..899 where f32 (and the per-dot phase offsets) stay precise.
+    const period_ms: i64 = 900;
+    const t: f32 = @floatFromInt(@mod(io_global.milliTimestamp(), period_ms));
     var row = dvui.box(src, .{ .dir = .horizontal }, .{ .gravity_x = 0.5, .gravity_y = 0.5 });
     defer row.deinit();
-    const period: f32 = 900;
+    const period: f32 = @floatFromInt(period_ms);
     var i: usize = 0;
     while (i < 3) : (i += 1) {
         const phase = t + @as(f32, @floatFromInt(i)) * (period / 3.0);
