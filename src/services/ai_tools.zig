@@ -63,10 +63,23 @@ pub fn containsToolCall(text: []const u8) bool {
 fn extractBalancedObject(text: []const u8, from: usize) ?[]const u8 {
     const start = std.mem.indexOfScalarPos(u8, text, from, '{') orelse return null;
     var depth: usize = 0;
+    var in_string = false;
     var i: usize = start;
     while (i < text.len) : (i += 1) {
-        if (text[i] == '{') depth += 1;
-        if (text[i] == '}') {
+        const c = text[i];
+        if (in_string) {
+            if (c == '\\') {
+                i += 1; // skip the escaped char
+            } else if (c == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (c == '"') {
+            in_string = true;
+        } else if (c == '{') {
+            depth += 1;
+        } else if (c == '}') {
             if (depth == 0) return null;
             depth -= 1;
             if (depth == 0) return text[start .. i + 1];
