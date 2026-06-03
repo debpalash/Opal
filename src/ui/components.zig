@@ -743,3 +743,28 @@ pub fn listItem(
     row.deinit();
     return clicked;
 }
+
+/// Indeterminate loader: three dots whose opacity phases via theme.motion.pulse.
+/// Reads wall time from io_global (no std.time). Consumers should be on a
+/// continuously-refreshing frame for it to animate.
+pub fn spinner(src: std.builtin.SourceLocation) void {
+    const io_global = @import("../core/io_global.zig");
+    const t: f32 = @floatFromInt(@as(u64, @bitCast(io_global.milliTimestamp())));
+    var row = dvui.box(src, .{ .dir = .horizontal }, .{ .gravity_x = 0.5, .gravity_y = 0.5 });
+    defer row.deinit();
+    const period: f32 = 900;
+    var i: usize = 0;
+    while (i < 3) : (i += 1) {
+        const phase = t + @as(f32, @floatFromInt(i)) * (period / 3.0);
+        const a: u8 = @intFromFloat(80 + 175 * theme.motion.pulse(phase, period));
+        var dot = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i,
+            .background = true,
+            .color_fill = dvui.Color{ .r = tk.accent_primary().r, .g = tk.accent_primary().g, .b = tk.accent_primary().b, .a = a },
+            .corner_radius = tk.rad_pill,
+            .min_size_content = .{ .w = 6, .h = 6 }, .max_size_content = .{ .w = 6, .h = 6 },
+            .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+        });
+        dot.deinit();
+    }
+}

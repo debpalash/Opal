@@ -81,6 +81,7 @@ pub fn render() void {
             _ = components.listItem(@src(), i, icons.tvg.lucide.@"file", nm, "›");
         }
     }
+    { components.spinner(@src()); }
     // Primitives are appended here by later tasks.
 
     if (!printed_marker) {
