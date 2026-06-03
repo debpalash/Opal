@@ -44,6 +44,45 @@ const MIN_DRAWER_W: f32 = 560;
 // Transparent color used as the "no fill" baseline for icon buttons.
 const TRANSPARENT: dvui.Color = theme.transparent;
 
+/// A named drawer group — drives rail layout + (future) palette grouping.
+/// References existing `state.DrawerTab` tags by name; NEVER reorders the enum
+/// (reorder would drift @intFromEnum-persisted config). Sources/Library/System
+/// per the Phase 2 IA spec. `icon` is stored as `[]const u8` because the lucide
+/// values are length-typed `@embedFile` pointers (no uniform array type); the
+/// slice coerces cleanly and `renderRailTab` accepts it via its `anytype` arg.
+const RailEntry = struct {
+    tab: state.DrawerTab,
+    icon: []const u8,
+    label: []const u8,
+    id: usize,
+};
+const DrawerGroup = struct {
+    name: []const u8,
+    entries: []const RailEntry,
+};
+
+const drawer_groups = [_]DrawerGroup{
+    .{ .name = "Sources", .entries = &.{
+        .{ .tab = .Search,   .icon = icons.tvg.lucide.@"search",   .label = "Search",   .id = 0 },
+        .{ .tab = .TMDB,     .icon = icons.tvg.lucide.@"film",     .label = "TMDB",     .id = 3 },
+        .{ .tab = .YouTube,  .icon = icons.tvg.lucide.@"play",     .label = "YouTube",  .id = 4 },
+        .{ .tab = .Anime,    .icon = icons.tvg.lucide.@"zap",      .label = "Anime",    .id = 5 },
+        .{ .tab = .Comics,   .icon = icons.tvg.lucide.@"image",    .label = "Comics",   .id = 6 },
+        .{ .tab = .RSS,      .icon = icons.tvg.lucide.@"rss",      .label = "RSS",      .id = 7 },
+        .{ .tab = .Jellyfin, .icon = icons.tvg.lucide.@"server",   .label = "Jellyfin", .id = 8 },
+    } },
+    .{ .name = "Library", .entries = &.{
+        .{ .tab = .Downloads, .icon = icons.tvg.lucide.@"download", .label = "Downloads", .id = 1 },
+        .{ .tab = .Queue,     .icon = icons.tvg.lucide.@"list",     .label = "Queue",     .id = 2 },
+        .{ .tab = .History,   .icon = icons.tvg.lucide.@"clock",    .label = "History",   .id = 9 },
+    } },
+    .{ .name = "System", .entries = &.{
+        .{ .tab = .AI,       .icon = icons.tvg.lucide.@"brain",    .label = "AI",       .id = 14 },
+        .{ .tab = .Plugins,  .icon = icons.tvg.lucide.@"package",  .label = "Plugins",  .id = 11 },
+        .{ .tab = .Settings, .icon = icons.tvg.lucide.@"settings", .label = "Settings", .id = 13 },
+    } },
+};
+
 pub fn renderDrawer() void {
     if (!state.app.drawer_open) return;
 
@@ -186,28 +225,13 @@ pub fn renderDrawer() void {
         });
         defer rail.deinit();
 
-        // ── Group 1: Find & Manage ──
-        renderRailTab(.Search,    icons.tvg.lucide.@"search",   "Search",    0);
-        renderRailTab(.Downloads, icons.tvg.lucide.@"download", "Downloads", 1);
-        renderRailTab(.Queue,     icons.tvg.lucide.@"list",     "Queue",     2);
-        renderRailTab(.History,   icons.tvg.lucide.@"clock",    "History",   9);
-
-        railGroupGap(0);
-
-        // ── Group 2: Sources ──
-        renderRailTab(.TMDB,     icons.tvg.lucide.@"film",   "TMDB",     3);
-        renderRailTab(.YouTube,  icons.tvg.lucide.@"play",   "YouTube",  4);
-        renderRailTab(.Anime,    icons.tvg.lucide.@"zap",    "Anime",    5);
-        renderRailTab(.Comics,   icons.tvg.lucide.@"image",  "Comics",   6);
-        renderRailTab(.RSS,      icons.tvg.lucide.@"rss",    "RSS",      7);
-        renderRailTab(.Jellyfin, icons.tvg.lucide.@"server", "Jellyfin", 8);
-
-        railGroupGap(1);
-
-        // ── Group 3: Configure ──
-        renderRailTab(.AI,       icons.tvg.lucide.@"brain",    "AI",       14);
-        renderRailTab(.Plugins,  icons.tvg.lucide.@"package",  "Plugins",  11);
-        renderRailTab(.Settings, icons.tvg.lucide.@"settings", "Settings", 13);
+        // ── Drawer tab groups (Sources / Library / System) — data-driven ──
+        for (drawer_groups, 0..) |grp, gi| {
+            for (grp.entries) |e| {
+                renderRailTab(e.tab, e.icon, e.label, e.id);
+            }
+            if (gi + 1 < drawer_groups.len) railGroupGap(gi);
+        }
 
         // Spacer to push bottom controls to the bottom of the rail.
         { var spacer = dvui.box(@src(), .{}, .{ .expand = .vertical }); spacer.deinit(); }
