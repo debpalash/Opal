@@ -1049,6 +1049,7 @@ fn appFrame() !dvui.App.Result {
     const settings = @import("ui/settings.zig");
     settings.renderSettingsModal();
     settings.renderCheatSheet();
+    @import("ui/command_palette.zig").render();
     settings.renderMediaInfo();
     settings.renderDepsModal();
     @import("ui/footer.zig").renderSubPicker();
