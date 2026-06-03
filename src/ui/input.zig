@@ -64,6 +64,16 @@ pub fn processGlobalInputs() void {
                 }
             }
 
+            // ? (Shift+/) = Keyboard shortcuts overlay (same target as Shift+I).
+            // Guarded so a literal '?' typed into a focused field still types.
+            if (key == .slash and mod.shift() and !mod.control() and !mod.alt()) {
+                if (dvui.focusedWidgetId() == null) {
+                    state.app.cheatsheet_open = !state.app.cheatsheet_open;
+                    dvui.refresh(null, @src(), null);
+                    continue;
+                }
+            }
+
             // ── If a text entry is focused, suppress single-key shortcuts ──
             if (dvui.focusedWidgetId() != null) {
                 continue;

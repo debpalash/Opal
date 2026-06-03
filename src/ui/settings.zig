@@ -2115,11 +2115,13 @@ pub fn renderCheatSheet() void {
         .open_flag = &state.app.cheatsheet_open,
     }, .{
         .min_size_content = .{ .w = 650, .h = 520 },
-        .color_fill = theme.colors.bg_drawer,
-        .color_border = theme.colors.border_drawer,
+        .color_fill = theme.colors.bg_surface,
+        .color_border = theme.colors.border_subtle,
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(theme.radius.lg),
     });
     defer win.deinit();
-    
+
     win.dragAreaSet(dvui.windowHeader("Keyboard Shortcuts", "", &state.app.cheatsheet_open));
     
     var settings_scale: f32 = 1.4;
@@ -2186,19 +2188,19 @@ pub fn renderCheatSheet() void {
         // Key label (fixed width feel via padding)
         _ = dvui.label(@src(), "{s}", .{sc[0]}, .{
             .id_extra = idx,
-            .color_text = theme.colors.accent,
+            .color_text = theme.colors.accent_primary,
             .min_size_content = .{ .w = 140, .h = 0 },
         });
 
         _ = dvui.label(@src(), "{s}", .{sc[1]}, .{
             .id_extra = idx + 1000,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
         });
     }
 
     // ── AI chat keyword shortcuts ──
     _ = dvui.label(@src(), "AI Keywords (type in input)", .{}, .{
-        .color_text = theme.colors.accent,
+        .color_text = theme.colors.accent_primary,
         .margin = .{ .y = 16 },
     });
 
@@ -2229,12 +2231,12 @@ pub fn renderCheatSheet() void {
         defer row.deinit();
         _ = dvui.label(@src(), "{s}", .{k[0]}, .{
             .id_extra = idx,
-            .color_text = theme.colors.accent,
+            .color_text = theme.colors.accent_primary,
             .min_size_content = .{ .w = 180, .h = 0 },
         });
         _ = dvui.label(@src(), "{s}", .{k[1]}, .{
             .id_extra = idx + 6000,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
         });
     }
 }
