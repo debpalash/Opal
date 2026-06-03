@@ -768,3 +768,21 @@ pub fn spinner(src: std.builtin.SourceLocation) void {
         dot.deinit();
     }
 }
+
+/// Calm dropdown menu. `selected` is the chosen index; returns true on change.
+/// Wraps dvui.dropdown so the 6 hand-rolled footer menus can converge here.
+pub fn menu(
+    src: std.builtin.SourceLocation,
+    options: []const []const u8,
+    selected: *usize,
+) bool {
+    if (options.len == 0) return false;
+    if (selected.* >= options.len) selected.* = 0;
+    return dvui.dropdown(src, options, .{ .choice = selected }, .{}, .{
+        .min_size_content = .{ .w = 120, .h = 24 },
+        .color_fill = tk.bg_elevated(),
+        .color_text = tk.text_primary(),
+        .corner_radius = tk.rad_md,
+        .padding = .{ .x = tk.sp_md, .y = tk.sp_xs, .w = tk.sp_md, .h = tk.sp_xs },
+    });
+}

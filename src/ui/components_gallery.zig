@@ -82,6 +82,13 @@ pub fn render() void {
         }
     }
     { components.spinner(@src()); }
+    {
+        const G = struct { var a: usize = 0; var b: usize = 1; const opts = [_][]const u8{ "Auto", "16:9", "4:3" }; };
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .margin = dvui.Rect.all(theme.spacing.sm) });
+        defer row.deinit();
+        _ = components.menu(@src(), &G.opts, &G.a);
+        _ = components.menu(@src(), &G.opts, &G.b);
+    }
     // Primitives are appended here by later tasks.
 
     if (!printed_marker) {
