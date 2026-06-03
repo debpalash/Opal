@@ -89,6 +89,18 @@ pub fn render() void {
         _ = components.menu(@src(), &G.opts, &G.a);
         _ = components.menu(@src(), &G.opts, &G.b);
     }
+    {
+        const G = struct {
+            var open: bool = true;
+        };
+        if (components.modal(@src(), "Example Modal", &G.open)) |m_const| {
+            var m = m_const;
+            var body = dvui.box(@src(), .{ .dir = .vertical }, .{ .padding = dvui.Rect.all(theme.spacing.lg) });
+            _ = dvui.label(@src(), "Modal body content.", .{}, .{ .color_text = theme.colors.text_secondary });
+            body.deinit();
+            m.deinit();
+        }
+    }
     // Primitives are appended here by later tasks.
 
     if (!printed_marker) {

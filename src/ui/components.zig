@@ -786,3 +786,50 @@ pub fn menu(
         .padding = .{ .x = tk.sp_md, .y = tk.sp_xs, .w = tk.sp_md, .h = tk.sp_xs },
     });
 }
+
+pub const Modal = struct {
+    win: *dvui.FloatingWindowWidget,
+    pub fn deinit(self: *Modal) void {
+        self.win.deinit();
+    }
+};
+
+/// Calm modal frame. Returns null when `open.* == false`. When non-null, the
+/// caller renders the body, then calls `.deinit()`. A title bar with a close X
+/// is drawn automatically; clicking it (or the scrim) flips `open.*` via
+/// dvui's `open_flag`.
+pub fn modal(
+    src: std.builtin.SourceLocation,
+    title: []const u8,
+    open: *bool,
+) ?Modal {
+    if (!open.*) return null;
+    const win = dvui.floatingWindow(src, .{ .modal = true, .open_flag = open }, .{
+        .min_size_content = .{ .w = 380, .h = 140 },
+        .color_fill = tk.bg_surface(),
+        .color_border = tk.border_subtle(),
+        .border = dvui.Rect.all(1),
+        .corner_radius = tk.rad_lg,
+    });
+
+    var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .padding = .{ .x = tk.sp_lg, .y = tk.sp_md, .w = tk.sp_md, .h = tk.sp_md },
+    });
+    _ = dvui.label(@src(), "{s}", .{title}, .{ .gravity_y = 0.5, .color_text = tk.text_primary(), .font = fontAt(tk.fs_title) });
+    {
+        var s = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+        s.deinit();
+    }
+    if (dvui.buttonIcon(@src(), "close", icons.tvg.lucide.@"x", .{}, .{}, .{
+        .color_text = tk.text_secondary(),
+        .color_fill = theme.transparent,
+        .border = dvui.Rect.all(0),
+        .gravity_y = 0.5,
+    })) {
+        open.* = false;
+    }
+    hdr.deinit();
+
+    return .{ .win = win };
+}
