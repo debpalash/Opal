@@ -39,81 +39,104 @@ pub const TOOL_SYSTEM_PROMPT =
 //  Tool Call Detection & Parsing
 // ══════════════════════════════════════════════════════════
 
-/// Check if LLM response contains a tool call (JSON format)
+/// Check if LLM response contains a tool call (JSON format).
+/// Accepts the canonical {"tool_call":{...}} wrapper as well as the
+/// OpenAI-style bare {"name":..,"arguments":..} object some models emit,
+/// including when wrapped in ```json fences or preceded by prose.
 pub fn containsToolCall(text: []const u8) bool {
-    // If it mentions tool_call and it's not null
-    const has_tool = std.mem.indexOf(u8, text, "\"tool_call\"") != null;
-    const is_null = std.mem.indexOf(u8, text, "\"tool_call\": null") != null or std.mem.indexOf(u8, text, "\"tool_call\":null") != null;
-    return has_tool and !is_null;
+    // Canonical wrapper: mentions tool_call and it's not explicitly null.
+    if (std.mem.indexOf(u8, text, "\"tool_call\"") != null) {
+        const is_null = std.mem.indexOf(u8, text, "\"tool_call\": null") != null or std.mem.indexOf(u8, text, "\"tool_call\":null") != null;
+        if (!is_null) return true;
+    }
+    // OpenAI-style bare object: has both a "name" and "arguments" key.
+    if (std.mem.indexOf(u8, text, "\"name\"") != null and std.mem.indexOf(u8, text, "\"arguments\"") != null) {
+        return true;
+    }
+    return false;
 }
 
-/// Parse a tool call from LLM response text (JSON)
-/// Expected JSON: {"message": "...", "tool_call": {"name": "tool_name", "arguments": {"param": "value"}}}
-pub fn parseToolCall(text: []const u8) ?ToolCall {
-    // Find "tool_call" block start
-    const tc_key = "\"tool_call\"";
-    const tc_pos = std.mem.indexOf(u8, text, tc_key) orelse return null;
-    
-    // Find the opening { of the tool_call object
-    const start = std.mem.indexOfScalarPos(u8, text, tc_pos + tc_key.len, '{') orelse return null;
-    
-    // Extract everything within the {}
+/// Find the balanced {...} object starting at the first '{' at or after `from`.
+/// Returns the slice including both braces, or null if unbalanced/absent.
+fn extractBalancedObject(text: []const u8, from: usize) ?[]const u8 {
+    const start = std.mem.indexOfScalarPos(u8, text, from, '{') orelse return null;
     var depth: usize = 0;
-    var end: usize = start;
-    while (end < text.len) : (end += 1) {
-        if (text[end] == '{') depth += 1;
-        if (text[end] == '}') {
+    var i: usize = start;
+    while (i < text.len) : (i += 1) {
+        if (text[i] == '{') depth += 1;
+        if (text[i] == '}') {
             if (depth == 0) return null;
             depth -= 1;
-            if (depth == 0) {
-                const json_text = text[start .. end + 1];
+            if (depth == 0) return text[start .. i + 1];
+        }
+    }
+    return null;
+}
 
-                var tc = ToolCall{};
+/// Parse a {"name":..,"arguments":{..}} object slice into a ToolCall.
+/// `json_text` must already be the balanced object containing the keys.
+fn parseNameAndArgs(json_text: []const u8) ?ToolCall {
+    var tc = ToolCall{};
 
-                // Extract "name": "..."
-                const name_key = "\"name\"";
-                const name_pos = std.mem.indexOf(u8, json_text, name_key) orelse return null;
-                const after_name = json_text[name_pos + name_key.len..];
-                var ni: usize = 0;
-                while (ni < after_name.len and after_name[ni] != '"') : (ni += 1) {}
-                ni += 1;
-                if (ni >= after_name.len) return null;
-                const name_start = ni;
-                var name_end = name_start;
-                while (name_end < after_name.len and after_name[name_end] != '"') : (name_end += 1) {}
-                if (name_end <= name_start) return null;
-                const name = after_name[name_start..name_end];
-                tc.name_len = @min(name.len, 64);
-                @memcpy(tc.name[0..tc.name_len], name[0..tc.name_len]);
+    // Extract "name": "..."
+    const name_key = "\"name\"";
+    const name_pos = std.mem.indexOf(u8, json_text, name_key) orelse return null;
+    const after_name = json_text[name_pos + name_key.len ..];
+    var ni: usize = 0;
+    while (ni < after_name.len and after_name[ni] != '"') : (ni += 1) {}
+    ni += 1;
+    if (ni >= after_name.len) return null;
+    const name_start = ni;
+    var name_end = name_start;
+    while (name_end < after_name.len and after_name[name_end] != '"') : (name_end += 1) {}
+    if (name_end <= name_start) return null;
+    const name = after_name[name_start..name_end];
+    tc.name_len = @min(name.len, 64);
+    @memcpy(tc.name[0..tc.name_len], name[0..tc.name_len]);
 
-                // Extract "arguments": {...}
-                const args_key = "\"arguments\"";
-                if (std.mem.indexOf(u8, json_text, args_key)) |args_pos| {
-                    const after_args = json_text[args_pos + args_key.len..];
-                    if (std.mem.indexOfScalar(u8, after_args, '{')) |brace_start| {
-                        var a_depth: usize = 0;
-                        var bi: usize = brace_start;
-                        while (bi < after_args.len) : (bi += 1) {
-                            if (after_args[bi] == '{') a_depth += 1;
-                            if (after_args[bi] == '}') {
-                                if (a_depth == 0) return null;
-                                a_depth -= 1;
-                                if (a_depth == 0) {
-                                    const args_json = after_args[brace_start .. bi + 1];
-                                    tc.args_len = @min(args_json.len, 512);
-                                    @memcpy(tc.args_json[0..tc.args_len], args_json[0..tc.args_len]);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
+    // Extract "arguments": {...}
+    const args_key = "\"arguments\"";
+    if (std.mem.indexOf(u8, json_text, args_key)) |args_pos| {
+        if (extractBalancedObject(json_text, args_pos + args_key.len)) |args_json| {
+            tc.args_len = @min(args_json.len, 512);
+            @memcpy(tc.args_json[0..tc.args_len], args_json[0..tc.args_len]);
+        }
+    }
 
-                return tc;
+    return tc;
+}
+
+/// Parse a tool call from LLM response text (JSON).
+/// Canonical form: {"message": "...", "tool_call": {"name": "...", "arguments": {...}}}
+/// Also tolerates: ```json fences and leading prose (substring search ignores them),
+/// and the OpenAI-style bare {"name":.., "arguments":..} object without the
+/// outer "tool_call" wrapper that some models emit.
+pub fn parseToolCall(text: []const u8) ?ToolCall {
+    // Preferred: locate the "tool_call" wrapper and parse the object after it.
+    const tc_key = "\"tool_call\"";
+    if (std.mem.indexOf(u8, text, tc_key)) |tc_pos| {
+        if (extractBalancedObject(text, tc_pos + tc_key.len)) |json_text| {
+            if (parseNameAndArgs(json_text)) |tc| return tc;
+        }
+    }
+
+    // Fallback: OpenAI-style bare object — find the first "name" key and parse
+    // the balanced object that encloses it.
+    const name_key = "\"name\"";
+    if (std.mem.indexOf(u8, text, name_key)) |name_pos| {
+        // Walk back to the '{' that opens the object containing this key, then
+        // extract the balanced object from there.
+        var open: usize = name_pos;
+        while (open > 0) : (open -= 1) {
+            if (text[open] == '{') break;
+        }
+        if (text[open] == '{') {
+            if (extractBalancedObject(text, open)) |json_text| {
+                if (parseNameAndArgs(json_text)) |tc| return tc;
             }
         }
     }
-    
+
     return null;
 }
 
@@ -1008,4 +1031,80 @@ fn executeComicInfo(alloc: std.mem.Allocator) ?[]u8 {
     }
 
     return result[0..off];
+}
+
+// ══════════════════════════════════════════════════════════
+//  Tests (pure — parsing only, no io_global)
+// ══════════════════════════════════════════════════════════
+
+test "parseToolCall: canonical tool_call wrapper" {
+    const text =
+        \\{"message":"Sure","tool_call":{"name":"player_control","arguments":{"action":"pause"}}}
+    ;
+    const tc = parseToolCall(text) orelse return error.NoToolCall;
+    try std.testing.expectEqualStrings("player_control", tc.name[0..tc.name_len]);
+    try std.testing.expectEqualStrings("{\"action\":\"pause\"}", tc.args_json[0..tc.args_len]);
+}
+
+test "parseToolCall: null tool_call is not a call" {
+    try std.testing.expect(!containsToolCall("{\"message\":\"hi\",\"tool_call\":null}"));
+    try std.testing.expect(parseToolCall("{\"message\":\"hi\",\"tool_call\":null}") == null);
+}
+
+test "parseToolCall: wrapped in json fences" {
+    const text =
+        \\```json
+        \\{"message":"ok","tool_call":{"name":"navigate","arguments":{"to":"downloads"}}}
+        \\```
+    ;
+    try std.testing.expect(containsToolCall(text));
+    const tc = parseToolCall(text) orelse return error.NoToolCall;
+    try std.testing.expectEqualStrings("navigate", tc.name[0..tc.name_len]);
+    try std.testing.expectEqualStrings("{\"to\":\"downloads\"}", tc.args_json[0..tc.args_len]);
+}
+
+test "parseToolCall: leading prose before json" {
+    const text =
+        \\Sure, let me do that for you.
+        \\{"message":"Playing","tool_call":{"name":"find_and_play","arguments":{"query":"dune"}}}
+    ;
+    const tc = parseToolCall(text) orelse return error.NoToolCall;
+    try std.testing.expectEqualStrings("find_and_play", tc.name[0..tc.name_len]);
+    try std.testing.expectEqualStrings("{\"query\":\"dune\"}", tc.args_json[0..tc.args_len]);
+}
+
+test "parseToolCall: openai-style bare object without wrapper" {
+    const text =
+        \\{"name":"youtube_search","arguments":{"query":"cats"}}
+    ;
+    try std.testing.expect(containsToolCall(text));
+    const tc = parseToolCall(text) orelse return error.NoToolCall;
+    try std.testing.expectEqualStrings("youtube_search", tc.name[0..tc.name_len]);
+    try std.testing.expectEqualStrings("{\"query\":\"cats\"}", tc.args_json[0..tc.args_len]);
+}
+
+test "parseToolCall: openai-style bare object in fences with prose" {
+    const text =
+        \\Here's the call:
+        \\```json
+        \\{"name":"player_info","arguments":{}}
+        \\```
+    ;
+    const tc = parseToolCall(text) orelse return error.NoToolCall;
+    try std.testing.expectEqualStrings("player_info", tc.name[0..tc.name_len]);
+    try std.testing.expectEqualStrings("{}", tc.args_json[0..tc.args_len]);
+}
+
+test "parseToolCall: no tool call returns null" {
+    try std.testing.expect(parseToolCall("{\"message\":\"just chatting\"}") == null);
+    try std.testing.expect(!containsToolCall("{\"message\":\"just chatting\"}"));
+}
+
+test "parseToolCall: missing arguments still parses name" {
+    const text =
+        \\{"tool_call":{"name":"player_info"}}
+    ;
+    const tc = parseToolCall(text) orelse return error.NoToolCall;
+    try std.testing.expectEqualStrings("player_info", tc.name[0..tc.name_len]);
+    try std.testing.expect(tc.args_len == 0);
 }
