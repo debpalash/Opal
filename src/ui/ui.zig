@@ -189,90 +189,35 @@ pub fn renderWorkspaceModals() void {
     // ═══════════════════════════════════════════════════════
     // LOAD WORKSPACE MODAL
     // ═══════════════════════════════════════════════════════
-    if (state.app.ws_load_open) {
-        var win = dvui.floatingWindow(@src(), .{
-            .modal = true,
-            .open_flag = &state.app.ws_load_open,
-        }, .{
-            .min_size_content = .{ .w = 360, .h = 120 },
-            .color_fill = theme.colors.bg_drawer,
-            .color_border = theme.colors.border_card,
-            .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(12),
+    if (components.modal(@src(), "Load Workspace", &state.app.ws_load_open)) |m_val| {
+        var m = m_val;
+        var body = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.md },
         });
-        defer win.deinit();
 
-        // Header
-        {
-            var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal,
-                .background = true,
-                .color_fill = theme.colors.bg_header,
-                .padding = .{ .x = 12, .y = 8, .w = 8, .h = 8 },
-                .color_border = theme.colors.bg_header_border,
-                .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+        if (state.app.ws_count == 0) {
+            _ = dvui.label(@src(), "No saved workspaces yet.", .{}, .{
+                .color_text = theme.colors.text_secondary,
+                .gravity_x = 0.5,
+                .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = theme.spacing.xs },
             });
-            defer hdr.deinit();
-
-            dvui.icon(@src(), "", icons.tvg.lucide.@"folder-open", .{}, .{
-                .color_text = theme.colors.accent,
-                .gravity_y = 0.5,
+            _ = dvui.label(@src(), "Save one first with the save button.", .{}, .{
+                .color_text = theme.colors.text_tertiary,
+                .gravity_x = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.md },
             });
-            _ = dvui.label(@src(), " Load Workspace", .{}, .{
-                .color_text = theme.colors.text_main,
-                .gravity_y = 0.5,
-            });
-
-            { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
-
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"x", .{}, .{}, .{
-                .color_text = theme.colors.text_muted,
-                .color_fill = theme.transparent,
-                .border = dvui.Rect.all(0),
-                .gravity_y = 0.5,
-            })) {
-                state.app.ws_load_open = false;
-            }
-        }
-
-        // Body
-        {
-            var body = dvui.box(@src(), .{ .dir = .vertical }, .{
-                .expand = .horizontal,
-                .padding = .{ .x = 16, .y = 12, .w = 16, .h = 12 },
-            });
-            defer body.deinit();
-
-            if (state.app.ws_count == 0) {
-                _ = dvui.label(@src(), "No saved workspaces yet.", .{}, .{
-                    .color_text = theme.colors.text_muted,
-                    .margin = .{ .x = 0, .y = 12, .w = 0, .h = 4 },
-                    .gravity_x = 0.5,
-                });
-                _ = dvui.label(@src(), "Save one first with the save button.", .{}, .{
-                    .color_text = theme.colors.text_dim,
-                    .gravity_x = 0.5,
-                    .margin = .{ .x = 0, .y = 0, .w = 0, .h = 12 },
-                });
-            } else {
-                for (0..state.app.ws_count) |wi| {
-                    const name = state.app.ws_names[wi][0..state.app.ws_name_lens[wi]];
-                    if (dvui.button(@src(), name, .{}, .{
-                        .id_extra = wi,
-                        .expand = .horizontal,
-                        .color_fill = theme.colors.bg_card,
-                        .color_text = theme.colors.text_main,
-                        .color_border = theme.colors.divider,
-                        .border = dvui.Rect.all(1),
-                        .corner_radius = dvui.Rect.all(6),
-                        .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
-                        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
-                    })) {
-                        workspace.loadWorkspaceNamed(@import("../core/alloc.zig").allocator, name);
-                        state.app.ws_load_open = false;
-                    }
+        } else {
+            for (0..state.app.ws_count) |wi| {
+                const name = state.app.ws_names[wi][0..state.app.ws_name_lens[wi]];
+                if (components.listItem(@src(), wi, icons.tvg.lucide.@"folder", name, "")) {
+                    workspace.loadWorkspaceNamed(@import("../core/alloc.zig").allocator, name);
+                    state.app.ws_load_open = false;
                 }
             }
         }
+
+        body.deinit();
+        m.deinit();
     }
 }
