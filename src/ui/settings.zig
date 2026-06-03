@@ -1775,6 +1775,40 @@ fn renderScriptsTab() void {
         }
     }
 
+    // ── Model picker (gemma_llama only) ──
+    // apfel has no downloadable GGUF, so the picker only surfaces for the
+    // llama-server backend. Selecting a model swaps the active HF registry
+    // entry (re-resolving paths) and persists via the shared config save.
+    {
+        const ai_server = @import("../services/ai_server.zig");
+        if (ai_server.backend_kind == .gemma_llama and ai_server.models.len > 0) {
+            settingRow("AI Model", 72, @src());
+
+            var labels: [ai_server.models.len][]const u8 = undefined;
+            inline for (ai_server.models, 0..) |m, i| labels[i] = m.display_name;
+
+            var sel: usize = ai_server.selected_model;
+            if (sel >= ai_server.models.len) sel = 0;
+
+            if (components.menu(@src(), &labels, &sel)) {
+                if (sel != ai_server.selected_model) {
+                    ai_server.setModel(sel);
+                    state.markConfigDirty();
+                    state.showToast(ai_server.models[sel].display_name);
+                }
+            }
+
+            const active = ai_server.models[sel];
+            var caption_font = dvui.themeGet().font_body;
+            caption_font.size = theme.font_size.small;
+            _ = dvui.label(@src(), "{s} — {s}", .{ active.size_label, active.note }, .{
+                .color_text = theme.colors.text_tertiary,
+                .font = caption_font,
+                .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
+            });
+        }
+    }
+
     // ── Web Remote Control ── (toggle row; address shown as a quiet hint)
     {
         const remote = @import("../services/remote.zig");
