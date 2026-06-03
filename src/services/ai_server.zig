@@ -223,7 +223,7 @@ fn detectApfel() void {
 fn detectGemmaLlama() void {
     // Gemma via llama-server: works on macOS, Linux, Windows. Same detection
     // path on all three — the only per-OS bit is the brew prefix.
-    const model_path = std.fmt.bufPrintZ(&model_path_buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, GEMMA_MODEL_FILENAME }) catch return;
+    const model_path = std.fmt.bufPrintZ(&model_path_buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, activeModelFilename() }) catch return;
     model_path_len = model_path.len;
 
     if (@import("../core/io_global.zig").cwdAccess(model_path, .{})) |_| {
