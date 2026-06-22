@@ -162,6 +162,24 @@ pub fn preWarmServers() void {
     }.run, .{}) catch {};
 }
 
+/// Fast preflight: run `python3 <script> --check`, which verifies the server's
+/// Python imports without loading any model and exits 0/non-zero. Lets the
+/// ensure* helpers skip the multi-second spawn-and-wait (and avoid leaving an
+/// idle python process) when the optional voice deps aren't installed.
+fn serverDepsReady(script: []const u8) bool {
+    var check = @import("../core/io_global.zig").Child.init(
+        &.{ "python3", script, "--check" },
+        @import("../core/alloc.zig").allocator,
+    );
+    check.stdout_behavior = .Ignore;
+    check.stderr_behavior = .Ignore;
+    const term = check.spawnAndWait() catch return false;
+    return switch (term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+}
+
 fn ensureVoiceServer() void {
     server_start_mutex.lock();
     defer server_start_mutex.unlock();
@@ -174,6 +192,10 @@ fn ensureVoiceServer() void {
         logs.pushLog("warn", "voice", "voice-server.py not found — skipping", true);
         return;
     };
+    if (!serverDepsReady("bin/zigzag-voice-server.py")) {
+        logs.pushLog("info", "voice", "voice-server deps missing — using fallback", true);
+        return;
+    }
     var child = @import("../core/io_global.zig").Child.init(
         &.{ "python3", "bin/zigzag-voice-server.py" },
         @import("../core/alloc.zig").allocator,
@@ -194,6 +216,7 @@ pub fn ensureSttServer() void {
     if (stt_server_started) return;
     if (@import("../core/io_global.zig").cwdAccess(STT_SOCKET, .{})) |_| { stt_server_started = true; return; } else |_| {}
     @import("../core/io_global.zig").cwdAccess("bin/zigzag-stt-server.py", .{}) catch { return; };
+    if (!serverDepsReady("bin/zigzag-stt-server.py")) return;
     var child = @import("../core/io_global.zig").Child.init(
         &.{ "python3", "bin/zigzag-stt-server.py" }, @import("../core/alloc.zig").allocator,
     );
@@ -212,6 +235,7 @@ pub fn ensureTtsServer() void {
     if (tts_server_started) return;
     if (@import("../core/io_global.zig").cwdAccess(TTS_SOCKET, .{})) |_| { tts_server_started = true; return; } else |_| {}
     @import("../core/io_global.zig").cwdAccess("bin/zigzag-tts-server.py", .{}) catch { return; };
+    if (!serverDepsReady("bin/zigzag-tts-server.py")) return;
     var child = @import("../core/io_global.zig").Child.init(
         &.{ "python3", "bin/zigzag-tts-server.py" }, @import("../core/alloc.zig").allocator,
     );

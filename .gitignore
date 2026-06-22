@@ -42,7 +42,15 @@ KittenTTS/
 llama.cpp/
 
 # === Runtime binaries & models ===
-bin/
+# bin/ holds runtime artifacts (downloaded models, compiled helpers) — ignored,
+# EXCEPT the voice helper scripts + their docs, which are tracked source.
+bin/*
+!bin/zigzag-stt.py
+!bin/zigzag-stt-server.py
+!bin/zigzag-tts-server.py
+!bin/zigzag-voice-server.py
+!bin/requirements.txt
+!bin/README.md
 models/
 
 # === Training datasets (large, regenerable) ===

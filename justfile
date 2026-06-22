@@ -25,6 +25,12 @@ release:
 test:
     {{zig}} build test
 
+# Comprehensive feature suite (DB, config, voice, ASR, theming + unit tests).
+# The standard gate — run to confirm every feature still works. Writes a
+# report to tests/results.json (viewable in tests/dashboard.html).
+test-all:
+    python3 tests/test_features.py
+
 # Format all .zig in src/
 fmt:
     {{zig}} fmt src/ build.zig

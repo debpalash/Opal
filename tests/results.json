@@ -1,43 +1,79 @@
 {
-  "timestamp": "2026-04-04T18:06:37",
-  "total": 18,
-  "passed": 18,
+  "timestamp": "2026-06-23T02:40:49",
+  "total": 59,
+  "passed": 49,
   "failed": 0,
-  "warnings": 0,
-  "skipped": 0,
+  "warnings": 3,
+  "skipped": 7,
   "categories": {
-    "Connectivity": {
-      "pass": 3,
+    "Database": {
+      "pass": 8,
       "fail": 0,
-      "warn": 0,
-      "skip": 0
-    },
-    "LLM Chat": {
-      "pass": 3,
-      "fail": 0,
-      "warn": 0,
-      "skip": 0
-    },
-    "LLM Perf": {
-      "pass": 2,
-      "fail": 0,
-      "warn": 0,
+      "warn": 1,
       "skip": 0
     },
     "Memory": {
-      "pass": 4,
+      "pass": 3,
+      "fail": 0,
+      "warn": 1,
+      "skip": 0
+    },
+    "Config": {
+      "pass": 6,
       "fail": 0,
       "warn": 0,
       "skip": 0
     },
-    "Config": {
-      "pass": 3,
+    "Build": {
+      "pass": 4,
+      "fail": 0,
+      "warn": 1,
+      "skip": 0
+    },
+    "Voice": {
+      "pass": 0,
+      "fail": 0,
+      "warn": 0,
+      "skip": 5
+    },
+    "LLM": {
+      "pass": 0,
+      "fail": 0,
+      "warn": 0,
+      "skip": 2
+    },
+    "Theming": {
+      "pass": 5,
+      "fail": 0,
+      "warn": 0,
+      "skip": 0
+    },
+    "Commands": {
+      "pass": 5,
       "fail": 0,
       "warn": 0,
       "skip": 0
     },
     "Integration": {
-      "pass": 3,
+      "pass": 6,
+      "fail": 0,
+      "warn": 0,
+      "skip": 0
+    },
+    "Voice Scripts": {
+      "pass": 9,
+      "fail": 0,
+      "warn": 0,
+      "skip": 0
+    },
+    "ASR Streaming": {
+      "pass": 2,
+      "fail": 0,
+      "warn": 0,
+      "skip": 0
+    },
+    "Unit Tests": {
+      "pass": 1,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -45,130 +81,417 @@
   },
   "tests": [
     {
-      "name": "LLM Server Online",
-      "category": "Connectivity",
+      "name": "Database Exists",
+      "category": "Database",
       "status": "pass",
-      "detail": "Status: ok",
-      "duration_ms": 19
-    },
-    {
-      "name": "Embedding Server Online",
-      "category": "Connectivity",
-      "status": "pass",
-      "detail": "Dim: 768",
-      "duration_ms": 21
-    },
-    {
-      "name": "Voice Server Socket",
-      "category": "Connectivity",
-      "status": "pass",
-      "detail": "Connected to voice server",
+      "detail": "Size: 136.0 KB",
       "duration_ms": 0
     },
     {
-      "name": "Basic Chat Response",
-      "category": "LLM Chat",
+      "name": "Config Table",
+      "category": "Database",
       "status": "pass",
-      "detail": "\"I am ZigZag, a media assistant. I help with conten...\"",
-      "duration_ms": 859
+      "detail": "36 config entries",
+      "duration_ms": 3
     },
     {
-      "name": "Media Awareness",
-      "category": "LLM Chat",
+      "name": "Watch History Table",
+      "category": "Database",
       "status": "pass",
-      "detail": "\"I can help you find movie information, but I can't...\"",
-      "duration_ms": 324
-    },
-    {
-      "name": "Tool Call Format",
-      "category": "LLM Chat",
-      "status": "pass",
-      "detail": "Contains tool call pattern",
-      "duration_ms": 201
-    },
-    {
-      "name": "First Token Latency",
-      "category": "LLM Perf",
-      "status": "pass",
-      "detail": "TTFT: 27ms, Total: 215ms",
-      "duration_ms": 27
-    },
-    {
-      "name": "Generation Throughput",
-      "category": "LLM Perf",
-      "status": "pass",
-      "detail": "~103 tok/s (54 tokens in 526ms)",
-      "duration_ms": 526
-    },
-    {
-      "name": "Conversation Log",
-      "category": "Memory",
-      "status": "pass",
-      "detail": "1 entries. Latest: assistant:Continuing...",
+      "detail": "2 watch entries",
       "duration_ms": 0
     },
     {
-      "name": "Preference Learning",
-      "category": "Memory",
+      "name": "Search History Table",
+      "category": "Database",
       "status": "pass",
-      "detail": "active_hour=11:00 (w:1)",
+      "detail": "26 searches",
       "duration_ms": 0
     },
     {
-      "name": "Proactive Suggestions",
-      "category": "Memory",
+      "name": "Download History Table",
+      "category": "Database",
       "status": "pass",
-      "detail": "\"Loki (2021) - S02E06 - \" at 66%, pos 0min",
+      "detail": "107 downloads",
       "duration_ms": 0
     },
     {
-      "name": "Watch History Depth",
+      "name": "TMDB Items Table",
+      "category": "Database",
+      "status": "pass",
+      "detail": "0 TMDB items",
+      "duration_ms": 0
+    },
+    {
+      "name": "AI Memory Table",
+      "category": "Database",
+      "status": "pass",
+      "detail": "0 memories",
+      "duration_ms": 0
+    },
+    {
+      "name": "Vector Memory Table",
+      "category": "Database",
+      "status": "warn",
+      "detail": "sqlite-vec extension not loaded (expected outside app)",
+      "duration_ms": 0
+    },
+    {
+      "name": "Poster Cache Table",
+      "category": "Database",
+      "status": "pass",
+      "detail": "0 cached posters",
+      "duration_ms": 0
+    },
+    {
+      "name": "Conversation Log Table",
       "category": "Memory",
       "status": "pass",
-      "detail": "27 entries: 23 deep (>50%), 21 completed (>90%)",
+      "detail": "42 logged conversations",
+      "duration_ms": 0
+    },
+    {
+      "name": "User Preferences Table",
+      "category": "Memory",
+      "status": "pass",
+      "detail": "active_hour=8:00 (w:128)",
+      "duration_ms": 0
+    },
+    {
+      "name": "Watch Sessions Table",
+      "category": "Memory",
+      "status": "pass",
+      "detail": "0 sessions",
+      "duration_ms": 0
+    },
+    {
+      "name": "Proactive Suggestion Query",
+      "category": "Memory",
+      "status": "warn",
+      "detail": "No unfinished content to suggest",
       "duration_ms": 0
     },
     {
       "name": "Theme Persistence",
       "category": "Config",
       "status": "pass",
-      "detail": "Active: Midnight",
+      "detail": "Theme: Phantom",
       "duration_ms": 0
     },
     {
-      "name": "TTS Config",
+      "name": "UI Scale Config",
       "category": "Config",
       "status": "pass",
-      "detail": "Voice: Bella, Speed: 1.00x",
+      "detail": "Scale: 1.00x",
       "duration_ms": 0
     },
     {
-      "name": "Config Key Count",
+      "name": "TTS Voice Config",
       "category": "Config",
       "status": "pass",
-      "detail": "33 keys: asr_enabled, auto_advance, deband_enabled, download_rate_limit, drawer_open, drawer_width_px, dubbing_enabled, eq_preset...",
+      "detail": "Voice: Luna",
       "duration_ms": 0
     },
     {
-      "name": "Chat \u2192 Memory Pipeline",
-      "category": "Integration",
+      "name": "TTS Speed Config",
+      "category": "Config",
       "status": "pass",
-      "detail": "Reply: 174 chars, Memory: 209\u2192209",
-      "duration_ms": 2423
+      "detail": "Speed: 1.00x",
+      "duration_ms": 0
     },
     {
-      "name": "Multi-Turn Coherence",
-      "category": "Integration",
+      "name": "Window State Persistence",
+      "category": "Config",
       "status": "pass",
-      "detail": "Remembered: \"Your name is Alex.\"",
-      "duration_ms": 231
+      "detail": "1244x771 at (0,61)",
+      "duration_ms": 0
     },
     {
-      "name": "Sequential Requests",
+      "name": "Jellyfin Integration Config",
+      "category": "Config",
+      "status": "pass",
+      "detail": "Server: http://localhost:8096",
+      "duration_ms": 0
+    },
+    {
+      "name": "Zig Build",
+      "category": "Build",
+      "status": "pass",
+      "detail": "Binary: 39.6 MB",
+      "duration_ms": 577
+    },
+    {
+      "name": "Binary Exists",
+      "category": "Build",
+      "status": "pass",
+      "detail": "39.6 MB, built at 02:38:17",
+      "duration_ms": 0
+    },
+    {
+      "name": "LLM Model File",
+      "category": "Build",
+      "status": "warn",
+      "detail": "No GGUF model found",
+      "duration_ms": 0
+    },
+    {
+      "name": "Voice Server Script",
+      "category": "Build",
+      "status": "pass",
+      "detail": "8906 bytes",
+      "duration_ms": 0
+    },
+    {
+      "name": "Libtorrent Wrapper",
+      "category": "Build",
+      "status": "pass",
+      "detail": "88 KB",
+      "duration_ms": 0
+    },
+    {
+      "name": "Voice Server Socket",
+      "category": "Voice",
+      "status": "skip",
+      "detail": "Voice server not running",
+      "duration_ms": 0
+    },
+    {
+      "name": "Silero VAD Available",
+      "category": "Voice",
+      "status": "skip",
+      "detail": "silero-vad not installed (optional)",
+      "duration_ms": 1345
+    },
+    {
+      "name": "Faster-Whisper Available",
+      "category": "Voice",
+      "status": "skip",
+      "detail": "faster-whisper not installed (optional)",
+      "duration_ms": 24
+    },
+    {
+      "name": "KittenTTS Available",
+      "category": "Voice",
+      "status": "skip",
+      "detail": "kittentts not installed (optional)",
+      "duration_ms": 22
+    },
+    {
+      "name": "PulseAudio Echo Cancel",
+      "category": "Voice",
+      "status": "skip",
+      "detail": "pactl not available",
+      "duration_ms": 25
+    },
+    {
+      "name": "LLM Server Health",
+      "category": "LLM",
+      "status": "skip",
+      "detail": "LLM server not running",
+      "duration_ms": 24
+    },
+    {
+      "name": "Embedding Server Health",
+      "category": "LLM",
+      "status": "skip",
+      "detail": "Embedding server not running",
+      "duration_ms": 0
+    },
+    {
+      "name": "Theme Presets Defined",
+      "category": "Theming",
+      "status": "pass",
+      "detail": "7 presets: midnight, abyss, phantom, nord, solarized, rose, ember",
+      "duration_ms": 0
+    },
+    {
+      "name": "Theme Cycle Function",
+      "category": "Theming",
+      "status": "pass",
+      "detail": "cycleTheme + setPreset defined",
+      "duration_ms": 0
+    },
+    {
+      "name": "Icon Size System",
+      "category": "Theming",
+      "status": "pass",
+      "detail": "IconSize enum + iconSize() defined",
+      "duration_ms": 0
+    },
+    {
+      "name": "Theme Palette Button",
+      "category": "Theming",
+      "status": "pass",
+      "detail": "Palette button wired to cycleTheme",
+      "duration_ms": 0
+    },
+    {
+      "name": "Settings Theme Picker",
+      "category": "Theming",
+      "status": "pass",
+      "detail": "Theme picker in settings",
+      "duration_ms": 0
+    },
+    {
+      "name": "Instant Commands Count",
+      "category": "Commands",
+      "status": "pass",
+      "detail": "25 unique commands, 52 response points",
+      "duration_ms": 0
+    },
+    {
+      "name": "Theme Voice Commands",
+      "category": "Commands",
+      "status": "pass",
+      "detail": "Found: theme, next theme, switch theme, midnight, abyss, phantom, nord, ember",
+      "duration_ms": 0
+    },
+    {
+      "name": "TTS Voice Command",
+      "category": "Commands",
+      "status": "pass",
+      "detail": "\"use voice X\" command exists",
+      "duration_ms": 0
+    },
+    {
+      "name": "Suggest Command",
+      "category": "Commands",
+      "status": "pass",
+      "detail": "\"suggest\" / \"what should i watch\" commands",
+      "duration_ms": 0
+    },
+    {
+      "name": "Save Chat Command",
+      "category": "Commands",
+      "status": "pass",
+      "detail": "\"save chat\" / \"export chat\" commands",
+      "duration_ms": 0
+    },
+    {
+      "name": "Dynamic Tool Selection",
       "category": "Integration",
       "status": "pass",
-      "detail": "3/3 succeeded in 226ms total",
-      "duration_ms": 226
+      "detail": "Player tools conditionally included",
+      "duration_ms": 0
+    },
+    {
+      "name": "Cross-Session Context Injection",
+      "category": "Integration",
+      "status": "pass",
+      "detail": "Injected: Past Sessions, Preferences, Memory Context",
+      "duration_ms": 0
+    },
+    {
+      "name": "Configurable TTS",
+      "category": "Integration",
+      "status": "pass",
+      "detail": "Voice + speed from state config",
+      "duration_ms": 0
+    },
+    {
+      "name": "Playback Memory Hooks",
+      "category": "Integration",
+      "status": "pass",
+      "detail": "Media play \u2192 memory + preference learning",
+      "duration_ms": 0
+    },
+    {
+      "name": "Startup Proactive Greeting",
+      "category": "Integration",
+      "status": "pass",
+      "detail": "Injects 'continue watching' on first frame",
+      "duration_ms": 0
+    },
+    {
+      "name": "Conversation Persistence",
+      "category": "Integration",
+      "status": "pass",
+      "detail": "Conversations saved to conversation_log table",
+      "duration_ms": 0
+    },
+    {
+      "name": "Compiles: zigzag-stt.py",
+      "category": "Voice Scripts",
+      "status": "pass",
+      "detail": "py_compile OK",
+      "duration_ms": 29
+    },
+    {
+      "name": "Compiles: zigzag-stt-server.py",
+      "category": "Voice Scripts",
+      "status": "pass",
+      "detail": "py_compile OK",
+      "duration_ms": 35
+    },
+    {
+      "name": "Compiles: zigzag-tts-server.py",
+      "category": "Voice Scripts",
+      "status": "pass",
+      "detail": "py_compile OK",
+      "duration_ms": 31
+    },
+    {
+      "name": "Compiles: zigzag-voice-server.py",
+      "category": "Voice Scripts",
+      "status": "pass",
+      "detail": "py_compile OK",
+      "duration_ms": 29
+    },
+    {
+      "name": "--check degrades: zigzag-stt-server.py",
+      "category": "Voice Scripts",
+      "status": "pass",
+      "detail": "clean exit 4 (deps absent (fallback))",
+      "duration_ms": 23
+    },
+    {
+      "name": "--check degrades: zigzag-tts-server.py",
+      "category": "Voice Scripts",
+      "status": "pass",
+      "detail": "clean exit 4 (deps absent (fallback))",
+      "duration_ms": 27
+    },
+    {
+      "name": "--check degrades: zigzag-voice-server.py",
+      "category": "Voice Scripts",
+      "status": "pass",
+      "detail": "clean exit 4 (deps absent (fallback))",
+      "duration_ms": 24
+    },
+    {
+      "name": "Whisper Model Present",
+      "category": "Voice Scripts",
+      "status": "pass",
+      "detail": "ggml-base.en.bin (141 MB)",
+      "duration_ms": 0
+    },
+    {
+      "name": "STT End-to-End (say\u2192whisper)",
+      "category": "Voice Scripts",
+      "status": "pass",
+      "detail": "transcribed: \"the next episode.\"",
+      "duration_ms": 2266
+    },
+    {
+      "name": "Sherpa Model Canonicalization",
+      "category": "ASR Streaming",
+      "status": "pass",
+      "detail": "canonicalization step present",
+      "duration_ms": 0
+    },
+    {
+      "name": "Streaming Convo Wired",
+      "category": "ASR Streaming",
+      "status": "pass",
+      "detail": "spawn + read loop present",
+      "duration_ms": 0
+    },
+    {
+      "name": "Zig Unit Tests",
+      "category": "Unit Tests",
+      "status": "pass",
+      "detail": "all pure-Zig unit tests pass",
+      "duration_ms": 533
     }
   ]
 }

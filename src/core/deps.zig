@@ -348,6 +348,32 @@ pub fn fetchSherpaStreamAsync() void {
             mv.stderr_behavior = .Ignore;
             _ = mv.spawnAndWait() catch {};
 
+            // The archive ships versioned, dual-precision weights
+            // (encoder-epoch-…-128.onnx plus a .int8.onnx). Both deps.check()
+            // and voice_backend.spawnStreamingConvo() expect canonical
+            // encoder.onnx / decoder.onnx / joiner.onnx — without this mapping
+            // sherpa_stream_model is permanently false and streaming never
+            // activates. Prefer int8 for a small on-device footprint (~68MB),
+            // fall back to fp32, then drop the unused variants.
+            const canon_script =
+                \\d="$1"
+                \\for stem in encoder decoder joiner; do
+                \\  if [ ! -f "$d/$stem.onnx" ]; then
+                \\    m=$(ls "$d/$stem"-*.int8.onnx 2>/dev/null | head -1)
+                \\    [ -z "$m" ] && m=$(ls "$d/$stem"-*.onnx 2>/dev/null | head -1)
+                \\    [ -n "$m" ] && cp "$m" "$d/$stem.onnx"
+                \\  fi
+                \\done
+                \\rm -f "$d"/*-epoch-*.onnx "$d"/bpe.model "$d"/*.sh "$d"/README.md
+            ;
+            var canon = io_global.Child.init(
+                &.{ "sh", "-c", canon_script, "sh", dst },
+                @import("alloc.zig").allocator,
+            );
+            canon.stdout_behavior = .Ignore;
+            canon.stderr_behavior = .Ignore;
+            _ = canon.spawnAndWait() catch {};
+
             io_global.deleteFileAbsolute(tar_path) catch {};
             logs.pushLog("info", "deps", "Streaming Zipformer model ready", true);
         }
