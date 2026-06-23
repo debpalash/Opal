@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-06-23T15:53:39",
+  "timestamp": "2026-06-23T16:41:11",
   "total": 72,
   "passed": 62,
   "failed": 0,
@@ -110,7 +110,7 @@
       "category": "Database",
       "status": "pass",
       "detail": "38 config entries",
-      "duration_ms": 18
+      "duration_ms": 11
     },
     {
       "name": "Watch History Table",
@@ -193,7 +193,7 @@
       "name": "Theme Persistence",
       "category": "Config",
       "status": "pass",
-      "detail": "Theme: Ros\u00e9",
+      "detail": "Theme: Midnight",
       "duration_ms": 0
     },
     {
@@ -236,13 +236,13 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 39.6 MB",
-      "duration_ms": 371
+      "duration_ms": 362
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "39.6 MB, built at 15:53:30",
+      "detail": "39.6 MB, built at 16:40:02",
       "duration_ms": 0
     },
     {
@@ -278,35 +278,35 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 1186
+      "duration_ms": 1169
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "skip",
       "detail": "faster-whisper not installed (optional)",
-      "duration_ms": 21
+      "duration_ms": 20
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 18
+      "duration_ms": 19
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 25
+      "duration_ms": 24
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 23
+      "duration_ms": 22
     },
     {
       "name": "Embedding Server Health",
@@ -439,7 +439,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 24
+      "duration_ms": 23
     },
     {
       "name": "Compiles: zigzag-tts-server.py",
@@ -453,14 +453,14 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 25
+      "duration_ms": 23
     },
     {
       "name": "--check degrades: zigzag-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 20
+      "duration_ms": 19
     },
     {
       "name": "--check degrades: zigzag-tts-server.py",
@@ -488,7 +488,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 2080
+      "duration_ms": 1866
     },
     {
       "name": "Sherpa Model Canonicalization",
@@ -551,14 +551,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 4613
+      "duration_ms": 5915
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 41
+      "duration_ms": 40
     },
     {
       "name": "Page Router",
@@ -579,7 +579,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 5
+      "duration_ms": 4
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -600,7 +600,7 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 428
+      "duration_ms": 442
     }
   ]
 }

@@ -230,17 +230,51 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
         return;
     }
 
+    // Compact toolbar: item count + card-size controls (smaller / bigger).
+    {
+        var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = 4, .y = 0, .w = 4, .h = 4 },
+        });
+        defer bar.deinit();
+        _ = dvui.label(@src(), "{d} items", .{items.items.len}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
+        const dim = dvui.Color{ .r = 120, .g = 120, .b = 148, .a = 200 };
+        if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = dim,
+            .border = dvui.Rect.all(0),
+            .min_size_content = .{ .w = 16, .h = 16 },
+            .padding = dvui.Rect.all(3),
+            .gravity_y = 0.5,
+        })) {
+            state.app.tmdb.card_w = @max(110, state.app.tmdb.card_w - 40);
+        }
+        if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = dim,
+            .border = dvui.Rect.all(0),
+            .min_size_content = .{ .w = 16, .h = 16 },
+            .padding = dvui.Rect.all(3),
+            .gravity_y = 0.5,
+        })) {
+            state.app.tmdb.card_w = @min(320, state.app.tmdb.card_w + 40);
+        }
+    }
+
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
     defer scroll.deinit();
 
     // Responsive columns from the LIVE page width (one-frame lag; first paint
-    // falls back to a sane default). Replaces the old dead drawer-geometry math
-    // so the gallery fills the full window instead of a fixed ~640px column.
+    // falls back to a sane default). Card width is user-cyclable (compact↔large).
     const rect_w = scroll.data().rect.w;
-    const avail_w: f32 = @max(280, (if (rect_w > 1) rect_w else 900) - 16);
-    const card_target_w: f32 = 170;
+    const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
+    const card_target_w: f32 = state.app.tmdb.card_w;
     const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / card_target_w)));
-    const card_w: f32 = @max(120, (avail_w - @as(f32, @floatFromInt(cols)) * 12) / @as(f32, @floatFromInt(cols)));
+    const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
     const poster_h: f32 = card_w * 1.5;
 
     var i: usize = 0;
@@ -248,7 +282,7 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i + 50000,
             .expand = .horizontal,
-            .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
+            .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
         });
         defer row.deinit();
 
@@ -259,21 +293,20 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
         i += cols;
     }
 
-    if (show_load_more and !state.app.tmdb.is_loading and state.app.tmdb.page < state.app.tmdb.total_pages) {
-        var load_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = dvui.Rect.all(12) });
-        defer load_row.deinit();
-        if (dvui.button(@src(), "Load More", .{}, .{
-            .gravity_x = 0.5,
-            .color_fill = theme.colors.bg_card,
-            .color_text = theme.colors.accent,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 24, .y = 8, .w = 24, .h = 8 },
-            .border = dvui.Rect.all(1),
-            .color_border = theme.colors.accent,
-        })) {
+    // Infinite scroll: auto-fetch the next page when the user nears the bottom
+    // (one-frame lag on si is fine). is_loading + page<total_pages bound it.
+    if (show_load_more and state.app.tmdb.page < state.app.tmdb.total_pages) {
+        const max_y = scroll.si.scrollMax(.vertical);
+        const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
+        if (near_bottom and !state.app.tmdb.is_loading) {
             state.app.tmdb.page += 1;
             api.fetchCurrentView(true);
         }
+        _ = dvui.label(@src(), "Loading more…", .{}, .{
+            .color_text = theme.colors.text_muted,
+            .gravity_x = 0.5,
+            .padding = dvui.Rect.all(12),
+        });
     }
 }
 
@@ -288,8 +321,8 @@ fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h: f3
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = idx,
         .min_size_content = .{ .w = card_w, .h = 10 },
-        .max_size_content = .{ .w = card_w, .h = poster_h + 80 },
-        .margin = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
+        .max_size_content = .{ .w = card_w, .h = poster_h + 64 },
+        .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
     });
     defer card.deinit();
 
@@ -349,7 +382,7 @@ fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h: f3
         var meta_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = idx + 300,
             .expand = .horizontal,
-            .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
+            .padding = .{ .x = 2, .y = 2, .w = 2, .h = 0 },
         });
         defer meta_row.deinit();
 

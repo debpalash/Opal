@@ -305,6 +305,8 @@ pub const AppState = struct {
         api_key: [256]u8 = std.mem.zeroes([256]u8),
         api_key_len: usize = 0,
         loaded_once: bool = false,
+        // Gallery card target width (px) — user-cyclable compact/normal/large/xl.
+        card_w: f32 = 150,
     } = .{},
 
     // ── OpenSubtitles ──
