@@ -46,7 +46,10 @@ fn matchesSearch(label: []const u8) bool {
         while (j < q.len) : (j += 1) {
             const a = std.ascii.toLower(label[i + j]);
             const b = std.ascii.toLower(q[j]);
-            if (a != b) { ok = false; break; }
+            if (a != b) {
+                ok = false;
+                break;
+            }
         }
         if (ok) return true;
     }
@@ -100,8 +103,10 @@ fn renderLeftNav() void {
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 0, .w = 1, .h = 0 },
         .padding = .{
-            .x = theme.spacing.md, .y = theme.spacing.lg,
-            .w = theme.spacing.md, .h = theme.spacing.lg,
+            .x = theme.spacing.md,
+            .y = theme.spacing.lg,
+            .w = theme.spacing.md,
+            .h = theme.spacing.lg,
         },
     });
     defer nav.deinit();
@@ -121,12 +126,12 @@ fn renderLeftNav() void {
         tab: state.SettingsTab,
         label: []const u8,
     }{
-        .{ .tab = .General,   .label = "General" },
-        .{ .tab = .Playback,  .label = "Playback" },
+        .{ .tab = .General, .label = "General" },
+        .{ .tab = .Playback, .label = "Playback" },
         .{ .tab = .Subtitles, .label = "Subtitles" },
-        .{ .tab = .Network,   .label = "Network" },
-        .{ .tab = .Storage,   .label = "Storage" },
-        .{ .tab = .Scripts,   .label = "AI & Scripts" },
+        .{ .tab = .Network, .label = "Network" },
+        .{ .tab = .Storage, .label = "Storage" },
+        .{ .tab = .Scripts, .label = "AI & Scripts" },
         .{ .tab = .LangLearn, .label = "Language" },
         .{ .tab = .FileAssoc, .label = "File Types" },
     };
@@ -145,8 +150,10 @@ fn renderLeftNav() void {
         _ = dvui.label(@src(), "No matches", .{}, .{
             .color_text = theme.colors.text_tertiary,
             .padding = .{
-                .x = theme.spacing.md, .y = theme.spacing.sm,
-                .w = theme.spacing.md, .h = theme.spacing.sm,
+                .x = theme.spacing.md,
+                .y = theme.spacing.sm,
+                .w = theme.spacing.md,
+                .h = theme.spacing.sm,
             },
         });
     }
@@ -157,12 +164,12 @@ fn renderLeftNav() void {
 fn sectionMatchesSearch(tab: state.SettingsTab) bool {
     if (search_len == 0) return true;
     const sections: []const []const u8 = switch (tab) {
-        .General   => &.{ "Interface", "Behavior", "TMDB", "Theme", "Scale", "Grid" },
-        .Playback  => &.{ "Video Processing", "Audio Equalizer", "Streaming", "About", "Shortcuts", "Filters", "Capture" },
+        .General => &.{ "Interface", "Behavior", "TMDB", "Theme", "Scale", "Grid" },
+        .Playback => &.{ "Video Processing", "Audio Equalizer", "Streaming", "About", "Shortcuts", "Filters", "Capture" },
         .Subtitles => &.{ "OpenSubtitles", "Language", "Search", "API Key" },
-        .Network   => &.{ "Download", "Trackers", "Proxy", "Speed" },
-        .Storage   => &.{ "Download Path", "Watch History", "Database" },
-        .Scripts   => &.{ "SponsorBlock", "AI Backend", "Remote", "Watch Party", "Scripts", "Gemma" },
+        .Network => &.{ "Download", "Trackers", "Proxy", "Speed" },
+        .Storage => &.{ "Download Path", "Watch History", "Database" },
+        .Scripts => &.{ "SponsorBlock", "AI Backend", "Remote", "Watch Party", "Scripts", "Gemma" },
         .LangLearn => &.{ "Translate", "ASR", "Dubbing", "TTS", "Voice", "Speed" },
         .FileAssoc => &.{ "File Associations", "Default Handler" },
     };
@@ -184,8 +191,10 @@ fn navTabRow(tab: state.SettingsTab, label: []const u8, id_extra: usize) void {
         .border = if (is_active) .{ .x = 2, .y = 0, .w = 0, .h = 0 } else dvui.Rect.all(0),
         .corner_radius = dvui.Rect.all(theme.radius.sm),
         .padding = .{
-            .x = theme.spacing.md, .y = theme.spacing.sm,
-            .w = theme.spacing.md, .h = theme.spacing.sm,
+            .x = theme.spacing.md,
+            .y = theme.spacing.sm,
+            .w = theme.spacing.md,
+            .h = theme.spacing.sm,
         }, // spec: spacing.md × spacing.lg — using sm vertical to land at 36 px
         .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
     });
@@ -234,31 +243,33 @@ fn renderRightPane() void {
         .max_size_content = .{ .w = 720, .h = std.math.floatMax(f32) }, // spec: max 720 px
         .expand = .horizontal,
         .padding = .{
-            .x = theme.spacing.xl, .y = theme.spacing.xl,
-            .w = theme.spacing.xl, .h = theme.spacing.xl,
+            .x = theme.spacing.xl,
+            .y = theme.spacing.xl,
+            .w = theme.spacing.xl,
+            .h = theme.spacing.xl,
         }, // spec: padding spacing.xl on all sides
     });
     defer content.deinit();
 
     // Big title at top of each tab.
     bigTitle(switch (state.app.settings_tab) {
-        .General   => "General Settings",
-        .Playback  => "Player Settings",
+        .General => "General Settings",
+        .Playback => "Player Settings",
         .Subtitles => "Subtitle Settings",
-        .Network   => "Network Settings",
-        .Storage   => "Storage Settings",
-        .Scripts   => "AI, Remote & Scripts",
+        .Network => "Network Settings",
+        .Storage => "Storage Settings",
+        .Scripts => "AI, Remote & Scripts",
         .LangLearn => "Language Learning",
         .FileAssoc => "File Associations",
     });
 
     switch (state.app.settings_tab) {
-        .General   => renderGeneralTab(),
-        .Playback  => renderPlaybackTab(),
-        .Network   => renderNetworkTab(),
+        .General => renderGeneralTab(),
+        .Playback => renderPlaybackTab(),
+        .Network => renderNetworkTab(),
         .Subtitles => renderSubtitlesTab(),
-        .Storage   => renderStorageTab(),
-        .Scripts   => renderScriptsTab(),
+        .Storage => renderStorageTab(),
+        .Scripts => renderScriptsTab(),
         .LangLearn => renderLangLearnTab(),
         .FileAssoc => renderFileAssocTab(),
     }
@@ -274,7 +285,10 @@ fn renderRightPane() void {
             .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
         });
         defer footer.deinit();
-        { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
         _ = dvui.label(@src(), "Changes saved automatically.", .{}, .{
             .color_text = theme.colors.text_tertiary,
             .gravity_y = 0.5,
@@ -307,7 +321,7 @@ pub fn renderAIContent() void {
         });
         defer hdr.deinit();
 
-        dvui.icon(@src(), "", icons.tvg.lucide.@"brain", .{}, .{
+        dvui.icon(@src(), "", icons.tvg.lucide.brain, .{}, .{
             .color_text = theme.colors.accent,
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
@@ -333,7 +347,7 @@ pub fn renderAIContent() void {
     defer content.deinit();
 
     // ── Voice Backend ──
-    aiSectionWithIcon(icons.tvg.lucide.@"mic", "Voice Backend", "STT + TTS engine for mic / conversation mode", 24, @src());
+    aiSectionWithIcon(icons.tvg.lucide.mic, "Voice Backend", "STT + TTS engine for mic / conversation mode", 24, @src());
     {
         const vb = @import("../services/voice_backend.zig");
         // Calm: spacing-only list, no card chrome. Each backend is a clickable
@@ -428,23 +442,44 @@ pub fn renderAIContent() void {
             });
 
             if (dvui.button(@src(), "−", .{}, .{
-                .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary,
+                .color_fill = theme.colors.bg_elevated,
+                .color_text = theme.colors.text_secondary,
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-                .corner_radius = theme.dims.rad_sm, .margin = .{ .w = theme.spacing.xs }, .gravity_y = 0.5,
-            })) { if (vb.kokoro_sid > 0) { vb.kokoro_sid -= 1; state.markConfigDirty(); } }
+                .corner_radius = theme.dims.rad_sm,
+                .margin = .{ .w = theme.spacing.xs },
+                .gravity_y = 0.5,
+            })) {
+                if (vb.kokoro_sid > 0) {
+                    vb.kokoro_sid -= 1;
+                    state.markConfigDirty();
+                }
+            }
             if (dvui.button(@src(), "+", .{}, .{
-                .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary,
+                .color_fill = theme.colors.bg_elevated,
+                .color_text = theme.colors.text_secondary,
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-                .corner_radius = theme.dims.rad_sm, .margin = .{ .w = theme.spacing.xs }, .gravity_y = 0.5,
-            })) { if (vb.kokoro_sid < 53) { vb.kokoro_sid += 1; state.markConfigDirty(); } }
-            { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+                .corner_radius = theme.dims.rad_sm,
+                .margin = .{ .w = theme.spacing.xs },
+                .gravity_y = 0.5,
+            })) {
+                if (vb.kokoro_sid < 53) {
+                    vb.kokoro_sid += 1;
+                    state.markConfigDirty();
+                }
+            }
+            {
+                var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+                sp.deinit();
+            }
             if (dvui.button(@src(), "Preview", .{}, .{
-                .color_fill = theme.colors.accent, .color_text = theme.colors.text_on_accent,
+                .color_fill = theme.colors.accent,
+                .color_text = theme.colors.text_on_accent,
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.xs, .w = theme.spacing.lg, .h = theme.spacing.xs },
-                .corner_radius = theme.dims.rad_md, .gravity_y = 0.5,
+                .corner_radius = theme.dims.rad_md,
+                .gravity_y = 0.5,
             })) {
                 const b = vb.active();
                 b.speak("Opal voice preview.");
@@ -453,7 +488,7 @@ pub fn renderAIContent() void {
     }
 
     // ── Language Learning ──
-    aiSectionWithIcon(icons.tvg.lucide.@"languages", "Language Learning", "ASR, dubbing, and translation for video", 60, @src());
+    aiSectionWithIcon(icons.tvg.lucide.languages, "Language Learning", "ASR, dubbing, and translation for video", 60, @src());
 
     // Language Learning Mode toggle — flips a bool then runs onToggle.
     {
@@ -502,7 +537,8 @@ pub fn renderAIContent() void {
     settingRow("TTS Server", 63, @src());
     {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal, .gravity_y = 0.5,
+            .expand = .horizontal,
+            .gravity_y = 0.5,
         });
         defer row.deinit();
         if (state.app.tts_server_ok) {
@@ -510,7 +546,10 @@ pub fn renderAIContent() void {
         } else {
             components.statusPill("Not running", .info);
         }
-        { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+        {
+            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            spacer.deinit();
+        }
         const lang_learn = @import("../services/lang_learn.zig");
         if (!state.app.tts_server_ok) {
             if (dvui.button(@src(), "Start Server", .{}, .{
@@ -519,7 +558,9 @@ pub fn renderAIContent() void {
                 .border = dvui.Rect.all(0),
                 .corner_radius = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-            })) { lang_learn.startServer(); }
+            })) {
+                lang_learn.startServer();
+            }
         } else {
             if (dvui.button(@src(), "Stop Server", .{}, .{
                 .color_fill = theme.colors.bg_elevated,
@@ -527,7 +568,9 @@ pub fn renderAIContent() void {
                 .border = dvui.Rect.all(0),
                 .corner_radius = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-            })) { lang_learn.stopServer(); }
+            })) {
+                lang_learn.stopServer();
+            }
         }
     }
     _ = dvui.label(@src(), "KittenTTS (80MB) | Cohere ASR (2B) | Google Translate", .{}, .{
@@ -542,13 +585,13 @@ pub fn renderAIContent() void {
         // Whisper.cpp tiny model (~39MB)
         modelRow("Whisper Tiny (39MB)", icons.tvg.lucide.@"audio-waveform", ds.whisper_model, deps.sherpa_model_downloading, 5000, @src());
         // Sherpa STT model (~40MB)
-        modelRow("Sherpa STT (40MB)", icons.tvg.lucide.@"mic", ds.sherpa_model, deps.sherpa_model_downloading, 5001, @src());
+        modelRow("Sherpa STT (40MB)", icons.tvg.lucide.mic, ds.sherpa_model, deps.sherpa_model_downloading, 5001, @src());
         // Sherpa Piper TTS (~40MB)
         modelRow("Piper TTS (40MB)", icons.tvg.lucide.@"volume-2", ds.sherpa_tts_model, deps.sherpa_tts_downloading, 5002, @src());
         // Kokoro TTS (~330MB)
         modelRow("Kokoro TTS (330MB)", icons.tvg.lucide.@"audio-lines", ds.sherpa_kokoro_model, deps.sherpa_kokoro_downloading, 5003, @src());
         // Streaming Zipformer (~80MB)
-        modelRow("Stream ASR (80MB)", icons.tvg.lucide.@"radio", ds.sherpa_stream_model, deps.sherpa_stream_downloading, 5004, @src());
+        modelRow("Stream ASR (80MB)", icons.tvg.lucide.radio, ds.sherpa_stream_model, deps.sherpa_stream_downloading, 5004, @src());
         // MLX Whisper (~1.6GB) — custom row with live status
         {
             const mlx_installed = ds.mlx_whisper_model and ds.mlx_whisper_cli;
@@ -559,7 +602,7 @@ pub fn renderAIContent() void {
             });
             defer row.deinit();
 
-            dvui.icon(@src(), "", icons.tvg.lucide.@"cpu", .{}, .{
+            dvui.icon(@src(), "", icons.tvg.lucide.cpu, .{}, .{
                 .id_extra = 5015,
                 .color_text = if (mlx_installed) theme.colors.accent else mutedText(),
                 .gravity_y = 0.5,
@@ -570,7 +613,10 @@ pub fn renderAIContent() void {
                 .color_text = labelText(),
                 .gravity_y = 0.5,
             });
-            { var sp = dvui.box(@src(), .{}, .{ .id_extra = 5035, .expand = .horizontal }); sp.deinit(); }
+            {
+                var sp = dvui.box(@src(), .{}, .{ .id_extra = 5035, .expand = .horizontal });
+                sp.deinit();
+            }
 
             if (deps.mlx_whisper_downloading) {
                 const slen = std.mem.indexOfScalar(u8, &deps.mlx_whisper_status, 0) orelse 0;
@@ -602,8 +648,12 @@ pub fn renderAIContent() void {
 // stays coherent with the rest of the calmed UI. Card chrome is gone
 // (sections are defined by whitespace + sectionHeader); these two map the
 // former muted/label colors onto the canonical text ramp.
-inline fn mutedText() dvui.Color { return theme.colors.text_secondary; }
-inline fn labelText() dvui.Color { return theme.colors.text_primary; }
+inline fn mutedText() dvui.Color {
+    return theme.colors.text_secondary;
+}
+inline fn labelText() dvui.Color {
+    return theme.colors.text_primary;
+}
 
 /// Section header used inside a tab content pane.  Wraps
 /// `components.sectionHeader` (uppercase, tracked-out, text_tertiary)
@@ -692,7 +742,10 @@ fn modelRow(comptime name: []const u8, icon_data: anytype, installed: bool, down
         .gravity_y = 0.5,
     });
     // Spacer
-    { var sp = dvui.box(src, .{}, .{ .id_extra = id_extra + 30, .expand = .horizontal }); sp.deinit(); }
+    {
+        var sp = dvui.box(src, .{}, .{ .id_extra = id_extra + 30, .expand = .horizontal });
+        sp.deinit();
+    }
     // Status — text-only pill.
     if (downloading) {
         components.statusPill("Downloading", .warn);
@@ -720,7 +773,10 @@ fn langSegment(buf: []u8, len: *usize, id_base: usize) void {
     const current = buf[0..len.*];
     var sel: usize = 0;
     for (translate_codes, 0..) |code, idx| {
-        if (std.mem.eql(u8, current, code)) { sel = idx; break; }
+        if (std.mem.eql(u8, current, code)) {
+            sel = idx;
+            break;
+        }
     }
     if (components.segment(@src(), &translate_labels, sel)) |clicked| {
         const code = translate_codes[clicked];
@@ -736,7 +792,10 @@ fn ttsVoiceSegment(id_base: usize) void {
     const current = state.app.tts_voice_buf[0..state.app.tts_voice_len];
     var sel: usize = 0;
     for (tts_voices, 0..) |voice, idx| {
-        if (std.mem.eql(u8, current, voice)) { sel = idx; break; }
+        if (std.mem.eql(u8, current, voice)) {
+            sel = idx;
+            break;
+        }
     }
     if (components.segment(@src(), &tts_voices, sel)) |clicked| {
         const voice = tts_voices[clicked];
@@ -751,7 +810,10 @@ fn ttsSpeedSegment(id_base: usize) void {
     _ = id_base;
     var sel: usize = 0;
     for (tts_speeds, 0..) |spd, idx| {
-        if (@abs(state.app.tts_speed - spd) < 0.05) { sel = idx; break; }
+        if (@abs(state.app.tts_speed - spd) < 0.05) {
+            sel = idx;
+            break;
+        }
     }
     if (components.segment(@src(), &tts_speed_labels, sel)) |clicked| {
         state.app.tts_speed = tts_speeds[clicked];
@@ -770,7 +832,10 @@ fn renderGeneralTab() void {
         const scale_labels = [_][]const u8{ "1.0x", "1.1x", "1.2x", "1.3x", "1.5x", "1.7x", "2.0x" };
         var sel: usize = 0;
         for (scales, 0..) |s, idx| {
-            if (@abs(state.app.ui_scale - s) < 0.05) { sel = idx; break; }
+            if (@abs(state.app.ui_scale - s) < 0.05) {
+                sel = idx;
+                break;
+            }
         }
         if (components.segment(@src(), &scale_labels, sel)) |clicked| {
             state.app.ui_scale = scales[clicked];
@@ -785,7 +850,10 @@ fn renderGeneralTab() void {
         const mode_names = [_][]const u8{ "Auto", "1 Col", "2 Col", "3 Col", "4 Col" };
         var sel: usize = 0;
         for (modes, 0..) |m, idx| {
-            if (state.app.grid_mode == m) { sel = idx; break; }
+            if (state.app.grid_mode == m) {
+                sel = idx;
+                break;
+            }
         }
         if (components.segment(@src(), &mode_names, sel)) |clicked| {
             state.app.grid_mode = modes[clicked];
@@ -801,7 +869,10 @@ fn renderGeneralTab() void {
         const preset_names = [_][]const u8{ "Midnight", "Abyss", "Phantom", "Nord", "Solarized", "Rosé", "Ember" };
         var sel: usize = 0;
         for (presets, 0..) |preset, idx| {
-            if (theme.active_preset == preset) { sel = idx; break; }
+            if (theme.active_preset == preset) {
+                sel = idx;
+                break;
+            }
         }
         if (components.segment(@src(), &preset_names, sel)) |clicked| {
             theme.setPreset(presets[clicked]);
@@ -904,7 +975,9 @@ fn renderPlaybackTab() void {
         const sel: usize = @intCast(@min(state.app.video_scaler, sn.len - 1));
         if (components.segment(@src(), &sn, sel)) |clicked| {
             state.app.video_scaler = @intCast(clicked);
-            for (state.app.players.items) |p| { _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "scale", @ptrCast(sv[clicked].ptr)); }
+            for (state.app.players.items) |p| {
+                _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "scale", @ptrCast(sv[clicked].ptr));
+            }
             state.markConfigDirty();
         }
     }
@@ -917,7 +990,9 @@ fn renderPlaybackTab() void {
         const sel: usize = @min(state.app.eq_preset, en.len - 1);
         if (components.segment(@src(), &en, sel)) |clicked| {
             state.app.eq_preset = clicked;
-            for (state.app.players.items) |p| { _ = c.mpv.mpv_command_string(p.mpv_ctx, @ptrCast(ec[clicked].ptr)); }
+            for (state.app.players.items) |p| {
+                _ = c.mpv.mpv_command_string(p.mpv_ctx, @ptrCast(ec[clicked].ptr));
+            }
             state.markConfigDirty();
         }
     }
@@ -931,7 +1006,9 @@ fn renderPlaybackTab() void {
         const sel: usize = @min(state.app.ytdl_format_idx, qn.len - 1);
         if (components.segment(@src(), &qn, sel)) |clicked| {
             state.app.ytdl_format_idx = clicked;
-            for (state.app.players.items) |p| { p.applyYtdlFormat(); }
+            for (state.app.players.items) |p| {
+                p.applyYtdlFormat();
+            }
             state.markConfigDirty();
         }
     }
@@ -941,18 +1018,25 @@ fn renderPlaybackTab() void {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer row.deinit();
         _ = dvui.label(@src(), "yt-dlp", .{}, .{ .color_text = labelText(), .gravity_y = 0.5 });
-        { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+        {
+            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            spacer.deinit();
+        }
         if (ytdlp.isDownloading()) {
             components.statusPill("Downloading", .info);
         } else if (ytdlp.getPath() != null) {
             components.statusPill("Installed", .success);
-            if (dvui.button(@src(), "Update", .{}, .{ .id_extra = 2901, .color_fill = btn_inactive, .color_text = theme.colors.accent, .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md })) { ytdlp.update(); }
+            if (dvui.button(@src(), "Update", .{}, .{ .id_extra = 2901, .color_fill = btn_inactive, .color_text = theme.colors.accent, .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md })) {
+                ytdlp.update();
+            }
         } else {
             components.statusPill("Not installed", .warn);
-            if (dvui.button(@src(), "Download", .{}, .{ .id_extra = 2902, .color_fill = btn_active, .color_text = btn_text_active, .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md })) { ytdlp.ensureAvailable(); }
+            if (dvui.button(@src(), "Download", .{}, .{ .id_extra = 2902, .color_fill = btn_active, .color_text = btn_text_active, .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md })) {
+                ytdlp.ensureAvailable();
+            }
         }
     }
-    
+
     // ── About / Updater ── (no card chrome; whitespace + the brand row)
     sectionHeader("About", "Installed version + update check", 25, @src());
     {
@@ -993,13 +1077,19 @@ fn renderPlaybackTab() void {
             defer row.deinit();
             _ = dvui.label(@src(), "Version", .{}, .{ .color_text = labelText(), .gravity_y = 0.5 });
             _ = dvui.label(@src(), "  v{s}", .{updater.APP_VERSION}, .{ .id_extra = 2510, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
-            { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+            {
+                var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+                spacer.deinit();
+            }
             if (updater.is_checking) {
                 _ = dvui.label(@src(), "Checking…", .{}, .{ .id_extra = 2511, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
             } else if (dvui.button(@src(), "Check for Updates", .{}, .{
-                .id_extra = 2512, .color_fill = btn_inactive, .color_text = theme.colors.text_primary,
+                .id_extra = 2512,
+                .color_fill = btn_inactive,
+                .color_text = theme.colors.text_primary,
                 .border = dvui.Rect.all(0),
-                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md,
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                .corner_radius = theme.dims.rad_md,
             })) {
                 updater.checkAsync();
             }
@@ -1025,14 +1115,20 @@ fn renderPlaybackTab() void {
             defer row.deinit();
             _ = dvui.label(@src(), "Latest", .{}, .{ .color_text = labelText(), .gravity_y = 0.5 });
             _ = dvui.label(@src(), "  v{s}", .{updater.latestTag()}, .{ .id_extra = 2520, .color_text = theme.colors.semantic_success, .gravity_y = 0.5 });
-            { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+            {
+                var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+                spacer.deinit();
+            }
             if (updater.is_downloading) {
                 _ = dvui.label(@src(), "Downloading…", .{}, .{ .id_extra = 2521, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
             } else if (updater.dl_url_len > 0) {
                 if (dvui.button(@src(), "Download & Install", .{}, .{
-                    .id_extra = 2522, .color_fill = btn_active, .color_text = btn_text_active,
+                    .id_extra = 2522,
+                    .color_fill = btn_active,
+                    .color_text = btn_text_active,
                     .border = dvui.Rect.all(0),
-                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md,
+                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                    .corner_radius = theme.dims.rad_md,
                 })) {
                     updater.downloadAndOpenAsync();
                 }
@@ -1077,20 +1173,24 @@ fn renderPlaybackTab() void {
 
         for (filters) |f| {
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = f.idx + 3000, .expand = .horizontal,
+                .id_extra = f.idx + 3000,
+                .expand = .horizontal,
                 .padding = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
             });
             defer row.deinit();
 
             _ = dvui.label(@src(), "{s}", .{f.name}, .{
-                .id_extra = f.idx + 3010, .color_text = labelText(),
-                .min_size_content = .{ .w = 90, .h = 0 }, .gravity_y = 0.5,
+                .id_extra = f.idx + 3010,
+                .color_text = labelText(),
+                .min_size_content = .{ .w = 90, .h = 0 },
+                .gravity_y = 0.5,
             });
 
             // "−" button
             if (dvui.button(@src(), "−", .{}, .{
                 .id_extra = f.idx + 3020,
-                .color_fill = btn_inactive, .color_text = mutedText(),
+                .color_fill = btn_inactive,
+                .color_text = mutedText(),
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
                 .corner_radius = theme.dims.rad_sm,
@@ -1113,15 +1213,19 @@ fn renderPlaybackTab() void {
                 var val_buf: [12]u8 = undefined;
                 const val_str = std.fmt.bufPrintZ(&val_buf, "{d}", .{val}) catch "0";
                 _ = dvui.label(@src(), "{s}", .{val_str}, .{
-                    .id_extra = f.idx + 3030, .color_text = theme.colors.text_main,
-                    .min_size_content = .{ .w = 30, .h = 0 }, .gravity_x = 0.5, .gravity_y = 0.5,
+                    .id_extra = f.idx + 3030,
+                    .color_text = theme.colors.text_main,
+                    .min_size_content = .{ .w = 30, .h = 0 },
+                    .gravity_x = 0.5,
+                    .gravity_y = 0.5,
                 });
             }
 
             // "+" button
             if (dvui.button(@src(), "+", .{}, .{
                 .id_extra = f.idx + 3040,
-                .color_fill = btn_inactive, .color_text = mutedText(),
+                .color_fill = btn_inactive,
+                .color_text = mutedText(),
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
                 .corner_radius = theme.dims.rad_sm,
@@ -1168,7 +1272,8 @@ fn renderPlaybackTab() void {
         // Screenshot button — the single primary action.
         if (dvui.button(@src(), "Screenshot (P)", .{}, .{
             .id_extra = 3200,
-            .color_fill = btn_active, .color_text = btn_text_active,
+            .color_fill = btn_active,
+            .color_text = btn_text_active,
             .border = dvui.Rect.all(0),
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
             .corner_radius = theme.dims.rad_md,
@@ -1183,7 +1288,8 @@ fn renderPlaybackTab() void {
         // Screenshot without subs
         if (dvui.button(@src(), "Screenshot (no subs)", .{}, .{
             .id_extra = 3201,
-            .color_fill = btn_inactive, .color_text = mutedText(),
+            .color_fill = btn_inactive,
+            .color_text = mutedText(),
             .border = dvui.Rect.all(0),
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
             .corner_radius = theme.dims.rad_md,
@@ -1223,11 +1329,14 @@ fn renderNetworkTab() void {
     // Download Speed Limit — short ramp via segment.
     settingRow("Download Speed Limit", 30, @src());
     {
-        const limits = [_]i32{ 0, 1*1024*1024, 2*1024*1024, 5*1024*1024, 10*1024*1024, 20*1024*1024 };
+        const limits = [_]i32{ 0, 1 * 1024 * 1024, 2 * 1024 * 1024, 5 * 1024 * 1024, 10 * 1024 * 1024, 20 * 1024 * 1024 };
         const limit_names = [_][]const u8{ "No Limit", "1 MB/s", "2 MB/s", "5 MB/s", "10 MB/s", "20 MB/s" };
         var sel: usize = 0;
         for (limits, 0..) |l, idx| {
-            if (state.app.download_rate_limit == l) { sel = idx; break; }
+            if (state.app.download_rate_limit == l) {
+                sel = idx;
+                break;
+            }
         }
         if (components.segment(@src(), &limit_names, sel)) |clicked| {
             state.app.download_rate_limit = limits[clicked];
@@ -1339,7 +1448,10 @@ fn renderSubtitlesTab() void {
         const current = state.app.sub_lang_buf[0..state.app.sub_lang_len];
         var sel: usize = 0;
         for (langs, 0..) |l, idx| {
-            if (std.mem.eql(u8, current, l)) { sel = idx; break; }
+            if (std.mem.eql(u8, current, l)) {
+                sel = idx;
+                break;
+            }
         }
         if (components.segment(@src(), &lang_names, sel)) |clicked| {
             const l = langs[clicked];
@@ -1386,7 +1498,7 @@ fn renderSubtitlesTab() void {
         // Auto-detect from player — secondary (text-only).
         if (dvui.button(@src(), "Auto", .{}, .{
             .id_extra = 4302,
-            .color_fill = dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = theme.colors.text_secondary,
             .border = dvui.Rect.all(0),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
@@ -1469,7 +1581,10 @@ fn renderSubtitlesTab() void {
                     });
                 }
 
-                { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+                {
+                    var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+                    sp.deinit();
+                }
 
                 // Download count — quiet metadata, no glyph.
                 if (r.download_count > 0) {
@@ -1545,7 +1660,7 @@ fn renderStorageTab() void {
             .color_text = theme.colors.text_secondary,
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
         });
-        
+
         // Path presets (resolved at runtime) — segment.
         var dl_path_buf: [256]u8 = undefined;
         var vid_path_buf: [256]u8 = undefined;
@@ -1556,7 +1671,10 @@ fn renderStorageTab() void {
 
         var sel: usize = path_names.len; // none-active sentinel
         for (preset_paths, 0..) |p, idx| {
-            if (std.mem.eql(u8, path, p)) { sel = idx; break; }
+            if (std.mem.eql(u8, path, p)) {
+                sel = idx;
+                break;
+            }
         }
         if (components.segment(@src(), &path_names, sel)) |clicked| {
             const p = preset_paths[clicked];
@@ -1681,7 +1799,10 @@ fn renderLangLearnTab() void {
             components.statusPill("Not running", .info);
         }
 
-        { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+        {
+            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            spacer.deinit();
+        }
 
         const lang_learn = @import("../services/lang_learn.zig");
         if (!state.app.tts_server_ok) {
@@ -1754,22 +1875,63 @@ fn renderScriptsTab() void {
             }
         }
 
-        const gemma_active = ai_server.backend_kind == .gemma_llama;
-        if (dvui.button(@src(), "Gemma 4 E2B (3.2GB)", .{}, .{
-            .color_fill = if (gemma_active) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (gemma_active) theme.colors.accent else theme.colors.text_secondary,
+        const llama_active = ai_server.backend_kind == .gemma_llama;
+        if (dvui.button(@src(), "Local LLM (Hugging Face)", .{}, .{
+            .color_fill = if (llama_active) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = if (llama_active) theme.colors.accent else theme.colors.text_secondary,
             .border = dvui.Rect.all(0),
             .corner_radius = theme.dims.rad_md,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
         })) {
-            if (!gemma_active) {
+            if (!llama_active) {
                 ai_server.stopServer();
                 ai_server.backend_kind = .gemma_llama;
                 ai_server.resetDetection();
-                if (!ai_server.model_exists) {
-                    state.showToast("Gemma selected — download model in AI panel");
-                } else {
-                    state.showToast("AI backend: Gemma 4 E2B");
+                state.markConfigDirty();
+                state.showToast("AI backend: Local LLM (Hugging Face)");
+            }
+        }
+    }
+
+    // ── Hugging Face model picker ──
+    // Curated GGUF catalog served by llama-server. Pick one to download +
+    // serve; the choice persists (config key "ai_model_id").
+    {
+        const ai_server = @import("../services/ai_server.zig");
+        if (ai_server.backend_kind == .gemma_llama) {
+            _ = dvui.label(@src(), "Model — Hugging Face GGUF", .{}, .{
+                .color_text = theme.colors.text_secondary,
+                .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.xs },
+            });
+            for (ai_server.MODEL_CATALOG, 0..) |m, i| {
+                const sel = i == ai_server.active_model_idx;
+                const have = ai_server.modelDownloaded(i);
+                var row_buf: [160]u8 = undefined;
+                const row = std.fmt.bufPrint(&row_buf, "{s}{s}  ·  {s}  ·  {s}{s}", .{
+                    if (sel) "● " else "○ ",
+                    m.name,
+                    m.size_label,
+                    m.note,
+                    if (have) "  ✓ downloaded" else "",
+                }) catch m.name;
+                if (dvui.button(@src(), row, .{}, .{
+                    .id_extra = i,
+                    .color_fill = if (sel) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .color_text = if (sel) theme.colors.accent else theme.colors.text_secondary,
+                    .border = dvui.Rect.all(0),
+                    .corner_radius = theme.dims.rad_md,
+                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                    .expand = .horizontal,
+                })) {
+                    if (!sel) {
+                        ai_server.stopServer();
+                        ai_server.selectModelByIndex(i);
+                        state.markConfigDirty();
+                        if (ai_server.modelDownloaded(i))
+                            state.showToast("Model selected")
+                        else
+                            state.showToast("Model selected — download below in AI panel");
+                    }
                 }
             }
         }
@@ -1874,14 +2036,16 @@ fn renderScriptsTab() void {
             components.divider();
 
             _ = dvui.label(@src(), "Chat", .{}, .{
-                .id_extra = 7400, .color_text = labelText(),
+                .id_extra = 7400,
+                .color_text = labelText(),
                 .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
             });
 
             // Chat messages (last 8)
             {
                 var chat_box = dvui.box(@src(), .{ .dir = .vertical }, .{
-                    .id_extra = 7500, .expand = .horizontal,
+                    .id_extra = 7500,
+                    .expand = .horizontal,
                     .background = true,
                     .color_fill = theme.colors.bg_input,
                     .corner_radius = theme.dims.rad_sm,
@@ -1905,7 +2069,8 @@ fn renderScriptsTab() void {
             // Input row
             {
                 var chat_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .id_extra = 7700, .expand = .horizontal,
+                    .id_extra = 7700,
+                    .expand = .horizontal,
                     .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
                 });
                 defer chat_row.deinit();
@@ -2075,7 +2240,7 @@ fn renderScriptsTab() void {
 
 pub fn renderCheatSheet() void {
     if (!state.app.cheatsheet_open) return;
-    
+
     var win = dvui.floatingWindow(@src(), .{
         .modal = true,
         .open_flag = &state.app.cheatsheet_open,
@@ -2085,13 +2250,13 @@ pub fn renderCheatSheet() void {
         .color_border = theme.colors.border_drawer,
     });
     defer win.deinit();
-    
+
     win.dragAreaSet(dvui.windowHeader("Keyboard Shortcuts", "", &state.app.cheatsheet_open));
-    
+
     var settings_scale: f32 = 1.4;
     var scale_w = dvui.scale(@src(), .{ .scale = &settings_scale }, .{ .expand = .both });
     defer scale_w.deinit();
-    
+
     const shortcuts = [_][2][]const u8{
         .{ "Space", "Play / Pause" },
         .{ "F", "Toggle Fullscreen" },
@@ -2140,7 +2305,7 @@ pub fn renderCheatSheet() void {
         .{ "Shift+I", "This Cheat Sheet" },
         .{ "Esc", "Close Overlay / Drawer" },
     };
-    
+
     for (shortcuts, 0..) |sc, idx| {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = idx,
@@ -2267,15 +2432,15 @@ pub fn renderDepsModal() void {
     const sherpa_dl = deps_mod.sherpa_model_downloading;
     const tts_dl = deps_mod.sherpa_tts_downloading;
     const rows = [_]DepRow{
-        .{ .name = "apfel",             .desc = "LLM backend (Apple Intelligence)", .ok = s.apfel },
-        .{ .name = "ffmpeg",            .desc = "Mic capture for voice mode",       .ok = s.ffmpeg },
-        .{ .name = "whisper-cpp",       .desc = "STT engine (default)",             .ok = s.whisper },
-        .{ .name = "ggml-tiny.en",      .desc = "whisper model (auto-downloading)", .ok = s.whisper_model, .pending = !s.whisper_model },
-        .{ .name = "sherpa-onnx",       .desc = "STT engine (optional — streaming + VITS TTS)", .ok = s.sherpa_onnx },
-        .{ .name = "sherpa STT model",  .desc = if (sherpa_dl) "Downloading sherpa whisper-tiny…" else "~/.config/opal/models/sherpa-whisper-tiny/ (click Download)", .ok = s.sherpa_model, .pending = sherpa_dl },
-        .{ .name = "sherpa TTS model",  .desc = if (tts_dl) "Downloading Piper-VITS en_US-lessac-medium…" else "~/.config/opal/models/sherpa-vits-piper/ (click Download)", .ok = s.sherpa_tts_model, .pending = tts_dl },
-        .{ .name = "sherpa streaming",  .desc = if (deps_mod.sherpa_stream_downloading) "Downloading streaming Zipformer…" else "~/.config/opal/models/sherpa-stream-zipformer/ (live convo mode)", .ok = s.sherpa_stream_model, .pending = deps_mod.sherpa_stream_downloading },
-        .{ .name = "sherpa Kokoro",     .desc = if (deps_mod.sherpa_kokoro_downloading) "Downloading Kokoro (~330MB)…" else "~/.config/opal/models/sherpa-kokoro/ (premium TTS, 53+ voices)", .ok = s.sherpa_kokoro_model, .pending = deps_mod.sherpa_kokoro_downloading },
+        .{ .name = "apfel", .desc = "LLM backend (Apple Intelligence)", .ok = s.apfel },
+        .{ .name = "ffmpeg", .desc = "Mic capture for voice mode", .ok = s.ffmpeg },
+        .{ .name = "whisper-cpp", .desc = "STT engine (default)", .ok = s.whisper },
+        .{ .name = "ggml-tiny.en", .desc = "whisper model (auto-downloading)", .ok = s.whisper_model, .pending = !s.whisper_model },
+        .{ .name = "sherpa-onnx", .desc = "STT engine (optional — streaming + VITS TTS)", .ok = s.sherpa_onnx },
+        .{ .name = "sherpa STT model", .desc = if (sherpa_dl) "Downloading sherpa whisper-tiny…" else "~/.config/opal/models/sherpa-whisper-tiny/ (click Download)", .ok = s.sherpa_model, .pending = sherpa_dl },
+        .{ .name = "sherpa TTS model", .desc = if (tts_dl) "Downloading Piper-VITS en_US-lessac-medium…" else "~/.config/opal/models/sherpa-vits-piper/ (click Download)", .ok = s.sherpa_tts_model, .pending = tts_dl },
+        .{ .name = "sherpa streaming", .desc = if (deps_mod.sherpa_stream_downloading) "Downloading streaming Zipformer…" else "~/.config/opal/models/sherpa-stream-zipformer/ (live convo mode)", .ok = s.sherpa_stream_model, .pending = deps_mod.sherpa_stream_downloading },
+        .{ .name = "sherpa Kokoro", .desc = if (deps_mod.sherpa_kokoro_downloading) "Downloading Kokoro (~330MB)…" else "~/.config/opal/models/sherpa-kokoro/ (premium TTS, 53+ voices)", .ok = s.sherpa_kokoro_model, .pending = deps_mod.sherpa_kokoro_downloading },
     };
 
     for (rows, 0..) |r, i| {
@@ -2389,6 +2554,14 @@ pub fn renderDepsModal() void {
             // Force a fresh detection each render so the rows reflect post-install reality.
             if (!ai_server.checked_paths) ai_server.checkPaths();
 
+            // Model row reflects the picker's current selection.
+            const am = ai_server.activeModel();
+            var mdesc_buf: [96]u8 = undefined;
+            const mdesc = if (ai_server.model_downloading)
+                (std.fmt.bufPrint(&mdesc_buf, "Downloading {s} ({s})…", .{ am.name, am.size_label }) catch "Downloading…")
+            else
+                (std.fmt.bufPrint(&mdesc_buf, "GGUF model ({s}) — one-time download", .{am.size_label}) catch "GGUF model — one-time download");
+
             const rows_base = [_]struct {
                 name: []const u8,
                 desc: []const u8,
@@ -2404,8 +2577,8 @@ pub fn renderDepsModal() void {
                     .action = .install_server,
                 },
                 .{
-                    .name = "Gemma 4 E2B",
-                    .desc = if (ai_server.model_downloading) "Downloading Gemma (~3.2GB)…" else "GGUF model (~3.2GB) — one-time download",
+                    .name = am.name,
+                    .desc = mdesc,
                     .ok = ai_server.model_exists,
                     .pending = ai_server.model_downloading,
                     .action = .download_model,
@@ -2577,7 +2750,10 @@ pub fn renderDepsModal() void {
         .color_text = theme.colors.text_tertiary,
         .gravity_y = 0.5,
     });
-    { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+    {
+        var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+        sp.deinit();
+    }
     if (dvui.button(@src(), "Skip for now", .{}, .{
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = theme.colors.text_secondary,
@@ -2596,9 +2772,9 @@ pub fn renderDepsModal() void {
 pub fn renderMediaInfo() void {
     if (!state.app.media_info_open) return;
     if (state.app.active_player_idx >= state.app.players.items.len) return;
-    
+
     const p = state.app.players.items[state.app.active_player_idx];
-    
+
     var win = dvui.floatingWindow(@src(), .{
         .open_flag = &state.app.media_info_open,
     }, .{
@@ -2607,9 +2783,9 @@ pub fn renderMediaInfo() void {
         .color_border = theme.colors.border_drawer,
     });
     defer win.deinit();
-    
+
     win.dragAreaSet(dvui.windowHeader("Media Info", "", &state.app.media_info_open));
-    
+
     var info_scale: f32 = 1.3;
     var scale_w = dvui.scale(@src(), .{ .scale = &info_scale }, .{ .expand = .both });
     defer scale_w.deinit();
@@ -2634,20 +2810,20 @@ pub fn renderMediaInfo() void {
 
     for (props, 0..) |prop, idx| {
         const val_ptr: ?[*:0]u8 = @ptrCast(c.mpv.mpv_get_property_string(p.mpv_ctx, @ptrCast(prop[0].ptr)));
-        
+
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = idx,
             .expand = .horizontal,
             .padding = .{ .x = 4, .y = 1, .w = 4, .h = 1 },
         });
         defer row.deinit();
-        
+
         _ = dvui.label(@src(), "{s}", .{prop[1]}, .{
             .id_extra = idx,
             .color_text = theme.colors.text_muted,
             .min_size_content = .{ .w = 120, .h = 0 },
         });
-        
+
         if (val_ptr) |vp| {
             const val_str = std.mem.span(vp);
             _ = dvui.label(@src(), "{s}", .{val_str}, .{

@@ -6,7 +6,6 @@ const theme = @import("../ui/theme.zig");
 
 /// Persistent config — saves/loads from zigzag.db config table.
 /// Migrates from old config.tsv on first run.
-
 pub fn ensureDir() void {
     var buf: [512]u8 = undefined;
     const dir = paths.configDir(&buf);
@@ -22,7 +21,11 @@ pub fn save() void {
 
     setKey("ui_scale", fmtFloat(&fb, state.app.ui_scale));
     setKey("grid_mode", switch (state.app.grid_mode) {
-        .auto => "auto", .cols_1 => "1", .cols_2 => "2", .cols_3 => "3", .cols_4 => "4",
+        .auto => "auto",
+        .cols_1 => "1",
+        .cols_2 => "2",
+        .cols_3 => "3",
+        .cols_4 => "4",
     });
     setKey("seek_sync", if (state.app.seek_sync) "1" else "0");
     setKey("hwdec", if (state.app.hwdec_enabled) "1" else "0");
@@ -64,6 +67,14 @@ pub fn save() void {
     setKey("win_h", fmtInt(&fb, @as(usize, @intCast(@max(100, state.app.win_h)))));
     // drawer_open intentionally not persisted — always start with sidebar closed
     setKey("theme_preset", theme.presetName(theme.active_preset));
+
+    // AI backend + selected Hugging Face model (the model picker).
+    const ai_server = @import("../services/ai_server.zig");
+    setKey("ai_backend", switch (ai_server.backend_kind) {
+        .apfel => "apfel",
+        .gemma_llama => "llama",
+    });
+    setKey("ai_model_id", ai_server.activeModelId());
 
     saveSessionUrls();
 
@@ -132,11 +143,7 @@ fn applyConfig(key: []const u8, val: []const u8) void {
     if (std.mem.eql(u8, key, "ui_scale")) {
         state.app.ui_scale = std.fmt.parseFloat(f32, val) catch 1.3;
     } else if (std.mem.eql(u8, key, "grid_mode")) {
-        state.app.grid_mode = if (std.mem.eql(u8, val, "1")) .cols_1
-            else if (std.mem.eql(u8, val, "2")) .cols_2
-            else if (std.mem.eql(u8, val, "3")) .cols_3
-            else if (std.mem.eql(u8, val, "4")) .cols_4
-            else .auto;
+        state.app.grid_mode = if (std.mem.eql(u8, val, "1")) .cols_1 else if (std.mem.eql(u8, val, "2")) .cols_2 else if (std.mem.eql(u8, val, "3")) .cols_3 else if (std.mem.eql(u8, val, "4")) .cols_4 else .auto;
     } else if (std.mem.eql(u8, key, "seek_sync")) {
         state.app.seek_sync = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "hwdec")) {
@@ -265,6 +272,11 @@ fn applyConfig(key: []const u8, val: []const u8) void {
                 break;
             }
         }
+    } else if (std.mem.eql(u8, key, "ai_backend")) {
+        const ai_server = @import("../services/ai_server.zig");
+        ai_server.backend_kind = if (std.mem.eql(u8, val, "apfel")) .apfel else .gemma_llama;
+    } else if (std.mem.eql(u8, key, "ai_model_id")) {
+        @import("../services/ai_server.zig").selectModelById(val);
     }
 }
 

@@ -21,32 +21,121 @@ pub const BackendKind = enum { apfel, gemma_llama };
 /// can switch to Gemma in Settings. Other OSes have no apfel so Gemma wins.
 pub var backend_kind: BackendKind = if (is_macos) .apfel else .gemma_llama;
 
-// Gemma 4 E2B (Unsloth dynamic 4-bit, ~3.2GB). Multimodal-capable; this build
-// uses text-only via llama-server /v1/chat/completions.
-const GEMMA_MODEL_URL = "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-UD-Q4_K_XL.gguf";
-const GEMMA_MODEL_FILENAME = "gemma-4-E2B-it-UD-Q4_K_XL.gguf";
-const GEMMA_MODEL_SIZE_LABEL = "3.17 GB";
+// ── Hugging Face GGUF model catalog ──
+// A curated set of llama.cpp-servable GGUF models pulled directly from the
+// Hugging Face hub. The user picks one in Settings; the choice is persisted
+// (config key "ai_model_id") and drives download + serving. All URLs are
+// HF `resolve/main` direct links and were verified to return 200.
+pub const GgufModel = struct {
+    id: []const u8, // stable key for config persistence
+    name: []const u8, // display name
+    url: []const u8, // HF resolve URL
+    filename: []const u8, // on-disk name under models/
+    size_label: []const u8,
+    note: []const u8, // short one-liner shown in the picker
+};
+
+pub const MODEL_CATALOG = [_]GgufModel{
+    .{
+        .id = "gemma-4-e2b",
+        .name = "Gemma 4 E2B",
+        .url = "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-UD-Q4_K_XL.gguf",
+        .filename = "gemma-4-E2B-it-UD-Q4_K_XL.gguf",
+        .size_label = "3.17 GB",
+        .note = "Balanced default (Google)",
+    },
+    .{
+        .id = "qwen2.5-3b",
+        .name = "Qwen2.5 3B Instruct",
+        .url = "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
+        .filename = "qwen2.5-3b-instruct-q4_k_m.gguf",
+        .size_label = "2.10 GB",
+        .note = "Fast, strong tool-use",
+    },
+    .{
+        .id = "llama3.2-3b",
+        .name = "Llama 3.2 3B Instruct",
+        .url = "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+        .filename = "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+        .size_label = "2.02 GB",
+        .note = "General purpose (Meta)",
+    },
+    .{
+        .id = "qwen2.5-1.5b",
+        .name = "Qwen2.5 1.5B Instruct",
+        .url = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+        .filename = "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+        .size_label = "1.12 GB",
+        .note = "Lightweight / low-RAM",
+    },
+    .{
+        .id = "smollm2-1.7b",
+        .name = "SmolLM2 1.7B Instruct",
+        .url = "https://huggingface.co/bartowski/SmolLM2-1.7B-Instruct-GGUF/resolve/main/SmolLM2-1.7B-Instruct-Q4_K_M.gguf",
+        .filename = "SmolLM2-1.7B-Instruct-Q4_K_M.gguf",
+        .size_label = "1.06 GB",
+        .note = "Tiny & quick",
+    },
+};
+
+/// Index into MODEL_CATALOG for the active llama-server model.
+pub var active_model_idx: usize = 0;
+
+pub fn activeModel() GgufModel {
+    return MODEL_CATALOG[@min(active_model_idx, MODEL_CATALOG.len - 1)];
+}
+
+pub fn activeModelId() []const u8 {
+    return activeModel().id;
+}
+
+/// Select a catalog model by index. Triggers re-detection (download/exist state)
+/// only if paths were already checked — i.e. a live user switch, not startup.
+pub fn selectModelByIndex(i: usize) void {
+    if (i >= MODEL_CATALOG.len or i == active_model_idx) return;
+    active_model_idx = i;
+    if (checked_paths) resetDetection();
+}
+
+/// Select by stable id (used by config load + voice/remote commands).
+pub fn selectModelById(id: []const u8) void {
+    for (MODEL_CATALOG, 0..) |m, i| {
+        if (std.mem.eql(u8, m.id, id)) {
+            selectModelByIndex(i);
+            return;
+        }
+    }
+}
+
+/// Whether a catalog entry's GGUF is already on disk.
+pub fn modelDownloaded(i: usize) bool {
+    if (i >= MODEL_CATALOG.len) return false;
+    var buf: [512]u8 = undefined;
+    const p = std.fmt.bufPrintZ(&buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, MODEL_CATALOG[i].filename }) catch return false;
+    @import("../core/io_global.zig").cwdAccess(p, .{}) catch return false;
+    return true;
+}
 
 pub const DEFAULT_MODELS_DIR = "models";
 
 fn activeModelFilename() []const u8 {
     return switch (backend_kind) {
         .apfel => "",
-        .gemma_llama => GEMMA_MODEL_FILENAME,
+        .gemma_llama => activeModel().filename,
     };
 }
 
 fn activeModelUrl() []const u8 {
     return switch (backend_kind) {
         .apfel => "",
-        .gemma_llama => GEMMA_MODEL_URL,
+        .gemma_llama => activeModel().url,
     };
 }
 
 fn activeModelSizeLabel() []const u8 {
     return switch (backend_kind) {
         .apfel => "",
-        .gemma_llama => GEMMA_MODEL_SIZE_LABEL,
+        .gemma_llama => activeModel().size_label,
     };
 }
 
@@ -165,7 +254,7 @@ fn detectApfel() void {
 fn detectGemmaLlama() void {
     // Gemma via llama-server: works on macOS, Linux, Windows. Same detection
     // path on all three — the only per-OS bit is the brew prefix.
-    const model_path = std.fmt.bufPrintZ(&model_path_buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, GEMMA_MODEL_FILENAME }) catch return;
+    const model_path = std.fmt.bufPrintZ(&model_path_buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, activeModelFilename() }) catch return;
     model_path_len = model_path.len;
 
     if (@import("../core/io_global.zig").cwdAccess(model_path, .{})) |_| {
@@ -293,14 +382,19 @@ pub fn startServer() void {
             const ngl_str = std.fmt.bufPrintZ(&ngl_buf, "{d}", .{gpu_layers}) catch "99";
             const argv = [_][]const u8{
                 sv_path,
-                "-m", m_path,
-                "--host", "127.0.0.1",
-                "--port", port_str,
-                "-ngl", ngl_str,
-                "--ctx-size", "4096",
-                "--flash-attn", "on",  // Flash attention — faster on modern GPUs
-                "-b", "512",           // Batch size for prompt processing
-                "-np", "1",            // Single slot — conversational assistant
+                "-m",
+                m_path,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                port_str,
+                "-ngl",
+                ngl_str,
+                "--ctx-size",
+                "4096",
+                "--flash-attn", "on", // Flash attention — faster on modern GPUs
+                "-b", "512", // Batch size for prompt processing
+                "-np", "1", // Single slot — conversational assistant
             };
             child = @import("../core/io_global.zig").Child.init(&argv, @import("../core/alloc.zig").allocator);
             if (@import("builtin").mode == .Debug) std.debug.print("[AI] Mode: llama-server (flash-attn)\n", .{});
@@ -321,11 +415,15 @@ pub fn startServer() void {
         const embed_m_path = "models/nomic-embed-text-v1.5.Q4_K_M.gguf";
         var embed_child = @import("../core/io_global.zig").Child.init(&.{
             sv_path,
-            "-m", embed_m_path,
-            "--host", "127.0.0.1",
-            "--port", "41593",
+            "-m",
+            embed_m_path,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "41593",
             "--embedding",
-            "-c", "2048",
+            "-c",
+            "2048",
             "-cb",
         }, @import("../core/alloc.zig").allocator);
         embed_child.stdout_behavior = .Ignore;
@@ -395,7 +493,9 @@ pub fn startModelDownload() void {
 }
 
 fn downloadModelThread() void {
-    defer { model_downloading = false; }
+    defer {
+        model_downloading = false;
+    }
 
     // apfel backend needs no download — guard so the UI can't kick this off.
     if (backend_kind == .apfel) {
@@ -412,9 +512,8 @@ fn downloadModelThread() void {
     };
 
     const argv = [_][]const u8{
-        "curl", "-L", "--progress-bar",
-        "-o", out_path,
-        activeModelUrl(),
+        "curl", "-L",     "--progress-bar",
+        "-o",   out_path, activeModelUrl(),
     };
 
     var child = @import("../core/io_global.zig").Child.init(&argv, @import("../core/alloc.zig").allocator);
@@ -465,7 +564,9 @@ pub fn installLlamaServer() void {
 }
 
 fn installThread() void {
-    defer { server_installing = false; }
+    defer {
+        server_installing = false;
+    }
 
     if (is_macos) {
         installLlamaServerMac();
@@ -584,9 +685,8 @@ fn downloadLlamaServer(comptime bin_dir: []const u8, bin_path: []const u8) void 
     const release_url = "https://github.com/Michael-A-Kuykendall/shimmy/releases/latest/download/shimmy-linux-x86_64";
 
     const dl_argv = [_][]const u8{
-        "curl", "-L", "--progress-bar",
-        "-o", bin_path,
-        release_url,
+        "curl", "-L",     "--progress-bar",
+        "-o",   bin_path, release_url,
     };
     var dl = @import("../core/io_global.zig").Child.init(&dl_argv, @import("../core/alloc.zig").allocator);
     dl.stdout_behavior = .Inherit;

@@ -202,7 +202,9 @@ fn ensureVoiceServer() void {
     );
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
-    child.spawn() catch { return; };
+    child.spawn() catch {
+        return;
+    };
     var attempts: usize = 0;
     while (attempts < 300) : (attempts += 1) {
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
@@ -214,15 +216,23 @@ fn ensureVoiceServer() void {
 
 pub fn ensureSttServer() void {
     if (stt_server_started) return;
-    if (@import("../core/io_global.zig").cwdAccess(STT_SOCKET, .{})) |_| { stt_server_started = true; return; } else |_| {}
-    @import("../core/io_global.zig").cwdAccess("bin/zigzag-stt-server.py", .{}) catch { return; };
+    if (@import("../core/io_global.zig").cwdAccess(STT_SOCKET, .{})) |_| {
+        stt_server_started = true;
+        return;
+    } else |_| {}
+    @import("../core/io_global.zig").cwdAccess("bin/zigzag-stt-server.py", .{}) catch {
+        return;
+    };
     if (!serverDepsReady("bin/zigzag-stt-server.py")) return;
     var child = @import("../core/io_global.zig").Child.init(
-        &.{ "python3", "bin/zigzag-stt-server.py" }, @import("../core/alloc.zig").allocator,
+        &.{ "python3", "bin/zigzag-stt-server.py" },
+        @import("../core/alloc.zig").allocator,
     );
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
-    child.spawn() catch { return; };
+    child.spawn() catch {
+        return;
+    };
     var attempts: usize = 0;
     while (attempts < 150) : (attempts += 1) {
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
@@ -233,15 +243,23 @@ pub fn ensureSttServer() void {
 
 pub fn ensureTtsServer() void {
     if (tts_server_started) return;
-    if (@import("../core/io_global.zig").cwdAccess(TTS_SOCKET, .{})) |_| { tts_server_started = true; return; } else |_| {}
-    @import("../core/io_global.zig").cwdAccess("bin/zigzag-tts-server.py", .{}) catch { return; };
+    if (@import("../core/io_global.zig").cwdAccess(TTS_SOCKET, .{})) |_| {
+        tts_server_started = true;
+        return;
+    } else |_| {}
+    @import("../core/io_global.zig").cwdAccess("bin/zigzag-tts-server.py", .{}) catch {
+        return;
+    };
     if (!serverDepsReady("bin/zigzag-tts-server.py")) return;
     var child = @import("../core/io_global.zig").Child.init(
-        &.{ "python3", "bin/zigzag-tts-server.py" }, @import("../core/alloc.zig").allocator,
+        &.{ "python3", "bin/zigzag-tts-server.py" },
+        @import("../core/alloc.zig").allocator,
     );
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
-    child.spawn() catch { return; };
+    child.spawn() catch {
+        return;
+    };
     var attempts: usize = 0;
     while (attempts < 150) : (attempts += 1) {
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
@@ -484,7 +502,6 @@ fn conversationLoopV2() void {
                     _ = c_pkg.mpv.mpv_get_property(state.app.players.items[p_idx].mpv_ctx, "volume", c_pkg.mpv.MPV_FORMAT_DOUBLE, &saved_volume);
                     _ = c_pkg.mpv.mpv_command_string(state.app.players.items[p_idx].mpv_ctx, "set volume 15");
                 }
-
             } else if (std.mem.startsWith(u8, line, "VAD:end")) {
                 setPhase(.transcribing);
                 is_recording = false;
@@ -496,7 +513,6 @@ fn conversationLoopV2() void {
                     const vol_cmd = std.fmt.bufPrintZ(&vol_cmd_buf, "set volume {d:.0}", .{saved_volume}) catch "set volume 100";
                     _ = c_pkg.mpv.mpv_command_string(state.app.players.items[p_idx].mpv_ctx, vol_cmd.ptr);
                 }
-
             } else if (std.mem.startsWith(u8, line, "PARTIAL:")) {
                 const ptext = line["PARTIAL:".len..];
                 const plen = @min(ptext.len, partial_text.len);
@@ -504,7 +520,6 @@ fn conversationLoopV2() void {
                 @memcpy(partial_text[0..plen], ptext[0..plen]);
                 partial_text_len = plen;
                 state_mutex.unlock();
-
             } else if (std.mem.startsWith(u8, line, "TRANSCRIPT:")) {
                 const text = line["TRANSCRIPT:".len..];
                 partial_text_len = 0; // Clear partial on final transcript
@@ -595,8 +610,7 @@ fn conversationLoopV1() void {
         const input_fmt = if (is_macos) "avfoundation" else "pulse";
         const input_dev = if (is_macos) ":0" else "default";
         var record_child = @import("../core/io_global.zig").Child.init(
-            &.{ "ffmpeg", "-y", "-f", input_fmt, "-i", input_dev,
-                "-ar", "16000", "-ac", "1", "-t", "12", MIC_WAV_PATH },
+            &.{ "ffmpeg", "-y", "-f", input_fmt, "-i", input_dev, "-ar", "16000", "-ac", "1", "-t", "12", MIC_WAV_PATH },
             @import("../core/alloc.zig").allocator,
         );
         record_child.stdout_behavior = .Ignore;
@@ -648,7 +662,9 @@ fn conversationLoopV1() void {
 }
 
 fn micRecordWorker() void {
-    defer { is_recording = false; }
+    defer {
+        is_recording = false;
+    }
 
     // ffmpeg-primary mic capture. Platform-specific input:
     //   macOS   → avfoundation (":0" = default audio)
@@ -660,11 +676,7 @@ fn micRecordWorker() void {
 
     logs.pushLog("info", "voice", "Mic: starting ffmpeg capture", true);
     var record_child = @import("../core/io_global.zig").Child.init(
-        &.{ "ffmpeg", "-y",
-            "-f", input_fmt,
-            "-i", input_dev,
-            "-ar", "16000", "-ac", "1", "-t", "15",
-            MIC_WAV_PATH },
+        &.{ "ffmpeg", "-y", "-f", input_fmt, "-i", input_dev, "-ar", "16000", "-ac", "1", "-t", "15", MIC_WAV_PATH },
         @import("../core/alloc.zig").allocator,
     );
     // stderr piped so ffmpeg errors surface in logs (permission denials,
@@ -689,7 +701,9 @@ fn micRecordWorker() void {
 
     if (@import("../core/io_global.zig").cwdAccess(MIC_WAV_PATH, .{})) |_| {
         is_transcribing = true;
-        defer { is_transcribing = false; }
+        defer {
+            is_transcribing = false;
+        }
         transcribeAndSend();
     } else |_| {
         setError("No audio recorded — check mic permission in System Settings → Privacy & Security → Microphone");
@@ -697,7 +711,6 @@ fn micRecordWorker() void {
 }
 
 pub const isHallucination = @import("voice_filter.zig").isHallucination;
-
 
 // ── ASR via persistent server (Unix socket) ──
 
@@ -791,13 +804,7 @@ fn transcribeAndSend() void {
     };
 
     var w_child = @import("../core/io_global.zig").Child.init(
-        &.{ whisper_bin,
-            "-m", model,
-            "-f", MIC_WAV_PATH,
-            "-t", "4",
-            "--no-timestamps",
-            "--no-prints",
-            "-otxt" },
+        &.{ whisper_bin, "-m", model, "-f", MIC_WAV_PATH, "-t", "4", "--no-timestamps", "--no-prints", "-otxt" },
         @import("../core/alloc.zig").allocator,
     );
     w_child.stdout_behavior = .Ignore;
@@ -882,7 +889,9 @@ fn ttsWorker() void {
     server.inference_mutex.lock();
     defer server.inference_mutex.unlock();
 
-    defer { is_speaking = false; }
+    defer {
+        is_speaking = false;
+    }
 
     const state = @import("../core/state.zig");
     const text = tts_text_buf[0..tts_text_len];
@@ -935,12 +944,13 @@ fn ttsWorker() void {
         state.app.tts_voice_buf[0..state.app.tts_voice_len]
     else
         "Bella";
-    
+
     var tts_cmd_buf: [512]u8 = undefined;
-    const tts_cmd = std.fmt.bufPrintZ(&tts_cmd_buf,
+    const tts_cmd = std.fmt.bufPrintZ(
+        &tts_cmd_buf,
         "from kittentts import KittenTTS; " ++
-        "text = open('/tmp/zigzag_tts_input.txt').read().strip(); " ++
-        "tts = KittenTTS(); tts.generate_to_file(text, '/tmp/zigzag_ai_tts.wav', voice='{s}', speed={d:.1})",
+            "text = open('/tmp/zigzag_tts_input.txt').read().strip(); " ++
+            "tts = KittenTTS(); tts.generate_to_file(text, '/tmp/zigzag_ai_tts.wav', voice='{s}', speed={d:.1})",
         .{ voice_name, state.app.tts_speed },
     ) catch return;
 

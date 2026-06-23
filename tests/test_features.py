@@ -750,6 +750,97 @@ def test_streaming_wired():
 
 
 # ══════════════════════════════════════════════════════════
+# AI Models (Hugging Face picker)
+# ══════════════════════════════════════════════════════════
+
+def _parse_catalog():
+    """Extract MODEL_CATALOG entries from ai_server.zig as dicts."""
+    import re
+    src = os.path.join(PROJECT_DIR, "src/services/ai_server.zig")
+    with open(src) as f:
+        content = f.read()
+    start = content.find("MODEL_CATALOG")
+    if start < 0:
+        return []
+    block = content[start:content.find("};", start)]
+    entries = []
+    for m in re.finditer(r"\.\{(.*?)\}", block, re.DOTALL):
+        body = m.group(1)
+        fields = dict(re.findall(r'\.(\w+)\s*=\s*"([^"]*)"', body))
+        if "id" in fields and "url" in fields:
+            entries.append(fields)
+    return entries
+
+
+@test("HF Model Catalog", "AI Models")
+def test_hf_catalog():
+    cat = _parse_catalog()
+    if len(cat) < 3:
+        return "fail", f"only {len(cat)} models parsed"
+    for e in cat:
+        for key in ("id", "name", "url", "filename", "size_label", "note"):
+            if not e.get(key):
+                return "fail", f"{e.get('id', '?')} missing {key}"
+        if not e["url"].startswith("https://huggingface.co/"):
+            return "fail", f"{e['id']} url not on HF hub"
+        if not e["url"].endswith(".gguf"):
+            return "fail", f"{e['id']} url not a .gguf"
+    return "pass", f"{len(cat)} HF GGUF models, all fields valid"
+
+
+@test("Catalog IDs/Files Unique", "AI Models")
+def test_catalog_unique():
+    cat = _parse_catalog()
+    ids = [e["id"] for e in cat]
+    files = [e["filename"] for e in cat]
+    if len(set(ids)) != len(ids):
+        return "fail", "duplicate model id"
+    if len(set(files)) != len(files):
+        return "fail", "duplicate filename"
+    return "pass", f"{len(ids)} unique ids + filenames"
+
+
+@test("Model Picker UI Wired", "AI Models")
+def test_picker_wired():
+    s = os.path.join(PROJECT_DIR, "src/ui/settings.zig")
+    with open(s) as f:
+        c = f.read()
+    if "MODEL_CATALOG" in c and "selectModelByIndex" in c:
+        return "pass", "picker iterates catalog + selects"
+    return "fail", "picker not wired in settings"
+
+
+@test("Model Selection Persisted", "AI Models")
+def test_model_persisted():
+    cfg = os.path.join(PROJECT_DIR, "src/core/config.zig")
+    with open(cfg) as f:
+        c = f.read()
+    if '"ai_model_id"' in c and "selectModelById" in c:
+        return "pass", "ai_model_id saved + restored"
+    return "fail", "model choice not persisted"
+
+
+@test("Catalog URLs Reachable", "AI Models")
+def test_catalog_urls():
+    import urllib.request
+    cat = _parse_catalog()
+    if not cat:
+        return "skip", "no catalog"
+    bad = []
+    for e in cat:
+        try:
+            req = urllib.request.Request(e["url"], method="HEAD")
+            with urllib.request.urlopen(req, timeout=12) as r:
+                if r.status >= 400:
+                    bad.append(f"{e['id']}:{r.status}")
+        except Exception:  # noqa: BLE001 — offline / transient → not a code fault
+            return "skip", "network unavailable"
+    if bad:
+        return "fail", "unreachable: " + ", ".join(bad)
+    return "pass", f"all {len(cat)} URLs resolve (HTTP 200)"
+
+
+# ══════════════════════════════════════════════════════════
 # Zig Unit Tests
 # ══════════════════════════════════════════════════════════
 

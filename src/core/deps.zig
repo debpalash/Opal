@@ -15,12 +15,12 @@ pub const Status = struct {
     whisper_model: bool = false,
     sherpa_onnx: bool = false,
     sherpa_model: bool = false,
-    sherpa_tts_model: bool = false,      // Piper VITS lessac-medium
-    sherpa_kokoro_model: bool = false,    // Kokoro multi-voice TTS
+    sherpa_tts_model: bool = false, // Piper VITS lessac-medium
+    sherpa_kokoro_model: bool = false, // Kokoro multi-voice TTS
     sherpa_stream_model: bool = false,
     sherpa_mic_cli: bool = false,
-    mlx_whisper_cli: bool = false,      // pip install mlx-whisper (Apple Silicon)
-    mlx_whisper_model: bool = false,    // HF cache: mlx-community/whisper-large-v3-turbo
+    mlx_whisper_cli: bool = false, // pip install mlx-whisper (Apple Silicon)
+    mlx_whisper_model: bool = false, // HF cache: mlx-community/whisper-large-v3-turbo
 };
 
 /// Returns true when the full sherpa stack (CLI + STT + TTS + streaming
@@ -90,18 +90,36 @@ fn have(path: []const u8) bool {
 pub fn installCmd(buf: []u8, s: Status) []const u8 {
     var parts: [8][]const u8 = undefined;
     var n: usize = 0;
-    if (!s.apfel) { if (n < parts.len) { parts[n] = "apfel"; n += 1; } }
-    if (!s.ffmpeg) { if (n < parts.len) { parts[n] = "ffmpeg"; n += 1; } }
-    if (!s.whisper) { if (n < parts.len) { parts[n] = "whisper-cpp"; n += 1; } }
+    if (!s.apfel) {
+        if (n < parts.len) {
+            parts[n] = "apfel";
+            n += 1;
+        }
+    }
+    if (!s.ffmpeg) {
+        if (n < parts.len) {
+            parts[n] = "ffmpeg";
+            n += 1;
+        }
+    }
+    if (!s.whisper) {
+        if (n < parts.len) {
+            parts[n] = "whisper-cpp";
+            n += 1;
+        }
+    }
     if (n == 0) return "";
 
     var off: usize = 0;
     const prefix = "brew install ";
-    @memcpy(buf[off..off + prefix.len], prefix);
+    @memcpy(buf[off .. off + prefix.len], prefix);
     off += prefix.len;
     for (parts[0..n], 0..) |p, i| {
-        if (i > 0) { buf[off] = ' '; off += 1; }
-        @memcpy(buf[off..off + p.len], p);
+        if (i > 0) {
+            buf[off] = ' ';
+            off += 1;
+        }
+        @memcpy(buf[off .. off + p.len], p);
         off += p.len;
     }
     return buf[0..off];
@@ -135,9 +153,8 @@ pub fn fetchSherpaWhisperAsync() void {
 
             logs.pushLog("info", "deps", "Fetching sherpa whisper-tiny (~40MB)…", true);
             var curl = io_global.Child.init(&.{
-                "curl", "-L", "--fail", "--silent", "--show-error",
-                "-o", tar_path,
-                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2",
+                "curl", "-L",     "--fail",                                                                                                 "--silent", "--show-error",
+                "-o",   tar_path, "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2",
             }, @import("alloc.zig").allocator);
             curl.stdout_behavior = .Ignore;
             curl.stderr_behavior = .Ignore;
@@ -199,9 +216,8 @@ pub fn fetchSherpaTtsAsync() void {
 
             logs.pushLog("info", "deps", "Fetching sherpa Piper-VITS (~40MB)…", true);
             var curl = io_global.Child.init(&.{
-                "curl", "-L", "--fail", "--silent", "--show-error",
-                "-o", tar_path,
-                "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-medium.tar.bz2",
+                "curl", "-L",     "--fail",                                                                                                    "--silent", "--show-error",
+                "-o",   tar_path, "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-medium.tar.bz2",
             }, @import("alloc.zig").allocator);
             curl.stdout_behavior = .Ignore;
             curl.stderr_behavior = .Ignore;
@@ -261,9 +277,8 @@ pub fn fetchSherpaKokoroAsync() void {
 
             logs.pushLog("info", "deps", "Fetching Kokoro TTS (~330MB)…", true);
             var curl = io_global.Child.init(&.{
-                "curl", "-L", "--fail", "--silent", "--show-error",
-                "-o", tar_path,
-                "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2",
+                "curl", "-L",     "--fail",                                                                                     "--silent", "--show-error",
+                "-o",   tar_path, "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2",
             }, @import("alloc.zig").allocator);
             curl.stdout_behavior = .Ignore;
             curl.stderr_behavior = .Ignore;
@@ -319,9 +334,8 @@ pub fn fetchSherpaStreamAsync() void {
 
             logs.pushLog("info", "deps", "Fetching streaming Zipformer (~80MB)…", true);
             var curl = io_global.Child.init(&.{
-                "curl", "-L", "--fail", "--silent", "--show-error",
-                "-o", tar_path,
-                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2",
+                "curl", "-L",     "--fail",                                                                                                                   "--silent", "--show-error",
+                "-o",   tar_path, "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2",
             }, @import("alloc.zig").allocator);
             curl.stdout_behavior = .Ignore;
             curl.stderr_behavior = .Ignore;
@@ -398,9 +412,8 @@ pub fn fetchWhisperModelAsync() void {
                 // Missing — fetch
                 logs.pushLog("info", "deps", "Fetching whisper tiny model (~39MB)…", true);
                 var curl = io_global.Child.init(&.{
-                    "curl", "-L", "--fail", "--silent", "--show-error",
-                    "-o", model_path,
-                    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+                    "curl", "-L",       "--fail",                                                                     "--silent", "--show-error",
+                    "-o",   model_path, "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
                 }, @import("alloc.zig").allocator);
                 curl.stdout_behavior = .Ignore;
                 curl.stderr_behavior = .Ignore;
@@ -565,7 +578,7 @@ pub fn fetchMlxWhisperModelAsync() void {
                 setStatus("Installing mlx-whisper…", .{});
                 logs.pushLog("info", "deps", "Installing mlx-whisper…", true);
                 var pip_install = io_global.Child.init(&.{
-                    uv, "pip", "install", "mlx-whisper",
+                    uv,         "pip",       "install", "mlx-whisper",
                     "--python", venv_python,
                 }, alloc);
                 pip_install.stdout_behavior = .Ignore;
@@ -615,7 +628,7 @@ pub fn fetchMlxWhisperModelAsync() void {
             var cfg_buf: [768]u8 = undefined;
             const cfg_path = std.fmt.bufPrintZ(&cfg_buf, "{s}/config.json", .{model_dir}) catch return;
             var cfg_dl = io_global.Child.init(&.{
-                "curl", "-L", "--fail", "--silent", "--show-error", "-o", cfg_path,
+                "curl",                                                                                 "-L", "--fail", "--silent", "--show-error", "-o", cfg_path,
                 "https://huggingface.co/mlx-community/whisper-large-v3-turbo/resolve/main/config.json",
             }, alloc);
             cfg_dl.stdout_behavior = .Ignore;
@@ -626,7 +639,7 @@ pub fn fetchMlxWhisperModelAsync() void {
             var wt_buf: [768]u8 = undefined;
             const wt_path = std.fmt.bufPrintZ(&wt_buf, "{s}/weights.safetensors", .{model_dir}) catch return;
             var wt_dl = io_global.Child.init(&.{
-                "curl", "-L", "--fail", "--show-error", "-o", wt_path,
+                "curl",                                                                                         "-L", "--fail", "--show-error", "-o", wt_path,
                 "https://huggingface.co/mlx-community/whisper-large-v3-turbo/resolve/main/weights.safetensors",
             }, alloc);
             wt_dl.stdout_behavior = .Ignore;
