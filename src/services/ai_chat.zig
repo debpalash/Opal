@@ -45,11 +45,19 @@ pub fn toggleStar(idx: usize) void {
 const db = @import("../core/db.zig");
 
 fn roleToInt(r: Role) c_int {
-    return switch (r) { .user => 0, .assistant => 1, .system => 2 };
+    return switch (r) {
+        .user => 0,
+        .assistant => 1,
+        .system => 2,
+    };
 }
 
 fn intToRole(n: c_int) Role {
-    return switch (n) { 0 => .user, 1 => .assistant, else => .system };
+    return switch (n) {
+        0 => .user,
+        1 => .assistant,
+        else => .system,
+    };
 }
 
 fn saveStarredToDb(m: Message) void {
@@ -205,7 +213,9 @@ pub fn stopAll() void {
             kill_rec.stderr_behavior = .Ignore;
             _ = kill_rec.spawnAndWait() catch {};
         }
-    }.run, .{}) catch { return; };
+    }.run, .{}) catch {
+        return;
+    };
     t.detach();
 }
 
@@ -217,17 +227,21 @@ pub fn renderChatBody() void {
     server.checkPaths();
     initCallbacks();
     { // Kill zombie servers from previous runs — once at startup only
-        const K = struct { var done: bool = false; };
+        const K = struct {
+            var done: bool = false;
+        };
         if (!K.done) {
             K.done = true;
             voice.killStaleServers();
-            voice.preWarmServers();  // Start STT/TTS servers in background early
+            voice.preWarmServers(); // Start STT/TTS servers in background early
         }
     }
 
     // Proactive startup greeting (once per session, fires on first frame with empty chat)
     {
-        const S = struct { var shown: bool = false; };
+        const S = struct {
+            var shown: bool = false;
+        };
         if (!S.shown and message_count == 0) {
             S.shown = true;
             var sug_buf: [256]u8 = undefined;
@@ -262,12 +276,15 @@ pub fn renderChatBody() void {
         });
         defer hdr.deinit();
 
-        _ = dvui.icon(@src(), "", icons.tvg.lucide.@"cpu", .{}, .{
+        _ = dvui.icon(@src(), "", icons.tvg.lucide.cpu, .{}, .{
             .color_text = theme.colors.accent,
             .min_size_content = .{ .w = 16, .h = 16 },
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
-        _ = dvui.label(@src(), switch (server.backend_kind) { .apfel => "Apple Intelligence", .gemma_llama => "Gemma 4 E2B" }, .{}, .{
+        _ = dvui.label(@src(), switch (server.backend_kind) {
+            .apfel => "Apple Intelligence",
+            .gemma_llama => "Gemma 4 E2B",
+        }, .{}, .{
             .color_text = theme.colors.text_primary,
             .expand = .horizontal,
         });
@@ -280,7 +297,7 @@ pub fn renderChatBody() void {
         }
 
         // Settings gear
-        if (components.iconButton(@src(), icons.tvg.lucide.@"settings", "Settings", show_controls)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.settings, "Settings", show_controls)) {
             show_controls = !show_controls;
         }
 
@@ -342,7 +359,7 @@ pub fn renderChatBody() void {
         });
         defer status_box.deinit();
 
-        _ = dvui.icon(@src(), "", icons.tvg.lucide.@"activity", .{}, .{
+        _ = dvui.icon(@src(), "", icons.tvg.lucide.activity, .{}, .{
             .color_text = theme.colors.accent,
             .min_size_content = .{ .w = 14, .h = 14 },
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -423,7 +440,7 @@ pub fn renderChatBody() void {
         const can_send = input_len > 0 and !is_generating.load(.acquire);
 
         // Send button — the single accent affordance in this row.
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"send", .{}, .{}, .{
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.send, .{}, .{}, .{
             .color_fill = if (can_send) theme.colors.accent else theme.colors.bg_elevated,
             .color_text = if (can_send) theme.colors.text_on_accent else theme.colors.text_tertiary,
             .corner_radius = theme.dims.rad_md,
@@ -442,7 +459,7 @@ pub fn renderChatBody() void {
         // Mic / conversation / stop — borderless icon buttons.
         // Recording/stopping use the danger token only while active.
         {
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"mic", .{}, .{}, .{
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.mic, .{}, .{}, .{
                 .id_extra = 9007,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 .color_text = if (voice.is_recording) theme.colors.danger else if (voice.is_transcribing) theme.colors.accent else theme.colors.text_secondary,
@@ -455,7 +472,7 @@ pub fn renderChatBody() void {
             }
 
             // Conversation mode toggle (live hands-free voice loop)
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"headphones", .{}, .{}, .{
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.headphones, .{}, .{}, .{
                 .id_extra = 9008,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 .color_text = if (voice.conversation_active) theme.colors.accent else theme.colors.text_secondary,
@@ -469,7 +486,7 @@ pub fn renderChatBody() void {
 
             // Stop button — danger token only when something is active.
             const is_active = is_generating.load(.acquire) or voice.is_speaking or voice.is_recording or voice.is_transcribing;
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"square", .{}, .{}, .{
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.square, .{}, .{}, .{
                 .id_extra = 9009,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 .color_text = if (is_active) theme.colors.danger else theme.colors.text_tertiary,
@@ -594,7 +611,7 @@ fn renderControlPanel() void {
         });
         defer row.deinit();
 
-        _ = dvui.icon(@src(), "", icons.tvg.lucide.@"server", .{}, .{
+        _ = dvui.icon(@src(), "", icons.tvg.lucide.server, .{}, .{
             .color_text = theme.colors.text_tertiary,
             .min_size_content = .{ .w = 14, .h = 14 },
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -718,7 +735,7 @@ fn renderControlPanel() void {
 
 fn renderEmptyState() void {
     components.emptyState(
-        icons.tvg.lucide.@"cpu",
+        icons.tvg.lucide.cpu,
         "ZigZag AI",
         if (server.model_status == .online) "Ask me anything about media" else "Start the server to begin chatting",
     );
@@ -759,7 +776,10 @@ fn renderMessage(mi: usize) void {
 
     // Author tag — one quiet label; hierarchy via muting, not colored tags.
     {
-        const author: []const u8 = if (is_user) "You" else switch (server.backend_kind) { .apfel => "Apple AI", .gemma_llama => "Gemma" };
+        const author: []const u8 = if (is_user) "You" else switch (server.backend_kind) {
+            .apfel => "Apple AI",
+            .gemma_llama => "Gemma",
+        };
         _ = dvui.label(@src(), "{s}", .{author}, .{
             .id_extra = mi + 7000,
             .expand = .horizontal,
@@ -837,6 +857,7 @@ pub fn renderInlineResults() void {
                 .torrent => "Torrent",
                 .anime => "Anime",
                 .youtube => "YouTube",
+                .local => "On disk",
             };
         }
     }.get;
@@ -938,7 +959,7 @@ pub fn renderInlineResults() void {
         }
 
         // Queue — borderless quiet action.
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"plus", .{}, .{}, .{
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.plus, .{}, .{}, .{
             .id_extra = ci + 10400,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = theme.colors.text_secondary,
@@ -953,7 +974,7 @@ pub fn renderInlineResults() void {
         }
 
         // Play — accent action.
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"play", .{}, .{}, .{
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = ci + 10100,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = theme.colors.accent,
@@ -992,11 +1013,11 @@ fn queueChatResult(idx: usize) void {
         .torrent => "torrent",
         .anime => "anime",
         .youtube => "youtube",
+        .local => "local",
     };
     @import("queue.zig").addToQueue(url_str, name, src_label);
     state.showToast("Added to queue");
 }
-
 
 // ══════════════════════════════════════════════════════════
 //  LLM Backend
@@ -1151,7 +1172,6 @@ fn onTranscribed(transcribed: []const u8) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn renderFloatingBubble() void {
-
     const min_w: f32 = 300.0;
     const min_h: f32 = 400.0;
     const default_w: f32 = 400.0;
@@ -1234,7 +1254,7 @@ pub fn renderFloatingBubble() void {
             // Make header the drag area so user can reposition the window
             chat_win.dragAreaSet(ctx_hdr.data().borderRectScale().r);
 
-            _ = dvui.icon(@src(), "", icons.tvg.lucide.@"bot", .{}, .{
+            _ = dvui.icon(@src(), "", icons.tvg.lucide.bot, .{}, .{
                 .color_text = theme.colors.accent,
                 .min_size_content = .{ .w = 14, .h = 14 },
                 .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
@@ -1275,7 +1295,7 @@ pub fn renderFloatingBubble() void {
             }
 
             // Close button
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"x", .{}, .{}, .{
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
                 .color_text = theme.colors.text_muted,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 .border = dvui.Rect.all(0),
@@ -1289,7 +1309,6 @@ pub fn renderFloatingBubble() void {
 
         // Render the inner chat UI
         renderChatBody();
-
     } else {
         // Collapsed mode handled by header bot-toggle. No floating FAB.
         return;

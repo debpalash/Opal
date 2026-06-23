@@ -820,6 +820,24 @@ def test_model_persisted():
     return "fail", "model choice not persisted"
 
 
+@test("Unified Search: Local Files", "AI Models")
+def test_local_source():
+    r = open(os.path.join(PROJECT_DIR, "src/services/resolver.zig")).read()
+    if "resolveLocalFiles" in r and ".local" in r and "status_local" in r:
+        return "pass", "local files are a unified-search source"
+    return "fail", "local files not wired into resolver"
+
+
+@test("Remote /load Percent-Decodes", "AI Models")
+def test_remote_load_decode():
+    rm = open(os.path.join(PROJECT_DIR, "src/services/remote.zig")).read()
+    # The /load handler must urlDecode before load_file (was passing raw).
+    idx = rm.find('"/load"')
+    if idx > 0 and "urlDecode(raw" in rm[idx:idx + 600]:
+        return "pass", "/load decodes percent-encoded URLs"
+    return "fail", "/load still passes raw url"
+
+
 @test("Catalog URLs Reachable", "AI Models")
 def test_catalog_urls():
     import urllib.request

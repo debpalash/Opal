@@ -150,7 +150,10 @@ fn extractBearer(request: []const u8) ?[]const u8 {
         while (i < name.len) : (i += 1) {
             const cc = line[i];
             const lc: u8 = if (cc >= 'A' and cc <= 'Z') cc + 32 else cc;
-            if (lc != name[i]) { match = false; break; }
+            if (lc != name[i]) {
+                match = false;
+                break;
+            }
         }
         if (!match) continue;
         var value = line[name.len..];
@@ -162,7 +165,10 @@ fn extractBearer(request: []const u8) ?[]const u8 {
         while (j < prefix.len) : (j += 1) {
             const cc = value[j];
             const lc: u8 = if (cc >= 'A' and cc <= 'Z') cc + 32 else cc;
-            if (lc != prefix[j]) { bp = false; break; }
+            if (lc != prefix[j]) {
+                bp = false;
+                break;
+            }
         }
         if (!bp) return null;
         return value[prefix.len..];
@@ -405,7 +411,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         ap.cycleRotation();
         sendJson(stream, "{\"ok\":true,\"action\":\"rotate\"}");
 
-    // ── Volume set ──
+        // ── Volume set ──
     } else if (std.mem.eql(u8, api_path, "/volume")) {
         if (getQueryParam(query, "v")) |v_str| {
             const vol = std.fmt.parseFloat(f64, v_str) catch return;
@@ -416,7 +422,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         }
         sendJson(stream, "{\"ok\":true,\"action\":\"volume\"}");
 
-    // ── Seek by percentage ──
+        // ── Seek by percentage ──
     } else if (std.mem.eql(u8, api_path, "/seek_pct")) {
         if (getQueryParam(query, "v")) |v_str| {
             const pct = std.fmt.parseInt(i32, v_str, 10) catch 0;
@@ -431,17 +437,20 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         }
         sendJson(stream, "{\"ok\":true,\"action\":\"seek_pct\"}");
 
-    // ── Load URL/magnet ──
+        // ── Load URL/magnet ──
     } else if (std.mem.eql(u8, api_path, "/load")) {
-        if (getQueryParam(query, "url")) |url| {
-            // URL-decode would go here; for now pass raw
-            var url_buf: [2048]u8 = undefined;
-            const url_z = std.fmt.bufPrintZ(&url_buf, "{s}", .{url}) catch return;
+        if (getQueryParam(query, "url")) |raw| {
+            // Percent-decode first — magnet/http URLs arrive with & as %26 etc.;
+            // passing them raw corrupted the loaded URI.
+            var dec_buf: [2048]u8 = undefined;
+            const decoded = urlDecode(raw, &dec_buf) orelse raw;
+            var url_buf: [2049]u8 = undefined;
+            const url_z = std.fmt.bufPrintZ(&url_buf, "{s}", .{decoded}) catch return;
             ap.load_file(url_z.ptr);
         }
         sendJson(stream, "{\"ok\":true,\"action\":\"load\"}");
 
-    // ── Status (enhanced) ──
+        // ── Status (enhanced) ──
     } else if (std.mem.eql(u8, api_path, "/status")) {
         var pos: f64 = 0;
         var dur: f64 = 0;
@@ -467,7 +476,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         sw.writeAll("\"}") catch return;
         sendJson(stream, json[0..sw.end]);
 
-    // ── Queue ──
+        // ── Queue ──
     } else if (std.mem.eql(u8, api_path, "/queue")) {
         const queue_svc = @import("queue.zig");
         var json_buf: [8192]u8 = undefined;
@@ -486,7 +495,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         w.writeAll("]}") catch return;
         sendJson(stream, json_buf[0..w.end]);
 
-    // ── Watch Party ──
+        // ── Watch Party ──
     } else if (std.mem.eql(u8, api_path, "/party/host")) {
         const wp = @import("watch_party.zig");
         wp.hostParty();
@@ -554,7 +563,7 @@ fn urlDecode(src: []const u8, buf: []u8) ?[]const u8 {
     var o: usize = 0;
     while (i < src.len and o < buf.len) {
         if (src[i] == '%' and i + 2 < src.len) {
-            buf[o] = std.fmt.parseInt(u8, src[i+1..i+3], 16) catch {
+            buf[o] = std.fmt.parseInt(u8, src[i + 1 .. i + 3], 16) catch {
                 buf[o] = src[i];
                 i += 1;
                 o += 1;
@@ -727,7 +736,9 @@ fn apiDownloads(stream: std.Io.net.Stream, query: []const u8) void {
         var size: u64 = 0;
         if (!is_dir) {
             if (dir.openFile(@import("../core/io_global.zig").io(), entry.name, .{})) |file| {
-                if (file.stat(@import("../core/io_global.zig").io())) |st| { size = st.size; } else |_| {}
+                if (file.stat(@import("../core/io_global.zig").io())) |st| {
+                    size = st.size;
+                } else |_| {}
                 file.close(@import("../core/io_global.zig").io());
             } else |_| {}
         }

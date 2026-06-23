@@ -1298,13 +1298,15 @@ fn renderUniversalResults() void {
             .torrent => dvui.Color{ .r = 255, .g = 180, .b = 80, .a = 255 },
             .anime => dvui.Color{ .r = 255, .g = 120, .b = 180, .a = 255 },
             .youtube => dvui.Color{ .r = 255, .g = 80, .b = 80, .a = 255 },
+            .local => dvui.Color{ .r = 130, .g = 230, .b = 200, .a = 255 },
         };
         const badge_text = switch (item.source) {
-            .jellyfin => "LOCAL",
+            .jellyfin => "JELLYFIN",
             .stremio => "STREAM",
             .torrent => "TORRENT",
             .anime => "ANIME",
             .youtube => "YT",
+            .local => "ON DISK",
         };
 
         // Result card — the whole card is clickable (→ play), plus an explicit

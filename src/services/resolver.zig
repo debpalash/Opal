@@ -21,6 +21,7 @@ pub const SourceType = enum {
     torrent, // Magnet links — needs download
     anime, // ani-cli streams — HTTP direct
     youtube, // yt-dlp streams — HTTP direct
+    local, // user's own downloaded files in save_path — instant playback
 };
 
 pub const ResolvedItem = struct {
@@ -61,6 +62,7 @@ pub var status_anime = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_yt = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_1337x = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_yts = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_local = std.atomic.Value(SourceStatus).init(.idle);
 
 // Explicit u8 backing so std.atomic.Value(SourceStatus) is byte-atomic.
 pub const SourceStatus = enum(u8) { idle, searching, done, failed };
@@ -252,6 +254,13 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     status_yt.store(.searching, .release);
     status_1337x.store(.searching, .release);
     status_yts.store(.searching, .release);
+    status_local.store(.searching, .release);
+
+    // Local files first — instant, already on disk.
+    _ = std.Thread.spawn(.{}, resolveLocalFiles, .{ resolver_query, qlen }) catch {
+        status_local.store(.failed, .release);
+        checkAllDone();
+    };
 
     // Fire all backends in parallel — 7 threads for maximum speed
     _ = std.Thread.spawn(.{}, resolveJellyfin, .{ resolver_query, qlen }) catch {
@@ -324,11 +333,85 @@ fn pushResult(item: ResolvedItem) bool {
     return true;
 }
 
+const local_media_exts = [_][]const u8{
+    ".mp4", ".mkv", ".avi",  ".mov", ".webm", ".m4v",  ".flv", ".wmv", ".mpg", ".mpeg",
+    ".ts",  ".mp3", ".flac", ".m4a", ".wav",  ".opus", ".aac", ".ogg",
+};
+
+fn isLocalMedia(name: []const u8) bool {
+    var lower: [512]u8 = undefined;
+    if (name.len == 0 or name.len > lower.len) return false;
+    for (0..name.len) |i| lower[i] = std.ascii.toLower(name[i]);
+    const l = lower[0..name.len];
+    for (local_media_exts) |ext| {
+        if (std.mem.endsWith(u8, l, ext)) return true;
+    }
+    return false;
+}
+
+/// Search the user's save/download folder for already-downloaded media whose
+/// filename matches the query — instant, zero-network results so a movie you
+/// already have is findable straight from the omnibox.
+fn resolveLocalFiles(q: [256]u8, qlen: usize) void {
+    const io_global = @import("../core/io_global.zig");
+    defer {
+        status_local.store(.done, .release);
+        checkAllDone();
+    }
+    if (qlen == 0) return;
+
+    var ql: [256]u8 = undefined;
+    for (0..qlen) |i| ql[i] = std.ascii.toLower(q[i]);
+    const query = ql[0..qlen];
+
+    var path_buf: [1024]u8 = undefined;
+    const save_path = if (state.app.save_path_len > 0)
+        state.app.save_path_buf[0..state.app.save_path_len]
+    else
+        @import("../core/paths.zig").defaultSavePath(&path_buf);
+    if (save_path.len == 0) return;
+
+    var dir = io_global.cwdOpenDir(save_path, .{ .iterate = true }) catch return;
+    defer dir.close(io_global.io());
+
+    var iter = dir.iterate();
+    var found: usize = 0;
+    while (iter.next(io_global.io()) catch null) |entry| {
+        if (found >= 20) break;
+        if (entry.kind != .file) continue;
+        const name = entry.name;
+        if (!isLocalMedia(name)) continue;
+
+        var nl: [512]u8 = undefined;
+        if (name.len > nl.len) continue;
+        for (0..name.len) |i| nl[i] = std.ascii.toLower(name[i]);
+        if (std.mem.indexOf(u8, nl[0..name.len], query) == null) continue;
+
+        var item = ResolvedItem{ .source = .local };
+        const nlen = @min(name.len, 255);
+        @memcpy(item.name[0..nlen], name[0..nlen]);
+        item.name_len = nlen;
+
+        var url_buf: [2048]u8 = undefined;
+        const url = std.fmt.bufPrint(&url_buf, "{s}/{s}", .{ save_path, name }) catch continue;
+        const ulen = @min(url.len, item.url.len);
+        @memcpy(item.url[0..ulen], url[0..ulen]);
+        item.url_len = ulen;
+
+        const d = "On disk";
+        @memcpy(item.detail[0..d.len], d);
+        item.detail_len = d.len;
+
+        _ = pushResult(item);
+        found += 1;
+    }
+}
+
 fn checkAllDone() void {
     if (status_jf.load(.acquire) != .searching and status_stremio.load(.acquire) != .searching and
         status_torrent.load(.acquire) != .searching and status_anime.load(.acquire) != .searching and
         status_yt.load(.acquire) != .searching and status_1337x.load(.acquire) != .searching and
-        status_yts.load(.acquire) != .searching)
+        status_yts.load(.acquire) != .searching and status_local.load(.acquire) != .searching)
     {
         is_resolving.store(false, .release);
     }
@@ -428,7 +511,8 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
     const is_movie_or_show = std.mem.eql(u8, intent, "movie") or std.mem.eql(u8, intent, "show");
 
     var source_w: u32 = switch (item.source) {
-        .jellyfin => 0,
+        .local => 0, // already on disk — instant, rank first
+        .jellyfin => 1,
         .stremio => 5,
         .torrent => 8,
         .anime => 12,
@@ -1310,8 +1394,8 @@ pub fn playItem(idx: usize) void {
             anime.playEpisode(item.url[0..item.url_len]);
             state.gotoPlayer();
         },
-        .youtube, .stremio => {
-            // Direct URL — load into mpv
+        .youtube, .stremio, .local => {
+            // Direct URL / local path — load into mpv.
             if (state.app.active_player_idx < state.app.players.items.len) {
                 const p = state.app.players.items[state.app.active_player_idx];
                 p.provider = .mpv;
