@@ -253,5 +253,5 @@ fn worker(args: *WorkerArgs) void {
     _ = @import("../core/io_global.zig").deleteFileAbsolute(tmp_wav) catch {};
     setStatus("Auto-subtitles ready");
     logs.pushLog("info", "subs", "Auto-subtitles generated via whisper", false);
-    state.showToast("✓ Auto-subs loaded");
+    state.showToast("Auto-subs loaded");
 }

@@ -534,7 +534,7 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
         voice.is_recording = false;
         voice.voice_mode = false;
         voice.setPhase(.idle);
-        addInstantResponse(raw_input, "Conversation mode off. Click 🎧 to restart.");
+        addInstantResponse(raw_input, "Conversation mode off. Click to restart.");
         return true;
     }
 

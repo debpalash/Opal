@@ -1941,7 +1941,7 @@ fn renderScriptsTab() void {
                     m.name,
                     m.size_label,
                     m.note,
-                    if (have) "  ✓ downloaded" else "",
+                    if (have) "downloaded" else "",
                 }) catch m.name;
                 if (dvui.button(@src(), row, .{}, .{
                     .id_extra = i,

@@ -37,11 +37,11 @@ fn percentEncode(input: []const u8, out: []u8) usize {
 pub fn loadComic(url: []const u8) void {
     if (state.app.comic.is_loading) return;
     if (url.len == 0 or url.len >= 512) return;
-    
+
     // Stop any active narration
     state.app.comic.narrating = false;
     state.app.comic.show_ocr_overlay = false;
-    
+
     // Store URL
     const buf_ptr: [*]const u8 = @ptrCast(&state.app.comic.url_buf[0]);
     if (url.ptr != buf_ptr) {
@@ -52,7 +52,7 @@ pub fn loadComic(url: []const u8) void {
     state.app.comic.page_count = 0;
     state.app.comic.dl_progress = 0;
     state.app.comic.current_page = 0;
-    
+
     // Clear old textures/pixels and OCR cache
     for (0..128) |i| {
         if (state.app.comic.page_textures[i]) |tex| {
@@ -66,18 +66,18 @@ pub fn loadComic(url: []const u8) void {
         state.app.comic.ocr_lens[i] = 0;
         state.app.comic.ocr_done[i] = false;
     }
-    
+
     // Auto-switch active pane to comic_viewer
     if (state.app.active_player_idx < state.app.players.items.len) {
         state.app.players.items[state.app.active_player_idx].provider = .comic_viewer;
     }
-    
+
     state.app.comic.thread = std.Thread.spawn(.{}, fetchComicThread, .{}) catch null;
 }
 
 fn fetchComicThread() void {
     const url = state.app.comic.url_buf[0..state.app.comic.url_len];
-    
+
     // Try external plugins first
     if (tryPlugins(url)) {
         logs.pushLog("info", "comics", "Comic loaded via plugin", false);
@@ -85,15 +85,15 @@ fn fetchComicThread() void {
         downloadPages();
         return;
     }
-    
+
     // Fallback: native curl + HTML parsing
     const argv = [_][]const u8{
-        "curl", "-sL",
-        "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "curl",       "-sL",
+        "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "--max-time", "15",
         url,
     };
-    
+
     var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
@@ -102,24 +102,24 @@ fn fetchComicThread() void {
         state.app.comic.is_loading = false;
         return;
     };
-    
+
     const html_buf = alloc.alloc(u8, 512 * 1024) catch return;
     defer alloc.free(html_buf);
     const html_bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, html_buf) catch 0 else 0;
     _ = child.wait() catch {};
-    
+
     if (html_bytes == 0) {
         logs.pushLog("error", "comics", "Empty response from curl", true);
         state.app.comic.is_loading = false;
         return;
     }
-    
+
     const html = html_buf[0..html_bytes];
-    
+
     parseTitle(html);
     parseImageUrls(html);
     parseNavLinks(html);
-    
+
     logs.pushLog("info", "comics", "Comic loaded (native)", false);
     state.app.comic.is_loading = false;
     downloadPages();
@@ -141,12 +141,12 @@ fn tryPlugins(url: []const u8) bool {
 fn tryPluginsInDir(dir_path: []const u8, url: []const u8) bool {
     var dir = @import("../core/io_global.zig").cwdOpenDir(dir_path, .{ .iterate = true }) catch return false;
     defer dir.close(@import("../core/io_global.zig").io());
-    
+
     var iter = dir.iterate();
     while (iter.next(@import("../core/io_global.zig").io()) catch null) |entry| {
         if (entry.kind != .file) continue;
         const name = entry.name;
-        
+
         // Determine interpreter based on extension
         const interpreter: []const u8 = if (std.mem.endsWith(u8, name, ".lua"))
             "lua"
@@ -156,26 +156,26 @@ fn tryPluginsInDir(dir_path: []const u8, url: []const u8) bool {
             "bash"
         else
             continue;
-        
+
         // Build full path
         var path_buf: [512]u8 = undefined;
         const full_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, name }) catch continue;
-        
+
         // Execute: <interpreter> <plugin_path> <url>
         const argv = [_][]const u8{ interpreter, full_path, url };
         var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Ignore;
         _ = child.spawn() catch continue;
-        
+
         const json_buf = alloc.alloc(u8, 256 * 1024) catch continue;
         defer alloc.free(json_buf);
         const json_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, json_buf) catch 0 else 0;
         const term = child.wait() catch continue;
-        
+
         // Plugin exited non-zero = "not my domain", try next
         if (term.exited != 0 or json_len < 10) continue;
-        
+
         // Parse JSON response
         if (parsePluginJson(json_buf[0..json_len])) {
             var msg_buf: [320]u8 = undefined;
@@ -190,14 +190,14 @@ fn tryPluginsInDir(dir_path: []const u8, url: []const u8) bool {
 /// Parse the JSON output from a comic plugin and populate state.
 fn parsePluginJson(json: []const u8) bool {
     // Simple manual JSON parsing — extract "title", "pages", "next_url", "prev_url"
-    
+
     // Title
     if (findJsonString(json, "\"title\":\"")) |title| {
         const len = @min(title.len, 255);
         @memcpy(state.app.comic.title[0..len], title[0..len]);
         state.app.comic.title_len = len;
     }
-    
+
     // Next URL
     if (findJsonString(json, "\"next_url\":\"")) |nxt| {
         const len = @min(nxt.len, 511);
@@ -206,7 +206,7 @@ fn parsePluginJson(json: []const u8) bool {
     } else {
         state.app.comic.next_url_len = 0;
     }
-    
+
     // Prev URL
     if (findJsonString(json, "\"prev_url\":\"")) |prv| {
         const len = @min(prv.len, 511);
@@ -215,12 +215,12 @@ fn parsePluginJson(json: []const u8) bool {
     } else {
         state.app.comic.prev_url_len = 0;
     }
-    
+
     // Pages array
     var count: usize = 0;
     const pages_start = std.mem.indexOf(u8, json, "\"pages\":[") orelse return false;
     var pos = pages_start + 9; // skip "pages":[
-    
+
     while (pos < json.len and count < 128) {
         // Find next quoted string
         const q1 = std.mem.indexOfScalar(u8, json[pos..], '"') orelse break;
@@ -228,18 +228,18 @@ fn parsePluginJson(json: []const u8) bool {
         if (abs_q1 >= json.len) break;
         const q2 = std.mem.indexOfScalar(u8, json[abs_q1..], '"') orelse break;
         const page_url = json[abs_q1 .. abs_q1 + q2];
-        
+
         if (page_url.len > 10 and page_url.len < 512) {
             @memcpy(state.app.comic.page_urls[count][0..page_url.len], page_url);
             state.app.comic.page_url_lens[count] = page_url.len;
             count += 1;
         }
-        
+
         pos = abs_q1 + q2 + 1;
         // Skip comma or closing bracket
         if (pos < json.len and json[pos] == ']') break;
     }
-    
+
     state.app.comic.page_count = count;
     return count > 0;
 }
@@ -276,7 +276,7 @@ fn parseImageUrls(html: []const u8) void {
     // Pattern: src="https://X.bp.blogspot.com/..."
     var count: usize = 0;
     var pos: usize = 0;
-    
+
     while (pos < html.len and count < 128) {
         // Find img src
         const src_start = findSubstring(html[pos..], "src=\"https://") orelse break;
@@ -284,35 +284,35 @@ fn parseImageUrls(html: []const u8) void {
         const src_end = std.mem.indexOfScalar(u8, html[abs_start..], '"') orelse break;
         const img_url = html[abs_start .. abs_start + src_end];
         pos = abs_start + src_end;
-        
+
         // Filter: only blogspot CDN images (actual comic pages)
         if (std.mem.indexOf(u8, img_url, "bp.blogspot.com") == null and
             std.mem.indexOf(u8, img_url, "blogger.googleusercontent") == null) continue;
-        
+
         // Skip tiny icons/thumbnails
         if (src_end < 30) continue;
-        
+
         if (img_url.len < 512) {
             @memcpy(state.app.comic.page_urls[count][0..img_url.len], img_url);
             state.app.comic.page_url_lens[count] = img_url.len;
             count += 1;
         }
     }
-    
+
     state.app.comic.page_count = count;
 }
 
 fn parseNavLinks(html: []const u8) void {
     state.app.comic.next_url_len = 0;
     state.app.comic.prev_url_len = 0;
-    
+
     // Look for: href="...">...Next...
     if (findLinkWithText(html, "Next")) |next_url| {
         const len = @min(next_url.len, 511);
         @memcpy(state.app.comic.next_url[0..len], next_url[0..len]);
         state.app.comic.next_url_len = len;
     }
-    
+
     if (findLinkWithText(html, "Prev")) |prev_url| {
         const len = @min(prev_url.len, 511);
         @memcpy(state.app.comic.prev_url[0..len], prev_url[0..len]);
@@ -325,14 +325,15 @@ fn downloadPages() void {
     const BATCH = 8;
     var threads: [BATCH]?std.Thread = [_]?std.Thread{null} ** BATCH;
     var page_idx: usize = 0;
-    
+
     while (page_idx < state.app.comic.page_count) {
         var active: usize = 0;
-        
+
         // Spawn batch of download threads
         while (active < BATCH and page_idx < state.app.comic.page_count) {
             if (state.app.comic.page_pixels[page_idx] != null or
-                state.app.comic.page_url_lens[page_idx] == 0) {
+                state.app.comic.page_url_lens[page_idx] == 0)
+            {
                 page_idx += 1;
                 continue;
             }
@@ -340,7 +341,7 @@ fn downloadPages() void {
             active += 1;
             page_idx += 1;
         }
-        
+
         // Wait for all threads in this batch
         for (0..active) |t| {
             if (threads[t]) |th| th.join();
@@ -352,24 +353,24 @@ fn downloadPages() void {
 fn downloadSinglePage(i: usize) void {
     const url = state.app.comic.page_urls[i][0..state.app.comic.page_url_lens[i]];
     if (url.len == 0) return;
-    
+
     const argv = [_][]const u8{
-        "curl", "-sL",
-        "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        "curl",       "-sL",
+        "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
         "--max-time", "15",
         url,
     };
-    
+
     var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     _ = child.spawn() catch return;
-    
+
     const max_img = 5 * 1024 * 1024;
     const tmp_buf = alloc.alloc(u8, max_img) catch return;
     defer alloc.free(tmp_buf);
     var total: usize = 0;
-    
+
     if (child.stdout) |*stdout| {
         while (total < max_img) {
             const n = @import("../core/io_global.zig").read(stdout, tmp_buf[total..]) catch break;
@@ -378,7 +379,7 @@ fn downloadSinglePage(i: usize) void {
         }
     }
     _ = child.wait() catch {};
-    
+
     if (total > 100) {
         const pixels = alloc.dupe(u8, tmp_buf[0..total]) catch return;
         state.app.comic.page_pixels[i] = pixels;
@@ -393,13 +394,13 @@ fn downloadSinglePage(i: usize) void {
 pub fn searchComics(query: []const u8) void {
     if (state.app.comic.is_loading) return;
     if (query.len == 0) return;
-    
+
     // readallcomics.com search URL: https://readallcomics.com/?story=QUERY&s=&type=comic
     var url_buf: [512]u8 = undefined;
     var encoded_query: [512]u8 = undefined;
     const enc_len = percentEncode(query, &encoded_query);
     const url = std.fmt.bufPrint(&url_buf, "https://readallcomics.com/?story={s}&s=&type=comic", .{encoded_query[0..enc_len]}) catch return;
-    
+
     // For now — load search results as a comic URL
     // In future, parse search results page to show a list
     loadComic(url);
@@ -419,7 +420,7 @@ pub fn renderContent() void {
             .color_fill = theme.colors.bg_header,
         });
         defer search_row.deinit();
-        
+
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.comic.search_buf } }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 200, .h = 20 },
@@ -431,7 +432,7 @@ pub fn renderContent() void {
         });
         const enter_pressed = te.enter_pressed;
         te.deinit();
-        
+
         const clicked = dvui.button(@src(), "Load", .{}, .{
             .color_fill = theme.colors.accent,
             .color_text = dvui.Color.white,
@@ -450,7 +451,7 @@ pub fn renderContent() void {
             }
         }
     }
-    
+
     // Quick links
     {
         var links_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -458,9 +459,9 @@ pub fn renderContent() void {
             .padding = .{ .x = 8, .y = 2, .w = 8, .h = 4 },
         });
         defer links_row.deinit();
-        
+
         if (dvui.button(@src(), "Invincible #1", .{}, .{
-            .color_fill = dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = theme.colors.accent,
             .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
         })) {
@@ -468,7 +469,7 @@ pub fn renderContent() void {
         }
         if (dvui.button(@src(), "The Boys #1", .{}, .{
             .id_extra = 1,
-            .color_fill = dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = theme.colors.accent,
             .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
         })) {
@@ -476,14 +477,14 @@ pub fn renderContent() void {
         }
         if (dvui.button(@src(), "Saga #1", .{}, .{
             .id_extra = 2,
-            .color_fill = dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = theme.colors.accent,
             .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
         })) {
             loadComic("https://readallcomics.com/saga-001-2012/");
         }
     }
-    
+
     // Loading indicator
     if (state.app.comic.is_loading) {
         _ = dvui.label(@src(), "Loading comic...", .{}, .{
@@ -492,7 +493,7 @@ pub fn renderContent() void {
         });
         return;
     }
-    
+
     if (state.app.comic.page_count == 0) {
         _ = dvui.label(@src(), "Enter a readallcomics.com URL or search", .{}, .{
             .color_text = theme.colors.text_muted,
@@ -500,9 +501,9 @@ pub fn renderContent() void {
         });
         return;
     }
-    
+
     // ── Comic Loaded: Show controls in drawer ──
-    
+
     // Title + page info
     {
         var info_row = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -510,13 +511,13 @@ pub fn renderContent() void {
             .padding = .{ .x = 12, .y = 8, .w = 12, .h = 4 },
         });
         defer info_row.deinit();
-        
+
         if (state.app.comic.title_len > 0) {
             _ = dvui.label(@src(), "{s}", .{state.app.comic.title[0..state.app.comic.title_len]}, .{
                 .color_text = theme.colors.text_main,
             });
         }
-        
+
         var page_buf: [64]u8 = undefined;
         const page_str = std.fmt.bufPrintZ(&page_buf, "Page {d} of {d}", .{
             state.app.comic.current_page + 1, state.app.comic.page_count,
@@ -525,7 +526,7 @@ pub fn renderContent() void {
             .color_text = theme.colors.text_muted,
         });
     }
-    
+
     // Page Navigation
     {
         var nav_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -533,7 +534,7 @@ pub fn renderContent() void {
             .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
         });
         defer nav_row.deinit();
-        
+
         if (state.app.comic.current_page > 0) {
             if (dvui.button(@src(), "← Prev", .{}, .{
                 .id_extra = 30,
@@ -547,7 +548,7 @@ pub fn renderContent() void {
                 state.app.comic.scroll_to_page = true;
             }
         }
-        
+
         if (state.app.comic.current_page + 1 < state.app.comic.page_count) {
             if (dvui.button(@src(), "Next →", .{}, .{
                 .id_extra = 31,
@@ -561,7 +562,7 @@ pub fn renderContent() void {
             }
         }
     }
-    
+
     // ── TTS & OCR Controls ──
     {
         var ctrl_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -573,9 +574,9 @@ pub fn renderContent() void {
             .color_border = theme.colors.divider,
         });
         defer ctrl_row.deinit();
-        
+
         // OCR this page
-        if (dvui.button(@src(), "📝 OCR Page", .{}, .{
+        if (dvui.button(@src(), "OCR Page", .{}, .{
             .id_extra = 40,
             .color_fill = if (state.app.comic.show_ocr_overlay) theme.colors.accent else theme.colors.bg_glass,
             .color_text = if (state.app.comic.show_ocr_overlay) dvui.Color.white else theme.colors.text_main,
@@ -585,9 +586,9 @@ pub fn renderContent() void {
         })) {
             ocrCurrentPage();
         }
-        
+
         // Narrate toggle
-        if (dvui.button(@src(), if (state.app.comic.narrating) "⏹ Stop" else "🔊 Narrate", .{}, .{
+        if (dvui.button(@src(), if (state.app.comic.narrating) "Stop" else "Narrate", .{}, .{
             .id_extra = 41,
             .color_fill = if (state.app.comic.narrating) theme.colors.danger else theme.colors.accent,
             .color_text = dvui.Color.white,
@@ -597,15 +598,15 @@ pub fn renderContent() void {
             toggleNarration();
         }
     }
-    
+
     // Show narration status
     if (state.app.comic.narrating) {
-        _ = dvui.label(@src(), "🎙️ Narrating page {d}...", .{state.app.comic.narrate_page + 1}, .{
+        _ = dvui.label(@src(), "Narrating page {d}...", .{state.app.comic.narrate_page + 1}, .{
             .color_text = theme.colors.accent,
             .padding = .{ .x = 12, .y = 4, .w = 0, .h = 0 },
         });
     }
-    
+
     // Show OCR text if available
     {
         const pg = state.app.comic.current_page;
@@ -617,12 +618,12 @@ pub fn renderContent() void {
                     .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
                 });
                 defer ocr_box.deinit();
-                
-                _ = dvui.label(@src(), "📖 Page Text:", .{}, .{
+
+                _ = dvui.label(@src(), "Page Text:", .{}, .{
                     .color_text = theme.colors.accent,
                     .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
                 });
-                
+
                 var scroll = dvui.scrollArea(@src(), .{}, .{
                     .expand = .horizontal,
                     .min_size_content = .{ .w = 100, .h = 80 },
@@ -633,7 +634,7 @@ pub fn renderContent() void {
                     .padding = dvui.Rect.all(8),
                 });
                 defer scroll.deinit();
-                
+
                 _ = dvui.label(@src(), "{s}", .{state.app.comic.ocr_texts[pg][0..tlen]}, .{
                     .color_text = theme.colors.text_main,
                 });
@@ -654,7 +655,7 @@ pub fn renderContent() void {
 
 pub fn renderPaneContent(pane_idx: usize) void {
     _ = pane_idx;
-    
+
     if (state.app.comic.is_loading) {
         // Show download progress
         var prog_buf: [64]u8 = undefined;
@@ -669,7 +670,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
         });
         return;
     }
-    
+
     // Title bar + navigation + controls
     {
         var nav_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -679,7 +680,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 22, .a = 245 },
         });
         defer nav_row.deinit();
-        
+
         // Prev issue
         if (state.app.comic.prev_url_len > 0) {
             if (dvui.button(@src(), "«", .{}, .{
@@ -691,7 +692,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 loadComic(state.app.comic.prev_url[0..state.app.comic.prev_url_len]);
             }
         }
-        
+
         // Title
         if (state.app.comic.title_len > 0) {
             _ = dvui.label(@src(), "{s}", .{state.app.comic.title[0..state.app.comic.title_len]}, .{
@@ -700,7 +701,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 .gravity_x = 0.5,
             });
         }
-        
+
         // Page info + progress
         {
             var info_buf: [64]u8 = undefined;
@@ -713,11 +714,11 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 .padding = .{ .x = 4, .y = 0, .w = 2, .h = 0 },
             });
         }
-        
+
         // View mode toggle
         {
-            const mode_label = if (state.app.comic.view_mode == .scroll) "📜" else "📄";
-            if (dvui.button(@src(), mode_label, .{}, .{
+            const mode_icon = if (state.app.comic.view_mode == .scroll) icons.tvg.lucide.@"scroll-text" else icons.tvg.lucide.@"book-open";
+            if (dvui.buttonIcon(@src(), "comic-view-mode", mode_icon, .{}, .{}, .{
                 .id_extra = 10,
                 .color_fill = theme.colors.bg_glass,
                 .color_text = theme.colors.text_main,
@@ -728,7 +729,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 state.app.comic.view_mode = if (state.app.comic.view_mode == .scroll) .single_page else .scroll;
             }
         }
-        
+
         // Page navigation (works in both modes)
         if (state.app.comic.current_page > 0) {
             if (dvui.button(@src(), "‹", .{}, .{
@@ -756,7 +757,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 state.app.comic.scroll_to_page = true;
             }
         }
-        
+
         // Next issue
         if (state.app.comic.next_url_len > 0) {
             if (dvui.button(@src(), "»", .{}, .{
@@ -770,12 +771,15 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 loadComic(state.app.comic.next_url[0..state.app.comic.next_url_len]);
             }
         }
-        
+
         // Spacer to push narration controls to the right
-        { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
-        
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
+
         // OCR text toggle
-        if (dvui.button(@src(), "📝", .{}, .{
+        if (dvui.buttonIcon(@src(), "comic-ocr", icons.tvg.lucide.@"scan-text", .{}, .{}, .{
             .id_extra = 20,
             .color_fill = if (state.app.comic.show_ocr_overlay) theme.colors.accent else theme.colors.bg_glass,
             .color_text = if (state.app.comic.show_ocr_overlay) dvui.Color.white else theme.colors.text_main,
@@ -785,9 +789,9 @@ pub fn renderPaneContent(pane_idx: usize) void {
         })) {
             ocrCurrentPage();
         }
-        
+
         // Narrate toggle
-        if (dvui.button(@src(), if (state.app.comic.narrating) "⏹" else "🔊", .{}, .{
+        if (dvui.buttonIcon(@src(), "comic-narrate", if (state.app.comic.narrating) icons.tvg.lucide.@"circle-stop" else icons.tvg.lucide.@"volume-2", .{}, .{}, .{
             .id_extra = 21,
             .color_fill = if (state.app.comic.narrating) theme.colors.accent else theme.colors.bg_glass,
             .color_text = if (state.app.comic.narrating) dvui.Color.white else theme.colors.text_main,
@@ -797,7 +801,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
         })) {
             toggleNarration();
         }
-        
+
         // Close (back to mpv)
         if (dvui.button(@src(), "X", .{}, .{
             .id_extra = 2,
@@ -815,7 +819,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             }
         }
     }
-    
+
     // Content area
     // When narrating, force single page mode for reliable page advancement
     if (state.app.comic.scroll_to_page) {
@@ -824,7 +828,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             state.app.comic.view_mode = .single_page;
         }
     }
-    
+
     if (state.app.comic.view_mode == .single_page) {
         // Single page mode
         var sp_scroll = dvui.scrollArea(@src(), .{}, .{
@@ -833,10 +837,10 @@ pub fn renderPaneContent(pane_idx: usize) void {
             .color_fill = dvui.Color{ .r = 8, .g = 8, .b = 10, .a = 255 },
         });
         defer sp_scroll.deinit();
-        
+
         // Get available width from scroll area for proper image scaling
         const avail_w = sp_scroll.data().contentRect().w;
-        
+
         const pg = state.app.comic.current_page;
         if (pg < state.app.comic.page_count) {
             decodePageTexture(pg);
@@ -870,14 +874,14 @@ pub fn renderPaneContent(pane_idx: usize) void {
             .color_fill = dvui.Color{ .r = 8, .g = 8, .b = 10, .a = 255 },
         });
         defer scroll.deinit();
-        
+
         // Get available width from scroll area
         const avail_w = scroll.data().contentRect().w;
-        
+
         // Only render pages near current page to avoid GPU memory exhaustion
         const render_start = if (state.app.comic.current_page > 2) state.app.comic.current_page - 2 else 0;
         const render_end = @min(state.app.comic.current_page + 5, state.app.comic.page_count);
-        
+
         for (0..state.app.comic.page_count) |pg| {
             var page_box = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = pg,
@@ -885,7 +889,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 .padding = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
             });
             defer page_box.deinit();
-            
+
             // Only decode/render pages in the visible window
             if (pg < render_start or pg >= render_end) {
                 // Placeholder for off-screen pages — keep layout space
@@ -899,9 +903,9 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 });
                 continue;
             }
-            
+
             decodePageTexture(pg);
-            
+
             if (state.app.comic.page_textures[pg]) |tex| {
                 const tw = state.app.comic.page_widths[pg];
                 const th = state.app.comic.page_heights[pg];
@@ -926,7 +930,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             }
         }
     }
-    
+
     // ═══════════════════════════════════════════════════════
     // OCR Text Overlay (shows extracted text at bottom)
     // ═══════════════════════════════════════════════════════
@@ -944,12 +948,12 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 .max_size_content = .{ .w = 0, .h = 120 },
             });
             defer ocr_panel.deinit();
-            
+
             var ocr_scroll = dvui.scrollArea(@src(), .{}, .{
                 .expand = .both,
             });
             defer ocr_scroll.deinit();
-            
+
             if (text_len > 0) {
                 _ = dvui.label(@src(), "{s}", .{state.app.comic.ocr_texts[pg][0..text_len]}, .{
                     .id_extra = 30000,
@@ -969,10 +973,10 @@ pub fn renderPaneContent(pane_idx: usize) void {
             });
         }
     }
-    
+
     // Narration indicator
     if (state.app.comic.narrating) {
-        _ = dvui.label(@src(), "🔊 Narrating...", .{}, .{
+        _ = dvui.label(@src(), "Narrating...", .{}, .{
             .id_extra = 30010,
             .color_text = theme.colors.accent,
             .padding = .{ .x = 10, .y = 3, .w = 0, .h = 3 },
@@ -990,8 +994,12 @@ fn decodePageTexture(pg: usize) void {
         var h: c_int = 0;
         var channels: c_int = 0;
         const rgba = dvui.c.stbi_load_from_memory(
-            raw.ptr, @as(c_int, @intCast(raw.len)),
-            &w, &h, &channels, 4,
+            raw.ptr,
+            @as(c_int, @intCast(raw.len)),
+            &w,
+            &h,
+            &channels,
+            4,
         );
         if (rgba != null and w > 0 and h > 0) {
             const uw: u32 = @intCast(w);
@@ -1020,12 +1028,12 @@ var ocr_initialized: bool = false;
 
 fn ensureOcrInit() bool {
     if (ocr_initialized) return true;
-    
+
     // Model paths: prefer PP-OCRv5 (much better accuracy), fall back to v4
     const det_path = "models/ppocr_det_v5.onnx";
     const rec_path = "models/ppocr_rec_v5.onnx";
     const dict_path = "models/en_dict_v5.txt";
-    
+
     const ret = ocr_c.ocr_init(det_path, rec_path, dict_path);
     if (ret != 0) {
         logs.pushLog("error", "comics", "OCR init failed — check models/ directory", true);
@@ -1041,34 +1049,39 @@ fn ensureOcrInit() bool {
 pub fn ocrPage(pg: usize) void {
     if (pg >= state.app.comic.page_count) return;
     if (state.app.comic.ocr_done[pg]) return;
-    
+
     const raw = state.app.comic.page_pixels[pg] orelse return;
-    
+
     if (!ensureOcrInit()) {
         state.app.comic.ocr_done[pg] = true;
         return;
     }
-    
+
     // Decode JPEG to RGBA
     var w: c_int = 0;
     var h: c_int = 0;
     var channels: c_int = 0;
     const rgba = dvui.c.stbi_load_from_memory(
-        raw.ptr, @as(c_int, @intCast(raw.len)),
-        &w, &h, &channels, 4,
+        raw.ptr,
+        @as(c_int, @intCast(raw.len)),
+        &w,
+        &h,
+        &channels,
+        4,
     );
     if (rgba == null or w <= 0 or h <= 0) {
         state.app.comic.ocr_done[pg] = true;
         return;
     }
     defer dvui.c.stbi_image_free(rgba);
-    
+
     // Run OCR via C wrapper
     const result = ocr_c.ocr_recognize_rgba(
         @ptrCast(rgba),
-        w, h,
+        w,
+        h,
     );
-    
+
     if (result != null) {
         const text: [*:0]const u8 = result.?;
         const text_slice = std.mem.span(text);
@@ -1091,7 +1104,7 @@ pub fn toggleNarration() void {
         // Start narration from current page
         state.app.comic.narrating = true;
         state.app.comic.narrate_page = state.app.comic.current_page;
-        
+
         if (state.app.comic.narrate_thread) |t| t.join();
         state.app.comic.narrate_thread = std.Thread.spawn(.{}, narrationThread, .{}) catch {
             state.app.comic.narrating = false;
@@ -1106,7 +1119,7 @@ pub fn toggleNarration() void {
 /// Strips sound effects (BOOM, CRASH), page numbers, credits, watermarks.
 fn filterDialogue(raw: []const u8, out: *[4096]u8) usize {
     var pos: usize = 0;
-    
+
     // Process line by line
     var line_start: usize = 0;
     for (raw, 0..) |ch, i| {
@@ -1122,7 +1135,7 @@ fn filterDialogue(raw: []const u8, out: *[4096]u8) usize {
                             out[pos] = ' ';
                             pos += 1;
                         }
-                        @memcpy(out[pos..pos + line.len], line);
+                        @memcpy(out[pos .. pos + line.len], line);
                         pos += line.len;
                     }
                 }
@@ -1130,14 +1143,14 @@ fn filterDialogue(raw: []const u8, out: *[4096]u8) usize {
             line_start = i + 1;
         }
     }
-    
+
     return pos;
 }
 
 /// Determine if an OCR text line is likely speech bubble dialogue (not SFX/credits/noise).
 fn isDialogueLine(line: []const u8) bool {
     if (line.len < 2) return false;
-    
+
     // Skip bare numbers (page numbers)
     var all_digits = true;
     for (line) |c| {
@@ -1147,35 +1160,40 @@ fn isDialogueLine(line: []const u8) bool {
         }
     }
     if (all_digits) return false;
-    
+
     // Skip website/credit markers
     const noise_markers = [_][]const u8{
-        "http", ".com", ".net", ".org", "www.",
-        "©", "copyright", "readallcomics", "readcomicsonline",
-        "chapter", "vol.", "volume", "issue",
-        "next chapter", "previous chapter",
-        "bookmark", "comment", "loading",
+        "http",      ".com",          ".net",             ".org",             "www.",
+        "©",
+        "copyright", "readallcomics", "readcomicsonline", "chapter",          "vol.",
+        "volume",    "issue",         "next chapter",     "previous chapter", "bookmark",
+        "comment",   "loading",
     };
     var lower_buf: [256]u8 = undefined;
     const lower_len = @min(line.len, 255);
     for (0..lower_len) |i| lower_buf[i] = std.ascii.toLower(line[i]);
     const lower = lower_buf[0..lower_len];
-    
+
     for (noise_markers) |marker| {
         if (std.mem.indexOf(u8, lower, marker) != null) return false;
     }
-    
+
     // Count properties
     var upper_count: usize = 0;
     var lower_count: usize = 0;
     var alpha_count: usize = 0;
     var word_count: usize = 1;
     var prev_space = false;
-    
+
     for (line) |c| {
-        if (std.ascii.isUpper(c)) { upper_count += 1; alpha_count += 1; }
-        else if (std.ascii.isLower(c)) { lower_count += 1; alpha_count += 1; }
-        
+        if (std.ascii.isUpper(c)) {
+            upper_count += 1;
+            alpha_count += 1;
+        } else if (std.ascii.isLower(c)) {
+            lower_count += 1;
+            alpha_count += 1;
+        }
+
         if (c == ' ') {
             if (!prev_space) word_count += 1;
             prev_space = true;
@@ -1183,18 +1201,18 @@ fn isDialogueLine(line: []const u8) bool {
             prev_space = false;
         }
     }
-    
+
     if (alpha_count == 0) return false;
-    
+
     // Single-word ALL-CAPS with 2-8 chars = SFX (BOOM, CRASH, WHAM, THUD, etc.)
     if (word_count == 1 and upper_count == alpha_count and alpha_count >= 2 and alpha_count <= 10) {
         // Common SFX patterns — reject them
         const sfx_patterns = [_][]const u8{
-            "BOOM", "CRASH", "WHAM", "THUD", "BANG", "CRACK",
-            "SPLASH", "WHOOSH", "SLAM", "SMASH", "POW", "ZAP",
-            "THWACK", "CLANG", "SNAP", "CLICK", "THUMP", "ROAR",
-            "SCREECH", "SWOOSH", "RUMBLE", "CRUNCH", "SHATTER",
-            "KABOOM", "BLAM", "FWOOSH", "KRACK", "SKREEE",
+            "BOOM",    "CRASH",  "WHAM",   "THUD",   "BANG",    "CRACK",
+            "SPLASH",  "WHOOSH", "SLAM",   "SMASH",  "POW",     "ZAP",
+            "THWACK",  "CLANG",  "SNAP",   "CLICK",  "THUMP",   "ROAR",
+            "SCREECH", "SWOOSH", "RUMBLE", "CRUNCH", "SHATTER", "KABOOM",
+            "BLAM",    "FWOOSH", "KRACK",  "SKREEE",
         };
         for (sfx_patterns) |sfx| {
             if (std.mem.eql(u8, line, sfx)) return false;
@@ -1202,19 +1220,19 @@ fn isDialogueLine(line: []const u8) bool {
         // Other all-caps single words under 5 chars are also likely SFX
         if (alpha_count <= 5) return false;
     }
-    
+
     // Two-word ALL-CAPS with total < 12 chars: likely SFX too (HA HA, NO NO)
     if (word_count == 2 and upper_count == alpha_count and alpha_count < 12) {
         return false;
     }
-    
+
     // Multi-word text with mixed case or longer sentences = dialogue
     // ALL-CAPS multi-word is OK if it's 3+ words (dialogue often in caps in comics)
     if (word_count >= 2 and alpha_count >= 4) return true;
-    
-    // Single word with lowercase = likely dialogue fragment  
+
+    // Single word with lowercase = likely dialogue fragment
     if (lower_count > 0 and alpha_count >= 3) return true;
-    
+
     return false;
 }
 
@@ -1224,10 +1242,10 @@ fn narrationThread() void {
     // one extra loop iteration before we notice cancellation.  Acceptable
     // because the thread performs no destructive writes once cancelled.
     const ai_voice = @import("ai_voice.zig");
-    
+
     // Ensure TTS server is warmed up (with timeout so we don't block forever)
     ai_voice.ensureTtsServer();
-    
+
     while (state.app.comic.narrating) {
         const pg = state.app.comic.narrate_page;
         if (pg >= state.app.comic.page_count) {
@@ -1236,7 +1254,7 @@ fn narrationThread() void {
             logs.pushLog("info", "comics", "Narration complete (end of issue)", false);
             break;
         }
-        
+
         // Wait for page image to be downloaded
         var wait: usize = 0;
         while (state.app.comic.page_pixels[pg] == null and wait < 100 and state.app.comic.narrating) : (wait += 1) {
@@ -1248,37 +1266,37 @@ fn narrationThread() void {
             state.app.comic.narrate_page += 1;
             continue;
         }
-        
+
         // Update visible page to match narration + trigger scroll
         state.app.comic.current_page = pg;
-        state.app.comic.scroll_to_page = true;  // Signal render loop to scroll
-        
+        state.app.comic.scroll_to_page = true; // Signal render loop to scroll
+
         // OCR the page
         ocrPage(pg);
-        
+
         // Get the text and filter to dialogue only
         const text_len = state.app.comic.ocr_lens[pg];
         var had_dialogue = false;
-        
+
         if (text_len > 0) {
             const text = state.app.comic.ocr_texts[pg][0..text_len];
-            
+
             // Filter: extract only speech bubble dialogue, skip SFX/credits/noise
             var dialogue_buf: [4096]u8 = undefined;
             const dialogue_len = filterDialogue(text, &dialogue_buf);
-            
+
             if (dialogue_len > 0) {
                 had_dialogue = true;
-                
+
                 // Wait for any existing speech to finish
                 while (ai_voice.is_speaking and state.app.comic.narrating) {
                     @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
                 }
                 if (!state.app.comic.narrating) break;
-                
+
                 // Speak the filtered dialogue
                 ai_voice.speakResponse(dialogue_buf[0..dialogue_len]);
-                
+
                 // Wait for TTS to finish
                 while (ai_voice.is_speaking and state.app.comic.narrating) {
                     @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
@@ -1286,7 +1304,7 @@ fn narrationThread() void {
                 if (!state.app.comic.narrating) break;
             }
         }
-        
+
         // Pause between pages:
         //   - Pages with dialogue: 1 second (TTS already provided viewing time)
         //   - Pages without dialogue: 3 seconds (give user time to read/view)
@@ -1295,13 +1313,13 @@ fn narrationThread() void {
         while (pause < pause_iters and state.app.comic.narrating) : (pause += 1) {
             @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
         }
-        
+
         // Advance to next page
         if (state.app.comic.narrating) {
             state.app.comic.narrate_page += 1;
         }
     }
-    
+
     state.app.comic.narrating = false;
 }
 
@@ -1313,7 +1331,7 @@ pub fn ocrCurrentPage() void {
         state.app.comic.show_ocr_overlay = !state.app.comic.show_ocr_overlay;
         return;
     }
-    
+
     if (state.app.comic.ocr_thread) |t| t.join();
     state.app.comic.ocr_thread = std.Thread.spawn(.{}, struct {
         fn run(page: usize) void {
@@ -1344,11 +1362,11 @@ fn findLinkWithText(html: []const u8, text: []const u8) ?[]const u8 {
     while (pos < html.len) {
         const text_pos = std.mem.indexOf(u8, html[pos..], text) orelse return null;
         const abs_text = pos + text_pos;
-        
+
         // Look backwards for href="
         const search_start = if (abs_text > 500) abs_text - 500 else 0;
         const before = html[search_start..abs_text];
-        
+
         // Find last href=" before this text
         var last_href: ?usize = null;
         var scan: usize = 0;
@@ -1358,13 +1376,13 @@ fn findLinkWithText(html: []const u8, text: []const u8) ?[]const u8 {
                 scan += h + 1;
             } else break;
         }
-        
+
         if (last_href) |href_start| {
             if (std.mem.indexOfScalar(u8, html[href_start..], '"')) |href_end| {
                 return html[href_start .. href_start + href_end];
             }
         }
-        
+
         pos = abs_text + text.len;
     }
     return null;

@@ -88,7 +88,7 @@ fn getBridgePath() ?[]const u8 {
 pub fn ensureBridge() void {
     if (bridge_ready.load(.acquire) or bridge_starting.load(.acquire)) return;
     bridge_starting.store(true, .release);
-    
+
     _ = std.Thread.spawn(.{}, startBridgeThread, .{}) catch {
         bridge_starting.store(false, .release);
         logs.pushLog("error", "browser", "Failed to spawn bridge thread", false);
@@ -97,12 +97,12 @@ pub fn ensureBridge() void {
 
 fn startBridgeThread() void {
     defer bridge_starting.store(false, .release);
-    
+
     const script_path = getBridgePath() orelse {
         logs.pushLog("error", "browser", "camoufox_bridge.py not found", false);
         return;
     };
-    
+
     // Resolve and check the venv python under the zigzag config dir.
     const venv_python = getVenvPython() orelse {
         logs.pushLog("error", "browser", "$HOME not set — cannot locate Python venv", false);
@@ -120,23 +120,23 @@ fn startBridgeThread() void {
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
-    
+
     _ = child.spawn() catch {
         logs.pushLog("error", "browser", "Failed to spawn Camoufox bridge", false);
         return;
     };
-    
+
     bridge_process = child;
-    
+
     // Start reader thread to process stdout
     bridge_reader_thread = std.Thread.spawn(.{}, bridgeReaderThread, .{}) catch null;
-    
+
     // Wait for ready signal (up to 15 seconds)
     var waited: usize = 0;
     while (waited < 150) : (waited += 1) {
         if (bridge_ready.load(.acquire)) {
-            logs.pushLog("info", "browser", "Camoufox ready 🦊", true);
-            
+            logs.pushLog("info", "browser", "Camoufox ready", true);
+
             // Send any pending navigate command
             if (pending_url_len > 0) {
                 var esc_buf: [4096]u8 = undefined;
@@ -150,7 +150,7 @@ fn startBridgeThread() void {
         }
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
     }
-    
+
     logs.pushLog("error", "browser", "Camoufox startup timeout", false);
 }
 
@@ -158,13 +158,13 @@ fn bridgeReaderThread() void {
     const proc = bridge_process orelse return;
     const stdout_pipe = proc.stdout orelse return;
     const stdout = stdout_pipe;
-    
+
     while (true) {
         // Read tag byte: 'J' for JSON, 'F' for frame
         var tag: [1]u8 = undefined;
         const n = @import("../core/io_global.zig").read(stdout, &tag) catch break;
         if (n == 0) break;
-        
+
         if (tag[0] == 'J') {
             // JSON response — read until newline
             var buf: [8192]u8 = undefined;
@@ -177,13 +177,13 @@ fn bridgeReaderThread() void {
                 buf[pos] = ch[0];
                 pos += 1;
             }
-            
+
             if (pos > 0) {
                 // Check for ready signal
                 if (std.mem.indexOf(u8, buf[0..pos], "\"ready\"")) |_| {
                     bridge_ready.store(true, .release);
                 }
-                
+
                 // Check for title update (navigate response)
                 if (std.mem.indexOf(u8, buf[0..pos], "\"title\"")) |_| {
                     // Extract title from JSON
@@ -206,7 +206,7 @@ fn bridgeReaderThread() void {
                     // Auto-request screenshot after navigation
                     sendCommand("{\"cmd\":\"screenshot\"}");
                 }
-                
+
                 // Store for general use
                 @memcpy(json_response[0..pos], buf[0..pos]);
                 json_response_len = pos;
@@ -222,14 +222,14 @@ fn bridgeReaderThread() void {
                 len_read += lr;
             }
             if (len_read < 4) continue;
-            
+
             const frame_size = @as(usize, len_buf[0]) << 24 |
                 @as(usize, len_buf[1]) << 16 |
                 @as(usize, len_buf[2]) << 8 |
                 @as(usize, len_buf[3]);
-            
+
             if (frame_size == 0 or frame_size > 5 * 1024 * 1024) continue;
-            
+
             // Read JPEG data
             const jpeg_buf = alloc.alloc(u8, frame_size) catch continue;
             var total_read: usize = 0;
@@ -238,7 +238,7 @@ fn bridgeReaderThread() void {
                 if (fr == 0) break;
                 total_read += fr;
             }
-            
+
             if (total_read == frame_size) {
                 frame_lock.lock();
                 if (frame_jpeg) |old| alloc.free(old);
@@ -246,7 +246,7 @@ fn bridgeReaderThread() void {
                 frame_jpeg_len = frame_size;
                 frame_dirty.store(true, .release);
                 frame_lock.unlock();
-                
+
                 // Mark loading done
                 if (activePlayer()) |p| {
                     p.browser_is_loading = false;
@@ -256,7 +256,7 @@ fn bridgeReaderThread() void {
             }
         }
     }
-    
+
     bridge_ready.store(false, .release);
     logs.pushLog("info", "browser", "Camoufox bridge disconnected", false);
 }
@@ -279,15 +279,15 @@ fn extractJsonField(json: []const u8, field: []const u8) ?[]const u8 {
     // Simple JSON field extractor — finds "field":"value"
     var search_buf: [64]u8 = undefined;
     const search = std.fmt.bufPrint(&search_buf, "\"{s}\"", .{field}) catch return null;
-    
+
     const field_pos = std.mem.indexOf(u8, json, search) orelse return null;
     var pos = field_pos + search.len;
-    
+
     // Skip colon and whitespace
     while (pos < json.len and (json[pos] == ':' or json[pos] == ' ')) pos += 1;
     if (pos >= json.len or json[pos] != '"') return null;
     pos += 1; // skip opening quote
-    
+
     const end = std.mem.indexOfScalar(u8, json[pos..], '"') orelse return null;
     return json[pos .. pos + end];
 }
@@ -320,7 +320,7 @@ fn escapeJsonString(input: []const u8, buf: *[4096]u8) []const u8 {
 pub fn navigate(url: []const u8) void {
     const p = activePlayer() orelse return;
     if (url.len == 0 or url.len >= 2048) return;
-    
+
     // Store URL
     const buf_ptr: [*]const u8 = @ptrCast(&p.browser_url_buf[0]);
     if (url.ptr != buf_ptr) {
@@ -329,7 +329,7 @@ pub fn navigate(url: []const u8) void {
     p.browser_url_len = url.len;
     p.browser_is_loading = true;
     p.browser_title_len = 0;
-    
+
     // Push to history
     if (!state.app.incognito_mode and p.browser_history_count < 32) {
         const hi = p.browser_history_count;
@@ -338,11 +338,11 @@ pub fn navigate(url: []const u8) void {
         p.browser_history_count += 1;
         p.browser_history_pos = p.browser_history_count;
     }
-    
+
     // Auto-switch to browser
     p.provider = .browser;
     fetch_player_idx = state.app.active_player_idx;
-    
+
     if (bridge_ready.load(.acquire)) {
         // Bridge is running — send navigate immediately
         var esc_buf: [4096]u8 = undefined;
@@ -432,24 +432,65 @@ fn mapKeyToPlaywright(key: enums.Key) ?[]const u8 {
         .right => "ArrowRight",
         .up => "ArrowUp",
         .down => "ArrowDown",
-        .a => "a", .b => "b", .c => "c", .d => "d",
-        .e => "e", .f => "f", .g => "g", .h => "h",
-        .i => "i", .j => "j", .k => "k", .l => "l",
-        .m => "m", .n => "n", .o => "o", .p => "p",
-        .q => "q", .r => "r", .s => "s", .t => "t",
-        .u => "u", .v => "v", .w => "w", .x => "x",
-        .y => "y", .z => "z",
-        .zero => "0", .one => "1", .two => "2", .three => "3",
-        .four => "4", .five => "5", .six => "6", .seven => "7",
-        .eight => "8", .nine => "9",
-        .minus => "-", .equal => "=",
-        .left_bracket => "[", .right_bracket => "]",
-        .backslash => "\\", .semicolon => ";",
-        .apostrophe => "'", .comma => ",",
-        .period => ".", .slash => "/", .grave => "`",
-        .f1 => "F1", .f2 => "F2", .f3 => "F3", .f4 => "F4",
-        .f5 => "F5", .f6 => "F6", .f7 => "F7", .f8 => "F8",
-        .f9 => "F9", .f10 => "F10", .f11 => "F11", .f12 => "F12",
+        .a => "a",
+        .b => "b",
+        .c => "c",
+        .d => "d",
+        .e => "e",
+        .f => "f",
+        .g => "g",
+        .h => "h",
+        .i => "i",
+        .j => "j",
+        .k => "k",
+        .l => "l",
+        .m => "m",
+        .n => "n",
+        .o => "o",
+        .p => "p",
+        .q => "q",
+        .r => "r",
+        .s => "s",
+        .t => "t",
+        .u => "u",
+        .v => "v",
+        .w => "w",
+        .x => "x",
+        .y => "y",
+        .z => "z",
+        .zero => "0",
+        .one => "1",
+        .two => "2",
+        .three => "3",
+        .four => "4",
+        .five => "5",
+        .six => "6",
+        .seven => "7",
+        .eight => "8",
+        .nine => "9",
+        .minus => "-",
+        .equal => "=",
+        .left_bracket => "[",
+        .right_bracket => "]",
+        .backslash => "\\",
+        .semicolon => ";",
+        .apostrophe => "'",
+        .comma => ",",
+        .period => ".",
+        .slash => "/",
+        .grave => "`",
+        .f1 => "F1",
+        .f2 => "F2",
+        .f3 => "F3",
+        .f4 => "F4",
+        .f5 => "F5",
+        .f6 => "F6",
+        .f7 => "F7",
+        .f8 => "F8",
+        .f9 => "F9",
+        .f10 => "F10",
+        .f11 => "F11",
+        .f12 => "F12",
         else => null,
     };
 }
@@ -459,30 +500,30 @@ fn mapKeyToPlaywright(key: enums.Key) ?[]const u8 {
 fn updateFrameTexture() void {
     frame_lock.lock();
     defer frame_lock.unlock();
-    
+
     if (!frame_dirty.load(.acquire)) return;
     frame_dirty.store(false, .release);
-    
+
     const jpeg = frame_jpeg orelse return;
     if (jpeg.len < 100) return;
-    
+
     // Decode JPEG → RGBA via stbi
     var w: c_int = 0;
     var h: c_int = 0;
     var ch: c_int = 0;
     const rgba = dvui.c.stbi_load_from_memory(jpeg.ptr, @intCast(jpeg.len), &w, &h, &ch, 4);
     if (rgba == null or w <= 0 or h <= 0) return;
-    
+
     const uw: u32 = @intCast(w);
     const uh: u32 = @intCast(h);
     const count = @as(usize, uw) * @as(usize, uh);
     const pma: [*]const dvui.Color.PMA = @ptrCast(@alignCast(rgba));
-    
+
     // Destroy old texture
     if (frame_texture) |old| {
         old.destroyLater();
     }
-    
+
     frame_texture = dvui.textureCreate(pma[0..count], uw, uh, .linear, .rgba_32) catch null;
     frame_w = uw;
     frame_h = uh;
@@ -495,9 +536,9 @@ fn updateFrameTexture() void {
 
 pub fn renderPaneContent(pane_idx: usize) void {
     const p = getPlayer(pane_idx) orelse return;
-    
+
     const icons = @import("icons");
-    
+
     // URL bar with icon buttons
     {
         var url_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -507,7 +548,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 22, .a = 245 },
         });
         defer url_row.deinit();
-        
+
         const icon_btn_style = dvui.Options{
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = theme.colors.text_muted,
@@ -515,38 +556,40 @@ pub fn renderPaneContent(pane_idx: usize) void {
             .padding = .{ .x = 3, .y = 2, .w = 3, .h = 2 },
             .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
         };
-        
+
         // Back
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-left", .{}, .{}, icon_btn_style)) {
             goBack();
         }
-        
+
         // Forward
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-right", .{}, .{}, icon_btn_style)) {
             goForward();
         }
-        
+
         // Refresh
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"rotate-cw", .{}, .{}, icon_btn_style)) {
             requestScreenshot();
         }
-        
+
         // Status indicator: 🦊 green if ready, orange if loading
         {
             if (bridge_ready.load(.acquire)) {
-                _ = dvui.label(@src(), "🦊", .{}, .{
+                dvui.icon(@src(), "browser-ready", icons.tvg.lucide.@"circle-check", .{}, .{
                     .color_text = theme.colors.accent,
+                    .min_size_content = .{ .w = 14, .h = 14 },
                     .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
                 });
             } else if (bridge_starting.load(.acquire)) {
-                _ = dvui.label(@src(), "⏳", .{}, .{
+                dvui.icon(@src(), "browser-loading", icons.tvg.lucide.@"loader-circle", .{}, .{
                     .id_extra = 99,
                     .color_text = dvui.Color{ .r = 255, .g = 165, .b = 0, .a = 255 },
+                    .min_size_content = .{ .w = 14, .h = 14 },
                     .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
                 });
             }
         }
-        
+
         // URL input
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &p.browser_url_buf } }, .{
             .expand = .horizontal,
@@ -561,9 +604,9 @@ pub fn renderPaneContent(pane_idx: usize) void {
         });
         const enter_pressed = te.enter_pressed;
         te.deinit();
-        
+
         // Go (play icon)
-        const clicked_go = dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"play", .{}, .{}, .{
+        const clicked_go = dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .color_fill = theme.colors.accent,
             .color_text = dvui.Color.white,
             .corner_radius = theme.dims.rad_sm,
@@ -583,9 +626,9 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 }
             }
         }
-        
+
         // Close (back to mpv)
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"x", .{}, .{}, .{
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
             .id_extra = 1,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = theme.colors.danger,
@@ -596,7 +639,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             p.provider = .mpv;
         }
     }
-    
+
     // Title bar
     if (p.browser_title_len > 0) {
         _ = dvui.label(@src(), "{s}", .{p.browser_title[0..p.browser_title_len]}, .{
@@ -607,7 +650,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             .expand = .horizontal,
         });
     }
-    
+
     // Loading state
     if (p.browser_is_loading) {
         _ = dvui.label(@src(), "Loading...", .{}, .{
@@ -618,12 +661,12 @@ pub fn renderPaneContent(pane_idx: usize) void {
         });
         return;
     }
-    
+
     // ── Frame rendering or landing page ──
-    
+
     // Update texture from latest frame
     updateFrameTexture();
-    
+
     if (frame_texture) |tex| {
         // Render the browser frame as a full-pane image
         var img_box = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -632,13 +675,13 @@ pub fn renderPaneContent(pane_idx: usize) void {
             .color_fill = dvui.Color{ .r = 12, .g = 12, .b = 16, .a = 255 },
         });
         defer img_box.deinit();
-        
+
         _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
             .expand = .both,
             .gravity_x = 0.5,
             .gravity_y = 0.0,
         });
-        
+
         // Handle mouse events in the image area
         for (dvui.events()) |*e| {
             switch (e.evt) {
@@ -698,13 +741,13 @@ pub fn renderPaneContent(pane_idx: usize) void {
             .color_fill = dvui.Color{ .r = 12, .g = 12, .b = 16, .a = 255 },
         });
         defer empty.deinit();
-        
-        _ = dvui.label(@src(), "🦊 ZigZag Browser", .{}, .{
+
+        _ = dvui.label(@src(), "ZigZag Browser", .{}, .{
             .color_text = theme.colors.text_main,
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
         });
-        
+
         if (bridge_ready.load(.acquire)) {
             _ = dvui.label(@src(), "Powered by Camoufox — Anti-detect Firefox", .{}, .{
                 .id_extra = 3,
@@ -739,7 +782,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
             });
         }
-        
+
         _ = dvui.label(@src(), "Enter a URL above to browse", .{}, .{
             .id_extra = 5,
             .color_text = theme.colors.text_muted,
@@ -751,7 +794,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             .color_text = dvui.Color{ .r = 60, .g = 70, .b = 90, .a = 255 },
             .gravity_x = 0.5,
         });
-        
+
         // Auto-start bridge on first render if not started
         ensureBridge();
     }
@@ -767,48 +810,46 @@ pub const ContentRoute = enum { mpv, comic_viewer, browser };
 pub fn routeContent(url: []const u8) ContentRoute {
     // Video/audio extensions → mpv
     const mpv_exts = [_][]const u8{
-        ".mp4", ".mkv", ".avi", ".webm", ".flv", ".mov", ".m4v",
-        ".mp3", ".flac", ".ogg", ".wav", ".aac", ".m4a",
-        ".m3u8", ".ts",
+        ".mp4", ".mkv",  ".avi", ".webm", ".flv", ".mov", ".m4v",
+        ".mp3", ".flac", ".ogg", ".wav",  ".aac", ".m4a", ".m3u8",
+        ".ts",
     };
     for (mpv_exts) |ext| {
         if (std.mem.endsWith(u8, url, ext)) return .mpv;
     }
-    
+
     // Video hosting sites → mpv (via yt-dlp)
     const mpv_domains = [_][]const u8{
-        "youtube.com", "youtu.be", "twitch.tv", "vimeo.com",
-        "dailymotion.com", "bilibili.com", "rumble.com",
-        "crunchyroll.com", "funimation.com",
-        "allanime.day", "gogoanime", "animixplay",
-        "pornhub.com", "pornhub.org",
+        "youtube.com",     "youtu.be",       "twitch.tv",      "vimeo.com",
+        "dailymotion.com", "bilibili.com",   "rumble.com",     "crunchyroll.com",
+        "funimation.com",  "allanime.day",   "gogoanime",      "animixplay",
+        "pornhub.com",     "pornhub.org",
         // Streamlink-supported live sites
-        "chaturbate.com", "stripchat.com", "bongacams.com",
-        "cam4.com", "camsoda.com", "myfreecams.com",
-        "flirt4free.com", "livejasmin.com",
-        "kick.com", "picarto.tv", "dlive.tv",
-        "afreecatv.com", "pluto.tv", "odysee.com",
+           "chaturbate.com", "stripchat.com",
+        "bongacams.com",   "cam4.com",       "camsoda.com",    "myfreecams.com",
+        "flirt4free.com",  "livejasmin.com", "kick.com",       "picarto.tv",
+        "dlive.tv",        "afreecatv.com",  "pluto.tv",       "odysee.com",
     };
     for (mpv_domains) |domain| {
         if (std.mem.indexOf(u8, url, domain) != null) return .mpv;
     }
-    
-    // Comic sites → comic_viewer 
+
+    // Comic sites → comic_viewer
     const comic_domains = [_][]const u8{
         "readallcomics.com", "readcomicsonline", "comicextra.net",
-        "mangadex.org", "mangakakalot.com", "manganato.com",
-        "webtoons.com", "tapas.io",
+        "mangadex.org",      "mangakakalot.com", "manganato.com",
+        "webtoons.com",      "tapas.io",
     };
     for (comic_domains) |domain| {
         if (std.mem.indexOf(u8, url, domain) != null) return .comic_viewer;
     }
-    
+
     // Image galleries → comic_viewer
     const img_exts = [_][]const u8{ ".jpg", ".jpeg", ".png", ".gif", ".webp" };
     for (img_exts) |ext| {
         if (std.mem.endsWith(u8, url, ext)) return .comic_viewer;
     }
-    
+
     // Everything else → browser
     return .browser;
 }
@@ -816,20 +857,20 @@ pub fn routeContent(url: []const u8) ContentRoute {
 /// Load content with automatic provider routing
 pub fn loadContent(url: []const u8) void {
     const extractors = @import("extractors.zig");
-    
+
     // Normalize URL
     var norm_buf: [2048]u8 = undefined;
     const norm_url = extractors.normalizeUrl(url, &norm_buf);
-    
+
     const route = routeContent(norm_url);
-    
+
     // Check if this is a playlist URL
     if (route == .mpv and extractors.isPlaylistUrl(norm_url)) {
         state.showToast("Extracting playlist...");
         extractors.extractPlaylist(norm_url);
         return;
     }
-    
+
     // Switch active pane to correct provider
     if (state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
@@ -838,7 +879,7 @@ pub fn loadContent(url: []const u8) void {
             .comic_viewer => .comic_viewer,
             .browser => .browser,
         };
-        
+
         switch (route) {
             .mpv => {
                 var url_z: [2049]u8 = undefined;

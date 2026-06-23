@@ -194,6 +194,16 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_search).step);
 
+    // Pure page-router (Route + back/forward history rings).
+    const test_router = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/router.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_router).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main

@@ -206,7 +206,7 @@ pub fn processGlobalInputs() void {
                         } else {
                             state.app.incognito_mode = !state.app.incognito_mode;
                             if (state.app.incognito_mode) {
-                                state.showToast("🕶 Incognito ON — no history saved");
+                                state.showToast("Incognito ON — no history saved");
                             } else {
                                 state.showToast("Incognito OFF — history recording resumed");
                             }
@@ -361,7 +361,7 @@ pub fn processGlobalInputs() void {
                             _ = c.mpv.mpv_command_string(p.mpv_ctx, "cycle mute");
                             var muted: c_int = 0;
                             _ = c.mpv.mpv_get_property(p.mpv_ctx, "mute", c.mpv.MPV_FORMAT_FLAG, &muted);
-                            state.showToast(if (muted != 0) "🔇 Muted" else "🔊 Unmuted");
+                            state.showToast(if (muted != 0) "Muted" else "Unmuted");
                         },
                         .j => {
                             if (mod.shift()) {
@@ -410,7 +410,7 @@ pub fn processGlobalInputs() void {
                         // Screenshot
                         .p => {
                             _ = c.mpv.mpv_command_string(p.mpv_ctx, "screenshot");
-                            state.showToast("📸 Screenshot saved");
+                            state.showToast("Screenshot saved");
                         },
                         // Stats for Nerds overlay toggle
                         .i => { state.app.stats_overlay_open = !state.app.stats_overlay_open; },
@@ -435,11 +435,11 @@ pub fn processGlobalInputs() void {
                         // Chapter navigation
                         .page_up => {
                             _ = c.mpv.mpv_command_string(p.mpv_ctx, "add chapter -1");
-                            state.showToast("⏮ Previous chapter");
+                            state.showToast("Previous chapter");
                         },
                         .page_down => {
                             _ = c.mpv.mpv_command_string(p.mpv_ctx, "add chapter 1");
-                            state.showToast("⏭ Next chapter");
+                            state.showToast("Next chapter");
                         },
                         else => {}
                     }

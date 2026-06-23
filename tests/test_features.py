@@ -841,6 +841,63 @@ def test_catalog_urls():
 
 
 # ══════════════════════════════════════════════════════════
+# UI Standards
+# ══════════════════════════════════════════════════════════
+
+import re as _re
+
+# Pictographic emoji + dingbats/symbols (NOT typographic arrows/middot/stars).
+_EMOJI = _re.compile(
+    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U00002B00-\U00002BFF"
+    "\U000023E9-\U000023FA\U0000FE0F]"
+)
+
+
+@test("No Emojis in UI", "UI Standards")
+def test_no_emoji():
+    # Hard project rule: SVG (lucide TVG) icons only, never emojis. Scans
+    # string LITERALS in native .zig (comments + \\x escapes are exempt; test
+    # files excluded). Any emoji inside a "..." literal is a UI offender.
+    offenders = []
+    for root, _, files in os.walk(os.path.join(PROJECT_DIR, "src")):
+        for f in files:
+            if not f.endswith(".zig") or f.endswith("_test.zig"):
+                continue
+            p = os.path.join(root, f)
+            for i, line in enumerate(open(p, encoding="utf-8").read().splitlines(), 1):
+                for lit in _re.findall(r'"[^"\n]*"', line):
+                    if _EMOJI.search(lit):
+                        rel = os.path.relpath(p, PROJECT_DIR)
+                        offenders.append(f"{rel}:{i}")
+                        break
+    if offenders:
+        return "fail", f"{len(offenders)} emoji literal(s): " + ", ".join(offenders[:4])
+    return "pass", "no emoji in UI string literals"
+
+
+@test("Page Router", "Page Shell")
+def test_page_router():
+    p = os.path.join(PROJECT_DIR, "src/core/router.zig")
+    if not os.path.exists(p):
+        return "fail", "router.zig missing"
+    c = open(p).read()
+    if "pub const Route" in c and "pub const History" in c and "fn navigate" in c:
+        return "pass", "Route + History (navigate/back/forward)"
+    return "fail", "router incomplete"
+
+
+@test("Page Shell Wired", "Page Shell")
+def test_page_shell():
+    shell = os.path.join(PROJECT_DIR, "src/ui/shell.zig")
+    main = open(os.path.join(PROJECT_DIR, "src/main.zig")).read()
+    if (os.path.exists(shell)
+            and "page_shell_enabled" in main
+            and "shell.zig" in main):
+        return "pass", "shell + flag branch in appFrame"
+    return "fail", "page shell not wired"
+
+
+# ══════════════════════════════════════════════════════════
 # Zig Unit Tests
 # ══════════════════════════════════════════════════════════
 

@@ -197,7 +197,7 @@ pub fn exportJson() void {
     if (@import("../core/io_global.zig").cwdCreateFile(out_path, .{})) |f| {
         _ = @import("../core/io_global.zig").writeAll(f, json.items) catch {};
         f.close(@import("../core/io_global.zig").io());
-        state.showToast("✓ Watch history exported");
+        state.showToast("Watch history exported");
     } else |_| {
         state.showToast("Export failed — check permissions");
     }
@@ -253,7 +253,7 @@ pub fn importJson(path: []const u8) void {
     }
 
     var msg_buf: [64]u8 = undefined;
-    const msg = std.fmt.bufPrint(&msg_buf, "✓ Imported {d} entries", .{imported}) catch "Imported";
+    const msg = std.fmt.bufPrint(&msg_buf, "Imported {d} entries", .{imported}) catch "Imported";
     state.showToast(msg);
 }
 

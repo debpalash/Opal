@@ -33,13 +33,13 @@ pub const AnimeResult = struct {
     name: [128]u8 = std.mem.zeroes([128]u8),
     name_len: usize = 0,
     episodes: u16 = 0,
-    
+
     score: f32 = 0.0,
     overview: [512]u8 = std.mem.zeroes([512]u8),
     overview_len: usize = 0,
     poster_url: [128]u8 = std.mem.zeroes([128]u8),
     poster_url_len: usize = 0,
-    
+
     // UI state
     expanded: bool = false,
     poster_fetching: bool = false,
@@ -178,6 +178,12 @@ pub const AppState = struct {
     drawer_open: bool = false,
     drawer_tab: DrawerTab = .Search,
     drawer_width_px: f32 = 640.0,
+
+    // ── Page-shell redesign (behind a flag; see ui/shell.zig) ──
+    // When enabled, appFrame renders the new page router instead of the
+    // header+grid+drawer layout. Off by default → zero behavior change.
+    page_shell_enabled: bool = false,
+    router: @import("router.zig").History = .{},
 
     // dvui window handle — set once in appInit. Stored here so worker
     // threads (e.g. the mpv render-update callback) can wake the UI loop
@@ -348,21 +354,19 @@ pub const AppState = struct {
         view_mode: enum { scroll, single_page } = .scroll,
         current_page: usize = 0,
         dl_progress: usize = 0, // number of images downloaded so far
-        
+
         // ── Comic Narration (OCR + TTS) ──
         ocr_texts: [128][4096]u8 = std.mem.zeroes([128][4096]u8),
         ocr_lens: [128]usize = std.mem.zeroes([128]usize),
         ocr_done: [128]bool = [_]bool{false} ** 128,
         narrating: bool = false,
         narrate_page: usize = 0,
-        show_ocr_overlay: bool = false,  // show OCR text overlay on current page
-        scroll_to_page: bool = false,     // signal render to scroll to comic_current_page
+        show_ocr_overlay: bool = false, // show OCR text overlay on current page
+        scroll_to_page: bool = false, // signal render to scroll to comic_current_page
         ocr_thread: ?std.Thread = null,
         narrate_thread: ?std.Thread = null,
     } = .{},
-    
 
-    
     // ── Anime ──
     anime: struct {
         search_buf: [256]u8 = std.mem.zeroes([256]u8),
@@ -569,17 +573,17 @@ pub fn showToastTyped(msg: []const u8, toast_type: ToastType) void {
     // Auto-detect type from common emoji prefixes if caller used .info
     if (toast_type == .info and copy_len >= 2) {
         const txt = app.toast_buf[0..copy_len];
-        if (std.mem.startsWith(u8, txt, "\xe2\x9c\x93") or   // ✓
+        if (std.mem.startsWith(u8, txt, "\xe2\x9c\x93") or // ✓
             std.mem.startsWith(u8, txt, "\xf0\x9f\x93\xb8") or // 📸
-            std.mem.startsWith(u8, txt, "\xe2\x9c\x85"))       // ✅
+            std.mem.startsWith(u8, txt, "\xe2\x9c\x85")) // ✅
         {
             app.toast_type = .success;
         } else if (std.mem.startsWith(u8, txt, "\xe2\x9a\xa0") or // ⚠
-                   std.mem.startsWith(u8, txt, "\xf0\x9f\x95\xb6"))  // 🕶
+            std.mem.startsWith(u8, txt, "\xf0\x9f\x95\xb6")) // 🕶
         {
             app.toast_type = .warning;
         } else if (std.mem.indexOf(u8, txt, "ailed") != null or
-                   std.mem.indexOf(u8, txt, "rror") != null)
+            std.mem.indexOf(u8, txt, "rror") != null)
         {
             app.toast_type = .err;
         } else {

@@ -160,7 +160,7 @@ pub fn saveWorkspaceNamed(allocator: std.mem.Allocator, name: []const u8) void {
     };
 
     logs.pushLog("info", "workspace", "Workspace saved", false);
-    state.showToast("⚡ Workspace saved");
+    state.showToast("Workspace saved");
 
     // Refresh the workspace list
     scanWorkspaces();
@@ -255,7 +255,7 @@ pub fn loadWorkspaceNamed(allocator: std.mem.Allocator, name: []const u8) void {
     if (any_success) {
         state.app.active_player_idx = 0;
         logs.pushLog("info", "workspace", "Workspace loaded", false);
-        state.showToast("⚡ Workspace restored");
+        state.showToast("Workspace restored");
     } else {
         state.showToast("Workspace was empty");
     }

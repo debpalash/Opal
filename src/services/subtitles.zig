@@ -355,7 +355,7 @@ fn doDownload(file_id: i64) void {
         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
     }
 
-    state.showToast("✓ Subtitle loaded");
+    state.showToast("Subtitle loaded");
     logs.pushLog("info", "subs", "Subtitle downloaded and loaded", false);
 }
 

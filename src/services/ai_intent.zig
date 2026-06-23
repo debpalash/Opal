@@ -95,11 +95,11 @@ fn recommendationWorker(assistant_idx: usize) void {
                 @memcpy(ri.name[0..tlen], tmdb_item.title[0..tlen]);
                 ri.name_len = tlen;
 
-                // Build detail: "2024 · Action, Thriller · ★ 7.8"
+                // Build detail: "2024 · Action, Thriller · 7.8"
                 var detail_buf: [128]u8 = undefined;
                 const year = tmdb_item.year[0..tmdb_item.year_len];
                 const genre = tmdb_item.genre_text[0..tmdb_item.genre_text_len];
-                const detail_str = std.fmt.bufPrint(&detail_buf, "{s} · {s} · ★ {d:.1}", .{
+                const detail_str = std.fmt.bufPrint(&detail_buf, "{s} · {s} · {d:.1}", .{
                     year, genre, tmdb_item.rating,
                 }) catch "";
                 const dlen = @min(detail_str.len, 127);

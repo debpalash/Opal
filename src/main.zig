@@ -30,7 +30,7 @@ var cli_open_len: usize = 0;
 var cli_open_done: bool = false;
 
 pub const dvui_app: dvui.App = .{
-    .config = .{ .options = .{ .size = .{ .w = 1400.0, .h = 820.0 }, .title = "⚡ ZigZag Media Console" } },
+    .config = .{ .options = .{ .size = .{ .w = 1400.0, .h = 820.0 }, .title = "ZigZag Media Console" } },
     .initFn = appInit,
     .frameFn = appFrame,
     .deinitFn = appDeinit,
@@ -50,7 +50,7 @@ fn appInit(win: *dvui.Window) !void {
     // Runtime initialization (env vars can't be read at comptime)
     state.initPaths();
     state.loadTmdbTokenFromEnv();
-    
+
     theme.setTheme();
     logs.logs_allocator = @import("core/alloc.zig").allocator;
 
@@ -90,7 +90,7 @@ fn appInit(win: *dvui.Window) !void {
     if (state.app.web_remote_enabled) {
         @import("services/remote.zig").start();
     }
-    
+
     // Register SDL Event Watch for file drops (must be on main thread)
     _ = c.sdl.SDL_EventState(c.sdl.SDL_DROPFILE, c.sdl.SDL_ENABLE);
     c.sdl.SDL_AddEventWatch(sdlEventWatch, null);
@@ -109,7 +109,7 @@ fn appInit(win: *dvui.Window) !void {
             // Migrate old flat files → SQLite (one-time, idempotent)
             const config = @import("core/config.zig");
             config.migrateFromTsv();
-            
+
             const tmdb_store = @import("services/tmdb_store.zig");
             tmdb_store.migrateFromTsv();
 
@@ -117,10 +117,10 @@ fn appInit(win: *dvui.Window) !void {
             const rss = @import("services/rss.zig");
             rss.init();
             tmdb_store.migrateOldDb();
-            
+
             hist.migrateSearchHistory();
             hist.migrateDownloadHistory();
-            
+
             const watch = @import("player/watch_history.zig");
             watch.migrateFromTsv();
 
@@ -132,6 +132,12 @@ fn appInit(win: *dvui.Window) !void {
 
             // Load all persistent data from SQLite
             config.load();
+
+            // Page-shell preview opt-in (redesign, WIP). Enable with
+            // OPAL_PAGE_SHELL=1 to render the new website-like layout.
+            if (@import("core/io_global.zig").getenv("OPAL_PAGE_SHELL")) |v| {
+                state.app.page_shell_enabled = !(v.len == 1 and v[0] == '0');
+            }
             hist.loadSearchHistory();
             hist.loadDownloadHistory();
             watch.load();
@@ -176,14 +182,14 @@ fn appDeinit() void {
         p.deinit(@import("core/alloc.zig").allocator);
     }
     state.app.players.deinit(@import("core/alloc.zig").allocator);
-    
+
     // Clean up UI arrays
     state.app.tmdb.results.deinit(@import("core/alloc.zig").allocator);
     state.app.tmdb.favorites.deinit(@import("core/alloc.zig").allocator);
     state.app.tmdb.watchlist.deinit(@import("core/alloc.zig").allocator);
     state.app.tmdb.watching.deinit(@import("core/alloc.zig").allocator);
     state.app.yt.results.deinit(@import("core/alloc.zig").allocator);
-    
+
     // Join search thread so its defers (free query, deinit argv) run cleanly
     search.search_abort.store(true, .release);
     if (search.search_thread) |t| t.join();
@@ -191,7 +197,6 @@ fn appDeinit() void {
 
     search.clearResults();
     search.search_results.deinit(@import("core/alloc.zig").allocator);
-    
 
     // Kill any spawned child processes that may still be running
     const kill_targets = [_][]const u8{
@@ -337,19 +342,19 @@ fn renderSlashMenu() void {
         send_as: []const u8 = "",
     };
     const cmds = [_]Cmd{
-        .{ .key = "/play ",       .desc = "Search + play best match — play iron man 3" },
-        .{ .key = "/find ",       .desc = "Search only, show results" },
-        .{ .key = "/watch ",      .desc = "Alias for /play" },
-        .{ .key = "/pause",       .desc = "Pause current playback",        .instant = true, .send_as = "pause" },
-        .{ .key = "/resume",      .desc = "Resume playback",                .instant = true, .send_as = "play" },
-        .{ .key = "/seek ",       .desc = "Jump to time — /seek 1:23" },
-        .{ .key = "/volume ",     .desc = "Set volume 0-100" },
-        .{ .key = "/mute",        .desc = "Toggle mute",                    .instant = true, .send_as = "mute" },
-        .{ .key = "/fullscreen",  .desc = "Toggle fullscreen",              .instant = true, .send_as = "fullscreen" },
-        .{ .key = "/subtitles",   .desc = "Cycle subtitle tracks",          .instant = true, .send_as = "next subtitle" },
-        .{ .key = "/queue ",      .desc = "Add URL to queue" },
-        .{ .key = "/next",        .desc = "Next episode / playlist item",   .instant = true, .send_as = "next episode" },
-        .{ .key = "/recommend ",  .desc = "TMDB-based suggestions" },
+        .{ .key = "/play ", .desc = "Search + play best match — play iron man 3" },
+        .{ .key = "/find ", .desc = "Search only, show results" },
+        .{ .key = "/watch ", .desc = "Alias for /play" },
+        .{ .key = "/pause", .desc = "Pause current playback", .instant = true, .send_as = "pause" },
+        .{ .key = "/resume", .desc = "Resume playback", .instant = true, .send_as = "play" },
+        .{ .key = "/seek ", .desc = "Jump to time — /seek 1:23" },
+        .{ .key = "/volume ", .desc = "Set volume 0-100" },
+        .{ .key = "/mute", .desc = "Toggle mute", .instant = true, .send_as = "mute" },
+        .{ .key = "/fullscreen", .desc = "Toggle fullscreen", .instant = true, .send_as = "fullscreen" },
+        .{ .key = "/subtitles", .desc = "Cycle subtitle tracks", .instant = true, .send_as = "next subtitle" },
+        .{ .key = "/queue ", .desc = "Add URL to queue" },
+        .{ .key = "/next", .desc = "Next episode / playlist item", .instant = true, .send_as = "next episode" },
+        .{ .key = "/recommend ", .desc = "TMDB-based suggestions" },
     };
 
     const typed = state.app.magnet_buf[0..text_len];
@@ -448,7 +453,6 @@ fn renderSlashMenu() void {
 fn renderChatDropdown() void {
     const ai_chat_mod = @import("services/ai_chat.zig");
     const voice_mod = @import("services/ai_voice.zig");
-    
 
     // Anchor near top, centered horizontally, fixed max width.
     const vw = dvui.windowRectPixels().w;
@@ -494,7 +498,7 @@ fn renderChatDropdown() void {
             var title_buf: [128]u8 = undefined;
             const tl = ap.getMediaTitle(&title_buf);
             if (tl > 0) {
-                _ = dvui.icon(@src(), "", @import("icons").tvg.lucide.@"bot", .{}, .{
+                _ = dvui.icon(@src(), "", @import("icons").tvg.lucide.bot, .{}, .{
                     .color_text = theme.colors.accent,
                     .min_size_content = .{ .w = 14, .h = 14 },
                     .margin = .{ .w = 6 },
@@ -506,8 +510,11 @@ fn renderChatDropdown() void {
                 });
             }
         }
-        { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
-        if (dvui.buttonIcon(@src(), "", @import("icons").tvg.lucide.@"x", .{}, .{}, .{
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
+        if (dvui.buttonIcon(@src(), "", @import("icons").tvg.lucide.x, .{}, .{}, .{
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = dvui.Color{ .r = 220, .g = 90, .b = 90, .a = 255 },
             .border = dvui.Rect.all(0),
@@ -578,8 +585,11 @@ fn renderChatDropdown() void {
                 .color_text = if (is_user) theme.colors.accent else theme.colors.text_muted,
             });
             if (!is_user) {
-                { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
-                if (dvui.buttonIcon(@src(), "", @import("icons").tvg.lucide.@"star", .{}, .{}, .{
+                {
+                    var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+                    sp.deinit();
+                }
+                if (dvui.buttonIcon(@src(), "", @import("icons").tvg.lucide.star, .{}, .{}, .{
                     .id_extra = mi + 91700,
                     .color_text = if (m.starred)
                         dvui.Color{ .r = 255, .g = 200, .b = 80, .a = 255 }
@@ -642,7 +652,7 @@ fn renderInlineChatDock() void {
                 .gravity_y = 0.5,
             });
             defer row.deinit();
-            _ = dvui.icon(@src(), "", @import("icons").tvg.lucide.@"bot", .{}, .{
+            _ = dvui.icon(@src(), "", @import("icons").tvg.lucide.bot, .{}, .{
                 .color_text = @import("ui/theme.zig").colors.accent,
                 .min_size_content = .{ .w = 14, .h = 14 },
                 .margin = .{ .w = 6 },
@@ -810,7 +820,8 @@ fn appFrame() !dvui.App.Result {
                 // Clear resume position so dropped file starts fresh
                 _ = c.mpv.mpv_set_option_string(
                     state.app.players.items[state.app.active_player_idx].mpv_ctx,
-                    "start", "0",
+                    "start",
+                    "0",
                 );
                 state.app.players.items[state.app.active_player_idx].load_file(@ptrCast(&state.app.dropped_file_path[0]));
                 logs.pushLog("info", "open", "Loaded dropped file", false);
@@ -819,7 +830,6 @@ fn appFrame() !dvui.App.Result {
         }
     }
     state.app.dropped_file_lock.unlock();
-
 
     // Process CLI file argument (deferred from appInit)
     if (!cli_open_done and cli_open_len > 0 and state.app.players.items.len > 0) {
@@ -857,7 +867,9 @@ fn appFrame() !dvui.App.Result {
 
     // Auto-save config every ~2 seconds (frame-counter throttled, no per-frame syscall)
     {
-        const S = struct { var frame_ctr: u32 = 0; };
+        const S = struct {
+            var frame_ctr: u32 = 0;
+        };
         S.frame_ctr +%= 1;
         if (S.frame_ctr % 120 == 0) {
             const config = @import("core/config.zig");
@@ -884,13 +896,14 @@ fn appFrame() !dvui.App.Result {
     }
     // Update window title with now-playing media name (~2x per second)
     {
-        const TitleState = struct { var title_ctr: u32 = 0; };
+        const TitleState = struct {
+            var title_ctr: u32 = 0;
+        };
         TitleState.title_ctr +%= 1;
         if (TitleState.title_ctr % 30 == 0) {
             if (dvui_win) |win| {
                 const sdl_win: ?*c.sdl.SDL_Window = @ptrCast(win.backend.impl.window);
                 if (sdl_win) |sw| {
-
                     var name_buf: [256]u8 = undefined;
                     var name_len: usize = 0;
 
@@ -919,7 +932,10 @@ fn appFrame() !dvui.App.Result {
     // Screensaver inhibit: mpv's stop-screensaver requires a VO; we use SW render,
     // so SDL handles it. Toggle when any player is actively playing (not paused).
     {
-        const S = struct { var disabled: bool = false; var tick: u8 = 0; };
+        const S = struct {
+            var disabled: bool = false;
+            var tick: u8 = 0;
+        };
         S.tick +%= 1;
         if (S.tick % 30 == 0) {
             var any_playing = false;
@@ -927,7 +943,10 @@ fn appFrame() !dvui.App.Result {
                 if (p.current_url_len == 0) continue;
                 var paused: c_int = 1;
                 _ = c.mpv.mpv_get_property(p.mpv_ctx, "pause", c.mpv.MPV_FORMAT_FLAG, &paused);
-                if (paused == 0) { any_playing = true; break; }
+                if (paused == 0) {
+                    any_playing = true;
+                    break;
+                }
             }
             if (any_playing and !S.disabled) {
                 c.sdl.SDL_DisableScreenSaver();
@@ -948,7 +967,7 @@ fn appFrame() !dvui.App.Result {
             return .close;
         }
     }
-    
+
     input.processGlobalInputs();
 
     // Auto-hide overlays on mouse idle
@@ -961,7 +980,7 @@ fn appFrame() !dvui.App.Result {
             state.app.last_mouse_move_ms = @import("core/io_global.zig").milliTimestamp();
         }
     }
-    
+
     if (has_mouse_movement) {
         state.app.overlay_hide_timer = 0;
         state.app.show_cell_overlay = true;
@@ -997,53 +1016,58 @@ fn appFrame() !dvui.App.Result {
     var scale_w = dvui.scale(@src(), .{ .scale = &state.app.ui_scale }, .{ .expand = .both });
     defer scale_w.deinit();
 
-    if (state.app.fullscreen_player_idx == null) {
-        ui.renderHeader();
-        ui.renderTabBar();
-    }
-
-    // Horizontal split: grid takes remaining space, drawer takes fixed width on the right
-    {
-        var main_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
-        defer main_row.deinit();
-
-        // 1. Grid Player Area + Language Learning bar (takes remaining width)
-        {
-            var grid_area = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
-            
-            // Main video grid (expands)
-            {
-                var grid_inner = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
-                try ui.renderGrid();
-                ui.renderLiquidGlassOverlay();
-                ui.renderStatsOverlay();
-                grid_inner.deinit();
-            }
-            
-            // Language Learning subtitle bar (non-expanding, below grid)
-            {
-                const lang_learn = @import("services/lang_learn.zig");
-                lang_learn.pollSubtitle();
-                lang_learn.renderSubtitleBar();
-            }
-            
-            grid_area.deinit();
+    if (state.app.page_shell_enabled) {
+        // New website-like page shell (redesign). Behind a flag until parity.
+        try @import("ui/shell.zig").render();
+    } else {
+        if (state.app.fullscreen_player_idx == null) {
+            ui.renderHeader();
+            ui.renderTabBar();
         }
 
-        // 2. Tabbed Drawer (non-expanding, fixed width on right side)
-        drawer.renderDrawer();
-    }
-    
-    // 3. Global Status Bottom Tray (hide when player controls overlay is active)
-    if (state.app.fullscreen_player_idx == null and !state.app.show_cell_overlay) {
-        ui.renderGlobalBottomTray();
-    }
+        // Horizontal split: grid takes remaining space, drawer takes fixed width on the right
+        {
+            var main_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+            defer main_row.deinit();
+
+            // 1. Grid Player Area + Language Learning bar (takes remaining width)
+            {
+                var grid_area = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+
+                // Main video grid (expands)
+                {
+                    var grid_inner = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+                    try ui.renderGrid();
+                    ui.renderLiquidGlassOverlay();
+                    ui.renderStatsOverlay();
+                    grid_inner.deinit();
+                }
+
+                // Language Learning subtitle bar (non-expanding, below grid)
+                {
+                    const lang_learn = @import("services/lang_learn.zig");
+                    lang_learn.pollSubtitle();
+                    lang_learn.renderSubtitleBar();
+                }
+
+                grid_area.deinit();
+            }
+
+            // 2. Tabbed Drawer (non-expanding, fixed width on right side)
+            drawer.renderDrawer();
+        }
+
+        // 3. Global Status Bottom Tray (hide when player controls overlay is active)
+        if (state.app.fullscreen_player_idx == null and !state.app.show_cell_overlay) {
+            ui.renderGlobalBottomTray();
+        }
+    } // end else — legacy header+grid+drawer layout
 
     // ── Layer 2: Floating Overlays & Modals ──
     metadata_dialog.renderMetadataDialog();
     search.renderNsfwModal();
     @import("services/projectjav.zig").renderModal();
-    
+
     const settings = @import("ui/settings.zig");
     settings.renderSettingsModal();
     settings.renderCheatSheet();

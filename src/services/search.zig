@@ -1544,7 +1544,7 @@ pub fn renderNsfwModal() void {
 
     win.dragAreaSet(dvui.windowHeader("NSFW Warning", "", &state.app.nsfw_confirm_pending));
 
-    _ = dvui.label(@src(), "🔞 NSFW Content Warning", .{}, .{
+    _ = dvui.label(@src(), "NSFW Content Warning", .{}, .{
         .color_text = theme.colors.danger,
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
     });

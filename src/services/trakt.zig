@@ -192,7 +192,7 @@ fn deviceAuthWorker() void {
                 @memcpy(access_token[0..len], at[0..len]);
                 access_token_len = len;
                 enabled = true;
-                state.showToast("✓ Trakt.tv connected!");
+                state.showToast("Trakt.tv connected!");
                 logs.pushLog("info", "trakt", "OAuth token received", true);
                 return;
             }

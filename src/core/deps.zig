@@ -541,7 +541,7 @@ pub fn fetchMlxWhisperModelAsync() void {
                     logs.pushLog("error", "deps", "uv installed but not found at ~/.local/bin/uv", true);
                     return;
                 }
-                logs.pushLog("info", "deps", "uv installed ✓", true);
+                logs.pushLog("info", "deps", "uv installed", true);
             }
 
             const uv = uv_bin.?;
@@ -568,7 +568,7 @@ pub fn fetchMlxWhisperModelAsync() void {
                     logs.pushLog("error", "deps", "uv venv creation failed", true);
                     return;
                 };
-                logs.pushLog("info", "deps", "Python venv ready ✓", true);
+                logs.pushLog("info", "deps", "Python venv ready", true);
             }
 
             // ── Step 3: Install mlx-whisper into the venv ──
@@ -587,12 +587,12 @@ pub fn fetchMlxWhisperModelAsync() void {
                     logs.pushLog("error", "deps", "mlx-whisper install failed", true);
                     return;
                 };
-                logs.pushLog("info", "deps", "mlx-whisper installed ✓", true);
+                logs.pushLog("info", "deps", "mlx-whisper installed", true);
             }
 
             // ── Step 4: Download the model ──
             if (mlxWhisperModelCached(home)) {
-                logs.pushLog("info", "deps", "MLX Whisper model already cached ✓", true);
+                logs.pushLog("info", "deps", "MLX Whisper model already cached", true);
                 return;
             }
 
@@ -611,7 +611,7 @@ pub fn fetchMlxWhisperModelAsync() void {
             hf_cli.stderr_behavior = .Ignore;
             if (hf_cli.spawnAndWait()) |_| {
                 if (mlxWhisperModelCached(home)) {
-                    logs.pushLog("info", "deps", "MLX Whisper model ready ✓", true);
+                    logs.pushLog("info", "deps", "MLX Whisper model ready", true);
                     return;
                 }
             } else |_| {}
@@ -650,8 +650,8 @@ pub fn fetchMlxWhisperModelAsync() void {
             };
 
             mlx_whisper_step = 5;
-            setStatus("✓ Ready", .{});
-            logs.pushLog("info", "deps", "MLX Whisper model ready ✓", true);
+            setStatus("Ready", .{});
+            logs.pushLog("info", "deps", "MLX Whisper model ready", true);
         }
     };
     _ = std.Thread.spawn(.{}, S.worker, .{}) catch {

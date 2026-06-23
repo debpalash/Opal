@@ -353,7 +353,7 @@ pub fn renderContent() void {
 
     // Error
     if (fetch_error) {
-        _ = dvui.label(@src(), "⚠ Failed to fetch feed", .{}, .{
+        _ = dvui.label(@src(), "Failed to fetch feed", .{}, .{
             .color_text = theme.colors.danger,
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
         });

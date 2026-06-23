@@ -513,7 +513,7 @@ pub const MediaPlayer = struct {
                     return;
                 };
                 if (term.exited == 0) {
-                    state.showToast("✓ Clip exported!");
+                    state.showToast("Clip exported!");
                     logs.pushLog("info", "clip", "Clip exported successfully", false);
                 } else {
                     state.showToast("Clip export failed (ffmpeg error)");
