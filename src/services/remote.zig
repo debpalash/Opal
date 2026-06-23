@@ -883,7 +883,7 @@ fn apiYoutube(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8
         }) catch return;
     }
     w.writeAll("],\"loading\":") catch return;
-    w.writeAll(if (state.app.yt.is_loading) "true" else "false") catch return;
+    w.writeAll(if (state.app.yt.is_loading.load(.acquire)) "true" else "false") catch return;
     w.writeAll("}") catch return;
     sendJson(stream, json_buf[0..w.end]);
 }
@@ -1063,7 +1063,7 @@ fn apiJellyfin(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
     w.writeAll("{\"connected\":") catch return;
     w.writeAll(if (state.app.jf.connected) "true" else "false") catch return;
     w.writeAll(",\"loading\":") catch return;
-    w.writeAll(if (state.app.jf.is_loading) "true" else "false") catch return;
+    w.writeAll(if (state.app.jf.is_loading.load(.acquire)) "true" else "false") catch return;
 
     // Login error
     if (state.app.jf.login_error_len > 0) {
@@ -1165,9 +1165,9 @@ fn apiUnifiedSearch(stream: std.Io.net.Stream, query: []const u8) void {
     const search_svc = @import("search.zig");
     const any_loading = search_svc.is_searching.load(.acquire) or
         state.app.tmdb.is_loading or
-        state.app.yt.is_loading or
+        state.app.yt.is_loading.load(.acquire) or
         state.app.anime.is_loading or
-        state.app.jf.is_loading;
+        state.app.jf.is_loading.load(.acquire);
 
     w.writeAll("{\"loading\":") catch return;
     w.writeAll(if (any_loading) "true" else "false") catch return;

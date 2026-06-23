@@ -17,10 +17,10 @@ pub fn renderContent() void {
     }
 
     // Auto-fetch libraries + resume on first load
-    if (state.app.jf.library_count == 0 and !state.app.jf.is_loading) {
+    if (state.app.jf.library_count == 0 and !state.app.jf.is_loading.load(.acquire)) {
         jf.fetchLibraries();
     }
-    if (!state.app.jf.resume_loaded) {
+    if (!state.app.jf.resume_loaded.load(.acquire)) {
         jf.fetchResume();
     }
 
@@ -138,7 +138,7 @@ fn renderLoginForm() void {
             });
         }
 
-        if (!state.app.jf.is_loading) {
+        if (!state.app.jf.is_loading.load(.acquire)) {
             const clicked_connect = dvui.button(@src(), "Connect", .{}, .{
                 .expand = .horizontal,
                 .color_fill = theme.colors.accent,
@@ -209,7 +209,7 @@ fn renderLibraries() void {
         }
     }
 
-    if (state.app.jf.is_loading and state.app.jf.library_count == 0) {
+    if (state.app.jf.is_loading.load(.acquire) and state.app.jf.library_count == 0) {
         renderSkeletonRows();
         return;
     }
@@ -348,7 +348,7 @@ fn renderItems() void {
             sp.deinit();
         }
 
-        if (state.app.jf.is_loading) {
+        if (state.app.jf.is_loading.load(.acquire)) {
             _ = dvui.label(@src(), "Loading...", .{}, .{
                 .color_text = theme.colors.text_muted,
                 .gravity_y = 0.5,
@@ -356,12 +356,12 @@ fn renderItems() void {
         }
     }
 
-    if (state.app.jf.is_loading and state.app.jf.item_count == 0) {
+    if (state.app.jf.is_loading.load(.acquire) and state.app.jf.item_count == 0) {
         renderSkeletonRows();
         return;
     }
 
-    if (state.app.jf.item_count == 0 and !state.app.jf.is_loading) {
+    if (state.app.jf.item_count == 0 and !state.app.jf.is_loading.load(.acquire)) {
         if (state.app.jf.view == .Search) {
             components.emptyState(
                 icons.tvg.lucide.@"search-x",

@@ -19,8 +19,8 @@ const piped_instances = [_][]const u8{
 };
 
 pub fn fetchYoutube(query: []const u8) void {
-    if (state.app.yt.is_loading) return;
-    state.app.yt.is_loading = true;
+    if (state.app.yt.is_loading.load(.acquire)) return;
+    state.app.yt.is_loading.store(true, .release);
 
     const actual_query = if (query.len == 0) "trending music 2024" else query;
 
@@ -40,7 +40,7 @@ pub fn fetchYoutube(query: []const u8) void {
     state.app.yt.thread = std.Thread.spawn(.{}, struct {
         fn worker() void {
             defer {
-                state.app.yt.is_loading = false;
+                state.app.yt.is_loading.store(false, .release);
             }
 
             yt_mutex.lock();
@@ -54,7 +54,7 @@ pub fn fetchYoutube(query: []const u8) void {
             fetchViaYtdlp(S.q_buf[0..S.q_len]);
         }
     }.worker, .{}) catch blk: {
-        state.app.yt.is_loading = false;
+        state.app.yt.is_loading.store(false, .release);
         break :blk null;
     };
     // Detach: the handle is never joined, so without this each search leaks a
@@ -343,18 +343,18 @@ pub fn renderContent() void {
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = dvui.Rect.all(8) });
     defer content.deinit();
 
-    if (!state.app.yt.loaded_once and !state.app.yt.is_loading) {
+    if (!state.app.yt.loaded_once and !state.app.yt.is_loading.load(.acquire)) {
         state.app.yt.loaded_once = true;
         fetchYoutube(state.app.yt.search_buf[0 .. std.mem.indexOfScalar(u8, &state.app.yt.search_buf, 0) orelse state.app.yt.search_buf.len]);
     }
 
     renderSearchBar();
 
-    if (state.app.yt.is_loading) {
+    if (state.app.yt.is_loading.load(.acquire)) {
         _ = dvui.label(@src(), "Searching YouTube...", .{}, .{ .color_text = theme.colors.accent, .gravity_x = 0.5, .margin = dvui.Rect.all(12) });
     }
 
-    if (state.app.yt.results.items.len == 0 and !state.app.yt.is_loading) {
+    if (state.app.yt.results.items.len == 0 and !state.app.yt.is_loading.load(.acquire)) {
         _ = dvui.label(@src(), "No results. Try searching for something.", .{}, .{
             .color_text = theme.colors.text_muted,
             .gravity_x = 0.5,

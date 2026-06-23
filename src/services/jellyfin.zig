@@ -30,14 +30,14 @@ fn escapeJsonStr(input: []const u8, out: *[256]u8) []const u8 {
 // ══════════════════════════════════════════════════════════
 
 pub fn authenticate() void {
-    if (state.app.jf.is_loading) return;
-    state.app.jf.is_loading = true;
+    if (state.app.jf.is_loading.load(.acquire)) return;
+    state.app.jf.is_loading.store(true, .release);
     state.app.jf.login_error_len = 0;
 
     state.app.jf.thread = std.Thread.spawn(.{}, struct {
         fn worker() void {
             defer {
-                state.app.jf.is_loading = false;
+                state.app.jf.is_loading.store(false, .release);
             }
 
             const server = state.app.jf.server_url[0..state.app.jf.server_url_len];
@@ -131,7 +131,7 @@ pub fn authenticate() void {
             fetchLibrariesSync();
         }
     }.worker, .{}) catch blk: {
-        state.app.jf.is_loading = false;
+        state.app.jf.is_loading.store(false, .release);
         break :blk null;
     };
 }
@@ -141,18 +141,18 @@ pub fn authenticate() void {
 // ══════════════════════════════════════════════════════════
 
 pub fn fetchLibraries() void {
-    if (state.app.jf.is_loading or !state.app.jf.connected) return;
-    state.app.jf.is_loading = true;
+    if (state.app.jf.is_loading.load(.acquire) or !state.app.jf.connected) return;
+    state.app.jf.is_loading.store(true, .release);
 
     state.app.jf.thread = std.Thread.spawn(.{}, struct {
         fn worker() void {
             defer {
-                state.app.jf.is_loading = false;
+                state.app.jf.is_loading.store(false, .release);
             }
             fetchLibrariesSync();
         }
     }.worker, .{}) catch blk: {
-        state.app.jf.is_loading = false;
+        state.app.jf.is_loading.store(false, .release);
         break :blk null;
     };
 }
@@ -203,8 +203,8 @@ fn fetchLibrariesSync() void {
 }
 
 pub fn fetchItems(parent_id: []const u8) void {
-    if (state.app.jf.is_loading or !state.app.jf.connected) return;
-    state.app.jf.is_loading = true;
+    if (state.app.jf.is_loading.load(.acquire) or !state.app.jf.connected) return;
+    state.app.jf.is_loading.store(true, .release);
 
     // Store parent_id
     const plen = @min(parent_id.len, state.app.jf.parent_id.len);
@@ -214,28 +214,28 @@ pub fn fetchItems(parent_id: []const u8) void {
     state.app.jf.thread = std.Thread.spawn(.{}, struct {
         fn worker() void {
             defer {
-                state.app.jf.is_loading = false;
+                state.app.jf.is_loading.store(false, .release);
             }
             fetchItemsSync(state.app.jf.parent_id[0..state.app.jf.parent_id_len], false);
         }
     }.worker, .{}) catch blk: {
-        state.app.jf.is_loading = false;
+        state.app.jf.is_loading.store(false, .release);
         break :blk null;
     };
 }
 
 pub fn searchItems() void {
-    if (state.app.jf.is_loading or !state.app.jf.connected) return;
+    if (state.app.jf.is_loading.load(.acquire) or !state.app.jf.connected) return;
 
     const qlen = std.mem.indexOfScalar(u8, &state.app.jf.search_buf, 0) orelse 0;
     if (qlen == 0) return;
 
-    state.app.jf.is_loading = true;
+    state.app.jf.is_loading.store(true, .release);
 
     state.app.jf.thread = std.Thread.spawn(.{}, struct {
         fn worker() void {
             defer {
-                state.app.jf.is_loading = false;
+                state.app.jf.is_loading.store(false, .release);
             }
             const qlen2 = std.mem.indexOfScalar(u8, &state.app.jf.search_buf, 0) orelse 0;
             if (qlen2 == 0) return;
@@ -256,7 +256,7 @@ pub fn searchItems() void {
             parseItemsResponse(body);
         }
     }.worker, .{}) catch blk: {
-        state.app.jf.is_loading = false;
+        state.app.jf.is_loading.store(false, .release);
         break :blk null;
     };
 }
@@ -460,7 +460,7 @@ pub fn fetchPoster(item: *state.JfItem) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn fetchResume() void {
-    if (state.app.jf.is_loading or !state.app.jf.connected) return;
+    if (state.app.jf.is_loading.load(.acquire) or !state.app.jf.connected) return;
 
     _ = std.Thread.spawn(.{}, struct {
         fn worker() void {
@@ -524,7 +524,7 @@ pub fn fetchResume() void {
                 state.app.jf.resume_count += 1;
                 pos = obj_end;
             }
-            state.app.jf.resume_loaded = true;
+            state.app.jf.resume_loaded.store(true, .release);
         }
     }.worker, .{}) catch {};
 }
