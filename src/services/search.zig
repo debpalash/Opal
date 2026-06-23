@@ -44,6 +44,10 @@ pub var search_abort: std.atomic.Value(bool) = std.atomic.Value(bool).init(false
 pub var search_thread: ?std.Thread = null;
 pub var search_buf = std.mem.zeroes([1024]u8);
 
+// Universal-search result sort mode (Relevance / Quality / Seeds).
+const UniSort = enum(usize) { relevance = 0, quality = 1, seeds = 2 };
+var uni_sort: UniSort = .relevance;
+
 // Each search gets a monotonically-increasing generation. A worker only
 // touches shared state (search_results, is_searching, search_thread) while it
 // is still the current generation. A superseded worker that was detached writes
@@ -1237,13 +1241,44 @@ fn renderUniversalResults() void {
             .padding = .{ .x = 12, .y = 8, .w = 12, .h = 4 },
         });
     } else if (resolver.result_count > 0) {
+        // Count + sort/filter row.
+        var fr = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = 9050,
+            .expand = .horizontal,
+            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+        });
+        defer fr.deinit();
+
         var count_buf: [48]u8 = undefined;
-        const clbl = std.fmt.bufPrintZ(&count_buf, "{d} results from all sources", .{resolver.result_count}) catch "Results";
+        const clbl = std.fmt.bufPrintZ(&count_buf, "{d} results", .{resolver.result_count}) catch "Results";
         _ = dvui.label(@src(), "{s}", .{clbl}, .{
             .id_extra = 9001,
             .color_text = theme.colors.text_muted,
-            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 4 },
+            .gravity_y = 0.5,
         });
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
+        // Sort: relevance / quality / seeds
+        const sorts = [_][]const u8{ "Relevance", "Quality", "Seeds" };
+        if (components.segment(@src(), &sorts, @intFromEnum(uni_sort))) |clicked| {
+            uni_sort = @enumFromInt(clicked);
+            resolver.sortResultsBy(@intFromEnum(uni_sort));
+        }
+        // NSFW filter toggle (honored by the card loop's is_nsfw check below).
+        const nsfw_label = if (state.app.nsfw_filter_enabled) "NSFW: off" else "NSFW: on";
+        if (dvui.button(@src(), nsfw_label, .{}, .{
+            .id_extra = 9060,
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = theme.colors.text_muted,
+            .border = dvui.Rect.all(0),
+            .gravity_y = 0.5,
+            .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+        })) {
+            state.app.nsfw_filter_enabled = !state.app.nsfw_filter_enabled;
+            state.markConfigDirty();
+        }
     } else if (!resolver.isResolving() and resolver.resolver_query_len > 0) {
         // Canonical empty state — search-x icon + canonical copy.
         components.emptyState(

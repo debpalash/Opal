@@ -63,6 +63,7 @@ pub var status_yt = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_1337x = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_yts = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_local = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_rss = std.atomic.Value(SourceStatus).init(.idle);
 
 // Explicit u8 backing so std.atomic.Value(SourceStatus) is byte-atomic.
 pub const SourceStatus = enum(u8) { idle, searching, done, failed };
@@ -70,6 +71,24 @@ pub const SourceStatus = enum(u8) { idle, searching, done, failed };
 /// Atomic accessor for is_resolving (UI reads, workers clear via checkAllDone).
 pub fn isResolving() bool {
     return is_resolving.load(.acquire);
+}
+
+/// Re-sort the current results in place (UI-driven). mode: 0=relevance (score),
+/// 1=quality (desc), 2=seeds (desc). Held under the results lock.
+pub fn sortResultsBy(mode: usize) void {
+    results_mutex.lock();
+    defer results_mutex.unlock();
+    const Ctx = struct {
+        m: usize,
+        fn lt(ctx: @This(), a: ResolvedItem, b: ResolvedItem) bool {
+            return switch (ctx.m) {
+                1 => a.quality > b.quality,
+                2 => a.seeds > b.seeds,
+                else => a.score < b.score,
+            };
+        }
+    };
+    std.sort.insertion(ResolvedItem, results[0..result_count], Ctx{ .m = mode }, Ctx.lt);
 }
 
 /// Reset the universal-result list under the results lock so a concurrent
@@ -255,10 +274,16 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     status_1337x.store(.searching, .release);
     status_yts.store(.searching, .release);
     status_local.store(.searching, .release);
+    status_rss.store(.searching, .release);
 
     // Local files first — instant, already on disk.
     _ = std.Thread.spawn(.{}, resolveLocalFiles, .{ resolver_query, qlen }) catch {
         status_local.store(.failed, .release);
+        checkAllDone();
+    };
+    // RSS feed items (already-fetched magnets matching the query).
+    _ = std.Thread.spawn(.{}, resolveRss, .{ resolver_query, qlen }) catch {
+        status_rss.store(.failed, .release);
         checkAllDone();
     };
 
@@ -407,11 +432,54 @@ fn resolveLocalFiles(q: [256]u8, qlen: usize) void {
     }
 }
 
+/// Match already-fetched RSS feed items against the query and surface them as
+/// torrent-source results (they carry magnet URIs → play via loadTorrentToPlayer).
+fn resolveRss(q: [256]u8, qlen: usize) void {
+    const rss = @import("rss.zig");
+    defer {
+        status_rss.store(.done, .release);
+        checkAllDone();
+    }
+    if (qlen == 0) return;
+
+    var ql: [256]u8 = undefined;
+    for (0..qlen) |i| ql[i] = std.ascii.toLower(q[i]);
+    const query = ql[0..qlen];
+
+    var found: usize = 0;
+    var i: usize = 0;
+    while (i < rss.item_count and found < 20) : (i += 1) {
+        const it = &rss.items[i];
+        if (it.magnet_len == 0 or it.title_len == 0) continue;
+        const title = it.title[0..it.title_len];
+        if (title.len > 256) continue;
+
+        var tl: [256]u8 = undefined;
+        for (0..title.len) |k| tl[k] = std.ascii.toLower(title[k]);
+        if (std.mem.indexOf(u8, tl[0..title.len], query) == null) continue;
+
+        var item = ResolvedItem{ .source = .torrent };
+        const nlen = @min(it.title_len, 255);
+        @memcpy(item.name[0..nlen], title[0..nlen]);
+        item.name_len = nlen;
+        const ulen = @min(it.magnet_len, item.url.len);
+        @memcpy(item.url[0..ulen], it.magnet[0..ulen]);
+        item.url_len = ulen;
+        item.seeds = it.seeds;
+        const d = "RSS feed";
+        @memcpy(item.detail[0..d.len], d);
+        item.detail_len = d.len;
+        _ = pushResult(item);
+        found += 1;
+    }
+}
+
 fn checkAllDone() void {
     if (status_jf.load(.acquire) != .searching and status_stremio.load(.acquire) != .searching and
         status_torrent.load(.acquire) != .searching and status_anime.load(.acquire) != .searching and
         status_yt.load(.acquire) != .searching and status_1337x.load(.acquire) != .searching and
-        status_yts.load(.acquire) != .searching and status_local.load(.acquire) != .searching)
+        status_yts.load(.acquire) != .searching and status_local.load(.acquire) != .searching and
+        status_rss.load(.acquire) != .searching)
     {
         is_resolving.store(false, .release);
     }
