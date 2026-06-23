@@ -445,7 +445,13 @@ pub fn iconButton(
 /// Calm: colored TEXT only (no box, no border, no fill). `.info` reads as a
 /// neutral secondary label; the semantic kinds use their muted colors so the
 /// status reads without shouting. Horizontal padding preserved.
+// Like divider()/sectionHeader(): every statusPill() shares this @src(), so
+// two pills under the same parent (e.g. one per search result) collide on the
+// same widget id (dvui draws red boxes + spams "duplicate widget id"). A
+// monotonic sequence as id_extra keeps each call's box + label unique.
+var statuspill_seq: usize = 0;
 pub fn statusPill(label: []const u8, kind: enum { info, success, warn, err }) void {
+    statuspill_seq +%= 1;
     const fg = switch (kind) {
         .info => tk.text_secondary(),
         .success => tk.semantic_success(),
@@ -454,12 +460,14 @@ pub fn statusPill(label: []const u8, kind: enum { info, success, warn, err }) vo
     };
 
     var pill = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = statuspill_seq,
         .padding = .{ .x = tk.sp_sm, .y = tk.sp_xs, .w = tk.sp_sm, .h = tk.sp_xs },
         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
     });
     defer pill.deinit();
 
     _ = dvui.label(@src(), "{s}", .{label}, .{
+        .id_extra = statuspill_seq,
         .color_text = fg,
         .font = fontAt(tk.fs_small),
     });

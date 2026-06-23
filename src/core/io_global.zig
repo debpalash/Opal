@@ -277,12 +277,19 @@ pub const Child = struct {
     }
 
     pub fn wait(self: *Child) !Term {
-        if (self.real) |*r| return r.wait(io());
+        if (self.real) |*r| {
+            // std's wait()/kill() assert(child.id != null) and panic otherwise
+            // (spawn that never set a pid, or an already-reaped child). Guard so
+            // callers get a catchable error instead of an ABRT.
+            if (r.id == null) return error.NotSpawned;
+            return r.wait(io());
+        }
         return error.NotSpawned;
     }
 
     pub fn kill(self: *Child) !Term {
         if (self.real) |*r| {
+            if (r.id == null) return error.NotSpawned;
             r.kill(io());
             return r.wait(io());
         }
