@@ -919,26 +919,41 @@ fn renderGallery() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
     defer scroll.deinit();
 
-    for (0..state.app.anime.result_count) |idx| {
-        renderCard(&state.app.anime.results[idx], idx);
+    // Responsive poster grid (was one wide row per item).
+    const rect_w = scroll.data().rect.w;
+    const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
+    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / 150)));
+    const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
+
+    var i: usize = 0;
+    while (i < state.app.anime.result_count) {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 70000, .expand = .horizontal });
+        defer row.deinit();
+        var col: usize = 0;
+        while (col < cols and i + col < state.app.anime.result_count) : (col += 1) {
+            renderCard(&state.app.anime.results[i + col], i + col, card_w);
+        }
+        i += cols;
     }
 }
 
-fn renderCard(item: *state.AnimeResult, idx: usize) void {
+fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
     if (item.name_len == 0) return;
     const title = item.name[0..item.name_len];
     const hue: u32 = @as(u32, @intCast(idx * 7 + 42)) *% 2654435761;
     const h1: u8 = @truncate(hue & 0xFF);
     const h2: u8 = @truncate((hue >> 8) & 0xFF);
 
-    var card = dvui.box(@src(), .{ .dir = .horizontal }, .{
+    const poster_h: f32 = card_w * 1.45;
+    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = idx + 1000,
-        .expand = .horizontal,
+        .min_size_content = .{ .w = card_w, .h = 10 },
+        .max_size_content = .{ .w = card_w, .h = poster_h + 92 },
         .background = true,
         .color_fill = theme.colors.bg_card,
-        .color_border = theme.colors.bg_header_border,
-        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        .padding = .{ .x = 10, .y = 10, .w = 10, .h = 10 },
+        .corner_radius = dvui.Rect.all(6),
+        .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
+        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
     });
     defer card.deinit();
 
@@ -946,11 +961,12 @@ fn renderCard(item: *state.AnimeResult, idx: usize) void {
     {
         var poster = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = idx + 100,
+            .expand = .horizontal,
             .background = true,
             .color_fill = dvui.Color{ .r = 20 + h1 / 6, .g = 25 + h2 / 8, .b = 35 + h1 / 5, .a = 255 },
-            .corner_radius = dvui.Rect.all(6),
-            .min_size_content = .{ .w = 60, .h = 90 },
-            .max_size_content = .{ .w = 60, .h = 90 },
+            .corner_radius = .{ .x = theme.radius.md, .y = theme.radius.md, .w = 0, .h = 0 },
+            .min_size_content = .{ .w = card_w, .h = poster_h },
+            .max_size_content = .{ .w = card_w, .h = poster_h },
         });
         defer poster.deinit();
 
@@ -989,7 +1005,7 @@ fn renderCard(item: *state.AnimeResult, idx: usize) void {
         var info = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = idx + 200,
             .expand = .horizontal,
-            .padding = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
+            .padding = .{ .x = 6, .y = 2, .w = 6, .h = 0 },
         });
         defer info.deinit();
 
