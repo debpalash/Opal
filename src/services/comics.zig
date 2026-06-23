@@ -411,6 +411,10 @@ pub fn searchComics(query: []const u8) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn renderContent() void {
+    // Full-page root so loading/empty branches fill width/height.
+    var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+    defer page.deinit();
+
     // Search bar
     {
         var search_row = dvui.box(@src(), .{ .dir = .horizontal }, .{

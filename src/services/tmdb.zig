@@ -230,21 +230,18 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
         return;
     }
 
-    // Compute available width from known drawer geometry (stable, no layout-timing issues)
-    // Drawer = resize_handle(8) + tab_rail(52) + content_padding(16) + scrollbar(~14)
-    const drawer_w: f32 = if (state.app.drawer_expanded)
-        @as(f32, @floatFromInt(@max(state.app.win_w, 400))) - 60.0
-    else
-        state.app.drawer_width_px;
-    const avail_w: f32 = @max(200, drawer_w - 90);
-
-    const card_target_w: f32 = 155;
-    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / card_target_w)));
-    const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 12) / @as(f32, @floatFromInt(cols)));
-    const poster_h: f32 = card_w * 1.5;
-
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
     defer scroll.deinit();
+
+    // Responsive columns from the LIVE page width (one-frame lag; first paint
+    // falls back to a sane default). Replaces the old dead drawer-geometry math
+    // so the gallery fills the full window instead of a fixed ~640px column.
+    const rect_w = scroll.data().rect.w;
+    const avail_w: f32 = @max(280, (if (rect_w > 1) rect_w else 900) - 16);
+    const card_target_w: f32 = 170;
+    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / card_target_w)));
+    const card_w: f32 = @max(120, (avail_w - @as(f32, @floatFromInt(cols)) * 12) / @as(f32, @floatFromInt(cols)));
+    const poster_h: f32 = card_w * 1.5;
 
     var i: usize = 0;
     while (i < items.items.len) {

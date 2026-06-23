@@ -208,6 +208,10 @@ fn formatSize(bytes: u64) [12]u8 {
 // ══════════════════════════════════════════════════════════
 
 pub fn renderContent() void {
+    // Full-page root so loading/empty branches fill width/height.
+    var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+    defer page.deinit();
+
     // Header
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -223,7 +227,10 @@ pub fn renderContent() void {
             .gravity_y = 0.5,
         });
 
-        { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+        {
+            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            spacer.deinit();
+        }
 
         if (is_fetching) {
             _ = dvui.label(@src(), "Fetching...", .{}, .{
@@ -231,7 +238,7 @@ pub fn renderContent() void {
                 .gravity_y = 0.5,
             });
         } else {
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"activity", .{}, .{}, .{
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.activity, .{}, .{}, .{
                 .color_fill = theme.colors.bg_glass,
                 .color_text = theme.colors.accent,
             })) {
@@ -416,9 +423,7 @@ pub fn renderContent() void {
                 defer meta.deinit();
 
                 // Seeds icon (arrow-up = upload/seed)
-                const seed_color = if (item.seeds > 10) theme.colors.success
-                               else if (item.seeds > 0) theme.colors.warning
-                               else theme.colors.text_muted;
+                const seed_color = if (item.seeds > 10) theme.colors.success else if (item.seeds > 0) theme.colors.warning else theme.colors.text_muted;
                 _ = dvui.icon(@src(), "", icons.tvg.lucide.@"monitor-up", .{}, .{
                     .id_extra = i + 8000,
                     .color_text = seed_color,
@@ -471,7 +476,7 @@ pub fn renderContent() void {
 
         // Play button (SVG icon)
         if (item.magnet_len > 0) {
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"play", .{}, .{}, .{
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
                 .id_extra = i + 6000,
                 .color_fill = theme.colors.accent,
                 .color_text = dvui.Color.white,

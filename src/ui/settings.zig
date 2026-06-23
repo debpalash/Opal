@@ -369,8 +369,12 @@ pub fn renderAIContent() void {
     });
     defer scroll.deinit();
 
+    // Centered max-width column so controls stay readable on wide windows.
+    var centre = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.5 });
+    defer centre.deinit();
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
+        .max_size_content = .{ .w = 760, .h = std.math.floatMax(f32) },
     });
     defer content.deinit();
 

@@ -8,7 +8,6 @@ const player = @import("../player/player.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
-
 // ══════════════════════════════════════════════════════════
 // Anime Tab — allanime.day API integration (built-in, no ani-cli)
 // Trending -> Search → Select → Pick Episode → Stream to MPV
@@ -26,13 +25,13 @@ pub var has_loaded_trending: bool = false;
 
 pub fn loadTrendingAnime() void {
     if (state.app.anime.is_loading or has_loaded_trending) return;
-    
+
     state.app.anime.is_loading = true;
     state.app.anime.result_count = 0;
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
     has_loaded_trending = true;
-    
+
     state.app.anime.thread = std.Thread.spawn(.{}, trendingThread, .{}) catch {
         state.app.anime.is_loading = false;
         return;
@@ -41,27 +40,27 @@ pub fn loadTrendingAnime() void {
 
 fn trendingThread() void {
     defer state.app.anime.is_loading = false;
-    
+
     const jikan_api = "https://api.jikan.moe/v4/top/anime";
     var arg1_buf: [256]u8 = undefined;
     const arg1 = std.fmt.bufPrint(&arg1_buf, "{s}?filter=airing&limit=24", .{jikan_api}) catch return;
-    
+
     const argv = [_][]const u8{
         "curl", "-s", "-A", agent, arg1,
     };
-    
+
     var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     _ = child.spawn() catch return;
-    
+
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
     const bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
     _ = child.wait() catch {};
-    
+
     if (bytes == 0) return;
-    
+
     parseJikanData(buf[0..bytes]);
     logs.pushLog("info", "anime", "Trending loaded (Jikan API)", false);
 }
@@ -69,18 +68,18 @@ fn trendingThread() void {
 pub fn searchAnime(query: []const u8) void {
     if (state.app.anime.is_loading) return;
     if (query.len == 0) return;
-    
+
     state.app.anime.is_loading = true;
     state.app.anime.result_count = 0;
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
-    
+
     // Copy query into a static buffer so the spawned thread doesn't read
     // from the potentially-mutated UI search_buf.
     const safe_len = @min(query.len, search_query_buf.len);
     @memcpy(search_query_buf[0..safe_len], query[0..safe_len]);
     search_query_len = safe_len;
-    
+
     state.app.anime.thread = std.Thread.spawn(.{}, searchThread, .{}) catch {
         state.app.anime.is_loading = false;
         return;
@@ -93,9 +92,9 @@ var search_query_len: usize = 0;
 fn searchThread() void {
     defer state.app.anime.is_loading = false;
     const query = search_query_buf[0..search_query_len];
-    
+
     const jikan_api = "https://api.jikan.moe/v4/anime";
-    
+
     var enc_buf: [768]u8 = undefined;
     var enc_len: usize = 0;
     for (query) |c| {
@@ -120,26 +119,26 @@ fn searchThread() void {
             enc_len += 1;
         }
     }
-    
+
     var url_buf: [512]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "{s}?q={s}&limit=24", .{jikan_api, enc_buf[0..enc_len]}) catch return;
-    
+    const url = std.fmt.bufPrint(&url_buf, "{s}?q={s}&limit=24", .{ jikan_api, enc_buf[0..enc_len] }) catch return;
+
     const argv = [_][]const u8{
         "curl", "-s", "-A", agent, url,
     };
-    
+
     var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     _ = child.spawn() catch return;
-    
+
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
     const bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
     _ = child.wait() catch {};
-    
+
     if (bytes == 0) return;
-    
+
     parseJikanData(buf[0..bytes]);
     logs.pushLog("info", "anime", "Search done (Jikan API)", false);
 }
@@ -161,14 +160,46 @@ fn decodeJsonEscapes(src: []const u8, dst: []u8) usize {
         }
         const esc = src[i + 1];
         switch (esc) {
-            '"' => { dst[out] = '"'; out += 1; i += 2; },
-            '\\' => { dst[out] = '\\'; out += 1; i += 2; },
-            '/' => { dst[out] = '/'; out += 1; i += 2; },
-            'n' => { dst[out] = '\n'; out += 1; i += 2; },
-            'r' => { dst[out] = '\r'; out += 1; i += 2; },
-            't' => { dst[out] = '\t'; out += 1; i += 2; },
-            'b' => { dst[out] = 0x08; out += 1; i += 2; },
-            'f' => { dst[out] = 0x0c; out += 1; i += 2; },
+            '"' => {
+                dst[out] = '"';
+                out += 1;
+                i += 2;
+            },
+            '\\' => {
+                dst[out] = '\\';
+                out += 1;
+                i += 2;
+            },
+            '/' => {
+                dst[out] = '/';
+                out += 1;
+                i += 2;
+            },
+            'n' => {
+                dst[out] = '\n';
+                out += 1;
+                i += 2;
+            },
+            'r' => {
+                dst[out] = '\r';
+                out += 1;
+                i += 2;
+            },
+            't' => {
+                dst[out] = '\t';
+                out += 1;
+                i += 2;
+            },
+            'b' => {
+                dst[out] = 0x08;
+                out += 1;
+                i += 2;
+            },
+            'f' => {
+                dst[out] = 0x0c;
+                out += 1;
+                i += 2;
+            },
             'u' => {
                 // \uXXXX — decode 4 hex digits to a codepoint, then UTF-8 encode.
                 if (i + 6 <= src.len) {
@@ -206,7 +237,7 @@ fn decodeJsonEscapes(src: []const u8, dst: []u8) usize {
 fn parseJikanData(json: []const u8) void {
     var count: usize = 0;
     var pos: usize = 0;
-    
+
     // Clear old result states including poster textures
     for (0..state.app.anime.results.len) |i| {
         state.app.anime.results[i].poster_fetching = false;
@@ -216,25 +247,25 @@ fn parseJikanData(json: []const u8) void {
             state.app.anime.results[i].poster_tex = null;
         }
     }
-    
+
     while (pos < json.len and count < 24) {
         // Find next mal_id object securely to avoid nested array overlap
         const id_idx = std.mem.indexOf(u8, json[pos..], "\"mal_id\":") orelse break;
         pos += id_idx + 9;
-        
+
         var next_obj_pos = json.len;
         if (std.mem.indexOf(u8, json[pos..], "\"mal_id\":")) |nidx| {
             next_obj_pos = pos + nidx;
         }
-        
+
         const obj_slice = json[pos..next_obj_pos];
-        
+
         // Extract ID
         var id_str: []const u8 = "0";
         var num_end: usize = 0;
         while (num_end < obj_slice.len and obj_slice[num_end] >= '0' and obj_slice[num_end] <= '9') : (num_end += 1) {}
         if (num_end > 0) id_str = obj_slice[0..num_end];
-        
+
         // Extract Title
         var name_str: []const u8 = "";
         if (std.mem.indexOf(u8, obj_slice, "\"title\":\"")) |title_idx| {
@@ -242,9 +273,13 @@ fn parseJikanData(json: []const u8) void {
             var in_esc = false;
             var end: usize = start;
             while (end < obj_slice.len) : (end += 1) {
-                if (in_esc) { in_esc = false; }
-                else if (obj_slice[end] == '\\') { in_esc = true; }
-                else if (obj_slice[end] == '"') { break; }
+                if (in_esc) {
+                    in_esc = false;
+                } else if (obj_slice[end] == '\\') {
+                    in_esc = true;
+                } else if (obj_slice[end] == '"') {
+                    break;
+                }
             }
             if (end < obj_slice.len) name_str = obj_slice[start..end];
         }
@@ -256,14 +291,18 @@ fn parseJikanData(json: []const u8) void {
                 var in_esc = false;
                 var end: usize = start;
                 while (end < obj_slice.len) : (end += 1) {
-                    if (in_esc) { in_esc = false; }
-                    else if (obj_slice[end] == '\\') { in_esc = true; }
-                    else if (obj_slice[end] == '"') { break; }
+                    if (in_esc) {
+                        in_esc = false;
+                    } else if (obj_slice[end] == '\\') {
+                        in_esc = true;
+                    } else if (obj_slice[end] == '"') {
+                        break;
+                    }
                 }
                 if (end < obj_slice.len) name_str = obj_slice[start..end];
             }
         }
-        
+
         // Extract Episodes
         var ep_count: u16 = 100;
         if (std.mem.indexOf(u8, obj_slice, "\"episodes\":")) |ep_idx| {
@@ -291,9 +330,13 @@ fn parseJikanData(json: []const u8) void {
             var in_esc = false;
             var end: usize = start;
             while (end < obj_slice.len) : (end += 1) {
-                if (in_esc) { in_esc = false; }
-                else if (obj_slice[end] == '\\') { in_esc = true; }
-                else if (obj_slice[end] == '"') { break; }
+                if (in_esc) {
+                    in_esc = false;
+                } else if (obj_slice[end] == '\\') {
+                    in_esc = true;
+                } else if (obj_slice[end] == '"') {
+                    break;
+                }
             }
             if (end < obj_slice.len) synopsis = obj_slice[start..end];
         }
@@ -313,19 +356,19 @@ fn parseJikanData(json: []const u8) void {
             var item = &state.app.anime.results[count];
             @memcpy(item.id[0..id_str.len], id_str);
             item.id_len = id_str.len;
-            
+
             // Decode JSON escapes in name (\" \\ \/ \n \t \uXXXX, etc.)
             item.name_len = decodeJsonEscapes(name_str, &item.name);
             item.episodes = ep_count;
             item.score = score;
-            
+
             const purl = @min(poster_url.len, 128);
             @memcpy(item.poster_url[0..purl], poster_url[0..purl]);
             item.poster_url_len = purl;
-            
+
             // Decode JSON escapes in synopsis (\" \\ \/ \n \t \uXXXX, etc.)
             item.overview_len = decodeJsonEscapes(synopsis, &item.overview);
-            
+
             item.poster_fetching = false;
             if (item.poster_tex) |tx| {
                 dvui.textureDestroyLater(tx);
@@ -335,21 +378,21 @@ fn parseJikanData(json: []const u8) void {
 
             count += 1;
         }
-        
+
         pos = next_obj_pos;
     }
-    
+
     state.app.anime.result_count = count;
 }
 
 pub fn loadEpisodes(idx: usize) void {
     if (idx >= state.app.anime.result_count) return;
     state.app.anime.selected_idx = idx;
-    
+
     // Instantly populate numbered episode slots so UI is responsive
     const max_eps = state.app.anime.results[idx].episodes;
     var ep_count: usize = 0;
-    
+
     while (ep_count < max_eps and ep_count < 200) : (ep_count += 1) {
         var str_buf: [8]u8 = undefined;
         const s = std.fmt.bufPrint(&str_buf, "{d}", .{ep_count + 1}) catch "1";
@@ -362,7 +405,7 @@ pub fn loadEpisodes(idx: usize) void {
     }
     state.app.anime.episode_count = ep_count;
     state.app.anime.is_loading = false;
-    
+
     // Now kick off Jikan episodes enrichment in background
     if (!state.app.anime.episodes_loading) {
         state.app.anime.episodes_loading = true;
@@ -374,17 +417,17 @@ pub fn loadEpisodes(idx: usize) void {
 
 fn fetchEpisodeDataThread(idx: usize) void {
     defer state.app.anime.episodes_loading = false;
-    
+
     const mal_id = state.app.anime.results[idx].id[0..state.app.anime.results[idx].id_len];
-    
+
     // Fetch up to 4 pages of episodes (100 eps per page from Jikan)
     var page: u32 = 1;
     var total_parsed: usize = 0;
-    
+
     while (page <= 4 and total_parsed < state.app.anime.episode_count) : (page += 1) {
         var url_buf: [256]u8 = undefined;
         const url = std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/anime/{s}/episodes?page={d}", .{ mal_id, page }) catch break;
-        
+
         const argv = [_][]const u8{
             "curl", "-s", "-A", agent, "--max-time", "10", url,
         };
@@ -392,45 +435,52 @@ fn fetchEpisodeDataThread(idx: usize) void {
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Ignore;
         _ = child.spawn() catch break;
-        
+
         var buf: [64 * 1024]u8 = undefined;
         const len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &buf) catch 0 else 0;
         _ = child.wait() catch {};
-        
+
         if (len < 10) break;
         const json = buf[0..len];
-        
+
         // Parse each episode in the data array
         var pos: usize = 0;
         var found_any = false;
-        
+
         while (pos < json.len and total_parsed < 200) {
             // Find next "mal_id": in episodes array
             const id_idx = std.mem.indexOf(u8, json[pos..], "\"mal_id\":") orelse break;
             pos += id_idx + 9;
-            
+
             // Extract episode number
             var num_end: usize = 0;
             while (num_end < json.len - pos and json[pos + num_end] >= '0' and json[pos + num_end] <= '9') : (num_end += 1) {}
             if (num_end == 0) continue;
             const ep_num = std.fmt.parseInt(usize, json[pos .. pos + num_end], 10) catch continue;
-            if (ep_num == 0 or ep_num > 200) { pos += num_end; continue; }
+            if (ep_num == 0 or ep_num > 200) {
+                pos += num_end;
+                continue;
+            }
             const ep_idx = ep_num - 1;
-            
+
             // Find scope of this episode object
             var next_ep = json.len;
             if (std.mem.indexOf(u8, json[pos..], "\"mal_id\":")) |nidx| {
                 next_ep = pos + nidx;
             }
             const obj = json[pos..next_ep];
-            
+
             // Extract title
             if (std.mem.indexOf(u8, obj, "\"title\":\"")) |ti| {
                 const start = ti + 9;
                 var end = start;
                 var esc = false;
                 while (end < obj.len) : (end += 1) {
-                    if (esc) { esc = false; } else if (obj[end] == '\\') { esc = true; } else if (obj[end] == '"') break;
+                    if (esc) {
+                        esc = false;
+                    } else if (obj[end] == '\\') {
+                        esc = true;
+                    } else if (obj[end] == '"') break;
                 }
                 if (end < obj.len) {
                     const tlen = @min(end - start, 80);
@@ -438,7 +488,7 @@ fn fetchEpisodeDataThread(idx: usize) void {
                     state.app.anime.episode_title_lens[ep_idx] = tlen;
                 }
             }
-            
+
             // Extract aired date (just YYYY-MM-DD)
             if (std.mem.indexOf(u8, obj, "\"aired\":\"")) |ai| {
                 const start = ai + 9;
@@ -446,7 +496,7 @@ fn fetchEpisodeDataThread(idx: usize) void {
                 @memcpy(state.app.anime.episode_aired[ep_idx][0..dlen], obj[start .. start + dlen]);
                 state.app.anime.episode_aired_lens[ep_idx] = dlen;
             }
-            
+
             // Extract score
             if (std.mem.indexOf(u8, obj, "\"score\":")) |si| {
                 const start = si + 8;
@@ -456,19 +506,19 @@ fn fetchEpisodeDataThread(idx: usize) void {
                     state.app.anime.episode_scores[ep_idx] = std.fmt.parseFloat(f32, obj[start..end]) catch 0;
                 }
             }
-            
+
             // Extract filler flag
             if (std.mem.indexOf(u8, obj, "\"filler\":true")) |_| {
                 state.app.anime.episode_filler[ep_idx] = true;
             }
-            
+
             total_parsed += 1;
             found_any = true;
             pos = next_ep;
         }
-        
+
         if (!found_any) break;
-        
+
         // Jikan rate limit: ~3 req/sec
         @import("../core/io_global.zig").sleep(400 * std.time.ns_per_ms);
     }
@@ -478,13 +528,13 @@ pub fn playEpisode(ep_no: []const u8) void {
     if (state.app.anime.selected_idx == null) return;
     const idx = state.app.anime.selected_idx.?;
     if (idx >= state.app.anime.result_count) return;
-    
+
     state.app.anime.stream_loading = true;
-    
+
     var ep_copy: [8]u8 = std.mem.zeroes([8]u8);
     const ep_len = @min(ep_no.len, 7);
     @memcpy(ep_copy[0..ep_len], ep_no[0..ep_len]);
-    
+
     _ = std.Thread.spawn(.{}, fetchStreamThread, .{ ep_copy, ep_len }) catch {
         state.app.anime.stream_loading = false;
     };
@@ -492,17 +542,17 @@ pub fn playEpisode(ep_no: []const u8) void {
 
 fn fetchStreamThread(ep_buf: [8]u8, ep_len: usize) void {
     defer state.app.anime.stream_loading = false;
-    
+
     const ep_no = ep_buf[0..ep_len];
     const sel_idx = state.app.anime.selected_idx orelse return;
-    
+
     var name_buf: [129]u8 = undefined;
     const name_len = state.app.anime.results[sel_idx].name_len;
     @memcpy(name_buf[0..name_len], state.app.anime.results[sel_idx].name[0..name_len]);
     const name_str = name_buf[0..name_len];
 
     var query_buf: [256]u8 = undefined;
-    const query = std.fmt.bufPrintZ(&query_buf, "{s} {s}", .{name_str, ep_no}) catch return;
+    const query = std.fmt.bufPrintZ(&query_buf, "{s} {s}", .{ name_str, ep_no }) catch return;
 
     // ── Phase 1: Try torrent resolution ──
     logs.pushLog("info", "anime", "Resolving stream via Torrents...", false);
@@ -524,7 +574,7 @@ fn fetchStreamThread(ep_buf: [8]u8, ep_len: usize) void {
             if (item.source == .torrent or item.source == .stremio) {
                 const srch = @import("search.zig");
                 srch.loadTorrentToPlayer(item.url[0..item.url_len]);
-                
+
                 var log_buf2: [128]u8 = undefined;
                 const log_msg2 = std.fmt.bufPrintZ(&log_buf2, "Playing: {s}", .{item.name[0..@min(item.name_len, 40)]}) catch "Playing";
                 logs.pushLog("info", "anime", log_msg2, false);
@@ -535,15 +585,15 @@ fn fetchStreamThread(ep_buf: [8]u8, ep_len: usize) void {
 
     // ── Phase 2: DDL fallback via AnimePahe ──
     logs.pushLog("info", "anime", "No torrent peers. Trying DDL fallback...", false);
-    
+
     if (tryAnimePaheDDL(name_str, ep_no)) return;
-    
+
     logs.pushLog("error", "anime", "No streams found. Try universal search.", true);
 }
 
 fn tryAnimePaheDDL(name: []const u8, ep_no: []const u8) bool {
     const c_alloc = std.heap.c_allocator;
-    
+
     // URL-encode the anime name for search
     var enc_buf: [256]u8 = undefined;
     var enc_len: usize = 0;
@@ -562,29 +612,28 @@ fn tryAnimePaheDDL(name: []const u8, ep_no: []const u8) bool {
             enc_len += 3;
         }
     }
-    
+
     // Search AnimePahe for the anime
     var url_buf: [512]u8 = undefined;
     const search_url = std.fmt.bufPrint(&url_buf, "https://animepahe.pw/api?m=search&q={s}", .{enc_buf[0..enc_len]}) catch return false;
-    
+
     const argv_search = [_][]const u8{
-        "curl", "-sL", "--max-time", "10",
-        "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-        "-H", "Referer: https://animepahe.pw",
+        "curl",     "-sL",                                                                                          "--max-time", "10",
+        "-H",       "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0", "-H",         "Referer: https://animepahe.pw",
         search_url,
     };
     var child = @import("../core/io_global.zig").Child.init(&argv_search, c_alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     _ = child.spawn() catch return false;
-    
+
     var buf: [32 * 1024]u8 = undefined;
     const len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &buf) catch 0 else 0;
     _ = child.wait() catch {};
-    
+
     if (len < 10) return false;
     const json = buf[0..len];
-    
+
     // Extract first matching session from search results
     // Format: {"data":[{"session":"xxxx-xxxx","title":"...","episodes":N},...]}
     var session: []const u8 = "";
@@ -594,20 +643,20 @@ fn tryAnimePaheDDL(name: []const u8, ep_no: []const u8) bool {
         while (end < json.len and json[end] != '"') : (end += 1) {}
         if (end < json.len) session = json[start..end];
     }
-    
+
     if (session.len == 0) {
         logs.pushLog("warn", "anime", "AnimePahe: anime not found", false);
         return false;
     }
-    
+
     // Construct the watch URL for mpv + ytdl-hook
     // AnimePahe format: https://animepahe.pw/anime/{session}
     // mpv will use yt-dlp/ytdl to extract the stream
     var watch_url_buf: [256]u8 = undefined;
-    const watch_url = std.fmt.bufPrintZ(&watch_url_buf, "https://animepahe.pw/play/{s}/{s}", .{session, ep_no}) catch return false;
-    
+    const watch_url = std.fmt.bufPrintZ(&watch_url_buf, "https://animepahe.pw/play/{s}/{s}", .{ session, ep_no }) catch return false;
+
     logs.pushLog("info", "anime", "DDL: Loading via AnimePahe...", false);
-    
+
     // Load directly via mpv (it will use ytdl-hook or we can try yt-dlp extraction)
     const c = @import("../core/c.zig");
     if (state.app.players.items.len > 0 and state.app.active_player_idx < state.app.players.items.len) {
@@ -617,7 +666,7 @@ fn tryAnimePaheDDL(name: []const u8, ep_no: []const u8) bool {
         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd_str.ptr);
         return true;
     }
-    
+
     return false;
 }
 
@@ -629,7 +678,11 @@ pub fn renderContent() void {
     if (!has_loaded_trending and state.app.anime.result_count == 0 and state.app.anime.search_buf[0] == 0) {
         loadTrendingAnime();
     }
-    
+
+    // Full-page root so loading/empty branches fill width/height.
+    var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+    defer page.deinit();
+
     // Search bar
     {
         var search_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -639,7 +692,7 @@ pub fn renderContent() void {
             .color_fill = theme.colors.bg_header,
         });
         defer search_row.deinit();
-        
+
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.anime.search_buf } }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 200, .h = 20 },
@@ -651,7 +704,7 @@ pub fn renderContent() void {
         });
         const enter_pressed = te.enter_pressed;
         te.deinit();
-        
+
         const clicked = dvui.button(@src(), "Search", .{}, .{
             .color_fill = theme.colors.accent,
             .color_text = dvui.Color.white,
@@ -666,7 +719,7 @@ pub fn renderContent() void {
             }
         }
     }
-    
+
     // Loading indicator
     if (state.app.anime.is_loading) {
         _ = dvui.label(@src(), "Loading...", .{}, .{
@@ -675,14 +728,14 @@ pub fn renderContent() void {
         });
         return;
     }
-    
+
     if (state.app.anime.stream_loading) {
         _ = dvui.label(@src(), "Loading stream...", .{}, .{
             .color_text = theme.colors.accent,
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
         });
     }
-    
+
     // Episode list (if anime selected)
     if (state.app.anime.selected_idx) |sel_idx| {
         if (sel_idx < state.app.anime.result_count) {
@@ -695,7 +748,7 @@ pub fn renderContent() void {
                     .color_fill = theme.colors.bg_card,
                 });
                 defer sel_row.deinit();
-                
+
                 if (dvui.button(@src(), "<", .{}, .{
                     .color_fill = theme.colors.accent,
                     .color_text = dvui.Color.white,
@@ -705,13 +758,13 @@ pub fn renderContent() void {
                     state.app.anime.selected_idx = null;
                     state.app.anime.episode_count = 0;
                 }
-                
+
                 _ = dvui.label(@src(), "{s}", .{r.name[0..r.name_len]}, .{
                     .color_text = theme.colors.text_main,
                     .expand = .horizontal,
                     .padding = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
                 });
-                
+
                 // Episode count badge
                 {
                     var ep_info: [32]u8 = undefined;
@@ -722,7 +775,7 @@ pub fn renderContent() void {
                     });
                 }
             }
-            
+
             // Episode cards
             if (state.app.anime.episode_count > 0) {
                 // Loading indicator for episode enrichment
@@ -732,12 +785,12 @@ pub fn renderContent() void {
                         .padding = .{ .x = 12, .y = 4, .w = 0, .h = 0 },
                     });
                 }
-                
+
                 var scroll = dvui.scrollArea(@src(), .{}, .{
                     .expand = .both,
                 });
                 defer scroll.deinit();
-                
+
                 var ep_i: usize = 0;
                 while (ep_i < state.app.anime.episode_count) : (ep_i += 1) {
                     const ep_len = state.app.anime.episode_list_lens[ep_i];
@@ -745,13 +798,13 @@ pub fn renderContent() void {
                     const ep_str = state.app.anime.episode_list[ep_i][0..ep_len];
                     const has_title = state.app.anime.episode_title_lens[ep_i] > 0;
                     const is_filler = state.app.anime.episode_filler[ep_i];
-                    
+
                     // Episode card container
-                    const fill_color = if (is_filler) 
+                    const fill_color = if (is_filler)
                         dvui.Color{ .r = 60, .g = 40, .b = 40, .a = 255 }
-                    else 
+                    else
                         theme.colors.bg_card;
-                    
+
                     var ep_card = dvui.box(@src(), .{ .dir = .vertical }, .{
                         .id_extra = ep_i + 2000,
                         .expand = .horizontal,
@@ -762,7 +815,7 @@ pub fn renderContent() void {
                         .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
                     });
                     defer ep_card.deinit();
-                    
+
                     // Top row: Ep number + play button
                     {
                         var top = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -770,7 +823,7 @@ pub fn renderContent() void {
                             .expand = .horizontal,
                         });
                         defer top.deinit();
-                        
+
                         // Episode number badge
                         var ep_badge: [16]u8 = undefined;
                         const badge = std.fmt.bufPrintZ(&ep_badge, "Ep {s}", .{ep_str}) catch "?";
@@ -778,7 +831,7 @@ pub fn renderContent() void {
                             .id_extra = ep_i + 3100,
                             .color_text = theme.colors.accent,
                         });
-                        
+
                         // Filler badge
                         if (is_filler) {
                             _ = dvui.label(@src(), " FILLER", .{}, .{
@@ -786,7 +839,7 @@ pub fn renderContent() void {
                                 .color_text = dvui.Color{ .r = 255, .g = 100, .b = 100, .a = 200 },
                             });
                         }
-                        
+
                         // Score on the right
                         const sc = state.app.anime.episode_scores[ep_i];
                         if (sc > 0) {
@@ -801,7 +854,7 @@ pub fn renderContent() void {
                             } else |_| {}
                         }
                     }
-                    
+
                     // Title row (if enriched)
                     if (has_title) {
                         const title = state.app.anime.episode_titles[ep_i][0..state.app.anime.episode_title_lens[ep_i]];
@@ -825,7 +878,7 @@ pub fn renderContent() void {
                             playEpisode(ep_str);
                         }
                     }
-                    
+
                     // Aired date
                     const aired_len = state.app.anime.episode_aired_lens[ep_i];
                     if (aired_len > 0) {
@@ -844,7 +897,7 @@ pub fn renderContent() void {
             return;
         }
     }
-    
+
     // Gallery cards
     renderGallery();
 }
@@ -856,7 +909,9 @@ pub fn renderContent() void {
 fn renderGallery() void {
     if (state.app.anime.result_count == 0 and !state.app.anime.is_loading) {
         _ = dvui.label(@src(), "Search for anime or wait for trending...", .{}, .{
-            .color_text = theme.colors.text_muted, .gravity_x = 0.5, .margin = dvui.Rect.all(24),
+            .color_text = theme.colors.text_muted,
+            .gravity_x = 0.5,
+            .margin = dvui.Rect.all(24),
         });
         return;
     }
@@ -877,8 +932,11 @@ fn renderCard(item: *state.AnimeResult, idx: usize) void {
     const h2: u8 = @truncate((hue >> 8) & 0xFF);
 
     var card = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .id_extra = idx + 1000, .expand = .horizontal, .background = true,
-        .color_fill = theme.colors.bg_card, .color_border = theme.colors.bg_header_border,
+        .id_extra = idx + 1000,
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = theme.colors.bg_card,
+        .color_border = theme.colors.bg_header_border,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .padding = .{ .x = 10, .y = 10, .w = 10, .h = 10 },
     });
@@ -887,10 +945,12 @@ fn renderCard(item: *state.AnimeResult, idx: usize) void {
     // Poster placeholder / texture
     {
         var poster = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 100, .background = true,
+            .id_extra = idx + 100,
+            .background = true,
             .color_fill = dvui.Color{ .r = 20 + h1 / 6, .g = 25 + h2 / 8, .b = 35 + h1 / 5, .a = 255 },
             .corner_radius = dvui.Rect.all(6),
-            .min_size_content = .{ .w = 60, .h = 90 }, .max_size_content = .{ .w = 60, .h = 90 },
+            .min_size_content = .{ .w = 60, .h = 90 },
+            .max_size_content = .{ .w = 60, .h = 90 },
         });
         defer poster.deinit();
 
@@ -907,13 +967,17 @@ fn renderCard(item: *state.AnimeResult, idx: usize) void {
 
         if (item.poster_tex) |*tex| {
             _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                .id_extra = idx + 150, .expand = .both, .corner_radius = dvui.Rect.all(6),
+                .id_extra = idx + 150,
+                .expand = .both,
+                .corner_radius = dvui.Rect.all(6),
             });
         } else {
             // Kick off async poster download if not already fetching
             if (!item.poster_fetching and item.poster_url_len > 0) fetchPoster(item);
-            dvui.icon(@src(), "", icons.tvg.lucide.@"film", .{}, .{
-                .id_extra = idx + 150, .gravity_x = 0.5, .gravity_y = 0.5,
+            dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
+                .id_extra = idx + 150,
+                .gravity_x = 0.5,
+                .gravity_y = 0.5,
                 .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 },
             });
         }
@@ -923,13 +987,16 @@ fn renderCard(item: *state.AnimeResult, idx: usize) void {
     // Info column
     {
         var info = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 200, .expand = .horizontal, .padding = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
+            .id_extra = idx + 200,
+            .expand = .horizontal,
+            .padding = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
         });
         defer info.deinit();
 
         // Title — click to load episodes
         if (dvui.button(@src(), title, .{}, .{
-            .id_extra = idx + 500, .expand = .horizontal,
+            .id_extra = idx + 500,
+            .expand = .horizontal,
             .color_text = theme.colors.text_main,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .padding = dvui.Rect.all(0),
@@ -940,7 +1007,9 @@ fn renderCard(item: *state.AnimeResult, idx: usize) void {
         // Meta row: episodes + score
         {
             var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = idx + 600, .expand = .horizontal, .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+                .id_extra = idx + 600,
+                .expand = .horizontal,
+                .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
             });
             defer meta.deinit();
 
@@ -969,7 +1038,9 @@ fn renderCard(item: *state.AnimeResult, idx: usize) void {
             const suffix: []const u8 = if (item.overview_len > 60) "..." else "";
             if (std.fmt.bufPrintZ(&btn_buf, "{s}{s}", .{ snip, suffix })) |snip_z| {
                 if (dvui.button(@src(), snip_z, .{}, .{
-                    .id_extra = idx + 650, .color_text = theme.colors.text_muted, .expand = .horizontal,
+                    .id_extra = idx + 650,
+                    .color_text = theme.colors.text_muted,
+                    .expand = .horizontal,
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .padding = dvui.Rect.all(0),
                 })) {
@@ -981,7 +1052,9 @@ fn renderCard(item: *state.AnimeResult, idx: usize) void {
         // Full overview when expanded
         if (item.expanded and item.overview_len > 0) {
             _ = dvui.label(@src(), "{s}", .{item.overview[0..item.overview_len]}, .{
-                .id_extra = idx + 700, .color_text = theme.colors.text_muted, .expand = .horizontal,
+                .id_extra = idx + 700,
+                .color_text = theme.colors.text_muted,
+                .expand = .horizontal,
                 .padding = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
             });
         }
@@ -1104,7 +1177,10 @@ pub fn fetchPoster(item: *state.AnimeResult) void {
     const results = state.app.anime.results[0..state.app.anime.result_count];
     var found_idx: ?usize = null;
     for (results, 0..) |*r, i| {
-        if (r == item) { found_idx = i; break; }
+        if (r == item) {
+            found_idx = i;
+            break;
+        }
     }
     const idx = found_idx orelse {
         item.poster_fetching = false;
