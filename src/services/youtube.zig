@@ -57,6 +57,9 @@ pub fn fetchYoutube(query: []const u8) void {
         state.app.yt.is_loading = false;
         break :blk null;
     };
+    // Detach: the handle is never joined, so without this each search leaks a
+    // thread handle/resources for the life of the process.
+    if (state.app.yt.thread) |t| t.detach();
 }
 
 fn urlEncode(input: []const u8, out: []u8) usize {

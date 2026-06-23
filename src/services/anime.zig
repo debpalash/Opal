@@ -36,6 +36,7 @@ pub fn loadTrendingAnime() void {
         state.app.anime.is_loading = false;
         return;
     };
+    if (state.app.anime.thread) |t| t.detach(); // never joined — detach to avoid leaking the handle
 }
 
 fn trendingThread() void {
@@ -84,6 +85,7 @@ pub fn searchAnime(query: []const u8) void {
         state.app.anime.is_loading = false;
         return;
     };
+    if (state.app.anime.thread) |t| t.detach(); // never joined — detach to avoid leaking the handle
 }
 
 var search_query_buf: [256]u8 = undefined;

@@ -88,6 +88,7 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
         state.app.tmdb.is_loading = false;
         break :blk null;
     };
+    if (state.app.tmdb.thread) |t| t.detach(); // never joined — detach to avoid leaking the handle
 }
 
 fn buildApiUrl(buf: *[512]u8, mode: FetchMode, query: []const u8, cat: state.TmdbCategory, mf: state.TmdbMediaFilter, tw: state.TmdbTimeWindow, page: u32) ?[]const u8 {
@@ -162,6 +163,7 @@ pub fn fetchDiscover(genre_id: u32) void {
         state.app.tmdb.is_loading = false;
         break :blk null;
     };
+    if (state.app.tmdb.thread) |t| t.detach(); // never joined — detach to avoid leaking the handle
 }
 
 // ══════════════════════════════════════════════════════════
