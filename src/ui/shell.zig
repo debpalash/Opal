@@ -45,12 +45,14 @@ pub fn render() !void {
         // The Player route owns its full bleed (video grid); every other page
         // gets a consistent gutter so content never sits flush to the window edge.
         const r = state.app.router.current;
-        const gutter: f32 = if (r == .player) 0 else theme.spacing.lg;
+        // Tight gutter so content fills the window (Browse/grids especially);
+        // the player still bleeds edge-to-edge.
+        const gutter: f32 = if (r == .player) 0 else theme.spacing.sm;
         var content = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .both,
             .background = true,
             .color_fill = theme.colors.bg_deep,
-            .padding = .{ .x = gutter, .y = if (r == .player) 0 else theme.spacing.md, .w = gutter, .h = 0 },
+            .padding = .{ .x = gutter, .y = if (r == .player) 0 else theme.spacing.xs, .w = gutter, .h = 0 },
         });
         defer content.deinit();
         try renderPage(r);
@@ -261,33 +263,62 @@ fn tabLabel(t: state.DrawerTab) []const u8 {
     };
 }
 
-/// Horizontal segment of sub-tabs; updates `sel` on click. Wraps when narrow.
+fn iconForTab(t: state.DrawerTab) []const u8 {
+    return switch (t) {
+        .Search => icons.tvg.lucide.search,
+        .Downloads => icons.tvg.lucide.download,
+        .TMDB => icons.tvg.lucide.film,
+        .YouTube => icons.tvg.lucide.youtube,
+        .Queue => icons.tvg.lucide.@"list-video",
+        .Comics => icons.tvg.lucide.@"book-open",
+        .Anime => icons.tvg.lucide.tv,
+        .History => icons.tvg.lucide.history,
+        .RSS => icons.tvg.lucide.rss,
+        .Jellyfin => icons.tvg.lucide.server,
+        .Plugins => icons.tvg.lucide.puzzle,
+        .Logs => icons.tvg.lucide.@"scroll-text",
+        .Settings => icons.tvg.lucide.settings,
+        .AI => icons.tvg.lucide.@"message-square-text",
+    };
+}
+
+/// Horizontal segment of sub-tabs (icon + label); updates `sel` on click.
+/// Compact, full-width; wraps when narrow.
 fn subTabs(tabs: []const state.DrawerTab, sel: *state.DrawerTab, id_extra: usize) void {
     var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
         .expand = .horizontal,
-        .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.sm, .w = theme.spacing.lg, .h = theme.spacing.xs },
+        .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = theme.spacing.xs, .h = theme.spacing.xs },
     });
     defer bar.deinit();
 
     for (tabs, 0..) |t, i| {
         const active = sel.* == t;
+        const fg = if (active) theme.colors.accent_primary else theme.colors.text_secondary;
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = id_extra + i + 1,
-            .min_size_content = .{ .w = 0, .h = 28 },
+            .min_size_content = .{ .w = 0, .h = 24 },
             .background = true,
             .color_fill = if (active) theme.colors.bg_elevated else transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+            .padding = .{ .x = theme.spacing.sm, .y = 3, .w = theme.spacing.sm, .h = 3 },
             .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         });
         defer row.deinit();
         if (dvui.clicked(row.data(), .{})) sel.* = t;
         row.drawBackground();
+        dvui.icon(@src(), "tab", iconForTab(t), .{}, .{
+            .id_extra = id_extra + i + 1,
+            .color_text = fg,
+            .min_size_content = .{ .w = 14, .h = 14 },
+            .max_size_content = .{ .w = 14, .h = 14 },
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
+        });
         _ = dvui.label(@src(), "{s}", .{tabLabel(t)}, .{
             .id_extra = id_extra + i + 1,
-            .color_text = if (active) theme.colors.accent_primary else theme.colors.text_secondary,
+            .color_text = fg,
             .gravity_y = 0.5,
         });
     }

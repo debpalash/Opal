@@ -324,6 +324,51 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
     }
 }
 
+/// Dimmed scrim + metadata shown over a poster while hovered.
+fn renderHoverMeta(item: *state.TmdbItem, idx: usize) void {
+    var ov = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = idx + 160,
+        .expand = .both,
+        .background = true,
+        .color_fill = dvui.Color{ .r = 8, .g = 10, .b = 16, .a = 232 },
+        .corner_radius = dvui.Rect.all(8),
+        .padding = dvui.Rect.all(8),
+    });
+    defer ov.deinit();
+
+    // Title (full, wraps).
+    _ = dvui.label(@src(), "{s}", .{safeUtf8(item.title[0..@min(item.title_len, item.title.len)])}, .{
+        .id_extra = idx + 161,
+        .expand = .horizontal,
+        .color_text = theme.colors.text_main,
+        .font = dvui.themeGet().font_heading,
+    });
+
+    // Rating · year · type line.
+    {
+        var line = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = idx + 162, .expand = .horizontal, .padding = .{ .x = 0, .y = 2, .w = 0, .h = 2 } });
+        defer line.deinit();
+        const pct = @as(u8, @intFromFloat(std.math.clamp(item.rating * 10.0, 0.0, 100.0)));
+        const sc = if (pct >= 70) theme.colors.success else if (pct >= 50) theme.colors.warning else theme.colors.danger;
+        var pb: [8]u8 = undefined;
+        if (std.fmt.bufPrint(&pb, "{d}%", .{pct})) |ps| {
+            _ = dvui.label(@src(), "{s}", .{ps}, .{ .id_extra = idx + 163, .color_text = sc });
+        } else |_| {}
+        if (item.year_len > 0) {
+            _ = dvui.label(@src(), "  {s}", .{item.year[0..item.year_len]}, .{ .id_extra = idx + 164, .color_text = theme.colors.text_muted });
+        }
+    }
+
+    // Overview (truncated; safeUtf8 trims any mid-codepoint cut).
+    if (item.overview_len > 0) {
+        _ = dvui.label(@src(), "{s}", .{safeUtf8(item.overview[0..@min(item.overview_len, 320)])}, .{
+            .id_extra = idx + 165,
+            .expand = .horizontal,
+            .color_text = theme.colors.text_secondary,
+        });
+    }
+}
+
 /// Render a single poster card in the grid layout
 pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h: f32) void {
     const title = safeUtf8(item.title[0..@min(item.title_len, item.title.len)]);
@@ -368,21 +413,31 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
             }
         }
 
-        if (item.poster_tex) |*tex| {
-            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                .id_extra = idx + 150,
-                .expand = .both,
-                .corner_radius = dvui.Rect.all(8),
-            });
-        } else {
-            if (!item.poster_fetching and item.poster_path_len > 0) api.fetchPoster(item);
-            dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
-                .id_extra = idx + 150,
-                .gravity_x = 0.5,
-                .gravity_y = 0.5,
-                .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 60 },
-                .expand = .both,
-            });
+        // Stack the poster + (on hover) a meta overlay, both filling the button.
+        {
+            var stack = dvui.overlay(@src(), .{ .id_extra = idx + 140, .expand = .both });
+            defer stack.deinit();
+
+            if (item.poster_tex) |*tex| {
+                _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+                    .id_extra = idx + 150,
+                    .expand = .both,
+                    .corner_radius = dvui.Rect.all(8),
+                });
+            } else {
+                if (!item.poster_fetching and item.poster_path_len > 0) api.fetchPoster(item);
+                dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
+                    .id_extra = idx + 150,
+                    .gravity_x = 0.5,
+                    .gravity_y = 0.5,
+                    .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 60 },
+                    .expand = .both,
+                });
+            }
+
+            // Hover reveals richer metadata (overview / rating / year) over a
+            // dimmed scrim, so cards stay compact by default.
+            if (bw.hovered()) renderHoverMeta(item, idx);
         }
 
         const poster_clicked = bw.clicked();

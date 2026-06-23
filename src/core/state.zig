@@ -310,7 +310,7 @@ pub const AppState = struct {
         api_key_len: usize = 0,
         loaded_once: bool = false,
         // Gallery card target width (px) — user-cyclable compact/normal/large/xl.
-        card_w: f32 = 150,
+        card_w: f32 = 124,
     } = .{},
 
     // ── OpenSubtitles ──

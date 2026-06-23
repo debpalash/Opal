@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-06-24T03:14:53",
+  "timestamp": "2026-06-24T03:18:46",
   "total": 77,
   "passed": 68,
   "failed": 0,
@@ -110,14 +110,14 @@
       "category": "Database",
       "status": "pass",
       "detail": "39 config entries",
-      "duration_ms": 12
+      "duration_ms": 10
     },
     {
       "name": "Watch History Table",
       "category": "Database",
       "status": "pass",
       "detail": "4 watch entries",
-      "duration_ms": 0
+      "duration_ms": 5
     },
     {
       "name": "Search History Table",
@@ -236,13 +236,13 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 39.7 MB",
-      "duration_ms": 464
+      "duration_ms": 489
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "39.7 MB, built at 03:14:41",
+      "detail": "39.7 MB, built at 03:18:29",
       "duration_ms": 0
     },
     {
@@ -278,35 +278,35 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 1135
+      "duration_ms": 1489
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "skip",
       "detail": "faster-whisper not installed (optional)",
-      "duration_ms": 28
+      "duration_ms": 26
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 23
+      "duration_ms": 24
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 28
+      "duration_ms": 25
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 30
+      "duration_ms": 26
     },
     {
       "name": "Embedding Server Health",
@@ -432,42 +432,42 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 35
+      "duration_ms": 32
     },
     {
       "name": "Compiles: zigzag-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 28
+      "duration_ms": 29
     },
     {
       "name": "Compiles: zigzag-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 27
+      "duration_ms": 30
     },
     {
       "name": "Compiles: zigzag-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 27
+      "duration_ms": 33
     },
     {
       "name": "--check degrades: zigzag-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 23
+      "duration_ms": 25
     },
     {
       "name": "--check degrades: zigzag-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 26
+      "duration_ms": 28
     },
     {
       "name": "--check degrades: zigzag-voice-server.py",
@@ -488,7 +488,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 2000
+      "duration_ms": 2038
     },
     {
       "name": "Sherpa Model Canonicalization",
@@ -551,14 +551,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 5893
+      "duration_ms": 3976
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 63
+      "duration_ms": 80
     },
     {
       "name": "Page Router",
@@ -579,7 +579,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 5
+      "duration_ms": 6
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -635,7 +635,7 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 2543
+      "duration_ms": 588
     }
   ]
 }
