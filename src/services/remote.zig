@@ -628,6 +628,9 @@ fn apiSearch(stream: std.Io.net.Stream, query: []const u8) void {
     w.writeAll("{\"results\":[") catch return;
     var count: usize = 0;
     for (search_svc.search_results.items) |r| {
+        // Reserve tail space so the closing `],"searching":…}` always fits —
+        // stop adding items rather than truncate into invalid JSON mid-array.
+        if (w.end + 2048 > json_buf.len) break;
         if (count > 0) w.writeAll(",") catch return;
         w.writeAll("{\"title\":\"") catch return;
         escJsonWrite(&w, r.name);
@@ -1177,6 +1180,7 @@ fn apiUnifiedSearch(stream: std.Io.net.Stream, query: []const u8) void {
         search_svc.search_results_mutex.lock();
         defer search_svc.search_results_mutex.unlock();
         for (search_svc.search_results.items) |r| {
+            if (w.end + 2048 > json_buf.len) break; // reserve tail → never truncate mid-array
             if (total > 0) w.writeAll(",") catch return;
             w.writeAll("{\"source\":\"torrent\",\"title\":\"") catch return;
             escJsonWrite(&w, r.name);
@@ -1196,6 +1200,7 @@ fn apiUnifiedSearch(stream: std.Io.net.Stream, query: []const u8) void {
     if (state.app.tmdb.api_key_len > 0) {
         for (state.app.tmdb.results.items, 0..) |item, idx| {
             if (idx >= 10) break;
+            if (w.end + 2048 > json_buf.len) break;
             if (total > 0) w.writeAll(",") catch return;
             const rating_pct = @as(u8, @intFromFloat(std.math.clamp(item.rating * 10.0, 0.0, 100.0)));
             w.writeAll("{\"source\":\"tmdb\",\"title\":\"") catch return;
@@ -1213,6 +1218,7 @@ fn apiUnifiedSearch(stream: std.Io.net.Stream, query: []const u8) void {
     // ── YouTube results ──
     for (state.app.yt.results.items) |yt_item| {
         if (total >= 80) break;
+        if (w.end + 2048 > json_buf.len) break;
         if (yt_item.title_len == 0) continue;
         if (total > 0) w.writeAll(",") catch return;
         w.writeAll("{\"source\":\"youtube\",\"title\":\"") catch return;
@@ -1228,6 +1234,7 @@ fn apiUnifiedSearch(stream: std.Io.net.Stream, query: []const u8) void {
     // ── Anime results ──
     for (0..state.app.anime.result_count) |ai| {
         if (total >= 80) break;
+        if (w.end + 2048 > json_buf.len) break;
         const a_item = state.app.anime.results[ai];
         if (a_item.name_len == 0) continue;
         if (total > 0) w.writeAll(",") catch return;
@@ -1243,6 +1250,7 @@ fn apiUnifiedSearch(stream: std.Io.net.Stream, query: []const u8) void {
     if (state.app.jf.connected) {
         for (0..state.app.jf.item_count) |ji| {
             if (total >= 80) break;
+            if (w.end + 2048 > json_buf.len) break;
             const jf_item = state.app.jf.items[ji];
             if (jf_item.name_len == 0) continue;
             if (total > 0) w.writeAll(",") catch return;
