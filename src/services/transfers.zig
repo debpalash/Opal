@@ -240,14 +240,8 @@ fn renderFilesInline() void {
         defer row.deinit();
 
         // Icon
-        const ficon = if (is_dir) icons.tvg.lucide.@"folder"
-            else if (is_video) icons.tvg.lucide.@"film"
-            else if (is_audio) icons.tvg.lucide.@"music"
-            else icons.tvg.lucide.@"file";
-        const icol = if (is_dir) dvui.Color{ .r = 100, .g = 170, .b = 255, .a = 255 }
-            else if (is_video) dvui.Color{ .r = 100, .g = 220, .b = 120, .a = 255 }
-            else if (is_audio) dvui.Color{ .r = 255, .g = 180, .b = 80, .a = 255 }
-            else theme.colors.text_dim;
+        const ficon = if (is_dir) icons.tvg.lucide.folder else if (is_video) icons.tvg.lucide.film else if (is_audio) icons.tvg.lucide.music else icons.tvg.lucide.file;
+        const icol = if (is_dir) dvui.Color{ .r = 100, .g = 170, .b = 255, .a = 255 } else if (is_video) dvui.Color{ .r = 100, .g = 220, .b = 120, .a = 255 } else if (is_audio) dvui.Color{ .r = 255, .g = 180, .b = 80, .a = 255 } else theme.colors.text_dim;
         _ = dvui.icon(@src(), "", ficon, .{}, .{
             .id_extra = fi + 20100,
             .color_text = icol,
@@ -318,7 +312,7 @@ fn renderFilesInline() void {
                 browse_path_changed = true;
             }
         } else {
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"play", .{}, .{}, .{
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
                 .id_extra = fi + 20500,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 .color_text = theme.colors.success,
@@ -329,7 +323,11 @@ fn renderFilesInline() void {
                 if (std.fmt.bufPrintZ(&fp, "{s}/{s}", .{ effective_path, name })) |full| {
                     if (state.app.active_player_idx < state.app.players.items.len) {
                         state.app.players.items[state.app.active_player_idx].load_file(full);
-                        addWatchHistory(name);
+                        // Record into the SHARED watch-history store (with the
+                        // file path as the replay link) so it shows on the
+                        // History page too, and reveal the player.
+                        @import("../player/watch_history.zig").savePosition(name, 1.0, full);
+                        state.gotoPlayer();
                     }
                 } else |_| {}
             }
@@ -344,8 +342,7 @@ fn renderFilesInline() void {
         })) {
             var dp: [1024]u8 = undefined;
             if (std.fmt.bufPrintZ(&dp, "{s}/{s}", .{ effective_path, name })) |del| {
-                if (is_dir) @import("../core/io_global.zig").cwdDeleteTree(del) catch {}
-                else @import("../core/io_global.zig").cwdDeleteFile(del) catch {};
+                if (is_dir) @import("../core/io_global.zig").cwdDeleteTree(del) catch {} else @import("../core/io_global.zig").cwdDeleteFile(del) catch {};
                 browse_path_changed = true;
                 state.showToast("Deleted");
             } else |_| {}
@@ -424,9 +421,7 @@ fn renderActiveInline() void {
 
         // Progress arc indicator (colored left border)
         {
-            const prog_col = if (progress >= 1.0) theme.colors.success
-                else if (is_paused) theme.colors.text_dim
-                else theme.colors.accent;
+            const prog_col = if (progress >= 1.0) theme.colors.success else if (is_paused) theme.colors.text_dim else theme.colors.accent;
             var bar = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = ui + 30050,
                 .min_size_content = .{ .w = 3, .h = 0 },
@@ -478,7 +473,7 @@ fn renderActiveInline() void {
             const spd_str = if (is_paused)
                 std.fmt.bufPrintZ(&spd_buf, "  {d}% paused", .{pct}) catch "paused"
             else
-                std.fmt.bufPrintZ(&spd_buf, "↓{d:.1}M {d}%", .{dl_mb, pct}) catch "...";
+                std.fmt.bufPrintZ(&spd_buf, "↓{d:.1}M {d}%", .{ dl_mb, pct }) catch "...";
             _ = dvui.label(@src(), "{s}", .{spd_str}, .{
                 .id_extra = ui + 30200,
                 .color_text = if (is_paused) theme.colors.text_dim else theme.colors.text_muted,
@@ -495,7 +490,7 @@ fn renderActiveInline() void {
         });
         defer acts.deinit();
 
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"play", .{}, .{}, .{
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = ui + 30300,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = theme.colors.success,
@@ -513,7 +508,7 @@ fn renderActiveInline() void {
             }
         }
         {
-            const pic = if (is_paused) icons.tvg.lucide.@"play" else icons.tvg.lucide.@"pause";
+            const pic = if (is_paused) icons.tvg.lucide.play else icons.tvg.lucide.pause;
             const pcol = if (is_paused) theme.colors.accent else theme.colors.text_muted;
             if (dvui.buttonIcon(@src(), "", pic, .{}, .{}, .{
                 .id_extra = ui + 30400,
@@ -522,8 +517,7 @@ fn renderActiveInline() void {
                 .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
                 .gravity_y = 0.5,
             })) {
-                if (is_paused) c.mpv.torrent_resume(state.app.torrent_ses, i)
-                else c.mpv.torrent_pause(state.app.torrent_ses, i);
+                if (is_paused) c.mpv.torrent_resume(state.app.torrent_ses, i) else c.mpv.torrent_pause(state.app.torrent_ses, i);
             }
         }
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"trash-2", .{}, .{}, .{
@@ -539,7 +533,8 @@ fn renderActiveInline() void {
             // other handles stay valid — only clear the one that was deleted.
             for (state.app.players.items) |p| {
                 if (p.current_torrent_id == i) {
-                    p.current_torrent_id = -1; p.torrent_is_ready = false;
+                    p.current_torrent_id = -1;
+                    p.torrent_is_ready = false;
                     p.has_metadata = false;
                     _ = c.mpv.mpv_command_string(p.mpv_ctx, "stop");
                 }
@@ -602,7 +597,7 @@ fn renderExpandedFiles(torrent_id: i32) void {
         defer frow.deinit();
 
         // Play file
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"play", .{}, .{}, .{
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = cid + 100,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = theme.colors.success,
@@ -665,7 +660,9 @@ fn renderExpandedFiles(torrent_id: i32) void {
             .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
             .margin = .{ .x = 4, .y = 0, .w = 2, .h = 0 },
             .gravity_y = 0.5,
-        })) { c.mpv.torrent_set_file_priority(state.app.torrent_ses, torrent_id, f_idx, 0); }
+        })) {
+            c.mpv.torrent_set_file_priority(state.app.torrent_ses, torrent_id, f_idx, 0);
+        }
 
         if (dvui.button(@src(), "High", .{}, .{
             .id_extra = cid + 600,
@@ -675,7 +672,9 @@ fn renderExpandedFiles(torrent_id: i32) void {
             .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
             .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
             .gravity_y = 0.5,
-        })) { c.mpv.torrent_set_file_priority(state.app.torrent_ses, torrent_id, f_idx, 7); }
+        })) {
+            c.mpv.torrent_set_file_priority(state.app.torrent_ses, torrent_id, f_idx, 7);
+        }
     }
 }
 
@@ -684,8 +683,9 @@ fn renderExpandedFiles(torrent_id: i32) void {
 // ══════════════════════════════════════════════════════════
 
 fn renderHistoryInline() void {
+    const wh = @import("../player/watch_history.zig");
     const has_dl = state.app.dl_history_count > 0;
-    const has_watch = watch_history_count > 0;
+    const has_watch = wh.count > 0;
 
     if (!has_dl and !has_watch) {
         _ = dvui.label(@src(), "No history yet.", .{}, .{
@@ -755,7 +755,7 @@ fn renderHistoryInline() void {
             defer hacts.deinit();
 
             if (link.len > 0) {
-                if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"play", .{}, .{}, .{
+                if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
                     .id_extra = hi + 40200,
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .color_text = theme.colors.accent,
@@ -766,7 +766,7 @@ fn renderHistoryInline() void {
                 }
             }
 
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"x", .{}, .{}, .{
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
                 .id_extra = hi + 40300,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 .color_text = theme.colors.text_dim,
@@ -796,7 +796,8 @@ fn renderHistoryInline() void {
         }
 
         var hi: usize = 0;
-        while (hi < watch_history_count) : (hi += 1) {
+        while (hi < wh.count) : (hi += 1) {
+            const e = &wh.entries[hi];
             const row_bg = if (hi % 2 == 0)
                 dvui.Color{ .r = 18, .g = 18, .b = 26, .a = 255 }
             else
@@ -807,20 +808,27 @@ fn renderHistoryInline() void {
                 .expand = .horizontal,
                 .background = true,
                 .color_fill = row_bg,
+                .color_fill_hover = theme.colors.bg_hover,
                 .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
                 .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
                 .color_border = dvui.Color{ .r = 30, .g = 30, .b = 45, .a = 140 },
             });
             defer row.deinit();
 
-            _ = dvui.icon(@src(), "", icons.tvg.lucide.@"film", .{}, .{
+            // Click a recently-played row to resume it (reveals the player).
+            if (e.link_len > 0 and dvui.clicked(row.data(), .{})) {
+                @import("browser.zig").loadContent(e.link[0..e.link_len]);
+            }
+            row.drawBackground();
+
+            _ = dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
                 .id_extra = hi + 50100,
                 .color_text = theme.colors.text_dim,
                 .min_size_content = .{ .w = 13, .h = 13 },
                 .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
                 .gravity_y = 0.5,
             });
-            _ = dvui.label(@src(), "{s}", .{displayName(watch_history_names[hi][0..watch_history_name_lens[hi]])}, .{
+            _ = dvui.label(@src(), "{s}", .{displayName(e.name[0..e.name_len])}, .{
                 .id_extra = hi + 50200,
                 .expand = .horizontal,
                 .color_text = theme.colors.text_muted,
@@ -869,12 +877,12 @@ fn displayName(name: []const u8) []const u8 {
 // Extract display name from magnet dn= param, or truncate hash
 fn extractDn(magnet: []const u8) []const u8 {
     if (std.mem.indexOf(u8, magnet, "dn=")) |pos| {
-        const after = magnet[pos + 3..];
+        const after = magnet[pos + 3 ..];
         const end = std.mem.indexOfScalar(u8, after, '&') orelse after.len;
         if (end > 0) return after[0..end];
     }
     if (std.mem.indexOf(u8, magnet, "btih:")) |pos| {
-        const after = magnet[pos + 5..];
+        const after = magnet[pos + 5 ..];
         const end = std.mem.indexOfScalar(u8, after, '&') orelse after.len;
         if (end > 0) return after[0..@min(end, 20)];
     }
@@ -924,13 +932,15 @@ fn bgRefreshFiles(_: void) void {
     const path = pbuf[0..plen];
     var cnt: usize = 0;
     var tmp_names: [MAX_CACHED_FILES][MAX_NAME_LEN]u8 = undefined;
-    var tmp_lens:  [MAX_CACHED_FILES]usize = std.mem.zeroes([MAX_CACHED_FILES]usize);
-    var tmp_dirs:  [MAX_CACHED_FILES]bool  = std.mem.zeroes([MAX_CACHED_FILES]bool);
-    var tmp_sizes: [MAX_CACHED_FILES]u64   = std.mem.zeroes([MAX_CACHED_FILES]u64);
+    var tmp_lens: [MAX_CACHED_FILES]usize = std.mem.zeroes([MAX_CACHED_FILES]usize);
+    var tmp_dirs: [MAX_CACHED_FILES]bool = std.mem.zeroes([MAX_CACHED_FILES]bool);
+    var tmp_sizes: [MAX_CACHED_FILES]u64 = std.mem.zeroes([MAX_CACHED_FILES]u64);
 
     var dir = @import("../core/io_global.zig").cwdOpenDir(path, .{ .iterate = true }) catch {
         files_mutex.lock();
-        staged_count = 0; staged_error = true; files_scanning = false;
+        staged_count = 0;
+        staged_error = true;
+        files_scanning = false;
         files_mutex.unlock();
         return;
     };
@@ -972,42 +982,26 @@ fn bgRefreshFiles(_: void) void {
 
 fn triggerFileScan(path: []const u8) void {
     files_mutex.lock();
-    if (files_scanning) { files_mutex.unlock(); return; }
+    if (files_scanning) {
+        files_mutex.unlock();
+        return;
+    }
     files_scanning = true;
     const plen = @min(path.len, files_scan_path_buf.len);
     @memcpy(files_scan_path_buf[0..plen], path[0..plen]);
     files_scan_path_len = plen;
     files_mutex.unlock();
     const t = std.Thread.spawn(.{}, bgRefreshFiles, .{{}}) catch {
-        files_mutex.lock(); files_scanning = false; files_mutex.unlock();
+        files_mutex.lock();
+        files_scanning = false;
+        files_mutex.unlock();
         return;
     };
     t.detach();
 }
 
-// ══════════════════════════════════════════════════════════
-// WATCH HISTORY (session only)
-// ══════════════════════════════════════════════════════════
-
-const MAX_WATCH_HISTORY = 20;
-var watch_history_names: [MAX_WATCH_HISTORY][MAX_NAME_LEN]u8 = undefined;
-var watch_history_name_lens: [MAX_WATCH_HISTORY]usize = std.mem.zeroes([MAX_WATCH_HISTORY]usize);
-var watch_history_count: usize = 0;
-
-fn addWatchHistory(name: []const u8) void {
-    if (watch_history_count > 0 and std.mem.eql(u8, watch_history_names[0][0..watch_history_name_lens[0]], name)) return;
-    if (watch_history_count > 0) {
-        var j: usize = @min(watch_history_count, MAX_WATCH_HISTORY - 1);
-        while (j > 0) : (j -= 1) {
-            watch_history_names[j] = watch_history_names[j - 1];
-            watch_history_name_lens[j] = watch_history_name_lens[j - 1];
-        }
-    }
-    const nlen = @min(name.len, MAX_NAME_LEN);
-    @memcpy(watch_history_names[0][0..nlen], name[0..nlen]);
-    watch_history_name_lens[0] = nlen;
-    if (watch_history_count < MAX_WATCH_HISTORY) watch_history_count += 1;
-}
+// Watch history is now unified in player/watch_history.zig (persistent, shared
+// with the History page) — the old session-only store here was removed.
 
 // ══════════════════════════════════════════════════════════
 // HELPERS
@@ -1015,12 +1009,12 @@ fn addWatchHistory(name: []const u8) void {
 
 fn isVideoExt(name: []const u8) bool {
     const exts = [_][]const u8{ ".mp4", ".mkv", ".avi", ".webm", ".mov", ".flv", ".ts", ".wmv", ".m4v" };
-    for (exts) |ext| if (name.len > ext.len and std.ascii.eqlIgnoreCase(name[name.len - ext.len..], ext)) return true;
+    for (exts) |ext| if (name.len > ext.len and std.ascii.eqlIgnoreCase(name[name.len - ext.len ..], ext)) return true;
     return false;
 }
 
 fn isAudioExt(name: []const u8) bool {
     const exts = [_][]const u8{ ".mp3", ".flac", ".wav", ".ogg", ".m4a", ".opus", ".aac", ".wma" };
-    for (exts) |ext| if (name.len > ext.len and std.ascii.eqlIgnoreCase(name[name.len - ext.len..], ext)) return true;
+    for (exts) |ext| if (name.len > ext.len and std.ascii.eqlIgnoreCase(name[name.len - ext.len ..], ext)) return true;
     return false;
 }

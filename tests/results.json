@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-06-23T17:09:04",
+  "timestamp": "2026-06-23T17:15:31",
   "total": 72,
-  "passed": 62,
+  "passed": 63,
   "failed": 0,
-  "warnings": 3,
+  "warnings": 2,
   "skipped": 7,
   "categories": {
     "Database": {
@@ -13,9 +13,9 @@
       "skip": 0
     },
     "Memory": {
-      "pass": 3,
+      "pass": 4,
       "fail": 0,
-      "warn": 1,
+      "warn": 0,
       "skip": 0
     },
     "Config": {
@@ -110,27 +110,27 @@
       "category": "Database",
       "status": "pass",
       "detail": "38 config entries",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "name": "Watch History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "0 watch entries",
+      "detail": "2 watch entries",
       "duration_ms": 0
     },
     {
       "name": "Search History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "28 searches",
+      "detail": "29 searches",
       "duration_ms": 0
     },
     {
       "name": "Download History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "107 downloads",
+      "detail": "109 downloads",
       "duration_ms": 0
     },
     {
@@ -172,7 +172,7 @@
       "name": "User Preferences Table",
       "category": "Memory",
       "status": "pass",
-      "detail": "active_hour=8:00 (w:128)",
+      "detail": "active_hour=11:00 (w:129)",
       "duration_ms": 0
     },
     {
@@ -185,8 +185,8 @@
     {
       "name": "Proactive Suggestion Query",
       "category": "Memory",
-      "status": "warn",
-      "detail": "No unfinished content to suggest",
+      "status": "pass",
+      "detail": "\"009f0a7849454206\" at 32%",
       "duration_ms": 0
     },
     {
@@ -236,13 +236,13 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 39.6 MB",
-      "duration_ms": 463
+      "duration_ms": 11490
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "39.6 MB, built at 17:08:33",
+      "detail": "39.6 MB, built at 17:15:23",
       "duration_ms": 0
     },
     {
@@ -278,35 +278,35 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 1141
+      "duration_ms": 1122
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "skip",
       "detail": "faster-whisper not installed (optional)",
-      "duration_ms": 22
+      "duration_ms": 21
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 22
+      "duration_ms": 20
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 21
+      "duration_ms": 28
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 24
+      "duration_ms": 23
     },
     {
       "name": "Embedding Server Health",
@@ -432,49 +432,49 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 26
+      "duration_ms": 24
     },
     {
       "name": "Compiles: zigzag-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 25
+      "duration_ms": 24
     },
     {
       "name": "Compiles: zigzag-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 26
+      "duration_ms": 25
     },
     {
       "name": "Compiles: zigzag-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 26
+      "duration_ms": 27
     },
     {
       "name": "--check degrades: zigzag-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 21
+      "duration_ms": 22
     },
     {
       "name": "--check degrades: zigzag-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 26
+      "duration_ms": 24
     },
     {
       "name": "--check degrades: zigzag-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 26
+      "duration_ms": 24
     },
     {
       "name": "Whisper Model Present",
@@ -488,14 +488,14 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 1846
+      "duration_ms": 1885
     },
     {
       "name": "Sherpa Model Canonicalization",
       "category": "ASR Streaming",
       "status": "pass",
       "detail": "canonicalization step present",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Streaming Convo Wired",
@@ -551,14 +551,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 5673
+      "duration_ms": 4147
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 43
+      "duration_ms": 51
     },
     {
       "name": "Page Router",
@@ -579,7 +579,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 6
+      "duration_ms": 5
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -600,7 +600,7 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 465
+      "duration_ms": 418
     }
   ]
 }
