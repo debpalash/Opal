@@ -7,6 +7,7 @@ const player = @import("../player/player.zig");
 const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
 const history = @import("history.zig");
+const safeUtf8 = @import("../core/text.zig").safeUtf8;
 
 pub const SearchResult = struct {
     name: []const u8,
@@ -613,7 +614,7 @@ pub fn renderSearchContent() void {
                     .failed => theme.colors.danger,
                     .idle => theme.colors.text_muted,
                 };
-                _ = dvui.label(@src(), "{s}", .{d.name}, .{
+                _ = dvui.label(@src(), "{s}", .{safeUtf8(d.name)}, .{
                     .id_extra = di + 8010,
                     .color_text = tc,
                     .padding = .{ .x = 3, .y = 0, .w = 3, .h = 0 },
@@ -994,7 +995,7 @@ pub fn renderSearchContent() void {
             defer row.deinit();
 
             // ── Row 1: Title ──
-            _ = dvui.label(@src(), "{s}", .{r.name}, .{
+            _ = dvui.label(@src(), "{s}", .{safeUtf8(r.name)}, .{
                 .id_extra = idx,
                 .expand = .horizontal,
                 .color_text = if (r.is_nsfw) theme.colors.warning else theme.colors.text_main,
@@ -1406,7 +1407,7 @@ fn renderUniversalResults() void {
             }
 
             // Name — expands to fill (dvui ellipsizes long titles).
-            _ = dvui.label(@src(), "{s}", .{item.name[0..item.name_len]}, .{
+            _ = dvui.label(@src(), "{s}", .{safeUtf8(item.name[0..item.name_len])}, .{
                 .id_extra = idx + 9500,
                 .expand = .horizontal,
                 .color_text = theme.colors.text_main,
@@ -1705,7 +1706,7 @@ pub fn renderNsfwModal() void {
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
     });
 
-    const name = state.app.nsfw_confirm_name_buf[0..state.app.nsfw_confirm_name_len];
+    const name = safeUtf8(state.app.nsfw_confirm_name_buf[0..state.app.nsfw_confirm_name_len]);
     _ = dvui.label(@src(), "{s}", .{name}, .{
         .color_text = theme.colors.warning,
         .padding = .{ .x = 0, .y = 4, .w = 0, .h = 12 },

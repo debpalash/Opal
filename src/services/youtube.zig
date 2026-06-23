@@ -417,7 +417,7 @@ fn renderSearchBar() void {
 }
 
 fn renderCard(item: *state.YtItem, idx: usize, card_w: f32) void {
-    const title = item.title[0..item.title_len];
+    const title = @import("../core/text.zig").safeUtf8(item.title[0..item.title_len]);
     const thumb_h: f32 = card_w * 9.0 / 16.0;
 
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -510,7 +510,7 @@ fn renderCard(item: *state.YtItem, idx: usize, card_w: f32) void {
             });
             defer meta.deinit();
 
-            _ = dvui.label(@src(), "{s}", .{item.uploader[0..item.uploader_len]}, .{ .id_extra = idx + 410, .color_text = theme.colors.text_muted });
+            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(item.uploader[0..item.uploader_len])}, .{ .id_extra = idx + 410, .color_text = theme.colors.text_muted });
 
             if (item.views > 0) {
                 _ = dvui.label(@src(), " • ", .{}, .{ .id_extra = idx + 420, .color_text = theme.colors.border_drawer });

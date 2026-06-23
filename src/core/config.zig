@@ -19,6 +19,10 @@ pub fn save() void {
     db.exec("BEGIN");
     var fb: [64]u8 = undefined;
 
+    // Accrue in-app usage time since the last save into the lifetime counter.
+    accrueUsage();
+    setKey("usage_seconds", fmtInt(&fb, @as(usize, @intCast(@max(0, state.app.usage_seconds_total)))));
+
     setKey("ui_scale", fmtFloat(&fb, state.app.ui_scale));
     setKey("grid_mode", switch (state.app.grid_mode) {
         .auto => "auto",
@@ -81,6 +85,22 @@ pub fn save() void {
     db.exec("COMMIT");
 }
 
+/// Add the seconds elapsed since the last accrual to the lifetime usage
+/// counter. Idempotent-safe: advances `usage_last_tick` so the same wall-clock
+/// span is never counted twice. Called from save() and at exit.
+pub fn accrueUsage() void {
+    const now = @import("io_global.zig").timestamp();
+    if (state.app.usage_last_tick == 0) {
+        state.app.usage_last_tick = now;
+        if (state.app.session_start_s == 0) state.app.session_start_s = now;
+        return;
+    }
+    const delta = now - state.app.usage_last_tick;
+    // Guard against clock skew / suspend producing absurd jumps (> 12h).
+    if (delta > 0 and delta < 12 * 3600) state.app.usage_seconds_total += delta;
+    state.app.usage_last_tick = now;
+}
+
 fn saveSessionUrls() void {
     {
         const del_sql = "DELETE FROM config WHERE key LIKE 'session_url_%'";
@@ -128,6 +148,11 @@ pub fn load() void {
         const val = db.columnText(stmt, 1) orelse continue;
         applyConfig(key, val);
     }
+
+    // Start this session's usage clock now that the lifetime total is loaded.
+    const now = @import("io_global.zig").timestamp();
+    state.app.session_start_s = now;
+    state.app.usage_last_tick = now;
 }
 
 fn setKey(key: []const u8, val: []const u8) void {
@@ -140,7 +165,9 @@ fn setKey(key: []const u8, val: []const u8) void {
 }
 
 fn applyConfig(key: []const u8, val: []const u8) void {
-    if (std.mem.eql(u8, key, "ui_scale")) {
+    if (std.mem.eql(u8, key, "usage_seconds")) {
+        state.app.usage_seconds_total = std.fmt.parseInt(i64, val, 10) catch 0;
+    } else if (std.mem.eql(u8, key, "ui_scale")) {
         state.app.ui_scale = std.fmt.parseFloat(f32, val) catch 1.3;
     } else if (std.mem.eql(u8, key, "grid_mode")) {
         state.app.grid_mode = if (std.mem.eql(u8, val, "1")) .cols_1 else if (std.mem.eql(u8, val, "2")) .cols_2 else if (std.mem.eql(u8, val, "3")) .cols_3 else if (std.mem.eql(u8, val, "4")) .cols_4 else .auto;

@@ -952,6 +952,72 @@ def test_play_navigates():
     return "fail", "playback doesn't navigate to player"
 
 
+@test("Home Distinct From Browse", "Page Shell")
+def test_home_distinct():
+    shell = open(os.path.join(PROJECT_DIR, "src/ui/shell.zig")).read()
+    home_path = os.path.join(PROJECT_DIR, "src/ui/home.zig")
+    if not os.path.exists(home_path):
+        return "fail", "home.zig dashboard missing"
+    home = open(home_path).read()
+    # Home must route to home.zig (not alias the TMDB browse content).
+    if ".home => @import(\"home.zig\").render()" not in shell:
+        return "fail", "home route still aliases TMDB content"
+    if "Continue Watching" in home and "Time in app" in home:
+        return "pass", "Home is a distinct metrics/lists dashboard"
+    return "fail", "home dashboard lacks metrics/continue-watching"
+
+
+@test("Usage Metrics Persisted", "Page Shell")
+def test_usage_metrics():
+    cfg = open(os.path.join(PROJECT_DIR, "src/core/config.zig")).read()
+    st = open(os.path.join(PROJECT_DIR, "src/core/state.zig")).read()
+    if "usage_seconds_total" in st and 'setKey("usage_seconds"' in cfg and "accrueUsage" in cfg:
+        return "pass", "lifetime in-app time accrued + persisted"
+    return "fail", "usage metrics not wired"
+
+
+@test("TMDB Filters Single Toolbar", "Page Shell")
+def test_tmdb_toolbar():
+    tm = open(os.path.join(PROJECT_DIR, "src/services/tmdb.zig")).read()
+    # The old multi-row layout (renderCategoryBar / renderSubTabs / gallery
+    # toolbar) is collapsed into one renderToolbar(count).
+    if "fn renderToolbar(" in tm and "fn renderCategoryBar(" not in tm:
+        return "pass", "filter rows collapsed into one toolbar"
+    return "fail", "TMDB still uses stacked filter rows"
+
+
+@test("Free-Text UTF-8 Safe", "Page Shell")
+def test_utf8_guard():
+    # Fixed-buffer titles/names can truncate mid-codepoint; dvui's text layout
+    # asserts valid UTF-8. A shared safeUtf8() guard must wrap dvui-rendered
+    # free text in every network-fed renderer.
+    txt = os.path.join(PROJECT_DIR, "src/core/text.zig")
+    if not os.path.exists(txt) or "pub fn safeUtf8(" not in open(txt).read():
+        return "fail", "core/text.zig safeUtf8 helper missing"
+    renderers = {
+        "src/services/tmdb.zig": "safeUtf8(item.title",
+        "src/services/youtube.zig": "safeUtf8(item.title",
+        "src/ui/jellyfin_ui.zig": "safeUtf8(item.name",
+        "src/services/comics.zig": "safeUtf8(state.app.comic.title",
+        "src/services/search.zig": "safeUtf8(item.name",
+    }
+    missing = [f for f, needle in renderers.items()
+               if needle not in open(os.path.join(PROJECT_DIR, f)).read()]
+    if missing:
+        return "fail", "UTF-8 guard missing in: " + ", ".join(missing)
+    return "pass", "all network-fed renderers UTF-8 guarded"
+
+
+@test("Anime Threads Detached", "Page Shell")
+def test_anime_detach():
+    an = open(os.path.join(PROJECT_DIR, "src/services/anime.zig")).read()
+    # Discarded `_ = std.Thread.spawn(...)` handles leak the pthread; every
+    # spawn must store + detach (or join).
+    if "_ = std.Thread.spawn(" not in an:
+        return "pass", "all anime threads detached (no leaked handles)"
+    return "fail", "an anime thread handle is discarded without detach"
+
+
 # ══════════════════════════════════════════════════════════
 # Zig Unit Tests
 # ══════════════════════════════════════════════════════════

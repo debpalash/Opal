@@ -130,6 +130,15 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_paths).step);
 
+    const test_text = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/text.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_text).step);
+
     const test_voice = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/voice_filter.zig"),

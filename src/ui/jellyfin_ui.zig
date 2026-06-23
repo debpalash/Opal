@@ -5,6 +5,7 @@ const state = @import("../core/state.zig");
 const theme = @import("theme.zig");
 const components = @import("components.zig");
 const jf = @import("../services/jellyfin.zig");
+const safeUtf8 = @import("../core/text.zig").safeUtf8;
 
 // ══════════════════════════════════════════════════════════
 // Main Entry Point
@@ -266,7 +267,7 @@ fn renderLibraries() void {
 
     for (0..state.app.jf.library_count) |i| {
         const lib = &state.app.jf.libraries[i];
-        const name = lib.name[0..lib.name_len];
+        const name = safeUtf8(lib.name[0..lib.name_len]);
         const ct = lib.collection_type[0..lib.collection_type_len];
         const ic = iconForCollectionType(ct);
 
@@ -474,7 +475,7 @@ fn renderSkeletonRows() void {
 // ══════════════════════════════════════════════════════════
 
 fn renderItemCard(item: *state.JfItem, idx: usize) void {
-    const name = item.name[0..item.name_len];
+    const name = safeUtf8(item.name[0..item.name_len]);
 
     var card = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = idx,
@@ -591,7 +592,7 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
 
         // Expandable overview
         if (item.overview_len > 0 and item.expanded) {
-            _ = dvui.label(@src(), "{s}", .{item.overview[0..item.overview_len]}, .{
+            _ = dvui.label(@src(), "{s}", .{safeUtf8(item.overview[0..item.overview_len])}, .{
                 .id_extra = idx + 500,
                 .color_text = theme.colors.text_muted,
                 .expand = .horizontal,
@@ -777,7 +778,7 @@ fn renderPosterCard(item: *state.JfItem, idx: usize, card_w: f32, show_progress:
     }
 
     // Title — fills card width, dvui ellipsizes (no manual char truncation).
-    _ = dvui.label(@src(), "{s}", .{item.name[0..item.name_len]}, .{
+    _ = dvui.label(@src(), "{s}", .{safeUtf8(item.name[0..item.name_len])}, .{
         .id_extra = idx + 90,
         .expand = .horizontal,
         .color_text = theme.colors.text_main,

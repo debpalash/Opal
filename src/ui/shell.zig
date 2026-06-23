@@ -79,12 +79,12 @@ fn anyHasMedia() bool {
 fn renderTopNav(compact: bool) void {
     var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = 48 },
+        .min_size_content = .{ .w = 0, .h = 32 },
         .background = true,
         .color_fill = theme.colors.bg_surface,
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+        .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = 2 },
     });
     defer bar.deinit();
 
@@ -139,12 +139,12 @@ fn navLink(r: Route, label: []const u8, icon: []const u8, id_extra: usize) void 
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
-        .min_size_content = .{ .w = 0, .h = 32 },
+        .min_size_content = .{ .w = 0, .h = 26 },
         .background = true,
         .color_fill = if (active) theme.colors.bg_elevated else transparent,
         .color_fill_hover = theme.colors.bg_hover, // native dvui hover (no stale local read)
         .corner_radius = dvui.Rect.all(theme.radius.sm),
-        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+        .padding = .{ .x = theme.spacing.sm, .y = 3, .w = theme.spacing.sm, .h = 3 },
         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         .gravity_y = 0.5,
     });
@@ -180,8 +180,8 @@ fn omnibox() void {
         .placeholder = "Ask, search, or paste a link…",
     }, .{
         .expand = .horizontal,
-        .min_size_content = .{ .w = 120, .h = 30 },
-        .max_size_content = .{ .w = 1000, .h = 30 },
+        .min_size_content = .{ .w = 120, .h = 26 },
+        .max_size_content = .{ .w = 1000, .h = 26 },
         .margin = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = 0 },
         .color_fill = theme.colors.bg_input,
         .color_border = theme.colors.border_subtle,
@@ -226,7 +226,7 @@ fn renderPage(r: Route) !void {
         .settings => drawer.renderTabContent(.Settings),
         .assistant => drawer.renderTabContent(.AI),
         .search => drawer.renderTabContent(.Search),
-        .home => drawer.renderTabContent(.TMDB), // discover hub (trending/recs)
+        .home => @import("home.zig").render(), // personal hub: metrics + lists
         .browse => {
             subTabs(&.{ .TMDB, .YouTube, .Anime, .Comics, .RSS }, &state.app.browse_source, 100);
             drawer.renderTabContent(state.app.browse_source);

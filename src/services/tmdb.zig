@@ -15,6 +15,10 @@ const alloc = @import("tmdb_parse.zig").alloc;
 pub const saveLists = store.saveLists;
 pub const loadLists = store.loadLists;
 
+/// Re-export the shared valid-UTF-8 guard (see core/text.zig). Free text drawn
+/// by dvui must pass through this or dvui's layout can panic on stray bytes.
+pub const safeUtf8 = @import("../core/text.zig").safeUtf8;
+
 // ══════════════════════════════════════════════════════════
 // TMDB Content Renderer (called from drawer.zig)
 // ══════════════════════════════════════════════════════════
@@ -28,31 +32,32 @@ pub fn renderTmdbContent() void {
         return;
     }
 
-    renderSubTabs();
-
     if (!state.app.tmdb.loaded_once and !state.app.tmdb.is_loading) {
         state.app.tmdb.loaded_once = true;
         api.fetchCurrentView(false);
     }
 
+    const list = activeList();
+
+    // Single combined toolbar — mode chips, contextual filters (Hot) or the
+    // search box (Find), item count, and card-size controls all on one row.
+    renderToolbar(list.items.len);
+
     if (state.app.tmdb.is_loading) {
         _ = dvui.label(@src(), "Loading...", .{}, .{ .color_text = theme.colors.accent, .gravity_x = 0.5, .margin = dvui.Rect.all(12) });
     }
 
-    if (state.app.tmdb.view == .Search) {
-        renderSearchBar();
-    }
+    const show_load_more = state.app.tmdb.view == .Trending or state.app.tmdb.view == .Search;
+    renderGallery(list, show_load_more);
+}
 
-    if (state.app.tmdb.view == .Trending) {
-        renderCategoryBar();
-    }
-
-    switch (state.app.tmdb.view) {
-        .Trending, .Search => renderGallery(&state.app.tmdb.results, true),
-        .Favorites => renderGallery(&state.app.tmdb.favorites, false),
-        .Watchlist => renderGallery(&state.app.tmdb.watchlist, false),
-        .Watching => renderGallery(&state.app.tmdb.watching, false),
-    }
+fn activeList() *std.ArrayListUnmanaged(state.TmdbItem) {
+    return switch (state.app.tmdb.view) {
+        .Trending, .Search => &state.app.tmdb.results,
+        .Favorites => &state.app.tmdb.favorites,
+        .Watchlist => &state.app.tmdb.watchlist,
+        .Watching => &state.app.tmdb.watching,
+    };
 }
 
 // ══════════════════════════════════════════════════════════
@@ -77,17 +82,111 @@ fn renderNoApiKey() void {
     }
 }
 
-fn renderSubTabs() void {
-    var tab_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+/// One compact, full-width toolbar replacing the old 3–4 stacked filter rows.
+/// Wraps gracefully on narrow widths via flexbox.
+fn renderToolbar(count: usize) void {
+    var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
         .expand = .horizontal,
-        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
     });
-    defer tab_row.deinit();
+    defer bar.deinit();
+
+    // Mode chips (always).
     renderSubTab(0, .Trending, "Hot");
     renderSubTab(1, .Search, "Find");
     renderSubTab(2, .Favorites, "Favs");
     renderSubTab(3, .Watchlist, "List");
     renderSubTab(4, .Watching, "Now");
+
+    // Contextual controls.
+    switch (state.app.tmdb.view) {
+        .Search => {
+            toolbarDivider(900);
+            renderSearchInline();
+        },
+        .Trending => {
+            toolbarDivider(901);
+            renderCatChip(0, .trending, "Trending");
+            renderCatChip(1, .popular, "Popular");
+            renderCatChip(2, .top_rated, "Top Rated");
+            renderCatChip(3, .now_playing, "In Cinemas");
+            renderCatChip(4, .upcoming, "Upcoming");
+            toolbarDivider(902);
+            renderFilterChip(10, .all, "All");
+            renderFilterChip(11, .movie, "Movies");
+            renderFilterChip(12, .tv, "TV");
+            if (state.app.tmdb.category == .trending) {
+                toolbarDivider(903);
+                renderTimeChip(20, .week, "Week");
+                renderTimeChip(21, .day, "Today");
+            }
+        },
+        else => {},
+    }
+
+    // Item count + card-size controls.
+    toolbarDivider(950);
+    _ = dvui.label(@src(), "{d} items", .{count}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
+    const dim = dvui.Color{ .r = 120, .g = 120, .b = 148, .a = 200 };
+    if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_text = dim,
+        .border = dvui.Rect.all(0),
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .padding = dvui.Rect.all(3),
+        .gravity_y = 0.5,
+    })) {
+        state.app.tmdb.card_w = @max(110, state.app.tmdb.card_w - 40);
+    }
+    if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_text = dim,
+        .border = dvui.Rect.all(0),
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .padding = dvui.Rect.all(3),
+        .gravity_y = 0.5,
+    })) {
+        state.app.tmdb.card_w = @min(320, state.app.tmdb.card_w + 40);
+    }
+}
+
+/// A faint vertical separator between toolbar groups.
+fn toolbarDivider(id: usize) void {
+    var d = dvui.box(@src(), .{}, .{
+        .id_extra = id,
+        .min_size_content = .{ .w = 1, .h = 18 },
+        .background = true,
+        .color_fill = theme.colors.border_subtle,
+        .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
+        .gravity_y = 0.5,
+    });
+    d.deinit();
+}
+
+/// Compact inline search box (Find mode) — replaces the old full-width bar.
+fn renderSearchInline() void {
+    var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.tmdb.search_buf }, .placeholder = "Search movies & TV…" }, .{
+        .min_size_content = .{ .w = 240, .h = 28 },
+        .color_fill = theme.colors.bg_input,
+        .color_border = theme.colors.border_input,
+        .color_text = theme.colors.text_main,
+        .border = dvui.Rect.all(1),
+        .corner_radius = theme.dims.rad_sm,
+        .gravity_y = 0.5,
+    });
+    const enter_pressed = te.enter_pressed;
+    te.deinit();
+    if (dvui.button(@src(), "Go", .{}, .{
+        .color_fill = theme.colors.accent,
+        .color_text = theme.colors.bg_header,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+        .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
+        .gravity_y = 0.5,
+    }) or enter_pressed) {
+        state.app.tmdb.page = 1;
+        api.fetchCurrentView(false);
+    }
 }
 
 fn renderSubTab(idx: usize, view: state.TmdbView, label: []const u8) void {
@@ -116,32 +215,8 @@ fn switchView(view: state.TmdbView) void {
 }
 
 // ══════════════════════════════════════════════════════════
-// Category Filters
+// Category Filters (chips reused by the combined toolbar)
 // ══════════════════════════════════════════════════════════
-
-fn renderCategoryBar() void {
-    {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 } });
-        defer row.deinit();
-        renderCatChip(0, .trending, "Trending");
-        renderCatChip(1, .popular, "Popular");
-        renderCatChip(2, .top_rated, "Top Rated");
-        renderCatChip(3, .now_playing, "In Cinemas");
-        renderCatChip(4, .upcoming, "Upcoming");
-    }
-    {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 } });
-        defer row.deinit();
-        renderFilterChip(10, .all, "All");
-        renderFilterChip(11, .movie, "Movies");
-        renderFilterChip(12, .tv, "TV");
-        _ = dvui.label(@src(), "  ", .{}, .{});
-        if (state.app.tmdb.category == .trending) {
-            renderTimeChip(20, .week, "This Week");
-            renderTimeChip(21, .day, "Today");
-        }
-    }
-}
 
 fn renderCatChip(idx: usize, cat: state.TmdbCategory, label: []const u8) void {
     const fg = if (state.app.tmdb.category == cat) theme.colors.accent else theme.colors.text_muted;
@@ -187,35 +262,6 @@ fn renderTimeChip(idx: usize, tw: state.TmdbTimeWindow, label: []const u8) void 
     }
 }
 
-fn renderSearchBar() void {
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 } });
-    defer row.deinit();
-    var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.tmdb.search_buf } }, .{
-        .expand = .horizontal,
-        .color_fill = theme.colors.bg_input,
-        .color_border = theme.colors.border_input,
-        .color_text = theme.colors.text_main,
-        .border = dvui.Rect.all(1),
-        .corner_radius = theme.dims.rad_sm,
-    });
-    const enter_pressed = te.enter_pressed;
-    te.deinit();
-    if (dvui.button(@src(), "Go", .{}, .{
-        .color_fill = theme.colors.accent,
-        .color_text = theme.colors.bg_header,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
-        .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
-    })) {
-        state.app.tmdb.page = 1;
-        api.fetchCurrentView(false);
-    }
-    if (enter_pressed) {
-        state.app.tmdb.page = 1;
-        api.fetchCurrentView(false);
-    }
-}
-
 // ══════════════════════════════════════════════════════════
 // Gallery & Cards
 // ══════════════════════════════════════════════════════════
@@ -228,41 +274,6 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
             .margin = dvui.Rect.all(24),
         });
         return;
-    }
-
-    // Compact toolbar: item count + card-size controls (smaller / bigger).
-    {
-        var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 4, .y = 0, .w = 4, .h = 4 },
-        });
-        defer bar.deinit();
-        _ = dvui.label(@src(), "{d} items", .{items.items.len}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
-        {
-            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            sp.deinit();
-        }
-        const dim = dvui.Color{ .r = 120, .g = 120, .b = 148, .a = 200 };
-        if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = dim,
-            .border = dvui.Rect.all(0),
-            .min_size_content = .{ .w = 16, .h = 16 },
-            .padding = dvui.Rect.all(3),
-            .gravity_y = 0.5,
-        })) {
-            state.app.tmdb.card_w = @max(110, state.app.tmdb.card_w - 40);
-        }
-        if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = dim,
-            .border = dvui.Rect.all(0),
-            .min_size_content = .{ .w = 16, .h = 16 },
-            .padding = dvui.Rect.all(3),
-            .gravity_y = 0.5,
-        })) {
-            state.app.tmdb.card_w = @min(320, state.app.tmdb.card_w + 40);
-        }
     }
 
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
@@ -314,8 +325,8 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
 }
 
 /// Render a single poster card in the grid layout
-fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h: f32) void {
-    const title = item.title[0..@min(item.title_len, item.title.len)];
+pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h: f32) void {
+    const title = safeUtf8(item.title[0..@min(item.title_len, item.title.len)]);
     const hue: u32 = @as(u32, @bitCast(item.id)) *% 2654435761;
     const h1: u8 = @truncate(hue & 0xFF);
     const h2: u8 = @truncate((hue >> 8) & 0xFF);
@@ -487,7 +498,7 @@ fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h: f3
 }
 
 fn renderCard(item: *state.TmdbItem, idx: usize) void {
-    const title = item.title[0..@min(item.title_len, item.title.len)];
+    const title = safeUtf8(item.title[0..@min(item.title_len, item.title.len)]);
     const hue: u32 = @as(u32, @bitCast(item.id)) *% 2654435761;
     const h1: u8 = @truncate(hue & 0xFF);
     const h2: u8 = @truncate((hue >> 8) & 0xFF);
@@ -601,7 +612,7 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
 
         // Genre (click to expand/collapse overview)
         if (item.genre_text_len > 0) {
-            if (dvui.button(@src(), item.genre_text[0..item.genre_text_len], .{}, .{
+            if (dvui.button(@src(), safeUtf8(item.genre_text[0..item.genre_text_len]), .{}, .{
                 .id_extra = idx + 650,
                 .color_text = theme.colors.text_muted,
                 .expand = .horizontal,
@@ -614,7 +625,7 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
 
         // Expanded overview
         if (item.expanded and item.overview_len > 0) {
-            _ = dvui.label(@src(), "{s}", .{item.overview[0..item.overview_len]}, .{
+            _ = dvui.label(@src(), "{s}", .{safeUtf8(item.overview[0..item.overview_len])}, .{
                 .id_extra = idx + 700,
                 .color_text = theme.colors.text_muted,
                 .expand = .horizontal,
@@ -715,7 +726,7 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
 
 fn sendToSearch(item: *state.TmdbItem) void {
     var query_buf: [256]u8 = std.mem.zeroes([256]u8);
-    const title = item.title[0..@min(item.title_len, item.title.len)];
+    const title = safeUtf8(item.title[0..@min(item.title_len, item.title.len)]);
     const year = item.year[0..@min(item.year_len, item.year.len)];
     const qlen = if (year.len > 0)
         std.fmt.bufPrint(&query_buf, "{s} {s}", .{ title, year }) catch return

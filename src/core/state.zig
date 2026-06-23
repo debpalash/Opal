@@ -225,6 +225,10 @@ pub const AppState = struct {
     toast_type: ToastType = .info,
     config_dirty: bool = false,
     last_config_save: i64 = 0,
+    // ── Usage metrics (Home dashboard) ──
+    usage_seconds_total: i64 = 0, // persisted lifetime seconds in-app
+    usage_last_tick: i64 = 0, // last accrual timestamp (in-memory)
+    session_start_s: i64 = 0, // this session's launch timestamp (in-memory)
     proxy_url: [128]u8 = std.mem.zeroes([128]u8), // e.g. "socks5://127.0.0.1:1080"
     proxy_url_len: usize = 0,
 

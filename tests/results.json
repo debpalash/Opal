@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-06-23T17:48:27",
-  "total": 72,
-  "passed": 63,
+  "timestamp": "2026-06-24T03:02:29",
+  "total": 77,
+  "passed": 68,
   "failed": 0,
   "warnings": 2,
   "skipped": 7,
@@ -85,7 +85,7 @@
       "skip": 0
     },
     "Page Shell": {
-      "pass": 5,
+      "pass": 10,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -102,35 +102,35 @@
       "name": "Database Exists",
       "category": "Database",
       "status": "pass",
-      "detail": "Size: 136.0 KB",
+      "detail": "Size: 140.0 KB",
       "duration_ms": 0
     },
     {
       "name": "Config Table",
       "category": "Database",
       "status": "pass",
-      "detail": "38 config entries",
-      "duration_ms": 1
+      "detail": "39 config entries",
+      "duration_ms": 2
     },
     {
       "name": "Watch History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "2 watch entries",
+      "detail": "4 watch entries",
       "duration_ms": 0
     },
     {
       "name": "Search History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "29 searches",
+      "detail": "31 searches",
       "duration_ms": 0
     },
     {
       "name": "Download History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "109 downloads",
+      "detail": "110 downloads",
       "duration_ms": 0
     },
     {
@@ -172,7 +172,7 @@
       "name": "User Preferences Table",
       "category": "Memory",
       "status": "pass",
-      "detail": "active_hour=11:00 (w:129)",
+      "detail": "active_hour=21:00 (w:130)",
       "duration_ms": 0
     },
     {
@@ -236,13 +236,13 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 39.7 MB",
-      "duration_ms": 427
+      "duration_ms": 389
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "39.7 MB, built at 17:48:12",
+      "detail": "39.7 MB, built at 03:01:54",
       "duration_ms": 0
     },
     {
@@ -278,7 +278,7 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 789
+      "duration_ms": 1104
     },
     {
       "name": "Faster-Whisper Available",
@@ -299,14 +299,14 @@
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 24
+      "duration_ms": 27
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 24
+      "duration_ms": 23
     },
     {
       "name": "Embedding Server Health",
@@ -432,14 +432,14 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 26
+      "duration_ms": 27
     },
     {
       "name": "Compiles: zigzag-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 25
+      "duration_ms": 26
     },
     {
       "name": "Compiles: zigzag-tts-server.py",
@@ -488,7 +488,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 1498
+      "duration_ms": 1976
     },
     {
       "name": "Sherpa Model Canonicalization",
@@ -551,14 +551,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 5029
+      "duration_ms": 5067
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 38
+      "duration_ms": 59
     },
     {
       "name": "Page Router",
@@ -579,7 +579,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 4
+      "duration_ms": 5
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -596,11 +596,46 @@
       "duration_ms": 0
     },
     {
+      "name": "Home Distinct From Browse",
+      "category": "Page Shell",
+      "status": "pass",
+      "detail": "Home is a distinct metrics/lists dashboard",
+      "duration_ms": 0
+    },
+    {
+      "name": "Usage Metrics Persisted",
+      "category": "Page Shell",
+      "status": "pass",
+      "detail": "lifetime in-app time accrued + persisted",
+      "duration_ms": 0
+    },
+    {
+      "name": "TMDB Filters Single Toolbar",
+      "category": "Page Shell",
+      "status": "pass",
+      "detail": "filter rows collapsed into one toolbar",
+      "duration_ms": 0
+    },
+    {
+      "name": "Free-Text UTF-8 Safe",
+      "category": "Page Shell",
+      "status": "pass",
+      "detail": "all network-fed renderers UTF-8 guarded",
+      "duration_ms": 0
+    },
+    {
+      "name": "Anime Threads Detached",
+      "category": "Page Shell",
+      "status": "pass",
+      "detail": "all anime threads detached (no leaked handles)",
+      "duration_ms": 0
+    },
+    {
       "name": "Zig Unit Tests",
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 438
+      "duration_ms": 470
     }
   ]
 }

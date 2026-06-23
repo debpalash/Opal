@@ -431,9 +431,9 @@ pub fn iconButton(
         .color_text = if (active) tk.accent_primary() else tk.text_secondary(),
         .border = dvui.Rect.all(0),
         .corner_radius = tk.rad_sm,
-        .min_size_content = .{ .w = 32, .h = 32 },
-        .max_size_content = .{ .w = 32, .h = 32 },
-        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
+        .min_size_content = .{ .w = 20, .h = 20 },
+        .max_size_content = .{ .w = 20, .h = 20 },
+        .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
     });
     if (tooltip.len > 0) {
         tip(src, wd, tooltip);

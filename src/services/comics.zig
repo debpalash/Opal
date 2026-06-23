@@ -6,6 +6,7 @@ const icons = @import("icons");
 const logs = @import("../core/logs.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
+const safeUtf8 = @import("../core/text.zig").safeUtf8;
 
 fn percentEncode(input: []const u8, out: []u8) usize {
     const hex = "0123456789ABCDEF";
@@ -588,7 +589,7 @@ pub fn renderContent() void {
         var list = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
         defer list.deinit();
         for (0..sr_count) |i| {
-            if (dvui.button(@src(), sr_titles[i][0..sr_title_lens[i]], .{}, .{
+            if (dvui.button(@src(), safeUtf8(sr_titles[i][0..sr_title_lens[i]]), .{}, .{
                 .id_extra = i + 44000,
                 .expand = .horizontal,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -632,7 +633,7 @@ pub fn renderContent() void {
         defer info_row.deinit();
 
         if (state.app.comic.title_len > 0) {
-            _ = dvui.label(@src(), "{s}", .{state.app.comic.title[0..state.app.comic.title_len]}, .{
+            _ = dvui.label(@src(), "{s}", .{safeUtf8(state.app.comic.title[0..state.app.comic.title_len])}, .{
                 .color_text = theme.colors.text_main,
             });
         }
@@ -814,7 +815,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
 
         // Title
         if (state.app.comic.title_len > 0) {
-            _ = dvui.label(@src(), "{s}", .{state.app.comic.title[0..state.app.comic.title_len]}, .{
+            _ = dvui.label(@src(), "{s}", .{safeUtf8(state.app.comic.title[0..state.app.comic.title_len])}, .{
                 .color_text = theme.colors.text_main,
                 .expand = .horizontal,
                 .gravity_x = 0.5,

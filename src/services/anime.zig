@@ -411,9 +411,11 @@ pub fn loadEpisodes(idx: usize) void {
     // Now kick off Jikan episodes enrichment in background
     if (!state.app.anime.episodes_loading) {
         state.app.anime.episodes_loading = true;
-        _ = std.Thread.spawn(.{}, fetchEpisodeDataThread, .{idx}) catch {
+        if (std.Thread.spawn(.{}, fetchEpisodeDataThread, .{idx})) |t| {
+            t.detach(); // never joined — detach so the handle isn't leaked
+        } else |_| {
             state.app.anime.episodes_loading = false;
-        };
+        }
     }
 }
 
@@ -537,9 +539,11 @@ pub fn playEpisode(ep_no: []const u8) void {
     const ep_len = @min(ep_no.len, 7);
     @memcpy(ep_copy[0..ep_len], ep_no[0..ep_len]);
 
-    _ = std.Thread.spawn(.{}, fetchStreamThread, .{ ep_copy, ep_len }) catch {
+    if (std.Thread.spawn(.{}, fetchStreamThread, .{ ep_copy, ep_len })) |t| {
+        t.detach(); // never joined — detach so the handle isn't leaked
+    } else |_| {
         state.app.anime.stream_loading = false;
-    };
+    }
 }
 
 fn fetchStreamThread(ep_buf: [8]u8, ep_len: usize) void {
@@ -1214,7 +1218,9 @@ pub fn fetchPoster(item: *state.AnimeResult) void {
     S.poster_url_len = url.len;
     S.result_idx = idx;
 
-    _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
+    if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
+        t.detach(); // never joined — detach so the handle isn't leaked
+    } else |_| {
         item.poster_fetching = false;
-    };
+    }
 }
