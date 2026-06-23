@@ -83,9 +83,12 @@ fn renderLoginForm() void {
         var url_te = dvui.textEntry(@src(), .{
             .text = .{ .buffer = &state.app.jf.server_url },
         }, .{
-            .expand = .horizontal, .background = true,
-            .color_fill = theme.colors.bg_card, .color_border = theme.colors.border_drawer,
-            .border = dvui.Rect.all(1), .corner_radius = theme.dims.rad_sm,
+            .expand = .horizontal,
+            .background = true,
+            .color_fill = theme.colors.bg_card,
+            .color_border = theme.colors.border_drawer,
+            .border = dvui.Rect.all(1),
+            .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
         });
@@ -98,9 +101,12 @@ fn renderLoginForm() void {
         var user_te = dvui.textEntry(@src(), .{
             .text = .{ .buffer = &state.app.jf.login_user_buf },
         }, .{
-            .expand = .horizontal, .background = true,
-            .color_fill = theme.colors.bg_card, .color_border = theme.colors.border_drawer,
-            .border = dvui.Rect.all(1), .corner_radius = theme.dims.rad_sm,
+            .expand = .horizontal,
+            .background = true,
+            .color_fill = theme.colors.bg_card,
+            .color_border = theme.colors.border_drawer,
+            .border = dvui.Rect.all(1),
+            .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
         });
@@ -113,9 +119,12 @@ fn renderLoginForm() void {
         var pass_te = dvui.textEntry(@src(), .{
             .text = .{ .buffer = &state.app.jf.login_pass_buf },
         }, .{
-            .expand = .horizontal, .background = true,
-            .color_fill = theme.colors.bg_card, .color_border = theme.colors.border_drawer,
-            .border = dvui.Rect.all(1), .corner_radius = theme.dims.rad_sm,
+            .expand = .horizontal,
+            .background = true,
+            .color_fill = theme.colors.bg_card,
+            .color_border = theme.colors.border_drawer,
+            .border = dvui.Rect.all(1),
+            .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 12 },
         });
@@ -142,8 +151,10 @@ fn renderLoginForm() void {
             }
         } else {
             _ = dvui.label(@src(), "Connecting...", .{}, .{
-                .expand = .horizontal, .color_text = theme.colors.text_muted,
-                .gravity_x = 0.5, .padding = .{ .x = 0, .y = 10, .w = 0, .h = 10 },
+                .expand = .horizontal,
+                .color_text = theme.colors.text_muted,
+                .gravity_x = 0.5,
+                .padding = .{ .x = 0, .y = 10, .w = 0, .h = 10 },
             });
         }
     }
@@ -164,24 +175,35 @@ fn renderLibraries() void {
         });
         defer hdr.deinit();
 
-        if (dvui.buttonIcon(@src(), "search", icons.tvg.lucide.@"search", .{}, .{}, .{
-            .color_fill = theme.colors.bg_glass, .color_text = theme.colors.text_muted,
-            .padding = dvui.Rect.all(5), .corner_radius = theme.dims.rad_sm,
+        if (dvui.buttonIcon(@src(), "search", icons.tvg.lucide.search, .{}, .{}, .{
+            .color_fill = theme.colors.bg_glass,
+            .color_text = theme.colors.text_muted,
+            .padding = dvui.Rect.all(5),
+            .corner_radius = theme.dims.rad_sm,
         })) {
             state.app.jf.view = .Search;
         }
 
-        { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
 
         _ = dvui.label(@src(), "Jellyfin", .{}, .{
-            .color_text = theme.colors.accent, .gravity_y = 0.5,
+            .color_text = theme.colors.accent,
+            .gravity_y = 0.5,
         });
 
-        { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
 
         if (dvui.buttonIcon(@src(), "disconnect", icons.tvg.lucide.@"log-out", .{}, .{}, .{
-            .color_fill = theme.colors.bg_glass, .color_text = theme.colors.text_muted,
-            .padding = dvui.Rect.all(5), .corner_radius = theme.dims.rad_sm,
+            .color_fill = theme.colors.bg_glass,
+            .color_text = theme.colors.text_muted,
+            .padding = dvui.Rect.all(5),
+            .corner_radius = theme.dims.rad_sm,
         })) {
             jf.disconnect();
         }
@@ -193,7 +215,9 @@ fn renderLibraries() void {
     }
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
-        .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer,
+        .expand = .both,
+        .background = true,
+        .color_fill = theme.colors.bg_drawer,
     });
     defer scroll.deinit();
 
@@ -228,7 +252,7 @@ fn renderLibraries() void {
 
         for (0..state.app.jf.resume_count) |i| {
             const item = &state.app.jf.resume_items[i];
-            renderPosterCard(item, i + 5000, true);
+            renderPosterCard(item, i + 5000, 130, true);
         }
     }
 
@@ -247,19 +271,24 @@ fn renderLibraries() void {
         const ic = iconForCollectionType(ct);
 
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = i, .expand = .horizontal,
+            .id_extra = i,
+            .expand = .horizontal,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.md, .w = theme.spacing.md, .h = theme.spacing.md },
         });
         defer row.deinit();
 
         dvui.icon(@src(), "", ic, .{}, .{
-            .id_extra = i, .gravity_y = 0.5, .color_text = theme.colors.accent,
+            .id_extra = i,
+            .gravity_y = 0.5,
+            .color_text = theme.colors.accent,
             .min_size_content = .{ .w = 18, .h = 18 },
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
 
         if (dvui.button(@src(), name, .{}, .{
-            .id_extra = i, .expand = .horizontal, .gravity_y = 0.5,
+            .id_extra = i,
+            .expand = .horizontal,
+            .gravity_y = 0.5,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = theme.colors.text_main,
             .padding = dvui.Rect.all(0),
@@ -274,7 +303,9 @@ fn renderLibraries() void {
         }
 
         dvui.icon(@src(), "", icons.tvg.lucide.@"chevron-right", .{}, .{
-            .id_extra = i, .gravity_y = 0.5, .color_text = theme.colors.text_muted,
+            .id_extra = i,
+            .gravity_y = 0.5,
+            .color_text = theme.colors.text_muted,
             .min_size_content = .{ .w = 16, .h = 16 },
         });
     }
@@ -296,24 +327,31 @@ fn renderItems() void {
         defer hdr.deinit();
 
         if (dvui.buttonIcon(@src(), "back", icons.tvg.lucide.@"arrow-left", .{}, .{}, .{
-            .color_fill = theme.colors.bg_glass, .color_text = theme.colors.text_muted,
-            .padding = dvui.Rect.all(5), .corner_radius = theme.dims.rad_sm,
+            .color_fill = theme.colors.bg_glass,
+            .color_text = theme.colors.text_muted,
+            .padding = dvui.Rect.all(5),
+            .corner_radius = theme.dims.rad_sm,
         })) {
             jf.popNav();
         }
 
         if (state.app.jf.parent_name_len > 0) {
             _ = dvui.label(@src(), "{s}", .{state.app.jf.parent_name[0..state.app.jf.parent_name_len]}, .{
-                .color_text = theme.colors.text_main, .gravity_y = 0.5,
+                .color_text = theme.colors.text_main,
+                .gravity_y = 0.5,
                 .padding = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
             });
         }
 
-        { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
 
         if (state.app.jf.is_loading) {
             _ = dvui.label(@src(), "Loading...", .{}, .{
-                .color_text = theme.colors.text_muted, .gravity_y = 0.5,
+                .color_text = theme.colors.text_muted,
+                .gravity_y = 0.5,
             });
         }
     }
@@ -341,13 +379,27 @@ fn renderItems() void {
     }
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
-        .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer,
+        .expand = .both,
+        .background = true,
+        .color_fill = theme.colors.bg_drawer,
     });
     defer scroll.deinit();
 
-    for (0..state.app.jf.item_count) |i| {
-        const item = &state.app.jf.items[i];
-        renderItemCard(item, i);
+    // Responsive poster grid (fills the page width; was one wide row per item).
+    const rect_w = scroll.data().rect.w;
+    const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
+    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / 150)));
+    const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
+
+    var i: usize = 0;
+    while (i < state.app.jf.item_count) {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 60000, .expand = .horizontal });
+        defer row.deinit();
+        var col: usize = 0;
+        while (col < cols and i + col < state.app.jf.item_count) : (col += 1) {
+            renderPosterCard(&state.app.jf.items[i + col], i + col, card_w, true);
+        }
+        i += cols;
     }
 }
 
@@ -357,7 +409,9 @@ fn renderItems() void {
 
 fn renderSkeletonRows() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
-        .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer,
+        .expand = .both,
+        .background = true,
+        .color_fill = theme.colors.bg_drawer,
     });
     defer scroll.deinit();
 
@@ -423,7 +477,8 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
     const name = item.name[0..item.name_len];
 
     var card = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .id_extra = idx, .expand = .horizontal,
+        .id_extra = idx,
+        .expand = .horizontal,
         .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
     });
     defer card.deinit();
@@ -431,10 +486,12 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
     // Poster thumbnail — flat token placeholder.
     {
         var poster = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 100, .background = true,
+            .id_extra = idx + 100,
+            .background = true,
             .color_fill = theme.colors.bg_elevated,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .min_size_content = .{ .w = 50, .h = 75 }, .max_size_content = .{ .w = 50, .h = 75 },
+            .min_size_content = .{ .w = 50, .h = 75 },
+            .max_size_content = .{ .w = 50, .h = 75 },
         });
         defer poster.deinit();
 
@@ -451,12 +508,16 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
 
         if (item.poster_tex) |*tex| {
             _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                .id_extra = idx + 150, .expand = .both, .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .id_extra = idx + 150,
+                .expand = .both,
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
             });
         } else {
             if (!item.poster_fetching and item.id_len > 0) jf.fetchPoster(item);
-            dvui.icon(@src(), "", icons.tvg.lucide.@"film", .{}, .{
-                .id_extra = idx + 150, .gravity_x = 0.5, .gravity_y = 0.5,
+            dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
+                .id_extra = idx + 150,
+                .gravity_x = 0.5,
+                .gravity_y = 0.5,
                 .color_text = theme.colors.text_tertiary,
             });
         }
@@ -465,7 +526,8 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
     // Info column
     {
         var info = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 200, .expand = .horizontal,
+            .id_extra = idx + 200,
+            .expand = .horizontal,
             .padding = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
             .gravity_y = 0.5,
         });
@@ -480,13 +542,15 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
         } else name;
 
         _ = dvui.label(@src(), "{s}", .{display}, .{
-            .id_extra = idx + 210, .color_text = theme.colors.text_main,
+            .id_extra = idx + 210,
+            .color_text = theme.colors.text_main,
         });
 
         // Meta row: type badge + year
         {
             var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = idx + 300, .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+                .id_extra = idx + 300,
+                .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
             });
             defer meta.deinit();
 
@@ -494,7 +558,8 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
             if (mt.len > 0) {
                 // Media-type is metadata, not an affordance — quiet text.
                 _ = dvui.label(@src(), "{s}", .{mt}, .{
-                    .id_extra = idx + 310, .color_text = theme.colors.text_muted,
+                    .id_extra = idx + 310,
+                    .color_text = theme.colors.text_muted,
                 });
             }
 
@@ -527,7 +592,8 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
         // Expandable overview
         if (item.overview_len > 0 and item.expanded) {
             _ = dvui.label(@src(), "{s}", .{item.overview[0..item.overview_len]}, .{
-                .id_extra = idx + 500, .color_text = theme.colors.text_muted,
+                .id_extra = idx + 500,
+                .color_text = theme.colors.text_muted,
                 .expand = .horizontal,
                 .padding = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
             });
@@ -537,7 +603,8 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
     // Action buttons
     {
         var acts = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 600, .gravity_y = 0.5,
+            .id_extra = idx + 600,
+            .gravity_y = 0.5,
         });
         defer acts.deinit();
 
@@ -558,7 +625,7 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
             }
         } else {
             // Play button
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"play", .{}, .{}, .{
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
                 .id_extra = idx + 620,
                 .color_fill = theme.colors.accent,
                 .color_text = theme.colors.text_on_accent,
@@ -578,7 +645,7 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
 
         // Info toggle
         if (item.overview_len > 0) {
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"info", .{}, .{}, .{
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.info, .{}, .{}, .{
                 .id_extra = idx + 630,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 .color_text = if (item.expanded) theme.colors.accent else theme.colors.text_muted,
@@ -616,25 +683,28 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
 // Poster Card — compact vertical card for horizontal scrolling
 // ══════════════════════════════════════════════════════════
 
-fn renderPosterCard(item: *state.JfItem, idx: usize, show_progress: bool) void {
+fn renderPosterCard(item: *state.JfItem, idx: usize, card_w: f32, show_progress: bool) void {
+    const poster_h: f32 = card_w * 1.45;
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = idx,
         .background = true,
         .color_fill = theme.colors.bg_card,
         .corner_radius = dvui.Rect.all(6),
-        .min_size_content = .{ .w = 90, .h = 130 },
-        .max_size_content = .{ .w = 90, .h = 130 },
-        .margin = .{ .x = 4, .y = 0, .w = 4, .h = 0 },
+        .min_size_content = .{ .w = card_w, .h = 10 },
+        .max_size_content = .{ .w = card_w, .h = poster_h + 32 },
+        .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
     });
     defer card.deinit();
 
     // Poster image area — flat token placeholder.
     {
         var img_box = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 50, .background = true,
+            .id_extra = idx + 50,
+            .background = true,
             .color_fill = theme.colors.bg_elevated,
             .corner_radius = .{ .x = theme.radius.md, .y = theme.radius.md, .w = 0, .h = 0 },
-            .min_size_content = .{ .w = 90, .h = 95 }, .max_size_content = .{ .w = 90, .h = 95 },
+            .min_size_content = .{ .w = card_w, .h = poster_h },
+            .max_size_content = .{ .w = card_w, .h = poster_h },
         });
 
         // Texture from pixels
@@ -651,20 +721,24 @@ fn renderPosterCard(item: *state.JfItem, idx: usize, show_progress: bool) void {
         if (item.poster_tex) |*tex| {
             // Clickable poster to play
             if (dvui.button(@src(), "", .{}, .{
-                .id_extra = idx + 60, .expand = .both,
+                .id_extra = idx + 60,
+                .expand = .both,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             })) {
                 const id = item.id[0..item.id_len];
                 jf.playItem(id);
             }
             _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                .id_extra = idx + 70, .expand = .both,
+                .id_extra = idx + 70,
+                .expand = .both,
             });
         } else {
             if (!item.poster_fetching and item.id_len > 0) jf.fetchPoster(item);
             // Play button as placeholder
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"play", .{}, .{}, .{
-                .id_extra = idx + 60, .gravity_x = 0.5, .gravity_y = 0.5,
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
+                .id_extra = idx + 60,
+                .gravity_x = 0.5,
+                .gravity_y = 0.5,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 .color_text = theme.colors.accent,
             })) {
@@ -680,38 +754,35 @@ fn renderPosterCard(item: *state.JfItem, idx: usize, show_progress: bool) void {
     if (show_progress and item.played_ticks > 0 and item.runtime_ticks > 0) {
         const pct = @as(f32, @floatFromInt(item.played_ticks)) / @as(f32, @floatFromInt(item.runtime_ticks));
         const clamped = std.math.clamp(pct, 0.0, 1.0);
+        // Fill width derived from card_w (not a mid-build rect read) so it's
+        // correct on the first frame.
+        const fill_w = card_w * clamped;
         var pb = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = idx + 80, .expand = .horizontal,
-            .min_size_content = .{ .w = 10, .h = 2 }, .max_size_content = .{ .w = 90, .h = 2 },
-            .background = true, .color_fill = theme.colors.bg_input,
+            .id_extra = idx + 80,
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 10, .h = 2 },
+            .max_size_content = .{ .w = card_w, .h = 2 },
+            .background = true,
+            .color_fill = theme.colors.bg_input,
         });
-        const pb_rect = pb.data().contentRectScale().r;
-        const fill_w = pb_rect.w * clamped;
         var fill = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = idx + 85,
-            .min_size_content = .{ .w = fill_w, .h = 2 }, .max_size_content = .{ .w = fill_w, .h = 2 },
-            .background = true, .color_fill = theme.colors.accent,
+            .min_size_content = .{ .w = fill_w, .h = 2 },
+            .max_size_content = .{ .w = fill_w, .h = 2 },
+            .background = true,
+            .color_fill = theme.colors.accent,
         });
         fill.deinit();
         pb.deinit();
     }
 
-    // Title (truncated, 2 lines max)
-    {
-        const name = item.name[0..item.name_len];
-        var trunc: [32]u8 = undefined;
-        const display = if (name.len > 28) blk: {
-            @memcpy(trunc[0..28], name[0..28]);
-            @memcpy(trunc[28..30], "..");
-            break :blk trunc[0..30];
-        } else name;
-
-        _ = dvui.label(@src(), "{s}", .{display}, .{
-            .id_extra = idx + 90,
-            .color_text = theme.colors.text_main,
-            .padding = .{ .x = 4, .y = 3, .w = 4, .h = 2 },
-        });
-    }
+    // Title — fills card width, dvui ellipsizes (no manual char truncation).
+    _ = dvui.label(@src(), "{s}", .{item.name[0..item.name_len]}, .{
+        .id_extra = idx + 90,
+        .expand = .horizontal,
+        .color_text = theme.colors.text_main,
+        .padding = .{ .x = 4, .y = 3, .w = 4, .h = 2 },
+    });
 }
 
 // ══════════════════════════════════════════════════════════
@@ -729,8 +800,10 @@ fn renderSearch() void {
         defer hdr.deinit();
 
         if (dvui.buttonIcon(@src(), "back", icons.tvg.lucide.@"arrow-left", .{}, .{}, .{
-            .color_fill = theme.colors.bg_glass, .color_text = theme.colors.text_muted,
-            .padding = dvui.Rect.all(5), .corner_radius = theme.dims.rad_sm,
+            .color_fill = theme.colors.bg_glass,
+            .color_text = theme.colors.text_muted,
+            .padding = dvui.Rect.all(5),
+            .corner_radius = theme.dims.rad_sm,
         })) {
             state.app.jf.view = .Libraries;
         }
@@ -738,18 +811,23 @@ fn renderSearch() void {
         var te = dvui.textEntry(@src(), .{
             .text = .{ .buffer = &state.app.jf.search_buf },
         }, .{
-            .expand = .horizontal, .background = true,
-            .color_fill = theme.colors.bg_card, .color_border = theme.colors.border_drawer,
-            .border = dvui.Rect.all(1), .corner_radius = theme.dims.rad_sm,
+            .expand = .horizontal,
+            .background = true,
+            .color_fill = theme.colors.bg_card,
+            .color_border = theme.colors.border_drawer,
+            .border = dvui.Rect.all(1),
+            .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
             .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
         });
         const search_enter = te.enter_pressed;
         te.deinit();
 
-        const clicked_search = dvui.buttonIcon(@src(), "search", icons.tvg.lucide.@"search", .{}, .{}, .{
-            .color_fill = theme.colors.accent, .color_text = theme.colors.text_on_accent,
-            .padding = dvui.Rect.all(theme.radius.md), .corner_radius = theme.dims.rad_sm,
+        const clicked_search = dvui.buttonIcon(@src(), "search", icons.tvg.lucide.search, .{}, .{}, .{
+            .color_fill = theme.colors.accent,
+            .color_text = theme.colors.text_on_accent,
+            .padding = dvui.Rect.all(theme.radius.md),
+            .corner_radius = theme.dims.rad_sm,
         });
         if (clicked_search or search_enter) {
             jf.searchItems();
@@ -764,10 +842,10 @@ fn renderSearch() void {
 // ══════════════════════════════════════════════════════════
 
 fn iconForCollectionType(ct: []const u8) []const u8 {
-    if (std.mem.eql(u8, ct, "movies")) return icons.tvg.lucide.@"film";
-    if (std.mem.eql(u8, ct, "tvshows")) return icons.tvg.lucide.@"tv";
-    if (std.mem.eql(u8, ct, "music")) return icons.tvg.lucide.@"music";
-    if (std.mem.eql(u8, ct, "books")) return icons.tvg.lucide.@"book";
-    if (std.mem.eql(u8, ct, "photos")) return icons.tvg.lucide.@"image";
-    return icons.tvg.lucide.@"folder";
+    if (std.mem.eql(u8, ct, "movies")) return icons.tvg.lucide.film;
+    if (std.mem.eql(u8, ct, "tvshows")) return icons.tvg.lucide.tv;
+    if (std.mem.eql(u8, ct, "music")) return icons.tvg.lucide.music;
+    if (std.mem.eql(u8, ct, "books")) return icons.tvg.lucide.book;
+    if (std.mem.eql(u8, ct, "photos")) return icons.tvg.lucide.image;
+    return icons.tvg.lucide.folder;
 }
