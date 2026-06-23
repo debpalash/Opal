@@ -46,13 +46,14 @@ pub fn handleRecommendation(raw_input: []const u8) bool {
 }
 
 fn recommendationWorker(assistant_idx: usize) void {
-    defer { chat.is_generating.store(false, .release); }
+    defer {
+        chat.is_generating.store(false, .release);
+    }
 
     // Strategy 1: Use TMDB trending if API key is configured
     if (state.app.tmdb.api_key_len > 0) {
-        // Open the TMDB drawer to trending view
-        state.app.drawer_open = true;
-        state.app.drawer_tab = .TMDB;
+        // Navigate to the Movies & TV (TMDB) page, trending view
+        state.navigateToTab(.TMDB);
         state.app.tmdb.view = .Trending;
         state.app.tmdb.category = .trending;
         state.app.tmdb.media_filter = .movie;
@@ -73,7 +74,8 @@ fn recommendationWorker(assistant_idx: usize) void {
 
         if (count > 0) {
             var resp_buf: [1024]u8 = undefined;
-            const resp = std.fmt.bufPrint(&resp_buf,
+            const resp = std.fmt.bufPrint(
+                &resp_buf,
                 "Here are trending movies right now! I've opened the TMDB tab so you can browse them with posters and ratings. Pick any title and say \"play <title>\" to start watching.",
                 .{},
             ) catch "Check the TMDB tab for trending movies!";
@@ -183,8 +185,7 @@ pub fn handleGenreBrowse(raw_input: []const u8) bool {
     const genre_id = genreNameToId(genre);
 
     // Use discover API via direct fetch instead of search piggyback
-    state.app.drawer_open = true;
-    state.app.drawer_tab = .TMDB;
+    state.navigateToTab(.TMDB);
     state.app.tmdb.view = .Search;
     state.app.tmdb.page = 1;
 
@@ -196,7 +197,9 @@ pub fn handleGenreBrowse(raw_input: []const u8) bool {
         @memcpy(chat.messages[assistant_idx].text[0..chat.messages[assistant_idx].text_len], resp2[0..chat.messages[assistant_idx].text_len]);
 
         // Spawn worker to call /discover/movie?with_genres=ID
-        const S = struct { var gid: u32 = 0; };
+        const S = struct {
+            var gid: u32 = 0;
+        };
         S.gid = genre_id;
         _ = std.Thread.spawn(.{}, struct {
             fn worker() void {

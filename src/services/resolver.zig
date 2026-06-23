@@ -16,22 +16,22 @@ const alloc = @import("../core/alloc.zig").allocator;
 // ══════════════════════════════════════════════════════════
 
 pub const SourceType = enum {
-    jellyfin,   // Local library — fastest, already on disk
-    stremio,    // Addon streams — HTTP direct
-    torrent,    // Magnet links — needs download
-    anime,      // ani-cli streams — HTTP direct
-    youtube,    // yt-dlp streams — HTTP direct
+    jellyfin, // Local library — fastest, already on disk
+    stremio, // Addon streams — HTTP direct
+    torrent, // Magnet links — needs download
+    anime, // ani-cli streams — HTTP direct
+    youtube, // yt-dlp streams — HTTP direct
 };
 
 pub const ResolvedItem = struct {
     name: [256]u8 = std.mem.zeroes([256]u8),
     name_len: usize = 0,
-    detail: [128]u8 = std.mem.zeroes([128]u8),  // size, seeds, source addon, etc.
+    detail: [128]u8 = std.mem.zeroes([128]u8), // size, seeds, source addon, etc.
     detail_len: usize = 0,
-    url: [2048]u8 = std.mem.zeroes([2048]u8),       // magnet/http/jf item id
+    url: [2048]u8 = std.mem.zeroes([2048]u8), // magnet/http/jf item id
     url_len: usize = 0,
     source: SourceType = .torrent,
-    quality: u8 = 0,  // 0=unknown, 1=480, 2=720, 3=1080, 4=4K
+    quality: u8 = 0, // 0=unknown, 1=480, 2=720, 3=1080, 4=4K
     seeds: u16 = 0,
     match_pct: u8 = 0, // 0-100% keyword match score for UI display
     score: u32 = 9999, // cached composite sort score (lower = better)
@@ -94,7 +94,7 @@ fn normalizeQuery(raw: []const u8, buf: *[256]u8) []const u8 {
 
     while (i < rlen) {
         // Check for "season X" pattern
-        if (i + 7 <= rlen and std.mem.eql(u8, src[i..i + 7], "season ")) {
+        if (i + 7 <= rlen and std.mem.eql(u8, src[i .. i + 7], "season ")) {
             const num_start = i + 7;
             var num_end = num_start;
             while (num_end < rlen and std.ascii.isDigit(src[num_end])) num_end += 1;
@@ -103,12 +103,20 @@ fn normalizeQuery(raw: []const u8, buf: *[256]u8) []const u8 {
                 out += 1;
                 // Zero-pad to 2 digits
                 const num = src[num_start..num_end];
-                if (num.len == 1) { buf[out] = '0'; out += 1; }
-                for (num) |ch| { if (out < 255) { buf[out] = ch; out += 1; } }
+                if (num.len == 1) {
+                    buf[out] = '0';
+                    out += 1;
+                }
+                for (num) |ch| {
+                    if (out < 255) {
+                        buf[out] = ch;
+                        out += 1;
+                    }
+                }
                 i = num_end;
                 // Check for "episode Y" immediately after
                 while (i < rlen and src[i] == ' ') i += 1;
-                if (i + 8 <= rlen and std.mem.eql(u8, src[i..i + 8], "episode ")) {
+                if (i + 8 <= rlen and std.mem.eql(u8, src[i .. i + 8], "episode ")) {
                     const ep_start = i + 8;
                     var ep_end = ep_start;
                     while (ep_end < rlen and std.ascii.isDigit(src[ep_end])) ep_end += 1;
@@ -116,11 +124,19 @@ fn normalizeQuery(raw: []const u8, buf: *[256]u8) []const u8 {
                         buf[out] = 'E';
                         out += 1;
                         const ep_num = src[ep_start..ep_end];
-                        if (ep_num.len == 1) { buf[out] = '0'; out += 1; }
-                        for (ep_num) |ch| { if (out < 255) { buf[out] = ch; out += 1; } }
+                        if (ep_num.len == 1) {
+                            buf[out] = '0';
+                            out += 1;
+                        }
+                        for (ep_num) |ch| {
+                            if (out < 255) {
+                                buf[out] = ch;
+                                out += 1;
+                            }
+                        }
                         i = ep_end;
                     }
-                } else if (i + 3 <= rlen and std.mem.eql(u8, src[i..i + 3], "ep ")) {
+                } else if (i + 3 <= rlen and std.mem.eql(u8, src[i .. i + 3], "ep ")) {
                     const ep_start = i + 3;
                     var ep_end = ep_start;
                     while (ep_end < rlen and std.ascii.isDigit(src[ep_end])) ep_end += 1;
@@ -128,8 +144,16 @@ fn normalizeQuery(raw: []const u8, buf: *[256]u8) []const u8 {
                         buf[out] = 'E';
                         out += 1;
                         const ep_num = src[ep_start..ep_end];
-                        if (ep_num.len == 1) { buf[out] = '0'; out += 1; }
-                        for (ep_num) |ch| { if (out < 255) { buf[out] = ch; out += 1; } }
+                        if (ep_num.len == 1) {
+                            buf[out] = '0';
+                            out += 1;
+                        }
+                        for (ep_num) |ch| {
+                            if (out < 255) {
+                                buf[out] = ch;
+                                out += 1;
+                            }
+                        }
                         i = ep_end;
                     }
                 }
@@ -137,7 +161,7 @@ fn normalizeQuery(raw: []const u8, buf: *[256]u8) []const u8 {
             }
         }
         // Check for standalone "episode X" or "ep X"
-        if (i + 8 <= rlen and std.mem.eql(u8, src[i..i + 8], "episode ")) {
+        if (i + 8 <= rlen and std.mem.eql(u8, src[i .. i + 8], "episode ")) {
             const ep_start = i + 8;
             var ep_end = ep_start;
             while (ep_end < rlen and std.ascii.isDigit(src[ep_end])) ep_end += 1;
@@ -145,13 +169,21 @@ fn normalizeQuery(raw: []const u8, buf: *[256]u8) []const u8 {
                 buf[out] = 'E';
                 out += 1;
                 const ep_num = src[ep_start..ep_end];
-                if (ep_num.len == 1) { buf[out] = '0'; out += 1; }
-                for (ep_num) |ch| { if (out < 255) { buf[out] = ch; out += 1; } }
+                if (ep_num.len == 1) {
+                    buf[out] = '0';
+                    out += 1;
+                }
+                for (ep_num) |ch| {
+                    if (out < 255) {
+                        buf[out] = ch;
+                        out += 1;
+                    }
+                }
                 i = ep_end;
                 continue;
             }
         }
-        if (i + 3 <= rlen and std.mem.eql(u8, src[i..i + 3], "ep ")) {
+        if (i + 3 <= rlen and std.mem.eql(u8, src[i .. i + 3], "ep ")) {
             const ep_start = i + 3;
             var ep_end = ep_start;
             while (ep_end < rlen and std.ascii.isDigit(src[ep_end])) ep_end += 1;
@@ -159,8 +191,16 @@ fn normalizeQuery(raw: []const u8, buf: *[256]u8) []const u8 {
                 buf[out] = 'E';
                 out += 1;
                 const ep_num = src[ep_start..ep_end];
-                if (ep_num.len == 1) { buf[out] = '0'; out += 1; }
-                for (ep_num) |ch| { if (out < 255) { buf[out] = ch; out += 1; } }
+                if (ep_num.len == 1) {
+                    buf[out] = '0';
+                    out += 1;
+                }
+                for (ep_num) |ch| {
+                    if (out < 255) {
+                        buf[out] = ch;
+                        out += 1;
+                    }
+                }
                 i = ep_end;
                 continue;
             }
@@ -190,7 +230,7 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
         const m = std.fmt.bufPrint(&qlog, "query='{s}' intent='{s}'", .{ normalized, intent }) catch "query";
         logs.pushLog("info", "resolver", m, false);
     }
-    
+
     // Save intent (e.g. "show", "movie", "auto")
     const ilen = @min(intent.len, 31);
     @memcpy(resolver_intent[0..ilen], intent[0..ilen]);
@@ -306,10 +346,9 @@ fn isStopWord(word: []const u8) bool {
 /// Detect error/garbage results from broken indexers (Jackett API errors, etc.)
 fn isErrorResult(name: []const u8) bool {
     const error_markers = [_][]const u8{
-        "api key error", "Jackett:", "jackett:", "API key",
-        "error!", "Error!", "ERROR", "configuration",
-        "Right-click this", "right-click this",
-        "indexer error", "Indexer Error",
+        "api key error",    "Jackett:",         "jackett:",      "API key",
+        "error!",           "Error!",           "ERROR",         "configuration",
+        "Right-click this", "right-click this", "indexer error", "Indexer Error",
     };
     for (error_markers) |marker| {
         if (std.mem.indexOf(u8, name, marker) != null) return true;
@@ -352,7 +391,10 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
         // word boundaries — otherwise "2" matches inside "2008" and ruins
         // ranking for sequels.
         var is_numeric = true;
-        for (word) |ch| if (!std.ascii.isDigit(ch)) { is_numeric = false; break; };
+        for (word) |ch| if (!std.ascii.isDigit(ch)) {
+            is_numeric = false;
+            break;
+        };
 
         const hay = lower_name[0..nlen];
         if (is_numeric) {
@@ -361,7 +403,10 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
                 const before_ok = (p == 0) or !std.ascii.isDigit(hay[p - 1]);
                 const after_idx = p + word.len;
                 const after_ok = (after_idx >= hay.len) or !std.ascii.isDigit(hay[after_idx]);
-                if (before_ok and after_ok) { match_words += 1; break; }
+                if (before_ok and after_ok) {
+                    match_words += 1;
+                    break;
+                }
                 hi = p + 1;
             }
         } else {
@@ -371,7 +416,8 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
 
     const pct: u8 = if (total_words > 0)
         @intCast((match_words * 100) / total_words)
-    else 50;
+    else
+        50;
 
     if (match_words == 0) return .{ .match_pct = 0, .score = 9999 };
 
@@ -382,7 +428,11 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
     const is_movie_or_show = std.mem.eql(u8, intent, "movie") or std.mem.eql(u8, intent, "show");
 
     var source_w: u32 = switch (item.source) {
-        .jellyfin => 0, .stremio => 5, .torrent => 8, .anime => 12, .youtube => 20,
+        .jellyfin => 0,
+        .stremio => 5,
+        .torrent => 8,
+        .anime => 12,
+        .youtube => 20,
     };
 
     // Heavily penalize YouTube if intent is movie or show to prevent playing random trailers
@@ -392,19 +442,17 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
 
     // 1080p is ideal sweet spot
     const quality_bonus: u32 = switch (item.quality) {
-        4 => 2, 3 => 0, 2 => 5, 1 => 10, else => 15,
+        4 => 2,
+        3 => 0,
+        2 => 5,
+        1 => 10,
+        else => 15,
     };
 
     // Seed bonus capped at 7 so a well-seeded torrent can't leapfrog an
     // equal-match jellyfin item (torrent source_w=8 gap must survive).
     // Inter-torrent ordering is still preserved via the remaining spread.
-    const seed_bonus: u32 = if (item.seeds > 100) 7
-        else if (item.seeds > 50) 6
-        else if (item.seeds > 20) 5
-        else if (item.seeds > 10) 4
-        else if (item.seeds > 5) 3
-        else if (item.seeds > 0) 1
-        else 0;
+    const seed_bonus: u32 = if (item.seeds > 100) 7 else if (item.seeds > 50) 6 else if (item.seeds > 20) 5 else if (item.seeds > 10) 4 else if (item.seeds > 5) 3 else if (item.seeds > 0) 1 else 0;
 
     const raw = relevance + source_w + quality_bonus;
     const score = if (raw > seed_bonus) raw - seed_bonus else 0;
@@ -417,7 +465,10 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
 // ══════════════════════════════════════════════════════════
 
 fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
-    defer { status_jf.store(.done, .release); checkAllDone(); }
+    defer {
+        status_jf.store(.done, .release);
+        checkAllDone();
+    }
 
     if (!state.app.jf.connected or state.app.jf.server_url_len == 0) {
         return;
@@ -503,7 +554,10 @@ fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
 
 // Main torrent thread: uses nova2.py (same proven engine as Torrent Only tab)
 fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
-    defer { status_torrent.store(.done, .release); checkAllDone(); }
+    defer {
+        status_torrent.store(.done, .release);
+        checkAllDone();
+    }
 
     const query = query_buf[0..qlen];
 
@@ -567,7 +621,10 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
             if (std.mem.startsWith(u8, s, "www.")) s = s[4..];
             var end: usize = s.len;
             for (s, 0..) |ch, j| {
-                if (ch == '.' or ch == '/') { end = j; break; }
+                if (ch == '.' or ch == '/') {
+                    end = j;
+                    break;
+                }
             }
             const elen = @min(end, 31);
             @memcpy(eng_buf[0..elen], s[0..elen]);
@@ -599,7 +656,10 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
-    defer { status_1337x.store(.done, .release); checkAllDone(); }
+    defer {
+        status_1337x.store(.done, .release);
+        checkAllDone();
+    }
 
     const query = query_buf[0..qlen];
 
@@ -608,9 +668,13 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
     var el: usize = 0;
     for (query) |ch| {
         if (el + 3 >= enc.len) break;
-        if (ch == ' ') { enc[el] = '+'; el += 1; }
-        else if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.') { enc[el] = ch; el += 1; }
-        else {
+        if (ch == ' ') {
+            enc[el] = '+';
+            el += 1;
+        } else if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.') {
+            enc[el] = ch;
+            el += 1;
+        } else {
             enc[el] = '%';
             enc[el + 1] = "0123456789ABCDEF"[ch >> 4];
             enc[el + 2] = "0123456789ABCDEF"[ch & 0xF];
@@ -633,7 +697,6 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
     const pn = page.len;
     if (pn < 100) return;
 
-
     // Parse result links: <a href="/torrent/12345/Title-Here/">
     var pos: usize = 0;
     var found: usize = 0;
@@ -642,16 +705,25 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
     while (found < 10 and pos < pn) {
         const href_start = std.mem.indexOfPos(u8, page, pos, link_prefix) orelse break;
         // Find the enclosing <a> tag to get the title text
-        const close_tag = std.mem.indexOfScalarPos(u8, page, href_start, '>') orelse { pos = href_start + 1; continue; };
+        const close_tag = std.mem.indexOfScalarPos(u8, page, href_start, '>') orelse {
+            pos = href_start + 1;
+            continue;
+        };
         const href_end = std.mem.indexOfScalarPos(u8, page, href_start, '"') orelse close_tag;
 
         // Extract href path
         const href = page[href_start..href_end];
-        if (href.len < 15) { pos = href_end + 1; continue; }
+        if (href.len < 15) {
+            pos = href_end + 1;
+            continue;
+        }
 
         // Extract title text between > and </a>
         const title_start = close_tag + 1;
-        const title_end = std.mem.indexOfPos(u8, page, title_start, "</a>") orelse { pos = close_tag + 1; continue; };
+        const title_end = std.mem.indexOfPos(u8, page, title_start, "</a>") orelse {
+            pos = close_tag + 1;
+            continue;
+        };
         const raw_title = page[title_start..title_end];
 
         // Clean HTML tags from title (there might be nested spans)
@@ -659,15 +731,24 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
         var ct_len: usize = 0;
         var in_tag = false;
         for (raw_title) |ch| {
-            if (ch == '<') { in_tag = true; continue; }
-            if (ch == '>') { in_tag = false; continue; }
+            if (ch == '<') {
+                in_tag = true;
+                continue;
+            }
+            if (ch == '>') {
+                in_tag = false;
+                continue;
+            }
             if (!in_tag and ct_len < 255) {
                 clean_title[ct_len] = ch;
                 ct_len += 1;
             }
         }
 
-        if (ct_len < 3) { pos = title_end + 1; continue; }
+        if (ct_len < 3) {
+            pos = title_end + 1;
+            continue;
+        }
 
         // Extract seeds from the same row — look for <td class="coll-2 seeds">N</td>
         const seeds_marker = "seeds\">";
@@ -680,7 +761,10 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
 
         // Build full URL for magnet fetch
         var detail_url: [512]u8 = undefined;
-        const du = std.fmt.bufPrint(&detail_url, "https://1337x.to{s}", .{href}) catch { pos = title_end + 1; continue; };
+        const du = std.fmt.bufPrint(&detail_url, "https://1337x.to{s}", .{href}) catch {
+            pos = title_end + 1;
+            continue;
+        };
 
         // Fetch the detail page to get magnet link
         var det_buf: [128 * 1024]u8 = undefined;
@@ -688,7 +772,10 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
         const det_page = @import("../core/http.zig").fetch(du, &det_buf, .{
             .timeout_secs = 6,
             .user_agent = "Mozilla/5.0",
-        }) orelse { pos = title_end + 1; continue; };
+        }) orelse {
+            pos = title_end + 1;
+            continue;
+        };
         const dn = det_page.len;
 
         // Find magnet link
@@ -735,7 +822,10 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
 
 // YTS API — fast movie search (runs in parallel)
 fn resolveYts(query_buf: [256]u8, qlen: usize) void {
-    defer { status_yts.store(.done, .release); checkAllDone(); }
+    defer {
+        status_yts.store(.done, .release);
+        checkAllDone();
+    }
 
     const query = query_buf[0..qlen];
 
@@ -770,9 +860,15 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
 
         // Find torrent URL in this movie block
         const hash_key = "\"hash\":\"";
-        const hash_pos = std.mem.indexOfPos(u8, buf[0..n], te, hash_key) orelse { pos = te + 1; continue; };
+        const hash_pos = std.mem.indexOfPos(u8, buf[0..n], te, hash_key) orelse {
+            pos = te + 1;
+            continue;
+        };
         const hs = hash_pos + hash_key.len;
-        const he = std.mem.indexOfScalarPos(u8, buf[0..n], hs, '"') orelse { pos = te + 1; continue; };
+        const he = std.mem.indexOfScalarPos(u8, buf[0..n], hs, '"') orelse {
+            pos = te + 1;
+            continue;
+        };
         const hash = buf[hs..he];
 
         // Find quality
@@ -820,7 +916,10 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
-    defer { status_anime.store(.done, .release); checkAllDone(); }
+    defer {
+        status_anime.store(.done, .release);
+        checkAllDone();
+    }
 
     const query = query_buf[0..qlen];
 
@@ -850,7 +949,8 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
     const search_gql = "query( $search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) { shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) { edges { _id name availableEpisodes __typename } }}";
 
     var vars_buf: [512]u8 = undefined;
-    const vars = std.fmt.bufPrint(&vars_buf,
+    const vars = std.fmt.bufPrint(
+        &vars_buf,
         "{{\"search\":{{\"allowAdult\":false,\"allowUnknown\":false,\"query\":\"{s}\"}},\"limit\":6,\"page\":1,\"translationType\":\"sub\",\"countryOrigin\":\"ALL\"}}",
         .{safe_q[0..si]},
     ) catch return;
@@ -892,9 +992,12 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
                 break;
             }
         }
-        if (name_end == 0) { pos = abs + 1; continue; }
+        if (name_end == 0) {
+            pos = abs + 1;
+            continue;
+        }
 
-        const name = buf[abs..abs + name_end];
+        const name = buf[abs .. abs + name_end];
         if (name.len > 2 and name.len < 256) {
             var item = std.mem.zeroes(ResolvedItem);
             item.source = .anime;
@@ -922,7 +1025,10 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
-    defer { status_yt.store(.done, .release); checkAllDone(); }
+    defer {
+        status_yt.store(.done, .release);
+        checkAllDone();
+    }
 
     const query = query_buf[0..qlen];
     var search_arg: [300]u8 = undefined;
@@ -983,7 +1089,10 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
-    defer { status_stremio.store(.done, .release); checkAllDone(); }
+    defer {
+        status_stremio.store(.done, .release);
+        checkAllDone();
+    }
 
     const stremio = @import("stremio.zig");
     // Lazily install the well-known addons so the stremio source works
@@ -1002,15 +1111,30 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
             enc[el] = '+';
             el += 1;
         } else if (ch == '%') {
-            enc[el] = '%'; enc[el + 1] = '2'; enc[el + 2] = '5'; el += 3;
+            enc[el] = '%';
+            enc[el + 1] = '2';
+            enc[el + 2] = '5';
+            el += 3;
         } else if (ch == '&') {
-            enc[el] = '%'; enc[el + 1] = '2'; enc[el + 2] = '6'; el += 3;
+            enc[el] = '%';
+            enc[el + 1] = '2';
+            enc[el + 2] = '6';
+            el += 3;
         } else if (ch == '=') {
-            enc[el] = '%'; enc[el + 1] = '3'; enc[el + 2] = 'D'; el += 3;
+            enc[el] = '%';
+            enc[el + 1] = '3';
+            enc[el + 2] = 'D';
+            el += 3;
         } else if (ch == '#') {
-            enc[el] = '%'; enc[el + 1] = '2'; enc[el + 2] = '3'; el += 3;
+            enc[el] = '%';
+            enc[el + 1] = '2';
+            enc[el + 2] = '3';
+            el += 3;
         } else if (ch == '?') {
-            enc[el] = '%'; enc[el + 1] = '3'; enc[el + 2] = 'F'; el += 3;
+            enc[el] = '%';
+            enc[el + 1] = '3';
+            enc[el + 2] = 'F';
+            el += 3;
         } else {
             enc[el] = ch;
             el += 1;
@@ -1115,15 +1239,15 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
             item.source = .stremio;
 
             const ulen = @min(ue, 2047);
-            @memcpy(item.url[0..ulen], sbuf[uabs..uabs + ulen]);
+            @memcpy(item.url[0..ulen], sbuf[uabs .. uabs + ulen]);
             item.url_len = ulen;
 
             // Get title
-            if (std.mem.lastIndexOf(u8, sbuf[spos..spos + next], "\"title\":\"")) |tp| {
+            if (std.mem.lastIndexOf(u8, sbuf[spos .. spos + next], "\"title\":\"")) |tp| {
                 const tabs = spos + tp + 9;
                 const tee = std.mem.indexOfScalar(u8, sbuf[tabs..], '"') orelse 0;
                 const tlen = @min(tee, 255);
-                @memcpy(item.name[0..tlen], sbuf[tabs..tabs + tlen]);
+                @memcpy(item.name[0..tlen], sbuf[tabs .. tabs + tlen]);
                 item.name_len = tlen;
             }
 
@@ -1163,6 +1287,7 @@ pub fn playItem(idx: usize) void {
         .jellyfin => {
             const jf = @import("jellyfin.zig");
             jf.playItem(item.jf_item_id[0..item.jf_item_id_len]);
+            state.gotoPlayer();
         },
         .torrent => {
             // URL is a 1337x detail page — need to resolve magnet
@@ -1183,16 +1308,19 @@ pub fn playItem(idx: usize) void {
         .anime => {
             const anime = @import("anime.zig");
             anime.playEpisode(item.url[0..item.url_len]);
+            state.gotoPlayer();
         },
         .youtube, .stremio => {
             // Direct URL — load into mpv
             if (state.app.active_player_idx < state.app.players.items.len) {
                 const p = state.app.players.items[state.app.active_player_idx];
+                p.provider = .mpv;
                 var url_z: [2049]u8 = undefined;
                 const ulen = item.url_len;
                 @memcpy(url_z[0..ulen], item.url[0..ulen]);
                 url_z[ulen] = 0;
                 p.load_file(@ptrCast(&url_z[0]));
+                state.gotoPlayer();
             }
         },
     }
@@ -1219,7 +1347,7 @@ fn extractStr(data: []const u8, key: []const u8) ?[]const u8 {
     const start = (std.mem.indexOf(u8, data, key) orelse return null) + key.len;
     if (start >= data.len) return null;
     const end = std.mem.indexOfScalar(u8, data[start..], '"') orelse return null;
-    return data[start..start + end];
+    return data[start .. start + end];
 }
 
 fn extractNumStr(data: []const u8, key: []const u8) ?[]const u8 {

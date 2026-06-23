@@ -66,15 +66,21 @@ fn renderNoApiKey() void {
     _ = dvui.label(@src(), "Add your free API key in Settings > General", .{}, .{ .color_text = theme.colors.text_muted, .gravity_x = 0.5 });
     _ = dvui.label(@src(), "Get one at: themoviedb.org/settings/api", .{}, .{ .color_text = theme.colors.accent, .gravity_x = 0.5 });
     if (dvui.button(@src(), "Open Settings", .{}, .{
-        .gravity_x = 0.5, .margin = .{ .x = 0, .y = 12, .w = 0, .h = 0 },
-        .color_fill = theme.colors.accent, .color_text = theme.colors.bg_header,
-        .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 16, .y = 8, .w = 16, .h = 8 },
-    })) { state.app.settings_open = true; }
+        .gravity_x = 0.5,
+        .margin = .{ .x = 0, .y = 12, .w = 0, .h = 0 },
+        .color_fill = theme.colors.accent,
+        .color_text = theme.colors.bg_header,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 16, .y = 8, .w = 16, .h = 8 },
+    })) {
+        state.app.settings_open = true;
+    }
 }
 
 fn renderSubTabs() void {
     var tab_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+        .expand = .horizontal,
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
     });
     defer tab_row.deinit();
     renderSubTab(0, .Trending, "Hot");
@@ -90,12 +96,16 @@ fn renderSubTab(idx: usize, view: state.TmdbView, label: []const u8) void {
     const fg = if (active) dvui.Color.white else theme.colors.text_muted;
 
     if (dvui.button(@src(), label, .{}, .{
-        .id_extra = idx, .background = true,
-        .color_fill = bg, .color_text = fg,
+        .id_extra = idx,
+        .background = true,
+        .color_fill = bg,
+        .color_text = fg,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
         .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
-    })) { switchView(view); }
+    })) {
+        switchView(view);
+    }
 }
 
 fn switchView(view: state.TmdbView) void {
@@ -136,9 +146,15 @@ fn renderCategoryBar() void {
 fn renderCatChip(idx: usize, cat: state.TmdbCategory, label: []const u8) void {
     const fg = if (state.app.tmdb.category == cat) theme.colors.accent else theme.colors.text_muted;
     if (dvui.button(@src(), label, .{}, .{
-        .id_extra = idx + 2000, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_text = fg, .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
-    })) { state.app.tmdb.category = cat; state.app.tmdb.page = 1; api.fetchCurrentView(false); }
+        .id_extra = idx + 2000,
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_text = fg,
+        .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
+    })) {
+        state.app.tmdb.category = cat;
+        state.app.tmdb.page = 1;
+        api.fetchCurrentView(false);
+    }
 }
 
 fn renderFilterChip(idx: usize, filter: state.TmdbMediaFilter, label: []const u8) void {
@@ -150,32 +166,54 @@ fn renderFilterChip(idx: usize, filter: state.TmdbMediaFilter, label: []const u8
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
         .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
-    })) { state.app.tmdb.media_filter = filter; state.app.tmdb.page = 1; api.fetchCurrentView(false); }
+    })) {
+        state.app.tmdb.media_filter = filter;
+        state.app.tmdb.page = 1;
+        api.fetchCurrentView(false);
+    }
 }
 
 fn renderTimeChip(idx: usize, tw: state.TmdbTimeWindow, label: []const u8) void {
     const fg = if (state.app.tmdb.time_window == tw) theme.colors.accent else theme.colors.text_muted;
     if (dvui.button(@src(), label, .{}, .{
-        .id_extra = idx + 4000, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_text = fg, .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
-    })) { state.app.tmdb.time_window = tw; state.app.tmdb.page = 1; api.fetchCurrentView(false); }
+        .id_extra = idx + 4000,
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_text = fg,
+        .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
+    })) {
+        state.app.tmdb.time_window = tw;
+        state.app.tmdb.page = 1;
+        api.fetchCurrentView(false);
+    }
 }
 
 fn renderSearchBar() void {
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 } });
     defer row.deinit();
     var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.tmdb.search_buf } }, .{
-        .expand = .horizontal, .color_fill = theme.colors.bg_input, .color_border = theme.colors.border_input,
-        .color_text = theme.colors.text_main, .border = dvui.Rect.all(1), .corner_radius = theme.dims.rad_sm,
+        .expand = .horizontal,
+        .color_fill = theme.colors.bg_input,
+        .color_border = theme.colors.border_input,
+        .color_text = theme.colors.text_main,
+        .border = dvui.Rect.all(1),
+        .corner_radius = theme.dims.rad_sm,
     });
     const enter_pressed = te.enter_pressed;
     te.deinit();
     if (dvui.button(@src(), "Go", .{}, .{
-        .color_fill = theme.colors.accent, .color_text = theme.colors.bg_header,
-        .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
+        .color_fill = theme.colors.accent,
+        .color_text = theme.colors.bg_header,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
         .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
-    })) { state.app.tmdb.page = 1; api.fetchCurrentView(false); }
-    if (enter_pressed) { state.app.tmdb.page = 1; api.fetchCurrentView(false); }
+    })) {
+        state.app.tmdb.page = 1;
+        api.fetchCurrentView(false);
+    }
+    if (enter_pressed) {
+        state.app.tmdb.page = 1;
+        api.fetchCurrentView(false);
+    }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -185,7 +223,9 @@ fn renderSearchBar() void {
 fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more: bool) void {
     if (items.items.len == 0 and !state.app.tmdb.is_loading) {
         _ = dvui.label(@src(), "No items to display.", .{}, .{
-            .color_text = theme.colors.text_muted, .gravity_x = 0.5, .margin = dvui.Rect.all(24),
+            .color_text = theme.colors.text_muted,
+            .gravity_x = 0.5,
+            .margin = dvui.Rect.all(24),
         });
         return;
     }
@@ -226,10 +266,17 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
         var load_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = dvui.Rect.all(12) });
         defer load_row.deinit();
         if (dvui.button(@src(), "Load More", .{}, .{
-            .gravity_x = 0.5, .color_fill = theme.colors.bg_card, .color_text = theme.colors.accent,
-            .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 24, .y = 8, .w = 24, .h = 8 },
-            .border = dvui.Rect.all(1), .color_border = theme.colors.accent,
-        })) { state.app.tmdb.page += 1; api.fetchCurrentView(true); }
+            .gravity_x = 0.5,
+            .color_fill = theme.colors.bg_card,
+            .color_text = theme.colors.accent,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 24, .y = 8, .w = 24, .h = 8 },
+            .border = dvui.Rect.all(1),
+            .color_border = theme.colors.accent,
+        })) {
+            state.app.tmdb.page += 1;
+            api.fetchCurrentView(true);
+        }
     }
 }
 
@@ -271,17 +318,24 @@ fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h: f3
             const num_pixels = item.poster_w * item.poster_h;
             const pixels_pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(item.poster_pixels.?.ptr)))[0..num_pixels];
             item.poster_tex = dvui.textureCreate(pixels_pma, item.poster_w, item.poster_h, .linear, .rgba_32) catch null;
-            if (item.poster_tex != null) { alloc.free(item.poster_pixels.?); item.poster_pixels = null; }
+            if (item.poster_tex != null) {
+                alloc.free(item.poster_pixels.?);
+                item.poster_pixels = null;
+            }
         }
 
         if (item.poster_tex) |*tex| {
             _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                .id_extra = idx + 150, .expand = .both, .corner_radius = dvui.Rect.all(8),
+                .id_extra = idx + 150,
+                .expand = .both,
+                .corner_radius = dvui.Rect.all(8),
             });
         } else {
             if (!item.poster_fetching and item.poster_path_len > 0) api.fetchPoster(item);
-            dvui.icon(@src(), "", icons.tvg.lucide.@"film", .{}, .{
-                .id_extra = idx + 150, .gravity_x = 0.5, .gravity_y = 0.5,
+            dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
+                .id_extra = idx + 150,
+                .gravity_x = 0.5,
+                .gravity_y = 0.5,
                 .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 60 },
                 .expand = .both,
             });
@@ -296,7 +350,8 @@ fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h: f3
     // Rating badge + type label
     {
         var meta_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = idx + 300, .expand = .horizontal,
+            .id_extra = idx + 300,
+            .expand = .horizontal,
             .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
         });
         defer meta_row.deinit();
@@ -310,7 +365,10 @@ fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h: f3
         } else |_| {}
 
         // Spacer
-        { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
 
         // Media type badge
         if (item.media_type_len > 0) {
@@ -326,16 +384,20 @@ fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h: f3
 
     // Title — click to search torrents
     if (dvui.button(@src(), title, .{}, .{
-        .id_extra = idx + 500, .expand = .horizontal,
+        .id_extra = idx + 500,
+        .expand = .horizontal,
         .color_text = theme.colors.text_main,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-    })) { sendToSearch(item); }
+    })) {
+        sendToSearch(item);
+    }
 
     // Year
     if (item.year_len > 0) {
         _ = dvui.label(@src(), "{s}", .{item.year[0..item.year_len]}, .{
-            .id_extra = idx + 520, .color_text = theme.colors.text_muted,
+            .id_extra = idx + 520,
+            .color_text = theme.colors.text_muted,
             .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         });
     }
@@ -353,24 +415,41 @@ fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h: f3
         // Fav
         {
             const fc = if (store.isInList(&state.app.tmdb.favorites, item.id)) dvui.Color{ .r = 255, .g = 215, .b = 0, .a = 255 } else dim;
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"star", .{}, .{}, .{
-                .id_extra = idx + 7000, .color_fill = trans, .color_text = fc, .padding = dvui.Rect.all(1),
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.star, .{}, .{}, .{
+                .id_extra = idx + 7000,
+                .color_fill = trans,
+                .color_text = fc,
+                .padding = dvui.Rect.all(1),
                 .min_size_content = .{ .w = 12, .h = 12 },
-            })) { store.toggleList(&state.app.tmdb.favorites, item); store.saveLists(); }
+            })) {
+                store.toggleList(&state.app.tmdb.favorites, item);
+                store.saveLists();
+            }
         }
         // Watchlist
         {
             const wc = if (store.isInList(&state.app.tmdb.watchlist, item.id)) theme.colors.accent else dim;
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"bookmark", .{}, .{}, .{
-                .id_extra = idx + 8000, .color_fill = trans, .color_text = wc, .padding = dvui.Rect.all(1),
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.bookmark, .{}, .{}, .{
+                .id_extra = idx + 8000,
+                .color_fill = trans,
+                .color_text = wc,
+                .padding = dvui.Rect.all(1),
                 .min_size_content = .{ .w = 12, .h = 12 },
-            })) { store.toggleList(&state.app.tmdb.watchlist, item); store.saveLists(); }
+            })) {
+                store.toggleList(&state.app.tmdb.watchlist, item);
+                store.saveLists();
+            }
         }
         // Search
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"search", .{}, .{}, .{
-            .id_extra = idx + 10000, .color_fill = trans, .color_text = theme.colors.accent, .padding = dvui.Rect.all(1),
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.search, .{}, .{}, .{
+            .id_extra = idx + 10000,
+            .color_fill = trans,
+            .color_text = theme.colors.accent,
+            .padding = dvui.Rect.all(1),
             .min_size_content = .{ .w = 12, .h = 12 },
-        })) { sendToSearch(item); }
+        })) {
+            sendToSearch(item);
+        }
     }
 }
 
@@ -381,8 +460,11 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
     const h2: u8 = @truncate((hue >> 8) & 0xFF);
 
     var card = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .id_extra = idx, .expand = .horizontal, .background = true,
-        .color_fill = theme.colors.bg_card, .color_border = theme.colors.bg_header_border,
+        .id_extra = idx,
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = theme.colors.bg_card,
+        .color_border = theme.colors.bg_header_border,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .padding = .{ .x = 10, .y = 10, .w = 10, .h = 10 },
     });
@@ -391,10 +473,12 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
     // Poster
     {
         var poster = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 100, .background = true,
+            .id_extra = idx + 100,
+            .background = true,
             .color_fill = dvui.Color{ .r = 20 + h1 / 6, .g = 25 + h2 / 8, .b = 35 + h1 / 5, .a = 255 },
             .corner_radius = dvui.Rect.all(6),
-            .min_size_content = .{ .w = 60, .h = 90 }, .max_size_content = .{ .w = 60, .h = 90 },
+            .min_size_content = .{ .w = 60, .h = 90 },
+            .max_size_content = .{ .w = 60, .h = 90 },
         });
         defer poster.deinit();
 
@@ -402,17 +486,24 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
             const num_pixels = item.poster_w * item.poster_h;
             const pixels_pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(item.poster_pixels.?.ptr)))[0..num_pixels];
             item.poster_tex = dvui.textureCreate(pixels_pma, item.poster_w, item.poster_h, .linear, .rgba_32) catch null;
-            if (item.poster_tex != null) { alloc.free(item.poster_pixels.?); item.poster_pixels = null; }
+            if (item.poster_tex != null) {
+                alloc.free(item.poster_pixels.?);
+                item.poster_pixels = null;
+            }
         }
 
         if (item.poster_tex) |*tex| {
             _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                .id_extra = idx + 150, .expand = .both, .corner_radius = dvui.Rect.all(6),
+                .id_extra = idx + 150,
+                .expand = .both,
+                .corner_radius = dvui.Rect.all(6),
             });
         } else {
             if (!item.poster_fetching and item.poster_path_len > 0) api.fetchPoster(item);
-            dvui.icon(@src(), "", icons.tvg.lucide.@"film", .{}, .{
-                .id_extra = idx + 150, .gravity_x = 0.5, .gravity_y = 0.5,
+            dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
+                .id_extra = idx + 150,
+                .gravity_x = 0.5,
+                .gravity_y = 0.5,
                 .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 },
             });
         }
@@ -422,22 +513,29 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
     // Info
     {
         var info = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 200, .expand = .horizontal, .padding = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
+            .id_extra = idx + 200,
+            .expand = .horizontal,
+            .padding = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
         });
         defer info.deinit();
 
         // Title (click to search torrents)
         if (dvui.button(@src(), title, .{}, .{
-            .id_extra = idx + 500, .expand = .horizontal,
+            .id_extra = idx + 500,
+            .expand = .horizontal,
             .color_text = theme.colors.text_main,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .padding = dvui.Rect.all(0),
-        })) { sendToSearch(item); }
+        })) {
+            sendToSearch(item);
+        }
 
         // Meta row
         {
             var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = idx + 600, .expand = .horizontal, .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+                .id_extra = idx + 600,
+                .expand = .horizontal,
+                .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
             });
             defer meta.deinit();
 
@@ -471,16 +569,22 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
         // Genre (click to expand/collapse overview)
         if (item.genre_text_len > 0) {
             if (dvui.button(@src(), item.genre_text[0..item.genre_text_len], .{}, .{
-                .id_extra = idx + 650, .color_text = theme.colors.text_muted, .expand = .horizontal,
+                .id_extra = idx + 650,
+                .color_text = theme.colors.text_muted,
+                .expand = .horizontal,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 .padding = dvui.Rect.all(0),
-            })) { item.expanded = !item.expanded; }
+            })) {
+                item.expanded = !item.expanded;
+            }
         }
 
         // Expanded overview
         if (item.expanded and item.overview_len > 0) {
             _ = dvui.label(@src(), "{s}", .{item.overview[0..item.overview_len]}, .{
-                .id_extra = idx + 700, .color_text = theme.colors.text_muted, .expand = .horizontal,
+                .id_extra = idx + 700,
+                .color_text = theme.colors.text_muted,
+                .expand = .horizontal,
                 .padding = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
             });
         }
@@ -495,28 +599,51 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
             // Fav
             {
                 const fc = if (store.isInList(&state.app.tmdb.favorites, item.id)) dvui.Color{ .r = 255, .g = 215, .b = 0, .a = 255 } else dim;
-                if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"star", .{}, .{}, .{
-                    .id_extra = idx + 7000, .color_fill = trans, .color_text = fc, .padding = dvui.Rect.all(1),
-                })) { store.toggleList(&state.app.tmdb.favorites, item); store.saveLists(); }
+                if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.star, .{}, .{}, .{
+                    .id_extra = idx + 7000,
+                    .color_fill = trans,
+                    .color_text = fc,
+                    .padding = dvui.Rect.all(1),
+                })) {
+                    store.toggleList(&state.app.tmdb.favorites, item);
+                    store.saveLists();
+                }
             }
             // Watchlist
             {
                 const wc = if (store.isInList(&state.app.tmdb.watchlist, item.id)) theme.colors.accent else dim;
-                if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"bookmark", .{}, .{}, .{
-                    .id_extra = idx + 8000, .color_fill = trans, .color_text = wc, .padding = dvui.Rect.all(1),
-                })) { store.toggleList(&state.app.tmdb.watchlist, item); store.saveLists(); }
+                if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.bookmark, .{}, .{}, .{
+                    .id_extra = idx + 8000,
+                    .color_fill = trans,
+                    .color_text = wc,
+                    .padding = dvui.Rect.all(1),
+                })) {
+                    store.toggleList(&state.app.tmdb.watchlist, item);
+                    store.saveLists();
+                }
             }
             // Watching
             {
                 const wac = if (store.isInList(&state.app.tmdb.watching, item.id)) theme.colors.success else dim;
-                if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"eye", .{}, .{}, .{
-                    .id_extra = idx + 9000, .color_fill = trans, .color_text = wac, .padding = dvui.Rect.all(1),
-                })) { store.toggleList(&state.app.tmdb.watching, item); store.saveLists(); }
+                if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.eye, .{}, .{}, .{
+                    .id_extra = idx + 9000,
+                    .color_fill = trans,
+                    .color_text = wac,
+                    .padding = dvui.Rect.all(1),
+                })) {
+                    store.toggleList(&state.app.tmdb.watching, item);
+                    store.saveLists();
+                }
             }
             // Search torrents
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"search", .{}, .{}, .{
-                .id_extra = idx + 10000, .color_fill = trans, .color_text = theme.colors.accent, .padding = dvui.Rect.all(1),
-            })) { sendToSearch(item); }
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.search, .{}, .{}, .{
+                .id_extra = idx + 10000,
+                .color_fill = trans,
+                .color_text = theme.colors.accent,
+                .padding = dvui.Rect.all(1),
+            })) {
+                sendToSearch(item);
+            }
         }
     }
 
@@ -561,7 +688,7 @@ fn sendToSearch(item: *state.TmdbItem) void {
         std.fmt.bufPrint(&query_buf, "{s} {s}", .{ title, year }) catch return
     else
         std.fmt.bufPrint(&query_buf, "{s}", .{title}) catch return;
-    state.app.drawer_tab = .Search;
+    state.navigateToTab(.Search);
     search.triggerSearch(qlen);
     state.showToast("Searching torrents...");
 }

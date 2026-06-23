@@ -53,10 +53,10 @@ pub fn parseToolCall(text: []const u8) ?ToolCall {
     // Find "tool_call" block start
     const tc_key = "\"tool_call\"";
     const tc_pos = std.mem.indexOf(u8, text, tc_key) orelse return null;
-    
+
     // Find the opening { of the tool_call object
     const start = std.mem.indexOfScalarPos(u8, text, tc_pos + tc_key.len, '{') orelse return null;
-    
+
     // Extract everything within the {}
     var depth: usize = 0;
     var end: usize = start;
@@ -73,7 +73,7 @@ pub fn parseToolCall(text: []const u8) ?ToolCall {
                 // Extract "name": "..."
                 const name_key = "\"name\"";
                 const name_pos = std.mem.indexOf(u8, json_text, name_key) orelse return null;
-                const after_name = json_text[name_pos + name_key.len..];
+                const after_name = json_text[name_pos + name_key.len ..];
                 var ni: usize = 0;
                 while (ni < after_name.len and after_name[ni] != '"') : (ni += 1) {}
                 ni += 1;
@@ -89,7 +89,7 @@ pub fn parseToolCall(text: []const u8) ?ToolCall {
                 // Extract "arguments": {...}
                 const args_key = "\"arguments\"";
                 if (std.mem.indexOf(u8, json_text, args_key)) |args_pos| {
-                    const after_args = json_text[args_pos + args_key.len..];
+                    const after_args = json_text[args_pos + args_key.len ..];
                     if (std.mem.indexOfScalar(u8, after_args, '{')) |brace_start| {
                         var a_depth: usize = 0;
                         var bi: usize = brace_start;
@@ -113,7 +113,7 @@ pub fn parseToolCall(text: []const u8) ?ToolCall {
             }
         }
     }
-    
+
     return null;
 }
 
@@ -194,17 +194,17 @@ pub fn formatToolResponse(buf: []u8, tool_name: []const u8, result: []const u8) 
 
     // Write prefix
     if (off + prefix.len > buf.len) return 0;
-    @memcpy(buf[off..off + prefix.len], prefix);
+    @memcpy(buf[off .. off + prefix.len], prefix);
     off += prefix.len;
 
     // Write tool name
     if (off + tool_name.len > buf.len) return 0;
-    @memcpy(buf[off..off + tool_name.len], tool_name);
+    @memcpy(buf[off .. off + tool_name.len], tool_name);
     off += tool_name.len;
 
     // Write mid
     if (off + mid.len > buf.len) return 0;
-    @memcpy(buf[off..off + mid.len], mid);
+    @memcpy(buf[off .. off + mid.len], mid);
     off += mid.len;
 
     // Write sanitized result (escape quotes, strip non-ASCII/control chars)
@@ -214,23 +214,35 @@ pub fn formatToolResponse(buf: []u8, tool_name: []const u8, result: []const u8) 
     for (result) |ch| {
         if (content_written + 2 >= max_content) break;
         if (ch == '"') {
-            buf[off] = '\\'; off += 1; content_written += 1;
-            buf[off] = '"'; off += 1; content_written += 1;
+            buf[off] = '\\';
+            off += 1;
+            content_written += 1;
+            buf[off] = '"';
+            off += 1;
+            content_written += 1;
         } else if (ch == '\\') {
-            buf[off] = '\\'; off += 1; content_written += 1;
-            buf[off] = '\\'; off += 1; content_written += 1;
+            buf[off] = '\\';
+            off += 1;
+            content_written += 1;
+            buf[off] = '\\';
+            off += 1;
+            content_written += 1;
         } else if (ch == '\n') {
-            buf[off] = ' '; off += 1; content_written += 1;
+            buf[off] = ' ';
+            off += 1;
+            content_written += 1;
         } else if (ch < 32 or ch > 126) {
             // Skip non-ASCII and control chars — prevents UTF-8 parse errors
             continue;
         } else {
-            buf[off] = ch; off += 1; content_written += 1;
+            buf[off] = ch;
+            off += 1;
+            content_written += 1;
         }
     }
 
     // Write suffix — space is guaranteed reserved above
-    @memcpy(buf[off..off + suffix.len], suffix);
+    @memcpy(buf[off .. off + suffix.len], suffix);
     off += suffix.len;
 
     return off;
@@ -385,7 +397,6 @@ fn executeGetWatchHistory(alloc: std.mem.Allocator, _: *const ToolCall) ?[]u8 {
     return result[0..off];
 }
 
-
 fn executeBrowseTmdb(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     const query = extractStringArg(tc.args_json[0..tc.args_len], "query") orelse
         return std.fmt.allocPrint(alloc, "Error: missing 'query' argument", .{}) catch null;
@@ -394,9 +405,8 @@ fn executeBrowseTmdb(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         return std.fmt.allocPrint(alloc, "TMDB API key not configured. Add it in Settings > General.", .{}) catch null;
     }
 
-    // Open drawer to TMDB tab and trigger search
-    state.app.drawer_open = true;
-    state.app.drawer_tab = .TMDB;
+    // Navigate to the Movies & TV (TMDB) page and trigger search
+    state.navigateToTab(.TMDB);
     state.app.tmdb.view = .Search;
 
     // Copy query into TMDB search buffer
@@ -410,7 +420,8 @@ fn executeBrowseTmdb(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     tmdb_api.fetchCurrentView(false);
     state.showToast("Searching TMDB...");
 
-    return std.fmt.allocPrint(alloc,
+    return std.fmt.allocPrint(
+        alloc,
         "I've opened the TMDB browser with results for '{s}'. You can view them in the tab.",
         .{query},
     ) catch null;
@@ -431,66 +442,97 @@ fn executeTmdbLookup(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     for (query) |c| {
         if (eq_len >= 253) break;
         switch (c) {
-            ' ' => { escaped_query[eq_len] = '+'; eq_len += 1; },
-            '&' => { escaped_query[eq_len] = '%'; escaped_query[eq_len + 1] = '2'; escaped_query[eq_len + 2] = '6'; eq_len += 3; },
-            '=' => { escaped_query[eq_len] = '%'; escaped_query[eq_len + 1] = '3'; escaped_query[eq_len + 2] = 'D'; eq_len += 3; },
-            '#' => { escaped_query[eq_len] = '%'; escaped_query[eq_len + 1] = '2'; escaped_query[eq_len + 2] = '3'; eq_len += 3; },
-            '?' => { escaped_query[eq_len] = '%'; escaped_query[eq_len + 1] = '3'; escaped_query[eq_len + 2] = 'F'; eq_len += 3; },
-            '%' => { escaped_query[eq_len] = '%'; escaped_query[eq_len + 1] = '2'; escaped_query[eq_len + 2] = '5'; eq_len += 3; },
-            else => { escaped_query[eq_len] = c; eq_len += 1; },
+            ' ' => {
+                escaped_query[eq_len] = '+';
+                eq_len += 1;
+            },
+            '&' => {
+                escaped_query[eq_len] = '%';
+                escaped_query[eq_len + 1] = '2';
+                escaped_query[eq_len + 2] = '6';
+                eq_len += 3;
+            },
+            '=' => {
+                escaped_query[eq_len] = '%';
+                escaped_query[eq_len + 1] = '3';
+                escaped_query[eq_len + 2] = 'D';
+                eq_len += 3;
+            },
+            '#' => {
+                escaped_query[eq_len] = '%';
+                escaped_query[eq_len + 1] = '2';
+                escaped_query[eq_len + 2] = '3';
+                eq_len += 3;
+            },
+            '?' => {
+                escaped_query[eq_len] = '%';
+                escaped_query[eq_len + 1] = '3';
+                escaped_query[eq_len + 2] = 'F';
+                eq_len += 3;
+            },
+            '%' => {
+                escaped_query[eq_len] = '%';
+                escaped_query[eq_len + 1] = '2';
+                escaped_query[eq_len + 2] = '5';
+                eq_len += 3;
+            },
+            else => {
+                escaped_query[eq_len] = c;
+                eq_len += 1;
+            },
         }
     }
-    
+
     const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
-    const url = std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org/3/search/multi?api_key={s}&query={s}&page=1", .{api_key, escaped_query[0..eq_len]}) catch return null;
-    
+    const url = std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org/3/search/multi?api_key={s}&query={s}&page=1", .{ api_key, escaped_query[0..eq_len] }) catch return null;
+
     var child = @import("../core/io_global.zig").Child.init(&.{ "curl", "-s", "--max-time", "10", url }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     child.spawn() catch return null;
-    
+
     const stdout = child.stdout.?;
     var result_buf: [8192]u8 = undefined;
     const n = @import("../core/io_global.zig").readAll(stdout, &result_buf) catch 0;
     _ = child.wait() catch {};
-    
+
     if (n == 0) return std.fmt.allocPrint(alloc, "Error: Failed to fetch TMDB", .{}) catch null;
-    
+
     // We don't have a JSON parser, so we use string matching to extract the first 3 titles and release dates
     var out_buf: [2048]u8 = undefined;
     var out_fbs = std.Io.Writer.fixed(&out_buf);
     const writer = &out_fbs;
-    
+
     writer.print("Top 3 TMDB Results for '{s}':\n", .{query}) catch {};
-    
+
     const json_str = result_buf[0..n];
     var search_start: usize = 0;
     var count: usize = 0;
-    
+
     while (count < 3) : (count += 1) {
         // Find "original_title" or "original_name"
-        const name_idx = std.mem.indexOf(u8, json_str[search_start..], "\"title\":\"") orelse 
-                         std.mem.indexOf(u8, json_str[search_start..], "\"name\":\"");
+        const name_idx = std.mem.indexOf(u8, json_str[search_start..], "\"title\":\"") orelse
+            std.mem.indexOf(u8, json_str[search_start..], "\"name\":\"");
         if (name_idx == null) break;
-        
+
         // Key lengths: '"title":"' = 10, '"name":"' = 8
         const key_len: usize = if (std.mem.indexOf(u8, json_str[search_start..], "\"title\":\"") != null) 10 else 8;
         search_start += name_idx.? + key_len;
         const name_end = std.mem.indexOfScalarPos(u8, json_str, search_start, '"') orelse break;
         const title = json_str[search_start..name_end];
-        
+
         // Find release_date or first_air_date
         var date: []const u8 = "Unknown";
-        const date_idx = std.mem.indexOf(u8, json_str[search_start..], "\"release_date\":\"") orelse 
-                         std.mem.indexOf(u8, json_str[search_start..], "\"first_air_date\":\"");
-                         
+        const date_idx = std.mem.indexOf(u8, json_str[search_start..], "\"release_date\":\"") orelse
+            std.mem.indexOf(u8, json_str[search_start..], "\"first_air_date\":\"");
+
         if (date_idx != null) {
             const d_start = search_start + date_idx.? + 16;
             if (std.mem.indexOfScalarPos(u8, json_str, d_start, '"')) |d_end| {
                 date = json_str[d_start..d_end];
             }
         }
-        
+
         // Find overview summary (just first 100 chars)
         var overview: []const u8 = "";
         if (std.mem.indexOf(u8, json_str[search_start..], "\"overview\":\"")) |o_idx| {
@@ -500,18 +542,17 @@ fn executeTmdbLookup(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
                 overview = json_str[o_start .. o_start + max_olen];
             }
         }
-        
-        writer.print("{d}. {s} ({s}) - {s}...\n", .{count + 1, title, date, overview}) catch {};
+
+        writer.print("{d}. {s} ({s}) - {s}...\n", .{ count + 1, title, date, overview }) catch {};
         search_start = name_end;
     }
-    
+
     if (count == 0) {
         writer.print("No results found.", .{}) catch {};
     }
-    
+
     return alloc.dupe(u8, out_fbs.buffered()) catch null;
 }
-
 
 fn executeReadWebpage(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     const url = extractStringArg(tc.args_json[0..tc.args_len], "url") orelse
@@ -523,12 +564,13 @@ fn executeReadWebpage(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     }
     // Block SSRF: loopback, private networks, cloud metadata, encoded IPs
     const blocked = [_][]const u8{
-        "127.0.0.1", "localhost", "0.0.0.0", "[::1]",
-        "169.254.169.254",
-        "10.", "192.168.", "172.16.", "172.17.", "172.18.", "172.19.",
-        "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.",
-        "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
-        "0x", "0177.",
+        "127.0.0.1",       "localhost", "0.0.0.0",  "[::1]",
+        "169.254.169.254", "10.",       "192.168.", "172.16.",
+        "172.17.",         "172.18.",   "172.19.",  "172.20.",
+        "172.21.",         "172.22.",   "172.23.",  "172.24.",
+        "172.25.",         "172.26.",   "172.27.",  "172.28.",
+        "172.29.",         "172.30.",   "172.31.",  "0x",
+        "0177.",
     };
     for (blocked) |pat| {
         if (std.mem.indexOf(u8, url, pat) != null) {
@@ -592,7 +634,7 @@ fn extractStringArg(json: []const u8, key: []const u8) ?[]const u8 {
     const needle = std.fmt.bufPrint(&needle_buf, "\"{s}\"", .{key}) catch return null;
 
     const key_pos = std.mem.indexOf(u8, json, needle) orelse return null;
-    const after = json[key_pos + needle.len..];
+    const after = json[key_pos + needle.len ..];
 
     // Skip : and whitespace, find opening quote
     var i: usize = 0;
@@ -714,10 +756,7 @@ fn executePlayerInfo(alloc: std.mem.Allocator) ?[]u8 {
         "Unknown";
     const paused_str = if (is_paused != 0) "paused" else "playing";
 
-    return std.fmt.allocPrint(alloc,
-        "Status: {s} | Title: {s} | Position: {d:.0}s / {d:.0}s | Volume: {d:.0}%",
-        .{ paused_str, title, pos, dur, vol }
-    ) catch null;
+    return std.fmt.allocPrint(alloc, "Status: {s} | Title: {s} | Position: {d:.0}s / {d:.0}s | Volume: {d:.0}%", .{ paused_str, title, pos, dur, vol }) catch null;
 }
 
 fn executeNavigate(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
@@ -738,22 +777,10 @@ fn executeNavigate(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     }
 
     // Map target string to DrawerTab
-    const tab: ?state.DrawerTab = if (std.mem.eql(u8, target, "search")) .Search
-        else if (std.mem.eql(u8, target, "downloads")) .Downloads
-        else if (std.mem.eql(u8, target, "tmdb")) .TMDB
-        else if (std.mem.eql(u8, target, "youtube")) .YouTube
-        else if (std.mem.eql(u8, target, "queue")) .Queue
-        else if (std.mem.eql(u8, target, "comics")) .Comics
-        else if (std.mem.eql(u8, target, "anime")) .Anime
-        else if (std.mem.eql(u8, target, "history")) .History
-        else if (std.mem.eql(u8, target, "rss")) .RSS
-        else if (std.mem.eql(u8, target, "jellyfin")) .Jellyfin
-        else if (std.mem.eql(u8, target, "ai")) .AI
-        else null;
+    const tab: ?state.DrawerTab = if (std.mem.eql(u8, target, "search")) .Search else if (std.mem.eql(u8, target, "downloads")) .Downloads else if (std.mem.eql(u8, target, "tmdb")) .TMDB else if (std.mem.eql(u8, target, "youtube")) .YouTube else if (std.mem.eql(u8, target, "queue")) .Queue else if (std.mem.eql(u8, target, "comics")) .Comics else if (std.mem.eql(u8, target, "anime")) .Anime else if (std.mem.eql(u8, target, "history")) .History else if (std.mem.eql(u8, target, "rss")) .RSS else if (std.mem.eql(u8, target, "jellyfin")) .Jellyfin else if (std.mem.eql(u8, target, "ai")) .AI else null;
 
     if (tab) |t| {
-        state.app.drawer_tab = t;
-        state.app.drawer_open = true;
+        state.navigateToTab(t);
         return std.fmt.allocPrint(alloc, "Switched to {s} tab", .{target}) catch null;
     }
 
@@ -791,7 +818,7 @@ fn executeQueueManage(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
             while (db.step(stmt) == db.c.SQLITE_ROW) {
                 if (count == 0) {
                     const hdr = "Queue contents:\n";
-                    @memcpy(result[off..off + hdr.len], hdr);
+                    @memcpy(result[off .. off + hdr.len], hdr);
                     off += hdr.len;
                 }
                 const title = db.columnText(stmt, 0) orelse continue;
@@ -820,9 +847,8 @@ fn executeYoutubeSearch(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     const query = extractStringArg(tc.args_json[0..tc.args_len], "query") orelse
         return std.fmt.allocPrint(alloc, "Error: missing 'query'", .{}) catch null;
 
-    // Switch to YouTube tab and trigger search
-    state.app.drawer_tab = .YouTube;
-    state.app.drawer_open = true;
+    // Switch to YouTube page and trigger search
+    state.navigateToTab(.YouTube);
     youtube.fetchYoutube(query);
 
     return std.fmt.allocPrint(alloc, "Searching YouTube for '{s}'. Results shown in YouTube tab.", .{query}) catch null;
@@ -834,9 +860,8 @@ fn executeAnimeSearch(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         return std.fmt.allocPrint(alloc, "Error: missing 'query'", .{}) catch null;
     const episode = extractStringArg(tc.args_json[0..tc.args_len], "episode");
 
-    // Switch to Anime tab
-    state.app.drawer_tab = .Anime;
-    state.app.drawer_open = true;
+    // Switch to Anime page
+    state.navigateToTab(.Anime);
 
     if (episode) |ep| {
         // Play specific episode — search first, then play
@@ -844,7 +869,7 @@ fn executeAnimeSearch(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         // Wait briefly for results
         @import("../core/io_global.zig").sleep(2000 * std.time.ns_per_ms);
         anime.playEpisode(ep);
-        return std.fmt.allocPrint(alloc, "Playing {s} episode {s}", .{query, ep}) catch null;
+        return std.fmt.allocPrint(alloc, "Playing {s} episode {s}", .{ query, ep }) catch null;
     } else {
         anime.searchAnime(query);
         return std.fmt.allocPrint(alloc, "Searching anime for '{s}'. Results in Anime tab.", .{query}) catch null;
@@ -856,9 +881,8 @@ fn executeJellyfinBrowse(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     const action = extractStringArg(tc.args_json[0..tc.args_len], "action") orelse
         return std.fmt.allocPrint(alloc, "Error: missing 'action'", .{}) catch null;
 
-    // Switch to Jellyfin tab
-    state.app.drawer_tab = .Jellyfin;
-    state.app.drawer_open = true;
+    // Switch to Jellyfin page
+    state.navigateToTab(.Jellyfin);
 
     if (std.mem.eql(u8, action, "libraries")) {
         jellyfin.fetchLibraries();
@@ -893,9 +917,8 @@ fn executeComicControl(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     const value = extractStringArg(tc.args_json[0..tc.args_len], "value");
 
     if (std.mem.eql(u8, action, "start_narration")) {
-        // Navigate to comics tab and start narration
-        state.app.drawer_tab = .Comics;
-        state.app.drawer_open = true;
+        // Navigate to the Comics page and start narration
+        state.navigateToTab(.Comics);
         if (!state.app.comic.narrating and state.app.comic.page_count > 0) {
             comics.toggleNarration();
         }
@@ -909,12 +932,12 @@ fn executeComicControl(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         if (state.app.comic.current_page + 1 < state.app.comic.page_count) {
             state.app.comic.current_page += 1;
         }
-        return std.fmt.allocPrint(alloc, "Page {d} of {d}", .{state.app.comic.current_page + 1, state.app.comic.page_count}) catch null;
+        return std.fmt.allocPrint(alloc, "Page {d} of {d}", .{ state.app.comic.current_page + 1, state.app.comic.page_count }) catch null;
     } else if (std.mem.eql(u8, action, "prev_page")) {
         if (state.app.comic.current_page > 0) {
             state.app.comic.current_page -= 1;
         }
-        return std.fmt.allocPrint(alloc, "Page {d} of {d}", .{state.app.comic.current_page + 1, state.app.comic.page_count}) catch null;
+        return std.fmt.allocPrint(alloc, "Page {d} of {d}", .{ state.app.comic.current_page + 1, state.app.comic.page_count }) catch null;
     } else if (std.mem.eql(u8, action, "go_to_page")) {
         const page_str = value orelse return std.fmt.allocPrint(alloc, "Error: need page number in 'value'", .{}) catch null;
         // Parse page number
@@ -928,7 +951,7 @@ fn executeComicControl(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         if (page_num < state.app.comic.page_count) {
             state.app.comic.current_page = page_num;
         }
-        return std.fmt.allocPrint(alloc, "Jumped to page {d} of {d}", .{state.app.comic.current_page + 1, state.app.comic.page_count}) catch null;
+        return std.fmt.allocPrint(alloc, "Jumped to page {d} of {d}", .{ state.app.comic.current_page + 1, state.app.comic.page_count }) catch null;
     } else if (std.mem.eql(u8, action, "read_page")) {
         // OCR current page and return text (also speak it)
         const pg = state.app.comic.current_page;
@@ -943,7 +966,7 @@ fn executeComicControl(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
                 // Speak it via TTS
                 const ai_voice = @import("ai_voice.zig");
                 ai_voice.speakResponse(state.app.comic.ocr_texts[pg][0..text_len]);
-                return std.fmt.allocPrint(alloc, "Page {d} text: {s}", .{pg + 1, state.app.comic.ocr_texts[pg][0..text_len]}) catch null;
+                return std.fmt.allocPrint(alloc, "Page {d} text: {s}", .{ pg + 1, state.app.comic.ocr_texts[pg][0..text_len] }) catch null;
             }
         }
         return std.fmt.allocPrint(alloc, "No text detected on page {d}", .{pg + 1}) catch null;
@@ -953,8 +976,7 @@ fn executeComicControl(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         const url_len = @min(url.len, state.app.comic.url_buf.len);
         @memcpy(state.app.comic.url_buf[0..url_len], url[0..url_len]);
         state.app.comic.url_len = url_len;
-        state.app.drawer_tab = .Comics;
-        state.app.drawer_open = true;
+        state.navigateToTab(.Comics);
         comics.loadComic(url);
         return std.fmt.allocPrint(alloc, "Loading comic from: {s}", .{url[0..@min(url.len, 80)]}) catch null;
     }
@@ -975,7 +997,7 @@ fn executeComicInfo(alloc: std.mem.Allocator) ?[]u8 {
 
     // Basic info
     const info = std.fmt.bufPrint(result[off..], "Comic: page {d}/{d} | Narrating: {s}", .{
-        pg + 1, total,
+        pg + 1,                                         total,
         if (state.app.comic.narrating) "yes" else "no",
     }) catch "";
     off += info.len;
@@ -986,23 +1008,23 @@ fn executeComicInfo(alloc: std.mem.Allocator) ?[]u8 {
         if (text_len > 0) {
             const hdr = "\nPage text: ";
             if (off + hdr.len < MAX_TOOL_RESULT) {
-                @memcpy(result[off..off + hdr.len], hdr);
+                @memcpy(result[off .. off + hdr.len], hdr);
                 off += hdr.len;
             }
             const copy_len = @min(text_len, MAX_TOOL_RESULT - off - 1);
-            @memcpy(result[off..off + copy_len], state.app.comic.ocr_texts[pg][0..copy_len]);
+            @memcpy(result[off .. off + copy_len], state.app.comic.ocr_texts[pg][0..copy_len]);
             off += copy_len;
         } else {
             const no_text = "\nPage text: (no text detected)";
             if (off + no_text.len < MAX_TOOL_RESULT) {
-                @memcpy(result[off..off + no_text.len], no_text);
+                @memcpy(result[off .. off + no_text.len], no_text);
                 off += no_text.len;
             }
         }
     } else {
         const not_scanned = "\nPage text: (not yet scanned — use comic_control read_page)";
         if (off + not_scanned.len < MAX_TOOL_RESULT) {
-            @memcpy(result[off..off + not_scanned.len], not_scanned);
+            @memcpy(result[off .. off + not_scanned.len], not_scanned);
             off += not_scanned.len;
         }
     }

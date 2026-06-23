@@ -896,5 +896,9 @@ pub fn loadContent(url: []const u8) void {
                 navigate(norm_url);
             },
         }
+        // Reveal the player page (and close the legacy drawer) so the user
+        // actually sees what they just loaded. Centralized here so search,
+        // resolver, queue, drag-drop and Resume all inherit it.
+        state.gotoPlayer();
     }
 }

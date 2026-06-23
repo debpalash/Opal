@@ -60,9 +60,8 @@ fn matchesSearch(label: []const u8) bool {
 /// Called from places that set `settings_open = true`.
 pub fn renderSettingsModal() void {
     if (!state.app.settings_open) return;
-    // Redirect to drawer
-    state.app.drawer_open = true;
-    state.app.drawer_tab = .Settings;
+    // Redirect to the Settings page (works in both shell and legacy drawer).
+    state.navigateToTab(.Settings);
     state.app.settings_open = false;
     state.markConfigDirty();
 }

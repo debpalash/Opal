@@ -184,6 +184,10 @@ pub const AppState = struct {
     // to fall back to the legacy header+grid+drawer layout.
     page_shell_enabled: bool = true,
     router: @import("router.zig").History = .{},
+    // In-page sub-navigation for the shell's Browse / Library / System routes.
+    browse_source: DrawerTab = .TMDB,
+    library_tab: DrawerTab = .Queue,
+    system_tab: DrawerTab = .Logs,
 
     // dvui window handle — set once in appInit. Stored here so worker
     // threads (e.g. the mpv render-update callback) can wake the UI loop
@@ -596,6 +600,68 @@ pub fn showToastTyped(msg: []const u8, toast_type: ToastType) void {
 
 pub fn markConfigDirty() void {
     app.config_dirty = true;
+}
+
+/// Navigate to the page that hosts a given legacy DrawerTab. Updates BOTH the
+/// new page router (+ the relevant Browse/Library/System sub-tab) and the
+/// legacy drawer state, so navigation works whether or not page_shell is on.
+/// Safe to call from any thread (enum/usize writes; UI reads are per-frame).
+pub fn navigateToTab(tab: DrawerTab) void {
+    app.drawer_tab = tab; // legacy drawer
+    app.drawer_open = true;
+    switch (tab) {
+        .Search => app.router.navigate(.search),
+        .TMDB => app.router.navigate(.home),
+        .YouTube => {
+            app.browse_source = .YouTube;
+            app.router.navigate(.browse);
+        },
+        .Anime => {
+            app.browse_source = .Anime;
+            app.router.navigate(.browse);
+        },
+        .Comics => {
+            app.browse_source = .Comics;
+            app.router.navigate(.browse);
+        },
+        .RSS => {
+            app.browse_source = .RSS;
+            app.router.navigate(.browse);
+        },
+        .Queue => {
+            app.library_tab = .Queue;
+            app.router.navigate(.library);
+        },
+        .History => {
+            app.library_tab = .History;
+            app.router.navigate(.library);
+        },
+        .Downloads => {
+            app.library_tab = .Downloads;
+            app.router.navigate(.library);
+        },
+        .Jellyfin => {
+            app.library_tab = .Jellyfin;
+            app.router.navigate(.library);
+        },
+        .Plugins => {
+            app.system_tab = .Plugins;
+            app.router.navigate(.system);
+        },
+        .Logs => {
+            app.system_tab = .Logs;
+            app.router.navigate(.system);
+        },
+        .Settings => app.router.navigate(.settings),
+        .AI => app.router.navigate(.assistant),
+    }
+}
+
+/// Reveal the player: switch to the Player route (shell) and close the legacy
+/// drawer so the grid is visible. Call from every playback entry point.
+pub fn gotoPlayer() void {
+    app.drawer_open = false;
+    app.router.navigate(.player);
 }
 
 /// Push a URL onto the recently-closed stack (ring buffer, max 16).

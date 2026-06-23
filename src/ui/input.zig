@@ -177,8 +177,7 @@ pub fn processGlobalInputs() void {
                         dvui.refresh(null, @src(), null);
                     },
                     .s => {
-                        if (!state.app.drawer_open) state.app.drawer_open = true else if (state.app.drawer_tab == .Search) state.app.drawer_open = false;
-                        state.app.drawer_tab = .Search;
+                        state.navigateToTab(.Search);
                         dvui.refresh(null, @src(), null);
                     },
 
@@ -198,7 +197,9 @@ pub fn processGlobalInputs() void {
                         dvui.refresh(null, @src(), null);
                     },
                     // (A handled above in early if-chain with continue)
-                    .y => { state.app.seek_sync = !state.app.seek_sync; },
+                    .y => {
+                        state.app.seek_sync = !state.app.seek_sync;
+                    },
                     // I = Toggle incognito mode, Shift+I = Cheatsheet
                     .i => {
                         if (mod.shift()) {
@@ -214,8 +215,7 @@ pub fn processGlobalInputs() void {
                         dvui.refresh(null, @src(), null);
                     },
                     .h => {
-                        if (!state.app.drawer_open) state.app.drawer_open = true else if (state.app.drawer_tab == .History) state.app.drawer_open = false;
-                        state.app.drawer_tab = .History;
+                        state.navigateToTab(.History);
                         dvui.refresh(null, @src(), null);
                     },
                     .one, .two, .three, .four, .five, .six, .seven, .eight, .nine => {
@@ -282,10 +282,10 @@ pub fn processGlobalInputs() void {
                             }
                         }
                     },
-                    else => {}
+                    else => {},
                 }
             }
-            
+
             // Ctrl+Arrow = Swap active cell with neighbor
             if (mod.control() and !mod.shift() and !mod.alt()) {
                 const pi = state.app.active_player_idx;
@@ -293,8 +293,12 @@ pub fn processGlobalInputs() void {
                 if (plen > 1) {
                     var swap_target: ?usize = null;
                     switch (key) {
-                        .left => { if (pi > 0) swap_target = pi - 1; },
-                        .right => { if (pi + 1 < plen) swap_target = pi + 1; },
+                        .left => {
+                            if (pi > 0) swap_target = pi - 1;
+                        },
+                        .right => {
+                            if (pi + 1 < plen) swap_target = pi + 1;
+                        },
                         .up => {
                             const cols = ui.computeGridColumns();
                             if (pi >= cols) swap_target = pi - cols;
@@ -303,7 +307,7 @@ pub fn processGlobalInputs() void {
                             const cols = ui.computeGridColumns();
                             if (pi + cols < plen) swap_target = pi + cols;
                         },
-                        else => {}
+                        else => {},
                     }
                     if (swap_target) |target| {
                         const tmp = state.app.players.items[pi];
@@ -314,7 +318,7 @@ pub fn processGlobalInputs() void {
                     }
                 }
             }
-            
+
             // Ctrl+I = Media Info
             if (key == .i and mod.control()) {
                 state.app.media_info_open = !state.app.media_info_open;
@@ -326,11 +330,11 @@ pub fn processGlobalInputs() void {
             // To be robust, we check if search_drawer is open, because typically that's where users type.
             if (state.app.active_player_idx < state.app.players.items.len and !state.app.drawer_open) {
                 const p = state.app.players.items[state.app.active_player_idx];
-                
+
                 // Active cell modifiers / controls
                 if (key == .left or key == .right) {
                     var seek_cmd: [64]u8 = undefined;
-                    if (std.fmt.bufPrintZ(&seek_cmd, "seek {d}", .{ if (key == .left) @as(i32, -10) else @as(i32, 10) })) |cmd| {
+                    if (std.fmt.bufPrintZ(&seek_cmd, "seek {d}", .{if (key == .left) @as(i32, -10) else @as(i32, 10)})) |cmd| {
                         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
                         // Broadcast to watch party
                         const party = @import("../services/watch_party.zig");
@@ -339,10 +343,10 @@ pub fn processGlobalInputs() void {
                         party.broadcastSeek(pos);
                     } else |_| {}
                 }
-                
+
                 if (key == .up or key == .down) {
                     var vol_cmd: [64]u8 = undefined;
-                    if (std.fmt.bufPrintZ(&vol_cmd, "add volume {d}", .{ if (key == .down) @as(i32, -5) else @as(i32, 5) })) |cmd| {
+                    if (std.fmt.bufPrintZ(&vol_cmd, "add volume {d}", .{if (key == .down) @as(i32, -5) else @as(i32, 5)})) |cmd| {
                         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
                     } else |_| {}
                 }
@@ -394,8 +398,12 @@ pub fn processGlobalInputs() void {
                             _ = c.mpv.mpv_command_string(p.mpv_ctx, "set speed 1.0");
                             state.showToast("Speed: 1.00x");
                         },
-                        .comma => { _ = c.mpv.mpv_command_string(p.mpv_ctx, "frame-back-step"); },
-                        .period => { _ = c.mpv.mpv_command_string(p.mpv_ctx, "frame-step"); },
+                        .comma => {
+                            _ = c.mpv.mpv_command_string(p.mpv_ctx, "frame-back-step");
+                        },
+                        .period => {
+                            _ = c.mpv.mpv_command_string(p.mpv_ctx, "frame-step");
+                        },
                         .l => {
                             if (p.loop_a < 0) {
                                 p.setLoopA();
@@ -405,19 +413,29 @@ pub fn processGlobalInputs() void {
                                 p.clearLoop();
                             }
                         },
-                        .r => { if (!mod.shift()) p.cycleRotation(); },
-                        .t => { p.toggleFlip(); },
+                        .r => {
+                            if (!mod.shift()) p.cycleRotation();
+                        },
+                        .t => {
+                            p.toggleFlip();
+                        },
                         // Screenshot
                         .p => {
                             _ = c.mpv.mpv_command_string(p.mpv_ctx, "screenshot");
                             state.showToast("Screenshot saved");
                         },
                         // Stats for Nerds overlay toggle
-                        .i => { state.app.stats_overlay_open = !state.app.stats_overlay_open; },
+                        .i => {
+                            state.app.stats_overlay_open = !state.app.stats_overlay_open;
+                        },
                         // Zoom
-                        .equal => { _ = c.mpv.mpv_command_string(p.mpv_ctx, "add video-zoom 0.1"); },
-                        .minus => { _ = c.mpv.mpv_command_string(p.mpv_ctx, "add video-zoom -0.1"); },
-                        .zero => { 
+                        .equal => {
+                            _ = c.mpv.mpv_command_string(p.mpv_ctx, "add video-zoom 0.1");
+                        },
+                        .minus => {
+                            _ = c.mpv.mpv_command_string(p.mpv_ctx, "add video-zoom -0.1");
+                        },
+                        .zero => {
                             _ = c.mpv.mpv_command_string(p.mpv_ctx, "set video-zoom 0");
                             _ = c.mpv.mpv_command_string(p.mpv_ctx, "set video-pan-x 0");
                             _ = c.mpv.mpv_command_string(p.mpv_ctx, "set video-pan-y 0");
@@ -441,21 +459,29 @@ pub fn processGlobalInputs() void {
                             _ = c.mpv.mpv_command_string(p.mpv_ctx, "add chapter 1");
                             state.showToast("Next chapter");
                         },
-                        else => {}
+                        else => {},
                     }
                 }
-                
+
                 // Shift+arrows = pan (when zoomed)
                 if (mod.shift() and !mod.control()) {
                     switch (key) {
-                        .left => { _ = c.mpv.mpv_command_string(p.mpv_ctx, "add video-pan-x 0.02"); },
-                        .right => { _ = c.mpv.mpv_command_string(p.mpv_ctx, "add video-pan-x -0.02"); },
-                        .up => { _ = c.mpv.mpv_command_string(p.mpv_ctx, "add video-pan-y 0.02"); },
-                        .down => { _ = c.mpv.mpv_command_string(p.mpv_ctx, "add video-pan-y -0.02"); },
-                        else => {}
+                        .left => {
+                            _ = c.mpv.mpv_command_string(p.mpv_ctx, "add video-pan-x 0.02");
+                        },
+                        .right => {
+                            _ = c.mpv.mpv_command_string(p.mpv_ctx, "add video-pan-x -0.02");
+                        },
+                        .up => {
+                            _ = c.mpv.mpv_command_string(p.mpv_ctx, "add video-pan-y 0.02");
+                        },
+                        .down => {
+                            _ = c.mpv.mpv_command_string(p.mpv_ctx, "add video-pan-y -0.02");
+                        },
+                        else => {},
                     }
                 }
-                
+
                 if (key == .three and mod.shift()) {
                     _ = c.mpv.mpv_command_string(p.mpv_ctx, "cycle audio");
                 }

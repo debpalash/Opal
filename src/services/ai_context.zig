@@ -283,7 +283,10 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
                 S.u_len = ul;
                 S.pi = p_idx;
                 S.busy = true;
-                const t = std.Thread.spawn(.{}, S.worker, .{}) catch { S.busy = false; return true; };
+                const t = std.Thread.spawn(.{}, S.worker, .{}) catch {
+                    S.busy = false;
+                    return true;
+                };
                 t.detach();
 
                 var resp_buf2: [64]u8 = undefined;
@@ -423,7 +426,7 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
                 }
                 // Extract clean name for response
                 var clean: []const u8 = target.url;
-                if (std.mem.lastIndexOfScalar(u8, clean, '/')) |slash| clean = clean[slash + 1..];
+                if (std.mem.lastIndexOfScalar(u8, clean, '/')) |slash| clean = clean[slash + 1 ..];
                 if (std.mem.lastIndexOfScalar(u8, clean, '.')) |dot| {
                     if (dot > 0) clean = clean[0..dot];
                 }
@@ -633,8 +636,7 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
             if (std.mem.eql(u8, nt.name, "Settings")) {
                 state.app.settings_open = true;
             } else {
-                state.app.drawer_tab = nt.tab;
-                state.app.drawer_open = true;
+                state.navigateToTab(nt.tab);
             }
             var resp_buf: [64]u8 = undefined;
             const resp = std.fmt.bufPrint(&resp_buf, "Opened {s}.", .{nt.name}) catch return false;
@@ -747,18 +749,18 @@ pub fn tryFastPath(raw_input: []const u8) bool {
     // ── Normalize query first (strips "can you play ", etc.) ──
     var norm_buf: [256]u8 = undefined;
     const normalized = intent.normalizeQuery(fl, &norm_buf);
-    
+
     // Now check if it originally had play intents (either raw or after normalization)
     const is_explicit_play = std.mem.indexOf(u8, fl, "play ") != null or
-                             std.mem.indexOf(u8, fl, "watch ") != null or
-                             std.mem.indexOf(u8, fl, "put on ") != null or
-                             std.mem.indexOf(u8, fl, "start ") != null;
-                             
+        std.mem.indexOf(u8, fl, "watch ") != null or
+        std.mem.indexOf(u8, fl, "put on ") != null or
+        std.mem.indexOf(u8, fl, "start ") != null;
+
     const is_search = std.mem.indexOf(u8, fl, "find ") != null or
-                      std.mem.indexOf(u8, fl, "search ") != null;
+        std.mem.indexOf(u8, fl, "search ") != null;
 
     if (!is_explicit_play and !is_search) {
-        // No explicit play/search command. 
+        // No explicit play/search command.
         // But if it has season/episode, we assume it's a media request.
         const has_episode = std.mem.indexOf(u8, fl, "season ") != null or
             std.mem.indexOf(u8, fl, "episode ") != null or
@@ -766,7 +768,7 @@ pub fn tryFastPath(raw_input: []const u8) bool {
             std.mem.indexOf(u8, fl, " s0") != null or
             std.mem.indexOf(u8, fl, " s1") != null or
             std.mem.indexOf(u8, fl, " s2") != null;
-            
+
         if (has_episode and normalized.len >= 2) {
             return dispatchFastPath(raw_input, normalized, .play_best);
         }
@@ -796,7 +798,10 @@ pub fn tryFastPath(raw_input: []const u8) bool {
 
 fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, action: FastPathAction) void {
     chat.phase = .searching;
-    defer { chat.is_generating.store(false, .release); chat.phase = .idle; }
+    defer {
+        chat.is_generating.store(false, .release);
+        chat.phase = .idle;
+    }
 
     const query = query_buf[0..query_len];
     resolver.resolve(query, "auto");
@@ -863,18 +868,18 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
         if (filtered_count == 0) {
             // Smart Fallback: if fast path fails, simulate a tool failure and run LLM
             chat.is_generating.store(true, .release);
-            
+
             var fallback_buf: [1024]u8 = undefined;
             const fallback_msg = std.fmt.bufPrint(&fallback_buf, "I automatically searched for streams of '{s}' but found 0 results. Provide a conversational response to the user, perhaps suggesting they search TMDB instead.", .{query}) catch "Search failed.";
-            
+
             chat.messages[assistant_idx].role = .system;
             chat.messages[assistant_idx].text_len = fallback_msg.len;
             @memcpy(chat.messages[assistant_idx].text[0..fallback_msg.len], fallback_msg);
-            
+
             if (chat.message_count < chat.MAX_MESSAGES) {
                 chat.messages[chat.message_count] = .{ .role = .assistant, .text_len = 0 };
                 chat.message_count += 1;
-                
+
                 const gen_thread = std.Thread.spawn(.{}, generateResponse, .{}) catch return;
                 gen_thread.detach();
                 return;
@@ -887,7 +892,11 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
             const best_item = chat.chat_results[0];
             const best = best_item.name[0..best_item.name_len];
             const best_q: []const u8 = switch (best_item.quality) {
-                4 => "4K", 3 => "1080p", 2 => "720p", 1 => "480p", else => "SD",
+                4 => "4K",
+                3 => "1080p",
+                2 => "720p",
+                1 => "480p",
+                else => "SD",
             };
             w.print(
                 "Picked **{s}** ({d}% title match · {s} · {d} seeds).\n",
@@ -901,7 +910,11 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
                     const it = chat.chat_results[ri];
                     const nm = it.name[0..it.name_len];
                     const q: []const u8 = switch (it.quality) {
-                        4 => "4K", 3 => "1080p", 2 => "720p", 1 => "480p", else => "SD",
+                        4 => "4K",
+                        3 => "1080p",
+                        2 => "720p",
+                        1 => "480p",
+                        else => "SD",
                     };
                     w.print("· {s} ({d}% · {s} · {d} seeds)\n", .{ nm, it.match_pct, q, it.seeds }) catch {};
                 }
@@ -945,7 +958,7 @@ pub fn generateResponse() void {
     defer {
         chat.is_generating.store(false, .release);
         chat.phase = .idle;
-        tool_depth = 0;  // Reset depth when the chain completes
+        tool_depth = 0; // Reset depth when the chain completes
     }
 
     if (chat.message_count < 2) {
@@ -967,7 +980,7 @@ pub fn generateResponse() void {
     // System prompt with RAG context (must be JSON-escaped at runtime
     // because SYSTEM_PROMPT contains real newlines from multiline literals)
     const sys_start = "{\"role\":\"system\",\"content\":\"";
-    @memcpy(msg_part[msg_off..msg_off + sys_start.len], sys_start);
+    @memcpy(msg_part[msg_off .. msg_off + sys_start.len], sys_start);
     msg_off += sys_start.len;
 
     // ── Dynamic System Prompt — conditionally include tools ──
@@ -1007,31 +1020,79 @@ pub fn generateResponse() void {
     for (dyn_str) |ch| {
         if (msg_off >= 5600) break;
         switch (ch) {
-            '"' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '"'; msg_off += 1; },
-            '\n' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = 'n'; msg_off += 1; },
+            '"' => {
+                if (msg_off + 2 > msg_part.len) break;
+                msg_part[msg_off] = '\\';
+                msg_off += 1;
+                msg_part[msg_off] = '"';
+                msg_off += 1;
+            },
+            '\n' => {
+                if (msg_off + 2 > msg_part.len) break;
+                msg_part[msg_off] = '\\';
+                msg_off += 1;
+                msg_part[msg_off] = 'n';
+                msg_off += 1;
+            },
             '\r' => {},
-            '\\' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '\\'; msg_off += 1; },
-            '\t' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = 't'; msg_off += 1; },
+            '\\' => {
+                if (msg_off + 2 > msg_part.len) break;
+                msg_part[msg_off] = '\\';
+                msg_off += 1;
+                msg_part[msg_off] = '\\';
+                msg_off += 1;
+            },
+            '\t' => {
+                if (msg_off + 2 > msg_part.len) break;
+                msg_part[msg_off] = '\\';
+                msg_off += 1;
+                msg_part[msg_off] = 't';
+                msg_off += 1;
+            },
             else => |c| {
                 if (c < 32) continue; // skip other control chars
-                msg_part[msg_off] = c; msg_off += 1;
+                msg_part[msg_off] = c;
+                msg_off += 1;
             },
         }
     }
 
     if (rag_context) |ctx| {
         const prefix = "\\n\\n[Memory Context]\\n";
-        @memcpy(msg_part[msg_off..msg_off + prefix.len], prefix);
+        @memcpy(msg_part[msg_off .. msg_off + prefix.len], prefix);
         msg_off += prefix.len;
 
         for (ctx) |ch| {
             if (msg_off >= 5500) break;
             switch (ch) {
-                '"' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '"'; msg_off += 1; },
-                '\n' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = 'n'; msg_off += 1; },
+                '"' => {
+                    if (msg_off + 2 > msg_part.len) break;
+                    msg_part[msg_off] = '\\';
+                    msg_off += 1;
+                    msg_part[msg_off] = '"';
+                    msg_off += 1;
+                },
+                '\n' => {
+                    if (msg_off + 2 > msg_part.len) break;
+                    msg_part[msg_off] = '\\';
+                    msg_off += 1;
+                    msg_part[msg_off] = 'n';
+                    msg_off += 1;
+                },
                 '\r' => {},
-                '\\' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '\\'; msg_off += 1; },
-                else => |c| { if (c >= 32) { msg_part[msg_off] = c; msg_off += 1; } },
+                '\\' => {
+                    if (msg_off + 2 > msg_part.len) break;
+                    msg_part[msg_off] = '\\';
+                    msg_off += 1;
+                    msg_part[msg_off] = '\\';
+                    msg_off += 1;
+                },
+                else => |c| {
+                    if (c >= 32) {
+                        msg_part[msg_off] = c;
+                        msg_off += 1;
+                    }
+                },
             }
         }
     }
@@ -1044,16 +1105,39 @@ pub fn generateResponse() void {
         if (convo_ctx) |cc| {
             const prefix2 = "\\n\\n[Past Sessions]\\n";
             if (msg_off + prefix2.len < msg_part.len) {
-                @memcpy(msg_part[msg_off..msg_off + prefix2.len], prefix2);
+                @memcpy(msg_part[msg_off .. msg_off + prefix2.len], prefix2);
                 msg_off += prefix2.len;
                 for (cc) |ch| {
                     if (msg_off >= 5800) break;
                     switch (ch) {
-                        '"' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '"'; msg_off += 1; },
-                        '\n' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = 'n'; msg_off += 1; },
+                        '"' => {
+                            if (msg_off + 2 > msg_part.len) break;
+                            msg_part[msg_off] = '\\';
+                            msg_off += 1;
+                            msg_part[msg_off] = '"';
+                            msg_off += 1;
+                        },
+                        '\n' => {
+                            if (msg_off + 2 > msg_part.len) break;
+                            msg_part[msg_off] = '\\';
+                            msg_off += 1;
+                            msg_part[msg_off] = 'n';
+                            msg_off += 1;
+                        },
                         '\r' => {},
-                        '\\' => { if (msg_off + 2 > msg_part.len) break; msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '\\'; msg_off += 1; },
-                        else => |c| { if (c >= 32) { msg_part[msg_off] = c; msg_off += 1; } },
+                        '\\' => {
+                            if (msg_off + 2 > msg_part.len) break;
+                            msg_part[msg_off] = '\\';
+                            msg_off += 1;
+                            msg_part[msg_off] = '\\';
+                            msg_off += 1;
+                        },
+                        else => |c| {
+                            if (c >= 32) {
+                                msg_part[msg_off] = c;
+                                msg_off += 1;
+                            }
+                        },
                     }
                 }
             }
@@ -1068,16 +1152,36 @@ pub fn generateResponse() void {
         if (pref_ctx) |pc| {
             const prefix3 = "\\n[Preferences]\\n";
             if (msg_off + prefix3.len < msg_part.len) {
-                @memcpy(msg_part[msg_off..msg_off + prefix3.len], prefix3);
+                @memcpy(msg_part[msg_off .. msg_off + prefix3.len], prefix3);
                 msg_off += prefix3.len;
                 for (pc) |ch| {
                     if (msg_off >= 5900) break;
                     switch (ch) {
-                        '"' => { msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '"'; msg_off += 1; },
-                        '\n' => { msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = 'n'; msg_off += 1; },
+                        '"' => {
+                            msg_part[msg_off] = '\\';
+                            msg_off += 1;
+                            msg_part[msg_off] = '"';
+                            msg_off += 1;
+                        },
+                        '\n' => {
+                            msg_part[msg_off] = '\\';
+                            msg_off += 1;
+                            msg_part[msg_off] = 'n';
+                            msg_off += 1;
+                        },
                         '\r' => {},
-                        '\\' => { msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '\\'; msg_off += 1; },
-                        else => |c| { if (c >= 32) { msg_part[msg_off] = c; msg_off += 1; } },
+                        '\\' => {
+                            msg_part[msg_off] = '\\';
+                            msg_off += 1;
+                            msg_part[msg_off] = '\\';
+                            msg_off += 1;
+                        },
+                        else => |c| {
+                            if (c >= 32) {
+                                msg_part[msg_off] = c;
+                                msg_off += 1;
+                            }
+                        },
                     }
                 }
             }
@@ -1086,7 +1190,7 @@ pub fn generateResponse() void {
 
     // -- Active State Injection Phase 2 --
     const active_prefix = "\\n\\n[Environment Context]\\n";
-    @memcpy(msg_part[msg_off..msg_off + active_prefix.len], active_prefix);
+    @memcpy(msg_part[msg_off .. msg_off + active_prefix.len], active_prefix);
     msg_off += active_prefix.len;
 
     var state_buf: [1024]u8 = undefined;
@@ -1109,7 +1213,7 @@ pub fn generateResponse() void {
     // 2. Search Context
     if (chat.last_show_len > 0 and chat.last_show_len <= 128) {
         w.print("Last search context: {s}", .{chat.last_show[0..chat.last_show_len]}) catch {};
-        if (chat.last_season > 0) w.print(" (Season {d} Ep {d})", .{chat.last_season, chat.last_episode}) catch {};
+        if (chat.last_season > 0) w.print(" (Season {d} Ep {d})", .{ chat.last_season, chat.last_episode }) catch {};
         w.print("\\n", .{}) catch {};
     }
 
@@ -1121,7 +1225,7 @@ pub fn generateResponse() void {
             const nlen = @min(item.name_len, 256);
             if (nlen == 0) continue;
             const name = item.name[0..nlen];
-            w.print("{d}. {s} ({d} seeds)\\n", .{i + 1, name, item.seeds}) catch {};
+            w.print("{d}. {s} ({d} seeds)\\n", .{ i + 1, name, item.seeds }) catch {};
         }
     }
 
@@ -1129,16 +1233,36 @@ pub fn generateResponse() void {
     for (state_str) |ch| {
         if (msg_off >= 6000) break;
         switch (ch) {
-            '"' => { msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '"'; msg_off += 1; },
-            '\n' => { msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = 'n'; msg_off += 1; },
+            '"' => {
+                msg_part[msg_off] = '\\';
+                msg_off += 1;
+                msg_part[msg_off] = '"';
+                msg_off += 1;
+            },
+            '\n' => {
+                msg_part[msg_off] = '\\';
+                msg_off += 1;
+                msg_part[msg_off] = 'n';
+                msg_off += 1;
+            },
             '\r' => {},
-            '\\' => { msg_part[msg_off] = '\\'; msg_off += 1; msg_part[msg_off] = '\\'; msg_off += 1; },
-            else => |c| { if (c >= 32) { msg_part[msg_off] = c; msg_off += 1; } },
+            '\\' => {
+                msg_part[msg_off] = '\\';
+                msg_off += 1;
+                msg_part[msg_off] = '\\';
+                msg_off += 1;
+            },
+            else => |c| {
+                if (c >= 32) {
+                    msg_part[msg_off] = c;
+                    msg_off += 1;
+                }
+            },
         }
     }
 
     const sys_end = "\"}";
-    @memcpy(msg_part[msg_off..msg_off + sys_end.len], sys_end);
+    @memcpy(msg_part[msg_off .. msg_off + sys_end.len], sys_end);
     msg_off += sys_end.len;
 
     // Last 8 messages (tight context for speed — RAG handles long-term memory)
@@ -1160,11 +1284,29 @@ pub fn generateResponse() void {
         for (text) |ch| {
             if (elen >= 2040) break;
             switch (ch) {
-                '"' => { escaped[elen] = '\\'; elen += 1; escaped[elen] = '"'; elen += 1; },
-                '\\' => { escaped[elen] = '\\'; elen += 1; escaped[elen] = '\\'; elen += 1; },
-                '\n' => { escaped[elen] = '\\'; elen += 1; escaped[elen] = 'n'; elen += 1; },
+                '"' => {
+                    escaped[elen] = '\\';
+                    elen += 1;
+                    escaped[elen] = '"';
+                    elen += 1;
+                },
+                '\\' => {
+                    escaped[elen] = '\\';
+                    elen += 1;
+                    escaped[elen] = '\\';
+                    elen += 1;
+                },
+                '\n' => {
+                    escaped[elen] = '\\';
+                    elen += 1;
+                    escaped[elen] = 'n';
+                    elen += 1;
+                },
                 '\r' => {},
-                else => { escaped[elen] = ch; elen += 1; },
+                else => {
+                    escaped[elen] = ch;
+                    elen += 1;
+                },
             }
         }
 
@@ -1228,9 +1370,7 @@ pub fn generateResponse() void {
     server.model_status = .checking;
 
     var child = @import("../core/io_global.zig").Child.init(
-        &.{ "curl", "-s", "-N", "--max-time", "60", "-X", "POST",
-            "-H", "Content-Type: application/json",
-            "--data-binary", "@/tmp/zigzag_ai_req.json", url },
+        &.{ "curl", "-s", "-N", "--max-time", "60", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", "@/tmp/zigzag_ai_req.json", url },
         @import("../core/alloc.zig").allocator,
     );
     child.stdout_behavior = .Pipe;
@@ -1284,10 +1424,22 @@ pub fn generateResponse() void {
                 var advance: usize = 1;
                 if (token[ti] == '\\' and ti + 1 < token.len) {
                     switch (token[ti + 1]) {
-                        'n' => { decoded_char = '\n'; advance = 2; },
-                        't' => { decoded_char = '\t'; advance = 2; },
-                        '"' => { decoded_char = '"'; advance = 2; },
-                        '\\' => { decoded_char = '\\'; advance = 2; },
+                        'n' => {
+                            decoded_char = '\n';
+                            advance = 2;
+                        },
+                        't' => {
+                            decoded_char = '\t';
+                            advance = 2;
+                        },
+                        '"' => {
+                            decoded_char = '"';
+                            advance = 2;
+                        },
+                        '\\' => {
+                            decoded_char = '\\';
+                            advance = 2;
+                        },
                         else => {},
                     }
                 }

@@ -19,12 +19,12 @@ const state = @import("../core/state.zig");
 const router = @import("../core/router.zig");
 const Route = router.Route;
 
+const search_mod = @import("../services/search.zig");
+
 const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
-// Sub-navigation selections (in-page segments).
-var browse_source: state.DrawerTab = .TMDB;
-var library_tab: state.DrawerTab = .Queue;
-var system_tab: state.DrawerTab = .Logs;
+// Sub-navigation selections live in state.app (so any service can navigate to
+// a Browse/Library/System sub-tab via state.navigateToTab without importing shell).
 
 /// Frame entry — called from appFrame when page_shell_enabled.
 pub fn render() !void {
@@ -42,17 +42,22 @@ pub fn render() !void {
     renderTopNav(compact);
 
     {
+        // The Player route owns its full bleed (video grid); every other page
+        // gets a consistent gutter so content never sits flush to the window edge.
+        const r = state.app.router.current;
+        const gutter: f32 = if (r == .player) 0 else theme.spacing.lg;
         var content = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .both,
             .background = true,
             .color_fill = theme.colors.bg_deep,
+            .padding = .{ .x = gutter, .y = if (r == .player) 0 else theme.spacing.md, .w = gutter, .h = 0 },
         });
         defer content.deinit();
-        try renderPage(state.app.router.current);
+        try renderPage(r);
     }
 
     // Docked mini-player — keeps transport visible while browsing other pages.
-    if (state.app.router.current != .player and activeHasMedia()) {
+    if (state.app.router.current != .player and anyHasMedia()) {
         footer.renderGlobalBottomTray();
     }
 
@@ -60,9 +65,13 @@ pub fn render() !void {
     if (compact) renderBottomTabs();
 }
 
-fn activeHasMedia() bool {
-    if (state.app.active_player_idx >= state.app.players.items.len) return false;
-    return state.app.players.items[state.app.active_player_idx].current_url_len > 0;
+/// True if ANY player has media loaded (so playback stays reachable via the
+/// mini-player even when a background player — not the active one — is playing).
+fn anyHasMedia() bool {
+    for (state.app.players.items) |p| {
+        if (p.current_url_len > 0) return true;
+    }
+    return false;
 }
 
 // ── Top navigation ──
@@ -116,6 +125,9 @@ fn renderTopNav(compact: bool) void {
     if (components.iconButton(@src(), icons.tvg.lucide.play, "Now playing", state.app.router.current == .player)) {
         state.app.router.navigate(.player);
     }
+    if (components.iconButton(@src(), icons.tvg.lucide.@"scroll-text", "Logs & Plugins", state.app.router.current == .system)) {
+        state.app.router.navigate(.system);
+    }
     if (components.iconButton(@src(), icons.tvg.lucide.settings, "Settings", state.app.router.current == .settings)) {
         state.app.router.navigate(.settings);
     }
@@ -124,13 +136,13 @@ fn renderTopNav(compact: bool) void {
 /// A top-nav link: whole-row click target, icon + label, accent when active.
 fn navLink(r: Route, label: []const u8, icon: []const u8, id_extra: usize) void {
     const active = state.app.router.current == r;
-    var hovered: bool = false;
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
         .min_size_content = .{ .w = 0, .h = 32 },
         .background = true,
-        .color_fill = if (active) theme.colors.bg_elevated else if (hovered) theme.colors.bg_hover else transparent,
+        .color_fill = if (active) theme.colors.bg_elevated else transparent,
+        .color_fill_hover = theme.colors.bg_hover, // native dvui hover (no stale local read)
         .corner_radius = dvui.Rect.all(theme.radius.sm),
         .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
@@ -138,7 +150,7 @@ fn navLink(r: Route, label: []const u8, icon: []const u8, id_extra: usize) void 
     });
     defer row.deinit();
 
-    if (dvui.clicked(row.data(), .{ .hovered = &hovered })) {
+    if (dvui.clicked(row.data(), .{})) {
         state.app.router.navigate(r);
     }
     row.drawBackground();
@@ -158,8 +170,10 @@ fn navLink(r: Route, label: []const u8, icon: []const u8, id_extra: usize) void 
     });
 }
 
-/// Live omnibox: type to chat / search / paste-a-link. Routes through the same
-/// handler the legacy header used (`header.submitInput`), then navigates.
+/// Live omnibox — the universal entry point. On Enter it classifies the text:
+///   • media (magnet/url/path)        → load into player, go to Player
+///   • leading '>' or trailing '?'    → AI assistant (chat)
+///   • anything else                  → UNIFIED search across all sources
 fn omnibox() void {
     var te = dvui.textEntry(@src(), .{
         .text = .{ .buffer = &state.app.magnet_buf },
@@ -167,7 +181,7 @@ fn omnibox() void {
     }, .{
         .expand = .horizontal,
         .min_size_content = .{ .w = 120, .h = 30 },
-        .max_size_content = .{ .w = 620, .h = 30 },
+        .max_size_content = .{ .w = 1000, .h = 30 },
         .margin = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = 0 },
         .color_fill = theme.colors.bg_input,
         .color_border = theme.colors.border_subtle,
@@ -178,12 +192,24 @@ fn omnibox() void {
     const entered = te.enter_pressed;
     te.deinit();
 
-    if (entered) {
-        const len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
-        const is_media = len > 0 and isMedia(state.app.magnet_buf[0..len]);
-        header.submitInput(); // routes media→player, else→AI chat; clears buffer
-        state.app.router.navigate(if (is_media) .player else .assistant);
+    if (!entered) return;
+    const len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
+    if (len == 0) return;
+    const text = state.app.magnet_buf[0..len];
+
+    if (isMedia(text)) {
+        header.submitInput(); // loads into player (clears buffer); helper routes the player nav
+        return;
     }
+    if (text[0] == '>' or text[len - 1] == '?') {
+        header.submitInput(); // → AI chat
+        state.app.router.navigate(.assistant);
+        return;
+    }
+    // Default: unified search across every source.
+    search_mod.submitQuery(text);
+    @memset(&state.app.magnet_buf, 0);
+    state.app.router.navigate(.search);
 }
 
 fn isMedia(text: []const u8) bool {
@@ -202,16 +228,16 @@ fn renderPage(r: Route) !void {
         .search => drawer.renderTabContent(.Search),
         .home => drawer.renderTabContent(.TMDB), // discover hub (trending/recs)
         .browse => {
-            subTabs(&.{ .TMDB, .YouTube, .Anime, .Comics, .RSS }, &browse_source, 100);
-            drawer.renderTabContent(browse_source);
+            subTabs(&.{ .TMDB, .YouTube, .Anime, .Comics, .RSS }, &state.app.browse_source, 100);
+            drawer.renderTabContent(state.app.browse_source);
         },
         .library => {
-            subTabs(&.{ .Queue, .History, .Downloads, .Jellyfin }, &library_tab, 200);
-            drawer.renderTabContent(library_tab);
+            subTabs(&.{ .Queue, .History, .Downloads, .Jellyfin }, &state.app.library_tab, 200);
+            drawer.renderTabContent(state.app.library_tab);
         },
         .system => {
-            subTabs(&.{ .Logs, .Plugins }, &system_tab, 300);
-            drawer.renderTabContent(system_tab);
+            subTabs(&.{ .Logs, .Plugins }, &state.app.system_tab, 300);
+            drawer.renderTabContent(state.app.system_tab);
         },
     }
 }
@@ -246,18 +272,18 @@ fn subTabs(tabs: []const state.DrawerTab, sel: *state.DrawerTab, id_extra: usize
 
     for (tabs, 0..) |t, i| {
         const active = sel.* == t;
-        var hovered: bool = false;
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = id_extra + i + 1,
             .min_size_content = .{ .w = 0, .h = 28 },
             .background = true,
-            .color_fill = if (active) theme.colors.bg_elevated else if (hovered) theme.colors.bg_hover else transparent,
+            .color_fill = if (active) theme.colors.bg_elevated else transparent,
+            .color_fill_hover = theme.colors.bg_hover,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         });
         defer row.deinit();
-        if (dvui.clicked(row.data(), .{ .hovered = &hovered })) sel.* = t;
+        if (dvui.clicked(row.data(), .{})) sel.* = t;
         row.drawBackground();
         _ = dvui.label(@src(), "{s}", .{tabLabel(t)}, .{
             .id_extra = id_extra + i + 1,
@@ -290,17 +316,17 @@ fn renderBottomTabs() void {
 
 fn bottomTab(r: Route, label: []const u8, icon: []const u8, id_extra: usize) void {
     const active = state.app.router.current == r;
-    var hovered: bool = false;
     var col = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = id_extra,
         .expand = .horizontal,
         .background = true,
-        .color_fill = if (hovered) theme.colors.bg_hover else transparent,
+        .color_fill = if (active) theme.colors.bg_elevated else transparent,
+        .color_fill_hover = theme.colors.bg_hover,
         .corner_radius = dvui.Rect.all(theme.radius.sm),
         .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = theme.spacing.xs, .h = theme.spacing.xs },
     });
     defer col.deinit();
-    if (dvui.clicked(col.data(), .{ .hovered = &hovered })) state.app.router.navigate(r);
+    if (dvui.clicked(col.data(), .{})) state.app.router.navigate(r);
     col.drawBackground();
 
     const fg = if (active) theme.colors.accent_primary else theme.colors.text_secondary;

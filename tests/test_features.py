@@ -897,6 +897,43 @@ def test_page_shell():
     return "fail", "page shell not wired"
 
 
+@test("No Dead drawer_tab Writes", "Page Shell")
+def test_no_dead_drawer_tab():
+    # Services must navigate via state.navigateToTab (router-aware), never write
+    # the dead state.app.drawer_tab (which the shell no longer reads to pick a page).
+    sdir = os.path.join(PROJECT_DIR, "src/services")
+    offenders = []
+    for root, _, files in os.walk(sdir):
+        for f in files:
+            if not f.endswith(".zig"):
+                continue
+            p = os.path.join(root, f)
+            for i, line in enumerate(open(p).read().splitlines(), 1):
+                if "state.app.drawer_tab =" in line:
+                    offenders.append(f"{os.path.relpath(p, PROJECT_DIR)}:{i}")
+    if offenders:
+        return "fail", "dead drawer_tab write: " + ", ".join(offenders[:4])
+    return "pass", "services navigate via navigateToTab"
+
+
+@test("Omnibox → Unified Search", "Page Shell")
+def test_omnibox_search():
+    shell = open(os.path.join(PROJECT_DIR, "src/ui/shell.zig")).read()
+    search = open(os.path.join(PROJECT_DIR, "src/services/search.zig")).read()
+    if "submitQuery" in shell and "pub fn submitQuery" in search and "navigate(.search)" in shell:
+        return "pass", "omnibox routes plain queries to unified search"
+    return "fail", "omnibox not wired to unified search"
+
+
+@test("Playback Navigates to Player", "Page Shell")
+def test_play_navigates():
+    st = open(os.path.join(PROJECT_DIR, "src/core/state.zig")).read()
+    browser = open(os.path.join(PROJECT_DIR, "src/services/browser.zig")).read()
+    if "pub fn gotoPlayer" in st and "gotoPlayer()" in browser:
+        return "pass", "load helpers reveal the Player route"
+    return "fail", "playback doesn't navigate to player"
+
+
 # ══════════════════════════════════════════════════════════
 # Zig Unit Tests
 # ══════════════════════════════════════════════════════════
