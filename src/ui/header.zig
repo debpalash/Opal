@@ -23,7 +23,9 @@ pub fn handleClipboardPaste() void {
                 return;
             };
             state.app.active_player_idx = 0;
-        } else |_| { return; }
+        } else |_| {
+            return;
+        }
     }
 
     if (state.app.players.items.len == 0) return;
@@ -132,7 +134,7 @@ pub fn renderHeader() void {
         defer left.deinit();
 
         // Logo / brand mark — quiet, not the view's accent.
-        dvui.icon(@src(), "brand", icons.tvg.lucide.@"zap", .{}, .{
+        dvui.icon(@src(), "brand", icons.tvg.lucide.zap, .{}, .{
             .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
             .min_size_content = .{ .w = 16, .h = 16 },
@@ -159,7 +161,7 @@ pub fn renderHeader() void {
         defer center.deinit();
 
         // Screen mgmt cluster.
-        if (components.iconButton(@src(), icons.tvg.lucide.@"plus", "Add screen", false)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.plus, "Add screen", false)) {
             if (state.app.players.items.len < 16) {
                 if (player.MediaPlayer.init(@import("../core/alloc.zig").allocator)) |p| {
                     state.app.players.append(@import("../core/alloc.zig").allocator, p) catch {};
@@ -168,7 +170,7 @@ pub fn renderHeader() void {
             }
         }
         spacerSm(@src());
-        if (components.iconButton(@src(), icons.tvg.lucide.@"minus", "Remove screen", false)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.minus, "Remove screen", false)) {
             if (state.app.players.items.len > 0) {
                 if (state.app.players.pop()) |p| {
                     if (p.current_url_len > 0 and p.current_url_len <= 2048) {
@@ -192,7 +194,7 @@ pub fn renderHeader() void {
         }
 
         spacerSm(@src());
-        if (components.iconButton(@src(), icons.tvg.lucide.@"save", "Save workspace", state.app.ws_save_open)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.save, "Save workspace", state.app.ws_save_open)) {
             state.app.ws_save_open = !state.app.ws_save_open;
             state.app.ws_load_open = false;
             if (state.app.ws_save_open) {
@@ -200,7 +202,7 @@ pub fn renderHeader() void {
             }
         }
         spacerSm(@src());
-        if (components.iconButton(@src(), icons.tvg.lucide.@"upload", "Load workspace", state.app.ws_load_open)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.upload, "Load workspace", state.app.ws_load_open)) {
             const workspace = @import("workspace.zig");
             workspace.scanWorkspaces();
             state.app.ws_load_open = !state.app.ws_load_open;
@@ -230,12 +232,12 @@ pub fn renderHeader() void {
         defer right.deinit();
 
         // Feature toggles cluster.
-        if (components.iconButton(@src(), icons.tvg.lucide.@"link", "Sync playback across screens", state.app.seek_sync)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.link, "Sync playback across screens", state.app.seek_sync)) {
             state.app.seek_sync = !state.app.seek_sync;
             state.markConfigDirty();
         }
         spacerSm(@src());
-        if (components.iconButton(@src(), icons.tvg.lucide.@"cpu", "Hardware decode", state.app.hwdec_enabled)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.cpu, "Hardware decode", state.app.hwdec_enabled)) {
             state.app.hwdec_enabled = !state.app.hwdec_enabled;
             state.markConfigDirty();
             const hw_val = if (state.app.hwdec_enabled) "auto" else "no";
@@ -264,7 +266,7 @@ pub fn renderHeader() void {
 
         // Stream-key chip — single button; on click toggles a click-to-reveal popover.
         if (activeStreamToken() != null) {
-            if (components.iconButton(@src(), icons.tvg.lucide.@"key", "Stream Key (reveal)", HeaderState.stream_key_open)) {
+            if (components.iconButton(@src(), icons.tvg.lucide.key, "Stream Key (reveal)", HeaderState.stream_key_open)) {
                 HeaderState.stream_key_open = !HeaderState.stream_key_open;
             }
             spacerSm(@src());
@@ -281,7 +283,7 @@ pub fn renderHeader() void {
 
         // Cheatsheet / info popover toggle.
         spacerSm(@src());
-        if (components.iconButton(@src(), icons.tvg.lucide.@"info", "Keyboard shortcuts", state.app.cheatsheet_open)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.info, "Keyboard shortcuts", state.app.cheatsheet_open)) {
             state.app.cheatsheet_open = !state.app.cheatsheet_open;
         }
 
@@ -291,7 +293,7 @@ pub fn renderHeader() void {
 
         // Theme cycler.
         spacerSm(@src());
-        if (components.iconButton(@src(), icons.tvg.lucide.@"palette", "Cycle theme", false)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.palette, "Cycle theme", false)) {
             theme.cycleTheme();
             state.showToast(theme.presetName(theme.active_preset));
         }
@@ -299,7 +301,7 @@ pub fn renderHeader() void {
         // Settings.
         spacerSm(@src());
         const settings_active = state.app.drawer_open and state.app.drawer_tab == .Settings;
-        if (components.iconButton(@src(), icons.tvg.lucide.@"settings", "Settings", settings_active)) {
+        if (components.iconButton(@src(), icons.tvg.lucide.settings, "Settings", settings_active)) {
             if (settings_active) {
                 state.app.drawer_open = false;
             } else {
@@ -406,9 +408,9 @@ fn renderVoiceButton() void {
     const voice_icon = if (voice.conv_phase == .speaking)
         icons.tvg.lucide.@"volume-2"
     else if (voice.conv_phase == .listening or voice.is_recording)
-        icons.tvg.lucide.@"mic"
+        icons.tvg.lucide.mic
     else
-        icons.tvg.lucide.@"headphones";
+        icons.tvg.lucide.headphones;
 
     if (components.iconButton(@src(), voice_icon, "Voice / conversation mode", voice.conversation_active)) {
         voice.toggleConversation();
@@ -462,9 +464,12 @@ fn renderStreamKeyPopover() void {
         .gravity_y = 0.5,
         .color_text = theme.colors.text_primary,
     });
-    { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+    {
+        var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+        sp.deinit();
+    }
 
-    if (components.iconButton(@src(), icons.tvg.lucide.@"copy", "Copy to clipboard", false)) {
+    if (components.iconButton(@src(), icons.tvg.lucide.copy, "Copy to clipboard", false)) {
         dvui.clipboardTextSet(token_slice);
         state.showToast("Stream key copied");
     }
@@ -537,7 +542,7 @@ pub fn renderUrlInput(is_large: bool) void {
 
     // Inline play button
     var play_wd: dvui.WidgetData = undefined;
-    const clicked_load = dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"play", .{}, .{}, .{
+    const clicked_load = dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
         .data_out = &play_wd,
         .gravity_y = 0.5,
         .color_text = theme.colors.accent,
@@ -570,7 +575,7 @@ pub fn renderUrlInput(is_large: bool) void {
         else
             theme.colors.text_tertiary;
         var mic_wd: dvui.WidgetData = undefined;
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"mic", .{}, .{}, .{
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.mic, .{}, .{}, .{
             .data_out = &mic_wd,
             .gravity_y = 0.5,
             .color_text = mic_color,
@@ -589,7 +594,7 @@ pub fn renderUrlInput(is_large: bool) void {
         const is_active = voice.conversation_active or voice.is_recording or voice.is_speaking or ai_chat_mod.is_generating.load(.acquire);
         if (is_active) {
             var stop_wd: dvui.WidgetData = undefined;
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"square", .{}, .{}, .{
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.square, .{}, .{}, .{
                 .data_out = &stop_wd,
                 .gravity_y = 0.5,
                 .color_text = theme.colors.danger,
@@ -626,7 +631,15 @@ pub fn renderUrlInput(is_large: bool) void {
     }
 
     // Handle Enter / Play click
-    if (clicked_load or enter_pressed) {
+    if (clicked_load or enter_pressed) submitInput();
+}
+
+/// Process the current input buffer (`state.app.magnet_buf`): route media
+/// (magnet / URL / path) to the player, everything else to the AI chat.
+/// Shared by the header input and the page-shell omnibox so both behave
+/// identically. Clears the buffer when consumed.
+pub fn submitInput() void {
+    {
         const len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
         if (len > 0) {
             const text = state.app.magnet_buf[0..len];
@@ -734,8 +747,12 @@ pub fn renderTabBar() void {
             var name_end: usize = basename.len;
             {
                 var ld: ?usize = null;
-                for (basename, 0..) |bch, bi| { if (bch == '.') ld = bi; }
-                if (ld) |d| { if (basename.len - d <= 6) name_end = d; }
+                for (basename, 0..) |bch, bi| {
+                    if (bch == '.') ld = bi;
+                }
+                if (ld) |d| {
+                    if (basename.len - d <= 6) name_end = d;
+                }
             }
             // Replace dots/underscores
             for (basename[0..@min(name_end, clean_buf.len)]) |bch| {

@@ -29,10 +29,10 @@ var drawer_last_mouse_x: f32 = -1;
 // (no inline magic numbers). Active state: a single 2px accent left indicator
 // (no boxed fill). Hover: bg_hover lift. Focus: dvui's built-in ring on
 // tab_index'd buttons.
-const RAIL_W: f32 = 56;             // fixed control width
+const RAIL_W: f32 = 56; // fixed control width
 const RAIL_SIDE_PAD: f32 = theme.spacing.sm;
-const BTN_SIZE: f32 = 40;           // fixed control size
-const ICON_GLYPH: f32 = 22;         // fixed glyph size
+const BTN_SIZE: f32 = 40; // fixed control size
+const ICON_GLYPH: f32 = 22; // fixed glyph size
 const ICON_GAP: f32 = theme.spacing.xs;
 const GROUP_GAP: f32 = theme.spacing.lg;
 const RADIUS_SM = theme.dims.rad_sm;
@@ -59,8 +59,8 @@ pub fn renderDrawer() void {
 
     // Drawer container — non-expanding horizontal layout with fixed width
     // In a horizontal split layout, this takes its width and the grid takes the rest
-    var container = dvui.box(@src(), .{ .dir = .horizontal }, .{ 
-        .expand = .vertical, 
+    var container = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .vertical,
         .min_size_content = .{ .w = if (is_expanded) 10 else w, .h = 10 },
         .max_size_content = if (is_expanded) .{ .w = std.math.floatMax(f32), .h = std.math.floatMax(f32) } else .{ .w = w, .h = std.math.floatMax(f32) },
         .background = true,
@@ -87,7 +87,10 @@ pub fn renderDrawer() void {
             else
                 theme.colors.text_dim;
 
-            { var spacer_top = dvui.box(@src(), .{}, .{ .expand = .vertical }); spacer_top.deinit(); }
+            {
+                var spacer_top = dvui.box(@src(), .{}, .{ .expand = .vertical });
+                spacer_top.deinit();
+            }
             for (0..3) |dot_i| {
                 var dot = dvui.box(@src(), .{}, .{
                     .id_extra = dot_i,
@@ -100,7 +103,10 @@ pub fn renderDrawer() void {
                 });
                 dot.deinit();
             }
-            { var spacer_bot = dvui.box(@src(), .{}, .{ .expand = .vertical }); spacer_bot.deinit(); }
+            {
+                var spacer_bot = dvui.box(@src(), .{}, .{ .expand = .vertical });
+                spacer_bot.deinit();
+            }
         }
 
         // Use global mouse state for reliable drag detection — dvui.events()
@@ -187,35 +193,38 @@ pub fn renderDrawer() void {
         defer rail.deinit();
 
         // ── Group 1: Find & Manage ──
-        renderRailTab(.Search,    icons.tvg.lucide.@"search",   "Search",    0);
-        renderRailTab(.Downloads, icons.tvg.lucide.@"download", "Downloads", 1);
-        renderRailTab(.Queue,     icons.tvg.lucide.@"list",     "Queue",     2);
-        renderRailTab(.History,   icons.tvg.lucide.@"clock",    "History",   9);
+        renderRailTab(.Search, icons.tvg.lucide.search, "Search", 0);
+        renderRailTab(.Downloads, icons.tvg.lucide.download, "Downloads", 1);
+        renderRailTab(.Queue, icons.tvg.lucide.list, "Queue", 2);
+        renderRailTab(.History, icons.tvg.lucide.clock, "History", 9);
 
         railGroupGap(0);
 
         // ── Group 2: Sources ──
-        renderRailTab(.TMDB,     icons.tvg.lucide.@"film",   "TMDB",     3);
-        renderRailTab(.YouTube,  icons.tvg.lucide.@"play",   "YouTube",  4);
-        renderRailTab(.Anime,    icons.tvg.lucide.@"zap",    "Anime",    5);
-        renderRailTab(.Comics,   icons.tvg.lucide.@"image",  "Comics",   6);
-        renderRailTab(.RSS,      icons.tvg.lucide.@"rss",    "RSS",      7);
-        renderRailTab(.Jellyfin, icons.tvg.lucide.@"server", "Jellyfin", 8);
+        renderRailTab(.TMDB, icons.tvg.lucide.film, "TMDB", 3);
+        renderRailTab(.YouTube, icons.tvg.lucide.play, "YouTube", 4);
+        renderRailTab(.Anime, icons.tvg.lucide.zap, "Anime", 5);
+        renderRailTab(.Comics, icons.tvg.lucide.image, "Comics", 6);
+        renderRailTab(.RSS, icons.tvg.lucide.rss, "RSS", 7);
+        renderRailTab(.Jellyfin, icons.tvg.lucide.server, "Jellyfin", 8);
 
         railGroupGap(1);
 
         // ── Group 3: Configure ──
-        renderRailTab(.AI,       icons.tvg.lucide.@"brain",    "AI",       14);
-        renderRailTab(.Plugins,  icons.tvg.lucide.@"package",  "Plugins",  11);
-        renderRailTab(.Settings, icons.tvg.lucide.@"settings", "Settings", 13);
+        renderRailTab(.AI, icons.tvg.lucide.brain, "AI", 14);
+        renderRailTab(.Plugins, icons.tvg.lucide.package, "Plugins", 11);
+        renderRailTab(.Settings, icons.tvg.lucide.settings, "Settings", 13);
 
         // Spacer to push bottom controls to the bottom of the rail.
-        { var spacer = dvui.box(@src(), .{}, .{ .expand = .vertical }); spacer.deinit(); }
+        {
+            var spacer = dvui.box(@src(), .{}, .{ .expand = .vertical });
+            spacer.deinit();
+        }
 
         // ── Bottom controls group (Console / Expand / Close) ──
         renderBottomIcon(
             .{ .Tab = .Logs },
-            icons.tvg.lucide.@"terminal",
+            icons.tvg.lucide.terminal,
             "Developer Console",
             100,
         );
@@ -245,23 +254,29 @@ pub fn renderDrawer() void {
         defer panel.deinit();
 
         // Body Routing
-        switch (state.app.drawer_tab) {
-            .Search => search.renderSearchContent(),
-            .Downloads => transfers.renderTransfersContent(),
-            .TMDB => tmdb.renderTmdbContent(),
-            .YouTube => youtube.renderContent(),
-            .Queue => queue.renderContent(),
-            .Comics => comics.renderContent(),
-            .Anime => anime.renderContent(),
-            .History => renderHistoryContent(),
-            .RSS => rss.renderContent(),
-            .Jellyfin => jellyfin_ui.renderContent(),
-            .Plugins => plugin_mod.renderContent(),
-            .Logs => renderLogsContent(),
-            .Settings => settings_mod.renderSettingsContent(),
-            // AI tab is live — renders the AI settings/config panel.
-            .AI => settings_mod.renderAIContent(),
-        }
+        renderTabContent(state.app.drawer_tab);
+    }
+}
+
+/// Render just the body for a given tab (no rail/chrome). Shared by the drawer
+/// and the page-shell so pages reuse the exact same content renderers.
+pub fn renderTabContent(tab: state.DrawerTab) void {
+    switch (tab) {
+        .Search => search.renderSearchContent(),
+        .Downloads => transfers.renderTransfersContent(),
+        .TMDB => tmdb.renderTmdbContent(),
+        .YouTube => youtube.renderContent(),
+        .Queue => queue.renderContent(),
+        .Comics => comics.renderContent(),
+        .Anime => anime.renderContent(),
+        .History => renderHistoryContent(),
+        .RSS => rss.renderContent(),
+        .Jellyfin => jellyfin_ui.renderContent(),
+        .Plugins => plugin_mod.renderContent(),
+        .Logs => renderLogsContent(),
+        .Settings => settings_mod.renderSettingsContent(),
+        // AI tab is live — renders the AI settings/config panel.
+        .AI => settings_mod.renderAIContent(),
     }
 }
 
@@ -312,8 +327,7 @@ fn renderRailTab(tab: state.DrawerTab, icon_data: anytype, label: []const u8, id
         .id_extra = id + 1000,
         .color_fill = TRANSPARENT,
         .color_fill_hover = theme.colors.bg_hover,
-        .color_text = if (active) theme.colors.accent_primary
-                      else theme.colors.text_secondary,
+        .color_text = if (active) theme.colors.accent_primary else theme.colors.text_secondary,
         .border = dvui.Rect.all(0),
         .corner_radius = RADIUS_SM,
         .padding = dvui.Rect.all((BTN_SIZE - ICON_GLYPH) / 2),
@@ -381,8 +395,7 @@ fn renderBottomIcon(action: BottomAction, icon_data: anytype, label: []const u8,
         .id_extra = id + 1000,
         .color_fill = TRANSPARENT,
         .color_fill_hover = theme.colors.bg_hover,
-        .color_text = if (is_active) theme.colors.accent_primary
-                      else theme.colors.text_secondary,
+        .color_text = if (is_active) theme.colors.accent_primary else theme.colors.text_secondary,
         .border = dvui.Rect.all(0),
         .corner_radius = RADIUS_SM,
         .padding = dvui.Rect.all((BTN_SIZE - ICON_GLYPH) / 2),
@@ -416,7 +429,6 @@ fn renderBottomIcon(action: BottomAction, icon_data: anytype, label: []const u8,
     }
 }
 
-
 fn tabHasBadge(tab: state.DrawerTab) bool {
     return switch (tab) {
         .Search => search.is_searching.load(.acquire),
@@ -449,7 +461,10 @@ fn renderHistoryContent() void {
 
         components.sectionHeader("Watch History");
 
-        { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+        {
+            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            spacer.deinit();
+        }
 
         if (watch_history.count > 0) {
             var count_buf: [16]u8 = undefined;
@@ -474,7 +489,7 @@ fn renderHistoryContent() void {
     }
 
     if (watch_history.count == 0) {
-        components.emptyState(icons.tvg.lucide.@"clock", "No watch history yet", "Played items will appear here");
+        components.emptyState(icons.tvg.lucide.clock, "No watch history yet", "Played items will appear here");
         return;
     }
 
@@ -534,7 +549,7 @@ fn renderHistoryContent() void {
         });
 
         // Remove button
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"x", .{}, .{}, .{
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
             .id_extra = i + 7000,
             .color_fill = TRANSPARENT,
             .color_text = theme.colors.text_secondary,
@@ -570,12 +585,15 @@ fn renderLogsContent() void {
 
         components.sectionHeader("Developer Console");
 
-        { var s = dvui.box(@src(), .{}, .{ .expand = .horizontal }); s.deinit(); }
+        {
+            var s = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            s.deinit();
+        }
 
         // Filter toggle — calm active state: accent glyph on a subtle
         // bg_elevated fill (no saturated pill). Reserve accent for this single
         // active affordance.
-        if (dvui.buttonIcon(@src(), if (logs.show_only_errors) "Errors" else "All", icons.tvg.lucide.@"eye", .{}, .{}, .{
+        if (dvui.buttonIcon(@src(), if (logs.show_only_errors) "Errors" else "All", icons.tvg.lucide.eye, .{}, .{}, .{
             .color_fill = if (logs.show_only_errors) theme.colors.bg_elevated else TRANSPARENT,
             .color_text = if (logs.show_only_errors) theme.colors.accent_primary else theme.colors.text_secondary,
             .corner_radius = RADIUS_SM,

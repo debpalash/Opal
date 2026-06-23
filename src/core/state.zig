@@ -179,10 +179,10 @@ pub const AppState = struct {
     drawer_tab: DrawerTab = .Search,
     drawer_width_px: f32 = 640.0,
 
-    // ── Page-shell redesign (behind a flag; see ui/shell.zig) ──
-    // When enabled, appFrame renders the new page router instead of the
-    // header+grid+drawer layout. Off by default → zero behavior change.
-    page_shell_enabled: bool = false,
+    // ── Page-shell redesign (see ui/shell.zig) ──
+    // The new website-like page router is the default UI. Set OPAL_PAGE_SHELL=0
+    // to fall back to the legacy header+grid+drawer layout.
+    page_shell_enabled: bool = true,
     router: @import("router.zig").History = .{},
 
     // dvui window handle — set once in appInit. Stored here so worker
