@@ -8,42 +8,74 @@ const theme = @import("theme.zig");
 
 const tk = struct {
     // ── colors (runtime — read fresh each frame from active theme) ──
-    pub inline fn bg_deep()        dvui.Color { return theme.colors.bg_deep; }
-    pub inline fn bg_surface()     dvui.Color { return theme.colors.bg_surface; }
-    pub inline fn bg_elevated()    dvui.Color { return theme.colors.bg_elevated; }
-    pub inline fn bg_hover()       dvui.Color { return theme.colors.bg_hover; }
-    pub inline fn bg_muted()       dvui.Color { return theme.colors.bg_muted; }
-    pub inline fn text_primary()   dvui.Color { return theme.colors.text_primary; }
-    pub inline fn text_secondary() dvui.Color { return theme.colors.text_secondary; }
-    pub inline fn text_tertiary()  dvui.Color { return theme.colors.text_tertiary; }
-    pub inline fn text_on_accent() dvui.Color { return theme.colors.text_on_accent; }
-    pub inline fn accent_primary() dvui.Color { return theme.colors.accent_primary; }
-    pub inline fn accent_dim()     dvui.Color { return theme.colors.accent_dim; }
-    pub inline fn semantic_success() dvui.Color { return theme.colors.semantic_success; }
-    pub inline fn semantic_warn()    dvui.Color { return theme.colors.semantic_warn; }
-    pub inline fn semantic_error()   dvui.Color { return theme.colors.semantic_error; }
-    pub inline fn border_subtle()  dvui.Color { return theme.colors.border_subtle; }
-    pub inline fn border_strong()  dvui.Color { return theme.colors.border_strong; }
+    pub inline fn bg_deep() dvui.Color {
+        return theme.colors.bg_deep;
+    }
+    pub inline fn bg_surface() dvui.Color {
+        return theme.colors.bg_surface;
+    }
+    pub inline fn bg_elevated() dvui.Color {
+        return theme.colors.bg_elevated;
+    }
+    pub inline fn bg_hover() dvui.Color {
+        return theme.colors.bg_hover;
+    }
+    pub inline fn bg_muted() dvui.Color {
+        return theme.colors.bg_muted;
+    }
+    pub inline fn text_primary() dvui.Color {
+        return theme.colors.text_primary;
+    }
+    pub inline fn text_secondary() dvui.Color {
+        return theme.colors.text_secondary;
+    }
+    pub inline fn text_tertiary() dvui.Color {
+        return theme.colors.text_tertiary;
+    }
+    pub inline fn text_on_accent() dvui.Color {
+        return theme.colors.text_on_accent;
+    }
+    pub inline fn accent_primary() dvui.Color {
+        return theme.colors.accent_primary;
+    }
+    pub inline fn accent_dim() dvui.Color {
+        return theme.colors.accent_dim;
+    }
+    pub inline fn semantic_success() dvui.Color {
+        return theme.colors.semantic_success;
+    }
+    pub inline fn semantic_warn() dvui.Color {
+        return theme.colors.semantic_warn;
+    }
+    pub inline fn semantic_error() dvui.Color {
+        return theme.colors.semantic_error;
+    }
+    pub inline fn border_subtle() dvui.Color {
+        return theme.colors.border_subtle;
+    }
+    pub inline fn border_strong() dvui.Color {
+        return theme.colors.border_strong;
+    }
 
     // ── spacing (pixels) ──
-    pub const sp_xs:  f32 = theme.spacing.xs;
-    pub const sp_sm:  f32 = theme.spacing.sm;
-    pub const sp_md:  f32 = theme.spacing.md;
-    pub const sp_lg:  f32 = theme.spacing.lg;
-    pub const sp_xl:  f32 = theme.spacing.xl;
+    pub const sp_xs: f32 = theme.spacing.xs;
+    pub const sp_sm: f32 = theme.spacing.sm;
+    pub const sp_md: f32 = theme.spacing.md;
+    pub const sp_lg: f32 = theme.spacing.lg;
+    pub const sp_xl: f32 = theme.spacing.xl;
     pub const sp_xxl: f32 = theme.spacing.xxl;
 
     // ── radii (dvui.Rect-typed for corner_radius slots) ──
-    pub const rad_sm   = dvui.Rect.all(theme.radius.sm);
-    pub const rad_md   = dvui.Rect.all(theme.radius.md);
-    pub const rad_lg   = dvui.Rect.all(theme.radius.lg);
+    pub const rad_sm = dvui.Rect.all(theme.radius.sm);
+    pub const rad_md = dvui.Rect.all(theme.radius.md);
+    pub const rad_lg = dvui.Rect.all(theme.radius.lg);
     pub const rad_pill = dvui.Rect.all(theme.radius.pill);
 
     // ── font sizes ──
-    pub const fs_micro:   f32 = theme.font_size.micro;
-    pub const fs_small:   f32 = theme.font_size.small;
-    pub const fs_body:    f32 = theme.font_size.body;
-    pub const fs_title:   f32 = theme.font_size.title;
+    pub const fs_micro: f32 = theme.font_size.micro;
+    pub const fs_small: f32 = theme.font_size.small;
+    pub const fs_body: f32 = theme.font_size.body;
+    pub const fs_title: f32 = theme.font_size.title;
     pub const fs_display: f32 = theme.font_size.display;
 };
 
@@ -95,7 +127,7 @@ pub fn tipId(src: std.builtin.SourceLocation, wd: dvui.WidgetData, text: []const
 // ══════════════════════════════════════════════════════════════════════
 
 pub fn ProgressBar(src: std.builtin.SourceLocation, fraction: f32, label: []const u8, id_extra: usize) void {
-    var container = dvui.box(src, .{ .dir = .vertical }, .{ .id_extra = id_extra, .expand = .horizontal, .margin = .{ .x=0, .y=4, .w=0, .h=4 } });
+    var container = dvui.box(src, .{ .dir = .vertical }, .{ .id_extra = id_extra, .expand = .horizontal, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 } });
     defer container.deinit();
 
     if (label.len > 0) {
@@ -103,14 +135,7 @@ pub fn ProgressBar(src: std.builtin.SourceLocation, fraction: f32, label: []cons
     }
 
     var pct_val = std.math.clamp(fraction, 0.0, 1.0);
-    _ = dvui.slider(@src(), .{ .fraction = &pct_val }, .{
-        .id_extra = id_extra,
-        .expand = .horizontal,
-        .min_size_content = .{ .w = 10, .h = 8 },
-        .color_fill = theme.colors.bg_input,
-        .color_text = theme.colors.accent,
-        .corner_radius = dvui.Rect.all(4)
-    });
+    _ = dvui.slider(@src(), .{ .fraction = &pct_val }, .{ .id_extra = id_extra, .expand = .horizontal, .min_size_content = .{ .w = 10, .h = 8 }, .color_fill = theme.colors.bg_input, .color_text = theme.colors.accent, .corner_radius = dvui.Rect.all(4) });
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -142,7 +167,7 @@ pub fn sectionHeader(label: []const u8) void {
     var pad_box = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = sectionheader_seq,
         .expand = .horizontal,
-        .margin = .{ .x = 0, .y = tk.sp_lg, .w = 0, .h = tk.sp_sm },
+        .margin = .{ .x = 0, .y = tk.sp_md, .w = 0, .h = tk.sp_xs },
     });
     defer pad_box.deinit();
 
@@ -194,7 +219,7 @@ pub fn toggleRow(
         .background = true,
         .color_fill = if (hovered) tk.bg_hover() else tk.bg_surface(),
         .corner_radius = tk.rad_sm,
-        .padding = .{ .x = tk.sp_lg, .y = tk.sp_md, .w = tk.sp_lg, .h = tk.sp_md },
+        .padding = .{ .x = tk.sp_md, .y = tk.sp_sm, .w = tk.sp_md, .h = tk.sp_sm },
         .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
     });
 
@@ -230,7 +255,10 @@ pub fn toggleRow(
     }
 
     // Spacer to push the toggle to the right edge.
-    { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+    {
+        var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+        spacer.deinit();
+    }
 
     // Right: pill toggle. The pill itself is a rounded box; a small
     // circle indicator slides to one of the two ends based on `value.*`.
@@ -288,7 +316,7 @@ pub fn selectRow(
         .background = true,
         .color_fill = if (hovered) tk.bg_hover() else tk.bg_surface(),
         .corner_radius = tk.rad_sm,
-        .padding = .{ .x = tk.sp_lg, .y = tk.sp_md, .w = tk.sp_lg, .h = tk.sp_md },
+        .padding = .{ .x = tk.sp_md, .y = tk.sp_sm, .w = tk.sp_md, .h = tk.sp_sm },
         .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
     });
     _ = dvui.clicked(row.data(), .{ .hovered = &hovered });
@@ -301,7 +329,10 @@ pub fn selectRow(
         .font = fontAt(tk.fs_body),
     });
 
-    { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+    {
+        var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+        spacer.deinit();
+    }
 
     // Right dropdown. dvui.dropdown draws the chosen entry + chevron and
     // pops a floating menu on click.
@@ -337,7 +368,10 @@ pub fn segment(
 ) ?usize {
     var clicked_index: ?usize = null;
 
-    var bar = dvui.box(src, .{ .dir = .horizontal }, .{
+    // Flexbox so many-option ramps (UI Scale, Theme) wrap to a second row on
+    // narrow panes instead of clipping the last options off the edge.
+    var bar = dvui.flexbox(src, .{ .justify_content = .start }, .{
+        .expand = .horizontal,
         .background = true,
         .color_fill = tk.bg_surface(),
         .corner_radius = tk.rad_sm,
@@ -356,8 +390,8 @@ pub fn segment(
             // No per-segment border (calm).
             .color_fill = if (is_active) tk.bg_elevated() else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .corner_radius = tk.rad_sm,
-            .padding = .{ .x = tk.sp_md, .y = tk.sp_xs, .w = tk.sp_md, .h = tk.sp_xs },
-            .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
+            .padding = .{ .x = tk.sp_sm, .y = tk.sp_xs, .w = tk.sp_sm, .h = tk.sp_xs },
+            .margin = .{ .x = 1, .y = 1, .w = 1, .h = 1 },
         });
 
         if (dvui.clicked(seg.data(), .{ .hovered = &hovered })) {
@@ -413,10 +447,10 @@ pub fn iconButton(
 /// status reads without shouting. Horizontal padding preserved.
 pub fn statusPill(label: []const u8, kind: enum { info, success, warn, err }) void {
     const fg = switch (kind) {
-        .info    => tk.text_secondary(),
+        .info => tk.text_secondary(),
         .success => tk.semantic_success(),
-        .warn    => tk.semantic_warn(),
-        .err     => tk.semantic_error(),
+        .warn => tk.semantic_warn(),
+        .err => tk.semantic_error(),
     };
 
     var pill = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -442,7 +476,10 @@ pub fn emptyState(icon: []const u8, title: []const u8, hint: []const u8) void {
     defer container.deinit();
 
     // Top spacer for vertical centering.
-    { var s = dvui.box(@src(), .{}, .{ .expand = .vertical }); s.deinit(); }
+    {
+        var s = dvui.box(@src(), .{}, .{ .expand = .vertical });
+        s.deinit();
+    }
 
     if (icon.len > 0) {
         dvui.icon(@src(), "empty-state", icon, .{}, .{
@@ -468,7 +505,10 @@ pub fn emptyState(icon: []const u8, title: []const u8, hint: []const u8) void {
     }
 
     // Bottom spacer for vertical centering.
-    { var s = dvui.box(@src(), .{}, .{ .expand = .vertical }); s.deinit(); }
+    {
+        var s = dvui.box(@src(), .{}, .{ .expand = .vertical });
+        s.deinit();
+    }
 }
 
 /// Full-width search input with magnifier prefix and placeholder text.
@@ -497,7 +537,7 @@ pub fn searchInput(
     defer shell.deinit();
 
     // Magnifier prefix.
-    dvui.icon(@src(), "search", icons.tvg.lucide.@"search", .{}, .{
+    dvui.icon(@src(), "search", icons.tvg.lucide.search, .{}, .{
         .color_text = tk.text_tertiary(),
         .min_size_content = .{ .w = 16, .h = 16 },
         .max_size_content = .{ .w = 16, .h = 16 },

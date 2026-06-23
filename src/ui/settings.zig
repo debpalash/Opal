@@ -86,64 +86,71 @@ pub fn renderSettingsContent() void {
     });
     defer outer.deinit();
 
-    renderLeftNav();
+    // Responsive: collapse the left nav to an icon-only rail when the settings
+    // region is narrow (small window / drawer / device). rect.w is 0 on the
+    // very first paint → default to the expanded layout (no collapse flash).
+    const region_w = outer.data().rect.w;
+    const compact = region_w > 1 and region_w < 440;
+
+    renderLeftNav(compact);
     renderRightPane();
 }
 
 // ── Left navigator (search box + vertical tab list) ──
 
-fn renderLeftNav() void {
-    // Sidebar column.
+fn renderLeftNav(compact: bool) void {
+    // Sidebar column — icon rail when compact, icon+label list otherwise.
     var nav = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .min_size_content = .{ .w = 148, .h = 0 },
-        .max_size_content = .{ .w = 164, .h = std.math.floatMax(f32) },
+        .min_size_content = .{ .w = if (compact) 48 else 150, .h = 0 },
+        .max_size_content = .{ .w = if (compact) 56 else 168, .h = std.math.floatMax(f32) },
         .expand = .vertical,
         .background = true,
         .color_fill = theme.colors.bg_surface,
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 0, .w = 1, .h = 0 },
         .padding = .{
-            .x = theme.spacing.md,
-            .y = theme.spacing.lg,
-            .w = theme.spacing.md,
-            .h = theme.spacing.lg,
+            .x = if (compact) theme.spacing.xs else theme.spacing.sm,
+            .y = theme.spacing.md,
+            .w = if (compact) theme.spacing.xs else theme.spacing.sm,
+            .h = theme.spacing.md,
         },
     });
     defer nav.deinit();
 
-    // ── Search box ──
-    {
+    // ── Search box ── (hidden in compact rail — no room for the field)
+    if (!compact) {
         var sb_wrap = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.md },
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
         });
         defer sb_wrap.deinit();
-        _ = components.searchInput(@src(), &search_buf, &search_len, "Search settings…");
+        _ = components.searchInput(@src(), &search_buf, &search_len, "Search…");
     }
 
     // ── Tab list ──
     const nav_tabs = [_]struct {
         tab: state.SettingsTab,
         label: []const u8,
+        icon: []const u8,
     }{
-        .{ .tab = .General, .label = "General" },
-        .{ .tab = .Playback, .label = "Playback" },
-        .{ .tab = .Subtitles, .label = "Subtitles" },
-        .{ .tab = .Network, .label = "Network" },
-        .{ .tab = .Storage, .label = "Storage" },
-        .{ .tab = .Scripts, .label = "AI & Scripts" },
-        .{ .tab = .LangLearn, .label = "Language" },
-        .{ .tab = .FileAssoc, .label = "File Types" },
+        .{ .tab = .General, .label = "General", .icon = icons.tvg.lucide.@"sliders-horizontal" },
+        .{ .tab = .Playback, .label = "Playback", .icon = icons.tvg.lucide.play },
+        .{ .tab = .Subtitles, .label = "Subtitles", .icon = icons.tvg.lucide.captions },
+        .{ .tab = .Network, .label = "Network", .icon = icons.tvg.lucide.wifi },
+        .{ .tab = .Storage, .label = "Storage", .icon = icons.tvg.lucide.@"hard-drive" },
+        .{ .tab = .Scripts, .label = "AI & Scripts", .icon = icons.tvg.lucide.sparkles },
+        .{ .tab = .LangLearn, .label = "Language", .icon = icons.tvg.lucide.languages },
+        .{ .tab = .FileAssoc, .label = "File Types", .icon = icons.tvg.lucide.@"file-cog" },
     };
 
     var any_match = false;
     for (nav_tabs, 0..) |nt, idx| {
         // Filter by search query — also surface the tab if a section/setting
         // inside it would match (cheap heuristic: also match against the tab
-        // name itself).
-        if (!matchesSearch(nt.label) and !sectionMatchesSearch(nt.tab)) continue;
+        // name itself). Compact rail ignores search (no field shown).
+        if (!compact and !matchesSearch(nt.label) and !sectionMatchesSearch(nt.tab)) continue;
         any_match = true;
-        navTabRow(nt.tab, nt.label, idx);
+        navTabRow(nt.tab, nt.label, nt.icon, idx, compact);
     }
 
     if (!any_match) {
@@ -177,41 +184,59 @@ fn sectionMatchesSearch(tab: state.SettingsTab) bool {
     return false;
 }
 
-/// Render a single tab row in the left nav.
-fn navTabRow(tab: state.SettingsTab, label: []const u8, id_extra: usize) void {
+/// Render a single tab row in the left nav. Whole row is clickable; an icon
+/// sits left of the label (label hidden in the compact rail, tooltip instead).
+fn navTabRow(tab: state.SettingsTab, label: []const u8, icon: []const u8, id_extra: usize, compact: bool) void {
     const is_active = state.app.settings_tab == tab;
+    var hovered: bool = false;
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
         .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = 36 }, // spec: 36 px row height
+        .min_size_content = .{ .w = 0, .h = if (compact) 40 else 34 },
         .background = true,
-        .color_fill = if (is_active) theme.colors.bg_elevated else .{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_border = if (is_active) theme.colors.accent_primary else .{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .border = if (is_active) .{ .x = 2, .y = 0, .w = 0, .h = 0 } else dvui.Rect.all(0),
+        .color_fill = if (is_active) theme.colors.bg_elevated else if (hovered) theme.colors.bg_hover else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_border = if (is_active) theme.colors.accent_primary else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .border = if (is_active and !compact) .{ .x = 2, .y = 0, .w = 0, .h = 0 } else dvui.Rect.all(0),
         .corner_radius = dvui.Rect.all(theme.radius.sm),
         .padding = .{
-            .x = theme.spacing.md,
-            .y = theme.spacing.sm,
-            .w = theme.spacing.md,
-            .h = theme.spacing.sm,
-        }, // spec: spacing.md × spacing.lg — using sm vertical to land at 36 px
+            .x = if (compact) theme.spacing.xs else theme.spacing.sm,
+            .y = theme.spacing.xs,
+            .w = if (compact) theme.spacing.xs else theme.spacing.sm,
+            .h = theme.spacing.xs,
+        },
         .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+        .gravity_x = if (compact) 0.5 else 0,
     });
     defer row.deinit();
 
-    // Make the whole row a clickable button (we draw colors manually above).
-    if (dvui.button(@src(), label, .{}, .{
-        .id_extra = id_extra + 600,
-        .expand = .horizontal,
-        .color_fill = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_text = if (is_active) theme.colors.text_primary else theme.colors.text_secondary,
-        // TODO: needs font_weight bold when dvui supports it — falling back to brighter text only.
-        .border = dvui.Rect.all(0),
-        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
-        .gravity_y = 0.5,
-    })) {
+    // Whole-row click target (colors drawn manually above).
+    if (dvui.clicked(row.data(), .{ .hovered = &hovered })) {
         state.app.settings_tab = tab;
+    }
+    row.drawBackground();
+
+    const fg = if (is_active) theme.colors.text_primary else theme.colors.text_secondary;
+
+    dvui.icon(@src(), label, icon, .{}, .{
+        .id_extra = id_extra,
+        .gravity_y = 0.5,
+        .color_text = fg,
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .max_size_content = .{ .w = 16, .h = 16 },
+    });
+
+    if (compact) {
+        // Tooltip carries the label when the text is hidden. Use components.tipId
+        // (offsets the src column per id_extra) — a raw dvui.tooltip sharing this
+        // @src() across all 8 tabs would collide on one FloatingTooltip id.
+        components.tipId(@src(), row.data().*, label, id_extra);
+    } else {
+        _ = dvui.label(@src(), "  {s}", .{label}, .{
+            .id_extra = id_extra,
+            .gravity_y = 0.5,
+            .color_text = fg,
+        });
     }
 }
 
@@ -240,14 +265,16 @@ fn renderRightPane() void {
 
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{
         .min_size_content = .{ .w = 0, .h = 0 },
-        .max_size_content = .{ .w = 720, .h = std.math.floatMax(f32) }, // spec: max 720 px
+        .max_size_content = .{ .w = 720, .h = std.math.floatMax(f32) },
         .expand = .horizontal,
+        // Compact: lg horizontal / md vertical instead of xl all-round, so the
+        // pane breathes less and controls (segments) get more usable width.
         .padding = .{
-            .x = theme.spacing.xl,
-            .y = theme.spacing.xl,
-            .w = theme.spacing.xl,
-            .h = theme.spacing.xl,
-        }, // spec: padding spacing.xl on all sides
+            .x = theme.spacing.lg,
+            .y = theme.spacing.md,
+            .w = theme.spacing.lg,
+            .h = theme.spacing.md,
+        },
     });
     defer content.deinit();
 
@@ -299,11 +326,13 @@ fn renderRightPane() void {
 /// Big display title rendered once at the top of each tab.
 fn bigTitle(title: []const u8) void {
     var f = dvui.themeGet().font_body;
-    f.size = theme.font_size.display;
+    // Compact: title size (17), not display (24). 24 overflowed the narrow
+    // settings pane and clipped ("General Setti…"); 17 fits and reads cleaner.
+    f.size = theme.font_size.title;
     _ = dvui.label(@src(), "{s}", .{title}, .{
         .color_text = theme.colors.text_primary,
         .font = f,
-        .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xl }, // spec: bottom margin spacing.xl
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.md },
     });
 }
 
@@ -903,7 +932,7 @@ fn renderGeneralTab() void {
 
     settingRow("API Key", 140, @src());
     {
-        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.tmdb.api_key } }, .{
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.tmdb.api_key }, .password_char = "•" }, .{
             .id_extra = 142,
             .expand = .horizontal,
             .min_size_content = .{ .w = 300, .h = 20 },
@@ -1420,7 +1449,7 @@ fn renderSubtitlesTab() void {
         });
         defer row.deinit();
 
-        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.opensub_api_key }, .placeholder = "Paste API key from opensubtitles.com" }, .{
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.opensub_api_key }, .placeholder = "Paste API key from opensubtitles.com", .password_char = "•" }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 250, .h = 20 },
             .color_fill = theme.colors.bg_input,
