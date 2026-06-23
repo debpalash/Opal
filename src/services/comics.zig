@@ -391,19 +391,109 @@ fn downloadSinglePage(i: usize) void {
 // Search readallcomics.com
 // ══════════════════════════════════════════════════════════
 
-pub fn searchComics(query: []const u8) void {
-    if (state.app.comic.is_loading) return;
-    if (query.len == 0) return;
+// ── Comic search results (parsed from the readallcomics search page) ──
+const MAX_SEARCH_RESULTS = 40;
+var sr_urls: [MAX_SEARCH_RESULTS][256]u8 = undefined;
+var sr_url_lens: [MAX_SEARCH_RESULTS]usize = std.mem.zeroes([MAX_SEARCH_RESULTS]usize);
+var sr_titles: [MAX_SEARCH_RESULTS][160]u8 = undefined;
+var sr_title_lens: [MAX_SEARCH_RESULTS]usize = std.mem.zeroes([MAX_SEARCH_RESULTS]usize);
+var sr_count: usize = 0;
+var sr_searching: bool = false;
+var sr_query_buf: [256]u8 = undefined;
+var sr_query_len: usize = 0;
 
-    // readallcomics.com search URL: https://readallcomics.com/?story=QUERY&s=&type=comic
-    var url_buf: [512]u8 = undefined;
+pub fn searchComics(query: []const u8) void {
+    if (sr_searching or query.len == 0 or query.len >= sr_query_buf.len) return;
+    sr_searching = true;
+    sr_count = 0;
+    @memcpy(sr_query_buf[0..query.len], query);
+    sr_query_len = query.len;
+    const t = std.Thread.spawn(.{}, searchWorker, .{}) catch {
+        sr_searching = false;
+        return;
+    };
+    t.detach();
+}
+
+fn searchWorker() void {
+    defer sr_searching = false;
+    const query = sr_query_buf[0..sr_query_len];
+
     var encoded_query: [512]u8 = undefined;
     const enc_len = percentEncode(query, &encoded_query);
-    const url = std.fmt.bufPrint(&url_buf, "https://readallcomics.com/?story={s}&s=&type=comic", .{encoded_query[0..enc_len]}) catch return;
+    var url_buf: [640]u8 = undefined;
+    const url = std.fmt.bufPrintZ(&url_buf, "https://readallcomics.com/?story={s}&s=&type=comic", .{encoded_query[0..enc_len]}) catch return;
 
-    // For now — load search results as a comic URL
-    // In future, parse search results page to show a list
-    loadComic(url);
+    const argv = [_][]const u8{
+        "curl",       "-sL",
+        "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "--max-time", "15",
+        url,
+    };
+    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    _ = child.spawn() catch return;
+    const html_buf = alloc.alloc(u8, 512 * 1024) catch return;
+    defer alloc.free(html_buf);
+    const n = if (child.stdout) |*so| @import("../core/io_global.zig").readAll(so, html_buf) catch 0 else 0;
+    _ = child.wait() catch {};
+    if (n == 0) return;
+    parseSearchResults(html_buf[0..n]);
+    logs.pushLog("info", "comics", "Comic search results parsed", false);
+}
+
+/// Best-effort: pull issue links from the readallcomics search page. Each result
+/// is an anchor to a single-segment slug, e.g.
+///   <a href="https://readallcomics.com/some-comic-001/">Some Comic 001</a>
+fn parseSearchResults(html: []const u8) void {
+    var count: usize = 0;
+    var pos: usize = 0;
+    const needle = "href=\"https://readallcomics.com/";
+    while (pos < html.len and count < MAX_SEARCH_RESULTS) {
+        const h = findSubstring(html[pos..], needle) orelse break;
+        const href_start = pos + h + 6; // skip 'href="'
+        const href_end = std.mem.indexOfScalar(u8, html[href_start..], '"') orelse break;
+        const link = html[href_start .. href_start + href_end];
+        pos = href_start + href_end;
+
+        const prefix = "https://readallcomics.com/";
+        if (link.len <= prefix.len) continue;
+        if (std.mem.indexOfScalar(u8, link, '?') != null) continue;
+        const tail = link[prefix.len..];
+        if (std.mem.startsWith(u8, tail, "category") or std.mem.startsWith(u8, tail, "page")) continue;
+        // single-segment slug (one trailing slash, no inner '/')
+        const slug = std.mem.trimEnd(u8, tail, "/");
+        if (slug.len == 0 or std.mem.indexOfScalar(u8, slug, '/') != null) continue;
+        // Comic issue slugs always carry a number (issue # / year); this filters
+        // out footer/nav links (privacy-policy, legal-disclamer, …).
+        var has_digit = false;
+        for (slug) |ch| {
+            if (std.ascii.isDigit(ch)) {
+                has_digit = true;
+                break;
+            }
+        }
+        if (!has_digit) continue;
+
+        // Anchor text = title (between the next '>' and '</a>').
+        const gt = std.mem.indexOfScalar(u8, html[pos..], '>') orelse continue;
+        const title_start = pos + gt + 1;
+        const close = findSubstring(html[title_start..], "</a>") orelse continue;
+        var title = std.mem.trim(u8, html[title_start .. title_start + close], " \t\r\n");
+        if (title.len == 0 or title.len > 159 or std.mem.indexOfScalar(u8, title, '<') != null) title = slug;
+
+        if (count > 0 and std.mem.eql(u8, sr_urls[count - 1][0..sr_url_lens[count - 1]], link)) continue;
+
+        const ulen = @min(link.len, 255);
+        @memcpy(sr_urls[count][0..ulen], link[0..ulen]);
+        sr_url_lens[count] = ulen;
+        const tlen = @min(title.len, 159);
+        @memcpy(sr_titles[count][0..tlen], title[0..tlen]);
+        sr_title_lens[count] = tlen;
+        count += 1;
+    }
+    sr_count = count;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -487,6 +577,31 @@ pub fn renderContent() void {
         })) {
             loadComic("https://readallcomics.com/saga-001-2012/");
         }
+    }
+
+    // Search results — clickable list; pick one to load it as a comic.
+    if (sr_searching) {
+        _ = dvui.label(@src(), "Searching…", .{}, .{ .color_text = theme.colors.accent, .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 } });
+        return;
+    }
+    if (sr_count > 0 and state.app.comic.page_count == 0 and !state.app.comic.is_loading) {
+        var list = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
+        defer list.deinit();
+        for (0..sr_count) |i| {
+            if (dvui.button(@src(), sr_titles[i][0..sr_title_lens[i]], .{}, .{
+                .id_extra = i + 44000,
+                .expand = .horizontal,
+                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_text = theme.colors.text_main,
+                .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+                .color_border = theme.colors.border_drawer,
+                .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
+            })) {
+                loadComic(sr_urls[i][0..sr_url_lens[i]]);
+                sr_count = 0;
+            }
+        }
+        return;
     }
 
     // Loading indicator
