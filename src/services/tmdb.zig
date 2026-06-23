@@ -294,8 +294,11 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
     }
 
     // Infinite scroll: auto-fetch the next page when the user nears the bottom
-    // (one-frame lag on si is fine). is_loading + page<total_pages bound it.
-    if (show_load_more and state.app.tmdb.page < state.app.tmdb.total_pages) {
+    // (one-frame lag on si is fine). Bounded by is_loading, page<total_pages,
+    // AND a hard item cap below the reserved buffer capacity (2048) so append()
+    // can never reallocate the buffer out from under in-flight poster workers.
+    const ITEM_CAP = 1900;
+    if (show_load_more and state.app.tmdb.page < state.app.tmdb.total_pages and items.items.len < ITEM_CAP) {
         const max_y = scroll.si.scrollMax(.vertical);
         const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
         if (near_bottom and !state.app.tmdb.is_loading) {

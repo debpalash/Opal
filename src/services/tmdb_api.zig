@@ -14,6 +14,14 @@ pub fn fetchCurrentView(append: bool) void {
     if (state.app.tmdb.is_loading) return;
     if (state.app.tmdb.api_key_len == 0) return;
 
+    // CRITICAL: reserve a large, STABLE capacity for the results buffer once,
+    // up front (before any poster-fetch worker thread can hold a *TmdbItem into
+    // it). Poster workers write ptr.poster_w/_pixels asynchronously; if a later
+    // page append() reallocated the buffer, those pointers would dangle → crash
+    // (seen with infinite scroll). With capacity reserved here and appends
+    // capped below it (see renderGallery), append never reallocates.
+    state.app.tmdb.results.ensureTotalCapacity(alloc, 2048) catch {};
+
     if (state.app.tmdb.view == .Search) {
         const qlen = std.mem.indexOfScalar(u8, &state.app.tmdb.search_buf, 0) orelse 0;
         if (qlen > 0) {
@@ -57,7 +65,9 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
 
     state.app.tmdb.thread = std.Thread.spawn(.{}, struct {
         fn worker() void {
-            defer { state.app.tmdb.is_loading = false; }
+            defer {
+                state.app.tmdb.is_loading = false;
+            }
 
             const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
 
@@ -127,12 +137,16 @@ pub fn fetchDiscover(genre_id: u32) void {
     if (state.app.tmdb.api_key_len == 0) return;
     state.app.tmdb.is_loading = true;
 
-    const S = struct { var gid: u32 = 0; };
+    const S = struct {
+        var gid: u32 = 0;
+    };
     S.gid = genre_id;
 
     state.app.tmdb.thread = std.Thread.spawn(.{}, struct {
         fn worker() void {
-            defer { state.app.tmdb.is_loading = false; }
+            defer {
+                state.app.tmdb.is_loading = false;
+            }
             const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
             var url_buf: [512]u8 = undefined;
             const url = std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org/3/discover/movie?with_genres={d}&sort_by=popularity.desc&page=1", .{S.gid}) catch return;
@@ -188,9 +202,8 @@ pub fn fetchPoster(item: *state.TmdbItem) void {
     }.worker, .{item}) catch {};
 }
 
-
 fn httpGet(url: []const u8, bearer_token: []const u8) ?[]u8 {
-    var client = std.http.Client{ .allocator = alloc , .io = @import("../core/io_global.zig").io() };
+    var client = std.http.Client{ .allocator = alloc, .io = @import("../core/io_global.zig").io() };
     defer client.deinit();
 
     const uri = std.Uri.parse(url) catch return null;
