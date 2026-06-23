@@ -290,8 +290,13 @@ pub const Child = struct {
     pub fn kill(self: *Child) !Term {
         if (self.real) |*r| {
             if (r.id == null) return error.NotSpawned;
+            // std's kill() sends the signal AND reaps (it nulls child.id and
+            // asserts so). Calling wait() afterwards would assert id != null
+            // and panic — so we must NOT wait here. Return a synthetic term
+            // (the real exit status is unavailable after a kill-reap); all
+            // callers discard it anyway.
             r.kill(io());
-            return r.wait(io());
+            return Term{ .unknown = 0 };
         }
         return error.NotSpawned;
     }

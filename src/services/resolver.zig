@@ -795,7 +795,12 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
         }
     }
 
-    _ = child.wait() catch {};
+    // nova2.py keeps streaming 200+ rows; we stop reading at 25 (or 200
+    // scanned). wait() would then DEADLOCK — the child blocks writing into a
+    // full stdout pipe we no longer drain. kill() signals + reaps, so the
+    // torrent source actually reaches .done and is_resolving can clear. (Was:
+    // perpetual "Searching…" that blocked every subsequent universal search.)
+    _ = child.kill() catch {};
     {
         var slog: [64]u8 = undefined;
         const m = std.fmt.bufPrint(&slog, "nova2 scanned={d} pushed={d}", .{ scanned, found }) catch "nova2";
