@@ -871,6 +871,15 @@ pub fn loadContent(url: []const u8) void {
         return;
     }
 
+    // Comics open inside the Browse › Comics tab (the player route is for
+    // playback only) — load + reveal that tab, no player pane involved.
+    if (route == .comic_viewer) {
+        @import("comics.zig").loadComic(norm_url);
+        state.app.browse_source = .Comics;
+        state.app.router.navigate(.browse);
+        return;
+    }
+
     // Switch active pane to correct provider
     if (state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];

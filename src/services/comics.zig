@@ -54,7 +54,15 @@ pub fn loadComic(url: []const u8) void {
     state.app.comic.dl_progress = 0;
     state.app.comic.current_page = 0;
 
-    // Clear old textures/pixels and OCR cache
+    freeComicPages();
+
+    // Comics read inside the Browse › Comics tab now (the player route is for
+    // playback only) — no player pane is claimed here.
+    state.app.comic.thread = std.Thread.spawn(.{}, fetchComicThread, .{}) catch null;
+}
+
+/// Free all downloaded page textures/pixels and the OCR cache.
+fn freeComicPages() void {
     for (0..128) |i| {
         if (state.app.comic.page_textures[i]) |tex| {
             dvui.textureDestroyLater(tex);
@@ -67,13 +75,17 @@ pub fn loadComic(url: []const u8) void {
         state.app.comic.ocr_lens[i] = 0;
         state.app.comic.ocr_done[i] = false;
     }
+}
 
-    // Auto-switch active pane to comic_viewer
-    if (state.app.active_player_idx < state.app.players.items.len) {
-        state.app.players.items[state.app.active_player_idx].provider = .comic_viewer;
-    }
-
-    state.app.comic.thread = std.Thread.spawn(.{}, fetchComicThread, .{}) catch null;
+/// Close the current comic and return to the browse/search view.
+pub fn closeComic() void {
+    state.app.comic.narrating = false;
+    state.app.comic.show_ocr_overlay = false;
+    freeComicPages();
+    state.app.comic.page_count = 0;
+    state.app.comic.current_page = 0;
+    state.app.comic.title_len = 0;
+    state.app.comic.dl_progress = 0;
 }
 
 fn fetchComicThread() void {
@@ -506,6 +518,15 @@ fn parseSearchResults(html: []const u8) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn renderContent() void {
+    // A comic is open → the reader fills the whole tab (images + tools live in
+    // renderPaneContent). Reading happens here in Browse, not the player route.
+    if (state.app.comic.is_loading or state.app.comic.page_count > 0) {
+        var reader = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+        defer reader.deinit();
+        renderPaneContent(0);
+        return;
+    }
+
     // First open shows a default popular feed so the tab isn't blank (the
     // search box stays free for anything else).
     if (!loaded_default and sr_count == 0 and !sr_searching and state.app.comic.search_buf[0] == 0 and state.app.comic.title_len == 0) {
@@ -623,167 +644,9 @@ pub fn renderContent() void {
         return;
     }
 
-    // Loading indicator
-    if (state.app.comic.is_loading) {
-        _ = dvui.label(@src(), "Loading comic...", .{}, .{
-            .color_text = theme.colors.accent,
-            .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
-        });
-        return;
-    }
-
-    if (state.app.comic.page_count == 0) {
-        _ = dvui.label(@src(), "Enter a readallcomics.com URL or search", .{}, .{
-            .color_text = theme.colors.text_muted,
-            .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
-        });
-        return;
-    }
-
-    // ── Comic Loaded: Show controls in drawer ──
-
-    // Title + page info
-    {
-        var info_row = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 12, .y = 8, .w = 12, .h = 4 },
-        });
-        defer info_row.deinit();
-
-        if (state.app.comic.title_len > 0) {
-            _ = dvui.label(@src(), "{s}", .{safeUtf8(state.app.comic.title[0..state.app.comic.title_len])}, .{
-                .color_text = theme.colors.text_main,
-            });
-        }
-
-        var page_buf: [64]u8 = undefined;
-        const page_str = std.fmt.bufPrintZ(&page_buf, "Page {d} of {d}", .{
-            state.app.comic.current_page + 1, state.app.comic.page_count,
-        }) catch "?";
-        _ = dvui.label(@src(), "{s}", .{page_str}, .{
-            .color_text = theme.colors.text_muted,
-        });
-    }
-
-    // Page Navigation
-    {
-        var nav_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-        });
-        defer nav_row.deinit();
-
-        if (state.app.comic.current_page > 0) {
-            if (dvui.button(@src(), "← Prev", .{}, .{
-                .id_extra = 30,
-                .color_fill = theme.colors.bg_glass,
-                .color_text = theme.colors.text_main,
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-                .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-            })) {
-                state.app.comic.current_page -= 1;
-                state.app.comic.scroll_to_page = true;
-            }
-        }
-
-        if (state.app.comic.current_page + 1 < state.app.comic.page_count) {
-            if (dvui.button(@src(), "Next →", .{}, .{
-                .id_extra = 31,
-                .color_fill = theme.colors.bg_glass,
-                .color_text = theme.colors.text_main,
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-            })) {
-                state.app.comic.current_page += 1;
-                state.app.comic.scroll_to_page = true;
-            }
-        }
-    }
-
-    // ── TTS & OCR Controls ──
-    {
-        var ctrl_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
-            .background = true,
-            .color_fill = theme.colors.bg_header,
-            .border = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
-            .color_border = theme.colors.divider,
-        });
-        defer ctrl_row.deinit();
-
-        // OCR this page
-        if (dvui.button(@src(), "OCR Page", .{}, .{
-            .id_extra = 40,
-            .color_fill = if (state.app.comic.show_ocr_overlay) theme.colors.accent else theme.colors.bg_glass,
-            .color_text = if (state.app.comic.show_ocr_overlay) dvui.Color.white else theme.colors.text_main,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-        })) {
-            ocrCurrentPage();
-        }
-
-        // Narrate toggle
-        if (dvui.button(@src(), if (state.app.comic.narrating) "Stop" else "Narrate", .{}, .{
-            .id_extra = 41,
-            .color_fill = if (state.app.comic.narrating) theme.colors.danger else theme.colors.accent,
-            .color_text = dvui.Color.white,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-        })) {
-            toggleNarration();
-        }
-    }
-
-    // Show narration status
-    if (state.app.comic.narrating) {
-        _ = dvui.label(@src(), "Narrating page {d}...", .{state.app.comic.narrate_page + 1}, .{
-            .color_text = theme.colors.accent,
-            .padding = .{ .x = 12, .y = 4, .w = 0, .h = 0 },
-        });
-    }
-
-    // Show OCR text if available
-    {
-        const pg = state.app.comic.current_page;
-        if (pg < 128 and state.app.comic.ocr_done[pg]) {
-            const tlen = state.app.comic.ocr_lens[pg];
-            if (tlen > 0) {
-                var ocr_box = dvui.box(@src(), .{ .dir = .vertical }, .{
-                    .expand = .horizontal,
-                    .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
-                });
-                defer ocr_box.deinit();
-
-                _ = dvui.label(@src(), "Page Text:", .{}, .{
-                    .color_text = theme.colors.accent,
-                    .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
-                });
-
-                var scroll = dvui.scrollArea(@src(), .{}, .{
-                    .expand = .horizontal,
-                    .min_size_content = .{ .w = 100, .h = 80 },
-                    .max_size_content = .{ .w = std.math.floatMax(f32), .h = 200 },
-                    .background = true,
-                    .color_fill = dvui.Color{ .r = 10, .g = 10, .b = 14, .a = 255 },
-                    .corner_radius = theme.dims.rad_sm,
-                    .padding = dvui.Rect.all(8),
-                });
-                defer scroll.deinit();
-
-                _ = dvui.label(@src(), "{s}", .{state.app.comic.ocr_texts[pg][0..tlen]}, .{
-                    .color_text = theme.colors.text_main,
-                });
-            } else {
-                _ = dvui.label(@src(), "No text detected on this page", .{}, .{
-                    .color_text = theme.colors.text_muted,
-                    .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
-                });
-            }
-        }
-    }
+    // No results yet and no comic open — the search box + quick links above
+    // are the whole browse view. (The reader, with all tools, renders at the
+    // top of this function via renderPaneContent once a comic is open.)
 }
 
 // ══════════════════════════════════════════════════════════
@@ -940,8 +803,8 @@ pub fn renderPaneContent(pane_idx: usize) void {
             toggleNarration();
         }
 
-        // Close (back to mpv)
-        if (dvui.button(@src(), "X", .{}, .{
+        // Close the reader → back to the comics browse/search view.
+        if (dvui.buttonIcon(@src(), "comic-close", icons.tvg.lucide.x, .{}, .{}, .{
             .id_extra = 2,
             .color_fill = dvui.Color{ .r = 60, .g = 20, .b = 20, .a = 200 },
             .color_text = theme.colors.danger,
@@ -949,12 +812,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
             .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
         })) {
-            // Stop narration if active
-            state.app.comic.narrating = false;
-            state.app.comic.show_ocr_overlay = false;
-            if (state.app.active_player_idx < state.app.players.items.len) {
-                state.app.players.items[state.app.active_player_idx].provider = .mpv;
-            }
+            closeComic();
         }
     }
 
