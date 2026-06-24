@@ -799,6 +799,18 @@ fn executeLookAtScreen(alloc: std.mem.Allocator) ?[]u8 {
     var result = alloc.alloc(u8, MAX_TOOL_RESULT) catch return null;
     var off: usize = 0;
 
+    // Enforced spoiler firewall: the strict progress-clamp instruction MUST be
+    // the first line of the on-screen context the model receives.
+    {
+        var clamp_buf: [256]u8 = undefined;
+        // Clamp to [0,100] before the float→int cast: a pathological mpv pos>dur
+        // could push percent past 255 and panic @intFromFloat in Debug.
+        const pct_u8: u8 = @intFromFloat(@max(0.0, @min(100.0, percent)));
+        const clamp = @import("spoiler.zig").clampLine(pct_u8, &clamp_buf);
+        const s = std.fmt.bufPrint(result[off..], "{s}\n", .{clamp}) catch result[off..off];
+        off += s.len;
+    }
+
     if (on > 0) {
         const s = std.fmt.bufPrint(result[off..], "OCR (on-screen text): {s}\n", .{ocr_text}) catch result[off..off];
         off += s.len;
@@ -824,7 +836,7 @@ fn executeLookAtScreen(alloc: std.mem.Allocator) ?[]u8 {
     }
 
     {
-        const s = std.fmt.bufPrint(result[off..], "Progress: {d:.0}% — only discuss events up to this point; no spoilers beyond it.", .{percent}) catch result[off..off];
+        const s = std.fmt.bufPrint(result[off..], "Progress: {d:.0}%.", .{percent}) catch result[off..off];
         off += s.len;
     }
 

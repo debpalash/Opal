@@ -134,12 +134,16 @@ const S = struct {
         const user_buf = alloc.alloc(u8, 8192) catch return;
         defer alloc.free(user_buf);
 
+        // Strict, consistent spoiler-clamp instruction (enforced firewall, S1).
+        var clamp_buf: [256]u8 = undefined;
+        const pct_u8: u8 = if (percent <= 0) 0 else if (percent >= 100) 100 else @intFromFloat(percent);
+        const clamp_text = @import("spoiler.zig").clampLine(pct_u8, &clamp_buf);
+
         const sys_text = std.fmt.bufPrint(sys_buf,
-            "You are a quiet co-watching companion. Playback is at {d:.0}% of the runtime. " ++
-            "Only discuss events up to here; NEVER reference, hint at, or foreshadow anything later. " ++
+            "You are a quiet co-watching companion. {s} " ++
             "Reply with ONE short, spoiler-safe sentence of at most 14 words. " ++
             "If there is no genuinely worthwhile remark to make, reply with exactly SILENT.",
-            .{percent},
+            .{clamp_text},
         ) catch return;
 
         const user_text = std.fmt.bufPrint(user_buf,
@@ -226,6 +230,14 @@ const S = struct {
         if (std.ascii.eqlIgnoreCase(remark, "SILENT")) return;
         // Some models wrap it: "SILENT." etc. — treat a leading SILENT token as silence.
         if (remark.len >= 6 and std.ascii.eqlIgnoreCase(remark[0..6], "SILENT")) return;
+
+        // Enforced spoiler firewall (S1): suppress any remark whose wording
+        // strongly signals a beyond-now leak, even if the model ignored the
+        // prompt-level clamp. Conservative — only strong, unambiguous signals.
+        if (@import("spoiler.zig").flagsSpoiler(remark)) {
+            logs.pushLog("info", "co-watch", "remark suppressed as possible spoiler", false);
+            return;
+        }
 
         // Re-check the talk guards right before speaking (state may have moved).
         if (voice.is_speaking) return;
