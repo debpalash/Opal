@@ -768,6 +768,8 @@ fn appFrame() !dvui.App.Result {
             };
             state.app.active_player_idx = state.app.players.items.len - 1;
             browser.loadContent(url);
+            // Single-media mode — restore only the first existing stream.
+            break;
         }
         if (state.app.players.items.len > 0) {
             state.app.active_player_idx = 0;
@@ -869,6 +871,23 @@ fn appFrame() !dvui.App.Result {
             }
         }
         state.app.pending_remove_player_idx = -1;
+    }
+
+    // Single-media invariant — the multi-stream / "add screen" grid feature is
+    // retired: only one player may exist at a time. If extras slipped in (an
+    // append-based open path, session restore), keep the active one and tear the
+    // rest down HERE, at the safe pre-render point — mpv deinit must not race the
+    // render thread, which is why removal is deferred to the frame top.
+    if (state.app.players.items.len > 1) {
+        const keep = @min(state.app.active_player_idx, state.app.players.items.len - 1);
+        var i: usize = state.app.players.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (i == keep) continue;
+            var p_rem = state.app.players.orderedRemove(i);
+            p_rem.deinit(@import("core/alloc.zig").allocator);
+        }
+        state.app.active_player_idx = 0;
     }
 
     // Auto-save config every ~2 seconds (frame-counter throttled, no per-frame syscall)

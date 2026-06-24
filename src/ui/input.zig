@@ -144,16 +144,10 @@ pub fn processGlobalInputs() void {
                 continue;
             }
 
-            // Ctrl+T = New player tab (without shift)
+            // Ctrl+T = New player tab — retired. The app plays one media at a
+            // time now; opening media replaces the current stream.
             if (key == .t and mod.control() and !mod.shift()) {
-                const player_mod = @import("../player/player.zig");
-                if (player_mod.MediaPlayer.init(@import("../core/alloc.zig").allocator)) |p| {
-                    state.app.players.append(@import("../core/alloc.zig").allocator, p) catch {};
-                    state.app.active_player_idx = state.app.players.items.len - 1;
-                    state.showToast("New player tab opened");
-                } else |_| {
-                    state.showToast("Failed to create player");
-                }
+                state.showToast("Single-player mode — open media to replace the current one");
                 dvui.refresh(null, @src(), null);
                 continue;
             }

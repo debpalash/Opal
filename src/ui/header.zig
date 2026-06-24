@@ -160,29 +160,7 @@ pub fn renderHeader() void {
         });
         defer center.deinit();
 
-        // Screen mgmt cluster.
-        if (components.iconButton(@src(), icons.tvg.lucide.plus, "Add screen", false)) {
-            if (state.app.players.items.len < 16) {
-                if (player.MediaPlayer.init(@import("../core/alloc.zig").allocator)) |p| {
-                    state.app.players.append(@import("../core/alloc.zig").allocator, p) catch {};
-                    state.app.active_player_idx = state.app.players.items.len - 1;
-                } else |_| {}
-            }
-        }
-        spacerSm(@src());
-        if (components.iconButton(@src(), icons.tvg.lucide.minus, "Remove screen", false)) {
-            if (state.app.players.items.len > 0) {
-                if (state.app.players.pop()) |p| {
-                    if (p.current_url_len > 0 and p.current_url_len <= 2048) {
-                        state.pushClosedUrl(p.current_url[0..p.current_url_len]);
-                    }
-                    p.deinit(@import("../core/alloc.zig").allocator);
-                }
-                if (state.app.active_player_idx >= state.app.players.items.len) {
-                    state.app.active_player_idx = if (state.app.players.items.len > 0) state.app.players.items.len - 1 else 0;
-                }
-            }
-        }
+        // Screen mgmt cluster (Add/Remove screen) retired — single-media mode.
 
         spacerSm(@src());
         {
