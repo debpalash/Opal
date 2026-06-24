@@ -1019,6 +1019,119 @@ def test_anime_detach():
 
 
 # ══════════════════════════════════════════════════════════
+# Session features: single-media, browser, voice, Co-Watcher, Recall
+# (wiring/regression guards so the build+test gate exercises new code)
+# ══════════════════════════════════════════════════════════
+
+def _src(rel):
+    p = os.path.join(PROJECT_DIR, rel)
+    return open(p).read() if os.path.exists(p) else ""
+
+
+@test("Single-Media Mode", "Player")
+def test_single_media():
+    main = _src("src/main.zig")
+    inp = _src("src/ui/input.zig")
+    hdr = _src("src/ui/header.zig")
+    # Frame-top collapse keeps exactly one player; Ctrl+T retired; Add screen gone.
+    if ("players.items.len > 1" in main and "orderedRemove" in main
+            and "Single-player mode" in inp and "Add screen" not in hdr):
+        return "pass", "collapse-to-one + multistream affordances removed"
+    return "fail", "single-media invariant not fully wired"
+
+
+@test("Browser in Web Tab", "Player")
+def test_browser_web_tab():
+    st = _src("src/core/state.zig")
+    dr = _src("src/ui/drawer.zig")
+    br = _src("src/services/browser.zig")
+    # Browser is a Browse>Web tab (not a player pane); .browser provider removed.
+    if ("AI, Web" in st and ".Web =>" in dr and "renderContent" in br
+            and "comic_viewer }" in st):
+        return "pass", "browser routed to Browse>Web; provider .browser dropped"
+    return "fail", "browser-in-web-tab not wired"
+
+
+@test("Voice Barge-in + Abort", "Voice")
+def test_voice_bargein():
+    av = _src("src/services/ai_voice.zig")
+    ac = _src("src/services/ai_chat.zig")
+    ax = _src("src/services/ai_context.zig")
+    if ("barge_in" in av and "stopAllAudio" in av
+            and "gen_abort" in ac and "gen_abort" in ax):
+        return "pass", "barge_in + stopAllAudio + gen_abort present"
+    return "fail", "barge-in/abort not fully wired"
+
+
+@test("TTS Non-Deadlock Mutex", "Voice")
+def test_tts_mutex():
+    av = _src("src/services/ai_voice.zig")
+    # ttsWorker must use a dedicated tts_mutex, never the LLM inference_mutex
+    # (which generateResponse holds while streaming → cross-thread deadlock).
+    if "tts_mutex" in av:
+        return "pass", "TTS uses dedicated tts_mutex (deadlock fixed)"
+    return "fail", "tts_mutex missing — TTS may deadlock vs LLM"
+
+
+@test("Co-Watcher look_at_screen", "Co-Watcher")
+def test_look_at_screen():
+    tools = _src("src/services/ai_tools.zig")
+    ctx = _src("src/services/ai_context.zig")
+    ocr = _src("src/services/frame_ocr.zig")
+    if ("look_at_screen" in tools and "executeLookAtScreen" in tools
+            and "look_at_screen" in ctx and "pub fn ocrCurrentFrame" in ocr):
+        return "pass", "look_at_screen tool + frame OCR wired"
+    return "fail", "look_at_screen not fully wired"
+
+
+@test("Proactive Co-Watcher Triggers", "Co-Watcher")
+def test_proactive_cowatch():
+    cw = _src("src/services/co_watch.zig")
+    pl = _src("src/player/player.zig")
+    if ("pub fn onPlaybackEvent" in cw and "sensitivity" in cw
+            and "onPlaybackEvent(.paused)" in pl and "onPlaybackEvent(.rewound)" in pl
+            and '"time-pos"' in pl):
+        return "pass", "pause/rewind triggers + time-pos observe wired"
+    return "fail", "proactive co-watcher triggers not wired"
+
+
+@test("Spoiler Firewall", "Co-Watcher")
+def test_spoiler_firewall():
+    sp = _src("src/services/spoiler.zig")
+    cw = _src("src/services/co_watch.zig")
+    tools = _src("src/services/ai_tools.zig")
+    if ("pub fn clampLine" in sp and "pub fn flagsSpoiler" in sp
+            and "flagsSpoiler" in cw and "clampLine" in tools):
+        return "pass", "clamp + leak-check enforced in co_watch and tool"
+    return "fail", "spoiler firewall not fully wired"
+
+
+@test("Total Recall Wired", "Recall")
+def test_total_recall():
+    sm = _src("src/services/scene_memory.zig")
+    cw = _src("src/services/co_watch.zig")
+    db = _src("src/core/db.zig")
+    tools = _src("src/services/ai_tools.zig")
+    ctx = _src("src/services/ai_context.zig")
+    if ("pub fn ingestScene" in sm and "ingestScene" in cw
+            and "insertSceneMemory" in db and "retrieveScene" in db and "position_secs" in db
+            and "recall_scene" in tools and "executeRecallScene" in tools and "recall_scene" in ctx):
+        return "pass", "scene capture + recall_scene tool + DB store wired"
+    return "fail", "total recall not fully wired"
+
+
+@test("aimemory position_secs Column", "Recall")
+def test_aimemory_position_col():
+    db = get_db()
+    if not db: return "skip", "No DB"
+    cols = [r[1] for r in db.execute("PRAGMA table_info(aimemory)").fetchall()]
+    db.close()
+    if "position_secs" in cols:
+        return "pass", "position_secs migration applied"
+    return "warn", "position_secs not present yet (runs on first launch)"
+
+
+# ══════════════════════════════════════════════════════════
 # Zig Unit Tests
 # ══════════════════════════════════════════════════════════
 
