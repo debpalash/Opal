@@ -27,7 +27,8 @@ pub fn loadTrendingAnime() void {
     if (state.app.anime.is_loading) return;
 
     state.app.anime.is_loading = true;
-    state.app.anime.result_count = 0;
+    // Don't clear result_count here — parseJikanData repopulates and sets the
+    // count after the fetch, so a stale-refresh keeps old cards on screen.
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
     state.app.anime.last_fetch_s = @import("browse_cache.zig").now(); // SWR stamp

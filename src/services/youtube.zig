@@ -7,6 +7,20 @@ const theme = @import("../ui/theme.zig");
 pub const alloc = @import("../core/alloc.zig").allocator;
 
 var yt_mutex: @import("../core/sync.zig").Mutex = .{};
+// Seamless refresh: instead of clearing results up-front (which blanks the
+// grid for the whole ~3s fetch), the worker arms this and the first new item
+// to arrive clears the old ones — so a stale-refresh swaps in place.
+var pending_clear: bool = false;
+
+/// Append a result, clearing stale results lazily on the first new one.
+/// Caller must hold yt_mutex.
+fn appendYt(item: state.YtItem) void {
+    if (pending_clear) {
+        state.app.yt.results.clearRetainingCapacity();
+        pending_clear = false;
+    }
+    state.app.yt.results.append(alloc, item) catch {};
+}
 
 // ══════════════════════════════════════════════════════════
 // YouTube Core Service & UI (Piped API + yt-dlp fallback)
@@ -45,7 +59,7 @@ pub fn fetchYoutube(query: []const u8) void {
             }
 
             yt_mutex.lock();
-            state.app.yt.results.clearRetainingCapacity();
+            pending_clear = true; // old results stay until the first new one lands
             yt_mutex.unlock();
 
             // Try Piped API first (fast, direct HTTP ~0.5s)
@@ -53,7 +67,9 @@ pub fn fetchYoutube(query: []const u8) void {
             // instances are frequently dead and stall the whole fetch with no
             // timeout, so it's only a backup when yt-dlp yields nothing.
             fetchViaYtdlp(S.q_buf[0..S.q_len]);
-            if (state.app.yt.results.items.len == 0) _ = fetchViaPiped(S.q_buf[0..S.q_len]);
+            // pending_clear still armed ⇒ yt-dlp produced nothing ⇒ try Piped.
+            // (Can't use results.len here: lazy-clear keeps the old results.)
+            if (pending_clear) _ = fetchViaPiped(S.q_buf[0..S.q_len]);
         }
     }.worker, .{}) catch blk: {
         state.app.yt.is_loading.store(false, .release);
@@ -176,7 +192,7 @@ fn parsePipedResults(json: []const u8) void {
         } else |_| {}
 
         yt_mutex.lock();
-        state.app.yt.results.append(alloc, item) catch {};
+        appendYt(item);
         yt_mutex.unlock();
         count += 1;
 
@@ -256,7 +272,7 @@ fn parseYtdlpLine(line: []const u8) void {
         item.thumbnail_url_len = tlen;
     } else |_| {}
 
-    state.app.yt.results.append(alloc, item) catch {};
+    appendYt(item);
 }
 
 fn extractJsonStr(json: []const u8, key: []const u8) ?[]const u8 {
@@ -362,7 +378,9 @@ pub fn renderContent() void {
 
     renderSearchBar();
 
-    if (state.app.yt.is_loading.load(.acquire)) {
+    // Only on an initial load (nothing yet) — a stale-refresh keeps current
+    // results on screen and swaps them in place.
+    if (state.app.yt.is_loading.load(.acquire) and state.app.yt.results.items.len == 0) {
         _ = dvui.label(@src(), "Searching YouTube...", .{}, .{ .color_text = theme.colors.accent, .gravity_x = 0.5, .margin = dvui.Rect.all(12) });
     }
 

@@ -412,7 +412,8 @@ pub fn searchResultCount() usize {
 pub fn searchComics(query: []const u8) void {
     if (sr_searching or query.len == 0 or query.len >= sr_query_buf.len) return;
     sr_searching = true;
-    sr_count = 0;
+    // Don't clear sr_count here — the parse repopulates and sets it at the end,
+    // so a stale-refresh keeps the old listing on screen until new data lands.
     last_fetch_s = @import("browse_cache.zig").now(); // SWR stamp
     @memcpy(sr_query_buf[0..query.len], query);
     sr_query_len = query.len;

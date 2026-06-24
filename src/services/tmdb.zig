@@ -70,7 +70,9 @@ pub fn renderTmdbContent() void {
     // search box (Find), item count, and card-size controls all on one row.
     renderToolbar(list.items.len);
 
-    if (state.app.tmdb.is_loading) {
+    // Only show the loading line on an INITIAL load (nothing to show yet).
+    // During a stale-refresh the current results stay on screen — seamless.
+    if (state.app.tmdb.is_loading and activeList().items.len == 0) {
         _ = dvui.label(@src(), "Loading...", .{}, .{ .color_text = theme.colors.accent, .gravity_x = 0.5, .margin = dvui.Rect.all(12) });
     }
 
