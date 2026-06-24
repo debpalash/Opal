@@ -245,9 +245,13 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
     var child_reader_buf: [1024]u8 = undefined;
     var reader = child.stdout.?.reader(@import("../core/io_global.zig").io(), &child_reader_buf);
 
+    var aborted = false;
     while (reader.interface.takeDelimiter('\n') catch null) |line| {
-        // Stop the moment a newer search supersedes us (also covers explicit abort).
-        if (search_abort.load(.acquire) or search_generation.load(.acquire) != my_gen) break;
+        // On supersede/abort, stop PARSING but keep draining to EOF — nova2.py
+        // runs a multiprocessing pool, and killing it mid-write spews
+        // BrokenPipe + leaks semaphores. Draining lets it exit cleanly.
+        if (!aborted and (search_abort.load(.acquire) or search_generation.load(.acquire) != my_gen)) aborted = true;
+        if (aborted) continue;
 
         if (line.len == 0) continue;
         var it = std.mem.splitScalar(u8, line, '|');
@@ -319,9 +323,8 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
 
     const superseded = search_generation.load(.acquire) != my_gen;
 
-    if (search_abort.load(.acquire) or superseded) {
-        _ = child.kill() catch {};
-    }
+    // Drained to EOF above (even when aborted) so nova2 exits on its own — no
+    // kill(), which would leave its pool workers spewing BrokenPipe.
     _ = child.wait() catch {};
 
     // A superseded worker must not touch shared state any further.

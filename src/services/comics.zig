@@ -62,7 +62,7 @@ pub fn loadComic(url: []const u8) void {
 }
 
 /// Free all downloaded page textures/pixels and the OCR cache.
-fn freeComicPages() void {
+pub fn freeComicPages() void {
     for (0..128) |i| {
         if (state.app.comic.page_textures[i]) |tex| {
             dvui.textureDestroyLater(tex);

@@ -4,6 +4,29 @@ const c = @import("../core/c.zig");
 const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
 
+/// True if a Firefox profile dir exists, so yt-dlp's --cookies-from-browser
+/// firefox won't abort. Checked once and cached.
+var ff_checked: bool = false;
+var ff_exists: bool = false;
+fn firefoxProfileExists() bool {
+    if (ff_checked) return ff_exists;
+    ff_checked = true;
+    const io = @import("../core/io_global.zig");
+    const home = io.getenv("HOME") orelse return false;
+    var buf: [512]u8 = undefined;
+    const macos = std.fmt.bufPrint(&buf, "{s}/Library/Application Support/Firefox/Profiles", .{home}) catch return false;
+    if (io.cwdAccess(macos, .{})) {
+        ff_exists = true;
+        return true;
+    } else |_| {}
+    const linux = std.fmt.bufPrint(&buf, "{s}/.mozilla/firefox", .{home}) catch return false;
+    if (io.cwdAccess(linux, .{})) {
+        ff_exists = true;
+        return true;
+    } else |_| {}
+    return false;
+}
+
 pub const video_w = 1920;
 pub const video_h = 1080;
 
@@ -400,18 +423,22 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-format", active_fmt);
         
         // ytdl-raw-options is a top-level mpv option (NOT script-opts!)
-        // cookies-from-browser: reuse Firefox session for auth/cookie walls (phub-cli pattern)
+        // cookies-from-browser: reuse Firefox session for auth/cookie walls —
+        //   but ONLY if a Firefox profile exists, else yt-dlp aborts with
+        //   "could not find firefox cookies database" and playback fails.
         // no-check-certificates: bypass SSL issues
-        // no-playlist: prevent ytdl_hook from expanding model/channel pages into 88-video floods
-        var raw_buf: [256]u8 = undefined;
+        // no-playlist: prevent ytdl_hook from expanding model/channel pages
+        const cookies_prefix: []const u8 = if (firefoxProfileExists()) "cookies-from-browser=firefox," else "";
+        var raw_buf: [320]u8 = undefined;
         if (state.app.proxy_url_len > 0) {
             const proxy_str = state.app.proxy_url[0..state.app.proxy_url_len];
-            if (std.fmt.bufPrintZ(&raw_buf, "cookies-from-browser=firefox,no-check-certificates=,no-playlist=,proxy={s}", .{proxy_str})) |raw| {
+            if (std.fmt.bufPrintZ(&raw_buf, "{s}no-check-certificates=,no-playlist=,proxy={s}", .{ cookies_prefix, proxy_str })) |raw| {
                 _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-raw-options", raw.ptr);
             } else |_| {}
         } else {
-            _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-raw-options", 
-                "cookies-from-browser=firefox,no-check-certificates=,no-playlist=");
+            if (std.fmt.bufPrintZ(&raw_buf, "{s}no-check-certificates=,no-playlist=", .{cookies_prefix})) |raw| {
+                _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-raw-options", raw.ptr);
+            } else |_| {}
         }
         
         // script-opts: ytdl_hook config + sponsorblock

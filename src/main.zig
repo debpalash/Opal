@@ -185,6 +185,9 @@ fn appDeinit() void {
 
     // Free any poster pixel buffers the renderer never consumed, then arrays.
     @import("services/tmdb.zig").freeImageBuffers();
+    // Free downloaded comic page pixels (decoded-but-unviewed pages keep their
+    // heap buffer until the texture is uploaded).
+    @import("services/comics.zig").freeComicPages();
 
     // Clean up UI arrays
     state.app.tmdb.results.deinit(@import("core/alloc.zig").allocator);
