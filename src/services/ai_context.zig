@@ -994,6 +994,10 @@ pub fn generateResponse() void {
 
     // Base prompt
     dw.writeAll(tools.TOOL_SYSTEM_PROMPT) catch {};
+    // Routing hint: "find the scene where... / take me back to when..." → recall_scene
+    if (has_player) {
+        dw.writeAll("\nWhen the user asks to find the scene where something happened, or to take them back to when something was said, use recall_scene.") catch {};
+    }
     dw.writeAll("\n<tools>\n[") catch {};
 
     // Core tools (always)
@@ -1013,6 +1017,7 @@ pub fn generateResponse() void {
             \\  {"name":"player_control","description":"Playback: pause/resume/stop/seek/volume/speed/fullscreen.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["pause","resume","toggle_pause","stop","seek_forward","seek_backward","seek_to","set_volume","set_speed","fullscreen","exit_fullscreen"]},"value":{"type":"string"}},"required":["action"]}},
             \\  {"name":"player_info","description":"Now playing info.","parameters":{"type":"object","properties":{}}},
             \\  {"name":"look_at_screen","description":"Returns on-screen text (OCR), the current subtitle, and recent dialogue. Use when the user asks who someone is, what was just said, what is happening on screen, or for a recap.","parameters":{"type":"object","properties":{}}},
+            \\  {"name":"recall_scene","description":"Find a remembered scene from the user's own watch history by describing it in natural language (what was said, what happened, a feeling) and jump the player there. Use when the user asks to find or return to a scene/moment they saw before.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}},
             \\  {"name":"queue_manage","description":"Queue ops.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["list","play_next","clear","clear_played"]}},"required":["action"]}}
         ) catch {};
     }

@@ -116,6 +116,11 @@ fn createTables() void {
     exec("ALTER TABLE watch_history ADD COLUMN position_secs REAL DEFAULT 0");
     exec("ALTER TABLE watch_history ADD COLUMN duration_secs REAL DEFAULT 0");
 
+    // Total Recall: scene memories store a playback position alongside the
+    // aimemory row. Idempotent — exec() swallows the duplicate-column error
+    // just like the watch_history migrations above.
+    exec("ALTER TABLE aimemory ADD COLUMN position_secs REAL DEFAULT 0");
+
     // TMDB items
     exec(
         \\CREATE TABLE IF NOT EXISTS tmdb_items (
@@ -397,4 +402,150 @@ pub fn retrieveMemory(allocator: std.mem.Allocator, embed: []const f32, limit: i
         return null;
     }
     return allocator.dupe(u8, fbs.buffered()) catch null;
+}
+
+// ══════════════════════════════════════════════════════════
+// Total Recall — scene memories (timestamped, spoiler-clamped)
+// ══════════════════════════════════════════════════════════
+
+pub const SceneHit = struct {
+    title: [256]u8 = std.mem.zeroes([256]u8),
+    title_len: usize = 0,
+    position_secs: f64 = 0,
+};
+
+/// Persist a single scene memory. Mirrors insertMemory but stamps
+/// context_type="scene", media_title=title and the new position_secs column.
+/// When `embed` is non-null and well-formed it is also written to vec_aimemory
+/// (rowid-linked) for cosine recall; when null the aimemory row is still
+/// inserted so the keyword/LIKE fallback in retrieveScene can find it.
+pub fn insertSceneMemory(title: []const u8, content: []const u8, position_secs: f64, embed: ?[]const f32) void {
+    const d = db_handle orelse return;
+
+    // 1. Insert text memory (always — this is what FTS/keyword fallback hits).
+    const stmt = prepare("INSERT INTO aimemory(role, content, context_type, media_title, position_secs) VALUES(?, ?, ?, ?, ?)");
+    if (stmt == null) return;
+    defer finalize(stmt);
+
+    bindText(stmt, 1, "scene");
+    bindText(stmt, 2, content);
+    bindText(stmt, 3, "scene");
+    bindText(stmt, 4, title);
+    bindDouble(stmt, 5, position_secs);
+
+    if (step(stmt) != c.SQLITE_DONE) return;
+
+    const rowid = c.sqlite3_last_insert_rowid(d);
+
+    // 2. Insert vector memory only when an embedding was supplied.
+    const e = embed orelse return;
+    if (e.len == 0) return;
+
+    const vec_stmt = prepare("INSERT INTO vec_aimemory(rowid, embedding) VALUES(?, ?)");
+    if (vec_stmt == null) return;
+    defer finalize(vec_stmt);
+
+    bindInt64(vec_stmt, 1, rowid);
+    const embed_bytes = std.mem.sliceAsBytes(e);
+    bindBlob(vec_stmt, 2, embed_bytes);
+
+    _ = step(vec_stmt);
+}
+
+/// Vector (or keyword) search over scene memories with a spoiler clamp:
+/// rows of the CURRENTLY-WATCHED title are only eligible up to current_pos;
+/// rows of OTHER titles are unrestricted. Returns the single best hit or null.
+///
+/// When `embed` is non-null we run a vec0 cosine KNN and apply the clamp in
+/// Zig (vec0 MATCH queries can't carry arbitrary JOIN predicates reliably).
+/// When `embed` is null we fall back to a LIKE keyword match over content with
+/// the same clamp.
+pub fn retrieveScene(embed: ?[]const f32, query_text: []const u8, current_title: []const u8, current_pos: f64) ?SceneHit {
+    _ = db_handle orelse return null;
+
+    if (embed) |e| {
+        if (e.len != 0) {
+            // KNN over the vector store; fetch a generous candidate set so that
+            // clamped-out near neighbours don't starve a valid further hit.
+            const sql =
+                \\SELECT v.rowid, v.distance
+                \\FROM vec_aimemory v
+                \\WHERE v.embedding MATCH ? AND k = ?
+                \\ORDER BY v.distance ASC
+            ;
+            const stmt = prepare(sql) orelse return null;
+            defer finalize(stmt);
+
+            const embed_bytes = std.mem.sliceAsBytes(e);
+            bindBlob(stmt, 1, embed_bytes);
+            bindInt(stmt, 2, 32);
+
+            // Per-candidate metadata lookup, restricted to scene rows.
+            const md_stmt = prepare("SELECT media_title, position_secs FROM aimemory WHERE id = ? AND context_type = 'scene'");
+            if (md_stmt == null) return null;
+            defer finalize(md_stmt);
+
+            while (step(stmt) == c.SQLITE_ROW) {
+                const rowid = columnInt(stmt, 0);
+                _ = c.sqlite3_reset(md_stmt);
+                bindInt(md_stmt, 1, rowid);
+                if (step(md_stmt) != c.SQLITE_ROW) continue;
+
+                const mtitle = columnText(md_stmt, 0) orelse "";
+                const pos = columnDouble(md_stmt, 1);
+
+                // Spoiler clamp: same-title rows must be at-or-before current_pos.
+                if (current_title.len != 0 and std.mem.eql(u8, mtitle, current_title) and pos > current_pos) continue;
+
+                // Candidates already arrive in ascending distance order, so the
+                // first one that survives the clamp is the best hit.
+                var hit = SceneHit{ .position_secs = pos };
+                const copy_len = @min(mtitle.len, hit.title.len - 1);
+                @memcpy(hit.title[0..copy_len], mtitle[0..copy_len]);
+                hit.title_len = copy_len;
+                return hit;
+            }
+            return null;
+        }
+    }
+
+    // ── Keyword / LIKE fallback (mandatory) ──
+    if (query_text.len == 0) return null;
+
+    // Build "%query%" pattern in a fixed buffer (no allocator dependency).
+    var pat_buf: [512]u8 = undefined;
+    const q = query_text[0..@min(query_text.len, pat_buf.len - 2)];
+    pat_buf[0] = '%';
+    @memcpy(pat_buf[1 .. 1 + q.len], q);
+    pat_buf[1 + q.len] = '%';
+    const pattern = pat_buf[0 .. q.len + 2];
+
+    // Clamp inline in SQL: same-title rows constrained to <= current_pos,
+    // other titles unrestricted. Best = most recent matching scene.
+    const sql =
+        \\SELECT media_title, position_secs
+        \\FROM aimemory
+        \\WHERE context_type = 'scene'
+        \\  AND content LIKE ?
+        \\  AND (media_title <> ? OR position_secs <= ?)
+        \\ORDER BY id DESC
+        \\LIMIT 1
+    ;
+    const stmt = prepare(sql) orelse return null;
+    defer finalize(stmt);
+
+    bindText(stmt, 1, pattern);
+    bindText(stmt, 2, current_title);
+    bindDouble(stmt, 3, current_pos);
+
+    if (step(stmt) != c.SQLITE_ROW) return null;
+
+    const mtitle = columnText(stmt, 0) orelse "";
+    const pos = columnDouble(stmt, 1);
+
+    var hit = SceneHit{ .position_secs = pos };
+    const copy_len = @min(mtitle.len, hit.title.len - 1);
+    @memcpy(hit.title[0..copy_len], mtitle[0..copy_len]);
+    hit.title_len = copy_len;
+    return hit;
 }

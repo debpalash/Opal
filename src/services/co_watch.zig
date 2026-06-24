@@ -122,6 +122,31 @@ const S = struct {
         _ = c.mpv.mpv_get_property(p.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur);
         const percent: f64 = if (dur > 0) (pos / dur) * 100.0 else 0;
 
+        // ── Total Recall: persist this moment as a SCENE memory (T1) ─────────
+        // Independent of the salience/firewall/curl remark path below. We join
+        // the subtitle + recent-dialogue + OCR text into one stack buffer and
+        // hand it to scene_memory, which dedups, junk-filters, embeds, and
+        // persists. Degrades silently; never blocks the remark path.
+        {
+            // Title MUST match what recall_scene queries with (ai_tools uses
+            // loading_label) so the per-title spoiler clamp lines up — prefer
+            // loading_label, fall back to mpv media-title only if it's empty.
+            var title_buf: [256]u8 = undefined;
+            const title = if (p.loading_label_len > 0 and p.loading_label_len <= 128)
+                p.loading_label[0..p.loading_label_len]
+            else
+                title_buf[0..p.getMediaTitle(&title_buf)];
+
+            var scene_buf: [9216]u8 = undefined;
+            var sfbs = std.Io.Writer.fixed(&scene_buf);
+            if (sub_text.len > 0) sfbs.print("{s}\n", .{sub_text}) catch {};
+            if (dn > 0) sfbs.print("{s}\n", .{dlg_text}) catch {};
+            if (on > 0) sfbs.print("{s}", .{ocr_text}) catch {};
+            const joined = sfbs.buffered();
+
+            @import("scene_memory.zig").ingestScene(title, pos, dur, joined);
+        }
+
         const reason: []const u8 = switch (kind) {
             .paused => "The viewer just PAUSED — they may have noticed or be reacting to something on screen.",
             .rewound => "The viewer just REWOUND more than 5 seconds — they may have missed or be confused by something.",

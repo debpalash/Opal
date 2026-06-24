@@ -136,6 +136,8 @@ pub fn executeTool(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         return normResult(alloc, executePlayerInfo(alloc));
     } else if (std.mem.eql(u8, name, "look_at_screen")) {
         return normResult(alloc, executeLookAtScreen(alloc));
+    } else if (std.mem.eql(u8, name, "recall_scene")) {
+        return normResult(alloc, executeRecallScene(alloc, tc));
     } else if (std.mem.eql(u8, name, "navigate")) {
         return normResult(alloc, executeNavigate(alloc, tc));
     } else if (std.mem.eql(u8, name, "queue_manage")) {
@@ -841,6 +843,66 @@ fn executeLookAtScreen(alloc: std.mem.Allocator) ?[]u8 {
     }
 
     return result[0..off];
+}
+
+// ══════════════════════════════════════════════════════════
+//  Total Recall — vector-search lifetime scene memory & seek
+// ══════════════════════════════════════════════════════════
+
+/// recall_scene(query): vector-search persisted SCENE memories (spoiler-clamped
+/// to watched positions of the current title), then SEEK the active player to
+/// the matched moment.
+fn executeRecallScene(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
+    const c = @import("../core/c.zig");
+    const ai_memory = @import("ai_memory.zig");
+    const db = @import("../core/db.zig");
+
+    const query = extractStringArg(tc.args_json[0..tc.args_len], "query") orelse
+        return std.fmt.allocPrint(alloc, "Error: missing 'query' argument", .{}) catch null;
+
+    // Embed the query (degrade to keyword/FTS fallback if the embed server is down).
+    var emb: [ai_memory.EMBED_DIM]f32 = undefined;
+    const ok = ai_memory.getEmbedding(query, &emb);
+
+    // Read the active player's current title + time-pos for the spoiler clamp.
+    // If no player is active we still allow recall, but with no current-title
+    // clamp (empty title matches nothing under the same-title rule, so other
+    // titles remain unrestricted).
+    var cur_title: []const u8 = "";
+    var cur_pos: f64 = 0;
+    if (state.app.active_player_idx < state.app.players.items.len) {
+        const p = state.app.players.items[state.app.active_player_idx];
+        _ = c.mpv.mpv_get_property(p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &cur_pos);
+        cur_title = if (p.loading_label_len > 0 and p.loading_label_len <= 128)
+            p.loading_label[0..p.loading_label_len]
+        else
+            "";
+    }
+
+    const hit = db.retrieveScene(if (ok) emb[0..] else null, query, cur_title, cur_pos) orelse
+        return std.fmt.allocPrint(alloc, "No matching scene found in your watch history.", .{}) catch null;
+
+    // Seek the active player to the matched moment (if one is active).
+    if (state.app.active_player_idx < state.app.players.items.len) {
+        const p = state.app.players.items[state.app.active_player_idx];
+        var cmd_buf: [64]u8 = undefined;
+        const cmd = std.fmt.bufPrintZ(&cmd_buf, "seek {d:.1} absolute", .{hit.position_secs}) catch
+            return std.fmt.allocPrint(alloc, "Error: could not build seek command", .{}) catch null;
+        _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
+    }
+
+    // Format HH:MM:SS from the matched position.
+    const total: u64 = @intFromFloat(@max(0.0, hit.position_secs));
+    const hh = total / 3600;
+    const mm = (total % 3600) / 60;
+    const ss = total % 60;
+
+    const title = hit.title[0..hit.title_len];
+    return std.fmt.allocPrint(
+        alloc,
+        "Jumping to {s} at {d:0>2}:{d:0>2}:{d:0>2}",
+        .{ title, hh, mm, ss },
+    ) catch null;
 }
 
 fn executeNavigate(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
