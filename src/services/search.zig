@@ -1234,13 +1234,20 @@ pub fn renderSearchContent() void {
 /// Pre-search hint: a grid of the sources Universal search queries in parallel,
 /// so an empty box doesn't look broken.
 fn renderUniversalCapabilities() void {
-    var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .gravity_x = 0.5, .gravity_y = 0.35, .padding = dvui.Rect.all(theme.spacing.lg) });
+    // Normal flow block BELOW the search bar (horizontal-only expand + a top
+    // margin) — an `expand=.both` + gravity_y box floats up over the input.
+    var col = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .gravity_x = 0.5,
+        .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.xl, .w = theme.spacing.lg, .h = theme.spacing.lg },
+    });
     defer col.deinit();
 
     dvui.icon(@src(), "uni", icons.tvg.lucide.telescope, .{}, .{
         .color_text = theme.colors.accent,
-        .min_size_content = .{ .w = 40, .h = 40 },
+        .min_size_content = .{ .w = 36, .h = 36 },
         .gravity_x = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
     });
     _ = dvui.label(@src(), "Universal search", .{}, .{ .color_text = theme.colors.text_main, .font = dvui.themeGet().font_title, .gravity_x = 0.5 });
     _ = dvui.label(@src(), "One query, every source — searched in parallel.", .{}, .{ .color_text = theme.colors.text_muted, .gravity_x = 0.5 });
