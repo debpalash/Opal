@@ -796,10 +796,14 @@ pub fn renderSearchContent() void {
     search_results_mutex.lock();
     defer search_results_mutex.unlock();
 
+    // Current query (shown in the status line so it's clear what was searched).
+    const qlen0 = std.mem.indexOfScalar(u8, &search_buf, 0) orelse search_buf.len;
+    const cur_query = safeUtf8(search_buf[0..qlen0]);
+
     // ── Status line ──
     if (is_searching.load(.acquire)) {
-        var live_buf: [64]u8 = undefined;
-        const live_lbl = std.fmt.bufPrintZ(&live_buf, "Searching… ({d} found)", .{search_results.items.len}) catch "Searching…";
+        var live_buf: [320]u8 = undefined;
+        const live_lbl = std.fmt.bufPrintZ(&live_buf, "Searching “{s}” … ({d} found)", .{ cur_query, search_results.items.len }) catch "Searching…";
         _ = dvui.label(@src(), "{s}", .{live_lbl}, .{
             .color_text = theme.colors.warning,
             .padding = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
@@ -813,8 +817,8 @@ pub fn renderSearchContent() void {
             if (s_num_chk < min_seed_filter) continue;
             visible_count += 1;
         }
-        var count_buf: [48]u8 = undefined;
-        const count_lbl = std.fmt.bufPrintZ(&count_buf, "{d} results ({d} total)", .{ visible_count, search_results.items.len }) catch "results";
+        var count_buf: [320]u8 = undefined;
+        const count_lbl = std.fmt.bufPrintZ(&count_buf, "{d} results for “{s}” ({d} total)", .{ visible_count, cur_query, search_results.items.len }) catch "results";
         _ = dvui.label(@src(), "{s}", .{count_lbl}, .{
             .color_text = dvui.Color{ .r = 120, .g = 130, .b = 150, .a = 255 },
             .padding = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
@@ -1282,16 +1286,87 @@ fn renderUniversalCapabilities() void {
     }
 }
 
+/// Live search progress — a header with the query + a running result count,
+/// and a chip per source that flips searching → done/failed in real time.
+fn renderUniversalProgress() void {
+    const resolver = @import("resolver.zig");
+
+    // Header: query + live count.
+    {
+        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = 9200,
+            .expand = .horizontal,
+            .padding = .{ .x = 12, .y = 8, .w = 12, .h = 4 },
+        });
+        defer hdr.deinit();
+        dvui.icon(@src(), "searching", icons.tvg.lucide.@"loader-circle", .{}, .{
+            .color_text = theme.colors.accent,
+            .min_size_content = .{ .w = 16, .h = 16 },
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+        });
+        const q = resolver.resolver_query[0..resolver.resolver_query_len];
+        var hb: [320]u8 = undefined;
+        const hs = std.fmt.bufPrintZ(&hb, "Searching “{s}” — {d} found", .{ safeUtf8(q), resolver.result_count }) catch "Searching…";
+        _ = dvui.label(@src(), "{s}", .{hs}, .{ .color_text = theme.colors.text_main, .gravity_y = 0.5 });
+    }
+
+    // Per-source status chips (live).
+    const Row = struct { icon: []const u8, name: []const u8, st: resolver.SourceStatus };
+    const tr = combinedTorrentStatus();
+    const rows = [_]Row{
+        .{ .icon = icons.tvg.lucide.@"hard-drive", .name = "On disk", .st = resolver.status_local.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.magnet, .name = "Torrents", .st = tr },
+        .{ .icon = icons.tvg.lucide.server, .name = "Jellyfin", .st = resolver.status_jf.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.youtube, .name = "YouTube", .st = resolver.status_yt.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.tv, .name = "Anime", .st = resolver.status_anime.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.clapperboard, .name = "Stremio", .st = resolver.status_stremio.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.rss, .name = "RSS", .st = resolver.status_rss.load(.acquire) },
+    };
+    var flow = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .id_extra = 9210, .expand = .horizontal, .padding = .{ .x = 12, .y = 2, .w = 12, .h = 6 } });
+    defer flow.deinit();
+    for (rows, 0..) |r, i| {
+        const done = r.st == .done;
+        const failed = r.st == .failed;
+        const accent = if (failed) theme.colors.danger else if (done) theme.colors.success else theme.colors.accent;
+        var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i + 9220,
+            .background = true,
+            .color_fill = theme.colors.bg_card,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+            .margin = dvui.Rect.all(3),
+        });
+        defer chip.deinit();
+        dvui.icon(@src(), r.name, r.icon, .{}, .{ .id_extra = i + 9220, .color_text = if (done or failed) theme.colors.text_secondary else theme.colors.accent, .min_size_content = .{ .w = 14, .h = 14 }, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 } });
+        _ = dvui.label(@src(), "{s}", .{r.name}, .{ .id_extra = i + 9220, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+        const glyph = if (failed) icons.tvg.lucide.@"circle-x" else if (done) icons.tvg.lucide.@"circle-check" else icons.tvg.lucide.@"loader-circle";
+        dvui.icon(@src(), "st", glyph, .{}, .{ .id_extra = i + 9230, .color_text = accent, .min_size_content = .{ .w = 13, .h = 13 }, .gravity_y = 0.5, .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 } });
+    }
+
+    // Poll ~5×/s while resolving so counts/status update live without input.
+    const tid = flow.data().id;
+    if (dvui.timerDoneOrNone(tid)) dvui.timer(tid, 200_000);
+}
+
+/// Torrent sources span three backends (nova2, 1337x, YTS) — show one chip:
+/// searching if any is still going, failed only if all failed, else done.
+fn combinedTorrentStatus() @import("resolver.zig").SourceStatus {
+    const r = @import("resolver.zig");
+    const a = r.status_torrent.load(.acquire);
+    const b = r.status_1337x.load(.acquire);
+    const c2 = r.status_yts.load(.acquire);
+    if (a == .searching or b == .searching or c2 == .searching) return .searching;
+    if (a == .failed and b == .failed and c2 == .failed) return .failed;
+    return .done;
+}
+
 fn renderUniversalResults() void {
     const resolver = @import("resolver.zig");
 
     // Status / loading indicator
     if (resolver.isResolving()) {
-        _ = dvui.label(@src(), "Searching all sources...", .{}, .{
-            .id_extra = 9000,
-            .color_text = theme.colors.accent,
-            .padding = .{ .x = 12, .y = 8, .w = 12, .h = 4 },
-        });
+        renderUniversalProgress();
     } else if (resolver.result_count > 0) {
         // Count + sort/filter row.
         var fr = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -1301,8 +1376,8 @@ fn renderUniversalResults() void {
         });
         defer fr.deinit();
 
-        var count_buf: [48]u8 = undefined;
-        const clbl = std.fmt.bufPrintZ(&count_buf, "{d} results", .{resolver.result_count}) catch "Results";
+        var count_buf: [320]u8 = undefined;
+        const clbl = std.fmt.bufPrintZ(&count_buf, "{d} results for “{s}”", .{ resolver.result_count, safeUtf8(resolver.resolver_query[0..resolver.resolver_query_len]) }) catch "Results";
         _ = dvui.label(@src(), "{s}", .{clbl}, .{
             .id_extra = 9001,
             .color_text = theme.colors.text_muted,
