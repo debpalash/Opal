@@ -9,6 +9,43 @@ const logs = @import("../core/logs.zig");
 const paths = @import("../core/paths.zig");
 const fileassoc = @import("settings_fileassoc.zig");
 
+// Run an osascript "Run in Terminal" launch off the render thread so the frame
+// never blocks waiting on Terminal.app. The script string is copied into a
+// module-static buffer (guarded by `busy`) before spawning the detached thread —
+// never hand the spawned thread a stack slice (see CLAUDE.md thread-safety notes).
+const TerminalLauncher = struct {
+    var busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+    var script_buf: [512]u8 = undefined;
+    var script_len: usize = 0;
+
+    fn worker() void {
+        defer busy.store(false, .release);
+        const script = TerminalLauncher.script_buf[0..TerminalLauncher.script_len];
+        var osa = @import("../core/io_global.zig").Child.init(
+            &.{ "osascript", "-e", script },
+            @import("../core/alloc.zig").allocator,
+        );
+        osa.stdout_behavior = .Ignore;
+        osa.stderr_behavior = .Ignore;
+        _ = osa.spawnAndWait() catch {};
+    }
+
+    /// Copy `script` into the static buffer and launch it on a detached thread.
+    /// No-op (returns false) if a launch is already in flight.
+    fn launch(script: []const u8) bool {
+        if (busy.swap(true, .acquire)) return false;
+        const n = @min(script.len, TerminalLauncher.script_buf.len);
+        @memcpy(TerminalLauncher.script_buf[0..n], script[0..n]);
+        TerminalLauncher.script_len = n;
+        const t = std.Thread.spawn(.{}, worker, .{}) catch {
+            busy.store(false, .release);
+            return false;
+        };
+        t.detach();
+        return true;
+    }
+};
+
 // ══════════════════════════════════════════════════════════
 // Settings — lives inside the drawer as a tab
 // ══════════════════════════════════════════════════════════
@@ -2747,13 +2784,8 @@ pub fn renderDepsModal() void {
                 .{cmd},
             ) catch "";
             if (script.len > 0) {
-                var osa = @import("../core/io_global.zig").Child.init(
-                    &.{ "osascript", "-e", script },
-                    @import("../core/alloc.zig").allocator,
-                );
-                osa.stdout_behavior = .Ignore;
-                osa.stderr_behavior = .Ignore;
-                _ = osa.spawnAndWait() catch {};
+                // Launch on a detached thread so the frame never blocks.
+                _ = TerminalLauncher.launch(script);
                 state.showToast("Running in Terminal — come back when done");
             }
         }

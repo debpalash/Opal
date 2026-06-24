@@ -132,40 +132,41 @@ pub fn resolveStreamUrl(url: []const u8) ?[]const u8 {
 /// Async version: resolve via streamlink in a background thread,
 /// then load the result into the player.
 pub fn resolveStreamUrlAsync(url: []const u8, player_idx: usize) void {
+    const playermod = @import("../player/player.zig");
     const S = struct {
         var busy: bool = false;
         var url_copy: [1024]u8 = undefined;
         var url_len: usize = 0;
-        var p_idx: usize = 0;
+        // Snapshot the STABLE *MediaPlayer pointer (heap-stable across players
+        // ArrayList reallocs / single-player collapse reordering) instead of a
+        // raw index, which the frame-top collapse can reorder or invalidate.
+        var target: ?*playermod.MediaPlayer = null;
+
         // Static buffers for mpv — must outlive the mpv_command call
         var load_buf: [2048]u8 = std.mem.zeroes([2048]u8);
         var args_load: [3][*c]const u8 = undefined;
 
         fn worker() void {
             defer @This().busy = false;
+            const p = @This().target orelse return;
             std.log.info("[streamlink] Resolving: {s}", .{url_copy[0..url_len]});
             if (resolveStreamUrl(url_copy[0..url_len])) |stream_url| {
-                if (state.app.players.items.len > p_idx) {
-                    @memset(&load_buf, 0);
-                    @memcpy(load_buf[0..stream_url.len], stream_url);
-                    const mpv = @import("../core/c.zig").mpv;
-                    args_load = .{ "loadfile", @ptrCast(&load_buf), null };
-                    // Use synchronous mpv_command — we're on a bg thread, safe to block
-                    const ret = mpv.mpv_command(state.app.players.items[p_idx].mpv_ctx, @ptrCast(&args_load));
-                    std.log.info("[streamlink] mpv_command returned {d} for player {d}", .{ret, p_idx});
-                }
+                @memset(&load_buf, 0);
+                @memcpy(load_buf[0..stream_url.len], stream_url);
+                const mpv = @import("../core/c.zig").mpv;
+                args_load = .{ "loadfile", @ptrCast(&load_buf), null };
+                // Use synchronous mpv_command — we're on a bg thread, safe to block
+                const ret = mpv.mpv_command(p.mpv_ctx, @ptrCast(&args_load));
+                std.log.info("[streamlink] mpv_command returned {d}", .{ret});
             } else {
                 std.log.warn("[streamlink] Failed to resolve stream", .{});
                 // Clear the stuck "Resolving live stream..." state — mpv never gets
                 // a loadfile on failure, so is_loading would otherwise never clear.
-                if (state.app.players.items.len > p_idx) {
-                    const p = state.app.players.items[p_idx];
-                    p.is_loading = false;
-                    const fail = "Stream offline or unavailable";
-                    @memset(&p.loading_label, 0);
-                    @memcpy(p.loading_label[0..fail.len], fail);
-                    p.loading_label_len = fail.len;
-                }
+                p.is_loading = false;
+                const fail = "Stream offline or unavailable";
+                @memset(&p.loading_label, 0);
+                @memcpy(p.loading_label[0..fail.len], fail);
+                p.loading_label_len = fail.len;
                 state.showToast("Stream offline or unavailable");
             }
         }
@@ -173,10 +174,13 @@ pub fn resolveStreamUrlAsync(url: []const u8, player_idx: usize) void {
 
     if (S.busy) return;
     if (url.len >= S.url_copy.len) return;
+    // Resolve the stable player pointer up front, on the caller (UI) thread,
+    // while the index is still valid. Guard the lookup.
+    if (player_idx >= state.app.players.items.len) return;
+    S.target = state.app.players.items[player_idx];
     S.busy = true;
     @memcpy(S.url_copy[0..url.len], url);
     S.url_len = url.len;
-    S.p_idx = player_idx;
 
     _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
         S.busy = false;

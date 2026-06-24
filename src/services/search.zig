@@ -1622,9 +1622,15 @@ pub fn loadTorrentToPlayer(magnet_link: []const u8) void {
     if (std.mem.startsWith(u8, magnet_link, "http://") or std.mem.startsWith(u8, magnet_link, "https://")) {
         logs.pushLog("info", "search", "Resolving detail page to magnet...", false);
 
-        // Show loading state on player
+        // Show loading state on player, and snapshot the STABLE *MediaPlayer
+        // pointer to hand to the worker. The frame-top single-player collapse can
+        // reorder/invalidate active_player_idx between spawn and use, so we never
+        // re-index players.items inside the thread — we use this captured pointer.
+        const playermod2 = @import("../player/player.zig");
+        var target_player: ?*playermod2.MediaPlayer = null;
         if (state.app.active_player_idx < state.app.players.items.len) {
             const p = state.app.players.items[state.app.active_player_idx];
+            target_player = p;
             p.is_loading = true;
             const lbl = "Resolving magnet...";
             @memcpy(p.loading_label[0..lbl.len], lbl);
@@ -1639,8 +1645,9 @@ pub fn loadTorrentToPlayer(magnet_link: []const u8) void {
         const ThreadContext = struct {
             url: [4096]u8,
             url_len: usize,
+            player: ?*playermod2.MediaPlayer,
         };
-        const ctx_store = ThreadContext{ .url = url_copy, .url_len = ulen };
+        const ctx_store = ThreadContext{ .url = url_copy, .url_len = ulen, .player = target_player };
 
         _ = std.Thread.spawn(.{}, struct {
             fn worker(ctx: ThreadContext) void {
@@ -1673,9 +1680,7 @@ pub fn loadTorrentToPlayer(magnet_link: []const u8) void {
                 if (total < 50) {
                     const logs2 = @import("../core/logs.zig");
                     logs2.pushLog("error", "search", "Failed to fetch detail page", true);
-                    if (state.app.active_player_idx < state.app.players.items.len) {
-                        state.app.players.items[state.app.active_player_idx].is_loading = false;
-                    }
+                    if (ctx.player) |p| p.is_loading = false;
                     return;
                 }
 
@@ -1730,9 +1735,7 @@ pub fn loadTorrentToPlayer(magnet_link: []const u8) void {
 
                 const logs2 = @import("../core/logs.zig");
                 logs2.pushLog("error", "search", "No magnet found on detail page", true);
-                if (state.app.active_player_idx < state.app.players.items.len) {
-                    state.app.players.items[state.app.active_player_idx].is_loading = false;
-                }
+                if (ctx.player) |p| p.is_loading = false;
             }
         }.worker, .{ctx_store}) catch {
             logs.pushLog("error", "search", "Failed to spawn resolver thread", true);

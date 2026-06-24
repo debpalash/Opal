@@ -559,13 +559,8 @@ pub fn renderGrid() !void {
         } else {
             var is_audio_only = false;
             if (p.torrent_is_ready) {
-                const vid_str = c.mpv.mpv_get_property_string(p.mpv_ctx, "vid");
-                if (vid_str != null) {
-                    defer c.mpv.mpv_free(@ptrCast(vid_str));
-                    if (std.mem.eql(u8, std.mem.span(vid_str), "no")) {
-                        is_audio_only = true;
-                    }
-                }
+                // Cached via mpv "vid" property observer (A4) — no per-frame IPC.
+                is_audio_only = p.cached_vid_no;
             }
 
             const header = @import("header.zig");

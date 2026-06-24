@@ -1147,9 +1147,8 @@ fn appFrame() !dvui.App.Result {
     // Without this, dvui only redraws on input events and the video freezes.
     for (state.app.players.items) |p| {
         if (p.provider == .mpv) {
-            var paused: i64 = 1;
-            _ = c.mpv.mpv_get_property(p.mpv_ctx, "pause", c.mpv.MPV_FORMAT_FLAG, &paused);
-            if (paused == 0) {
+            // Cached via mpv property observer (A4) — no per-frame IPC.
+            if (!p.cached_paused) {
                 dvui.refresh(null, @src(), null);
                 break;
             }

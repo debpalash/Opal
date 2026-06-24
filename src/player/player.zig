@@ -65,6 +65,15 @@ pub const MediaPlayer = struct {
     save_counter: u32 = 0, // periodic save every N frames
     provider: state.ContentProvider = .mpv,
 
+    // ── Cached mpv properties (A4) ──
+    // Populated via mpv_observe_property + MPV_EVENT_PROPERTY_CHANGE in the
+    // event loop (see updateTorrentBackgroundTasks) so the per-frame render
+    // path doesn't issue synchronous IPC (or per-frame allocations) for these.
+    cached_paused: bool = true, // mirror of mpv "pause"
+    cached_vid_no: bool = false, // mpv "vid" == "no" (audio-only)
+    cached_sub_text: [1024]u8 = std.mem.zeroes([1024]u8),
+    cached_sub_text_len: usize = 0,
+
     // v2: handle to the per-player torrent HTTP proxy stream (multi-tenant).
     // INVALID_HANDLE means no proxy is currently running for this player.
     proxy_handle: @import("stream_proxy.zig").Handle = @import("stream_proxy.zig").INVALID_HANDLE,
@@ -214,6 +223,13 @@ pub const MediaPlayer = struct {
         if (!state.app.scripts_scanned) scripts_mgr.scanScripts();
         
         _ = c.mpv.mpv_initialize(self.mpv_ctx);
+
+        // ── Observe properties so the render hot path can read cached fields
+        // instead of issuing synchronous mpv_get_property IPC every frame (A4).
+        // Updates arrive as MPV_EVENT_PROPERTY_CHANGE in the event loop.
+        _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "pause", c.mpv.MPV_FORMAT_FLAG);
+        _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "vid", c.mpv.MPV_FORMAT_STRING);
+        _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "sub-text", c.mpv.MPV_FORMAT_STRING);
 
         // Load enabled user scripts individually (must happen after mpv_initialize)
         for (0..state.app.script_count) |si| {
@@ -602,6 +618,37 @@ pub fn updateTorrentBackgroundTasks() void {
                     // Non-torrent content ended — auto-play next from queue
                     const queue_svc = @import("../services/queue.zig");
                     queue_svc.playNextUnplayed(p);
+                }
+            } else if (ev.*.event_id == c.mpv.MPV_EVENT_PROPERTY_CHANGE) {
+                // Update cached property mirrors so the render hot path avoids
+                // per-frame synchronous IPC (A4). data may be NULL/NONE when the
+                // property is currently unavailable.
+                const pc = @as(*c.mpv.mpv_event_property, @ptrCast(@alignCast(ev.*.data)));
+                const pname = if (pc.*.name != null) std.mem.span(pc.*.name) else "";
+                if (std.mem.eql(u8, pname, "pause")) {
+                    if (pc.*.format == c.mpv.MPV_FORMAT_FLAG and pc.*.data != null) {
+                        const flag = @as(*c_int, @ptrCast(@alignCast(pc.*.data))).*;
+                        p.cached_paused = (flag != 0);
+                    }
+                } else if (std.mem.eql(u8, pname, "vid")) {
+                    if (pc.*.format == c.mpv.MPV_FORMAT_STRING and pc.*.data != null) {
+                        const sptr = @as(*[*c]u8, @ptrCast(@alignCast(pc.*.data))).*;
+                        const vid = if (sptr != null) std.mem.span(sptr) else "";
+                        p.cached_vid_no = std.mem.eql(u8, vid, "no");
+                    } else {
+                        // Unavailable (no value) — treat as not audio-only.
+                        p.cached_vid_no = false;
+                    }
+                } else if (std.mem.eql(u8, pname, "sub-text")) {
+                    if (pc.*.format == c.mpv.MPV_FORMAT_STRING and pc.*.data != null) {
+                        const sptr = @as(*[*c]u8, @ptrCast(@alignCast(pc.*.data))).*;
+                        const txt = if (sptr != null) std.mem.span(sptr) else "";
+                        const n = @min(txt.len, p.cached_sub_text.len);
+                        @memcpy(p.cached_sub_text[0..n], txt[0..n]);
+                        p.cached_sub_text_len = n;
+                    } else {
+                        p.cached_sub_text_len = 0;
+                    }
                 }
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_LOG_MESSAGE) {
                 const log_msg = @as(*c.mpv.mpv_event_log_message, @ptrCast(@alignCast(ev.*.data)));

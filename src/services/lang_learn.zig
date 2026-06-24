@@ -132,41 +132,33 @@ pub fn pollSubtitle() void {
     if (state.app.active_player_idx >= state.app.players.items.len) return;
 
     const p = state.app.players.items[state.app.active_player_idx];
-    
-    // Get current subtitle text from mpv
-    const sub_text_ptr: ?[*:0]u8 = @ptrCast(c.mpv.mpv_get_property_string(p.mpv_ctx, "sub-text"));
-    
-    if (sub_text_ptr) |ptr| {
-        const sub_text = std.mem.span(ptr);
-        
-        if (sub_text.len > 0 and sub_text.len < MAX_SUB_LEN) {
-            // Only re-tokenize if subtitle text changed
-            if (!std.mem.eql(u8, current_sub_text[0..current_sub_len], sub_text)) {
-                @memcpy(current_sub_text[0..sub_text.len], sub_text);
-                current_sub_len = sub_text.len;
-                tokenizeWords(sub_text);
-                
-                // Trigger translation if enabled
-                if (state.app.translate_enabled and !translate_busy) {
-                    const hash = std.hash.Wyhash.hash(0, sub_text);
-                    if (hash != last_translated_hash) {
-                        last_translated_hash = hash;
-                        translated_len = 0; // Clear while translating
-                        translate_busy = true;
-                        translate_thread = std.Thread.spawn(.{}, translateWorker, .{}) catch {
-                            translate_busy = false;
-                            return;
-                        };
-                    }
+
+    // Read current subtitle text from the cached mirror updated by the mpv
+    // "sub-text" property observer (A4) — no per-frame IPC or allocation here.
+    const sub_text = p.cached_sub_text[0..p.cached_sub_text_len];
+
+    if (sub_text.len > 0 and sub_text.len < MAX_SUB_LEN) {
+        // Only re-tokenize if subtitle text changed
+        if (!std.mem.eql(u8, current_sub_text[0..current_sub_len], sub_text)) {
+            @memcpy(current_sub_text[0..sub_text.len], sub_text);
+            current_sub_len = sub_text.len;
+            tokenizeWords(sub_text);
+
+            // Trigger translation if enabled
+            if (state.app.translate_enabled and !translate_busy) {
+                const hash = std.hash.Wyhash.hash(0, sub_text);
+                if (hash != last_translated_hash) {
+                    last_translated_hash = hash;
+                    translated_len = 0; // Clear while translating
+                    translate_busy = true;
+                    translate_thread = std.Thread.spawn(.{}, translateWorker, .{}) catch {
+                        translate_busy = false;
+                        return;
+                    };
                 }
             }
-        } else if (sub_text.len == 0) {
-            current_sub_len = 0;
-            word_count = 0;
-            translated_len = 0;
         }
-        c.mpv.mpv_free(ptr);
-    } else {
+    } else if (sub_text.len == 0) {
         current_sub_len = 0;
         word_count = 0;
         translated_len = 0;
