@@ -118,12 +118,14 @@ fn renderTopNav(compact: bool) void {
         navLink(.search, "Search", icons.tvg.lucide.search, 2);
         navLink(.browse, "Browse", icons.tvg.lucide.compass, 3);
         navLink(.library, "Library", icons.tvg.lucide.library, 4);
-        navLink(.assistant, "Assistant", icons.tvg.lucide.@"message-square-text", 5);
     }
 
     omnibox();
 
-    // Right-side actions
+    // Right-side actions (icon-only). Assistant lives here now.
+    if (components.iconButton(@src(), icons.tvg.lucide.@"message-square-text", "Assistant", state.app.router.current == .assistant)) {
+        state.app.router.navigate(.assistant);
+    }
     if (components.iconButton(@src(), icons.tvg.lucide.play, "Now playing", state.app.router.current == .player)) {
         state.app.router.navigate(.player);
     }
@@ -161,11 +163,12 @@ fn navLink(r: Route, label: []const u8, icon: []const u8, id_extra: usize) void 
     dvui.icon(@src(), label, icon, .{}, .{
         .id_extra = id_extra,
         .color_text = fg,
-        .min_size_content = .{ .w = 16, .h = 16 },
-        .max_size_content = .{ .w = 16, .h = 16 },
+        .min_size_content = .{ .w = 15, .h = 15 },
+        .max_size_content = .{ .w = 15, .h = 15 },
         .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
     });
-    _ = dvui.label(@src(), "  {s}", .{label}, .{
+    _ = dvui.label(@src(), "{s}", .{label}, .{
         .id_extra = id_extra,
         .color_text = fg,
         .gravity_y = 0.5,
@@ -230,11 +233,11 @@ fn renderPage(r: Route) !void {
         .search => drawer.renderTabContent(.Search),
         .home => @import("home.zig").render(), // personal hub: metrics + lists
         .browse => {
-            subTabs(&.{ .TMDB, .YouTube, .Anime, .Comics, .RSS }, &state.app.browse_source, 100);
+            subTabs(&.{ .TMDB, .YouTube, .Anime, .Comics, .RSS, .Jellyfin }, &state.app.browse_source, 100);
             drawer.renderTabContent(state.app.browse_source);
         },
         .library => {
-            subTabs(&.{ .Queue, .History, .Downloads, .Jellyfin }, &state.app.library_tab, 200);
+            subTabs(&.{ .Queue, .History, .Downloads }, &state.app.library_tab, 200);
             drawer.renderTabContent(state.app.library_tab);
         },
         .system => {

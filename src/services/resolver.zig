@@ -1191,8 +1191,9 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
     var search_arg: [300]u8 = undefined;
     const sa = std.fmt.bufPrint(&search_arg, "ytsearch5:{s}", .{query}) catch return;
 
+    const ytdlp_bin = @import("ytdlp.zig").binary();
     const argv = [_][]const u8{
-        "yt-dlp", "--flat-playlist", "--dump-json", "--no-warnings", sa,
+        ytdlp_bin, "--flat-playlist", "--dump-json", "--no-warnings", sa,
     };
     var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
     child.stdout_behavior = .Pipe;

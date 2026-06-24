@@ -183,6 +183,9 @@ fn appDeinit() void {
     }
     state.app.players.deinit(@import("core/alloc.zig").allocator);
 
+    // Free any poster pixel buffers the renderer never consumed, then arrays.
+    @import("services/tmdb.zig").freeImageBuffers();
+
     // Clean up UI arrays
     state.app.tmdb.results.deinit(@import("core/alloc.zig").allocator);
     state.app.tmdb.favorites.deinit(@import("core/alloc.zig").allocator);

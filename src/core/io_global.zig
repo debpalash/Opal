@@ -170,8 +170,23 @@ pub fn parseIp(text: []const u8, port: u16) !std.Io.net.IpAddress {
 // rewritten to `readAll(file, buf)` since 0.16 File methods take io.
 // anytype accepts both File and *File.
 
+/// Drain `file` into `buf` until EOF or `buf` is full.
+///
+/// Streams via `read()` rather than `readPositionalAll` — pipes (a child's
+/// stdout) are NOT seekable, so the positional read returned 0 bytes for every
+/// subprocess reader (anime/youtube/comics/voice/plugins all silently loaded
+/// nothing). Streaming works for both regular files and pipes.
 pub fn readAll(file: anytype, buf: []u8) !usize {
-    return file.readPositionalAll(io(), buf, 0);
+    var total: usize = 0;
+    while (total < buf.len) {
+        const n = read(file, buf[total..]) catch |e| {
+            if (total > 0) break; // return what we already have
+            return e; // nothing read yet — surface the error
+        };
+        if (n == 0) break; // EOF (or no data within read()'s retry window)
+        total += n;
+    }
+    return total;
 }
 
 /// Partial read (up to buf.len bytes). Returns 0 on EOF.

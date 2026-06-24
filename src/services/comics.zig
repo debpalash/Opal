@@ -400,8 +400,13 @@ var sr_titles: [MAX_SEARCH_RESULTS][160]u8 = undefined;
 var sr_title_lens: [MAX_SEARCH_RESULTS]usize = std.mem.zeroes([MAX_SEARCH_RESULTS]usize);
 var sr_count: usize = 0;
 var sr_searching: bool = false;
+var loaded_default: bool = false;
 var sr_query_buf: [256]u8 = undefined;
 var sr_query_len: usize = 0;
+
+pub fn searchResultCount() usize {
+    return sr_count;
+}
 
 pub fn searchComics(query: []const u8) void {
     if (sr_searching or query.len == 0 or query.len >= sr_query_buf.len) return;
@@ -502,6 +507,13 @@ fn parseSearchResults(html: []const u8) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn renderContent() void {
+    // First open shows a default popular feed so the tab isn't blank (the
+    // search box stays free for anything else).
+    if (!loaded_default and sr_count == 0 and !sr_searching and state.app.comic.search_buf[0] == 0 and state.app.comic.title_len == 0) {
+        loaded_default = true;
+        searchComics("spider-man");
+    }
+
     // Full-page root so loading/empty branches fill width/height.
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer page.deinit();

@@ -216,8 +216,8 @@ pub fn installScript(rec_idx: usize) void {
     child_ptr.stderr_behavior = .Ignore;
     child_ptr.stdout_behavior = .Ignore;
 
-    _ = std.Thread.spawn(.{}, struct {
-        fn worker(c2: *@import("../core/io_global.zig").Child, alloc: std.mem.Allocator, url_owned: []const u8, out_owned: []const u8, argv_owned: [][]const u8) void {
+    if (std.Thread.spawn(.{}, struct {
+        fn worker(c2: *@import("../core/io_global.zig").Child, alloc: std.mem.Allocator, url_owned: [:0]const u8, out_owned: [:0]const u8, argv_owned: [][]const u8) void {
             _ = c2.spawnAndWait() catch {};
             alloc.destroy(c2);
             alloc.free(url_owned);
@@ -226,10 +226,12 @@ pub fn installScript(rec_idx: usize) void {
             // Re-scan after download
             state.app.scripts_scanned = false;
         }
-    }.worker, .{ child_ptr, allocator, url_z, out_z, argv }) catch {
+    }.worker, .{ child_ptr, allocator, url_z, out_z, argv })) |t| {
+        t.detach();
+    } else |_| {
         allocator.destroy(child_ptr);
         allocator.free(url_z);
         allocator.free(out_z);
         allocator.free(argv);
-    };
+    }
 }

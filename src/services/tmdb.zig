@@ -19,6 +19,26 @@ pub const loadLists = store.loadLists;
 /// by dvui must pass through this or dvui's layout can panic on stray bytes.
 pub const safeUtf8 = @import("../core/text.zig").safeUtf8;
 
+/// Free poster pixel buffers that a fetch worker produced but the renderer
+/// never uploaded (off-screen cards, or fetched right before exit). Only
+/// touches items whose worker has finished (`!poster_fetching`), so it can't
+/// race a still-running worker. Call at shutdown before the lists deinit.
+pub fn freeImageBuffers() void {
+    const lists = [_]*std.ArrayListUnmanaged(state.TmdbItem){
+        &state.app.tmdb.results,   &state.app.tmdb.favorites,
+        &state.app.tmdb.watchlist, &state.app.tmdb.watching,
+    };
+    for (lists) |list| {
+        for (list.items) |*it| {
+            if (it.poster_fetching) continue; // worker may still write — leave it
+            if (it.poster_pixels) |px| {
+                alloc.free(px);
+                it.poster_pixels = null;
+            }
+        }
+    }
+}
+
 // ══════════════════════════════════════════════════════════
 // TMDB Content Renderer (called from drawer.zig)
 // ══════════════════════════════════════════════════════════

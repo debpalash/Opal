@@ -174,7 +174,7 @@ pub fn fetchPoster(item: *state.TmdbItem) void {
     if (item.poster_path_len == 0 or item.poster_fetching) return;
     item.poster_fetching = true;
 
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn worker(ptr: *state.TmdbItem) void {
             defer ptr.poster_fetching = false;
 
@@ -201,7 +201,11 @@ pub fn fetchPoster(item: *state.TmdbItem) void {
             ptr.poster_h = @intCast(h);
             ptr.poster_pixels = p_slice;
         }
-    }.worker, .{item}) catch {};
+    }.worker, .{item})) |t| {
+        t.detach(); // never joined — detach so the handle isn't leaked
+    } else |_| {
+        item.poster_fetching = false;
+    }
 }
 
 fn httpGet(url: []const u8, bearer_token: []const u8) ?[]u8 {

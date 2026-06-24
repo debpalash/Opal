@@ -20,6 +20,37 @@ pub fn getPath() ?[]const u8 {
     return null;
 }
 
+var resolved_buf: [512]u8 = undefined;
+var resolved_len: usize = 0;
+var resolved_done: bool = false;
+
+/// The yt-dlp executable to spawn. Prefers a system install (absolute path —
+/// the GUI process PATH usually lacks /opt/homebrew/bin, so a bare "yt-dlp"
+/// fails) because the bundled macOS standalone binary cold-starts ~20s per
+/// run; falls back to the bundled copy, then to a bare PATH lookup. Cached.
+pub fn binary() []const u8 {
+    if (resolved_done) return resolved_buf[0..resolved_len];
+    const io = @import("../core/io_global.zig");
+    const candidates = [_][]const u8{
+        "/opt/homebrew/bin/yt-dlp",
+        "/usr/local/bin/yt-dlp",
+        "/usr/bin/yt-dlp",
+    };
+    for (candidates) |c| {
+        if (io.cwdAccess(c, .{})) {
+            @memcpy(resolved_buf[0..c.len], c);
+            resolved_len = c.len;
+            resolved_done = true;
+            return resolved_buf[0..resolved_len];
+        } else |_| {}
+    }
+    const pick = getPath() orelse "yt-dlp";
+    @memcpy(resolved_buf[0..pick.len], pick);
+    resolved_len = pick.len;
+    resolved_done = true;
+    return resolved_buf[0..resolved_len];
+}
+
 pub fn isDownloading() bool {
     return is_downloading;
 }

@@ -647,8 +647,8 @@ pub fn navigateToTab(tab: DrawerTab) void {
             app.router.navigate(.library);
         },
         .Jellyfin => {
-            app.library_tab = .Jellyfin;
-            app.router.navigate(.library);
+            app.browse_source = .Jellyfin;
+            app.router.navigate(.browse);
         },
         .Plugins => {
             app.system_tab = .Plugins;

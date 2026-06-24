@@ -48,10 +48,11 @@ pub fn fetchYoutube(query: []const u8) void {
             yt_mutex.unlock();
 
             // Try Piped API first (fast, direct HTTP ~0.5s)
-            if (fetchViaPiped(S.q_buf[0..S.q_len])) return;
-
-            // Fallback to yt-dlp (slow, ~5-10s)
+            // yt-dlp first — reliable (~2s) and always available. Public Piped
+            // instances are frequently dead and stall the whole fetch with no
+            // timeout, so it's only a backup when yt-dlp yields nothing.
             fetchViaYtdlp(S.q_buf[0..S.q_len]);
+            if (state.app.yt.results.items.len == 0) _ = fetchViaPiped(S.q_buf[0..S.q_len]);
         }
     }.worker, .{}) catch blk: {
         state.app.yt.is_loading.store(false, .release);
@@ -184,12 +185,19 @@ fn parsePipedResults(json: []const u8) void {
 
 fn fetchViaYtdlp(query: []const u8) void {
     var search_arg: [280]u8 = undefined;
-    const search_str = std.fmt.bufPrintZ(&search_arg, "ytsearch10:{s}", .{query}) catch return;
+    const search_str = std.fmt.bufPrintZ(&search_arg, "ytsearch20:{s}", .{query}) catch return;
 
+    // --print with a compact tab template instead of -j: full JSON lines carry
+    // a huge `description` that overflows the reader buffer (takeDelimiter then
+    // errors and we parse nothing). Tab rows are short, fast, and robust.
+    // Use the app's bundled yt-dlp (~/.config/zigzag/bin) — bare "yt-dlp" isn't
+    // on the GUI process PATH, so spawning it fails.
+    const ytdlp_bin = @import("ytdlp.zig").binary();
     const argv = [_][]const u8{
-        "yt-dlp",
+        ytdlp_bin,
         "--flat-playlist",
-        "-j",
+        "--print",
+        "%(id)s\t%(title)s\t%(channel)s\t%(duration)s\t%(view_count)s",
         "--no-warnings",
         "--socket-timeout",
         "10",
@@ -213,34 +221,32 @@ fn fetchViaYtdlp(query: []const u8) void {
     _ = child.wait() catch {};
 }
 
-fn parseYtdlpLine(json: []const u8) void {
+/// Parse one tab-delimited row: id \t title \t channel \t duration \t views.
+/// yt-dlp prints "NA" for missing numeric fields (flat-playlist) — parseInt
+/// then fails and we fall back to 0.
+fn parseYtdlpLine(line: []const u8) void {
     var item = state.YtItem{};
 
-    if (extractJsonStr(json, "\"id\":")) |vid| {
-        const vlen = @min(vid.len, 31);
-        @memcpy(item.video_id[0..vlen], vid[0..vlen]);
-        item.video_id_len = vlen;
-    }
-    if (item.video_id_len == 0) return;
+    var it = std.mem.splitScalar(u8, line, '\t');
+    const vid = it.next() orelse return;
+    if (vid.len == 0 or vid.len > 31 or std.mem.eql(u8, vid, "NA")) return;
+    @memcpy(item.video_id[0..vid.len], vid);
+    item.video_id_len = vid.len;
 
-    if (extractJsonStr(json, "\"title\":")) |title| {
+    if (it.next()) |title| {
         const tlen = @min(title.len, 127);
         @memcpy(item.title[0..tlen], title[0..tlen]);
         item.title_len = tlen;
     }
-
-    if (extractJsonStr(json, "\"channel\":")) |ch| {
-        const ulen = @min(ch.len, 63);
-        @memcpy(item.uploader[0..ulen], ch[0..ulen]);
-        item.uploader_len = ulen;
-    } else if (extractJsonStr(json, "\"uploader\":")) |ch| {
-        const ulen = @min(ch.len, 63);
-        @memcpy(item.uploader[0..ulen], ch[0..ulen]);
-        item.uploader_len = ulen;
+    if (it.next()) |ch| {
+        if (!std.mem.eql(u8, ch, "NA")) {
+            const ulen = @min(ch.len, 63);
+            @memcpy(item.uploader[0..ulen], ch[0..ulen]);
+            item.uploader_len = ulen;
+        }
     }
-
-    item.duration = extractJsonNum(json, "\"duration\":");
-    item.views = extractJsonNum(json, "\"view_count\":");
+    if (it.next()) |dur| item.duration = std.fmt.parseInt(i64, dur, 10) catch 0;
+    if (it.next()) |views| item.views = std.fmt.parseInt(i64, views, 10) catch 0;
 
     var thumb_buf: [128]u8 = undefined;
     if (std.fmt.bufPrint(&thumb_buf, "https://i.ytimg.com/vi/{s}/mqdefault.jpg", .{item.video_id[0..item.video_id_len]})) |thumb| {
