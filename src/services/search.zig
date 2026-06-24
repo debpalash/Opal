@@ -522,6 +522,59 @@ pub fn submitQuery(query_text: []const u8) void {
     resolver.resolve(search_buf[0..n], "auto");
 }
 
+/// Omnibox memory-mode flag. When set, the shell's submit path routes the
+/// raw phrase through memorySearch() (conversational "?"-search) instead of the
+/// plain unified search. R4 sets this; R3 honors it via the submit entry.
+pub var memory_mode: bool = false;
+
+/// Conversational "?"-search (Taste Receipts pillar). Embeds the phrase, finds
+/// the nearest *spoiler-clamped* scene memory via db.retrieveScene, and uses
+/// that scene's media_title as a SEED into the existing multi-source unified
+/// search — results land in the normal grid (no new grid code).
+///
+/// Mandatory offline fallback: if getEmbedding fails OR no confident scene hit,
+/// degrade to a plain unified search over the user's phrase. Never hard-fails.
+pub fn memorySearch(phrase: []const u8) void {
+    if (phrase.len == 0) return;
+
+    const ai_memory = @import("ai_memory.zig");
+    const db = @import("../core/db.zig");
+
+    // Embed the phrase; a null embedding makes retrieveScene use its keyword/LIKE
+    // fallback (also spoiler-clamped). Either path is safe.
+    var floats: [ai_memory.EMBED_DIM]f32 = undefined;
+    const ok = ai_memory.getEmbedding(phrase, &floats);
+
+    // Active player's current title + time-pos drive the spoiler clamp. Guard the
+    // index properly; an empty title means no same-title restriction.
+    var cur_title: []const u8 = "";
+    var cur_pos: f64 = 0;
+    if (state.app.active_player_idx < state.app.players.items.len) {
+        const p = state.app.players.items[state.app.active_player_idx];
+        _ = c.mpv.mpv_get_property(p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &cur_pos);
+        cur_title = if (p.loading_label_len > 0 and p.loading_label_len <= 128)
+            p.loading_label[0..p.loading_label_len]
+        else
+            "";
+    }
+
+    // Nearest scene memory (spoiler clamp reused from db.retrieveScene — not
+    // reimplemented here).
+    const hit = db.retrieveScene(if (ok) floats[0..] else null, phrase, cur_title, cur_pos);
+
+    if (hit) |h| {
+        const seed = h.title[0..h.title_len];
+        if (seed.len > 0) {
+            // Seed = the matched title; fan into the existing multi-source search.
+            submitQuery(seed);
+            return;
+        }
+    }
+
+    // Offline / no-hit fallback: plain unified search over the raw phrase.
+    submitQuery(phrase);
+}
+
 pub fn triggerSearch(query_text: []const u8) void {
     if (query_text.len == 0) return;
 
@@ -683,6 +736,10 @@ pub fn renderSearchContent() void {
                 } else {
                     state.showToast("Loading URL...");
                 }
+            } else if (memory_mode) {
+                // Conversational "?"-search: route the raw phrase through the
+                // taste/scene seed path (degrades silently to unified search).
+                memorySearch(query_text);
             } else if (state.app.universal_search) {
                 resolver.resolve(query_text, "auto");
             } else {

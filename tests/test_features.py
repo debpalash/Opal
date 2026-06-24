@@ -1131,6 +1131,22 @@ def test_aimemory_position_col():
     return "warn", "position_secs not present yet (runs on first launch)"
 
 
+@test("Taste Receipts Wired", "Recall")
+def test_taste_receipts():
+    tv = _src("src/services/taste_vector.zig")
+    db = _src("src/core/db.zig")
+    recs = _src("src/services/recommendations.zig")
+    dui = _src("src/ui/discovery_ui.zig")
+    home = _src("src/ui/home.zig")
+    shell = _src("src/ui/shell.zig")
+    srch = _src("src/services/search.zig")
+    if ("pub fn computeTaste" in tv and "seedTitlesByTaste" in db and "getEmbeddingBlob" in db
+            and "computeTaste" in recs and "renderForYouRail" in dui and "renderForYouRail" in home
+            and "pub fn memorySearch" in srch and "memorySearch" in shell):
+        return "pass", "taste vector + For-You rail + ?-memory-search wired"
+    return "fail", "taste receipts not fully wired"
+
+
 # ══════════════════════════════════════════════════════════
 # Zig Unit Tests
 # ══════════════════════════════════════════════════════════

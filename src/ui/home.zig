@@ -37,6 +37,21 @@ pub fn render() void {
 
     renderStats();
 
+    // Taste Receipts: the For-You rail. Generate recommendations once per
+    // session (DB + vec0 KNN — a one-time cost on first Home view; off-thread
+    // optimization is a follow-up), then render the rail (no-op when empty).
+    {
+        const recs = @import("../services/recommendations.zig");
+        const Once = struct {
+            var done: bool = false;
+        };
+        if (!Once.done) {
+            Once.done = true;
+            recs.generateRecommendations();
+        }
+        @import("discovery_ui.zig").renderForYouRail();
+    }
+
     const watching = &state.app.tmdb.watching;
     const watchlist = &state.app.tmdb.watchlist;
     const favorites = &state.app.tmdb.favorites;

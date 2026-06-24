@@ -1,5 +1,6 @@
 const std = @import("std");
 const paths = @import("paths.zig");
+const ai_memory = @import("../services/ai_memory.zig");
 
 // ══════════════════════════════════════════════════════════
 // SQLite3 C Bindings
@@ -548,4 +549,245 @@ pub fn retrieveScene(embed: ?[]const f32, query_text: []const u8, current_title:
     @memcpy(hit.title[0..copy_len], mtitle[0..copy_len]);
     hit.title_len = copy_len;
     return hit;
+}
+
+// ══════════════════════════════════════════════════════════
+// Taste Receipts — For-You rail over the existing embeddings
+// ══════════════════════════════════════════════════════════
+
+/// Copy a single stored embedding (by aimemory rowid) out of vec_aimemory into
+/// `out`. Returns false when the row is missing or the blob is shorter than a
+/// full EMBED_DIM vector. Mirrors retrieveMemory's vec0 access + sliceAsBytes
+/// usage; all sqlite handle access stays here.
+pub fn getEmbeddingBlob(rowid: i64, out: *[ai_memory.EMBED_DIM]f32) bool {
+    _ = db_handle orelse return false;
+
+    const stmt = prepare("SELECT embedding FROM vec_aimemory WHERE rowid = ?") orelse return false;
+    defer finalize(stmt);
+
+    bindInt64(stmt, 1, rowid);
+    if (step(stmt) != c.SQLITE_ROW) return false;
+
+    const blob = columnBlob(stmt, 0) orelse return false;
+    const want_bytes = ai_memory.EMBED_DIM * @sizeOf(f32);
+    if (blob.len < want_bytes) return false;
+
+    // Byte-wise copy: the sqlite BLOB pointer carries no f32 alignment
+    // guarantee, so reinterpreting it as []f32 directly would be UB.
+    const out_bytes = std.mem.sliceAsBytes(out[0..ai_memory.EMBED_DIM]);
+    @memcpy(out_bytes, blob[0..want_bytes]);
+    return true;
+}
+
+/// A lightweight projection of one aimemory row used to build the taste vector.
+pub const AiMemRow = struct {
+    id: i64 = 0,
+    is_scene: bool = false,
+    title: [128]u8 = std.mem.zeroes([128]u8),
+    title_len: usize = 0,
+    age_days: f64 = 0,
+};
+
+// Snapshot of aimemory rows for iteration. Rebuilt on each aiMemRowCount() so
+// callers see a stable count/index pairing without holding a sqlite cursor
+// across the (single-threaded recommendations worker) walk.
+var aimem_rows: [512]AiMemRow = undefined;
+var aimem_rows_len: usize = 0;
+
+/// Refresh + return the number of aimemory rows available for taste-vector
+/// computation. Newest rows first; capped at the snapshot buffer size.
+pub fn aiMemRowCount() usize {
+    aimem_rows_len = 0;
+    _ = db_handle orelse return 0;
+
+    // age_days from the DATETIME timestamp; is_scene from context_type.
+    const sql =
+        \\SELECT id, context_type,
+        \\       (julianday('now') - julianday(timestamp)) AS age_days
+        \\FROM aimemory
+        \\WHERE id IN (SELECT rowid FROM vec_aimemory)
+        \\ORDER BY id DESC
+        \\LIMIT 512
+    ;
+    const stmt = prepare(sql) orelse return 0;
+    defer finalize(stmt);
+
+    while (step(stmt) == c.SQLITE_ROW and aimem_rows_len < aimem_rows.len) {
+        var row = AiMemRow{};
+        row.id = c.sqlite3_column_int64(stmt, 0);
+        const ctype = columnText(stmt, 1) orelse "";
+        row.is_scene = std.mem.eql(u8, ctype, "scene");
+        var age = columnDouble(stmt, 2);
+        if (age < 0 or std.math.isNan(age)) age = 0;
+        row.age_days = age;
+        aimem_rows[aimem_rows_len] = row;
+        aimem_rows_len += 1;
+    }
+    return aimem_rows_len;
+}
+
+/// Fetch the idx-th row from the most recent aiMemRowCount() snapshot.
+pub fn aiMemRowAt(idx: usize, out: *AiMemRow) bool {
+    if (idx >= aimem_rows_len) return false;
+    out.* = aimem_rows[idx];
+    return true;
+}
+
+/// True when any watch_history row exists for `title` (case-sensitive exact
+/// match on the stored name). Used to exclude already-seen titles from the rail.
+pub fn isWatched(title: []const u8) bool {
+    if (title.len == 0) return false;
+    _ = db_handle orelse return false;
+
+    const stmt = prepare("SELECT 1 FROM watch_history WHERE name = ? LIMIT 1") orelse return false;
+    defer finalize(stmt);
+
+    bindText(stmt, 1, title);
+    return step(stmt) == c.SQLITE_ROW;
+}
+
+pub const SeedHit = struct {
+    title: [128]u8 = std.mem.zeroes([128]u8),
+    title_len: usize = 0,
+    reason: [256]u8 = std.mem.zeroes([256]u8),
+    reason_len: usize = 0,
+    score: f64 = 0,
+};
+
+// Internal accumulator: one entry per unique media_title, keeping the closest
+// (smallest-distance) scene candidate for that title.
+const SeedAccum = struct {
+    title: [128]u8 = std.mem.zeroes([128]u8),
+    title_len: usize = 0,
+    content: [512]u8 = std.mem.zeroes([512]u8),
+    content_len: usize = 0,
+    distance: f64 = 0,
+};
+
+/// KNN over scene embeddings by the taste vector, grouped per media_title.
+///
+/// For each unique title (excluding the currently-playing one and anything in
+/// watch_history) we keep the closest scene and synthesise a spoiler-clamped
+/// "Because you watched the … in <title>" receipt. Same-title rows relative to
+/// `current_title` are clamped to <= `current_pos` (mirrors retrieveScene), so
+/// a future scene of the current title can never leak into a receipt. Returns
+/// the number of SeedHits written into `out`.
+pub fn seedTitlesByTaste(taste: []const f32, current_title: []const u8, current_pos: f64, out: []SeedHit) usize {
+    if (out.len == 0) return 0;
+    if (taste.len == 0) return 0;
+    _ = db_handle orelse return 0;
+
+    const sql =
+        \\SELECT v.rowid, v.distance
+        \\FROM vec_aimemory v
+        \\WHERE v.embedding MATCH ? AND k = ?
+        \\ORDER BY v.distance ASC
+    ;
+    const stmt = prepare(sql) orelse return 0;
+    defer finalize(stmt);
+
+    const taste_bytes = std.mem.sliceAsBytes(taste);
+    bindBlob(stmt, 1, taste_bytes);
+    bindInt(stmt, 2, 50);
+
+    // Per-candidate metadata, restricted to scene rows (carries the clamp pos).
+    const md_stmt = prepare("SELECT media_title, content, position_secs FROM aimemory WHERE id = ? AND context_type = 'scene'") orelse return 0;
+    defer finalize(md_stmt);
+
+    // Group candidates by title; closest distance wins. Bounded by out.len.
+    var accum: [64]SeedAccum = undefined;
+    var accum_len: usize = 0;
+    const accum_cap = @min(out.len, accum.len);
+
+    while (step(stmt) == c.SQLITE_ROW) {
+        const rowid = columnInt(stmt, 0);
+        const distance = columnDouble(stmt, 1);
+
+        _ = c.sqlite3_reset(md_stmt);
+        bindInt(md_stmt, 1, rowid);
+        if (step(md_stmt) != c.SQLITE_ROW) continue;
+
+        const mtitle = columnText(md_stmt, 0) orelse "";
+        const content = columnText(md_stmt, 1) orelse "";
+        const pos = columnDouble(md_stmt, 2);
+        if (mtitle.len == 0) continue;
+
+        // Spoiler clamp: same-title rows must be at-or-before current_pos.
+        if (current_title.len != 0 and std.mem.eql(u8, mtitle, current_title)) {
+            if (pos > current_pos) continue;
+            // Don't surface the currently-playing title in its own rail.
+            continue;
+        }
+
+        // Exclude already-watched titles.
+        if (isWatched(mtitle)) continue;
+
+        // Have we already recorded this title? (candidates arrive ascending,
+        // so the first occurrence is already the closest — just skip dupes.)
+        var seen = false;
+        for (accum[0..accum_len]) |a| {
+            if (std.mem.eql(u8, a.title[0..a.title_len], mtitle)) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen) continue;
+
+        if (accum_len >= accum_cap) break;
+
+        var a = SeedAccum{ .distance = distance };
+        const t_len = @min(mtitle.len, a.title.len - 1);
+        @memcpy(a.title[0..t_len], mtitle[0..t_len]);
+        a.title_len = t_len;
+        const c_len = @min(content.len, a.content.len - 1);
+        @memcpy(a.content[0..c_len], content[0..c_len]);
+        a.content_len = c_len;
+        accum[accum_len] = a;
+        accum_len += 1;
+    }
+
+    // Materialise SeedHits with cosine-ish score + a "because" receipt.
+    var n: usize = 0;
+    for (accum[0..accum_len]) |a| {
+        if (n >= out.len) break;
+        var hit = SeedHit{};
+        @memcpy(hit.title[0..a.title_len], a.title[0..a.title_len]);
+        hit.title_len = a.title_len;
+
+        // distance -> score in (0, 1]; robust to either cosine-distance or L2.
+        hit.score = 1.0 / (1.0 + a.distance);
+
+        // Build a spoiler-safe receipt. The scene content is already clamped
+        // (other titles unrestricted; current title excluded above), so a short
+        // snippet of it is safe to surface as the "because".
+        const snippet = trimScene(a.content[0..a.content_len]);
+        var fbs = std.Io.Writer.fixed(&hit.reason);
+        if (snippet.len != 0) {
+            fbs.print("Because you watched the {s} in {s}", .{ snippet, a.title[0..a.title_len] }) catch {};
+        } else {
+            fbs.print("Because of a scene you loved in {s}", .{a.title[0..a.title_len]}) catch {};
+        }
+        hit.reason_len = fbs.buffered().len;
+
+        out[n] = hit;
+        n += 1;
+    }
+    return n;
+}
+
+/// Reduce a scene-content blob to a short, single-line snippet suitable for an
+/// inline "because" receipt. Collapses whitespace and caps length.
+fn trimScene(content: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, content, " \t\r\n");
+    // Stop at the first sentence/line break for a tidy clause.
+    var end: usize = trimmed.len;
+    for (trimmed, 0..) |ch, i| {
+        if (ch == '\n' or ch == '\r' or ch == '.') {
+            end = i;
+            break;
+        }
+    }
+    var clause = trimmed[0..end];
+    if (clause.len > 80) clause = clause[0..80];
+    return std.mem.trim(u8, clause, " \t\r\n");
 }

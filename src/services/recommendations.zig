@@ -1,10 +1,19 @@
 const std = @import("std");
 const state = @import("../core/state.zig");
 const db = @import("../core/db.zig");
+const taste_vector = @import("taste_vector.zig");
+const ai_memory = @import("ai_memory.zig");
 
 // ══════════════════════════════════════════════════════════
 // AI Recommendations — suggests content based on watch history
-// Uses TMDB genre analysis + keyword frequency from watched titles
+//
+// Primary: "Taste Receipts" — a no-cold-start For-You rail seeded by a
+// taste vector over the embeddings already in vec_aimemory (the scenes the
+// user leaned into). Each rec carries a spoiler-clamped "because" receipt.
+//
+// Fallback (MANDATORY, offline-safe): if no taste vector can be computed
+// (empty/absent embeddings) we degrade to the original TMDB genre-frequency
+// rail below — never hard-fail, never show a wrong receipt.
 // ══════════════════════════════════════════════════════════
 
 const alloc = @import("../core/alloc.zig").allocator;
@@ -12,7 +21,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 pub const Recommendation = struct {
     title: [128]u8 = std.mem.zeroes([128]u8),
     title_len: usize = 0,
-    reason: [64]u8 = std.mem.zeroes([64]u8),
+    reason: [256]u8 = std.mem.zeroes([256]u8),
     reason_len: usize = 0,
     id: i32 = 0,
     score: f64 = 0,
@@ -22,17 +31,59 @@ pub var recommendations: [20]Recommendation = undefined;
 pub var rec_count: usize = 0;
 pub var is_loading: bool = false;
 
-/// Generate recommendations from TMDB watchlist + favorites + watch patterns
+// Snapshot of the active player taken on the calling (UI) thread BEFORE the
+// worker spawns — the worker must not touch state.app.players itself.
+var seed_current_title: [128]u8 = std.mem.zeroes([128]u8);
+var seed_current_title_len: usize = 0;
+var seed_current_pos: f64 = 0;
+
+/// Generate recommendations. Tries the taste-vector rail first; on failure
+/// (no embeddings / empty vec store) keeps the original genre-frequency rail.
 pub fn generateRecommendations() void {
     if (is_loading) return;
     is_loading = true;
     rec_count = 0;
+
+    // Snapshot the active player on this (UI) thread, guarded per CLAUDE.md.
+    seed_current_title_len = 0;
+    seed_current_pos = 0;
+    if (state.app.active_player_idx < state.app.players.items.len) {
+        const p = state.app.players.items[state.app.active_player_idx];
+        seed_current_title_len = p.getMediaTitle(&seed_current_title);
+        seed_current_pos = p.last_seen_pos;
+    }
 
     _ = std.Thread.spawn(.{}, struct {
         fn worker() void {
             defer {
                 is_loading = false;
             }
+
+            // ── Primary: Taste Receipts (taste vector over vec_aimemory) ──
+            var taste: [ai_memory.EMBED_DIM]f32 = undefined;
+            if (taste_vector.computeTaste(&taste)) {
+                const current_title = seed_current_title[0..seed_current_title_len];
+                var seeds: [20]db.SeedHit = undefined;
+                const n = db.seedTitlesByTaste(taste[0..], current_title, seed_current_pos, seeds[0..]);
+                if (n > 0) {
+                    var i: usize = 0;
+                    while (i < n and rec_count < 20) : (i += 1) {
+                        const s = &seeds[i];
+                        addRec(
+                            s.title[0..@min(s.title_len, s.title.len)],
+                            s.reason[0..@min(s.reason_len, s.reason.len)],
+                            0,
+                            s.score,
+                        );
+                    }
+                    return;
+                }
+                // n == 0 → fall through to the genre-frequency fallback below.
+            }
+
+            // ── Fallback (MANDATORY): TMDB genre-frequency rail ──
+            // Reached when no taste vector could be computed (empty/absent
+            // embeddings) OR the KNN returned nothing. Original body, verbatim.
 
             // 1) Collect genre_ids from favorited/watchlisted TMDB items
             var genre_counts: [32]struct { genre: [32]u8, genre_len: usize, count: u32 } = undefined;
@@ -114,7 +165,7 @@ pub fn generateRecommendations() void {
             const tlen = @min(title.len, 127);
             @memcpy(rec.title[0..tlen], title[0..tlen]);
             rec.title_len = tlen;
-            const rlen = @min(reason.len, 63);
+            const rlen = @min(reason.len, 255);
             @memcpy(rec.reason[0..rlen], reason[0..rlen]);
             rec.reason_len = rlen;
             rec.id = id;

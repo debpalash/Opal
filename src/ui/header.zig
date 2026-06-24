@@ -518,6 +518,27 @@ pub fn renderUrlInput(is_large: bool) void {
     }
     te.deinit();
 
+    // Inline memory-mode (Taste Receipts) toggle — flips search.memory_mode.
+    // When on, an omnibox submit routes the text to search.memorySearch (a
+    // conversational "?"-style taste lookup) instead of the normal media/AI
+    // routing. Accent glyph when active; quiet tertiary when off.
+    {
+        const mem_on = search.memory_mode;
+        var mem_wd: dvui.WidgetData = undefined;
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.brain, .{}, .{}, .{
+            .data_out = &mem_wd,
+            .gravity_y = 0.5,
+            .color_text = if (mem_on) theme.colors.accent else theme.colors.text_tertiary,
+            .color_fill = transparent,
+            .border = dvui.Rect.all(0),
+            .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
+            .min_size_content = .{ .w = 18, .h = 18 },
+        })) {
+            search.memory_mode = !search.memory_mode;
+        }
+        if (!is_large) components.tip(@src(), mem_wd, "Taste search (ask your memory)");
+    }
+
     // Inline play button
     var play_wd: dvui.WidgetData = undefined;
     const clicked_load = dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
@@ -621,6 +642,16 @@ pub fn submitInput() void {
         const len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
         if (len > 0) {
             const text = state.app.magnet_buf[0..len];
+
+            // Memory-mode (Taste Receipts): a conversational "?"-style lookup
+            // over the user's taste memory that fans seed titles into the
+            // existing multi-source search. Takes priority over the normal
+            // media/AI routing; the buffer is consumed either way.
+            if (search.memory_mode) {
+                search.memorySearch(text);
+                @memset(&state.app.magnet_buf, 0);
+                return;
+            }
 
             // Unified input: route to AI chat if not URL/magnet/path. Media goes to player.
             const looks_like_media =

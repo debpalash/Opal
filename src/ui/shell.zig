@@ -202,6 +202,15 @@ fn omnibox() void {
     if (len == 0) return;
     const text = state.app.magnet_buf[0..len];
 
+    // Leading '?' → conversational memory search over your own watch history
+    // ("?the rainy argument scene") — seeds the matched title into multi-source
+    // search. (Trailing '?' is AI chat, handled below.)
+    if (text[0] == '?' and len > 1) {
+        search_mod.memorySearch(text[1..]);
+        @memset(&state.app.magnet_buf, 0);
+        return;
+    }
+
     if (isMedia(text)) {
         header.submitInput(); // loads into player (clears buffer); helper routes the player nav
         return;
