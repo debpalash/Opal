@@ -21,6 +21,7 @@ const piped_instances = [_][]const u8{
 pub fn fetchYoutube(query: []const u8) void {
     if (state.app.yt.is_loading.load(.acquire)) return;
     state.app.yt.is_loading.store(true, .release);
+    state.app.yt.last_fetch_s = @import("browse_cache.zig").now(); // SWR stamp
 
     const actual_query = if (query.len == 0) "trending music 2024" else query;
 
@@ -351,6 +352,11 @@ pub fn renderContent() void {
 
     if (!state.app.yt.loaded_once and !state.app.yt.is_loading.load(.acquire)) {
         state.app.yt.loaded_once = true;
+        fetchYoutube(state.app.yt.search_buf[0 .. std.mem.indexOfScalar(u8, &state.app.yt.search_buf, 0) orelse state.app.yt.search_buf.len]);
+    } else if (state.app.yt.results.items.len > 0 and !state.app.yt.is_loading.load(.acquire) and
+        @import("browse_cache.zig").isStale(state.app.yt.last_fetch_s))
+    {
+        // SWR background refresh — keep showing current results meanwhile.
         fetchYoutube(state.app.yt.search_buf[0 .. std.mem.indexOfScalar(u8, &state.app.yt.search_buf, 0) orelse state.app.yt.search_buf.len]);
     }
 

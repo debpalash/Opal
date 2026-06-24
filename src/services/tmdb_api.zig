@@ -14,6 +14,10 @@ pub fn fetchCurrentView(append: bool) void {
     if (state.app.tmdb.is_loading) return;
     if (state.app.tmdb.api_key_len == 0) return;
 
+    // SWR: stamp the cache time on a fresh (non-append) load so revisits within
+    // the TTL skip the network (see browse_cache + renderTmdbContent).
+    if (!append) state.app.tmdb.last_fetch_s = @import("browse_cache.zig").now();
+
     // CRITICAL: reserve a large, STABLE capacity for the results buffer once,
     // up front (before any poster-fetch worker thread can hold a *TmdbItem into
     // it). Poster workers write ptr.poster_w/_pixels asynchronously; if a later

@@ -55,6 +55,13 @@ pub fn renderTmdbContent() void {
     if (!state.app.tmdb.loaded_once and !state.app.tmdb.is_loading) {
         state.app.tmdb.loaded_once = true;
         api.fetchCurrentView(false);
+    } else if (state.app.tmdb.view == .Trending and !state.app.tmdb.is_loading and
+        state.app.tmdb.results.items.len > 0 and state.app.tmdb.page == 1 and
+        @import("browse_cache.zig").isStale(state.app.tmdb.last_fetch_s))
+    {
+        // Cache aged past the TTL — refresh in the background (the current
+        // results keep showing until the new ones arrive).
+        api.fetchCurrentView(false);
     }
 
     const list = activeList();

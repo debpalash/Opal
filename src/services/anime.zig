@@ -24,12 +24,13 @@ const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/2010010
 pub var has_loaded_trending: bool = false;
 
 pub fn loadTrendingAnime() void {
-    if (state.app.anime.is_loading or has_loaded_trending) return;
+    if (state.app.anime.is_loading) return;
 
     state.app.anime.is_loading = true;
     state.app.anime.result_count = 0;
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
+    state.app.anime.last_fetch_s = @import("browse_cache.zig").now(); // SWR stamp
     has_loaded_trending = true;
 
     state.app.anime.thread = std.Thread.spawn(.{}, trendingThread, .{}) catch {
@@ -681,7 +682,11 @@ fn tryAnimePaheDDL(name: []const u8, ep_no: []const u8) bool {
 // ══════════════════════════════════════════════════════════
 
 pub fn renderContent() void {
-    if (!has_loaded_trending and state.app.anime.result_count == 0 and state.app.anime.search_buf[0] == 0) {
+    // Initial load, or SWR background refresh once the cache is stale. Only
+    // while on the trending view (empty search box).
+    if (state.app.anime.search_buf[0] == 0 and !state.app.anime.is_loading and
+        (state.app.anime.result_count == 0 or @import("browse_cache.zig").isStale(state.app.anime.last_fetch_s)))
+    {
         loadTrendingAnime();
     }
 

@@ -401,6 +401,7 @@ var sr_title_lens: [MAX_SEARCH_RESULTS]usize = std.mem.zeroes([MAX_SEARCH_RESULT
 var sr_count: usize = 0;
 var sr_searching: bool = false;
 var loaded_default: bool = false;
+var last_fetch_s: i64 = 0; // SWR cache timestamp
 var sr_query_buf: [256]u8 = undefined;
 var sr_query_len: usize = 0;
 
@@ -412,6 +413,7 @@ pub fn searchComics(query: []const u8) void {
     if (sr_searching or query.len == 0 or query.len >= sr_query_buf.len) return;
     sr_searching = true;
     sr_count = 0;
+    last_fetch_s = @import("browse_cache.zig").now(); // SWR stamp
     @memcpy(sr_query_buf[0..query.len], query);
     sr_query_len = query.len;
     const t = std.Thread.spawn(.{}, searchWorker, .{}) catch {
@@ -512,6 +514,13 @@ pub fn renderContent() void {
     if (!loaded_default and sr_count == 0 and !sr_searching and state.app.comic.search_buf[0] == 0 and state.app.comic.title_len == 0) {
         loaded_default = true;
         searchComics("spider-man");
+    } else if (sr_count > 0 and !sr_searching and sr_query_len > 0 and state.app.comic.title_len == 0 and
+        @import("browse_cache.zig").isStale(last_fetch_s))
+    {
+        // SWR: refresh the current listing in the background once it's stale.
+        var q: [256]u8 = undefined;
+        @memcpy(q[0..sr_query_len], sr_query_buf[0..sr_query_len]);
+        searchComics(q[0..sr_query_len]);
     }
 
     // Full-page root so loading/empty branches fill width/height.
