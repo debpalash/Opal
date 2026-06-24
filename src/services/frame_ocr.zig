@@ -16,6 +16,8 @@ const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
 const player = @import("../player/player.zig");
+const sync = @import("../core/sync.zig");
+const alloc = @import("../core/alloc.zig");
 
 // Native ONNX Runtime OCR via the same C wrapper comics.zig uses.
 const ocr_c = @cImport({
@@ -25,6 +27,15 @@ const ocr_c = @cImport({
 var ocr_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var ocr_init_failed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var ocr_init_lock: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+// Module-owned scratch buffer. mpv writes p.pixels on the render thread while
+// OCR runs for tens of ms; reading it directly yields torn frames (garbled
+// OCR) and, on a resolution-change realloc, a use-after-free. We snapshot the
+// pixel bytes into this buffer under `scratch_mutex` and hand the SCRATCH copy
+// to the OCR wrapper. The buffer is reused across calls and only grown when a
+// larger frame arrives (the proactive co-watcher OCRs frequently).
+var scratch: ?[]u8 = null;
+var scratch_mutex: sync.Mutex = .{};
 
 /// Lazily initialize the OCR pipeline exactly once. Returns true if usable.
 fn ensureOcrInit() bool {
@@ -87,8 +98,28 @@ pub fn ocrCurrentFrame(out_buf: []u8) usize {
 
     if (!ensureOcrInit()) return 0;
 
-    // Opaque video frame: PMA bytes == straight RGBA bytes. Cast through.
-    const rgba_ptr: [*]const u8 = @ptrCast(pixels.ptr);
+    // ── Snapshot the live frame so OCR can't race mpv's render thread. ──
+    // Each PMA pixel is 4 bytes; copy the exact w*h*4 byte window we need.
+    const byte_len: usize = need * 4;
+    const src_bytes: [*]const u8 = @ptrCast(pixels.ptr);
+
+    scratch_mutex.lock();
+    // Lazily allocate / grow the reusable scratch buffer.
+    if (scratch == null or scratch.?.len < byte_len) {
+        if (scratch) |old| alloc.allocator.free(old);
+        scratch = null;
+        scratch = alloc.allocator.alloc(u8, byte_len) catch {
+            scratch_mutex.unlock();
+            return 0;
+        };
+    }
+    const buf = scratch.?;
+    @memcpy(buf[0..byte_len], src_bytes[0..byte_len]);
+    scratch_mutex.unlock();
+
+    // Opaque video frame: PMA bytes == straight RGBA bytes. Pass the SNAPSHOT
+    // (not the live p.pixels) so a concurrent render/realloc can't corrupt us.
+    const rgba_ptr: [*]const u8 = buf.ptr;
 
     const result = ocr_c.ocr_recognize_rgba(rgba_ptr, w, h);
     if (result == null) return 0;

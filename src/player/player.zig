@@ -70,6 +70,7 @@ pub const MediaPlayer = struct {
     // event loop (see updateTorrentBackgroundTasks) so the per-frame render
     // path doesn't issue synchronous IPC (or per-frame allocations) for these.
     cached_paused: bool = true, // mirror of mpv "pause"
+    last_seen_pos: f64 = 0, // last valid mpv time-pos seen in the event loop (co-watch rewind detect)
     cached_vid_no: bool = false, // mpv "vid" == "no" (audio-only)
     cached_sub_text: [1024]u8 = std.mem.zeroes([1024]u8),
     cached_sub_text_len: usize = 0,
@@ -700,7 +701,17 @@ pub fn updateTorrentBackgroundTasks() void {
                 if (std.mem.eql(u8, pname, "pause")) {
                     if (pc.*.format == c.mpv.MPV_FORMAT_FLAG and pc.*.data != null) {
                         const flag = @as(*c_int, @ptrCast(@alignCast(pc.*.data))).*;
-                        p.cached_paused = (flag != 0);
+                        const prev_paused = p.cached_paused;
+                        const new_paused = (flag != 0);
+                        p.cached_paused = new_paused;
+                        // Co-watcher: fire only on a genuine playing->paused transition
+                        // for the *active* player (pointer identity, bounds-guarded).
+                        if (!prev_paused and new_paused and
+                            state.app.active_player_idx < state.app.players.items.len and
+                            state.app.players.items[state.app.active_player_idx] == p)
+                        {
+                            @import("../services/co_watch.zig").onPlaybackEvent(.paused);
+                        }
                     }
                 } else if (std.mem.eql(u8, pname, "vid")) {
                     if (pc.*.format == c.mpv.MPV_FORMAT_STRING and pc.*.data != null) {
@@ -724,6 +735,18 @@ pub fn updateTorrentBackgroundTasks() void {
                             var pos: f64 = 0;
                             _ = c.mpv.mpv_get_property(p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &pos);
                             p.updateDialogueRing(txt, pos);
+
+                            // Co-watcher rewind detect: a large backward jump in
+                            // time-pos. Active player only (pointer identity).
+                            if (pos >= 0) {
+                                if (pos < p.last_seen_pos - 5.0 and
+                                    state.app.active_player_idx < state.app.players.items.len and
+                                    state.app.players.items[state.app.active_player_idx] == p)
+                                {
+                                    @import("../services/co_watch.zig").onPlaybackEvent(.rewound);
+                                }
+                                p.last_seen_pos = pos;
+                            }
                         }
                     } else {
                         p.cached_sub_text_len = 0;

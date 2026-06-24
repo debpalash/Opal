@@ -597,6 +597,35 @@ pub fn renderAIContent() void {
         }
     }
 
+    // Proactive Co-Watcher sensitivity — the AI may speak ONE short, spoiler-
+    // safe remark about what is on screen when you pause or rewind in voice
+    // mode. Quiet by default; this control just assigns the module var.
+    settingRow("Co-Watcher", 65, @src());
+    _ = dvui.label(@src(), "AI comments on what you missed when you pause or rewind (voice mode)", .{}, .{
+        .id_extra = 651,
+        .color_text = theme.colors.text_tertiary,
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
+    });
+    {
+        const co_watch = @import("../services/co_watch.zig");
+        const cw_labels = [_][]const u8{ "Off", "Quiet", "Balanced", "Chatty" };
+        const sel: usize = switch (co_watch.sensitivity) {
+            .off => 0,
+            .quiet => 1,
+            .balanced => 2,
+            .chatty => 3,
+        };
+        if (components.segment(@src(), &cw_labels, sel)) |clicked| {
+            co_watch.sensitivity = switch (clicked) {
+                0 => .off,
+                1 => .quiet,
+                2 => .balanced,
+                else => .chatty,
+            };
+            state.markConfigDirty();
+        }
+    }
+
     settingRow("TTS Voice", 61, @src());
     ttsVoiceSegment(0);
 
