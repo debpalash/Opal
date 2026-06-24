@@ -227,7 +227,15 @@ fn isMedia(text: []const u8) bool {
 
 fn renderPage(r: Route) !void {
     switch (r) {
-        .player => try @import("grid.zig").renderGrid(),
+        .player => {
+            try @import("grid.zig").renderGrid();
+            // Transport controls overlay (play/pause/scrubber/volume). The
+            // legacy layout calls this right after the grid (main.zig); the page
+            // shell must too, or the player has no controls. Gated internally by
+            // show_cell_overlay (mouse-activity auto-hide) + provider == .mpv.
+            @import("footer.zig").renderLiquidGlassOverlay();
+            @import("footer.zig").renderStatsOverlay();
+        },
         .settings => drawer.renderTabContent(.Settings),
         .assistant => drawer.renderTabContent(.AI),
         .search => drawer.renderTabContent(.Search),
