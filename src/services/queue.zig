@@ -753,9 +753,10 @@ fn startThumbBackfill() void {
                 }
                 const url = urls[i][0..url_lens[i]];
                 
-                // yt-dlp --get-thumbnail <url>
+                // yt-dlp --get-thumbnail <url> (bundled/system binary — bare
+                // "yt-dlp" isn't on the GUI process PATH).
                 const argv = [_][]const u8{
-                    "yt-dlp", "--get-thumbnail",
+                    @import("ytdlp.zig").binary(), "--get-thumbnail",
                     "--no-warnings", "--no-check-certificates",
                     "--cookies-from-browser", "firefox",
                     url,

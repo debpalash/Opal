@@ -95,15 +95,16 @@ fn extractThread() void {
     const has_proxy = state.app.proxy_url_len > 0;
     const proxy_str = state.app.proxy_url[0..state.app.proxy_url_len];
     
+    const ytdlp_bin = @import("ytdlp.zig").binary();
     const argv_proxy = [_][]const u8{
-        "yt-dlp", "--flat-playlist", "-j",
+        ytdlp_bin, "--flat-playlist", "-j",
         "--no-warnings",
         "--cookies-from-browser", "firefox",
         "--proxy", proxy_str,
         "--", url,
     };
     const argv_direct = [_][]const u8{
-        "yt-dlp", "--flat-playlist", "-j",
+        ytdlp_bin, "--flat-playlist", "-j",
         "--no-warnings",
         "--cookies-from-browser", "firefox",
         "--", url,

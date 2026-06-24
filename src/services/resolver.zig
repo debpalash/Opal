@@ -276,47 +276,27 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     status_local.store(.searching, .release);
     status_rss.store(.searching, .release);
 
-    // Local files first — instant, already on disk.
-    _ = std.Thread.spawn(.{}, resolveLocalFiles, .{ resolver_query, qlen }) catch {
-        status_local.store(.failed, .release);
-        checkAllDone();
+    // Fire every backend in parallel. Each handle is detached (never joined) —
+    // discarding it via `_ =` leaks the pthread resource for the process life.
+    const Spawn = struct {
+        fn go(comptime f: anytype, st: *std.atomic.Value(SourceStatus)) void {
+            if (std.Thread.spawn(.{}, f, .{ resolver_query, resolver_query_len })) |t| {
+                t.detach();
+            } else |_| {
+                st.store(.failed, .release);
+                checkAllDone();
+            }
+        }
     };
-    // RSS feed items (already-fetched magnets matching the query).
-    _ = std.Thread.spawn(.{}, resolveRss, .{ resolver_query, qlen }) catch {
-        status_rss.store(.failed, .release);
-        checkAllDone();
-    };
-
-    // Fire all backends in parallel — 7 threads for maximum speed
-    _ = std.Thread.spawn(.{}, resolveJellyfin, .{ resolver_query, qlen }) catch {
-        status_jf.store(.failed, .release);
-        checkAllDone();
-    };
-    _ = std.Thread.spawn(.{}, resolveTorrentsNova2, .{ resolver_query, qlen }) catch {
-        status_torrent.store(.failed, .release);
-        checkAllDone();
-    };
-    _ = std.Thread.spawn(.{}, resolve1337x, .{ resolver_query, qlen }) catch {
-        status_1337x.store(.failed, .release);
-        checkAllDone();
-    };
-    _ = std.Thread.spawn(.{}, resolveYts, .{ resolver_query, qlen }) catch {
-        status_yts.store(.failed, .release);
-        checkAllDone();
-    };
-    _ = std.Thread.spawn(.{}, resolveAnime, .{ resolver_query, qlen }) catch {
-        status_anime.store(.failed, .release);
-        checkAllDone();
-    };
-    _ = std.Thread.spawn(.{}, resolveYouTube, .{ resolver_query, qlen }) catch {
-        status_yt.store(.failed, .release);
-        checkAllDone();
-    };
-    // Stremio needs IMDB ID — queries TMDB first, then addons
-    _ = std.Thread.spawn(.{}, resolveStremio, .{ resolver_query, qlen }) catch {
-        status_stremio.store(.failed, .release);
-        checkAllDone();
-    };
+    Spawn.go(resolveLocalFiles, &status_local); // instant — already on disk
+    Spawn.go(resolveRss, &status_rss); // already-fetched magnets matching query
+    Spawn.go(resolveJellyfin, &status_jf);
+    Spawn.go(resolveTorrentsNova2, &status_torrent);
+    Spawn.go(resolve1337x, &status_1337x);
+    Spawn.go(resolveYts, &status_yts);
+    Spawn.go(resolveAnime, &status_anime);
+    Spawn.go(resolveYouTube, &status_yt);
+    Spawn.go(resolveStremio, &status_stremio); // needs IMDB id — TMDB then addons
 }
 
 fn pushResult(item: ResolvedItem) bool {
