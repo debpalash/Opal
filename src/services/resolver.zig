@@ -729,15 +729,17 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
     // uses — it's 0.16-native and known to work (drawer search pulls 200+
     // rows reliably). Byte-by-byte reads via our shim were dropping data
     // on pipe WouldBlock + reader-buffer resets.
-    var child_reader_buf: [2048]u8 = undefined;
+    var child_reader_buf: [8192]u8 = undefined;
     var reader = child.stdout.?.reader(@import("../core/io_global.zig").io(), &child_reader_buf);
 
     var found: usize = 0;
     var scanned: usize = 0;
-    while (scanned < 200) {
+    while (true) {
         const line = reader.interface.takeDelimiter('\n') catch break orelse break;
         scanned += 1;
-        if (line.len < 10) continue;
+        // Keep draining the pipe to EOF even after we have enough — see the
+        // wait() note below. We just stop parsing.
+        if (found >= 25 or line.len < 10) continue;
 
         // Parse pipe-delimited: link|name|size|seeds|leech|engine
         var it = std.mem.splitScalar(u8, line, '|');
@@ -789,18 +791,16 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
         @memcpy(item.detail[0..dlen], dstr[0..dlen]);
         item.detail_len = dlen;
 
-        if (pushResult(item)) {
-            found += 1;
-            if (found >= 25) break;
-        }
+        if (pushResult(item)) found += 1;
     }
 
-    // nova2.py keeps streaming 200+ rows; we stop reading at 25 (or 200
-    // scanned). wait() would then DEADLOCK — the child blocks writing into a
-    // full stdout pipe we no longer drain. kill() signals + reaps, so the
-    // torrent source actually reaches .done and is_resolving can clear. (Was:
-    // perpetual "Searching…" that blocked every subsequent universal search.)
-    _ = child.kill() catch {};
+    // Drain to EOF (above) and let nova2.py exit on its own, THEN reap. We used
+    // to kill() it once we had 25 rows, but nova2 runs a multiprocessing pool —
+    // SIGTERM mid-run left its workers writing into a dead pipe, spewing
+    // BrokenPipeError tracebacks and leaking semaphores. Draining is what the
+    // torrent-mode search does too, and it tears down cleanly. (The earlier
+    // deadlock came from NOT draining before wait(); now we always drain.)
+    _ = child.wait() catch {};
     {
         var slog: [64]u8 = undefined;
         const m = std.fmt.bufPrint(&slog, "nova2 scanned={d} pushed={d}", .{ scanned, found }) catch "nova2";
