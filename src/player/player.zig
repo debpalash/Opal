@@ -303,6 +303,9 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "pause", c.mpv.MPV_FORMAT_FLAG);
         _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "vid", c.mpv.MPV_FORMAT_STRING);
         _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "sub-text", c.mpv.MPV_FORMAT_STRING);
+        // time-pos drives co-watch rewind detection even during silent stretches
+        // (no subtitle change). Value arrives in the event payload — no per-frame IPC.
+        _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "time-pos", c.mpv.MPV_FORMAT_DOUBLE);
 
         // Load enabled user scripts individually (must happen after mpv_initialize)
         for (0..state.app.script_count) |si| {
@@ -731,25 +734,31 @@ pub fn updateTorrentBackgroundTasks() void {
                         p.cached_sub_text_len = n;
 
                         // T3: also feed the rolling dialogue ring (deduped).
+                        // (Rewind detection now lives in the "time-pos" branch so
+                        // it fires during silent stretches too.)
                         if (txt.len > 0) {
                             var pos: f64 = 0;
                             _ = c.mpv.mpv_get_property(p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &pos);
                             p.updateDialogueRing(txt, pos);
-
-                            // Co-watcher rewind detect: a large backward jump in
-                            // time-pos. Active player only (pointer identity).
-                            if (pos >= 0) {
-                                if (pos < p.last_seen_pos - 5.0 and
-                                    state.app.active_player_idx < state.app.players.items.len and
-                                    state.app.players.items[state.app.active_player_idx] == p)
-                                {
-                                    @import("../services/co_watch.zig").onPlaybackEvent(.rewound);
-                                }
-                                p.last_seen_pos = pos;
-                            }
                         }
                     } else {
                         p.cached_sub_text_len = 0;
+                    }
+                } else if (std.mem.eql(u8, pname, "time-pos")) {
+                    if (pc.*.format == c.mpv.MPV_FORMAT_DOUBLE and pc.*.data != null) {
+                        const newpos = @as(*f64, @ptrCast(@alignCast(pc.*.data))).*;
+                        if (newpos >= 0) {
+                            // Co-watcher rewind detect: a backward jump > 5s, fired
+                            // even during silent stretches. Active player only
+                            // (pointer identity, bounds-guarded).
+                            if (newpos < p.last_seen_pos - 5.0 and
+                                state.app.active_player_idx < state.app.players.items.len and
+                                state.app.players.items[state.app.active_player_idx] == p)
+                            {
+                                @import("../services/co_watch.zig").onPlaybackEvent(.rewound);
+                            }
+                            p.last_seen_pos = newpos;
+                        }
                     }
                 }
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_LOG_MESSAGE) {
