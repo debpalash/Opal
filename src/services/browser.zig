@@ -517,6 +517,14 @@ pub fn renderContent() void {
 
     const icons = @import("icons");
 
+    // Wrap the whole browser body in ONE expanding container. Without this, the
+    // URL bar / title / landing render as bare siblings directly into the shell's
+    // content box — next to the Browse sub-tabs row — and the expand=.both frame
+    // starves the non-expand siblings (sub-tabs + URL bar) of height, making them
+    // vanish. Every other Browse content renderer wraps its body the same way.
+    var root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+    defer root.deinit();
+
     // URL bar with icon buttons
     {
         var url_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -697,13 +705,14 @@ pub fn renderContent() void {
             }
         }
     } else {
-        // Landing page — no frame yet
+        // Landing page — no frame yet. expand=.both fills the space BELOW the
+        // URL bar; do NOT add gravity_y here — gravity on an expanded box makes
+        // it claim the full parent height and draw its fill over the URL bar.
         var empty = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .both,
-            .gravity_x = 0.5,
-            .gravity_y = 0.5,
             .background = true,
             .color_fill = dvui.Color{ .r = 12, .g = 12, .b = 16, .a = 255 },
+            .padding = .{ .x = 0, .y = 12, .w = 0, .h = 0 },
         });
         defer empty.deinit();
 
