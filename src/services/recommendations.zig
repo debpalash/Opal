@@ -53,7 +53,7 @@ pub fn generateRecommendations() void {
         seed_current_pos = p.last_seen_pos;
     }
 
-    _ = std.Thread.spawn(.{}, struct {
+    const rec_thread = std.Thread.spawn(.{}, struct {
         fn worker() void {
             defer {
                 is_loading = false;
@@ -172,5 +172,10 @@ pub fn generateRecommendations() void {
             rec.score = score;
             rec_count += 1;
         }
-    }.worker, .{}) catch {};
+    }.worker, .{}) catch {
+        // Spawn failed — must clear is_loading or generation is blocked forever.
+        is_loading = false;
+        return;
+    };
+    rec_thread.detach(); // detach so the pthread handle isn't leaked
 }

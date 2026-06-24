@@ -1147,6 +1147,19 @@ def test_taste_receipts():
     return "fail", "taste receipts not fully wired"
 
 
+@test("Session Threads Detached", "Stability")
+def test_session_threads_detached():
+    # Discarded `_ = std.Thread.spawn(...)` leaks the pthread handle (CLAUDE.md);
+    # spawns must store + detach. Guard the files this session created/owns.
+    files = ["src/services/recommendations.zig", "src/services/co_watch.zig",
+             "src/services/scene_memory.zig", "src/services/taste_vector.zig",
+             "src/services/spoiler.zig", "src/services/frame_ocr.zig"]
+    offenders = [f for f in files if "_ = std.Thread.spawn(" in _src(f)]
+    if offenders:
+        return "fail", "leaked thread handle in: " + ", ".join(offenders)
+    return "pass", "session-owned spawns store + detach"
+
+
 # ══════════════════════════════════════════════════════════
 # Zig Unit Tests
 # ══════════════════════════════════════════════════════════
