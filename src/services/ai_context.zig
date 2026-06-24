@@ -1201,7 +1201,10 @@ pub fn generateResponse() void {
     const w = &state_fbs;
 
     // 1. Playback state (enriched for context-aware responses)
-    if (has_player) {
+    // Fresh bounds check (not the stale `has_player` from above): this runs on
+    // the generation worker thread and the UI thread can shrink players in
+    // between — indexing on a stale length is an OOB/UAF. CLAUDE.md mandate.
+    if (state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
         if (p.loading_label_len > 0 and p.loading_label_len <= 128) {
             w.print("Playing: {s}", .{p.loading_label[0..p.loading_label_len]}) catch {};

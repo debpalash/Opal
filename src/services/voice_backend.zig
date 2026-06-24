@@ -300,8 +300,10 @@ fn playPiperOrSay(bin: []const u8, out_arg: []const u8, out_wav: []const u8, tex
 }
 
 fn playWav(path: []const u8) void {
+    // macOS plays via afplay; Linux via aplay (matches ai_voice's player choice).
+    const player_bin = if (@import("builtin").os.tag == .macos) "/usr/bin/afplay" else "aplay";
     var play = io_global.Child.init(&.{
-        "/usr/bin/afplay", path,
+        player_bin, path,
     }, @import("../core/alloc.zig").allocator);
     play.stdout_behavior = .Ignore;
     play.stderr_behavior = .Ignore;
