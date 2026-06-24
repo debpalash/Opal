@@ -955,6 +955,9 @@ pub fn generateResponse() void {
     defer server.inference_mutex.unlock();
     chat.phase = .thinking;
 
+    // Fresh generation — clear any stale abort request from a previous reply.
+    chat.gen_abort.store(false, .release);
+
     defer {
         chat.is_generating.store(false, .release);
         chat.phase = .idle;
@@ -1402,6 +1405,12 @@ pub fn generateResponse() void {
     const stdout_file = child.stdout.?;
 
     while (true) {
+        // Barge-in / Stop — abort the stream and kill curl so we don't block on
+        // its --max-time and don't overwrite the chat with a superseded reply.
+        if (chat.gen_abort.load(.acquire)) {
+            _ = child.kill() catch {};
+            break;
+        }
         var byte: [1]u8 = undefined;
         const n = @import("../core/io_global.zig").read(stdout_file, &byte) catch break;
         if (n == 0) break; // EOF
@@ -1510,6 +1519,11 @@ pub fn generateResponse() void {
 
     _ = child.wait() catch {};
     server.model_status = .online;
+
+    // Aborted by barge-in / Stop — leave whatever partial text was streamed and
+    // bail without surfacing a "no response" error or parsing tool calls on a
+    // truncated reply. The defer clears is_generating; the next turn replaces it.
+    if (chat.gen_abort.load(.acquire)) return;
 
     if (resp_len == 0) {
         chat.setAssistantError(assistant_idx, "The AI server returned no response. Is it running?");

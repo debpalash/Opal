@@ -21,6 +21,13 @@ pub var is_recording: bool = false;
 pub var is_transcribing: bool = false;
 pub var is_speaking: bool = false;
 pub var conversation_active: bool = false;
+/// Set true the instant a barge-in is detected (user spoke over the assistant).
+/// Silences every queued/in-flight TTS sentence until the next user turn resets
+/// it. Atomic because the voice worker thread sets it and the LLM-generation
+/// thread (sentence-streaming TTS in ai_context) reads it. Reset to false when a
+/// new transcript is dispatched, so the assistant's reply to the interruption
+/// can speak normally.
+pub var barge_in: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 pub var conv_phase: ConvPhase = .idle;
 pub var partial_text: [512]u8 = std.mem.zeroes([512]u8);
 pub var partial_text_len: usize = 0;
@@ -35,6 +42,13 @@ pub fn setPhase(p: ConvPhase) void {
 var mic_thread: ?std.Thread = null;
 var tts_thread: ?std.Thread = null;
 var conv_thread: ?std.Thread = null;
+/// Serializes TTS playback among TTS workers only. MUST NOT be the LLM
+/// `inference_mutex`: generateResponse() holds that across the whole stream and
+/// speaks each sentence mid-stream, so making ttsWorker take inference_mutex
+/// deadlocks (generation holds it + waits for is_speaking; the TTS thread can't
+/// start because it's blocked on the same mutex). TTS uses separate processes
+/// (say/afplay/kokoro/sherpa), so it never actually contends with the LLM.
+var tts_mutex: @import("../core/sync.zig").Mutex = .{};
 
 // ── Persistent server PIDs ──
 var stt_server_started: bool = false;
@@ -81,6 +95,29 @@ fn voiceSocketWrite(msg: []const u8) void {
 /// on stop instead of touching voice_socket directly (which is now private).
 pub fn pauseVoiceServer() void {
     voiceSocketWrite("PAUSE\n");
+}
+
+/// Silence the assistant instantly — kill EVERY audio-playback helper we spawn
+/// for TTS, regardless of backend. macOS plays via `say` (sayTtsSpeak) and
+/// `afplay` (sherpa/kokoro/speaches WAV playback); Linux via `aplay`/`paplay`.
+/// We match by exact process name (`pkill -x`) so we never hit unrelated
+/// processes — these are short-lived helpers we own. Used for barge-in and for
+/// stopping conversation mode. The old code only killed `say`, so interrupting
+/// a Kokoro/Piper reply (which uses afplay) did nothing on macOS.
+pub fn stopAllAudio() void {
+    is_speaking = false;
+    const io = @import("../core/io_global.zig");
+    const alloc = @import("../core/alloc.zig").allocator;
+    const names: []const []const u8 = if (@import("builtin").os.tag == .macos)
+        &.{ "say", "afplay" }
+    else
+        &.{ "aplay", "paplay", "ffplay" };
+    for (names) |n| {
+        var k = io.Child.init(&.{ "pkill", "-x", n }, alloc);
+        k.stdout_behavior = .Ignore;
+        k.stderr_behavior = .Ignore;
+        _ = k.spawnAndWait() catch {};
+    }
 }
 
 pub const ConvPhase = enum {
@@ -297,6 +334,9 @@ pub fn toggleConversation() void {
         setPhase(.idle);
         // Tell voice server to pause (guarded — worker may be closing the socket)
         voiceSocketWrite("PAUSE\n");
+        // Cut any in-progress assistant speech so stopping is instant.
+        barge_in.store(true, .release);
+        stopAllAudio();
         logs.pushLog("info", "voice", "Conversation mode stopped", true);
     } else {
         // Pre-check: ensure at least one voice path is viable
@@ -403,7 +443,24 @@ fn conversationLoopSherpa() void {
         if (text.len < 3) continue;
         if (@import("voice_filter.zig").isHallucination(text)) continue;
 
+        // Barge-in for the streaming path: this loop has no separate interrupt
+        // channel, but a fresh utterance arriving while the assistant is
+        // speaking IS the interruption. Cut the current reply, abort its
+        // generation, and wait for it to unwind so onTranscribed (which drops
+        // turns while is_generating) accepts this new one.
+        if (is_speaking or @import("ai_chat.zig").is_generating.load(.acquire)) {
+            barge_in.store(true, .release);
+            @import("ai_chat.zig").gen_abort.store(true, .release);
+            stopAllAudio();
+            var w: usize = 0;
+            while (@import("ai_chat.zig").is_generating.load(.acquire) and w < 50) : (w += 1) {
+                @import("../core/io_global.zig").sleep(10 * std.time.ns_per_ms);
+            }
+        }
+
         setPhase(.transcribing);
+        // New user turn — clear any prior barge-in so this reply may speak.
+        barge_in.store(false, .release);
         if (on_transcribed_fn) |f| f(text);
         // Wait for LLM to finish before listening again so TTS doesn't
         // compete with mic input.
@@ -475,17 +532,13 @@ fn conversationLoopV2() void {
             line_pos = 0;
 
             if (std.mem.startsWith(u8, line, "BARGEIN")) {
-                // User interrupted TTS — kill playback immediately
-                logs.pushLog("info", "voice", "Barge-in! Killing TTS", true);
-                is_speaking = false;
-                // Kill aplay
-                var kill_aplay = @import("../core/io_global.zig").Child.init(
-                    &.{ "pkill", "-f", if (@import("builtin").os.tag == .macos) "say" else "aplay.*zigzag" },
-                    @import("../core/alloc.zig").allocator,
-                );
-                kill_aplay.stdout_behavior = .Ignore;
-                kill_aplay.stderr_behavior = .Ignore;
-                _ = kill_aplay.spawnAndWait() catch {};
+                // User interrupted TTS — silence the assistant immediately and
+                // flag the in-flight reply as superseded so its remaining
+                // sentences don't get queued (see speakResponse barge_in guard).
+                logs.pushLog("info", "voice", "Barge-in! Stopping TTS", true);
+                barge_in.store(true, .release);
+                @import("ai_chat.zig").gen_abort.store(true, .release);
+                stopAllAudio();
                 voiceSocketWrite("DONE_SPEAKING\n");
                 // Don't set conv_phase here — the waiter thread + voice server
                 // cooldown will handle the transition back to listening.
@@ -528,6 +581,10 @@ fn conversationLoopV2() void {
                     // Tell server we're about to speak (enables barge-in detection)
                     voiceSocketWrite("SPEAKING\n");
                     is_recording = false;
+
+                    // New user turn — clear any prior barge-in so the reply to
+                    // this utterance is allowed to speak.
+                    barge_in.store(false, .release);
 
                     // Send to chat
                     if (on_transcribed_fn) |f| f(text);
@@ -870,6 +927,10 @@ var tts_text_len: usize = 0;
 
 pub fn speakResponse(text: []const u8) void {
     if (text.len == 0) return;
+    // User interrupted — drop any further sentences of the superseded reply.
+    // Centralizing the check here means every speak site (sentence-streaming,
+    // trailing remainder, full-response, intent, comics) honors barge-in for free.
+    if (barge_in.load(.acquire)) return;
     if (is_speaking) return;
 
     const slen = @min(text.len, tts_text_buf.len);
@@ -885,13 +946,18 @@ pub fn speakResponse(text: []const u8) void {
 }
 
 fn ttsWorker() void {
-    const server = @import("ai_server.zig");
-    server.inference_mutex.lock();
-    defer server.inference_mutex.unlock();
+    // TTS-only lock — see tts_mutex comment. Deliberately NOT inference_mutex,
+    // which generateResponse holds while streaming sentences to us.
+    tts_mutex.lock();
+    defer tts_mutex.unlock();
 
     defer {
         is_speaking = false;
     }
+
+    // A barge-in (or stop) may have fired between speakResponse() spawning us
+    // and this thread acquiring the lock — bail before making any sound.
+    if (barge_in.load(.acquire)) return;
 
     const state = @import("../core/state.zig");
     const text = tts_text_buf[0..tts_text_len];

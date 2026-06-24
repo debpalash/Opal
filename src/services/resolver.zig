@@ -22,6 +22,7 @@ pub const SourceType = enum {
     anime, // ani-cli streams — HTTP direct
     youtube, // yt-dlp streams — HTTP direct
     local, // user's own downloaded files in save_path — instant playback
+    tmdb, // catalog entry (movie/show) — click to find sources
 };
 
 pub const ResolvedItem = struct {
@@ -565,6 +566,7 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
         .torrent => 8,
         .anime => 12,
         .youtube => 20,
+        .tmdb => 30, // catalog stub — not directly playable, rank last
     };
 
     // Heavily penalize YouTube if intent is movie or show to prevent playing random trailers
@@ -1447,6 +1449,12 @@ pub fn playItem(idx: usize) void {
             const anime = @import("anime.zig");
             anime.playEpisode(item.url[0..item.url_len]);
             state.gotoPlayer();
+        },
+        .tmdb => {
+            // Catalog stub, not directly playable — kick off a universal source
+            // search for its title so the user can pick a real stream. Must use
+            // submitQuery (resolver fan-out) so results land in the universal view.
+            @import("search.zig").submitQuery(item.name[0..item.name_len]);
         },
         .youtube, .stremio, .local => {
             // Direct URL / local path — load into mpv.

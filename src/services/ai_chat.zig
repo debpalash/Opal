@@ -103,6 +103,12 @@ pub var message_count: usize = 0;
 pub var input_buf: [MAX_INPUT_LEN]u8 = std.mem.zeroes([MAX_INPUT_LEN]u8);
 pub var input_len: usize = 0;
 pub var is_generating: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+/// Set true to abort the in-flight LLM stream. generateResponse() resets it to
+/// false at the start of each generation and checks it inside the SSE read loop,
+/// killing the curl child and bailing. Lets the Stop button and voice barge-in
+/// truly stop the model mid-reply (previously is_generating was flipped but the
+/// curl child kept streaming and overwrote the chat).
+pub var gen_abort: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 /// Fine-grained phase reporting so the UI can show what the AI is
 /// actually doing, not just "Thinking…". Set at transitions in
@@ -188,23 +194,22 @@ pub fn stopAll() void {
     voice.is_speaking = false;
     voice.is_recording = false;
     voice.is_transcribing = false;
+    // Abort the in-flight LLM stream for real (curl child gets killed in the
+    // SSE loop), and silence any queued sentences of the superseded reply.
+    voice.barge_in.store(true, .release);
+    gen_abort.store(true, .release);
     is_generating.store(false, .release);
     voice.setPhase(.idle);
 
     // Pause v2 voice server (thread-safe; voice_socket is now private + mutex-guarded)
     voice.pauseVoiceServer();
 
-    // Kill aplay + recording in background thread to avoid blocking render
+    // Kill audio playback + recording in a background thread to avoid blocking
+    // render. stopAllAudio targets the real players (say/afplay/aplay), which
+    // the old `pkill -f say` missed for Kokoro/Piper backends.
     const t = std.Thread.spawn(.{}, struct {
         fn run() void {
-            var kill_aplay = @import("../core/io_global.zig").Child.init(
-                &.{ "pkill", "-f", if (@import("builtin").os.tag == .macos) "say" else "aplay.*zigzag" },
-                @import("../core/alloc.zig").allocator,
-            );
-            kill_aplay.stdout_behavior = .Ignore;
-            kill_aplay.stderr_behavior = .Ignore;
-            _ = kill_aplay.spawnAndWait() catch {};
-
+            voice.stopAllAudio();
             var kill_rec = @import("../core/io_global.zig").Child.init(
                 &.{ "pkill", "-f", "rec.*zigzag_ai_mic" },
                 @import("../core/alloc.zig").allocator,
@@ -858,6 +863,7 @@ pub fn renderInlineResults() void {
                 .anime => "Anime",
                 .youtube => "YouTube",
                 .local => "On disk",
+                .tmdb => "Catalog",
             };
         }
     }.get;
@@ -1014,6 +1020,7 @@ fn queueChatResult(idx: usize) void {
         .anime => "anime",
         .youtube => "youtube",
         .local => "local",
+        .tmdb => "tmdb",
     };
     @import("queue.zig").addToQueue(url_str, name, src_label);
     state.showToast("Added to queue");

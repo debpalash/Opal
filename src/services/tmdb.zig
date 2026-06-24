@@ -817,6 +817,9 @@ fn sendToSearch(item: *state.TmdbItem) void {
     else
         std.fmt.bufPrint(&query_buf, "{s}", .{title}) catch return;
     state.navigateToTab(.Search);
-    search.triggerSearch(qlen);
-    state.showToast("Searching torrents...");
+    // Universal (all-source) search — populates resolver.results, which is what
+    // the Search tab's universal view renders. triggerSearch() only fills the
+    // torrent-only buffer, leaving the universal view empty.
+    search.submitQuery(qlen);
+    state.showToast("Searching all sources...");
 }

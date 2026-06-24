@@ -1463,6 +1463,7 @@ fn renderUniversalResults() void {
             .anime => dvui.Color{ .r = 255, .g = 120, .b = 180, .a = 255 },
             .youtube => dvui.Color{ .r = 255, .g = 80, .b = 80, .a = 255 },
             .local => dvui.Color{ .r = 130, .g = 230, .b = 200, .a = 255 },
+            .tmdb => dvui.Color{ .r = 1, .g = 180, .b = 228, .a = 255 },
         };
         const badge_text = switch (item.source) {
             .jellyfin => "JELLYFIN",
@@ -1471,6 +1472,7 @@ fn renderUniversalResults() void {
             .anime => "ANIME",
             .youtube => "YT",
             .local => "ON DISK",
+            .tmdb => "CATALOG",
         };
 
         // Result card — the whole card is clickable (→ play), plus an explicit
