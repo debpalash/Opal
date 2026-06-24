@@ -231,12 +231,10 @@ pub fn processGlobalInputs() void {
                         state.showToast(mode_str);
                         dvui.refresh(null, @src(), null);
                     },
-                    // B = Switch active cell to browser
+                    // B = Open the in-app web browser (Browse › Web tab)
                     .b => {
-                        if (state.app.active_player_idx < state.app.players.items.len) {
-                            state.app.players.items[state.app.active_player_idx].provider = .browser;
-                            dvui.refresh(null, @src(), null);
-                        }
+                        state.navigateToTab(.Web);
+                        dvui.refresh(null, @src(), null);
                     },
                     // C = Switch active cell to comic viewer
                     .c => {

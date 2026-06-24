@@ -205,6 +205,7 @@ pub fn renderDrawer() void {
         renderRailTab(.YouTube, icons.tvg.lucide.play, "YouTube", 4);
         renderRailTab(.Anime, icons.tvg.lucide.zap, "Anime", 5);
         renderRailTab(.Comics, icons.tvg.lucide.image, "Comics", 6);
+        renderRailTab(.Web, icons.tvg.lucide.globe, "Web", 15);
         renderRailTab(.RSS, icons.tvg.lucide.rss, "RSS", 7);
         renderRailTab(.Jellyfin, icons.tvg.lucide.server, "Jellyfin", 8);
 
@@ -268,6 +269,7 @@ pub fn renderTabContent(tab: state.DrawerTab) void {
         .YouTube => youtube.renderContent(),
         .Queue => queue.renderContent(),
         .Comics => comics.renderContent(),
+        .Web => @import("../services/browser.zig").renderContent(),
         .Anime => anime.renderContent(),
         .History => renderHistoryContent(),
         .RSS => rss.renderContent(),

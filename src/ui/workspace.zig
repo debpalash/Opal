@@ -94,11 +94,7 @@ pub fn saveWorkspaceNamed(allocator: std.mem.Allocator, name: []const u8) void {
         if (url.len == 0 and p.current_url_len > 0 and p.current_url_len <= 2048) {
             url = p.current_url[0..p.current_url_len];
         }
-        // 3. browser_url_buf (set by browser navigate)
-        if (url.len == 0 and p.browser_url_len > 0 and p.browser_url_len <= 2048) {
-            url = p.browser_url_buf[0..p.browser_url_len];
-        }
-        // 4. Ask mpv for its current path
+        // 3. Ask mpv for its current path
         if (url.len == 0) {
             var mpv_path: ?[*:0]const u8 = null;
             if (c.mpv.mpv_get_property(p.mpv_ctx, "path", c.mpv.MPV_FORMAT_STRING, @ptrCast(&mpv_path)) == 0) {
@@ -111,8 +107,8 @@ pub fn saveWorkspaceNamed(allocator: std.mem.Allocator, name: []const u8) void {
             }
         }
 
-        std.debug.print("[workspace] player {d}: source_url_len={d} current_url_len={d} browser_url_len={d} url='{s}'\n",
-            .{ pi, p.source_url_len, p.current_url_len, p.browser_url_len, url });
+        std.debug.print("[workspace] player {d}: source_url_len={d} current_url_len={d} url='{s}'\n",
+            .{ pi, p.source_url_len, p.current_url_len, url });
 
         if (url.len == 0) continue;
 

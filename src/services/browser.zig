@@ -3,21 +3,7 @@ const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const logs = @import("../core/logs.zig");
-const player_mod = @import("../player/player.zig");
-
 const alloc = @import("../core/alloc.zig").allocator;
-
-// Module-level: which player index the fetch thread is operating on
-var fetch_player_idx: usize = 0;
-
-fn getPlayer(idx: usize) ?*player_mod.MediaPlayer {
-    if (idx < state.app.players.items.len) return state.app.players.items[idx];
-    return null;
-}
-
-fn activePlayer() ?*player_mod.MediaPlayer {
-    return getPlayer(state.app.active_player_idx);
-}
 
 // ══════════════════════════════════════════════════════════
 // Camoufox Browser Engine — CDP screenshot streaming
@@ -188,20 +174,18 @@ fn bridgeReaderThread() void {
                 if (std.mem.indexOf(u8, buf[0..pos], "\"title\"")) |_| {
                     // Extract title from JSON
                     if (extractJsonField(buf[0..pos], "title")) |title| {
-                        if (activePlayer()) |p| {
-                            const tlen = @min(title.len, 255);
-                            @memcpy(p.browser_title[0..tlen], title[0..tlen]);
-                            p.browser_title_len = tlen;
-                            p.browser_is_loading = false;
-                        }
+                        const b = &state.app.browser;
+                        const tlen = @min(title.len, 255);
+                        @memcpy(b.title[0..tlen], title[0..tlen]);
+                        b.title_len = tlen;
+                        b.is_loading = false;
                     }
                     // Extract url
                     if (extractJsonField(buf[0..pos], "url")) |url| {
-                        if (activePlayer()) |p| {
-                            const ulen = @min(url.len, 2047);
-                            @memcpy(p.browser_url_buf[0..ulen], url[0..ulen]);
-                            p.browser_url_len = ulen;
-                        }
+                        const b = &state.app.browser;
+                        const ulen = @min(url.len, 2047);
+                        @memcpy(b.url_buf[0..ulen], url[0..ulen]);
+                        b.url_len = ulen;
                     }
                     // Auto-request screenshot after navigation
                     sendCommand("{\"cmd\":\"screenshot\"}");
@@ -248,9 +232,7 @@ fn bridgeReaderThread() void {
                 frame_lock.unlock();
 
                 // Mark loading done
-                if (activePlayer()) |p| {
-                    p.browser_is_loading = false;
-                }
+                state.app.browser.is_loading = false;
             } else {
                 alloc.free(jpeg_buf);
             }
@@ -318,30 +300,26 @@ fn escapeJsonString(input: []const u8, buf: *[4096]u8) []const u8 {
 // ── Public API ──
 
 pub fn navigate(url: []const u8) void {
-    const p = activePlayer() orelse return;
+    const b = &state.app.browser;
     if (url.len == 0 or url.len >= 2048) return;
 
     // Store URL
-    const buf_ptr: [*]const u8 = @ptrCast(&p.browser_url_buf[0]);
+    const buf_ptr: [*]const u8 = @ptrCast(&b.url_buf[0]);
     if (url.ptr != buf_ptr) {
-        @memcpy(p.browser_url_buf[0..url.len], url);
+        @memcpy(b.url_buf[0..url.len], url);
     }
-    p.browser_url_len = url.len;
-    p.browser_is_loading = true;
-    p.browser_title_len = 0;
+    b.url_len = url.len;
+    b.is_loading = true;
+    b.title_len = 0;
 
     // Push to history
-    if (!state.app.incognito_mode and p.browser_history_count < 32) {
-        const hi = p.browser_history_count;
-        @memcpy(p.browser_history[hi][0..url.len], url);
-        p.browser_history_lens[hi] = url.len;
-        p.browser_history_count += 1;
-        p.browser_history_pos = p.browser_history_count;
+    if (!state.app.incognito_mode and b.history_count < 32) {
+        const hi = b.history_count;
+        @memcpy(b.history[hi][0..url.len], url);
+        b.history_lens[hi] = url.len;
+        b.history_count += 1;
+        b.history_pos = b.history_count;
     }
-
-    // Auto-switch to browser
-    p.provider = .browser;
-    fetch_player_idx = state.app.active_player_idx;
 
     if (bridge_ready.load(.acquire)) {
         // Bridge is running — send navigate immediately
@@ -534,8 +512,8 @@ fn updateFrameTexture() void {
 // Pane Rendering
 // ══════════════════════════════════════════════════════════
 
-pub fn renderPaneContent(pane_idx: usize) void {
-    const p = getPlayer(pane_idx) orelse return;
+pub fn renderContent() void {
+    const b = &state.app.browser;
 
     const icons = @import("icons");
 
@@ -591,7 +569,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
         }
 
         // URL input
-        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &p.browser_url_buf } }, .{
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &b.url_buf } }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 200, .h = 18 },
             .color_fill = dvui.Color{ .r = 28, .g = 28, .b = 34, .a = 255 },
@@ -614,8 +592,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
         });
         if (clicked_go or enter_pressed) {
-            state.app.active_player_idx = pane_idx;
-            const input_text = std.mem.sliceTo(&p.browser_url_buf, 0);
+            const input_text = std.mem.sliceTo(&b.url_buf, 0);
             if (input_text.len > 0) {
                 if (!std.mem.startsWith(u8, input_text, "http://") and !std.mem.startsWith(u8, input_text, "https://")) {
                     var url_fixed: [2048]u8 = undefined;
@@ -626,23 +603,11 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 }
             }
         }
-
-        // Close (back to mpv)
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
-            .id_extra = 1,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = theme.colors.danger,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 3, .y = 2, .w = 3, .h = 2 },
-            .margin = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
-        })) {
-            p.provider = .mpv;
-        }
     }
 
     // Title bar
-    if (p.browser_title_len > 0) {
-        _ = dvui.label(@src(), "{s}", .{p.browser_title[0..p.browser_title_len]}, .{
+    if (b.title_len > 0) {
+        _ = dvui.label(@src(), "{s}", .{b.title[0..b.title_len]}, .{
             .color_text = theme.colors.text_main,
             .padding = .{ .x = 8, .y = 2, .w = 8, .h = 2 },
             .background = true,
@@ -652,7 +617,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
     }
 
     // Loading state
-    if (p.browser_is_loading) {
+    if (b.is_loading) {
         _ = dvui.label(@src(), "Loading...", .{}, .{
             .color_text = theme.colors.accent,
             .gravity_x = 0.5,
@@ -804,7 +769,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
 // Content Router — auto-detect provider from URL
 // ══════════════════════════════════════════════════════════
 
-pub const ContentRoute = enum { mpv, comic_viewer, browser };
+pub const ContentRoute = enum { mpv, comic_viewer, web };
 
 /// Determine the correct pane provider for a given URL
 pub fn routeContent(url: []const u8) ContentRoute {
@@ -850,8 +815,8 @@ pub fn routeContent(url: []const u8) ContentRoute {
         if (std.mem.endsWith(u8, url, ext)) return .comic_viewer;
     }
 
-    // Everything else → browser
-    return .browser;
+    // Everything else → web browser
+    return .web;
 }
 
 /// Load content with automatic provider routing
@@ -880,31 +845,26 @@ pub fn loadContent(url: []const u8) void {
         return;
     }
 
-    // Switch active pane to correct provider
+    // Web pages open inside the Browse › Web tab — the in-app browser is
+    // fully independent of any player now. Load + reveal that tab.
+    if (route == .web) {
+        navigate(norm_url);
+        state.app.browse_source = .Web;
+        state.app.router.navigate(.browse);
+        return;
+    }
+
+    // Video/audio → the MPV player pane.
     if (state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
-        p.provider = switch (route) {
-            .mpv => .mpv,
-            .comic_viewer => .comic_viewer,
-            .browser => .browser,
-        };
+        p.provider = .mpv;
 
-        switch (route) {
-            .mpv => {
-                var url_z: [2049]u8 = undefined;
-                const len = @min(norm_url.len, 2048);
-                @memcpy(url_z[0..len], norm_url[0..len]);
-                url_z[len] = 0;
-                p.load_file(@ptrCast(&url_z[0]));
-            },
-            .comic_viewer => {
-                const comics = @import("comics.zig");
-                comics.loadComic(norm_url);
-            },
-            .browser => {
-                navigate(norm_url);
-            },
-        }
+        var url_z: [2049]u8 = undefined;
+        const len = @min(norm_url.len, 2048);
+        @memcpy(url_z[0..len], norm_url[0..len]);
+        url_z[len] = 0;
+        p.load_file(@ptrCast(&url_z[0]));
+
         // Reveal the player page (and close the legacy drawer) so the user
         // actually sees what they just loaded. Centralized here so search,
         // resolver, queue, drag-drop and Resume all inherit it.

@@ -741,12 +741,6 @@ pub fn renderGrid() !void {
                 comics.renderPaneContent(i);
             }
         },
-
-        .browser => {
-            // ── Browser Pane ──
-            const browser = @import("../services/browser.zig");
-            browser.renderPaneContent(i);
-        },
         } // end switch
         
 

@@ -69,21 +69,6 @@ pub const MediaPlayer = struct {
     // INVALID_HANDLE means no proxy is currently running for this player.
     proxy_handle: @import("stream_proxy.zig").Handle = @import("stream_proxy.zig").INVALID_HANDLE,
 
-    // ── Per-player browser state ──
-    browser_url_buf: [2048]u8 = std.mem.zeroes([2048]u8),
-    browser_url_len: usize = 0,
-    browser_is_loading: bool = false,
-    browser_thread: ?std.Thread = null,
-    browser_title: [256]u8 = std.mem.zeroes([256]u8),
-    browser_title_len: usize = 0,
-    browser_content: ?[]u8 = null,
-    browser_links: [128]state.BrowserLink = std.mem.zeroes([128]state.BrowserLink),
-    browser_link_count: usize = 0,
-    browser_history: [32][2048]u8 = std.mem.zeroes([32][2048]u8),
-    browser_history_lens: [32]usize = std.mem.zeroes([32]usize),
-    browser_history_count: usize = 0,
-    browser_history_pos: usize = 0,
-    
     pub fn getMediaTitle(self: *MediaPlayer, out_buf: []u8) usize {
         // 1. If torrent, get torrent name
         if (self.current_torrent_id >= 0) {
@@ -97,14 +82,7 @@ pub const MediaPlayer = struct {
             }
         }
         
-        // 2. If it has a browser title
-        if (self.provider == .browser and self.browser_title_len > 0) {
-            const limit = @min(self.browser_title_len, out_buf.len);
-            @memcpy(out_buf[0..limit], self.browser_title[0..limit]);
-            return limit;
-        }
-
-        // 3. Try reading mpv "media-title"
+        // 2. Try reading mpv "media-title"
         const title_c = c.mpv.mpv_get_property_string(self.mpv_ctx, "media-title");
         if (title_c != null) {
             defer c.mpv.mpv_free(@ptrCast(title_c));
@@ -165,21 +143,6 @@ pub const MediaPlayer = struct {
         self.is_loading = false;
         self.loading_label_len = 0;
         self.provider = .mpv;
-        
-        // Browser state init
-        @memset(&self.browser_url_buf, 0);
-        self.browser_url_len = 0;
-        self.browser_is_loading = false;
-        self.browser_thread = null;
-        @memset(&self.browser_title, 0);
-        self.browser_title_len = 0;
-        self.browser_content = null;
-        self.browser_links = std.mem.zeroes([128]state.BrowserLink);
-        self.browser_link_count = 0;
-        for (&self.browser_history) |*h| @memset(h, 0);
-        @memset(&self.browser_history_lens, 0);
-        self.browser_history_count = 0;
-        self.browser_history_pos = 0;
         self.thumb_texture = null;
         @memset(&self.thumb_texture_path, 0);
         self.thumb_texture_path_len = 0;

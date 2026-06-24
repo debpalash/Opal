@@ -12,9 +12,9 @@ const subtitles_mod = @import("../player/subtitles.zig");
 // ══════════════════════════════════════════════════════════
 
 pub const GridMode = enum { auto, cols_1, cols_2, cols_3, cols_4 };
-pub const ContentProvider = enum { mpv, comic_viewer, browser };
+pub const ContentProvider = enum { mpv, comic_viewer };
 pub const VideoFillMode = enum { fit, cover };
-pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, History, RSS, Jellyfin, Plugins, Logs, Settings, AI };
+pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, History, RSS, Jellyfin, Plugins, Logs, Settings, AI, Web };
 pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, Scripts, LangLearn, FileAssoc };
 pub const TmdbView = enum { Trending, Search, Favorites, Watchlist, Watching };
 pub const TmdbCategory = enum { trending, now_playing, top_rated, upcoming, popular };
@@ -403,20 +403,23 @@ pub const AppState = struct {
         stream_loading: bool = false,
     } = .{},
 
-    // ── Browser ──
-    browser_url_buf: [2048]u8 = std.mem.zeroes([2048]u8),
-    browser_url_len: usize = 0,
-    browser_is_loading: bool = false,
-    browser_thread: ?std.Thread = null,
-    browser_title: [256]u8 = std.mem.zeroes([256]u8),
-    browser_title_len: usize = 0,
-    browser_content: ?[]u8 = null, // stripped text content
-    browser_links: [128]BrowserLink = std.mem.zeroes([128]BrowserLink),
-    browser_link_count: usize = 0,
-    browser_history: [32][2048]u8 = std.mem.zeroes([32][2048]u8),
-    browser_history_lens: [32]usize = std.mem.zeroes([32]usize),
-    browser_history_count: usize = 0,
-    browser_history_pos: usize = 0,
+    // ── Browser (global singleton — the in-app web browser lives in the
+    //     Browse › Web tab now, independent of any MediaPlayer) ──
+    browser: struct {
+        url_buf: [2048]u8 = std.mem.zeroes([2048]u8),
+        url_len: usize = 0,
+        is_loading: bool = false,
+        thread: ?std.Thread = null,
+        title: [256]u8 = std.mem.zeroes([256]u8),
+        title_len: usize = 0,
+        content: ?[]u8 = null, // stripped text content
+        links: [128]BrowserLink = std.mem.zeroes([128]BrowserLink),
+        link_count: usize = 0,
+        history: [32][2048]u8 = std.mem.zeroes([32][2048]u8),
+        history_lens: [32]usize = std.mem.zeroes([32]usize),
+        history_count: usize = 0,
+        history_pos: usize = 0,
+    } = .{},
 
     // ── Language Learning ──
     lang_learn_enabled: bool = false,
@@ -631,6 +634,10 @@ pub fn navigateToTab(tab: DrawerTab) void {
         },
         .Comics => {
             app.browse_source = .Comics;
+            app.router.navigate(.browse);
+        },
+        .Web => {
+            app.browse_source = .Web;
             app.router.navigate(.browse);
         },
         .RSS => {

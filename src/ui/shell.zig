@@ -233,7 +233,7 @@ fn renderPage(r: Route) !void {
         .search => drawer.renderTabContent(.Search),
         .home => @import("home.zig").render(), // personal hub: metrics + lists
         .browse => {
-            subTabs(&.{ .TMDB, .YouTube, .Anime, .Comics, .RSS, .Jellyfin }, &state.app.browse_source, 100);
+            subTabs(&.{ .TMDB, .YouTube, .Anime, .Comics, .Web, .RSS, .Jellyfin }, &state.app.browse_source, 100);
             drawer.renderTabContent(state.app.browse_source);
         },
         .library => {
@@ -255,6 +255,7 @@ fn tabLabel(t: state.DrawerTab) []const u8 {
         .YouTube => "YouTube",
         .Queue => "Queue",
         .Comics => "Comics",
+        .Web => "Web",
         .Anime => "Anime",
         .History => "History",
         .RSS => "RSS",
@@ -274,6 +275,7 @@ fn iconForTab(t: state.DrawerTab) []const u8 {
         .YouTube => icons.tvg.lucide.youtube,
         .Queue => icons.tvg.lucide.@"list-video",
         .Comics => icons.tvg.lucide.@"book-open",
+        .Web => icons.tvg.lucide.globe,
         .Anime => icons.tvg.lucide.tv,
         .History => icons.tvg.lucide.history,
         .RSS => icons.tvg.lucide.rss,
