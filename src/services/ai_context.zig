@@ -1012,6 +1012,7 @@ pub fn generateResponse() void {
             \\,
             \\  {"name":"player_control","description":"Playback: pause/resume/stop/seek/volume/speed/fullscreen.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["pause","resume","toggle_pause","stop","seek_forward","seek_backward","seek_to","set_volume","set_speed","fullscreen","exit_fullscreen"]},"value":{"type":"string"}},"required":["action"]}},
             \\  {"name":"player_info","description":"Now playing info.","parameters":{"type":"object","properties":{}}},
+            \\  {"name":"look_at_screen","description":"Returns on-screen text (OCR), the current subtitle, and recent dialogue. Use when the user asks who someone is, what was just said, what is happening on screen, or for a recap.","parameters":{"type":"object","properties":{}}},
             \\  {"name":"queue_manage","description":"Queue ops.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["list","play_next","clear","clear_played"]}},"required":["action"]}}
         ) catch {};
     }

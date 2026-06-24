@@ -134,6 +134,8 @@ pub fn executeTool(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         return normResult(alloc, executePlayerControl(alloc, tc));
     } else if (std.mem.eql(u8, name, "player_info")) {
         return normResult(alloc, executePlayerInfo(alloc));
+    } else if (std.mem.eql(u8, name, "look_at_screen")) {
+        return normResult(alloc, executeLookAtScreen(alloc));
     } else if (std.mem.eql(u8, name, "navigate")) {
         return normResult(alloc, executeNavigate(alloc, tc));
     } else if (std.mem.eql(u8, name, "queue_manage")) {
@@ -757,6 +759,76 @@ fn executePlayerInfo(alloc: std.mem.Allocator) ?[]u8 {
     const paused_str = if (is_paused != 0) "paused" else "playing";
 
     return std.fmt.allocPrint(alloc, "Status: {s} | Title: {s} | Position: {d:.0}s / {d:.0}s | Volume: {d:.0}%", .{ paused_str, title, pos, dur, vol }) catch null;
+}
+
+fn executeLookAtScreen(alloc: std.mem.Allocator) ?[]u8 {
+    const c = @import("../core/c.zig");
+
+    if (!(state.app.active_player_idx < state.app.players.items.len))
+        return std.fmt.allocPrint(alloc, "No player active", .{}) catch null;
+    const p = state.app.players.items[state.app.active_player_idx];
+
+    // (a) OCR the current frame
+    var ocr_buf: [4096]u8 = undefined;
+    const on = @import("frame_ocr.zig").ocrCurrentFrame(&ocr_buf);
+    const ocr_text = ocr_buf[0..on];
+
+    // (b) Current subtitle
+    const sub_text = if (p.cached_sub_text_len <= p.cached_sub_text.len)
+        p.cached_sub_text[0..p.cached_sub_text_len]
+    else
+        p.cached_sub_text[0..0];
+
+    // (c) Recent dialogue
+    var dlg_buf: [4096]u8 = undefined;
+    const dn = p.getRecentDialogue(&dlg_buf);
+    const dlg_text = dlg_buf[0..dn];
+
+    // Nothing to report
+    if (on == 0 and sub_text.len == 0 and dn == 0)
+        return std.fmt.allocPrint(alloc, "Nothing visible on screen right now.", .{}) catch null;
+
+    // (d) Progress
+    var pos: f64 = 0;
+    var dur: f64 = 0;
+    _ = c.mpv.mpv_get_property(p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &pos);
+    _ = c.mpv.mpv_get_property(p.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur);
+    const percent: f64 = if (dur > 0) (pos / dur) * 100.0 else 0;
+
+    // Format labeled result into a MAX_TOOL_RESULT buffer (normResult-friendly).
+    var result = alloc.alloc(u8, MAX_TOOL_RESULT) catch return null;
+    var off: usize = 0;
+
+    if (on > 0) {
+        const s = std.fmt.bufPrint(result[off..], "OCR (on-screen text): {s}\n", .{ocr_text}) catch result[off..off];
+        off += s.len;
+    } else {
+        const s = std.fmt.bufPrint(result[off..], "OCR (on-screen text): (none)\n", .{}) catch result[off..off];
+        off += s.len;
+    }
+
+    if (sub_text.len > 0) {
+        const s = std.fmt.bufPrint(result[off..], "Current subtitle: {s}\n", .{sub_text}) catch result[off..off];
+        off += s.len;
+    } else {
+        const s = std.fmt.bufPrint(result[off..], "Current subtitle: (none)\n", .{}) catch result[off..off];
+        off += s.len;
+    }
+
+    if (dn > 0) {
+        const s = std.fmt.bufPrint(result[off..], "Recent dialogue:\n{s}\n", .{dlg_text}) catch result[off..off];
+        off += s.len;
+    } else {
+        const s = std.fmt.bufPrint(result[off..], "Recent dialogue: (none)\n", .{}) catch result[off..off];
+        off += s.len;
+    }
+
+    {
+        const s = std.fmt.bufPrint(result[off..], "Progress: {d:.0}% — only discuss events up to this point; no spoilers beyond it.", .{percent}) catch result[off..off];
+        off += s.len;
+    }
+
+    return result[0..off];
 }
 
 fn executeNavigate(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {

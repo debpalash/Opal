@@ -74,6 +74,18 @@ pub const MediaPlayer = struct {
     cached_sub_text: [1024]u8 = std.mem.zeroes([1024]u8),
     cached_sub_text_len: usize = 0,
 
+    // ── Rolling dialogue ring (T3) ──
+    // Fixed-size, no allocations. Stores the most recent subtitle lines with
+    // their mpv time-pos timestamps so the AI can be handed ~60s of context.
+    // Appended from the "sub-text" property handler; deduped against the last
+    // appended line via a Wyhash so repeated/held subtitles aren't duplicated.
+    dialogue_lines: [24][256]u8 = std.mem.zeroes([24][256]u8),
+    dialogue_line_lens: [24]usize = std.mem.zeroes([24]usize),
+    dialogue_line_ts: [24]f64 = std.mem.zeroes([24]f64),
+    dialogue_head: usize = 0, // index of next slot to write
+    dialogue_count: usize = 0, // number of valid stored lines (<= 24)
+    dialogue_last_hash: u64 = 0, // hash of last appended line (dedup)
+
     // v2: handle to the per-player torrent HTTP proxy stream (multi-tenant).
     // INVALID_HANDLE means no proxy is currently running for this player.
     proxy_handle: @import("stream_proxy.zig").Handle = @import("stream_proxy.zig").INVALID_HANDLE,
@@ -122,6 +134,66 @@ pub const MediaPlayer = struct {
             }
         }
         return 0;
+    }
+
+    /// Append a subtitle line to the rolling dialogue ring (T3). No allocations.
+    /// Only appends when `sub_text` is non-empty AND its hash differs from the
+    /// last appended line (dedup of held/repeated subtitles).
+    pub fn updateDialogueRing(self: *MediaPlayer, sub_text: []const u8, time_pos: f64) void {
+        if (sub_text.len == 0) return;
+        const h = std.hash.Wyhash.hash(0, sub_text);
+        if (self.dialogue_count > 0 and h == self.dialogue_last_hash) return;
+
+        const slot = self.dialogue_head;
+        const n = @min(sub_text.len, self.dialogue_lines[slot].len);
+        @memcpy(self.dialogue_lines[slot][0..n], sub_text[0..n]);
+        self.dialogue_line_lens[slot] = n;
+        self.dialogue_line_ts[slot] = time_pos;
+
+        self.dialogue_head = (slot + 1) % self.dialogue_lines.len;
+        if (self.dialogue_count < self.dialogue_lines.len) self.dialogue_count += 1;
+        self.dialogue_last_hash = h;
+    }
+
+    /// Emit stored dialogue lines whose timestamp is within ~60s of the newest
+    /// stored timestamp, oldest->newest, one per line, into `out_buf`. Returns
+    /// bytes written (0 if none). No allocations.
+    pub fn getRecentDialogue(self: *MediaPlayer, out_buf: []u8) usize {
+        if (self.dialogue_count == 0 or out_buf.len == 0) return 0;
+
+        // Newest line is the one just before head (in ring order).
+        const ring = self.dialogue_lines.len;
+        const newest_idx = (self.dialogue_head + ring - 1) % ring;
+        const newest_ts = self.dialogue_line_ts[newest_idx];
+
+        // Oldest valid line in chronological order.
+        const start = (self.dialogue_head + ring - self.dialogue_count) % ring;
+
+        var written: usize = 0;
+        var i: usize = 0;
+        while (i < self.dialogue_count) : (i += 1) {
+            const idx = (start + i) % ring;
+            const ts = self.dialogue_line_ts[idx];
+            // Within ~60s window of newest. Tolerate small backward seeks.
+            if (newest_ts - ts > 60.0) continue;
+
+            const ln = self.dialogue_line_lens[idx];
+            if (ln == 0) continue;
+            if (written >= out_buf.len) break;
+
+            const avail = out_buf.len - written;
+            const copy_len = @min(ln, avail);
+            @memcpy(out_buf[written .. written + copy_len], self.dialogue_lines[idx][0..copy_len]);
+            written += copy_len;
+            if (copy_len < ln) break; // out of space mid-line
+
+            // Newline separator (skip after the final emitted line).
+            if (i + 1 < self.dialogue_count and written < out_buf.len) {
+                out_buf[written] = '\n';
+                written += 1;
+            }
+        }
+        return written;
     }
 
     pub fn init(allocator: std.mem.Allocator) !*MediaPlayer {
@@ -646,6 +718,13 @@ pub fn updateTorrentBackgroundTasks() void {
                         const n = @min(txt.len, p.cached_sub_text.len);
                         @memcpy(p.cached_sub_text[0..n], txt[0..n]);
                         p.cached_sub_text_len = n;
+
+                        // T3: also feed the rolling dialogue ring (deduped).
+                        if (txt.len > 0) {
+                            var pos: f64 = 0;
+                            _ = c.mpv.mpv_get_property(p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &pos);
+                            p.updateDialogueRing(txt, pos);
+                        }
                     } else {
                         p.cached_sub_text_len = 0;
                     }
