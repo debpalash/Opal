@@ -1231,6 +1231,47 @@ pub fn renderSearchContent() void {
 // Universal Search Results Renderer
 // ══════════════════════════════════════════════════════════
 
+/// Pre-search hint: a grid of the sources Universal search queries in parallel,
+/// so an empty box doesn't look broken.
+fn renderUniversalCapabilities() void {
+    var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .gravity_x = 0.5, .gravity_y = 0.35, .padding = dvui.Rect.all(theme.spacing.lg) });
+    defer col.deinit();
+
+    dvui.icon(@src(), "uni", icons.tvg.lucide.telescope, .{}, .{
+        .color_text = theme.colors.accent,
+        .min_size_content = .{ .w = 40, .h = 40 },
+        .gravity_x = 0.5,
+    });
+    _ = dvui.label(@src(), "Universal search", .{}, .{ .color_text = theme.colors.text_main, .font = dvui.themeGet().font_title, .gravity_x = 0.5 });
+    _ = dvui.label(@src(), "One query, every source — searched in parallel.", .{}, .{ .color_text = theme.colors.text_muted, .gravity_x = 0.5 });
+
+    const Src = struct { icon: []const u8, name: []const u8 };
+    const sources = [_]Src{
+        .{ .icon = icons.tvg.lucide.@"hard-drive", .name = "On disk" },
+        .{ .icon = icons.tvg.lucide.magnet, .name = "Torrents" },
+        .{ .icon = icons.tvg.lucide.server, .name = "Jellyfin" },
+        .{ .icon = icons.tvg.lucide.youtube, .name = "YouTube" },
+        .{ .icon = icons.tvg.lucide.tv, .name = "Anime" },
+        .{ .icon = icons.tvg.lucide.clapperboard, .name = "Stremio" },
+        .{ .icon = icons.tvg.lucide.rss, .name = "RSS" },
+    };
+    var flow = dvui.flexbox(@src(), .{ .justify_content = .center }, .{ .expand = .horizontal, .padding = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = 0 } });
+    defer flow.deinit();
+    for (sources, 0..) |s, i| {
+        var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i + 9700,
+            .background = true,
+            .color_fill = theme.colors.bg_card,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
+            .margin = dvui.Rect.all(4),
+        });
+        defer chip.deinit();
+        dvui.icon(@src(), s.name, s.icon, .{}, .{ .id_extra = i + 9700, .color_text = theme.colors.accent, .min_size_content = .{ .w = 15, .h = 15 }, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 } });
+        _ = dvui.label(@src(), "{s}", .{s.name}, .{ .id_extra = i + 9700, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+    }
+}
+
 fn renderUniversalResults() void {
     const resolver = @import("resolver.zig");
 
@@ -1305,7 +1346,9 @@ fn renderUniversalResults() void {
         }
         return;
     } else {
-        return; // Nothing to show
+        // No query yet — show what Universal search reaches across.
+        renderUniversalCapabilities();
+        return;
     }
 
     // Results list
