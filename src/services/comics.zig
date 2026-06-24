@@ -405,10 +405,6 @@ var last_fetch_s: i64 = 0; // SWR cache timestamp
 var sr_query_buf: [256]u8 = undefined;
 var sr_query_len: usize = 0;
 
-pub fn searchResultCount() usize {
-    return sr_count;
-}
-
 pub fn searchComics(query: []const u8) void {
     if (sr_searching or query.len == 0 or query.len >= sr_query_buf.len) return;
     sr_searching = true;
