@@ -130,8 +130,11 @@ fn renderFilesInline() void {
     else
         save_path;
 
+    // Rescan immediately on a path change, otherwise at most every 5s. The old
+    // `now != last_scan` (second-granularity) fired a full background directory
+    // scan every single wall-clock second the Files tab was open.
     const now = @import("../core/io_global.zig").timestamp();
-    if (now != cached_files_last_scan or browse_path_changed) {
+    if (browse_path_changed or now - cached_files_last_scan >= 5) {
         cached_files_last_scan = now;
         browse_path_changed = false;
         triggerFileScan(effective_path); // non-blocking — bg thread updates cache

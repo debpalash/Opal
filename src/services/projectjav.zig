@@ -41,7 +41,7 @@ pub const PjavTorrent = struct {
 pub var torrents: [MAX_PJAV_TORRENTS]PjavTorrent = std.mem.zeroes([MAX_PJAV_TORRENTS]PjavTorrent);
 pub var torrent_count: usize = 0;
 pub var modal_open: bool = false;
-pub var is_fetching: bool = false;
+pub var is_fetching: std.atomic.Value(bool) = std.atomic.Value(bool).init(false); // release after torrents[]/torrent_count fully written
 pub var page_title: [256]u8 = std.mem.zeroes([256]u8);
 pub var page_title_len: usize = 0;
 pub var probing_started: bool = false;
@@ -56,10 +56,10 @@ pub fn isProjectJavUrl(url: []const u8) bool {
 
 /// Trigger async fetch + parse of a projectjav movie page
 pub fn fetchTorrents(url: []const u8) void {
-    if (is_fetching) return;
+    if (is_fetching.load(.acquire)) return;
     if (url.len == 0 or url.len >= 2048) return;
 
-    is_fetching = true;
+    is_fetching.store(true, .release);
     torrent_count = 0;
     modal_open = true;
     page_title_len = 0;
@@ -77,7 +77,7 @@ pub fn fetchTorrents(url: []const u8) void {
 
     if (std.Thread.spawn(.{}, struct {
         fn worker() void {
-            defer is_fetching = false;
+            defer is_fetching.store(false, .release);
 
             const fetch_url = S.url_buf[0..S.url_len];
 
@@ -140,7 +140,7 @@ pub fn fetchTorrents(url: []const u8) void {
     }.worker, .{})) |t| {
         t.detach();
     } else |_| {
-        is_fetching = false;
+        is_fetching.store(false, .release);
         logs.pushLog("error", "pjav", "Failed to spawn fetch thread", false);
     }
 }
@@ -468,7 +468,7 @@ pub fn renderModal() void {
     was_open = true;
 
     // Start probing once fetch is done and we have torrents
-    if (!is_fetching and torrent_count > 0 and !probing_started) {
+    if (!is_fetching.load(.acquire) and torrent_count > 0 and !probing_started) {
         startProbing();
     }
 
@@ -496,7 +496,7 @@ pub fn renderModal() void {
     win.dragAreaSet(dvui.windowHeader(title_text, "", &modal_open));
 
     // Loading state
-    if (is_fetching) {
+    if (is_fetching.load(.acquire)) {
         _ = dvui.label(@src(), "⟳ Fetching torrents...", .{}, .{
             .color_text = theme.colors.accent,
             .gravity_x = 0.5,

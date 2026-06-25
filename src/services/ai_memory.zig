@@ -129,11 +129,28 @@ pub fn ingestMemory(role: []const u8, content: []const u8, context_type: []const
     if (content.len == 0) return;
     if (isJunkTurn(content)) return; // same poison filter as saveConversation
     const allocator = @import("../core/alloc.zig").allocator;
+    // Free earlier successful dupes if a later one fails (else they leak).
+    const r = allocator.dupe(u8, role) catch return;
+    const cnt = allocator.dupe(u8, content) catch {
+        allocator.free(r);
+        return;
+    };
+    const ct = allocator.dupe(u8, context_type) catch {
+        allocator.free(r);
+        allocator.free(cnt);
+        return;
+    };
+    const mt = allocator.dupe(u8, media_title) catch {
+        allocator.free(r);
+        allocator.free(cnt);
+        allocator.free(ct);
+        return;
+    };
     const args = IngestArgs{
-        .role = allocator.dupe(u8, role) catch return,
-        .content = allocator.dupe(u8, content) catch return,
-        .context_type = allocator.dupe(u8, context_type) catch return,
-        .media_title = allocator.dupe(u8, media_title) catch return,
+        .role = r,
+        .content = cnt,
+        .context_type = ct,
+        .media_title = mt,
         .allocator = allocator,
     };
 
