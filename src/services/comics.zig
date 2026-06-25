@@ -1716,7 +1716,13 @@ pub fn renderPaneContent(pane_idx: usize) void {
             defer ocr_scroll.deinit();
 
             if (text_len > 0) {
-                _ = dvui.label(@src(), "{s}", .{state.app.comic.ocr_texts[pg][0..text_len]}, .{
+                // OCR output is raw PP-OCR bytes (and @min-truncated to 4095,
+                // which can cut a codepoint) — invalid UTF-8 drawn to dvui panics
+                // the whole app. Snapshot+validate a copy (worker rewrites this
+                // buffer mid-frame, so safeUtf8Buf, not plain safeUtf8).
+                var ocr_safe_buf: [4096]u8 = undefined;
+                const ocr_safe = @import("../core/text.zig").safeUtf8Buf(state.app.comic.ocr_texts[pg][0..text_len], &ocr_safe_buf);
+                _ = dvui.label(@src(), "{s}", .{ocr_safe}, .{
                     .id_extra = 30000,
                     .color_text = theme.colors.text_main,
                 });

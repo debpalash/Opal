@@ -615,8 +615,10 @@ fn renderExpandedFiles(torrent_id: i32) void {
             }
         }
 
-        // Filename
-        _ = dvui.label(@src(), "{s}", .{f_name[0..f_len]}, .{
+        // Filename — libtorrent file names are byte strings (Shift-JIS/latin-1/
+        // truncated mid-codepoint), and invalid UTF-8 drawn to dvui panics the
+        // whole app. Validate like the sibling displayName() path does.
+        _ = dvui.label(@src(), "{s}", .{safeUtf8(f_name[0..f_len])}, .{
             .id_extra = cid + 200,
             .expand = .horizontal,
             .color_text = theme.colors.text_main,

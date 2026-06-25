@@ -583,7 +583,10 @@ pub fn renderModal() void {
                 t.name[0..t.name_len]
             else
                 "Unknown";
-            _ = dvui.label(@src(), "{s}", .{display_name}, .{
+            // Torrent metadata names are untrusted byte strings (often non-UTF-8
+            // or truncated mid-codepoint) — drawing invalid UTF-8 to dvui panics
+            // the whole app. Validate before display.
+            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(display_name)}, .{
                 .id_extra = idx + 5100,
                 .color_text = theme.colors.text_main,
                 .expand = .horizontal,
@@ -683,7 +686,7 @@ pub fn renderModal() void {
                 else
                     theme.colors.text_muted;
 
-                _ = dvui.label(@src(), "{s}", .{t.badge[0..t.badge_len]}, .{
+                _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(t.badge[0..t.badge_len])}, .{
                     .id_extra = idx + 5750,
                     .color_text = badge_color,
                     .gravity_y = 0.5,
@@ -697,7 +700,7 @@ pub fn renderModal() void {
                     .color_text = theme.colors.text_dim,
                     .gravity_y = 0.5,
                 });
-                _ = dvui.label(@src(), "{s}", .{t.date[0..t.date_len]}, .{
+                _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(t.date[0..t.date_len])}, .{
                     .id_extra = idx + 5850,
                     .color_text = theme.colors.text_dim,
                     .gravity_y = 0.5,

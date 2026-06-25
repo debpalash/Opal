@@ -177,7 +177,11 @@ fn renderPlaylistTab() void {
         const bg_color = if (is_active) theme.colors.accent else theme.colors.bg_card;
         const fg_color = if (is_active) theme.colors.bg_header else theme.colors.text_main;
         
-        const clicked = dvui.button(@src(), label_buf[0..std.mem.indexOfScalar(u8, &label_buf, 0) orelse 0], .{}, .{
+        // Title/group are trimmed at byte boundaries (can cut a codepoint) and
+        // come from untrusted M3U/IPTV playlists — validate before dvui draws it
+        // (invalid UTF-8 panics the whole app).
+        const lbl_slice = label_buf[0 .. std.mem.indexOfScalar(u8, &label_buf, 0) orelse 0];
+        const clicked = dvui.button(@src(), @import("../core/text.zig").safeUtf8(lbl_slice), .{}, .{
             .id_extra = i,
             .expand = .horizontal,
             .color_fill = bg_color,

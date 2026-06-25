@@ -531,7 +531,11 @@ pub fn renderGrid() !void {
                         if (p.loading_label_len > 0) {
                             const src_text = p.loading_label[0..p.loading_label_len];
                             const display = if (src_text.len > 45) src_text[src_text.len - 45 ..] else src_text;
-                            _ = dvui.label(@src(), "{s}", .{display}, .{
+                            // loading_label is a file path / network title written
+                            // by the load worker — validate a copy so a non-UTF-8
+                            // byte (or a tail slice cut mid-codepoint) can't panic dvui.
+                            var ll_buf: [64]u8 = undefined;
+                            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(display, &ll_buf)}, .{
                                 .id_extra = i + 4002,
                                 .color_text = theme.colors.text_tertiary,
                                 .gravity_x = 0.5,

@@ -1678,7 +1678,10 @@ fn renderSubtitlesTab() void {
                 // Release name (truncated)
                 if (r.release_len > 0) {
                     const show_len = @min(r.release_len, 60);
-                    _ = dvui.label(@src(), "{s}", .{r.release[0..show_len]}, .{
+                    // Untrusted + worker-written: validate a copy before dvui draws
+                    // it (invalid/mid-codepoint UTF-8 panics the whole app).
+                    var rel_buf: [96]u8 = undefined;
+                    _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(r.release[0..show_len], &rel_buf)}, .{
                         .id_extra = ri + 4700,
                         .color_text = theme.colors.text_primary,
                         .gravity_y = 0.5,

@@ -363,7 +363,10 @@ pub fn renderSubPicker() void {
         }
         if (r.release_len > 0) {
             const show_len = @min(r.release_len, 70);
-            _ = dvui.label(@src(), "{s}", .{r.release[0..show_len]}, .{
+            // OpenSubtitles release names are untrusted + worker-written; snapshot
+            // + validate a copy so an invalid/mid-codepoint byte can't panic dvui.
+            var rel_buf: [128]u8 = undefined;
+            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(r.release[0..show_len], &rel_buf)}, .{
                 .id_extra = ri + 58200,
                 .color_text = theme.colors.text_primary,
                 .gravity_y = 0.5,
