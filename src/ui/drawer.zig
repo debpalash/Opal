@@ -615,7 +615,7 @@ fn renderLogsContent() void {
             .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
             .gravity_y = 0.5,
         })) {
-            logs.clearAll();
+            logs.clear(); // locked — never call unlocked clearAll() from the UI thread
         }
     }
 
@@ -635,12 +635,18 @@ fn renderLogsContent() void {
         return;
     }
 
+    // Hold the log lock across read+draw so a worker's pushLog eviction can't free
+    // a text slice mid-draw (use-after-free). Validate UTF-8 — log text is
+    // untrusted (mpv stderr / scraper output) and would otherwise panic dvui.
+    logs.lockRead();
+    defer logs.unlockRead();
+    const snap = logs.logCount();
     var li: usize = 0;
-    while (li < count) : (li += 1) {
+    while (li < snap) : (li += 1) {
         const l = logs.getLog(li);
         if (logs.show_only_errors and !l.is_error) continue;
         const col = if (l.is_error) theme.colors.danger else theme.colors.text_dim;
-        _ = dvui.labelNoFmt(@src(), l.text, .{}, .{
+        _ = dvui.labelNoFmt(@src(), @import("../core/text.zig").safeUtf8(l.text), .{}, .{
             .id_extra = li,
             .color_text = col,
             .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },

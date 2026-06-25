@@ -29,6 +29,9 @@ pub fn getLog(index: usize) *const LogEntry {
     return getLogAt(index);
 }
 
+/// Free every entry and reset the ring. UNLOCKED — callers must hold log_mutex
+/// (deinit/clear/pushLog-eviction do). Calling this from a UI thread without the
+/// lock races pushLog's eviction free() → use-after-free / double-free.
 pub fn clearAll() void {
     var ci: usize = 0;
     while (ci < log_count) : (ci += 1) {
@@ -39,6 +42,25 @@ pub fn clearAll() void {
     }
     log_count = 0;
     log_head = 0;
+}
+
+/// Locked Clear for UI buttons (Logs tab / dev console). Always use this from the
+/// UI thread instead of clearAll(), so concurrent worker pushLog can't free an
+/// entry we're mid-freeing.
+pub fn clear() void {
+    log_mutex.lock();
+    defer log_mutex.unlock();
+    clearAll();
+}
+
+/// Hold the log lock across a read+draw loop so a worker's pushLog eviction can't
+/// free a LogEntry's text slice while the UI is still drawing it. Pair lockRead()
+/// with unlockRead() around the render loop; do NOT call pushLog/clear in between.
+pub fn lockRead() void {
+    log_mutex.lock();
+}
+pub fn unlockRead() void {
+    log_mutex.unlock();
 }
 
 /// Free all log entries — call during app shutdown to prevent GPA leak reports
@@ -126,9 +148,7 @@ pub fn renderDevLogWindow() void {
             show_only_errors = !show_only_errors;
         }
         if (dvui.button(@src(), "Clear", .{}, .{})) {
-            log_mutex.lock();
-            defer log_mutex.unlock();
-            clearAll();
+            clear();
         }
         if (dvui.button(@src(), "Close", .{}, .{})) {
             show_logs_ui = false;
@@ -144,11 +164,18 @@ pub fn renderDevLogWindow() void {
     var inner = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
     defer inner.deinit();
 
+    // Hold the lock across the whole read+draw loop: a worker's pushLog eviction
+    // frees the oldest entry's text slice, which the UI would otherwise read after
+    // free. Log text is also untrusted (mpv stderr / scraper output) so validate
+    // UTF-8 before dvui measures it.
+    lockRead();
+    defer unlockRead();
+    const snap = log_count;
     var li: usize = 0;
-    while (li < log_count) : (li += 1) {
+    while (li < snap) : (li += 1) {
         const l = getLogAt(li);
         if (show_only_errors and !l.is_error) continue;
         const col = if (l.is_error) dvui.Color{ .r = 255, .g = 80, .b = 80, .a = 255 } else dvui.Color{ .r = 180, .g = 180, .b = 180, .a = 255 };
-        _ = dvui.labelNoFmt(@src(), l.text, .{}, .{ .id_extra = li, .color_text = col });
+        _ = dvui.labelNoFmt(@src(), @import("text.zig").safeUtf8(l.text), .{}, .{ .id_extra = li, .color_text = col });
     }
 }
