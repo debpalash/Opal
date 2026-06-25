@@ -94,6 +94,12 @@ pub fn uploadIfReady(pixels: *?[]u8, w: u32, h: u32, tex: *?dvui.Texture) bool {
     const num_px = w * h;
     if (num_px == 0) return false;
 
+    // Torn-publish guard: the worker writes w/h then the pixels pointer; on a
+    // weakly-ordered CPU the UI can observe the new pixels with stale w/h. If the
+    // buffer length doesn't exactly match w*h*4 the dims aren't consistent yet —
+    // skip this frame (prevents an out-of-bounds read / mis-sized texture).
+    if (pixels.*.?.len != num_px * 4) return false;
+
     const pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(pixels.*.?.ptr)))[0..num_px];
     tex.* = dvui.textureCreate(pma, w, h, .linear, .rgba_32) catch null;
 
