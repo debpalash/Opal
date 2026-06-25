@@ -225,11 +225,51 @@ fn serverLoop() void {
     }
 }
 
+/// True if the request's Host header is a loopback name (127.0.0.1 / localhost /
+/// ::1), optionally with a :port. DNS-rebinding defense: a malicious page that
+/// rebinds its own domain to 127.0.0.1 reaches us with Host: attacker.com, which
+/// fails this check. No Host header (HTTP/1.1 requires one) is also rejected.
+fn hostHeaderIsLocal(request: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, request, '\n');
+    _ = lines.next(); // skip the request line
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \r\t");
+        if (trimmed.len < 5 or !std.ascii.eqlIgnoreCase(trimmed[0..5], "host:")) continue;
+        var host = std.mem.trim(u8, trimmed[5..], " \r\t");
+        // Strip a trailing :port (only when what follows the last ':' is all digits,
+        // so the ':' inside a bare "::1" isn't mistaken for a port separator).
+        if (std.mem.lastIndexOfScalar(u8, host, ':')) |ci| {
+            const after = host[ci + 1 ..];
+            var all_digit = after.len > 0;
+            for (after) |ch| if (!std.ascii.isDigit(ch)) {
+                all_digit = false;
+            };
+            if (all_digit) host = host[0..ci];
+        }
+        return std.mem.eql(u8, host, "127.0.0.1") or
+            std.ascii.eqlIgnoreCase(host, "localhost") or
+            std.mem.eql(u8, host, "::1") or
+            std.mem.eql(u8, host, "[::1]");
+    }
+    return false;
+}
+
 fn handleRequest(stream: std.Io.net.Stream) !void {
     var buf: [4096]u8 = undefined;
     const n = io_g.streamReadAll(stream, &buf) catch return;
     if (n == 0) return;
     const request = buf[0..n];
+
+    // DNS-rebinding defense (loopback bind only): the bundled HTML is served
+    // unauthenticated AND carries the injected bearer token, so a rebound attacker
+    // domain (Host: evil.com → 127.0.0.1) could read it same-origin (the CORS fix
+    // doesn't stop same-origin reads). Require a loopback Host. Headless mode binds
+    // 0.0.0.0 for LAN use and does NOT inject the token, so it's exempt.
+    if (!state.app.is_headless and !hostHeaderIsLocal(request)) {
+        const resp = "HTTP/1.1 403 Forbidden\r\nContent-Length: 9\r\n\r\nForbidden";
+        _ = io_g.streamWriteAll(stream, resp) catch {};
+        return;
+    }
 
     var lines = std.mem.splitScalar(u8, request, '\n');
     const first_line = lines.next() orelse return;
