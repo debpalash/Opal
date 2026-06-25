@@ -489,7 +489,9 @@ pub const AppState = struct {
     // ── Anime ──
     anime: struct {
         search_buf: [256]u8 = std.mem.zeroes([256]u8),
-        is_loading: bool = false,
+        // Atomic like the tmdb/yt/jf loaders: read by the UI + remote API threads,
+        // written by detached fetch workers. A plain bool here is a data race.
+        is_loading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
         last_fetch_s: i64 = 0, // SWR cache timestamp (trending)
         thread: ?std.Thread = null,
         results: [100]AnimeResult = std.mem.zeroes([100]AnimeResult),

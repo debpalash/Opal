@@ -49,7 +49,7 @@ const allanime_api = "https://api.allanime.day";
 const allanime_refr = "https://allmanga.to";
 const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0";
 
-// NOTE: state.app.anime.is_loading / stream_loading / episodes_loading are plain
+// NOTE: state.app.anime.is_loading.load(.acquire) / stream_loading / episodes_loading are plain
 // bools in the global state struct, shared between UI and bg threads without
 // atomics. Acceptable — worst case is one stale UI frame before the flag is seen.
 pub var has_loaded_trending: bool = false;
@@ -188,7 +188,7 @@ var grid_loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(fals
 /// results[] (mirrors comics.zig loadMoreResults). No-op unless the last fetch
 /// reported has_next_page, we're not already busy/loading, and there's room.
 pub fn loadMoreGrid() void {
-    if (!more_available or grid_loading_more.load(.acquire) or state.app.anime.is_loading) return;
+    if (!more_available or grid_loading_more.load(.acquire) or state.app.anime.is_loading.load(.acquire)) return;
     if (state.app.anime.result_count == 0 or state.app.anime.result_count >= state.app.anime.results.len) return;
     if (grid_loading_more.swap(true, .acq_rel)) return;
     if (std.Thread.spawn(.{}, loadMoreGridWorker, .{ search_gen.load(.acquire), state.app.anime.mode })) |t| {
@@ -271,9 +271,9 @@ var last_buf_snapshot_len: usize = 0;
 var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
 pub fn loadTrendingAnime() void {
-    if (state.app.anime.is_loading) return;
+    if (state.app.anime.is_loading.load(.acquire)) return;
 
-    state.app.anime.is_loading = true;
+    state.app.anime.is_loading.store(true, .release);
     // Don't clear result_count here — parseJikanData repopulates and sets the
     // count after the fetch, so a stale-refresh keeps old cards on screen.
     state.app.anime.selected_idx = null;
@@ -287,14 +287,14 @@ pub fn loadTrendingAnime() void {
     _ = search_gen.fetchAdd(1, .acq_rel);
 
     state.app.anime.thread = std.Thread.spawn(.{}, trendingThread, .{}) catch {
-        state.app.anime.is_loading = false;
+        state.app.anime.is_loading.store(false, .release);
         return;
     };
     if (state.app.anime.thread) |t| t.detach(); // never joined — detach to avoid leaking the handle
 }
 
 fn trendingThread() void {
-    defer state.app.anime.is_loading = false;
+    defer state.app.anime.is_loading.store(false, .release);
     // Capture the generation this load was spawned under (see searchThread).
     const my_gen = search_gen.load(.acquire);
 
@@ -334,7 +334,7 @@ pub fn searchAnime(query: []const u8) void {
     // are dropped, and the search_query_buf is overwritten for the new fetch.
     // (Worst case two curl workers run briefly; the stale one self-discards.)
 
-    state.app.anime.is_loading = true;
+    state.app.anime.is_loading.store(true, .release);
     // Don't clear result_count — keep prior cards visible until new results
     // arrive (no flicker). The new generation guards against stale publishes.
     state.app.anime.selected_idx = null;
@@ -354,7 +354,7 @@ pub fn searchAnime(query: []const u8) void {
     if (std.Thread.spawn(.{}, searchThread, .{my_gen})) |t| {
         t.detach(); // never joined — detach to avoid leaking the handle
     } else |_| {
-        state.app.anime.is_loading = false;
+        state.app.anime.is_loading.store(false, .release);
     }
 }
 
@@ -362,7 +362,7 @@ var search_query_buf: [256]u8 = undefined;
 var search_query_len: usize = 0;
 
 fn searchThread(my_gen: u32) void {
-    defer state.app.anime.is_loading = false;
+    defer state.app.anime.is_loading.store(false, .release);
     // Snapshot the query immediately — a newer search may overwrite the static
     // buffer mid-flight. We only re-check the generation right before publish.
     var local_query_buf: [256]u8 = undefined;
@@ -428,8 +428,8 @@ fn searchThread(my_gen: u32) void {
 /// Kick a seasonal fetch for the current season_sel / season_year. Reuses the
 /// shared results[]/generation machinery (parseJikanData publishes the cards).
 pub fn loadSeasonal() void {
-    if (state.app.anime.is_loading) return;
-    state.app.anime.is_loading = true;
+    if (state.app.anime.is_loading.load(.acquire)) return;
+    state.app.anime.is_loading.store(true, .release);
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
     state.app.anime.last_fetch_s = @import("browse_cache.zig").now();
@@ -438,14 +438,14 @@ pub fn loadSeasonal() void {
     const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
 
     state.app.anime.thread = std.Thread.spawn(.{}, seasonalThread, .{my_gen}) catch {
-        state.app.anime.is_loading = false;
+        state.app.anime.is_loading.store(false, .release);
         return;
     };
     if (state.app.anime.thread) |t| t.detach();
 }
 
 fn seasonalThread(my_gen: u32) void {
-    defer state.app.anime.is_loading = false;
+    defer state.app.anime.is_loading.store(false, .release);
 
     const sel = state.app.anime.season_sel;
     const year = state.app.anime.season_year;
@@ -480,8 +480,8 @@ fn seasonalThread(my_gen: u32) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn loadCalendar() void {
-    if (state.app.anime.is_loading) return;
-    state.app.anime.is_loading = true;
+    if (state.app.anime.is_loading.load(.acquire)) return;
+    state.app.anime.is_loading.store(true, .release);
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
     state.app.anime.last_fetch_s = @import("browse_cache.zig").now();
@@ -490,14 +490,14 @@ pub fn loadCalendar() void {
     const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
 
     state.app.anime.thread = std.Thread.spawn(.{}, calendarThread, .{my_gen}) catch {
-        state.app.anime.is_loading = false;
+        state.app.anime.is_loading.store(false, .release);
         return;
     };
     if (state.app.anime.thread) |t| t.detach();
 }
 
 fn calendarThread(my_gen: u32) void {
-    defer state.app.anime.is_loading = false;
+    defer state.app.anime.is_loading.store(false, .release);
 
     const day = calDayStr(state.app.anime.cal_day);
     var url_buf: [256]u8 = undefined;
@@ -631,11 +631,22 @@ fn parseJikanData(json: []const u8, my_gen: u32) usize {
 /// APPEND path: we keep the already-shown cards (and their live textures)
 /// untouched, write new rows at [start..), DEDUPE each candidate by mal_id
 /// against rows [0..count), and return how many rows were actually added.
+/// Serializes the whole parse so two concurrent workers (fast typing spawns
+/// overlapping search workers; the remote API thread can spawn another) can never
+/// both write state.app.anime.results[]/result_count or both read-then-null the
+/// same item.poster_tex — the latter would queueTexFree the same GPU texture
+/// twice → double dvui.textureDestroyLater → SIGABRT (see file header).
+var anime_parse_mutex: @import("../core/sync.zig").Mutex = .{};
+
 fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_offset: usize) usize {
+    anime_parse_mutex.lock();
+    defer anime_parse_mutex.unlock();
+
     // Drop stale results: if a newer search/trending load fired while we were
     // in-flight, this generation is no longer the latest — discard silently so
     // fast typing never shows out-of-order results, and we don't clobber the
-    // newer fetch's cards/textures.
+    // newer fetch's cards/textures. (Re-checked here under the lock so a worker
+    // that waited on the mutex sees the latest generation.)
     if (search_gen.load(.acquire) != my_gen) return 0;
 
     var count: usize = start_offset;
@@ -855,7 +866,7 @@ pub fn loadEpisodes(idx: usize) void {
         state.app.anime.episode_filler[ep_count] = false;
     }
     state.app.anime.episode_count = ep_count;
-    state.app.anime.is_loading = false;
+    state.app.anime.is_loading.store(false, .release);
 
     // ── Tracking: zero the watched flags for the visible range, then hydrate
     //    from the DB (animeLoadWatched only sets trues; we must clear first). ──
@@ -1148,7 +1159,7 @@ var jump_busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 pub fn jumpToAnime(mal_id: []const u8) void {
     if (mal_id.len == 0 or mal_id.len > 15) return;
     if (jump_busy.swap(true, .acq_rel)) return;
-    state.app.anime.is_loading = true;
+    state.app.anime.is_loading.store(true, .release);
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
     // New generation so any in-flight grid fetch can't clobber results[0].
@@ -1163,7 +1174,7 @@ pub fn jumpToAnime(mal_id: []const u8) void {
 
         fn worker() void {
             defer {
-                state.app.anime.is_loading = false;
+                state.app.anime.is_loading.store(false, .release);
                 jump_busy.store(false, .release);
             }
             const id = @This().id_buf[0..@This().id_len];
@@ -1206,7 +1217,7 @@ pub fn jumpToAnime(mal_id: []const u8) void {
     if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
         t.detach();
     } else |_| {
-        state.app.anime.is_loading = false;
+        state.app.anime.is_loading.store(false, .release);
         jump_busy.store(false, .release);
     }
 }
@@ -1441,7 +1452,7 @@ pub fn renderContent() void {
 
     // Only show the spinner on an INITIAL load (nothing to show yet). During a
     // live-search / stale refresh the current cards stay on screen — seamless.
-    if (state.app.anime.is_loading and state.app.anime.result_count == 0 and
+    if (state.app.anime.is_loading.load(.acquire) and state.app.anime.result_count == 0 and
         state.app.anime.selected_idx == null)
     {
         _ = dvui.label(@src(), "Loading...", .{}, .{
@@ -1739,7 +1750,7 @@ pub fn renderContent() void {
 /// also keeps its SWR auto-refresh; the other modes only refetch when their
 /// sub-selector (season/day/filter) changes or on an explicit mode switch.
 fn dispatchModeFetch() void {
-    if (state.app.anime.is_loading) {
+    if (state.app.anime.is_loading.load(.acquire)) {
         // Don't stack fetches; record intent so we re-dispatch once it lands.
         return;
     }
@@ -2369,7 +2380,7 @@ fn renderTrendChip(idx: usize, filter: TrendFilter, label: []const u8) void {
 // ══════════════════════════════════════════════════════════
 
 fn renderGallery() void {
-    if (state.app.anime.result_count == 0 and !state.app.anime.is_loading) {
+    if (state.app.anime.result_count == 0 and !state.app.anime.is_loading.load(.acquire)) {
         _ = dvui.label(@src(), "Search for anime or wait for trending...", .{}, .{
             .color_text = theme.colors.text_muted,
             .gravity_x = 0.5,
