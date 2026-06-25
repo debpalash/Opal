@@ -5,6 +5,7 @@ const theme = @import("../ui/theme.zig");
 const icons = @import("icons");
 const logs = @import("../core/logs.zig");
 const player = @import("../player/player.zig");
+const safeUtf8 = @import("../core/text.zig").safeUtf8;
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -23,6 +24,44 @@ const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/2010010
 // atomics. Acceptable — worst case is one stale UI frame before the flag is seen.
 pub var has_loaded_trending: bool = false;
 
+// ── UI-control state (module-level, NOT in state.zig). ──
+
+/// Trending category chip — maps to Jikan top/anime `filter=` values.
+const TrendFilter = enum {
+    airing,
+    top,
+    bypopularity,
+    upcoming,
+
+    /// Jikan query value. `.top` is the un-filtered top list (no filter param).
+    fn jikan(self: TrendFilter) []const u8 {
+        return switch (self) {
+            .airing => "airing",
+            .top => "", // no filter → overall top
+            .bypopularity => "bypopularity",
+            .upcoming => "upcoming",
+        };
+    }
+};
+var trend_filter: TrendFilter = .airing;
+
+/// User-cyclable card width (compact ↔ large), clamped 110–320 in the +/- wires.
+var card_w_pref: f32 = 150;
+
+// ── Live-search debounce + generation (see renderSearchBar). ──
+/// Wall-clock ms of the last observed change to the search text buffer.
+var last_edit_ms: i64 = 0;
+/// Last query we actually fired a fetch for (to suppress duplicate fires).
+var last_fired_query: [256]u8 = std.mem.zeroes([256]u8);
+var last_fired_len: usize = 0;
+/// Previous-frame snapshot of the buffer, to detect edits frame-to-frame.
+var last_buf_snapshot: [256]u8 = std.mem.zeroes([256]u8);
+var last_buf_snapshot_len: usize = 0;
+/// Monotonic search generation. Each fired search captures the value it was
+/// spawned under; a worker only publishes if it is still the latest, so fast
+/// typing can't show stale / out-of-order results.
+var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
 pub fn loadTrendingAnime() void {
     if (state.app.anime.is_loading) return;
 
@@ -33,6 +72,9 @@ pub fn loadTrendingAnime() void {
     state.app.anime.episode_count = 0;
     state.app.anime.last_fetch_s = @import("browse_cache.zig").now(); // SWR stamp
     has_loaded_trending = true;
+    // Trending owns the global generation too, so a stale in-flight search
+    // worker won't overwrite freshly-loaded trending cards.
+    _ = search_gen.fetchAdd(1, .acq_rel);
 
     state.app.anime.thread = std.Thread.spawn(.{}, trendingThread, .{}) catch {
         state.app.anime.is_loading = false;
@@ -43,10 +85,16 @@ pub fn loadTrendingAnime() void {
 
 fn trendingThread() void {
     defer state.app.anime.is_loading = false;
+    // Capture the generation this load was spawned under (see searchThread).
+    const my_gen = search_gen.load(.acquire);
 
     const jikan_api = "https://api.jikan.moe/v4/top/anime";
     var arg1_buf: [256]u8 = undefined;
-    const arg1 = std.fmt.bufPrint(&arg1_buf, "{s}?filter=airing&limit=24", .{jikan_api}) catch return;
+    const fv = trend_filter.jikan();
+    const arg1 = (if (fv.len == 0)
+        std.fmt.bufPrint(&arg1_buf, "{s}?limit=24", .{jikan_api})
+    else
+        std.fmt.bufPrint(&arg1_buf, "{s}?filter={s}&limit=24", .{ jikan_api, fv })) catch return;
 
     const argv = [_][]const u8{
         "curl", "-s", "-A", agent, arg1,
@@ -64,18 +112,25 @@ fn trendingThread() void {
 
     if (bytes == 0) return;
 
-    parseJikanData(buf[0..bytes]);
+    parseJikanData(buf[0..bytes], my_gen);
     logs.pushLog("info", "anime", "Trending loaded (Jikan API)", false);
 }
 
 pub fn searchAnime(query: []const u8) void {
-    if (state.app.anime.is_loading) return;
     if (query.len == 0) return;
+    // NOTE: do NOT early-return on is_loading. Live-search supersedes an
+    // in-flight fetch: we bump the generation so the older worker's results
+    // are dropped, and the search_query_buf is overwritten for the new fetch.
+    // (Worst case two curl workers run briefly; the stale one self-discards.)
 
     state.app.anime.is_loading = true;
-    state.app.anime.result_count = 0;
+    // Don't clear result_count — keep prior cards visible until new results
+    // arrive (no flicker). The new generation guards against stale publishes.
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
+
+    // New generation for this search; the worker captures and re-checks it.
+    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
 
     // Copy query into a static buffer so the spawned thread doesn't read
     // from the potentially-mutated UI search_buf.
@@ -83,19 +138,24 @@ pub fn searchAnime(query: []const u8) void {
     @memcpy(search_query_buf[0..safe_len], query[0..safe_len]);
     search_query_len = safe_len;
 
-    state.app.anime.thread = std.Thread.spawn(.{}, searchThread, .{}) catch {
+    if (std.Thread.spawn(.{}, searchThread, .{my_gen})) |t| {
+        t.detach(); // never joined — detach to avoid leaking the handle
+    } else |_| {
         state.app.anime.is_loading = false;
-        return;
-    };
-    if (state.app.anime.thread) |t| t.detach(); // never joined — detach to avoid leaking the handle
+    }
 }
 
 var search_query_buf: [256]u8 = undefined;
 var search_query_len: usize = 0;
 
-fn searchThread() void {
+fn searchThread(my_gen: u32) void {
     defer state.app.anime.is_loading = false;
-    const query = search_query_buf[0..search_query_len];
+    // Snapshot the query immediately — a newer search may overwrite the static
+    // buffer mid-flight. We only re-check the generation right before publish.
+    var local_query_buf: [256]u8 = undefined;
+    const qlen = @min(search_query_len, local_query_buf.len);
+    @memcpy(local_query_buf[0..qlen], search_query_buf[0..qlen]);
+    const query = local_query_buf[0..qlen];
 
     const jikan_api = "https://api.jikan.moe/v4/anime";
 
@@ -143,7 +203,7 @@ fn searchThread() void {
 
     if (bytes == 0) return;
 
-    parseJikanData(buf[0..bytes]);
+    parseJikanData(buf[0..bytes], my_gen);
     logs.pushLog("info", "anime", "Search done (Jikan API)", false);
 }
 
@@ -238,7 +298,13 @@ fn decodeJsonEscapes(src: []const u8, dst: []u8) usize {
     return out;
 }
 
-fn parseJikanData(json: []const u8) void {
+fn parseJikanData(json: []const u8, my_gen: u32) void {
+    // Drop stale results: if a newer search/trending load fired while we were
+    // in-flight, this generation is no longer the latest — discard silently so
+    // fast typing never shows out-of-order results, and we don't clobber the
+    // newer fetch's cards/textures.
+    if (search_gen.load(.acquire) != my_gen) return;
+
     var count: usize = 0;
     var pos: usize = 0;
 
@@ -386,6 +452,9 @@ fn parseJikanData(json: []const u8) void {
         pos = next_obj_pos;
     }
 
+    // Final generation re-check before publishing the count: a newer fetch may
+    // have superseded us during parsing. If so, drop our results.
+    if (search_gen.load(.acquire) != my_gen) return;
     state.app.anime.result_count = count;
 }
 
@@ -695,47 +764,21 @@ pub fn renderContent() void {
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer page.deinit();
 
-    // Search bar
-    {
-        var search_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
-            .background = true,
-            .color_fill = theme.colors.bg_header,
-        });
-        defer search_row.deinit();
-
-        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.anime.search_buf } }, .{
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 200, .h = 20 },
-            .color_fill = theme.colors.bg_input,
-            .color_border = theme.colors.border_input,
-            .color_text = theme.colors.text_main,
-            .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
-        });
-        const enter_pressed = te.enter_pressed;
-        te.deinit();
-
-        const clicked = dvui.button(@src(), "Search", .{}, .{
-            .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-            .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
-        });
-        if (clicked or enter_pressed) {
-            const input = std.mem.sliceTo(&state.app.anime.search_buf, 0);
-            if (input.len > 0) {
-                searchAnime(input);
-            }
-        }
+    // Search bar + toolbar (chips, count, card-size controls). Hidden while
+    // an anime is selected (episode-list view has its own header).
+    if (state.app.anime.selected_idx == null) {
+        renderSearchBar();
+        renderToolbar(state.app.anime.result_count);
     }
 
-    // Loading indicator
-    if (state.app.anime.is_loading) {
+    // Only show the spinner on an INITIAL load (nothing to show yet). During a
+    // live-search / stale refresh the current cards stay on screen — seamless.
+    if (state.app.anime.is_loading and state.app.anime.result_count == 0 and
+        state.app.anime.selected_idx == null)
+    {
         _ = dvui.label(@src(), "Loading...", .{}, .{
             .color_text = theme.colors.accent,
+            .gravity_x = 0.5,
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
         });
         return;
@@ -915,6 +958,182 @@ pub fn renderContent() void {
 }
 
 // ══════════════════════════════════════════════════════════
+// Search bar + toolbar (live search, chips, card-size controls)
+// ══════════════════════════════════════════════════════════
+
+/// Search box with LIVE / incremental search-as-you-type (350ms debounce) plus
+/// the explicit Enter / button path. Empty query → trending.
+fn renderSearchBar() void {
+    const io = @import("../core/io_global.zig");
+
+    var search_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
+        .background = true,
+        .color_fill = theme.colors.bg_header,
+    });
+    defer search_row.deinit();
+
+    var te = dvui.textEntry(@src(), .{
+        .text = .{ .buffer = &state.app.anime.search_buf },
+        .placeholder = "Search anime…",
+    }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 200, .h = 20 },
+        .color_fill = theme.colors.bg_input,
+        .color_border = theme.colors.border_input,
+        .color_text = theme.colors.text_main,
+        .border = dvui.Rect.all(1),
+        .corner_radius = theme.dims.rad_sm,
+    });
+    const enter_pressed = te.enter_pressed;
+    te.deinit();
+
+    const clicked = dvui.button(@src(), "Search", .{}, .{
+        .color_fill = theme.colors.accent,
+        .color_text = dvui.Color.white,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+        .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
+    });
+
+    // Current buffer contents (NUL-terminated fixed buffer).
+    const buf = std.mem.sliceTo(&state.app.anime.search_buf, 0);
+    const now_ms = io.milliTimestamp();
+
+    // 1) Detect an edit this frame vs. the previous snapshot → restamp the
+    //    debounce clock so we only fire after the user pauses typing.
+    const changed = !(buf.len == last_buf_snapshot_len and
+        std.mem.eql(u8, buf, last_buf_snapshot[0..last_buf_snapshot_len]));
+    if (changed) {
+        const n = @min(buf.len, last_buf_snapshot.len);
+        @memcpy(last_buf_snapshot[0..n], buf[0..n]);
+        last_buf_snapshot_len = n;
+        last_edit_ms = now_ms;
+    }
+
+    // 2) Explicit fire (button / Enter) — immediate, no debounce.
+    if (clicked or enter_pressed) {
+        if (buf.len > 0) {
+            recordFired(buf);
+            searchAnime(buf);
+        } else {
+            // Empty query → back to trending.
+            recordFired(buf);
+            loadTrendingAnime();
+        }
+        return;
+    }
+
+    // 3) Live / debounced fire: buffer differs from what we last fired, has
+    //    settled for >= 350ms, and is long enough to be a useful query.
+    const differs = !(buf.len == last_fired_len and
+        std.mem.eql(u8, buf, last_fired_query[0..last_fired_len]));
+    if (differs and (now_ms - last_edit_ms) >= 350) {
+        if (buf.len >= 2) {
+            recordFired(buf);
+            searchAnime(buf);
+        } else if (buf.len == 0 and last_fired_len > 0) {
+            // Cleared the box → restore trending.
+            recordFired(buf);
+            loadTrendingAnime();
+        }
+    }
+}
+
+/// Remember the query we just fired, so we don't re-fire it next frame.
+fn recordFired(buf: []const u8) void {
+    const n = @min(buf.len, last_fired_query.len);
+    @memcpy(last_fired_query[0..n], buf[0..n]);
+    last_fired_len = n;
+}
+
+/// Compact toolbar: trending category chips (only on the trending view),
+/// a result count, and card-size +/- controls. Wraps on narrow widths.
+fn renderToolbar(count: usize) void {
+    const on_trending = state.app.anime.search_buf[0] == 0;
+
+    var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
+        .expand = .horizontal,
+        .margin = .{ .x = 8, .y = 0, .w = 8, .h = 6 },
+    });
+    defer bar.deinit();
+
+    // Trending category chips (Jikan top/anime filters). Hidden while a search
+    // query is active — those results come from /anime?q=, not top/anime.
+    if (on_trending) {
+        renderTrendChip(0, .airing, "Airing");
+        renderTrendChip(1, .top, "Top");
+        renderTrendChip(2, .bypopularity, "Popular");
+        renderTrendChip(3, .upcoming, "Upcoming");
+        toolbarDivider(900);
+    }
+
+    // Result count.
+    _ = dvui.label(@src(), "{d} results", .{count}, .{
+        .color_text = theme.colors.text_muted,
+        .gravity_y = 0.5,
+    });
+
+    // Card-size −/+ controls.
+    toolbarDivider(950);
+    const dim = dvui.Color{ .r = 120, .g = 120, .b = 148, .a = 200 };
+    if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_text = dim,
+        .border = dvui.Rect.all(0),
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .padding = dvui.Rect.all(3),
+        .gravity_y = 0.5,
+    })) {
+        card_w_pref = @max(110, card_w_pref - 40);
+    }
+    if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_text = dim,
+        .border = dvui.Rect.all(0),
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .padding = dvui.Rect.all(3),
+        .gravity_y = 0.5,
+    })) {
+        card_w_pref = @min(320, card_w_pref + 40);
+    }
+}
+
+/// A faint vertical separator between toolbar groups.
+fn toolbarDivider(id: usize) void {
+    var d = dvui.box(@src(), .{}, .{
+        .id_extra = id,
+        .min_size_content = .{ .w = 1, .h = 18 },
+        .background = true,
+        .color_fill = theme.colors.border_subtle,
+        .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
+        .gravity_y = 0.5,
+    });
+    d.deinit();
+}
+
+fn renderTrendChip(idx: usize, filter: TrendFilter, label: []const u8) void {
+    const active = trend_filter == filter;
+    if (dvui.button(@src(), label, .{}, .{
+        .id_extra = idx + 8000,
+        .background = true,
+        .color_fill = if (active) theme.colors.accent else theme.colors.bg_card,
+        .color_text = if (active) dvui.Color.white else theme.colors.text_muted,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+        .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
+    })) {
+        if (trend_filter != filter) {
+            trend_filter = filter;
+            // Force a refresh even if SWR thinks the cache is fresh.
+            state.app.anime.last_fetch_s = 0;
+            loadTrendingAnime();
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════
 // Gallery Grid & Poster Cards
 // ══════════════════════════════════════════════════════════
 
@@ -931,10 +1150,12 @@ fn renderGallery() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
     defer scroll.deinit();
 
-    // Responsive poster grid (was one wide row per item).
+    // Responsive poster grid from the LIVE page width (one-frame lag; first
+    // paint falls back to a sane default). Card width is user-cyclable.
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
-    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / 150)));
+    const card_target_w: f32 = card_w_pref;
+    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / card_target_w)));
     const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
 
     var i: usize = 0;
@@ -946,6 +1167,60 @@ fn renderGallery() void {
             renderCard(&state.app.anime.results[i + col], i + col, card_w);
         }
         i += cols;
+    }
+}
+
+/// Dimmed scrim + metadata shown over an anime poster while hovered.
+/// Mirrors tmdb.zig renderHoverMeta — full title, score %, episode count,
+/// and a truncated (UTF-8-safe) synopsis.
+fn renderHoverMeta(item: *state.AnimeResult, idx: usize) void {
+    var ov = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = idx + 1600,
+        .expand = .both,
+        .background = true,
+        .color_fill = dvui.Color{ .r = 8, .g = 10, .b = 16, .a = 232 },
+        .corner_radius = dvui.Rect.all(6),
+        .padding = dvui.Rect.all(8),
+    });
+    defer ov.deinit();
+
+    // Title (full, wraps).
+    _ = dvui.label(@src(), "{s}", .{safeUtf8(item.name[0..@min(item.name_len, item.name.len)])}, .{
+        .id_extra = idx + 1601,
+        .expand = .horizontal,
+        .color_text = theme.colors.text_main,
+        .font = dvui.themeGet().font_heading,
+    });
+
+    // Score % · episode count line.
+    {
+        var line = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = idx + 1602,
+            .expand = .horizontal,
+            .padding = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+        });
+        defer line.deinit();
+
+        const pct = @as(u8, @intFromFloat(std.math.clamp(item.score * 10.0, 0.0, 100.0)));
+        const sc = if (pct >= 70) theme.colors.success else if (pct >= 50) theme.colors.warning else theme.colors.danger;
+        var pb: [8]u8 = undefined;
+        if (std.fmt.bufPrint(&pb, "{d}%", .{pct})) |ps| {
+            _ = dvui.label(@src(), "{s}", .{ps}, .{ .id_extra = idx + 1603, .color_text = sc });
+        } else |_| {}
+
+        var eb: [24]u8 = undefined;
+        if (std.fmt.bufPrint(&eb, "  {d} eps", .{item.episodes})) |es| {
+            _ = dvui.label(@src(), "{s}", .{es}, .{ .id_extra = idx + 1604, .color_text = theme.colors.text_muted });
+        } else |_| {}
+    }
+
+    // Synopsis (truncated ~300 chars; safeUtf8 trims any mid-codepoint cut).
+    if (item.overview_len > 0) {
+        _ = dvui.label(@src(), "{s}", .{safeUtf8(item.overview[0..@min(item.overview_len, 300)])}, .{
+            .id_extra = idx + 1605,
+            .expand = .horizontal,
+            .color_text = theme.colors.text_secondary,
+        });
     }
 }
 
@@ -969,18 +1244,22 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
     });
     defer card.deinit();
 
-    // Poster placeholder / texture
+    // Poster placeholder / texture — a clickable button-widget hosting the
+    // image, with a hover overlay revealing full metadata. Clicking the poster
+    // loads episodes (same action as clicking the title).
     {
-        var poster = dvui.box(@src(), .{ .dir = .vertical }, .{
+        var bw: dvui.ButtonWidget = undefined;
+        bw.init(@src(), .{}, .{
             .id_extra = idx + 100,
-            .expand = .horizontal,
             .background = true,
             .color_fill = dvui.Color{ .r = 20 + h1 / 6, .g = 25 + h2 / 8, .b = 35 + h1 / 5, .a = 255 },
             .corner_radius = .{ .x = theme.radius.md, .y = theme.radius.md, .w = 0, .h = 0 },
             .min_size_content = .{ .w = card_w, .h = poster_h },
             .max_size_content = .{ .w = card_w, .h = poster_h },
+            .padding = dvui.Rect.all(0),
         });
-        defer poster.deinit();
+        bw.processEvents();
+        bw.drawBackground();
 
         // Upload pixels to GPU texture once ready
         if (item.poster_tex == null and item.poster_pixels != null) {
@@ -993,23 +1272,37 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
             }
         }
 
-        if (item.poster_tex) |*tex| {
-            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                .id_extra = idx + 150,
-                .expand = .both,
-                .corner_radius = dvui.Rect.all(6),
-            });
-        } else {
-            // Kick off async poster download if not already fetching
-            if (!item.poster_fetching and item.poster_url_len > 0) fetchPoster(item);
-            dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
-                .id_extra = idx + 150,
-                .gravity_x = 0.5,
-                .gravity_y = 0.5,
-                .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 },
-            });
+        // Stack the poster + (on hover) a meta overlay, both filling the button.
+        {
+            var stack = dvui.overlay(@src(), .{ .id_extra = idx + 140, .expand = .both });
+            defer stack.deinit();
+
+            if (item.poster_tex) |*tex| {
+                _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+                    .id_extra = idx + 150,
+                    .expand = .both,
+                    .corner_radius = dvui.Rect.all(6),
+                });
+            } else {
+                // Kick off async poster download if not already fetching
+                if (!item.poster_fetching and item.poster_url_len > 0) fetchPoster(item);
+                dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
+                    .id_extra = idx + 150,
+                    .gravity_x = 0.5,
+                    .gravity_y = 0.5,
+                    .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 },
+                    .expand = .both,
+                });
+            }
+
+            // Hover reveals richer metadata over a dimmed scrim.
+            if (bw.hovered()) renderHoverMeta(item, idx);
         }
-        _ = &poster;
+
+        const poster_clicked = bw.clicked();
+        bw.drawFocus();
+        bw.deinit();
+        if (poster_clicked) loadEpisodes(idx);
     }
 
     // Info column

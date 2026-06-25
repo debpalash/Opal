@@ -3,8 +3,11 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
+const io = @import("../core/io_global.zig");
 
 pub const alloc = @import("../core/alloc.zig").allocator;
+
+const safeUtf8 = @import("../core/text.zig").safeUtf8;
 
 var yt_mutex: @import("../core/sync.zig").Mutex = .{};
 // Seamless refresh: instead of clearing results up-front (which blanks the
@@ -12,14 +15,70 @@ var yt_mutex: @import("../core/sync.zig").Mutex = .{};
 // to arrive clears the old ones — so a stale-refresh swaps in place.
 var pending_clear: bool = false;
 
+// ── Publish dates (parallel to state.app.yt.results) ──
+// YtItem can't be extended, so the upload_date (YYYYMMDD) for each result lives
+// here, kept index-aligned with results: appended in appendYt(), cleared by the
+// same lazy-clear so a stale-refresh swaps it in place too. Guarded by yt_mutex
+// (every reader/writer below already holds it).
+var dates: std.ArrayListUnmanaged([8]u8) = .empty;
+var dates_lens: std.ArrayListUnmanaged(u8) = .empty;
+// Staging for the date of the item currently being parsed (parseYtdlpLine /
+// parsePipedResults fill this just before calling appendYt).
+var staged_date: [8]u8 = std.mem.zeroes([8]u8);
+var staged_date_len: u8 = 0;
+
+// ── Live / incremental search ──
+// Debounced search-as-you-type. The UI thread records the last keystroke time;
+// once the buffer has been stable for the debounce window it auto-fires.
+var last_edit_ms: i64 = 0;
+var last_fired_query: [256]u8 = std.mem.zeroes([256]u8);
+var last_fired_len: usize = 0;
+// Buffer contents observed on the previous frame — used to detect a keystroke
+// (buffer changed) so the debounce window measures *inactivity*, not total time.
+var last_seen_query: [256]u8 = std.mem.zeroes([256]u8);
+var last_seen_len: usize = 0;
+// Monotonic search generation. Each fetch captures the value at spawn time; a
+// worker that finds itself superseded (a newer search bumped this) discards its
+// results instead of racing them onto the grid out of order.
+var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+const DEBOUNCE_MS: i64 = 400;
+
+// ── UI controls (module-level, not in state.zig) ──
+var card_w: f32 = 200; // user-cyclable card width, clamp 150..360
+const CARD_MIN: f32 = 150;
+const CARD_MAX: f32 = 360;
+
 /// Append a result, clearing stale results lazily on the first new one.
-/// Caller must hold yt_mutex.
+/// Caller must hold yt_mutex. Keeps the `dates` arrays index-aligned.
 fn appendYt(item: state.YtItem) void {
     if (pending_clear) {
         state.app.yt.results.clearRetainingCapacity();
+        dates.clearRetainingCapacity();
+        dates_lens.clearRetainingCapacity();
         pending_clear = false;
     }
-    state.app.yt.results.append(alloc, item) catch {};
+    state.app.yt.results.append(alloc, item) catch return;
+    // Mirror the staged date so indices stay aligned even on alloc failure.
+    dates.append(alloc, staged_date) catch {
+        // Roll the result back so the two stay aligned.
+        _ = state.app.yt.results.pop();
+        return;
+    };
+    dates_lens.append(alloc, staged_date_len) catch {
+        _ = state.app.yt.results.pop();
+        _ = dates.pop();
+        return;
+    };
+    // Reset staging for the next row.
+    staged_date_len = 0;
+}
+
+/// Date string for result `idx`, or "" if none/out of range. Caller holds yt_mutex.
+fn dateFor(idx: usize) []const u8 {
+    if (idx >= dates.items.len or idx >= dates_lens.items.len) return "";
+    const n = dates_lens.items[idx];
+    if (n == 0) return "";
+    return dates.items[idx][0..@min(n, 8)];
 }
 
 // ══════════════════════════════════════════════════════════
@@ -39,13 +98,19 @@ pub fn fetchYoutube(query: []const u8) void {
 
     const actual_query = if (query.len == 0) "trending music 2024" else query;
 
+    // Bump the generation; this fetch owns `my_gen`. A later fetch will bump it
+    // again, marking this one stale.
+    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+
     const S = struct {
         var q_buf: [256]u8 = undefined;
         var q_len: usize = 0;
+        var gen: u32 = 0;
     };
 
     S.q_len = @min(actual_query.len, 255);
     @memcpy(S.q_buf[0..S.q_len], actual_query[0..S.q_len]);
+    S.gen = my_gen;
 
     // Reserve a stable capacity (on the caller thread, before the worker /
     // any thumb-fetch worker exists) so later appends never realloc the buffer
@@ -62,14 +127,13 @@ pub fn fetchYoutube(query: []const u8) void {
             pending_clear = true; // old results stay until the first new one lands
             yt_mutex.unlock();
 
-            // Try Piped API first (fast, direct HTTP ~0.5s)
             // yt-dlp first — reliable (~2s) and always available. Public Piped
             // instances are frequently dead and stall the whole fetch with no
             // timeout, so it's only a backup when yt-dlp yields nothing.
-            fetchViaYtdlp(S.q_buf[0..S.q_len]);
+            fetchViaYtdlp(S.q_buf[0..S.q_len], S.gen);
             // pending_clear still armed ⇒ yt-dlp produced nothing ⇒ try Piped.
             // (Can't use results.len here: lazy-clear keeps the old results.)
-            if (pending_clear) _ = fetchViaPiped(S.q_buf[0..S.q_len]);
+            if (pending_clear and isCurrent(S.gen)) _ = fetchViaPiped(S.q_buf[0..S.q_len], S.gen);
         }
     }.worker, .{}) catch blk: {
         state.app.yt.is_loading.store(false, .release);
@@ -78,6 +142,12 @@ pub fn fetchYoutube(query: []const u8) void {
     // Detach: the handle is never joined, so without this each search leaks a
     // thread handle/resources for the life of the process.
     if (state.app.yt.thread) |t| t.detach();
+}
+
+/// True while `gen` is still the newest search. A stale worker bails so its
+/// (out-of-date) results never reach the grid.
+fn isCurrent(gen: u32) bool {
+    return search_gen.load(.acquire) == gen;
 }
 
 fn urlEncode(input: []const u8, out: []u8) usize {
@@ -101,16 +171,17 @@ fn urlEncode(input: []const u8, out: []u8) usize {
     return olen;
 }
 
-fn fetchViaPiped(query: []const u8) bool {
+fn fetchViaPiped(query: []const u8, gen: u32) bool {
     var encoded: [512]u8 = undefined;
     const elen = urlEncode(query, &encoded);
     if (elen == 0) return false;
 
     for (piped_instances) |host| {
+        if (!isCurrent(gen)) return false;
         var url_buf: [768]u8 = undefined;
         const url = std.fmt.bufPrint(&url_buf, "https://{s}/search?q={s}&filter=videos", .{ host, encoded[0..elen] }) catch continue;
 
-        var client = std.http.Client{ .allocator = alloc, .io = @import("../core/io_global.zig").io() };
+        var client = std.http.Client{ .allocator = alloc, .io = io.io() };
         defer client.deinit();
 
         const uri = std.Uri.parse(url) catch continue;
@@ -136,18 +207,19 @@ fn fetchViaPiped(query: []const u8) bool {
 
         if (body.len < 10) continue;
 
-        // Parse Piped JSON response: {"items":[{"url":"/watch?v=...","title":"...","uploaderName":"...","duration":123,"views":456,"thumbnail":"..."},...]}
-        parsePipedResults(body);
+        // Parse Piped JSON response.
+        parsePipedResults(body, gen);
         return state.app.yt.results.items.len > 0;
     }
     return false;
 }
 
-fn parsePipedResults(json: []const u8) void {
+fn parsePipedResults(json: []const u8, gen: u32) void {
     var pos: usize = 0;
     var count: usize = 0;
 
     while (pos < json.len and count < 20) {
+        if (!isCurrent(gen)) return;
         // Find next video item by looking for "url":"/watch?v=
         const url_marker = std.mem.indexOf(u8, json[pos..], "\"url\":\"/watch?v=") orelse break;
         const abs_url = pos + url_marker + 15; // after "/watch?v=
@@ -191,6 +263,9 @@ fn parsePipedResults(json: []const u8) void {
             item.thumbnail_url_len = tlen;
         } else |_| {}
 
+        // Piped has no plain upload_date in this list shape — leave it empty.
+        staged_date_len = 0;
+
         yt_mutex.lock();
         appendYt(item);
         yt_mutex.unlock();
@@ -200,7 +275,7 @@ fn parsePipedResults(json: []const u8) void {
     }
 }
 
-fn fetchViaYtdlp(query: []const u8) void {
+fn fetchViaYtdlp(query: []const u8, gen: u32) void {
     var search_arg: [280]u8 = undefined;
     const search_str = std.fmt.bufPrintZ(&search_arg, "ytsearch20:{s}", .{query}) catch return;
 
@@ -209,27 +284,29 @@ fn fetchViaYtdlp(query: []const u8) void {
     // errors and we parse nothing). Tab rows are short, fast, and robust.
     // Use the app's bundled yt-dlp (~/.config/zigzag/bin) — bare "yt-dlp" isn't
     // on the GUI process PATH, so spawning it fails.
+    // Trailing field is %(upload_date)s (YYYYMMDD or NA on flat-playlist).
     const ytdlp_bin = @import("ytdlp.zig").binary();
     const argv = [_][]const u8{
         ytdlp_bin,
         "--flat-playlist",
         "--print",
-        "%(id)s\t%(title)s\t%(channel)s\t%(duration)s\t%(view_count)s",
+        "%(id)s\t%(title)s\t%(channel)s\t%(duration)s\t%(view_count)s\t%(upload_date)s",
         "--no-warnings",
         "--socket-timeout",
         "10",
         search_str,
     };
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
+    var child = io.Child.init(&argv, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     child.spawn() catch return;
 
     var reader_buf: [8192]u8 = undefined;
-    var reader = child.stdout.?.reader(@import("../core/io_global.zig").io(), &reader_buf);
+    var reader = child.stdout.?.reader(io.io(), &reader_buf);
 
     while (reader.interface.takeDelimiter('\n') catch null) |line| {
         if (line.len == 0) continue;
+        if (!isCurrent(gen)) break; // superseded — stop feeding the grid
         yt_mutex.lock();
         parseYtdlpLine(line);
         yt_mutex.unlock();
@@ -238,11 +315,13 @@ fn fetchViaYtdlp(query: []const u8) void {
     _ = child.wait() catch {};
 }
 
-/// Parse one tab-delimited row: id \t title \t channel \t duration \t views.
-/// yt-dlp prints "NA" for missing numeric fields (flat-playlist) — parseInt
-/// then fails and we fall back to 0.
+/// Parse one tab-delimited row:
+///   id \t title \t channel \t duration \t views \t upload_date
+/// yt-dlp prints "NA" for missing fields (flat-playlist) — parseInt then fails
+/// and we fall back to 0; an "NA"/short date is just skipped.
 fn parseYtdlpLine(line: []const u8) void {
     var item = state.YtItem{};
+    staged_date_len = 0;
 
     var it = std.mem.splitScalar(u8, line, '\t');
     const vid = it.next() orelse return;
@@ -264,6 +343,13 @@ fn parseYtdlpLine(line: []const u8) void {
     }
     if (it.next()) |dur| item.duration = std.fmt.parseInt(i64, dur, 10) catch 0;
     if (it.next()) |views| item.views = std.fmt.parseInt(i64, views, 10) catch 0;
+    if (it.next()) |ud| {
+        // Expect exactly YYYYMMDD (8 ASCII digits). Anything else → skip.
+        if (ud.len == 8 and isAllDigits(ud)) {
+            @memcpy(staged_date[0..8], ud[0..8]);
+            staged_date_len = 8;
+        }
+    }
 
     var thumb_buf: [128]u8 = undefined;
     if (std.fmt.bufPrint(&thumb_buf, "https://i.ytimg.com/vi/{s}/mqdefault.jpg", .{item.video_id[0..item.video_id_len]})) |thumb| {
@@ -273,6 +359,13 @@ fn parseYtdlpLine(line: []const u8) void {
     } else |_| {}
 
     appendYt(item);
+}
+
+fn isAllDigits(s: []const u8) bool {
+    for (s) |c| {
+        if (c < '0' or c > '9') return false;
+    }
+    return true;
 }
 
 fn extractJsonStr(json: []const u8, key: []const u8) ?[]const u8 {
@@ -310,6 +403,46 @@ fn extractJsonNum(json: []const u8, key: []const u8) i64 {
 }
 
 // ══════════════════════════════════════════════════════════
+// Date formatting
+// ══════════════════════════════════════════════════════════
+
+/// Render an upload_date (YYYYMMDD) into a compact human "X ago" string.
+/// Returns "" if the date is missing/unparseable. Writes into `out`.
+fn formatAgo(ymd: []const u8, out: []u8) []const u8 {
+    if (ymd.len != 8 or !isAllDigits(ymd)) return "";
+    const y = std.fmt.parseInt(i64, ymd[0..4], 10) catch return "";
+    const mo = std.fmt.parseInt(i64, ymd[4..6], 10) catch return "";
+    const d = std.fmt.parseInt(i64, ymd[6..8], 10) catch return "";
+    if (mo < 1 or mo > 12 or d < 1 or d > 31) return "";
+
+    // Days since a fixed epoch (proleptic Gregorian) for both the upload date
+    // and "now", then diff. Good enough for a relative label.
+    const up_days = daysFromCivil(y, mo, d);
+    const now_s = io.timestamp(); // seconds since unix epoch
+    const now_days = @divFloor(now_s, 86400) + 719468; // align to daysFromCivil epoch
+    var diff = now_days - up_days;
+    if (diff < 0) diff = 0;
+
+    if (diff < 1) return std.fmt.bufPrint(out, "today", .{}) catch "";
+    if (diff < 2) return std.fmt.bufPrint(out, "yesterday", .{}) catch "";
+    if (diff < 7) return std.fmt.bufPrint(out, "{d}d ago", .{diff}) catch "";
+    if (diff < 30) return std.fmt.bufPrint(out, "{d}w ago", .{@divTrunc(diff, 7)}) catch "";
+    if (diff < 365) return std.fmt.bufPrint(out, "{d}mo ago", .{@divTrunc(diff, 30)}) catch "";
+    return std.fmt.bufPrint(out, "{d}y ago", .{@divTrunc(diff, 365)}) catch "";
+}
+
+/// Days from civil date relative to 0000-03-01 epoch shifted to match the
+/// unix-epoch alignment used above (Howard Hinnant's algorithm, +719468).
+fn daysFromCivil(y_in: i64, m: i64, d: i64) i64 {
+    const y = if (m <= 2) y_in - 1 else y_in;
+    const era = @divFloor(if (y >= 0) y else y - 399, 400);
+    const yoe = y - era * 400; // [0, 399]
+    const doy = @divFloor(153 * (if (m > 2) m - 3 else m + 9) + 2, 5) + d - 1; // [0, 365]
+    const doe = yoe * 365 + @divFloor(yoe, 4) - @divFloor(yoe, 100) + doy; // [0, 146096]
+    return era * 146097 + doe; // days since 0000-03-01
+}
+
+// ══════════════════════════════════════════════════════════
 // Thumbnail Fetching
 // ══════════════════════════════════════════════════════════
 
@@ -321,7 +454,7 @@ pub fn fetchThumb(item: *state.YtItem) void {
         fn worker(ptr: *state.YtItem) void {
             defer ptr.thumb_fetching = false;
 
-            var client = std.http.Client{ .allocator = alloc, .io = @import("../core/io_global.zig").io() };
+            var client = std.http.Client{ .allocator = alloc, .io = io.io() };
             defer client.deinit();
 
             const uri = std.Uri.parse(ptr.thumbnail_url[0..ptr.thumbnail_url_len]) catch return;
@@ -368,18 +501,25 @@ pub fn renderContent() void {
 
     if (!state.app.yt.loaded_once and !state.app.yt.is_loading.load(.acquire)) {
         state.app.yt.loaded_once = true;
-        fetchYoutube(state.app.yt.search_buf[0 .. std.mem.indexOfScalar(u8, &state.app.yt.search_buf, 0) orelse state.app.yt.search_buf.len]);
+        const q = currentQuery();
+        recordFired(q);
+        fetchYoutube(q);
     } else if (state.app.yt.results.items.len > 0 and !state.app.yt.is_loading.load(.acquire) and
         @import("browse_cache.zig").isStale(state.app.yt.last_fetch_s))
     {
         // SWR background refresh — keep showing current results meanwhile.
-        fetchYoutube(state.app.yt.search_buf[0 .. std.mem.indexOfScalar(u8, &state.app.yt.search_buf, 0) orelse state.app.yt.search_buf.len]);
+        fetchYoutube(currentQuery());
     }
 
-    renderSearchBar();
+    renderToolbar();
 
-    // Only on an initial load (nothing yet) — a stale-refresh keeps current
-    // results on screen and swaps them in place.
+    // Debounced live search: fire once the buffer has settled for DEBOUNCE_MS
+    // and differs from what we last fired. Enter/button paths fire immediately
+    // (renderSearchInline), this just covers as-you-type.
+    maybeFireLiveSearch();
+
+    // Only show the loading line on an INITIAL load (nothing yet) — a
+    // stale-refresh keeps current results on screen and swaps in place.
     if (state.app.yt.is_loading.load(.acquire) and state.app.yt.results.items.len == 0) {
         _ = dvui.label(@src(), "Searching YouTube...", .{}, .{ .color_text = theme.colors.accent, .gravity_x = 0.5, .margin = dvui.Rect.all(12) });
     }
@@ -399,11 +539,12 @@ pub fn renderContent() void {
     yt_mutex.lock();
     defer yt_mutex.unlock();
 
-    // Responsive grid of 16:9 video tiles (was one wide row per result).
+    // Responsive grid of 16:9 video tiles from the LIVE width; the column count
+    // derives from the user-cyclable card width.
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(260, (if (rect_w > 1) rect_w else 900) - 8);
-    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / 200)));
-    const card_w: f32 = @max(140, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
+    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / card_w)));
+    const real_card_w: f32 = @max(120, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
 
     var i: usize = 0;
     while (i < state.app.yt.results.items.len) {
@@ -411,69 +552,217 @@ pub fn renderContent() void {
         defer row.deinit();
         var col: usize = 0;
         while (col < cols and i + col < state.app.yt.results.items.len) : (col += 1) {
-            renderCard(&state.app.yt.results.items[i + col], i + col, card_w);
+            renderCard(&state.app.yt.results.items[i + col], i + col, real_card_w);
         }
         i += cols;
     }
 }
 
-fn renderSearchBar() void {
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 12 } });
-    defer row.deinit();
+/// Current search query from the shared buffer (NUL-trimmed).
+fn currentQuery() []const u8 {
+    return state.app.yt.search_buf[0 .. std.mem.indexOfScalar(u8, &state.app.yt.search_buf, 0) orelse state.app.yt.search_buf.len];
+}
 
-    dvui.icon(@src(), "", icons.tvg.lucide.music, .{}, .{ .color_text = theme.colors.accent, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 } });
+/// Remember which query we last fired so live-search doesn't re-fire it.
+fn recordFired(q: []const u8) void {
+    last_fired_len = @min(q.len, last_fired_query.len);
+    @memcpy(last_fired_query[0..last_fired_len], q[0..last_fired_len]);
+    last_edit_ms = io.milliTimestamp();
+}
 
-    var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.yt.search_buf } }, .{
+/// Debounced search-as-you-type. Called every frame.
+///
+/// Design: `last_seen_*` snapshots the buffer each frame; whenever it differs
+/// from the previous frame we treat that as a keystroke and reset `last_edit_ms`
+/// — so the window measures *inactivity*. Once the buffer has been stable for
+/// DEBOUNCE_MS, has ≥2 chars, and differs from what we last fired, we fire.
+/// fetchYoutube bumps `search_gen`; an in-flight worker whose gen is superseded
+/// drops its results (isCurrent), so fast typing never shows out-of-order rows.
+fn maybeFireLiveSearch() void {
+    const q = currentQuery();
+    const now_ms = io.milliTimestamp();
+
+    // Detect a buffer change since the previous frame → restart the debounce.
+    const changed = q.len != last_seen_len or !std.mem.eql(u8, q, last_seen_query[0..last_seen_len]);
+    if (changed) {
+        last_seen_len = @min(q.len, last_seen_query.len);
+        @memcpy(last_seen_query[0..last_seen_len], q[0..last_seen_len]);
+        last_edit_ms = now_ms;
+        return; // wait at least one settle window before firing
+    }
+
+    // Nothing changed this frame; fire if settled, meaningful, and not already
+    // the last-fired query.
+    const same_as_fired = q.len == last_fired_len and std.mem.eql(u8, q, last_fired_query[0..last_fired_len]);
+    if (same_as_fired) return;
+
+    if (q.len >= 2 and now_ms - last_edit_ms >= DEBOUNCE_MS and !state.app.yt.is_loading.load(.acquire)) {
+        recordFired(q);
+        fetchYoutube(q);
+    }
+}
+
+// ══════════════════════════════════════════════════════════
+// Toolbar (chips, search, count, card-size)
+// ══════════════════════════════════════════════════════════
+
+const CatChip = struct { label: []const u8, query: []const u8 };
+const cat_chips = [_]CatChip{
+    .{ .label = "Trending", .query = "trending 2024" },
+    .{ .label = "Music", .query = "music" },
+    .{ .label = "Gaming", .query = "gaming" },
+    .{ .label = "Tech", .query = "tech" },
+    .{ .label = "News", .query = "news" },
+};
+
+fn renderToolbar() void {
+    var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
         .expand = .horizontal,
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+    });
+    defer bar.deinit();
+
+    dvui.icon(@src(), "yt-icon", icons.tvg.lucide.music, .{}, .{ .color_text = theme.colors.accent, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 } });
+
+    renderSearchInline();
+
+    // Category preset chips.
+    toolbarDivider(901);
+    const q = currentQuery();
+    for (cat_chips, 0..) |c, ci| {
+        renderCatChip(ci, c, q);
+    }
+
+    // Item count + card-size controls.
+    toolbarDivider(950);
+    _ = dvui.label(@src(), "{d} videos", .{state.app.yt.results.items.len}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
+
+    const dim = dvui.Color{ .r = 120, .g = 120, .b = 148, .a = 200 };
+    if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_text = dim,
+        .border = dvui.Rect.all(0),
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .padding = dvui.Rect.all(3),
+        .gravity_y = 0.5,
+    })) {
+        card_w = @max(CARD_MIN, card_w - 40);
+    }
+    if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_text = dim,
+        .border = dvui.Rect.all(0),
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .padding = dvui.Rect.all(3),
+        .gravity_y = 0.5,
+    })) {
+        card_w = @min(CARD_MAX, card_w + 40);
+    }
+}
+
+/// A faint vertical separator between toolbar groups.
+fn toolbarDivider(id: usize) void {
+    var d = dvui.box(@src(), .{}, .{
+        .id_extra = id,
+        .min_size_content = .{ .w = 1, .h = 18 },
+        .background = true,
+        .color_fill = theme.colors.border_subtle,
+        .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
+        .gravity_y = 0.5,
+    });
+    d.deinit();
+}
+
+/// Compact inline search box. Enter/Go fire immediately; typing is handled by
+/// the debounced live search in maybeFireLiveSearch().
+fn renderSearchInline() void {
+    var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.yt.search_buf }, .placeholder = "Search YouTube…" }, .{
+        .min_size_content = .{ .w = 240, .h = 28 },
         .color_fill = theme.colors.bg_input,
         .color_border = theme.colors.border_input,
         .color_text = theme.colors.text_main,
         .border = dvui.Rect.all(1),
         .corner_radius = theme.dims.rad_sm,
+        .gravity_y = 0.5,
     });
-    const ep = te.enter_pressed;
+    const enter_pressed = te.enter_pressed;
     te.deinit();
 
-    if (dvui.button(@src(), "Search", .{}, .{
+    if (dvui.button(@src(), "Go", .{}, .{
         .color_fill = theme.colors.accent,
         .color_text = theme.colors.bg_header,
         .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
+        .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
         .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
-    }) or ep) {
-        const qlen = std.mem.indexOfScalar(u8, &state.app.yt.search_buf, 0) orelse state.app.yt.search_buf.len;
-        fetchYoutube(state.app.yt.search_buf[0..qlen]);
+        .gravity_y = 0.5,
+    }) or enter_pressed) {
+        const q = currentQuery();
+        recordFired(q);
+        fetchYoutube(q);
     }
 }
 
-fn renderCard(item: *state.YtItem, idx: usize, card_w: f32) void {
-    const title = @import("../core/text.zig").safeUtf8(item.title[0..item.title_len]);
-    const thumb_h: f32 = card_w * 9.0 / 16.0;
+fn renderCatChip(idx: usize, chip: CatChip, current: []const u8) void {
+    const active = std.mem.eql(u8, current, chip.query);
+    if (dvui.button(@src(), chip.label, .{}, .{
+        .id_extra = idx + 2000,
+        .background = true,
+        .color_fill = if (active) theme.colors.accent else theme.colors.bg_card,
+        .color_text = if (active) dvui.Color.white else theme.colors.text_muted,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+        .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
+        .gravity_y = 0.5,
+    })) {
+        setQuery(chip.query);
+        recordFired(chip.query);
+        fetchYoutube(chip.query);
+    }
+}
+
+/// Replace the shared search buffer with `q` (NUL-padded).
+fn setQuery(q: []const u8) void {
+    const n = @min(q.len, state.app.yt.search_buf.len - 1);
+    @memset(&state.app.yt.search_buf, 0);
+    @memcpy(state.app.yt.search_buf[0..n], q[0..n]);
+}
+
+// ══════════════════════════════════════════════════════════
+// Cards
+// ══════════════════════════════════════════════════════════
+
+fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
+    const title = safeUtf8(item.title[0..item.title_len]);
+    const thumb_h: f32 = the_card_w * 9.0 / 16.0;
 
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = idx,
         .background = true,
         .color_fill = theme.colors.bg_card,
         .corner_radius = dvui.Rect.all(6),
-        .min_size_content = .{ .w = card_w, .h = 10 },
-        .max_size_content = .{ .w = card_w, .h = thumb_h + 96 },
+        .min_size_content = .{ .w = the_card_w, .h = 10 },
+        .max_size_content = .{ .w = the_card_w, .h = thumb_h + 110 },
         .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
     });
     defer card.deinit();
 
-    // Thumbnail (16:9)
+    // Thumbnail (16:9) — a clickable button-widget hosting the image + hover
+    // overlay, so the whole poster is one hit-target (quick-play on click).
     {
-        var poster = dvui.box(@src(), .{ .dir = .vertical }, .{
+        var bw: dvui.ButtonWidget = undefined;
+        bw.init(@src(), .{}, .{
             .id_extra = idx + 100,
             .expand = .horizontal,
             .background = true,
             .color_fill = theme.colors.bg_app,
             .corner_radius = .{ .x = theme.radius.md, .y = theme.radius.md, .w = 0, .h = 0 },
-            .min_size_content = .{ .w = card_w, .h = thumb_h },
-            .max_size_content = .{ .w = card_w, .h = thumb_h },
+            .min_size_content = .{ .w = the_card_w, .h = thumb_h },
+            .max_size_content = .{ .w = the_card_w, .h = thumb_h },
+            .padding = dvui.Rect.all(0),
         });
-        defer poster.deinit();
+        bw.processEvents();
+        bw.drawBackground();
 
         if (item.thumb_tex == null and item.thumb_pixels != null) {
             const num_pixels = item.thumb_w * item.thumb_h;
@@ -485,36 +774,58 @@ fn renderCard(item: *state.YtItem, idx: usize, card_w: f32) void {
             }
         }
 
-        if (item.thumb_tex) |*tex| {
-            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                .id_extra = idx + 150,
-                .expand = .both,
-                .corner_radius = dvui.Rect.all(4),
-            });
-        } else {
-            if (!item.thumb_fetching and item.thumbnail_url_len > 0) fetchThumb(item);
-            dvui.icon(@src(), "", icons.tvg.lucide.image, .{}, .{
-                .id_extra = idx + 150,
-                .gravity_x = 0.5,
-                .gravity_y = 0.5,
-                .color_text = theme.colors.bg_glass,
-            });
+        // Stack: image (or placeholder) + duration badge + hover overlay.
+        {
+            var stack = dvui.overlay(@src(), .{ .id_extra = idx + 140, .expand = .both });
+            defer stack.deinit();
+
+            if (item.thumb_tex) |*tex| {
+                _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+                    .id_extra = idx + 150,
+                    .expand = .both,
+                    .corner_radius = dvui.Rect.all(4),
+                });
+            } else {
+                if (!item.thumb_fetching and item.thumbnail_url_len > 0) fetchThumb(item);
+                dvui.icon(@src(), "ph", icons.tvg.lucide.image, .{}, .{
+                    .id_extra = idx + 150,
+                    .gravity_x = 0.5,
+                    .gravity_y = 0.5,
+                    .color_text = theme.colors.bg_glass,
+                    .expand = .both,
+                });
+            }
+
+            // Duration badge (bottom-right).
+            if (item.duration > 0) {
+                var dur_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                    .id_extra = idx + 161,
+                    .gravity_x = 1.0,
+                    .gravity_y = 1.0,
+                    .background = true,
+                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 200 },
+                    .corner_radius = dvui.Rect.all(2),
+                    .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
+                    .margin = dvui.Rect.all(2),
+                });
+                defer dur_box.deinit();
+
+                const dur_min = @divTrunc(item.duration, 60);
+                const dur_sec = @rem(item.duration, 60);
+                var dur_buf: [16]u8 = undefined;
+                if (std.fmt.bufPrintZ(&dur_buf, "{d}:{d:0>2}", .{ dur_min, dur_sec })) |dur_str| {
+                    _ = dvui.labelNoFmt(@src(), dur_str, .{}, .{ .id_extra = idx + 162, .color_text = dvui.Color.white });
+                } else |_| {}
+            }
+
+            // Hover overlay: dimmed scrim + metadata + centered play affordance.
+            if (bw.hovered()) renderHoverMeta(item, idx);
         }
 
-        if (item.duration > 0) {
-            var dur_overlay = dvui.overlay(@src(), .{ .id_extra = idx + 160, .expand = .both });
-            defer dur_overlay.deinit();
-
-            var dur_box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = idx + 161, .gravity_x = 1.0, .gravity_y = 1.0, .background = true, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 200 }, .corner_radius = dvui.Rect.all(2), .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 }, .margin = dvui.Rect.all(2) });
-            defer dur_box.deinit();
-
-            const dur_min = @divTrunc(item.duration, 60);
-            const dur_sec = @rem(item.duration, 60);
-            var dur_buf: [16]u8 = undefined;
-            if (std.fmt.bufPrintZ(&dur_buf, "{d}:{d:0>2}", .{ dur_min, dur_sec })) |dur_str| {
-                _ = dvui.labelNoFmt(@src(), dur_str, .{}, .{ .id_extra = idx + 162, .color_text = dvui.Color.white });
-            } else |_| {}
-        }
+        const clicked = bw.clicked();
+        bw.drawFocus();
+        bw.deinit();
+        if (clicked) sendToPlayer(item, false);
     }
 
     // Info
@@ -540,25 +851,22 @@ fn renderCard(item: *state.YtItem, idx: usize, card_w: f32) void {
             });
             defer meta.deinit();
 
-            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(item.uploader[0..item.uploader_len])}, .{ .id_extra = idx + 410, .color_text = theme.colors.text_muted });
+            _ = dvui.label(@src(), "{s}", .{safeUtf8(item.uploader[0..item.uploader_len])}, .{ .id_extra = idx + 410, .color_text = theme.colors.text_muted });
 
             if (item.views > 0) {
                 _ = dvui.label(@src(), " • ", .{}, .{ .id_extra = idx + 420, .color_text = theme.colors.border_drawer });
-
                 var vbuf: [32]u8 = undefined;
-                const views_f = @as(f64, @floatFromInt(item.views));
-                if (views_f >= 1_000_000.0) {
-                    if (std.fmt.bufPrintZ(&vbuf, "{d:.1}M views", .{views_f / 1_000_000.0})) |v| {
-                        _ = dvui.label(@src(), "{s}", .{v}, .{ .id_extra = idx + 430, .color_text = theme.colors.text_muted });
-                    } else |_| {}
-                } else if (views_f >= 1_000.0) {
-                    if (std.fmt.bufPrintZ(&vbuf, "{d:.1}K views", .{views_f / 1_000.0})) |v| {
-                        _ = dvui.label(@src(), "{s}", .{v}, .{ .id_extra = idx + 430, .color_text = theme.colors.text_muted });
-                    } else |_| {}
-                } else {
-                    if (std.fmt.bufPrintZ(&vbuf, "{d} views", .{item.views})) |v| {
-                        _ = dvui.label(@src(), "{s}", .{v}, .{ .id_extra = idx + 430, .color_text = theme.colors.text_muted });
-                    } else |_| {}
+                _ = dvui.label(@src(), "{s}", .{viewsStr(item.views, &vbuf)}, .{ .id_extra = idx + 430, .color_text = theme.colors.text_muted });
+            }
+
+            // Publish date ("X ago"), index-aligned with results.
+            const ymd = dateFor(idx);
+            if (ymd.len == 8) {
+                var abuf: [16]u8 = undefined;
+                const ago = formatAgo(ymd, &abuf);
+                if (ago.len > 0) {
+                    _ = dvui.label(@src(), " • ", .{}, .{ .id_extra = idx + 440, .color_text = theme.colors.border_drawer });
+                    _ = dvui.label(@src(), "{s}", .{ago}, .{ .id_extra = idx + 450, .color_text = theme.colors.text_muted });
                 }
             }
         }
@@ -607,6 +915,88 @@ fn renderCard(item: *state.YtItem, idx: usize, card_w: f32) void {
                 }
             }
         }
+    }
+}
+
+/// Human view count, e.g. "1.2M views". Writes into `buf`.
+fn viewsStr(views: i64, buf: []u8) []const u8 {
+    const f = @as(f64, @floatFromInt(views));
+    if (f >= 1_000_000.0) return std.fmt.bufPrintZ(buf, "{d:.1}M views", .{f / 1_000_000.0}) catch "";
+    if (f >= 1_000.0) return std.fmt.bufPrintZ(buf, "{d:.1}K views", .{f / 1_000.0}) catch "";
+    return std.fmt.bufPrintZ(buf, "{d} views", .{views}) catch "";
+}
+
+/// Dimmed scrim + full metadata + a centered ▶ play affordance, over a hovered
+/// thumbnail. Clicking the thumbnail (handled by the parent button) plays.
+fn renderHoverMeta(item: *state.YtItem, idx: usize) void {
+    var ov = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = idx + 600,
+        .expand = .both,
+        .background = true,
+        .color_fill = dvui.Color{ .r = 8, .g = 10, .b = 16, .a = 224 },
+        .corner_radius = .{ .x = theme.radius.md, .y = theme.radius.md, .w = 0, .h = 0 },
+        .padding = dvui.Rect.all(8),
+    });
+    defer ov.deinit();
+
+    // Full title (wraps).
+    _ = dvui.label(@src(), "{s}", .{safeUtf8(item.title[0..item.title_len])}, .{
+        .id_extra = idx + 601,
+        .expand = .horizontal,
+        .color_text = theme.colors.text_main,
+        .font = dvui.themeGet().font_heading,
+    });
+
+    // Channel.
+    if (item.uploader_len > 0) {
+        _ = dvui.label(@src(), "{s}", .{safeUtf8(item.uploader[0..item.uploader_len])}, .{
+            .id_extra = idx + 602,
+            .expand = .horizontal,
+            .color_text = theme.colors.text_secondary,
+        });
+    }
+
+    // Views · date line.
+    {
+        var line = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = idx + 603, .expand = .horizontal, .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 } });
+        defer line.deinit();
+
+        if (item.views > 0) {
+            var vbuf: [32]u8 = undefined;
+            _ = dvui.label(@src(), "{s}", .{viewsStr(item.views, &vbuf)}, .{ .id_extra = idx + 604, .color_text = theme.colors.text_muted });
+        }
+        const ymd = dateFor(idx);
+        if (ymd.len == 8) {
+            var abuf: [16]u8 = undefined;
+            const ago = formatAgo(ymd, &abuf);
+            if (ago.len > 0) {
+                if (item.views > 0) _ = dvui.label(@src(), "  ·  ", .{}, .{ .id_extra = idx + 605, .color_text = theme.colors.border_drawer });
+                _ = dvui.label(@src(), "{s}", .{ago}, .{ .id_extra = idx + 606, .color_text = theme.colors.text_muted });
+            }
+        }
+    }
+
+    // Duration.
+    if (item.duration > 0) {
+        const dur_min = @divTrunc(item.duration, 60);
+        const dur_sec = @rem(item.duration, 60);
+        var dbuf: [16]u8 = undefined;
+        if (std.fmt.bufPrintZ(&dbuf, "{d}:{d:0>2}", .{ dur_min, dur_sec })) |ds| {
+            _ = dvui.label(@src(), "{s}", .{ds}, .{ .id_extra = idx + 607, .color_text = theme.colors.text_secondary });
+        } else |_| {}
+    }
+
+    // Centered ▶ play affordance.
+    {
+        var center = dvui.overlay(@src(), .{ .id_extra = idx + 608, .expand = .both });
+        defer center.deinit();
+        dvui.icon(@src(), "play", icons.tvg.lucide.play, .{}, .{
+            .id_extra = idx + 609,
+            .gravity_x = 0.5,
+            .gravity_y = 0.5,
+            .color_text = theme.colors.accent,
+            .min_size_content = .{ .w = 40, .h = 40 },
+        });
     }
 }
 

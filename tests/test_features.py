@@ -1179,10 +1179,48 @@ def test_headless_render_guards():
     pl = _src("src/player/player.zig")
     gr = _src("src/ui/grid.zig")
     th = _src("src/ui/theme.zig")
+    # theme.applyToDvui defers when there's no UI-thread frame context
+    # (current_window == null) — covers BOTH headless and background-thread
+    # callers like config.load(); reapplied on the UI thread via appFrame.
     if ("is_headless" in pl and "mpv_gl != null" in gr
-            and "is_headless" in th):  # theme applyToDvui no-op headless
-        return "pass", "render-context/pixels/theme gated; grid guards mpv_gl"
+            and "current_window == null" in th and "reapplyIfPending" in th):
+        return "pass", "render-context/pixels gated; grid guards mpv_gl; theme defers off-UI-thread"
     return "fail", "headless render guards missing"
+
+
+@test("Log Severity By Level", "Stability")
+def test_log_severity_by_level():
+    # Info/debug/warn logs must not render red: pushLog derives the error flag
+    # from `level`, not the inconsistently-set call-site is_error bool (dozens
+    # of "info" logs passed true, painting the whole Logs view red).
+    lg = _src("src/core/logs.zig")
+    if ("effective_error" in lg and 'eqlIgnoreCase(level, "info")' in lg
+            and ".is_error = effective_error" in lg):
+        return "pass", "log severity derived from level (info/warn/debug never error-red)"
+    return "fail", "log severity still keyed on inconsistent is_error bool"
+
+
+@test("Card Views Live Search + Polish", "Browse")
+def test_card_views_polish():
+    # Anime / YouTube / Comics browse views upgraded to TMDB-grade: debounced
+    # live search (generation-guarded), card-size control, hover. Comics gains a
+    # real cover-image grid (covers parsed from source, async fetch→texture).
+    an = _src("src/services/anime.zig")
+    yt = _src("src/services/youtube.zig")
+    cm = _src("src/services/comics.zig")
+    checks = {
+        "anime live search": "search_gen" in an and "last_edit_ms" in an,
+        "youtube live search": "search_gen" in yt and "last_edit_ms" in yt,
+        "comics live search": "search_gen" in cm and "last_edit_ms" in cm,
+        "anime card size": "card_w" in an,
+        "youtube card size": "card_w" in yt,
+        "comics cover grid": ("sr_cover_tex" in cm and "fetchCover" in cm
+                              and "renderCoverCard" in cm),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if not missing:
+        return "pass", "live search + card-size + comics cover grid wired across all 3 views"
+    return "fail", f"missing: {missing}"
 
 
 @test("Web UI API Base Port", "Page Shell")

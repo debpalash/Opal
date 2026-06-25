@@ -49,6 +49,17 @@ pub fn deinit() void {
 }
 
 pub fn pushLog(level: []const u8, prefix: []const u8, text: []const u8, is_error: bool) void {
+    // Severity is derived from `level`, not the call-site `is_error` bool: that
+    // bool was set inconsistently across the codebase (dozens of plain "info"
+    // logs passed `true`), which painted the whole Logs view red. `level`
+    // ("info"/"warn"/"error"/…) is the reliable signal. The param is kept for
+    // source compatibility but a non-error level can no longer render as error.
+    const effective_error = is_error and
+        !std.ascii.eqlIgnoreCase(level, "info") and
+        !std.ascii.eqlIgnoreCase(level, "debug") and
+        !std.ascii.eqlIgnoreCase(level, "warn") and
+        !std.ascii.eqlIgnoreCase(level, "trace");
+
     // Clean up trailing newlines from MPV
     var clean_text = text;
     while (clean_text.len > 0 and (clean_text[clean_text.len - 1] == '\n' or clean_text[clean_text.len - 1] == '\r')) {
@@ -82,7 +93,7 @@ pub fn pushLog(level: []const u8, prefix: []const u8, text: []const u8, is_error
         .level = new_level,
         .prefix = new_prefix,
         .text = new_text,
-        .is_error = is_error,
+        .is_error = effective_error,
     };
     log_head = (log_head + 1) % MAX_LOGS;
     if (log_count < MAX_LOGS) log_count += 1;

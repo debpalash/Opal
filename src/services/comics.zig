@@ -77,6 +77,14 @@ pub fn freeComicPages() void {
     }
 }
 
+/// Release all search-result cover textures + pixel buffers. RENDER-THREAD ONLY
+/// (e.g. app shutdown). The per-slot free helper lives further down with the
+/// search-result state; declared here as a thin forwarder for call sites near
+/// the comic lifecycle.
+pub fn freeSearchCovers() void {
+    for (0..MAX_SEARCH_RESULTS) |i| freeCoverSlot(i);
+}
+
 /// Close the current comic and return to the browse/search view.
 pub fn closeComic() void {
     state.app.comic.narrating = false;
@@ -410,12 +418,74 @@ var sr_urls: [MAX_SEARCH_RESULTS][256]u8 = undefined;
 var sr_url_lens: [MAX_SEARCH_RESULTS]usize = std.mem.zeroes([MAX_SEARCH_RESULTS]usize);
 var sr_titles: [MAX_SEARCH_RESULTS][160]u8 = undefined;
 var sr_title_lens: [MAX_SEARCH_RESULTS]usize = std.mem.zeroes([MAX_SEARCH_RESULTS]usize);
+
+// ── Per-result cover art (lazy curl → stbi decode → GPU texture) ──
+// The readallcomics search page wraps every result in
+//   <a … title="TITLE" class="book-link"> <img src="COVER" class="book-cover">
+//   … <a … class="latest-chapter">CHAPTER</a>
+// so a cover URL is available for essentially every hit. We still degrade to a
+// gradient placeholder card if one happens to be missing.
+var sr_cover_urls: [MAX_SEARCH_RESULTS][512]u8 = undefined;
+var sr_cover_url_lens: [MAX_SEARCH_RESULTS]usize = std.mem.zeroes([MAX_SEARCH_RESULTS]usize);
+var sr_cover_pixels: [MAX_SEARCH_RESULTS]?[]u8 = [_]?[]u8{null} ** MAX_SEARCH_RESULTS;
+var sr_cover_w: [MAX_SEARCH_RESULTS]u32 = std.mem.zeroes([MAX_SEARCH_RESULTS]u32);
+var sr_cover_h: [MAX_SEARCH_RESULTS]u32 = std.mem.zeroes([MAX_SEARCH_RESULTS]u32);
+var sr_cover_tex: [MAX_SEARCH_RESULTS]?dvui.Texture = [_]?dvui.Texture{null} ** MAX_SEARCH_RESULTS;
+var sr_cover_fetching: [MAX_SEARCH_RESULTS]std.atomic.Value(bool) = [_]std.atomic.Value(bool){std.atomic.Value(bool).init(false)} ** MAX_SEARCH_RESULTS;
+// Per-slot generation: the search generation that last wrote this slot's cover
+// URL. The RENDER THREAD compares against `covers_render_gen` to reclaim stale
+// textures/pixels — so only the render thread ever destroys textures or frees
+// cover pixels (the worker only writes URLs). This sidesteps a worker↔render
+// double-free on the pixel buffers entirely.
+var sr_cover_gen: [MAX_SEARCH_RESULTS]u32 = std.mem.zeroes([MAX_SEARCH_RESULTS]u32);
+var covers_render_gen: u32 = 0;
+
 var sr_count: usize = 0;
 var sr_searching: bool = false;
 var loaded_default: bool = false;
 var last_fetch_s: i64 = 0; // SWR cache timestamp
 var sr_query_buf: [256]u8 = undefined;
 var sr_query_len: usize = 0;
+
+// ── Live / incremental (debounced) search ──
+// generation guards against stale workers overwriting fresher results.
+var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+var last_edit_ms: i64 = 0;
+var last_fired_query: [256]u8 = undefined;
+var last_fired_len: usize = 0;
+
+// ── Discovery grid sizing (user-cyclable card width) ──
+var card_w: f32 = 150;
+
+/// Release one cover slot's GPU texture + heap pixels. RENDER-THREAD ONLY — it
+/// is the sole owner of textures/pixels, so this never races a worker free.
+fn freeCoverSlot(i: usize) void {
+    if (sr_cover_tex[i]) |tex| {
+        dvui.textureDestroyLater(tex);
+        sr_cover_tex[i] = null;
+    }
+    if (sr_cover_pixels[i]) |px| {
+        alloc.free(px);
+        sr_cover_pixels[i] = null;
+    }
+    sr_cover_w[i] = 0;
+    sr_cover_h[i] = 0;
+}
+
+/// RENDER-THREAD reclaim: once a new search has stamped slots with a fresh
+/// generation, drop the textures/pixels left over from the previous search.
+/// Runs at the top of the grid render each frame; cheap when nothing changed.
+fn reclaimStaleCovers() void {
+    const g = search_gen.load(.acquire);
+    if (g == covers_render_gen) return;
+    for (0..MAX_SEARCH_RESULTS) |i| {
+        // A slot belonging to an older generation (or a now-empty slot beyond
+        // sr_count) holds stale art — reclaim it. Slots stamped with the live
+        // generation keep their freshly-fetched covers.
+        if (sr_cover_gen[i] != g) freeCoverSlot(i);
+    }
+    covers_render_gen = g;
+}
 
 pub fn searchComics(query: []const u8) void {
     if (sr_searching or query.len == 0 or query.len >= sr_query_buf.len) return;
@@ -425,14 +495,18 @@ pub fn searchComics(query: []const u8) void {
     last_fetch_s = @import("browse_cache.zig").now(); // SWR stamp
     @memcpy(sr_query_buf[0..query.len], query);
     sr_query_len = query.len;
-    const t = std.Thread.spawn(.{}, searchWorker, .{}) catch {
+    // Record the fired query so the live-search debouncer doesn't re-issue it.
+    @memcpy(last_fired_query[0..query.len], query);
+    last_fired_len = query.len;
+    const gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const t = std.Thread.spawn(.{}, searchWorker, .{gen}) catch {
         sr_searching = false;
         return;
     };
     t.detach();
 }
 
-fn searchWorker() void {
+fn searchWorker(gen: u32) void {
     defer sr_searching = false;
     const query = sr_query_buf[0..sr_query_len];
 
@@ -456,50 +530,145 @@ fn searchWorker() void {
     const n = if (child.stdout) |*so| @import("../core/io_global.zig").readAll(so, html_buf) catch 0 else 0;
     _ = child.wait() catch {};
     if (n == 0) return;
-    parseSearchResults(html_buf[0..n]);
+
+    // A newer search superseded us while curl was running — drop these results.
+    if (search_gen.load(.acquire) != gen) {
+        logs.pushLog("info", "comics", "Comic search superseded (stale dropped)", false);
+        return;
+    }
+
+    parseSearchResults(html_buf[0..n], gen);
     logs.pushLog("info", "comics", "Comic search results parsed", false);
 }
 
-/// Best-effort: pull issue links from the readallcomics search page. Each result
-/// is an anchor to a single-segment slug, e.g.
-///   <a href="https://readallcomics.com/some-comic-001/">Some Comic 001</a>
-fn parseSearchResults(html: []const u8) void {
-    var count: usize = 0;
-    var pos: usize = 0;
-    const needle = "href=\"https://readallcomics.com/";
-    while (pos < html.len and count < MAX_SEARCH_RESULTS) {
-        const h = findSubstring(html[pos..], needle) orelse break;
-        const href_start = pos + h + 6; // skip 'href="'
-        const href_end = std.mem.indexOfScalar(u8, html[href_start..], '"') orelse break;
-        const link = html[href_start .. href_start + href_end];
-        pos = href_start + href_end;
-
-        const prefix = "https://readallcomics.com/";
-        if (link.len <= prefix.len) continue;
-        if (std.mem.indexOfScalar(u8, link, '?') != null) continue;
-        const tail = link[prefix.len..];
-        if (std.mem.startsWith(u8, tail, "category") or std.mem.startsWith(u8, tail, "page")) continue;
-        // single-segment slug (one trailing slash, no inner '/')
-        const slug = std.mem.trimEnd(u8, tail, "/");
-        if (slug.len == 0 or std.mem.indexOfScalar(u8, slug, '/') != null) continue;
-        // Comic issue slugs always carry a number (issue # / year); this filters
-        // out footer/nav links (privacy-policy, legal-disclamer, …).
-        var has_digit = false;
-        for (slug) |ch| {
-            if (std.ascii.isDigit(ch)) {
-                has_digit = true;
-                break;
+/// Decode the handful of HTML entities readallcomics emits inside `title="…"`
+/// attributes (apostrophes, ampersands, quotes) into a clean display string.
+/// Writes into `out`, returns the byte length used.
+fn decodeEntities(in: []const u8, out: []u8) usize {
+    var o: usize = 0;
+    var i: usize = 0;
+    while (i < in.len and o < out.len) {
+        if (in[i] == '&') {
+            const rest = in[i..];
+            if (std.mem.startsWith(u8, rest, "&#039;") or std.mem.startsWith(u8, rest, "&#39;") or std.mem.startsWith(u8, rest, "&apos;")) {
+                out[o] = '\'';
+                o += 1;
+                i += if (rest[2] == '0') @as(usize, 6) else if (rest[1] == '#') @as(usize, 5) else @as(usize, 6);
+                continue;
+            } else if (std.mem.startsWith(u8, rest, "&amp;")) {
+                out[o] = '&';
+                o += 1;
+                i += 5;
+                continue;
+            } else if (std.mem.startsWith(u8, rest, "&quot;")) {
+                out[o] = '"';
+                o += 1;
+                i += 6;
+                continue;
+            } else if (std.mem.startsWith(u8, rest, "&#034;") or std.mem.startsWith(u8, rest, "&#34;")) {
+                out[o] = '"';
+                o += 1;
+                i += if (rest[2] == '0') @as(usize, 6) else @as(usize, 5);
+                continue;
             }
         }
-        if (!has_digit) continue;
+        out[o] = in[i];
+        o += 1;
+        i += 1;
+    }
+    return o;
+}
 
-        // Anchor text = title (between the next '>' and '</a>').
-        const gt = std.mem.indexOfScalar(u8, html[pos..], '>') orelse continue;
-        const title_start = pos + gt + 1;
-        const close = findSubstring(html[title_start..], "</a>") orelse continue;
-        var title = std.mem.trim(u8, html[title_start .. title_start + close], " \t\r\n");
-        if (title.len == 0 or title.len > 159 or std.mem.indexOfScalar(u8, title, '<') != null) title = slug;
+/// Read the value of an HTML attribute (`name="value"`) located within `html`,
+/// searching only up to `limit` bytes ahead. Returns the slice between quotes.
+fn attrValue(html: []const u8, name: []const u8, limit: usize) ?[]const u8 {
+    const window = html[0..@min(limit, html.len)];
+    const at = findSubstring(window, name) orelse return null;
+    var p = at + name.len;
+    // skip optional whitespace + '=' + opening quote
+    while (p < window.len and (window[p] == ' ' or window[p] == '=')) p += 1;
+    if (p >= window.len or window[p] != '"') return null;
+    p += 1;
+    const end = std.mem.indexOfScalar(u8, html[p..], '"') orelse return null;
+    return html[p .. p + end];
+}
 
+/// Parse the readallcomics search page. Each result is a `class="book-link"`
+/// block carrying:
+///   • a `title="…"` attribute        → display title
+///   • a `<img … class="book-cover">`  → cover art URL
+///   • a following `class="latest-chapter"` anchor → the loadable issue URL
+/// We anchor on `book-link`, then grab the cover + the latest-chapter href that
+/// follow it (bounded by the next book-link so blocks never bleed together).
+fn parseSearchResults(html: []const u8, gen: u32) void {
+    // NOTE: we do NOT free textures/pixels here (worker thread). We only stamp
+    // each result slot with `gen` and write its cover URL; the render thread's
+    // reclaimStaleCovers() drops the previous search's art. This keeps the
+    // render thread the sole owner of GPU textures + cover pixel buffers.
+    var count: usize = 0;
+    var pos: usize = 0;
+    const block_needle = "class=\"book-link\"";
+
+    while (pos < html.len and count < MAX_SEARCH_RESULTS) {
+        const b = findSubstring(html[pos..], block_needle) orelse break;
+        const block_at = pos + b;
+        // The book-link anchor opens before the class attr — back up to find the
+        // enclosing <a … title="…"> for this block.
+        const a_open = std.mem.lastIndexOf(u8, html[0..block_at], "<a ") orelse {
+            pos = block_at + block_needle.len;
+            continue;
+        };
+
+        // Where the next result begins — bounds this block's cover/issue search.
+        const next_rel = findSubstring(html[block_at + block_needle.len ..], block_needle);
+        const block_end = if (next_rel) |nr| block_at + block_needle.len + nr else html.len;
+        pos = block_end;
+
+        const block = html[a_open..block_end];
+
+        // ── Title: prefer the title="…" attribute on the book-link anchor. ──
+        // (`title=` follows the href in the opening tag, so the window must clear
+        // a long category URL — keep it generous but still tag-local.)
+        var title_raw: []const u8 = "";
+        if (attrValue(block, "title=", 600)) |t| title_raw = t;
+
+        // ── Loadable URL: the latest-chapter anchor's href. ──
+        var link: []const u8 = "";
+        if (findSubstring(block, "class=\"latest-chapter\"")) |lc| {
+            // href appears just before the class on the same anchor — scan back
+            // to the anchor open, then read its href forward.
+            const lc_abs = lc;
+            const a2 = std.mem.lastIndexOf(u8, block[0..lc_abs], "<a ") orelse lc_abs;
+            if (attrValue(block[a2..], "href=", 256)) |h| {
+                if (std.mem.startsWith(u8, h, "https://readallcomics.com/") and
+                    std.mem.indexOf(u8, h, "/category/") == null)
+                    link = h;
+            }
+        }
+        // Fallback: if no clean issue link, use the category page (still loads —
+        // loadComic will parse its first issue's images, and at worst the user
+        // sees the series landing). Better than dropping the result entirely.
+        if (link.len == 0) {
+            if (attrValue(block, "href=", 256)) |h| {
+                if (std.mem.startsWith(u8, h, "https://readallcomics.com/")) link = h;
+            }
+        }
+        if (link.len == 0 or link.len > 255) continue;
+
+        // Title fallback: derive from the link slug.
+        var title_buf: [320]u8 = undefined;
+        var title: []const u8 = undefined;
+        if (title_raw.len > 0) {
+            title = title_buf[0..decodeEntities(title_raw, &title_buf)];
+        } else {
+            const prefix = "https://readallcomics.com/";
+            const tail = if (link.len > prefix.len) std.mem.trimEnd(u8, link[prefix.len..], "/") else link;
+            title = tail;
+        }
+        title = std.mem.trim(u8, title, " \t\r\n");
+        if (title.len == 0) continue;
+
+        // De-dupe consecutive identical links.
         if (count > 0 and std.mem.eql(u8, sr_urls[count - 1][0..sr_url_lens[count - 1]], link)) continue;
 
         const ulen = @min(link.len, 255);
@@ -508,9 +677,148 @@ fn parseSearchResults(html: []const u8) void {
         const tlen = @min(title.len, 159);
         @memcpy(sr_titles[count][0..tlen], title[0..tlen]);
         sr_title_lens[count] = tlen;
+
+        // ── Cover URL: the book-cover img src within this block. ──
+        sr_cover_url_lens[count] = 0;
+        if (findSubstring(block, "class=\"book-cover\"")) |bc| {
+            // <img src="…" … class="book-cover"> — src is before the class.
+            const img_at = std.mem.lastIndexOf(u8, block[0..bc], "<img") orelse bc;
+            if (attrValue(block[img_at..], "src=", 1024)) |src| {
+                if (std.mem.startsWith(u8, src, "http") and src.len < 512 and src.len > 16) {
+                    const clen = @min(src.len, 511);
+                    @memcpy(sr_cover_urls[count][0..clen], src[0..clen]);
+                    sr_cover_url_lens[count] = clen;
+                }
+            }
+        }
+        // Stamp this slot with the live generation so the render thread reclaims
+        // the previous occupant's texture/pixels (it owns those) on next frame.
+        sr_cover_gen[count] = gen;
+
         count += 1;
     }
+
+    // Re-check generation before committing — a fresher search may have started
+    // while we were parsing. (If so, our slot stamps are already < the live gen,
+    // so the render thread reclaims whatever we wrote; nothing leaks.)
+    if (search_gen.load(.acquire) != gen) return;
+
     sr_count = count;
+}
+
+/// Lazily fetch one result's cover art on a detached thread:
+///   curl -sL (512KB cap) → stbi decode → heap RGBA pixels (uploaded to a GPU
+/// texture on the render thread, which then frees the pixels).
+/// Guarded by sr_cover_fetching[idx] so a card render can't double-spawn.
+fn fetchCover(idx: usize) void {
+    if (idx >= MAX_SEARCH_RESULTS) return;
+    if (sr_cover_url_lens[idx] == 0) return;
+    if (sr_cover_pixels[idx] != null or sr_cover_tex[idx] != null) return;
+    // Atomically claim the slot.
+    if (sr_cover_fetching[idx].swap(true, .acq_rel)) return; // already in flight
+
+    const t = std.Thread.spawn(.{}, coverWorker, .{idx}) catch {
+        sr_cover_fetching[idx].store(false, .release);
+        return;
+    };
+    t.detach();
+}
+
+/// Rewrite a cover URL to a thumbnail-sized variant where the host supports it.
+/// blogspot / googleusercontent serve full-res by default (a single page can be
+/// multiple MB); they accept a size token (`=s400` query-style or `/s400/`
+/// path-style). Downscaling to ~400px keeps covers crisp at grid sizes while
+/// cutting bandwidth + decode cost ~25×. Writes into `out`, returns the slice.
+fn thumbnailize(url: []const u8, out: []u8) []const u8 {
+    if (std.mem.indexOf(u8, url, "blogspot.com") == null and
+        std.mem.indexOf(u8, url, "googleusercontent.com") == null)
+        return url;
+
+    // Query-style: trailing "=sN" (or "=s0", "=s1600"). Replace from '=s'.
+    if (std.mem.lastIndexOf(u8, url, "=s")) |eq| {
+        // Confirm what's after "=s" is digits to end (a genuine size token).
+        var ok = eq + 2 < url.len;
+        var k = eq + 2;
+        while (k < url.len) : (k += 1) {
+            if (!std.ascii.isDigit(url[k])) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) {
+            const head = url[0..eq];
+            const r = std.fmt.bufPrint(out, "{s}=s400", .{head}) catch return url;
+            return r;
+        }
+    }
+    // Path-style: ".../sN/filename". Replace the "/sN/" segment with "/s400/".
+    if (std.mem.indexOf(u8, url, "/s0/")) |p| {
+        const r = std.fmt.bufPrint(out, "{s}/s400/{s}", .{ url[0..p], url[p + 4 ..] }) catch return url;
+        return r;
+    }
+    return url;
+}
+
+fn coverWorker(idx: usize) void {
+    defer sr_cover_fetching[idx].store(false, .release);
+
+    const raw_url = sr_cover_urls[idx][0..sr_cover_url_lens[idx]];
+    if (raw_url.len == 0) return;
+    var url_buf: [560]u8 = undefined;
+    const url = thumbnailize(raw_url, &url_buf);
+
+    const argv = [_][]const u8{
+        "curl",       "-sL",
+        "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "--max-time", "10",
+        url,
+    };
+    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    _ = child.spawn() catch return;
+
+    // Heap buffer — never on the thread stack. 4MB covers full-res fallbacks for
+    // hosts that ignore the size hint (e.g. raw .jpg with no size token).
+    const max_img = 4 * 1024 * 1024;
+    const tmp_buf = alloc.alloc(u8, max_img) catch {
+        _ = child.wait() catch {};
+        return;
+    };
+    defer alloc.free(tmp_buf);
+
+    var total: usize = 0;
+    if (child.stdout) |*so| {
+        while (total < max_img) {
+            const n = @import("../core/io_global.zig").read(so, tmp_buf[total..]) catch break;
+            if (n == 0) break;
+            total += n;
+        }
+    }
+    _ = child.wait() catch {};
+    if (total < 100) return;
+
+    // Decode → RGBA pixels.
+    var w: c_int = 0;
+    var h: c_int = 0;
+    var comp: c_int = 0;
+    const pixels = dvui.c.stbi_load_from_memory(tmp_buf.ptr, @intCast(total), &w, &h, &comp, 4);
+    if (pixels == null or w <= 0 or h <= 0) return;
+    defer dvui.c.stbi_image_free(pixels);
+
+    const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
+    const p_slice = alloc.alloc(u8, p_len) catch return;
+    @memcpy(p_slice, pixels[0..p_len]);
+
+    // Publish only if this result slot is still alive (a newer search could have
+    // freed/repurposed it). The render thread uploads + frees the pixels.
+    if (sr_cover_url_lens[idx] == 0) {
+        alloc.free(p_slice);
+        return;
+    }
+    sr_cover_w[idx] = @intCast(w);
+    sr_cover_h[idx] = @intCast(h);
+    sr_cover_pixels[idx] = p_slice;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -545,7 +853,7 @@ pub fn renderContent() void {
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer page.deinit();
 
-    // Search bar
+    // ── Search bar (live-as-you-type + Load button + URL paste) ──
     {
         var search_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
@@ -554,6 +862,12 @@ pub fn renderContent() void {
             .color_fill = theme.colors.bg_header,
         });
         defer search_row.deinit();
+
+        dvui.icon(@src(), "", icons.tvg.lucide.search, .{}, .{
+            .color_text = theme.colors.accent,
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+        });
 
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.comic.search_buf } }, .{
             .expand = .horizontal,
@@ -574,79 +888,263 @@ pub fn renderContent() void {
             .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
             .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
         });
+
+        const input = std.mem.sliceTo(&state.app.comic.search_buf, 0);
+        const is_url = std.mem.startsWith(u8, input, "http");
+
+        // Explicit submit (Enter / Load) — URLs load directly, text searches.
         if (clicked or enter_pressed) {
-            const input = std.mem.sliceTo(&state.app.comic.search_buf, 0);
             if (input.len > 0) {
-                if (std.mem.startsWith(u8, input, "http")) {
-                    loadComic(input);
-                } else {
-                    searchComics(input);
+                if (is_url) loadComic(input) else searchComics(input);
+            }
+        } else {
+            // ── Live / incremental debounced search ──
+            // Fire when: buffer differs from the last fired query, ≥2 chars, not
+            // a URL, and 400ms have elapsed since the buffer last changed.
+            const now_ms = @import("../core/io_global.zig").milliTimestamp();
+            const changed = !(input.len == last_fired_len and std.mem.eql(u8, input, last_fired_query[0..last_fired_len]));
+            if (changed) last_edit_ms = now_ms;
+            if (changed and input.len >= 2 and !is_url and !sr_searching and
+                (now_ms - last_edit_ms) >= 400)
+            {
+                searchComics(input);
+            }
+        }
+    }
+
+    // ── Toolbar: result count · quick-link chips · card-size −/+ ──
+    {
+        var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 6 },
+        });
+        defer bar.deinit();
+
+        // Result count (or live status).
+        {
+            var cb: [48]u8 = undefined;
+            const cs = if (sr_searching and sr_count == 0)
+                @as([]const u8, "Searching…")
+            else
+                std.fmt.bufPrint(&cb, "{d} results", .{sr_count}) catch "";
+            _ = dvui.label(@src(), "{s}", .{cs}, .{
+                .color_text = if (sr_searching and sr_count == 0) theme.colors.accent else theme.colors.text_muted,
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+            });
+        }
+
+        renderChip("Invincible", 1, "https://readallcomics.com/invincible-001/");
+        renderChip("The Boys", 2, "https://readallcomics.com/the-boys-001-2006/");
+        renderChip("Saga", 3, "https://readallcomics.com/saga-001-2012/");
+
+        // Spacer pushes the size controls to the right.
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
+
+        if (dvui.buttonIcon(@src(), "comic-card-smaller", icons.tvg.lucide.@"zoom-out", .{}, .{}, .{
+            .id_extra = 9001,
+            .color_fill = theme.colors.bg_glass,
+            .color_text = theme.colors.text_main,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 5, .y = 4, .w = 5, .h = 4 },
+            .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
+            .gravity_y = 0.5,
+        })) {
+            card_w = std.math.clamp(card_w - 20, 110, 300);
+        }
+        if (dvui.buttonIcon(@src(), "comic-card-bigger", icons.tvg.lucide.@"zoom-in", .{}, .{}, .{
+            .id_extra = 9002,
+            .color_fill = theme.colors.bg_glass,
+            .color_text = theme.colors.text_main,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 5, .y = 4, .w = 5, .h = 4 },
+            .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
+            .gravity_y = 0.5,
+        })) {
+            card_w = std.math.clamp(card_w + 20, 110, 300);
+        }
+    }
+
+    // ── Cover-grid discovery ──
+    if (sr_count == 0 and sr_searching) {
+        _ = dvui.label(@src(), "Searching…", .{}, .{
+            .color_text = theme.colors.accent,
+            .gravity_x = 0.5,
+            .margin = dvui.Rect.all(24),
+        });
+        return;
+    }
+    if (sr_count == 0) {
+        _ = dvui.label(@src(), "No comics found. Try another title.", .{}, .{
+            .color_text = theme.colors.text_muted,
+            .gravity_x = 0.5,
+            .margin = dvui.Rect.all(24),
+        });
+        return;
+    }
+
+    // Render-thread reclaim of the previous search's cover art (textures+pixels)
+    // before drawing the current grid — keeps the render thread the sole owner.
+    reclaimStaleCovers();
+
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
+    defer scroll.deinit();
+
+    // Responsive columns from the live page width (one-frame lag on first paint).
+    const rect_w = scroll.data().rect.w;
+    const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
+    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / card_w)));
+    const cw: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
+    const cover_h: f32 = cw * 1.5; // comic covers ~2:3 portrait
+
+    var i: usize = 0;
+    while (i < sr_count) {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 50000, .expand = .horizontal });
+        defer row.deinit();
+        var col: usize = 0;
+        while (col < cols and i + col < sr_count) : (col += 1) {
+            renderCoverCard(i + col, cw, cover_h);
+        }
+        i += cols;
+    }
+}
+
+/// A toolbar quick-link chip that loads a known issue directly.
+fn renderChip(label: []const u8, id: usize, url: []const u8) void {
+    if (dvui.button(@src(), label, .{}, .{
+        .id_extra = id + 70000,
+        .color_fill = theme.colors.bg_glass,
+        .color_text = theme.colors.accent,
+        .corner_radius = theme.dims.rad_md,
+        .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
+        .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+        .gravity_y = 0.5,
+    })) {
+        loadComic(url);
+    }
+}
+
+/// One discovery card: cover art (or gradient placeholder) + title, clickable to
+/// load the issue. Hover reveals the full title over a dimmed scrim.
+fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
+    const title = safeUtf8(sr_titles[idx][0..sr_title_lens[idx]]);
+    // Deterministic gradient from a title hash (placeholder + glyph tint).
+    const hash: u32 = blk: {
+        var h: u32 = 2166136261;
+        for (sr_titles[idx][0..sr_title_lens[idx]]) |c| {
+            h = (h ^ c) *% 16777619;
+        }
+        break :blk h;
+    };
+    const h1: u8 = @truncate(hash & 0xFF);
+    const h2: u8 = @truncate((hash >> 8) & 0xFF);
+
+    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = idx,
+        .min_size_content = .{ .w = cw, .h = 10 },
+        .max_size_content = .{ .w = cw, .h = cover_h + 56 },
+        .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
+    });
+    defer card.deinit();
+
+    // Cover image area — a single clickable button-widget hosting the image.
+    {
+        var bw: dvui.ButtonWidget = undefined;
+        bw.init(@src(), .{}, .{
+            .id_extra = idx + 100,
+            .background = true,
+            .color_fill = dvui.Color{ .r = 18 + h1 / 8, .g = 22 + h2 / 10, .b = 32 + h1 / 6, .a = 255 },
+            .corner_radius = dvui.Rect.all(8),
+            .min_size_content = .{ .w = cw, .h = cover_h },
+            .max_size_content = .{ .w = cw, .h = cover_h },
+            .padding = dvui.Rect.all(0),
+        });
+        bw.processEvents();
+        bw.drawBackground();
+
+        // Upload pixels → texture on the render thread, then free the pixels.
+        if (sr_cover_tex[idx] == null and sr_cover_pixels[idx] != null) {
+            const np: usize = @as(usize, sr_cover_w[idx]) * @as(usize, sr_cover_h[idx]);
+            const pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(sr_cover_pixels[idx].?.ptr)))[0..np];
+            sr_cover_tex[idx] = dvui.textureCreate(pma, sr_cover_w[idx], sr_cover_h[idx], .linear, .rgba_32) catch null;
+            if (sr_cover_tex[idx] != null) {
+                alloc.free(sr_cover_pixels[idx].?);
+                sr_cover_pixels[idx] = null;
+            }
+        }
+
+        {
+            var stack = dvui.overlay(@src(), .{ .id_extra = idx + 140, .expand = .both });
+            defer stack.deinit();
+
+            if (sr_cover_tex[idx]) |*tex| {
+                _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+                    .id_extra = idx + 150,
+                    .expand = .both,
+                    .corner_radius = dvui.Rect.all(8),
+                });
+            } else {
+                // Lazy-trigger fetch; meanwhile show a glyph placeholder.
+                if (sr_cover_url_lens[idx] > 0) fetchCover(idx);
+                dvui.icon(@src(), "", icons.tvg.lucide.@"book-open", .{}, .{
+                    .id_extra = idx + 150,
+                    .gravity_x = 0.5,
+                    .gravity_y = 0.5,
+                    .color_text = dvui.Color{ .r = h1, .g = h2, .b = 200, .a = 70 },
+                    .expand = .both,
+                });
+                // Placeholder cards still show the title inside the cover area.
+                if (sr_cover_url_lens[idx] == 0) {
+                    _ = dvui.label(@src(), "{s}", .{title}, .{
+                        .id_extra = idx + 151,
+                        .expand = .horizontal,
+                        .gravity_y = 0.85,
+                        .color_text = theme.colors.text_secondary,
+                        .padding = dvui.Rect.all(6),
+                    });
                 }
             }
-        }
-    }
 
-    // Quick links
-    {
-        var links_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 2, .w = 8, .h = 4 },
-        });
-        defer links_row.deinit();
-
-        if (dvui.button(@src(), "Invincible #1", .{}, .{
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = theme.colors.accent,
-            .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
-        })) {
-            loadComic("https://readallcomics.com/invincible-001/");
-        }
-        if (dvui.button(@src(), "The Boys #1", .{}, .{
-            .id_extra = 1,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = theme.colors.accent,
-            .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
-        })) {
-            loadComic("https://readallcomics.com/the-boys-001-2006/");
-        }
-        if (dvui.button(@src(), "Saga #1", .{}, .{
-            .id_extra = 2,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = theme.colors.accent,
-            .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
-        })) {
-            loadComic("https://readallcomics.com/saga-001-2012/");
-        }
-    }
-
-    // Search results — clickable list; pick one to load it as a comic.
-    if (sr_searching) {
-        _ = dvui.label(@src(), "Searching…", .{}, .{ .color_text = theme.colors.accent, .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 } });
-        return;
-    }
-    if (sr_count > 0 and state.app.comic.page_count == 0 and !state.app.comic.is_loading) {
-        var list = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
-        defer list.deinit();
-        for (0..sr_count) |i| {
-            if (dvui.button(@src(), safeUtf8(sr_titles[i][0..sr_title_lens[i]]), .{}, .{
-                .id_extra = i + 44000,
-                .expand = .horizontal,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = theme.colors.text_main,
-                .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-                .color_border = theme.colors.border_drawer,
-                .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
-            })) {
-                loadComic(sr_urls[i][0..sr_url_lens[i]]);
-                sr_count = 0;
+            // Hover scrim with the full (wrapping) title.
+            if (bw.hovered()) {
+                var ov = dvui.box(@src(), .{ .dir = .vertical }, .{
+                    .id_extra = idx + 160,
+                    .expand = .both,
+                    .background = true,
+                    .color_fill = dvui.Color{ .r = 8, .g = 10, .b = 16, .a = 224 },
+                    .corner_radius = dvui.Rect.all(8),
+                    .padding = dvui.Rect.all(8),
+                });
+                defer ov.deinit();
+                _ = dvui.label(@src(), "{s}", .{title}, .{
+                    .id_extra = idx + 161,
+                    .expand = .horizontal,
+                    .gravity_y = 0.5,
+                    .color_text = theme.colors.text_main,
+                    .font = dvui.themeGet().font_heading,
+                });
             }
         }
-        return;
+
+        const clicked = bw.clicked();
+        bw.drawFocus();
+        bw.deinit();
+        if (clicked) {
+            loadComic(sr_urls[idx][0..sr_url_lens[idx]]);
+        }
     }
 
-    // No results yet and no comic open — the search box + quick links above
-    // are the whole browse view. (The reader, with all tools, renders at the
-    // top of this function via renderPaneContent once a comic is open.)
+    // Title caption below the cover (single-line, ellipsis via max height).
+    _ = dvui.label(@src(), "{s}", .{title}, .{
+        .id_extra = idx + 200,
+        .expand = .horizontal,
+        .color_text = theme.colors.text_main,
+        .max_size_content = .{ .w = cw, .h = 40 },
+        .padding = .{ .x = 2, .y = 3, .w = 2, .h = 0 },
+    });
 }
 
 // ══════════════════════════════════════════════════════════
@@ -813,6 +1311,29 @@ pub fn renderPaneContent(pane_idx: usize) void {
             .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
         })) {
             closeComic();
+        }
+    }
+
+    // ── Reader keyboard navigation (handled in-scope; input.zig untouched) ──
+    // Left / J → previous page · Right / K → next page. Works in both view
+    // modes (in scroll mode it nudges current_page + flags scroll_to_page, which
+    // the block below converts into single-page for a clean jump). Issue nav
+    // stays on the «/» buttons.
+    for (dvui.events()) |*e| {
+        if (e.evt != .key) continue;
+        const ke = e.evt.key;
+        if (ke.action != .down and ke.action != .repeat) continue;
+        const prev = ke.code == .left or ke.code == .j;
+        const next = ke.code == .right or ke.code == .k;
+        if (!prev and !next) continue;
+        if (prev and state.app.comic.current_page > 0) {
+            state.app.comic.current_page -= 1;
+            state.app.comic.scroll_to_page = true;
+            e.handled = true;
+        } else if (next and state.app.comic.current_page + 1 < state.app.comic.page_count) {
+            state.app.comic.current_page += 1;
+            state.app.comic.scroll_to_page = true;
+            e.handled = true;
         }
     }
 

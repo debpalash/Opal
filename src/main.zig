@@ -765,6 +765,10 @@ fn appFrame() !dvui.App.Result {
     // accidentally toggles dvui debug panel.
     dvui.currentWindow().debug.widget_id = .zero;
 
+    // Apply any theme change requested off the UI thread (config.load runs
+    // theme.setPreset on the background worker, which can't touch dvui directly).
+    theme.reapplyIfPending();
+
     // Session restore: rehydrate players from last exit, paused.
     // Config loads async on a worker thread, so we re-check each frame
     // until session_restore_count becomes non-zero, then run once.
