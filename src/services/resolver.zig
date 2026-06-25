@@ -23,6 +23,7 @@ pub const SourceType = enum {
     youtube, // yt-dlp streams — HTTP direct
     local, // user's own downloaded files in save_path — instant playback
     tmdb, // catalog entry (movie/show) — click to find sources
+    comics, // readallcomics.com issues — open in the comics reader
 };
 
 pub const ResolvedItem = struct {
@@ -65,6 +66,7 @@ pub var status_1337x = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_yts = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_local = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_rss = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_comics = std.atomic.Value(SourceStatus).init(.idle);
 
 // Explicit u8 backing so std.atomic.Value(SourceStatus) is byte-atomic.
 pub const SourceStatus = enum(u8) { idle, searching, done, failed };
@@ -276,6 +278,7 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     status_yts.store(.searching, .release);
     status_local.store(.searching, .release);
     status_rss.store(.searching, .release);
+    status_comics.store(.searching, .release);
 
     // Fire every backend in parallel. Each handle is detached (never joined) —
     // discarding it via `_ =` leaks the pthread resource for the process life.
@@ -297,6 +300,7 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     Spawn.go(resolveYts, &status_yts);
     Spawn.go(resolveAnime, &status_anime);
     Spawn.go(resolveYouTube, &status_yt);
+    Spawn.go(resolveComics, &status_comics); // readallcomics.com HTML scrape
     Spawn.go(resolveStremio, &status_stremio); // needs IMDB id — TMDB then addons
 }
 
@@ -455,12 +459,144 @@ fn resolveRss(q: [256]u8, qlen: usize) void {
     }
 }
 
+/// Search readallcomics.com for comic issues matching the query and surface
+/// them as .comics-source results (click → comics.loadComic → reader view).
+/// Reuses the exact search URL + book-link/title/latest-chapter href parse that
+/// comics.zig's buildSearchUrl/parseSearchResults use.
+fn resolveComics(query_buf: [256]u8, qlen: usize) void {
+    defer {
+        status_comics.store(.done, .release);
+        checkAllDone();
+    }
+    if (qlen == 0) return;
+
+    const query = query_buf[0..qlen];
+
+    // URL-encode the query (percent-encode space/&/=/#/?/% per CLAUDE.md; space→+).
+    var enc: [512]u8 = undefined;
+    var el: usize = 0;
+    const hex = "0123456789ABCDEF";
+    for (query) |ch| {
+        if (el + 3 >= enc.len) break;
+        if (ch == ' ') {
+            enc[el] = '+';
+            el += 1;
+        } else if (ch == '&' or ch == '=' or ch == '#' or ch == '?' or ch == '%' or ch == '+') {
+            enc[el] = '%';
+            enc[el + 1] = hex[ch >> 4];
+            enc[el + 2] = hex[ch & 0x0F];
+            el += 3;
+        } else {
+            enc[el] = ch;
+            el += 1;
+        }
+    }
+
+    var url_buf: [640]u8 = undefined;
+    // Same URL comics.zig builds for page 1.
+    const url = std.fmt.bufPrint(&url_buf, "https://readallcomics.com/?story={s}&s=&type=comic", .{enc[0..el]}) catch return;
+
+    // readallcomics pages can be large — heap the fetch buffer (never on the
+    // worker stack, per the >64KB rule).
+    const page = alloc.alloc(u8, 512 * 1024) catch return;
+    defer alloc.free(page);
+
+    @import("../core/rate_limit.zig").acquire("readallcomics", 1.0);
+    const body = @import("../core/http.zig").fetch(url, page, .{
+        .timeout_secs = 6,
+        .user_agent = "Mozilla/5.0",
+    }) orelse return;
+    const html = body;
+    if (html.len < 100) return;
+
+    // Parse: each result is a `class="book-link"` block carrying a title="…"
+    // attribute and a following `class="latest-chapter"` anchor href (the
+    // loadable issue URL). Mirror comics.zig parseSearchResults.
+    var pos: usize = 0;
+    var found: usize = 0;
+    const block_needle = "class=\"book-link\"";
+    while (pos < html.len and found < 12) {
+        const b = std.mem.indexOfPos(u8, html, pos, block_needle) orelse break;
+        const block_at = b;
+        const a_open = std.mem.lastIndexOf(u8, html[0..block_at], "<a ") orelse {
+            pos = block_at + block_needle.len;
+            continue;
+        };
+        const next_rel = std.mem.indexOfPos(u8, html, block_at + block_needle.len, block_needle);
+        const block_end = next_rel orelse html.len;
+        pos = block_end;
+        const block = html[a_open..block_end];
+
+        // Title — the title="…" attribute on the book-link anchor.
+        var title: []const u8 = "";
+        if (attrValue(block, "title=", 600)) |t| title = t;
+
+        // Loadable URL — the latest-chapter anchor's href (non-category).
+        var link: []const u8 = "";
+        if (std.mem.indexOf(u8, block, "class=\"latest-chapter\"")) |lc| {
+            const a2 = std.mem.lastIndexOf(u8, block[0..lc], "<a ") orelse lc;
+            if (attrValue(block[a2..], "href=", 256)) |h| {
+                if (std.mem.startsWith(u8, h, "https://readallcomics.com/") and
+                    std.mem.indexOf(u8, h, "/category/") == null)
+                    link = h;
+            }
+        }
+        // Fallback: the book-link's own href (category page still loads).
+        if (link.len == 0) {
+            if (attrValue(block, "href=", 256)) |h| {
+                if (std.mem.startsWith(u8, h, "https://readallcomics.com/")) link = h;
+            }
+        }
+        if (link.len == 0 or link.len > 2047) continue;
+
+        // Title fallback: derive from the link slug.
+        if (title.len == 0) {
+            const prefix = "https://readallcomics.com/";
+            const tail = if (link.len > prefix.len) std.mem.trimEnd(u8, link[prefix.len..], "/") else link;
+            title = tail;
+        }
+        title = std.mem.trim(u8, title, " \t\r\n");
+        if (title.len == 0) continue;
+
+        var item = std.mem.zeroes(ResolvedItem);
+        item.source = .comics;
+
+        const nlen = @min(title.len, 255);
+        @memcpy(item.name[0..nlen], title[0..nlen]);
+        item.name_len = nlen;
+
+        const ulen = @min(link.len, 2047);
+        @memcpy(item.url[0..ulen], link[0..ulen]);
+        item.url_len = ulen;
+
+        const d = "Comic · ReadAllComics";
+        @memcpy(item.detail[0..d.len], d);
+        item.detail_len = d.len;
+
+        if (pushResult(item)) found += 1;
+    }
+}
+
+/// Read an HTML attribute value (`name="value"`) within the first `limit` bytes
+/// of `html`. Returns the slice between the quotes. (Local copy of the comics.zig
+/// helper so the resolver stays self-contained.)
+fn attrValue(html: []const u8, name: []const u8, limit: usize) ?[]const u8 {
+    const window = html[0..@min(limit, html.len)];
+    const at = std.mem.indexOf(u8, window, name) orelse return null;
+    var p = at + name.len;
+    while (p < window.len and (window[p] == ' ' or window[p] == '=')) p += 1;
+    if (p >= window.len or window[p] != '"') return null;
+    p += 1;
+    const end = std.mem.indexOfScalar(u8, html[p..], '"') orelse return null;
+    return html[p .. p + end];
+}
+
 fn checkAllDone() void {
     if (status_jf.load(.acquire) != .searching and status_stremio.load(.acquire) != .searching and
         status_torrent.load(.acquire) != .searching and status_anime.load(.acquire) != .searching and
         status_yt.load(.acquire) != .searching and status_1337x.load(.acquire) != .searching and
         status_yts.load(.acquire) != .searching and status_local.load(.acquire) != .searching and
-        status_rss.load(.acquire) != .searching)
+        status_rss.load(.acquire) != .searching and status_comics.load(.acquire) != .searching)
     {
         is_resolving.store(false, .release);
     }
@@ -565,6 +701,7 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
         .stremio => 5,
         .torrent => 8,
         .anime => 12,
+        .comics => 14, // readable issues — rank near anime
         .youtube => 20,
         .tmdb => 30, // catalog stub — not directly playable, rank last
     };
@@ -1449,6 +1586,13 @@ pub fn playItem(idx: usize) void {
             const anime = @import("anime.zig");
             anime.playEpisode(item.url[0..item.url_len]);
             state.gotoPlayer();
+        },
+        .comics => {
+            // Load the issue and reveal the Browse › Comics reader (comics read
+            // inside the Comics tab now, not the player route).
+            const comics = @import("comics.zig");
+            comics.loadComic(item.url[0..item.url_len]);
+            state.navigateToTab(.Comics);
         },
         .tmdb => {
             // Catalog stub, not directly playable — kick off a universal source

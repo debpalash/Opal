@@ -864,6 +864,7 @@ pub fn renderInlineResults() void {
                 .youtube => "YouTube",
                 .local => "On disk",
                 .tmdb => "Catalog",
+                .comics => "Comics",
             };
         }
     }.get;
@@ -1021,6 +1022,7 @@ fn queueChatResult(idx: usize) void {
         .youtube => "youtube",
         .local => "local",
         .tmdb => "tmdb",
+        .comics => "comics",
     };
     @import("queue.zig").addToQueue(url_str, name, src_label);
     state.showToast("Added to queue");
