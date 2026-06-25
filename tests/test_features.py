@@ -1153,7 +1153,11 @@ def test_session_threads_detached():
     # spawns must store + detach. Guard the files this session created/owns.
     files = ["src/services/recommendations.zig", "src/services/co_watch.zig",
              "src/services/scene_memory.zig", "src/services/taste_vector.zig",
-             "src/services/spoiler.zig", "src/services/frame_ocr.zig"]
+             "src/services/spoiler.zig", "src/services/frame_ocr.zig",
+             # swept (was 24 leaky files repo-wide; sweeping in chunks):
+             "src/core/poster.zig", "src/services/anilist.zig",
+             "src/services/projectjav.zig", "src/services/youtube.zig",
+             "src/services/queue.zig"]
     offenders = [f for f in files if "_ = std.Thread.spawn(" in _src(f)]
     if offenders:
         return "fail", "leaked thread handle in: " + ", ".join(offenders)

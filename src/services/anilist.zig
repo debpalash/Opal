@@ -18,7 +18,7 @@ pub var enabled: bool = false;
 pub fn updateProgress(media_id: i64, episode: i32) void {
     if (!enabled or access_token_len == 0 or media_id <= 0) return;
 
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn worker(mid: i64, ep: i32) void {
             const alloc = @import("../core/alloc.zig").allocator;
 
@@ -48,7 +48,7 @@ pub fn updateProgress(media_id: i64, episode: i32) void {
                 logs.pushLog("info", "anilist", "AniList progress updated", false);
             }
         }
-    }.worker, .{ media_id, episode }) catch {};
+    }.worker, .{ media_id, episode })) |t| t.detach() else |_| {}
 }
 
 /// Search AniList for an anime by title, return media ID.

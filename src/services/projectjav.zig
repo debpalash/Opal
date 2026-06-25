@@ -75,7 +75,7 @@ pub fn fetchTorrents(url: []const u8) void {
     S.url_buf[copy_len] = 0;
     S.url_len = copy_len;
 
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn worker() void {
             defer is_fetching = false;
 
@@ -137,10 +137,12 @@ pub fn fetchTorrents(url: []const u8) void {
                 logs.pushLog("warn", "pjav", "No magnet links found on page", false);
             }
         }
-    }.worker, .{}) catch {
+    }.worker, .{})) |t| {
+        t.detach();
+    } else |_| {
         is_fetching = false;
         logs.pushLog("error", "pjav", "Failed to spawn fetch thread", false);
-    };
+    }
 }
 
 fn parseHtml(html: []const u8) void {

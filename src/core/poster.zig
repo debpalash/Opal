@@ -28,7 +28,7 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
     
     const Args = struct { url_ptr: []const u8, pix: *?[]u8, w: *u32, h: *u32, flag: *bool };
     
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn worker(args: Args) void {
             defer args.flag.* = false;
             
@@ -52,9 +52,11 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
             args.h.* = @intCast(h);
             args.pix.* = p_slice;
         }
-    }.worker, .{ Args{ .url_ptr = url, .pix = pixels_out, .w = w_out, .h = h_out, .flag = fetching_flag } }) catch {
+    }.worker, .{ Args{ .url_ptr = url, .pix = pixels_out, .w = w_out, .h = h_out, .flag = fetching_flag } })) |t| {
+        t.detach();
+    } else |_| {
         fetching_flag.* = false;
-    };
+    }
 }
 
 /// Upload pending pixel data to GPU texture. Call from render thread.

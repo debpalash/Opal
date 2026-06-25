@@ -317,7 +317,7 @@ pub fn fetchThumb(item: *state.YtItem) void {
     if (item.thumbnail_url_len == 0 or item.thumb_fetching) return;
     item.thumb_fetching = true;
 
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn worker(ptr: *state.YtItem) void {
             defer ptr.thumb_fetching = false;
 
@@ -355,7 +355,7 @@ pub fn fetchThumb(item: *state.YtItem) void {
             ptr.thumb_h = @intCast(h);
             ptr.thumb_pixels = p_slice;
         }
-    }.worker, .{item}) catch {};
+    }.worker, .{item})) |t| t.detach() else |_| {}
 }
 
 // ══════════════════════════════════════════════════════════
