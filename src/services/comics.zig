@@ -413,7 +413,10 @@ fn downloadSinglePage(i: usize) void {
 // ══════════════════════════════════════════════════════════
 
 // ── Comic search results (parsed from the readallcomics search page) ──
-const MAX_SEARCH_RESULTS = 40;
+// readallcomics serves 20 results per page (WordPress `&paged=N`). 120 holds
+// six pages so infinite-scroll can grow the listing well past one screen.
+const MAX_SEARCH_RESULTS = 120;
+const RESULTS_PER_PAGE = 20; // readallcomics page size (confirmed from live HTML)
 var sr_urls: [MAX_SEARCH_RESULTS][256]u8 = undefined;
 var sr_url_lens: [MAX_SEARCH_RESULTS]usize = std.mem.zeroes([MAX_SEARCH_RESULTS]usize);
 var sr_titles: [MAX_SEARCH_RESULTS][160]u8 = undefined;
@@ -454,6 +457,22 @@ var last_edit_ms: i64 = 0;
 var last_fired_query: [256]u8 = undefined;
 var last_fired_len: usize = 0;
 
+// ── Infinite scroll / pagination ──
+// `sr_page` is the highest readallcomics page already merged into sr_*. When the
+// grid scrolls near the bottom we fetch sr_page+1 and APPEND (deduped by URL).
+// `loading_more` guards against double-spawning the appender; `more_available`
+// goes false once a fetched page yields no new rows (we hit the end / cap).
+var sr_page: u32 = 1;
+var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var more_available: bool = true;
+
+// ── Source selector ──
+// readallcomics is the only natively-readable source today (its issue pages
+// embed blogspot-CDN images the reader consumes). A clean enum + selector keeps
+// adding sources a one-arm change; plugin sources are surfaced dynamically.
+const Source = enum { all, readallcomics };
+var active_source: Source = .all;
+
 // ── Discovery grid sizing (user-cyclable card width) ──
 var card_w: f32 = 150;
 
@@ -490,6 +509,9 @@ fn reclaimStaleCovers() void {
 pub fn searchComics(query: []const u8) void {
     if (sr_searching or query.len == 0 or query.len >= sr_query_buf.len) return;
     sr_searching = true;
+    // Fresh search → reset pagination so infinite-scroll starts at page 1 again.
+    sr_page = 1;
+    more_available = true;
     // Don't clear sr_count here — the parse repopulates and sets it at the end,
     // so a stale-refresh keeps the old listing on screen until new data lands.
     last_fetch_s = @import("browse_cache.zig").now(); // SWR stamp
@@ -506,15 +528,22 @@ pub fn searchComics(query: []const u8) void {
     t.detach();
 }
 
-fn searchWorker(gen: u32) void {
-    defer sr_searching = false;
-    const query = sr_query_buf[0..sr_query_len];
-
+/// Build the readallcomics search URL for `query` at WordPress page `paged`
+/// (1-based). `paged=1` omits the param (the bare URL is page 1). This is the
+/// single source-specific URL seam — adding a source means adding one builder.
+fn buildSearchUrl(out: []u8, query: []const u8, paged: u32) ?[:0]const u8 {
     var encoded_query: [512]u8 = undefined;
     const enc_len = percentEncode(query, &encoded_query);
-    var url_buf: [640]u8 = undefined;
-    const url = std.fmt.bufPrintZ(&url_buf, "https://readallcomics.com/?story={s}&s=&type=comic", .{encoded_query[0..enc_len]}) catch return;
+    const eq = encoded_query[0..enc_len];
+    if (paged <= 1) {
+        return std.fmt.bufPrintZ(out, "https://readallcomics.com/?story={s}&s=&type=comic", .{eq}) catch null;
+    }
+    return std.fmt.bufPrintZ(out, "https://readallcomics.com/?story={s}&s=&type=comic&paged={d}", .{ eq, paged }) catch null;
+}
 
+/// curl a search-results page into `dst`; returns bytes read (0 on failure).
+/// Shared by the initial search and the infinite-scroll appender.
+fn fetchSearchHtml(url: [:0]const u8, dst: []u8) usize {
     const argv = [_][]const u8{
         "curl",       "-sL",
         "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -524,11 +553,22 @@ fn searchWorker(gen: u32) void {
     var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return;
+    _ = child.spawn() catch return 0;
+    const n = if (child.stdout) |*so| @import("../core/io_global.zig").readAll(so, dst) catch 0 else 0;
+    _ = child.wait() catch {};
+    return n;
+}
+
+fn searchWorker(gen: u32) void {
+    defer sr_searching = false;
+    const query = sr_query_buf[0..sr_query_len];
+
+    var url_buf: [640]u8 = undefined;
+    const url = buildSearchUrl(&url_buf, query, 1) orelse return;
+
     const html_buf = alloc.alloc(u8, 512 * 1024) catch return;
     defer alloc.free(html_buf);
-    const n = if (child.stdout) |*so| @import("../core/io_global.zig").readAll(so, html_buf) catch 0 else 0;
-    _ = child.wait() catch {};
+    const n = fetchSearchHtml(url, html_buf);
     if (n == 0) return;
 
     // A newer search superseded us while curl was running — drop these results.
@@ -537,8 +577,49 @@ fn searchWorker(gen: u32) void {
         return;
     }
 
-    parseSearchResults(html_buf[0..n], gen);
+    // Page 1 replaces the listing (start index 0).
+    const added = parseSearchResults(html_buf[0..n], gen, 0);
+    if (added < RESULTS_PER_PAGE) more_available = false;
     logs.pushLog("info", "comics", "Comic search results parsed", false);
+}
+
+/// Infinite-scroll appender: fetch the next readallcomics page and merge new
+/// rows onto the existing listing (dedup by URL, bounded by MAX_SEARCH_RESULTS).
+/// Runs on a detached thread; guarded by `loading_more`.
+pub fn loadMoreResults() void {
+    if (!more_available or loading_more.load(.acquire) or sr_searching) return;
+    if (sr_count == 0 or sr_count >= MAX_SEARCH_RESULTS or sr_query_len == 0) return;
+    if (loading_more.swap(true, .acq_rel)) return;
+    const t = std.Thread.spawn(.{}, loadMoreWorker, .{search_gen.load(.acquire)}) catch {
+        loading_more.store(false, .release);
+        return;
+    };
+    t.detach();
+}
+
+fn loadMoreWorker(gen: u32) void {
+    defer loading_more.store(false, .release);
+    const query = sr_query_buf[0..sr_query_len];
+    const next_page = sr_page + 1;
+
+    var url_buf: [640]u8 = undefined;
+    const url = buildSearchUrl(&url_buf, query, next_page) orelse return;
+
+    const html_buf = alloc.alloc(u8, 512 * 1024) catch return;
+    defer alloc.free(html_buf);
+    const n = fetchSearchHtml(url, html_buf);
+    if (n == 0) return;
+
+    // Bail if a fresh search started while we were fetching — its page 1 owns
+    // the listing now; appending our older page would corrupt/duplicate it.
+    if (search_gen.load(.acquire) != gen) return;
+
+    // Append starting at the current end. parseSearchResults dedupes against the
+    // existing rows and re-checks `gen` before committing sr_count.
+    const start = sr_count;
+    const added = parseSearchResults(html_buf[0..n], gen, start);
+    if (added == 0 or added < RESULTS_PER_PAGE) more_available = false;
+    if (added > 0) sr_page = next_page;
 }
 
 /// Decode the handful of HTML entities readallcomics emits inside `title="…"`
@@ -600,12 +681,15 @@ fn attrValue(html: []const u8, name: []const u8, limit: usize) ?[]const u8 {
 ///   • a following `class="latest-chapter"` anchor → the loadable issue URL
 /// We anchor on `book-link`, then grab the cover + the latest-chapter href that
 /// follow it (bounded by the next book-link so blocks never bleed together).
-fn parseSearchResults(html: []const u8, gen: u32) void {
+/// Parse a search page, writing results into sr_* starting at slot `start`.
+/// Returns the number of NEW rows appended. With start==0 it (re)populates the
+/// listing; with start==sr_count it appends a paginated page (deduped by URL).
+fn parseSearchResults(html: []const u8, gen: u32, start: usize) usize {
     // NOTE: we do NOT free textures/pixels here (worker thread). We only stamp
     // each result slot with `gen` and write its cover URL; the render thread's
     // reclaimStaleCovers() drops the previous search's art. This keeps the
     // render thread the sole owner of GPU textures + cover pixel buffers.
-    var count: usize = 0;
+    var count: usize = start;
     var pos: usize = 0;
     const block_needle = "class=\"book-link\"";
 
@@ -668,8 +752,19 @@ fn parseSearchResults(html: []const u8, gen: u32) void {
         title = std.mem.trim(u8, title, " \t\r\n");
         if (title.len == 0) continue;
 
-        // De-dupe consecutive identical links.
-        if (count > 0 and std.mem.eql(u8, sr_urls[count - 1][0..sr_url_lens[count - 1]], link)) continue;
+        // De-dupe against EVERY row already collected (paginated pages can
+        // resurface a series, and the same series may appear twice on a page).
+        {
+            var dup = false;
+            var d: usize = 0;
+            while (d < count) : (d += 1) {
+                if (std.mem.eql(u8, sr_urls[d][0..sr_url_lens[d]], link)) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) continue;
+        }
 
         const ulen = @min(link.len, 255);
         @memcpy(sr_urls[count][0..ulen], link[0..ulen]);
@@ -701,9 +796,10 @@ fn parseSearchResults(html: []const u8, gen: u32) void {
     // Re-check generation before committing — a fresher search may have started
     // while we were parsing. (If so, our slot stamps are already < the live gen,
     // so the render thread reclaims whatever we wrote; nothing leaks.)
-    if (search_gen.load(.acquire) != gen) return;
+    if (search_gen.load(.acquire) != gen) return 0;
 
     sr_count = count;
+    return count - start;
 }
 
 /// Lazily fetch one result's cover art on a detached thread:
@@ -866,31 +962,56 @@ pub fn renderContent() void {
         dvui.icon(@src(), "", icons.tvg.lucide.search, .{}, .{
             .color_text = theme.colors.accent,
             .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+            .margin = .{ .x = 2, .y = 0, .w = 10, .h = 0 },
+            .min_size_content = .{ .w = 20, .h = 20 },
         });
 
-        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.comic.search_buf } }, .{
+        const input = std.mem.sliceTo(&state.app.comic.search_buf, 0);
+
+        var te = dvui.textEntry(@src(), .{
+            .text = .{ .buffer = &state.app.comic.search_buf },
+            .placeholder = "Search comics…  (title or paste a readallcomics URL)",
+        }, .{
             .expand = .horizontal,
-            .min_size_content = .{ .w = 200, .h = 20 },
+            .min_size_content = .{ .w = 240, .h = 26 },
             .color_fill = theme.colors.bg_input,
-            .color_border = theme.colors.border_input,
+            .color_border = if (input.len > 0) theme.colors.accent else theme.colors.border_input,
             .color_text = theme.colors.text_main,
-            .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
+            .border = dvui.Rect.all(if (input.len > 0) 2 else 1),
+            .corner_radius = theme.dims.rad_md,
+            .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 },
+            .font = dvui.themeGet().font_heading,
         });
         const enter_pressed = te.enter_pressed;
         te.deinit();
 
-        const clicked = dvui.button(@src(), "Load", .{}, .{
+        const is_url = std.mem.startsWith(u8, input, "http");
+
+        // Clear button (×) — visible only when there's text, resets the listing.
+        if (input.len > 0) {
+            if (dvui.buttonIcon(@src(), "comic-search-clear", icons.tvg.lucide.x, .{}, .{}, .{
+                .id_extra = 9100,
+                .color_fill = theme.colors.bg_glass,
+                .color_text = theme.colors.text_muted,
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = 6, .y = 5, .w = 6, .h = 5 },
+                .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
+                .gravity_y = 0.5,
+            })) {
+                state.app.comic.search_buf[0] = 0;
+                last_fired_len = 0;
+            }
+        }
+
+        const clicked = dvui.button(@src(), "Search", .{}, .{
             .color_fill = theme.colors.accent,
             .color_text = dvui.Color.white,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-            .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
+            .corner_radius = theme.dims.rad_md,
+            .padding = .{ .x = 14, .y = 6, .w = 14, .h = 6 },
+            .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
+            .gravity_y = 0.5,
+            .font = dvui.themeGet().font_heading,
         });
-
-        const input = std.mem.sliceTo(&state.app.comic.search_buf, 0);
-        const is_url = std.mem.startsWith(u8, input, "http");
 
         // Explicit submit (Enter / Load) — URLs load directly, text searches.
         if (clicked or enter_pressed) {
@@ -910,6 +1031,29 @@ pub fn renderContent() void {
                 searchComics(input);
             }
         }
+    }
+
+    // ── Source selector (chips) ──
+    // ReadAllComics is the only natively-readable source today (its issue pages
+    // embed blogspot-CDN images the reader consumes). The "All" chip is the
+    // default and aggregates every available source; any user/bundled comic
+    // plugins are surfaced as read-only badge chips so the user sees they exist.
+    {
+        var src_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 2 },
+        });
+        defer src_row.deinit();
+
+        _ = dvui.label(@src(), "Source:", .{}, .{
+            .color_text = theme.colors.text_muted,
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+        });
+
+        renderSourceChip("All", 1, .all);
+        renderSourceChip("ReadAllComics", 2, .readallcomics);
+        renderPluginSourceBadges();
     }
 
     // ── Toolbar: result count · quick-link chips · card-size −/+ ──
@@ -1009,6 +1153,110 @@ pub fn renderContent() void {
             renderCoverCard(i + col, cw, cover_h);
         }
         i += cols;
+    }
+
+    // ── Infinite scroll: a status row at the grid's tail. When it scrolls into
+    // view (viewport bottom within one viewport-height of content end) we kick
+    // the next-page appender. The row also doubles as a tap-to-load affordance.
+    if (more_available and sr_count > 0 and sr_count < MAX_SEARCH_RESULTS) {
+        const busy = loading_more.load(.acquire);
+        const lbl = if (busy) "Loading more…" else "▾ Load more";
+        if (dvui.button(@src(), lbl, .{}, .{
+            .id_extra = 60001,
+            .expand = .horizontal,
+            .color_fill = theme.colors.bg_glass,
+            .color_text = theme.colors.accent,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 8, .y = 12, .w = 8, .h = 12 },
+            .margin = .{ .x = 3, .y = 8, .w = 3, .h = 12 },
+            .gravity_x = 0.5,
+        })) {
+            loadMoreResults();
+        }
+
+        // Auto-trigger when the user scrolls near the bottom (within 1.5 view-
+        // ports of the content end), so it feels infinite without a click.
+        const si = scroll.si;
+        const max_scroll = si.scrollMax(.vertical);
+        if (max_scroll > 0 and si.viewport.y >= max_scroll - si.viewport.h * 1.5) {
+            loadMoreResults();
+        }
+    } else if (!more_available and sr_count > RESULTS_PER_PAGE) {
+        _ = dvui.label(@src(), "— end of results —", .{}, .{
+            .id_extra = 60002,
+            .expand = .horizontal,
+            .color_text = theme.colors.text_muted,
+            .gravity_x = 0.5,
+            .margin = .{ .x = 0, .y = 8, .w = 0, .h = 12 },
+        });
+    }
+}
+
+/// A source-selector chip. Active source is highlighted; clicking it re-runs the
+/// current query against that source. Today only readallcomics returns rows, so
+/// "All" and "ReadAllComics" behave identically — but the seam is ready for more.
+fn renderSourceChip(label: []const u8, id: usize, src: Source) void {
+    const active = active_source == src;
+    if (dvui.button(@src(), label, .{}, .{
+        .id_extra = id + 72000,
+        .color_fill = if (active) theme.colors.accent else theme.colors.bg_glass,
+        .color_text = if (active) dvui.Color.white else theme.colors.text_main,
+        .corner_radius = theme.dims.rad_md,
+        .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
+        .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+        .gravity_y = 0.5,
+    })) {
+        if (active_source != src) {
+            active_source = src;
+            // Re-run the live listing under the new source filter.
+            if (sr_query_len > 0) {
+                var q: [256]u8 = undefined;
+                @memcpy(q[0..sr_query_len], sr_query_buf[0..sr_query_len]);
+                searchComics(q[0..sr_query_len]);
+            }
+        }
+    }
+}
+
+/// Surface comic plugins (bundled + user) as non-interactive badge chips so the
+/// user can SEE which extra sources are installed. Plugins resolve issue URLs at
+/// load time (tryPlugins), so they extend every source transparently — there's
+/// no per-plugin search index to query, hence read-only badges.
+fn renderPluginSourceBadges() void {
+    var shown: usize = 0;
+    showPluginBadgesInDir("plugins", &shown);
+    const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
+    var dir_buf: [256]u8 = undefined;
+    const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/.config/zigzag/plugins/comics", .{home}) catch return;
+    showPluginBadgesInDir(dir_path, &shown);
+}
+
+fn showPluginBadgesInDir(dir_path: []const u8, shown: *usize) void {
+    var dir = @import("../core/io_global.zig").cwdOpenDir(dir_path, .{ .iterate = true }) catch return;
+    defer dir.close(@import("../core/io_global.zig").io());
+    var iter = dir.iterate();
+    while (iter.next(@import("../core/io_global.zig").io()) catch null) |entry| {
+        if (entry.kind != .file) continue;
+        const name = entry.name;
+        const stem: []const u8 = if (std.mem.lastIndexOfScalar(u8, name, '.')) |dot| blk: {
+            const ext = name[dot..];
+            if (!std.mem.eql(u8, ext, ".lua") and !std.mem.eql(u8, ext, ".py") and !std.mem.eql(u8, ext, ".sh")) continue;
+            break :blk name[0..dot];
+        } else continue;
+        if (shown.* >= 6 or stem.len == 0) return; // bound the chip row
+        var lbl_buf: [80]u8 = undefined;
+        const lbl = std.fmt.bufPrint(&lbl_buf, "{s}", .{safeUtf8(stem)}) catch continue;
+        _ = dvui.label(@src(), "{s}", .{lbl}, .{
+            .id_extra = shown.* + 73000,
+            .color_text = theme.colors.text_secondary,
+            .color_fill = theme.colors.bg_glass,
+            .background = true,
+            .corner_radius = theme.dims.rad_md,
+            .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+            .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+            .gravity_y = 0.5,
+        });
+        shown.* += 1;
     }
 }
 

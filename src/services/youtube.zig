@@ -48,6 +48,24 @@ var card_w: f32 = 200; // user-cyclable card width, clamp 150..360
 const CARD_MIN: f32 = 150;
 const CARD_MAX: f32 = 360;
 
+// ── Infinite scroll / load-more ──
+// yt-dlp's flat search has no page cursor, so we re-run `ytsearch{N}:` with a
+// larger N and append only the rows past what's already on screen (deduped by
+// video_id). `loaded_count` is how many we've asked for so far; `loading_more`
+// gates the auto-fetch so a near-bottom scroll doesn't spam fetches.
+const PAGE_SIZE: usize = 20;
+const ITEM_CAP: usize = 200; // below the 256 reserved capacity → appends never realloc
+var loaded_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0);
+var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+// The query the current result set is paged on — captured at first fetch so
+// load-more re-runs the right search even if the text box changes mid-scroll.
+var paged_query: [256]u8 = std.mem.zeroes([256]u8);
+var paged_query_len: usize = 0;
+
+// Set for the duration of a load-more fetch: appendYt then dedupes against the
+// existing grid (yt-dlp re-sends the earlier page) and honours ITEM_CAP.
+var appending_more: bool = false;
+
 /// Append a result, clearing stale results lazily on the first new one.
 /// Caller must hold yt_mutex. Keeps the `dates` arrays index-aligned.
 fn appendYt(item: state.YtItem) void {
@@ -56,6 +74,10 @@ fn appendYt(item: state.YtItem) void {
         dates.clearRetainingCapacity();
         dates_lens.clearRetainingCapacity();
         pending_clear = false;
+    }
+    if (appending_more) {
+        if (state.app.yt.results.items.len >= ITEM_CAP) return;
+        if (videoIdExists(item.video_id[0..item.video_id_len])) return;
     }
     state.app.yt.results.append(alloc, item) catch return;
     // Mirror the staged date so indices stay aligned even on alloc failure.
@@ -71,6 +93,15 @@ fn appendYt(item: state.YtItem) void {
     };
     // Reset staging for the next row.
     staged_date_len = 0;
+}
+
+/// True if a result with `video_id` is already in the grid. Caller holds yt_mutex.
+/// Used by load-more to skip the overlap with the previously-loaded page.
+fn videoIdExists(video_id: []const u8) bool {
+    for (state.app.yt.results.items) |*r| {
+        if (std.mem.eql(u8, r.video_id[0..r.video_id_len], video_id)) return true;
+    }
+    return false;
 }
 
 /// Date string for result `idx`, or "" if none/out of range. Caller holds yt_mutex.
@@ -112,6 +143,13 @@ pub fn fetchYoutube(query: []const u8) void {
     @memcpy(S.q_buf[0..S.q_len], actual_query[0..S.q_len]);
     S.gen = my_gen;
 
+    // Fresh search → reset paging. Remember the query this result set is paged
+    // on so load-more re-runs the same search even if the text box changes.
+    loaded_count.store(PAGE_SIZE, .release);
+    loading_more.store(false, .release);
+    paged_query_len = S.q_len;
+    @memcpy(paged_query[0..S.q_len], S.q_buf[0..S.q_len]);
+
     // Reserve a stable capacity (on the caller thread, before the worker /
     // any thumb-fetch worker exists) so later appends never realloc the buffer
     // out from under fetchThumb workers holding *YtItem (cf. the TMDB crash).
@@ -130,7 +168,7 @@ pub fn fetchYoutube(query: []const u8) void {
             // yt-dlp first — reliable (~2s) and always available. Public Piped
             // instances are frequently dead and stall the whole fetch with no
             // timeout, so it's only a backup when yt-dlp yields nothing.
-            fetchViaYtdlp(S.q_buf[0..S.q_len], S.gen);
+            fetchViaYtdlp(S.q_buf[0..S.q_len], S.gen, PAGE_SIZE);
             // pending_clear still armed ⇒ yt-dlp produced nothing ⇒ try Piped.
             // (Can't use results.len here: lazy-clear keeps the old results.)
             if (pending_clear and isCurrent(S.gen)) _ = fetchViaPiped(S.q_buf[0..S.q_len], S.gen);
@@ -142,6 +180,60 @@ pub fn fetchYoutube(query: []const u8) void {
     // Detach: the handle is never joined, so without this each search leaks a
     // thread handle/resources for the life of the process.
     if (state.app.yt.thread) |t| t.detach();
+}
+
+/// Load the next page and APPEND it. yt-dlp flat search has no cursor, so we
+/// re-run `ytsearch{loaded_count+PAGE_SIZE}:` and dedupe the overlap (the first
+/// `loaded_count` rows repeat). Guarded by `loading_more` + the main is_loading
+/// so a near-bottom scroll can't spam fetches; the generation guard makes a new
+/// search supersede an in-flight load-more.
+pub fn fetchMore() void {
+    if (state.app.yt.is_loading.load(.acquire)) return;
+    if (loading_more.load(.acquire)) return;
+    if (loaded_count.load(.acquire) >= ITEM_CAP) return;
+    if (paged_query_len == 0) return;
+    loading_more.store(true, .release);
+
+    // This load-more belongs to the current generation; a new search bumps the
+    // gen and this worker's appends get dropped (isCurrent).
+    const my_gen = search_gen.load(.acquire);
+    const want = @min(loaded_count.load(.acquire) + PAGE_SIZE, ITEM_CAP);
+
+    const S = struct {
+        var q_buf: [256]u8 = undefined;
+        var q_len: usize = 0;
+        var gen: u32 = 0;
+        var n: usize = 0;
+    };
+    S.q_len = paged_query_len;
+    @memcpy(S.q_buf[0..S.q_len], paged_query[0..S.q_len]);
+    S.gen = my_gen;
+    S.n = want;
+
+    const t = std.Thread.spawn(.{}, struct {
+        fn worker() void {
+            defer loading_more.store(false, .release);
+
+            yt_mutex.lock();
+            appending_more = true;
+            yt_mutex.unlock();
+            defer {
+                yt_mutex.lock();
+                appending_more = false;
+                yt_mutex.unlock();
+            }
+
+            fetchViaYtdlp(S.q_buf[0..S.q_len], S.gen, S.n);
+
+            // Only advance the cursor if this load-more is still current; a
+            // superseding search has already reset loaded_count for its own page.
+            if (isCurrent(S.gen)) loaded_count.store(S.n, .release);
+        }
+    }.worker, .{}) catch {
+        loading_more.store(false, .release);
+        return;
+    };
+    t.detach();
 }
 
 /// True while `gen` is still the newest search. A stale worker bails so its
@@ -275,9 +367,9 @@ fn parsePipedResults(json: []const u8, gen: u32) void {
     }
 }
 
-fn fetchViaYtdlp(query: []const u8, gen: u32) void {
-    var search_arg: [280]u8 = undefined;
-    const search_str = std.fmt.bufPrintZ(&search_arg, "ytsearch20:{s}", .{query}) catch return;
+fn fetchViaYtdlp(query: []const u8, gen: u32, count: usize) void {
+    var search_arg: [288]u8 = undefined;
+    const search_str = std.fmt.bufPrintZ(&search_arg, "ytsearch{d}:{s}", .{ count, query }) catch return;
 
     // --print with a compact tab template instead of -j: full JSON lines carry
     // a huge `description` that overflows the reader buffer (takeDelimiter then
@@ -556,6 +648,29 @@ pub fn renderContent() void {
         }
         i += cols;
     }
+
+    // ── Infinite scroll ──
+    // When the viewport nears the bottom, fetch+append the next page. Mirrors
+    // tmdb.zig: an 800px trigger band, gated by is_loading + loading_more so a
+    // scroll can't spam fetches, and capped at ITEM_CAP (below the reserved 256
+    // buffer capacity so appends never realloc out from under thumb workers).
+    // fetchMore() only spawns a thread; the mutex we hold here is taken by that
+    // worker asynchronously, so calling it under the lock is safe.
+    const have = state.app.yt.results.items.len;
+    if (have > 0 and have < ITEM_CAP and paged_query_len > 0) {
+        const max_y = scroll.si.scrollMax(.vertical);
+        const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
+        if (near_bottom and !state.app.yt.is_loading.load(.acquire) and !loading_more.load(.acquire)) {
+            fetchMore();
+        }
+        if (loading_more.load(.acquire)) {
+            _ = dvui.label(@src(), "Loading more…", .{}, .{
+                .color_text = theme.colors.text_muted,
+                .gravity_x = 0.5,
+                .padding = dvui.Rect.all(12),
+            });
+        }
+    }
 }
 
 /// Current search query from the shared buffer (NUL-trimmed).
@@ -741,7 +856,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
         .color_fill = theme.colors.bg_card,
         .corner_radius = dvui.Rect.all(6),
         .min_size_content = .{ .w = the_card_w, .h = 10 },
-        .max_size_content = .{ .w = the_card_w, .h = thumb_h + 110 },
+        .max_size_content = .{ .w = the_card_w, .h = thumb_h + 150 },
         .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
     });
@@ -837,37 +952,50 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
         });
         defer info.deinit();
 
-        _ = dvui.labelNoFmt(@src(), title, .{}, .{
+        // Title — clamped to two lines (each line auto-ellipsized by dvui),
+        // UTF-8 safe. A "\n" split near the width-derived midpoint at a word
+        // boundary gives a balanced two-line block; long single words just
+        // ellipsize on line one.
+        var title_buf: [160]u8 = undefined;
+        const title_2l = twoLineTitle(title, the_card_w, &title_buf);
+        _ = dvui.labelNoFmt(@src(), title_2l, .{}, .{
             .id_extra = idx + 300,
             .expand = .horizontal,
             .color_text = theme.colors.text_main,
         });
 
+        // Two-line meta: channel on its own line, then "1.5M views · 3w ago".
+        // Splitting them means dvui ellipsizes the CHANNEL (line 1) and trims
+        // the date end (line 2) — a view-count digit is never cut.
         {
-            var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            var meta = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = idx + 400,
                 .expand = .horizontal,
-                .padding = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
+                .padding = .{ .x = 0, .y = 3, .w = 0, .h = 0 },
             });
             defer meta.deinit();
 
-            _ = dvui.label(@src(), "{s}", .{safeUtf8(item.uploader[0..item.uploader_len])}, .{ .id_extra = idx + 410, .color_text = theme.colors.text_muted });
-
-            if (item.views > 0) {
-                _ = dvui.label(@src(), " • ", .{}, .{ .id_extra = idx + 420, .color_text = theme.colors.border_drawer });
-                var vbuf: [32]u8 = undefined;
-                _ = dvui.label(@src(), "{s}", .{viewsStr(item.views, &vbuf)}, .{ .id_extra = idx + 430, .color_text = theme.colors.text_muted });
+            if (item.uploader_len > 0) {
+                var ch_buf: [80]u8 = undefined;
+                const ch = truncateUtf8(item.uploader[0..item.uploader_len], 28, &ch_buf);
+                _ = dvui.labelNoFmt(@src(), ch, .{}, .{
+                    .id_extra = idx + 410,
+                    .expand = .horizontal,
+                    .color_text = theme.colors.text_muted,
+                });
             }
 
-            // Publish date ("X ago"), index-aligned with results.
             const ymd = dateFor(idx);
-            if (ymd.len == 8) {
-                var abuf: [16]u8 = undefined;
-                const ago = formatAgo(ymd, &abuf);
-                if (ago.len > 0) {
-                    _ = dvui.label(@src(), " • ", .{}, .{ .id_extra = idx + 440, .color_text = theme.colors.border_drawer });
-                    _ = dvui.label(@src(), "{s}", .{ago}, .{ .id_extra = idx + 450, .color_text = theme.colors.text_muted });
-                }
+            var abuf: [16]u8 = undefined;
+            const ago = if (ymd.len == 8) formatAgo(ymd, &abuf) else "";
+            var mbuf: [64]u8 = undefined;
+            const ml = metaLine(item.views, ago, &mbuf);
+            if (ml.len > 0) {
+                _ = dvui.labelNoFmt(@src(), ml, .{}, .{
+                    .id_extra = idx + 430,
+                    .expand = .horizontal,
+                    .color_text = theme.colors.text_muted,
+                });
             }
         }
 
@@ -918,12 +1046,122 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
     }
 }
 
-/// Human view count, e.g. "1.2M views". Writes into `buf`.
-fn viewsStr(views: i64, buf: []u8) []const u8 {
+/// Clamp a title to two lines by inserting a single "\n" near a word boundary.
+/// dvui ellipsizes each line independently, so a one-line title that overflows
+/// only ever shows ~half; splitting it onto two lines lets far more show before
+/// the second line ellipsizes. `card_w` estimates chars-per-line (~7px/char at
+/// the default font). UTF-8 safe (input is already safeUtf8'd; we only split on
+/// an ASCII space, never inside a codepoint). Writes into `out`.
+fn twoLineTitle(title: []const u8, width: f32, out: []u8) []const u8 {
+    // Rough glyphs-per-line for this card width (with side padding ~12px).
+    const cpl: usize = @max(8, @as(usize, @intFromFloat(@max(0, width - 12) / 7.0)));
+    if (title.len <= cpl) return title; // fits on one line, leave it
+
+    // Find the last space at/just before the line-1 budget so line 1 ends on a
+    // whole word. Fall back to a hard split if there's no space in range.
+    const limit = @min(title.len, cpl);
+    var split: usize = 0;
+    var i: usize = 0;
+    while (i < limit) : (i += 1) {
+        if (title[i] == ' ') split = i;
+    }
+    // If the only space is very early, prefer a hard cut at the budget so line 1
+    // isn't nearly empty. Otherwise break on the word boundary.
+    if (split < cpl / 2) split = limit;
+
+    // Skip the space we broke on (if we broke on one) so line 2 doesn't start
+    // with a leading space.
+    const rest_start = if (split < title.len and title[split] == ' ') split + 1 else split;
+    const rest = title[rest_start..];
+    if (split + 1 + rest.len > out.len) {
+        // Won't fit the buffer — just return the (auto-ellipsized) original.
+        return title;
+    }
+    @memcpy(out[0..split], title[0..split]);
+    out[split] = '\n';
+    @memcpy(out[split + 1 .. split + 1 + rest.len], rest);
+    return out[0 .. split + 1 + rest.len];
+}
+
+/// Build the "1.5M views · 3w ago" meta line into `out`. Either part may be
+/// empty. Views come first so dvui's per-line ellipsize (which trims the END of
+/// the line) eats the date before it could ever cut a digit of the count.
+fn metaLine(views: i64, ago: []const u8, out: []u8) []const u8 {
+    var vbuf: [32]u8 = undefined;
+    const vstr = viewsStr(views, &vbuf); // "1.5M views" or ""
+    if (vstr.len > 0 and ago.len > 0) return std.fmt.bufPrint(out, "{s}  \u{00b7}  {s}", .{ vstr, ago }) catch vstr;
+    if (vstr.len > 0) return std.fmt.bufPrint(out, "{s}", .{vstr}) catch "";
+    if (ago.len > 0) return std.fmt.bufPrint(out, "{s}", .{ago}) catch "";
+    return "";
+}
+
+/// UTF-8-safe truncation to at most `max` codepoints, appending "…" when cut.
+/// Writes into `out`; returns the slice. Trims a trailing space before the
+/// ellipsis so "Some Channel …" reads "Some Channel…". Keeps view counts on the
+/// next line intact — only the channel name is ever shortened.
+fn truncateUtf8(s_in: []const u8, max: usize, out: []u8) []const u8 {
+    const s = safeUtf8(s_in);
+    // Count codepoints; if it already fits, pass through unchanged.
+    var cps: usize = 0;
+    var i: usize = 0;
+    while (i < s.len) {
+        const n = std.unicode.utf8ByteSequenceLength(s[i]) catch break;
+        if (i + n > s.len) break;
+        i += n;
+        cps += 1;
+    }
+    if (cps <= max) return s;
+
+    // Re-walk, copying up to `max` codepoints.
+    var bi: usize = 0;
+    var taken: usize = 0;
+    var oi: usize = 0;
+    while (bi < s.len and taken < max) {
+        const n = std.unicode.utf8ByteSequenceLength(s[bi]) catch break;
+        if (bi + n > s.len or oi + n > out.len) break;
+        @memcpy(out[oi .. oi + n], s[bi .. bi + n]);
+        oi += n;
+        bi += n;
+        taken += 1;
+    }
+    // Drop a trailing space so we don't render "Foo …".
+    while (oi > 0 and out[oi - 1] == ' ') oi -= 1;
+    const ell = "\u{2026}"; // …
+    if (oi + ell.len <= out.len) {
+        @memcpy(out[oi .. oi + ell.len], ell);
+        oi += ell.len;
+    }
+    return out[0..oi];
+}
+
+/// Compact view-count magnitude, e.g. 337000→"337K", 1491000→"1.5M",
+/// 114200000→"114M", 0→"". Drops the trailing ".0" so "2.0M" reads "2M". Never
+/// truncates mid-digit — the whole formatted token fits. Writes into `buf`.
+fn formatViews(views: i64, buf: []u8) []const u8 {
+    if (views <= 0) return "";
     const f = @as(f64, @floatFromInt(views));
-    if (f >= 1_000_000.0) return std.fmt.bufPrintZ(buf, "{d:.1}M views", .{f / 1_000_000.0}) catch "";
-    if (f >= 1_000.0) return std.fmt.bufPrintZ(buf, "{d:.1}K views", .{f / 1_000.0}) catch "";
-    return std.fmt.bufPrintZ(buf, "{d} views", .{views}) catch "";
+    if (views < 1_000) return std.fmt.bufPrint(buf, "{d}", .{views}) catch "";
+    if (views < 1_000_000) return scaled(buf, f / 1_000.0, "K");
+    if (views < 1_000_000_000) return scaled(buf, f / 1_000_000.0, "M");
+    return scaled(buf, f / 1_000_000_000.0, "B");
+}
+
+/// Render `v` with one decimal place unless it's ≥100 (then no decimal — "337K"
+/// not "337.0K") or the decimal is zero ("2M" not "2.0M"), then the suffix.
+fn scaled(buf: []u8, v: f64, suffix: []const u8) []const u8 {
+    const tenths = @as(i64, @intFromFloat(@round(v * 10.0)));
+    const whole = @divTrunc(tenths, 10);
+    const frac = @rem(tenths, 10);
+    if (v >= 100.0 or frac == 0) return std.fmt.bufPrint(buf, "{d}{s}", .{ whole, suffix }) catch "";
+    return std.fmt.bufPrint(buf, "{d}.{d}{s}", .{ whole, frac, suffix }) catch "";
+}
+
+/// "1.5M views" / "" — the formatViews magnitude with the unit appended.
+fn viewsStr(views: i64, buf: []u8) []const u8 {
+    var nbuf: [16]u8 = undefined;
+    const n = formatViews(views, &nbuf);
+    if (n.len == 0) return "";
+    return std.fmt.bufPrint(buf, "{s} views", .{n}) catch "";
 }
 
 /// Dimmed scrim + full metadata + a centered ▶ play affordance, over a hovered
