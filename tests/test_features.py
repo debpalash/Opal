@@ -1147,35 +1147,24 @@ def test_taste_receipts():
     return "fail", "taste receipts not fully wired"
 
 
-@test("Session Threads Detached", "Stability")
-def test_session_threads_detached():
+@test("Threads Detached (project-wide)", "Stability")
+def test_threads_detached():
     # Discarded `_ = std.Thread.spawn(...)` leaks the pthread handle (CLAUDE.md);
-    # spawns must store + detach. Guard the files this session created/owns.
-    files = ["src/services/recommendations.zig", "src/services/co_watch.zig",
-             "src/services/scene_memory.zig", "src/services/taste_vector.zig",
-             "src/services/spoiler.zig", "src/services/frame_ocr.zig",
-             # swept (was 24 leaky files repo-wide; sweeping in chunks):
-             "src/core/poster.zig", "src/services/anilist.zig",
-             "src/services/projectjav.zig", "src/services/youtube.zig",
-             "src/services/queue.zig",
-             # chunk 2:
-             "src/services/trakt.zig", "src/services/updater.zig",
-             "src/services/browser.zig", "src/player/stream_proxy.zig",
-             "src/services/watch_party.zig",
-             # chunk 3:
-             "src/core/deps.zig", "src/services/auto_subs.zig",
-             "src/services/streamlink.zig",
-             # chunk 4:
-             "src/main.zig", "src/services/search.zig",
-             "src/player/player.zig", "src/services/ai_voice.zig",
-             # chunk 5:
-             "src/services/ai_intent.zig", "src/services/simkl.zig",
-             "src/services/stremio.zig", "src/services/jellyfin.zig",
-             "src/services/subtitles.zig"]
-    offenders = [f for f in files if "_ = std.Thread.spawn(" in _src(f)]
+    # every spawn must store + detach (or join). Repo-wide sweep is complete, so
+    # this guard now walks ALL of src/ and fails if the pattern ever returns.
+    offenders = []
+    src = os.path.join(PROJECT_DIR, "src")
+    for root, _, files in os.walk(src):
+        for fn in files:
+            if not fn.endswith(".zig"):
+                continue
+            p = os.path.join(root, fn)
+            for i, line in enumerate(open(p).read().splitlines(), 1):
+                if "_ = std.Thread.spawn(" in line:
+                    offenders.append(f"{os.path.relpath(p, PROJECT_DIR)}:{i}")
     if offenders:
-        return "fail", "leaked thread handle in: " + ", ".join(offenders)
-    return "pass", "session-owned spawns store + detach"
+        return "fail", "leaked thread handle(s): " + ", ".join(offenders[:6])
+    return "pass", "no discarded std.Thread.spawn handles in src/"
 
 
 # ══════════════════════════════════════════════════════════

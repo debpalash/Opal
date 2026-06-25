@@ -28,7 +28,7 @@ pub fn scanDevices() void {
     is_scanning = true;
     device_count = 0;
 
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn worker() void {
             defer {
                 is_scanning = false;
@@ -78,7 +78,7 @@ pub fn scanDevices() void {
                 state.showToast("No cast devices found");
             }
         }
-    }.worker, .{}) catch {};
+    }.worker, .{})) |t| t.detach() else |_| {}
 }
 
 /// Cast current video URL to a device
@@ -101,7 +101,7 @@ pub fn castTo(device_idx: usize) void {
     const url_copy = alloc.dupe(u8, url) catch return;
     const name_copy = alloc.dupe(u8, device_name) catch return;
 
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn worker(u: []const u8, dev: []const u8) void {
             defer {
                 is_casting = false;
@@ -121,12 +121,12 @@ pub fn castTo(device_idx: usize) void {
             state.showToast("Casting...");
             _ = child.wait() catch {};
         }
-    }.worker, .{ url_copy, name_copy }) catch {};
+    }.worker, .{ url_copy, name_copy })) |t| t.detach() else |_| {}
 }
 
 /// Stop casting
 pub fn stopCast() void {
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn worker() void {
             const argv = [_][]const u8{ "catt", "stop" };
             var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
@@ -136,5 +136,5 @@ pub fn stopCast() void {
             active_device_idx = null;
             state.showToast("Cast stopped");
         }
-    }.worker, .{}) catch {};
+    }.worker, .{})) |t| t.detach() else |_| {}
 }
