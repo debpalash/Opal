@@ -1155,11 +1155,13 @@ def test_live_asr_foundation():
     if not ("pub fn setEnabled" in la and "live_asr_enabled" in st
             and "live_asr" in cfg):
         return "fail", "live-ASR foundation not wired (module/state/config)"
-    # Safety: must NOT capture the default mic (":0"/avfoundation) — that would
-    # feed room noise into Total Recall. Off-by-default no-op until a loopback.
-    if "avfoundation" in la or '":0"' in la:
-        return "fail", "live_asr must not capture the mic (loopback only)"
-    return "pass", "off-by-default foundation; no mic capture"
+    # Safety: must NOT actually capture audio yet (no ffmpeg/Child spawn) — a
+    # capture today would record the mic (room noise) and poison Total Recall.
+    # (The module *documents* the mic device in comments; that's fine — we check
+    # for real capture code, not mentions.)
+    if "Child.init(" in la or "ffmpeg" in la:
+        return "fail", "live_asr must not capture audio until loopback is wired"
+    return "pass", "off-by-default foundation; no capture yet"
 
 
 @test("Threads Detached (project-wide)", "Stability")
