@@ -1,0 +1,31 @@
+# Build caches (rebuilt inside the container)
+.zig-cache
+zig-cache
+zig-out
+
+# Host-built native artifacts — must be (re)compiled INSIDE the Linux container,
+# never copied from the macOS/host build.
+*.so
+*.dylib
+*.o
+*.a
+
+# VCS
+.git
+.gitignore
+
+# Node deps for the web UI (reinstalled/rebuilt as needed)
+web/node_modules
+
+# Scratch / temp
+scratchpad
+tmp
+*.tmp
+*.log
+
+# Docker artifacts / local data mounts
+data
+docker-compose.override.yml
+
+# OS cruft
+.DS_Store

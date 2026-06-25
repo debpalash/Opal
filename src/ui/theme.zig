@@ -504,6 +504,11 @@ pub const dims = struct {
 // ── Apply to dvui global ──
 
 fn applyToDvui() void {
+    // dvui themeGet/themeSet require a live Window (current_window). In headless
+    // server mode there is none — skip; the theme only affects UI rendering,
+    // which never runs headless. setTheme() still updates `colors` for any
+    // non-dvui consumer.
+    if (@import("../core/state.zig").app.is_headless) return;
     var t = dvui.themeGet();
     t.dark = true;
     t.text = colors.text_main;

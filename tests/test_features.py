@@ -1147,6 +1147,56 @@ def test_taste_receipts():
     return "fail", "taste receipts not fully wired"
 
 
+@test("Headless Server Mode Wired", "Server")
+def test_headless_mode():
+    # Compile-time entry split (dvui requires root.main == dvui.App.main, so the
+    # headless entry is selected via -Dheadless, NOT a runtime wrapper).
+    main = _src("src/main.zig")
+    hl = _src("src/headless.zig")
+    det = _src("src/core/headless_detect.zig")
+    st = _src("src/core/state.zig")
+    rem = _src("src/services/remote.zig")
+    bld = _src("build.zig")
+    checks = [
+        '@import("build_options").headless' in main,  # compile-time entry select
+        "pub const main = if" in main,
+        "pub fn coreInit" in main and "pub fn appDeinit" in main,
+        "pub fn headlessMain" in hl and "shutdown" in hl and "sigaction" in hl,
+        "pub fn detect" in det,
+        "is_headless" in st,
+        "0.0.0.0" in rem and "is_headless" in rem,            # T6 bind
+        '"headless"' in bld,                                    # -Dheadless option
+    ]
+    if all(checks):
+        return "pass", "compile-time headless entry + coreInit/headlessMain + 0.0.0.0 bind + -Dheadless"
+    return "fail", f"headless wiring incomplete: {checks}"
+
+
+@test("Headless Render Guards", "Server")
+def test_headless_render_guards():
+    # Windowed mode must stay byte-identical: every headless branch gated on
+    # is_headless / mpv_gl==null. mpv render-context + pixels skipped headless.
+    pl = _src("src/player/player.zig")
+    gr = _src("src/ui/grid.zig")
+    th = _src("src/ui/theme.zig")
+    if ("is_headless" in pl and "mpv_gl != null" in gr
+            and "is_headless" in th):  # theme applyToDvui no-op headless
+        return "pass", "render-context/pixels/theme gated; grid guards mpv_gl"
+    return "fail", "headless render guards missing"
+
+
+@test("Web UI API Base Port", "Page Shell")
+def test_web_api_base_port():
+    # Web UI is served on :3000 but the JSON API lives on :41595 — index.html
+    # must target the API port, not location.origin (which is the :3000 server).
+    html = _src("web/index.html")
+    if not html:
+        return "skip", "web/index.html not present"
+    if ":41595" in html and "const API = location.origin;" not in html:
+        return "pass", "web UI targets API :41595 (not location.origin)"
+    return "fail", "web UI API base still points at the static server"
+
+
 @test("Live-ASR Foundation", "Co-Watcher")
 def test_live_asr_foundation():
     la = _src("src/services/live_asr.zig")

@@ -4,6 +4,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const headless = b.option(bool, "headless", "Build headless server (no SDL/X11 link)") orelse false;
+
+    // Expose the headless flag to the app as a `build_options` import.
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "headless", headless);
+
     const exe = b.addExecutable(.{
         .name = "zigzag",
         .root_module = b.createModule(.{
@@ -32,11 +38,18 @@ pub fn build(b: *std.Build) void {
     } else {
         // Non-macOS: link system SDL2. On macOS, dvui's bundled SDL2 is used
         // (avoids duplicate-class ObjC warnings when both static + dyn SDL2 load).
+        // headless (-Dheadless, non-macOS) would skip this SDL2 link, but
+        // main/player/grid still import dvui unconditionally this cycle.
+        // headless: full dvui/SDL removal is follow-up; keep linked so the binary still runs.
         exe.root_module.linkSystemLibrary("SDL2", .{});
     }
 
-    // Add dvui_sdl2 which is a fully bundled standalone backend
+    // Add dvui_sdl2 which is a fully bundled standalone backend.
+    // headless: full dvui/SDL removal is follow-up; keep linked so the binary still runs.
     exe.root_module.addImport("dvui", dvui_dep.module("dvui_sdl2"));
+
+    // Expose -Dheadless to the app code via @import("build_options").
+    exe.root_module.addImport("build_options", build_options.createModule());
 
     // Fetch and bind TVG Icons library
     const icons_dep = b.dependency("icons", .{
@@ -52,21 +65,19 @@ pub fn build(b: *std.Build) void {
     // SQLite Vector DB
     exe.root_module.addCSourceFile(.{
         .file = b.path("src/core/sqlite/sqlite-vec.c"),
-        .flags = &[_][]const u8{"-O3", "-fomit-frame-pointer"},
+        .flags = &[_][]const u8{ "-O3", "-fomit-frame-pointer" },
     });
-    
+
     // Libtorrent & C++ Linkage (Dynamic Shared Object isolating GCC C++ ABIs)
     // Checking modification times avoids recompiling the heavy C++ wrapper on every `zig build` iteration
     const compile_cmd = if (target.result.os.tag == .macos)
         "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -I/opt/homebrew/include -L/opt/homebrew/lib src/torrent_wrapper.cpp -o libtorrent_wrapper.so -ltorrent-rasterbar; fi"
     else
         "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC src/torrent_wrapper.cpp -o libtorrent_wrapper.so -ltorrent-rasterbar; fi";
-        
-    const compile_wrapper = b.addSystemCommand(&.{
-        "sh", "-c", compile_cmd
-    });
+
+    const compile_wrapper = b.addSystemCommand(&.{ "sh", "-c", compile_cmd });
     exe.step.dependOn(&compile_wrapper.step);
-    
+
     exe.root_module.addLibraryPath(b.path("."));
     exe.root_module.linkSystemLibrary("torrent_wrapper", .{});
     exe.root_module.addRPath(b.path(".")); // Ensure the binary can find the locally compiled wrapper
@@ -82,7 +93,7 @@ pub fn build(b: *std.Build) void {
     // OCR via ONNX Runtime (PP-OCR pipeline)
     exe.root_module.addCSourceFile(.{
         .file = b.path("ort/ocr_ort.c"),
-        .flags = &[_][]const u8{"-O2", "-Wno-unused-result"},
+        .flags = &[_][]const u8{ "-O2", "-Wno-unused-result" },
     });
     exe.root_module.addIncludePath(b.path("ort"));
     exe.root_module.addLibraryPath(b.path("ort"));
@@ -90,8 +101,6 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addRPath(b.path("ort"));
 
     exe.root_module.addIncludePath(b.path("src"));
-
-
 
     b.installArtifact(exe);
 
@@ -212,6 +221,16 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_router).step);
+
+    // Pure headless-mode detection (env precedence + OS gating).
+    const test_headless = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/headless_detect.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_headless).step);
 
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The

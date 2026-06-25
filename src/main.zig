@@ -36,17 +36,34 @@ pub const dvui_app: dvui.App = .{
     .deinitFn = appDeinit,
 };
 
-pub const main = dvui.App.main;
+// Entry point is selected at COMPILE time. dvui's App interface comptime-
+// requires `root.main == dvui.App.main` exactly (see App.zig get()), so a
+// runtime dispatcher that conditionally calls dvui.App.main is impossible
+// (it forms an inferred-error-set dependency loop). Instead the headless
+// server build (`zig build -Dheadless=true`) swaps the entry point entirely.
+// The default desktop build is byte-identical: `pub const main = dvui.App.main`.
+pub const main = if (@import("build_options").headless)
+    headlessEntry
+else
+    dvui.App.main;
+
+fn headlessEntry(_: std.process.Init) !u8 {
+    // -Dheadless builds are always headless; gate the render/bind branches.
+    state.app.is_headless = true;
+    try @import("headless.zig").headlessMain();
+    return 0;
+}
+
 pub const panic = dvui.App.panic;
 pub const std_options: std.Options = .{ .logFn = dvui.App.logFn, .log_level = .warn };
 
-fn appInit(win: *dvui.Window) !void {
-    // Store window ref for position/size persistence
-    dvui_win = win;
-    // Also mirror into state.app so worker threads (mpv render-update
-    // callback, etc.) can wake the UI via dvui.refresh from any thread.
-    state.app.dvui_win = win;
-
+/// Window-independent core initialization. Shared by the windowed entry
+/// (appInit) and the headless server entry (headless.headlessMain). Runs
+/// every startup step that does NOT require a dvui.Window: paths, theme,
+/// deps, sherpa promotion, the first MediaPlayer, the torrent worker, the
+/// remote JSON API, and the background DB/library load thread. Nothing here
+/// reads dvui_win / state.app.dvui_win, so the window may be assigned after.
+pub fn coreInit() !void {
     // Runtime initialization (env vars can't be read at comptime)
     state.initPaths();
     state.loadTmdbTokenFromEnv();
@@ -90,10 +107,6 @@ fn appInit(win: *dvui.Window) !void {
     if (state.app.web_remote_enabled) {
         @import("services/remote.zig").start();
     }
-
-    // Register SDL Event Watch for file drops (must be on main thread)
-    _ = c.sdl.SDL_EventState(c.sdl.SDL_DROPFILE, c.sdl.SDL_ENABLE);
-    c.sdl.SDL_AddEventWatch(sdlEventWatch, null);
 
     // Move heavy DB/migration/loading work to background so UI renders instantly
     if (std.Thread.spawn(.{}, struct {
@@ -154,6 +167,23 @@ fn appInit(win: *dvui.Window) !void {
             logs.pushLog("info", "init", "Background init complete", false);
         }
     }.worker, .{})) |t| t.detach() else |_| {}
+}
+
+fn appInit(win: *dvui.Window) !void {
+    // Window-independent startup first. Nothing in coreInit reads dvui_win,
+    // so assigning the window afterwards is safe (and lets headless mode
+    // reuse coreInit without a window).
+    try coreInit();
+
+    // Store window ref for position/size persistence
+    dvui_win = win;
+    // Also mirror into state.app so worker threads (mpv render-update
+    // callback, etc.) can wake the UI via dvui.refresh from any thread.
+    state.app.dvui_win = win;
+
+    // Register SDL Event Watch for file drops (must be on main thread)
+    _ = c.sdl.SDL_EventState(c.sdl.SDL_DROPFILE, c.sdl.SDL_ENABLE);
+    c.sdl.SDL_AddEventWatch(sdlEventWatch, null);
 
     // ── CLI argument handling ──
     // `zigzag /path/to/file.mp4` or `zigzag https://example.com/stream`
@@ -170,7 +200,7 @@ fn appInit(win: *dvui.Window) !void {
     }
 }
 
-fn appDeinit() void {
+pub fn appDeinit() void {
     // Stop conversation/voice mode
     const voice = @import("services/ai_voice.zig");
     voice.conversation_active = false;

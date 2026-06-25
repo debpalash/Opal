@@ -103,7 +103,7 @@ pub const MediaPlayer = struct {
                 return limit;
             }
         }
-        
+
         // 2. Try reading mpv "media-title"
         const title_c = c.mpv.mpv_get_property_string(self.mpv_ctx, "media-title");
         if (title_c != null) {
@@ -127,7 +127,7 @@ pub const MediaPlayer = struct {
                 (if (idx + 1 < path.len) path[idx + 1 ..] else path)
             else
                 path;
-            
+
             if (basename.len > 0 and !std.mem.eql(u8, basename, "stream") and basename.len > 1) {
                 const limit = @min(basename.len, out_buf.len);
                 @memcpy(out_buf[0..limit], basename[0..limit]);
@@ -228,14 +228,22 @@ pub const MediaPlayer = struct {
         self.thumb_texture = null;
         @memset(&self.thumb_texture_path, 0);
         self.thumb_texture_path_len = 0;
-        
-        self.pixels = try allocator.alloc(dvui.Color.PMA, video_w * video_h);
-        @memset(self.pixels, dvui.Color.PMA.black);
+
+        if (state.app.is_headless) {
+            // Headless: no display surface, so no software-render pixel buffer.
+            // Empty slice — deinit's allocator.free on a zero-len slice is a no-op.
+            self.pixels = &.{};
+        } else {
+            self.pixels = try allocator.alloc(dvui.Color.PMA, video_w * video_h);
+            @memset(self.pixels, dvui.Color.PMA.black);
+        }
 
         self.mpv_ctx = c.mpv.mpv_create() orelse @panic("fail mpv");
         const hw_val = if (state.app.hwdec_enabled) "auto-safe" else "no";
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "hwdec", hw_val);
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "vo", "libmpv");
+        // Headless: use the null video output so libmpv never opens a display
+        // surface. Audio + property events + seek all still work for control.
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "vo", if (state.app.is_headless) "null" else "libmpv");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "audio-display", "attachment");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "osc", "no");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "osd-bar", "no");
@@ -245,7 +253,7 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "msg-level", "all=status");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "terminal", "yes");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "clipboard-backends", "");
-        
+
         // Streaming-optimized: large demuxer cache for torrent + network tolerance
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache", "yes");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache-secs", "120");
@@ -287,14 +295,14 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "sub-auto", "fuzzy");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "sub-font-size", "40");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "save-position-on-quit", "yes");
-        
+
         _ = c.mpv.mpv_request_log_messages(self.mpv_ctx, "warn");
         self.applyYtdlFormat();
-        
+
         // Scan scripts before init (but loading happens after)
         const scripts_mgr = @import("../services/scripts.zig");
         if (!state.app.scripts_scanned) scripts_mgr.scanScripts();
-        
+
         _ = c.mpv.mpv_initialize(self.mpv_ctx);
 
         // ── Observe properties so the render hot path can read cached fields
@@ -323,23 +331,28 @@ pub const MediaPlayer = struct {
             .{ .type = c.mpv.MPV_RENDER_PARAM_INVALID, .data = null },
         };
         self.mpv_gl = null;
-        if (c.mpv.mpv_render_context_create(&self.mpv_gl, self.mpv_ctx, &params) < 0) {
-            @panic("fail render");
+        if (!state.app.is_headless) {
+            // Windowed: create the software render context and wire the
+            // frame-ready callback. Headless leaves mpv_gl == null (vo=null,
+            // no pixel buffer) — the render path is skipped entirely there.
+            if (c.mpv.mpv_render_context_create(&self.mpv_gl, self.mpv_ctx, &params) < 0) {
+                @panic("fail render");
+            }
+            // Wake the UI loop whenever mpv has a new frame ready. Without
+            // this, dvui sleeps on input idle (no mouse movement) and the
+            // texture freezes even though audio keeps playing because the
+            // pixel-buffer transfer in ui/grid.zig only happens inside a
+            // dvui frame. The callback fires on an mpv-owned thread, so we
+            // use the cross-thread form of dvui.refresh (passing *Window).
+            c.mpv.mpv_render_context_set_update_callback(self.mpv_gl, &mpvRenderUpdateCallback, null);
         }
-        // Wake the UI loop whenever mpv has a new frame ready. Without
-        // this, dvui sleeps on input idle (no mouse movement) and the
-        // texture freezes even though audio keeps playing because the
-        // pixel-buffer transfer in ui/grid.zig only happens inside a
-        // dvui frame. The callback fires on an mpv-owned thread, so we
-        // use the cross-thread form of dvui.refresh (passing *Window).
-        c.mpv.mpv_render_context_set_update_callback(self.mpv_gl, &mpvRenderUpdateCallback, null);
         return self;
     }
 
     pub fn load_file(self: *MediaPlayer, path: [*c]const u8) void {
         // Save position of current video before switching
         self.saveCurrentPosition();
-        
+
         @memset(self.pixels, dvui.Color.PMA.black);
         if (self.texture) |*tex| {
             _ = dvui.Texture.update(tex, self.pixels, .linear) catch {};
@@ -350,7 +363,7 @@ pub const MediaPlayer = struct {
         const copy_len = @min(path_span.len, self.loading_label.len);
         @memcpy(self.loading_label[0..copy_len], path_span[0..copy_len]);
         self.loading_label_len = copy_len;
-        
+
         // Store current URL for resume tracking
         @memcpy(self.current_url[0..copy_len], path_span[0..copy_len]);
         self.current_url_len = copy_len;
@@ -370,7 +383,7 @@ pub const MediaPlayer = struct {
             streamlink.resolveStreamUrlAsync(path_span, p_idx);
             return; // Don't call mpv loadfile directly — the async thread will do it
         }
-        
+
         var args = [_][*c]const u8{ "loadfile", path, null };
         _ = c.mpv.mpv_command(self.mpv_ctx, @ptrCast(&args));
 
@@ -464,19 +477,14 @@ pub const MediaPlayer = struct {
 
     pub fn applyYtdlFormat(self: *MediaPlayer) void {
         const ytdlp = @import("../services/ytdlp.zig");
-        const fmt_strings = [_][*:0]const u8{
-            "bestvideo[height<=?720]+bestaudio/best",
-            "bestvideo[height<=?1080]+bestaudio/best",
-            "bestvideo[height<=?2160]+bestaudio/best",
-            "bestaudio/best"
-        };
+        const fmt_strings = [_][*:0]const u8{ "bestvideo[height<=?720]+bestaudio/best", "bestvideo[height<=?1080]+bestaudio/best", "bestvideo[height<=?2160]+bestaudio/best", "bestaudio/best" };
         const active_fmt = fmt_strings[state.app.ytdl_format_idx];
         // Use bundled yt-dlp if available, else fall back to system
         const ytdl_path = ytdlp.getPath() orelse "yt-dlp";
-        
+
         // ytdl-format is a top-level mpv option
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-format", active_fmt);
-        
+
         // ytdl-raw-options is a top-level mpv option (NOT script-opts!)
         // cookies-from-browser: reuse Firefox session for auth/cookie walls —
         //   but ONLY if a Firefox profile exists, else yt-dlp aborts with
@@ -495,13 +503,13 @@ pub const MediaPlayer = struct {
                 _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-raw-options", raw.ptr);
             } else |_| {}
         }
-        
+
         // script-opts: ytdl_hook config + sponsorblock
         // try_ytdl_first=no: try direct playback before yt-dlp (avoids playlist expansion)
         // exclude patterns: model/channel pages that expand into huge playlists
         var buf: [512]u8 = undefined;
         const sp_opts = if (state.app.sponsorblock_enabled) ",sponsorblock-mark=all" else "";
-        if (std.fmt.bufPrintZ(&buf, "ytdl_hook-ytdl_path={s},ytdl_hook-try_ytdl_first=no,ytdl_hook-exclude=%.*/model/.*|%.*/channels/.*|%.*/pornstar/.*|%.*/playlist.*{s}", .{ytdl_path, sp_opts})) |opts| {
+        if (std.fmt.bufPrintZ(&buf, "ytdl_hook-ytdl_path={s},ytdl_hook-try_ytdl_first=no,ytdl_hook-exclude=%.*/model/.*|%.*/channels/.*|%.*/pornstar/.*|%.*/playlist.*{s}", .{ ytdl_path, sp_opts })) |opts| {
             _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "script-opts", opts.ptr);
         } else |_| {}
     }
@@ -525,7 +533,7 @@ pub const MediaPlayer = struct {
         // Generate output filename with timestamps
         const a_sec = @as(u32, @intFromFloat(@max(0, self.loop_a)));
         const b_sec = @as(u32, @intFromFloat(@max(0, self.loop_b)));
-        
+
         const ExportCtx = struct {
             src: [2048]u8 = undefined,
             src_len: usize = 0,
@@ -575,13 +583,7 @@ pub const MediaPlayer = struct {
                 const alloc = @import("../core/alloc.zig").allocator;
 
                 var child = io_global.Child.init(
-                    &.{ "ffmpeg", "-y",
-                         "-ss", ec.ss_buf[0..ec.ss_len],
-                         "-to", ec.to_buf[0..ec.to_len],
-                         "-i", ec.src[0..ec.src_len],
-                         "-c", "copy",
-                         "-avoid_negative_ts", "make_zero",
-                         ec.out[0..ec.out_len] },
+                    &.{ "ffmpeg", "-y", "-ss", ec.ss_buf[0..ec.ss_len], "-to", ec.to_buf[0..ec.to_len], "-i", ec.src[0..ec.src_len], "-c", "copy", "-avoid_negative_ts", "make_zero", ec.out[0..ec.out_len] },
                     alloc,
                 );
                 child.stdout_behavior = .Ignore;
@@ -638,7 +640,7 @@ pub fn updateTorrentBackgroundTasks() void {
         while (true) {
             const ev = c.mpv.mpv_wait_event(p.mpv_ctx, 0);
             if (ev.*.event_id == c.mpv.MPV_EVENT_NONE) break;
-            
+
             if (ev.*.event_id == c.mpv.MPV_EVENT_START_FILE) {
                 p.provider = .mpv;
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_END_FILE) {
@@ -646,41 +648,41 @@ pub fn updateTorrentBackgroundTasks() void {
                     // Torrent streaming: check if download is complete
                     var pct: f32 = 0.0;
                     _ = c.mpv.torrent_poll(state.app.torrent_ses, p.current_torrent_id, p.selected_file_idx, null, 0, &pct, null, null);
-                    
+
                     if (pct >= 0.99) {
                         // File fully downloaded — genuine EOF.
                         // Auto-advance to next episode if enabled and multi-file torrent
                         if (state.app.auto_advance) {
-                        const file_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, p.current_torrent_id);
-                        if (file_count > 1 and p.selected_file_idx >= 0 and p.selected_file_idx + 1 < file_count) {
-                            // Find next video file (skip non-video files like .nfo, .txt)
-                            var next_idx = p.selected_file_idx + 1;
-                            while (next_idx < file_count) {
-                                var fname: [512]u8 = undefined;
-                                c.mpv.torrent_get_file_name(state.app.torrent_ses, p.current_torrent_id, next_idx, &fname, 512);
-                                const name = std.mem.sliceTo(&fname, 0);
-                                // Check if it's a video file
-                                const is_video = std.mem.endsWith(u8, name, ".mkv") or 
-                                    std.mem.endsWith(u8, name, ".mp4") or 
-                                    std.mem.endsWith(u8, name, ".avi") or 
-                                    std.mem.endsWith(u8, name, ".wmv") or 
-                                    std.mem.endsWith(u8, name, ".mov");
-                                if (is_video) break;
-                                next_idx += 1;
-                            }
-                            if (next_idx < file_count) {
-                                p.selected_file_idx = next_idx;
-                                p.torrent_is_ready = false;
-                                p.has_metadata = true;
-                                logs.pushLog("info", "zigzag", "Auto-advancing to next episode...", false);
-                                continue;
-                            }
+                            const file_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, p.current_torrent_id);
+                            if (file_count > 1 and p.selected_file_idx >= 0 and p.selected_file_idx + 1 < file_count) {
+                                // Find next video file (skip non-video files like .nfo, .txt)
+                                var next_idx = p.selected_file_idx + 1;
+                                while (next_idx < file_count) {
+                                    var fname: [512]u8 = undefined;
+                                    c.mpv.torrent_get_file_name(state.app.torrent_ses, p.current_torrent_id, next_idx, &fname, 512);
+                                    const name = std.mem.sliceTo(&fname, 0);
+                                    // Check if it's a video file
+                                    const is_video = std.mem.endsWith(u8, name, ".mkv") or
+                                        std.mem.endsWith(u8, name, ".mp4") or
+                                        std.mem.endsWith(u8, name, ".avi") or
+                                        std.mem.endsWith(u8, name, ".wmv") or
+                                        std.mem.endsWith(u8, name, ".mov");
+                                    if (is_video) break;
+                                    next_idx += 1;
+                                }
+                                if (next_idx < file_count) {
+                                    p.selected_file_idx = next_idx;
+                                    p.torrent_is_ready = false;
+                                    p.has_metadata = true;
+                                    logs.pushLog("info", "zigzag", "Auto-advancing to next episode...", false);
+                                    continue;
+                                }
                             }
                         }
                         // No next episode or auto-advance disabled — genuine end
                         continue;
                     }
-                    
+
                     // File still downloading — mpv hit an undownloaded section.
                     // Wait and reload with a longer backoff to give pieces time to arrive.
                     const now = @import("../core/io_global.zig").milliTimestamp();
@@ -775,7 +777,7 @@ pub fn updateTorrentBackgroundTasks() void {
             if (!p.torrent_is_ready) {
                 var buffering_path: [512]u8 = undefined;
                 const t_status = c.mpv.torrent_poll(state.app.torrent_ses, p.current_torrent_id, p.selected_file_idx, &buffering_path, @intCast(buffering_path.len), null, null, null);
-                
+
                 // Metadata check: torrent_poll returns >= 1 when has_metadata
                 // We also check has_metadata directly via file_count for file-selected case
                 if (!p.has_metadata) {
@@ -797,7 +799,10 @@ pub fn updateTorrentBackgroundTasks() void {
                         var i: i32 = 0;
                         while (i < f_count) : (i += 1) {
                             const sz = c.mpv.torrent_get_file_size(state.app.torrent_ses, p.current_torrent_id, i);
-                            if (sz > max_sz) { max_sz = sz; max_idx = i; }
+                            if (sz > max_sz) {
+                                max_sz = sz;
+                                max_idx = i;
+                            }
                             c.mpv.torrent_set_file_priority(state.app.torrent_ses, p.current_torrent_id, i, 0);
                         }
                         p.selected_file_idx = max_idx;
@@ -833,7 +838,7 @@ pub fn updateTorrentBackgroundTasks() void {
                         const ai_memory = @import("../services/ai_memory.zig");
                         ai_memory.ingestMemory("system", "User started playing media", "media", t_name_ai[0..nai_len]);
                     }
-                    
+
                     // Check watch history for resume position
                     const watch = @import("watch_history.zig");
                     if (p.resume_percent <= 0.0) {
@@ -847,7 +852,7 @@ pub fn updateTorrentBackgroundTasks() void {
                             }
                         }
                     }
-                    
+
                     if (p.resume_percent > 0.0) {
                         var start_opt: [32]u8 = undefined;
                         if (std.fmt.bufPrintZ(&start_opt, "{d:.2}%", .{p.resume_percent})) |so| {
@@ -858,7 +863,7 @@ pub fn updateTorrentBackgroundTasks() void {
                         // Clear any previous start option to prevent looping
                         _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "start", "none");
                     }
-                    
+
                     // ── Streaming Proxy: serve torrent via HTTP for smooth playback ──
                     // The proxy blocks reads until pieces arrive — no holes, no corruption.
                     // v2: each player owns its proxy handle so multi-stream split-view works,
@@ -893,7 +898,7 @@ pub fn updateTorrentBackgroundTasks() void {
                         state.app.players.items[state.app.active_player_idx] == p)
                     {
                         state.app.thumb_state.reset();
-                        
+
                         // Auto-search subtitles for this torrent
                         const subs = @import("subtitles.zig");
                         var t_name: [256]u8 = undefined;
@@ -912,7 +917,7 @@ pub fn updateTorrentBackgroundTasks() void {
                 // The HTTP proxy handles back-pressure (blocking reads until pieces arrive),
                 // so we no longer need to pause/unpause mpv — it buffers naturally via HTTP.
                 _ = c.mpv.torrent_ensure_streaming_buffer(state.app.torrent_ses, p.current_torrent_id, p.selected_file_idx, percent_pos);
-                
+
                 // Save position to watch history every ~300 frames (~5s at 60fps)
                 p.save_counter +%= 1;
                 if (percent_pos > 0.5 and p.save_counter % 300 == 0) {
@@ -935,7 +940,7 @@ pub fn updateTorrentBackgroundTasks() void {
                     p.tryResumePosition();
                 }
             }
-            
+
             // Periodic position save every ~120 frames (~2s at 60fps)
             p.save_counter +%= 1;
             if (p.save_counter % 120 == 0) {

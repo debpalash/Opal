@@ -208,11 +208,14 @@ pub fn isRunning() bool {
 }
 
 fn serverLoop() void {
-    const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", port) catch return;
+    // Headless (e.g. Docker): bind 0.0.0.0 so the container is reachable from
+    // outside. Windowed desktop stays loopback-only (127.0.0.1) for security.
+    const ip = if (state.app.is_headless) "0.0.0.0" else "127.0.0.1";
+    const addr = std.Io.net.IpAddress.parseIp4(ip, port) catch return;
     var server = addr.listen(io_g.io(), .{ .reuse_address = true }) catch return;
     defer server.deinit(io_g.io());
 
-    std.debug.print("[remote] JSON API listening on http://127.0.0.1:{d}\n", .{port});
+    std.debug.print("[remote] JSON API listening on http://{s}:{d}\n", .{ ip, port });
     std.debug.print("[remote] Web UI: cd web && zig build dev (http://0.0.0.0:3000)\n", .{});
 
     while (running.load(.acquire)) {

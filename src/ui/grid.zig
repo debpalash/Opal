@@ -122,10 +122,13 @@ fn renderInlineChat() void {
                 .gravity_y = 0.5,
             });
             if (!is_user) {
-                { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+                {
+                    var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+                    sp.deinit();
+                }
                 // Star toggle — warning token only when starred, else neutral.
                 var star_wd: dvui.WidgetData = undefined;
-                if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"star", .{}, .{}, .{
+                if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.star, .{}, .{}, .{
                     .id_extra = mi + 71700,
                     .data_out = &star_wd,
                     .color_text = if (m.starred) theme.colors.warning else theme.colors.text_secondary,
@@ -190,25 +193,25 @@ pub fn computeGridColumns() usize {
         .auto => blk: {
             const w: f32 = @floatFromInt(state.app.win_w);
             const h: f32 = @floatFromInt(state.app.win_h);
-            
+
             if (w <= 0 or h <= 0) break :blk if (n <= 4) @as(usize, 2) else 3;
-            
+
             const target_ratio: f32 = 16.0 / 9.0;
             var best_cols: usize = 1;
             var max_area: f32 = 0;
-            
+
             var col_idx: usize = 1;
             while (col_idx <= n) : (col_idx += 1) {
                 const c_f: f32 = @floatFromInt(col_idx);
                 const r_i = (n + col_idx - 1) / col_idx;
                 const r_f: f32 = @floatFromInt(r_i);
-                
+
                 const cell_w = w / c_f;
                 const cell_h = h / r_f;
-                
+
                 const possible_w = @min(cell_w, cell_h * target_ratio);
                 const possible_h = possible_w / target_ratio;
-                
+
                 const area = possible_w * possible_h;
                 if (area > max_area) {
                     max_area = area;
@@ -226,10 +229,12 @@ pub fn computeGridColumns() usize {
 
 pub fn muteBackgroundPlayers() void {
     // Only update volume when active player changes (not every frame)
-    const VS = struct { var last_active: usize = 999; };
+    const VS = struct {
+        var last_active: usize = 999;
+    };
     if (VS.last_active == state.app.active_player_idx) return;
     VS.last_active = state.app.active_player_idx;
-    
+
     for (state.app.players.items, 0..) |p, i| {
         if (i == state.app.active_player_idx) {
             // Restore active cell volume
@@ -274,15 +279,18 @@ pub fn renderGrid() !void {
         // Cap cell width so text-heavy panes (browser) can't push other cells away
         const grid_w = grid_wrapper.data().borderRectScale().r.w;
         const max_cell_w: f32 = if (grid_columns > 0 and grid_w > 0) grid_w / @as(f32, @floatFromInt(grid_columns)) else 9999;
-        
+
         var cell_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .max_size_content = .{ .w = max_cell_w, .h = std.math.floatMax(f32) }, .expand = .both, .background = true, .color_fill = theme.colors.bg_deep, .color_border = cell_color, .border = border_rect, .margin = dvui.Rect.all(2), .corner_radius = theme.dims.rad_sm });
-        
+
         // Single wrapper overlay — ensures video content and control badges layer
         // rather than splitting the cell height vertically
         var cell_wrapper = dvui.overlay(@src(), .{ .id_extra = i + 11000, .expand = .both });
-        
-        // When not showing MPV, still drain its render context to prevent blocking
-        if (p.provider != .mpv) {
+
+        // When not showing MPV, still drain its render context to prevent blocking.
+        // Guarded on a non-null render context: in windowed mode mpv_gl is always
+        // non-null so this runs exactly as before; a null context (e.g. headless,
+        // or a render-context that failed to create) skips it safely.
+        if (p.provider != .mpv and p.mpv_gl != null) {
             const flags = c.mpv.mpv_render_context_update(p.mpv_gl);
             if ((flags & c.mpv.MPV_RENDER_UPDATE_FRAME) != 0) {
                 const size = [2]c_int{ player.video_w, player.video_h };
@@ -300,451 +308,429 @@ pub fn renderGrid() !void {
         }
 
         switch (p.provider) {
-        .mpv => {
-        // ── MPV Video Player ──
-        const flags = c.mpv.mpv_render_context_update(p.mpv_gl);
-        const size = [2]c_int{ player.video_w, player.video_h };
-        const img_format = "rgba";
-        const pitch: usize = player.video_w * 4;
-        var render_params = [_]c.mpv.mpv_render_param{
-            .{ .type = c.mpv.MPV_RENDER_PARAM_SW_SIZE, .data = @constCast(&size) },
-            .{ .type = c.mpv.MPV_RENDER_PARAM_SW_FORMAT, .data = @constCast(img_format.ptr) },
-            .{ .type = c.mpv.MPV_RENDER_PARAM_SW_STRIDE, .data = @constCast(&pitch) },
-            .{ .type = c.mpv.MPV_RENDER_PARAM_SW_POINTER, .data = p.pixels.ptr },
-            .{ .type = c.mpv.MPV_RENDER_PARAM_INVALID, .data = null },
-        };
+            .mpv => {
+                // ── MPV Video Player ──
+                // All render-context + texture work is gated on a non-null render
+                // context. In windowed mode mpv_gl is always non-null so this block
+                // executes exactly as before; a null context (headless, or a context
+                // that failed to create) skips the GPU/texture path safely. p.texture
+                // then stays null, and the `if (p.texture) |*tex|` display block below
+                // is already null-safe.
+                if (p.mpv_gl != null) {
+                    const flags = c.mpv.mpv_render_context_update(p.mpv_gl);
+                    const size = [2]c_int{ player.video_w, player.video_h };
+                    const img_format = "rgba";
+                    const pitch: usize = player.video_w * 4;
+                    var render_params = [_]c.mpv.mpv_render_param{
+                        .{ .type = c.mpv.MPV_RENDER_PARAM_SW_SIZE, .data = @constCast(&size) },
+                        .{ .type = c.mpv.MPV_RENDER_PARAM_SW_FORMAT, .data = @constCast(img_format.ptr) },
+                        .{ .type = c.mpv.MPV_RENDER_PARAM_SW_STRIDE, .data = @constCast(&pitch) },
+                        .{ .type = c.mpv.MPV_RENDER_PARAM_SW_POINTER, .data = p.pixels.ptr },
+                        .{ .type = c.mpv.MPV_RENDER_PARAM_INVALID, .data = null },
+                    };
 
-        if ((flags & c.mpv.MPV_RENDER_UPDATE_FRAME) != 0) {
-            if (c.mpv.mpv_render_context_render(p.mpv_gl, &render_params) >= 0) {
-                // MPV renders with "rgba" format — alpha is already 0xFF, no fill needed
-                if (p.texture == null) {
-                    p.texture = try dvui.textureCreate(p.pixels, player.video_w, player.video_h, .linear, .rgba_32);
-                } else {
-                    try dvui.Texture.update(&p.texture.?, p.pixels, .linear);
-                }
-                // First frame rendered — clear loading state
-                p.is_loading = false;
-                // Try to resume from saved position on first frame
-                p.tryResumePosition();
-                // Only request UI refresh when we actually have a new video frame
-                dvui.refresh(null, @src(), null);
-            }
-        }
-        
-        // Periodic position save (every ~120 frames ≈ 4 sec)
-        p.save_counter +%= 1;
-        if (p.save_counter % 120 == 0) {
-            p.saveCurrentPosition();
-        }
-
-        if (p.texture) |*tex| {
-            var cell_overlay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
-            const img_wd = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .expand = .both, .gravity_x = 0.5, .gravity_y = 0.5 });
-            
-            for (dvui.events()) |*e| {
-                if (e.evt == .mouse) {
-                    const me = e.evt.mouse;
-                    if (me.p.x >= img_wd.rect.x and me.p.x <= img_wd.rect.x + img_wd.rect.w and me.p.y >= img_wd.rect.y and me.p.y <= img_wd.rect.y + img_wd.rect.h) {
-                        if (me.action == .press and me.button == .left) {
-                            state.app.active_player_idx = i;
-                            // Double-click detection → fullscreen toggle
-                            const DblClick = struct {
-                                var last_click_ms: i64 = 0;
-                                var last_click_cell: usize = 999;
-                            };
-                            const now_ms = @import("../core/io_global.zig").milliTimestamp();
-                            if (DblClick.last_click_cell == i and now_ms - DblClick.last_click_ms < 500) {
-                                // Double-click: toggle fullscreen
-                                if (state.app.fullscreen_player_idx == null) {
-                                    state.app.fullscreen_player_idx = i;
-                                } else {
-                                    state.app.fullscreen_player_idx = null;
-                                }
-                                DblClick.last_click_ms = 0; // reset to prevent triple-click
+                    if ((flags & c.mpv.MPV_RENDER_UPDATE_FRAME) != 0) {
+                        if (c.mpv.mpv_render_context_render(p.mpv_gl, &render_params) >= 0) {
+                            // MPV renders with "rgba" format — alpha is already 0xFF, no fill needed
+                            if (p.texture == null) {
+                                p.texture = try dvui.textureCreate(p.pixels, player.video_w, player.video_h, .linear, .rgba_32);
                             } else {
-                                // Single click: toggle pause
-                                p.togglePause();
-                                DblClick.last_click_ms = now_ms;
-                                DblClick.last_click_cell = i;
+                                try dvui.Texture.update(&p.texture.?, p.pixels, .linear);
                             }
-                        } else if (me.action == .release and me.button == .left) {
-                            if (state.app.dragging_magnet_len > 0) {
-                                state.app.active_player_idx = i;
-                                search.loadTorrentToPlayer(state.app.dragging_magnet_buf[0..state.app.dragging_magnet_len]);
-                            }
+                            // First frame rendered — clear loading state
+                            p.is_loading = false;
+                            // Try to resume from saved position on first frame
+                            p.tryResumePosition();
+                            // Only request UI refresh when we actually have a new video frame
+                            dvui.refresh(null, @src(), null);
                         }
                     }
                 }
-            }
 
-            if (p.is_torrent and (!p.torrent_is_ready or p.is_buffering_paused)) {
-                // Background darkener overlay
-                var dim_box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .expand = .both, .background = true, .color_fill = theme.colors.overlay, .corner_radius = theme.dims.rad_sm });
-                dim_box.deinit();
-
-                var o_lay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
-                defer o_lay.deinit();
-
-                // Borderless elevated panel — separated from the dim backdrop by
-                // its fill tier and whitespace alone (no glass outline).
-                var loading_box = dvui.box(@src(), .{ .dir = .vertical }, .{
-                    .id_extra = i,
-                    .gravity_y = 0.5,
-                    .gravity_x = 0.5,
-                    .background = true,
-                    .color_fill = theme.colors.bg_elevated,
-                    .padding = theme.dims.pad_lg,
-                    .margin = dvui.Rect.all(theme.spacing.xl),
-                    .corner_radius = theme.dims.rad_lg,
-                    .min_size_content = .{ .w = 320, .h = 10 }
-                });
-
-                var t_name: [256]u8 = undefined;
-                c.mpv.torrent_get_name(state.app.torrent_ses, p.current_torrent_id, &t_name, 256);
-                const name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse 255;
-
-                _ = dvui.label(@src(), "{s}", .{t_name[0..name_len]}, .{ .color_text = theme.colors.text_primary, .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 } });
-
-                var buf_pct: f32 = 0;
-                var dl_rate: i32 = 0;
-                var peers: i32 = 0;
-                var buf_path: [512]u8 = undefined;
-
-                if (p.current_torrent_id >= 0) {
-                    _ = c.mpv.torrent_poll(state.app.torrent_ses, p.current_torrent_id, p.selected_file_idx, &buf_path, 512, &buf_pct, &dl_rate, &peers);
+                // Periodic position save (every ~120 frames ≈ 4 sec)
+                p.save_counter +%= 1;
+                if (p.save_counter % 120 == 0) {
+                    p.saveCurrentPosition();
                 }
 
-                const is_dead = p.metadata_start_time > 0 and @import("../core/io_global.zig").timestamp() - p.metadata_start_time > 15 and peers == 0 and !p.has_metadata;
+                if (p.texture) |*tex| {
+                    var cell_overlay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
+                    const img_wd = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .expand = .both, .gravity_x = 0.5, .gravity_y = 0.5 });
 
-                if (is_dead) {
-                    // Transient failure — danger as text only, no resting fill.
-                    _ = dvui.label(@src(), "Dead torrent", .{}, .{ .color_text = theme.colors.danger, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
-                    _ = dvui.label(@src(), "No peers found after 15 seconds.", .{}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
-                    if (dvui.button(@src(), "Close Stream", .{}, .{
-                        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                        .color_text = theme.colors.danger,
-                        .border = dvui.Rect.all(0),
-                        .corner_radius = theme.dims.rad_sm,
-                    })) {
-                        p.current_torrent_id = -1;
-                        p.is_torrent = false;
-                        p.torrent_is_ready = false;
-                        p.has_metadata = false;
-                        p.metadata_start_time = 0;
-                        if (state.app.active_player_idx == i) state.app.active_player_idx = 0;
+                    for (dvui.events()) |*e| {
+                        if (e.evt == .mouse) {
+                            const me = e.evt.mouse;
+                            if (me.p.x >= img_wd.rect.x and me.p.x <= img_wd.rect.x + img_wd.rect.w and me.p.y >= img_wd.rect.y and me.p.y <= img_wd.rect.y + img_wd.rect.h) {
+                                if (me.action == .press and me.button == .left) {
+                                    state.app.active_player_idx = i;
+                                    // Double-click detection → fullscreen toggle
+                                    const DblClick = struct {
+                                        var last_click_ms: i64 = 0;
+                                        var last_click_cell: usize = 999;
+                                    };
+                                    const now_ms = @import("../core/io_global.zig").milliTimestamp();
+                                    if (DblClick.last_click_cell == i and now_ms - DblClick.last_click_ms < 500) {
+                                        // Double-click: toggle fullscreen
+                                        if (state.app.fullscreen_player_idx == null) {
+                                            state.app.fullscreen_player_idx = i;
+                                        } else {
+                                            state.app.fullscreen_player_idx = null;
+                                        }
+                                        DblClick.last_click_ms = 0; // reset to prevent triple-click
+                                    } else {
+                                        // Single click: toggle pause
+                                        p.togglePause();
+                                        DblClick.last_click_ms = now_ms;
+                                        DblClick.last_click_cell = i;
+                                    }
+                                } else if (me.action == .release and me.button == .left) {
+                                    if (state.app.dragging_magnet_len > 0) {
+                                        state.app.active_player_idx = i;
+                                        search.loadTorrentToPlayer(state.app.dragging_magnet_buf[0..state.app.dragging_magnet_len]);
+                                    }
+                                }
+                            }
+                        }
                     }
+
+                    if (p.is_torrent and (!p.torrent_is_ready or p.is_buffering_paused)) {
+                        // Background darkener overlay
+                        var dim_box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .expand = .both, .background = true, .color_fill = theme.colors.overlay, .corner_radius = theme.dims.rad_sm });
+                        dim_box.deinit();
+
+                        var o_lay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
+                        defer o_lay.deinit();
+
+                        // Borderless elevated panel — separated from the dim backdrop by
+                        // its fill tier and whitespace alone (no glass outline).
+                        var loading_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .gravity_y = 0.5, .gravity_x = 0.5, .background = true, .color_fill = theme.colors.bg_elevated, .padding = theme.dims.pad_lg, .margin = dvui.Rect.all(theme.spacing.xl), .corner_radius = theme.dims.rad_lg, .min_size_content = .{ .w = 320, .h = 10 } });
+
+                        var t_name: [256]u8 = undefined;
+                        c.mpv.torrent_get_name(state.app.torrent_ses, p.current_torrent_id, &t_name, 256);
+                        const name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse 255;
+
+                        _ = dvui.label(@src(), "{s}", .{t_name[0..name_len]}, .{ .color_text = theme.colors.text_primary, .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 } });
+
+                        var buf_pct: f32 = 0;
+                        var dl_rate: i32 = 0;
+                        var peers: i32 = 0;
+                        var buf_path: [512]u8 = undefined;
+
+                        if (p.current_torrent_id >= 0) {
+                            _ = c.mpv.torrent_poll(state.app.torrent_ses, p.current_torrent_id, p.selected_file_idx, &buf_path, 512, &buf_pct, &dl_rate, &peers);
+                        }
+
+                        const is_dead = p.metadata_start_time > 0 and @import("../core/io_global.zig").timestamp() - p.metadata_start_time > 15 and peers == 0 and !p.has_metadata;
+
+                        if (is_dead) {
+                            // Transient failure — danger as text only, no resting fill.
+                            _ = dvui.label(@src(), "Dead torrent", .{}, .{ .color_text = theme.colors.danger, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
+                            _ = dvui.label(@src(), "No peers found after 15 seconds.", .{}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
+                            if (dvui.button(@src(), "Close Stream", .{}, .{
+                                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                                .color_text = theme.colors.danger,
+                                .border = dvui.Rect.all(0),
+                                .corner_radius = theme.dims.rad_sm,
+                            })) {
+                                p.current_torrent_id = -1;
+                                p.is_torrent = false;
+                                p.torrent_is_ready = false;
+                                p.has_metadata = false;
+                                p.metadata_start_time = 0;
+                                if (state.app.active_player_idx == i) state.app.active_player_idx = 0;
+                            }
+                        } else {
+                            const dr_mb = @as(f32, @floatFromInt(dl_rate)) / (1024.0 * 1024.0);
+                            var status_lb: [128]u8 = undefined;
+                            if (std.fmt.bufPrintZ(&status_lb, "Downloading: {d:.1} MB/s | {d} Peers", .{ dr_mb, peers })) |msg| {
+                                _ = dvui.label(@src(), "{s}", .{msg}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .y = theme.spacing.sm } });
+                            } else |_| {}
+
+                            var prog_lb: [64]u8 = undefined;
+                            if (std.fmt.bufPrintZ(&prog_lb, "Buffer: {d}%", .{@as(i32, @intFromFloat(buf_pct * 100.0))})) |msg| {
+                                components.ProgressBar(@src(), buf_pct, msg, i);
+                            } else |_| {}
+                        }
+
+                        loading_box.deinit();
+                    } else if (p.is_buffering_paused) {
+                        var loading_box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .gravity_y = 0.5, .gravity_x = 0.5, .background = true, .color_fill = theme.colors.bg_elevated, .padding = theme.dims.pad_md, .corner_radius = theme.dims.rad_md });
+                        _ = dvui.label(@src(), "Initializing network…", .{}, .{ .color_text = theme.colors.text_secondary });
+                        loading_box.deinit();
+                    }
+
+                    if (state.app.show_cell_overlay) {
+                        var tr_box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .expand = .none, .gravity_x = 1.0, .gravity_y = 0.0, .padding = dvui.Rect.all(8) });
+
+                        var x_bg = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .background = true, .color_fill = theme.colors.overlay, .corner_radius = dvui.Rect.all(theme.radius.pill), .padding = theme.dims.pad_xs });
+
+                        if (dvui.buttonIcon(@src(), "CellClose", icons.tvg.lucide.x, .{}, .{}, .{ .id_extra = i, .color_text = theme.colors.text_secondary, .color_fill = .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .border = dvui.Rect.all(0) })) {
+                            state.app.pending_remove_player_idx = @as(i32, @intCast(i));
+                        }
+
+                        x_bg.deinit();
+                        tr_box.deinit();
+                    }
+
+                    cell_overlay.deinit();
+
+                    // ── Recording indicator (red pulsing REC dot) ──
+                    {
+                        const sl = @import("../services/streamlink.zig");
+                        if (sl.is_recording) {
+                            var rec_overlay = dvui.overlay(@src(), .{ .id_extra = i + 7000, .expand = .both });
+                            var rec_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                                .id_extra = i + 7001,
+                                .gravity_x = 0.0,
+                                .gravity_y = 0.0,
+                                .background = true,
+                                .color_fill = theme.colors.overlay,
+                                .corner_radius = theme.dims.rad_md,
+                                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                                .margin = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = 0, .h = 0 },
+                            });
+                            // Transient capture status — danger as text/icon only.
+                            _ = dvui.icon(@src(), "", icons.tvg.lucide.circle, .{}, .{
+                                .id_extra = i + 7003,
+                                .color_text = theme.colors.danger,
+                                .min_size_content = .{ .w = 10, .h = 10 },
+                                .margin = .{ .w = theme.spacing.xs },
+                                .gravity_y = 0.5,
+                            });
+                            _ = dvui.label(@src(), "REC", .{}, .{
+                                .id_extra = i + 7002,
+                                .color_text = theme.colors.danger,
+                                .gravity_y = 0.5,
+                            });
+                            rec_box.deinit();
+                            rec_overlay.deinit();
+                        }
+                    }
+                } else if (p.is_loading) {
+                    // ── Loading indicator — shown immediately on load_file() ──
+                    // Polished: uses components.emptyState for the canonical
+                    // "loading" surface plus the source path beneath it.
+                    var load_overlay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
+                    {
+                        // Dark backdrop captures clicks to select this pane.
+                        if (dvui.button(@src(), "", .{}, .{ .id_extra = i + 3000, .expand = .both, .color_fill = theme.colors.bg_deep })) {
+                            state.app.active_player_idx = i;
+                        }
+
+                        var load_stack = dvui.box(@src(), .{ .dir = .vertical }, .{
+                            .id_extra = i + 3100,
+                            .gravity_x = 0.5,
+                            .gravity_y = 0.5,
+                            .expand = .both,
+                        });
+                        defer load_stack.deinit();
+
+                        components.emptyState(icons.tvg.lucide.hourglass, "Loading...", "");
+
+                        // Truncated source path beneath the canonical empty state.
+                        if (p.loading_label_len > 0) {
+                            const src_text = p.loading_label[0..p.loading_label_len];
+                            const display = if (src_text.len > 45) src_text[src_text.len - 45 ..] else src_text;
+                            _ = dvui.label(@src(), "{s}", .{display}, .{
+                                .id_extra = i + 4002,
+                                .color_text = theme.colors.text_tertiary,
+                                .gravity_x = 0.5,
+                                .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
+                            });
+                        }
+                    }
+                    load_overlay.deinit();
+                    dvui.refresh(null, @src(), null);
                 } else {
-                    const dr_mb = @as(f32, @floatFromInt(dl_rate)) / (1024.0 * 1024.0);
-                    var status_lb: [128]u8 = undefined;
-                    if (std.fmt.bufPrintZ(&status_lb, "Downloading: {d:.1} MB/s | {d} Peers", .{dr_mb, peers})) |msg| {
-                        _ = dvui.label(@src(), "{s}", .{msg}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .y = theme.spacing.sm } });
-                    } else |_| {}
+                    var is_audio_only = false;
+                    if (p.torrent_is_ready) {
+                        // Cached via mpv "vid" property observer (A4) — no per-frame IPC.
+                        is_audio_only = p.cached_vid_no;
+                    }
 
-                    var prog_lb: [64]u8 = undefined;
-                    if (std.fmt.bufPrintZ(&prog_lb, "Buffer: {d}%", .{@as(i32, @intFromFloat(buf_pct * 100.0))})) |msg| {
-                        components.ProgressBar(@src(), buf_pct, msg, i);
-                    } else |_| {}
-                }
+                    const header = @import("header.zig");
+                    if (p.current_torrent_id < 0 and i == state.app.active_player_idx and header.shouldUrlInputBeInGrid()) {
+                        const ai_chat = @import("../services/ai_chat.zig");
+                        const has_chat = ai_chat.message_count > 0 or ai_chat.is_generating.load(.acquire);
 
-                loading_box.deinit();
+                        var outer = dvui.box(@src(), .{ .dir = .vertical }, .{
+                            .id_extra = i,
+                            .expand = .both,
+                            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                        });
 
-            } else if (p.is_buffering_paused) {
-                var loading_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .id_extra = i,
-                    .gravity_y = 0.5,
-                    .gravity_x = 0.5,
-                    .background = true,
-                    .color_fill = theme.colors.bg_elevated,
-                    .padding = theme.dims.pad_md,
-                    .corner_radius = theme.dims.rad_md
-                });
-                _ = dvui.label(@src(), "Initializing network…", .{}, .{ .color_text = theme.colors.text_secondary });
-                loading_box.deinit();
-            }
+                        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+                            .id_extra = i,
+                            .gravity_x = 0.5,
+                            // Empty state stays vertically centered; once a conversation
+                            // starts, anchor near the top so the growing chat expands
+                            // downward instead of creeping up under the toolbar.
+                            .gravity_y = if (has_chat) @as(f32, 0.04) else 0.34,
+                            .background = false,
+                            .border = dvui.Rect.all(0),
+                            .padding = .{ .x = 24, .y = 20, .w = 24, .h = 20 },
+                            .margin = .{ .x = 0, .y = if (has_chat) @as(f32, 10) else 0, .w = 0, .h = 0 },
+                            .min_size_content = .{ .w = 620, .h = 0 },
+                            .max_size_content = .{ .w = 760, .h = std.math.floatMax(f32) },
+                        });
 
-            if (state.app.show_cell_overlay) {
-                var tr_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .id_extra = i,
-                    .expand = .none,
-                    .gravity_x = 1.0, 
-                    .gravity_y = 0.0,
-                    .padding = dvui.Rect.all(8)
-                });
-                
-                var x_bg = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .id_extra = i,
-                    .background = true,
-                    .color_fill = theme.colors.overlay,
-                    .corner_radius = dvui.Rect.all(theme.radius.pill),
-                    .padding = theme.dims.pad_xs
-                });
+                        // Input bar first — primary action, immediately reachable
+                        header.renderUrlInput(true);
 
-                if (dvui.buttonIcon(@src(), "CellClose", icons.tvg.lucide.@"x", .{}, .{}, .{ .id_extra = i, .color_text = theme.colors.text_secondary, .color_fill = .{ .r=0,.g=0,.b=0,.a=0 }, .border = dvui.Rect.all(0) })) {
-                    state.app.pending_remove_player_idx = @as(i32, @intCast(i));
-                }
-                
-                x_bg.deinit();
-                tr_box.deinit();
-            }
+                        // Continue Watching — returning users want this front and center
+                        renderContinueWatching();
 
-            cell_overlay.deinit();
+                        // Empty home: the hero input above is the single focal point —
+                        // no separate drop-zone hint (the input placeholder carries it).
+                        // The inline chat only appears once a conversation exists.
+                        if (has_chat) {
+                            renderInlineChat();
+                        }
 
-            // ── Recording indicator (red pulsing REC dot) ──
-            {
-                const sl = @import("../services/streamlink.zig");
-                if (sl.is_recording) {
-                    var rec_overlay = dvui.overlay(@src(), .{ .id_extra = i + 7000, .expand = .both });
-                    var rec_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                        .id_extra = i + 7001,
-                        .gravity_x = 0.0,
-                        .gravity_y = 0.0,
-                        .background = true,
-                        .color_fill = theme.colors.overlay,
-                        .corner_radius = theme.dims.rad_md,
-                        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-                        .margin = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = 0, .h = 0 },
-                    });
-                    // Transient capture status — danger as text/icon only.
-                    _ = dvui.icon(@src(), "", icons.tvg.lucide.@"circle", .{}, .{
-                        .id_extra = i + 7003,
-                        .color_text = theme.colors.danger,
-                        .min_size_content = .{ .w = 10, .h = 10 },
-                        .margin = .{ .w = theme.spacing.xs },
-                        .gravity_y = 0.5,
-                    });
-                    _ = dvui.label(@src(), "REC", .{}, .{
-                        .id_extra = i + 7002,
-                        .color_text = theme.colors.danger,
-                        .gravity_y = 0.5,
-                    });
-                    rec_box.deinit();
-                    rec_overlay.deinit();
-                }
-            }
-        } else if (p.is_loading) {
-            // ── Loading indicator — shown immediately on load_file() ──
-            // Polished: uses components.emptyState for the canonical
-            // "loading" surface plus the source path beneath it.
-            var load_overlay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
-            {
-                // Dark backdrop captures clicks to select this pane.
-                if (dvui.button(@src(), "", .{}, .{ .id_extra = i + 3000, .expand = .both, .color_fill = theme.colors.bg_deep })) {
-                    state.app.active_player_idx = i;
-                }
+                        // ── Context line + voice phase ──
+                        // Both are conversation affordances — suppressed entirely on the
+                        // empty home so the hero input stays the single focal point.
+                        if (has_chat) {
+                            const voice = @import("../services/ai_voice.zig");
+                            const has_media = state.app.active_player_idx < state.app.players.items.len;
+                            if (has_media) {
+                                const ap = state.app.players.items[state.app.active_player_idx];
+                                var title_buf: [128]u8 = undefined;
+                                const title_len = ap.getMediaTitle(&title_buf);
+                                const media_label = title_buf[0..title_len];
+                                var chip_buf: [256]u8 = undefined;
+                                if (media_label.len > 0) {
+                                    const chip_txt = std.fmt.bufPrint(&chip_buf, "Seeing: {s}", .{media_label}) catch "";
+                                    if (chip_txt.len > 0) {
+                                        // Borderless, quiet context line.
+                                        _ = dvui.label(@src(), "{s}", .{chip_txt}, .{
+                                            .color_text = theme.colors.text_tertiary,
+                                            .margin = .{ .y = theme.spacing.xs },
+                                            .gravity_x = 0.5,
+                                        });
+                                    }
+                                }
+                            }
 
-                var load_stack = dvui.box(@src(), .{ .dir = .vertical }, .{
-                    .id_extra = i + 3100,
-                    .gravity_x = 0.5,
-                    .gravity_y = 0.5,
-                    .expand = .both,
-                });
-                defer load_stack.deinit();
-
-                components.emptyState(icons.tvg.lucide.@"hourglass", "Loading...", "");
-
-                // Truncated source path beneath the canonical empty state.
-                if (p.loading_label_len > 0) {
-                    const src_text = p.loading_label[0..p.loading_label_len];
-                    const display = if (src_text.len > 45) src_text[src_text.len - 45 ..] else src_text;
-                    _ = dvui.label(@src(), "{s}", .{display}, .{
-                        .id_extra = i + 4002,
-                        .color_text = theme.colors.text_tertiary,
-                        .gravity_x = 0.5,
-                        .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
-                    });
-                }
-            }
-            load_overlay.deinit();
-            dvui.refresh(null, @src(), null);
-        } else {
-            var is_audio_only = false;
-            if (p.torrent_is_ready) {
-                // Cached via mpv "vid" property observer (A4) — no per-frame IPC.
-                is_audio_only = p.cached_vid_no;
-            }
-
-            const header = @import("header.zig");
-            if (p.current_torrent_id < 0 and i == state.app.active_player_idx and header.shouldUrlInputBeInGrid()) {
-                const ai_chat = @import("../services/ai_chat.zig");
-                const has_chat = ai_chat.message_count > 0 or ai_chat.is_generating.load(.acquire);
-
-                var outer = dvui.box(@src(), .{ .dir = .vertical }, .{
-                    .id_extra = i,
-                    .expand = .both,
-                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                });
-
-                var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-                    .id_extra = i,
-                    .gravity_x = 0.5,
-                    // Empty state stays vertically centered; once a conversation
-                    // starts, anchor near the top so the growing chat expands
-                    // downward instead of creeping up under the toolbar.
-                    .gravity_y = if (has_chat) @as(f32, 0.04) else 0.34,
-                    .background = false,
-                    .border = dvui.Rect.all(0),
-                    .padding = .{ .x = 24, .y = 20, .w = 24, .h = 20 },
-                    .margin = .{ .x = 0, .y = if (has_chat) @as(f32, 10) else 0, .w = 0, .h = 0 },
-                    .min_size_content = .{ .w = 620, .h = 0 },
-                    .max_size_content = .{ .w = 760, .h = std.math.floatMax(f32) },
-                });
-
-                // Input bar first — primary action, immediately reachable
-                header.renderUrlInput(true);
-
-                // Continue Watching — returning users want this front and center
-                renderContinueWatching();
-
-                // Empty home: the hero input above is the single focal point —
-                // no separate drop-zone hint (the input placeholder carries it).
-                // The inline chat only appears once a conversation exists.
-                if (has_chat) {
-                    renderInlineChat();
-                }
-
-                // ── Context line + voice phase ──
-                // Both are conversation affordances — suppressed entirely on the
-                // empty home so the hero input stays the single focal point.
-                if (has_chat) {
-                    const voice = @import("../services/ai_voice.zig");
-                    const has_media = state.app.active_player_idx < state.app.players.items.len;
-                    if (has_media) {
-                        const ap = state.app.players.items[state.app.active_player_idx];
-                        var title_buf: [128]u8 = undefined;
-                        const title_len = ap.getMediaTitle(&title_buf);
-                        const media_label = title_buf[0..title_len];
-                        var chip_buf: [256]u8 = undefined;
-                        if (media_label.len > 0) {
-                            const chip_txt = std.fmt.bufPrint(&chip_buf, "Seeing: {s}", .{media_label}) catch "";
-                            if (chip_txt.len > 0) {
-                                // Borderless, quiet context line.
-                                _ = dvui.label(@src(), "{s}", .{chip_txt}, .{
+                            // Voice phase — one quiet text_tertiary line.
+                            const ai_chat_mod = @import("../services/ai_chat.zig");
+                            const phase_txt: ?[]const u8 = switch (voice.conv_phase) {
+                                .listening => "Listening…",
+                                .transcribing => "Transcribing…",
+                                .thinking => "Thinking…",
+                                .speaking => "Speaking…",
+                                .idle => if (ai_chat_mod.is_generating.load(.acquire)) "Thinking…" else null,
+                            };
+                            if (phase_txt) |txt| {
+                                _ = dvui.label(@src(), "{s}", .{txt}, .{
                                     .color_text = theme.colors.text_tertiary,
                                     .margin = .{ .y = theme.spacing.xs },
                                     .gravity_x = 0.5,
                                 });
                             }
                         }
-                    }
 
-                    // Voice phase — one quiet text_tertiary line.
-                    const ai_chat_mod = @import("../services/ai_chat.zig");
-                    const phase_txt: ?[]const u8 = switch (voice.conv_phase) {
-                        .listening => "Listening…",
-                        .transcribing => "Transcribing…",
-                        .thinking => "Thinking…",
-                        .speaking => "Speaking…",
-                        .idle => if (ai_chat_mod.is_generating.load(.acquire)) "Thinking…" else null,
-                    };
-                    if (phase_txt) |txt| {
-                        _ = dvui.label(@src(), "{s}", .{txt}, .{
-                            .color_text = theme.colors.text_tertiary,
-                            .margin = .{ .y = theme.spacing.xs },
-                            .gravity_x = 0.5,
-                        });
-                    }
-                }
-
-                if (has_chat) {
-                    // Clear chat — two-step confirm to avoid accidental wipe.
-                    // Uses a static Guard var so the confirm state survives
-                    // across frames but resets if user clicks elsewhere.
-                    const Guard = struct { var armed: bool = false; };
-                    const label: []const u8 = if (Guard.armed) "Click again to confirm" else "Clear chat";
-                    // Calm: ghost button. Armed state reads as danger TEXT only —
-                    // no resting red fill.
-                    if (dvui.button(@src(), label, .{}, .{
-                        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                        .color_text = if (Guard.armed) theme.colors.danger else theme.colors.text_secondary,
-                        .border = dvui.Rect.all(0),
-                        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-                        .margin = .{ .y = theme.spacing.sm },
-                        .gravity_x = 0.5,
-                        .corner_radius = theme.dims.rad_sm,
-                    })) {
-                        if (Guard.armed) {
-                            ai_chat.clearHistory();
-                            Guard.armed = false;
-                        } else {
-                            Guard.armed = true;
+                        if (has_chat) {
+                            // Clear chat — two-step confirm to avoid accidental wipe.
+                            // Uses a static Guard var so the confirm state survives
+                            // across frames but resets if user clicks elsewhere.
+                            const Guard = struct {
+                                var armed: bool = false;
+                            };
+                            const label: []const u8 = if (Guard.armed) "Click again to confirm" else "Clear chat";
+                            // Calm: ghost button. Armed state reads as danger TEXT only —
+                            // no resting red fill.
+                            if (dvui.button(@src(), label, .{}, .{
+                                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                                .color_text = if (Guard.armed) theme.colors.danger else theme.colors.text_secondary,
+                                .border = dvui.Rect.all(0),
+                                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                                .margin = .{ .y = theme.spacing.sm },
+                                .gravity_x = 0.5,
+                                .corner_radius = theme.dims.rad_sm,
+                            })) {
+                                if (Guard.armed) {
+                                    ai_chat.clearHistory();
+                                    Guard.armed = false;
+                                } else {
+                                    Guard.armed = true;
+                                }
+                            }
                         }
+
+                        card.deinit();
+                        outer.deinit();
+                    } else {
+                        // Empty / pre-buffer state for an idle player cell.
+                        // Loading states get the hourglass empty-state; the truly
+                        // empty (no torrent, no media) state gets the library
+                        // empty-state with a "Search above" hint.
+                        const is_loading_torrent = p.current_torrent_id >= 0;
+                        const placeholder_text = if (is_loading_torrent)
+                            (if (!p.torrent_is_ready)
+                                (if (p.has_metadata) "Buffering first video parts..." else "Loading torrent metadata...")
+                            else
+                                (if (is_audio_only) "Audio stream playing" else "Buffering video stream..."))
+                        else
+                            "Nothing here yet";
+                        const placeholder_hint: []const u8 = if (is_loading_torrent)
+                            ""
+                        else
+                            "Search above to find something to watch.";
+                        const placeholder_icon = if (is_loading_torrent)
+                            icons.tvg.lucide.hourglass
+                        else
+                            icons.tvg.lucide.library;
+
+                        // Transparent overlay captures clicks to select this pane
+                        // without painting over the centered empty-state widget.
+                        var placeholder_overlay = dvui.overlay(@src(), .{
+                            .id_extra = i + 5500,
+                            .expand = .both,
+                        });
+                        defer placeholder_overlay.deinit();
+
+                        if (dvui.button(@src(), "", .{}, .{
+                            .id_extra = i + 5510,
+                            .expand = .both,
+                            .color_fill = theme.colors.bg_deep,
+                            .color_text = theme.colors.text_main,
+                            .border = dvui.Rect.all(0),
+                            .corner_radius = theme.dims.rad_sm,
+                        })) {
+                            state.app.active_player_idx = i;
+                        }
+
+                        components.emptyState(placeholder_icon, placeholder_text, placeholder_hint);
                     }
                 }
+            }, // end .mpv
 
-                card.deinit();
-                outer.deinit();
-            } else {
-                // Empty / pre-buffer state for an idle player cell.
-                // Loading states get the hourglass empty-state; the truly
-                // empty (no torrent, no media) state gets the library
-                // empty-state with a "Search above" hint.
-                const is_loading_torrent = p.current_torrent_id >= 0;
-                const placeholder_text = if (is_loading_torrent)
-                    (if (!p.torrent_is_ready)
-                        (if (p.has_metadata) "Buffering first video parts..." else "Loading torrent metadata...")
-                    else (if (is_audio_only) "Audio stream playing" else "Buffering video stream..."))
-                    else "Nothing here yet";
-                const placeholder_hint: []const u8 = if (is_loading_torrent)
-                    ""
-                else
-                    "Search above to find something to watch.";
-                const placeholder_icon = if (is_loading_torrent)
-                    icons.tvg.lucide.@"hourglass"
-                else
-                    icons.tvg.lucide.@"library";
+            .comic_viewer => {
+                // ── Comic Viewer Pane ──
+                const comics = @import("../services/comics.zig");
 
-                // Transparent overlay captures clicks to select this pane
-                // without painting over the centered empty-state widget.
-                var placeholder_overlay = dvui.overlay(@src(), .{
-                    .id_extra = i + 5500,
-                    .expand = .both,
-                });
-                defer placeholder_overlay.deinit();
-
+                // Click to select pane
                 if (dvui.button(@src(), "", .{}, .{
-                    .id_extra = i + 5510,
+                    .id_extra = i + 5000,
                     .expand = .both,
-                    .color_fill = theme.colors.bg_deep,
-                    .color_text = theme.colors.text_main,
-                    .border = dvui.Rect.all(0),
-                    .corner_radius = theme.dims.rad_sm,
+                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 })) {
                     state.app.active_player_idx = i;
                 }
 
-                components.emptyState(placeholder_icon, placeholder_text, placeholder_hint);
-            }
-        }
-        }, // end .mpv
-
-        .comic_viewer => {
-            // ── Comic Viewer Pane ──
-            const comics = @import("../services/comics.zig");
-            
-            // Click to select pane
-            if (dvui.button(@src(), "", .{}, .{
-                .id_extra = i + 5000,
-                .expand = .both,
-                .color_fill = dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
-            })) {
-                state.app.active_player_idx = i;
-            }
-            
-            if (state.app.comic.page_count == 0 and !state.app.comic.is_loading) {
-                components.emptyState(icons.tvg.lucide.@"book", "Comic Viewer", "Open a comic to start reading.");
-            } else {
-                comics.renderPaneContent(i);
-            }
-        },
+                if (state.app.comic.page_count == 0 and !state.app.comic.is_loading) {
+                    components.emptyState(icons.tvg.lucide.book, "Comic Viewer", "Open a comic to start reading.");
+                } else {
+                    comics.renderPaneContent(i);
+                }
+            },
         } // end switch
-        
 
-        
-        
         cell_wrapper.deinit();
         cell_box.deinit();
     }
-    
+
     if (current_row != null) current_row.?.deinit();
 }
 
@@ -845,7 +831,7 @@ fn renderContinueWatching() void {
 
             // Play glyph demoted to neutral — the progress fill is the single
             // accent in this row.
-            _ = dvui.icon(@src(), "", icons.tvg.lucide.@"play", .{}, .{
+            _ = dvui.icon(@src(), "", icons.tvg.lucide.play, .{}, .{
                 .id_extra = si + 43100,
                 .color_text = theme.colors.text_secondary,
                 .min_size_content = .{ .w = 14, .h = 14 },
@@ -930,4 +916,3 @@ fn renderContinueWatching() void {
         }
     }
 }
-

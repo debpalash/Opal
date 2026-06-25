@@ -355,7 +355,10 @@
 </svg>
 
 <script>
-const API = location.origin;
+// Web UI is served on :3000 but the remote JSON API lives on :41595
+// (src/services/remote.zig). Talk to the API host on its own port, not
+// location.origin (which would resolve to the :3000 static server).
+const API = location.protocol + '//' + location.hostname + ':41595';
 // Bearer token injected by the server into the served HTML (see remote.zig
 // serveStaticFile). Falls back to empty if the page was opened without the
 // server substituting the placeholder.

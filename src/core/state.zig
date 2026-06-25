@@ -194,6 +194,12 @@ pub const AppState = struct {
     // via dvui.refresh(win, @src(), null) from any thread.
     dvui_win: ?*dvui.Window = null,
 
+    // Headless server mode: when true, the app runs without a window/display.
+    // mpv stays fully active for audio + control, but no render context is
+    // created and no pixel buffer is allocated. Default false → windowed mode
+    // is byte-identical to before.
+    is_headless: bool = false,
+
     // Window geometry persistence
     win_x: i32 = 0,
     win_y: i32 = 0,
