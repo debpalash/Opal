@@ -1147,6 +1147,21 @@ def test_taste_receipts():
     return "fail", "taste receipts not fully wired"
 
 
+@test("Live-ASR Foundation", "Co-Watcher")
+def test_live_asr_foundation():
+    la = _src("src/services/live_asr.zig")
+    st = _src("src/core/state.zig")
+    cfg = _src("src/core/config.zig")
+    if not ("pub fn setEnabled" in la and "live_asr_enabled" in st
+            and "live_asr" in cfg):
+        return "fail", "live-ASR foundation not wired (module/state/config)"
+    # Safety: must NOT capture the default mic (":0"/avfoundation) — that would
+    # feed room noise into Total Recall. Off-by-default no-op until a loopback.
+    if "avfoundation" in la or '":0"' in la:
+        return "fail", "live_asr must not capture the mic (loopback only)"
+    return "pass", "off-by-default foundation; no mic capture"
+
+
 @test("Threads Detached (project-wide)", "Stability")
 def test_threads_detached():
     # Discarded `_ = std.Thread.spawn(...)` leaks the pthread handle (CLAUDE.md);

@@ -44,6 +44,7 @@ pub fn save() void {
     setKey("kokoro_sid", fmtInt(&fb, @as(usize, @import("../services/voice_backend.zig").kokoro_sid)));
     setKey("lang_learn", if (state.app.lang_learn_enabled) "1" else "0");
     setKey("asr_enabled", if (state.app.asr_enabled) "1" else "0");
+    setKey("live_asr", if (state.app.live_asr_enabled) "1" else "0");
     setKey("dubbing_enabled", if (state.app.dubbing_enabled) "1" else "0");
     setKey("eq_preset", fmtInt(&fb, state.app.eq_preset));
     setKey("download_rate_limit", fmtInt(&fb, @as(usize, @intCast(state.app.download_rate_limit))));
@@ -210,6 +211,10 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.lang_learn_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "asr_enabled")) {
         state.app.asr_enabled = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "live_asr")) {
+        // setEnabled reflects the flag into state AND starts/stops the worker;
+        // also keeps live_asr.zig in the compile graph (it has no other caller yet).
+        @import("../services/live_asr.zig").setEnabled(std.mem.eql(u8, val, "1"));
     } else if (std.mem.eql(u8, key, "dubbing_enabled")) {
         state.app.dubbing_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "eq_preset")) {

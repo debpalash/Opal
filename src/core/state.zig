@@ -432,6 +432,9 @@ pub const AppState = struct {
     translate_lang_buf: [8]u8 = initTranslateLangBuf(),
     translate_lang_len: usize = 2,
     asr_enabled: bool = false,
+    // Live-ASR (experimental): transcribe PLAYBACK audio for un-subtitled
+    // content. OFF by default — needs an audio loopback device (see live_asr.zig).
+    live_asr_enabled: bool = false,
     asr_text_buf: [1024]u8 = std.mem.zeroes([1024]u8),
     asr_text_len: usize = 0,
     asr_busy: bool = false,
