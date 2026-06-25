@@ -543,7 +543,8 @@ fn renderHistoryContent() void {
             if (slash + 1 < name.len) display_name = name[slash + 1 ..];
         }
         const show_len = @min(display_name.len, 50);
-        _ = dvui.label(@src(), "{s}", .{display_name[0..show_len]}, .{
+        var dn_buf: [64]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(display_name[0..show_len], &dn_buf)}, .{
             .id_extra = i + 6000,
             .color_text = theme.colors.text_primary,
             .expand = .horizontal,

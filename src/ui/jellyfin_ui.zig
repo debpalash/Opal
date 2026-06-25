@@ -337,7 +337,8 @@ fn renderItems() void {
         }
 
         if (state.app.jf.parent_name_len > 0) {
-            _ = dvui.label(@src(), "{s}", .{state.app.jf.parent_name[0..state.app.jf.parent_name_len]}, .{
+            var pn_buf: [128]u8 = undefined;
+            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(state.app.jf.parent_name[0..state.app.jf.parent_name_len], &pn_buf)}, .{
                 .color_text = theme.colors.text_main,
                 .gravity_y = 0.5,
                 .padding = .{ .x = 8, .y = 0, .w = 0, .h = 0 },

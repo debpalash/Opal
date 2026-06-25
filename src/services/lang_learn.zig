@@ -729,7 +729,8 @@ pub fn renderSubtitleBar() void {
                 });
                 defer trans_row.deinit();
                 
-                _ = dvui.label(@src(), "{s}", .{translated_text[0..translated_len]}, .{
+                var tt_buf: [1024]u8 = undefined;
+                _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(translated_text[0..translated_len], &tt_buf)}, .{
                     .color_text = dvui.Color{ .r = 180, .g = 220, .b = 130, .a = 255 },
                 });
             } else if (translate_busy) {
@@ -818,7 +819,8 @@ pub fn renderSubtitleBar() void {
     } else {
         // ── No subtitles: show ASR text if available ──
         if (state.app.asr_text_len > 0) {
-            _ = dvui.label(@src(), "{s}", .{state.app.asr_text_buf[0..state.app.asr_text_len]}, .{
+            var asr_buf: [1024]u8 = undefined;
+            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(state.app.asr_text_buf[0..state.app.asr_text_len], &asr_buf)}, .{
                 .color_text = dvui.Color{ .r = 200, .g = 210, .b = 240, .a = 230 },
                 .expand = .horizontal,
                 .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },

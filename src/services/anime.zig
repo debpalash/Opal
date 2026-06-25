@@ -1482,7 +1482,8 @@ pub fn renderContent() void {
                     state.app.anime.episode_count = 0;
                 }
 
-                _ = dvui.label(@src(), "{s}", .{r.name[0..r.name_len]}, .{
+                var rn_buf: [128]u8 = undefined;
+                _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(r.name[0..r.name_len], &rn_buf)}, .{
                     .color_text = theme.colors.text_main,
                     .expand = .horizontal,
                     .padding = .{ .x = 4, .y = 0, .w = 0, .h = 0 },

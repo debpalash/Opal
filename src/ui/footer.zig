@@ -355,7 +355,8 @@ pub fn renderSubPicker() void {
         defer row.deinit();
 
         if (r.lang_len > 0) {
-            _ = dvui.label(@src(), "{s}", .{r.language[0..r.lang_len]}, .{
+            var fl_buf: [16]u8 = undefined;
+            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(r.language[0..r.lang_len], &fl_buf)}, .{
                 .id_extra = ri + 58100,
                 .color_text = theme.colors.text_secondary,
                 .gravity_y = 0.5,

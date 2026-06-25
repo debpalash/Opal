@@ -655,7 +655,8 @@ fn renderChatDropdown() void {
                 }
             }
         }
-        _ = dvui.label(@src(), "{s}", .{m.text[0..m.text_len]}, .{
+        var mtbuf: [2048]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{@import("core/text.zig").safeUtf8Buf(m.text[0..m.text_len], &mtbuf)}, .{
             .id_extra = mi + 1,
             .color_text = theme.colors.text_main,
         });
@@ -757,7 +758,8 @@ fn renderInlineChatDock() void {
             .id_extra = mi,
             .color_text = if (is_user) @import("ui/theme.zig").colors.accent else @import("ui/theme.zig").colors.text_muted,
         });
-        _ = dvui.label(@src(), "{s}", .{m.text[0..m.text_len]}, .{
+        var mtbuf2: [2048]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{@import("core/text.zig").safeUtf8Buf(m.text[0..m.text_len], &mtbuf2)}, .{
             .id_extra = mi + 1,
             .color_text = @import("ui/theme.zig").colors.text_main,
         });
