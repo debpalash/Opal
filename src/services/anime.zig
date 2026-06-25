@@ -2777,7 +2777,13 @@ pub fn fetchPoster(item: *state.AnimeResult) void {
             }
             defer dvui.c.stbi_image_free(pixels);
 
-            const p_len: usize = @intCast(w * h * 4);
+            if (w <= 0 or h <= 0) {
+                markDone(result_idx, u);
+                return;
+            }
+            // Compute in usize: w*h*4 in c_int (i32) overflows on a large crafted
+            // image, panicking this worker thread and aborting the whole app.
+            const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
             const p_slice = std.heap.c_allocator.alloc(u8, p_len) catch {
                 markDone(result_idx, u);
                 return;
@@ -2879,7 +2885,13 @@ pub fn fetchContinuePoster(item: *state.ContinueItem) void {
             }
             defer dvui.c.stbi_image_free(pixels);
 
-            const p_len: usize = @intCast(w * h * 4);
+            if (w <= 0 or h <= 0) {
+                markDone(idx, url);
+                return;
+            }
+            // usize-first: w*h*4 in c_int overflows on a large crafted image and
+            // panics this worker thread (whole-app abort).
+            const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
             const p_slice = std.heap.c_allocator.alloc(u8, p_len) catch {
                 markDone(idx, url);
                 return;

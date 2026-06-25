@@ -444,7 +444,10 @@ pub fn fetchPoster(item: *state.JfItem) void {
             if (pixels == null) return;
             defer dvui.c.stbi_image_free(pixels);
 
-            const p_len: usize = @intCast(w * h * 4);
+            if (w <= 0 or h <= 0) return;
+            // usize-first: w*h*4 in c_int overflows on a large crafted image and
+            // panics this worker thread (whole-app abort).
+            const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
             const p_slice = alloc.alloc(u8, p_len) catch return;
             @memcpy(p_slice, pixels[0..p_len]);
 
