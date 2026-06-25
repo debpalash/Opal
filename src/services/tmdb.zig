@@ -485,12 +485,7 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
         const poster_clicked = bw.clicked();
         bw.drawFocus();
         bw.deinit();
-        if (poster_clicked) {
-            // TV shows open the Seasons → Episodes drill-down; movies (and
-            // unknown media types) keep the universal-search behavior.
-            const mt = item.media_type[0..@min(item.media_type_len, item.media_type.len)];
-            if (std.mem.eql(u8, mt, "tv")) openTvDetail(item) else sendToSearch(item);
-        }
+        if (poster_clicked) openOrSearch(item);
     }
 
     // Rating badge + type label
@@ -528,7 +523,7 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
         }
     }
 
-    // Title — click to search torrents
+    // Title — click opens the TV episode detail (or searches, for movies).
     if (dvui.button(@src(), title, .{}, .{
         .id_extra = idx + 500,
         .expand = .horizontal,
@@ -536,7 +531,7 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
     })) {
-        sendToSearch(item);
+        openOrSearch(item);
     }
 
     // Year
@@ -909,6 +904,14 @@ fn closeTvDetail() void {
 }
 
 // ── Seasons fetch (/tv/{id}) ──
+
+/// Click action for a TMDB card: open the TV season/episode detail for TV
+/// shows, otherwise run a universal search. Used by BOTH the poster and the
+/// title so clicking either part of a TV card shows its episodes.
+fn openOrSearch(item: *state.TmdbItem) void {
+    const mt = item.media_type[0..@min(item.media_type_len, item.media_type.len)];
+    if (std.mem.eql(u8, mt, "tv")) openTvDetail(item) else sendToSearch(item);
+}
 
 fn fetchSeasons(tmdb_id: i32) void {
     if (state.app.tmdb.api_key_len == 0) return;
