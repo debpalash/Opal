@@ -560,8 +560,15 @@ fn serveStaticFile(stream: std.Io.net.Stream, path: []const u8, content_type: []
         }
     }
 
+    // SECURITY: deliberately NO `Access-Control-Allow-Origin` on this response.
+    // This HTML carries the injected bearer token (above); with wildcard CORS, any
+    // website the user visits could fetch('http://127.0.0.1:41595/') cross-origin
+    // and READ the token out of the body → full local API takeover. Omitting the
+    // header makes the browser block cross-origin reads of the body, while the
+    // same-origin bundled UI (loaded directly from this server) still reads its own
+    // page fine. The token-gated JSON API keeps CORS for the :3000 web UI.
     var header: [512]u8 = undefined;
-    const h = std.fmt.bufPrint(&header, "HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {d}\r\n\r\n", .{ content_type, body.len }) catch return;
+    const h = std.fmt.bufPrint(&header, "HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nX-Content-Type-Options: nosniff\r\nContent-Length: {d}\r\n\r\n", .{ content_type, body.len }) catch return;
     _ = @import("../core/io_global.zig").streamWriteAll(stream, h) catch {};
     _ = @import("../core/io_global.zig").streamWriteAll(stream, body) catch {};
 }
