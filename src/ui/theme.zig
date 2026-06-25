@@ -508,23 +508,42 @@ pub const dims = struct {
 /// on the background worker) or in headless mode; consumed by reapplyIfPending()
 /// from appFrame on the UI thread.
 var pending_apply: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+// Identity of the UI/render thread, recorded by markUiThread() from appInit/
+// appFrame. dvui.current_window is a GLOBAL (not threadlocal), so a null-check
+// can't tell "off the UI thread" from "between frames" — a background caller
+// could see it non-null mid-frame and corrupt dvui state. Thread identity is
+// the reliable gate.
+var ui_thread_id: std.atomic.Value(std.Thread.Id) = std.atomic.Value(std.Thread.Id).init(0);
+var ui_thread_known: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
-/// Apply any deferred theme change on the UI thread. MUST be called from
-/// appFrame (between dvui.Window.begin/end, so current_window is valid).
+/// Record the calling thread as the UI/render thread. Call from appInit (and/or
+/// appFrame) — always on the dvui main thread.
+pub fn markUiThread() void {
+    ui_thread_id.store(std.Thread.getCurrentId(), .release);
+    ui_thread_known.store(true, .release);
+}
+
+fn onUiThread() bool {
+    if (!ui_thread_known.load(.acquire)) return false;
+    return std.Thread.getCurrentId() == ui_thread_id.load(.acquire);
+}
+
+/// Apply any deferred theme change on the UI thread. Call from appFrame.
 pub fn reapplyIfPending() void {
     if (pending_apply.swap(false, .acq_rel)) applyToDvui();
 }
 
 fn applyToDvui() void {
-    // dvui themeGet/themeSet require the UI thread's frame context
-    // (current_window, valid only between Window.begin/end). When called off the
-    // UI thread — config.load() runs theme.setPreset on the background worker —
-    // or in headless mode (no frame ever), calling dvui here panics with
-    // "current_window was null". Defer instead: stash the request and let
-    // appFrame apply it on the UI thread via reapplyIfPending(). `colors` is
-    // already updated by the caller, so UI rendering uses the new theme
-    // immediately; only the dvui built-in palette waits one frame.
-    if (dvui.current_window == null) {
+    // dvui themeGet/themeSet mutate the global current_window's theme and MUST
+    // run only on the UI/render thread. config.load() calls setPreset on a
+    // background worker; current_window being a GLOBAL means a null-check races
+    // (it can be non-null mid-frame), so an off-thread call corrupted dvui and
+    // aborted with SIGABRT. Gate on THREAD IDENTITY: off-thread (or pre-first-
+    // frame, or headless where no UI thread is ever marked) → defer, and the
+    // next appFrame applies it via reapplyIfPending(). `colors` is already set
+    // by the caller, so UI rendering uses the new theme immediately; only dvui's
+    // built-in palette waits at most one frame.
+    if (!onUiThread()) {
         pending_apply.store(true, .release);
         return;
     }

@@ -170,6 +170,11 @@ pub fn coreInit() !void {
 }
 
 fn appInit(win: *dvui.Window) !void {
+    // Record THIS (UI/render) thread so theme.applyToDvui can tell UI-thread
+    // calls from background-worker calls (config.load → setPreset). Must run
+    // before coreInit spawns the DB/library worker that applies the saved theme.
+    theme.markUiThread();
+
     // Window-independent startup first. Nothing in coreInit reads dvui_win,
     // so assigning the window afterwards is safe (and lets headless mode
     // reuse coreInit without a window).

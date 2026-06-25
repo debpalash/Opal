@@ -1183,7 +1183,7 @@ def test_headless_render_guards():
     # (current_window == null) — covers BOTH headless and background-thread
     # callers like config.load(); reapplied on the UI thread via appFrame.
     if ("is_headless" in pl and "mpv_gl != null" in gr
-            and "current_window == null" in th and "reapplyIfPending" in th):
+            and "onUiThread" in th and "reapplyIfPending" in th):
         return "pass", "render-context/pixels gated; grid guards mpv_gl; theme defers off-UI-thread"
     return "fail", "headless render guards missing"
 
