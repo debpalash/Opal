@@ -165,7 +165,12 @@ fn renderInlineChat() void {
                 .margin = .{ .y = 2 },
             });
         } else {
-            _ = dvui.label(@src(), "{s}", .{m.text[0..m.text_len]}, .{
+            // Assistant text is streamed one byte at a time by a detached LLM
+            // worker — a frame landing mid-codepoint (em dash, curly quote, emoji)
+            // would feed dvui a partial sequence and panic the whole app. Snapshot
+            // + validate a copy (MAX_MSG_LEN buffer).
+            var mbuf: [2048]u8 = undefined;
+            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(m.text[0..m.text_len], &mbuf)}, .{
                 .id_extra = mi + 72000,
                 .color_text = theme.colors.text_primary,
                 .margin = .{ .y = 2 },
@@ -409,7 +414,9 @@ pub fn renderGrid() !void {
                         c.mpv.torrent_get_name(state.app.torrent_ses, p.current_torrent_id, &t_name, 256);
                         const name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse 255;
 
-                        _ = dvui.label(@src(), "{s}", .{t_name[0..name_len]}, .{ .color_text = theme.colors.text_primary, .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 } });
+                        // Torrent name is untrusted metadata (non-UTF-8 / truncated
+                        // mid-codepoint at the 256-byte cap) — validate before dvui.
+                        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(t_name[0..name_len])}, .{ .color_text = theme.colors.text_primary, .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 } });
 
                         var buf_pct: f32 = 0;
                         var dl_rate: i32 = 0;

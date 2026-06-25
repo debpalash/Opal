@@ -1702,8 +1702,12 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
 
         // Title from the player's loading label (works for audio-only).
         const raw_title = if (p.loading_label_len > 0) p.loading_label[0..p.loading_label_len] else "Now Playing";
-        var title = text.safeUtf8(raw_title);
-        if (title.len > 42) title = text.safeUtf8(title[0..42]); // re-trim to a codepoint boundary
+        // safeUtf8Buf (not plain safeUtf8): loading_label is mutated by the load
+        // worker, so validating a slice into the live buffer can still let dvui
+        // re-read mutated bytes mid-frame. Snapshot a stable copy first.
+        var nt_buf: [128]u8 = undefined;
+        var title = text.safeUtf8Buf(raw_title, &nt_buf);
+        if (title.len > 42) title = text.safeUtf8(title[0..42]); // re-trim to a codepoint boundary (on the copy)
         _ = dvui.label(@src(), "{s}", .{title}, .{
             .color_text = theme.colors.text_primary,
             .gravity_y = 0.5,
@@ -1984,7 +1988,11 @@ pub fn renderToast() void {
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
     });
 
-    _ = dvui.label(@src(), "{s}", .{state.app.toast_buf[0..state.app.toast_len]}, .{
+    // Toast text is written by background workers (subtitle/streamlink/cast) and
+    // @min-truncated at 127 bytes — validate a snapshot copy so a non-UTF-8 or
+    // mid-codepoint byte can't panic dvui.
+    var tb: [128]u8 = undefined;
+    _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(state.app.toast_buf[0..state.app.toast_len], &tb)}, .{
         .color_text = theme.colors.text_primary,
         .gravity_y = 0.5,
     });
