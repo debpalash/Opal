@@ -674,7 +674,11 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
         var id_str: []const u8 = "0";
         var num_end: usize = 0;
         while (num_end < obj_slice.len and obj_slice[num_end] >= '0' and obj_slice[num_end] <= '9') : (num_end += 1) {}
-        if (num_end > 0) id_str = obj_slice[0..num_end];
+        // Clamp to the id buffer up front so every downstream use (dedupe compare
+        // + the @memcpy below) is bounds-safe. A malformed/oversized digit-run in
+        // the raw JSON must never trip a slice-bounds panic on this worker thread
+        // (worker panics abort the whole app — see Opal crash 2026-06-26 00:04).
+        if (num_end > 0) id_str = obj_slice[0..@min(num_end, state.app.anime.results[0].id.len)];
 
         // Extract Title
         var name_str: []const u8 = "";
