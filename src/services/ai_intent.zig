@@ -64,7 +64,7 @@ fn recommendationWorker(assistant_idx: usize) void {
 
         // Wait briefly for TMDB results
         var waited: usize = 0;
-        while (state.app.tmdb.is_loading and waited < 30) : (waited += 1) {
+        while (state.app.tmdb.is_loading.load(.acquire) and waited < 30) : (waited += 1) {
             @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
         }
 

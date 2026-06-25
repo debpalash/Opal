@@ -11,7 +11,7 @@ const alloc = parse.alloc;
 // ══════════════════════════════════════════════════════════
 
 pub fn fetchCurrentView(append: bool) void {
-    if (state.app.tmdb.is_loading) return;
+    if (state.app.tmdb.is_loading.load(.acquire)) return;
     if (state.app.tmdb.api_key_len == 0) return;
 
     // SWR: stamp the cache time on a fresh (non-append) load so revisits within
@@ -39,8 +39,8 @@ pub fn fetchCurrentView(append: bool) void {
 const FetchMode = enum { search, browse };
 
 fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
-    if (state.app.tmdb.is_loading) return;
-    state.app.tmdb.is_loading = true;
+    if (state.app.tmdb.is_loading.load(.acquire)) return;
+    state.app.tmdb.is_loading.store(true, .release);
 
     const S = struct {
         var fetch_mode: FetchMode = .browse;
@@ -70,7 +70,7 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
     state.app.tmdb.thread = std.Thread.spawn(.{}, struct {
         fn worker() void {
             defer {
-                state.app.tmdb.is_loading = false;
+                state.app.tmdb.is_loading.store(false, .release);
             }
 
             const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
@@ -89,7 +89,7 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
             parse.parseTmdbResponse(body);
         }
     }.worker, .{}) catch blk: {
-        state.app.tmdb.is_loading = false;
+        state.app.tmdb.is_loading.store(false, .release);
         break :blk null;
     };
     if (state.app.tmdb.thread) |t| t.detach(); // never joined — detach to avoid leaking the handle
@@ -138,9 +138,9 @@ fn buildApiUrl(buf: *[512]u8, mode: FetchMode, query: []const u8, cat: state.Tmd
 /// Fetch movies by TMDB genre ID (e.g. 28 = Action, 878 = Sci-Fi).
 /// Populates the same results grid as the search/browse views.
 pub fn fetchDiscover(genre_id: u32) void {
-    if (state.app.tmdb.is_loading) return;
+    if (state.app.tmdb.is_loading.load(.acquire)) return;
     if (state.app.tmdb.api_key_len == 0) return;
-    state.app.tmdb.is_loading = true;
+    state.app.tmdb.is_loading.store(true, .release);
 
     const S = struct {
         var gid: u32 = 0;
@@ -150,7 +150,7 @@ pub fn fetchDiscover(genre_id: u32) void {
     state.app.tmdb.thread = std.Thread.spawn(.{}, struct {
         fn worker() void {
             defer {
-                state.app.tmdb.is_loading = false;
+                state.app.tmdb.is_loading.store(false, .release);
             }
             const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
             var url_buf: [512]u8 = undefined;
@@ -164,7 +164,7 @@ pub fn fetchDiscover(genre_id: u32) void {
             parse.parseTmdbResponse(body);
         }
     }.worker, .{}) catch blk: {
-        state.app.tmdb.is_loading = false;
+        state.app.tmdb.is_loading.store(false, .release);
         break :blk null;
     };
     if (state.app.tmdb.thread) |t| t.detach(); // never joined — detach to avoid leaking the handle

@@ -60,10 +60,10 @@ pub fn renderTmdbContent() void {
         return;
     }
 
-    if (!state.app.tmdb.loaded_once and !state.app.tmdb.is_loading) {
+    if (!state.app.tmdb.loaded_once and !state.app.tmdb.is_loading.load(.acquire)) {
         state.app.tmdb.loaded_once = true;
         api.fetchCurrentView(false);
-    } else if (state.app.tmdb.view == .Trending and !state.app.tmdb.is_loading and
+    } else if (state.app.tmdb.view == .Trending and !state.app.tmdb.is_loading.load(.acquire) and
         state.app.tmdb.results.items.len > 0 and state.app.tmdb.page == 1 and
         @import("browse_cache.zig").isStale(state.app.tmdb.last_fetch_s))
     {
@@ -80,7 +80,7 @@ pub fn renderTmdbContent() void {
 
     // Only show the loading line on an INITIAL load (nothing to show yet).
     // During a stale-refresh the current results stay on screen — seamless.
-    if (state.app.tmdb.is_loading and activeList().items.len == 0) {
+    if (state.app.tmdb.is_loading.load(.acquire) and activeList().items.len == 0) {
         _ = dvui.label(@src(), "Loading...", .{}, .{ .color_text = theme.colors.accent, .gravity_x = 0.5, .margin = dvui.Rect.all(12) });
     }
 
@@ -304,7 +304,7 @@ fn renderTimeChip(idx: usize, tw: state.TmdbTimeWindow, label: []const u8) void 
 // ══════════════════════════════════════════════════════════
 
 fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more: bool) void {
-    if (items.items.len == 0 and !state.app.tmdb.is_loading) {
+    if (items.items.len == 0 and !state.app.tmdb.is_loading.load(.acquire)) {
         _ = dvui.label(@src(), "No items to display.", .{}, .{
             .color_text = theme.colors.text_muted,
             .gravity_x = 0.5,
@@ -349,7 +349,7 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
     if (show_load_more and state.app.tmdb.page < state.app.tmdb.total_pages and items.items.len < ITEM_CAP) {
         const max_y = scroll.si.scrollMax(.vertical);
         const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
-        if (near_bottom and !state.app.tmdb.is_loading) {
+        if (near_bottom and !state.app.tmdb.is_loading.load(.acquire)) {
             state.app.tmdb.page += 1;
             api.fetchCurrentView(true);
         }

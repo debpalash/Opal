@@ -383,7 +383,9 @@ pub const AppState = struct {
         watchlist: std.ArrayListUnmanaged(TmdbItem) = .empty,
         watching: std.ArrayListUnmanaged(TmdbItem) = .empty,
         search_buf: [256]u8 = std.mem.zeroes([256]u8),
-        is_loading: bool = false,
+        // Atomic: written by detached fetch workers, read by UI/remote/ai threads
+        // (matches yt.is_loading / jellyfin loaders). A plain bool here is a data race.
+        is_loading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
         thread: ?std.Thread = null,
         api_key: [256]u8 = std.mem.zeroes([256]u8),
         api_key_len: usize = 0,

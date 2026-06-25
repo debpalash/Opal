@@ -857,7 +857,7 @@ fn apiTmdb(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) v
         w.writeAll("\"}") catch return;
     }
     w.writeAll("],\"loading\":") catch return;
-    w.writeAll(if (state.app.tmdb.is_loading) "true" else "false") catch return;
+    w.writeAll(if (state.app.tmdb.is_loading.load(.acquire)) "true" else "false") catch return;
     w.writeAll(",\"has_key\":") catch return;
     w.writeAll(if (state.app.tmdb.api_key_len > 0) "true" else "false") catch return;
     w.writeAll("}") catch return;
@@ -1179,7 +1179,7 @@ fn apiUnifiedSearch(stream: std.Io.net.Stream, query: []const u8) void {
     // Track loading state across all sources
     const search_svc = @import("search.zig");
     const any_loading = search_svc.is_searching.load(.acquire) or
-        state.app.tmdb.is_loading or
+        state.app.tmdb.is_loading.load(.acquire) or
         state.app.yt.is_loading.load(.acquire) or
         state.app.anime.is_loading or
         state.app.jf.is_loading.load(.acquire);
