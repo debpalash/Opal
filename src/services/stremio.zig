@@ -50,7 +50,7 @@ pub fn fetchCatalog() void {
     is_loading = true;
     addon_count = 0;
 
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn worker() void {
             defer is_loading = false;
 
@@ -135,7 +135,7 @@ pub fn fetchCatalog() void {
 
             logs.pushLog("info", "stremio", "Catalog loaded", false);
         }
-    }.worker, .{}) catch {};
+    }.worker, .{})) |t| t.detach() else |_| {}
 }
 
 /// Ensure at least the well-known addons are installed so streaming sources
@@ -244,7 +244,7 @@ pub fn queryStreams(imdb_id: []const u8, media_type: []const u8) void {
     const type_len = @min(media_type.len, 15);
     @memcpy(type_buf[0..type_len], media_type[0..type_len]);
 
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn worker(id: [32]u8, idl: usize, mt: [16]u8, mtl: usize) void {
             defer stream_loading = false;
 
@@ -326,5 +326,5 @@ pub fn queryStreams(imdb_id: []const u8, media_type: []const u8) void {
                 logs.pushLog("info", "stremio", "No streams found", false);
             }
         }
-    }.worker, .{ id_buf, id_len, type_buf, type_len }) catch {};
+    }.worker, .{ id_buf, id_len, type_buf, type_len })) |t| t.detach() else |_| {}
 }

@@ -1167,7 +1167,11 @@ def test_session_threads_detached():
              "src/services/streamlink.zig",
              # chunk 4:
              "src/main.zig", "src/services/search.zig",
-             "src/player/player.zig", "src/services/ai_voice.zig"]
+             "src/player/player.zig", "src/services/ai_voice.zig",
+             # chunk 5:
+             "src/services/ai_intent.zig", "src/services/simkl.zig",
+             "src/services/stremio.zig", "src/services/jellyfin.zig",
+             "src/services/subtitles.zig"]
     offenders = [f for f in files if "_ = std.Thread.spawn(" in _src(f)]
     if offenders:
         return "fail", "leaked thread handle in: " + ", ".join(offenders)

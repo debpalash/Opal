@@ -38,10 +38,10 @@ pub fn handleRecommendation(raw_input: []const u8) bool {
     chat.is_generating.store(true, .release);
     chat.last_error_len = 0;
 
-    _ = std.Thread.spawn(.{}, recommendationWorker, .{chat.message_count - 1}) catch {
+    if (std.Thread.spawn(.{}, recommendationWorker, .{chat.message_count - 1})) |t| t.detach() else |_| {
         chat.is_generating.store(false, .release);
         return false;
-    };
+    }
     return true;
 }
 
@@ -201,12 +201,12 @@ pub fn handleGenreBrowse(raw_input: []const u8) bool {
             var gid: u32 = 0;
         };
         S.gid = genre_id;
-        _ = std.Thread.spawn(.{}, struct {
+        if (std.Thread.spawn(.{}, struct {
             fn worker() void {
                 const tmdb_api = @import("tmdb_api.zig");
                 tmdb_api.fetchDiscover(S.gid);
             }
-        }.worker, .{}) catch {};
+        }.worker, .{})) |t| t.detach() else |_| {}
     } else {
         // Fallback to search by genre keyword
         @memset(&state.app.tmdb.search_buf, 0);

@@ -50,14 +50,14 @@ pub fn searchByQuery(query: []const u8, lang: []const u8) void {
     S.l_len = @min(lang.len, S.l_buf.len);
     @memcpy(S.l_buf[0..S.l_len], lang[0..S.l_len]);
 
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn work() void {
             defer { is_searching = false; }
             doSearch(S.q_buf[0..S.q_len], S.l_buf[0..S.l_len]);
         }
-    }.work, .{}) catch {
+    }.work, .{})) |t| t.detach() else |_| {
         is_searching = false;
-    };
+    }
 }
 
 fn doSearch(query: []const u8, lang: []const u8) void {
@@ -251,14 +251,14 @@ pub fn downloadSubtitle(file_id: i64) void {
     const S = struct { var fid: i64 = 0; };
     S.fid = file_id;
 
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn work() void {
             defer { is_downloading = false; }
             doDownload(S.fid);
         }
-    }.work, .{}) catch {
+    }.work, .{})) |t| t.detach() else |_| {
         is_downloading = false;
-    };
+    }
 }
 
 fn doDownload(file_id: i64) void {

@@ -20,7 +20,7 @@ pub var enabled: bool = false;
 pub fn checkin(title: []const u8, media_type: []const u8) void {
     if (!enabled or access_token_len == 0 or api_key_len == 0) return;
 
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn worker(t: []const u8, mt: []const u8) void {
             const alloc = @import("../core/alloc.zig").allocator;
 
@@ -61,14 +61,14 @@ pub fn checkin(title: []const u8, media_type: []const u8) void {
                 logs.pushLog("info", "simkl", "SIMKL history synced", false);
             }
         }
-    }.worker, .{ title, media_type }) catch {};
+    }.worker, .{ title, media_type })) |t| t.detach() else |_| {}
 }
 
 /// Add to watchlist
 pub fn addToWatchlist(title: []const u8) void {
     if (!enabled or access_token_len == 0) return;
 
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn worker(t: []const u8) void {
             const alloc = @import("../core/alloc.zig").allocator;
 
@@ -106,5 +106,5 @@ pub fn addToWatchlist(title: []const u8) void {
             child.spawn() catch return;
             _ = child.wait() catch {};
         }
-    }.worker, .{title}) catch {};
+    }.worker, .{title})) |t| t.detach() else |_| {}
 }

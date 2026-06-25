@@ -421,7 +421,7 @@ pub fn fetchPoster(item: *state.JfItem) void {
     if (item.id_len == 0 or item.poster_fetching) return;
     item.poster_fetching = true;
 
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn worker(ptr: *state.JfItem) void {
             defer ptr.poster_fetching = false;
 
@@ -452,7 +452,7 @@ pub fn fetchPoster(item: *state.JfItem) void {
             ptr.poster_h = @intCast(h);
             ptr.poster_pixels = p_slice;
         }
-    }.worker, .{item}) catch {};
+    }.worker, .{item})) |t| t.detach() else |_| {}
 }
 
 // ══════════════════════════════════════════════════════════
@@ -462,7 +462,7 @@ pub fn fetchPoster(item: *state.JfItem) void {
 pub fn fetchResume() void {
     if (state.app.jf.is_loading.load(.acquire) or !state.app.jf.connected) return;
 
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn worker() void {
             const server = state.app.jf.server_url[0..state.app.jf.server_url_len];
             const uid = state.app.jf.user_id[0..state.app.jf.user_id_len];
@@ -526,7 +526,7 @@ pub fn fetchResume() void {
             }
             state.app.jf.resume_loaded.store(true, .release);
         }
-    }.worker, .{}) catch {};
+    }.worker, .{})) |t| t.detach() else |_| {}
 }
 
 /// Push current browse state onto nav stack before navigating deeper
