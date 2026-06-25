@@ -11,6 +11,34 @@ const poster = @import("../core/poster.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
+// dvui texture ops MUST run on the UI thread (they touch current_window / the
+// frame texture-trash list). The Jikan parse WORKER threads overwrite results[]
+// and used to call dvui.textureDestroyLater directly on the old poster textures
+// → SIGABRT on a mode switch after posters had loaded. Workers now QUEUE the old
+// textures here; the UI thread drains them via drainPendingTexFrees() each frame.
+var pending_tex: [256]dvui.Texture = undefined;
+var pending_tex_count: usize = 0;
+var pending_tex_mutex: @import("../core/sync.zig").Mutex = .{};
+
+fn queueTexFree(tex: dvui.Texture) void {
+    pending_tex_mutex.lock();
+    defer pending_tex_mutex.unlock();
+    if (pending_tex_count < pending_tex.len) {
+        pending_tex[pending_tex_count] = tex;
+        pending_tex_count += 1;
+    }
+    // Queue full (≥256 pending, extremely rare) → texture leaks. Far better than
+    // aborting the app from a worker thread.
+}
+
+/// Drain queued poster-texture frees on the UI thread. Call from renderContent.
+fn drainPendingTexFrees() void {
+    pending_tex_mutex.lock();
+    defer pending_tex_mutex.unlock();
+    for (pending_tex[0..pending_tex_count]) |t| dvui.textureDestroyLater(t);
+    pending_tex_count = 0;
+}
+
 // ══════════════════════════════════════════════════════════
 // Anime Tab — allanime.day API integration (built-in, no ani-cli)
 // Trending -> Search → Select → Pick Episode → Stream to MPV
@@ -475,7 +503,7 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool) void {
         state.app.anime.results[i].poster_fetching = false;
         state.app.anime.results[i].expanded = false;
         if (state.app.anime.results[i].poster_tex) |tex| {
-            dvui.textureDestroyLater(tex);
+            queueTexFree(tex); // worker thread — defer the dvui destroy to the UI thread
             state.app.anime.results[i].poster_tex = null;
         }
     }
@@ -607,7 +635,7 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool) void {
 
             item.poster_fetching = false;
             if (item.poster_tex) |tx| {
-                dvui.textureDestroyLater(tx);
+                queueTexFree(tx); // worker thread — defer the dvui destroy to the UI thread
             }
             item.poster_tex = null;
             item.expanded = false;
@@ -1219,6 +1247,9 @@ fn tryAnimePaheDDL(name: []const u8, ep_no: []const u8) bool {
 // ══════════════════════════════════════════════════════════
 
 pub fn renderContent() void {
+    // Free any poster textures queued by parse worker threads (UI-thread only).
+    drainPendingTexFrees();
+
     // ── Mode dispatch. Each grid mode reuses results[]/renderGallery; only the
     //    fetch differs. We fire exactly once per (mode + sub-selector) change,
     //    plus SWR auto-refresh on Trending only (other modes don't cross-
