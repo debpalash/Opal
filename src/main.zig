@@ -74,12 +74,12 @@ fn appInit(win: *dvui.Window) !void {
 
     // Init torrent session in background — DHT bootstrap takes 5-10s
     state.app.torrent_ses = null;
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn worker() void {
             state.app.torrent_ses = c.mpv.torrent_init();
             logs.pushLog("info", "torrent", "Torrent session ready", false);
         }
-    }.worker, .{}) catch {};
+    }.worker, .{})) |t| t.detach() else |_| {}
 
     std.Io.Dir.cwd().createDirPath(@import("core/io_global.zig").io(), state.app.save_path_buf[0..state.app.save_path_len]) catch {};
     try state.app.players.append(@import("core/alloc.zig").allocator, try player.MediaPlayer.init(@import("core/alloc.zig").allocator));
@@ -96,7 +96,7 @@ fn appInit(win: *dvui.Window) !void {
     c.sdl.SDL_AddEventWatch(sdlEventWatch, null);
 
     // Move heavy DB/migration/loading work to background so UI renders instantly
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn worker() void {
             // ── Unified SQLite Database ──
             const database = @import("core/db.zig");
@@ -153,7 +153,7 @@ fn appInit(win: *dvui.Window) !void {
 
             logs.pushLog("info", "init", "Background init complete", false);
         }
-    }.worker, .{}) catch {};
+    }.worker, .{})) |t| t.detach() else |_| {}
 
     // ── CLI argument handling ──
     // `zigzag /path/to/file.mp4` or `zigzag https://example.com/stream`

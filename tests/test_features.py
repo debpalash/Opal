@@ -1164,7 +1164,10 @@ def test_session_threads_detached():
              "src/services/watch_party.zig",
              # chunk 3:
              "src/core/deps.zig", "src/services/auto_subs.zig",
-             "src/services/streamlink.zig"]
+             "src/services/streamlink.zig",
+             # chunk 4:
+             "src/main.zig", "src/services/search.zig",
+             "src/player/player.zig", "src/services/ai_voice.zig"]
     offenders = [f for f in files if "_ = std.Thread.spawn(" in _src(f)]
     if offenders:
         return "fail", "leaked thread handle in: " + ", ".join(offenders)

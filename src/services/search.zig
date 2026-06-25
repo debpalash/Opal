@@ -1706,7 +1706,7 @@ pub fn loadTorrentToPlayer(magnet_link: []const u8) void {
         };
         const ctx_store = ThreadContext{ .url = url_copy, .url_len = ulen, .player = target_player };
 
-        _ = std.Thread.spawn(.{}, struct {
+        if (std.Thread.spawn(.{}, struct {
             fn worker(ctx: ThreadContext) void {
                 const alloc = @import("../core/alloc.zig").allocator;
                 const u = ctx.url[0..ctx.url_len];
@@ -1794,9 +1794,9 @@ pub fn loadTorrentToPlayer(magnet_link: []const u8) void {
                 logs2.pushLog("error", "search", "No magnet found on detail page", true);
                 if (ctx.player) |p| p.is_loading = false;
             }
-        }.worker, .{ctx_store}) catch {
+        }.worker, .{ctx_store})) |t| t.detach() else |_| {
             logs.pushLog("error", "search", "Failed to spawn resolver thread", true);
-        };
+        }
         return;
     }
 

@@ -191,12 +191,12 @@ pub fn killStaleServers() void {
 pub fn preWarmServers() void {
     if (servers_warming or (voice_server_started and tts_server_started)) return;
     servers_warming = true;
-    _ = std.Thread.spawn(.{}, struct {
+    if (std.Thread.spawn(.{}, struct {
         fn run() void {
             ensureVoiceServer();
             ensureTtsServer();
         }
-    }.run, .{}) catch {};
+    }.run, .{})) |t| t.detach() else |_| {}
 }
 
 /// Fast preflight: run `python3 <script> --check`, which verifies the server's
@@ -615,7 +615,7 @@ fn conversationLoopV2() void {
                             }
                         }
                     };
-                    _ = std.Thread.spawn(.{}, S.waiter, .{}) catch {};
+                    if (std.Thread.spawn(.{}, S.waiter, .{})) |t| t.detach() else |_| {}
                 }
             }
         } else {
