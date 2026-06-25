@@ -479,7 +479,7 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                     
                     state.app.comic.page_count = img_count;
                     state.app.comic.current_page = 0;
-                    state.app.comic.dl_progress = 0;
+                    state.app.comic.dl_progress.store(0, .release);
                     state.app.comic.is_loading = false;
                     state.app.comic.next_url_len = 0;
                     state.app.comic.prev_url_len = 0;
@@ -545,7 +545,7 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                                             if (total > 100) {
                                                 const px = a.dupe(u8, tmp[0..total]) catch return;
                                                 state.app.comic.page_pixels[idx] = px;
-                                                state.app.comic.dl_progress += 1;
+                                                _ = state.app.comic.dl_progress.fetchAdd(1, .acq_rel);
                                             }
                                         }
                                     }.fetch, .{pi}) catch null;

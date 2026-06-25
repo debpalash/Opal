@@ -466,7 +466,7 @@ pub const AppState = struct {
         prev_url_len: usize = 0,
         view_mode: enum { scroll, single_page } = .scroll,
         current_page: usize = 0,
-        dl_progress: usize = 0, // number of images downloaded so far
+        dl_progress: std.atomic.Value(usize) = std.atomic.Value(usize).init(0), // images downloaded (atomic: written by ≤8 concurrent workers)
 
         // ── Comic Narration (OCR + TTS) ──
         ocr_texts: [128][4096]u8 = std.mem.zeroes([128][4096]u8),

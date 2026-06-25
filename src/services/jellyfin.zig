@@ -134,6 +134,9 @@ pub fn authenticate() void {
         state.app.jf.is_loading.store(false, .release);
         break :blk null;
     };
+    // Detach: the result is observed via state.app.jf, never joined — otherwise the
+    // joinable thread handle leaks on every login/library/search.
+    if (state.app.jf.thread) |t| t.detach();
 }
 
 // ══════════════════════════════════════════════════════════
@@ -155,6 +158,9 @@ pub fn fetchLibraries() void {
         state.app.jf.is_loading.store(false, .release);
         break :blk null;
     };
+    // Detach: the result is observed via state.app.jf, never joined — otherwise the
+    // joinable thread handle leaks on every login/library/search.
+    if (state.app.jf.thread) |t| t.detach();
 }
 
 fn fetchLibrariesSync() void {
@@ -222,6 +228,9 @@ pub fn fetchItems(parent_id: []const u8) void {
         state.app.jf.is_loading.store(false, .release);
         break :blk null;
     };
+    // Detach: the result is observed via state.app.jf, never joined — otherwise the
+    // joinable thread handle leaks on every login/library/search.
+    if (state.app.jf.thread) |t| t.detach();
 }
 
 pub fn searchItems() void {
@@ -259,6 +268,9 @@ pub fn searchItems() void {
         state.app.jf.is_loading.store(false, .release);
         break :blk null;
     };
+    // Detach: the result is observed via state.app.jf, never joined — otherwise the
+    // joinable thread handle leaks on every login/library/search.
+    if (state.app.jf.thread) |t| t.detach();
 }
 
 fn fetchItemsSync(parent_id: []const u8, recursive: bool) void {

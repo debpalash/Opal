@@ -51,7 +51,7 @@ pub fn loadComic(url: []const u8) void {
     state.app.comic.url_len = url.len;
     state.app.comic.is_loading = true;
     state.app.comic.page_count = 0;
-    state.app.comic.dl_progress = 0;
+    state.app.comic.dl_progress.store(0, .release);
     state.app.comic.current_page = 0;
 
     freeComicPages();
@@ -93,7 +93,7 @@ pub fn closeComic() void {
     state.app.comic.page_count = 0;
     state.app.comic.current_page = 0;
     state.app.comic.title_len = 0;
-    state.app.comic.dl_progress = 0;
+    state.app.comic.dl_progress.store(0, .release);
 }
 
 fn fetchComicThread() void {
@@ -404,7 +404,7 @@ fn downloadSinglePage(i: usize) void {
     if (total > 100) {
         const pixels = alloc.dupe(u8, tmp_buf[0..total]) catch return;
         state.app.comic.page_pixels[i] = pixels;
-        state.app.comic.dl_progress += 1;
+        _ = state.app.comic.dl_progress.fetchAdd(1, .acq_rel);
     }
 }
 
@@ -435,6 +435,11 @@ var sr_cover_w: [MAX_SEARCH_RESULTS]u32 = std.mem.zeroes([MAX_SEARCH_RESULTS]u32
 var sr_cover_h: [MAX_SEARCH_RESULTS]u32 = std.mem.zeroes([MAX_SEARCH_RESULTS]u32);
 var sr_cover_tex: [MAX_SEARCH_RESULTS]?dvui.Texture = [_]?dvui.Texture{null} ** MAX_SEARCH_RESULTS;
 var sr_cover_fetching: [MAX_SEARCH_RESULTS]std.atomic.Value(bool) = [_]std.atomic.Value(bool){std.atomic.Value(bool).init(false)} ** MAX_SEARCH_RESULTS;
+// Global cap on simultaneous cover fetches: a full search grid (up to
+// MAX_SEARCH_RESULTS=120 cards) would otherwise spawn 120 curl+decode workers at
+// once (each up to ~4 MB), a process/memory storm. Mirrors core/poster.zig.
+var cover_in_flight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+const MAX_COVER_CONCURRENT: u32 = 8;
 // Per-slot generation: the search generation that last wrote this slot's cover
 // URL. The RENDER THREAD compares against `covers_render_gen` to reclaim stale
 // textures/pixels — so only the render thread ever destroys textures or frees
@@ -813,7 +818,16 @@ fn fetchCover(idx: usize) void {
     // Atomically claim the slot.
     if (sr_cover_fetching[idx].swap(true, .acq_rel)) return; // already in flight
 
+    // Over the global cap: release the slot claim and let the card retry on a
+    // later frame once an in-flight slot frees.
+    if (cover_in_flight.load(.acquire) >= MAX_COVER_CONCURRENT) {
+        sr_cover_fetching[idx].store(false, .release);
+        return;
+    }
+    _ = cover_in_flight.fetchAdd(1, .acq_rel);
+
     const t = std.Thread.spawn(.{}, coverWorker, .{idx}) catch {
+        _ = cover_in_flight.fetchSub(1, .acq_rel);
         sr_cover_fetching[idx].store(false, .release);
         return;
     };
@@ -857,6 +871,7 @@ fn thumbnailize(url: []const u8, out: []u8) []const u8 {
 
 fn coverWorker(idx: usize) void {
     defer sr_cover_fetching[idx].store(false, .release);
+    defer _ = cover_in_flight.fetchSub(1, .acq_rel); // release the global slot
 
     const raw_url = sr_cover_urls[idx][0..sr_cover_url_lens[idx]];
     if (raw_url.len == 0) return;
@@ -1399,7 +1414,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
         // Show download progress
         var prog_buf: [64]u8 = undefined;
         const prog_str = std.fmt.bufPrintZ(&prog_buf, "Loading comic... {d}/{d} pages", .{
-            state.app.comic.dl_progress, state.app.comic.page_count,
+            state.app.comic.dl_progress.load(.acquire), state.app.comic.page_count,
         }) catch "Loading...";
         _ = dvui.label(@src(), "{s}", .{prog_str}, .{
             .color_text = theme.colors.accent,
@@ -1447,7 +1462,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             const info = if (state.app.comic.view_mode == .single_page)
                 std.fmt.bufPrintZ(&info_buf, "{d}/{d}", .{ state.app.comic.current_page + 1, state.app.comic.page_count }) catch "?"
             else
-                std.fmt.bufPrintZ(&info_buf, "{d}pp {d}↓", .{ state.app.comic.page_count, state.app.comic.dl_progress }) catch "?";
+                std.fmt.bufPrintZ(&info_buf, "{d}pp {d}↓", .{ state.app.comic.page_count, state.app.comic.dl_progress.load(.acquire) }) catch "?";
             _ = dvui.label(@src(), "{s}", .{info}, .{
                 .color_text = theme.colors.text_muted,
                 .padding = .{ .x = 4, .y = 0, .w = 2, .h = 0 },
