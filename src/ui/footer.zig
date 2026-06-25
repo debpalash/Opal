@@ -670,46 +670,82 @@ fn pickerIconChip(
 
 // ── Querying helpers for the picker chips ──
 
+// Throttle cache for the now-playing audio/subtitle chips. The track-list only
+// changes on file load / track switch, but this was queried via BLOCKING mpv IPC
+// every frame (per chip) — visible jank. Cache per chip (0=audio, 1=sub) keyed by
+// the mpv ctx and refresh at most ~2x/sec.
+const track_chip_cache = struct {
+    var last_ms: [2]i64 = .{ 0, 0 };
+    var ctx_key: [2]usize = .{ 0, 0 };
+    var buf: [2][64]u8 = undefined;
+    var len: [2]usize = .{ 0, 0 };
+    var active: [2]bool = .{ false, false };
+};
+
 fn currentTrackChipText(
     ctx: *c.mpv.mpv_handle,
     track_type: []const u8,
     out_buf: []u8,
 ) struct { text: []const u8, active: bool } {
-    var count: i64 = 0;
-    _ = c.mpv.mpv_get_property(ctx, "track-list/count", c.mpv.MPV_FORMAT_INT64, &count);
+    const C = track_chip_cache;
+    const slot: usize = if (std.mem.eql(u8, track_type, "audio")) 0 else 1;
+    const key = @intFromPtr(ctx);
+    const now = @import("../core/io_global.zig").milliTimestamp();
 
-    var i: i64 = 0;
-    while (i < count) : (i += 1) {
-        var q_buf: [64]u8 = undefined;
-        const tq = std.fmt.bufPrintZ(&q_buf, "track-list/{d}/type", .{i}) catch continue;
-        const tc = c.mpv.mpv_get_property_string(ctx, tq.ptr);
-        if (tc == null) continue;
-        const t_span = std.mem.span(tc);
-        const matches = std.mem.eql(u8, t_span, track_type);
-        c.mpv.mpv_free(@ptrCast(tc));
-        if (!matches) continue;
+    // Serve from cache (no mpv IPC) unless stale (>500ms) or the player changed.
+    if (!(C.ctx_key[slot] == key and now - C.last_ms[slot] < 500)) {
+        var res_text: []const u8 = "Off";
+        var res_active = false;
+        var local: [64]u8 = undefined;
 
-        var sq_buf: [64]u8 = undefined;
-        const sq = std.fmt.bufPrintZ(&sq_buf, "track-list/{d}/selected", .{i}) catch continue;
-        const sc = c.mpv.mpv_get_property_string(ctx, sq.ptr);
-        if (sc == null) continue;
-        const selected_yes = std.mem.eql(u8, std.mem.span(sc), "yes");
-        c.mpv.mpv_free(@ptrCast(sc));
-        if (!selected_yes) continue;
+        var count: i64 = 0;
+        _ = c.mpv.mpv_get_property(ctx, "track-list/count", c.mpv.MPV_FORMAT_INT64, &count);
+        var i: i64 = 0;
+        scan: while (i < count) : (i += 1) {
+            var q_buf: [64]u8 = undefined;
+            const tq = std.fmt.bufPrintZ(&q_buf, "track-list/{d}/type", .{i}) catch continue;
+            const tc = c.mpv.mpv_get_property_string(ctx, tq.ptr);
+            if (tc == null) continue;
+            const matches = std.mem.eql(u8, std.mem.span(tc), track_type);
+            c.mpv.mpv_free(@ptrCast(tc));
+            if (!matches) continue;
 
-        var lq_buf: [64]u8 = undefined;
-        const lq = std.fmt.bufPrintZ(&lq_buf, "track-list/{d}/lang", .{i}) catch continue;
-        const lc = c.mpv.mpv_get_property_string(ctx, lq.ptr);
-        if (lc != null) {
-            const lang_span = std.mem.span(lc);
-            const len = @min(lang_span.len, out_buf.len);
-            @memcpy(out_buf[0..len], lang_span[0..len]);
-            c.mpv.mpv_free(@ptrCast(lc));
-            return .{ .text = out_buf[0..len], .active = true };
+            var sq_buf: [64]u8 = undefined;
+            const sq = std.fmt.bufPrintZ(&sq_buf, "track-list/{d}/selected", .{i}) catch continue;
+            const sc = c.mpv.mpv_get_property_string(ctx, sq.ptr);
+            if (sc == null) continue;
+            const selected_yes = std.mem.eql(u8, std.mem.span(sc), "yes");
+            c.mpv.mpv_free(@ptrCast(sc));
+            if (!selected_yes) continue;
+
+            var lq_buf: [64]u8 = undefined;
+            const lq = std.fmt.bufPrintZ(&lq_buf, "track-list/{d}/lang", .{i}) catch continue;
+            const lc = c.mpv.mpv_get_property_string(ctx, lq.ptr);
+            if (lc != null) {
+                const lang_span = std.mem.span(lc);
+                const ln = @min(lang_span.len, local.len);
+                @memcpy(local[0..ln], lang_span[0..ln]);
+                c.mpv.mpv_free(@ptrCast(lc));
+                res_text = local[0..ln];
+                res_active = true;
+                break :scan;
+            }
+            res_text = "On";
+            res_active = true;
+            break :scan;
         }
-        return .{ .text = "On", .active = true };
+
+        const cn = @min(res_text.len, C.buf[slot].len);
+        @memcpy(C.buf[slot][0..cn], res_text[0..cn]);
+        C.len[slot] = cn;
+        C.active[slot] = res_active;
+        C.ctx_key[slot] = key;
+        C.last_ms[slot] = now;
     }
-    return .{ .text = "Off", .active = false };
+
+    const n = @min(C.len[slot], out_buf.len);
+    @memcpy(out_buf[0..n], C.buf[slot][0..n]);
+    return .{ .text = out_buf[0..n], .active = C.active[slot] };
 }
 
 fn currentAspectChipText(ctx: *c.mpv.mpv_handle) []const u8 {
