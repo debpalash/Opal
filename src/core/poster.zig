@@ -12,6 +12,15 @@ const http = @import("http.zig");
 
 const c_alloc = std.heap.c_allocator;
 
+/// Cap on simultaneous in-flight poster fetches across ALL providers (TMDB,
+/// Anime, Jellyfin, YouTube, Plugins share this one daemon). Each worker holds a
+/// 512 KB decode buffer + an http connection, so without a cap a large grid
+/// (anime infinite scroll can hold up to 100 cards) scrolled quickly would spawn
+/// a thread/allocation storm. Over the cap we simply skip — the caller leaves
+/// fetching_flag false, so the card retries next frame once a slot frees.
+var in_flight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+const MAX_CONCURRENT: u32 = 8;
+
 pub const PosterRequest = struct {
     url: []const u8,
     pixels_out: *?[]u8,
@@ -30,7 +39,11 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
     // fetch worker may rewrite mid-flight. Copy the bytes so each worker owns
     // its URL and there's no shared-slice race.
     if (url.len > 1024) return;
+    // Don't set fetching_flag when over the cap — leave the card unfetched so
+    // it retries on a later frame once an in-flight slot frees.
+    if (in_flight.load(.acquire) >= MAX_CONCURRENT) return;
     fetching_flag.* = true;
+    _ = in_flight.fetchAdd(1, .acq_rel);
 
     const Args = struct { url_buf: [1024]u8, url_len: usize, pix: *?[]u8, w: *u32, h: *u32, flag: *bool };
 
@@ -40,6 +53,7 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
     if (std.Thread.spawn(.{}, struct {
         fn worker(args: Args) void {
             defer args.flag.* = false;
+            defer _ = in_flight.fetchSub(1, .acq_rel);
 
             const img_buf = c_alloc.alloc(u8, 512 * 1024) catch return;
             defer c_alloc.free(img_buf);
@@ -67,6 +81,7 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
         t.detach();
     } else |_| {
         fetching_flag.* = false;
+        _ = in_flight.fetchSub(1, .acq_rel); // spawn failed — release the slot we reserved
     }
 }
 
