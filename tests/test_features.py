@@ -1223,6 +1223,28 @@ def test_card_views_polish():
     return "fail", f"missing: {missing}"
 
 
+@test("TV Seasons/Episodes/Tracking", "Browse")
+def test_tv_seasons():
+    # TMDB TV-show drill-down: click a TV card → seasons → episodes → resolver
+    # play, with persisted episode watched-tracking.
+    st = _src("src/core/state.zig")
+    db = _src("src/core/db.zig")
+    tm = _src("src/services/tmdb.zig")
+    checks = {
+        "state types": ("TvSeason" in st and "TvEpisode" in st
+                        and "tv_detail_open" in st and "tv_episode_watched" in st),
+        "db tracking": ("tvMarkWatched" in db and "tvLoadWatched" in db
+                        and "tv_watched" in db and "tv_continue" in db),
+        "detail view": "openTvDetail" in tm and "renderTvDetail" in tm,
+        "season/episode fetch": "/tv/" in tm and "/season/" in tm,
+        "tracking wired": "tvMarkWatched" in tm and "tvLoadWatched" in tm,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if not missing:
+        return "pass", "tv seasons → episodes → resolver play + episode tracking wired"
+    return "fail", f"missing: {missing}"
+
+
 @test("Anime Seasons/Calendar/Tracking", "Browse")
 def test_anime_netflix_experience():
     # Netflix/Apple-TV+ anime browse: mode toolbar, Seasonal (/seasons),

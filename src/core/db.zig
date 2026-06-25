@@ -262,6 +262,33 @@ fn createTables() void {
         \\)
     );
     exec("CREATE INDEX IF NOT EXISTS idx_anime_continue_at ON anime_continue(updated_at DESC)");
+
+    // ── TV-show episode tracking ──
+
+    // Per-episode watched flags, keyed by (tmdb_id, season, episode).
+    exec(
+        \\CREATE TABLE IF NOT EXISTS tv_watched (
+        \\  tmdb_id INTEGER NOT NULL,
+        \\  season INTEGER NOT NULL,
+        \\  episode INTEGER NOT NULL,
+        \\  watched INTEGER DEFAULT 1,
+        \\  updated_at INTEGER,
+        \\  PRIMARY KEY (tmdb_id, season, episode)
+        \\)
+    );
+
+    // Continue-watching rail: one row per series, most-recent first.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS tv_continue (
+        \\  tmdb_id INTEGER PRIMARY KEY,
+        \\  name TEXT,
+        \\  poster_path TEXT,
+        \\  season INTEGER,
+        \\  episode INTEGER,
+        \\  updated_at INTEGER
+        \\)
+    );
+    exec("CREATE INDEX IF NOT EXISTS idx_tv_continue_at ON tv_continue(updated_at DESC)");
 }
 
 // ══════════════════════════════════════════════════════════
@@ -953,6 +980,138 @@ pub fn animeGetContinue(out: []@import("state.zig").ContinueItem) usize {
         }
         item.last_episode = @intCast(columnInt(stmt, 3));
         item.total_episodes = @intCast(columnInt(stmt, 4));
+
+        n += 1;
+    }
+    return n;
+}
+
+/// Mark a single (season, episode) of `tmdb_id` as watched / un-watched. Upserts
+/// into tv_watched keyed by (tmdb_id, season, episode); `watched==false` stores 0
+/// rather than deleting so a re-toggle keeps the same row. Stamps updated_at (ms).
+pub fn tvMarkWatched(tmdb_id: i32, season: u32, episode: u32, watched: bool) void {
+    _ = db_handle orelse return;
+
+    const sql =
+        \\INSERT INTO tv_watched(tmdb_id, season, episode, watched, updated_at)
+        \\VALUES(?, ?, ?, ?, ?)
+        \\ON CONFLICT(tmdb_id, season, episode) DO UPDATE SET
+        \\  watched = excluded.watched,
+        \\  updated_at = excluded.updated_at
+    ;
+    const stmt = prepare(sql) orelse {
+        logs.pushLog("error", "tv", "tvMarkWatched: prepare failed", true);
+        return;
+    };
+    defer finalize(stmt);
+
+    bindInt(stmt, 1, @intCast(@as(i64, tmdb_id)));
+    bindInt(stmt, 2, @intCast(@as(i64, season)));
+    bindInt(stmt, 3, @intCast(@as(i64, episode)));
+    bindInt(stmt, 4, if (watched) 1 else 0);
+    bindInt64(stmt, 5, io_global.milliTimestamp());
+
+    if (step(stmt) != c.SQLITE_DONE) {
+        logs.pushLog("error", "tv", "tvMarkWatched: step failed", true);
+    }
+}
+
+/// Load watched flags for (`tmdb_id`, `season`) into `out`, setting
+/// out[episode-1]=true for every watched row. Bounds-safe: episodes < 1 or whose
+/// index >= out.len are ignored. Does not clear `out` (caller zeroes it); only
+/// sets trues.
+pub fn tvLoadWatched(tmdb_id: i32, season: u32, out: []bool) void {
+    if (out.len == 0) return;
+    _ = db_handle orelse return;
+
+    const stmt = prepare("SELECT episode FROM tv_watched WHERE tmdb_id = ? AND season = ? AND watched <> 0") orelse {
+        logs.pushLog("error", "tv", "tvLoadWatched: prepare failed", true);
+        return;
+    };
+    defer finalize(stmt);
+
+    bindInt(stmt, 1, @intCast(@as(i64, tmdb_id)));
+    bindInt(stmt, 2, @intCast(@as(i64, season)));
+
+    while (step(stmt) == c.SQLITE_ROW) {
+        const ep = columnInt(stmt, 0);
+        if (ep < 1) continue;
+        const idx: usize = @intCast(ep - 1);
+        if (idx >= out.len) continue;
+        out[idx] = true;
+    }
+}
+
+/// Upsert a continue-watching entry keyed by `tmdb_id`, stamping updated_at (ms)
+/// so the most-recently-touched series sorts first in tvGetContinue.
+pub fn tvUpsertContinue(tmdb_id: i32, name: []const u8, poster_path: []const u8, season: u32, episode: u32) void {
+    _ = db_handle orelse return;
+
+    const sql =
+        \\INSERT INTO tv_continue(tmdb_id, name, poster_path, season, episode, updated_at)
+        \\VALUES(?, ?, ?, ?, ?, ?)
+        \\ON CONFLICT(tmdb_id) DO UPDATE SET
+        \\  name = excluded.name,
+        \\  poster_path = excluded.poster_path,
+        \\  season = excluded.season,
+        \\  episode = excluded.episode,
+        \\  updated_at = excluded.updated_at
+    ;
+    const stmt = prepare(sql) orelse {
+        logs.pushLog("error", "tv", "tvUpsertContinue: prepare failed", true);
+        return;
+    };
+    defer finalize(stmt);
+
+    bindInt(stmt, 1, @intCast(@as(i64, tmdb_id)));
+    bindText(stmt, 2, name);
+    bindText(stmt, 3, poster_path);
+    bindInt(stmt, 4, @intCast(@as(i64, season)));
+    bindInt(stmt, 5, @intCast(@as(i64, episode)));
+    bindInt64(stmt, 6, io_global.milliTimestamp());
+
+    if (step(stmt) != c.SQLITE_DONE) {
+        logs.pushLog("error", "tv", "tvUpsertContinue: step failed", true);
+    }
+}
+
+/// Fill `out` with the most-recently-updated TV continue-watching entries
+/// (newest first), up to out.len rows. Each fixed buffer is filled with a
+/// clamped @memcpy. Returns the number of rows written.
+pub fn tvGetContinue(out: []@import("state.zig").TvContinueItem) usize {
+    if (out.len == 0) return 0;
+    _ = db_handle orelse return 0;
+
+    const stmt = prepare(
+        \\SELECT tmdb_id, name, poster_path, season, episode
+        \\FROM tv_continue
+        \\ORDER BY updated_at DESC
+        \\LIMIT ?
+    ) orelse {
+        logs.pushLog("error", "tv", "tvGetContinue: prepare failed", true);
+        return 0;
+    };
+    defer finalize(stmt);
+
+    bindInt(stmt, 1, @intCast(out.len));
+
+    var n: usize = 0;
+    while (n < out.len and step(stmt) == c.SQLITE_ROW) {
+        const item = &out[n];
+
+        item.tmdb_id = @intCast(columnInt(stmt, 0));
+        if (columnText(stmt, 1)) |s| {
+            const len = @min(s.len, item.name.len);
+            @memcpy(item.name[0..len], s[0..len]);
+            item.name_len = len;
+        }
+        if (columnText(stmt, 2)) |s| {
+            const len = @min(s.len, item.poster_path.len);
+            @memcpy(item.poster_path[0..len], s[0..len]);
+            item.poster_path_len = len;
+        }
+        item.season = @intCast(columnInt(stmt, 3));
+        item.episode = @intCast(columnInt(stmt, 4));
 
         n += 1;
     }

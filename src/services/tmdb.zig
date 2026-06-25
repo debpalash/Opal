@@ -52,6 +52,13 @@ pub fn renderTmdbContent() void {
         return;
     }
 
+    // TV drill-down takes over the whole view (Netflix/Apple-TV+ style). The
+    // normal Trending/Search/etc. gallery is suppressed until the user backs out.
+    if (state.app.tmdb.tv_detail_open) {
+        renderTvDetail();
+        return;
+    }
+
     if (!state.app.tmdb.loaded_once and !state.app.tmdb.is_loading) {
         state.app.tmdb.loaded_once = true;
         api.fetchCurrentView(false);
@@ -472,7 +479,12 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
         const poster_clicked = bw.clicked();
         bw.drawFocus();
         bw.deinit();
-        if (poster_clicked) sendToSearch(item);
+        if (poster_clicked) {
+            // TV shows open the Seasons → Episodes drill-down; movies (and
+            // unknown media types) keep the universal-search behavior.
+            const mt = item.media_type[0..@min(item.media_type_len, item.media_type.len)];
+            if (std.mem.eql(u8, mt, "tv")) openTvDetail(item) else sendToSearch(item);
+        }
     }
 
     // Rating badge + type label
@@ -822,4 +834,740 @@ fn sendToSearch(item: *state.TmdbItem) void {
     // torrent-only buffer, leaving the universal view empty.
     search.submitQuery(qlen);
     state.showToast("Searching all sources...");
+}
+
+// ══════════════════════════════════════════════════════════
+// TV Seasons → Episodes drill-down (Netflix / Apple-TV+ style)
+//
+// A TV poster click opens openTvDetail(), which fetches /tv/{id} (seasons[]),
+// auto-selects the first real season, and fetches /tv/{id}/season/{n}
+// (episodes[]). renderTvDetail() draws the season chips + episode list. Episode
+// play resolves a torrent for "{name} SxxEyy" and loads it into the player.
+//
+// All fetchers carry a monotonic generation (tv_gen). A worker only publishes
+// if it is still the latest, so fast clicking / season-switching never shows
+// stale episodes. Worker inputs are copied BY VALUE through the spawn tuple —
+// never shared statics (avoids the races that bit the other fetchers).
+// ══════════════════════════════════════════════════════════
+
+const io = @import("../core/io_global.zig");
+const logs = @import("../core/logs.zig");
+const db = @import("../core/db.zig");
+const resolver = @import("resolver.zig");
+
+/// Monotonic generation. Each TV fetch captures the value it was spawned under;
+/// it publishes only if still the latest, so superseded fetches self-discard.
+var tv_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
+/// Open the Seasons → Episodes detail for a TV show. Resets all per-show state,
+/// kicks the seasons fetch (which, on completion, auto-selects the default
+/// season and fetches its episodes).
+fn openTvDetail(item: *state.TmdbItem) void {
+    const t = &state.app.tmdb;
+    t.tv_detail_open = true;
+    t.tv_id = item.id;
+
+    const nlen = @min(item.title_len, t.tv_name.len);
+    @memcpy(t.tv_name[0..nlen], item.title[0..nlen]);
+    t.tv_name_len = nlen;
+
+    const plen = @min(item.poster_path_len, t.tv_poster_path.len);
+    @memcpy(t.tv_poster_path[0..plen], item.poster_path[0..plen]);
+    t.tv_poster_path_len = plen;
+
+    // Reset season/episode state for the fresh show.
+    t.tv_season_count = 0;
+    t.tv_sel_season = 0;
+    t.tv_episode_count = 0;
+    for (0..t.tv_episode_watched.len) |i| t.tv_episode_watched[i] = false;
+
+    // New generation drops any in-flight seasons/episodes worker.
+    _ = tv_gen.fetchAdd(1, .acq_rel);
+
+    fetchSeasons(item.id);
+}
+
+/// Clear the TV detail view and return to the gallery. Bumps the generation so
+/// any in-flight worker can't repopulate state after we leave.
+fn closeTvDetail() void {
+    const t = &state.app.tmdb;
+    t.tv_detail_open = false;
+    t.tv_season_count = 0;
+    t.tv_episode_count = 0;
+    t.tv_sel_season = 0;
+    for (0..t.tv_episode_watched.len) |i| t.tv_episode_watched[i] = false;
+    _ = tv_gen.fetchAdd(1, .acq_rel);
+}
+
+// ── Seasons fetch (/tv/{id}) ──
+
+fn fetchSeasons(tmdb_id: i32) void {
+    if (state.app.tmdb.api_key_len == 0) return;
+    state.app.tmdb.tv_seasons_loading = true;
+    const my_gen = tv_gen.load(.acquire);
+
+    if (std.Thread.spawn(.{}, fetchSeasonsThread, .{ tmdb_id, my_gen })) |th| {
+        th.detach(); // never joined — detach to avoid leaking the handle
+    } else |_| {
+        state.app.tmdb.tv_seasons_loading = false;
+    }
+}
+
+fn fetchSeasonsThread(tmdb_id: i32, my_gen: u32) void {
+    defer state.app.tmdb.tv_seasons_loading = false;
+
+    var url_buf: [128]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org/3/tv/{d}", .{tmdb_id}) catch return;
+
+    const buf = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(buf);
+    const bytes = tvCurl(url, buf);
+    if (bytes == 0) return;
+    const body = buf[0..bytes];
+
+    // Superseded by a newer open/close? Drop silently.
+    if (tv_gen.load(.acquire) != my_gen) return;
+
+    parseSeasons(body);
+
+    if (tv_gen.load(.acquire) != my_gen) return;
+
+    // Auto-select the first real season (season_number >= 1); fall back to index
+    // 0 (Specials) only if that's all there is.
+    var sel: usize = 0;
+    var i: usize = 0;
+    while (i < state.app.tmdb.tv_season_count) : (i += 1) {
+        if (state.app.tmdb.tv_seasons[i].season_number >= 1) {
+            sel = i;
+            break;
+        }
+    }
+    state.app.tmdb.tv_sel_season = sel;
+
+    if (state.app.tmdb.tv_season_count > 0) {
+        const sn = state.app.tmdb.tv_seasons[sel].season_number;
+        fetchEpisodes(tmdb_id, sn);
+    }
+
+    logs.pushLog("info", "tmdb", "TV seasons loaded", false);
+}
+
+/// Find the next complete top-level `{...}` object in `json` starting at `from`,
+/// honoring string literals (so braces inside strings don't confuse the depth
+/// counter). Returns the object slice and the index just past its closing `}`.
+/// Null at end of input.
+fn nextJsonObject(json: []const u8, from: usize) ?struct { obj: []const u8, end: usize } {
+    var i = from;
+    // Seek the opening brace.
+    while (i < json.len and json[i] != '{') : (i += 1) {}
+    if (i >= json.len) return null;
+    const start = i;
+    var depth: i32 = 0;
+    var in_str = false;
+    var esc = false;
+    while (i < json.len) : (i += 1) {
+        const c = json[i];
+        if (in_str) {
+            if (esc) {
+                esc = false;
+            } else if (c == '\\') {
+                esc = true;
+            } else if (c == '"') {
+                in_str = false;
+            }
+            continue;
+        }
+        switch (c) {
+            '"' => in_str = true,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if (depth == 0) return .{ .obj = json[start .. i + 1], .end = i + 1 };
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+/// Scan TMDB /tv/{id} JSON for the `seasons` array and fill tv_seasons (cap 40).
+/// Iterates complete brace-matched objects so field order/association is correct.
+fn parseSeasons(json: []const u8) void {
+    const t = &state.app.tmdb;
+    t.tv_season_count = 0;
+
+    // Anchor on the seasons array, then bound to its matching ']' so we never
+    // wander into trailing top-level objects.
+    const arr_key = std.mem.indexOf(u8, json, "\"seasons\":") orelse return;
+    var pos = arr_key + "\"seasons\":".len;
+    while (pos < json.len and json[pos] != '[') : (pos += 1) {}
+    if (pos >= json.len) return;
+    const arr_end = arrayEnd(json, pos);
+    const arr = json[pos..arr_end];
+
+    var p: usize = 0;
+    while (t.tv_season_count < t.tv_seasons.len) {
+        const found = nextJsonObject(arr, p) orelse break;
+        const obj = found.obj;
+        p = found.end;
+
+        var s = &t.tv_seasons[t.tv_season_count];
+        s.* = .{};
+        s.season_number = jsonInt(obj, "\"season_number\":");
+        s.name_len = jsonStr(obj, "\"name\":\"", &s.name);
+        s.episode_count = @intCast(@max(0, jsonInt(obj, "\"episode_count\":")));
+        s.air_date_len = jsonStr(obj, "\"air_date\":\"", &s.air_date);
+        s.poster_path_len = jsonStr(obj, "\"poster_path\":\"", &s.poster_path);
+
+        t.tv_season_count += 1;
+    }
+}
+
+/// Index just past the matching `]` for the `[` at `open` (string-aware).
+fn arrayEnd(json: []const u8, open: usize) usize {
+    var i = open;
+    var depth: i32 = 0;
+    var in_str = false;
+    var esc = false;
+    while (i < json.len) : (i += 1) {
+        const c = json[i];
+        if (in_str) {
+            if (esc) {
+                esc = false;
+            } else if (c == '\\') {
+                esc = true;
+            } else if (c == '"') {
+                in_str = false;
+            }
+            continue;
+        }
+        switch (c) {
+            '"' => in_str = true,
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if (depth == 0) return i + 1;
+            },
+            else => {},
+        }
+    }
+    return json.len;
+}
+
+// ── Episodes fetch (/tv/{id}/season/{n}) ──
+
+fn fetchEpisodes(tmdb_id: i32, season_number: i32) void {
+    if (state.app.tmdb.api_key_len == 0) return;
+    state.app.tmdb.tv_episodes_loading = true;
+    state.app.tmdb.tv_episode_count = 0;
+    const my_gen = tv_gen.load(.acquire);
+
+    if (std.Thread.spawn(.{}, fetchEpisodesThread, .{ tmdb_id, season_number, my_gen })) |th| {
+        th.detach(); // never joined — detach to avoid leaking the handle
+    } else |_| {
+        state.app.tmdb.tv_episodes_loading = false;
+    }
+}
+
+fn fetchEpisodesThread(tmdb_id: i32, season_number: i32, my_gen: u32) void {
+    defer state.app.tmdb.tv_episodes_loading = false;
+
+    var url_buf: [160]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org/3/tv/{d}/season/{d}", .{ tmdb_id, season_number }) catch return;
+
+    const buf = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(buf);
+    const bytes = tvCurl(url, buf);
+    if (bytes == 0) return;
+    const body = buf[0..bytes];
+
+    if (tv_gen.load(.acquire) != my_gen) return;
+
+    parseEpisodes(body);
+
+    if (tv_gen.load(.acquire) != my_gen) return;
+
+    // Hydrate watched flags from the DB for this season's loaded range. Zero
+    // first (tvLoadWatched only sets trues), then load.
+    const count = state.app.tmdb.tv_episode_count;
+    for (0..@min(count, state.app.tmdb.tv_episode_watched.len)) |i| state.app.tmdb.tv_episode_watched[i] = false;
+    if (count > 0 and season_number >= 0) {
+        db.tvLoadWatched(tmdb_id, @intCast(season_number), state.app.tmdb.tv_episode_watched[0..count]);
+    }
+
+    logs.pushLog("info", "tmdb", "TV episodes loaded", false);
+}
+
+/// Scan TMDB /tv/{id}/season/{n} JSON for the `episodes` array, filling
+/// tv_episodes (cap 120).
+fn parseEpisodes(json: []const u8) void {
+    const t = &state.app.tmdb;
+    t.tv_episode_count = 0;
+
+    const arr_key = std.mem.indexOf(u8, json, "\"episodes\":") orelse return;
+    var pos = arr_key + "\"episodes\":".len;
+    while (pos < json.len and json[pos] != '[') : (pos += 1) {}
+    if (pos >= json.len) return;
+    const arr_end = arrayEnd(json, pos);
+    const arr = json[pos..arr_end];
+
+    var p: usize = 0;
+    while (t.tv_episode_count < t.tv_episodes.len) {
+        const found = nextJsonObject(arr, p) orelse break;
+        const obj = found.obj;
+        p = found.end;
+
+        var e = &t.tv_episodes[t.tv_episode_count];
+        e.* = .{};
+        e.episode_number = jsonInt(obj, "\"episode_number\":");
+        e.name_len = jsonStr(obj, "\"name\":\"", &e.name);
+        e.overview_len = jsonStr(obj, "\"overview\":\"", &e.overview);
+        e.air_date_len = jsonStr(obj, "\"air_date\":\"", &e.air_date);
+        e.still_path_len = jsonStr(obj, "\"still_path\":\"", &e.still_path);
+        e.vote_average = jsonFloat(obj, "\"vote_average\":");
+        e.runtime = @intCast(@max(0, jsonInt(obj, "\"runtime\":")));
+
+        t.tv_episode_count += 1;
+    }
+}
+
+// ── curl + tiny JSON scan helpers (bounds-capped to the dst buffers) ──
+
+/// GET `url` with the TMDB Bearer token via curl (io_global.Child), writing the
+/// response body into `buf`. Returns the byte count (0 on failure). The caller
+/// owns `buf` (so it can free the FULL allocation — the DebugAllocator rejects
+/// freeing a resized sub-slice, which is why we don't return an owned slice).
+fn tvCurl(url: []const u8, buf: []u8) usize {
+    var auth_buf: [300]u8 = undefined;
+    const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
+    const auth = std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{key}) catch return 0;
+
+    const argv = [_][]const u8{ "curl", "-s", "-H", auth, "--max-time", "12", url };
+    var child = io.Child.init(&argv, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    _ = child.spawn() catch return 0;
+
+    const bytes = if (child.stdout) |*stdout| io.readAll(stdout, buf) catch 0 else 0;
+    _ = child.wait() catch {};
+    return bytes;
+}
+
+/// Parse the integer at the very start of `s` (used right after a key offset).
+/// Handles an optional leading '-'.
+fn jsonIntHere(s: []const u8) i32 {
+    var i: usize = 0;
+    while (i < s.len and (s[i] == ' ' or s[i] == ':')) : (i += 1) {}
+    var neg = false;
+    if (i < s.len and s[i] == '-') {
+        neg = true;
+        i += 1;
+    }
+    const start = i;
+    while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {}
+    if (i == start) return 0;
+    const v = std.fmt.parseInt(i32, s[start..i], 10) catch return 0;
+    return if (neg) -v else v;
+}
+
+/// Find `key` in `obj` and parse the integer that follows. `null` (no digits)
+/// → 0. Returns 0 if the key is absent.
+fn jsonInt(obj: []const u8, key: []const u8) i32 {
+    const idx = std.mem.indexOf(u8, obj, key) orelse return 0;
+    return jsonIntHere(obj[idx + key.len ..]);
+}
+
+/// Find `key` in `obj` and parse the float that follows (0 on absence/error).
+fn jsonFloat(obj: []const u8, key: []const u8) f32 {
+    const idx = std.mem.indexOf(u8, obj, key) orelse return 0;
+    var p = idx + key.len;
+    while (p < obj.len and (obj[p] == ' ' or obj[p] == ':')) : (p += 1) {}
+    const start = p;
+    while (p < obj.len and ((obj[p] >= '0' and obj[p] <= '9') or obj[p] == '.' or obj[p] == '-')) : (p += 1) {}
+    if (p == start) return 0;
+    return std.fmt.parseFloat(f32, obj[start..p]) catch 0;
+}
+
+/// Find `quoted_key` (which must include the opening `"..":"`) in `obj`, copy
+/// the string value into `dst` (bounded), and return the byte length. Handles
+/// a JSON `null` value (→ 0) and \" escapes inside the string. Drops the
+/// backslash on recognized escapes; keeps everything else verbatim.
+fn jsonStr(obj: []const u8, quoted_key: []const u8, dst: []u8) usize {
+    const idx = std.mem.indexOf(u8, obj, quoted_key) orelse return 0;
+    const start = idx + quoted_key.len;
+    var i = start;
+    var out: usize = 0;
+    while (i < obj.len and out < dst.len) {
+        const c = obj[i];
+        if (c == '"') break;
+        if (c == '\\' and i + 1 < obj.len) {
+            const esc = obj[i + 1];
+            const repl: u8 = switch (esc) {
+                '"' => '"',
+                '\\' => '\\',
+                '/' => '/',
+                'n' => '\n',
+                't' => '\t',
+                'r' => '\r',
+                else => 0,
+            };
+            if (repl != 0) {
+                dst[out] = repl;
+                out += 1;
+                i += 2;
+                continue;
+            }
+            // Unknown escape (incl. \uXXXX) — keep the backslash verbatim.
+            dst[out] = '\\';
+            out += 1;
+            i += 1;
+            continue;
+        }
+        dst[out] = c;
+        out += 1;
+        i += 1;
+    }
+    return out;
+}
+
+// ── Watched-tracking helpers ──
+
+/// Number of watched episodes in the loaded range.
+fn tvWatchedCount() usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < state.app.tmdb.tv_episode_count and i < state.app.tmdb.tv_episode_watched.len) : (i += 1) {
+        if (state.app.tmdb.tv_episode_watched[i]) n += 1;
+    }
+    return n;
+}
+
+/// Lowest 1-based episode_number not yet watched (for Resume). Falls back to the
+/// first loaded episode's number, or 1.
+fn tvNextUnwatched() i32 {
+    var i: usize = 0;
+    while (i < state.app.tmdb.tv_episode_count and i < state.app.tmdb.tv_episode_watched.len) : (i += 1) {
+        if (!state.app.tmdb.tv_episode_watched[i]) return state.app.tmdb.tv_episodes[i].episode_number;
+    }
+    if (state.app.tmdb.tv_episode_count > 0) return state.app.tmdb.tv_episodes[0].episode_number;
+    return 1;
+}
+
+/// Season number for the currently-selected season (0 if none).
+fn tvSelSeasonNumber() i32 {
+    const t = &state.app.tmdb;
+    if (t.tv_sel_season < t.tv_season_count) return t.tv_seasons[t.tv_sel_season].season_number;
+    return 0;
+}
+
+/// Toggle episode `ep` (1-based episode_number) watched ↔ unwatched. `ep_idx` is
+/// the array index of that episode. Flips the flag + persists to the DB.
+fn tvToggleWatched(ep_idx: usize, ep: i32) void {
+    if (ep_idx >= state.app.tmdb.tv_episode_watched.len) return;
+    if (ep < 1) return;
+    const flag = !state.app.tmdb.tv_episode_watched[ep_idx];
+    state.app.tmdb.tv_episode_watched[ep_idx] = flag;
+    const season = tvSelSeasonNumber();
+    if (season >= 0) db.tvMarkWatched(state.app.tmdb.tv_id, @intCast(season), @intCast(ep), flag);
+}
+
+// ── Episode playback ──
+
+/// Play a specific episode of the selected season. Marks it watched + upserts
+/// the Continue entry, then resolves a torrent for "{name} SxxEyy" in a worker.
+fn playTvEpisode(episode: i32) void {
+    const t = &state.app.tmdb;
+    const season = tvSelSeasonNumber();
+    if (episode < 1 or season < 0) return;
+
+    // Mark watched immediately (UI + DB) and update the loaded flag if visible.
+    var i: usize = 0;
+    while (i < t.tv_episode_count) : (i += 1) {
+        if (t.tv_episodes[i].episode_number == episode) {
+            if (i < t.tv_episode_watched.len) t.tv_episode_watched[i] = true;
+            break;
+        }
+    }
+    db.tvMarkWatched(t.tv_id, @intCast(season), @intCast(episode), true);
+    db.tvUpsertContinue(t.tv_id, t.tv_name[0..t.tv_name_len], t.tv_poster_path[0..t.tv_poster_path_len], @intCast(season), @intCast(episode));
+
+    // Build "{name} S01E02" (zero-padded) and copy BY VALUE into the worker.
+    var qbuf: [256]u8 = std.mem.zeroes([256]u8);
+    const name = safeUtf8(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)]);
+    const q = std.fmt.bufPrint(&qbuf, "{s} S{d:0>2}E{d:0>2}", .{ name, season, episode }) catch return;
+    var qcopy: [256]u8 = std.mem.zeroes([256]u8);
+    const qlen = @min(q.len, qcopy.len);
+    @memcpy(qcopy[0..qlen], q[0..qlen]);
+
+    state.app.tmdb.tv_stream_loading = true;
+    if (std.Thread.spawn(.{}, playTvEpisodeThread, .{ qcopy, qlen })) |th| {
+        th.detach(); // never joined — detach to avoid leaking the handle
+    } else |_| {
+        state.app.tmdb.tv_stream_loading = false;
+    }
+}
+
+fn playTvEpisodeThread(qbuf: [256]u8, qlen: usize) void {
+    defer state.app.tmdb.tv_stream_loading = false;
+
+    const query = qbuf[0..qlen];
+    logs.pushLog("info", "tmdb", "Resolving TV episode stream...", false);
+
+    resolver.resolve(query, "tv");
+
+    var waited: usize = 0;
+    while (resolver.isResolving() and waited < 100) : (waited += 1) {
+        io.sleep(100 * std.time.ns_per_ms);
+    }
+
+    resolver.results_mutex.lock();
+    defer resolver.results_mutex.unlock();
+    for (0..resolver.result_count) |i| {
+        const item = resolver.results[i];
+        if (item.source == .torrent or item.source == .stremio) {
+            search.loadTorrentToPlayer(item.url[0..item.url_len]);
+            logs.pushLog("info", "tmdb", "Playing TV episode", false);
+            return;
+        }
+    }
+    logs.pushLog("error", "tmdb", "No streams found for episode. Try universal search.", true);
+}
+
+// ══════════════════════════════════════════════════════════
+// TV detail view UI
+// ══════════════════════════════════════════════════════════
+
+fn renderTvDetail() void {
+    const t = &state.app.tmdb;
+
+    var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+    defer page.deinit();
+
+    // ── Header: Back + show name ──
+    {
+        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
+            .background = true,
+            .color_fill = theme.colors.bg_card,
+        });
+        defer hdr.deinit();
+
+        if (dvui.button(@src(), "< Back", .{}, .{
+            .color_fill = theme.colors.accent,
+            .color_text = dvui.Color.white,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            .margin = .{ .x = 0, .y = 0, .w = 10, .h = 0 },
+            .gravity_y = 0.5,
+        })) {
+            closeTvDetail();
+            return;
+        }
+
+        _ = dvui.label(@src(), "{s}", .{safeUtf8(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)])}, .{
+            .color_text = theme.colors.text_main,
+            .expand = .horizontal,
+            .font = dvui.themeGet().font_heading,
+            .gravity_y = 0.5,
+        });
+    }
+
+    if (t.tv_stream_loading) {
+        _ = dvui.label(@src(), "Loading stream...", .{}, .{
+            .color_text = theme.colors.accent,
+            .padding = .{ .x = 12, .y = 6, .w = 0, .h = 0 },
+        });
+    }
+
+    // ── Season selector row ──
+    if (t.tv_seasons_loading and t.tv_season_count == 0) {
+        _ = dvui.label(@src(), "Loading seasons...", .{}, .{
+            .color_text = theme.colors.accent,
+            .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
+        });
+        return;
+    }
+
+    {
+        var sbar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 4 },
+        });
+        defer sbar.deinit();
+
+        var si: usize = 0;
+        while (si < t.tv_season_count) : (si += 1) {
+            const sn = t.tv_seasons[si].season_number;
+            const active = si == t.tv_sel_season;
+            var lbl_buf: [16]u8 = undefined;
+            const lbl = if (sn == 0)
+                "Specials"
+            else
+                (std.fmt.bufPrint(&lbl_buf, "S{d}", .{sn}) catch "S?");
+            if (dvui.button(@src(), lbl, .{}, .{
+                .id_extra = si + 30000,
+                .background = true,
+                .color_fill = if (active) theme.colors.accent else theme.colors.bg_card,
+                .color_text = if (active) dvui.Color.white else theme.colors.text_muted,
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+                .margin = .{ .x = 0, .y = 0, .w = 4, .h = 4 },
+            })) {
+                if (si != t.tv_sel_season) {
+                    t.tv_sel_season = si;
+                    // New generation supersedes any in-flight episode fetch.
+                    _ = tv_gen.fetchAdd(1, .acq_rel);
+                    fetchEpisodes(t.tv_id, sn);
+                }
+            }
+        }
+    }
+
+    // ── Progress line + Resume ──
+    if (t.tv_episode_count > 0) {
+        var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = 8, .y = 2, .w = 8, .h = 4 },
+        });
+        defer prow.deinit();
+
+        const watched = tvWatchedCount();
+        const total = t.tv_episode_count;
+        const next_ep = tvNextUnwatched();
+
+        if (dvui.button(@src(), "Resume", .{}, .{
+            .color_fill = theme.colors.accent,
+            .color_text = dvui.Color.white,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
+            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+            .gravity_y = 0.5,
+        })) {
+            playTvEpisode(next_ep);
+        }
+
+        {
+            var rl: [16]u8 = undefined;
+            const rs = std.fmt.bufPrint(&rl, "E{d}", .{next_ep}) catch "";
+            _ = dvui.label(@src(), "{s}", .{rs}, .{
+                .color_text = theme.colors.text_muted,
+                .gravity_y = 0.5,
+                .padding = .{ .x = 0, .y = 0, .w = 12, .h = 0 },
+            });
+        }
+
+        {
+            var cb: [32]u8 = undefined;
+            const cs = std.fmt.bufPrint(&cb, "{d}/{d} watched", .{ watched, total }) catch "";
+            _ = dvui.label(@src(), "{s}", .{cs}, .{
+                .color_text = theme.colors.text_main,
+                .gravity_y = 0.5,
+            });
+        }
+    }
+
+    // ── Episode list ──
+    if (t.tv_episodes_loading and t.tv_episode_count == 0) {
+        _ = dvui.label(@src(), "Loading episodes...", .{}, .{
+            .color_text = theme.colors.accent,
+            .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
+        });
+        return;
+    }
+
+    if (t.tv_episode_count == 0) {
+        _ = dvui.label(@src(), "No episodes available.", .{}, .{
+            .color_text = theme.colors.text_muted,
+            .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
+        });
+        return;
+    }
+
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
+    defer scroll.deinit();
+
+    var ei: usize = 0;
+    while (ei < t.tv_episode_count) : (ei += 1) {
+        const e = &t.tv_episodes[ei];
+        const is_watched = ei < t.tv_episode_watched.len and t.tv_episode_watched[ei];
+
+        const fill_color = if (is_watched)
+            dvui.Color{ .r = 18, .g = 22, .b = 30, .a = 255 }
+        else
+            theme.colors.bg_card;
+
+        var ecard = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = ei + 40000,
+            .expand = .horizontal,
+            .background = true,
+            .color_fill = fill_color,
+            .color_border = theme.colors.bg_header_border,
+            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+            .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
+        });
+        defer ecard.deinit();
+
+        // Top row: watched toggle + "E{n}  {name}" + Play.
+        {
+            var top = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = ei + 41000,
+                .expand = .horizontal,
+            });
+            defer top.deinit();
+
+            const chk_label: []const u8 = if (is_watched) "\xe2\x9c\x93" else "\xe2\x97\x8b"; // ✓ / ○
+            if (dvui.button(@src(), chk_label, .{}, .{
+                .id_extra = ei + 41100,
+                .background = true,
+                .color_fill = if (is_watched) theme.colors.success else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_text = if (is_watched) dvui.Color.white else theme.colors.text_muted,
+                .corner_radius = dvui.Rect.all(10),
+                .padding = .{ .x = 5, .y = 1, .w = 5, .h = 1 },
+                .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+                .gravity_y = 0.5,
+            })) {
+                tvToggleWatched(ei, e.episode_number);
+            }
+
+            // "E{n}  {name}" — clickable to play.
+            var title_buf: [160]u8 = undefined;
+            const ep_name = safeUtf8(e.name[0..@min(e.name_len, e.name.len)]);
+            const title = std.fmt.bufPrint(&title_buf, "E{d}  {s}", .{ e.episode_number, ep_name }) catch ep_name;
+            if (dvui.button(@src(), title, .{}, .{
+                .id_extra = ei + 41200,
+                .expand = .horizontal,
+                .color_text = if (is_watched) theme.colors.text_muted else theme.colors.text_main,
+                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+                .gravity_y = 0.5,
+            })) {
+                playTvEpisode(e.episode_number);
+            }
+
+            if (dvui.button(@src(), "Play", .{}, .{
+                .id_extra = ei + 41300,
+                .color_fill = theme.colors.accent,
+                .color_text = dvui.Color.white,
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
+                .gravity_y = 0.5,
+            })) {
+                playTvEpisode(e.episode_number);
+            }
+        }
+
+        // Muted meta line: {air_date} · {runtime}m · {vote%}.
+        {
+            var meta: [64]u8 = undefined;
+            const pct = @as(u8, @intFromFloat(std.math.clamp(e.vote_average * 10.0, 0.0, 100.0)));
+            const air = e.air_date[0..@min(e.air_date_len, e.air_date.len)];
+            const ms = std.fmt.bufPrint(&meta, "{s} · {d}m · {d}%", .{ air, e.runtime, pct }) catch "";
+            _ = dvui.label(@src(), "{s}", .{ms}, .{
+                .id_extra = ei + 41400,
+                .color_text = theme.colors.text_muted,
+                .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+            });
+        }
+    }
 }

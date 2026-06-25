@@ -90,6 +90,44 @@ pub const BrowserLink = struct {
     text_len: usize = 0,
 };
 
+/// One TV season (from TMDB /tv/{id} → seasons[]).
+pub const TvSeason = struct {
+    season_number: i32 = 0,
+    name: [64]u8 = std.mem.zeroes([64]u8),
+    name_len: usize = 0,
+    episode_count: u16 = 0,
+    air_date: [12]u8 = std.mem.zeroes([12]u8),
+    air_date_len: usize = 0,
+    poster_path: [64]u8 = std.mem.zeroes([64]u8),
+    poster_path_len: usize = 0,
+};
+
+/// One TV episode (from TMDB /tv/{id}/season/{n} → episodes[]).
+pub const TvEpisode = struct {
+    episode_number: i32 = 0,
+    name: [128]u8 = std.mem.zeroes([128]u8),
+    name_len: usize = 0,
+    overview: [512]u8 = std.mem.zeroes([512]u8),
+    overview_len: usize = 0,
+    air_date: [12]u8 = std.mem.zeroes([12]u8),
+    air_date_len: usize = 0,
+    still_path: [80]u8 = std.mem.zeroes([80]u8),
+    still_path_len: usize = 0,
+    vote_average: f32 = 0,
+    runtime: u16 = 0,
+};
+
+/// One TV Continue-Watching entry (resume the next episode of a series).
+pub const TvContinueItem = struct {
+    tmdb_id: i32 = 0,
+    name: [128]u8 = std.mem.zeroes([128]u8),
+    name_len: usize = 0,
+    poster_path: [64]u8 = std.mem.zeroes([64]u8),
+    poster_path_len: usize = 0,
+    season: u16 = 0,
+    episode: u16 = 0,
+};
+
 pub const TmdbItem = struct {
     id: i32 = 0,
     title: [128]u8 = std.mem.zeroes([128]u8),
@@ -352,6 +390,27 @@ pub const AppState = struct {
         loaded_once: bool = false,
         // Gallery card target width (px) — user-cyclable compact/normal/large/xl.
         card_w: f32 = 124,
+
+        // ── TV seasons/episodes detail (Netflix-style drill-down) ──
+        // Opened by clicking a media_type=="tv" card. seasons from /tv/{id};
+        // episodes from /tv/{id}/season/{n}; episode → resolver play; watched
+        // flags persisted via db tv_watched.
+        tv_detail_open: bool = false,
+        tv_id: i32 = 0,
+        tv_name: [128]u8 = std.mem.zeroes([128]u8),
+        tv_name_len: usize = 0,
+        tv_poster_path: [64]u8 = std.mem.zeroes([64]u8),
+        tv_poster_path_len: usize = 0,
+        tv_seasons: [40]TvSeason = std.mem.zeroes([40]TvSeason),
+        tv_season_count: usize = 0,
+        tv_sel_season: usize = 0, // index into tv_seasons
+        tv_seasons_loading: bool = false,
+        tv_episodes: [120]TvEpisode = std.mem.zeroes([120]TvEpisode),
+        tv_episode_count: usize = 0,
+        tv_episodes_loading: bool = false,
+        // episode N of the selected season → tv_episode_watched[N-1].
+        tv_episode_watched: [120]bool = std.mem.zeroes([120]bool),
+        tv_stream_loading: bool = false,
     } = .{},
 
     // ── OpenSubtitles ──
