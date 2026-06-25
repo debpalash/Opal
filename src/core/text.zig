@@ -22,6 +22,21 @@ pub fn safeUtf8(s: []const u8) []const u8 {
     return s[0..i];
 }
 
+/// Like `safeUtf8`, but first copies `s` into `out` and validates the COPY.
+///
+/// `safeUtf8` returns a slice that still points at the source bytes. When the
+/// source is a `results[]` title/overview that a background fetch worker may
+/// rewrite mid-frame, dvui can read bytes that changed AFTER validation and hit
+/// its `utf8ByteSequenceLength(...) catch unreachable` panic (Utf8Invalid…).
+/// Validating a stable stack copy makes the returned slice immune to that race
+/// (worst case is a momentarily-garbled label, never a crash). Pass a stack
+/// buffer as `out`.
+pub fn safeUtf8Buf(s: []const u8, out: []u8) []const u8 {
+    const n = @min(s.len, out.len);
+    @memcpy(out[0..n], s[0..n]);
+    return safeUtf8(out[0..n]);
+}
+
 test "safeUtf8 passes valid through and trims invalid tail" {
     try std.testing.expectEqualStrings("hello", safeUtf8("hello"));
     // Valid 2-byte é (0xC3 0xA9) then a lone continuation byte 0xA9.

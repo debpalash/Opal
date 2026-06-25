@@ -6,6 +6,7 @@ const icons = @import("icons");
 const logs = @import("../core/logs.zig");
 const player = @import("../player/player.zig");
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
+const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 const poster = @import("../core/poster.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
@@ -2210,7 +2211,8 @@ fn renderHoverMeta(item: *state.AnimeResult, idx: usize) void {
     defer ov.deinit();
 
     // Title (full, wraps).
-    _ = dvui.label(@src(), "{s}", .{safeUtf8(item.name[0..@min(item.name_len, item.name.len)])}, .{
+    var hover_name_buf: [128]u8 = undefined;
+    _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(item.name[0..@min(item.name_len, item.name.len)], &hover_name_buf)}, .{
         .id_extra = idx + 1601,
         .expand = .horizontal,
         .color_text = theme.colors.text_main,
@@ -2241,7 +2243,8 @@ fn renderHoverMeta(item: *state.AnimeResult, idx: usize) void {
 
     // Synopsis (truncated ~300 chars; safeUtf8 trims any mid-codepoint cut).
     if (item.overview_len > 0) {
-        _ = dvui.label(@src(), "{s}", .{safeUtf8(item.overview[0..@min(item.overview_len, 300)])}, .{
+        var hover_ov_buf: [512]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(item.overview[0..@min(item.overview_len, 300)], &hover_ov_buf)}, .{
             .id_extra = idx + 1605,
             .expand = .horizontal,
             .color_text = theme.colors.text_secondary,
@@ -2251,7 +2254,10 @@ fn renderHoverMeta(item: *state.AnimeResult, idx: usize) void {
 
 fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
     if (item.name_len == 0) return;
-    const title = item.name[0..item.name_len];
+    // Snapshot+validate: a fetch worker can rewrite item.name mid-frame; dvui
+    // panics on invalid UTF-8 it reads after validation (Utf8Invalid…).
+    var title_buf: [128]u8 = undefined;
+    const title = safeUtf8Buf(item.name[0..item.name_len], &title_buf);
     const hue: u32 = @as(u32, @intCast(idx * 7 + 42)) *% 2654435761;
     const h1: u8 = @truncate(hue & 0xFF);
     const h2: u8 = @truncate((hue >> 8) & 0xFF);

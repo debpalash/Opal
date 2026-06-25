@@ -18,6 +18,7 @@ pub const loadLists = store.loadLists;
 /// Re-export the shared valid-UTF-8 guard (see core/text.zig). Free text drawn
 /// by dvui must pass through this or dvui's layout can panic on stray bytes.
 pub const safeUtf8 = @import("../core/text.zig").safeUtf8;
+pub const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 
 /// Free poster pixel buffers that a fetch worker produced but the renderer
 /// never uploaded (off-screen cards, or fetched right before exit). Only
@@ -397,7 +398,8 @@ fn renderHoverMeta(item: *state.TmdbItem, idx: usize) void {
 
     // Overview (truncated; safeUtf8 trims any mid-codepoint cut).
     if (item.overview_len > 0) {
-        _ = dvui.label(@src(), "{s}", .{safeUtf8(item.overview[0..@min(item.overview_len, 320)])}, .{
+        var ov_buf: [320]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(item.overview[0..@min(item.overview_len, 320)], &ov_buf)}, .{
             .id_extra = idx + 165,
             .expand = .horizontal,
             .color_text = theme.colors.text_secondary,
@@ -407,7 +409,11 @@ fn renderHoverMeta(item: *state.TmdbItem, idx: usize) void {
 
 /// Render a single poster card in the grid layout
 pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h: f32) void {
-    const title = safeUtf8(item.title[0..@min(item.title_len, item.title.len)]);
+    // Validate a STABLE COPY: a background fetch worker can rewrite this title in
+    // results[] mid-frame, and dvui panics on invalid UTF-8 it reads after we
+    // validated. safeUtf8Buf snapshots first → never a Utf8Invalid… crash.
+    var title_buf: [128]u8 = undefined;
+    const title = safeUtf8Buf(item.title[0..@min(item.title_len, item.title.len)], &title_buf);
     const hue: u32 = @as(u32, @bitCast(item.id)) *% 2654435761;
     const h1: u8 = @truncate(hue & 0xFF);
     const h2: u8 = @truncate((hue >> 8) & 0xFF);
@@ -594,7 +600,8 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
 }
 
 fn renderCard(item: *state.TmdbItem, idx: usize) void {
-    const title = safeUtf8(item.title[0..@min(item.title_len, item.title.len)]);
+    var title_buf: [128]u8 = undefined;
+    const title = safeUtf8Buf(item.title[0..@min(item.title_len, item.title.len)], &title_buf);
     const hue: u32 = @as(u32, @bitCast(item.id)) *% 2654435761;
     const h1: u8 = @truncate(hue & 0xFF);
     const h2: u8 = @truncate((hue >> 8) & 0xFF);
@@ -708,7 +715,8 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
 
         // Genre (click to expand/collapse overview)
         if (item.genre_text_len > 0) {
-            if (dvui.button(@src(), safeUtf8(item.genre_text[0..item.genre_text_len]), .{}, .{
+            var genre_buf: [64]u8 = undefined;
+            if (dvui.button(@src(), safeUtf8Buf(item.genre_text[0..item.genre_text_len], &genre_buf), .{}, .{
                 .id_extra = idx + 650,
                 .color_text = theme.colors.text_muted,
                 .expand = .horizontal,
@@ -721,7 +729,8 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
 
         // Expanded overview
         if (item.expanded and item.overview_len > 0) {
-            _ = dvui.label(@src(), "{s}", .{safeUtf8(item.overview[0..item.overview_len])}, .{
+            var ov2_buf: [512]u8 = undefined;
+            _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(item.overview[0..@min(item.overview_len, ov2_buf.len)], &ov2_buf)}, .{
                 .id_extra = idx + 700,
                 .color_text = theme.colors.text_muted,
                 .expand = .horizontal,
@@ -1293,7 +1302,8 @@ fn playTvEpisode(episode: i32) void {
 
     // Build "{name} S01E02" (zero-padded) and copy BY VALUE into the worker.
     var qbuf: [256]u8 = std.mem.zeroes([256]u8);
-    const name = safeUtf8(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)]);
+    var tv_name_buf: [128]u8 = undefined;
+    const name = safeUtf8Buf(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)], &tv_name_buf);
     const q = std.fmt.bufPrint(&qbuf, "{s} S{d:0>2}E{d:0>2}", .{ name, season, episode }) catch return;
     var qcopy: [256]u8 = std.mem.zeroes([256]u8);
     const qlen = @min(q.len, qcopy.len);
@@ -1365,7 +1375,8 @@ fn renderTvDetail() void {
             return;
         }
 
-        _ = dvui.label(@src(), "{s}", .{safeUtf8(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)])}, .{
+        var tvn_buf: [128]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)], &tvn_buf)}, .{
             .color_text = theme.colors.text_main,
             .expand = .horizontal,
             .font = dvui.themeGet().font_heading,
@@ -1532,7 +1543,8 @@ fn renderTvDetail() void {
 
             // "E{n}  {name}" — clickable to play.
             var title_buf: [160]u8 = undefined;
-            const ep_name = safeUtf8(e.name[0..@min(e.name_len, e.name.len)]);
+            var ep_name_buf: [128]u8 = undefined;
+            const ep_name = safeUtf8Buf(e.name[0..@min(e.name_len, e.name.len)], &ep_name_buf);
             const title = std.fmt.bufPrint(&title_buf, "E{d}  {s}", .{ e.episode_number, ep_name }) catch ep_name;
             if (dvui.button(@src(), title, .{}, .{
                 .id_extra = ei + 41200,
