@@ -42,8 +42,7 @@ fn formatHmsBuf(buf: []u8, sec: u32) []const u8 {
 
 /// Returns true when the mouse is over the given screen rect this frame.
 fn mouseOverRect(rect: dvui.Rect.Physical) bool {
-    return state.app.last_mouse_x >= rect.x and state.app.last_mouse_x <= rect.x + rect.w
-        and state.app.last_mouse_y >= rect.y and state.app.last_mouse_y <= rect.y + rect.h;
+    return state.app.last_mouse_x >= rect.x and state.app.last_mouse_x <= rect.x + rect.w and state.app.last_mouse_y >= rect.y and state.app.last_mouse_y <= rect.y + rect.h;
 }
 
 pub fn aspectDropdownMenu(ctx: *c.mpv.mpv_handle, id_extra: usize) void {
@@ -59,9 +58,7 @@ pub fn aspectDropdownMenu(ctx: *c.mpv.mpv_handle, id_extra: usize) void {
     var btn_lbl: [32]u8 = undefined;
     const label = std.fmt.bufPrintZ(&btn_lbl, "{s}", .{current_ar}) catch "AR";
 
-
-
-    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_fill = dvui.Color{ .r=0, .g=0, .b=0, .a=0 }, .color_text = theme.colors.text_muted })) |r| {
+    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_muted })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
         var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_drawer, .border = dvui.Rect.all(1), .color_border = theme.colors.border_drawer });
@@ -69,7 +66,7 @@ pub fn aspectDropdownMenu(ctx: *c.mpv.mpv_handle, id_extra: usize) void {
 
         const modes = [_][]const u8{ "-1", "16:9", "4:3", "21:9" };
         const mode_labels = [_][]const u8{ "Auto", "16:9", "4:3", "21:9" };
-        
+
         for (modes, 0..) |mode, k| {
             if (dvui.menuItemLabel(@src(), mode_labels[k], .{}, .{ .id_extra = k, .expand = .horizontal, .color_text = theme.colors.text_main })) |_| {
                 var set_cmd_buf: [64]u8 = undefined;
@@ -84,10 +81,10 @@ pub fn aspectDropdownMenu(ctx: *c.mpv.mpv_handle, id_extra: usize) void {
 pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
     var count: i64 = 0;
     _ = c.mpv.mpv_get_property(ctx, "track-list/count", c.mpv.MPV_FORMAT_INT64, &count);
-    
+
     var active_title: []const u8 = "None";
     var active_buf: [32]u8 = undefined;
-    
+
     for (0..@as(usize, @intCast(@max(@as(i64, 0), count)))) |i| {
         var qtype_buf: [64]u8 = undefined;
         const type_query = std.fmt.bufPrintZ(&qtype_buf, "track-list/{d}/type", .{i}) catch continue;
@@ -127,9 +124,7 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
     const label = std.fmt.bufPrintZ(&btn_lbl, "{s}", .{active_title}) catch "Trax";
     const kind_id: usize = if (is_aud) 1 else 2;
 
-
-
-    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = kind_id, .gravity_y = 0.5, .color_fill = dvui.Color{ .r=0, .g=0, .b=0, .a=0 }, .color_text = theme.colors.text_muted })) |r| {
+    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = kind_id, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_muted })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
         var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_drawer, .border = dvui.Rect.all(1), .color_border = theme.colors.border_drawer });
@@ -149,11 +144,11 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
 
                     var row_name: []const u8 = "Unknown Track";
                     var name_buf: [64]u8 = undefined;
-                    
+
                     var qlang_buf: [64]u8 = undefined;
                     const lang_q = std.fmt.bufPrintZ(&qlang_buf, "track-list/{d}/lang", .{i}) catch continue;
                     const lang_c = c.mpv.mpv_get_property_string(ctx, lang_q.ptr);
-                    
+
                     if (lang_c != null) {
                         defer c.mpv.mpv_free(@ptrCast(lang_c));
                         row_name = std.fmt.bufPrint(&name_buf, "{s}", .{std.mem.span(lang_c)}) catch "Err";
@@ -172,7 +167,7 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
                     if (dvui.menuItemLabel(@src(), row_name, .{}, .{ .id_extra = i, .expand = .horizontal, .color_text = theme.colors.text_main })) |_| {
                         var set_cmd_buf: [64]u8 = undefined;
                         const prop = if (is_aud) "aid" else "sid";
-                        if (std.fmt.bufPrintZ(&set_cmd_buf, "set {s} {d}", .{prop, t_id})) |cmd| {
+                        if (std.fmt.bufPrintZ(&set_cmd_buf, "set {s} {d}", .{ prop, t_id })) |cmd| {
                             _ = c.mpv.mpv_command_string(ctx, cmd.ptr);
                         } else |_| {}
                     }
@@ -188,9 +183,7 @@ pub fn playlistDropdownMenu(p: *player.MediaPlayer) void {
     const file_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, p.current_torrent_id);
     if (file_count <= 1) return;
 
-
-
-    if (dvui.menuItemLabel(@src(), "Files", .{ .submenu = true }, .{ .id_extra = 99, .gravity_y = 0.5, .color_fill = dvui.Color{ .r=0, .g=0, .b=0, .a=0 }, .color_text = theme.colors.text_muted })) |r| {
+    if (dvui.menuItemLabel(@src(), "Files", .{ .submenu = true }, .{ .id_extra = 99, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_muted })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
         var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_drawer, .border = dvui.Rect.all(1), .color_border = theme.colors.border_drawer });
@@ -199,20 +192,22 @@ pub fn playlistDropdownMenu(p: *player.MediaPlayer) void {
         for (0..@as(usize, @intCast(@max(@as(c_int, 0), file_count)))) |i| {
             var name_buf: [256]u8 = undefined;
             c.mpv.torrent_get_file_name(state.app.torrent_ses, p.current_torrent_id, @intCast(i), &name_buf, 256);
-            
+
             const size = c.mpv.torrent_get_file_size(state.app.torrent_ses, p.current_torrent_id, @intCast(i));
             const size_mb = @as(f64, @floatFromInt(size)) / 1024.0 / 1024.0;
-            
+
             var lbl_buf: [300]u8 = undefined;
             const label = std.fmt.bufPrintZ(&lbl_buf, "{s} ({d:.1} MB)", .{ std.mem.sliceTo(&name_buf, 0), size_mb }) catch "File";
 
-            if (dvui.menuItemLabel(@src(), label, .{}, .{ .id_extra = i, .expand = .horizontal,
+            if (dvui.menuItemLabel(@src(), label, .{}, .{
+                .id_extra = i,
+                .expand = .horizontal,
                 .color_text = if (p.selected_file_idx == @as(i32, @intCast(i))) theme.colors.accent else theme.colors.text_main,
             })) |_| {
                 if (p.selected_file_idx != @as(i32, @intCast(i))) {
                     // Stop current playback immediately
                     _ = c.mpv.mpv_command_string(p.mpv_ctx, "stop");
-                    
+
                     // Deprioritize old file, prioritize new one
                     const old_idx = p.selected_file_idx;
                     if (old_idx >= 0 and old_idx < file_count) {
@@ -231,16 +226,16 @@ pub fn subLanguageDropdown() void {
     const current_lang = state.app.sub_lang_buf[0..state.app.sub_lang_len];
     var btn_lbl: [16]u8 = undefined;
     const label = std.fmt.bufPrintZ(&btn_lbl, "{s}", .{current_lang}) catch "lang";
-    
-    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = 300, .gravity_y = 0.5, .color_fill = dvui.Color{ .r=0, .g=0, .b=0, .a=0 }, .color_text = theme.colors.text_muted })) |r| {
+
+    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = 300, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_muted })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
         var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_drawer, .border = dvui.Rect.all(1), .color_border = theme.colors.border_drawer });
         defer menu.deinit();
-        
+
         const langs = [_][]const u8{ "eng", "spa", "fre", "ger", "por", "ita", "dut", "pol", "rus", "chi", "jpn", "kor", "ara", "hin", "tur" };
         const lang_names = [_][]const u8{ "English", "Spanish", "French", "German", "Portuguese", "Italian", "Dutch", "Polish", "Russian", "Chinese", "Japanese", "Korean", "Arabic", "Hindi", "Turkish" };
-        
+
         for (langs, 0..) |l, k| {
             if (dvui.menuItemLabel(@src(), lang_names[k], .{}, .{ .id_extra = k, .expand = .horizontal, .color_text = theme.colors.text_main })) |_| {
                 @memcpy(state.app.sub_lang_buf[0..l.len], l);
@@ -568,7 +563,10 @@ fn renderScrubber(
         .background = false,
         .border = dvui.Rect.all(0),
     })) {
-        const S = struct { var last_seek_ms: i64 = 0; var last_seek_pct: f64 = -1.0; };
+        const S = struct {
+            var last_seek_ms: i64 = 0;
+            var last_seek_pct: f64 = -1.0;
+        };
         const seek_pct = @as(f64, slider_pct * 100.0);
         if (now_ms - S.last_seek_ms > 100 or @abs(seek_pct - S.last_seek_pct) > 2.0) {
             var buf: [64]u8 = undefined;
@@ -577,8 +575,7 @@ fn renderScrubber(
             } else |_| {}
 
             if (active_p.current_torrent_id >= 0 and now_ms - S.last_seek_ms > 500) {
-                c.mpv.torrent_seek_prioritize(state.app.torrent_ses, active_p.current_torrent_id,
-                    active_p.selected_file_idx, seek_pct);
+                c.mpv.torrent_seek_prioritize(state.app.torrent_ses, active_p.current_torrent_id, active_p.selected_file_idx, seek_pct);
             }
 
             S.last_seek_ms = now_ms;
@@ -742,7 +739,10 @@ fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
     if (open_picker != .chapter) return;
     var ch_count: i64 = 0;
     _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "chapter-list/count", c.mpv.MPV_FORMAT_INT64, &ch_count);
-    if (ch_count <= 0) { open_picker = .none; return; }
+    if (ch_count <= 0) {
+        open_picker = .none;
+        return;
+    }
 
     var current_ch: i64 = -1;
     _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "chapter", c.mpv.MPV_FORMAT_INT64, &current_ch);
@@ -974,9 +974,15 @@ fn renderLangPickerPopover() void {
 
 fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
     if (open_picker != .playlist) return;
-    if (active_p.current_torrent_id < 0) { open_picker = .none; return; }
+    if (active_p.current_torrent_id < 0) {
+        open_picker = .none;
+        return;
+    }
     const file_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, active_p.current_torrent_id);
-    if (file_count <= 1) { open_picker = .none; return; }
+    if (file_count <= 1) {
+        open_picker = .none;
+        return;
+    }
 
     var open: bool = true;
     var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
@@ -1034,11 +1040,7 @@ pub fn renderLiquidGlassOverlay() void {
     if (active_p.provider != .mpv) return;
 
     // Hide transport/badges when no media: no texture, no torrent, no URL loaded.
-    const has_media = active_p.texture != null
-        or active_p.torrent_is_ready
-        or active_p.current_torrent_id >= 0
-        or active_p.current_url_len > 0
-        or active_p.is_loading;
+    const has_media = active_p.texture != null or active_p.torrent_is_ready or active_p.current_torrent_id >= 0 or active_p.current_url_len > 0 or active_p.is_loading;
     if (!has_media) return;
 
     const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
@@ -1118,7 +1120,7 @@ pub fn renderLiquidGlassOverlay() void {
         _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "playlist-pos", c.mpv.MPV_FORMAT_INT64, &SlowProps.pl_pos);
     }
 
-    const toggle_icon = if (is_paused != 0) icons.tvg.lucide.@"play" else icons.tvg.lucide.@"pause";
+    const toggle_icon = if (is_paused != 0) icons.tvg.lucide.play else icons.tvg.lucide.pause;
 
     // ═══════════════════════════════════════════════════════════════
     // ROW 1 — Scrubber + chapter pips + hover time-at-cursor
@@ -1159,7 +1161,7 @@ pub fn renderLiquidGlassOverlay() void {
         }
 
         // Rewind 10s — 36px square.
-        if (dvui.buttonIcon(@src(), "rewind10", icons.tvg.lucide.@"rewind", .{}, .{}, .{
+        if (dvui.buttonIcon(@src(), "rewind10", icons.tvg.lucide.rewind, .{}, .{}, .{
             .data_out = &wd,
             .color_fill = transparent,
             .color_text = theme.colors.text_primary,
@@ -1368,7 +1370,10 @@ pub fn renderLiquidGlassOverlay() void {
         }
 
         // ── Spacer pushes pickers + close to the right edge ──
-        { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+        {
+            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            spacer.deinit();
+        }
 
         // ── Picker icon-chips: aspect, chapters, audio, subs, lang, files ──
 
@@ -1376,7 +1381,7 @@ pub fn renderLiquidGlassOverlay() void {
         {
             const ar_text = currentAspectChipText(active_p.mpv_ctx);
             const ar_active = !std.mem.eql(u8, ar_text, "Auto");
-            if (pickerIconChip(@src(), 700, icons.tvg.lucide.@"ratio", ar_text, ar_active, "Aspect ratio")) {
+            if (pickerIconChip(@src(), 700, icons.tvg.lucide.ratio, ar_text, ar_active, "Aspect ratio")) {
                 open_picker = if (open_picker == .aspect) .none else .aspect;
             }
         }
@@ -1386,7 +1391,7 @@ pub fn renderLiquidGlassOverlay() void {
             var chp_buf: [16]u8 = undefined;
             const chp = currentChapterChipText(active_p.mpv_ctx, &chp_buf);
             if (chp.count > 1) {
-                if (pickerIconChip(@src(), 701, icons.tvg.lucide.@"bookmark", chp.text, true, "Chapters")) {
+                if (pickerIconChip(@src(), 701, icons.tvg.lucide.bookmark, chp.text, true, "Chapters")) {
                     open_picker = if (open_picker == .chapter) .none else .chapter;
                 }
             }
@@ -1396,7 +1401,7 @@ pub fn renderLiquidGlassOverlay() void {
         {
             var aud_buf: [32]u8 = undefined;
             const aud = currentTrackChipText(active_p.mpv_ctx, "audio", &aud_buf);
-            if (pickerIconChip(@src(), 702, icons.tvg.lucide.@"music", aud.text, aud.active, "Audio track")) {
+            if (pickerIconChip(@src(), 702, icons.tvg.lucide.music, aud.text, aud.active, "Audio track")) {
                 open_picker = if (open_picker == .audio) .none else .audio;
             }
         }
@@ -1405,7 +1410,7 @@ pub fn renderLiquidGlassOverlay() void {
         {
             var sub_buf: [32]u8 = undefined;
             const sub = currentTrackChipText(active_p.mpv_ctx, "sub", &sub_buf);
-            if (pickerIconChip(@src(), 703, icons.tvg.lucide.@"captions", sub.text, sub.active, "Subtitle track")) {
+            if (pickerIconChip(@src(), 703, icons.tvg.lucide.captions, sub.text, sub.active, "Subtitle track")) {
                 open_picker = if (open_picker == .sub) .none else .sub;
             }
         }
@@ -1414,13 +1419,13 @@ pub fn renderLiquidGlassOverlay() void {
         {
             const cur_lang = state.app.sub_lang_buf[0..state.app.sub_lang_len];
             const chip = if (cur_lang.len > 0) cur_lang else "eng";
-            if (pickerIconChip(@src(), 704, icons.tvg.lucide.@"globe", chip, cur_lang.len > 0, "Subtitle search language")) {
+            if (pickerIconChip(@src(), 704, icons.tvg.lucide.globe, chip, cur_lang.len > 0, "Subtitle search language")) {
                 open_picker = if (open_picker == .lang) .none else .lang;
             }
         }
 
         // Find Subtitles — direct shortcut.
-        if (pickerIconChip(@src(), 705, icons.tvg.lucide.@"search", "Subs", false, "Find subtitles online")) {
+        if (pickerIconChip(@src(), 705, icons.tvg.lucide.search, "Subs", false, "Find subtitles online")) {
             state.app.sub_picker_open = true;
             const subs = @import("../services/subtitles.zig");
             if (!subs.is_searching) subs.autoSearchFromPlayer();
@@ -1432,7 +1437,7 @@ pub fn renderLiquidGlassOverlay() void {
             if (file_count > 1) {
                 var f_buf: [16]u8 = undefined;
                 const f_chip = std.fmt.bufPrint(&f_buf, "{d}", .{file_count}) catch "";
-                if (pickerIconChip(@src(), 706, icons.tvg.lucide.@"list", f_chip, true, "Files in torrent")) {
+                if (pickerIconChip(@src(), 706, icons.tvg.lucide.list, f_chip, true, "Files in torrent")) {
                     open_picker = if (open_picker == .playlist) .none else .playlist;
                 }
             }
@@ -1442,10 +1447,13 @@ pub fn renderLiquidGlassOverlay() void {
         // We use module-level state to carry hover across frames: read the
         // rect captured last frame, then update it after this frame's button
         // is laid out. One frame of lag is fine for a hover effect.
-        { var spacer2 = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = theme.spacing.sm, .h = 0 } }); spacer2.deinit(); }
+        {
+            var spacer2 = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = theme.spacing.sm, .h = 0 } });
+            spacer2.deinit();
+        }
 
         const close_hovered_now = mouseOverRect(close_button_rect);
-        if (dvui.buttonIcon(@src(), "close", icons.tvg.lucide.@"x", .{}, .{}, .{
+        if (dvui.buttonIcon(@src(), "close", icons.tvg.lucide.x, .{}, .{}, .{
             .data_out = &wd,
             .color_fill = transparent,
             .color_text = if (close_hovered_now) theme.colors.semantic_error else theme.colors.text_secondary,
@@ -1489,7 +1497,10 @@ pub fn renderLiquidGlassOverlay() void {
             .gravity_y = 0.5,
         });
 
-        { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+        {
+            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            spacer.deinit();
+        }
 
         var stat_buf: [80]u8 = undefined;
         if (std.fmt.bufPrintZ(&stat_buf, "{d:.1}% \xC2\xB7 {d:.1} MB/s \xC2\xB7 {d} seeds", .{ pct * 100.0, rate_mb, seeds })) |st| {
@@ -1541,7 +1552,251 @@ pub fn renderLiquidGlassOverlay() void {
     renderPlaylistPickerPopover(active_p);
 }
 
-pub fn renderGlobalBottomTray() void {
+// ── Persistent NOW-PLAYING media bar ──
+//
+// A Spotify/SoundCloud-style transport bar that lives at the very bottom of the
+// app (above the thin torrent-activity strip) so playback stays controllable
+// while the user browses any tab. It is intentionally robust for audio-only
+// media (e.g. YouTube audio): it never needs a video texture — title, transport
+// and scrubber render purely off mpv properties + the player's loading label.
+//
+// Rendered only when there is *active media*:
+//   active_player_idx < players.items.len  AND  provider == .mpv
+//   AND (p.has_metadata OR p.loading_label_len > 0)
+// On the `.player` route the full in-player controls (renderLiquidGlassOverlay)
+// already show, so we skip the bar there to avoid a duplicate transport. (Shell
+// also gates this whole tray off the player route, but we guard here too.)
+
+/// Returns the active mpv player when there is loaded/loading media to control,
+/// else null. All callers MUST treat null as "no media bar". Player access is
+/// guarded by the active-idx bound check before any indexing.
+fn activeMediaPlayer() ?*player.MediaPlayer {
+    if (state.app.active_player_idx >= state.app.players.items.len) return null;
+    const p = state.app.players.items[state.app.active_player_idx];
+    if (p.provider != .mpv) return null;
+    // "Active media" mirrors the scrubber/overlay heuristic: metadata loaded,
+    // or a loading label present (covers the audio-only / still-buffering case).
+    if (!p.has_metadata and p.loading_label_len == 0) return null;
+    return p;
+}
+
+/// The ~100px now-playing bar. Caller guarantees `p` is the active mpv player.
+fn renderNowPlayingBar(p: *player.MediaPlayer) void {
+    const text = @import("../core/text.zig");
+    const queue = @import("../services/queue.zig");
+    const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+    const now_ms = @import("../core/io_global.zig").milliTimestamp();
+
+    // ── Transport state (cheap, every frame) ──
+    var is_paused: c_int = 0;
+    _ = c.mpv.mpv_get_property(p.mpv_ctx, "pause", c.mpv.MPV_FORMAT_FLAG, &is_paused);
+    var percent_pos: f64 = 0.0;
+    _ = c.mpv.mpv_get_property(p.mpv_ctx, "percent-pos", c.mpv.MPV_FORMAT_DOUBLE, &percent_pos);
+    var time_pos: f64 = 0.0;
+    _ = c.mpv.mpv_get_property(p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &time_pos);
+    var duration: f64 = 0.0;
+    _ = c.mpv.mpv_get_property(p.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &duration);
+    var volume: f64 = 100.0;
+    _ = c.mpv.mpv_get_property(p.mpv_ctx, "volume", c.mpv.MPV_FORMAT_DOUBLE, &volume);
+
+    // ── Bar panel: bg_surface + 1px top border, ~100px tall ──
+    var bar = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .color_border = theme.colors.border_subtle,
+        .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
+        .min_size_content = .{ .w = 0, .h = 100 },
+        .max_size_content = .{ .w = 0, .h = 100 },
+    });
+    defer bar.deinit();
+
+    // ── Row 1: scrubber + chapter pips (reused, identical seek behavior) ──
+    renderScrubber(p, percent_pos, duration, now_ms);
+
+    // ── Row 2: [thumb + title] | [transport] | [time] | [volume] | [queue] ──
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = 56 },
+        .max_size_content = .{ .w = 0, .h = 56 },
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+    });
+    defer row.deinit();
+
+    var wd: dvui.WidgetData = undefined;
+
+    // ── Left: glyph + now-playing title (ellipsized, capped width) ──
+    {
+        var left = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .gravity_y = 0.5,
+            .min_size_content = .{ .w = 200, .h = 0 },
+            .max_size_content = .{ .w = 280, .h = 0 },
+        });
+        defer left.deinit();
+
+        // A small thumbnail when mpv exposed one, else a music/film glyph.
+        if (p.thumb_texture != null) {
+            _ = dvui.image(@src(), .{ .source = .{ .texture = p.thumb_texture.? } }, .{
+                .min_size_content = .{ .w = 40, .h = 40 },
+                .max_size_content = .{ .w = 40, .h = 40 },
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+            });
+        } else {
+            _ = dvui.icon(@src(), "np-glyph", icons.tvg.lucide.music, .{}, .{
+                .color_text = theme.colors.accent,
+                .min_size_content = .{ .w = 22, .h = 22 },
+                .max_size_content = .{ .w = 22, .h = 22 },
+                .gravity_y = 0.5,
+                .margin = .{ .x = 4, .y = 0, .w = theme.spacing.sm, .h = 0 },
+            });
+        }
+
+        // Title from the player's loading label (works for audio-only).
+        const raw_title = if (p.loading_label_len > 0) p.loading_label[0..p.loading_label_len] else "Now Playing";
+        var title = text.safeUtf8(raw_title);
+        if (title.len > 42) title = text.safeUtf8(title[0..42]); // re-trim to a codepoint boundary
+        _ = dvui.label(@src(), "{s}", .{title}, .{
+            .color_text = theme.colors.text_primary,
+            .gravity_y = 0.5,
+        });
+    }
+
+    // ── Center: transport (Previous | Play/Pause | Next) ──
+    {
+        var center = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .gravity_y = 0.5,
+            .gravity_x = 0.5,
+            .expand = .horizontal,
+        });
+        defer center.deinit();
+
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
+
+        // Previous — best-effort. No prev-queue API, so use mpv playlist-prev
+        // (handles internal playlists / torrent files); harmless otherwise.
+        if (dvui.buttonIcon(@src(), "np-prev", icons.tvg.lucide.@"skip-back", .{}, .{}, .{
+            .data_out = &wd,
+            .color_fill = transparent,
+            .color_text = theme.colors.text_primary,
+            .border = dvui.Rect.all(0),
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .gravity_y = 0.5,
+            .padding = .{ .x = 7, .y = 7, .w = 7, .h = 7 },
+            .min_size_content = .{ .w = 34, .h = 34 },
+            .max_size_content = .{ .w = 34, .h = 34 },
+        })) {
+            _ = c.mpv.mpv_command_string(p.mpv_ctx, "playlist-prev");
+        }
+        components.tip(@src(), wd, "Previous");
+
+        // Play / Pause — the single accent affordance.
+        const toggle_icon = if (is_paused != 0) icons.tvg.lucide.play else icons.tvg.lucide.pause;
+        if (dvui.buttonIcon(@src(), "np-pp", toggle_icon, .{}, .{}, .{
+            .data_out = &wd,
+            .color_fill = theme.colors.accent_primary,
+            .color_text = theme.colors.text_on_accent,
+            .border = dvui.Rect.all(0),
+            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .gravity_y = 0.5,
+            .padding = .{ .x = 10, .y = 10, .w = 10, .h = 10 },
+            .min_size_content = .{ .w = 40, .h = 40 },
+            .max_size_content = .{ .w = 40, .h = 40 },
+            .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        })) {
+            p.togglePause();
+        }
+        components.tip(@src(), wd, "Play/Pause");
+
+        // Next — plays the next unplayed queue item.
+        if (dvui.buttonIcon(@src(), "np-next", icons.tvg.lucide.@"skip-forward", .{}, .{}, .{
+            .data_out = &wd,
+            .color_fill = transparent,
+            .color_text = theme.colors.text_primary,
+            .border = dvui.Rect.all(0),
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .gravity_y = 0.5,
+            .padding = .{ .x = 7, .y = 7, .w = 7, .h = 7 },
+            .min_size_content = .{ .w = 34, .h = 34 },
+            .max_size_content = .{ .w = 34, .h = 34 },
+        })) {
+            queue.playNextUnplayed(p);
+        }
+        components.tip(@src(), wd, "Next (from queue)");
+
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
+    }
+
+    // ── Time readout: elapsed / total ──
+    {
+        const safe_time = @max(0.0, if (std.math.isNan(time_pos)) 0.0 else time_pos);
+        const safe_dur = @max(0.0, if (std.math.isNan(duration)) 0.0 else duration);
+        var cur_buf: [16]u8 = undefined;
+        var tot_buf: [16]u8 = undefined;
+        const cur_str = formatHmsBuf(&cur_buf, @as(u32, @intFromFloat(safe_time)));
+        const tot_str = formatHmsBuf(&tot_buf, @as(u32, @intFromFloat(safe_dur)));
+        _ = dvui.label(@src(), "{s}", .{cur_str}, .{
+            .color_text = theme.colors.text_primary,
+            .gravity_y = 0.5,
+            .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
+        });
+        _ = dvui.label(@src(), " / {s}", .{tot_str}, .{
+            .color_text = theme.colors.text_tertiary,
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        });
+    }
+
+    // ── Right: volume slider + queue toggle ──
+    {
+        _ = dvui.icon(@src(), "np-vol-ic", icons.tvg.lucide.@"volume-2", .{}, .{
+            .color_text = theme.colors.text_secondary,
+            .min_size_content = .{ .w = 16, .h = 16 },
+            .max_size_content = .{ .w = 16, .h = 16 },
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
+        });
+        var vol_val: f32 = @floatCast(@max(0.0, @min(1.0, volume / 100.0)));
+        if (dvui.slider(@src(), .{ .fraction = &vol_val }, .{
+            .min_size_content = .{ .w = 90, .h = 4 },
+            .max_size_content = .{ .w = 90, .h = 4 },
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_secondary,
+            .corner_radius = dvui.Rect.all(2),
+            .gravity_y = 0.5,
+            .background = true,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        })) {
+            var vc: [64]u8 = undefined;
+            if (std.fmt.bufPrintZ(&vc, "set volume {d}", .{@as(i32, @intFromFloat(vol_val * 100.0))})) |cmd| {
+                _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
+            } else |_| {}
+        }
+
+        // Queue / playlist toggle — opens the torrent files dropdown when this
+        // is a multi-file torrent; also shows the queue count badge.
+        var q_buf: [16]u8 = undefined;
+        const q_label = std.fmt.bufPrint(&q_buf, "{d}", .{queue.queue_count}) catch "";
+        if (pickerIconChip(@src(), 720, icons.tvg.lucide.@"list-music", q_label, queue.queue_count > 0, "Queue / playlist")) {
+            state.app.router.navigate(.player);
+        }
+        // Inline torrent-files dropdown (no-op when single file / no torrent).
+        var pl_menu = dvui.menu(@src(), .horizontal, .{ .gravity_y = 0.5 });
+        defer pl_menu.deinit();
+        playlistDropdownMenu(p);
+    }
+}
+
+/// The thin torrent-activity strip — unchanged from the original tray. Rendered
+/// below the now-playing bar (or alone, when nothing is playing).
+fn renderTorrentActivityStrip() void {
     const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
     var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -1572,17 +1827,24 @@ pub fn renderGlobalBottomTray() void {
 
     // Single accent — the leading "Active" indicator. Everything else reads
     // on the neutral text ramp (rate brightens to text_primary when live).
-    _ = dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"activity", .{}, .{}, .{
-        .gravity_y = 0.5, .color_fill = transparent, .color_text = theme.colors.accent, .padding = dvui.Rect.all(2),
+    _ = dvui.buttonIcon(@src(), "", icons.tvg.lucide.activity, .{}, .{}, .{
+        .gravity_y = 0.5,
+        .color_fill = transparent,
+        .color_text = theme.colors.accent,
+        .padding = dvui.Rect.all(2),
     });
     _ = dvui.label(@src(), "{d} Active", .{total_active}, .{ .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
 
-    { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
+    {
+        var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+        spacer.deinit();
+    }
 
     const mb_s = total_dl / (1024.0 * 1024.0);
     const rate_color = if (mb_s > 0.1) theme.colors.text_primary else theme.colors.text_tertiary;
-    _ = dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"download", .{}, .{}, .{
-        .gravity_y = 0.5, .color_fill = transparent,
+    _ = dvui.buttonIcon(@src(), "", icons.tvg.lucide.download, .{}, .{}, .{
+        .gravity_y = 0.5,
+        .color_fill = transparent,
         .color_text = rate_color,
         .padding = dvui.Rect.all(2),
     });
@@ -1590,14 +1852,39 @@ pub fn renderGlobalBottomTray() void {
     if (std.fmt.bufPrintZ(&mb_str, "{d:.2} MB/s", .{mb_s})) |msg| {
         _ = dvui.label(@src(), "{s}", .{msg}, .{
             .color_text = rate_color,
-            .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
     } else |_| {}
 
-    _ = dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"users", .{}, .{}, .{
-        .gravity_y = 0.5, .color_fill = transparent, .color_text = theme.colors.text_tertiary, .padding = dvui.Rect.all(2),
+    _ = dvui.buttonIcon(@src(), "", icons.tvg.lucide.users, .{}, .{}, .{
+        .gravity_y = 0.5,
+        .color_fill = transparent,
+        .color_text = theme.colors.text_tertiary,
+        .padding = dvui.Rect.all(2),
     });
     _ = dvui.label(@src(), "{d} Peers", .{total_peers}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+}
+
+/// The persistent bottom tray, rendered across every non-player tab by shell.zig.
+/// Vertical stack:
+///   [ NOW-PLAYING media bar — only when there is active media ]
+///   [ thin torrent-activity strip — always, unchanged ]
+/// When nothing is playing the tray looks exactly as it did before.
+pub fn renderGlobalBottomTray() void {
+    var stack = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+    defer stack.deinit();
+
+    // Media bar: only with active media, and never on the player route (the
+    // in-player overlay owns transport there). Player access is guarded inside
+    // activeMediaPlayer() before any indexing.
+    if (state.app.router.current != .player) {
+        if (activeMediaPlayer()) |p| {
+            renderNowPlayingBar(p);
+        }
+    }
+
+    renderTorrentActivityStrip();
 }
 
 pub fn renderToast() void {
@@ -1607,7 +1894,7 @@ pub fn renderToast() void {
         state.app.toast_len = 0;
         return;
     }
-    
+
     var toast_anchor = dvui.overlay(@src(), .{ .expand = .both });
     defer toast_anchor.deinit();
 
@@ -1619,10 +1906,10 @@ pub fn renderToast() void {
         .err => theme.colors.danger,
     };
     const toast_icon = switch (state.app.toast_type) {
-        .info => icons.tvg.lucide.@"info",
+        .info => icons.tvg.lucide.info,
         .success => icons.tvg.lucide.@"circle-check-big",
-        .warning => icons.tvg.lucide.@"info",
-        .err => icons.tvg.lucide.@"x",
+        .warning => icons.tvg.lucide.info,
+        .err => icons.tvg.lucide.x,
     };
 
     // Toast container — top-center, flat elevated surface + one soft shadow.

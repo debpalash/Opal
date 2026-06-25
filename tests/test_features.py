@@ -1248,6 +1248,18 @@ def test_anime_netflix_experience():
     return "fail", f"missing: {missing}"
 
 
+@test("Now-Playing Media Bar", "Player")
+def test_now_playing_bar():
+    # Persistent bottom now-playing bar (Spotify-style): transport + scrubber +
+    # playlist, shown across tabs when media is active; torrent strip preserved.
+    f = _src("src/ui/footer.zig")
+    if ("renderNowPlayingBar" in f and "activeMediaPlayer" in f
+            and "renderTorrentActivityStrip" in f
+            and "playlistDropdownMenu" in f and "active_player_idx <" in f):
+        return "pass", "now-playing bar: transport+scrubber+playlist, guarded; torrent strip kept"
+    return "fail", "now-playing media bar not wired"
+
+
 @test("Web UI API Base Port", "Page Shell")
 def test_web_api_base_port():
     # Web UI is served on :3000 but the JSON API lives on :41595 — index.html
