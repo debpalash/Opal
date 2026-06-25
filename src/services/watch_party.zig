@@ -229,7 +229,7 @@ fn hostLoop() void {
                 }
 
                 // Start reader thread for this client (for chat messages from clients)
-                _ = std.Thread.spawn(.{}, hostClientReader, .{conn}) catch {};
+                if (std.Thread.spawn(.{}, hostClientReader, .{conn})) |t| t.detach() else |_| {}
                 break;
             }
         } else {

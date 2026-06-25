@@ -119,9 +119,11 @@ pub fn startDeviceAuth() void {
         return;
     }
     auth_pending = true;
-    _ = std.Thread.spawn(.{}, deviceAuthWorker, .{}) catch {
+    if (std.Thread.spawn(.{}, deviceAuthWorker, .{})) |t| {
+        t.detach();
+    } else |_| {
         auth_pending = false;
-    };
+    }
 }
 
 fn deviceAuthWorker() void {

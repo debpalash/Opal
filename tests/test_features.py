@@ -1157,7 +1157,11 @@ def test_session_threads_detached():
              # swept (was 24 leaky files repo-wide; sweeping in chunks):
              "src/core/poster.zig", "src/services/anilist.zig",
              "src/services/projectjav.zig", "src/services/youtube.zig",
-             "src/services/queue.zig"]
+             "src/services/queue.zig",
+             # chunk 2:
+             "src/services/trakt.zig", "src/services/updater.zig",
+             "src/services/browser.zig", "src/player/stream_proxy.zig",
+             "src/services/watch_party.zig"]
     offenders = [f for f in files if "_ = std.Thread.spawn(" in _src(f)]
     if offenders:
         return "fail", "leaked thread handle in: " + ", ".join(offenders)

@@ -75,10 +75,12 @@ pub fn ensureBridge() void {
     if (bridge_ready.load(.acquire) or bridge_starting.load(.acquire)) return;
     bridge_starting.store(true, .release);
 
-    _ = std.Thread.spawn(.{}, startBridgeThread, .{}) catch {
+    if (std.Thread.spawn(.{}, startBridgeThread, .{})) |t| {
+        t.detach();
+    } else |_| {
         bridge_starting.store(false, .release);
         logs.pushLog("error", "browser", "Failed to spawn bridge thread", false);
-    };
+    }
 }
 
 fn startBridgeThread() void {

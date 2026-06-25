@@ -51,9 +51,11 @@ fn clearError() void {
 pub fn checkAsync() void {
     if (is_checking) return;
     is_checking = true;
-    _ = std.Thread.spawn(.{}, checkWorker, .{}) catch {
+    if (std.Thread.spawn(.{}, checkWorker, .{})) |t| {
+        t.detach();
+    } else |_| {
         is_checking = false;
-    };
+    }
 }
 
 fn checkWorker() void {
@@ -215,9 +217,11 @@ pub fn downloadAndOpenAsync() void {
         return;
     }
     is_downloading = true;
-    _ = std.Thread.spawn(.{}, downloadWorker, .{}) catch {
+    if (std.Thread.spawn(.{}, downloadWorker, .{})) |t| {
+        t.detach();
+    } else |_| {
         is_downloading = false;
-    };
+    }
 }
 
 fn downloadWorker() void {

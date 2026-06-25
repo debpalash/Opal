@@ -306,12 +306,14 @@ fn acceptLoop(slot: u8) void {
         }
 
         const args = ConnArgs{ .slot = slot, .stream_id = id_now, .conn = conn };
-        _ = std.Thread.spawn(.{}, handleConnectionThread, .{args}) catch {
+        if (std.Thread.spawn(.{}, handleConnectionThread, .{args})) |t| {
+            t.detach();
+        } else |_| {
             handleConnection(args) catch {};
             var c2 = conn;
             c2.close(io_g.io());
             continue;
-        };
+        }
     }
 
     // Teardown: close listener, mark slot free.
