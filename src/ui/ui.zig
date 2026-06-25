@@ -318,7 +318,7 @@ pub fn renderWorkspaceModals() void {
             } else {
                 for (0..state.app.ws_count) |wi| {
                     const name = state.app.ws_names[wi][0..state.app.ws_name_lens[wi]];
-                    if (dvui.button(@src(), name, .{}, .{
+                    if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(name), .{}, .{
                         .id_extra = wi,
                         .expand = .horizontal,
                         .color_fill = theme.colors.bg_card,

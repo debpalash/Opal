@@ -956,7 +956,7 @@ fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []const u
             }
         }
 
-        if (dvui.button(@src(), row_name, .{}, .{
+        if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(row_name), .{}, .{
             .id_extra = @as(usize, @intCast(i)),
             .expand = .horizontal,
             .color_fill = if (is_selected) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
