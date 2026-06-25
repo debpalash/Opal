@@ -251,8 +251,13 @@ fn renderFilesInline() void {
             .gravity_y = 0.5,
         });
 
-        // Name (truncated to leave fixed room for actions)
-        _ = dvui.label(@src(), "{s}", .{displayName(name)}, .{
+        // Name (truncated to leave fixed room for actions). safeUtf8Buf (not the
+        // safeUtf8 inside displayName): `name` aliases the cached_files buffer that
+        // the bg scan worker rewrites under files_mutex, so validating a slice into
+        // the live buffer can still let dvui re-read mutated bytes mid-frame.
+        // Snapshot a stable copy here.
+        var nm_buf: [256]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(displayName(name), &nm_buf)}, .{
             .id_extra = fi + 20200,
             .expand = .horizontal,
             .color_text = theme.colors.text_main,

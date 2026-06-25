@@ -34,6 +34,24 @@ fn percentEncode(input: []const u8, out: []u8) usize {
 // Uses curl subprocess to bypass Cloudflare
 // ══════════════════════════════════════════════════════════
 
+/// Request a comic load from a NON-UI thread (the remote API server). loadComic()
+/// frees page textures via dvui.textureDestroyLater, which is UI-thread-only, so
+/// the remote thread must not call it directly. Stash the URL and let the UI drain.
+pub fn requestLoad(url: []const u8) void {
+    if (url.len == 0 or url.len >= state.app.comic.pending_load_url.len) return;
+    @memcpy(state.app.comic.pending_load_url[0..url.len], url);
+    state.app.comic.pending_load_len = url.len;
+    state.app.comic.pending_load.store(true, .release);
+}
+
+/// Drain a pending remote comic-load request. UI-THREAD ONLY — call once per frame.
+pub fn drainPendingLoad() void {
+    if (!state.app.comic.pending_load.swap(false, .acq_rel)) return;
+    const n = state.app.comic.pending_load_len;
+    if (n == 0 or n >= state.app.comic.pending_load_url.len) return;
+    loadComic(state.app.comic.pending_load_url[0..n]);
+}
+
 /// Kick off a background thread to fetch and parse a comic issue page.
 pub fn loadComic(url: []const u8) void {
     if (state.app.comic.is_loading) return;

@@ -890,10 +890,18 @@ fn appFrame() !dvui.App.Result {
         }
     }
 
+    // Drain a deferred comic-load requested by the remote API thread (loadComic
+    // frees textures via dvui, which is UI-thread-only).
+    @import("services/comics.zig").drainPendingLoad();
+
     // Process deferred player removal (safe: before any rendering)
     if (state.app.pending_remove_player_idx >= 0) {
         const idx = @as(usize, @intCast(state.app.pending_remove_player_idx));
         if (idx < state.app.players.items.len) {
+            // Lock against the remote API thread, which may be driving mpv on a
+            // captured *MediaPlayer right now (use-after-free otherwise).
+            state.players_mutex.lock();
+            defer state.players_mutex.unlock();
             var p_rem = state.app.players.orderedRemove(idx);
             // Save URL for Ctrl+Shift+T undo
             if (p_rem.current_url_len > 0 and p_rem.current_url_len <= 2048) {
@@ -918,6 +926,9 @@ fn appFrame() !dvui.App.Result {
     // rest down HERE, at the safe pre-render point — mpv deinit must not race the
     // render thread, which is why removal is deferred to the frame top.
     if (state.app.players.items.len > 1) {
+        // Lock against the remote API thread (see the deferred-removal block above).
+        state.players_mutex.lock();
+        defer state.players_mutex.unlock();
         const keep = @min(state.app.active_player_idx, state.app.players.items.len - 1);
         var i: usize = state.app.players.items.len;
         while (i > 0) {

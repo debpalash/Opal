@@ -413,6 +413,12 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     }
 
     // ── Player-dependent endpoints ──
+    // Hold players_mutex across the whole dispatch below: the UI thread frees
+    // players at frame top (main.zig), so without this the captured `ap` could
+    // become a dangling *MediaPlayer mid-mpv-call → use-after-free. defer covers
+    // every exit path of this tail section (the chain runs to the function end).
+    state.players_mutex.lock();
+    defer state.players_mutex.unlock();
     if (state.app.active_player_idx >= state.app.players.items.len) {
         sendJson(stream, "{\"error\":\"no player\"}");
         return;
@@ -1014,7 +1020,8 @@ fn apiComics(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
             var decoded: [512]u8 = undefined;
             const comic_url = urlDecode(url, &decoded) orelse url;
             const comics_svc = @import("comics.zig");
-            comics_svc.loadComic(comic_url);
+            // Defer to the UI thread: loadComic frees textures via dvui (UI-only).
+            comics_svc.requestLoad(comic_url);
         }
         sendJson(stream, "{\"ok\":true,\"action\":\"load_comic\"}");
         return;

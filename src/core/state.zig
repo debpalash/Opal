@@ -450,6 +450,12 @@ pub const AppState = struct {
         url_buf: [512]u8 = std.mem.zeroes([512]u8),
         url_len: usize = 0,
         is_loading: bool = false,
+        // Deferred comic-load request from the remote API thread. loadComic()
+        // frees page textures via dvui (UI-thread-only), so the remote thread sets
+        // this and the UI thread drains it at frame top (cf. pending_remove_player_idx).
+        pending_load_url: [512]u8 = std.mem.zeroes([512]u8),
+        pending_load_len: usize = 0,
+        pending_load: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
         thread: ?std.Thread = null,
         page_urls: [128][512]u8 = std.mem.zeroes([128][512]u8),
         page_url_lens: [128]usize = std.mem.zeroes([128]usize),
@@ -601,6 +607,13 @@ pub const AppState = struct {
 
 /// The single global application state instance.
 pub var app: AppState = .{};
+
+/// Serializes player teardown (UI thread frees players at frame top) against the
+/// remote API server thread, which captures a *MediaPlayer and drives mpv on it.
+/// Without this the remote thread can dereference a freed player → use-after-free.
+/// Both the UI teardown (orderedRemove + deinit) and the remote player-dispatch
+/// hold this.
+pub var players_mutex: @import("sync.zig").Mutex = .{};
 
 // ══════════════════════════════════════════════════════════
 // Utility Functions
