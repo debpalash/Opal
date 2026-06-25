@@ -2429,92 +2429,8 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
 
 pub fn fetchPoster(item: *state.AnimeResult) void {
     if (item.poster_url_len == 0 or item.poster_fetching) return;
-    item.poster_fetching = true;
 
-    // Copy URL and index into struct statics so the thread doesn't hold a
-    // pointer into the mutable results array (which can be overwritten by a
-    // new search/trending load).
-    const S = struct {
-        var poster_url_buf: [512]u8 = undefined;
-        var poster_url_len: usize = 0;
-        var result_idx: usize = 0;
-
-        fn worker() void {
-            const idx = @This().result_idx;
-            const url = @This().poster_url_buf[0..@This().poster_url_len];
-
-            const argv = [_][]const u8{
-                "curl", "-sL", "--max-time", "10", url,
-            };
-            var child = @import("../core/io_global.zig").Child.init(&argv, std.heap.c_allocator);
-            child.stdout_behavior = .Pipe;
-            child.stderr_behavior = .Ignore;
-            _ = child.spawn() catch {
-                markDone(idx, url);
-                return;
-            };
-
-            const img_buf = @import("../core/alloc.zig").allocator.alloc(u8, 512 * 1024) catch {
-                _ = child.wait() catch {};
-                markDone(idx, url);
-                return;
-            };
-            defer @import("../core/alloc.zig").allocator.free(img_buf);
-            const img_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, img_buf) catch 0 else 0;
-            _ = child.wait() catch {};
-
-            if (img_len < 100) {
-                markDone(idx, url);
-                return;
-            }
-
-            var w: c_int = 0;
-            var h: c_int = 0;
-            var comp: c_int = 0;
-            const pixels = dvui.c.stbi_load_from_memory(img_buf[0..img_len].ptr, @intCast(img_len), &w, &h, &comp, 4);
-            if (pixels == null) {
-                markDone(idx, url);
-                return;
-            }
-            defer dvui.c.stbi_image_free(pixels);
-
-            const p_len: usize = @intCast(w * h * 4);
-            const p_slice = std.heap.c_allocator.alloc(u8, p_len) catch {
-                markDone(idx, url);
-                return;
-            };
-            @memcpy(p_slice, pixels[0..p_len]);
-
-            // Verify the result at this index still has the same URL
-            if (idx < state.app.anime.result_count) {
-                const ptr = &state.app.anime.results[idx];
-                if (ptr.poster_url_len == url.len and
-                    std.mem.eql(u8, ptr.poster_url[0..ptr.poster_url_len], url))
-                {
-                    ptr.poster_w = @intCast(w);
-                    ptr.poster_h = @intCast(h);
-                    ptr.poster_pixels = p_slice;
-                    ptr.poster_fetching = false;
-                    return;
-                }
-            }
-            // Mismatch or out of bounds — free pixels
-            std.heap.c_allocator.free(p_slice);
-        }
-
-        fn markDone(idx: usize, url: []const u8) void {
-            if (idx < state.app.anime.result_count) {
-                const ptr = &state.app.anime.results[idx];
-                if (ptr.poster_url_len == url.len and
-                    std.mem.eql(u8, ptr.poster_url[0..ptr.poster_url_len], url))
-                {
-                    ptr.poster_fetching = false;
-                }
-            }
-        }
-    };
-
-    // Find the index of this item in the results array
+    // Find the index of this item in the results array.
     const results = state.app.anime.results[0..state.app.anime.result_count];
     var found_idx: ?usize = null;
     for (results, 0..) |*r, i| {
@@ -2523,21 +2439,94 @@ pub fn fetchPoster(item: *state.AnimeResult) void {
             break;
         }
     }
-    const idx = found_idx orelse {
-        item.poster_fetching = false;
-        return;
-    };
+    const idx = found_idx orelse return;
 
     const url = item.poster_url[0..item.poster_url_len];
-    if (url.len > S.poster_url_buf.len) {
-        item.poster_fetching = false;
-        return;
-    }
-    @memcpy(S.poster_url_buf[0..url.len], url);
-    S.poster_url_len = url.len;
-    S.result_idx = idx;
+    if (url.len == 0 or url.len > 512) return;
 
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
+    item.poster_fetching = true;
+
+    // Copy the URL into a fixed array passed BY VALUE through the spawn args —
+    // NEVER share module-level statics across poster fetches. The grid triggers
+    // ~24 fetches in a single frame; shared statics get overwritten before the
+    // worker threads read them, so only the last URL/idx survives and every
+    // other card is stuck poster_fetching=true forever (all placeholders).
+    var url_copy: [512]u8 = undefined;
+    @memcpy(url_copy[0..url.len], url);
+
+    const S = struct {
+        fn markDone(idx_: usize, u: []const u8) void {
+            if (idx_ < state.app.anime.result_count) {
+                const ptr = &state.app.anime.results[idx_];
+                if (ptr.poster_url_len == u.len and
+                    std.mem.eql(u8, ptr.poster_url[0..ptr.poster_url_len], u))
+                {
+                    ptr.poster_fetching = false;
+                }
+            }
+        }
+
+        fn worker(url_buf: [512]u8, url_len: usize, result_idx: usize) void {
+            const u = url_buf[0..url_len];
+
+            const argv = [_][]const u8{ "curl", "-sL", "--max-time", "10", u };
+            var child = @import("../core/io_global.zig").Child.init(&argv, std.heap.c_allocator);
+            child.stdout_behavior = .Pipe;
+            child.stderr_behavior = .Ignore;
+            _ = child.spawn() catch {
+                markDone(result_idx, u);
+                return;
+            };
+
+            const img_buf = @import("../core/alloc.zig").allocator.alloc(u8, 512 * 1024) catch {
+                _ = child.wait() catch {};
+                markDone(result_idx, u);
+                return;
+            };
+            defer @import("../core/alloc.zig").allocator.free(img_buf);
+            const img_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, img_buf) catch 0 else 0;
+            _ = child.wait() catch {};
+
+            if (img_len < 100) {
+                markDone(result_idx, u);
+                return;
+            }
+
+            var w: c_int = 0;
+            var h: c_int = 0;
+            var comp: c_int = 0;
+            const pixels = dvui.c.stbi_load_from_memory(img_buf[0..img_len].ptr, @intCast(img_len), &w, &h, &comp, 4);
+            if (pixels == null) {
+                markDone(result_idx, u);
+                return;
+            }
+            defer dvui.c.stbi_image_free(pixels);
+
+            const p_len: usize = @intCast(w * h * 4);
+            const p_slice = std.heap.c_allocator.alloc(u8, p_len) catch {
+                markDone(result_idx, u);
+                return;
+            };
+            @memcpy(p_slice, pixels[0..p_len]);
+
+            // Verify the slot still holds the same URL before publishing.
+            if (result_idx < state.app.anime.result_count) {
+                const ptr = &state.app.anime.results[result_idx];
+                if (ptr.poster_url_len == u.len and
+                    std.mem.eql(u8, ptr.poster_url[0..ptr.poster_url_len], u))
+                {
+                    ptr.poster_w = @intCast(w);
+                    ptr.poster_h = @intCast(h);
+                    ptr.poster_pixels = p_slice;
+                    ptr.poster_fetching = false;
+                    return;
+                }
+            }
+            std.heap.c_allocator.free(p_slice);
+        }
+    };
+
+    if (std.Thread.spawn(.{}, S.worker, .{ url_copy, url.len, idx })) |t| {
         t.detach(); // never joined — detach so the handle isn't leaked
     } else |_| {
         item.poster_fetching = false;
@@ -2575,13 +2564,12 @@ pub fn fetchContinuePoster(item: *state.ContinueItem) void {
     item.poster_fetching = true;
 
     const S = struct {
-        var poster_url_buf: [512]u8 = undefined;
-        var poster_url_len: usize = 0;
-        var cont_idx: usize = 0;
-
-        fn worker() void {
-            const idx = @This().cont_idx;
-            const url = @This().poster_url_buf[0..@This().poster_url_len];
+        // URL + index are passed BY VALUE through the spawn args — never shared
+        // statics (the My List grid spawns many fetches; shared statics race and
+        // leave most cards stuck poster_fetching=true / placeholder forever).
+        fn worker(url_buf: [512]u8, url_len: usize, cont_idx: usize) void {
+            const idx = cont_idx;
+            const url = url_buf[0..url_len];
 
             const argv = [_][]const u8{ "curl", "-sL", "--max-time", "10", url };
             var child = @import("../core/io_global.zig").Child.init(&argv, std.heap.c_allocator);
@@ -2660,15 +2648,14 @@ pub fn fetchContinuePoster(item: *state.ContinueItem) void {
     };
 
     const url = item.poster_url[0..item.poster_url_len];
-    if (url.len > S.poster_url_buf.len) {
+    if (url.len == 0 or url.len > 512) {
         item.poster_fetching = false;
         return;
     }
-    @memcpy(S.poster_url_buf[0..url.len], url);
-    S.poster_url_len = url.len;
-    S.cont_idx = idx;
+    var url_copy: [512]u8 = undefined;
+    @memcpy(url_copy[0..url.len], url);
 
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
+    if (std.Thread.spawn(.{}, S.worker, .{ url_copy, url.len, idx })) |t| {
         t.detach();
     } else |_| {
         item.poster_fetching = false;
