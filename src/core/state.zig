@@ -484,7 +484,7 @@ pub const AppState = struct {
         is_loading: bool = false,
         last_fetch_s: i64 = 0, // SWR cache timestamp (trending)
         thread: ?std.Thread = null,
-        results: [32]AnimeResult = std.mem.zeroes([32]AnimeResult),
+        results: [100]AnimeResult = std.mem.zeroes([100]AnimeResult),
         result_count: usize = 0,
         selected_idx: ?usize = null,
         episodes: [512]u8 = std.mem.zeroes([512]u8),
@@ -509,8 +509,8 @@ pub const AppState = struct {
         season_year: u16 = 2026, // year for winter/spring/summer/fall
         cal_day: u8 = 0, // Calendar mode: 0=all, 1=Mon … 7=Sun
         // Per-result broadcast string ("Mondays at 01:00 (JST)") for Calendar.
-        broadcast: [32][40]u8 = std.mem.zeroes([32][40]u8),
-        broadcast_lens: [32]usize = std.mem.zeroes([32]usize),
+        broadcast: [100][40]u8 = std.mem.zeroes([100][40]u8),
+        broadcast_lens: [100]usize = std.mem.zeroes([100]usize),
         // Detail view: "Seasons & Related" rail (Jikan relations).
         relations: [16]AnimeRelation = std.mem.zeroes([16]AnimeRelation),
         relation_count: usize = 0,

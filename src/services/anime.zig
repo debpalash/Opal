@@ -104,7 +104,131 @@ fn setMode(m: state.AnimeMode) void {
     state.app.anime.episode_count = 0;
     state.app.anime.last_fetch_s = 0; // bypass SWR on explicit switch
     fetched_mode = null; // force renderContent to re-dispatch
+    grid_page = 1; // restart infinite-scroll pagination for the new mode
+    more_available = false;
     _ = search_gen.fetchAdd(1, .acq_rel); // drop stale in-flight workers
+}
+
+// ── Infinite-scroll pagination (mirrors comics.zig loadMoreResults). ──
+// Jikan paginates: the four grid fetchers request page 1, and loadMoreGrid()
+// fetches page grid_page+1 and APPENDS into results[] at the current end.
+// `more_available` is the parsed `has_next_page` flag from the last fetch;
+// `grid_page` is the highest page currently merged into results[].
+var more_available: bool = false;
+var grid_page: u32 = 1;
+
+/// True iff the Jikan `pagination.has_next_page` flag is set in `json`. A flat
+/// substring scan is enough — the field appears once, at the document root.
+fn parsePagination(json: []const u8) bool {
+    return std.mem.indexOf(u8, json, "\"has_next_page\":true") != null;
+}
+
+/// Build the page-`page` Jikan URL for the *current* grid mode into `out`,
+/// reusing the exact URL strings the four fetch threads emit. Returns the
+/// formatted slice, or null on a bufPrint overflow. Search uses the snapshot
+/// in search_query_buf (already percent-encoded path is rebuilt here).
+fn buildGridUrl(out: []u8, mode: state.AnimeMode, page: u32) ?[]const u8 {
+    return switch (mode) {
+        .trending => blk: {
+            const jikan_api = "https://api.jikan.moe/v4/top/anime";
+            const fv = trend_filter.jikan();
+            break :blk (if (fv.len == 0)
+                std.fmt.bufPrint(out, "{s}?limit=25&page={d}", .{ jikan_api, page })
+            else
+                std.fmt.bufPrint(out, "{s}?filter={s}&limit=25&page={d}", .{ jikan_api, fv, page })) catch null;
+        },
+        .search => blk: {
+            var enc_buf: [768]u8 = undefined;
+            var enc_len: usize = 0;
+            const qlen = @min(search_query_len, search_query_buf.len);
+            for (search_query_buf[0..qlen]) |c| {
+                if (enc_len + 3 > enc_buf.len) break;
+                const pct: ?[2]u8 = switch (c) {
+                    '%' => .{ '2', '5' },
+                    ' ' => .{ '2', '0' },
+                    '&' => .{ '2', '6' },
+                    '=' => .{ '3', 'D' },
+                    '#' => .{ '2', '3' },
+                    '?' => .{ '3', 'F' },
+                    '+' => .{ '2', 'B' },
+                    else => null,
+                };
+                if (pct) |hex| {
+                    enc_buf[enc_len] = '%';
+                    enc_buf[enc_len + 1] = hex[0];
+                    enc_buf[enc_len + 2] = hex[1];
+                    enc_len += 3;
+                } else {
+                    enc_buf[enc_len] = c;
+                    enc_len += 1;
+                }
+            }
+            break :blk std.fmt.bufPrint(out, "https://api.jikan.moe/v4/anime?q={s}&limit=25&page={d}", .{ enc_buf[0..enc_len], page }) catch null;
+        },
+        .seasonal => switch (state.app.anime.season_sel) {
+            .now => std.fmt.bufPrint(out, "https://api.jikan.moe/v4/seasons/now?limit=25&page={d}", .{page}) catch null,
+            .upcoming => std.fmt.bufPrint(out, "https://api.jikan.moe/v4/seasons/upcoming?limit=25&page={d}", .{page}) catch null,
+            else => std.fmt.bufPrint(out, "https://api.jikan.moe/v4/seasons/{d}/{s}?limit=25&page={d}", .{ state.app.anime.season_year, seasonStr(state.app.anime.season_sel), page }) catch null,
+        },
+        .calendar => blk: {
+            const day = calDayStr(state.app.anime.cal_day);
+            break :blk (if (day.len == 0)
+                std.fmt.bufPrint(out, "https://api.jikan.moe/v4/schedules?limit=25&page={d}", .{page})
+            else
+                std.fmt.bufPrint(out, "https://api.jikan.moe/v4/schedules?filter={s}&limit=25&page={d}", .{ day, page })) catch null;
+        },
+        .mylist => null,
+    };
+}
+
+/// Detached worker guard for the infinite-scroll appender.
+var grid_loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+/// Fetch the next Jikan page for the current grid mode and APPEND it into
+/// results[] (mirrors comics.zig loadMoreResults). No-op unless the last fetch
+/// reported has_next_page, we're not already busy/loading, and there's room.
+pub fn loadMoreGrid() void {
+    if (!more_available or grid_loading_more.load(.acquire) or state.app.anime.is_loading) return;
+    if (state.app.anime.result_count == 0 or state.app.anime.result_count >= state.app.anime.results.len) return;
+    if (grid_loading_more.swap(true, .acq_rel)) return;
+    if (std.Thread.spawn(.{}, loadMoreGridWorker, .{ search_gen.load(.acquire), state.app.anime.mode })) |t| {
+        t.detach(); // never joined — detach to avoid leaking the handle
+    } else |_| {
+        grid_loading_more.store(false, .release);
+    }
+}
+
+fn loadMoreGridWorker(my_gen: u32, mode: state.AnimeMode) void {
+    defer grid_loading_more.store(false, .release);
+
+    const next_page = grid_page + 1;
+    var url_buf: [512]u8 = undefined;
+    const url = buildGridUrl(&url_buf, mode, next_page) orelse return;
+
+    const argv = [_][]const u8{ "curl", "-s", "-A", agent, "--max-time", "12", url };
+
+    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    _ = child.spawn() catch return;
+
+    const buf = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(buf);
+    const bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
+    _ = child.wait() catch {};
+
+    if (bytes == 0) return;
+    // Bail if a newer fetch (mode switch / fresh search) superseded us mid-curl.
+    if (search_gen.load(.acquire) != my_gen) return;
+
+    const json = buf[0..bytes];
+    const added = parseJikanDataEx(json, my_gen, mode == .calendar, state.app.anime.result_count);
+    if (added == 0) {
+        more_available = false;
+    } else {
+        grid_page = next_page;
+        more_available = parsePagination(json);
+    }
 }
 
 /// Jikan season path component for the current AnimeSeasonSel (winter/…/fall).
@@ -155,6 +279,8 @@ pub fn loadTrendingAnime() void {
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
     state.app.anime.last_fetch_s = @import("browse_cache.zig").now(); // SWR stamp
+    grid_page = 1; // restart infinite-scroll pagination
+    more_available = false;
     has_loaded_trending = true;
     // Trending owns the global generation too, so a stale in-flight search
     // worker won't overwrite freshly-loaded trending cards.
@@ -176,9 +302,9 @@ fn trendingThread() void {
     var arg1_buf: [256]u8 = undefined;
     const fv = trend_filter.jikan();
     const arg1 = (if (fv.len == 0)
-        std.fmt.bufPrint(&arg1_buf, "{s}?limit=24", .{jikan_api})
+        std.fmt.bufPrint(&arg1_buf, "{s}?limit=25&page={d}", .{ jikan_api, grid_page })
     else
-        std.fmt.bufPrint(&arg1_buf, "{s}?filter={s}&limit=24", .{ jikan_api, fv })) catch return;
+        std.fmt.bufPrint(&arg1_buf, "{s}?filter={s}&limit=25&page={d}", .{ jikan_api, fv, grid_page })) catch return;
 
     const argv = [_][]const u8{
         "curl", "-s", "-A", agent, arg1,
@@ -196,7 +322,8 @@ fn trendingThread() void {
 
     if (bytes == 0) return;
 
-    parseJikanData(buf[0..bytes], my_gen);
+    _ = parseJikanData(buf[0..bytes], my_gen);
+    if (search_gen.load(.acquire) == my_gen) more_available = parsePagination(buf[0..bytes]);
     logs.pushLog("info", "anime", "Trending loaded (Jikan API)", false);
 }
 
@@ -215,6 +342,8 @@ pub fn searchAnime(query: []const u8) void {
 
     // New generation for this search; the worker captures and re-checks it.
     const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    grid_page = 1; // restart infinite-scroll pagination
+    more_available = false;
 
     // Copy query into a static buffer so the spawned thread doesn't read
     // from the potentially-mutated UI search_buf.
@@ -269,7 +398,7 @@ fn searchThread(my_gen: u32) void {
     }
 
     var url_buf: [512]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "{s}?q={s}&limit=24", .{ jikan_api, enc_buf[0..enc_len] }) catch return;
+    const url = std.fmt.bufPrint(&url_buf, "{s}?q={s}&limit=25&page={d}", .{ jikan_api, enc_buf[0..enc_len], grid_page }) catch return;
 
     const argv = [_][]const u8{
         "curl", "-s", "-A", agent, url,
@@ -287,7 +416,8 @@ fn searchThread(my_gen: u32) void {
 
     if (bytes == 0) return;
 
-    parseJikanData(buf[0..bytes], my_gen);
+    _ = parseJikanData(buf[0..bytes], my_gen);
+    if (search_gen.load(.acquire) == my_gen) more_available = parsePagination(buf[0..bytes]);
     logs.pushLog("info", "anime", "Search done (Jikan API)", false);
 }
 
@@ -303,6 +433,8 @@ pub fn loadSeasonal() void {
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
     state.app.anime.last_fetch_s = @import("browse_cache.zig").now();
+    grid_page = 1; // restart infinite-scroll pagination
+    more_available = false;
     const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
 
     state.app.anime.thread = std.Thread.spawn(.{}, seasonalThread, .{my_gen}) catch {
@@ -320,9 +452,9 @@ fn seasonalThread(my_gen: u32) void {
 
     var url_buf: [256]u8 = undefined;
     const url = switch (sel) {
-        .now => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/now?limit=24", .{}),
-        .upcoming => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/upcoming?limit=24", .{}),
-        else => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/{d}/{s}?limit=24", .{ year, seasonStr(sel) }),
+        .now => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/now?limit=25&page={d}", .{grid_page}),
+        .upcoming => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/upcoming?limit=25&page={d}", .{grid_page}),
+        else => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/{d}/{s}?limit=25&page={d}", .{ year, seasonStr(sel), grid_page }),
     } catch return;
 
     const argv = [_][]const u8{ "curl", "-s", "-A", agent, "--max-time", "12", url };
@@ -338,7 +470,8 @@ fn seasonalThread(my_gen: u32) void {
     _ = child.wait() catch {};
 
     if (bytes == 0) return;
-    parseJikanData(buf[0..bytes], my_gen);
+    _ = parseJikanData(buf[0..bytes], my_gen);
+    if (search_gen.load(.acquire) == my_gen) more_available = parsePagination(buf[0..bytes]);
     logs.pushLog("info", "anime", "Seasonal loaded (Jikan API)", false);
 }
 
@@ -352,6 +485,8 @@ pub fn loadCalendar() void {
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
     state.app.anime.last_fetch_s = @import("browse_cache.zig").now();
+    grid_page = 1; // restart infinite-scroll pagination
+    more_available = false;
     const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
 
     state.app.anime.thread = std.Thread.spawn(.{}, calendarThread, .{my_gen}) catch {
@@ -367,9 +502,9 @@ fn calendarThread(my_gen: u32) void {
     const day = calDayStr(state.app.anime.cal_day);
     var url_buf: [256]u8 = undefined;
     const url = (if (day.len == 0)
-        std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/schedules?limit=24", .{})
+        std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/schedules?limit=25&page={d}", .{grid_page})
     else
-        std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/schedules?filter={s}&limit=24", .{day})) catch return;
+        std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/schedules?filter={s}&limit=25&page={d}", .{ day, grid_page })) catch return;
 
     const argv = [_][]const u8{ "curl", "-s", "-A", agent, "--max-time", "12", url };
 
@@ -386,7 +521,8 @@ fn calendarThread(my_gen: u32) void {
     if (bytes == 0) return;
     // parseJikanData handles the cards; pass with_broadcast so it also extracts
     // each item's broadcast.string into anime.broadcast[] (aligned to index).
-    parseJikanDataEx(buf[0..bytes], my_gen, true);
+    _ = parseJikanDataEx(buf[0..bytes], my_gen, true, 0);
+    if (search_gen.load(.acquire) == my_gen) more_available = parsePagination(buf[0..bytes]);
     logs.pushLog("info", "anime", "Calendar loaded (Jikan API)", false);
 }
 
@@ -481,37 +617,48 @@ fn decodeJsonEscapes(src: []const u8, dst: []u8) usize {
     return out;
 }
 
-fn parseJikanData(json: []const u8, my_gen: u32) void {
-    parseJikanDataEx(json, my_gen, false);
+fn parseJikanData(json: []const u8, my_gen: u32) usize {
+    return parseJikanDataEx(json, my_gen, false, 0);
 }
 
 /// `with_broadcast` (Calendar mode): additionally pull each item's
 /// broadcast.string into state.app.anime.broadcast[count] (≤39 chars), aligned
 /// to the same result index, so the card meta row can show an airtime badge.
-fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool) void {
+///
+/// `start` is the index to begin writing at. `start == 0` is a fresh load: we
+/// clear ALL old cards (queueing their poster textures for the UI thread to
+/// free) and wipe the broadcast badges. `start > 0` is the infinite-scroll
+/// APPEND path: we keep the already-shown cards (and their live textures)
+/// untouched, write new rows at [start..), DEDUPE each candidate by mal_id
+/// against rows [0..count), and return how many rows were actually added.
+fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_offset: usize) usize {
     // Drop stale results: if a newer search/trending load fired while we were
     // in-flight, this generation is no longer the latest — discard silently so
     // fast typing never shows out-of-order results, and we don't clobber the
     // newer fetch's cards/textures.
-    if (search_gen.load(.acquire) != my_gen) return;
+    if (search_gen.load(.acquire) != my_gen) return 0;
 
-    var count: usize = 0;
+    var count: usize = start_offset;
     var pos: usize = 0;
 
-    // Clear old result states including poster textures
-    for (0..state.app.anime.results.len) |i| {
-        state.app.anime.results[i].poster_fetching = false;
-        state.app.anime.results[i].expanded = false;
-        if (state.app.anime.results[i].poster_tex) |tex| {
-            queueTexFree(tex); // worker thread — defer the dvui destroy to the UI thread
-            state.app.anime.results[i].poster_tex = null;
+    if (start_offset == 0) {
+        // Fresh load — clear old result states including poster textures. On the
+        // APPEND path we must NOT touch existing cards' textures (they're still
+        // on screen), so this whole reset is gated on start == 0.
+        for (0..state.app.anime.results.len) |i| {
+            state.app.anime.results[i].poster_fetching = false;
+            state.app.anime.results[i].expanded = false;
+            if (state.app.anime.results[i].poster_tex) |tex| {
+                queueTexFree(tex); // worker thread — defer the dvui destroy to the UI thread
+                state.app.anime.results[i].poster_tex = null;
+            }
         }
+        // Clear broadcast badges (only Calendar repopulates them; other modes
+        // leave them zeroed so no stale airtime shows on a Trending card).
+        for (0..state.app.anime.broadcast_lens.len) |i| state.app.anime.broadcast_lens[i] = 0;
     }
-    // Clear broadcast badges (only Calendar repopulates them; other modes leave
-    // them zeroed so no stale airtime shows on a Trending/Seasonal card).
-    for (0..state.app.anime.broadcast_lens.len) |i| state.app.anime.broadcast_lens[i] = 0;
 
-    while (pos < json.len and count < 24) {
+    while (pos < json.len and count < state.app.anime.results.len) {
         // Find next mal_id object securely to avoid nested array overlap
         const id_idx = std.mem.indexOf(u8, json[pos..], "\"mal_id\":") orelse break;
         pos += id_idx + 9;
@@ -615,7 +762,22 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool) void {
             }
         }
 
-        if (name_str.len > 0 and name_str.len <= 128) {
+        // Dedupe by mal_id against rows already committed [0..count). Jikan can
+        // repeat entries across pages (and the broadcast schedule list groups by
+        // day), so without this the same card could appear twice on append.
+        var is_dup = false;
+        if (num_end > 0) {
+            var d: usize = 0;
+            while (d < count) : (d += 1) {
+                const ex = &state.app.anime.results[d];
+                if (ex.id_len == id_str.len and std.mem.eql(u8, ex.id[0..ex.id_len], id_str)) {
+                    is_dup = true;
+                    break;
+                }
+            }
+        }
+
+        if (!is_dup and name_str.len > 0 and name_str.len <= 128) {
             var item = &state.app.anime.results[count];
             @memcpy(item.id[0..id_str.len], id_str);
             item.id_len = id_str.len;
@@ -665,8 +827,9 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool) void {
 
     // Final generation re-check before publishing the count: a newer fetch may
     // have superseded us during parsing. If so, drop our results.
-    if (search_gen.load(.acquire) != my_gen) return;
+    if (search_gen.load(.acquire) != my_gen) return 0;
     state.app.anime.result_count = count;
+    return count - start_offset; // rows actually added (0 ⇒ no more pages worth fetching)
 }
 
 pub fn loadEpisodes(idx: usize) void {
@@ -986,6 +1149,8 @@ pub fn jumpToAnime(mal_id: []const u8) void {
     state.app.anime.episode_count = 0;
     // New generation so any in-flight grid fetch can't clobber results[0].
     const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    grid_page = 1; // single-anime view has no further pages
+    more_available = false;
 
     const S = struct {
         var id_buf: [16]u8 = undefined;
@@ -1019,7 +1184,7 @@ pub fn jumpToAnime(mal_id: []const u8) void {
             // The single-anime endpoint wraps one object in {"data":{...}} — the
             // same field shape parseJikanData walks, so reuse it (it caps at the
             // first mal_id object → exactly one card in results[0]).
-            parseJikanData(buf[0..len], @This().gen);
+            _ = parseJikanData(buf[0..len], @This().gen);
 
             // If still current, select it and load its episodes on this thread.
             if (search_gen.load(.acquire) == @This().gen and state.app.anime.result_count > 0) {
@@ -2225,6 +2390,44 @@ fn renderGallery() void {
             renderCard(&state.app.anime.results[i + col], i + col, card_w);
         }
         i += cols;
+    }
+
+    // ── Infinite scroll: a status row at the grid's tail (mirrors comics.zig).
+    // When it scrolls near the bottom (viewport within 1.5 viewports of the
+    // content end) we kick the next-page appender; the row also doubles as a
+    // tap-to-load affordance. Only shown while there's a next page AND room.
+    if (more_available and state.app.anime.result_count > 0 and
+        state.app.anime.result_count < state.app.anime.results.len)
+    {
+        const busy = grid_loading_more.load(.acquire);
+        if (busy) {
+            _ = dvui.label(@src(), "Loading more…", .{}, .{
+                .id_extra = 80001,
+                .expand = .horizontal,
+                .gravity_x = 0.5,
+                .color_text = theme.colors.text_muted,
+                .margin = .{ .x = 3, .y = 8, .w = 3, .h = 12 },
+            });
+        } else if (dvui.button(@src(), "▾ Load more", .{}, .{
+            .id_extra = 80002,
+            .expand = .horizontal,
+            .color_fill = theme.colors.bg_glass,
+            .color_text = theme.colors.accent,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 8, .y = 12, .w = 8, .h = 12 },
+            .margin = .{ .x = 3, .y = 8, .w = 3, .h = 12 },
+            .gravity_x = 0.5,
+        })) {
+            loadMoreGrid(); // tap fallback
+        }
+
+        // Auto-trigger when the user scrolls near the bottom (within 1.5 view-
+        // ports of the content end), so it feels infinite without a click.
+        const si = scroll.si;
+        const max_scroll = si.scrollMax(.vertical);
+        if (max_scroll > 0 and si.viewport.y >= max_scroll - si.viewport.h * 1.5) {
+            loadMoreGrid();
+        }
     }
 }
 
