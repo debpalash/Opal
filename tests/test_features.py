@@ -1223,6 +1223,31 @@ def test_card_views_polish():
     return "fail", f"missing: {missing}"
 
 
+@test("Anime Seasons/Calendar/Tracking", "Browse")
+def test_anime_netflix_experience():
+    # Netflix/Apple-TV+ anime browse: mode toolbar, Seasonal (/seasons),
+    # Calendar (/schedules), franchise relations rail, and persisted episode
+    # tracking + Continue-Watching.
+    st = _src("src/core/state.zig")
+    db = _src("src/core/db.zig")
+    an = _src("src/services/anime.zig")
+    checks = {
+        "state modes": ("AnimeMode" in st and "AnimeSeasonSel" in st
+                        and "ContinueItem" in st and "episode_watched" in st),
+        "db tracking": ("animeMarkWatched" in db and "animeGetContinue" in db
+                        and "anime_watched" in db and "anime_continue" in db),
+        "seasonal fetch": "/seasons/" in an,
+        "calendar fetch": "/schedules" in an,
+        "relations rail": "/relations" in an,
+        "tracking wired": ("animeMarkWatched" in an and "animeLoadWatched" in an
+                           and "animeUpsertContinue" in an),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if not missing:
+        return "pass", "modes + seasonal + calendar + relations + episode tracking wired"
+    return "fail", f"missing: {missing}"
+
+
 @test("Web UI API Base Port", "Page Shell")
 def test_web_api_base_port():
     # Web UI is served on :3000 but the JSON API lives on :41595 — index.html

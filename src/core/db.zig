@@ -236,6 +236,32 @@ fn createTables() void {
     ;
     exec(ai_chat_schema);
     exec("CREATE INDEX IF NOT EXISTS idx_ai_chat_starred_at ON ai_chat_starred(created_at DESC)");
+
+    // ── Anime episode tracking ──
+
+    // Per-episode watched flags, keyed by (mal_id, episode).
+    exec(
+        \\CREATE TABLE IF NOT EXISTS anime_watched (
+        \\  mal_id TEXT NOT NULL,
+        \\  episode INTEGER NOT NULL,
+        \\  watched INTEGER DEFAULT 1,
+        \\  updated_at INTEGER,
+        \\  PRIMARY KEY (mal_id, episode)
+        \\)
+    );
+
+    // Continue-watching rail: one row per series, most-recent first.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS anime_continue (
+        \\  mal_id TEXT PRIMARY KEY,
+        \\  title TEXT,
+        \\  poster_url TEXT,
+        \\  last_episode INTEGER,
+        \\  total_episodes INTEGER,
+        \\  updated_at INTEGER
+        \\)
+    );
+    exec("CREATE INDEX IF NOT EXISTS idx_anime_continue_at ON anime_continue(updated_at DESC)");
 }
 
 // ══════════════════════════════════════════════════════════
@@ -354,7 +380,7 @@ pub fn insertMemory(role: []const u8, content: []const u8, context_type: []const
 pub fn retrieveMemory(allocator: std.mem.Allocator, embed: []const f32, limit: i32) ?[]u8 {
     _ = db_handle orelse return null;
 
-    const sql = 
+    const sql =
         \\SELECT rowid, distance
         \\FROM vec_aimemory
         \\WHERE embedding MATCH ? AND k = ?
@@ -379,7 +405,7 @@ pub fn retrieveMemory(allocator: std.mem.Allocator, embed: []const f32, limit: i
     var count: usize = 0;
     while (step(stmt) == c.SQLITE_ROW) {
         const rowid = columnInt(stmt, 0);
-        
+
         // Reuse pre-prepared metadata statement
         _ = c.sqlite3_reset(md_stmt);
         bindInt(md_stmt, 1, rowid);
@@ -389,16 +415,16 @@ pub fn retrieveMemory(allocator: std.mem.Allocator, embed: []const f32, limit: i
             const ctype = columnText(md_stmt, 2) orelse "chat";
             const title = columnText(md_stmt, 3) orelse "";
             const ts = columnText(md_stmt, 4) orelse "";
-            
+
             if (std.mem.eql(u8, ctype, "media")) {
-                writer.print("[{s}] System: Started Playing context: {s}\n", .{ts, title}) catch {};
+                writer.print("[{s}] System: Started Playing context: {s}\n", .{ ts, title }) catch {};
             } else {
-                writer.print("[{s}] {s}: {s}\n", .{ts, role, content}) catch {};
+                writer.print("[{s}] {s}: {s}\n", .{ ts, role, content }) catch {};
             }
             count += 1;
         }
     }
-    
+
     if (count == 0) {
         return null;
     }
@@ -790,4 +816,145 @@ fn trimScene(content: []const u8) []const u8 {
     var clause = trimmed[0..end];
     if (clause.len > 80) clause = clause[0..80];
     return std.mem.trim(u8, clause, " \t\r\n");
+}
+
+// ══════════════════════════════════════════════════════════
+// Anime episode tracking
+// ══════════════════════════════════════════════════════════
+
+const logs = @import("logs.zig");
+const io_global = @import("io_global.zig");
+
+/// Mark a single episode of `mal_id` as watched / un-watched. Upserts into
+/// anime_watched keyed by (mal_id, episode); `watched==false` stores 0 rather
+/// than deleting so a re-toggle keeps the same row. Stamps updated_at (ms).
+pub fn animeMarkWatched(mal_id: []const u8, episode: u32, watched: bool) void {
+    _ = db_handle orelse return;
+
+    const sql =
+        \\INSERT INTO anime_watched(mal_id, episode, watched, updated_at)
+        \\VALUES(?, ?, ?, ?)
+        \\ON CONFLICT(mal_id, episode) DO UPDATE SET
+        \\  watched = excluded.watched,
+        \\  updated_at = excluded.updated_at
+    ;
+    const stmt = prepare(sql) orelse {
+        logs.pushLog("error", "anime", "animeMarkWatched: prepare failed", true);
+        return;
+    };
+    defer finalize(stmt);
+
+    bindText(stmt, 1, mal_id);
+    bindInt(stmt, 2, @intCast(@as(i64, episode)));
+    bindInt(stmt, 3, if (watched) 1 else 0);
+    bindInt64(stmt, 4, io_global.milliTimestamp());
+
+    if (step(stmt) != c.SQLITE_DONE) {
+        logs.pushLog("error", "anime", "animeMarkWatched: step failed", true);
+    }
+}
+
+/// Load watched flags for `mal_id` into `out`, setting out[episode-1]=true for
+/// every watched row. Bounds-safe: episodes < 1 or whose index >= out.len are
+/// ignored. Does not clear `out` (caller zeroes it); only sets trues.
+pub fn animeLoadWatched(mal_id: []const u8, out: []bool) void {
+    if (out.len == 0) return;
+    _ = db_handle orelse return;
+
+    const stmt = prepare("SELECT episode FROM anime_watched WHERE mal_id = ? AND watched <> 0") orelse {
+        logs.pushLog("error", "anime", "animeLoadWatched: prepare failed", true);
+        return;
+    };
+    defer finalize(stmt);
+
+    bindText(stmt, 1, mal_id);
+
+    while (step(stmt) == c.SQLITE_ROW) {
+        const ep = columnInt(stmt, 0);
+        if (ep < 1) continue;
+        const idx: usize = @intCast(ep - 1);
+        if (idx >= out.len) continue;
+        out[idx] = true;
+    }
+}
+
+/// Upsert a continue-watching entry keyed by `mal_id`, stamping updated_at (ms)
+/// so the most-recently-touched series sorts first in animeGetContinue.
+pub fn animeUpsertContinue(mal_id: []const u8, title: []const u8, poster_url: []const u8, last_episode: u16, total_episodes: u16) void {
+    _ = db_handle orelse return;
+
+    const sql =
+        \\INSERT INTO anime_continue(mal_id, title, poster_url, last_episode, total_episodes, updated_at)
+        \\VALUES(?, ?, ?, ?, ?, ?)
+        \\ON CONFLICT(mal_id) DO UPDATE SET
+        \\  title = excluded.title,
+        \\  poster_url = excluded.poster_url,
+        \\  last_episode = excluded.last_episode,
+        \\  total_episodes = excluded.total_episodes,
+        \\  updated_at = excluded.updated_at
+    ;
+    const stmt = prepare(sql) orelse {
+        logs.pushLog("error", "anime", "animeUpsertContinue: prepare failed", true);
+        return;
+    };
+    defer finalize(stmt);
+
+    bindText(stmt, 1, mal_id);
+    bindText(stmt, 2, title);
+    bindText(stmt, 3, poster_url);
+    bindInt(stmt, 4, @intCast(@as(i64, last_episode)));
+    bindInt(stmt, 5, @intCast(@as(i64, total_episodes)));
+    bindInt64(stmt, 6, io_global.milliTimestamp());
+
+    if (step(stmt) != c.SQLITE_DONE) {
+        logs.pushLog("error", "anime", "animeUpsertContinue: step failed", true);
+    }
+}
+
+/// Fill `out` with the most-recently-updated continue-watching entries (newest
+/// first), up to out.len rows. Each fixed buffer is filled with a clamped
+/// @memcpy; the lazy poster_* UI fields are left untouched. Returns the number
+/// of rows written.
+pub fn animeGetContinue(out: []@import("state.zig").ContinueItem) usize {
+    if (out.len == 0) return 0;
+    _ = db_handle orelse return 0;
+
+    const stmt = prepare(
+        \\SELECT mal_id, title, poster_url, last_episode, total_episodes
+        \\FROM anime_continue
+        \\ORDER BY updated_at DESC
+        \\LIMIT ?
+    ) orelse {
+        logs.pushLog("error", "anime", "animeGetContinue: prepare failed", true);
+        return 0;
+    };
+    defer finalize(stmt);
+
+    bindInt(stmt, 1, @intCast(out.len));
+
+    var n: usize = 0;
+    while (n < out.len and step(stmt) == c.SQLITE_ROW) {
+        const item = &out[n];
+
+        if (columnText(stmt, 0)) |s| {
+            const len = @min(s.len, item.mal_id.len);
+            @memcpy(item.mal_id[0..len], s[0..len]);
+            item.mal_id_len = len;
+        }
+        if (columnText(stmt, 1)) |s| {
+            const len = @min(s.len, item.title.len);
+            @memcpy(item.title[0..len], s[0..len]);
+            item.title_len = len;
+        }
+        if (columnText(stmt, 2)) |s| {
+            const len = @min(s.len, item.poster_url.len);
+            @memcpy(item.poster_url[0..len], s[0..len]);
+            item.poster_url_len = len;
+        }
+        item.last_episode = @intCast(columnInt(stmt, 3));
+        item.total_episodes = @intCast(columnInt(stmt, 4));
+
+        n += 1;
+    }
+    return n;
 }

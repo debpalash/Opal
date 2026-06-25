@@ -48,6 +48,60 @@ var trend_filter: TrendFilter = .airing;
 /// User-cyclable card width (compact ↔ large), clamped 110–320 in the +/- wires.
 var card_w_pref: f32 = 150;
 
+// ── Mode dispatch (Trending | Seasonal | Calendar | Search | My List) ──
+// Every grid mode reuses results[]/renderGallery; only the fetch differs. A
+// single monotonic generation (`search_gen`, already declared below) guards all
+// of them so switching modes fast never shows stale results: each fetcher
+// captures the gen it was spawned under and parseJikanData drops on mismatch.
+
+/// Latest mode we issued a fetch for. When renderContent sees `anime.mode`
+/// differ from this, it resets SWR + fires the matching fetch exactly once.
+var fetched_mode: ?state.AnimeMode = null;
+/// Sub-selectors we last fetched under, so changing a season/day/filter while
+/// already in that mode re-fires (renderContent compares + refetches).
+var fetched_season_sel: state.AnimeSeasonSel = .now;
+var fetched_season_year: u16 = 0;
+var fetched_cal_day: u8 = 255;
+
+/// Switch the active browse mode. Resets the SWR stamp so the explicit switch
+/// always refetches, bumps the generation (drops any in-flight worker), and
+/// clears the selection so we land on the grid. The actual fetch is kicked by
+/// renderContent's dispatch (keeps a single fire-point).
+fn setMode(m: state.AnimeMode) void {
+    if (state.app.anime.mode == m) return;
+    state.app.anime.mode = m;
+    state.app.anime.selected_idx = null;
+    state.app.anime.episode_count = 0;
+    state.app.anime.last_fetch_s = 0; // bypass SWR on explicit switch
+    fetched_mode = null; // force renderContent to re-dispatch
+    _ = search_gen.fetchAdd(1, .acq_rel); // drop stale in-flight workers
+}
+
+/// Jikan season path component for the current AnimeSeasonSel (winter/…/fall).
+fn seasonStr(sel: state.AnimeSeasonSel) []const u8 {
+    return switch (sel) {
+        .winter => "winter",
+        .spring => "spring",
+        .summer => "summer",
+        .fall => "fall",
+        else => "winter",
+    };
+}
+
+/// Jikan schedules filter for the current cal_day (0=all → empty → no filter).
+fn calDayStr(day: u8) []const u8 {
+    return switch (day) {
+        1 => "monday",
+        2 => "tuesday",
+        3 => "wednesday",
+        4 => "thursday",
+        5 => "friday",
+        6 => "saturday",
+        7 => "sunday",
+        else => "",
+    };
+}
+
 // ── Live-search debounce + generation (see renderSearchBar). ──
 /// Wall-clock ms of the last observed change to the search text buffer.
 var last_edit_ms: i64 = 0;
@@ -207,6 +261,105 @@ fn searchThread(my_gen: u32) void {
     logs.pushLog("info", "anime", "Search done (Jikan API)", false);
 }
 
+// ══════════════════════════════════════════════════════════
+// Seasonal mode (/seasons/now, /seasons/{year}/{season}, /seasons/upcoming)
+// ══════════════════════════════════════════════════════════
+
+/// Kick a seasonal fetch for the current season_sel / season_year. Reuses the
+/// shared results[]/generation machinery (parseJikanData publishes the cards).
+pub fn loadSeasonal() void {
+    if (state.app.anime.is_loading) return;
+    state.app.anime.is_loading = true;
+    state.app.anime.selected_idx = null;
+    state.app.anime.episode_count = 0;
+    state.app.anime.last_fetch_s = @import("browse_cache.zig").now();
+    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+
+    state.app.anime.thread = std.Thread.spawn(.{}, seasonalThread, .{my_gen}) catch {
+        state.app.anime.is_loading = false;
+        return;
+    };
+    if (state.app.anime.thread) |t| t.detach();
+}
+
+fn seasonalThread(my_gen: u32) void {
+    defer state.app.anime.is_loading = false;
+
+    const sel = state.app.anime.season_sel;
+    const year = state.app.anime.season_year;
+
+    var url_buf: [256]u8 = undefined;
+    const url = switch (sel) {
+        .now => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/now?limit=24", .{}),
+        .upcoming => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/upcoming?limit=24", .{}),
+        else => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/{d}/{s}?limit=24", .{ year, seasonStr(sel) }),
+    } catch return;
+
+    const argv = [_][]const u8{ "curl", "-s", "-A", agent, "--max-time", "12", url };
+
+    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    _ = child.spawn() catch return;
+
+    const buf = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(buf);
+    const bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
+    _ = child.wait() catch {};
+
+    if (bytes == 0) return;
+    parseJikanData(buf[0..bytes], my_gen);
+    logs.pushLog("info", "anime", "Seasonal loaded (Jikan API)", false);
+}
+
+// ══════════════════════════════════════════════════════════
+// Calendar mode (/schedules?filter={day}) — same anime shape + broadcast.string
+// ══════════════════════════════════════════════════════════
+
+pub fn loadCalendar() void {
+    if (state.app.anime.is_loading) return;
+    state.app.anime.is_loading = true;
+    state.app.anime.selected_idx = null;
+    state.app.anime.episode_count = 0;
+    state.app.anime.last_fetch_s = @import("browse_cache.zig").now();
+    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+
+    state.app.anime.thread = std.Thread.spawn(.{}, calendarThread, .{my_gen}) catch {
+        state.app.anime.is_loading = false;
+        return;
+    };
+    if (state.app.anime.thread) |t| t.detach();
+}
+
+fn calendarThread(my_gen: u32) void {
+    defer state.app.anime.is_loading = false;
+
+    const day = calDayStr(state.app.anime.cal_day);
+    var url_buf: [256]u8 = undefined;
+    const url = (if (day.len == 0)
+        std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/schedules?limit=24", .{})
+    else
+        std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/schedules?filter={s}&limit=24", .{day})) catch return;
+
+    const argv = [_][]const u8{ "curl", "-s", "-A", agent, "--max-time", "12", url };
+
+    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    _ = child.spawn() catch return;
+
+    const buf = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(buf);
+    const bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
+    _ = child.wait() catch {};
+
+    if (bytes == 0) return;
+    // parseJikanData handles the cards; pass with_broadcast so it also extracts
+    // each item's broadcast.string into anime.broadcast[] (aligned to index).
+    parseJikanDataEx(buf[0..bytes], my_gen, true);
+    logs.pushLog("info", "anime", "Calendar loaded (Jikan API)", false);
+}
+
 /// Decode common JSON string escapes (\" \\ \/ \n \r \t \b \f \uXXXX) from
 /// `src` into `dst`, returning the number of bytes written. Bounded by dst.len.
 /// Anything that isn't a recognized escape is copied verbatim (the backslash is
@@ -299,6 +452,13 @@ fn decodeJsonEscapes(src: []const u8, dst: []u8) usize {
 }
 
 fn parseJikanData(json: []const u8, my_gen: u32) void {
+    parseJikanDataEx(json, my_gen, false);
+}
+
+/// `with_broadcast` (Calendar mode): additionally pull each item's
+/// broadcast.string into state.app.anime.broadcast[count] (≤39 chars), aligned
+/// to the same result index, so the card meta row can show an airtime badge.
+fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool) void {
     // Drop stale results: if a newer search/trending load fired while we were
     // in-flight, this generation is no longer the latest — discard silently so
     // fast typing never shows out-of-order results, and we don't clobber the
@@ -317,6 +477,9 @@ fn parseJikanData(json: []const u8, my_gen: u32) void {
             state.app.anime.results[i].poster_tex = null;
         }
     }
+    // Clear broadcast badges (only Calendar repopulates them; other modes leave
+    // them zeroed so no stale airtime shows on a Trending/Seasonal card).
+    for (0..state.app.anime.broadcast_lens.len) |i| state.app.anime.broadcast_lens[i] = 0;
 
     while (pos < json.len and count < 24) {
         // Find next mal_id object securely to avoid nested array overlap
@@ -446,6 +609,23 @@ fn parseJikanData(json: []const u8, my_gen: u32) void {
             item.poster_tex = null;
             item.expanded = false;
 
+            // Calendar: extract broadcast.string ("Mondays at 01:00 (JST)").
+            if (with_broadcast and count < state.app.anime.broadcast.len) {
+                if (std.mem.indexOf(u8, obj_slice, "\"broadcast\":")) |b_idx| {
+                    const bscope = obj_slice[b_idx..];
+                    if (std.mem.indexOf(u8, bscope, "\"string\":\"")) |s_idx| {
+                        const start = s_idx + 10;
+                        var end = start;
+                        while (end < bscope.len and bscope[end] != '"' and bscope[end] != '\\') : (end += 1) {}
+                        if (end > start and end < bscope.len) {
+                            const blen = @min(end - start, state.app.anime.broadcast[count].len - 1);
+                            @memcpy(state.app.anime.broadcast[count][0..blen], bscope[start .. start + blen]);
+                            state.app.anime.broadcast_lens[count] = blen;
+                        }
+                    }
+                }
+            }
+
             count += 1;
         }
 
@@ -478,6 +658,17 @@ pub fn loadEpisodes(idx: usize) void {
     }
     state.app.anime.episode_count = ep_count;
     state.app.anime.is_loading = false;
+
+    // ── Tracking: zero the watched flags for the visible range, then hydrate
+    //    from the DB (animeLoadWatched only sets trues; we must clear first). ──
+    for (0..@min(ep_count, state.app.anime.episode_watched.len)) |i| state.app.anime.episode_watched[i] = false;
+    const mal_id = state.app.anime.results[idx].id[0..state.app.anime.results[idx].id_len];
+    if (mal_id.len > 0 and ep_count > 0) {
+        @import("../core/db.zig").animeLoadWatched(mal_id, state.app.anime.episode_watched[0..ep_count]);
+    }
+
+    // Detail view also shows a "Seasons & Related" rail — load relations.
+    loadRelations(idx);
 
     // Now kick off Jikan episodes enrichment in background
     if (!state.app.anime.episodes_loading) {
@@ -599,10 +790,283 @@ fn fetchEpisodeDataThread(idx: usize) void {
     }
 }
 
+// ══════════════════════════════════════════════════════════
+// Relations rail (/anime/{mal_id}/relations) — Sequel/Prequel/Side Story/…
+// ══════════════════════════════════════════════════════════
+
+var relations_busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+pub fn loadRelations(idx: usize) void {
+    if (idx >= state.app.anime.result_count) return;
+    if (relations_busy.swap(true, .acq_rel)) return; // already in flight
+    state.app.anime.relations_loading = true;
+    state.app.anime.relation_count = 0;
+
+    const S = struct {
+        var mal_id_buf: [16]u8 = undefined;
+        var mal_id_len: usize = 0;
+
+        fn worker() void {
+            defer {
+                state.app.anime.relations_loading = false;
+                relations_busy.store(false, .release);
+            }
+            const mal_id = @This().mal_id_buf[0..@This().mal_id_len];
+            if (mal_id.len == 0) return;
+
+            var url_buf: [128]u8 = undefined;
+            const url = std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/anime/{s}/relations", .{mal_id}) catch return;
+
+            const argv = [_][]const u8{ "curl", "-s", "-A", agent, "--max-time", "10", url };
+            var child = @import("../core/io_global.zig").Child.init(&argv, std.heap.c_allocator);
+            child.stdout_behavior = .Pipe;
+            child.stderr_behavior = .Ignore;
+            _ = child.spawn() catch return;
+
+            const buf = @import("../core/alloc.zig").allocator.alloc(u8, 128 * 1024) catch {
+                _ = child.wait() catch {};
+                return;
+            };
+            defer @import("../core/alloc.zig").allocator.free(buf);
+            const len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
+            _ = child.wait() catch {};
+            if (len < 10) return;
+            parseRelations(buf[0..len]);
+        }
+    };
+
+    const mal = state.app.anime.results[idx].id[0..state.app.anime.results[idx].id_len];
+    const n = @min(mal.len, S.mal_id_buf.len);
+    @memcpy(S.mal_id_buf[0..n], mal[0..n]);
+    S.mal_id_len = n;
+
+    if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
+        t.detach();
+    } else |_| {
+        state.app.anime.relations_loading = false;
+        relations_busy.store(false, .release);
+    }
+}
+
+/// Relation types worth surfacing in the rail (skip Character/Adaptation/Summary).
+fn relationKept(rel: []const u8) bool {
+    const keep = [_][]const u8{ "Sequel", "Prequel", "Side Story", "Spin-Off", "Parent story", "Alternative version", "Alternative setting" };
+    for (keep) |k| {
+        if (std.ascii.eqlIgnoreCase(rel, k)) return true;
+    }
+    return false;
+}
+
+/// Parse /anime/{id}/relations → data[] of {relation, entry:[{mal_id,type,name}]}.
+/// Fills state.app.anime.relations[] with kept (meaningful) anime-type entries.
+fn parseRelations(json: []const u8) void {
+    var count: usize = 0;
+    var pos: usize = 0;
+
+    while (pos < json.len and count < state.app.anime.relations.len) {
+        // Each data element starts with "relation":"<type>".
+        const rel_idx = std.mem.indexOf(u8, json[pos..], "\"relation\":\"") orelse break;
+        const rel_start = pos + rel_idx + 12;
+        var rel_end = rel_start;
+        while (rel_end < json.len and json[rel_end] != '"') : (rel_end += 1) {}
+        if (rel_end >= json.len) break;
+        const rel_type = json[rel_start..rel_end];
+
+        // Scope this element up to the next "relation": (or EOF).
+        var next_rel = json.len;
+        if (std.mem.indexOf(u8, json[rel_end..], "\"relation\":\"")) |nidx| {
+            next_rel = rel_end + nidx;
+        }
+        const scope = json[rel_end..next_rel];
+        pos = next_rel;
+
+        if (!relationKept(rel_type)) continue;
+
+        // Walk each entry object in this relation's entry[] array. We accept
+        // only type:"anime" entries (skip manga/light-novel relations).
+        var epos: usize = 0;
+        while (epos < scope.len and count < state.app.anime.relations.len) {
+            const eid = std.mem.indexOf(u8, scope[epos..], "\"mal_id\":") orelse break;
+            const num_st = epos + eid + 9;
+            var ne = num_st;
+            while (ne < scope.len and scope[ne] >= '0' and scope[ne] <= '9') : (ne += 1) {}
+            if (ne == num_st) {
+                epos = num_st;
+                continue;
+            }
+            const id_str = scope[num_st..ne];
+
+            var ent_end = scope.len;
+            if (std.mem.indexOf(u8, scope[ne..], "\"mal_id\":")) |nidx| {
+                ent_end = ne + nidx;
+            }
+            const ent = scope[num_st..ent_end];
+            epos = ent_end;
+
+            // type must be anime.
+            var is_anime = false;
+            if (std.mem.indexOf(u8, ent, "\"type\":\"anime\"")) |_| is_anime = true;
+            if (!is_anime) continue;
+
+            // entry name.
+            var name_str: []const u8 = "";
+            if (std.mem.indexOf(u8, ent, "\"name\":\"")) |ni| {
+                const s = ni + 8;
+                var e = s;
+                var esc = false;
+                while (e < ent.len) : (e += 1) {
+                    if (esc) {
+                        esc = false;
+                    } else if (ent[e] == '\\') {
+                        esc = true;
+                    } else if (ent[e] == '"') break;
+                }
+                if (e <= ent.len and e > s) name_str = ent[s..e];
+            }
+            if (name_str.len == 0) continue;
+
+            var r = &state.app.anime.relations[count];
+            const idl = @min(id_str.len, r.mal_id.len);
+            @memcpy(r.mal_id[0..idl], id_str[0..idl]);
+            r.mal_id_len = idl;
+            r.name_len = decodeJsonEscapes(name_str, &r.name);
+            const tl = @min(rel_type.len, r.rel_type.len);
+            @memcpy(r.rel_type[0..tl], rel_type[0..tl]);
+            r.rel_type_len = tl;
+            count += 1;
+        }
+    }
+
+    state.app.anime.relation_count = count;
+}
+
+// ══════════════════════════════════════════════════════════
+// Jump to a single anime by mal_id (/anime/{id}) — related & continue rails.
+// Parses one anime object into results[0], selects it, loads episodes.
+// ══════════════════════════════════════════════════════════
+
+var jump_busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+pub fn jumpToAnime(mal_id: []const u8) void {
+    if (mal_id.len == 0 or mal_id.len > 15) return;
+    if (jump_busy.swap(true, .acq_rel)) return;
+    state.app.anime.is_loading = true;
+    state.app.anime.selected_idx = null;
+    state.app.anime.episode_count = 0;
+    // New generation so any in-flight grid fetch can't clobber results[0].
+    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+
+    const S = struct {
+        var id_buf: [16]u8 = undefined;
+        var id_len: usize = 0;
+        var gen: u32 = 0;
+
+        fn worker() void {
+            defer {
+                state.app.anime.is_loading = false;
+                jump_busy.store(false, .release);
+            }
+            const id = @This().id_buf[0..@This().id_len];
+            var url_buf: [96]u8 = undefined;
+            const url = std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/anime/{s}", .{id}) catch return;
+
+            const argv = [_][]const u8{ "curl", "-s", "-A", agent, "--max-time", "12", url };
+            var child = @import("../core/io_global.zig").Child.init(&argv, std.heap.c_allocator);
+            child.stdout_behavior = .Pipe;
+            child.stderr_behavior = .Ignore;
+            _ = child.spawn() catch return;
+
+            const buf = @import("../core/alloc.zig").allocator.alloc(u8, 128 * 1024) catch {
+                _ = child.wait() catch {};
+                return;
+            };
+            defer @import("../core/alloc.zig").allocator.free(buf);
+            const len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
+            _ = child.wait() catch {};
+            if (len < 10) return;
+
+            // The single-anime endpoint wraps one object in {"data":{...}} — the
+            // same field shape parseJikanData walks, so reuse it (it caps at the
+            // first mal_id object → exactly one card in results[0]).
+            parseJikanData(buf[0..len], @This().gen);
+
+            // If still current, select it and load its episodes on this thread.
+            if (search_gen.load(.acquire) == @This().gen and state.app.anime.result_count > 0) {
+                state.app.anime.selected_idx = 0;
+                loadEpisodes(0);
+            }
+        }
+    };
+
+    const n = @min(mal_id.len, S.id_buf.len);
+    @memcpy(S.id_buf[0..n], mal_id[0..n]);
+    S.id_len = n;
+    S.gen = my_gen;
+
+    if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
+        t.detach();
+    } else |_| {
+        state.app.anime.is_loading = false;
+        jump_busy.store(false, .release);
+    }
+}
+
+// ══════════════════════════════════════════════════════════
+// Episode tracking helpers (watched toggle, resume, continue upsert)
+// ══════════════════════════════════════════════════════════
+
+/// Toggle episode N's watched flag (UI ↔ DB). ep is 1-based.
+fn toggleWatched(idx: usize, ep: usize) void {
+    if (ep == 0 or ep > state.app.anime.episode_watched.len) return;
+    if (idx >= state.app.anime.result_count) return;
+    const flag = !state.app.anime.episode_watched[ep - 1];
+    state.app.anime.episode_watched[ep - 1] = flag;
+    const mal_id = state.app.anime.results[idx].id[0..state.app.anime.results[idx].id_len];
+    if (mal_id.len > 0) {
+        @import("../core/db.zig").animeMarkWatched(mal_id, @intCast(ep), flag);
+    }
+}
+
+/// Count watched episodes among the currently-loaded episode range.
+fn watchedCount() usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < state.app.anime.episode_count and i < state.app.anime.episode_watched.len) : (i += 1) {
+        if (state.app.anime.episode_watched[i]) n += 1;
+    }
+    return n;
+}
+
+/// Lowest 1-based episode number not yet watched (for the Resume button). Falls
+/// back to episode 1 if everything is watched or nothing is loaded.
+fn nextUnwatchedEp() usize {
+    var i: usize = 0;
+    while (i < state.app.anime.episode_count and i < state.app.anime.episode_watched.len) : (i += 1) {
+        if (!state.app.anime.episode_watched[i]) return i + 1;
+    }
+    return 1;
+}
+
 pub fn playEpisode(ep_no: []const u8) void {
     if (state.app.anime.selected_idx == null) return;
     const idx = state.app.anime.selected_idx.?;
     if (idx >= state.app.anime.result_count) return;
+
+    // ── Tracking: mark this episode watched + upsert the Continue entry so it
+    //    surfaces in My List with the next episode to resume. ──
+    {
+        const ep_num = std.fmt.parseInt(u16, ep_no, 10) catch 0;
+        const r = &state.app.anime.results[idx];
+        const mal_id = r.id[0..r.id_len];
+        if (ep_num >= 1 and ep_num <= state.app.anime.episode_watched.len and mal_id.len > 0) {
+            state.app.anime.episode_watched[ep_num - 1] = true;
+            const db = @import("../core/db.zig");
+            db.animeMarkWatched(mal_id, ep_num, true);
+            db.animeUpsertContinue(mal_id, r.name[0..r.name_len], r.poster_url[0..r.poster_url_len], ep_num, r.episodes);
+            // Refresh the cached Continue rail so My List reflects this play.
+            state.app.anime.continue_loaded = false;
+        }
+    }
 
     state.app.anime.stream_loading = true;
 
@@ -752,22 +1216,24 @@ fn tryAnimePaheDDL(name: []const u8, ep_no: []const u8) bool {
 // ══════════════════════════════════════════════════════════
 
 pub fn renderContent() void {
-    // Initial load, or SWR background refresh once the cache is stale. Only
-    // while on the trending view (empty search box).
-    if (state.app.anime.search_buf[0] == 0 and !state.app.anime.is_loading and
-        (state.app.anime.result_count == 0 or @import("browse_cache.zig").isStale(state.app.anime.last_fetch_s)))
-    {
-        loadTrendingAnime();
-    }
+    // ── Mode dispatch. Each grid mode reuses results[]/renderGallery; only the
+    //    fetch differs. We fire exactly once per (mode + sub-selector) change,
+    //    plus SWR auto-refresh on Trending only (other modes don't cross-
+    //    contaminate trending's last_fetch_s). Skipped while an anime detail is
+    //    open (selected_idx != null) so the detail view stays stable. ──
+    if (state.app.anime.selected_idx == null) dispatchModeFetch();
 
     // Full-page root so loading/empty branches fill width/height.
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer page.deinit();
 
-    // Search bar + toolbar (chips, count, card-size controls). Hidden while
-    // an anime is selected (episode-list view has its own header).
+    // Mode toolbar + per-mode sub-toolbar + count/card-size controls. Hidden
+    // while an anime is selected (episode-list view has its own header).
     if (state.app.anime.selected_idx == null) {
-        renderSearchBar();
+        renderModeToolbar();
+        // Search mode keeps the live search-as-you-type box.
+        if (state.app.anime.mode == .search) renderSearchBar();
+        renderSubToolbar();
         renderToolbar(state.app.anime.result_count);
     }
 
@@ -831,6 +1297,87 @@ pub fn renderContent() void {
                 }
             }
 
+            // ── Tracking header: progress bar + "{watched}/{total}" + Resume ──
+            if (state.app.anime.episode_count > 0) {
+                const total = state.app.anime.episode_count;
+                const watched = watchedCount();
+                var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                    .id_extra = 60,
+                    .expand = .horizontal,
+                    .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+                });
+                defer hdr.deinit();
+
+                // Resume button → plays the lowest unwatched episode.
+                if (dvui.button(@src(), "Resume", .{}, .{
+                    .id_extra = 61,
+                    .color_fill = theme.colors.accent,
+                    .color_text = dvui.Color.white,
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
+                    .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+                    .gravity_y = 0.5,
+                })) {
+                    var eb: [8]u8 = undefined;
+                    const es = std.fmt.bufPrint(&eb, "{d}", .{nextUnwatchedEp()}) catch "1";
+                    playEpisode(es);
+                }
+
+                // "Resume E{n}" hint label.
+                {
+                    var rl: [16]u8 = undefined;
+                    const rs = std.fmt.bufPrintZ(&rl, "E{d}", .{nextUnwatchedEp()}) catch "";
+                    _ = dvui.label(@src(), "{s}", .{rs}, .{
+                        .id_extra = 62,
+                        .color_text = theme.colors.text_muted,
+                        .gravity_y = 0.5,
+                        .padding = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+                    });
+                }
+
+                // Progress bar (filled fraction = watched/total).
+                {
+                    const frac: f32 = if (total > 0) @as(f32, @floatFromInt(watched)) / @as(f32, @floatFromInt(total)) else 0;
+                    var track = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                        .id_extra = 63,
+                        .expand = .horizontal,
+                        .min_size_content = .{ .w = 80, .h = 8 },
+                        .background = true,
+                        .color_fill = theme.colors.bg_input,
+                        .corner_radius = dvui.Rect.all(4),
+                        .gravity_y = 0.5,
+                    });
+                    defer track.deinit();
+                    if (frac > 0) {
+                        var fill = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                            .id_extra = 64,
+                            .min_size_content = .{ .w = @max(4, track.data().rect.w * frac), .h = 8 },
+                            .background = true,
+                            .color_fill = theme.colors.accent,
+                            .corner_radius = dvui.Rect.all(4),
+                        });
+                        fill.deinit();
+                    }
+                }
+
+                // "{watched}/{total}" count.
+                {
+                    var cb: [24]u8 = undefined;
+                    const cs = std.fmt.bufPrintZ(&cb, "{d}/{d}", .{ watched, total }) catch "";
+                    _ = dvui.label(@src(), "{s}", .{cs}, .{
+                        .id_extra = 65,
+                        .color_text = theme.colors.text_main,
+                        .gravity_y = 0.5,
+                        .padding = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+                    });
+                }
+            }
+
+            // ── Seasons & Related rail (Jikan relations) ──
+            if (state.app.anime.relation_count > 0 or state.app.anime.relations_loading) {
+                renderRelationsRail();
+            }
+
             // Episode cards
             if (state.app.anime.episode_count > 0) {
                 // Loading indicator for episode enrichment
@@ -853,10 +1400,13 @@ pub fn renderContent() void {
                     const ep_str = state.app.anime.episode_list[ep_i][0..ep_len];
                     const has_title = state.app.anime.episode_title_lens[ep_i] > 0;
                     const is_filler = state.app.anime.episode_filler[ep_i];
+                    const is_watched = ep_i < state.app.anime.episode_watched.len and state.app.anime.episode_watched[ep_i];
 
-                    // Episode card container
+                    // Episode card container — watched rows get a subtle dim.
                     const fill_color = if (is_filler)
                         dvui.Color{ .r = 60, .g = 40, .b = 40, .a = 255 }
+                    else if (is_watched)
+                        dvui.Color{ .r = 18, .g = 22, .b = 30, .a = 255 }
                     else
                         theme.colors.bg_card;
 
@@ -879,12 +1429,29 @@ pub fn renderContent() void {
                         });
                         defer top.deinit();
 
+                        // Watched toggle — click flips the flag + persists to DB.
+                        // Filled check (✓) when watched, hollow circle when not.
+                        const chk_label: []const u8 = if (is_watched) "\xe2\x9c\x93" else "\xe2\x97\x8b"; // ✓ / ○
+                        if (dvui.button(@src(), chk_label, .{}, .{
+                            .id_extra = ep_i + 3050,
+                            .background = true,
+                            .color_fill = if (is_watched) theme.colors.success else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                            .color_text = if (is_watched) dvui.Color.white else theme.colors.text_muted,
+                            .corner_radius = dvui.Rect.all(10),
+                            .padding = .{ .x = 5, .y = 1, .w = 5, .h = 1 },
+                            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+                            .gravity_y = 0.5,
+                        })) {
+                            const ep_num = std.fmt.parseInt(usize, ep_str, 10) catch 0;
+                            if (ep_num > 0) toggleWatched(sel_idx, ep_num);
+                        }
+
                         // Episode number badge
                         var ep_badge: [16]u8 = undefined;
                         const badge = std.fmt.bufPrintZ(&ep_badge, "Ep {s}", .{ep_str}) catch "?";
                         _ = dvui.label(@src(), "{s}", .{badge}, .{
                             .id_extra = ep_i + 3100,
-                            .color_text = theme.colors.accent,
+                            .color_text = if (is_watched) theme.colors.text_muted else theme.colors.accent,
                         });
 
                         // Filler badge
@@ -953,8 +1520,434 @@ pub fn renderContent() void {
         }
     }
 
-    // Gallery cards
-    renderGallery();
+    // My List mode → Continue-Watching grid (db-backed); all other modes →
+    // the standard Jikan gallery grid.
+    if (state.app.anime.mode == .mylist) {
+        renderContinueGrid();
+    } else {
+        renderGallery();
+    }
+}
+
+/// Fire the right fetch for the active mode, exactly once per change. Trending
+/// also keeps its SWR auto-refresh; the other modes only refetch when their
+/// sub-selector (season/day/filter) changes or on an explicit mode switch.
+fn dispatchModeFetch() void {
+    if (state.app.anime.is_loading) {
+        // Don't stack fetches; record intent so we re-dispatch once it lands.
+        return;
+    }
+
+    const m = state.app.anime.mode;
+    switch (m) {
+        .trending => {
+            // Initial load + SWR background refresh (trending only).
+            const stale = state.app.anime.result_count == 0 or
+                @import("browse_cache.zig").isStale(state.app.anime.last_fetch_s);
+            if (fetched_mode != .trending or stale) {
+                fetched_mode = .trending;
+                loadTrendingAnime();
+            }
+        },
+        .seasonal => {
+            if (fetched_mode != .seasonal or
+                fetched_season_sel != state.app.anime.season_sel or
+                fetched_season_year != state.app.anime.season_year)
+            {
+                fetched_mode = .seasonal;
+                fetched_season_sel = state.app.anime.season_sel;
+                fetched_season_year = state.app.anime.season_year;
+                loadSeasonal();
+            }
+        },
+        .calendar => {
+            if (fetched_mode != .calendar or fetched_cal_day != state.app.anime.cal_day) {
+                fetched_mode = .calendar;
+                fetched_cal_day = state.app.anime.cal_day;
+                loadCalendar();
+            }
+        },
+        .search => {
+            // Search fires from the live search box (renderSearchBar). On first
+            // entry with an empty box, show trending-style results once.
+            if (fetched_mode != .search) {
+                fetched_mode = .search;
+                const buf = std.mem.sliceTo(&state.app.anime.search_buf, 0);
+                if (buf.len >= 2) {
+                    recordFired(buf);
+                    searchAnime(buf);
+                } else if (state.app.anime.result_count == 0) {
+                    loadTrendingAnime();
+                }
+            }
+        },
+        .mylist => {
+            if (fetched_mode != .mylist) fetched_mode = .mylist;
+            if (!state.app.anime.continue_loaded) loadContinue();
+        },
+    }
+}
+
+// ══════════════════════════════════════════════════════════
+// Mode toolbar (Trending | Seasonal | Calendar | Search | My List)
+// ══════════════════════════════════════════════════════════
+
+fn renderModeToolbar() void {
+    var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
+        .expand = .horizontal,
+        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 4 },
+        .background = true,
+        .color_fill = theme.colors.bg_header,
+    });
+    defer bar.deinit();
+
+    renderModeTab(0, .trending, "Trending");
+    renderModeTab(1, .seasonal, "Seasonal");
+    renderModeTab(2, .calendar, "Calendar");
+    renderModeTab(3, .search, "Search");
+    renderModeTab(4, .mylist, "My List");
+}
+
+fn renderModeTab(idx: usize, m: state.AnimeMode, label: []const u8) void {
+    const active = state.app.anime.mode == m;
+    if (dvui.button(@src(), label, .{}, .{
+        .id_extra = idx + 20000,
+        .background = true,
+        .color_fill = if (active) theme.colors.accent else theme.colors.bg_card,
+        .color_text = if (active) dvui.Color.white else theme.colors.text_muted,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+        .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
+    })) {
+        setMode(m);
+    }
+}
+
+/// Per-mode sub-toolbar (season selector / calendar days). Trending's category
+/// chips live in renderToolbar; Search/My List have no sub-toolbar.
+fn renderSubToolbar() void {
+    switch (state.app.anime.mode) {
+        .seasonal => renderSeasonalSubToolbar(),
+        .calendar => renderCalendarSubToolbar(),
+        else => {},
+    }
+}
+
+fn renderSeasonChip(idx: usize, sel: state.AnimeSeasonSel, label: []const u8) void {
+    const active = state.app.anime.season_sel == sel;
+    if (dvui.button(@src(), label, .{}, .{
+        .id_extra = idx + 21000,
+        .background = true,
+        .color_fill = if (active) theme.colors.accent else theme.colors.bg_card,
+        .color_text = if (active) dvui.Color.white else theme.colors.text_muted,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+        .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
+    })) {
+        state.app.anime.season_sel = sel;
+    }
+}
+
+fn renderSeasonalSubToolbar() void {
+    var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
+        .expand = .horizontal,
+        .margin = .{ .x = 8, .y = 4, .w = 8, .h = 2 },
+    });
+    defer bar.deinit();
+
+    renderSeasonChip(0, .now, "This Season");
+    renderSeasonChip(1, .winter, "Winter");
+    renderSeasonChip(2, .spring, "Spring");
+    renderSeasonChip(3, .summer, "Summer");
+    renderSeasonChip(4, .fall, "Fall");
+    toolbarDivider(960);
+
+    // Year stepper (only meaningful for the four named cours; still shown so the
+    // user can pre-set a year before picking a season).
+    if (dvui.button(@src(), "−", .{}, .{
+        .id_extra = 21100,
+        .background = true,
+        .color_fill = theme.colors.bg_card,
+        .color_text = theme.colors.text_main,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+        .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
+    })) {
+        if (state.app.anime.season_year > 1960) state.app.anime.season_year -= 1;
+    }
+    {
+        var yb: [8]u8 = undefined;
+        const ys = std.fmt.bufPrint(&yb, "{d}", .{state.app.anime.season_year}) catch "----";
+        _ = dvui.label(@src(), "{s}", .{ys}, .{
+            .id_extra = 21101,
+            .color_text = theme.colors.text_main,
+            .gravity_y = 0.5,
+            .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+        });
+    }
+    if (dvui.button(@src(), "+", .{}, .{
+        .id_extra = 21102,
+        .background = true,
+        .color_fill = theme.colors.bg_card,
+        .color_text = theme.colors.text_main,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+        .margin = .{ .x = 3, .y = 0, .w = 3, .h = 0 },
+    })) {
+        if (state.app.anime.season_year < 2027) state.app.anime.season_year += 1;
+    }
+
+    toolbarDivider(961);
+    renderSeasonChip(5, .upcoming, "Upcoming");
+}
+
+fn renderCalDayChip(idx: usize, day: u8, label: []const u8) void {
+    const active = state.app.anime.cal_day == day;
+    if (dvui.button(@src(), label, .{}, .{
+        .id_extra = idx + 22000,
+        .background = true,
+        .color_fill = if (active) theme.colors.accent else theme.colors.bg_card,
+        .color_text = if (active) dvui.Color.white else theme.colors.text_muted,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+        .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
+    })) {
+        state.app.anime.cal_day = day;
+    }
+}
+
+fn renderCalendarSubToolbar() void {
+    var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
+        .expand = .horizontal,
+        .margin = .{ .x = 8, .y = 4, .w = 8, .h = 2 },
+    });
+    defer bar.deinit();
+
+    renderCalDayChip(0, 0, "All");
+    renderCalDayChip(1, 1, "Mon");
+    renderCalDayChip(2, 2, "Tue");
+    renderCalDayChip(3, 3, "Wed");
+    renderCalDayChip(4, 4, "Thu");
+    renderCalDayChip(5, 5, "Fri");
+    renderCalDayChip(6, 6, "Sat");
+    renderCalDayChip(7, 7, "Sun");
+}
+
+// ══════════════════════════════════════════════════════════
+// Continue-Watching grid (My List mode)
+// ══════════════════════════════════════════════════════════
+
+fn renderContinueGrid() void {
+    if (state.app.anime.continue_count == 0) {
+        _ = dvui.label(@src(), "Nothing here yet — play an episode and it'll show up to resume.", .{}, .{
+            .color_text = theme.colors.text_muted,
+            .gravity_x = 0.5,
+            .margin = dvui.Rect.all(24),
+        });
+        return;
+    }
+
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
+    defer scroll.deinit();
+
+    const rect_w = scroll.data().rect.w;
+    const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
+    const card_target_w: f32 = card_w_pref;
+    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / card_target_w)));
+    const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
+
+    var i: usize = 0;
+    while (i < state.app.anime.continue_count) {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 72000, .expand = .horizontal });
+        defer row.deinit();
+        var col: usize = 0;
+        while (col < cols and i + col < state.app.anime.continue_count) : (col += 1) {
+            renderContinueCard(&state.app.anime.continue_items[i + col], i + col, card_w);
+        }
+        i += cols;
+    }
+}
+
+fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
+    if (item.title_len == 0) return;
+    const title = item.title[0..item.title_len];
+    const hue: u32 = @as(u32, @intCast(idx * 7 + 42)) *% 2654435761;
+    const h1: u8 = @truncate(hue & 0xFF);
+    const h2: u8 = @truncate((hue >> 8) & 0xFF);
+    const poster_h: f32 = card_w * 1.45;
+
+    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = idx + 30000,
+        .min_size_content = .{ .w = card_w, .h = 10 },
+        .max_size_content = .{ .w = card_w, .h = poster_h + 70 },
+        .background = true,
+        .color_fill = theme.colors.bg_card,
+        .corner_radius = dvui.Rect.all(6),
+        .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
+        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
+    });
+    defer card.deinit();
+
+    {
+        var bw: dvui.ButtonWidget = undefined;
+        bw.init(@src(), .{}, .{
+            .id_extra = idx + 30100,
+            .background = true,
+            .color_fill = dvui.Color{ .r = 20 + h1 / 6, .g = 25 + h2 / 8, .b = 35 + h1 / 5, .a = 255 },
+            .corner_radius = .{ .x = theme.radius.md, .y = theme.radius.md, .w = 0, .h = 0 },
+            .min_size_content = .{ .w = card_w, .h = poster_h },
+            .max_size_content = .{ .w = card_w, .h = poster_h },
+            .padding = dvui.Rect.all(0),
+        });
+        bw.processEvents();
+        bw.drawBackground();
+
+        // Upload pixels → texture once ready (same lifecycle as AnimeResult).
+        if (item.poster_tex == null and item.poster_pixels != null) {
+            const num_pixels = item.poster_w * item.poster_h;
+            const pixels_pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(item.poster_pixels.?.ptr)))[0..num_pixels];
+            item.poster_tex = dvui.textureCreate(pixels_pma, item.poster_w, item.poster_h, .linear, .rgba_32) catch null;
+            if (item.poster_tex != null) {
+                std.heap.c_allocator.free(item.poster_pixels.?);
+                item.poster_pixels = null;
+            }
+        }
+
+        {
+            var stack = dvui.overlay(@src(), .{ .id_extra = idx + 30140, .expand = .both });
+            defer stack.deinit();
+
+            if (item.poster_tex) |*tex| {
+                _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+                    .id_extra = idx + 30150,
+                    .expand = .both,
+                    .corner_radius = dvui.Rect.all(6),
+                });
+            } else {
+                if (!item.poster_fetching and item.poster_url_len > 0) fetchContinuePoster(item);
+                dvui.icon(@src(), "", icons.tvg.lucide.play, .{}, .{
+                    .id_extra = idx + 30150,
+                    .gravity_x = 0.5,
+                    .gravity_y = 0.5,
+                    .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 },
+                    .expand = .both,
+                });
+            }
+
+            // "E{last}/{total}" progress badge, bottom-left.
+            {
+                var badge: [24]u8 = undefined;
+                const bs = std.fmt.bufPrintZ(&badge, "E{d}/{d}", .{ item.last_episode, item.total_episodes }) catch "";
+                if (bs.len > 0) {
+                    var bb = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                        .id_extra = idx + 30160,
+                        .gravity_x = 0.02,
+                        .gravity_y = 0.98,
+                        .background = true,
+                        .color_fill = dvui.Color{ .r = 8, .g = 10, .b = 16, .a = 220 },
+                        .corner_radius = dvui.Rect.all(4),
+                        .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
+                    });
+                    defer bb.deinit();
+                    _ = dvui.label(@src(), "{s}", .{bs}, .{ .id_extra = idx + 30161, .color_text = theme.colors.accent });
+                }
+            }
+        }
+
+        const clicked = bw.clicked();
+        bw.drawFocus();
+        bw.deinit();
+        if (clicked) jumpToAnime(item.mal_id[0..item.mal_id_len]);
+    }
+
+    // Info column.
+    {
+        var info = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = idx + 30200,
+            .expand = .horizontal,
+            .padding = .{ .x = 6, .y = 2, .w = 6, .h = 0 },
+        });
+        defer info.deinit();
+
+        if (dvui.button(@src(), safeUtf8(title), .{}, .{
+            .id_extra = idx + 30500,
+            .expand = .horizontal,
+            .color_text = theme.colors.text_main,
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .padding = dvui.Rect.all(0),
+        })) {
+            jumpToAnime(item.mal_id[0..item.mal_id_len]);
+        }
+
+        // "Continue E{last+1}/{total}" resume line.
+        {
+            const next_ep: u32 = @as(u32, item.last_episode) + 1;
+            var rb: [40]u8 = undefined;
+            const rs = std.fmt.bufPrintZ(&rb, "Continue E{d}/{d}", .{ next_ep, item.total_episodes }) catch "Continue";
+            _ = dvui.label(@src(), "{s}", .{rs}, .{
+                .id_extra = idx + 30600,
+                .color_text = theme.colors.text_muted,
+                .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+            });
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════
+// Seasons & Related rail (detail view)
+// ══════════════════════════════════════════════════════════
+
+/// Horizontal chip rail of franchise relations (Sequel/Prequel/Side Story/…).
+/// Clicking a chip jumps to that anime via /anime/{mal_id} → loadEpisodes.
+fn renderRelationsRail() void {
+    var wrap = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = 80000,
+        .expand = .horizontal,
+        .padding = .{ .x = 8, .y = 2, .w = 8, .h = 4 },
+    });
+    defer wrap.deinit();
+
+    _ = dvui.label(@src(), "Seasons & Related", .{}, .{
+        .id_extra = 80001,
+        .color_text = theme.colors.text_muted,
+        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
+    });
+
+    if (state.app.anime.relations_loading and state.app.anime.relation_count == 0) {
+        _ = dvui.label(@src(), "Loading related…", .{}, .{
+            .id_extra = 80002,
+            .color_text = theme.colors.accent,
+        });
+        return;
+    }
+
+    var rail = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
+        .id_extra = 80003,
+        .expand = .horizontal,
+    });
+    defer rail.deinit();
+
+    var i: usize = 0;
+    while (i < state.app.anime.relation_count and i < state.app.anime.relations.len) : (i += 1) {
+        const rel = &state.app.anime.relations[i];
+        if (rel.name_len == 0) continue;
+        var lbl: [160]u8 = undefined;
+        const ls = std.fmt.bufPrintZ(&lbl, "{s}: {s}", .{
+            rel.rel_type[0..rel.rel_type_len],
+            safeUtf8(rel.name[0..@min(rel.name_len, 100)]),
+        }) catch continue;
+        if (dvui.button(@src(), ls, .{}, .{
+            .id_extra = i + 80100,
+            .background = true,
+            .color_fill = theme.colors.bg_card,
+            .color_text = theme.colors.text_main,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 4 },
+        })) {
+            jumpToAnime(rel.mal_id[0..rel.mal_id_len]);
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1051,7 +2044,7 @@ fn recordFired(buf: []const u8) void {
 /// Compact toolbar: trending category chips (only on the trending view),
 /// a result count, and card-size +/- controls. Wraps on narrow widths.
 fn renderToolbar(count: usize) void {
-    const on_trending = state.app.anime.search_buf[0] == 0;
+    const on_trending = state.app.anime.mode == .trending;
 
     var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
         .expand = .horizontal,
@@ -1059,8 +2052,7 @@ fn renderToolbar(count: usize) void {
     });
     defer bar.deinit();
 
-    // Trending category chips (Jikan top/anime filters). Hidden while a search
-    // query is active — those results come from /anime?q=, not top/anime.
+    // Trending category chips (Jikan top/anime filters) — only in Trending mode.
     if (on_trending) {
         renderTrendChip(0, .airing, "Airing");
         renderTrendChip(1, .top, "Top");
@@ -1351,6 +2343,34 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
             } else |_| {}
         }
 
+        // Calendar mode: airtime badge (broadcast.string, e.g. "Mondays at 01:00
+        // (JST)") aligned to this result index. Only set in Calendar mode.
+        if (state.app.anime.mode == .calendar and idx < state.app.anime.broadcast_lens.len and
+            state.app.anime.broadcast_lens[idx] > 0)
+        {
+            const bcast = state.app.anime.broadcast[idx][0..state.app.anime.broadcast_lens[idx]];
+            var bb = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = idx + 640,
+                .background = true,
+                .color_fill = dvui.Color{ .r = 30, .g = 36, .b = 52, .a = 255 },
+                .corner_radius = dvui.Rect.all(4),
+                .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+                .padding = .{ .x = 5, .y = 1, .w = 5, .h = 1 },
+            });
+            defer bb.deinit();
+            dvui.icon(@src(), "", icons.tvg.lucide.clock, .{}, .{
+                .id_extra = idx + 641,
+                .color_text = theme.colors.accent,
+                .min_size_content = .{ .w = 11, .h = 11 },
+                .gravity_y = 0.5,
+            });
+            _ = dvui.label(@src(), "{s}", .{safeUtf8(bcast)}, .{
+                .id_extra = idx + 642,
+                .color_text = theme.colors.text_secondary,
+                .padding = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
+            });
+        }
+
         // Synopsis snippet (click to expand)
         if (item.overview_len > 0) {
             var btn_buf: [128]u8 = undefined;
@@ -1519,6 +2539,137 @@ pub fn fetchPoster(item: *state.AnimeResult) void {
 
     if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
         t.detach(); // never joined — detach so the handle isn't leaked
+    } else |_| {
+        item.poster_fetching = false;
+    }
+}
+
+// ══════════════════════════════════════════════════════════
+// My List / Continue-Watching (db-backed Continue rail)
+// ══════════════════════════════════════════════════════════
+
+/// (Re)load the Continue-Watching rail from the DB. Frees any prior textures /
+/// pending pixels on the old entries first so we don't leak when reloading.
+pub fn loadContinue() void {
+    // Free old textures + pending pixels before overwriting the slots.
+    for (0..state.app.anime.continue_items.len) |i| {
+        var it = &state.app.anime.continue_items[i];
+        if (it.poster_tex) |tex| {
+            dvui.textureDestroyLater(tex);
+            it.poster_tex = null;
+        }
+        if (it.poster_pixels) |px| {
+            std.heap.c_allocator.free(px);
+            it.poster_pixels = null;
+        }
+        it.* = .{}; // reset to default (clears buffers/lens/fetching)
+    }
+    state.app.anime.continue_count = @import("../core/db.zig").animeGetContinue(state.app.anime.continue_items[0..]);
+    state.app.anime.continue_loaded = true;
+}
+
+/// Lazy poster download for a ContinueItem — mirrors fetchPoster but keyed by
+/// the continue_items[] index (looked up by pointer identity, same as fetchPoster).
+pub fn fetchContinuePoster(item: *state.ContinueItem) void {
+    if (item.poster_url_len == 0 or item.poster_fetching) return;
+    item.poster_fetching = true;
+
+    const S = struct {
+        var poster_url_buf: [512]u8 = undefined;
+        var poster_url_len: usize = 0;
+        var cont_idx: usize = 0;
+
+        fn worker() void {
+            const idx = @This().cont_idx;
+            const url = @This().poster_url_buf[0..@This().poster_url_len];
+
+            const argv = [_][]const u8{ "curl", "-sL", "--max-time", "10", url };
+            var child = @import("../core/io_global.zig").Child.init(&argv, std.heap.c_allocator);
+            child.stdout_behavior = .Pipe;
+            child.stderr_behavior = .Ignore;
+            _ = child.spawn() catch {
+                markDone(idx, url);
+                return;
+            };
+
+            const img_buf = @import("../core/alloc.zig").allocator.alloc(u8, 512 * 1024) catch {
+                _ = child.wait() catch {};
+                markDone(idx, url);
+                return;
+            };
+            defer @import("../core/alloc.zig").allocator.free(img_buf);
+            const img_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, img_buf) catch 0 else 0;
+            _ = child.wait() catch {};
+
+            if (img_len < 100) {
+                markDone(idx, url);
+                return;
+            }
+
+            var w: c_int = 0;
+            var h: c_int = 0;
+            var comp: c_int = 0;
+            const pixels = dvui.c.stbi_load_from_memory(img_buf[0..img_len].ptr, @intCast(img_len), &w, &h, &comp, 4);
+            if (pixels == null) {
+                markDone(idx, url);
+                return;
+            }
+            defer dvui.c.stbi_image_free(pixels);
+
+            const p_len: usize = @intCast(w * h * 4);
+            const p_slice = std.heap.c_allocator.alloc(u8, p_len) catch {
+                markDone(idx, url);
+                return;
+            };
+            @memcpy(p_slice, pixels[0..p_len]);
+
+            if (idx < state.app.anime.continue_count) {
+                const ptr = &state.app.anime.continue_items[idx];
+                if (ptr.poster_url_len == url.len and std.mem.eql(u8, ptr.poster_url[0..ptr.poster_url_len], url)) {
+                    ptr.poster_w = @intCast(w);
+                    ptr.poster_h = @intCast(h);
+                    ptr.poster_pixels = p_slice;
+                    ptr.poster_fetching = false;
+                    return;
+                }
+            }
+            std.heap.c_allocator.free(p_slice);
+        }
+
+        fn markDone(idx: usize, url: []const u8) void {
+            if (idx < state.app.anime.continue_count) {
+                const ptr = &state.app.anime.continue_items[idx];
+                if (ptr.poster_url_len == url.len and std.mem.eql(u8, ptr.poster_url[0..ptr.poster_url_len], url)) {
+                    ptr.poster_fetching = false;
+                }
+            }
+        }
+    };
+
+    // Resolve the index of this item by pointer identity.
+    var found_idx: ?usize = null;
+    for (state.app.anime.continue_items[0..state.app.anime.continue_count], 0..) |*ci, i| {
+        if (ci == item) {
+            found_idx = i;
+            break;
+        }
+    }
+    const idx = found_idx orelse {
+        item.poster_fetching = false;
+        return;
+    };
+
+    const url = item.poster_url[0..item.poster_url_len];
+    if (url.len > S.poster_url_buf.len) {
+        item.poster_fetching = false;
+        return;
+    }
+    @memcpy(S.poster_url_buf[0..url.len], url);
+    S.poster_url_len = url.len;
+    S.cont_idx = idx;
+
+    if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
+        t.detach();
     } else |_| {
         item.poster_fetching = false;
     }

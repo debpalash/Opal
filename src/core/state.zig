@@ -49,6 +49,40 @@ pub const AnimeResult = struct {
     poster_tex: ?dvui.Texture = null,
 };
 
+/// Anime browse modes (Netflix-style mode toolbar).
+pub const AnimeMode = enum { trending, seasonal, calendar, search, mylist };
+
+/// Seasonal-mode selector: this season, a specific cour, or upcoming.
+pub const AnimeSeasonSel = enum { now, winter, spring, summer, fall, upcoming };
+
+/// One franchise relation (Sequel/Prequel/Side Story/…) for the detail rail.
+pub const AnimeRelation = struct {
+    mal_id: [16]u8 = std.mem.zeroes([16]u8),
+    mal_id_len: usize = 0,
+    name: [128]u8 = std.mem.zeroes([128]u8),
+    name_len: usize = 0,
+    rel_type: [24]u8 = std.mem.zeroes([24]u8), // "Sequel","Prequel","Side Story"…
+    rel_type_len: usize = 0,
+};
+
+/// One Continue-Watching entry (resume the next episode of a series).
+pub const ContinueItem = struct {
+    mal_id: [16]u8 = std.mem.zeroes([16]u8),
+    mal_id_len: usize = 0,
+    title: [128]u8 = std.mem.zeroes([128]u8),
+    title_len: usize = 0,
+    poster_url: [128]u8 = std.mem.zeroes([128]u8),
+    poster_url_len: usize = 0,
+    last_episode: u16 = 0,
+    total_episodes: u16 = 0,
+    // Lazy poster (same pattern as AnimeResult).
+    poster_fetching: bool = false,
+    poster_pixels: ?[]u8 = null,
+    poster_w: u32 = 0,
+    poster_h: u32 = 0,
+    poster_tex: ?dvui.Texture = null,
+};
+
 pub const BrowserLink = struct {
     url: [512]u8 = std.mem.zeroes([512]u8),
     url_len: usize = 0,
@@ -407,6 +441,28 @@ pub const AppState = struct {
         episode_count: usize = 0,
         episodes_loading: bool = false,
         stream_loading: bool = false,
+
+        // ── Netflix/Apple-TV+ browse: modes, seasons, calendar, tracking ──
+        // The card grid (results[]) is reused by every grid mode; each mode just
+        // fetches differently. See services/anime.zig.
+        mode: AnimeMode = .trending,
+        season_sel: AnimeSeasonSel = .now, // Seasonal mode selector
+        season_year: u16 = 2026, // year for winter/spring/summer/fall
+        cal_day: u8 = 0, // Calendar mode: 0=all, 1=Mon … 7=Sun
+        // Per-result broadcast string ("Mondays at 01:00 (JST)") for Calendar.
+        broadcast: [32][40]u8 = std.mem.zeroes([32][40]u8),
+        broadcast_lens: [32]usize = std.mem.zeroes([32]usize),
+        // Detail view: "Seasons & Related" rail (Jikan relations).
+        relations: [16]AnimeRelation = std.mem.zeroes([16]AnimeRelation),
+        relation_count: usize = 0,
+        relations_loading: bool = false,
+        // Tracking: per-episode watched flags for the selected anime (loaded
+        // from db when episodes load); episode N → episode_watched[N-1].
+        episode_watched: [200]bool = std.mem.zeroes([200]bool),
+        // Continue-Watching rail (My List mode), loaded from db.
+        continue_items: [12]ContinueItem = std.mem.zeroes([12]ContinueItem),
+        continue_count: usize = 0,
+        continue_loaded: bool = false,
     } = .{},
 
     // ── Browser (global singleton — the in-app web browser lives in the
