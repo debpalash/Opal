@@ -55,6 +55,10 @@ pub fn renderForYouRail() void {
     // ── Horizontal scrolling strip of receipt cards ──
     var scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
         .expand = .horizontal,
+        // Transparent container — let the dark page show through (dvui's default
+        // scroll fill is light; without this the rail rendered as a white box).
+        .background = false,
+        .color_fill = theme.colors.bg_app,
         .min_size_content = .{ .w = 10, .h = CARD_H + 24 },
         .max_size_content = .{ .w = std.math.floatMax(f32), .h = CARD_H + 24 },
         .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },

@@ -758,6 +758,8 @@ fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
+        // Transparent — show the popup's themed bg, not dvui's default white fill.
+        .background = false,
         .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
     });
     defer scroll.deinit();
@@ -863,6 +865,8 @@ fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []const u
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
+        // Transparent — show the popup's themed bg, not dvui's default white fill.
+        .background = false,
         .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
     });
     defer scroll.deinit();
@@ -945,6 +949,8 @@ fn renderLangPickerPopover() void {
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
+        // Transparent — show the popup's themed bg, not dvui's default white fill.
+        .background = false,
         .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
     });
     defer scroll.deinit();
@@ -995,6 +1001,8 @@ fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
+        // Transparent — show the popup's themed bg, not dvui's default white fill.
+        .background = false,
         .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
     });
     defer scroll.deinit();

@@ -182,6 +182,8 @@ fn posterStrip(title: []const u8, icon: []const u8, items: *std.ArrayListUnmanag
     var scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
         .id_extra = id,
         .expand = .horizontal,
+        // Transparent — dvui's default scroll fill is light; show the dark page.
+        .background = false,
         .min_size_content = .{ .w = 10, .h = STRIP_POSTER_H + 70 },
         .max_size_content = .{ .w = std.math.floatMax(f32), .h = STRIP_POSTER_H + 70 },
         .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },

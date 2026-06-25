@@ -1484,7 +1484,7 @@ fn renderTvDetail() void {
         return;
     }
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = false });
     defer scroll.deinit();
 
     var ei: usize = 0;
