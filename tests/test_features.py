@@ -1260,6 +1260,25 @@ def test_now_playing_bar():
     return "fail", "now-playing media bar not wired"
 
 
+@test("Brand Is Opal", "Page Shell")
+def test_brand_is_opal():
+    # User-facing brand unified to "Opal — Play everything" (the binary/config
+    # dir stay `zigzag` by design). Guard the display surfaces against regressing
+    # to the old "ZigZag Media Console" wording.
+    main = _src("src/main.zig")
+    web = _src("web/index.html")
+    tools = _src("src/services/ai_tools.zig")
+    checks = {
+        "window title": 'title = "Opal' in main and "ZigZag Media Console" not in main,
+        "web title/brand": "Opal — Play everything" in web and "ZigZag — Remote" not in web,
+        "assistant identity": "You are Opal" in tools and "You are ZigZag AI" not in tools,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if not missing:
+        return "pass", "display brand = Opal / Play everything (binary/config stay zigzag)"
+    return "fail", f"brand regressed: {missing}"
+
+
 @test("Web UI API Base Port", "Page Shell")
 def test_web_api_base_port():
     # Web UI is served on :3000 but the JSON API lives on :41595 — index.html
