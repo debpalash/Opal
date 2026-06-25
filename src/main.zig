@@ -30,7 +30,7 @@ var cli_open_len: usize = 0;
 var cli_open_done: bool = false;
 
 pub const dvui_app: dvui.App = .{
-    .config = .{ .options = .{ .size = .{ .w = 1400.0, .h = 820.0 }, .title = "ZigZag Media Console" } },
+    .config = .{ .options = .{ .size = .{ .w = 1400.0, .h = 820.0 }, .title = "Opal — Play everything" } },
     .initFn = appInit,
     .frameFn = appFrame,
     .deinitFn = appDeinit,
@@ -979,12 +979,12 @@ fn appFrame() !dvui.App.Result {
 
                     if (name_len > 0) {
                         var win_title: [300]u8 = undefined;
-                        const wt = std.fmt.bufPrintZ(&win_title, "\xe2\x9a\xa1 {s} \xe2\x80\x94 ZigZag", .{name_buf[0..name_len]}) catch null;
+                        const wt = std.fmt.bufPrintZ(&win_title, "\xe2\x9a\xa1 {s} \xe2\x80\x94 Opal", .{name_buf[0..name_len]}) catch null;
                         if (wt) |t| {
                             c.sdl.SDL_SetWindowTitle(sw, t.ptr);
                         }
                     } else {
-                        c.sdl.SDL_SetWindowTitle(sw, "\xe2\x9a\xa1 ZigZag Media Console");
+                        c.sdl.SDL_SetWindowTitle(sw, "\xe2\x9a\xa1 Opal \xe2\x80\x94 Play everything");
                     }
                 }
             }

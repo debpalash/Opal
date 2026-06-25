@@ -718,7 +718,7 @@ pub fn renderContent() void {
         });
         defer empty.deinit();
 
-        _ = dvui.label(@src(), "ZigZag Browser", .{}, .{
+        _ = dvui.label(@src(), "Opal Browser", .{}, .{
             .color_text = theme.colors.text_main,
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },

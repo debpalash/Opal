@@ -921,7 +921,7 @@ fn ttsSpeedSegment(id_base: usize) void {
 
 fn renderGeneralTab() void {
     // ── Interface ── (whitespace-separated, no card chrome)
-    sectionHeader("Interface", "Customize how ZigZag looks and feels", 10, @src());
+    sectionHeader("Interface", "Customize how Opal looks and feels", 10, @src());
 
     // UI Scale — short ramp via segment.
     settingRow("UI Scale", 100, @src());
@@ -1166,6 +1166,12 @@ fn renderPlaybackTab() void {
                 .color_text = theme.colors.text_primary,
                 .font = wmf,
                 .gravity_y = 0.5,
+            });
+            // Tagline.
+            _ = dvui.label(@src(), "Play everything", .{}, .{
+                .color_text = theme.colors.text_secondary,
+                .gravity_y = 0.5,
+                .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
             });
         }
 
@@ -2934,6 +2940,6 @@ pub fn renderMediaInfo() void {
 }
 
 fn renderFileAssocTab() void {
-    sectionHeader("Default File Associations", "Register ZigZag as the default handler for media, torrents, and comics", 70, @src());
+    sectionHeader("Default File Associations", "Register Opal as the default handler for media, torrents, and comics", 70, @src());
     fileassoc.render();
 }

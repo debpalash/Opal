@@ -741,7 +741,7 @@ fn renderControlPanel() void {
 fn renderEmptyState() void {
     components.emptyState(
         icons.tvg.lucide.cpu,
-        "ZigZag AI",
+        "Opal",
         if (server.model_status == .online) "Ask me anything about media" else "Start the server to begin chatting",
     );
 

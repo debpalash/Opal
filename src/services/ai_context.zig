@@ -495,7 +495,7 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
                 if (m.text_len == 0 or m.role == .system) continue;
                 const role_str = switch (m.role) {
                     .user => "User",
-                    .assistant => "ZigZag",
+                    .assistant => "Opal",
                     .system => "System",
                 };
                 @import("../core/io_global.zig").writeAll(f, role_str) catch {};

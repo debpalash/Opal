@@ -333,7 +333,7 @@ fn ensureDesktopFileBlocking() void {
                "application/x-cbz;application/x-cbr;application/x-cb7;application/x-cbt;application/vnd.comicbook+zip;application/vnd.comicbook-rar;";
     var cb: [2560]u8 = undefined;
     const ct = std.fmt.bufPrint(&cb,
-        "[Desktop Entry]\nName=ZigZag\nComment=ZigZag Media Suite\nExec={s} %U\nIcon=zigzag\nTerminal=false\nType=Application\nCategories=AudioVideo;Video;Audio;Player;\nMimeType={s}\nStartupNotify=true\n",
+        "[Desktop Entry]\nName=Opal\nComment=Opal — Play everything\nExec={s} %U\nIcon=zigzag\nTerminal=false\nType=Application\nCategories=AudioVideo;Video;Audio;Player;\nMimeType={s}\nStartupNotify=true\n",
         .{ exe, ml }) catch return;
     @import("../core/io_global.zig").cwdWriteFile(.{ .sub_path = fp, .data = ct }) catch {};
 }
