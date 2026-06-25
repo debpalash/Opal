@@ -187,9 +187,9 @@ pub fn fetchSherpaWhisperAsync() void {
             logs.pushLog("info", "deps", "Sherpa whisper-tiny ready", true);
         }
     };
-    _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
+    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {
         sherpa_model_downloading = false;
-    };
+    }
 }
 
 /// Fetch + extract Piper VITS en_US-lessac-medium TTS bundle
@@ -247,9 +247,9 @@ pub fn fetchSherpaTtsAsync() void {
             logs.pushLog("info", "deps", "Sherpa TTS model ready", true);
         }
     };
-    _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
+    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {
         sherpa_tts_downloading = false;
-    };
+    }
 }
 
 /// Fetch Kokoro multi-voice TTS bundle (~330MB) for highest-quality
@@ -305,9 +305,9 @@ pub fn fetchSherpaKokoroAsync() void {
             logs.pushLog("info", "deps", "Kokoro model ready (53+ voices)", true);
         }
     };
-    _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
+    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {
         sherpa_kokoro_downloading = false;
-    };
+    }
 }
 
 /// Fetch sherpa streaming Zipformer bundle (~80MB) for live-convo
@@ -392,9 +392,9 @@ pub fn fetchSherpaStreamAsync() void {
             logs.pushLog("info", "deps", "Streaming Zipformer model ready", true);
         }
     };
-    _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
+    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {
         sherpa_stream_downloading = false;
-    };
+    }
 }
 
 pub fn fetchWhisperModelAsync() void {
@@ -427,7 +427,7 @@ pub fn fetchWhisperModelAsync() void {
             };
         }
     };
-    _ = std.Thread.spawn(.{}, S.worker, .{}) catch {};
+    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {}
 }
 
 // ══════════════════════════════════════════════════════════
@@ -654,7 +654,7 @@ pub fn fetchMlxWhisperModelAsync() void {
             logs.pushLog("info", "deps", "MLX Whisper model ready", true);
         }
     };
-    _ = std.Thread.spawn(.{}, S.worker, .{}) catch {
+    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {
         mlx_whisper_downloading = false;
-    };
+    }
 }

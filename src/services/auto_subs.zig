@@ -118,12 +118,12 @@ pub fn transcribeCurrent() void {
     };
     args.* = .{ .path = media_path };
 
-    _ = std.Thread.spawn(.{}, worker, .{args}) catch {
+    if (std.Thread.spawn(.{}, worker, .{args})) |t| t.detach() else |_| {
         alloc.free(args.path);
         alloc.destroy(args);
         in_progress = false;
         setStatus("Failed to spawn thread");
-    };
+    }
 }
 
 const WorkerArgs = struct { path: []u8 };
