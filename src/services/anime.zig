@@ -597,9 +597,10 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool) void {
             item.episodes = ep_count;
             item.score = score;
 
-            const purl = @min(poster_url.len, 128);
-            @memcpy(item.poster_url[0..purl], poster_url[0..purl]);
-            item.poster_url_len = purl;
+            // Decode JSON escapes (Jikan escapes the URL slashes as "\/", which
+            // makes std.Uri.parse reject it → posters never fetched). Must run
+            // through decodeJsonEscapes just like the name/synopsis.
+            item.poster_url_len = decodeJsonEscapes(poster_url, &item.poster_url);
 
             // Decode JSON escapes in synopsis (\" \\ \/ \n \t \uXXXX, etc.)
             item.overview_len = decodeJsonEscapes(synopsis, &item.overview);
