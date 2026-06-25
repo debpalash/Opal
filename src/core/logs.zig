@@ -135,7 +135,11 @@ pub fn renderDevLogWindow() void {
         }
     }
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
+    // background=false: don't paint the scrollArea's own (default light theme)
+    // fill — it would render as a pale box over this dark dev-log window. Let the
+    // dark window (vbox color_fill above) show through. (User report: the Logs
+    // tab "doesn't respect theme colors.")
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = false });
     defer scroll.deinit();
     var inner = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
     defer inner.deinit();
