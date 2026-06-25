@@ -267,7 +267,8 @@ fn renderLibraries() void {
 
     for (0..state.app.jf.library_count) |i| {
         const lib = &state.app.jf.libraries[i];
-        const name = safeUtf8(lib.name[0..lib.name_len]);
+        var lib_name_buf: [128]u8 = undefined;
+        const name = @import("../core/text.zig").safeUtf8Buf(lib.name[0..lib.name_len], &lib_name_buf);
         const ct = lib.collection_type[0..lib.collection_type_len];
         const ic = iconForCollectionType(ct);
 
@@ -593,7 +594,8 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
 
         // Expandable overview
         if (item.overview_len > 0 and item.expanded) {
-            _ = dvui.label(@src(), "{s}", .{safeUtf8(item.overview[0..item.overview_len])}, .{
+            var ov_buf: [512]u8 = undefined;
+            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(item.overview[0..item.overview_len], &ov_buf)}, .{
                 .id_extra = idx + 500,
                 .color_text = theme.colors.text_muted,
                 .expand = .horizontal,
@@ -779,7 +781,8 @@ fn renderPosterCard(item: *state.JfItem, idx: usize, card_w: f32, show_progress:
     }
 
     // Title — fills card width, dvui ellipsizes (no manual char truncation).
-    _ = dvui.label(@src(), "{s}", .{safeUtf8(item.name[0..item.name_len])}, .{
+    var jf_title_buf: [256]u8 = undefined;
+    _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(item.name[0..item.name_len], &jf_title_buf)}, .{
         .id_extra = idx + 90,
         .expand = .horizontal,
         .color_text = theme.colors.text_main,

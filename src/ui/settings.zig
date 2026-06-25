@@ -2167,7 +2167,10 @@ fn renderScriptsTab() void {
                 for (start..party.chat_count) |ci| {
                     const msg = party.chat_msgs[ci][0..party.chat_msg_lens[ci]];
                     const is_sys = msg.len > 2 and msg[0] == '>' and msg[1] == '>';
-                    _ = dvui.label(@src(), "{s}", .{msg}, .{
+                    // Untrusted network peer text (127-byte truncatable) — validate
+                    // a stable copy or an invalid byte panics the whole app.
+                    var chat_buf: [128]u8 = undefined;
+                    _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(msg, &chat_buf)}, .{
                         .id_extra = ci + 7600,
                         .color_text = if (is_sys) theme.colors.text_tertiary else theme.colors.text_primary,
                     });

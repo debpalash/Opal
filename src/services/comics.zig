@@ -1303,7 +1303,10 @@ fn renderChip(label: []const u8, id: usize, url: []const u8) void {
 /// One discovery card: cover art (or gradient placeholder) + title, clickable to
 /// load the issue. Hover reveals the full title over a dimmed scrim.
 fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
-    const title = safeUtf8(sr_titles[idx][0..sr_title_lens[idx]]);
+    // Stable copy: sr_titles is rewritten by the search worker mid-frame, so a
+    // validated slice into the live buffer can still let dvui re-read mutated bytes.
+    var title_buf: [256]u8 = undefined;
+    const title = @import("../core/text.zig").safeUtf8Buf(sr_titles[idx][0..sr_title_lens[idx]], &title_buf);
     // Deterministic gradient from a title hash (placeholder + glyph tint).
     const hash: u32 = blk: {
         var h: u32 = 2166136261;
