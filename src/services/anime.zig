@@ -1681,7 +1681,10 @@ pub fn renderContent() void {
 
                     // Title row (if enriched)
                     if (has_title) {
-                        const title = state.app.anime.episode_titles[ep_i][0..state.app.anime.episode_title_lens[ep_i]];
+                        // Jikan-sourced + worker-written: validate a copy so a
+                        // malformed title can't panic dvui (whole-app abort).
+                        var et_buf: [256]u8 = undefined;
+                        const title = @import("../core/text.zig").safeUtf8Buf(state.app.anime.episode_titles[ep_i][0..state.app.anime.episode_title_lens[ep_i]], &et_buf);
                         if (dvui.button(@src(), title, .{}, .{
                             .id_extra = ep_i + 4000,
                             .expand = .horizontal,
