@@ -15,6 +15,31 @@ var yt_mutex: @import("../core/sync.zig").Mutex = .{};
 // to arrive clears the old ones — so a stale-refresh swaps in place.
 var pending_clear: bool = false;
 
+// On re-search, appendYt (worker thread) drops the old results via
+// clearRetainingCapacity — but those YtItems own a GPU thumb_tex + heap
+// thumb_pixels that would otherwise leak. dvui.textureDestroyLater is UI-thread
+// only, so the worker queues the old textures here and renderContent drains them.
+var pending_tex_free: [512]dvui.Texture = undefined;
+var pending_tex_free_count: usize = 0;
+var pending_tex_free_mutex: @import("../core/sync.zig").Mutex = .{};
+
+fn queueYtTexFree(tex: dvui.Texture) void {
+    pending_tex_free_mutex.lock();
+    defer pending_tex_free_mutex.unlock();
+    if (pending_tex_free_count < pending_tex_free.len) {
+        pending_tex_free[pending_tex_free_count] = tex;
+        pending_tex_free_count += 1;
+    }
+}
+
+/// Destroy queued thumbnail textures. UI-THREAD ONLY — call once per frame.
+fn drainYtTexFrees() void {
+    pending_tex_free_mutex.lock();
+    defer pending_tex_free_mutex.unlock();
+    for (pending_tex_free[0..pending_tex_free_count]) |t| dvui.textureDestroyLater(t);
+    pending_tex_free_count = 0;
+}
+
 // ── Publish dates (parallel to state.app.yt.results) ──
 // YtItem can't be extended, so the upload_date (YYYYMMDD) for each result lives
 // here, kept index-aligned with results: appended in appendYt(), cleared by the
@@ -70,6 +95,18 @@ var appending_more: bool = false;
 /// Caller must hold yt_mutex. Keeps the `dates` arrays index-aligned.
 fn appendYt(item: state.YtItem) void {
     if (pending_clear) {
+        // Free the old items' GPU textures (queued for the UI thread) and heap
+        // pixel buffers before dropping them — clearRetainingCapacity won't.
+        for (state.app.yt.results.items) |*old| {
+            if (old.thumb_tex) |t| {
+                queueYtTexFree(t);
+                old.thumb_tex = null;
+            }
+            if (old.thumb_pixels) |px| {
+                alloc.free(px);
+                old.thumb_pixels = null;
+            }
+        }
         state.app.yt.results.clearRetainingCapacity();
         dates.clearRetainingCapacity();
         dates_lens.clearRetainingCapacity();
@@ -540,11 +577,15 @@ fn daysFromCivil(y_in: i64, m: i64, d: i64) i64 {
 
 pub fn fetchThumb(item: *state.YtItem) void {
     if (item.thumbnail_url_len == 0 or item.thumb_fetching) return;
+    // Shared global poster/thumbnail fetch cap — over the cap, leave thumb_fetching
+    // false so the card retries next frame (no fetch storm on a full grid).
+    if (!@import("../core/poster.zig").tryClaimSlot()) return;
     item.thumb_fetching = true;
 
     if (std.Thread.spawn(.{}, struct {
         fn worker(ptr: *state.YtItem) void {
             defer ptr.thumb_fetching = false;
+            defer @import("../core/poster.zig").releaseSlot();
 
             var client = std.http.Client{ .allocator = alloc, .io = io.io() };
             defer client.deinit();
@@ -583,7 +624,10 @@ pub fn fetchThumb(item: *state.YtItem) void {
             ptr.thumb_h = @intCast(h);
             ptr.thumb_pixels = p_slice;
         }
-    }.worker, .{item})) |t| t.detach() else |_| {}
+    }.worker, .{item})) |t| t.detach() else |_| {
+        item.thumb_fetching = false; // spawn failed — reset so the card isn't stuck on placeholder
+        @import("../core/poster.zig").releaseSlot();
+    }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -591,6 +635,7 @@ pub fn fetchThumb(item: *state.YtItem) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn renderContent() void {
+    drainYtTexFrees(); // free textures from a re-search clear (UI thread)
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = dvui.Rect.all(8) });
     defer content.deinit();
 
@@ -882,7 +927,9 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
         bw.processEvents();
         bw.drawBackground();
 
-        if (item.thumb_tex == null and item.thumb_pixels != null) {
+        if (item.thumb_tex == null and item.thumb_pixels != null and
+            item.thumb_pixels.?.len == @as(usize, item.thumb_w) * @as(usize, item.thumb_h) * 4)
+        {
             const num_pixels = item.thumb_w * item.thumb_h;
             const pixels_pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(item.thumb_pixels.?.ptr)))[0..num_pixels];
             item.thumb_tex = dvui.textureCreate(pixels_pma, item.thumb_w, item.thumb_h, .linear, .rgba_32) catch null;
