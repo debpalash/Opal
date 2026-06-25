@@ -964,9 +964,17 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
     // v2: throttle to ≤1 req/sec per origin so parallel queries don't trip rate limits.
     @import("../core/rate_limit.zig").acquire("1337x", 1.0);
 
+    // Heap, not stack: the search page (128 KB) plus the per-result detail page
+    // (another 128 KB) would put 256 KB of live buffers on this spawned worker's
+    // 512 KB stack — close enough to overflow (with the other locals) to crash.
+    // One reused det_buf for the whole result loop keeps it to two heap blocks.
+    const page_buf = alloc.alloc(u8, 128 * 1024) catch return;
+    defer alloc.free(page_buf);
+    const det_buf = alloc.alloc(u8, 128 * 1024) catch return;
+    defer alloc.free(det_buf);
+
     // Fetch search page
-    var page_buf: [128 * 1024]u8 = undefined;
-    const page = @import("../core/http.zig").fetch(url, &page_buf, .{
+    const page = @import("../core/http.zig").fetch(url, page_buf, .{
         .timeout_secs = 8,
         .user_agent = "Mozilla/5.0",
     }) orelse return;
@@ -1042,10 +1050,10 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
             continue;
         };
 
-        // Fetch the detail page to get magnet link
-        var det_buf: [128 * 1024]u8 = undefined;
+        // Fetch the detail page to get magnet link (reuses the function-level
+        // heap det_buf — overwritten each iteration, processed before the next).
         @import("../core/rate_limit.zig").acquire("1337x", 1.0);
-        const det_page = @import("../core/http.zig").fetch(du, &det_buf, .{
+        const det_page = @import("../core/http.zig").fetch(du, det_buf, .{
             .timeout_secs = 6,
             .user_agent = "Mozilla/5.0",
         }) orelse {
