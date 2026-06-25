@@ -1708,6 +1708,10 @@ pub fn renderPaneContent(pane_idx: usize) void {
 
             var ocr_scroll = dvui.scrollArea(@src(), .{}, .{
                 .expand = .both,
+                // background=false: don't paint the scrollArea's default (light)
+                // fill over the dark OCR panel above (color_fill 10,10,14). Same
+                // theme-respect fix as the dev-log scroll area.
+                .background = false,
             });
             defer ocr_scroll.deinit();
 
