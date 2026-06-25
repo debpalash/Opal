@@ -78,16 +78,18 @@ Call the API with the token:
 
 ```sh
 curl -H "Authorization: Bearer $(cat data/config/zigzag/api.token)" \
-  http://HOST:41595/status
+  http://HOST:41595/api/status
 ```
 
-## Healthcheck caveat
+(Authenticated data endpoints live under the `/api/` prefix, e.g.
+`/api/status`, `/api/search`, `/api/load`.)
 
-The container `HEALTHCHECK` hits `http://localhost:41595/status`, but `/status`
-requires a Bearer token, so an unauthenticated request returns **401**. The 401
-still proves the server is listening, so the healthcheck treats any HTTP
-response as healthy. If a tokenless health route is added later, point the
-healthcheck at it for a stricter check.
+## Healthcheck
+
+The container `HEALTHCHECK` hits `http://localhost:41595/health` — an
+unauthenticated liveness probe that returns `{"ok":true}` (served before the
+Bearer-auth gate). A clean HTTP 200 means the JSON API is up and serving; no
+token needed.
 
 ## NOT verifiable on macOS dev — needs a real Linux/Docker host
 

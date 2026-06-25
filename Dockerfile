@@ -98,12 +98,10 @@ ENV XDG_CONFIG_HOME=/config \
 # JSON API (41595) + web UI (3000).
 EXPOSE 41595 3000
 
-# HEALTHCHECK hits /status. CAVEAT: /status requires a Bearer token, so a bare
-# curl returns 401. The 401 still proves the server is up and listening, so we
-# treat a reachable socket (any HTTP response) as healthy via curl's exit code.
-# If the API gains a tokenless health route, switch this to that route.
+# HEALTHCHECK hits /health — an unauthenticated liveness probe that returns
+# {"ok":true} (see remote.zig handleRequest, served before the Bearer-auth
+# gate). A clean 200 means the JSON API is up and serving.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS -o /dev/null http://localhost:41595/status \
-        || curl -s -o /dev/null -w '%{http_code}' http://localhost:41595/status | grep -qE '^[0-9]+$'
+    CMD curl -fsS -o /dev/null http://localhost:41595/health
 
 ENTRYPOINT ["/usr/local/bin/zigzag"]
