@@ -6,6 +6,7 @@ const icons = @import("icons");
 const logs = @import("../core/logs.zig");
 const player = @import("../player/player.zig");
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
+const poster = @import("../core/poster.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -1230,11 +1231,10 @@ pub fn renderContent() void {
     // Mode toolbar + per-mode sub-toolbar + count/card-size controls. Hidden
     // while an anime is selected (episode-list view has its own header).
     if (state.app.anime.selected_idx == null) {
-        renderModeToolbar();
-        // Search mode keeps the live search-as-you-type box.
+        // Single unified toolbar row: mode tabs + per-mode chips + count + zoom.
+        renderModeToolbar(state.app.anime.result_count);
+        // Search mode keeps the live search-as-you-type box (its own row).
         if (state.app.anime.mode == .search) renderSearchBar();
-        renderSubToolbar();
-        renderToolbar(state.app.anime.result_count);
     }
 
     // Only show the spinner on an INITIAL load (nothing to show yet). During a
@@ -1592,10 +1592,12 @@ fn dispatchModeFetch() void {
 // Mode toolbar (Trending | Seasonal | Calendar | Search | My List)
 // ══════════════════════════════════════════════════════════
 
-fn renderModeToolbar() void {
+fn renderModeToolbar(count: usize) void {
+    // ONE wrapping flexbox holding the mode tabs, the per-mode chips, the result
+    // count and the card-size controls — all on a single row (wraps if narrow).
     var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
         .expand = .horizontal,
-        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 4 },
+        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 6 },
         .background = true,
         .color_fill = theme.colors.bg_header,
     });
@@ -1606,6 +1608,54 @@ fn renderModeToolbar() void {
     renderModeTab(2, .calendar, "Calendar");
     renderModeTab(3, .search, "Search");
     renderModeTab(4, .mylist, "My List");
+
+    // Per-mode chips, inline on the same row.
+    switch (state.app.anime.mode) {
+        .trending => {
+            toolbarDivider(889);
+            renderTrendChip(0, .airing, "Airing");
+            renderTrendChip(1, .top, "Top");
+            renderTrendChip(2, .bypopularity, "Popular");
+            renderTrendChip(3, .upcoming, "Upcoming");
+        },
+        .seasonal => {
+            toolbarDivider(889);
+            renderSeasonalSubToolbar();
+        },
+        .calendar => {
+            toolbarDivider(889);
+            renderCalendarSubToolbar();
+        },
+        else => {},
+    }
+
+    // Result count + card-size −/+ (always, same row).
+    toolbarDivider(950);
+    _ = dvui.label(@src(), "{d} results", .{count}, .{
+        .color_text = theme.colors.text_muted,
+        .gravity_y = 0.5,
+    });
+    const dim = dvui.Color{ .r = 120, .g = 120, .b = 148, .a = 200 };
+    if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_text = dim,
+        .border = dvui.Rect.all(0),
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .padding = dvui.Rect.all(3),
+        .gravity_y = 0.5,
+    })) {
+        card_w_pref = @max(110, card_w_pref - 40);
+    }
+    if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_text = dim,
+        .border = dvui.Rect.all(0),
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .padding = dvui.Rect.all(3),
+        .gravity_y = 0.5,
+    })) {
+        card_w_pref = @min(320, card_w_pref + 40);
+    }
 }
 
 fn renderModeTab(idx: usize, m: state.AnimeMode, label: []const u8) void {
@@ -1649,12 +1699,7 @@ fn renderSeasonChip(idx: usize, sel: state.AnimeSeasonSel, label: []const u8) vo
 }
 
 fn renderSeasonalSubToolbar() void {
-    var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
-        .expand = .horizontal,
-        .margin = .{ .x = 8, .y = 4, .w = 8, .h = 2 },
-    });
-    defer bar.deinit();
-
+    // No own flexbox — renders chips into the unified toolbar row (renderModeToolbar).
     renderSeasonChip(0, .now, "This Season");
     renderSeasonChip(1, .winter, "Winter");
     renderSeasonChip(2, .spring, "Spring");
@@ -1717,12 +1762,7 @@ fn renderCalDayChip(idx: usize, day: u8, label: []const u8) void {
 }
 
 fn renderCalendarSubToolbar() void {
-    var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
-        .expand = .horizontal,
-        .margin = .{ .x = 8, .y = 4, .w = 8, .h = 2 },
-    });
-    defer bar.deinit();
-
+    // No own flexbox — renders chips into the unified toolbar row (renderModeToolbar).
     renderCalDayChip(0, 0, "All");
     renderCalDayChip(1, 1, "Mon");
     renderCalDayChip(2, 2, "Tue");
@@ -1803,15 +1843,7 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
         bw.drawBackground();
 
         // Upload pixels → texture once ready (same lifecycle as AnimeResult).
-        if (item.poster_tex == null and item.poster_pixels != null) {
-            const num_pixels = item.poster_w * item.poster_h;
-            const pixels_pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(item.poster_pixels.?.ptr)))[0..num_pixels];
-            item.poster_tex = dvui.textureCreate(pixels_pma, item.poster_w, item.poster_h, .linear, .rgba_32) catch null;
-            if (item.poster_tex != null) {
-                std.heap.c_allocator.free(item.poster_pixels.?);
-                item.poster_pixels = null;
-            }
-        }
+        _ = poster.uploadIfReady(&item.poster_pixels, item.poster_w, item.poster_h, &item.poster_tex);
 
         {
             var stack = dvui.overlay(@src(), .{ .id_extra = idx + 30140, .expand = .both });
@@ -1824,7 +1856,8 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
                     .corner_radius = dvui.Rect.all(6),
                 });
             } else {
-                if (!item.poster_fetching and item.poster_url_len > 0) fetchContinuePoster(item);
+                if (!item.poster_fetching and item.poster_url_len > 0)
+                    poster.fetchAsync(item.poster_url[0..item.poster_url_len], &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
                 dvui.icon(@src(), "", icons.tvg.lucide.play, .{}, .{
                     .id_extra = idx + 30150,
                     .gravity_x = 0.5,
@@ -2254,15 +2287,7 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
         bw.drawBackground();
 
         // Upload pixels to GPU texture once ready
-        if (item.poster_tex == null and item.poster_pixels != null) {
-            const num_pixels = item.poster_w * item.poster_h;
-            const pixels_pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(item.poster_pixels.?.ptr)))[0..num_pixels];
-            item.poster_tex = dvui.textureCreate(pixels_pma, item.poster_w, item.poster_h, .linear, .rgba_32) catch null;
-            if (item.poster_tex != null) {
-                std.heap.c_allocator.free(item.poster_pixels.?);
-                item.poster_pixels = null;
-            }
-        }
+        _ = poster.uploadIfReady(&item.poster_pixels, item.poster_w, item.poster_h, &item.poster_tex);
 
         // Stack the poster + (on hover) a meta overlay, both filling the button.
         {
@@ -2276,8 +2301,11 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
                     .corner_radius = dvui.Rect.all(6),
                 });
             } else {
-                // Kick off async poster download if not already fetching
-                if (!item.poster_fetching and item.poster_url_len > 0) fetchPoster(item);
+                // Kick off async poster download via the shared poster daemon
+                // (http.fetchImage — the proven path TMDB/Jellyfin use; the old
+                // bespoke curl fetch left anime cards on placeholders).
+                if (!item.poster_fetching and item.poster_url_len > 0)
+                    poster.fetchAsync(item.poster_url[0..item.poster_url_len], &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
                 dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
                     .id_extra = idx + 150,
                     .gravity_x = 0.5,

@@ -1038,31 +1038,29 @@ pub fn renderContent() void {
     // embed blogspot-CDN images the reader consumes). The "All" chip is the
     // default and aggregates every available source; any user/bundled comic
     // plugins are surfaced as read-only badge chips so the user sees they exist.
+    // ── Single unified toolbar row: Source chips · result count · quick-links
+    //    · card-size −/+ (wraps if the window is narrow). ──
     {
-        var src_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 2 },
+            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 6 },
         });
-        defer src_row.deinit();
+        defer bar.deinit();
 
         _ = dvui.label(@src(), "Source:", .{}, .{
             .color_text = theme.colors.text_muted,
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
         });
-
         renderSourceChip("All", 1, .all);
         renderSourceChip("ReadAllComics", 2, .readallcomics);
         renderPluginSourceBadges();
-    }
 
-    // ── Toolbar: result count · quick-link chips · card-size −/+ ──
-    {
-        var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 6 },
+        // Divider between the source group and the result/quick-link group.
+        _ = dvui.label(@src(), "  •  ", .{}, .{
+            .color_text = theme.colors.border_drawer,
+            .gravity_y = 0.5,
         });
-        defer bar.deinit();
 
         // Result count (or live status).
         {
@@ -1081,12 +1079,6 @@ pub fn renderContent() void {
         renderChip("Invincible", 1, "https://readallcomics.com/invincible-001/");
         renderChip("The Boys", 2, "https://readallcomics.com/the-boys-001-2006/");
         renderChip("Saga", 3, "https://readallcomics.com/saga-001-2012/");
-
-        // Spacer pushes the size controls to the right.
-        {
-            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            sp.deinit();
-        }
 
         if (dvui.buttonIcon(@src(), "comic-card-smaller", icons.tvg.lucide.@"zoom-out", .{}, .{}, .{
             .id_extra = 9001,
