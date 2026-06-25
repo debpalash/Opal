@@ -431,11 +431,15 @@ pub fn goToLibraries() void {
 
 pub fn fetchPoster(item: *state.JfItem) void {
     if (item.id_len == 0 or item.poster_fetching) return;
+    // Global poster-fetch cap (shared with all providers) — over the cap, leave
+    // poster_fetching false so the card retries next frame.
+    if (!@import("../core/poster.zig").tryClaimSlot()) return;
     item.poster_fetching = true;
 
     if (std.Thread.spawn(.{}, struct {
         fn worker(ptr: *state.JfItem) void {
             defer ptr.poster_fetching = false;
+            defer @import("../core/poster.zig").releaseSlot();
 
             const server = state.app.jf.server_url[0..state.app.jf.server_url_len];
             const token = state.app.jf.token[0..state.app.jf.token_len];
@@ -467,7 +471,10 @@ pub fn fetchPoster(item: *state.JfItem) void {
             ptr.poster_h = @intCast(h);
             ptr.poster_pixels = p_slice;
         }
-    }.worker, .{item})) |t| t.detach() else |_| {}
+    }.worker, .{item})) |t| t.detach() else |_| {
+        item.poster_fetching = false;
+        @import("../core/poster.zig").releaseSlot(); // spawn failed — release the slot
+    }
 }
 
 // ══════════════════════════════════════════════════════════

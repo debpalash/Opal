@@ -176,40 +176,13 @@ pub fn fetchDiscover(genre_id: u32) void {
 
 pub fn fetchPoster(item: *state.TmdbItem) void {
     if (item.poster_path_len == 0 or item.poster_fetching) return;
-    item.poster_fetching = true;
-
-    if (std.Thread.spawn(.{}, struct {
-        fn worker(ptr: *state.TmdbItem) void {
-            defer ptr.poster_fetching = false;
-
-            var url_buf: [256]u8 = undefined;
-            const url = std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w185{s}", .{ptr.poster_path[0..ptr.poster_path_len]}) catch return;
-
-            const img_buf = alloc.alloc(u8, 512 * 1024) catch return;
-            defer alloc.free(img_buf);
-            const img_content = @import("../core/http.zig").fetchImage(url, img_buf) orelse return;
-            const img_len = img_content.len;
-
-            var w: c_int = 0;
-            var h: c_int = 0;
-            var comp: c_int = 0;
-            const pixels = dvui.c.stbi_load_from_memory(img_buf[0..img_len].ptr, @intCast(img_len), &w, &h, &comp, 4);
-            if (pixels == null) return;
-            defer dvui.c.stbi_image_free(pixels);
-
-            const p_len: usize = @intCast(w * h * 4);
-            const p_slice = alloc.alloc(u8, p_len) catch return;
-            @memcpy(p_slice, pixels[0..p_len]);
-
-            ptr.poster_w = @intCast(w);
-            ptr.poster_h = @intCast(h);
-            ptr.poster_pixels = p_slice;
-        }
-    }.worker, .{item})) |t| {
-        t.detach(); // never joined — detach so the handle isn't leaked
-    } else |_| {
-        item.poster_fetching = false;
-    }
+    // Route through the shared poster daemon: it carries the global concurrency
+    // cap (no fetch storm when the infinite-scroll grid is flung), usize-first
+    // pixel math (no i32 w*h*4 overflow), and the torn-publish guard — all of
+    // which this provider's hand-rolled worker was missing.
+    var url_buf: [256]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w185{s}", .{item.poster_path[0..item.poster_path_len]}) catch return;
+    @import("../core/poster.zig").fetchAsync(url, &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
 }
 
 fn httpGet(url: []const u8, bearer_token: []const u8) ?[]u8 {

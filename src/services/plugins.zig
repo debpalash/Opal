@@ -748,11 +748,15 @@ fn extractJsonString(json: []const u8, key: []const u8, out_buf: []u8, out_len: 
 
 pub fn fetchPoster(item: *PluginResult) void {
     if (item.poster_url_len == 0 or item.poster_fetching) return;
+    // Global poster-fetch cap (shared with all providers) — over the cap, leave
+    // poster_fetching false so the card retries next frame.
+    if (!@import("../core/poster.zig").tryClaimSlot()) return;
     item.poster_fetching = true;
-    
+
     if (std.Thread.spawn(.{}, struct {
         fn worker(ptr: *PluginResult) void {
             defer ptr.poster_fetching = false;
+            defer @import("../core/poster.zig").releaseSlot();
             const url = ptr.poster_url[0..ptr.poster_url_len];
             
             const argv = [_][]const u8{ "curl", "-sL", "--max-time", "10", url };
@@ -790,7 +794,10 @@ pub fn fetchPoster(item: *PluginResult) void {
             ptr.poster_pixels = p_slice;
             results_mutex.unlock();
         }
-    }.worker, .{item})) |t| t.detach() else |_| {}
+    }.worker, .{item})) |t| t.detach() else |_| {
+        item.poster_fetching = false;
+        @import("../core/poster.zig").releaseSlot(); // spawn failed — release the slot
+    }
 }
 
 // ══════════════════════════════════════════════════════════

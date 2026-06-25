@@ -21,6 +21,19 @@ const c_alloc = std.heap.c_allocator;
 var in_flight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 const MAX_CONCURRENT: u32 = 8;
 
+/// Shared global cap for providers that decode posters in their OWN worker
+/// (jellyfin auth-in-URL, plugins via curl) instead of fetchAsync. Claim a slot
+/// before spawning; if it returns false, skip and retry next frame. Release in
+/// the worker's defer. Keeps every provider under the same MAX_CONCURRENT.
+pub fn tryClaimSlot() bool {
+    if (in_flight.load(.acquire) >= MAX_CONCURRENT) return false;
+    _ = in_flight.fetchAdd(1, .acq_rel);
+    return true;
+}
+pub fn releaseSlot() void {
+    _ = in_flight.fetchSub(1, .acq_rel);
+}
+
 pub const PosterRequest = struct {
     url: []const u8,
     pixels_out: *?[]u8,
