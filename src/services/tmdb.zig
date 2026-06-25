@@ -467,7 +467,16 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
                     .corner_radius = dvui.Rect.all(8),
                 });
             } else {
-                if (!item.poster_fetching and item.poster_path_len > 0) api.fetchPoster(item);
+                if (item.poster_fetching) {
+                    item.poster_attempted = true;
+                } else if (item.poster_attempted and item.poster_pixels == null and item.poster_tex == null) {
+                    // Worker ran but produced no pixels — latch failure so we
+                    // stop re-spawning a fetch every frame.
+                    item.poster_failed = true;
+                } else if (!item.poster_failed and item.poster_pixels == null and item.poster_path_len > 0) {
+                    api.fetchPoster(item);
+                    if (item.poster_fetching) item.poster_attempted = true;
+                }
                 dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
                     .id_extra = idx + 150,
                     .gravity_x = 0.5,

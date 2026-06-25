@@ -146,6 +146,12 @@ pub const TmdbItem = struct {
     poster_path: [64]u8 = std.mem.zeroes([64]u8),
     poster_path_len: usize = 0,
     poster_fetching: bool = false,
+    // Failure latch: a fetch that completed (fetching true→false) without
+    // producing pixels marks poster_failed so the renderer stops re-spawning a
+    // worker every frame (thread/alloc storm). poster_attempted distinguishes
+    // "never tried" from "tried and failed".
+    poster_attempted: bool = false,
+    poster_failed: bool = false,
     poster_pixels: ?[]u8 = null,
     poster_w: u32 = 0,
     poster_h: u32 = 0,
@@ -449,7 +455,7 @@ pub const AppState = struct {
         search_buf: [256]u8 = std.mem.zeroes([256]u8),
         url_buf: [512]u8 = std.mem.zeroes([512]u8),
         url_len: usize = 0,
-        is_loading: bool = false,
+        is_loading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
         // Deferred comic-load request from the remote API thread. loadComic()
         // frees page textures via dvui (UI-thread-only), so the remote thread sets
         // this and the UI thread drains it at frame top (cf. pending_remove_player_idx).
@@ -539,7 +545,7 @@ pub const AppState = struct {
     browser: struct {
         url_buf: [2048]u8 = std.mem.zeroes([2048]u8),
         url_len: usize = 0,
-        is_loading: bool = false,
+        is_loading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
         thread: ?std.Thread = null,
         title: [256]u8 = std.mem.zeroes([256]u8),
         title_len: usize = 0,

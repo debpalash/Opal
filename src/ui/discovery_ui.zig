@@ -82,6 +82,13 @@ fn renderCard(rec: *const recommendations.Recommendation, id: usize) void {
     const title = rec.title[0..@min(rec.title_len, rec.title.len)];
     const reason = rec.reason[0..@min(rec.reason_len, rec.reason.len)];
 
+    // Title/reason live in worker-written buffers (recommendations.addRec, a
+    // detached thread) — validate a stable stack copy before dvui measures it.
+    var tb: [128]u8 = undefined;
+    const title_safe = @import("../core/text.zig").safeUtf8Buf(title, &tb);
+    var rb: [256]u8 = undefined;
+    const reason_safe = @import("../core/text.zig").safeUtf8Buf(reason, &rb);
+
     var hovered: bool = false;
 
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -111,7 +118,7 @@ fn renderCard(rec: *const recommendations.Recommendation, id: usize) void {
         });
         defer top.deinit();
 
-        _ = dvui.label(@src(), "{s}", .{title}, .{
+        _ = dvui.label(@src(), "{s}", .{title_safe}, .{
             .id_extra = id,
             .expand = .horizontal,
             .color_text = theme.colors.text_primary,
@@ -155,7 +162,7 @@ fn renderCard(rec: *const recommendations.Recommendation, id: usize) void {
             .gravity_y = 0.0,
             .margin = .{ .x = 0, .y = 2, .w = theme.spacing.xs, .h = 0 },
         });
-        _ = dvui.label(@src(), "{s}", .{reason}, .{
+        _ = dvui.label(@src(), "{s}", .{reason_safe}, .{
             .id_extra = id,
             .expand = .horizontal,
             .color_text = theme.colors.text_secondary,

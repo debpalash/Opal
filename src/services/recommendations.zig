@@ -29,7 +29,7 @@ pub const Recommendation = struct {
 
 pub var recommendations: [20]Recommendation = undefined;
 pub var rec_count: usize = 0;
-pub var is_loading: bool = false;
+pub var is_loading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 // Snapshot of the active player taken on the calling (UI) thread BEFORE the
 // worker spawns — the worker must not touch state.app.players itself.
@@ -40,8 +40,8 @@ var seed_current_pos: f64 = 0;
 /// Generate recommendations. Tries the taste-vector rail first; on failure
 /// (no embeddings / empty vec store) keeps the original genre-frequency rail.
 pub fn generateRecommendations() void {
-    if (is_loading) return;
-    is_loading = true;
+    if (is_loading.load(.acquire)) return;
+    is_loading.store(true, .release);
     rec_count = 0;
 
     // Snapshot the active player on this (UI) thread, guarded per CLAUDE.md.
@@ -56,7 +56,7 @@ pub fn generateRecommendations() void {
     const rec_thread = std.Thread.spawn(.{}, struct {
         fn worker() void {
             defer {
-                is_loading = false;
+                is_loading.store(false, .release);
             }
 
             // ── Primary: Taste Receipts (taste vector over vec_aimemory) ──
@@ -174,7 +174,7 @@ pub fn generateRecommendations() void {
         }
     }.worker, .{}) catch {
         // Spawn failed — must clear is_loading or generation is blocked forever.
-        is_loading = false;
+        is_loading.store(false, .release);
         return;
     };
     rec_thread.detach(); // detach so the pthread handle isn't leaked

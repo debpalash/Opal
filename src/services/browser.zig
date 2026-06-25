@@ -181,7 +181,7 @@ fn bridgeReaderThread() void {
                         const tlen = @min(title.len, 255);
                         @memcpy(b.title[0..tlen], title[0..tlen]);
                         b.title_len = tlen;
-                        b.is_loading = false;
+                        b.is_loading.store(false, .release);
                     }
                     // Extract url
                     if (extractJsonField(buf[0..pos], "url")) |url| {
@@ -235,7 +235,7 @@ fn bridgeReaderThread() void {
                 frame_lock.unlock();
 
                 // Mark loading done
-                state.app.browser.is_loading = false;
+                state.app.browser.is_loading.store(false, .release);
             } else {
                 alloc.free(jpeg_buf);
             }
@@ -312,7 +312,7 @@ pub fn navigate(url: []const u8) void {
         @memcpy(b.url_buf[0..url.len], url);
     }
     b.url_len = url.len;
-    b.is_loading = true;
+    b.is_loading.store(true, .release);
     b.title_len = 0;
 
     // Push to history
@@ -629,7 +629,7 @@ pub fn renderContent() void {
     }
 
     // Loading state
-    if (b.is_loading) {
+    if (b.is_loading.load(.acquire)) {
         _ = dvui.label(@src(), "Loading...", .{}, .{
             .color_text = theme.colors.accent,
             .gravity_x = 0.5,

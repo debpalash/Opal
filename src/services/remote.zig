@@ -26,32 +26,30 @@ var csprng_init: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var csprng: std.Random.DefaultCsprng = undefined;
 var csprng_mutex = sync.Mutex{};
 
-fn seedCsprng() void {
+/// Seed the CSPRNG from /dev/urandom. Returns false if that read fails — we do
+/// NOT fall back to a timestamp seed: a predictable bearer token is worse than
+/// no remote API at all (callers leave api_token_ready false so endpoints 401).
+fn seedCsprng() bool {
     var seed: [std.Random.DefaultCsprng.secret_seed_length]u8 = undefined;
-    var seeded = false;
     if (io_g.openFileAbsolute("/dev/urandom", .{})) |f| {
         var fh = f;
         defer fh.close(io_g.io());
         const n = io_g.readAll(fh, &seed) catch 0;
-        if (n == seed.len) seeded = true;
-    } else |_| {}
-    if (!seeded) {
-        const t = io_g.milliTimestamp();
-        const tid = std.Thread.getCurrentId();
-        var i: usize = 0;
-        while (i < seed.len) : (i += 1) {
-            const mix: u64 = @as(u64, @bitCast(t)) ^ tid ^ (i *% 0x9e3779b97f4a7c15);
-            seed[i] = @truncate(mix >> @as(u6, @intCast(i % 8)) * 8);
+        if (n == seed.len) {
+            csprng = std.Random.DefaultCsprng.init(seed);
+            return true;
         }
-    }
-    csprng = std.Random.DefaultCsprng.init(seed);
+    } else |_| {}
+    return false;
 }
 
-fn fillRandomHex(out: *[TOKEN_HEX_LEN]u8) void {
+/// Fill `out` with random hex. Returns false if the CSPRNG could not be seeded
+/// (no /dev/urandom) — `out` is left untouched in that case.
+fn fillRandomHex(out: *[TOKEN_HEX_LEN]u8) bool {
     csprng_mutex.lock();
     defer csprng_mutex.unlock();
     if (!csprng_init.load(.acquire)) {
-        seedCsprng();
+        if (!seedCsprng()) return false;
         csprng_init.store(true, .release);
     }
     var bytes: [TOKEN_HEX_LEN / 2]u8 = undefined;
@@ -61,6 +59,7 @@ fn fillRandomHex(out: *[TOKEN_HEX_LEN]u8) void {
         out[i * 2] = hex[b >> 4];
         out[i * 2 + 1] = hex[b & 0x0f];
     }
+    return true;
 }
 
 fn tokenPath(buf: []u8) []const u8 {
@@ -103,7 +102,10 @@ fn loadOrCreateToken() void {
     const dir = paths_mod.configDir(&dir_buf);
     io_g.cwdMakePath(dir) catch {};
 
-    fillRandomHex(&api_token);
+    if (!fillRandomHex(&api_token)) {
+        logs.pushLog("error", "remote", "CSPRNG unavailable — remote API disabled", true);
+        return;
+    }
     api_token_ready.store(true, .release);
 
     // Create with mode 0600; chmod again after write in case umask widened it.
@@ -831,6 +833,11 @@ fn apiDownloadsPlay(stream: std.Io.net.Stream, query: []const u8) void {
         if (std.mem.indexOf(u8, file_name, "..") != null) return;
         var full_buf: [1024]u8 = undefined;
         if (std.fmt.bufPrintZ(&full_buf, "{s}/{s}", .{ dl_path, file_name })) |full_path| {
+            // Hold players_mutex across the lookup + load_file: the UI thread
+            // frees players at frame top (main.zig), so without this the
+            // captured `plyr` could dangle mid-mpv-call → use-after-free.
+            state.players_mutex.lock();
+            defer state.players_mutex.unlock();
             if (state.app.active_player_idx < state.app.players.items.len) {
                 const plyr = state.app.players.items[state.app.active_player_idx];
                 plyr.load_file(full_path.ptr);
@@ -1030,7 +1037,7 @@ fn apiComics(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     var json_buf: [2048]u8 = undefined;
     var w = std.Io.Writer.fixed(&json_buf);
     w.print("{{\"loading\":{s},\"pages\":{d},\"current\":{d},\"url\":\"", .{
-        if (state.app.comic.is_loading) "true" else "false",
+        if (state.app.comic.is_loading.load(.acquire)) "true" else "false",
         state.app.comic.page_count,
         state.app.comic.current_page,
     }) catch return;

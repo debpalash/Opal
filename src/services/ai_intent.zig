@@ -129,7 +129,7 @@ fn recommendationWorker(assistant_idx: usize) void {
 
     // Wait for recs
     var waited2: usize = 0;
-    while (recs.is_loading and waited2 < 30) : (waited2 += 1) {
+    while (recs.is_loading.load(.acquire) and waited2 < 30) : (waited2 += 1) {
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
     }
 

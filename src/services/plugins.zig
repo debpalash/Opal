@@ -480,7 +480,7 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                     state.app.comic.page_count = img_count;
                     state.app.comic.current_page = 0;
                     state.app.comic.dl_progress.store(0, .release);
-                    state.app.comic.is_loading = false;
+                    state.app.comic.is_loading.store(false, .release);
                     state.app.comic.next_url_len = 0;
                     state.app.comic.prev_url_len = 0;
                     
@@ -857,7 +857,7 @@ pub fn renderContent() void {
                 const is_active = (pi == active_plugin);
                 const name = p.name[0..p.name_len];
                 
-                if (dvui.button(@src(), name, .{}, .{
+                if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(name), .{}, .{
                     .id_extra = pi + 8000,
                     .color_fill = if (is_active) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .color_text = if (is_active) dvui.Color.white else theme.colors.text_muted,
@@ -1005,7 +1005,7 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
             defer info.deinit();
             
             // Title — click to toggle episode selection
-            if (dvui.button(@src(), title, .{}, .{
+            if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(title), .{}, .{
                 .id_extra = idx + 500, .expand = .horizontal,
                 .color_text = if (item.expanded) theme.colors.accent else theme.colors.text_main,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -1040,7 +1040,7 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                 defer meta.deinit();
                 
                 if (item.year_len > 0) {
-                    _ = dvui.label(@src(), "{s}", .{item.year[0..item.year_len]}, .{
+                    _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(item.year[0..item.year_len])}, .{
                         .id_extra = idx + 610, .color_text = theme.colors.text_muted,
                     });
                     _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 615, .color_text = theme.colors.text_muted });
@@ -1070,7 +1070,7 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                 const suffix: []const u8 = if (item.overview_len > 60) "..." else "";
                 var btn_buf: [128]u8 = undefined;
                 if (std.fmt.bufPrintZ(&btn_buf, "{s}{s}", .{item.overview[0..snip_len], suffix})) |snip| {
-                    _ = dvui.label(@src(), "{s}", .{snip}, .{
+                    _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(snip)}, .{
                         .id_extra = idx + 650, .color_text = theme.colors.text_dim, .expand = .horizontal,
                         .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
                     });
@@ -1117,7 +1117,7 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                 const ep_num = ep_i + 1;
                 var lbl: [8]u8 = undefined;
                 if (std.fmt.bufPrintZ(&lbl, "{d}", .{ep_num})) |ep_str| {
-                    if (dvui.button(@src(), ep_str, .{}, .{
+                    if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(ep_str), .{}, .{
                         .id_extra = idx * 300 + ep_i + 3000,
                         .color_fill = theme.colors.bg_input,
                         .color_text = theme.colors.text_main,

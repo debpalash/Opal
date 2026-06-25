@@ -608,7 +608,8 @@ pub fn renderGrid() !void {
                                 const ap = state.app.players.items[state.app.active_player_idx];
                                 var title_buf: [128]u8 = undefined;
                                 const title_len = ap.getMediaTitle(&title_buf);
-                                const media_label = title_buf[0..title_len];
+                                var mb: [128]u8 = undefined;
+                                const media_label = @import("../core/text.zig").safeUtf8Buf(title_buf[0..title_len], &mb);
                                 var chip_buf: [256]u8 = undefined;
                                 if (media_label.len > 0) {
                                     const chip_txt = std.fmt.bufPrint(&chip_buf, "Seeing: {s}", .{media_label}) catch "";
@@ -730,7 +731,7 @@ pub fn renderGrid() !void {
                     state.app.active_player_idx = i;
                 }
 
-                if (state.app.comic.page_count == 0 and !state.app.comic.is_loading) {
+                if (state.app.comic.page_count == 0 and !state.app.comic.is_loading.load(.acquire)) {
                     components.emptyState(icons.tvg.lucide.book, "Comic Viewer", "Open a comic to start reading.");
                 } else {
                     comics.renderPaneContent(i);

@@ -54,7 +54,7 @@ pub fn drainPendingLoad() void {
 
 /// Kick off a background thread to fetch and parse a comic issue page.
 pub fn loadComic(url: []const u8) void {
-    if (state.app.comic.is_loading) return;
+    if (state.app.comic.is_loading.load(.acquire)) return;
     if (url.len == 0 or url.len >= 512) return;
 
     // Stop any active narration
@@ -67,7 +67,7 @@ pub fn loadComic(url: []const u8) void {
         @memcpy(state.app.comic.url_buf[0..url.len], url);
     }
     state.app.comic.url_len = url.len;
-    state.app.comic.is_loading = true;
+    state.app.comic.is_loading.store(true, .release);
     state.app.comic.page_count = 0;
     state.app.comic.dl_progress.store(0, .release);
     state.app.comic.current_page = 0;
@@ -81,6 +81,22 @@ pub fn loadComic(url: []const u8) void {
 
 /// Free all downloaded page textures/pixels and the OCR cache.
 pub fn freeComicPages() void {
+    // UAF guard: the narration + OCR workers read state.app.comic.page_pixels
+    // (and re-decode via stbi). Freeing those buffers here while a worker is
+    // mid-read is a use-after-free. Signal stop and JOIN both before freeing.
+    // Both callers (closeComic / loadComic) run on the UI thread, and neither
+    // worker calls freeComicPages, so this can't self-deadlock. (narrationThread
+    // polls `narrating` and exits promptly; ocrPage is a bounded one-shot.)
+    state.app.comic.narrating = false;
+    if (state.app.comic.narrate_thread) |t| {
+        t.join();
+        state.app.comic.narrate_thread = null;
+    }
+    if (state.app.comic.ocr_thread) |t| {
+        t.join();
+        state.app.comic.ocr_thread = null;
+    }
+
     for (0..128) |i| {
         if (state.app.comic.page_textures[i]) |tex| {
             dvui.textureDestroyLater(tex);
@@ -120,7 +136,7 @@ fn fetchComicThread() void {
     // Try external plugins first
     if (tryPlugins(url)) {
         logs.pushLog("info", "comics", "Comic loaded via plugin", false);
-        state.app.comic.is_loading = false;
+        state.app.comic.is_loading.store(false, .release);
         downloadPages();
         return;
     }
@@ -138,7 +154,7 @@ fn fetchComicThread() void {
     child.stderr_behavior = .Ignore;
     _ = child.spawn() catch {
         logs.pushLog("error", "comics", "Failed to spawn curl", true);
-        state.app.comic.is_loading = false;
+        state.app.comic.is_loading.store(false, .release);
         return;
     };
 
@@ -149,7 +165,7 @@ fn fetchComicThread() void {
 
     if (html_bytes == 0) {
         logs.pushLog("error", "comics", "Empty response from curl", true);
-        state.app.comic.is_loading = false;
+        state.app.comic.is_loading.store(false, .release);
         return;
     }
 
@@ -160,7 +176,7 @@ fn fetchComicThread() void {
     parseNavLinks(html);
 
     logs.pushLog("info", "comics", "Comic loaded (native)", false);
-    state.app.comic.is_loading = false;
+    state.app.comic.is_loading.store(false, .release);
     downloadPages();
 }
 
@@ -957,7 +973,7 @@ fn coverWorker(idx: usize) void {
 pub fn renderContent() void {
     // A comic is open → the reader fills the whole tab (images + tools live in
     // renderPaneContent). Reading happens here in Browse, not the player route.
-    if (state.app.comic.is_loading or state.app.comic.page_count > 0) {
+    if (state.app.comic.is_loading.load(.acquire) or state.app.comic.page_count > 0) {
         var reader = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
         defer reader.deinit();
         renderPaneContent(0);
@@ -1431,7 +1447,7 @@ fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
 pub fn renderPaneContent(pane_idx: usize) void {
     _ = pane_idx;
 
-    if (state.app.comic.is_loading) {
+    if (state.app.comic.is_loading.load(.acquire)) {
         // Show download progress
         var prog_buf: [64]u8 = undefined;
         const prog_str = std.fmt.bufPrintZ(&prog_buf, "Loading comic... {d}/{d} pages", .{
