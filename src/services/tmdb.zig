@@ -934,13 +934,24 @@ fn fetchSeasonsThread(tmdb_id: i32, my_gen: u32) void {
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
     const bytes = tvCurl(url, buf);
-    if (bytes == 0) return;
+    if (bytes == 0) {
+        var lb: [96]u8 = undefined;
+        const lm = std.fmt.bufPrint(&lb, "TV seasons fetch FAILED (id={d}) — empty response", .{tmdb_id}) catch "TV seasons fetch failed";
+        logs.pushLog("error", "tmdb", lm, true);
+        return;
+    }
     const body = buf[0..bytes];
 
     // Superseded by a newer open/close? Drop silently.
     if (tv_gen.load(.acquire) != my_gen) return;
 
     parseSeasons(body);
+
+    {
+        var lb: [96]u8 = undefined;
+        const lm = std.fmt.bufPrint(&lb, "TV id={d}: {d} seasons parsed ({d}b)", .{ tmdb_id, state.app.tmdb.tv_season_count, bytes }) catch "TV seasons parsed";
+        logs.pushLog("info", "tmdb", lm, false);
+    }
 
     if (tv_gen.load(.acquire) != my_gen) return;
 

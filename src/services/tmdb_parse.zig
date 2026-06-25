@@ -95,23 +95,47 @@ pub fn parseTmdbResponse(body: []const u8) void {
 
     const arr_start = results_start + "\"results\":[".len;
 
+    // String-aware brace matching: a '{' or '}' inside a JSON string (a title or
+    // overview can legitimately contain one) must NOT move the depth counter, or
+    // every result after the offending one gets mis-sliced and parseAndAddItem
+    // reads the wrong object — including the wrong top-level "id", which then
+    // opens a TV detail for the wrong/nonexistent show ("No episodes available").
     var depth: i32 = 0;
     var obj_start: ?usize = null;
+    var in_str = false;
+    var esc = false;
     var i: usize = arr_start;
     while (i < body.len) : (i += 1) {
-        if (body[i] == '{') {
-            if (depth == 0) obj_start = i;
-            depth += 1;
-        } else if (body[i] == '}') {
-            depth -= 1;
-            if (depth == 0) {
-                if (obj_start) |start| {
-                    parseAndAddItem(body[start..i + 1]) catch {};
-                    obj_start = null;
-                }
+        const c = body[i];
+        if (in_str) {
+            if (esc) {
+                esc = false;
+            } else if (c == '\\') {
+                esc = true;
+            } else if (c == '"') {
+                in_str = false;
             }
-        } else if (body[i] == ']' and depth == 0) {
-            break;
+            continue;
+        }
+        switch (c) {
+            '"' => in_str = true,
+            '{' => {
+                if (depth == 0) obj_start = i;
+                depth += 1;
+            },
+            '}' => {
+                depth -= 1;
+                if (depth == 0) {
+                    if (obj_start) |start| {
+                        parseAndAddItem(body[start .. i + 1]) catch {};
+                        obj_start = null;
+                    }
+                }
+            },
+            ']' => {
+                if (depth == 0) break;
+            },
+            else => {},
         }
     }
 }
