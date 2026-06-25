@@ -2409,8 +2409,9 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
         // Synopsis snippet (click to expand)
         if (item.overview_len > 0) {
             var btn_buf: [128]u8 = undefined;
+            var snip_buf: [64]u8 = undefined;
             const snip_len = @min(item.overview_len, 60);
-            const snip = item.overview[0..snip_len];
+            const snip = safeUtf8Buf(item.overview[0..snip_len], &snip_buf);
             const suffix: []const u8 = if (item.overview_len > 60) "..." else "";
             if (std.fmt.bufPrintZ(&btn_buf, "{s}{s}", .{ snip, suffix })) |snip_z| {
                 if (dvui.button(@src(), snip_z, .{}, .{
@@ -2427,7 +2428,8 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
 
         // Full overview when expanded
         if (item.expanded and item.overview_len > 0) {
-            _ = dvui.label(@src(), "{s}", .{item.overview[0..item.overview_len]}, .{
+            var ov_buf: [512]u8 = undefined;
+            _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(item.overview[0..@min(item.overview_len, ov_buf.len)], &ov_buf)}, .{
                 .id_extra = idx + 700,
                 .color_text = theme.colors.text_muted,
                 .expand = .horizontal,

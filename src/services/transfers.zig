@@ -6,6 +6,7 @@ const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const search = @import("search.zig");
 const history = @import("history.zig");
+const safeUtf8 = @import("../core/text.zig").safeUtf8;
 
 pub var expanded_torrent_id: i32 = -1;
 var tab_idx: u8 = 1; // 0=Files 1=Active 2=History
@@ -860,7 +861,7 @@ fn displayName(name: []const u8) []const u8 {
             // Find first ' - ' (space-dash-space) or ' -' separator after TLD
             if (std.mem.indexOf(u8, name, " - ")) |sep| {
                 const after = name[sep + 3 ..];
-                if (after.len > 0) return std.mem.trimStart(u8, after, " -_");
+                if (after.len > 0) return safeUtf8(std.mem.trimStart(u8, after, " -_"));
             }
         }
     }
@@ -868,10 +869,10 @@ fn displayName(name: []const u8) []const u8 {
     if (name.len > 0 and name[0] == '[') {
         if (std.mem.indexOfScalar(u8, name, ']')) |close| {
             const after = std.mem.trimStart(u8, name[close + 1 ..], " -_");
-            if (after.len > 0) return after;
+            if (after.len > 0) return safeUtf8(after);
         }
     }
-    return name;
+    return safeUtf8(name);
 }
 
 // Extract display name from magnet dn= param, or truncate hash

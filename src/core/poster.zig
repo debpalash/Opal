@@ -24,35 +24,46 @@ pub const PosterRequest = struct {
 /// Sets fetching_flag while working, writes pixels/w/h on success.
 pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32, fetching_flag: *bool) void {
     if (fetching_flag.*) return;
+    // Bound the URL and copy it by value into the worker args (CLAUDE.md:
+    // never pass a slice into a mutable array to a detached thread). Callers
+    // pass item.poster_url[0..len] — a slice into a results[] buffer that a
+    // fetch worker may rewrite mid-flight. Copy the bytes so each worker owns
+    // its URL and there's no shared-slice race.
+    if (url.len > 1024) return;
     fetching_flag.* = true;
-    
-    const Args = struct { url_ptr: []const u8, pix: *?[]u8, w: *u32, h: *u32, flag: *bool };
-    
+
+    const Args = struct { url_buf: [1024]u8, url_len: usize, pix: *?[]u8, w: *u32, h: *u32, flag: *bool };
+
+    var url_buf: [1024]u8 = undefined;
+    @memcpy(url_buf[0..url.len], url);
+
     if (std.Thread.spawn(.{}, struct {
         fn worker(args: Args) void {
             defer args.flag.* = false;
-            
+
             const img_buf = c_alloc.alloc(u8, 512 * 1024) catch return;
             defer c_alloc.free(img_buf);
-            const data = http.fetchImage(args.url_ptr, img_buf) orelse return;
-            
+            const data = http.fetchImage(args.url_buf[0..args.url_len], img_buf) orelse return;
+
             var w: c_int = 0;
             var h: c_int = 0;
             var comp: c_int = 0;
             const pixels = dvui.c.stbi_load_from_memory(data.ptr, @intCast(data.len), &w, &h, &comp, 4);
             if (pixels == null) return;
             defer dvui.c.stbi_image_free(pixels);
-            
+
             if (w <= 0 or h <= 0) return;
-            const p_len: usize = @intCast(w * h * 4);
+            // Compute in usize to avoid i32 overflow on large images
+            // (w * h * 4 would otherwise be evaluated in c_int).
+            const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
             const p_slice = c_alloc.alloc(u8, p_len) catch return;
             @memcpy(p_slice, pixels[0..p_len]);
-            
+
             args.w.* = @intCast(w);
             args.h.* = @intCast(h);
             args.pix.* = p_slice;
         }
-    }.worker, .{ Args{ .url_ptr = url, .pix = pixels_out, .w = w_out, .h = h_out, .flag = fetching_flag } })) |t| {
+    }.worker, .{Args{ .url_buf = url_buf, .url_len = url.len, .pix = pixels_out, .w = w_out, .h = h_out, .flag = fetching_flag }})) |t| {
         t.detach();
     } else |_| {
         fetching_flag.* = false;
@@ -64,13 +75,13 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
 pub fn uploadIfReady(pixels: *?[]u8, w: u32, h: u32, tex: *?dvui.Texture) bool {
     if (tex.* != null) return true;
     if (pixels.* == null) return false;
-    
+
     const num_px = w * h;
     if (num_px == 0) return false;
-    
+
     const pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(pixels.*.?.ptr)))[0..num_px];
     tex.* = dvui.textureCreate(pma, w, h, .linear, .rgba_32) catch null;
-    
+
     if (tex.* != null) {
         c_alloc.free(pixels.*.?);
         pixels.* = null;

@@ -543,11 +543,16 @@ fn serveStaticFile(stream: std.Io.net.Stream, path: []const u8, content_type: []
     const raw = @import("../core/io_global.zig").readToEndAlloc(file, alloc, 512 * 1024) catch return;
     defer alloc.free(raw);
 
-    // Inject the live bearer token into the served page (HTML only).
+    // Inject the live bearer token into the served page (HTML only) — but ONLY
+    // on the loopback (desktop) bind. In headless mode the API binds 0.0.0.0, and
+    // `/` is served pre-auth so the token would be handed to ANY LAN client that
+    // GETs the page = full remote takeover. On 0.0.0.0 we leave the placeholder
+    // (page's 32-hex-validator rejects it → no token) and the operator must
+    // supply the token (from ~/.config/zigzag/api.token) out of band.
     var body: []const u8 = raw;
     var injected: ?[]u8 = null;
     defer if (injected) |buf| alloc.free(buf);
-    if (api_token_ready.load(.acquire) and std.mem.indexOf(u8, raw, TOKEN_PLACEHOLDER) != null) {
+    if (!state.app.is_headless and api_token_ready.load(.acquire) and std.mem.indexOf(u8, raw, TOKEN_PLACEHOLDER) != null) {
         const new_body = std.mem.replaceOwned(u8, alloc, raw, TOKEN_PLACEHOLDER, api_token[0..]) catch null;
         if (new_body) |nb| {
             injected = nb;

@@ -4,6 +4,7 @@ const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const logs = @import("../core/logs.zig");
 const alloc = @import("../core/alloc.zig").allocator;
+const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 
 // ══════════════════════════════════════════════════════════
 // Camoufox Browser Engine — CDP screenshot streaming
@@ -617,7 +618,8 @@ pub fn renderContent() void {
 
     // Title bar
     if (b.title_len > 0) {
-        _ = dvui.label(@src(), "{s}", .{b.title[0..b.title_len]}, .{
+        var tbuf: [256]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(b.title[0..b.title_len], &tbuf)}, .{
             .color_text = theme.colors.text_main,
             .padding = .{ .x = 8, .y = 2, .w = 8, .h = 2 },
             .background = true,
