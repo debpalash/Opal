@@ -1161,6 +1161,42 @@ def test_live_asr_foundation():
     return "fail", "live-ASR foundation not wired"
 
 
+# ── Regression guards for older subsystems (edited as the watcher runs) ──
+
+@test("Player Resume Wired", "Player")
+def test_player_resume():
+    p = _src("src/player/player.zig")
+    if ("pub fn load_file" in p and "pub fn saveCurrentPosition" in p
+            and "pub fn tryResumePosition" in p):
+        return "pass", "load_file + save/resume position present"
+    return "fail", "player load/resume not wired"
+
+
+@test("Multi-Source Search Wired", "Search")
+def test_multi_source_search():
+    s = _src("src/services/search.zig")
+    if ("pub fn submitQuery" in s and "pub fn triggerSearch" in s
+            and "pub fn loadTorrentToPlayer" in s):
+        return "pass", "universal + torrent + magnet load paths present"
+    return "fail", "search paths not wired"
+
+
+@test("Queue Persistence Wired", "Library")
+def test_queue_wired():
+    q = _src("src/services/queue.zig")
+    if "pub fn addToQueue" in q and "pub fn playNextUnplayed" in q and "queue_count" in q:
+        return "pass", "addToQueue + playNextUnplayed + count present"
+    return "fail", "queue not wired"
+
+
+@test("Transfers Content Wired", "Downloads")
+def test_transfers_wired():
+    t = _src("src/services/transfers.zig")
+    if "pub fn renderTransfersContent" in t:
+        return "pass", "transfers content renderer present"
+    return "fail", "transfers not wired"
+
+
 @test("Threads Detached (project-wide)", "Stability")
 def test_threads_detached():
     # Discarded `_ = std.Thread.spawn(...)` leaks the pthread handle (CLAUDE.md);
