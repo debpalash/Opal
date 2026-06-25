@@ -691,7 +691,10 @@ pub fn initPaths() void {
 
 /// Get null-terminated save path for C API calls.
 pub fn getSavePath() [*c]const u8 {
-    app.save_path_buf[app.save_path_len] = 0;
+    // Clamp: if save_path_len == buf.len, writing the NUL at [save_path_len]
+    // would be one byte past the end (buffer overflow).
+    const i = @min(app.save_path_len, app.save_path_buf.len - 1);
+    app.save_path_buf[i] = 0;
     return @ptrCast(&app.save_path_buf);
 }
 

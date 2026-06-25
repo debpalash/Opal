@@ -124,7 +124,8 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
     const label = std.fmt.bufPrintZ(&btn_lbl, "{s}", .{active_title}) catch "Trax";
     const kind_id: usize = if (is_aud) 1 else 2;
 
-    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = kind_id, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_muted })) |r| {
+    // mpv track lang/title is untrusted metadata — validate before dvui.
+    if (dvui.menuItemLabel(@src(), @import("../core/text.zig").safeUtf8(label), .{ .submenu = true }, .{ .id_extra = kind_id, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_muted })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
         var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_drawer, .border = dvui.Rect.all(1), .color_border = theme.colors.border_drawer });
@@ -164,7 +165,7 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
                         }
                     }
 
-                    if (dvui.menuItemLabel(@src(), row_name, .{}, .{ .id_extra = i, .expand = .horizontal, .color_text = theme.colors.text_main })) |_| {
+                    if (dvui.menuItemLabel(@src(), @import("../core/text.zig").safeUtf8(row_name), .{}, .{ .id_extra = i, .expand = .horizontal, .color_text = theme.colors.text_main })) |_| {
                         var set_cmd_buf: [64]u8 = undefined;
                         const prop = if (is_aud) "aid" else "sid";
                         if (std.fmt.bufPrintZ(&set_cmd_buf, "set {s} {d}", .{ prop, t_id })) |cmd| {
@@ -1539,7 +1540,9 @@ pub fn renderLiquidGlassOverlay() void {
         const name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse t_name.len;
         const rate_mb = @as(f32, @floatFromInt(dl_rate)) / 1024.0 / 1024.0;
 
-        _ = dvui.label(@src(), "{s}", .{t_name[0..name_len]}, .{
+        // Untrusted torrent metadata, truncated at the 64-byte buffer (possibly
+        // mid-codepoint) — validate before dvui (matches grid.zig).
+        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(t_name[0..name_len])}, .{
             .color_text = theme.colors.text_tertiary,
             .gravity_y = 0.5,
         });

@@ -1667,7 +1667,8 @@ fn renderSubtitlesTab() void {
 
                 // Language badge — demoted to secondary text (not accent).
                 if (r.lang_len > 0) {
-                    _ = dvui.label(@src(), "{s}", .{r.language[0..r.lang_len]}, .{
+                    var lb: [16]u8 = undefined;
+                    _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(r.language[0..r.lang_len], &lb)}, .{
                         .id_extra = ri + 4600,
                         .color_text = theme.colors.text_secondary,
                         .gravity_y = 0.5,
