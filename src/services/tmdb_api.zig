@@ -213,6 +213,46 @@ fn curlGet(url: []const u8, auth_header: []const u8) ?[]u8 {
     return alloc.dupe(u8, buf[0..n]) catch null;
 }
 
+fn curlIntoOnce(url: []const u8, buf: []u8) usize {
+    const io_g = @import("../core/io_global.zig");
+    var child = io_g.Child.init(&.{ "curl", "-s", "--max-time", "12", url }, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return 0;
+    const n = if (child.stdout) |*so| io_g.readAll(so, buf) catch 0 else 0;
+    _ = child.wait() catch {};
+    return n;
+}
+
+/// HTTPS→HTTP fallback curl into a caller buffer, for TMDB callers that carry the
+/// api_key in the query string (resolver / AI search). Returns bytes written.
+/// Shares tmdb_https_blocked with httpGet/tvCurl. Use this instead of std.http
+/// (http.fetch) for api.themoviedb.org — std.http SEGV-crashes on the TLS reset
+/// that SNI-blocked networks return.
+pub fn tmdbCurlInto(url: []const u8, buf: []u8) usize {
+    var hb: [700]u8 = undefined;
+    const http_url: ?[]const u8 = if (std.mem.startsWith(u8, url, "https://"))
+        (std.fmt.bufPrint(&hb, "http://{s}", .{url[8..]}) catch null)
+    else
+        null;
+    if (tmdb_https_blocked.load(.acquire)) {
+        if (http_url) |hu| {
+            const n = curlIntoOnce(hu, buf);
+            if (n > 0) return n;
+        }
+    }
+    const n = curlIntoOnce(url, buf);
+    if (n > 0) return n;
+    if (http_url) |hu| {
+        const m = curlIntoOnce(hu, buf);
+        if (m > 0) {
+            tmdb_https_blocked.store(true, .release);
+            return m;
+        }
+    }
+    return 0;
+}
+
 fn httpGet(url: []const u8, bearer_token: []const u8) ?[]u8 {
     var auth_buf: [300]u8 = undefined;
     const auth = std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{bearer_token}) catch return null;

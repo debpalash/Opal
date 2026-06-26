@@ -490,15 +490,10 @@ fn executeTmdbLookup(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
     const url = std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org/3/search/multi?api_key={s}&query={s}&page=1", .{ api_key, escaped_query[0..eq_len] }) catch return null;
 
-    var child = @import("../core/io_global.zig").Child.init(&.{ "curl", "-s", "--max-time", "10", url }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return null;
-
-    const stdout = child.stdout.?;
+    // curl + HTTPS→HTTP fallback (api.themoviedb.org 443 is SNI-blocked on some
+    // networks; HTTP works and the key is in the query string already).
     var result_buf: [8192]u8 = undefined;
-    const n = @import("../core/io_global.zig").readAll(stdout, &result_buf) catch 0;
-    _ = child.wait() catch {};
+    const n = @import("tmdb_api.zig").tmdbCurlInto(url, &result_buf);
 
     if (n == 0) return std.fmt.allocPrint(alloc, "Error: Failed to fetch TMDB", .{}) catch null;
 

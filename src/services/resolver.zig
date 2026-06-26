@@ -1436,8 +1436,9 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
 
     var buf: [32 * 1024]u8 = undefined;
     @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
-    const t_body = @import("../core/http.zig").fetch(turl, &buf, .{ .timeout_secs = 5 }) orelse return;
-    const n = t_body.len;
+    // curl + HTTPS→HTTP fallback (NOT http.fetch/std.http, which SEGV-crashes on
+    // the api.themoviedb.org TLS reset that SNI-blocked networks return).
+    const n = @import("tmdb_api.zig").tmdbCurlInto(turl, &buf);
 
     if (n < 20) return;
 
@@ -1471,8 +1472,8 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
 
     var buf2: [4096]u8 = undefined;
     @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
-    const e_body = @import("../core/http.zig").fetch(eurl, &buf2, .{ .timeout_secs = 5 }) orelse return;
-    const n2 = e_body.len;
+    const n2 = @import("tmdb_api.zig").tmdbCurlInto(eurl, &buf2);
+    if (n2 == 0) return;
 
     if (n2 < 10) return;
 
