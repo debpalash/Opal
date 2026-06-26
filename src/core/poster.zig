@@ -80,6 +80,10 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
             defer dvui.c.stbi_image_free(pixels);
 
             if (w <= 0 or h <= 0) return;
+            // Reject absurdly large decoded dimensions: a tiny highly-compressed
+            // image (decompression bomb) can decode to hundreds of MB of RGBA and
+            // exhaust memory. No real poster exceeds these bounds.
+            if (w > 8192 or h > 8192) return;
             // Compute in usize to avoid i32 overflow on large images
             // (w * h * 4 would otherwise be evaluated in c_int).
             const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;

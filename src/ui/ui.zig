@@ -127,7 +127,9 @@ pub fn triggerFileOpen() void {
 pub fn pollFileOpen() void {
     if (FileOpenState.pending.load(.acquire)) {
         if (FileOpenState.file_path_len > 0 and state.app.active_player_idx < state.app.players.items.len) {
-            FileOpenState.file_path[FileOpenState.file_path_len] = 0;
+            // Clamp the terminator index: a picker path that fills file_path exactly
+            // would otherwise write the NUL one byte past the buffer.
+            FileOpenState.file_path[@min(FileOpenState.file_path_len, FileOpenState.file_path.len - 1)] = 0;
             state.app.players.items[state.app.active_player_idx].load_file(@ptrCast(&FileOpenState.file_path[0]));
             logs.pushLog("info", "open", "Loaded local file", false);
         }

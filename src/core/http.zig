@@ -113,11 +113,14 @@ pub fn fetch(url: []const u8, buf: []u8, opts: HttpOptions) ?[]const u8 {
     var transfer_buf: [16 * 1024]u8 = undefined;
     const reader = response.reader(&transfer_buf);
     
-    const body = reader.allocRemaining(alloc.allocator, std.Io.Limit.limited(opts.max_response)) catch {
+    // Clamp the read limit to the caller's buffer — never allocate/download more
+    // than we can return (a huge response otherwise allocs then gets discarded).
+    const read_limit = @min(opts.max_response, buf.len);
+    const body = reader.allocRemaining(alloc.allocator, std.Io.Limit.limited(read_limit)) catch {
         return null;
     };
     defer alloc.allocator.free(body);
-    
+
     if (body.len < 2 or body.len > buf.len) {
         return null;
     }

@@ -679,7 +679,10 @@ pub fn submitInput() void {
                 return;
             }
 
-            var null_term_uri: [2048]u8 = undefined;
+            // [2049] not [2048]: when the dvui text entry is filled to exactly 2048
+            // bytes it leaves NO null terminator, so len can be 2048 and writing the
+            // terminator at null_term_uri[len] would be one past a [2048] buffer.
+            var null_term_uri: [2049]u8 = undefined;
             @memcpy(null_term_uri[0..len], text);
             null_term_uri[len] = 0;
 

@@ -205,9 +205,12 @@ fn tokenizeWords(text: []const u8) void {
 
 /// Perform HTTP GET using curl (reliable, handles encoding/redirects).
 fn httpGetRaw(url_str: []const u8, response_buf: []u8) !usize {
-    // TODO: use unique temp paths for security (predictable /tmp names on multi-user systems)
-    const tmp_path = "/tmp/zigzag_http_resp";
-    
+    // Scratch file in the per-user XDG cache dir (~/.cache/zigzag), NOT a
+    // world-writable /tmp path — avoids the symlink/predictable-name race a
+    // multi-user box would expose. Matches the asr_* scratch files below.
+    var tmp_path_buf: [512]u8 = undefined;
+    const tmp_path = paths.cacheFile(&tmp_path_buf, "http_resp.tmp");
+
     var child = @import("../core/io_global.zig").Child.init(
         &.{ "curl", "-s", "-o", tmp_path, "--max-time", "10", url_str },
         @import("../core/alloc.zig").allocator,

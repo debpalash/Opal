@@ -11,6 +11,8 @@ const alloc = @import("../core/alloc.zig").allocator;
 // disconnect() queue the old textures here; fetchPoster (UI thread) drains them.
 var pending_tex_free: [512]dvui.Texture = undefined;
 var pending_tex_free_count: usize = 0;
+var pending_pix_free: [512][]u8 = undefined;
+var pending_pix_free_count: usize = 0;
 var pending_tex_free_mutex: @import("../core/sync.zig").Mutex = .{};
 
 fn queueJfTexFree(tex: dvui.Texture) void {
@@ -22,22 +24,36 @@ fn queueJfTexFree(tex: dvui.Texture) void {
     }
 }
 
-/// Destroy queued poster textures. UI-THREAD ONLY — call once per render pass.
+fn queueJfPixFree(px: []u8) void {
+    pending_tex_free_mutex.lock();
+    defer pending_tex_free_mutex.unlock();
+    if (pending_pix_free_count < pending_pix_free.len) {
+        pending_pix_free[pending_pix_free_count] = px;
+        pending_pix_free_count += 1;
+    }
+}
+
+/// Destroy queued poster textures + free queued pixel buffers. UI-THREAD ONLY.
 fn drainJfTexFrees() void {
     pending_tex_free_mutex.lock();
     defer pending_tex_free_mutex.unlock();
     for (pending_tex_free[0..pending_tex_free_count]) |t| dvui.textureDestroyLater(t);
     pending_tex_free_count = 0;
+    for (pending_pix_free[0..pending_pix_free_count]) |px| alloc.free(px);
+    pending_pix_free_count = 0;
 }
 
-/// Queue an item's GPU texture for UI-thread destroy and free its pixel buffer.
+/// Queue an item's GPU texture AND its pixel buffer for UI-thread freeing.
+/// Called from the fetch WORKER thread, so neither can be freed here: the UI
+/// thread may be mid-read of poster_pixels in textureCreate (use-after-free
+/// otherwise). Queue both; the UI drains them in drainJfTexFrees next pass.
 fn freeItemPoster(item: *state.JfItem) void {
     if (item.poster_tex) |t| {
         queueJfTexFree(t);
         item.poster_tex = null;
     }
     if (item.poster_pixels) |px| {
-        alloc.free(px);
+        queueJfPixFree(px);
         item.poster_pixels = null;
     }
 }

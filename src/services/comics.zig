@@ -122,6 +122,7 @@ pub fn freeComicPages() void {
     }
 
     for (0..128) |i| {
+        page_decode_failed[i] = false; // fresh page set — clear the decode-failure latch
         if (state.app.comic.page_textures[i]) |tex| {
             dvui.textureDestroyLater(tex);
         }
@@ -1831,8 +1832,14 @@ pub fn renderPaneContent(pane_idx: usize) void {
 }
 
 /// Decode a single page from JPEG bytes → dvui.Texture (if not already done)
+// Per-page latch: a page whose bytes can't be decoded must be attempted at most
+// once, else decodePageTexture re-runs a multi-MB stbi decode every frame on the
+// UI thread. Reset in freeComicPages when the page set is replaced. UI-thread only.
+var page_decode_failed: [128]bool = [_]bool{false} ** 128;
+
 fn decodePageTexture(pg: usize) void {
-    if (state.app.comic.page_pixels[pg] != null and state.app.comic.page_textures[pg] == null) {
+    if (pg >= 128) return;
+    if (state.app.comic.page_pixels[pg] != null and state.app.comic.page_textures[pg] == null and !page_decode_failed[pg]) {
         const raw = state.app.comic.page_pixels[pg].?;
         var w: c_int = 0;
         var h: c_int = 0;
@@ -1856,6 +1863,10 @@ fn decodePageTexture(pg: usize) void {
                 state.app.comic.page_heights[pg] = uh;
             } else |_| {}
             dvui.c.stbi_image_free(rgba);
+        } else {
+            // Undecodable bytes — latch so we don't retry the heavy decode each frame.
+            page_decode_failed[pg] = true;
+            if (rgba != null) dvui.c.stbi_image_free(rgba);
         }
     }
 }
