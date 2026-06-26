@@ -660,7 +660,6 @@ fn conversationLoopV1() void {
         if (!conversation_active) break;
 
         const has_player = state.app.players.items.len > 0;
-        const p_idx = if (has_player) @min(state.app.active_player_idx, state.app.players.items.len - 1) else 0;
         var saved_vol: f64 = 100.0;
         if (has_player) {
             // Worker thread — brief lock around the mpv access (NOT held across the
@@ -714,11 +713,15 @@ fn conversationLoopV1() void {
             continue;
         };
         is_recording = false;
-        // Re-check player still exists after recording
-        if (has_player and p_idx < state.app.players.items.len) {
-            var rv_buf: [64]u8 = undefined;
-            const rv_cmd = std.fmt.bufPrintZ(&rv_buf, "set volume {d:.0}", .{saved_vol}) catch "set volume 100";
-            _ = c_pkg.mpv.mpv_command_string(state.app.players.items[p_idx].mpv_ctx, rv_cmd.ptr);
+        // Re-check player still exists after recording (under the lock).
+        if (has_player) {
+            state.players_mutex.lock();
+            defer state.players_mutex.unlock();
+            if (state.app.active_player_idx < state.app.players.items.len) {
+                var rv_buf: [64]u8 = undefined;
+                const rv_cmd = std.fmt.bufPrintZ(&rv_buf, "set volume {d:.0}", .{saved_vol}) catch "set volume 100";
+                _ = c_pkg.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, rv_cmd.ptr);
+            }
         }
         if (!conversation_active) break;
 

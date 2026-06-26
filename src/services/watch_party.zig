@@ -218,13 +218,18 @@ fn hostLoop() void {
                 const chat_msg = std.fmt.bufPrint(&chat_buf, ">> Guest joined ({d} total)", .{client_count}) catch ">> Guest joined";
                 pushChat(chat_msg);
 
-                // Send current URL to new client
-                if (state.app.active_player_idx < state.app.players.items.len) {
-                    const p = state.app.players.items[state.app.active_player_idx];
-                    if (p.current_url_len > 0) {
-                        var url_msg: [2200]u8 = undefined;
-                        const um = std.fmt.bufPrint(&url_msg, "LOAD {s}\n", .{p.current_url[0..p.current_url_len]}) catch "";
-                        if (um.len > 0) _ = @import("../core/io_global.zig").streamWriteAll(conn, um) catch {};
+                // Send current URL to new client. hostLoop worker thread — hold
+                // players_mutex across the p.current_url read (copied into url_msg).
+                {
+                    state.players_mutex.lock();
+                    defer state.players_mutex.unlock();
+                    if (state.app.active_player_idx < state.app.players.items.len) {
+                        const p = state.app.players.items[state.app.active_player_idx];
+                        if (p.current_url_len > 0) {
+                            var url_msg: [2200]u8 = undefined;
+                            const um = std.fmt.bufPrint(&url_msg, "LOAD {s}\n", .{p.current_url[0..p.current_url_len]}) catch "";
+                            if (um.len > 0) _ = @import("../core/io_global.zig").streamWriteAll(conn, um) catch {};
+                        }
                     }
                 }
 
@@ -298,6 +303,10 @@ fn clientLoop(ip_buf: [46]u8, ip_len: usize) void {
 }
 
 fn applyCommand(cmd: []const u8) void {
+    // Runs on the clientLoop worker thread — hold players_mutex across the lookup
+    // + every mpv call so the UI thread can't free the player mid-command (UAF).
+    state.players_mutex.lock();
+    defer state.players_mutex.unlock();
     if (state.app.active_player_idx >= state.app.players.items.len) return;
     const ap = state.app.players.items[state.app.active_player_idx];
 
