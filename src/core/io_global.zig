@@ -5,12 +5,24 @@ const std = @import("std");
 /// of them through Io. We keep a process-wide Threaded Io to avoid threading
 /// io through every function signature.
 var threaded: std.Io.Threaded = undefined;
-var initialized = std.atomic.Value(bool).init(false);
+// `constructing` is claimed by the single thread that builds `threaded`.
+// `ready` is published with .release ONLY after construction completes, so a
+// concurrent first-caller can never observe ready=true and then use a
+// half-constructed `threaded` (the old single-flag design had that race).
+var constructing = std.atomic.Value(bool).init(false);
+var ready = std.atomic.Value(bool).init(false);
 
 pub fn io() std.Io {
-    if (initialized.cmpxchgStrong(false, true, .seq_cst, .seq_cst) == null) {
-        const alloc = @import("alloc.zig").allocator;
-        threaded = std.Io.Threaded.init(alloc, .{});
+    if (!ready.load(.acquire)) {
+        if (constructing.cmpxchgStrong(false, true, .acq_rel, .acquire) == null) {
+            // We won the race — construct, then publish readiness.
+            const alloc = @import("alloc.zig").allocator;
+            threaded = std.Io.Threaded.init(alloc, .{});
+            ready.store(true, .release);
+        } else {
+            // Another thread is constructing — wait for it to publish.
+            while (!ready.load(.acquire)) std.atomic.spinLoopHint();
+        }
     }
     return threaded.io();
 }

@@ -676,7 +676,13 @@ fn executePlayerControl(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         return std.fmt.allocPrint(alloc, "Error: missing 'action'", .{}) catch null;
     const value = extractStringArg(tc.args_json[0..tc.args_len], "value");
 
-    // Get active player
+    // Get active player. This executor runs on the detached LLM worker thread, so
+    // hold players_mutex across the lookup + every mpv call: the UI thread frees
+    // players under the same lock (main.zig), so without it `p` is a dangling
+    // *MediaPlayer (use-after-free). Every branch below returns, so the
+    // function-scope defer covers them all.
+    state.players_mutex.lock();
+    defer state.players_mutex.unlock();
     if (state.app.players.items.len == 0)
         return std.fmt.allocPrint(alloc, "No player active", .{}) catch null;
     const idx = @min(state.app.active_player_idx, state.app.players.items.len - 1);
@@ -738,6 +744,10 @@ fn executePlayerControl(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
 fn executePlayerInfo(alloc: std.mem.Allocator) ?[]u8 {
     const c = @import("../core/c.zig");
 
+    // Worker thread — hold players_mutex across the lookup + mpv reads + the
+    // p.loading_label slice used in the result (UI thread frees players under it).
+    state.players_mutex.lock();
+    defer state.players_mutex.unlock();
     if (state.app.players.items.len == 0)
         return std.fmt.allocPrint(alloc, "No player active", .{}) catch null;
     const idx = @min(state.app.active_player_idx, state.app.players.items.len - 1);
@@ -766,6 +776,11 @@ fn executePlayerInfo(alloc: std.mem.Allocator) ?[]u8 {
 fn executeLookAtScreen(alloc: std.mem.Allocator) ?[]u8 {
     const c = @import("../core/c.zig");
 
+    // Worker thread — hold players_mutex for the whole function: p.cached_sub_text /
+    // getRecentDialogue / mpv_ctx are all used (and sliced into the result) below,
+    // and the UI thread frees players under this lock.
+    state.players_mutex.lock();
+    defer state.players_mutex.unlock();
     if (!(state.app.active_player_idx < state.app.players.items.len))
         return std.fmt.allocPrint(alloc, "No player active", .{}) catch null;
     const p = state.app.players.items[state.app.active_player_idx];
@@ -868,27 +883,38 @@ fn executeRecallScene(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     // If no player is active we still allow recall, but with no current-title
     // clamp (empty title matches nothing under the same-title rule, so other
     // titles remain unrestricted).
+    var cur_title_buf: [128]u8 = undefined;
     var cur_title: []const u8 = "";
     var cur_pos: f64 = 0;
-    if (state.app.active_player_idx < state.app.players.items.len) {
-        const p = state.app.players.items[state.app.active_player_idx];
-        _ = c.mpv.mpv_get_property(p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &cur_pos);
-        cur_title = if (p.loading_label_len > 0 and p.loading_label_len <= 128)
-            p.loading_label[0..p.loading_label_len]
-        else
-            "";
+    {
+        // Worker thread — hold players_mutex around the lookup, and COPY the title
+        // into a stable buffer (it's used at retrieveScene below, after the lock).
+        state.players_mutex.lock();
+        defer state.players_mutex.unlock();
+        if (state.app.active_player_idx < state.app.players.items.len) {
+            const p = state.app.players.items[state.app.active_player_idx];
+            _ = c.mpv.mpv_get_property(p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &cur_pos);
+            if (p.loading_label_len > 0 and p.loading_label_len <= 128) {
+                @memcpy(cur_title_buf[0..p.loading_label_len], p.loading_label[0..p.loading_label_len]);
+                cur_title = cur_title_buf[0..p.loading_label_len];
+            }
+        }
     }
 
     const hit = db.retrieveScene(if (ok) emb[0..] else null, query, cur_title, cur_pos) orelse
         return std.fmt.allocPrint(alloc, "No matching scene found in your watch history.", .{}) catch null;
 
     // Seek the active player to the matched moment (if one is active).
-    if (state.app.active_player_idx < state.app.players.items.len) {
-        const p = state.app.players.items[state.app.active_player_idx];
-        var cmd_buf: [64]u8 = undefined;
-        const cmd = std.fmt.bufPrintZ(&cmd_buf, "seek {d:.1} absolute", .{hit.position_secs}) catch
-            return std.fmt.allocPrint(alloc, "Error: could not build seek command", .{}) catch null;
-        _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
+    {
+        state.players_mutex.lock();
+        defer state.players_mutex.unlock();
+        if (state.app.active_player_idx < state.app.players.items.len) {
+            const p = state.app.players.items[state.app.active_player_idx];
+            var cmd_buf: [64]u8 = undefined;
+            const cmd = std.fmt.bufPrintZ(&cmd_buf, "seek {d:.1} absolute", .{hit.position_secs}) catch
+                return std.fmt.allocPrint(alloc, "Error: could not build seek command", .{}) catch null;
+            _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
+        }
     }
 
     // Format HH:MM:SS from the matched position.
@@ -940,6 +966,10 @@ fn executeQueueManage(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
 
     if (std.mem.eql(u8, action, "play_next")) {
         if (state.app.players.items.len > 0) {
+            // Worker thread — hold players_mutex across the *MediaPlayer lookup +
+            // use so the UI thread can't free it mid-call.
+            state.players_mutex.lock();
+            defer state.players_mutex.unlock();
             const idx = @min(state.app.active_player_idx, state.app.players.items.len - 1);
             queue.playNextUnplayed(state.app.players.items[idx]);
             return std.fmt.allocPrint(alloc, "Playing next in queue", .{}) catch null;
@@ -1123,7 +1153,9 @@ fn executeComicControl(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         @memcpy(state.app.comic.url_buf[0..url_len], url[0..url_len]);
         state.app.comic.url_len = url_len;
         state.navigateToTab(.Comics);
-        comics.loadComic(url);
+        // Worker thread — loadComic frees page textures via dvui (UI-thread-only).
+        // Defer to the UI frame-top via requestLoad (same as the remote API path).
+        comics.requestLoad(url);
         return std.fmt.allocPrint(alloc, "Loading comic from: {s}", .{url[0..@min(url.len, 80)]}) catch null;
     }
 

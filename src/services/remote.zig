@@ -1053,14 +1053,14 @@ fn apiJellyfin(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
         // Set server URL, username, password then authenticate
         if (getQueryParam(query, "server")) |s| {
             var decoded: [256]u8 = undefined;
-            const sv = urlDecode(s, &decoded) orelse s;
+            const sv = @import("../core/text.zig").safeUtf8(urlDecode(s, &decoded) orelse s);
             const slen = @min(sv.len, 255);
             @memcpy(state.app.jf.server_url[0..slen], sv[0..slen]);
             state.app.jf.server_url_len = slen;
         }
         if (getQueryParam(query, "user")) |u| {
             var decoded: [128]u8 = undefined;
-            const uv = urlDecode(u, &decoded) orelse u;
+            const uv = @import("../core/text.zig").safeUtf8(urlDecode(u, &decoded) orelse u);
             const ulen = @min(uv.len, 127);
             @memcpy(state.app.jf.login_user_buf[0..ulen], uv[0..ulen]);
             state.app.jf.login_user_buf[ulen] = 0;
@@ -1099,8 +1099,9 @@ fn apiJellyfin(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
         if (getQueryParam(query, "q")) |q| {
             var decoded: [256]u8 = undefined;
             const dq = urlDecode(q, &decoded) orelse q;
-            const slen = @min(dq.len, 255);
-            @memcpy(state.app.jf.search_buf[0..slen], dq[0..slen]);
+            const safe = @import("../core/text.zig").safeUtf8(dq);
+            const slen = @min(safe.len, 255);
+            @memcpy(state.app.jf.search_buf[0..slen], safe[0..slen]);
             state.app.jf.search_buf[slen] = 0;
             jf.searchItems();
         }

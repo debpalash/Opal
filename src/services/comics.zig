@@ -2167,6 +2167,10 @@ fn narrationThread() void {
     state.app.comic.narrating = false;
 }
 
+/// True while an ocrCurrentPage worker is running. Lets the re-trigger skip
+/// without blocking the UI thread on Thread.join (OCR ML inference is ~seconds).
+var ocr_busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
 /// Run OCR on current page in background (for "show text" button)
 pub fn ocrCurrentPage() void {
     const pg = state.app.comic.current_page;
@@ -2176,13 +2180,24 @@ pub fn ocrCurrentPage() void {
         return;
     }
 
+    // Don't block the UI thread joining a still-running OCR — just skip the
+    // re-trigger. (freeComicPages still joins ocr_thread for the UAF guard.)
+    if (ocr_busy.load(.acquire)) return;
+    // Not busy ⇒ any previous OCR thread has finished; join the handle (instant)
+    // to reclaim it before overwriting.
     if (state.app.comic.ocr_thread) |t| t.join();
+    state.app.comic.ocr_thread = null;
+    ocr_busy.store(true, .release);
     state.app.comic.ocr_thread = std.Thread.spawn(.{}, struct {
         fn run(page: usize) void {
+            defer ocr_busy.store(false, .release);
             ocrPage(page);
             state.app.comic.show_ocr_overlay = true;
         }
-    }.run, .{pg}) catch null;
+    }.run, .{pg}) catch blk: {
+        ocr_busy.store(false, .release);
+        break :blk null;
+    };
 }
 
 // ══════════════════════════════════════════════════════════

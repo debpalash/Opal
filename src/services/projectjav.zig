@@ -493,7 +493,9 @@ pub fn renderModal() void {
 
     // Title bar
     const title_text = if (page_title_len > 0) page_title[0..page_title_len] else "Select Torrent";
-    win.dragAreaSet(dvui.windowHeader(title_text, "", &modal_open));
+    var th_buf: [256]u8 = undefined;
+    const title_te = @import("../core/text.zig").safeUtf8Buf(title_text, &th_buf);
+    win.dragAreaSet(dvui.windowHeader(title_te, "", &modal_open));
 
     // Loading state
     if (is_fetching.load(.acquire)) {

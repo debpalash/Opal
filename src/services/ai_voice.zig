@@ -550,10 +550,14 @@ fn conversationLoopV2() void {
                 // Duck media volume (save current level first)
                 const has_player = state.app.players.items.len > 0;
                 if (has_player) {
-                    const p_idx = @min(state.app.active_player_idx, state.app.players.items.len - 1);
-                    // Query and save current volume before ducking
-                    _ = c_pkg.mpv.mpv_get_property(state.app.players.items[p_idx].mpv_ctx, "volume", c_pkg.mpv.MPV_FORMAT_DOUBLE, &saved_volume);
-                    _ = c_pkg.mpv.mpv_command_string(state.app.players.items[p_idx].mpv_ctx, "set volume 15");
+                    // Worker thread — brief lock around the mpv access (UI frees players).
+                    state.players_mutex.lock();
+                    defer state.players_mutex.unlock();
+                    if (state.app.active_player_idx < state.app.players.items.len) {
+                        const pp = state.app.players.items[state.app.active_player_idx];
+                        _ = c_pkg.mpv.mpv_get_property(pp.mpv_ctx, "volume", c_pkg.mpv.MPV_FORMAT_DOUBLE, &saved_volume);
+                        _ = c_pkg.mpv.mpv_command_string(pp.mpv_ctx, "set volume 15");
+                    }
                 }
             } else if (std.mem.startsWith(u8, line, "VAD:end")) {
                 setPhase(.transcribing);
@@ -561,10 +565,13 @@ fn conversationLoopV2() void {
                 // Restore media volume to saved level
                 const has_player = state.app.players.items.len > 0;
                 if (has_player) {
-                    const p_idx = @min(state.app.active_player_idx, state.app.players.items.len - 1);
-                    var vol_cmd_buf: [64]u8 = undefined;
-                    const vol_cmd = std.fmt.bufPrintZ(&vol_cmd_buf, "set volume {d:.0}", .{saved_volume}) catch "set volume 100";
-                    _ = c_pkg.mpv.mpv_command_string(state.app.players.items[p_idx].mpv_ctx, vol_cmd.ptr);
+                    state.players_mutex.lock();
+                    defer state.players_mutex.unlock();
+                    if (state.app.active_player_idx < state.app.players.items.len) {
+                        var vol_cmd_buf: [64]u8 = undefined;
+                        const vol_cmd = std.fmt.bufPrintZ(&vol_cmd_buf, "set volume {d:.0}", .{saved_volume}) catch "set volume 100";
+                        _ = c_pkg.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, vol_cmd.ptr);
+                    }
                 }
             } else if (std.mem.startsWith(u8, line, "PARTIAL:")) {
                 const ptext = line["PARTIAL:".len..];
@@ -656,8 +663,15 @@ fn conversationLoopV1() void {
         const p_idx = if (has_player) @min(state.app.active_player_idx, state.app.players.items.len - 1) else 0;
         var saved_vol: f64 = 100.0;
         if (has_player) {
-            _ = c_pkg.mpv.mpv_get_property(state.app.players.items[p_idx].mpv_ctx, "volume", c_pkg.mpv.MPV_FORMAT_DOUBLE, &saved_vol);
-            _ = c_pkg.mpv.mpv_command_string(state.app.players.items[p_idx].mpv_ctx, "set volume 15");
+            // Worker thread — brief lock around the mpv access (NOT held across the
+            // 12s ffmpeg record below) so the UI thread can't free the player mid-call.
+            state.players_mutex.lock();
+            defer state.players_mutex.unlock();
+            if (state.app.active_player_idx < state.app.players.items.len) {
+                const pp = state.app.players.items[state.app.active_player_idx];
+                _ = c_pkg.mpv.mpv_get_property(pp.mpv_ctx, "volume", c_pkg.mpv.MPV_FORMAT_DOUBLE, &saved_vol);
+                _ = c_pkg.mpv.mpv_command_string(pp.mpv_ctx, "set volume 15");
+            }
         }
 
         setPhase(.listening);
@@ -674,20 +688,28 @@ fn conversationLoopV1() void {
         record_child.stderr_behavior = .Ignore;
         record_child.spawn() catch {
             is_recording = false;
-            if (has_player and p_idx < state.app.players.items.len) {
-                var rv_buf: [64]u8 = undefined;
-                const rv_cmd = std.fmt.bufPrintZ(&rv_buf, "set volume {d:.0}", .{saved_vol}) catch "set volume 100";
-                _ = c_pkg.mpv.mpv_command_string(state.app.players.items[p_idx].mpv_ctx, rv_cmd.ptr);
+            if (has_player) {
+                state.players_mutex.lock();
+                defer state.players_mutex.unlock();
+                if (state.app.active_player_idx < state.app.players.items.len) {
+                    var rv_buf: [64]u8 = undefined;
+                    const rv_cmd = std.fmt.bufPrintZ(&rv_buf, "set volume {d:.0}", .{saved_vol}) catch "set volume 100";
+                    _ = c_pkg.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, rv_cmd.ptr);
+                }
             }
             @import("../core/io_global.zig").sleep(500 * std.time.ns_per_ms);
             continue;
         };
         _ = record_child.wait() catch {
             is_recording = false;
-            if (has_player and p_idx < state.app.players.items.len) {
-                var rv_buf: [64]u8 = undefined;
-                const rv_cmd = std.fmt.bufPrintZ(&rv_buf, "set volume {d:.0}", .{saved_vol}) catch "set volume 100";
-                _ = c_pkg.mpv.mpv_command_string(state.app.players.items[p_idx].mpv_ctx, rv_cmd.ptr);
+            if (has_player) {
+                state.players_mutex.lock();
+                defer state.players_mutex.unlock();
+                if (state.app.active_player_idx < state.app.players.items.len) {
+                    var rv_buf: [64]u8 = undefined;
+                    const rv_cmd = std.fmt.bufPrintZ(&rv_buf, "set volume {d:.0}", .{saved_vol}) catch "set volume 100";
+                    _ = c_pkg.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, rv_cmd.ptr);
+                }
             }
             continue;
         };

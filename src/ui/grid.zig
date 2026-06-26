@@ -851,7 +851,9 @@ fn renderContinueWatching() void {
                 .gravity_y = 0.5,
             });
 
-            _ = dvui.label(@src(), "{s}", .{disp}, .{
+            var disp_buf: [64]u8 = undefined;
+            const safe_disp = @import("../core/text.zig").safeUtf8Buf(disp, &disp_buf);
+            _ = dvui.label(@src(), "{s}", .{safe_disp}, .{
                 .id_extra = si + 43200,
                 .color_text = theme.colors.text_primary,
                 .gravity_y = 0.5,

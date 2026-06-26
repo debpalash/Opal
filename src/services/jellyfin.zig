@@ -5,6 +5,43 @@ const player = @import("../player/player.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
+// On refetch/disconnect the old JfItems own a GPU poster_tex + heap
+// poster_pixels that resetting item_count alone would leak. dvui.textureDestroyLater
+// is UI-thread only, so workers (parseItemsResponse) and the possibly-off-UI-thread
+// disconnect() queue the old textures here; fetchPoster (UI thread) drains them.
+var pending_tex_free: [512]dvui.Texture = undefined;
+var pending_tex_free_count: usize = 0;
+var pending_tex_free_mutex: @import("../core/sync.zig").Mutex = .{};
+
+fn queueJfTexFree(tex: dvui.Texture) void {
+    pending_tex_free_mutex.lock();
+    defer pending_tex_free_mutex.unlock();
+    if (pending_tex_free_count < pending_tex_free.len) {
+        pending_tex_free[pending_tex_free_count] = tex;
+        pending_tex_free_count += 1;
+    }
+}
+
+/// Destroy queued poster textures. UI-THREAD ONLY — call once per render pass.
+fn drainJfTexFrees() void {
+    pending_tex_free_mutex.lock();
+    defer pending_tex_free_mutex.unlock();
+    for (pending_tex_free[0..pending_tex_free_count]) |t| dvui.textureDestroyLater(t);
+    pending_tex_free_count = 0;
+}
+
+/// Queue an item's GPU texture for UI-thread destroy and free its pixel buffer.
+fn freeItemPoster(item: *state.JfItem) void {
+    if (item.poster_tex) |t| {
+        queueJfTexFree(t);
+        item.poster_tex = null;
+    }
+    if (item.poster_pixels) |px| {
+        alloc.free(px);
+        item.poster_pixels = null;
+    }
+}
+
 fn escapeJsonStr(input: []const u8, out: *[256]u8) []const u8 {
     var o: usize = 0;
     for (input) |ch| {
@@ -288,6 +325,9 @@ fn fetchItemsSync(parent_id: []const u8, recursive: bool) void {
 }
 
 fn parseItemsResponse(body: []const u8) void {
+    // Free the prior result set's poster textures/pixels before reusing the
+    // slots — resetting item_count alone leaks them on every refetch.
+    for (state.app.jf.items[0..state.app.jf.item_count]) |*old| freeItemPoster(old);
     state.app.jf.item_count = 0;
     var pos: usize = 0;
 
@@ -409,6 +449,8 @@ pub fn playAudioItem(item_id: []const u8) void {
 
 /// Disconnect from Jellyfin
 pub fn disconnect() void {
+    // Free poster textures/pixels before clearing — item_count=0 alone leaks them.
+    for (state.app.jf.items[0..state.app.jf.item_count]) |*old| freeItemPoster(old);
     state.app.jf.connected = false;
     state.app.jf.token_len = 0;
     state.app.jf.user_id_len = 0;
@@ -430,6 +472,10 @@ pub fn goToLibraries() void {
 // ══════════════════════════════════════════════════════════
 
 pub fn fetchPoster(item: *state.JfItem) void {
+    // fetchPoster is only ever called from the Jellyfin render (UI thread) for
+    // cards lacking a poster, so it is the reliable UI-thread drain point for
+    // textures a prior parseItemsResponse/disconnect queued on a worker thread.
+    drainJfTexFrees();
     if (item.id_len == 0 or item.poster_fetching) return;
     // Global poster-fetch cap (shared with all providers) — over the cap, leave
     // poster_fetching false so the card retries next frame.

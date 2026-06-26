@@ -319,7 +319,9 @@ pub fn renderSubPicker() void {
     }
 
     if (subs.search_error_len > 0) {
-        _ = dvui.label(@src(), "{s}", .{subs.search_error[0..subs.search_error_len]}, .{
+        var err_buf: [128]u8 = undefined;
+        const safe_err = @import("../core/text.zig").safeUtf8Buf(subs.search_error[0..subs.search_error_len], &err_buf);
+        _ = dvui.label(@src(), "{s}", .{safe_err}, .{
             .color_text = theme.colors.semantic_warn,
             .margin = .{ .y = theme.spacing.xs },
         });
