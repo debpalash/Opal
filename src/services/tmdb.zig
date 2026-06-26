@@ -444,16 +444,12 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
         bw.processEvents();
         bw.drawBackground();
 
-        // Upload texture if pixels are ready
-        if (item.poster_tex == null and item.poster_pixels != null) {
-            const num_pixels = item.poster_w * item.poster_h;
-            const pixels_pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(item.poster_pixels.?.ptr)))[0..num_pixels];
-            item.poster_tex = dvui.textureCreate(pixels_pma, item.poster_w, item.poster_h, .linear, .rgba_32) catch null;
-            if (item.poster_tex != null) {
-                alloc.free(item.poster_pixels.?);
-                item.poster_pixels = null;
-            }
-        }
+        // Upload via the shared poster daemon's uploadIfReady: TMDB posters are
+        // fetched through core/poster.zig fetchAsync, which allocates pixels with
+        // the C allocator — freeing them here with the global `alloc` was an
+        // invalid-free crash (allocator mismatch). uploadIfReady frees with the
+        // matching allocator and carries the torn-publish (len==w*h*4) guard.
+        _ = @import("../core/poster.zig").uploadIfReady(&item.poster_pixels, item.poster_w, item.poster_h, &item.poster_tex);
 
         // Stack the poster + (on hover) a meta overlay, both filling the button.
         {
@@ -633,15 +629,10 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
         });
         defer poster.deinit();
 
-        if (item.poster_tex == null and item.poster_pixels != null) {
-            const num_pixels = item.poster_w * item.poster_h;
-            const pixels_pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(item.poster_pixels.?.ptr)))[0..num_pixels];
-            item.poster_tex = dvui.textureCreate(pixels_pma, item.poster_w, item.poster_h, .linear, .rgba_32) catch null;
-            if (item.poster_tex != null) {
-                alloc.free(item.poster_pixels.?);
-                item.poster_pixels = null;
-            }
-        }
+        // Same allocator-matching upload as renderPosterCard (pixels come from
+        // core/poster.zig fetchAsync = C allocator; freeing with global `alloc`
+        // here was an invalid free).
+        _ = @import("../core/poster.zig").uploadIfReady(&item.poster_pixels, item.poster_w, item.poster_h, &item.poster_tex);
 
         if (item.poster_tex) |*tex| {
             _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
