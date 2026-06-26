@@ -231,10 +231,7 @@ fn curlIntoOnce(url: []const u8, buf: []u8) usize {
 /// that SNI-blocked networks return.
 pub fn tmdbCurlInto(url: []const u8, buf: []u8) usize {
     var hb: [700]u8 = undefined;
-    const http_url: ?[]const u8 = if (std.mem.startsWith(u8, url, "https://"))
-        (std.fmt.bufPrint(&hb, "http://{s}", .{url[8..]}) catch null)
-    else
-        null;
+    const http_url = @import("tmdb_pure.zig").httpsToHttp(url, &hb);
     if (tmdb_https_blocked.load(.acquire)) {
         if (http_url) |hu| {
             const n = curlIntoOnce(hu, buf);
@@ -258,10 +255,7 @@ fn httpGet(url: []const u8, bearer_token: []const u8) ?[]u8 {
     const auth = std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{bearer_token}) catch return null;
 
     var http_buf: [600]u8 = undefined;
-    const http_url: ?[]const u8 = if (std.mem.startsWith(u8, url, "https://"))
-        (std.fmt.bufPrint(&http_buf, "http://{s}", .{url[8..]}) catch null)
-    else
-        null;
+    const http_url = @import("tmdb_pure.zig").httpsToHttp(url, &http_buf);
 
     // If HTTPS is known-blocked, go straight to HTTP.
     if (tmdb_https_blocked.load(.acquire)) {

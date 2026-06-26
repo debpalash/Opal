@@ -1182,10 +1182,7 @@ fn tvCurlOnce(url: []const u8, buf: []u8) usize {
 fn tvCurl(url: []const u8, buf: []u8) usize {
     const api_mod = @import("tmdb_api.zig");
     var http_buf: [200]u8 = undefined;
-    const http_url: ?[]const u8 = if (std.mem.startsWith(u8, url, "https://"))
-        (std.fmt.bufPrint(&http_buf, "http://{s}", .{url[8..]}) catch null)
-    else
-        null;
+    const http_url = @import("tmdb_pure.zig").httpsToHttp(url, &http_buf);
 
     if (api_mod.tmdb_https_blocked.load(.acquire)) {
         if (http_url) |hu| {

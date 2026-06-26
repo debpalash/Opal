@@ -193,6 +193,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_rank).step);
 
+    // TMDB pure string helpers: string-aware results splitter (FROM/HotD id-corruption
+    // regression) + HTTPS→HTTP fallback rewrite.
+    const test_tmdb_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/tmdb_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_tmdb_pure).step);
+
     // Pipeline test imports ai_intent_pure + resolver_rank siblings.
     const test_pipeline = b.addTest(.{
         .root_module = b.createModule(.{

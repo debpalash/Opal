@@ -88,56 +88,17 @@ pub fn formatDate(out_buf: *[16]u8, iso: []const u8) []const u8 {
 // ══════════════════════════════════════════════════════════
 
 pub fn parseTmdbResponse(body: []const u8) void {
-    const results_start = std.mem.indexOf(u8, body, "\"results\":[") orelse {
+    if (std.mem.indexOf(u8, body, "\"results\":[") == null) {
         parseAndAddItem(body) catch {};
         return;
-    };
-
-    const arr_start = results_start + "\"results\":[".len;
-
-    // String-aware brace matching: a '{' or '}' inside a JSON string (a title or
-    // overview can legitimately contain one) must NOT move the depth counter, or
-    // every result after the offending one gets mis-sliced and parseAndAddItem
-    // reads the wrong object — including the wrong top-level "id", which then
-    // opens a TV detail for the wrong/nonexistent show ("No episodes available").
-    var depth: i32 = 0;
-    var obj_start: ?usize = null;
-    var in_str = false;
-    var esc = false;
-    var i: usize = arr_start;
-    while (i < body.len) : (i += 1) {
-        const c = body[i];
-        if (in_str) {
-            if (esc) {
-                esc = false;
-            } else if (c == '\\') {
-                esc = true;
-            } else if (c == '"') {
-                in_str = false;
-            }
-            continue;
-        }
-        switch (c) {
-            '"' => in_str = true,
-            '{' => {
-                if (depth == 0) obj_start = i;
-                depth += 1;
-            },
-            '}' => {
-                depth -= 1;
-                if (depth == 0) {
-                    if (obj_start) |start| {
-                        parseAndAddItem(body[start .. i + 1]) catch {};
-                        obj_start = null;
-                    }
-                }
-            },
-            ']' => {
-                if (depth == 0) break;
-            },
-            else => {},
-        }
     }
+    // String-aware split (tmdb_pure.splitResultObjects, unit-tested): a '{'/'}'
+    // inside a title/overview must not desync the brace counter, else later
+    // results get mis-sliced and parseAndAddItem reads the wrong top-level "id"
+    // (the "FROM"/"House of the Dragon" TV-detail bug). 64 ≥ a TMDB page (20).
+    var objs: [64][]const u8 = undefined;
+    const n = @import("tmdb_pure.zig").splitResultObjects(body, &objs);
+    for (objs[0..n]) |obj| parseAndAddItem(obj) catch {};
 }
 
 fn parseAndAddItem(json_obj: []const u8) !void {
