@@ -1160,7 +1160,7 @@ fn parseEpisodes(json: []const u8) void {
 /// response body into `buf`. Returns the byte count (0 on failure). The caller
 /// owns `buf` (so it can free the FULL allocation — the DebugAllocator rejects
 /// freeing a resized sub-slice, which is why we don't return an owned slice).
-fn tvCurl(url: []const u8, buf: []u8) usize {
+fn tvCurlOnce(url: []const u8, buf: []u8) usize {
     var auth_buf: [300]u8 = undefined;
     const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
     const auth = std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{key}) catch return 0;
@@ -1174,6 +1174,35 @@ fn tvCurl(url: []const u8, buf: []u8) usize {
     const bytes = if (child.stdout) |*stdout| io.readAll(stdout, buf) catch 0 else 0;
     _ = child.wait() catch {};
     return bytes;
+}
+
+/// HTTPS first, HTTP fallback (shares tmdb_api.tmdb_https_blocked): some networks
+/// SNI-block api.themoviedb.org over 443 (TLS reset → empty response). HTTP works
+/// there and the bearer token still authenticates. See tmdb_api.curlGet.
+fn tvCurl(url: []const u8, buf: []u8) usize {
+    const api_mod = @import("tmdb_api.zig");
+    var http_buf: [200]u8 = undefined;
+    const http_url: ?[]const u8 = if (std.mem.startsWith(u8, url, "https://"))
+        (std.fmt.bufPrint(&http_buf, "http://{s}", .{url[8..]}) catch null)
+    else
+        null;
+
+    if (api_mod.tmdb_https_blocked.load(.acquire)) {
+        if (http_url) |hu| {
+            const n = tvCurlOnce(hu, buf);
+            if (n > 0) return n;
+        }
+    }
+    const n = tvCurlOnce(url, buf);
+    if (n > 0) return n;
+    if (http_url) |hu| {
+        const m = tvCurlOnce(hu, buf);
+        if (m > 0) {
+            api_mod.tmdb_https_blocked.store(true, .release);
+            return m;
+        }
+    }
+    return 0;
 }
 
 /// Parse the integer at the very start of `s` (used right after a key offset).

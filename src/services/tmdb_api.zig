@@ -185,34 +185,55 @@ pub fn fetchPoster(item: *state.TmdbItem) void {
     @import("../core/poster.zig").fetchAsync(url, &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
 }
 
+/// Sticky flag: some networks SNI-block api.themoviedb.org over HTTPS (the TLS
+/// ClientHello is reset). Once we've seen HTTPS fail and HTTP succeed, prefer
+/// HTTP for the rest of the session so we don't pay a failed HTTPS attempt each
+/// call. (image.tmdb.org is a different host and is not blocked, so posters stay
+/// HTTPS.) Shared with tmdb.zig's TV-detail fetch.
+pub var tmdb_https_blocked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+/// GET via the curl subprocess (returns a heap body the caller frees, or null).
+/// We use curl rather than std.http here because std.http.Client SEGV-crashed on
+/// the api.themoviedb.org TLS connection-reset; curl fails gracefully.
+fn curlGet(url: []const u8, auth_header: []const u8) ?[]u8 {
+    const io_g = @import("../core/io_global.zig");
+    const argv = [_][]const u8{ "curl", "-s", "-H", auth_header, "--max-time", "12", url };
+    var child = io_g.Child.init(&argv, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return null;
+    const buf = alloc.alloc(u8, 256 * 1024) catch {
+        _ = child.wait() catch {};
+        return null;
+    };
+    defer alloc.free(buf);
+    const n = if (child.stdout) |*so| io_g.readAll(so, buf) catch 0 else 0;
+    _ = child.wait() catch {};
+    if (n == 0) return null;
+    return alloc.dupe(u8, buf[0..n]) catch null;
+}
+
 fn httpGet(url: []const u8, bearer_token: []const u8) ?[]u8 {
-    var client = std.http.Client{ .allocator = alloc, .io = @import("../core/io_global.zig").io() };
-    defer client.deinit();
-
-    const uri = std.Uri.parse(url) catch return null;
-
     var auth_buf: [300]u8 = undefined;
-    const auth_val = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{bearer_token}) catch return null;
+    const auth = std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{bearer_token}) catch return null;
 
-    var req = client.request(.GET, uri, .{
-        .extra_headers = &.{
-            .{ .name = "Authorization", .value = auth_val },
-            .{ .name = "Accept", .value = "application/json" },
-        },
-    }) catch return null;
-    defer req.deinit();
+    var http_buf: [600]u8 = undefined;
+    const http_url: ?[]const u8 = if (std.mem.startsWith(u8, url, "https://"))
+        (std.fmt.bufPrint(&http_buf, "http://{s}", .{url[8..]}) catch null)
+    else
+        null;
 
-    req.sendBodiless() catch return null;
-
-    var redirect_buf: [8192]u8 = undefined;
-    var response = req.receiveHead(&redirect_buf) catch return null;
-
-    if (response.head.status != .ok) return null;
-
-    var transfer_buf: [4096]u8 = undefined;
-    var decompress: std.http.Decompress = undefined;
-    var rdr = response.readerDecompressing(&transfer_buf, &decompress, &.{});
-
-    const body = rdr.allocRemaining(alloc, std.Io.Limit.limited(256 * 1024)) catch return null;
-    return body;
+    // If HTTPS is known-blocked, go straight to HTTP.
+    if (tmdb_https_blocked.load(.acquire)) {
+        if (http_url) |hu| if (curlGet(hu, auth)) |b| return b;
+    }
+    // Try as-is (HTTPS), then fall back to HTTP and remember the block.
+    if (curlGet(url, auth)) |b| return b;
+    if (http_url) |hu| {
+        if (curlGet(hu, auth)) |b| {
+            tmdb_https_blocked.store(true, .release);
+            return b;
+        }
+    }
+    return null;
 }
