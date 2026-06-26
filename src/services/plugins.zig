@@ -467,12 +467,21 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                 }
                 
                 if (img_count > 0) {
-                    // Clear old textures
-                    const c_alloc2 = std.heap.c_allocator;
+                    // Clear old pages. This runs on a detached worker thread, so:
+                    //  - GPU textures must be destroyed on the UI thread → queue them
+                    //    (dvui.textureDestroyLater is UI-only; nulling here leaked them).
+                    //  - page_pixels were allocated with the GLOBAL allocator
+                    //    (comics.zig alloc.dupe), NOT c_allocator — free with the same
+                    //    one or it's heap corruption.
+                    const comics_mod = @import("comics.zig");
+                    const page_free_alloc = @import("../core/alloc.zig").allocator;
                     for (0..128) |i| {
-                        state.app.comic.page_textures[i] = null;
+                        if (state.app.comic.page_textures[i]) |tex| {
+                            comics_mod.queuePageTexFree(tex);
+                            state.app.comic.page_textures[i] = null;
+                        }
                         if (state.app.comic.page_pixels[i]) |px| {
-                            c_alloc2.free(px);
+                            page_free_alloc.free(px);
                             state.app.comic.page_pixels[i] = null;
                         }
                     }

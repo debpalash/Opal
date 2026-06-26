@@ -52,6 +52,30 @@ pub fn drainPendingLoad() void {
     loadComic(state.app.comic.pending_load_url[0..n]);
 }
 
+// Page textures freed from a NON-UI thread (the plugin manga-reload worker) must
+// not call dvui.textureDestroyLater directly. The worker queues them here and
+// renderContent drains on the UI thread (mirrors youtube/anime).
+var pending_page_tex: [256]dvui.Texture = undefined;
+var pending_page_tex_count: usize = 0;
+var pending_page_tex_mutex: @import("../core/sync.zig").Mutex = .{};
+
+pub fn queuePageTexFree(tex: dvui.Texture) void {
+    pending_page_tex_mutex.lock();
+    defer pending_page_tex_mutex.unlock();
+    if (pending_page_tex_count < pending_page_tex.len) {
+        pending_page_tex[pending_page_tex_count] = tex;
+        pending_page_tex_count += 1;
+    }
+}
+
+/// Destroy queued page textures. UI-THREAD ONLY — call once per frame.
+pub fn drainPageTexFrees() void {
+    pending_page_tex_mutex.lock();
+    defer pending_page_tex_mutex.unlock();
+    for (pending_page_tex[0..pending_page_tex_count]) |t| dvui.textureDestroyLater(t);
+    pending_page_tex_count = 0;
+}
+
 /// Kick off a background thread to fetch and parse a comic issue page.
 pub fn loadComic(url: []const u8) void {
     if (state.app.comic.is_loading.load(.acquire)) return;
@@ -971,6 +995,7 @@ fn coverWorker(idx: usize) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn renderContent() void {
+    drainPageTexFrees(); // free textures queued by the plugin manga-reload worker (UI thread)
     // A comic is open → the reader fills the whole tab (images + tools live in
     // renderPaneContent). Reading happens here in Browse, not the player route.
     if (state.app.comic.is_loading.load(.acquire) or state.app.comic.page_count > 0) {

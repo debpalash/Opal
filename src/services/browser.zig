@@ -292,6 +292,32 @@ fn escapeJsonString(input: []const u8, buf: *[4096]u8) []const u8 {
             out += 1;
             buf[out] = '"';
             out += 1;
+        } else if (ch == '\n') {
+            buf[out] = '\\';
+            out += 1;
+            buf[out] = 'n';
+            out += 1;
+        } else if (ch == '\r') {
+            buf[out] = '\\';
+            out += 1;
+            buf[out] = 'r';
+            out += 1;
+        } else if (ch == '\t') {
+            buf[out] = '\\';
+            out += 1;
+            buf[out] = 't';
+            out += 1;
+        } else if (ch < 0x20) {
+            // Other control characters → \u00XX. Needs 6 bytes.
+            if (out + 6 > buf.len) break;
+            const hex = "0123456789abcdef";
+            buf[out] = '\\';
+            buf[out + 1] = 'u';
+            buf[out + 2] = '0';
+            buf[out + 3] = '0';
+            buf[out + 4] = hex[(ch >> 4) & 0xF];
+            buf[out + 5] = hex[ch & 0xF];
+            out += 6;
         } else {
             buf[out] = ch;
             out += 1;

@@ -43,6 +43,11 @@ pub const AnimeResult = struct {
     // UI state
     expanded: bool = false,
     poster_fetching: bool = false,
+    // Failure latch (mirrors TmdbItem): a completed fetch that produced no
+    // pixels marks poster_failed so the grid stops re-spawning a worker every
+    // frame. poster_attempted distinguishes "never tried" from "tried & failed".
+    poster_attempted: bool = false,
+    poster_failed: bool = false,
     poster_pixels: ?[]u8 = null,
     poster_w: u32 = 0,
     poster_h: u32 = 0,
@@ -176,6 +181,12 @@ pub const JfItem = struct {
     runtime_ticks: i64 = 0,
     played_ticks: i64 = 0,
     poster_fetching: bool = false,
+    // Failure latch (mirrors TmdbItem): a fetch that completed without
+    // producing pixels marks poster_failed so the renderer stops re-spawning a
+    // worker every frame. poster_attempted distinguishes "never tried" from
+    // "tried and failed".
+    poster_attempted: bool = false,
+    poster_failed: bool = false,
     poster_pixels: ?[]u8 = null,
     poster_w: u32 = 0,
     poster_h: u32 = 0,

@@ -516,7 +516,16 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
             });
         } else {
-            if (!item.poster_fetching and item.id_len > 0) jf.fetchPoster(item);
+            if (item.poster_fetching) {
+                item.poster_attempted = true;
+            } else if (item.poster_attempted and item.poster_pixels == null and item.poster_tex == null) {
+                // Worker ran but produced no pixels — latch failure so we stop
+                // re-spawning a fetch every frame.
+                item.poster_failed = true;
+            } else if (!item.poster_failed and item.poster_pixels == null and item.id_len > 0) {
+                jf.fetchPoster(item);
+                if (item.poster_fetching) item.poster_attempted = true;
+            }
             dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
                 .id_extra = idx + 150,
                 .gravity_x = 0.5,
@@ -737,7 +746,16 @@ fn renderPosterCard(item: *state.JfItem, idx: usize, card_w: f32, show_progress:
                 .expand = .both,
             });
         } else {
-            if (!item.poster_fetching and item.id_len > 0) jf.fetchPoster(item);
+            if (item.poster_fetching) {
+                item.poster_attempted = true;
+            } else if (item.poster_attempted and item.poster_pixels == null and item.poster_tex == null) {
+                // Worker ran but produced no pixels — latch failure so we stop
+                // re-spawning a fetch every frame.
+                item.poster_failed = true;
+            } else if (!item.poster_failed and item.poster_pixels == null and item.id_len > 0) {
+                jf.fetchPoster(item);
+                if (item.poster_fetching) item.poster_attempted = true;
+            }
             // Play button as placeholder
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
                 .id_extra = idx + 60,

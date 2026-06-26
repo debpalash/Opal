@@ -3,8 +3,19 @@ const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const icons = @import("icons");
+const alloc = @import("../core/alloc.zig").allocator;
 
 var filter_buf: [128]u8 = std.mem.zeroes([128]u8);
+
+// Cached filter match set — the substring scan over the whole playlist is
+// O(n*m) and was previously recomputed every frame. We only rebuild it when
+// the filter text or the entry list (pointer/len) actually changes.
+var filter_cache_text: [128]u8 = std.mem.zeroes([128]u8);
+var filter_cache_len: usize = 0;
+var filter_cache_ptr: usize = 0;
+var filter_cache_count: usize = 0;
+var filter_cache_valid: bool = false;
+var filter_matches: std.ArrayListUnmanaged(bool) = .empty;
 
 const PlaylistTab = enum { playlist, queue };
 var active_tab: PlaylistTab = .queue;
@@ -135,13 +146,41 @@ fn renderPlaylistTab() void {
         active_url = ap.source_url[0..ap.source_url_len];
     }
 
+    // Rebuild the filter match cache only when the filter text or the entry
+    // list actually changed. Keeps per-frame cost O(visible) instead of O(n*m).
+    {
+        const entries_ptr = @intFromPtr(pl.entries.items.ptr);
+        const entries_count = pl.entries.items.len;
+        const cache_hit = filter_cache_valid and
+            filter_cache_len == filter_len and
+            filter_cache_ptr == entries_ptr and
+            filter_cache_count == entries_count and
+            std.mem.eql(u8, filter_cache_text[0..filter_cache_len], filter_text);
+        if (!cache_hit) {
+            filter_matches.clearRetainingCapacity();
+            filter_matches.ensureTotalCapacity(alloc, entries_count) catch {};
+            for (pl.entries.items) |entry| {
+                var matched = true;
+                if (filter_len > 0) {
+                    const title_match = caseContains(entry.title, filter_text);
+                    const group_match = if (entry.group) |g| caseContains(g, filter_text) else false;
+                    matched = title_match or group_match;
+                }
+                filter_matches.append(alloc, matched) catch {};
+            }
+            @memcpy(filter_cache_text[0..filter_len], filter_text);
+            filter_cache_len = filter_len;
+            filter_cache_ptr = entries_ptr;
+            filter_cache_count = entries_count;
+            filter_cache_valid = true;
+        }
+    }
+
     var rendered: usize = 0;
     for (pl.entries.items, 0..) |entry, i| {
-        // Filter: skip entries that don't match
+        // Filter: skip entries that don't match (cached above)
         if (filter_len > 0) {
-            const title_match = caseContains(entry.title, filter_text);
-            const group_match = if (entry.group) |g| caseContains(g, filter_text) else false;
-            if (!title_match and !group_match) continue;
+            if (i >= filter_matches.items.len or !filter_matches.items[i]) continue;
         }
 
         // Cap visible items for performance

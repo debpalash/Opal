@@ -2563,9 +2563,16 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
             } else {
                 // Kick off async poster download via the shared poster daemon
                 // (http.fetchImage — the proven path TMDB/Jellyfin use; the old
-                // bespoke curl fetch left anime cards on placeholders).
-                if (!item.poster_fetching and item.poster_url_len > 0)
+                // bespoke curl fetch left anime cards on placeholders). Latch
+                // permanent failure so we stop re-spawning a worker every frame.
+                if (item.poster_fetching) {
+                    item.poster_attempted = true;
+                } else if (item.poster_attempted and item.poster_pixels == null and item.poster_tex == null) {
+                    item.poster_failed = true;
+                } else if (!item.poster_failed and item.poster_pixels == null and item.poster_url_len > 0) {
                     poster.fetchAsync(item.poster_url[0..item.poster_url_len], &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
+                    if (item.poster_fetching) item.poster_attempted = true;
+                }
                 dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
                     .id_extra = idx + 150,
                     .gravity_x = 0.5,

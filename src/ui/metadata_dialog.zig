@@ -57,32 +57,36 @@ pub fn renderMetadataDialog() void {
     const name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse 255;
 
     _ = dvui.label(@src(), "Pre-Download Filter", .{}, .{ .color_text = theme.colors.text_primary });
-    _ = dvui.label(@src(), "{s}", .{t_name[0..name_len]}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .x=0, .y=0, .w=0, .h=theme.spacing.md } });
+    _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(t_name[0..name_len])}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .x=0, .y=0, .w=0, .h=theme.spacing.md } });
 
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     
     var f_list = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = theme.dims.pad_sm });
     
     const f_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, state.app.pending_magnet_tid);
-    
+    // f_count is untrusted (.torrent metadata). Clamp to the fixed-size
+    // pending_files_selection buffer so the index below can never go OOB.
+    const shown = @min(f_count, @as(@TypeOf(f_count), @intCast(state.app.pending_files_selection.len)));
+
     var i: i32 = 0;
-    while (i < f_count) : (i += 1) {
+    while (i < shown) : (i += 1) {
         var f_name: [256]u8 = undefined;
         c.mpv.torrent_get_file_name(state.app.torrent_ses, state.app.pending_magnet_tid, i, &f_name, 256);
         const f_len = std.mem.indexOfScalar(u8, &f_name, 0) orelse 255;
+        const safe_name = @import("../core/text.zig").safeUtf8(f_name[0..f_len]);
         const sz = c.mpv.torrent_get_file_size(state.app.torrent_ses, state.app.pending_magnet_tid, i);
         const sz_mb = @as(f64, @floatFromInt(sz)) / (1024.0 * 1024.0);
 
         var f_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x=0, .y=0, .w=0, .h=4 }, .gravity_y = 0.5 });
-        
+
         const selected = &state.app.pending_files_selection[@as(usize, @intCast(i))];
         _ = dvui.checkbox(@src(), selected, "", .{});
-        
+
         var f_buf: [300]u8 = undefined;
-        if (std.fmt.bufPrintZ(&f_buf, "{s} ({d:.1} MB)", .{f_name[0..f_len], sz_mb})) |n| {
+        if (std.fmt.bufPrintZ(&f_buf, "{s} ({d:.1} MB)", .{safe_name, sz_mb})) |n| {
             _ = dvui.label(@src(), "{s}", .{n}, .{ .color_text = theme.colors.text_primary, .expand = .horizontal });
         } else |_| {}
-        
+
         f_row.deinit();
     }
     
@@ -104,7 +108,8 @@ pub fn renderMetadataDialog() void {
     // Primary action — the single accent affordance of the dialog.
     if (dvui.button(@src(), "Start Download", .{}, .{ .color_fill = theme.colors.accent_primary, .color_text = theme.colors.text_on_accent, .padding = theme.dims.pad_md, .margin = .{ .x=theme.spacing.sm, .y=0, .w=0, .h=0 } })) {
         var fi: i32 = 0;
-        while (fi < f_count) : (fi += 1) {
+        const shown_dl = @min(f_count, @as(@TypeOf(f_count), @intCast(state.app.pending_files_selection.len)));
+        while (fi < shown_dl) : (fi += 1) {
             if (!state.app.pending_files_selection[@as(usize, @intCast(fi))]) {
                 c.mpv.torrent_set_file_priority(state.app.torrent_ses, state.app.pending_magnet_tid, fi, 0); // Skip
             } else {

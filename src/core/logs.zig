@@ -91,14 +91,8 @@ pub fn pushLog(level: []const u8, prefix: []const u8, text: []const u8, is_error
     log_mutex.lock();
     defer log_mutex.unlock();
 
-    // Free old entry if ring is full (O(1) — no shifting)
-    if (log_count >= MAX_LOGS) {
-        const old = &log_ring[log_head];
-        logs_allocator.free(old.level);
-        logs_allocator.free(old.prefix);
-        logs_allocator.free(old.text);
-    }
-
+    // Dupe all three new slices FIRST so an OOM mid-way never leaves the ring
+    // slot dangling. Only after all three succeed do we evict the old entry.
     const new_level = logs_allocator.dupe(u8, level) catch return;
     const new_prefix = logs_allocator.dupe(u8, prefix) catch {
         logs_allocator.free(new_level);
@@ -109,6 +103,15 @@ pub fn pushLog(level: []const u8, prefix: []const u8, text: []const u8, is_error
         logs_allocator.free(new_prefix);
         return;
     };
+
+    // Free old entry if ring is full (O(1) — no shifting). Safe to do now: the
+    // three new slices are committed, so this slot is guaranteed overwritten.
+    if (log_count >= MAX_LOGS) {
+        const old = &log_ring[log_head];
+        logs_allocator.free(old.level);
+        logs_allocator.free(old.prefix);
+        logs_allocator.free(old.text);
+    }
 
     log_ring[log_head] = .{
         .timestamp = @import("io_global.zig").milliTimestamp(),

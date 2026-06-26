@@ -1282,7 +1282,7 @@ pub fn renderFloatingBubble() void {
                 if (path_len > 0) {
                     const basename = std.fs.path.basename(path[0..path_len]);
                     const safe_len = @min(basename.len, 128);
-                    @memcpy(&name_buf, basename[0..safe_len]);
+                    @memcpy(name_buf[0..safe_len], basename[0..safe_len]);
                     curr_title = name_buf[0..safe_len];
                 }
 
