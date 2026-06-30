@@ -611,13 +611,15 @@ pub fn searchComics(query: []const u8) void {
 /// (1-based). `paged=1` omits the param (the bare URL is page 1). This is the
 /// single source-specific URL seam — adding a source means adding one builder.
 fn buildSearchUrl(out: []u8, query: []const u8, paged: u32) ?[:0]const u8 {
+    // Endpoint migrated to opal-plugins — null until the user installs "readallcomics".
+    const base = @import("../core/source_config.zig").get("readallcomics", "base") orelse return null;
     var encoded_query: [512]u8 = undefined;
     const enc_len = percentEncode(query, &encoded_query);
     const eq = encoded_query[0..enc_len];
     if (paged <= 1) {
-        return std.fmt.bufPrintZ(out, "https://readallcomics.com/?story={s}&s=&type=comic", .{eq}) catch null;
+        return std.fmt.bufPrintZ(out, "{s}/?story={s}&s=&type=comic", .{ base, eq }) catch null;
     }
-    return std.fmt.bufPrintZ(out, "https://readallcomics.com/?story={s}&s=&type=comic&paged={d}", .{ eq, paged }) catch null;
+    return std.fmt.bufPrintZ(out, "{s}/?story={s}&s=&type=comic&paged={d}", .{ base, eq, paged }) catch null;
 }
 
 /// curl a search-results page into `dst`; returns bytes read (0 on failure).

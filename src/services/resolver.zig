@@ -492,9 +492,11 @@ fn resolveComics(query_buf: [256]u8, qlen: usize) void {
         }
     }
 
+    // Endpoint migrated to opal-plugins — inert until the user installs "readallcomics".
+    const base = @import("../core/source_config.zig").get("readallcomics", "base") orelse return;
     var url_buf: [640]u8 = undefined;
     // Same URL comics.zig builds for page 1.
-    const url = std.fmt.bufPrint(&url_buf, "https://readallcomics.com/?story={s}&s=&type=comic", .{enc[0..el]}) catch return;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/?story={s}&s=&type=comic", .{ base, enc[0..el] }) catch return;
 
     // readallcomics pages can be large — heap the fetch buffer (never on the
     // worker stack, per the >64KB rule).
@@ -961,8 +963,11 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
         }
     }
 
+    // Endpoint migrated to opal-plugins — inert until the user installs "1337x".
+    const base = @import("../core/source_config.zig").get("1337x", "base") orelse return;
+
     var url_buf: [512]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "https://1337x.to/search/{s}/1/", .{enc[0..el]}) catch return;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/search/{s}/1/", .{ base, enc[0..el] }) catch return;
 
     // v2: throttle to ≤1 req/sec per origin so parallel queries don't trip rate limits.
     @import("../core/rate_limit.zig").acquire("1337x", 1.0);
@@ -1048,7 +1053,7 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
 
         // Build full URL for magnet fetch
         var detail_url: [512]u8 = undefined;
-        const du = std.fmt.bufPrint(&detail_url, "https://1337x.to{s}", .{href}) catch {
+        const du = std.fmt.bufPrint(&detail_url, "{s}{s}", .{ base, href }) catch {
             pos = title_end + 1;
             continue;
         };
@@ -1120,9 +1125,12 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
     var enc: [512]u8 = undefined;
     const enc_q = @import("../core/http.zig").urlEncode(query, &enc);
 
+    // Endpoint migrated to opal-plugins — inert until the user installs "yts".
+    const api = @import("../core/source_config.zig").get("yts", "api") orelse return;
+
     var url_buf: [512]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "https://yts.mx/api/v2/list_movies.json?query_term={s}&limit=8&sort_by=seeds", .{
-        enc_q,
+    const url = std.fmt.bufPrint(&url_buf, "{s}?query_term={s}&limit=8&sort_by=seeds", .{
+        api, enc_q,
     }) catch return;
 
     var buf: [64 * 1024]u8 = undefined;

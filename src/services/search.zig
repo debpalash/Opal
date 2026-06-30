@@ -361,12 +361,12 @@ fn freeSearchResult(r: SearchResult, allocator: std.mem.Allocator) void {
 }
 
 fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator, my_gen: u64) void {
-    // Build API URL: https://eztvx.to/api/get-torrents?limit=50&page=1
-    // EZTV API doesn't support search by name — only by IMDB ID or listing all.
-    // For name search, use the search page with scraping (already done by Python engine).
-    // But we can supplement by querying pages and filtering client-side.
+    // The EZTV API lists all/recent torrents (no name search); we filter
+    // client-side and supplement the Python-engine results.
+    // Endpoint migrated to opal-plugins — inert until the user installs "eztv".
+    const api = @import("../core/source_config.zig").get("eztv", "api") orelse return;
     var url_buf: [512]u8 = undefined;
-    const api_url = std.fmt.bufPrint(&url_buf, "https://eztvx.to/api/get-torrents?limit=100&page=1", .{}) catch return;
+    const api_url = std.fmt.bufPrint(&url_buf, "{s}?limit=100&page=1", .{api}) catch return;
 
     var client = std.http.Client{ .allocator = allocator, .io = @import("../core/io_global.zig").io() };
     defer client.deinit();

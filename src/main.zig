@@ -154,6 +154,9 @@ pub fn coreInit() !void {
             hist.loadSearchHistory();
             hist.loadDownloadHistory();
             watch.load();
+            // Load installed source endpoints (opal-plugins). No file → every
+            // gated source stays inert until the user installs it.
+            @import("core/source_config.zig").reload();
             // Signal the UI thread that watch history is ready so the "resume
             // last played?" launch prompt can arm (monotonic one-way flag).
             state.app.init_history_loaded = true;

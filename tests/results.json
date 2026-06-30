@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-06-28T16:11:57",
-  "total": 104,
-  "passed": 94,
+  "timestamp": "2026-06-30T16:58:21",
+  "total": 105,
+  "passed": 95,
   "failed": 0,
   "warnings": 3,
   "skipped": 7,
@@ -115,7 +115,7 @@
       "skip": 0
     },
     "Stability": {
-      "pass": 4,
+      "pass": 5,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -163,14 +163,14 @@
       "name": "Config Table",
       "category": "Database",
       "status": "pass",
-      "detail": "40 config entries",
-      "duration_ms": 1
+      "detail": "41 config entries",
+      "duration_ms": 5
     },
     {
       "name": "Watch History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "0 watch entries",
+      "detail": "2 watch entries",
       "duration_ms": 0
     },
     {
@@ -185,14 +185,14 @@
       "category": "Database",
       "status": "pass",
       "detail": "9 downloads",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "name": "TMDB Items Table",
       "category": "Database",
       "status": "pass",
       "detail": "0 TMDB items",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "AI Memory Table",
@@ -226,7 +226,7 @@
       "name": "User Preferences Table",
       "category": "Memory",
       "status": "pass",
-      "detail": "active_hour=19:00 (w:170)",
+      "detail": "active_hour=8:00 (w:172)",
       "duration_ms": 0
     },
     {
@@ -241,7 +241,7 @@
       "category": "Memory",
       "status": "warn",
       "detail": "No unfinished content to suggest",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "name": "Theme Persistence",
@@ -276,7 +276,7 @@
       "category": "Config",
       "status": "pass",
       "detail": "1244x771 at (0,61)",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Jellyfin Integration Config",
@@ -290,13 +290,13 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 40.5 MB",
-      "duration_ms": 748
+      "duration_ms": 551
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "40.5 MB, built at 16:11:07",
+      "detail": "40.5 MB, built at 16:58:07",
       "duration_ms": 0
     },
     {
@@ -332,14 +332,14 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 1379
+      "duration_ms": 1347
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "skip",
       "detail": "faster-whisper not installed (optional)",
-      "duration_ms": 25
+      "duration_ms": 24
     },
     {
       "name": "KittenTTS Available",
@@ -353,14 +353,14 @@
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 35
+      "duration_ms": 30
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 26
+      "duration_ms": 25
     },
     {
       "name": "Embedding Server Health",
@@ -409,7 +409,7 @@
       "category": "Commands",
       "status": "pass",
       "detail": "25 unique commands, 52 response points",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Theme Voice Commands",
@@ -486,49 +486,49 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 98
+      "duration_ms": 29
     },
     {
       "name": "Compiles: zigzag-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 31
+      "duration_ms": 28
     },
     {
       "name": "Compiles: zigzag-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 55
+      "duration_ms": 29
     },
     {
       "name": "Compiles: zigzag-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 59
+      "duration_ms": 30
     },
     {
       "name": "--check degrades: zigzag-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 29
+      "duration_ms": 23
     },
     {
       "name": "--check degrades: zigzag-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 32
+      "duration_ms": 25
     },
     {
       "name": "--check degrades: zigzag-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 35
+      "duration_ms": 24
     },
     {
       "name": "Whisper Model Present",
@@ -542,7 +542,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 2331
+      "duration_ms": 2097
     },
     {
       "name": "Sherpa Model Canonicalization",
@@ -605,14 +605,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 7933
+      "duration_ms": 7958
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 64
+      "duration_ms": 61
     },
     {
       "name": "Page Router",
@@ -745,7 +745,7 @@
       "category": "Recall",
       "status": "pass",
       "detail": "position_secs migration applied",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "name": "Taste Receipts Wired",
@@ -759,7 +759,7 @@
       "category": "Server",
       "status": "pass",
       "detail": "compile-time headless entry + coreInit/headlessMain + 0.0.0.0 bind + -Dheadless",
-      "duration_ms": 3
+      "duration_ms": 0
     },
     {
       "name": "Headless Render Guards",
@@ -867,6 +867,13 @@
       "duration_ms": 1
     },
     {
+      "name": "Source Endpoints Externalized To Plugins",
+      "category": "Stability",
+      "status": "pass",
+      "detail": "1337x/yts/eztv/readallcomics endpoints read from installed plugins",
+      "duration_ms": 0
+    },
+    {
       "name": "Threads Detached (project-wide)",
       "category": "Stability",
       "status": "pass",
@@ -878,7 +885,7 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 1041
+      "duration_ms": 744
     }
   ]
 }

@@ -1407,6 +1407,33 @@ def test_stream_resource_root():
     return "pass", "resource-root cwd wired for nova2 + engines/ bundled"
 
 
+@test("Source Endpoints Externalized To Plugins", "Stability")
+def test_sources_externalized():
+    # Neutral-player: connector CODE stays in the app, but source URLs/creds are
+    # migrated to opal-plugins and read via core/source_config. No installed
+    # endpoint → the source is inert. Guard that the migrated sources route
+    # through source_config.get and no longer hardcode their URL builder.
+    sc = _src("src/core/source_config.zig")
+    rv = _src("src/services/resolver.zig")
+    sr = _src("src/services/search.zig")
+    cm = _src("src/services/comics.zig")
+    checks = {
+        "source_config.get exists": "pub fn get(" in sc and "sources.json" in sc,
+        "1337x via config": 'get("1337x"' in rv,
+        "yts via config": 'get("yts"' in rv,
+        "eztv via config": 'get("eztv"' in sr,
+        "readallcomics via config": 'get("readallcomics"' in rv and 'get("readallcomics"' in cm,
+        # The old hardcoded URL builders must be gone (validators may remain).
+        "no hardcoded 1337x search": '"https://1337x.to/search' not in rv,
+        "no hardcoded yts api": "yts.mx/api/v2/list_movies" not in rv,
+        "no hardcoded eztv api": "eztvx.to/api/get-torrents" not in sr,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "source externalization gaps: " + ", ".join(missing)
+    return "pass", "1337x/yts/eztv/readallcomics endpoints read from installed plugins"
+
+
 @test("Threads Detached (project-wide)", "Stability")
 def test_threads_detached():
     # Discarded `_ = std.Thread.spawn(...)` leaks the pthread handle (CLAUDE.md);
