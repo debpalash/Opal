@@ -1365,13 +1365,17 @@ fn tryAnimePaheDDL(name: []const u8, ep_no: []const u8) bool {
         }
     }
 
+    // Endpoint migrated to opal-plugins — inert until the user installs "animepahe".
+    const base = @import("../core/source_config.zig").get("animepahe", "base") orelse return false;
     // Search AnimePahe for the anime
     var url_buf: [512]u8 = undefined;
-    const search_url = std.fmt.bufPrint(&url_buf, "https://animepahe.pw/api?m=search&q={s}", .{enc_buf[0..enc_len]}) catch return false;
+    const search_url = std.fmt.bufPrint(&url_buf, "{s}/api?m=search&q={s}", .{ base, enc_buf[0..enc_len] }) catch return false;
+    var refr_buf: [600]u8 = undefined;
+    const referer = std.fmt.bufPrint(&refr_buf, "Referer: {s}", .{base}) catch return false;
 
     const argv_search = [_][]const u8{
         "curl",     "-sL",                                                                                          "--max-time", "10",
-        "-H",       "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0", "-H",         "Referer: https://animepahe.pw",
+        "-H",       "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0", "-H",         referer,
         search_url,
     };
     var child = @import("../core/io_global.zig").Child.init(&argv_search, c_alloc);
@@ -1401,11 +1405,11 @@ fn tryAnimePaheDDL(name: []const u8, ep_no: []const u8) bool {
         return false;
     }
 
-    // Construct the watch URL for mpv + ytdl-hook
-    // AnimePahe format: https://animepahe.pw/anime/{session}
-    // mpv will use yt-dlp/ytdl to extract the stream
-    var watch_url_buf: [256]u8 = undefined;
-    const watch_url = std.fmt.bufPrintZ(&watch_url_buf, "https://animepahe.pw/play/{s}/{s}", .{ session, ep_no }) catch return false;
+    // Construct the watch URL for mpv + ytdl-hook (format: {base}/play/{session}/{ep})
+    // mpv will use yt-dlp/ytdl to extract the stream. `base` (animepahe) is the
+    // opal-plugins endpoint resolved at the top of this function.
+    var watch_url_buf: [320]u8 = undefined;
+    const watch_url = std.fmt.bufPrintZ(&watch_url_buf, "{s}/play/{s}/{s}", .{ base, session, ep_no }) catch return false;
 
     logs.pushLog("info", "anime", "DDL: Loading via AnimePahe...", false);
 

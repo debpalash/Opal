@@ -1172,9 +1172,9 @@ pub fn renderContent() void {
             });
         }
 
-        renderChip("Invincible", 1, "https://readallcomics.com/invincible-001/");
-        renderChip("The Boys", 2, "https://readallcomics.com/the-boys-001-2006/");
-        renderChip("Saga", 3, "https://readallcomics.com/saga-001-2012/");
+        renderChip("Invincible", 1, "/invincible-001/");
+        renderChip("The Boys", 2, "/the-boys-001-2006/");
+        renderChip("Saga", 3, "/saga-001-2012/");
 
         if (dvui.buttonIcon(@src(), "comic-card-smaller", icons.tvg.lucide.@"zoom-out", .{}, .{}, .{
             .id_extra = 9001,
@@ -1349,7 +1349,10 @@ fn showPluginBadgesInDir(dir_path: []const u8, shown: *usize) void {
 }
 
 /// A toolbar quick-link chip that loads a known issue directly.
-fn renderChip(label: []const u8, id: usize, url: []const u8) void {
+// `path` is a source-relative slug (e.g. "/invincible-001/"); the host comes from
+// the installed "readallcomics" plugin. No plugin → no popular chips.
+fn renderChip(label: []const u8, id: usize, path: []const u8) void {
+    const base = @import("../core/source_config.zig").get("readallcomics", "base") orelse return;
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = id + 70000,
         .color_fill = theme.colors.bg_glass,
@@ -1359,6 +1362,8 @@ fn renderChip(label: []const u8, id: usize, url: []const u8) void {
         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         .gravity_y = 0.5,
     })) {
+        var url_buf: [320]u8 = undefined;
+        const url = std.fmt.bufPrint(&url_buf, "{s}{s}", .{ base, path }) catch return;
         loadComic(url);
     }
 }
