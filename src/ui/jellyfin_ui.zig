@@ -53,10 +53,10 @@ fn renderLoginForm() void {
         });
         defer hdr.deinit();
 
-        _ = dvui.label(@src(), "Jellyfin", .{}, .{
+        _ = dvui.label(@src(), "Jellyfin / Emby", .{}, .{
             .color_text = theme.colors.accent,
         });
-        _ = dvui.label(@src(), "Connect to your Jellyfin server", .{}, .{
+        _ = dvui.label(@src(), "Connect to your Jellyfin or Emby server (for Emby, append /emby to the URL if needed)", .{}, .{
             .color_text = theme.colors.text_muted,
             .padding = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
         });
@@ -190,7 +190,7 @@ fn renderLibraries() void {
             sp.deinit();
         }
 
-        _ = dvui.label(@src(), "Jellyfin", .{}, .{
+        _ = dvui.label(@src(), "Jellyfin / Emby", .{}, .{
             .color_text = theme.colors.accent,
             .gravity_y = 0.5,
         });

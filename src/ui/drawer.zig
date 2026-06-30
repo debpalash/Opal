@@ -207,7 +207,7 @@ pub fn renderDrawer() void {
         renderRailTab(.Comics, icons.tvg.lucide.image, "Comics", 6);
         renderRailTab(.Web, icons.tvg.lucide.globe, "Web", 15);
         renderRailTab(.RSS, icons.tvg.lucide.rss, "RSS", 7);
-        renderRailTab(.Jellyfin, icons.tvg.lucide.server, "Jellyfin", 8);
+        renderRailTab(.Jellyfin, icons.tvg.lucide.server, "Jellyfin / Emby", 8);
 
         railGroupGap(1);
 
