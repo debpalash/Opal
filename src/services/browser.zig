@@ -13,14 +13,14 @@ const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 
 const BRIDGE_SCRIPT = "camoufox_bridge.py";
 
-// Resolve the venv python under the zigzag config dir (~/.config/zigzag/venv/bin/python3).
+// Resolve the venv python under the zigzag config dir (~/.config/opal/venv/bin/python3).
 // Returns null if $HOME is unset. Falls back to bare "python3" handled by callers.
 fn getVenvPython() ?[]const u8 {
     const home = @import("../core/io_global.zig").getenv("HOME") orelse return null;
     const S = struct {
         var buf: [512]u8 = undefined;
     };
-    return std.fmt.bufPrint(&S.buf, "{s}/.config/zigzag/venv/bin/python3", .{home}) catch null;
+    return std.fmt.bufPrint(&S.buf, "{s}/.config/opal/venv/bin/python3", .{home}) catch null;
 }
 
 // Bridge process state (singleton — one browser instance shared across all panes)
@@ -58,12 +58,12 @@ fn getBridgePath() ?[]const u8 {
         return rel;
     } else |_| {}
 
-    // 2) Look under the zigzag config dir (~/.config/zigzag/scripts/camoufox_bridge.py).
+    // 2) Look under the zigzag config dir (~/.config/opal/scripts/camoufox_bridge.py).
     if (io.getenv("HOME")) |home| {
         const S = struct {
             var buf: [512]u8 = undefined;
         };
-        const p = std.fmt.bufPrint(&S.buf, "{s}/.config/zigzag/scripts/{s}", .{ home, BRIDGE_SCRIPT }) catch return null;
+        const p = std.fmt.bufPrint(&S.buf, "{s}/.config/opal/scripts/{s}", .{ home, BRIDGE_SCRIPT }) catch return null;
         if (io.cwdAccess(p, .{})) |_| {
             return p;
         } else |_| {}

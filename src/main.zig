@@ -64,6 +64,10 @@ pub const std_options: std.Options = .{ .logFn = dvui.App.logFn, .log_level = .w
 /// remote JSON API, and the background DB/library load thread. Nothing here
 /// reads dvui_win / state.app.dvui_win, so the window may be assigned after.
 pub fn coreInit() !void {
+    // One-time legacy rename: ~/.config/zigzag → ~/.config/opal (+ cache + the
+    // db file). MUST run before any path is read. Idempotent.
+    @import("core/paths.zig").migrateLegacyDir();
+
     // Runtime initialization (env vars can't be read at comptime)
     state.initPaths();
     state.loadTmdbTokenFromEnv();

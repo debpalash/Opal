@@ -7,7 +7,7 @@
 //! infringing is hardcoded in the running binary.
 //!
 //! On-disk format: one file per installed source under
-//! `~/.config/zigzag/plugins/sources/<id>.json`, each a flat JSON string map of
+//! `~/.config/opal/plugins/sources/<id>.json`, each a flat JSON string map of
 //! named endpoints/creds (id = filename stem). e.g. `sources/1337x.json`:
 //!   { "base": "https://1337x.to" }
 //! Install = write the file; uninstall = delete it (the plugin manager does this).

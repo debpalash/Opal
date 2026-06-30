@@ -164,7 +164,7 @@ pub fn loadCachedPoster(item_id: i32) ?struct { data: []u8, w: u32, h: u32 } {
 pub fn migrateFromTsv() void {
     const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
     var path_buf: [512]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/zigzag/tmdb_lists.tsv", .{home}) catch return;
+    const path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/opal/tmdb_lists.tsv", .{home}) catch return;
 
     const file = @import("../core/io_global.zig").openFileAbsolute(path, .{}) catch return;
     defer file.close(@import("../core/io_global.zig").io());
@@ -209,7 +209,7 @@ pub fn migrateFromTsv() void {
     db.exec("COMMIT");
 
     var old_buf: [512]u8 = undefined;
-    const old_path = std.fmt.bufPrint(&old_buf, "{s}/.config/zigzag/tmdb_lists.tsv.migrated", .{home}) catch return;
+    const old_path = std.fmt.bufPrint(&old_buf, "{s}/.config/opal/tmdb_lists.tsv.migrated", .{home}) catch return;
     @import("../core/io_global.zig").renameAbsolute(path, old_path) catch {};
 }
 
@@ -217,7 +217,7 @@ pub fn migrateFromTsv() void {
 pub fn migrateOldDb() void {
     const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
     var path_buf: [512]u8 = undefined;
-    const old_db_path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/zigzag/tmdb.db", .{home}) catch return;
+    const old_db_path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/opal/tmdb.db", .{home}) catch return;
     // Just delete it — data was already in tmdb_lists.tsv which we migrated above
     @import("../core/io_global.zig").deleteFileAbsolute(old_db_path) catch {};
 }

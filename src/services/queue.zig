@@ -50,11 +50,11 @@ pub fn initDb() void {
 
     const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
     var path_buf: [256]u8 = undefined;
-    const db_path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/zigzag/queue.db", .{home}) catch return;
+    const db_path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/opal/queue.db", .{home}) catch return;
     
     // Ensure directory exists
     var dir_buf: [256]u8 = undefined;
-    const dir_path = std.fmt.bufPrintZ(&dir_buf, "{s}/.config/zigzag", .{home}) catch return;
+    const dir_path = std.fmt.bufPrintZ(&dir_buf, "{s}/.config/opal", .{home}) catch return;
     _ = @import("../core/io_global.zig").makeDirAbsolute(dir_path) catch {};
     
     if (c.sqlite.sqlite3_open(db_path.ptr, &db) != c.sqlite.SQLITE_OK) {

@@ -129,7 +129,7 @@ pub fn authenticate() void {
             const url = std.fmt.bufPrint(&url_buf, "{s}/Users/AuthenticateByName", .{server}) catch return;
 
             var auth_hdr: [256]u8 = undefined;
-            const auth_val = std.fmt.bufPrint(&auth_hdr, "X-Emby-Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"zigzag-001\", Version=\"1.0\"", .{}) catch return;
+            const auth_val = std.fmt.bufPrint(&auth_hdr, "X-Emby-Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"opal-001\", Version=\"1.0\"", .{}) catch return;
 
             var resp_buf: [16384]u8 = undefined;
             const resp = @import("../core/http.zig").fetch(url, &resp_buf, .{
@@ -651,7 +651,7 @@ fn jfGet(url: []const u8) ?[]u8 {
     const token = state.app.jf.token[0..state.app.jf.token_len];
 
     var auth_buf: [600]u8 = undefined;
-    const auth = std.fmt.bufPrint(&auth_buf, "X-Emby-Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"zigzag-001\", Version=\"1.0\", Token=\"{s}\"", .{token}) catch return null;
+    const auth = std.fmt.bufPrint(&auth_buf, "X-Emby-Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"opal-001\", Version=\"1.0\", Token=\"{s}\"", .{token}) catch return null;
 
     const resp_buf = alloc.alloc(u8, 256 * 1024) catch return null;
     defer alloc.free(resp_buf);

@@ -213,7 +213,7 @@ fn fetchComicThread() void {
     downloadPages();
 }
 
-/// Scan ~/.config/zigzag/plugins/comics/ for .lua/.py/.sh scripts,
+/// Scan ~/.config/opal/plugins/comics/ for .lua/.py/.sh scripts,
 /// execute each with url as arg1, parse JSON stdout.
 fn tryPlugins(url: []const u8) bool {
     // 1) Try bundled plugins/ directory (shipped with app)
@@ -222,7 +222,7 @@ fn tryPlugins(url: []const u8) bool {
     // 2) Try user plugins directory
     const home = @import("../core/io_global.zig").getenv("HOME") orelse return false;
     var dir_buf: [256]u8 = undefined;
-    const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/.config/zigzag/plugins/comics", .{home}) catch return false;
+    const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/.config/opal/plugins/comics", .{home}) catch return false;
     return tryPluginsInDir(dir_path, url);
 }
 
@@ -1315,7 +1315,7 @@ fn renderPluginSourceBadges() void {
     showPluginBadgesInDir("plugins", &shown);
     const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
     var dir_buf: [256]u8 = undefined;
-    const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/.config/zigzag/plugins/comics", .{home}) catch return;
+    const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/.config/opal/plugins/comics", .{home}) catch return;
     showPluginBadgesInDir(dir_path, &shown);
 }
 

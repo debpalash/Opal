@@ -16,7 +16,7 @@ const sync = @import("../core/sync.zig");
 // scraping/piracy code. Plugins are language-agnostic 
 // executables that communicate via JSON over stdin/stdout.
 //
-// Plugin directory: ~/.config/zigzag/plugins/<name>/
+// Plugin directory: ~/.config/opal/plugins/<name>/
 // Each plugin has:
 //   manifest.json — metadata + capabilities
 //   search        — executable: search <query> → JSON results
@@ -122,7 +122,7 @@ fn endLoading() void {
 
 pub fn getPluginDir(buf: *[512]u8) []const u8 {
     if (@import("../core/io_global.zig").getenv("HOME")) |home| {
-        return std.fmt.bufPrint(buf, "{s}/.config/zigzag/plugins", .{home}) catch "";
+        return std.fmt.bufPrint(buf, "{s}/.config/opal/plugins", .{home}) catch "";
     }
     return "";
 }
@@ -880,7 +880,7 @@ fn renderSourcePlugins() void {
     defer list.deinit();
     for (0..pr.plugin_count) |i| {
         const p = &pr.plugins[i];
-        var rowb = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 81000, .expand = .horizontal, .padding = .{ .x = 0, .y = 5, .w = 0, .h = 5 }, .gravity_y = 0.5 });
+        var rowb = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 81000, .expand = .horizontal, .padding = .{ .x = 0, .y = 5, .w = 0, .h = 5 } });
         defer rowb.deinit();
         _ = dvui.label(@src(), "{s}", .{p.nameSlice()}, .{ .id_extra = i + 81100, .color_text = theme.colors.text_main, .gravity_y = 0.5 });
         _ = dvui.label(@src(), "  {s}", .{p.kindSlice()}, .{ .id_extra = i + 81200, .color_text = theme.colors.text_dim, .gravity_y = 0.5 });
@@ -1000,7 +1000,7 @@ pub fn renderContent() void {
             var hint_buf: [256]u8 = undefined;
             var dir_buf2: [512]u8 = undefined;
             const pd = getPluginDir(&dir_buf2);
-            const hint = std.fmt.bufPrintZ(&hint_buf, "Install plugins to: {s}", .{pd}) catch "~/.config/zigzag/plugins/";
+            const hint = std.fmt.bufPrintZ(&hint_buf, "Install plugins to: {s}", .{pd}) catch "~/.config/opal/plugins/";
             _ = dvui.label(@src(), "{s}", .{hint}, .{
                 .color_text = theme.colors.text_dim, .expand = .horizontal,
             });

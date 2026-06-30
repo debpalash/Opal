@@ -1,7 +1,7 @@
 //! Plex client — PIN auth (plex.tv/link) → server discovery → library browse →
 //! direct-play. Plex's API differs from Jellyfin/Emby: plex.tv auth + X-Plex-Token
 //! + server discovery via plex.tv/api/v2/resources. JSON is requested with an
-//! Accept header. The user's auth token is persisted at ~/.config/zigzag/plex.json.
+//! Accept header. The user's auth token is persisted at ~/.config/opal/plex.json.
 
 const std = @import("std");
 const dvui = @import("dvui");

@@ -14,100 +14,151 @@ fn getHome() []const u8 {
     return getenv("HOME") orelse "/tmp";
 }
 
-/// ~/.config/zigzag  (or $XDG_CONFIG_HOME/zigzag)
+/// ~/.config/opal  (or $XDG_CONFIG_HOME/opal)
 pub fn configDir(buf: []u8) []const u8 {
     if (getenv("XDG_CONFIG_HOME")) |xdg| {
-        return std.fmt.bufPrint(buf, "{s}/zigzag", .{xdg}) catch "/tmp/zigzag";
+        return std.fmt.bufPrint(buf, "{s}/opal", .{xdg}) catch "/tmp/opal";
     }
     const home = getHome();
-    return std.fmt.bufPrint(buf, "{s}/.config/zigzag", .{home}) catch "/tmp/zigzag";
+    return std.fmt.bufPrint(buf, "{s}/.config/opal", .{home}) catch "/tmp/opal";
 }
 
-/// ~/.config/zigzag/config.tsv
+/// ~/.config/opal/config.tsv
 pub fn configFile(buf: []u8) []const u8 {
     if (getenv("XDG_CONFIG_HOME")) |xdg| {
-        return std.fmt.bufPrint(buf, "{s}/zigzag/config.tsv", .{xdg}) catch "/tmp/zigzag/config.tsv";
+        return std.fmt.bufPrint(buf, "{s}/opal/config.tsv", .{xdg}) catch "/tmp/opal/config.tsv";
     }
     const home = getHome();
-    return std.fmt.bufPrint(buf, "{s}/.config/zigzag/config.tsv", .{home}) catch "/tmp/zigzag/config.tsv";
+    return std.fmt.bufPrint(buf, "{s}/.config/opal/config.tsv", .{home}) catch "/tmp/opal/config.tsv";
 }
 
-/// ~/.config/zigzag/watch_history.tsv
+/// ~/.config/opal/watch_history.tsv
 pub fn watchHistoryFile(buf: []u8) []const u8 {
     if (getenv("XDG_CONFIG_HOME")) |xdg| {
-        return std.fmt.bufPrint(buf, "{s}/zigzag/watch_history.tsv", .{xdg}) catch "/tmp/zigzag_watch_history.tsv";
+        return std.fmt.bufPrint(buf, "{s}/opal/watch_history.tsv", .{xdg}) catch "/tmp/opal_watch_history.tsv";
     }
     const home = getHome();
-    return std.fmt.bufPrint(buf, "{s}/.config/zigzag/watch_history.tsv", .{home}) catch "/tmp/zigzag_watch_history.tsv";
+    return std.fmt.bufPrint(buf, "{s}/.config/opal/watch_history.tsv", .{home}) catch "/tmp/opal_watch_history.tsv";
 }
 
-/// ~/.cache/zigzag/<name> (or $XDG_CACHE_HOME/zigzag/<name>)
+/// ~/.cache/opal/<name> (or $XDG_CACHE_HOME/opal/<name>)
 pub fn cacheFile(buf: []u8, name: []const u8) []const u8 {
     if (getenv("XDG_CACHE_HOME")) |xdg| {
-        return std.fmt.bufPrint(buf, "{s}/zigzag/{s}", .{ xdg, name }) catch "/tmp/zigzag_cache";
+        return std.fmt.bufPrint(buf, "{s}/opal/{s}", .{ xdg, name }) catch "/tmp/opal_cache";
     }
     const home = getHome();
-    return std.fmt.bufPrint(buf, "{s}/.cache/zigzag/{s}", .{ home, name }) catch "/tmp/zigzag_cache";
+    return std.fmt.bufPrint(buf, "{s}/.cache/opal/{s}", .{ home, name }) catch "/tmp/opal_cache";
 }
 
-/// ~/Downloads/zigzag (default save path)
+/// ~/Downloads/opal (default save path)
 pub fn defaultSavePath(buf: []u8) []const u8 {
     const home = getHome();
-    return std.fmt.bufPrint(buf, "{s}/Downloads/zigzag", .{home}) catch "/tmp/zigzag_downloads";
+    return std.fmt.bufPrint(buf, "{s}/Downloads/opal", .{home}) catch "/tmp/opal_downloads";
 }
 
-/// ~/Videos/zigzag (alternative save path)
+/// ~/Videos/opal (alternative save path)
 pub fn videosSavePath(buf: []u8) []const u8 {
     const home = getHome();
-    return std.fmt.bufPrint(buf, "{s}/Videos/zigzag", .{home}) catch "/tmp/zigzag_videos";
+    return std.fmt.bufPrint(buf, "{s}/Videos/opal", .{home}) catch "/tmp/opal_videos";
 }
 
-/// ~/.config/zigzag/zigzag.db (unified SQLite database)
+/// ~/.config/opal/opal.db (unified SQLite database)
 pub fn zigzagDbFile(buf: []u8) []const u8 {
     if (getenv("XDG_CONFIG_HOME")) |xdg| {
-        return std.fmt.bufPrint(buf, "{s}/zigzag/zigzag.db", .{xdg}) catch "/tmp/zigzag.db";
+        return std.fmt.bufPrint(buf, "{s}/opal/opal.db", .{xdg}) catch "/tmp/opal.db";
     }
     const home = getHome();
-    return std.fmt.bufPrint(buf, "{s}/.config/zigzag/zigzag.db", .{home}) catch "/tmp/zigzag.db";
+    return std.fmt.bufPrint(buf, "{s}/.config/opal/opal.db", .{home}) catch "/tmp/opal.db";
 }
 
-/// ~/.config/zigzag/tmdb.db (SQLite database for TMDB data)
+/// ~/.config/opal/tmdb.db (SQLite database for TMDB data)
 pub fn tmdbDbFile(buf: []u8) []const u8 {
     if (getenv("XDG_CONFIG_HOME")) |xdg| {
-        return std.fmt.bufPrint(buf, "{s}/zigzag/tmdb.db", .{xdg}) catch "/tmp/zigzag_tmdb.db";
+        return std.fmt.bufPrint(buf, "{s}/opal/tmdb.db", .{xdg}) catch "/tmp/opal_tmdb.db";
     }
     const home = getHome();
-    return std.fmt.bufPrint(buf, "{s}/.config/zigzag/tmdb.db", .{home}) catch "/tmp/zigzag_tmdb.db";
+    return std.fmt.bufPrint(buf, "{s}/.config/opal/tmdb.db", .{home}) catch "/tmp/opal_tmdb.db";
 }
 
 /// Ensure the cache directory exists.
 pub fn ensureCacheDir() void {
     var buf: [512]u8 = undefined;
     if (getenv("XDG_CACHE_HOME")) |xdg| {
-        const dir = std.fmt.bufPrint(&buf, "{s}/zigzag", .{xdg}) catch return;
+        const dir = std.fmt.bufPrint(&buf, "{s}/opal", .{xdg}) catch return;
         @import("io_global.zig").cwdMakePath(dir) catch {};
     } else {
         const home = getHome();
-        const dir = std.fmt.bufPrint(&buf, "{s}/.cache/zigzag", .{home}) catch return;
+        const dir = std.fmt.bufPrint(&buf, "{s}/.cache/opal", .{home}) catch return;
         @import("io_global.zig").cwdMakePath(dir) catch {};
     }
+}
+
+// ══════════════════════════════════════════════════════════
+// Legacy migration: zigzag → opal
+// ══════════════════════════════════════════════════════════
+
+fn legacyDir(buf: []u8, env: [*:0]const u8, sub: []const u8, name: []const u8) []const u8 {
+    if (getenv(env)) |xdg| return std.fmt.bufPrint(buf, "{s}/{s}", .{ xdg, name }) catch "";
+    const home = getHome();
+    return std.fmt.bufPrint(buf, "{s}/{s}/{s}", .{ home, sub, name }) catch "";
+}
+
+fn renameIfNew(old: []const u8, new: []const u8) bool {
+    const io = @import("io_global.zig");
+    if (old.len == 0 or new.len == 0) return false;
+    // Already migrated (or fresh install): leave it.
+    if (io.cwdAccess(new, .{})) |_| return false else |_| {}
+    // Nothing to migrate.
+    io.cwdAccess(old, .{}) catch return false;
+    std.Io.Dir.renameAbsolute(old, new, io.io()) catch return false;
+    return true;
+}
+
+/// One-time rename of legacy ~/.config/zigzag → ~/.config/opal (and cache, and
+/// the zigzag.db → opal.db inside, with its WAL sidecars). Idempotent: does
+/// nothing once the opal dir exists. MUST run before config/db are opened.
+pub fn migrateLegacyDir() void {
+    const io = @import("io_global.zig");
+
+    var ob: [512]u8 = undefined;
+    var nb: [512]u8 = undefined;
+    const old_cfg = legacyDir(&ob, "XDG_CONFIG_HOME", ".config", "zigzag");
+    const new_cfg = legacyDir(&nb, "XDG_CONFIG_HOME", ".config", "opal");
+    if (renameIfNew(old_cfg, new_cfg)) {
+        // Rename the main DB + its WAL sidecars together so SQLite stays consistent.
+        const sfx = [_][]const u8{ "", "-wal", "-shm", "-journal" };
+        for (sfx) |s| {
+            var fo: [600]u8 = undefined;
+            var fn_: [600]u8 = undefined;
+            const fold = std.fmt.bufPrint(&fo, "{s}/zigzag.db{s}", .{ new_cfg, s }) catch continue;
+            const fnew = std.fmt.bufPrint(&fn_, "{s}/opal.db{s}", .{ new_cfg, s }) catch continue;
+            std.Io.Dir.renameAbsolute(fold, fnew, io.io()) catch {};
+        }
+    }
+
+    var ob2: [512]u8 = undefined;
+    var nb2: [512]u8 = undefined;
+    _ = renameIfNew(
+        legacyDir(&ob2, "XDG_CACHE_HOME", ".cache", "zigzag"),
+        legacyDir(&nb2, "XDG_CACHE_HOME", ".cache", "opal"),
+    );
 }
 
 // ══════════════════════════════════════════════════════════
 // Tests
 // ══════════════════════════════════════════════════════════
 
-test "configDir contains zigzag" {
+test "configDir contains opal" {
     var buf: [512]u8 = undefined;
     const dir = configDir(&buf);
-    try std.testing.expect(std.mem.endsWith(u8, dir, "/zigzag"));
-    try std.testing.expect(dir.len > 7); // not just "/zigzag"
+    try std.testing.expect(std.mem.endsWith(u8, dir, "/opal"));
+    try std.testing.expect(dir.len > 5); // not just "/opal"
 }
 
 test "configFile ends with config.tsv" {
     var buf: [512]u8 = undefined;
     const path = configFile(&buf);
-    try std.testing.expect(std.mem.endsWith(u8, path, "/zigzag/config.tsv"));
+    try std.testing.expect(std.mem.endsWith(u8, path, "/opal/config.tsv"));
 }
 
 test "watchHistoryFile ends with watch_history.tsv" {
@@ -120,26 +171,26 @@ test "cacheFile includes name" {
     var buf: [512]u8 = undefined;
     const path = cacheFile(&buf, "asr_output.wav");
     try std.testing.expect(std.mem.endsWith(u8, path, "asr_output.wav"));
-    try std.testing.expect(std.mem.indexOf(u8, path, "zigzag") != null);
+    try std.testing.expect(std.mem.indexOf(u8, path, "opal") != null);
 }
 
 test "defaultSavePath contains Downloads" {
     var buf: [512]u8 = undefined;
     const path = defaultSavePath(&buf);
     try std.testing.expect(std.mem.indexOf(u8, path, "Downloads") != null or
-        std.mem.indexOf(u8, path, "zigzag") != null);
+        std.mem.indexOf(u8, path, "opal") != null);
 }
 
 test "videosSavePath contains Videos" {
     var buf: [512]u8 = undefined;
     const path = videosSavePath(&buf);
     try std.testing.expect(std.mem.indexOf(u8, path, "Videos") != null or
-        std.mem.indexOf(u8, path, "zigzag") != null);
+        std.mem.indexOf(u8, path, "opal") != null);
 }
 
 test "small buffer falls back safely" {
     var tiny: [4]u8 = undefined;
     const path = configDir(&tiny);
-    // Should return fallback /tmp/zigzag
-    try std.testing.expectEqualStrings("/tmp/zigzag", path);
+    // Should return fallback /tmp/opal
+    try std.testing.expectEqualStrings("/tmp/opal", path);
 }

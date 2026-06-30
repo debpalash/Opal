@@ -134,7 +134,7 @@ def installed_engines() -> set[str]:
     this is empty and no engine runs, so no search source is live by default."""
     sources_dir = path.join(
         os.environ.get('XDG_CONFIG_HOME') or path.join(path.expanduser('~'), '.config'),
-        'zigzag', 'plugins', 'sources',
+        'opal', 'plugins', 'sources',
     )
     try:
         return {f[:-5] for f in os.listdir(sources_dir) if f.endswith('.json')}

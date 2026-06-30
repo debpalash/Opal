@@ -428,7 +428,7 @@ fn fetchViaYtdlp(query: []const u8, gen: u32, count: usize) void {
     // --print with a compact tab template instead of -j: full JSON lines carry
     // a huge `description` that overflows the reader buffer (takeDelimiter then
     // errors and we parse nothing). Tab rows are short, fast, and robust.
-    // Use the app's bundled yt-dlp (~/.config/zigzag/bin) — bare "yt-dlp" isn't
+    // Use the app's bundled yt-dlp (~/.config/opal/bin) — bare "yt-dlp" isn't
     // on the GUI process PATH, so spawning it fails.
     // Trailing field is %(upload_date)s (YYYYMMDD or NA on flat-playlist).
     const ytdlp_bin = @import("ytdlp.zig").binary();

@@ -23,11 +23,11 @@ const WorkspaceData = struct {
 // Named Workspace Management
 // ══════════════════════════════════════════════════════════
 
-/// Get the workspaces directory path (~/.config/zigzag/workspaces/)
+/// Get the workspaces directory path (~/.config/opal/workspaces/)
 fn workspacesDir(buf: []u8) []const u8 {
     var dir_buf: [512]u8 = undefined;
     const cfg = paths.configDir(&dir_buf);
-    return std.fmt.bufPrint(buf, "{s}/workspaces", .{cfg}) catch "/tmp/zigzag/workspaces";
+    return std.fmt.bufPrint(buf, "{s}/workspaces", .{cfg}) catch "/tmp/opal/workspaces";
 }
 
 /// Ensure the workspaces directory exists.
@@ -130,7 +130,7 @@ pub fn saveWorkspaceNamed(allocator: std.mem.Allocator, name: []const u8) void {
         .drawer_width_px = state.app.drawer_width_px,
     };
 
-    // Build save path: ~/.config/zigzag/workspaces/<name>.json
+    // Build save path: ~/.config/opal/workspaces/<name>.json
     var dir_buf: [512]u8 = undefined;
     const ws_dir = workspacesDir(&dir_buf);
     var path_buf: [640]u8 = undefined;

@@ -1819,7 +1819,7 @@ fn renderStorageTab() void {
 
     // Database info
     settingRow("Database", 52, @src());
-    _ = dvui.label(@src(), "SQLite: ~/.config/zigzag/zigzag.db", .{}, .{
+    _ = dvui.label(@src(), "SQLite: ~/.config/opal/zigzag.db", .{}, .{
         .color_text = theme.colors.text_tertiary,
     });
 }
@@ -2239,7 +2239,7 @@ fn renderScriptsTab() void {
     settingRow("Installed Scripts", 71, @src());
 
     if (state.app.script_count == 0) {
-        _ = dvui.label(@src(), "No scripts found in ~/.config/mpv/scripts/ or ~/.config/zigzag/scripts/", .{}, .{
+        _ = dvui.label(@src(), "No scripts found in ~/.config/mpv/scripts/ or ~/.config/opal/scripts/", .{}, .{
             .color_text = theme.colors.text_tertiary,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
         });

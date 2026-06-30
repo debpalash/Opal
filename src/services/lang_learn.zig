@@ -205,7 +205,7 @@ fn tokenizeWords(text: []const u8) void {
 
 /// Perform HTTP GET using curl (reliable, handles encoding/redirects).
 fn httpGetRaw(url_str: []const u8, response_buf: []u8) !usize {
-    // Scratch file in the per-user XDG cache dir (~/.cache/zigzag), NOT a
+    // Scratch file in the per-user XDG cache dir (~/.cache/opal), NOT a
     // world-writable /tmp path — avoids the symlink/predictable-name race a
     // multi-user box would expose. Matches the asr_* scratch files below.
     var tmp_path_buf: [512]u8 = undefined;

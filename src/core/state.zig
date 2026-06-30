@@ -690,7 +690,7 @@ fn readFileAll(dir_path: []const u8, name: []const u8, buf: []u8) ?[]const u8 {
 }
 
 fn loadTmdbFromDotEnv() void {
-    // Search order: cwd (dev: `zig build run`) → ~/.config/zigzag (bundle / installed).
+    // Search order: cwd (dev: `zig build run`) → ~/.config/opal (bundle / installed).
     // First hit wins; later locations are fallbacks.
     var buf: [4096]u8 = undefined;
     var cfg_buf: [512]u8 = undefined;
@@ -699,7 +699,7 @@ fn loadTmdbFromDotEnv() void {
     const content = blk: {
         // Try cwd first
         if (readFileAll(".", ".env", &buf)) |bytes| break :blk bytes;
-        // Then ~/.config/zigzag/.env
+        // Then ~/.config/opal/.env
         if (readFileAll(cfg_dir, ".env", &buf)) |bytes| break :blk bytes;
         return;
     };
