@@ -32,6 +32,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 import importlib
+import os
 import pathlib
 import sys
 import traceback
@@ -125,6 +126,20 @@ def list_engines() -> list[EngineModuleName]:
         names.append(engine_module_name)
 
     return sorted(names)
+
+
+def installed_engines() -> set[str]:
+    """Engine ids the user has explicitly installed via Opal's plugin manager
+    (a `sources/<id>.json` marker). Opal ships NEUTRAL — with nothing installed
+    this is empty and no engine runs, so no search source is live by default."""
+    sources_dir = path.join(
+        os.environ.get('XDG_CONFIG_HOME') or path.join(path.expanduser('~'), '.config'),
+        'zigzag', 'plugins', 'sources',
+    )
+    try:
+        return {f[:-5] for f in os.listdir(sources_dir) if f.endswith('.json')}
+    except OSError:
+        return set()
 
 
 def import_engine(engine_module_name: EngineModuleName) -> Optional[type[Engine]]:
@@ -236,6 +251,9 @@ if __name__ == "__main__":
         # get unique engines
         engs = set(arg.strip().lower() for arg in sys.argv[1].split(','))
         engines = found_engines if 'all' in engs else [e for e in found_engines if e in engs]
+        # Neutral-player gate: only run engines the user has installed.
+        installed = installed_engines()
+        engines = [e for e in engines if e in installed]
 
         cat = sys.argv[2].lower()
         try:
