@@ -1391,9 +1391,9 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
     }
 
     const stremio = @import("stremio.zig");
-    // Lazily install the well-known addons so the stremio source works
-    // out of the box without separate UI wiring (S15). Idempotent.
-    stremio.ensureDefaultAddons();
+    // Neutral: query only the Stremio addons the user has installed via the
+    // plugin manager (re-read each search so installs/uninstalls take effect).
+    stremio.loadInstalledAddons();
     if (stremio.installed_count == 0) return;
 
     const query = query_buf[0..qlen];

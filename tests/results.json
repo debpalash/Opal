@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-06-30T17:14:01",
+  "timestamp": "2026-06-30T19:44:11",
   "total": 106,
   "passed": 96,
   "failed": 0,
@@ -157,49 +157,49 @@
       "category": "Database",
       "status": "pass",
       "detail": "Size: 168.0 KB",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Config Table",
       "category": "Database",
       "status": "pass",
-      "detail": "41 config entries",
-      "duration_ms": 4
+      "detail": "40 config entries",
+      "duration_ms": 15
     },
     {
       "name": "Watch History Table",
       "category": "Database",
       "status": "pass",
       "detail": "2 watch entries",
-      "duration_ms": 1
+      "duration_ms": 4
     },
     {
       "name": "Search History Table",
       "category": "Database",
       "status": "pass",
       "detail": "39 searches",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "name": "Download History Table",
       "category": "Database",
       "status": "pass",
       "detail": "9 downloads",
-      "duration_ms": 5
+      "duration_ms": 0
     },
     {
       "name": "TMDB Items Table",
       "category": "Database",
       "status": "pass",
       "detail": "0 TMDB items",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "AI Memory Table",
       "category": "Database",
       "status": "pass",
       "detail": "0 memories",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Vector Memory Table",
@@ -255,7 +255,7 @@
       "category": "Config",
       "status": "pass",
       "detail": "Scale: 1.00x",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "TTS Voice Config",
@@ -290,13 +290,13 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 40.6 MB",
-      "duration_ms": 1687
+      "duration_ms": 779
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "40.6 MB, built at 17:12:09",
+      "detail": "40.6 MB, built at 19:42:34",
       "duration_ms": 0
     },
     {
@@ -332,35 +332,35 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 5752
+      "duration_ms": 1661
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "skip",
       "detail": "faster-whisper not installed (optional)",
-      "duration_ms": 45
+      "duration_ms": 22
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 47
+      "duration_ms": 21
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 35
+      "duration_ms": 31
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 110
+      "duration_ms": 24
     },
     {
       "name": "Embedding Server Health",
@@ -402,14 +402,14 @@
       "category": "Theming",
       "status": "pass",
       "detail": "Theme picker in settings",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Instant Commands Count",
       "category": "Commands",
       "status": "pass",
       "detail": "25 unique commands, 52 response points",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Theme Voice Commands",
@@ -465,7 +465,7 @@
       "category": "Integration",
       "status": "pass",
       "detail": "Media play \u2192 memory + preference learning",
-      "duration_ms": 4
+      "duration_ms": 1
     },
     {
       "name": "Startup Proactive Greeting",
@@ -486,49 +486,49 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 68
+      "duration_ms": 27
     },
     {
       "name": "Compiles: zigzag-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 62
+      "duration_ms": 25
     },
     {
       "name": "Compiles: zigzag-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 67
+      "duration_ms": 26
     },
     {
       "name": "Compiles: zigzag-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 92
+      "duration_ms": 29
     },
     {
       "name": "--check degrades: zigzag-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 59
+      "duration_ms": 23
     },
     {
       "name": "--check degrades: zigzag-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 58
+      "duration_ms": 25
     },
     {
       "name": "--check degrades: zigzag-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 85
+      "duration_ms": 24
     },
     {
       "name": "Whisper Model Present",
@@ -542,7 +542,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 4354
+      "duration_ms": 2516
     },
     {
       "name": "Sherpa Model Canonicalization",
@@ -563,7 +563,7 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "5 HF GGUF models, all fields valid",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Catalog IDs/Files Unique",
@@ -605,14 +605,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 7807
+      "duration_ms": 8300
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 91
+      "duration_ms": 78
     },
     {
       "name": "Page Router",
@@ -633,7 +633,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 12
+      "duration_ms": 6
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -745,7 +745,7 @@
       "category": "Recall",
       "status": "pass",
       "detail": "position_secs migration applied",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "name": "Taste Receipts Wired",
@@ -857,14 +857,14 @@
       "category": "Stability",
       "status": "pass",
       "detail": "all 27 default-valued fields assigned in init",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "name": "Stream Resources Resolvable When Bundled",
       "category": "Stability",
       "status": "pass",
       "detail": "resource-root cwd wired for nova2 + engines/ bundled",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Source Endpoints Externalized To Plugins",
@@ -885,14 +885,14 @@
       "category": "Stability",
       "status": "pass",
       "detail": "no discarded std.Thread.spawn handles in src/",
-      "duration_ms": 21
+      "duration_ms": 10
     },
     {
       "name": "Zig Unit Tests",
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 1387
+      "duration_ms": 695
     }
   ]
 }
