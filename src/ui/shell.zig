@@ -250,7 +250,7 @@ fn renderPage(r: Route) !void {
         .search => drawer.renderTabContent(.Search),
         .home => @import("home.zig").render(), // personal hub: metrics + lists
         .browse => {
-            subTabs(&.{ .TMDB, .YouTube, .Anime, .Comics, .Web, .RSS, .Jellyfin }, &state.app.browse_source, 100);
+            subTabs(&.{ .TMDB, .YouTube, .Anime, .Comics, .Web, .RSS, .Jellyfin, .Plex }, &state.app.browse_source, 100);
             drawer.renderTabContent(state.app.browse_source);
         },
         .library => {
@@ -277,6 +277,7 @@ fn tabLabel(t: state.DrawerTab) []const u8 {
         .History => "History",
         .RSS => "RSS",
         .Jellyfin => "Jellyfin",
+        .Plex => "Plex",
         .Plugins => "Plugins",
         .Logs => "Logs",
         .Settings => "Settings",
@@ -297,6 +298,7 @@ fn iconForTab(t: state.DrawerTab) []const u8 {
         .History => icons.tvg.lucide.history,
         .RSS => icons.tvg.lucide.rss,
         .Jellyfin => icons.tvg.lucide.server,
+        .Plex => icons.tvg.lucide.server,
         .Plugins => icons.tvg.lucide.puzzle,
         .Logs => icons.tvg.lucide.@"scroll-text",
         .Settings => icons.tvg.lucide.settings,

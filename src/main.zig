@@ -159,6 +159,7 @@ pub fn coreInit() !void {
             @import("core/source_config.zig").reload();
             @import("services/plugin_repo.zig").init(); // load saved GitHub token
             @import("services/trakt.zig").init(); // load saved Trakt credentials/token
+            @import("services/plex.zig").init(); // load saved Plex token/server
             // Signal the UI thread that watch history is ready so the "resume
             // last played?" launch prompt can arm (monotonic one-way flag).
             state.app.init_history_loaded = true;

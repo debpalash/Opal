@@ -208,6 +208,7 @@ pub fn renderDrawer() void {
         renderRailTab(.Web, icons.tvg.lucide.globe, "Web", 15);
         renderRailTab(.RSS, icons.tvg.lucide.rss, "RSS", 7);
         renderRailTab(.Jellyfin, icons.tvg.lucide.server, "Jellyfin / Emby", 8);
+        renderRailTab(.Plex, icons.tvg.lucide.server, "Plex", 8);
 
         railGroupGap(1);
 
@@ -274,6 +275,7 @@ pub fn renderTabContent(tab: state.DrawerTab) void {
         .History => renderHistoryContent(),
         .RSS => rss.renderContent(),
         .Jellyfin => jellyfin_ui.renderContent(),
+        .Plex => @import("../services/plex.zig").renderContent(),
         .Plugins => plugin_mod.renderContent(),
         .Logs => renderLogsContent(),
         .Settings => settings_mod.renderSettingsContent(),

@@ -1461,6 +1461,26 @@ def test_plugin_manager():
     return "pass", "fetch/install/uninstall + UI + debrid wired"
 
 
+@test("Plex Client Wired", "Page Shell")
+def test_plex_wired():
+    # Plex client: PIN auth → server discovery → library browse → direct-play,
+    # with a .Plex nav tab.
+    px = _src("src/services/plex.zig")
+    dr = _src("src/ui/drawer.zig")
+    en = _src("src/core/state.zig")
+    ok = (
+        "api/v2/pins" in px
+        and "api/v2/resources" in px
+        and "/library/sections" in px
+        and "pub fn renderContent()" in px
+        and "X-Plex-Token" in px
+        and ".Plex =>" in dr
+        and "Plex," in en.split("DrawerTab = enum")[1].split("}")[0]
+        and 'plex.zig").init()' in _src("src/main.zig")
+    )
+    return ("pass", "PIN auth + discovery + browse + play + tab wired") if ok else ("fail", "plex not fully wired")
+
+
 @test("Trakt Sync Wired", "Page Shell")
 def test_trakt_wired():
     # Trakt was dead code missing client_secret (auth couldn't complete). Now:

@@ -14,7 +14,7 @@ const subtitles_mod = @import("../player/subtitles.zig");
 pub const GridMode = enum { auto, cols_1, cols_2, cols_3, cols_4 };
 pub const ContentProvider = enum { mpv, comic_viewer };
 pub const VideoFillMode = enum { fit, cover };
-pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, History, RSS, Jellyfin, Plugins, Logs, Settings, AI, Web };
+pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web };
 pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, Scripts, LangLearn, FileAssoc };
 pub const TmdbView = enum { Trending, Search, Favorites, Watchlist, Watching };
 pub const TmdbCategory = enum { trending, now_playing, top_rated, upcoming, popular };
@@ -845,6 +845,10 @@ pub fn navigateToTab(tab: DrawerTab) void {
         },
         .Jellyfin => {
             app.browse_source = .Jellyfin;
+            app.router.navigate(.browse);
+        },
+        .Plex => {
+            app.browse_source = .Plex;
             app.router.navigate(.browse);
         },
         .Plugins => {
