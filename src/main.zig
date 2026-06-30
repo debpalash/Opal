@@ -158,6 +158,7 @@ pub fn coreInit() !void {
             // gated source stays inert until the user installs it.
             @import("core/source_config.zig").reload();
             @import("services/plugin_repo.zig").init(); // load saved GitHub token
+            @import("services/trakt.zig").init(); // load saved Trakt credentials/token
             // Signal the UI thread that watch history is ready so the "resume
             // last played?" launch prompt can arm (monotonic one-way flag).
             state.app.init_history_loaded = true;

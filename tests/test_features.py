@@ -1461,6 +1461,26 @@ def test_plugin_manager():
     return "pass", "fetch/install/uninstall + UI + debrid wired"
 
 
+@test("Trakt Sync Wired", "Page Shell")
+def test_trakt_wired():
+    # Trakt was dead code missing client_secret (auth couldn't complete). Now:
+    # device flow w/ secret + persistence, a Connect UI, and id-based mark-watched
+    # wired to TMDB episode play.
+    tr = _src("src/services/trakt.zig")
+    pg = _src("src/services/plugins.zig")
+    tm = _src("src/services/tmdb.zig")
+    ok = (
+        "client_secret" in tr
+        and "markWatchedEpisode" in tr
+        and "pub fn init()" in tr
+        and tr.count("client_secret") >= 4  # decl + save + load + token poll
+        and "renderTrakt" in pg
+        and "markWatchedEpisode" in tm
+        and "trakt.zig\").init()" in _src("src/main.zig")
+    )
+    return ("pass", "device-flow + persistence + mark-watched wired") if ok else ("fail", "trakt not fully wired")
+
+
 @test("Threads Detached (project-wide)", "Stability")
 def test_threads_detached():
     # Discarded `_ = std.Thread.spawn(...)` leaks the pthread handle (CLAUDE.md);

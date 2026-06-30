@@ -945,10 +945,64 @@ fn renderSourcePlugins() void {
     }
 }
 
+/// Trakt.tv connect panel — scrobble + sync watched to the user's Trakt account.
+fn renderTrakt() void {
+    const tr = @import("trakt.zig");
+    var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
+        .background = true,
+        .color_fill = theme.colors.bg_header,
+        .color_border = theme.colors.border_subtle,
+        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+    });
+    defer panel.deinit();
+
+    _ = dvui.label(@src(), "Trakt.tv  ·  sync watched history", .{}, .{ .color_text = theme.colors.text_main, .gravity_y = 0.5 });
+
+    if (tr.isConnected()) {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
+        defer row.deinit();
+        _ = dvui.label(@src(), "Connected", .{}, .{ .color_text = theme.colors.success, .gravity_y = 0.5 });
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
+        if (dvui.button(@src(), "Disconnect", .{}, .{ .color_fill = theme.colors.bg_glass, .color_text = theme.colors.text_muted, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 }, .gravity_y = 0.5 })) {
+            tr.disconnect();
+        }
+        return;
+    }
+
+    _ = dvui.label(@src(), "Create an app at trakt.tv/oauth/applications (redirect: urn:ietf:wg:oauth:2.0:oob), then paste id + secret.", .{}, .{ .color_text = theme.colors.text_dim, .expand = .horizontal });
+
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
+    defer row.deinit();
+
+    var idte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &tr.client_id }, .placeholder = "Trakt client id" }, .{ .expand = .horizontal, .gravity_y = 0.5 });
+    idte.deinit();
+    tr.client_id_len = std.mem.indexOfScalar(u8, &tr.client_id, 0) orelse tr.client_id.len;
+
+    var scte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &tr.client_secret }, .placeholder = "client secret" }, .{ .expand = .horizontal, .gravity_y = 0.5, .margin = .{ .x = 6, .y = 0, .w = 6, .h = 0 } });
+    scte.deinit();
+    tr.client_secret_len = std.mem.indexOfScalar(u8, &tr.client_secret, 0) orelse tr.client_secret.len;
+
+    const label_txt = if (tr.auth_pending and tr.user_code_len > 0) "Waiting…" else "Connect";
+    if (dvui.button(@src(), label_txt, .{}, .{ .color_fill = theme.colors.accent, .color_text = dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 }, .gravity_y = 0.5 })) {
+        tr.save();
+        tr.startDeviceAuth();
+    }
+
+    if (tr.auth_pending and tr.user_code_len > 0) {
+        _ = dvui.label(@src(), "Enter code {s} at trakt.tv/activate", .{tr.user_code[0..tr.user_code_len]}, .{ .color_text = theme.colors.accent, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
+    }
+}
+
 pub fn renderContent() void {
     if (!scanned) scanPlugins();
 
     renderSourcePlugins();
+    renderTrakt();
 
     // Plugin selector + search bar
     {

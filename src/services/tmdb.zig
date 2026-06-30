@@ -1294,6 +1294,7 @@ fn playTvEpisode(episode: i32) void {
         }
     }
     db.tvMarkWatched(t.tv_id, @intCast(season), @intCast(episode), true);
+    @import("trakt.zig").markWatchedEpisode(t.tv_id, season, episode); // Trakt sync (no-op if not connected)
     db.tvUpsertContinue(t.tv_id, t.tv_name[0..t.tv_name_len], t.tv_poster_path[0..t.tv_poster_path_len], @intCast(season), @intCast(episode));
 
     // Build "{name} S01E02" (zero-padded) and copy BY VALUE into the worker.
