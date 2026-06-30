@@ -103,44 +103,72 @@ fn legacyDir(buf: []u8, env: [*:0]const u8, sub: []const u8, name: []const u8) [
     return std.fmt.bufPrint(buf, "{s}/{s}/{s}", .{ home, sub, name }) catch "";
 }
 
-fn renameIfNew(old: []const u8, new: []const u8) bool {
+/// Move every entry from the legacy `old` dir into `new`, but only when `new`
+/// doesn't already have it (so a pre-existing opal dir can't strand data). When
+/// `new` is absent entirely we do a fast atomic whole-dir rename. `rename_db`
+/// maps `zigzag.db*` → `opal.db*` on the way in.
+fn mergeDir(old: []const u8, new: []const u8, rename_db: bool) void {
     const io = @import("io_global.zig");
-    if (old.len == 0 or new.len == 0) return false;
-    // Already migrated (or fresh install): leave it.
-    if (io.cwdAccess(new, .{})) |_| return false else |_| {}
-    // Nothing to migrate.
-    io.cwdAccess(old, .{}) catch return false;
-    std.Io.Dir.renameAbsolute(old, new, io.io()) catch return false;
-    return true;
+    if (old.len == 0 or new.len == 0) return;
+    io.cwdAccess(old, .{}) catch return; // nothing legacy to migrate
+
+    // Fast path: opal absent → atomic rename, then fix the db name.
+    if (io.cwdAccess(new, .{})) |_| {} else |_| {
+        if (std.Io.Dir.renameAbsolute(old, new, io.io())) |_| {
+            if (rename_db) {
+                const sfx = [_][]const u8{ "", "-wal", "-shm", "-journal" };
+                for (sfx) |s| {
+                    var fo: [600]u8 = undefined;
+                    var fnn: [600]u8 = undefined;
+                    const a = std.fmt.bufPrint(&fo, "{s}/zigzag.db{s}", .{ new, s }) catch continue;
+                    const b = std.fmt.bufPrint(&fnn, "{s}/opal.db{s}", .{ new, s }) catch continue;
+                    std.Io.Dir.renameAbsolute(a, b, io.io()) catch {};
+                }
+            }
+            return;
+        } else |_| {}
+    }
+
+    // Merge path: opal exists → fill in only what it's missing.
+    io.cwdMakePath(new) catch {};
+    var dir = io.cwdOpenDir(old, .{ .iterate = true }) catch return;
+    defer dir.close(io.io());
+    var it = dir.iterate();
+    while (it.next(io.io()) catch null) |entry| {
+        var dst_name_buf: [128]u8 = undefined;
+        const dst_name = if (rename_db and std.mem.startsWith(u8, entry.name, "zigzag.db"))
+            (std.fmt.bufPrint(&dst_name_buf, "opal.db{s}", .{entry.name["zigzag.db".len..]}) catch entry.name)
+        else
+            entry.name;
+
+        var np: [700]u8 = undefined;
+        const n = std.fmt.bufPrint(&np, "{s}/{s}", .{ new, dst_name }) catch continue;
+        if (io.cwdAccess(n, .{})) |_| continue else |_| {} // opal already has it → keep opal's
+
+        var op: [700]u8 = undefined;
+        const o = std.fmt.bufPrint(&op, "{s}/{s}", .{ old, entry.name }) catch continue;
+        std.Io.Dir.renameAbsolute(o, n, io.io()) catch {};
+    }
 }
 
-/// One-time rename of legacy ~/.config/zigzag → ~/.config/opal (and cache, and
-/// the zigzag.db → opal.db inside, with its WAL sidecars). Idempotent: does
-/// nothing once the opal dir exists. MUST run before config/db are opened.
+/// One-time migration of the legacy ~/.config/zigzag → ~/.config/opal (+ cache,
+/// + zigzag.db → opal.db). Idempotent; robust to a pre-existing opal dir. MUST
+/// run before config/db are opened.
 pub fn migrateLegacyDir() void {
-    const io = @import("io_global.zig");
-
     var ob: [512]u8 = undefined;
     var nb: [512]u8 = undefined;
-    const old_cfg = legacyDir(&ob, "XDG_CONFIG_HOME", ".config", "zigzag");
-    const new_cfg = legacyDir(&nb, "XDG_CONFIG_HOME", ".config", "opal");
-    if (renameIfNew(old_cfg, new_cfg)) {
-        // Rename the main DB + its WAL sidecars together so SQLite stays consistent.
-        const sfx = [_][]const u8{ "", "-wal", "-shm", "-journal" };
-        for (sfx) |s| {
-            var fo: [600]u8 = undefined;
-            var fn_: [600]u8 = undefined;
-            const fold = std.fmt.bufPrint(&fo, "{s}/zigzag.db{s}", .{ new_cfg, s }) catch continue;
-            const fnew = std.fmt.bufPrint(&fn_, "{s}/opal.db{s}", .{ new_cfg, s }) catch continue;
-            std.Io.Dir.renameAbsolute(fold, fnew, io.io()) catch {};
-        }
-    }
+    mergeDir(
+        legacyDir(&ob, "XDG_CONFIG_HOME", ".config", "zigzag"),
+        legacyDir(&nb, "XDG_CONFIG_HOME", ".config", "opal"),
+        true,
+    );
 
     var ob2: [512]u8 = undefined;
     var nb2: [512]u8 = undefined;
-    _ = renameIfNew(
+    mergeDir(
         legacyDir(&ob2, "XDG_CACHE_HOME", ".cache", "zigzag"),
         legacyDir(&nb2, "XDG_CACHE_HOME", ".cache", "opal"),
+        false,
     );
 }
 

@@ -13,7 +13,7 @@ import time
 import socket
 import sys
 
-DB_PATH = os.path.expanduser("~/.config/zigzag/zigzag.db")
+DB_PATH = os.path.expanduser("~/.config/opal/opal.db")
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESULTS_FILE = os.path.join(PROJECT_DIR, "tests", "results.json")
 
@@ -67,7 +67,7 @@ def test_db_exists():
     if os.path.exists(DB_PATH):
         size = os.path.getsize(DB_PATH)
         return "pass", f"Size: {size/1024:.1f} KB"
-    return "fail", "zigzag.db not found"
+    return "fail", "opal.db not found"
 
 @test("Config Table", "Database")
 def test_config_table():
