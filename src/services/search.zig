@@ -374,7 +374,7 @@ fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator, my_gen: u64) vo
     const uri = std.Uri.parse(api_url) catch return;
     var req = client.request(.GET, uri, .{ .extra_headers = &.{
         .{ .name = "Accept", .value = "application/json" },
-        .{ .name = "User-Agent", .value = "ZigZag/1.0" },
+        .{ .name = "User-Agent", .value = "Opal/1.0" },
     } }) catch return;
     defer req.deinit();
     req.sendBodiless() catch return;

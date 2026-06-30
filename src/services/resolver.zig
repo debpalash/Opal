@@ -1137,7 +1137,7 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
     @import("../core/rate_limit.zig").acquire("yts", 1.0);
     const body = @import("../core/http.zig").fetch(url, &buf, .{
         .timeout_secs = 6,
-        .user_agent = "ZigZag/1.0",
+        .user_agent = "Opal/1.0",
     }) orelse return;
     const n = body.len;
 

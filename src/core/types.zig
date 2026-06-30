@@ -1,7 +1,7 @@
 const std = @import("std");
 
 // ══════════════════════════════════════════════════════════
-// ZigZag v2 — Shared Types
+// Opal v2 — Shared Types
 //
 // Replaces hundreds of foo_buf + foo_len pairs with a
 // single generic BoundedString(N). Provides shared

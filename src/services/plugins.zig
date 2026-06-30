@@ -9,7 +9,7 @@ const paths = @import("../core/paths.zig");
 const sync = @import("../core/sync.zig");
 
 // ══════════════════════════════════════════════════════════
-// ZigZag Plugin System
+// Opal Plugin System
 //
 // Plugins are external, user-installed modules that provide
 // content sources. The core app ships clean with no

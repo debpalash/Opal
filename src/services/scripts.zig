@@ -14,7 +14,7 @@ pub fn scanScripts() void {
     if (state.app.scripts_scanned) return;
     state.app.script_count = 0;
 
-    // Scan ZigZag scripts dir first
+    // Scan Opal scripts dir first
     var zigzag_dir_buf: [512]u8 = undefined;
     const home = @import("../core/io_global.zig").getenv("HOME") orelse "";
     const zigzag_scripts = std.fmt.bufPrint(&zigzag_dir_buf, "{s}/.config/zigzag/scripts", .{home}) catch "";

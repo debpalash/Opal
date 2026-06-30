@@ -3,7 +3,7 @@ const dvui = @import("dvui");
 const http = @import("http.zig");
 
 // ══════════════════════════════════════════════════════════
-// ZigZag v2 — Poster Daemon
+// Opal v2 — Poster Daemon
 //
 // Single shared poster fetching engine used by all content
 // providers (TMDB, Anime, Jellyfin, YouTube, Plugins).

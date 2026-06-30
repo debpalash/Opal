@@ -8,7 +8,7 @@ const c = @import("../core/c.zig");
 // ══════════════════════════════════════════════════════════
 
 const API_BASE = "https://api.opensubtitles.com/api/v1";
-const USER_AGENT = "ZigZag v1.0";
+const USER_AGENT = "Opal v1.0";
 
 // ── Result storage ──
 pub const SubResult = struct {

@@ -3,7 +3,7 @@ const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 
 // ══════════════════════════════════════════════════════════
-// ZigZag Global Theming System
+// Opal Global Theming System
 // ══════════════════════════════════════════════════════════
 // Supports multiple theme presets with hot-switching.
 // All colors/dims flow from `active` — a single source of truth.

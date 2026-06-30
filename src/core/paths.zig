@@ -1,6 +1,6 @@
 const std = @import("std");
 
-/// XDG-compliant path resolution for ZigZag.
+/// XDG-compliant path resolution for Opal.
 /// Replaces all hardcoded `/home/pal/...` paths with portable alternatives.
 
 /// zig 0.16 removed getenv; wrap libc getenv returning a static slice.

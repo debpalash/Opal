@@ -8,7 +8,7 @@ const sync = @import("../core/sync.zig");
 const io_g = @import("../core/io_global.zig");
 
 // ══════════════════════════════════════════════════════════
-// Web Remote Control — JSON API for ZigZag Web UI
+// Web Remote Control — JSON API for Opal Web UI
 // API bridge on :9876, Web UI (Ziex) on :3000
 // ══════════════════════════════════════════════════════════
 

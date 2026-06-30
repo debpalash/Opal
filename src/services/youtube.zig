@@ -334,7 +334,7 @@ fn fetchViaPiped(query: []const u8, gen: u32) bool {
         var req = client.request(.GET, uri, .{
             .extra_headers = &.{
                 .{ .name = "Accept", .value = "application/json" },
-                .{ .name = "User-Agent", .value = "Mozilla/5.0 (X11; Linux x86_64) ZigZag/1.0" },
+                .{ .name = "User-Agent", .value = "Mozilla/5.0 (X11; Linux x86_64) Opal/1.0" },
             },
         }) catch continue;
         defer req.deinit();
