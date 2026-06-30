@@ -4,6 +4,7 @@ const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const io = @import("../core/io_global.zig");
+const workers = @import("../core/workers.zig");
 
 pub const alloc = @import("../core/alloc.zig").allocator;
 
@@ -139,6 +140,22 @@ fn videoIdExists(video_id: []const u8) bool {
         if (std.mem.eql(u8, r.video_id[0..r.video_id_len], video_id)) return true;
     }
     return false;
+}
+
+/// Shutdown cleanup. Frees per-result thumbnail pixels the renderer never
+/// uploaded (the results ArrayList only owns its own backing, not each item's
+/// heap buffer), then the index-aligned date arrays. GPU textures don't need a
+/// free here — the window/GL context is already tearing down.
+pub fn deinit() void {
+    for (state.app.yt.results.items) |*it| {
+        if (it.thumb_pixels) |px| {
+            alloc.free(px);
+            it.thumb_pixels = null;
+        }
+    }
+    state.app.yt.results.deinit(alloc);
+    dates.deinit(alloc);
+    dates_lens.deinit(alloc);
 }
 
 /// Date string for result `idx`, or "" if none/out of range. Caller holds yt_mutex.
@@ -584,6 +601,8 @@ pub fn fetchThumb(item: *state.YtItem) void {
 
     if (std.Thread.spawn(.{}, struct {
         fn worker(ptr: *state.YtItem) void {
+            workers.enter();
+            defer workers.leave();
             defer ptr.thumb_fetching = false;
             defer @import("../core/poster.zig").releaseSlot();
 
@@ -619,6 +638,13 @@ pub fn fetchThumb(item: *state.YtItem) void {
             const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
             const p_slice = alloc.alloc(u8, p_len) catch return;
             @memcpy(p_slice, pixels[0..p_len]);
+
+            // Quitting → don't publish into a result the deinit path may have
+            // already freed; drop our copy so it isn't reported as a leak.
+            if (workers.isQuitting()) {
+                alloc.free(p_slice);
+                return;
+            }
 
             ptr.thumb_w = @intCast(w);
             ptr.thumb_h = @intCast(h);

@@ -229,6 +229,27 @@ pub const MediaPlayer = struct {
         @memset(&self.thumb_texture_path, 0);
         self.thumb_texture_path_len = 0;
 
+        // `allocator.create` hands back undefined memory and this init assigns
+        // fields one-by-one, so the struct-declaration DEFAULTS are never
+        // applied. These were missed and read garbage (0xaa under the debug
+        // allocator): a garbage `dialogue_head`/`dialogue_count` drove an
+        // out-of-bounds in updateDialogueRing (crash on the first subtitle), and
+        // a garbage `cached_sub_text_len` risks an OOB / invalid-UTF-8 dvui panic
+        // when the sub-text mirror is drawn. Initialize them to their defaults.
+        self.cached_paused = true;
+        self.last_seen_pos = 0;
+        self.cached_vid_no = false;
+        @memset(&self.cached_sub_text, 0);
+        self.cached_sub_text_len = 0;
+        @memset(&self.loading_label, 0);
+        @memset(std.mem.asBytes(&self.dialogue_lines), 0);
+        @memset(&self.dialogue_line_lens, 0);
+        @memset(&self.dialogue_line_ts, 0);
+        self.dialogue_head = 0;
+        self.dialogue_count = 0;
+        self.dialogue_last_hash = 0;
+        self.proxy_handle = @import("stream_proxy.zig").INVALID_HANDLE;
+
         if (state.app.is_headless) {
             // Headless: no display surface, so no software-render pixel buffer.
             // Empty slice — deinit's allocator.free on a zero-len slice is a no-op.

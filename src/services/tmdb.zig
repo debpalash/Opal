@@ -929,11 +929,11 @@ fn fetchSeasonsThread(tmdb_id: i32, my_gen: u32) void {
     defer state.app.tmdb.tv_seasons_loading = false;
 
     var url_buf: [128]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org/3/tv/{d}", .{tmdb_id}) catch return;
+    const url = std.fmt.bufPrint(&url_buf, "/3/tv/{d}", .{tmdb_id}) catch return;
 
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
-    const bytes = tvCurl(url, buf);
+    const bytes = @import("tmdb_api.zig").tmdbApiInto(url, state.app.tmdb.api_key[0..state.app.tmdb.api_key_len], buf);
     if (bytes == 0) {
         var lb: [96]u8 = undefined;
         const lm = std.fmt.bufPrint(&lb, "TV seasons fetch FAILED (id={d}) — empty response", .{tmdb_id}) catch "TV seasons fetch failed";
@@ -1096,11 +1096,11 @@ fn fetchEpisodesThread(tmdb_id: i32, season_number: i32, my_gen: u32) void {
     defer state.app.tmdb.tv_episodes_loading = false;
 
     var url_buf: [160]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org/3/tv/{d}/season/{d}", .{ tmdb_id, season_number }) catch return;
+    const url = std.fmt.bufPrint(&url_buf, "/3/tv/{d}/season/{d}", .{ tmdb_id, season_number }) catch return;
 
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
-    const bytes = tvCurl(url, buf);
+    const bytes = @import("tmdb_api.zig").tmdbApiInto(url, state.app.tmdb.api_key[0..state.app.tmdb.api_key_len], buf);
     if (bytes == 0) return;
     const body = buf[0..bytes];
 
@@ -1155,52 +1155,8 @@ fn parseEpisodes(json: []const u8) void {
 }
 
 // ── curl + tiny JSON scan helpers (bounds-capped to the dst buffers) ──
-
-/// GET `url` with the TMDB Bearer token via curl (io_global.Child), writing the
-/// response body into `buf`. Returns the byte count (0 on failure). The caller
-/// owns `buf` (so it can free the FULL allocation — the DebugAllocator rejects
-/// freeing a resized sub-slice, which is why we don't return an owned slice).
-fn tvCurlOnce(url: []const u8, buf: []u8) usize {
-    var auth_buf: [300]u8 = undefined;
-    const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
-    const auth = std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{key}) catch return 0;
-
-    const argv = [_][]const u8{ "curl", "-s", "-H", auth, "--max-time", "12", url };
-    var child = io.Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return 0;
-
-    const bytes = if (child.stdout) |*stdout| io.readAll(stdout, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    return bytes;
-}
-
-/// HTTPS first, HTTP fallback (shares tmdb_api.tmdb_https_blocked): some networks
-/// SNI-block api.themoviedb.org over 443 (TLS reset → empty response). HTTP works
-/// there and the bearer token still authenticates. See tmdb_api.curlGet.
-fn tvCurl(url: []const u8, buf: []u8) usize {
-    const api_mod = @import("tmdb_api.zig");
-    var http_buf: [200]u8 = undefined;
-    const http_url = @import("tmdb_pure.zig").httpsToHttp(url, &http_buf);
-
-    if (api_mod.tmdb_https_blocked.load(.acquire)) {
-        if (http_url) |hu| {
-            const n = tvCurlOnce(hu, buf);
-            if (n > 0) return n;
-        }
-    }
-    const n = tvCurlOnce(url, buf);
-    if (n > 0) return n;
-    if (http_url) |hu| {
-        const m = tvCurlOnce(hu, buf);
-        if (m > 0) {
-            api_mod.tmdb_https_blocked.store(true, .release);
-            return m;
-        }
-    }
-    return 0;
-}
+// TV detail/season fetches now go through tmdb_api.tmdbApiInto (shared auth-by-
+// key-shape + HTTPS→HTTP fallback + JSON validation + sticky-flag self-heal).
 
 /// Parse the integer at the very start of `s` (used right after a key offset).
 /// Handles an optional leading '-'.

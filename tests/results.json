@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-06-25T10:58:44",
-  "total": 96,
-  "passed": 86,
+  "timestamp": "2026-06-28T16:11:57",
+  "total": 104,
+  "passed": 94,
   "failed": 0,
   "warnings": 3,
   "skipped": 7,
@@ -85,13 +85,13 @@
       "skip": 0
     },
     "Page Shell": {
-      "pass": 11,
+      "pass": 12,
       "fail": 0,
       "warn": 0,
       "skip": 0
     },
     "Player": {
-      "pass": 3,
+      "pass": 4,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -114,6 +114,18 @@
       "warn": 0,
       "skip": 0
     },
+    "Stability": {
+      "pass": 4,
+      "fail": 0,
+      "warn": 0,
+      "skip": 0
+    },
+    "Browse": {
+      "pass": 3,
+      "fail": 0,
+      "warn": 0,
+      "skip": 0
+    },
     "Search": {
       "pass": 1,
       "fail": 0,
@@ -132,12 +144,6 @@
       "warn": 0,
       "skip": 0
     },
-    "Stability": {
-      "pass": 1,
-      "fail": 0,
-      "warn": 0,
-      "skip": 0
-    },
     "Unit Tests": {
       "pass": 1,
       "fail": 0,
@@ -150,7 +156,7 @@
       "name": "Database Exists",
       "category": "Database",
       "status": "pass",
-      "detail": "Size: 140.0 KB",
+      "detail": "Size: 168.0 KB",
       "duration_ms": 0
     },
     {
@@ -158,27 +164,27 @@
       "category": "Database",
       "status": "pass",
       "detail": "40 config entries",
-      "duration_ms": 3
+      "duration_ms": 1
     },
     {
       "name": "Watch History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "6 watch entries",
+      "detail": "0 watch entries",
       "duration_ms": 0
     },
     {
       "name": "Search History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "38 searches",
+      "detail": "39 searches",
       "duration_ms": 0
     },
     {
       "name": "Download History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "10 downloads",
+      "detail": "9 downloads",
       "duration_ms": 0
     },
     {
@@ -220,7 +226,7 @@
       "name": "User Preferences Table",
       "category": "Memory",
       "status": "pass",
-      "detail": "active_hour=22:00 (w:142)",
+      "detail": "active_hour=19:00 (w:170)",
       "duration_ms": 0
     },
     {
@@ -241,7 +247,7 @@
       "name": "Theme Persistence",
       "category": "Config",
       "status": "pass",
-      "detail": "Theme: Midnight",
+      "detail": "Theme: Solarized",
       "duration_ms": 0
     },
     {
@@ -283,14 +289,14 @@
       "name": "Zig Build",
       "category": "Build",
       "status": "pass",
-      "detail": "Binary: 39.9 MB",
-      "duration_ms": 596
+      "detail": "Binary: 40.5 MB",
+      "duration_ms": 748
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "39.9 MB, built at 10:57:21",
+      "detail": "40.5 MB, built at 16:11:07",
       "duration_ms": 0
     },
     {
@@ -326,35 +332,35 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 1283
+      "duration_ms": 1379
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "skip",
       "detail": "faster-whisper not installed (optional)",
-      "duration_ms": 37
+      "duration_ms": 25
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 31
+      "duration_ms": 23
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 22
+      "duration_ms": 35
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 35
+      "duration_ms": 26
     },
     {
       "name": "Embedding Server Health",
@@ -368,7 +374,7 @@
       "category": "Theming",
       "status": "pass",
       "detail": "7 presets: midnight, abyss, phantom, nord, solarized, rose, ember",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Theme Cycle Function",
@@ -403,7 +409,7 @@
       "category": "Commands",
       "status": "pass",
       "detail": "25 unique commands, 52 response points",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Theme Voice Commands",
@@ -480,49 +486,49 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 34
+      "duration_ms": 98
     },
     {
       "name": "Compiles: zigzag-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 41
+      "duration_ms": 31
     },
     {
       "name": "Compiles: zigzag-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 34
+      "duration_ms": 55
     },
     {
       "name": "Compiles: zigzag-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 41
+      "duration_ms": 59
     },
     {
       "name": "--check degrades: zigzag-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 30
+      "duration_ms": 29
     },
     {
       "name": "--check degrades: zigzag-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 30
+      "duration_ms": 32
     },
     {
       "name": "--check degrades: zigzag-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 36
+      "duration_ms": 35
     },
     {
       "name": "Whisper Model Present",
@@ -536,14 +542,14 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 2098
+      "duration_ms": 2331
     },
     {
       "name": "Sherpa Model Canonicalization",
       "category": "ASR Streaming",
       "status": "pass",
       "detail": "canonicalization step present",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Streaming Convo Wired",
@@ -599,14 +605,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 7273
+      "duration_ms": 7933
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 44
+      "duration_ms": 64
     },
     {
       "name": "Page Router",
@@ -627,7 +633,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 6
+      "duration_ms": 7
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -753,13 +759,55 @@
       "category": "Server",
       "status": "pass",
       "detail": "compile-time headless entry + coreInit/headlessMain + 0.0.0.0 bind + -Dheadless",
-      "duration_ms": 0
+      "duration_ms": 3
     },
     {
       "name": "Headless Render Guards",
       "category": "Server",
       "status": "pass",
-      "detail": "render-context/pixels/theme gated; grid guards mpv_gl",
+      "detail": "render-context/pixels gated; grid guards mpv_gl; theme defers off-UI-thread",
+      "duration_ms": 0
+    },
+    {
+      "name": "Log Severity By Level",
+      "category": "Stability",
+      "status": "pass",
+      "detail": "log severity derived from level (info/warn/debug never error-red)",
+      "duration_ms": 0
+    },
+    {
+      "name": "Card Views Live Search + Polish",
+      "category": "Browse",
+      "status": "pass",
+      "detail": "live search + card-size + comics cover grid wired across all 3 views",
+      "duration_ms": 0
+    },
+    {
+      "name": "TV Seasons/Episodes/Tracking",
+      "category": "Browse",
+      "status": "pass",
+      "detail": "tv seasons \u2192 episodes \u2192 resolver play + episode tracking wired",
+      "duration_ms": 0
+    },
+    {
+      "name": "Anime Seasons/Calendar/Tracking",
+      "category": "Browse",
+      "status": "pass",
+      "detail": "modes + seasonal + calendar + relations + episode tracking wired",
+      "duration_ms": 0
+    },
+    {
+      "name": "Now-Playing Media Bar",
+      "category": "Player",
+      "status": "pass",
+      "detail": "now-playing bar: transport+scrubber+playlist, guarded; torrent strip kept",
+      "duration_ms": 0
+    },
+    {
+      "name": "Brand Is Opal",
+      "category": "Page Shell",
+      "status": "pass",
+      "detail": "display brand = Opal / Play everything (binary/config stay zigzag)",
       "duration_ms": 0
     },
     {
@@ -805,18 +853,32 @@
       "duration_ms": 0
     },
     {
+      "name": "Player Init Applies Field Defaults",
+      "category": "Stability",
+      "status": "pass",
+      "detail": "all 27 default-valued fields assigned in init",
+      "duration_ms": 1
+    },
+    {
+      "name": "Stream Resources Resolvable When Bundled",
+      "category": "Stability",
+      "status": "pass",
+      "detail": "resource-root cwd wired for nova2 + engines/ bundled",
+      "duration_ms": 1
+    },
+    {
       "name": "Threads Detached (project-wide)",
       "category": "Stability",
       "status": "pass",
       "detail": "no discarded std.Thread.spawn handles in src/",
-      "duration_ms": 17
+      "duration_ms": 12
     },
     {
       "name": "Zig Unit Tests",
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 602
+      "duration_ms": 1041
     }
   ]
 }

@@ -192,30 +192,12 @@ pub fn fetchPoster(item: *state.TmdbItem) void {
 /// HTTPS.) Shared with tmdb.zig's TV-detail fetch.
 pub var tmdb_https_blocked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
-/// GET via the curl subprocess (returns a heap body the caller frees, or null).
-/// We use curl rather than std.http here because std.http.Client SEGV-crashed on
-/// the api.themoviedb.org TLS connection-reset; curl fails gracefully.
-fn curlGet(url: []const u8, auth_header: []const u8) ?[]u8 {
+fn curlIntoOnce(url: []const u8, auth_header: []const u8, buf: []u8) usize {
     const io_g = @import("../core/io_global.zig");
-    const argv = [_][]const u8{ "curl", "-s", "-H", auth_header, "--max-time", "12", url };
-    var child = io_g.Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return null;
-    const buf = alloc.alloc(u8, 256 * 1024) catch {
-        _ = child.wait() catch {};
-        return null;
-    };
-    defer alloc.free(buf);
-    const n = if (child.stdout) |*so| io_g.readAll(so, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    if (n == 0) return null;
-    return alloc.dupe(u8, buf[0..n]) catch null;
-}
-
-fn curlIntoOnce(url: []const u8, buf: []u8) usize {
-    const io_g = @import("../core/io_global.zig");
-    var child = io_g.Child.init(&.{ "curl", "-s", "--max-time", "12", url }, alloc);
+    var child = if (auth_header.len > 0)
+        io_g.Child.init(&.{ "curl", "-s", "-H", auth_header, "--max-time", "12", url }, alloc)
+    else
+        io_g.Child.init(&.{ "curl", "-s", "--max-time", "12", url }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     child.spawn() catch return 0;
@@ -224,50 +206,76 @@ fn curlIntoOnce(url: []const u8, buf: []u8) usize {
     return n;
 }
 
-/// HTTPS→HTTP fallback curl into a caller buffer, for TMDB callers that carry the
-/// api_key in the query string (resolver / AI search). Returns bytes written.
-/// Shares tmdb_https_blocked with httpGet/tvCurl. Use this instead of std.http
-/// (http.fetch) for api.themoviedb.org — std.http SEGV-crashes on the TLS reset
-/// that SNI-blocked networks return.
-pub fn tmdbCurlInto(url: []const u8, buf: []u8) usize {
-    var hb: [700]u8 = undefined;
-    const http_url = @import("tmdb_pure.zig").httpsToHttp(url, &hb);
+/// curl `url` (HTTPS) into `buf`, with an HTTPS→HTTP fallback for SNI-blocked
+/// networks. CRITICAL: a response is only accepted if it looks like JSON — some
+/// ISPs hijack plain HTTP to api.themoviedb.org and inject an HTML block page
+/// (200 OK). Treating that HTML as success poisoned `tmdb_https_blocked` (sticky)
+/// and routed every later call to the block page → all content stopped loading.
+/// The flag now self-heals: it clears whenever HTTPS returns JSON again.
+fn curlFallbackInto(url: []const u8, auth_header: []const u8, buf: []u8) usize {
+    const pure = @import("tmdb_pure.zig");
+    var hb: [768]u8 = undefined;
+    const http_url = pure.httpsToHttp(url, &hb);
+
+    // Known-blocked: try HTTP first, but only trust valid JSON. If HTTP no longer
+    // returns JSON (ISP now hijacks HTTP too), fall through and re-try HTTPS.
     if (tmdb_https_blocked.load(.acquire)) {
         if (http_url) |hu| {
-            const n = curlIntoOnce(hu, buf);
-            if (n > 0) return n;
+            const n = curlIntoOnce(hu, auth_header, buf);
+            if (n > 0 and pure.looksLikeJson(buf[0..n])) return n;
         }
     }
-    const n = curlIntoOnce(url, buf);
-    if (n > 0) return n;
+
+    const n = curlIntoOnce(url, auth_header, buf); // HTTPS
+    if (n > 0 and pure.looksLikeJson(buf[0..n])) {
+        tmdb_https_blocked.store(false, .release); // HTTPS works — clear any stale block
+        return n;
+    }
+
     if (http_url) |hu| {
-        const m = curlIntoOnce(hu, buf);
-        if (m > 0) {
-            tmdb_https_blocked.store(true, .release);
+        const m = curlIntoOnce(hu, auth_header, buf);
+        if (m > 0 and pure.looksLikeJson(buf[0..m])) {
+            tmdb_https_blocked.store(true, .release); // genuine SNI-block network
             return m;
         }
     }
     return 0;
 }
 
+/// Fetch a TMDB API endpoint into `buf`, picking the auth mechanism by key shape:
+/// a v4 Read-Access-Token (JWT) goes in `Authorization: Bearer`, a v3 key in the
+/// `?api_key=` query param. `path_query` is the part after the host with NO auth,
+/// e.g. "/3/search/multi?query=batman&page=1". Returns bytes written (0 on fail).
+/// Use this (not http.fetch/std.http) for api.themoviedb.org — std.http
+/// SEGV-crashes on the TLS reset that SNI-blocked networks return.
+pub fn tmdbApiInto(path_query: []const u8, key: []const u8, buf: []u8) usize {
+    const v4 = @import("tmdb_pure.zig").keyIsV4(key);
+
+    var url_buf: [768]u8 = undefined;
+    const url = if (v4)
+        std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org{s}", .{path_query}) catch return 0
+    else blk: {
+        const sep: u8 = if (std.mem.indexOfScalar(u8, path_query, '?') != null) '&' else '?';
+        break :blk std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org{s}{c}api_key={s}", .{ path_query, sep, key }) catch return 0;
+    };
+
+    var auth_buf: [320]u8 = undefined;
+    const auth: []const u8 = if (v4)
+        (std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{key}) catch return 0)
+    else
+        "";
+
+    return curlFallbackInto(url, auth, buf);
+}
+
 fn httpGet(url: []const u8, bearer_token: []const u8) ?[]u8 {
-    var auth_buf: [300]u8 = undefined;
+    var auth_buf: [320]u8 = undefined;
     const auth = std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{bearer_token}) catch return null;
-
-    var http_buf: [600]u8 = undefined;
-    const http_url = @import("tmdb_pure.zig").httpsToHttp(url, &http_buf);
-
-    // If HTTPS is known-blocked, go straight to HTTP.
-    if (tmdb_https_blocked.load(.acquire)) {
-        if (http_url) |hu| if (curlGet(hu, auth)) |b| return b;
-    }
-    // Try as-is (HTTPS), then fall back to HTTP and remember the block.
-    if (curlGet(url, auth)) |b| return b;
-    if (http_url) |hu| {
-        if (curlGet(hu, auth)) |b| {
-            tmdb_https_blocked.store(true, .release);
-            return b;
-        }
-    }
-    return null;
+    // Route through the shared HTTPS→HTTP fallback so the browse tab gets the same
+    // JSON validation (rejects ISP block pages) + sticky-flag self-heal.
+    const buf = alloc.alloc(u8, 256 * 1024) catch return null;
+    defer alloc.free(buf);
+    const n = curlFallbackInto(url, auth, buf);
+    if (n == 0) return null;
+    return alloc.dupe(u8, buf[0..n]) catch null;
 }

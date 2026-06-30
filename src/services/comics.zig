@@ -7,6 +7,7 @@ const logs = @import("../core/logs.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
+const workers = @import("../core/workers.zig");
 
 fn percentEncode(input: []const u8, out: []u8) usize {
     const hex = "0123456789ABCDEF";
@@ -156,6 +157,8 @@ pub fn closeComic() void {
 }
 
 fn fetchComicThread() void {
+    workers.enter();
+    defer workers.leave();
     const url = state.app.comic.url_buf[0..state.app.comic.url_len];
 
     // Try external plugins first
@@ -187,6 +190,11 @@ fn fetchComicThread() void {
     defer alloc.free(html_buf);
     const html_bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, html_buf) catch 0 else 0;
     _ = child.wait() catch {};
+
+    if (workers.isQuitting()) {
+        state.app.comic.is_loading.store(false, .release);
+        return;
+    }
 
     if (html_bytes == 0) {
         logs.pushLog("error", "comics", "Empty response from curl", true);
@@ -431,6 +439,8 @@ fn downloadPages() void {
 }
 
 fn downloadSinglePage(i: usize) void {
+    workers.enter();
+    defer workers.leave();
     const url = state.app.comic.page_urls[i][0..state.app.comic.page_url_lens[i]];
     if (url.len == 0) return;
 
@@ -453,12 +463,17 @@ fn downloadSinglePage(i: usize) void {
 
     if (child.stdout) |*stdout| {
         while (total < max_img) {
+            if (workers.isQuitting()) return; // bail mid-download; defer frees tmp_buf
             const n = @import("../core/io_global.zig").read(stdout, tmp_buf[total..]) catch break;
             if (n == 0) break;
             total += n;
         }
     }
     _ = child.wait() catch {};
+
+    // Quitting → freeComicPages may already have run; don't publish a buffer
+    // nothing will free.
+    if (workers.isQuitting()) return;
 
     if (total > 100) {
         const pixels = alloc.dupe(u8, tmp_buf[0..total]) catch return;
@@ -929,6 +944,8 @@ fn thumbnailize(url: []const u8, out: []u8) []const u8 {
 }
 
 fn coverWorker(idx: usize) void {
+    workers.enter();
+    defer workers.leave();
     defer sr_cover_fetching[idx].store(false, .release);
     defer _ = cover_in_flight.fetchSub(1, .acq_rel); // release the global slot
 
@@ -960,6 +977,7 @@ fn coverWorker(idx: usize) void {
     var total: usize = 0;
     if (child.stdout) |*so| {
         while (total < max_img) {
+            if (workers.isQuitting()) return; // bail mid-download; defer frees tmp_buf
             const n = @import("../core/io_global.zig").read(so, tmp_buf[total..]) catch break;
             if (n == 0) break;
             total += n;
@@ -981,8 +999,9 @@ fn coverWorker(idx: usize) void {
     @memcpy(p_slice, pixels[0..p_len]);
 
     // Publish only if this result slot is still alive (a newer search could have
-    // freed/repurposed it). The render thread uploads + frees the pixels.
-    if (sr_cover_url_lens[idx] == 0) {
+    // freed/repurposed it) and we're not shutting down (freeSearchCovers may
+    // already have run). The render thread uploads + frees the pixels.
+    if (sr_cover_url_lens[idx] == 0 or workers.isQuitting()) {
         alloc.free(p_slice);
         return;
     }

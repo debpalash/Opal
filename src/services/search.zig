@@ -239,6 +239,9 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
     var child = @import("../core/io_global.zig").Child.init(argv.items, allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Inherit;
+    // Resolve engines/nova2.py from the bundled resource root when installed
+    // (CWD is "/" from a /Applications launch); null keeps the dev CWD.
+    child.cwd = state.resourceRoot();
 
     child.spawn() catch return;
 

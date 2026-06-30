@@ -12,6 +12,29 @@ pub fn httpsToHttp(url: []const u8, buf: []u8) ?[]const u8 {
     return std.fmt.bufPrint(buf, "http://{s}", .{url["https://".len..]}) catch null;
 }
 
+/// True if `key` is a TMDB v4 Read-Access-Token (a JWT, "eyJ…") rather than a v3
+/// API key (32-char hex). v4 tokens MUST be sent via `Authorization: Bearer`; a
+/// v4 token in the `?api_key=` query param returns 401 "Invalid API key" (the
+/// bug that broke resolver/AI TMDB lookups). v3 keys go in `?api_key=`.
+pub fn keyIsV4(key: []const u8) bool {
+    return std.mem.startsWith(u8, key, "eyJ");
+}
+
+/// True if `body` looks like a JSON document (first non-whitespace byte is `{` or
+/// `[`). Used to reject ISP/captive-portal block pages (HTML) that some networks
+/// inject over plain HTTP — accepting that HTML as a "successful" TMDB response
+/// poisoned the sticky HTTPS→HTTP fallback and made all content stop loading.
+pub fn looksLikeJson(body: []const u8) bool {
+    for (body) |ch| {
+        switch (ch) {
+            ' ', '\t', '\r', '\n' => continue,
+            '{', '[' => return true,
+            else => return false,
+        }
+    }
+    return false;
+}
+
 /// String-aware splitter for a TMDB `"results":[ {…}, {…} ]` array. Fills `out`
 /// with a slice for each top-level object, WITHOUT entering string literals — so
 /// a `{` or `}` inside a title/overview can't desync the brace counter (the bug
@@ -114,4 +137,21 @@ test "httpsToHttp rewrites only https" {
     );
     try std.testing.expect(httpsToHttp("http://already", &buf) == null);
     try std.testing.expect(httpsToHttp("ftp://nope", &buf) == null);
+}
+
+test "keyIsV4 distinguishes JWT bearer tokens from v3 keys" {
+    // v4 Read-Access-Token (JWT) → Bearer header.
+    try std.testing.expect(keyIsV4("eyJhbGciOiJIUzI1NiJ9.payload.sig"));
+    // v3 key (32-char hex) → ?api_key= query param.
+    try std.testing.expect(!keyIsV4("0123456789abcdef0123456789abcdef"));
+    try std.testing.expect(!keyIsV4(""));
+}
+
+test "looksLikeJson accepts JSON, rejects ISP HTML block pages" {
+    try std.testing.expect(looksLikeJson("{\"results\":[]}"));
+    try std.testing.expect(looksLikeJson("  \n\t [1,2,3]"));
+    // The Airtel court-order block page that broke the HTTP fallback.
+    try std.testing.expect(!looksLikeJson("<meta name=\"viewport\"><iframe src=\"http://www.airtel.in/court-orders/\">"));
+    try std.testing.expect(!looksLikeJson("   "));
+    try std.testing.expect(!looksLikeJson(""));
 }

@@ -285,7 +285,12 @@ pub fn renderGrid() !void {
         const grid_w = grid_wrapper.data().borderRectScale().r.w;
         const max_cell_w: f32 = if (grid_columns > 0 and grid_w > 0) grid_w / @as(f32, @floatFromInt(grid_columns)) else 9999;
 
-        var cell_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .max_size_content = .{ .w = max_cell_w, .h = std.math.floatMax(f32) }, .expand = .both, .background = true, .color_fill = theme.colors.bg_deep, .color_border = cell_color, .border = border_rect, .margin = dvui.Rect.all(2), .corner_radius = theme.dims.rad_sm });
+        // While a video is showing, the leftover space around the aspect-fit image
+        // is letterbox — fill it BLACK (cinematic) instead of the navy app bg, so
+        // it reads as proper bars, not a UI gap. Empty/loading cells keep bg_deep.
+        const cell_fill = if (p.texture != null) dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } else theme.colors.bg_deep;
+
+        var cell_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .max_size_content = .{ .w = max_cell_w, .h = std.math.floatMax(f32) }, .expand = .both, .background = true, .color_fill = cell_fill, .color_border = cell_color, .border = border_rect, .margin = dvui.Rect.all(2), .corner_radius = theme.dims.rad_sm });
 
         // Single wrapper overlay — ensures video content and control badges layer
         // rather than splitting the cell height vertically
@@ -881,17 +886,15 @@ fn renderContinueWatching() void {
                 .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
             });
             if (resume_clicked) {
-                if (state.app.active_player_idx < state.app.players.items.len) {
-                    const browser = @import("../services/browser.zig");
-                    // Watch history stores both the display name and the
-                    // original URL/magnet/path. Routing must use the URL —
-                    // the display name has no extension or domain so it
-                    // routes to .browser and opens the HTML browser
-                    // instead of mpv.
-                    const url_to_load = if (e.link_len > 0) e.link[0..e.link_len] else raw_name;
-                    browser.loadContent(url_to_load);
-                    state.showToast("Resuming...");
-                }
+                const browser = @import("../services/browser.zig");
+                // Watch history stores both the display name and the original
+                // URL/magnet/path. Routing must use the URL — the display name
+                // has no extension or domain so it routes to .browser and opens
+                // the HTML browser instead of mpv. loadContent creates a player
+                // if none exists (cold start on the empty home screen).
+                const url_to_load = if (e.link_len > 0) e.link[0..e.link_len] else raw_name;
+                browser.loadContent(url_to_load);
+                state.showToast("Resuming...");
             }
         }
 

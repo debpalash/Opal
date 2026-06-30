@@ -1363,6 +1363,50 @@ def test_transfers_wired():
     return "fail", "transfers not wired"
 
 
+@test("Player Init Applies Field Defaults", "Stability")
+def test_player_init_defaults():
+    # Regression: MediaPlayer.init does `allocator.create` (undefined memory) +
+    # field-by-field assignment, so struct-declaration DEFAULTS are NOT applied.
+    # Forgotten fields read 0xaa garbage — a garbage dialogue_head/count drove an
+    # out-of-bounds crash in updateDialogueRing on the first subtitle. Guard the
+    # whole class: every default-valued field MUST be assigned in init.
+    import re
+    p = _src("src/player/player.zig")
+    decl = p.split("pub const MediaPlayer = struct", 1)[-1].split("pub fn init", 1)[0]
+    init_body = p.split("pub fn init", 1)[-1].split("return self;", 1)[0]
+    default_fields = re.findall(r"^    ([a-zA-Z_]\w*)\s*:\s*[^,]*=\s", decl, re.M)
+    missed = [f for f in default_fields
+              if not re.search(r"self\." + re.escape(f) + r"\b", init_body)]
+    if missed:
+        return "fail", "init never assigns default field(s): " + ", ".join(missed[:8])
+    return "pass", f"all {len(default_fields)} default-valued fields assigned in init"
+
+
+@test("Stream Resources Resolvable When Bundled", "Stability")
+def test_stream_resource_root():
+    # Regression: `python3 engines/nova2.py` (torrent search) is spawned with a
+    # RELATIVE path, so a /Applications launch (CWD "/") found nothing → "loading
+    # stream not working". Fix: a resource root (SDL_GetBasePath bundle Resources)
+    # used as the child cwd, plus engines/ copied into the .app bundle.
+    st = _src("src/core/state.zig")
+    rv = _src("src/services/resolver.zig")
+    sr = _src("src/services/search.zig")
+    mn = _src("src/main.zig")
+    sh = os.path.join(PROJECT_DIR, "scripts/build-app.sh")
+    sh_txt = open(sh).read() if os.path.exists(sh) else ""
+    checks = {
+        "state.resourceRoot helper": "pub fn resourceRoot()" in st,
+        "startup detection": "detectResourceRoot" in mn and "SDL_GetBasePath" in mn,
+        "resolver uses cwd": "child.cwd = state.resourceRoot()" in rv,
+        "search uses cwd": "child.cwd = state.resourceRoot()" in sr,
+        "bundle copies engines/": "Contents/Resources/engines" in sh_txt,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "stream resource wiring missing: " + ", ".join(missing)
+    return "pass", "resource-root cwd wired for nova2 + engines/ bundled"
+
+
 @test("Threads Detached (project-wide)", "Stability")
 def test_threads_detached():
     # Discarded `_ = std.Thread.spawn(...)` leaks the pthread handle (CLAUDE.md);

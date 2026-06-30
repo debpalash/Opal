@@ -175,6 +175,33 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_env).step);
 
+    const test_workers = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/workers.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_workers).step);
+
+    const test_chrome = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ui/chrome_autohide.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_chrome).step);
+
+    const test_resume = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/resume_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_resume).step);
+
     const test_intent = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/ai_intent_pure.zig"),

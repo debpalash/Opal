@@ -352,6 +352,16 @@ pub const AppState = struct {
     session_restore_lens: [16]usize = std.mem.zeroes([16]usize),
     session_restore_count: usize = 0,
     session_restore_done: bool = false,
+
+    // ── "Resume last played?" launch prompt (replaces silent session restore) ──
+    init_history_loaded: bool = false, // set on the init worker after watch.load()
+    resume_prompt_checked: bool = false, // one-shot: armed once watch history loads
+    resume_prompt_active: bool = false, // banner currently shown
+    resume_prompt_link: [2048]u8 = std.mem.zeroes([2048]u8), // URL/magnet/path to reopen
+    resume_prompt_link_len: usize = 0,
+    resume_prompt_label: [128]u8 = std.mem.zeroes([128]u8), // cleaned title for the banner
+    resume_prompt_label_len: usize = 0,
+    resume_prompt_pct: u8 = 0, // saved progress (0–100)
     eq_preset: usize = 0,
     playlist: ?*const @import("../player/m3u.zig").M3UPlaylist = null,
     thumb_state: thumbnail.ThumbnailState = thumbnail.ThumbnailState.init(),
@@ -372,6 +382,13 @@ pub const AppState = struct {
     download_rate_limit: i32 = 0,
     save_path_buf: [256]u8 = std.mem.zeroes([256]u8),
     save_path_len: usize = 0,
+
+    // Directory that holds bundled runtime resources (engines/, scripts/, …).
+    // Empty = use the current working directory (dev: launched from project
+    // root). Set at startup to the macOS bundle's Resources dir when the app is
+    // launched from /Applications (CWD is "/" there, so relative paths fail).
+    resource_root: [1024]u8 = std.mem.zeroes([1024]u8),
+    resource_root_len: usize = 0,
     ytdl_format_idx: usize = 1,
     sub_lang_buf: [8]u8 = [_]u8{ 'e', 'n', 'g', 0, 0, 0, 0, 0 },
     sub_lang_len: usize = 3,
@@ -728,6 +745,15 @@ pub fn getSavePath() [*c]const u8 {
     const i = @min(app.save_path_len, app.save_path_buf.len - 1);
     app.save_path_buf[i] = 0;
     return @ptrCast(&app.save_path_buf);
+}
+
+/// Directory holding bundled runtime resources (engines/, scripts/, …), or null
+/// to use the current working directory. Set once at startup. Used as the child
+/// working directory for `python3 engines/nova2.py` and similar relative spawns
+/// so streaming works from a /Applications launch (CWD "/") as well as dev.
+pub fn resourceRoot() ?[]const u8 {
+    if (app.resource_root_len == 0) return null;
+    return app.resource_root[0..app.resource_root_len];
 }
 
 /// Show a toast notification for 3 seconds.

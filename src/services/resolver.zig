@@ -839,6 +839,9 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
     var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
+    // Run from the bundled resource root when installed (CWD is "/" from a
+    // /Applications launch); null in dev keeps the inherited project-dir CWD.
+    child.cwd = state.resourceRoot();
     _ = child.spawn() catch {
         logs.pushLog("warn", "resolver", "nova2.py spawn failed", false);
         return;
@@ -1430,15 +1433,13 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
     if (api_key.len == 0) return;
 
     var tmdb_url: [512]u8 = undefined;
-    const turl = std.fmt.bufPrint(&tmdb_url, "https://api.themoviedb.org/3/search/multi?api_key={s}&query={s}&page=1", .{
-        api_key, enc[0..el],
-    }) catch return;
+    const turl = std.fmt.bufPrint(&tmdb_url, "/3/search/multi?query={s}&page=1", .{enc[0..el]}) catch return;
 
     var buf: [32 * 1024]u8 = undefined;
     @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
-    // curl + HTTPS→HTTP fallback (NOT http.fetch/std.http, which SEGV-crashes on
-    // the api.themoviedb.org TLS reset that SNI-blocked networks return).
-    const n = @import("tmdb_api.zig").tmdbCurlInto(turl, &buf);
+    // curl + HTTPS→HTTP fallback; tmdbApiInto picks Bearer (v4 JWT) vs ?api_key=
+    // (v3) by key shape and rejects ISP HTML block pages.
+    const n = @import("tmdb_api.zig").tmdbApiInto(turl, api_key, &buf);
 
     if (n < 20) return;
 
@@ -1466,13 +1467,11 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
     // Fetch external IDs to get IMDB ID
     const mt_str = if (media_type_len > 0) media_type[0..media_type_len] else "movie";
     var ext_url: [256]u8 = undefined;
-    const eurl = std.fmt.bufPrint(&ext_url, "https://api.themoviedb.org/3/{s}/{s}/external_ids?api_key={s}", .{
-        mt_str, tmdb_id[0..tmdb_id_len], api_key,
-    }) catch return;
+    const eurl = std.fmt.bufPrint(&ext_url, "/3/{s}/{s}/external_ids", .{ mt_str, tmdb_id[0..tmdb_id_len] }) catch return;
 
     var buf2: [4096]u8 = undefined;
     @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
-    const n2 = @import("tmdb_api.zig").tmdbCurlInto(eurl, &buf2);
+    const n2 = @import("tmdb_api.zig").tmdbApiInto(eurl, api_key, &buf2);
     if (n2 == 0) return;
 
     if (n2 < 10) return;

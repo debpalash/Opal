@@ -893,7 +893,16 @@ pub fn loadContent(url: []const u8) void {
         return;
     }
 
-    // Video/audio → the MPV player pane.
+    // Video/audio → the MPV player pane. Create a player if none exists yet, so
+    // cold-start opens work too (Continue Watching, the launch resume prompt,
+    // deep links) — previously these silently no-op'd with no player present.
+    if (state.app.players.items.len == 0) {
+        if (@import("../player/player.zig").MediaPlayer.init(alloc)) |np| {
+            state.app.players.append(alloc, np) catch np.deinit(alloc);
+            if (state.app.players.items.len > 0) state.app.active_player_idx = state.app.players.items.len - 1;
+        } else |_| {}
+    }
+
     if (state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
         p.provider = .mpv;
