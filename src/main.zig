@@ -1162,7 +1162,12 @@ fn appFrame() !dvui.App.Result {
             });
         };
 
-        if (state.app.fullscreen_player_idx == null and !hide_chrome) {
+        // Immersive = give the video the whole window: hide ALL chrome (navbar,
+        // tab bar, drawer, language bar, bottom tray). True in fullscreen, or once
+        // the mouse goes idle during playback. Mouse motion reveals it again.
+        const immersive = state.app.fullscreen_player_idx != null or hide_chrome;
+
+        if (!immersive) {
             ui.renderHeader();
             ui.renderTabBar();
         }
@@ -1185,8 +1190,9 @@ fn appFrame() !dvui.App.Result {
                     grid_inner.deinit();
                 }
 
-                // Language Learning subtitle bar (non-expanding, below grid)
-                {
+                // Language Learning subtitle bar (non-expanding, below grid) —
+                // hidden in immersive playback so the video reaches the bottom edge.
+                if (!immersive) {
                     const lang_learn = @import("services/lang_learn.zig");
                     lang_learn.pollSubtitle();
                     lang_learn.renderSubtitleBar();
@@ -1195,13 +1201,14 @@ fn appFrame() !dvui.App.Result {
                 grid_area.deinit();
             }
 
-            // 2. Tabbed Drawer (non-expanding, fixed width on right side)
-            drawer.renderDrawer();
+            // 2. Tabbed Drawer (fixed width, right side) — hidden in immersive
+            // playback so the video gets the full window width.
+            if (!immersive) drawer.renderDrawer();
         }
 
-        // 3. Global Status Bottom Tray (hide when the player controls overlay is
-        // active, and while chrome is auto-hidden during idle playback)
-        if (state.app.fullscreen_player_idx == null and !state.app.show_cell_overlay and !hide_chrome) {
+        // 3. Global Status Bottom Tray (hidden in immersive playback and when the
+        // player controls overlay is active)
+        if (!immersive and !state.app.show_cell_overlay) {
             ui.renderGlobalBottomTray();
         }
     } // end else — legacy header+grid+drawer layout

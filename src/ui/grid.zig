@@ -290,7 +290,11 @@ pub fn renderGrid() !void {
         // it reads as proper bars, not a UI gap. Empty/loading cells keep bg_deep.
         const cell_fill = if (p.texture != null) dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } else theme.colors.bg_deep;
 
-        var cell_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .max_size_content = .{ .w = max_cell_w, .h = std.math.floatMax(f32) }, .expand = .both, .background = true, .color_fill = cell_fill, .color_border = cell_color, .border = border_rect, .margin = dvui.Rect.all(2), .corner_radius = theme.dims.rad_sm });
+        // Fullscreen → edge-to-edge: drop the inset margin + rounded corners.
+        const fs = state.app.fullscreen_player_idx != null;
+        const cell_margin = if (fs) dvui.Rect.all(0) else dvui.Rect.all(2);
+        const cell_radius = if (fs) dvui.Rect.all(0) else theme.dims.rad_sm;
+        var cell_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .max_size_content = .{ .w = max_cell_w, .h = std.math.floatMax(f32) }, .expand = .both, .background = true, .color_fill = cell_fill, .color_border = cell_color, .border = border_rect, .margin = cell_margin, .corner_radius = cell_radius });
 
         // Single wrapper overlay — ensures video content and control badges layer
         // rather than splitting the cell height vertically
