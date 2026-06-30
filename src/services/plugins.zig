@@ -844,7 +844,8 @@ fn renderSourcePlugins() void {
     const Auto = struct {
         var done: bool = false;
     };
-    if (!Auto.done and pr.token_len > 0 and pr.plugin_count == 0 and pr.status.load(.acquire) == .idle) {
+    // Auto-load the list on first view (public repo — no token needed).
+    if (!Auto.done and pr.plugin_count == 0 and pr.status.load(.acquire) == .idle) {
         Auto.done = true;
         pr.refresh();
     }
@@ -852,27 +853,25 @@ fn renderSourcePlugins() void {
     var card = cardBegin(@src(), 0);
     defer card.deinit();
 
-    cardTitle(@src(), "Available plugins", "Click Install to fetch a source from the repo and enable it. Only install sources you trust.");
-
-    // Token + Refresh.
+    // Header row: title + a small Refresh.
     {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-        defer row.deinit();
-        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &pr.token_buf }, .placeholder = "GitHub token (for a private repo)" }, .{ .expand = .horizontal, .gravity_y = 0.5 });
-        te.deinit();
-        pr.token_len = std.mem.indexOfScalar(u8, &pr.token_buf, 0) orelse pr.token_buf.len;
-        if (dvui.button(@src(), "Refresh", .{}, .{ .color_fill = theme.colors.accent, .color_text = dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 }, .gravity_y = 0.5 })) {
-            pr.saveToken();
+        var hrow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        defer hrow.deinit();
+        _ = dvui.label(@src(), "Available plugins", .{}, .{ .color_text = theme.colors.text_main, .font = dvui.themeGet().font_title, .gravity_y = 0.5 });
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
+        if (dvui.button(@src(), "Refresh", .{}, .{ .color_fill = theme.colors.bg_glass, .color_text = theme.colors.text_muted, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 }, .gravity_y = 0.5 })) {
+            pr.plugin_count = 0;
             pr.refresh();
         }
     }
-
-    if (pr.status_msg_len > 0) {
-        _ = dvui.label(@src(), "{s}", .{pr.status_msg[0..pr.status_msg_len]}, .{ .color_text = if (pr.status.load(.acquire) == .err) theme.colors.danger else theme.colors.text_muted, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
-    }
+    _ = dvui.label(@src(), "Click Install to enable a source. Only install sources you trust.", .{}, .{ .color_text = theme.colors.text_dim, .expand = .horizontal, .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 } });
 
     if (pr.plugin_count == 0) {
-        _ = dvui.label(@src(), "Paste your token and press Refresh to load available sources.", .{}, .{ .color_text = theme.colors.text_dim, .margin = .{ .x = 0, .y = 8, .w = 0, .h = 0 } });
+        const fetching = pr.status.load(.acquire) == .fetching;
+        _ = dvui.label(@src(), "{s}", .{if (fetching) "Loading sources…" else "No sources available."}, .{ .color_text = theme.colors.text_dim, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
         return;
     }
 

@@ -154,6 +154,21 @@ pub fn saveToken() void {
 
 // ── Fetch manifest ───────────────────────────────────────────────────────────
 
+/// Load the plugin list from the bundled manifest (no token, no network) so the
+/// Plugins page shows everything immediately. Bundled into the .app at build time
+/// (Resources/plugins-manifest.json); in dev it's read from the project root.
+pub fn loadLocalManifest() void {
+    if (plugin_count > 0) return;
+    var path_buf: [700]u8 = undefined;
+    const path: []const u8 = if (state.resourceRoot()) |r|
+        (std.fmt.bufPrint(&path_buf, "{s}/plugins-manifest.json", .{r}) catch return)
+    else
+        "plugins-manifest.json";
+    const body = io.cwdReadFileAlloc(path, alloc, 262144) catch return;
+    defer alloc.free(body);
+    parseManifest(body);
+}
+
 pub fn refresh() void {
     if (status.load(.acquire) == .fetching) return;
     status.store(.fetching, .release);
