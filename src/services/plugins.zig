@@ -838,10 +838,21 @@ fn cardTitle(src: std.builtin.SourceLocation, text: []const u8, sub: []const u8)
 
 fn renderSourcePlugins() void {
     const pr = @import("plugin_repo.zig");
+
+    // Auto-load the list on first view so all available plugins show without a
+    // manual Refresh (needs a token for the private repo).
+    const Auto = struct {
+        var done: bool = false;
+    };
+    if (!Auto.done and pr.token_len > 0 and pr.plugin_count == 0 and pr.status.load(.acquire) == .idle) {
+        Auto.done = true;
+        pr.refresh();
+    }
+
     var card = cardBegin(@src(), 0);
     defer card.deinit();
 
-    cardTitle(@src(), "Source plugins", "Install endpoints for the built-in connectors. Only install sources you trust.");
+    cardTitle(@src(), "Available plugins", "Click Install to fetch a source from the repo and enable it. Only install sources you trust.");
 
     // Token + Refresh.
     {
@@ -964,7 +975,7 @@ fn renderTrakt() void {
 pub fn renderContent() void {
     if (!scanned) scanPlugins();
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_app });
     defer scroll.deinit();
 
     renderSourcePlugins();

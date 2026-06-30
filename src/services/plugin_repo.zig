@@ -25,9 +25,14 @@ pub const Plugin = struct {
     kind_len: usize = 0,
     version: [16]u8 = std.mem.zeroes([16]u8),
     version_len: usize = 0,
-    // The endpoints object, serialized verbatim ({"base":"…"}) — written on install.
+    // The endpoints object, serialized verbatim ({"base":"…"}) — written on install
+    // when no `file` is given (legacy inline manifest).
     endpoints: [512]u8 = std.mem.zeroes([512]u8),
     endpoints_len: usize = 0,
+    // Repo path to the plugin's own file (e.g. "plugins/torrentio.json"); when
+    // present, Install FETCHES it from the repo and writes it as the source config.
+    file: [128]u8 = std.mem.zeroes([128]u8),
+    file_len: usize = 0,
 
     pub fn idSlice(self: *const Plugin) []const u8 {
         return self.id[0..self.id_len];
@@ -245,6 +250,7 @@ fn parseManifest(body: []const u8) void {
         copyField(&pl.name, &pl.name_len, p.object.get("name"));
         copyField(&pl.kind, &pl.kind_len, p.object.get("type"));
         copyField(&pl.version, &pl.version_len, p.object.get("version"));
+        copyField(&pl.file, &pl.file_len, p.object.get("file"));
         if (pl.id_len == 0) continue;
 
         // Serialize the endpoints object verbatim for writing on install.
@@ -288,25 +294,92 @@ fn sourceFilePath(buf: []u8, id: []const u8) []const u8 {
     return std.fmt.bufPrint(buf, "{s}/{s}.json", .{ source_config.sourcesDir(&dir_buf), id }) catch "";
 }
 
+/// Fetch a file from the plugin repo (GitHub contents API, raw) into `out`.
+fn fetchRepoFile(repo_path: []const u8, out: []u8) usize {
+    var url_buf: [320]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "https://api.github.com/repos/{s}/contents/{s}", .{ repo(), repo_path }) catch return 0;
+    var auth_buf: [320]u8 = undefined;
+    const have_token = token_len > 0;
+    const auth = if (have_token) (std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{token_buf[0..token_len]}) catch return 0) else "";
+    var child = if (have_token)
+        io.Child.init(&.{ "curl", "-s", "-H", "Accept: application/vnd.github.raw", "-H", "User-Agent: Opal", "-H", auth, "--max-time", "15", url }, alloc)
+    else
+        io.Child.init(&.{ "curl", "-s", "-H", "Accept: application/vnd.github.raw", "-H", "User-Agent: Opal", "--max-time", "15", url }, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return 0;
+    const n = if (child.stdout) |*so| io.readAll(so, out) catch 0 else 0;
+    _ = child.wait() catch {};
+    return n;
+}
+
+fn writeSource(id: []const u8, data: []const u8) bool {
+    var dir_buf: [600]u8 = undefined;
+    io.cwdMakePath(source_config.sourcesDir(&dir_buf)) catch {};
+    var fp_buf: [700]u8 = undefined;
+    io.cwdWriteFile(.{ .sub_path = sourceFilePath(&fp_buf, id), .data = data }) catch return false;
+    source_config.reload();
+    return true;
+}
+
 pub fn install(idx: usize) void {
     if (idx >= plugin_count) return;
     const pl = &plugins[idx];
+
+    // Per-plugin file in the repo → fetch it on install (worker, network).
+    if (pl.file_len > 0) {
+        const S = struct {
+            var busy: bool = false;
+            var id: [32]u8 = undefined;
+            var id_len: usize = 0;
+            var file: [128]u8 = undefined;
+            var file_len: usize = 0;
+            var name: [48]u8 = undefined;
+            var name_len: usize = 0;
+            fn worker() void {
+                defer busy = false;
+                var buf: [16384]u8 = undefined;
+                const n = fetchRepoFile(file[0..file_len], &buf);
+                const ok = n > 0 and buf[0] == '{' and std.mem.indexOf(u8, buf[0..n], "\"Not Found\"") == null;
+                if (!ok) {
+                    state.showToastTyped("Install failed (fetch)", .err);
+                    return;
+                }
+                if (!writeSource(id[0..id_len], buf[0..n])) {
+                    state.showToastTyped("Install failed (write)", .err);
+                    return;
+                }
+                var tb: [80]u8 = undefined;
+                state.showToastTyped(std.fmt.bufPrint(&tb, "Installed {s}", .{name[0..name_len]}) catch "Installed", .success);
+            }
+        };
+        if (S.busy) return;
+        S.busy = true;
+        @memcpy(S.id[0..pl.id_len], pl.idSlice());
+        S.id_len = pl.id_len;
+        @memcpy(S.file[0..pl.file_len], pl.file[0..pl.file_len]);
+        S.file_len = pl.file_len;
+        @memcpy(S.name[0..pl.name_len], pl.nameSlice());
+        S.name_len = pl.name_len;
+        (std.Thread.spawn(.{}, S.worker, .{}) catch {
+            S.busy = false;
+            return;
+        }).detach();
+        state.showToastTyped("Installing", .info);
+        return;
+    }
+
+    // Legacy: endpoints inline in the manifest → write directly.
     if (pl.endpoints_len == 0) {
         state.showToastTyped("Plugin has no endpoint", .warning);
         return;
     }
-    var dir_buf: [600]u8 = undefined;
-    io.cwdMakePath(source_config.sourcesDir(&dir_buf)) catch {};
-    var fp_buf: [700]u8 = undefined;
-    const fp = sourceFilePath(&fp_buf, pl.idSlice());
-    io.cwdWriteFile(.{ .sub_path = fp, .data = pl.endpoints[0..pl.endpoints_len] }) catch {
+    if (!writeSource(pl.idSlice(), pl.endpoints[0..pl.endpoints_len])) {
         state.showToastTyped("Install failed (write)", .err);
         return;
-    };
-    source_config.reload();
+    }
     var tb: [80]u8 = undefined;
     state.showToastTyped(std.fmt.bufPrint(&tb, "Installed {s}", .{pl.nameSlice()}) catch "Installed", .success);
-    logs.pushLog("info", "plugins", "source endpoint installed", false);
 }
 
 pub fn uninstall(idx: usize) void {
