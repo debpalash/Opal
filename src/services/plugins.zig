@@ -813,9 +813,98 @@ pub fn fetchPoster(item: *PluginResult) void {
 // UI Rendering
 // ══════════════════════════════════════════════════════════
 
+/// Source-endpoint plugins (opal-plugins repo): supply URLs/creds for Opal's
+/// built-in connectors. Rendered at the top of the Plugins page.
+fn renderSourcePlugins() void {
+    const pr = @import("plugin_repo.zig");
+
+    var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
+        .background = true,
+        .color_fill = theme.colors.bg_header,
+        .color_border = theme.colors.border_subtle,
+        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+    });
+    defer panel.deinit();
+
+    _ = dvui.label(@src(), "Source plugins  ·  {s}", .{pr.repo()}, .{
+        .color_text = theme.colors.text_main,
+        .gravity_y = 0.5,
+    });
+    _ = dvui.label(@src(), "Supplies endpoints for built-in connectors. Only install sources you trust.", .{}, .{
+        .color_text = theme.colors.text_dim,
+        .expand = .horizontal,
+    });
+
+    // Token + Refresh row.
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 4 } });
+        defer row.deinit();
+
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &pr.token_buf }, .placeholder = "GitHub token (for a private repo)" }, .{
+            .expand = .horizontal,
+            .gravity_y = 0.5,
+        });
+        te.deinit();
+        pr.token_len = std.mem.indexOfScalar(u8, &pr.token_buf, 0) orelse pr.token_buf.len;
+
+        if (dvui.button(@src(), "Refresh", .{}, .{
+            .color_fill = theme.colors.accent,
+            .color_text = dvui.Color.white,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
+            .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+            .gravity_y = 0.5,
+        })) {
+            pr.saveToken();
+            pr.refresh();
+        }
+    }
+
+    if (pr.status_msg_len > 0) {
+        _ = dvui.label(@src(), "{s}", .{pr.status_msg[0..pr.status_msg_len]}, .{
+            .color_text = if (pr.status.load(.acquire) == .err) theme.colors.danger else theme.colors.text_muted,
+        });
+    }
+
+    // Available sources with Install / Uninstall.
+    for (0..pr.plugin_count) |i| {
+        const p = &pr.plugins[i];
+        var rowb = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i + 81000,
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+            .gravity_y = 0.5,
+        });
+        defer rowb.deinit();
+
+        _ = dvui.label(@src(), "{s}", .{p.nameSlice()}, .{ .id_extra = i + 81100, .color_text = theme.colors.text_main, .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "  {s} · v{s}", .{ p.kindSlice(), p.version[0..p.version_len] }, .{ .id_extra = i + 81200, .color_text = theme.colors.text_dim, .gravity_y = 0.5 });
+        {
+            var sp = dvui.box(@src(), .{}, .{ .id_extra = i + 81300, .expand = .horizontal });
+            sp.deinit();
+        }
+
+        const installed = pr.isInstalled(p.idSlice());
+        if (dvui.button(@src(), if (installed) "Uninstall" else "Install", .{}, .{
+            .id_extra = i + 81400,
+            .color_fill = if (installed) theme.colors.bg_glass else theme.colors.accent,
+            .color_text = if (installed) theme.colors.text_muted else dvui.Color.white,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+            .gravity_y = 0.5,
+        })) {
+            if (installed) pr.uninstall(i) else pr.install(i);
+        }
+    }
+}
+
 pub fn renderContent() void {
     if (!scanned) scanPlugins();
-    
+
+    renderSourcePlugins();
+
     // Plugin selector + search bar
     {
         var top = dvui.box(@src(), .{ .dir = .vertical }, .{

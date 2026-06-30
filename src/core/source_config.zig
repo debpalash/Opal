@@ -6,10 +6,11 @@
 //! INERT (its code looks up its endpoint, gets null, and skips). Nothing
 //! infringing is hardcoded in the running binary.
 //!
-//! On-disk format: a single JSON object at `~/.config/zigzag/plugins/sources.json`
-//! keyed by source id, each value a flat string map of named endpoints/creds, e.g.
-//!   { "1337x": { "base": "https://1337x.to" },
-//!     "yts":   { "api":  "https://yts.mx/api/v2/list_movies.json" } }
+//! On-disk format: one file per installed source under
+//! `~/.config/zigzag/plugins/sources/<id>.json`, each a flat JSON string map of
+//! named endpoints/creds (id = filename stem). e.g. `sources/1337x.json`:
+//!   { "base": "https://1337x.to" }
+//! Install = write the file; uninstall = delete it (the plugin manager does this).
 
 const std = @import("std");
 const paths = @import("paths.zig");
@@ -31,11 +32,11 @@ var entries: [MAX_ENTRIES]Entry = undefined;
 var entry_count: usize = 0;
 var mutex: @import("sync.zig").Mutex = .{};
 
-/// Absolute path of the installed-sources file.
-pub fn filePath(buf: []u8) []const u8 {
+/// Absolute path of the installed-sources directory.
+pub fn sourcesDir(buf: []u8) []const u8 {
     var cfg_buf: [512]u8 = undefined;
     const cfg = paths.configDir(&cfg_buf);
-    return std.fmt.bufPrint(buf, "{s}/plugins/sources.json", .{cfg}) catch cfg;
+    return std.fmt.bufPrint(buf, "{s}/plugins/sources", .{cfg}) catch cfg;
 }
 
 fn putEntry(id: []const u8, field: []const u8, val: []const u8) void {
@@ -59,22 +60,30 @@ pub fn reload() void {
     defer mutex.unlock();
     entry_count = 0;
 
-    var path_buf: [600]u8 = undefined;
-    const fpath = filePath(&path_buf);
-    const body = io.cwdReadFileAlloc(fpath, alloc, 256 * 1024) catch return;
-    defer alloc.free(body);
+    var dir_buf: [600]u8 = undefined;
+    const dir_path = sourcesDir(&dir_buf);
+    var dir = io.cwdOpenDir(dir_path, .{ .iterate = true }) catch return; // missing → all inert
+    defer dir.close(io.io());
 
-    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return;
-    defer parsed.deinit();
-    if (parsed.value != .object) return;
+    var it = dir.iterate();
+    while (it.next(io.io()) catch null) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".json")) continue;
+        const id = entry.name[0 .. entry.name.len - 5]; // strip ".json"
+        if (id.len == 0 or id.len > 32) continue;
 
-    var it = parsed.value.object.iterator();
-    while (it.next()) |kv| {
-        if (kv.value_ptr.* != .object) continue;
-        var fit = kv.value_ptr.*.object.iterator();
+        var fp_buf: [700]u8 = undefined;
+        const fp = std.fmt.bufPrint(&fp_buf, "{s}/{s}", .{ dir_path, entry.name }) catch continue;
+        const body = io.cwdReadFileAlloc(fp, alloc, 64 * 1024) catch continue;
+        defer alloc.free(body);
+
+        var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch continue;
+        defer parsed.deinit();
+        if (parsed.value != .object) continue;
+
+        var fit = parsed.value.object.iterator();
         while (fit.next()) |fkv| {
             if (fkv.value_ptr.* == .string) {
-                putEntry(kv.key_ptr.*, fkv.key_ptr.*, fkv.value_ptr.*.string);
+                putEntry(id, fkv.key_ptr.*, fkv.value_ptr.*.string);
             }
         }
     }

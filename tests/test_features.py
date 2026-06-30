@@ -1418,7 +1418,7 @@ def test_sources_externalized():
     sr = _src("src/services/search.zig")
     cm = _src("src/services/comics.zig")
     checks = {
-        "source_config.get exists": "pub fn get(" in sc and "sources.json" in sc,
+        "source_config.get exists": "pub fn get(" in sc and "plugins/sources" in sc,
         "1337x via config": 'get("1337x"' in rv,
         "yts via config": 'get("yts"' in rv,
         "eztv via config": 'get("eztv"' in sr,
@@ -1432,6 +1432,24 @@ def test_sources_externalized():
     if missing:
         return "fail", "source externalization gaps: " + ", ".join(missing)
     return "pass", "1337x/yts/eztv/readallcomics endpoints read from installed plugins"
+
+
+@test("Plugin Manager Wired", "Page Shell")
+def test_plugin_manager():
+    # qBittorrent-style source-endpoint manager: fetch opal-plugins manifest →
+    # Install writes ~/.config/zigzag/plugins/sources/<id>.json (read by
+    # source_config) → the built-in connector goes live.
+    pr = _src("src/services/plugin_repo.zig")
+    pg = _src("src/services/plugins.zig")
+    ok = (
+        "pub fn refresh()" in pr
+        and "pub fn install(" in pr
+        and "pub fn uninstall(" in pr
+        and "api.github.com/repos" in pr
+        and "source_config.reload()" in pr
+        and "renderSourcePlugins" in pg
+    )
+    return ("pass", "fetch/install/uninstall + UI wired") if ok else ("fail", "plugin manager not wired")
 
 
 @test("Threads Detached (project-wide)", "Stability")
