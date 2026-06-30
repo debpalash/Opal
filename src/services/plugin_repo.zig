@@ -55,6 +55,23 @@ pub var repo_len: usize = 0;
 pub var token_buf: [256]u8 = std.mem.zeroes([256]u8);
 pub var token_len: usize = 0;
 
+// Debrid config — turns torrent results into instant cached HTTP streams via a
+// Stremio add-on (Torrentio/Comet/…). `provider` is the add-on's provider id
+// (realdebrid, alldebrid, premiumize, torbox, debridlink); `key` is the API key.
+// Applied at addon-load time (stremio.loadInstalledAddons) to a plugin's "debrid"
+// URL template, so changing it takes effect on the next search — no reinstall.
+pub var debrid_provider_buf: [32]u8 = std.mem.zeroes([32]u8);
+pub var debrid_provider_len: usize = 0;
+pub var debrid_key_buf: [128]u8 = std.mem.zeroes([128]u8);
+pub var debrid_key_len: usize = 0;
+
+pub fn debridProvider() []const u8 {
+    return if (debrid_provider_len > 0) debrid_provider_buf[0..debrid_provider_len] else "realdebrid";
+}
+pub fn debridKey() []const u8 {
+    return debrid_key_buf[0..debrid_key_len];
+}
+
 fn setMsg(comptime fmt: []const u8, args: anytype) void {
     const s = std.fmt.bufPrint(&status_msg, fmt, args) catch status_msg[0..0];
     status_msg_len = s.len;
@@ -69,17 +86,54 @@ fn tokenPath(buf: []u8) []const u8 {
     return std.fmt.bufPrint(buf, "{s}/plugins/gh_token", .{paths.configDir(&cfg)}) catch "";
 }
 
-/// Load the persisted GitHub token (if any). Call at startup.
+fn debridPath(buf: []u8) []const u8 {
+    var cfg: [512]u8 = undefined;
+    return std.fmt.bufPrint(buf, "{s}/plugins/debrid.json", .{paths.configDir(&cfg)}) catch "";
+}
+
+/// Load the persisted GitHub token + debrid config (if any). Call at startup.
 pub fn init() void {
     var pb: [600]u8 = undefined;
     const tp = tokenPath(&pb);
-    const body = io.cwdReadFileAlloc(tp, alloc, 4096) catch return;
+    if (io.cwdReadFileAlloc(tp, alloc, 4096)) |body| {
+        defer alloc.free(body);
+        const t = std.mem.trim(u8, body, " \r\n\t");
+        if (t.len > 0 and t.len <= token_buf.len) {
+            @memcpy(token_buf[0..t.len], t);
+            token_len = t.len;
+        }
+    } else |_| {}
+    loadDebrid();
+}
+
+fn loadDebrid() void {
+    var pb: [600]u8 = undefined;
+    const dp = debridPath(&pb);
+    const body = io.cwdReadFileAlloc(dp, alloc, 4096) catch return;
     defer alloc.free(body);
-    const t = std.mem.trim(u8, body, " \r\n\t");
-    if (t.len > 0 and t.len <= token_buf.len) {
-        @memcpy(token_buf[0..t.len], t);
-        token_len = t.len;
-    }
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return;
+    defer parsed.deinit();
+    if (parsed.value != .object) return;
+    if (parsed.value.object.get("provider")) |v| if (v == .string and v.string.len <= debrid_provider_buf.len) {
+        @memcpy(debrid_provider_buf[0..v.string.len], v.string);
+        debrid_provider_len = v.string.len;
+    };
+    if (parsed.value.object.get("key")) |v| if (v == .string and v.string.len <= debrid_key_buf.len) {
+        @memcpy(debrid_key_buf[0..v.string.len], v.string);
+        debrid_key_len = v.string.len;
+    };
+}
+
+/// Persist the debrid provider/key entered in the UI.
+pub fn saveDebrid() void {
+    var cfg: [512]u8 = undefined;
+    var dir_buf: [600]u8 = undefined;
+    const dir = std.fmt.bufPrint(&dir_buf, "{s}/plugins", .{paths.configDir(&cfg)}) catch return;
+    io.cwdMakePath(dir) catch {};
+    var body_buf: [400]u8 = undefined;
+    const body = std.fmt.bufPrint(&body_buf, "{{\"provider\":\"{s}\",\"key\":\"{s}\"}}", .{ debridProvider(), debridKey() }) catch return;
+    var pb: [600]u8 = undefined;
+    io.cwdWriteFile(.{ .sub_path = debridPath(&pb), .data = body }) catch {};
 }
 
 /// Persist the token entered in the UI.

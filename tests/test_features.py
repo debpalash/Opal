@@ -1449,7 +1449,16 @@ def test_plugin_manager():
         and "source_config.reload()" in pr
         and "renderSourcePlugins" in pg
     )
-    return ("pass", "fetch/install/uninstall + UI wired") if ok else ("fail", "plugin manager not wired")
+    debrid = (
+        "debridKey()" in pr
+        and "applyDebrid" in _src("src/services/stremio.zig")
+        and "loadInstalledAddons" in _src("src/services/resolver.zig")
+    )
+    if not ok:
+        return "fail", "plugin manager not wired"
+    if not debrid:
+        return "fail", "debrid not wired"
+    return "pass", "fetch/install/uninstall + UI + debrid wired"
 
 
 @test("Threads Detached (project-wide)", "Stability")

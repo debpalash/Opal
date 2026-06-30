@@ -862,6 +862,51 @@ fn renderSourcePlugins() void {
         }
     }
 
+    // Debrid row — instant cached HTTP streams via Stremio add-ons (Torrentio/…).
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 } });
+        defer row.deinit();
+
+        _ = dvui.label(@src(), "Debrid", .{}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 } });
+
+        const providers = [_][]const u8{ "realdebrid", "alldebrid", "premiumize", "torbox", "debridlink" };
+        if (dvui.button(@src(), pr.debridProvider(), .{}, .{
+            .color_fill = theme.colors.bg_glass,
+            .color_text = theme.colors.accent,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
+            .gravity_y = 0.5,
+        })) {
+            var idx: usize = 0;
+            for (providers, 0..) |p, k| {
+                if (std.mem.eql(u8, p, pr.debridProvider())) idx = k;
+            }
+            const next = providers[(idx + 1) % providers.len];
+            @memcpy(pr.debrid_provider_buf[0..next.len], next);
+            pr.debrid_provider_len = next.len;
+            pr.saveDebrid();
+        }
+
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &pr.debrid_key_buf }, .placeholder = "debrid API key (optional)" }, .{
+            .expand = .horizontal,
+            .gravity_y = 0.5,
+            .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
+        });
+        te.deinit();
+        pr.debrid_key_len = std.mem.indexOfScalar(u8, &pr.debrid_key_buf, 0) orelse pr.debrid_key_buf.len;
+
+        if (dvui.button(@src(), "Save", .{}, .{
+            .color_fill = theme.colors.bg_glass,
+            .color_text = theme.colors.text_muted,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
+            .gravity_y = 0.5,
+        })) {
+            pr.saveDebrid();
+            state.showToastTyped("Debrid saved", .success);
+        }
+    }
+
     if (pr.status_msg_len > 0) {
         _ = dvui.label(@src(), "{s}", .{pr.status_msg[0..pr.status_msg_len]}, .{
             .color_text = if (pr.status.load(.acquire) == .err) theme.colors.danger else theme.colors.text_muted,

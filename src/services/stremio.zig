@@ -140,6 +140,18 @@ pub fn fetchCatalog() void {
 
 /// Ensure at least the well-known addons are installed so streaming sources
 /// work without manual UI setup. Idempotent: no-op once any addon is installed.
+/// Substitute {provider}/{key} in a debrid URL template, or null if it won't fit.
+fn applyDebrid(tmpl: []const u8, provider: []const u8, key: []const u8, out: []u8) ?[]const u8 {
+    var tmp: [512]u8 = undefined;
+    const s1_len = std.mem.replacementSize(u8, tmpl, "{provider}", provider);
+    if (s1_len > tmp.len) return null;
+    _ = std.mem.replace(u8, tmpl, "{provider}", provider, &tmp);
+    const out_len = std.mem.replacementSize(u8, tmp[0..s1_len], "{key}", key);
+    if (out_len > out.len) return null;
+    _ = std.mem.replace(u8, tmp[0..s1_len], "{key}", key, out);
+    return out[0..out_len];
+}
+
 /// Neutral: populate installed_addons ONLY from user-installed Stremio plugins
 /// (~/.config/zigzag/plugins/sources/<id>.json files that carry a "stremio" field
 /// = the addon manifest URL, written by the plugin manager). No addon is active
@@ -176,8 +188,19 @@ pub fn loadInstalledAddons() void {
         const nlen = @min(id.len, inst.name.len - 1);
         @memcpy(inst.name[0..nlen], id[0..nlen]);
         inst.name_len = nlen;
-        const ulen = @min(url_v.string.len, inst.url.len - 1);
-        @memcpy(inst.url[0..ulen], url_v.string[0..ulen]);
+
+        // Debrid: if the user set a debrid key and this add-on carries a "debrid"
+        // URL template, use the substituted URL (instant cached HTTP streams).
+        var dbuf: [512]u8 = undefined;
+        var addon_url = url_v.string;
+        const pr = @import("plugin_repo.zig");
+        if (pr.debridKey().len > 0) {
+            if (parsed.value.object.get("debrid")) |dv| if (dv == .string) {
+                if (applyDebrid(dv.string, pr.debridProvider(), pr.debridKey(), &dbuf)) |u| addon_url = u;
+            };
+        }
+        const ulen = @min(addon_url.len, inst.url.len - 1);
+        @memcpy(inst.url[0..ulen], addon_url[0..ulen]);
         inst.url_len = ulen;
         if (parsed.value.object.get("types")) |tv| if (tv == .string) {
             const tl = @min(tv.string.len, inst.types.len - 1);
