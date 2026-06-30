@@ -815,205 +815,175 @@ pub fn fetchPoster(item: *PluginResult) void {
 
 /// Source-endpoint plugins (opal-plugins repo): supply URLs/creds for Opal's
 /// built-in connectors. Rendered at the top of the Plugins page.
+// ── shared card primitives ──────────────────────────────────────────────────
+fn cardBegin(src: std.builtin.SourceLocation, id: usize) *dvui.BoxWidget {
+    const card = dvui.box(src, .{ .dir = .vertical }, .{
+        .id_extra = id,
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .corner_radius = dvui.Rect.all(theme.radius.lg),
+        .padding = dvui.Rect.all(theme.spacing.md),
+        .margin = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+    });
+    return card;
+}
+
+fn cardTitle(src: std.builtin.SourceLocation, text: []const u8, sub: []const u8) void {
+    _ = dvui.label(src, "{s}", .{text}, .{ .color_text = theme.colors.text_main, .font = dvui.themeGet().font_title });
+    if (sub.len > 0) {
+        _ = dvui.label(@src(), "{s}", .{sub}, .{ .color_text = theme.colors.text_dim, .expand = .horizontal, .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 } });
+    }
+}
+
 fn renderSourcePlugins() void {
     const pr = @import("plugin_repo.zig");
+    var card = cardBegin(@src(), 0);
+    defer card.deinit();
 
-    var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
-        .background = true,
-        .color_fill = theme.colors.bg_header,
-        .color_border = theme.colors.border_subtle,
-        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-    });
-    defer panel.deinit();
+    cardTitle(@src(), "Source plugins", "Install endpoints for the built-in connectors. Only install sources you trust.");
 
-    _ = dvui.label(@src(), "Source plugins  ·  {s}", .{pr.repo()}, .{
-        .color_text = theme.colors.text_main,
-        .gravity_y = 0.5,
-    });
-    _ = dvui.label(@src(), "Supplies endpoints for built-in connectors. Only install sources you trust.", .{}, .{
-        .color_text = theme.colors.text_dim,
-        .expand = .horizontal,
-    });
-
-    // Token + Refresh row.
+    // Token + Refresh.
     {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 4 } });
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer row.deinit();
-
-        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &pr.token_buf }, .placeholder = "GitHub token (for a private repo)" }, .{
-            .expand = .horizontal,
-            .gravity_y = 0.5,
-        });
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &pr.token_buf }, .placeholder = "GitHub token (for a private repo)" }, .{ .expand = .horizontal, .gravity_y = 0.5 });
         te.deinit();
         pr.token_len = std.mem.indexOfScalar(u8, &pr.token_buf, 0) orelse pr.token_buf.len;
-
-        if (dvui.button(@src(), "Refresh", .{}, .{
-            .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
-            .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
-            .gravity_y = 0.5,
-        })) {
+        if (dvui.button(@src(), "Refresh", .{}, .{ .color_fill = theme.colors.accent, .color_text = dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 }, .gravity_y = 0.5 })) {
             pr.saveToken();
             pr.refresh();
         }
     }
 
-    // Debrid row — instant cached HTTP streams via Stremio add-ons (Torrentio/…).
-    {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 } });
-        defer row.deinit();
-
-        _ = dvui.label(@src(), "Debrid", .{}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 } });
-
-        const providers = [_][]const u8{ "realdebrid", "alldebrid", "premiumize", "torbox", "debridlink" };
-        if (dvui.button(@src(), pr.debridProvider(), .{}, .{
-            .color_fill = theme.colors.bg_glass,
-            .color_text = theme.colors.accent,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
-            .gravity_y = 0.5,
-        })) {
-            var idx: usize = 0;
-            for (providers, 0..) |p, k| {
-                if (std.mem.eql(u8, p, pr.debridProvider())) idx = k;
-            }
-            const next = providers[(idx + 1) % providers.len];
-            @memcpy(pr.debrid_provider_buf[0..next.len], next);
-            pr.debrid_provider_len = next.len;
-            pr.saveDebrid();
-        }
-
-        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &pr.debrid_key_buf }, .placeholder = "debrid API key (optional)" }, .{
-            .expand = .horizontal,
-            .gravity_y = 0.5,
-            .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
-        });
-        te.deinit();
-        pr.debrid_key_len = std.mem.indexOfScalar(u8, &pr.debrid_key_buf, 0) orelse pr.debrid_key_buf.len;
-
-        if (dvui.button(@src(), "Save", .{}, .{
-            .color_fill = theme.colors.bg_glass,
-            .color_text = theme.colors.text_muted,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
-            .gravity_y = 0.5,
-        })) {
-            pr.saveDebrid();
-            state.showToastTyped("Debrid saved", .success);
-        }
-    }
-
     if (pr.status_msg_len > 0) {
-        _ = dvui.label(@src(), "{s}", .{pr.status_msg[0..pr.status_msg_len]}, .{
-            .color_text = if (pr.status.load(.acquire) == .err) theme.colors.danger else theme.colors.text_muted,
-        });
+        _ = dvui.label(@src(), "{s}", .{pr.status_msg[0..pr.status_msg_len]}, .{ .color_text = if (pr.status.load(.acquire) == .err) theme.colors.danger else theme.colors.text_muted, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
     }
 
-    // Available sources with Install / Uninstall.
+    if (pr.plugin_count == 0) {
+        _ = dvui.label(@src(), "Paste your token and press Refresh to load available sources.", .{}, .{ .color_text = theme.colors.text_dim, .margin = .{ .x = 0, .y = 8, .w = 0, .h = 0 } });
+        return;
+    }
+
+    // Available sources — one tidy row each.
+    var list = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
+    defer list.deinit();
     for (0..pr.plugin_count) |i| {
         const p = &pr.plugins[i];
-        var rowb = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = i + 81000,
-            .expand = .horizontal,
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
-            .gravity_y = 0.5,
-        });
+        var rowb = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 81000, .expand = .horizontal, .padding = .{ .x = 0, .y = 5, .w = 0, .h = 5 }, .gravity_y = 0.5 });
         defer rowb.deinit();
-
         _ = dvui.label(@src(), "{s}", .{p.nameSlice()}, .{ .id_extra = i + 81100, .color_text = theme.colors.text_main, .gravity_y = 0.5 });
-        _ = dvui.label(@src(), "  {s} · v{s}", .{ p.kindSlice(), p.version[0..p.version_len] }, .{ .id_extra = i + 81200, .color_text = theme.colors.text_dim, .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "  {s}", .{p.kindSlice()}, .{ .id_extra = i + 81200, .color_text = theme.colors.text_dim, .gravity_y = 0.5 });
         {
             var sp = dvui.box(@src(), .{}, .{ .id_extra = i + 81300, .expand = .horizontal });
             sp.deinit();
         }
-
         const installed = pr.isInstalled(p.idSlice());
-        if (dvui.button(@src(), if (installed) "Uninstall" else "Install", .{}, .{
-            .id_extra = i + 81400,
-            .color_fill = if (installed) theme.colors.bg_glass else theme.colors.accent,
-            .color_text = if (installed) theme.colors.text_muted else dvui.Color.white,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
-            .gravity_y = 0.5,
-        })) {
+        if (dvui.button(@src(), if (installed) "Uninstall" else "Install", .{}, .{ .id_extra = i + 81400, .color_fill = if (installed) theme.colors.bg_glass else theme.colors.accent, .color_text = if (installed) theme.colors.text_muted else dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 }, .gravity_y = 0.5 })) {
             if (installed) pr.uninstall(i) else pr.install(i);
         }
+    }
+}
+
+fn renderDebrid() void {
+    const pr = @import("plugin_repo.zig");
+    var card = cardBegin(@src(), 1);
+    defer card.deinit();
+
+    cardTitle(@src(), "Debrid", "Instant cached streams via Stremio add-ons (Torrentio). Optional.");
+
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+    defer row.deinit();
+
+    const providers = [_][]const u8{ "realdebrid", "alldebrid", "premiumize", "torbox", "debridlink" };
+    if (dvui.button(@src(), pr.debridProvider(), .{}, .{ .color_fill = theme.colors.bg_glass, .color_text = theme.colors.accent, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 }, .gravity_y = 0.5 })) {
+        var idx: usize = 0;
+        for (providers, 0..) |p, k| {
+            if (std.mem.eql(u8, p, pr.debridProvider())) idx = k;
+        }
+        const next = providers[(idx + 1) % providers.len];
+        @memcpy(pr.debrid_provider_buf[0..next.len], next);
+        pr.debrid_provider_len = next.len;
+        pr.saveDebrid();
+    }
+    var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &pr.debrid_key_buf }, .placeholder = "debrid API key" }, .{ .expand = .horizontal, .gravity_y = 0.5, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 } });
+    te.deinit();
+    pr.debrid_key_len = std.mem.indexOfScalar(u8, &pr.debrid_key_buf, 0) orelse pr.debrid_key_buf.len;
+    if (dvui.button(@src(), "Save", .{}, .{ .color_fill = theme.colors.bg_glass, .color_text = theme.colors.text_muted, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
+        pr.saveDebrid();
+        state.showToastTyped("Debrid saved", .success);
     }
 }
 
 /// Trakt.tv connect panel — scrobble + sync watched to the user's Trakt account.
 fn renderTrakt() void {
     const tr = @import("trakt.zig");
-    var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
-        .background = true,
-        .color_fill = theme.colors.bg_header,
-        .color_border = theme.colors.border_subtle,
-        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-    });
-    defer panel.deinit();
+    var card = cardBegin(@src(), 2);
+    defer card.deinit();
 
-    _ = dvui.label(@src(), "Trakt.tv  ·  sync watched history", .{}, .{ .color_text = theme.colors.text_main, .gravity_y = 0.5 });
+    cardTitle(@src(), "Trakt.tv", "Sync your watched history.");
 
     if (tr.isConnected()) {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer row.deinit();
         _ = dvui.label(@src(), "Connected", .{}, .{ .color_text = theme.colors.success, .gravity_y = 0.5 });
         {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
         }
-        if (dvui.button(@src(), "Disconnect", .{}, .{ .color_fill = theme.colors.bg_glass, .color_text = theme.colors.text_muted, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 }, .gravity_y = 0.5 })) {
+        if (dvui.button(@src(), "Disconnect", .{}, .{ .color_fill = theme.colors.bg_glass, .color_text = theme.colors.text_muted, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 }, .gravity_y = 0.5 })) {
             tr.disconnect();
         }
         return;
     }
 
-    _ = dvui.label(@src(), "Create an app at trakt.tv/oauth/applications (redirect: urn:ietf:wg:oauth:2.0:oob), then paste id + secret.", .{}, .{ .color_text = theme.colors.text_dim, .expand = .horizontal });
+    _ = dvui.label(@src(), "Create an app at trakt.tv/oauth/applications (redirect urn:ietf:wg:oauth:2.0:oob), then paste id + secret.", .{}, .{ .color_text = theme.colors.text_dim, .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 } });
 
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
     defer row.deinit();
 
     var idte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &tr.client_id }, .placeholder = "Trakt client id" }, .{ .expand = .horizontal, .gravity_y = 0.5 });
     idte.deinit();
     tr.client_id_len = std.mem.indexOfScalar(u8, &tr.client_id, 0) orelse tr.client_id.len;
 
-    var scte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &tr.client_secret }, .placeholder = "client secret" }, .{ .expand = .horizontal, .gravity_y = 0.5, .margin = .{ .x = 6, .y = 0, .w = 6, .h = 0 } });
+    var scte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &tr.client_secret }, .placeholder = "client secret" }, .{ .expand = .horizontal, .gravity_y = 0.5, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 } });
     scte.deinit();
     tr.client_secret_len = std.mem.indexOfScalar(u8, &tr.client_secret, 0) orelse tr.client_secret.len;
 
-    const label_txt = if (tr.auth_pending and tr.user_code_len > 0) "Waiting…" else "Connect";
-    if (dvui.button(@src(), label_txt, .{}, .{ .color_fill = theme.colors.accent, .color_text = dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 }, .gravity_y = 0.5 })) {
+    const label_txt = if (tr.auth_pending and tr.user_code_len > 0) "Waiting" else "Connect";
+    if (dvui.button(@src(), label_txt, .{}, .{ .color_fill = theme.colors.accent, .color_text = dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
         tr.save();
         tr.startDeviceAuth();
     }
 
     if (tr.auth_pending and tr.user_code_len > 0) {
-        _ = dvui.label(@src(), "Enter code {s} at trakt.tv/activate", .{tr.user_code[0..tr.user_code_len]}, .{ .color_text = theme.colors.accent, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
+        _ = dvui.label(@src(), "Enter code {s} at trakt.tv/activate", .{tr.user_code[0..tr.user_code_len]}, .{ .color_text = theme.colors.accent, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
     }
 }
 
 pub fn renderContent() void {
     if (!scanned) scanPlugins();
 
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
+    defer scroll.deinit();
+
     renderSourcePlugins();
+    renderDebrid();
     renderTrakt();
 
-    // Plugin selector + search bar
+    // ── Content plugins (external executables) — advanced, own card ──
+    var card = cardBegin(@src(), 3);
+    defer card.deinit();
+    cardTitle(@src(), "Content plugins", "Advanced: external executable plugins.");
+
     {
         var top = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal, .padding = .{ .x = 8, .y = 8, .w = 8, .h = 4 },
-            .background = true, .color_fill = theme.colors.bg_header,
+            .expand = .horizontal,
         });
         defer top.deinit();
-        
+
         if (plugin_count == 0) {
-            _ = dvui.label(@src(), "No plugins installed", .{}, .{
+            _ = dvui.label(@src(), "No content plugins installed", .{}, .{
                 .color_text = theme.colors.text_muted, .expand = .horizontal,
             });
             
@@ -1128,8 +1098,8 @@ pub fn renderContent() void {
         return;
     }
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
-    defer scroll.deinit();
+    var results_scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
+    defer results_scroll.deinit();
 
     // Hold the lock across the render loop: a worker only ever rewrites
     // `results` while holding `results_mutex` (see executeAndParse), so this
