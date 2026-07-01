@@ -1562,6 +1562,26 @@ def test_plugin_sandbox_hardened():
     return "pass", "user-trust gate + hardened prelude + native warn, pure-tested"
 
 
+@test("Motion Tokens + Transitions Wired", "Page Shell")
+def test_motion_transitions():
+    # Phase 2 motion (GUI-only — verified by presence): a single motion-token
+    # source of truth (durations + easings) drives transitions, and the app now
+    # uses dvui's animation APIs (previously 0 usage): route fade-in, toast
+    # fade-in, and a control-bar chrome fade instead of a hard pop.
+    th = _src("src/ui/theme.zig")
+    sh = _src("src/ui/shell.zig")
+    ft = _src("src/ui/footer.zig")
+    if "pub const motion = struct" not in th or "dvui.easing" not in th:
+        return "fail", "theme.motion tokens missing"
+    if "dvui.animate(" not in sh or "@intFromEnum(r)" not in sh:
+        return "fail", "route fade not wired in shell.zig"
+    if "dvui.animate(" not in ft:
+        return "fail", "toast fade not wired in footer.zig"
+    if "dvui.alpha(chrome_vis)" not in ft:
+        return "fail", "control-bar chrome fade not wired in footer.zig"
+    return "pass", "motion tokens + route/toast/chrome transitions wired"
+
+
 @test("Playback Repaint Gated + Async UI Wakes", "Stability")
 def test_smoothness_repaint():
     # Phase 1 smoothness (GUI/thread-only wiring — verified by presence):

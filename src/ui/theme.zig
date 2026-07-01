@@ -502,6 +502,21 @@ pub const dims = struct {
     pub const pad_lg = dvui.Rect.all(spacing.lg);
 };
 
+// ── Motion tokens — durations (µs, dvui animation units) + standard curves ──
+//
+// One source of truth for animation timing so the whole UI moves consistently
+// (see dvui.animate / dvui.animation / dvui.easing). Entrances ease-out, exits
+// ease-in, positional moves ease-in-out. Durations are deliberately short — a
+// polished UI feels responsive, not slow.
+pub const motion = struct {
+    pub const fast: i32 = 120_000; // hovers, small state flips
+    pub const base: i32 = 180_000; // toasts, route crossfade, chrome fade
+    pub const slow: i32 = 260_000; // larger reveals / staggered entrances
+    pub const enter: *const dvui.easing.EasingFn = dvui.easing.outQuad;
+    pub const exit: *const dvui.easing.EasingFn = dvui.easing.inQuad;
+    pub const move: *const dvui.easing.EasingFn = dvui.easing.inOutCubic;
+};
+
 // ── Apply to dvui global ──
 
 /// Set true when applyToDvui() is requested off the UI thread (e.g. config.load

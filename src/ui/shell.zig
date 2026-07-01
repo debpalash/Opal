@@ -78,7 +78,20 @@ pub fn render() !void {
             .padding = .{ .x = gutter, .y = if (r == .player) 0 else theme.spacing.xs, .w = gutter, .h = 0 },
         });
         defer content.deinit();
-        try renderPage(r);
+        // Fade each page in on navigation. id_extra keyed on the route so the
+        // AnimateWidget gets a fresh id per route → firstFrame true → the fade
+        // re-triggers on every top-nav change. The Player route bleeds edge-to-
+        // edge and must appear instantly (no flash over the video), so it skips.
+        if (r == .player) {
+            try renderPage(r);
+        } else {
+            var page_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.base, .easing = theme.motion.enter }, .{
+                .id_extra = @as(usize, @intFromEnum(r)),
+                .expand = .both,
+            });
+            defer page_fade.deinit();
+            try renderPage(r);
+        }
     }
 
     // Docked mini-player — keeps transport visible while browsing other pages.

@@ -1100,7 +1100,23 @@ pub fn renderLiquidGlassOverlay() void {
     var is_paused: c_int = 0;
     _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "pause", c.mpv.MPV_FORMAT_FLAG, &is_paused);
     const now_ms = @import("../core/io_global.zig").milliTimestamp();
-    if (is_paused == 0 and now_ms - state.app.last_mouse_move_ms > 2500 and open_picker == .none) return;
+    // Smooth fade-out instead of a hard pop: hold full opacity until 2.5s idle,
+    // then fade to 0 over ~220ms, then stop rendering. Held fully visible while
+    // paused or a picker is open. dvui.alpha() multiplies alpha for everything
+    // drawn until the paired alphaSet() restores it (same primitive AnimateWidget
+    // uses). During video playback the mpv render callback keeps frames coming so
+    // the fade advances; paused → chrome_held so no fade.
+    const idle_ms = now_ms - state.app.last_mouse_move_ms;
+    const chrome_held = is_paused != 0 or open_picker != .none;
+    const FADE_START_MS: i64 = 2500;
+    const FADE_LEN_MS: i64 = 220;
+    if (!chrome_held and idle_ms > FADE_START_MS + FADE_LEN_MS) return; // fully hidden
+    const chrome_vis: f32 = if (chrome_held or idle_ms <= FADE_START_MS)
+        1.0
+    else
+        1.0 - @min(@as(f32, 1.0), @as(f32, @floatFromInt(idle_ms - FADE_START_MS)) / @as(f32, @floatFromInt(FADE_LEN_MS)));
+    const prev_chrome_alpha = dvui.alpha(chrome_vis);
+    defer dvui.alphaSet(prev_chrome_alpha);
 
     // ── Anchor: push the footer to the bottom of the active cell. ──
     var anchor = dvui.box(@src(), .{ .dir = .vertical }, .{ .gravity_y = 1.0, .expand = .horizontal });
@@ -2030,6 +2046,15 @@ pub fn renderToast() void {
 
     var toast_anchor = dvui.overlay(@src(), .{ .expand = .both });
     defer toast_anchor.deinit();
+
+    // Fade each toast in. id_extra keyed on the (unique) expiry timestamp so a
+    // NEW toast gets a fresh widget id → firstFrame true → the fade re-triggers
+    // (AnimateWidget only auto-starts on the first frame of a given id).
+    var toast_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.base, .easing = theme.motion.enter }, .{
+        .id_extra = @as(usize, @bitCast(state.app.toast_expire)),
+        .expand = .both,
+    });
+    defer toast_fade.deinit();
 
     // Semantic colors based on toast type
     const toast_color = switch (state.app.toast_type) {

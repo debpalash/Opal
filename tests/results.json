@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-07-02T02:48:00",
-  "total": 113,
-  "passed": 103,
+  "timestamp": "2026-07-02T04:22:42",
+  "total": 114,
+  "passed": 104,
   "failed": 0,
   "warnings": 3,
   "skipped": 7,
@@ -85,7 +85,7 @@
       "skip": 0
     },
     "Page Shell": {
-      "pass": 18,
+      "pass": 19,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -170,7 +170,7 @@
       "name": "Watch History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "8 watch entries",
+      "detail": "9 watch entries",
       "duration_ms": 0
     },
     {
@@ -226,7 +226,7 @@
       "name": "User Preferences Table",
       "category": "Memory",
       "status": "pass",
-      "detail": "active_hour=16:00 (w:185)",
+      "detail": "active_hour=22:00 (w:189)",
       "duration_ms": 0
     },
     {
@@ -290,13 +290,13 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 40.8 MB",
-      "duration_ms": 365
+      "duration_ms": 386
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "40.8 MB, built at 02:47:10",
+      "detail": "40.8 MB, built at 04:20:28",
       "duration_ms": 0
     },
     {
@@ -332,35 +332,35 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 692
+      "duration_ms": 741
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "skip",
       "detail": "faster-whisper not installed (optional)",
-      "duration_ms": 20
+      "duration_ms": 21
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 18
+      "duration_ms": 20
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 17
+      "duration_ms": 25
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 21
+      "duration_ms": 23
     },
     {
       "name": "Embedding Server Health",
@@ -486,49 +486,49 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 23
+      "duration_ms": 25
     },
     {
       "name": "Compiles: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 23
+      "duration_ms": 25
     },
     {
       "name": "Compiles: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 22
+      "duration_ms": 24
     },
     {
       "name": "Compiles: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 23
+      "duration_ms": 24
     },
     {
       "name": "--check degrades: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 19
+      "duration_ms": 20
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 22
+      "duration_ms": 23
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 21
+      "duration_ms": 22
     },
     {
       "name": "Whisper Model Present",
@@ -605,14 +605,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 8360
+      "duration_ms": 8798
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 70
+      "duration_ms": 34
     },
     {
       "name": "Page Router",
@@ -633,7 +633,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 6
+      "duration_ms": 5
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -745,7 +745,7 @@
       "category": "Recall",
       "status": "pass",
       "detail": "position_secs migration applied",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Taste Receipts Wired",
@@ -902,6 +902,13 @@
       "duration_ms": 0
     },
     {
+      "name": "Motion Tokens + Transitions Wired",
+      "category": "Page Shell",
+      "status": "pass",
+      "detail": "motion tokens + route/toast/chrome transitions wired",
+      "duration_ms": 0
+    },
+    {
       "name": "Playback Repaint Gated + Async UI Wakes",
       "category": "Stability",
       "status": "pass",
@@ -934,14 +941,14 @@
       "category": "Stability",
       "status": "pass",
       "detail": "no discarded std.Thread.spawn handles in src/",
-      "duration_ms": 9
+      "duration_ms": 10
     },
     {
       "name": "Zig Unit Tests",
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 566
+      "duration_ms": 686
     }
   ]
 }
