@@ -1989,7 +1989,7 @@ pub fn renderResumePrompt() void {
         .corner_radius = dvui.Rect.all(theme.radius.lg),
         .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
         .box_shadow = .{
-            .color = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 },
+            .color = theme.shadow_soft,
             .offset = .{ .x = 0, .y = 4 },
             .fade = 20,
         },
@@ -2080,7 +2080,7 @@ pub fn renderToast() void {
         .corner_radius = dvui.Rect.all(theme.radius.lg),
         .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.md },
         .box_shadow = .{
-            .color = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 },
+            .color = theme.shadow_soft,
             .offset = .{ .x = 0, .y = 4 },
             .fade = 20,
         },
@@ -2126,7 +2126,7 @@ pub fn renderStatsOverlay() void {
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
         .min_size_content = .{ .w = 220, .h = 0 },
         .box_shadow = .{
-            .color = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 },
+            .color = theme.shadow_soft,
             .offset = .{ .x = 0, .y = 4 },
             .fade = 20,
         },

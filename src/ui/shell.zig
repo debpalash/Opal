@@ -203,8 +203,7 @@ fn navLink(r: Route, label: []const u8, icon: []const u8, id_extra: usize) void 
     dvui.icon(@src(), label, icon, .{}, .{
         .id_extra = id_extra,
         .color_text = fg,
-        .min_size_content = .{ .w = 15, .h = 15 },
-        .max_size_content = .{ .w = 15, .h = 15 },
+        .min_size_content = theme.iconSize(.sm),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
     });
@@ -375,8 +374,7 @@ fn subTabs(tabs: []const state.DrawerTab, sel: *state.DrawerTab, id_extra: usize
         dvui.icon(@src(), "tab", iconForTab(t), .{}, .{
             .id_extra = id_extra + i + 1,
             .color_text = fg,
-            .min_size_content = .{ .w = 14, .h = 14 },
-            .max_size_content = .{ .w = 14, .h = 14 },
+            .min_size_content = theme.iconSize(.sm),
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
         });

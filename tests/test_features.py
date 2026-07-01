@@ -1562,6 +1562,23 @@ def test_plugin_sandbox_hardened():
     return "pass", "user-trust gate + hardened prelude + native warn, pure-tested"
 
 
+@test("Polish Tokens Adopted", "Page Shell")
+def test_polish_tokens():
+    # Phase 3 polish (GUI-only): nav + sub-tab icons use the iconSize token (was
+    # raw 15/14px literals that differed between adjacent nav surfaces), and the
+    # soft drop shadow is a single theme token instead of copied {0,0,0,160}.
+    th = _src("src/ui/theme.zig")
+    sh = _src("src/ui/shell.zig")
+    ft = _src("src/ui/footer.zig")
+    if "pub const shadow_soft" not in th:
+        return "fail", "theme.shadow_soft token missing"
+    if "theme.iconSize(.sm)" not in sh:
+        return "fail", "nav icons not on iconSize token"
+    if "theme.shadow_soft" not in ft or "0, .g = 0, .b = 0, .a = 160" in ft:
+        return "fail", "footer still uses raw shadow literals"
+    return "pass", "nav iconSize + shadow token adopted"
+
+
 @test("Motion Tokens + Transitions Wired", "Page Shell")
 def test_motion_transitions():
     # Phase 2 motion (GUI-only — verified by presence): a single motion-token

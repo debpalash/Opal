@@ -502,6 +502,13 @@ pub const dims = struct {
     pub const pad_lg = dvui.Rect.all(spacing.lg);
 };
 
+// ── Shadow token — soft drop shadow for elevated surfaces ──
+//
+// One value (all presets are dark) instead of the `{0,0,0,160}` literals that
+// were hand-copied into toasts / dialogs / the control bar. Pair with a small
+// y-offset + fade at the call site.
+pub const shadow_soft: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 160 };
+
 // ── Motion tokens — durations (µs, dvui animation units) + standard curves ──
 //
 // One source of truth for animation timing so the whole UI moves consistently
