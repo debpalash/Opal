@@ -211,7 +211,7 @@ pub fn stopAll() void {
         fn run() void {
             voice.stopAllAudio();
             var kill_rec = @import("../core/io_global.zig").Child.init(
-                &.{ "pkill", "-f", "rec.*zigzag_ai_mic" },
+                &.{ "pkill", "-f", "rec.*opal_ai_mic" },
                 @import("../core/alloc.zig").allocator,
             );
             kill_rec.stdout_behavior = .Ignore;

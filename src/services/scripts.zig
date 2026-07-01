@@ -5,7 +5,7 @@ const db = @import("../core/db.zig");
 
 // ══════════════════════════════════════════════════════════
 // MPV Script Manager
-// Scans ~/.config/mpv/scripts/ and ~/.config/zigzag/scripts/
+// Scans ~/.config/mpv/scripts/ and ~/.config/opal/scripts/
 // Persists enable/disable state in SQLite
 // ══════════════════════════════════════════════════════════
 
@@ -14,11 +14,11 @@ pub fn scanScripts() void {
     if (state.app.scripts_scanned) return;
     state.app.script_count = 0;
 
-    // Scan ZigZag scripts dir first
-    var zigzag_dir_buf: [512]u8 = undefined;
+    // Scan Opal scripts dir first
+    var opal_dir_buf: [512]u8 = undefined;
     const home = @import("../core/io_global.zig").getenv("HOME") orelse "";
-    const zigzag_scripts = std.fmt.bufPrint(&zigzag_dir_buf, "{s}/.config/zigzag/scripts", .{home}) catch "";
-    if (zigzag_scripts.len > 0) scanDir(zigzag_scripts);
+    const opal_scripts = std.fmt.bufPrint(&opal_dir_buf, "{s}/.config/opal/scripts", .{home}) catch "";
+    if (opal_scripts.len > 0) scanDir(opal_scripts);
 
     // Scan mpv scripts dir
     var mpv_dir_buf: [512]u8 = undefined;
@@ -181,14 +181,14 @@ pub const recommended_scripts = [_]RecommendedScript{
     },
 };
 
-/// Download a recommended script to ~/.config/zigzag/scripts/.
+/// Download a recommended script to ~/.config/opal/scripts/.
 pub fn installScript(rec_idx: usize) void {
     if (rec_idx >= recommended_scripts.len) return;
     const rec = recommended_scripts[rec_idx];
 
     const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
     var dir_buf: [512]u8 = undefined;
-    const dir = std.fmt.bufPrint(&dir_buf, "{s}/.config/zigzag/scripts", .{home}) catch return;
+    const dir = std.fmt.bufPrint(&dir_buf, "{s}/.config/opal/scripts", .{home}) catch return;
     @import("../core/io_global.zig").cwdMakePath(dir) catch {};
 
     // Spawn curl in background

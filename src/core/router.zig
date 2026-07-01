@@ -67,6 +67,24 @@ pub const History = struct {
         self.fwd_len -= 1;
         self.current = self.fwd[self.fwd_len];
     }
+
+    /// Leave the Player route when the last player closes: return to the most
+    /// recent NON-player page in the back stack, or Home if there is none, so the
+    /// Player route is never left rendering an empty grid. No-op if not currently
+    /// on Player. Clears the forward stack (the empty player isn't worth keeping).
+    pub fn leavePlayer(self: *History) void {
+        if (self.current != .player) return;
+        self.fwd_len = 0;
+        while (self.back_len > 0) {
+            self.back_len -= 1;
+            const r = self.back[self.back_len];
+            if (r != .player) {
+                self.current = r;
+                return;
+            }
+        }
+        self.current = .home;
+    }
 };
 
 /// Push onto a fixed ring; when full, drop the oldest (shift down) so the
@@ -136,6 +154,37 @@ test "new navigation invalidates forward stack" {
     h.navigate(.settings); // should clear forward
     try std.testing.expect(!h.canGoForward());
     try std.testing.expectEqual(Route.settings, h.current);
+}
+
+test "leavePlayer returns to last non-player page or home" {
+    // Typical: opened player from Search → closing returns to Search.
+    var h: History = .{};
+    h.navigate(.search);
+    h.navigate(.player);
+    h.leavePlayer();
+    try std.testing.expectEqual(Route.search, h.current);
+    try std.testing.expect(!h.canGoForward()); // forward stack cleared
+
+    // Skips stacked player entries, lands on the nearest non-player page.
+    var h2: History = .{};
+    h2.navigate(.browse);
+    h2.navigate(.player);
+    h2.back[h2.back_len] = .player; // simulate a player entry buried in history
+    h2.back_len += 1;
+    h2.leavePlayer();
+    try std.testing.expectEqual(Route.browse, h2.current);
+
+    // No non-player history → Home.
+    var h3: History = .{};
+    h3.navigate(.player);
+    h3.leavePlayer();
+    try std.testing.expectEqual(Route.home, h3.current);
+
+    // Not on Player → no-op.
+    var h4: History = .{};
+    h4.navigate(.settings);
+    h4.leavePlayer();
+    try std.testing.expectEqual(Route.settings, h4.current);
 }
 
 test "back stack caps without blocking navigation" {

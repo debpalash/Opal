@@ -105,7 +105,8 @@ fn activeStreamToken() ?[]const u8 {
 }
 
 pub fn renderHeader() void {
-    // Outer toolbar — fixed 44px height, single source of horizontal padding.
+    // Outer toolbar — fixed 38px height (IINA-compact), single source of
+    // horizontal padding.
     var header_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .background = true,
@@ -113,8 +114,8 @@ pub fn renderHeader() void {
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-        .min_size_content = .{ .w = 0, .h = 44 },
-        .max_size_content = .{ .w = 99999, .h = 44 },
+        .min_size_content = .{ .w = 0, .h = 38 },
+        .max_size_content = .{ .w = 99999, .h = 38 },
     });
     defer header_hbox.deinit();
 
@@ -129,7 +130,7 @@ pub fn renderHeader() void {
     {
         var left = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .gravity_y = 0.5,
-            .padding = .{ .x = 0, .y = 0, .w = theme.spacing.lg, .h = 0 },
+            .padding = .{ .x = 0, .y = 0, .w = theme.spacing.md, .h = 0 },
         });
         defer left.deinit();
 
@@ -156,7 +157,7 @@ pub fn renderHeader() void {
         var center = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .gravity_y = 0.5,
-            .padding = .{ .x = 0, .y = 0, .w = theme.spacing.lg, .h = 0 },
+            .padding = .{ .x = 0, .y = 0, .w = theme.spacing.md, .h = 0 },
         });
         defer center.deinit();
 

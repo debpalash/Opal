@@ -13,14 +13,14 @@ const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 
 const BRIDGE_SCRIPT = "camoufox_bridge.py";
 
-// Resolve the venv python under the zigzag config dir (~/.config/zigzag/venv/bin/python3).
+// Resolve the venv python under the Opal config dir (~/.config/opal/venv/bin/python3).
 // Returns null if $HOME is unset. Falls back to bare "python3" handled by callers.
 fn getVenvPython() ?[]const u8 {
     const home = @import("../core/io_global.zig").getenv("HOME") orelse return null;
     const S = struct {
         var buf: [512]u8 = undefined;
     };
-    return std.fmt.bufPrint(&S.buf, "{s}/.config/zigzag/venv/bin/python3", .{home}) catch null;
+    return std.fmt.bufPrint(&S.buf, "{s}/.config/opal/venv/bin/python3", .{home}) catch null;
 }
 
 // Bridge process state (singleton — one browser instance shared across all panes)
@@ -58,12 +58,12 @@ fn getBridgePath() ?[]const u8 {
         return rel;
     } else |_| {}
 
-    // 2) Look under the zigzag config dir (~/.config/zigzag/scripts/camoufox_bridge.py).
+    // 2) Look under the Opal config dir (~/.config/opal/scripts/camoufox_bridge.py).
     if (io.getenv("HOME")) |home| {
         const S = struct {
             var buf: [512]u8 = undefined;
         };
-        const p = std.fmt.bufPrint(&S.buf, "{s}/.config/zigzag/scripts/{s}", .{ home, BRIDGE_SCRIPT }) catch return null;
+        const p = std.fmt.bufPrint(&S.buf, "{s}/.config/opal/scripts/{s}", .{ home, BRIDGE_SCRIPT }) catch return null;
         if (io.cwdAccess(p, .{})) |_| {
             return p;
         } else |_| {}
@@ -92,7 +92,7 @@ fn startBridgeThread() void {
         return;
     };
 
-    // Resolve and check the venv python under the zigzag config dir.
+    // Resolve and check the venv python under the Opal config dir.
     const venv_python = getVenvPython() orelse {
         logs.pushLog("error", "browser", "$HOME not set — cannot locate Python venv", false);
         return;
@@ -858,6 +858,27 @@ pub fn routeContent(url: []const u8) ContentRoute {
     return .web;
 }
 
+/// Load a URL directly into mpv without content-type routing.
+/// Use for URLs already known to be video streams (e.g. Stremio debrid links,
+/// direct CDN streams) where routeContent() would misidentify them as web pages.
+pub fn loadContentDirect(url: []const u8) void {
+    if (state.app.players.items.len == 0) {
+        if (@import("../player/player.zig").MediaPlayer.init(alloc)) |np| {
+            state.app.players.append(alloc, np) catch { np.deinit(alloc); return; };
+            state.app.active_player_idx = 0;
+        } else |_| return;
+    }
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
+    const p = state.app.players.items[state.app.active_player_idx];
+    p.provider = .mpv;
+    var url_z: [2049]u8 = undefined;
+    const len = @min(url.len, 2048);
+    @memcpy(url_z[0..len], url[0..len]);
+    url_z[len] = 0;
+    p.load_file(@as([*c]const u8, @ptrCast(&url_z[0])));
+    state.gotoPlayer();
+}
+
 /// Load content with automatic provider routing
 pub fn loadContent(url: []const u8) void {
     const extractors = @import("extractors.zig");
@@ -893,7 +914,16 @@ pub fn loadContent(url: []const u8) void {
         return;
     }
 
-    // Video/audio → the MPV player pane.
+    // Video/audio → the MPV player pane. Create a player if none exists yet, so
+    // cold-start opens work too (Continue Watching, the launch resume prompt,
+    // deep links) — previously these silently no-op'd with no player present.
+    if (state.app.players.items.len == 0) {
+        if (@import("../player/player.zig").MediaPlayer.init(alloc)) |np| {
+            state.app.players.append(alloc, np) catch np.deinit(alloc);
+            if (state.app.players.items.len > 0) state.app.active_player_idx = state.app.players.items.len - 1;
+        } else |_| {}
+    }
+
     if (state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
         p.provider = .mpv;
@@ -909,4 +939,24 @@ pub fn loadContent(url: []const u8) void {
         // resolver, queue, drag-drop and Resume all inherit it.
         state.gotoPlayer();
     }
+}
+
+/// Resume a previously-played item in the PLAYER. Unlike `loadContent` — which
+/// auto-routes by URL shape and sends magnets + extensionless stream URLs to the
+/// in-app browser (route == .web) — watch-history, Continue-Watching and the
+/// launch Resume prompt are *known playback*, so this forces the player: magnets
+/// go through the torrent engine, comics to the reader, everything else into mpv.
+pub fn resumePlayback(url: []const u8) void {
+    if (std.mem.startsWith(u8, url, "magnet:")) {
+        @import("search.zig").loadTorrentToPlayer(url); // handles player reveal
+        return;
+    }
+    if (routeContent(url) == .comic_viewer) {
+        @import("comics.zig").loadComic(url);
+        state.app.browse_source = .Comics;
+        state.app.router.navigate(.browse);
+        return;
+    }
+    // Streams / files / video hosts → straight into mpv (never the browser).
+    loadContentDirect(url);
 }

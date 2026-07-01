@@ -2,7 +2,7 @@
 
 This directory holds two kinds of things:
 
-- **Tracked source** (committed): the `zigzag-*.py` voice helpers below.
+- **Tracked source** (committed): the `opal-*.py` voice helpers below.
 - **Runtime artifacts** (gitignored): downloaded ML models such as
   `bin/whisper.cpp/models/*.bin`.
 
@@ -15,10 +15,10 @@ and the Zig caller falls back to the next strategy in its chain.
 
 | Script | Role | Socket / output |
 | --- | --- | --- |
-| `zigzag-stt.py` | One-shot transcription of a WAV → stdout | — |
-| `zigzag-stt-server.py` | Warm STT server (model stays loaded) | `/tmp/zigzag-stt.sock` |
-| `zigzag-tts-server.py` | Warm TTS server (text → WAV) | `/tmp/zigzag-tts.sock` → `/tmp/zigzag_ai_tts.wav` |
-| `zigzag-voice-server.py` | Continuous VAD conversation + barge-in | `/tmp/zigzag-voice.sock` |
+| `opal-stt.py` | One-shot transcription of a WAV → stdout | — |
+| `opal-stt-server.py` | Warm STT server (model stays loaded) | `/tmp/opal-stt.sock` |
+| `opal-tts-server.py` | Warm TTS server (text → WAV) | `/tmp/opal-tts.sock` → `/tmp/opal_ai_tts.wav` |
+| `opal-voice-server.py` | Continuous VAD conversation + barge-in | `/tmp/opal-voice.sock` |
 
 ## Voice paths (no Python required)
 

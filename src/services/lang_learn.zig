@@ -205,7 +205,7 @@ fn tokenizeWords(text: []const u8) void {
 
 /// Perform HTTP GET using curl (reliable, handles encoding/redirects).
 fn httpGetRaw(url_str: []const u8, response_buf: []u8) !usize {
-    // Scratch file in the per-user XDG cache dir (~/.cache/zigzag), NOT a
+    // Scratch file in the per-user XDG cache dir (~/.cache/opal), NOT a
     // world-writable /tmp path — avoids the symlink/predictable-name race a
     // multi-user box would expose. Matches the asr_* scratch files below.
     var tmp_path_buf: [512]u8 = undefined;
@@ -290,7 +290,7 @@ fn ttsWorker(word_idx: usize) void {
     if (body_len < 44) return;
     
     // TODO: use unique temp paths for security (predictable /tmp names on multi-user systems)
-    const wav_path = "/tmp/zigzag_tts_word.wav";
+    const wav_path = "/tmp/opal_tts_word.wav";
     const file = @import("../core/io_global.zig").cwdCreateFile(wav_path, .{ .truncate = true }) catch return;
     @import("../core/io_global.zig").writeAll(file, wav_buf[0..body_len]) catch { file.close(@import("../core/io_global.zig").io()); return; };
     file.close(@import("../core/io_global.zig").io());
@@ -350,7 +350,7 @@ fn ttsLineWorker() void {
     if (body_len < 44) return;
     
     // TODO: use unique temp paths for security (predictable /tmp names on multi-user systems)
-    const wav_path = "/tmp/zigzag_tts_line.wav";
+    const wav_path = "/tmp/opal_tts_line.wav";
     const file = @import("../core/io_global.zig").cwdCreateFile(wav_path, .{ .truncate = true }) catch return;
     @import("../core/io_global.zig").writeAll(file, wav_buf[0..body_len]) catch { file.close(@import("../core/io_global.zig").io()); return; };
     file.close(@import("../core/io_global.zig").io());

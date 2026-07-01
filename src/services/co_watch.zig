@@ -205,7 +205,7 @@ const S = struct {
         ) catch return;
 
         // Write to a SEPARATE temp file (must not collide with ai_req.json).
-        const req_path = "/tmp/zigzag_cowatch_req.json";
+        const req_path = "/tmp/opal_cowatch_req.json";
         if (io.cwdCreateFile(req_path, .{})) |f| {
             io.writeAll(f, body) catch {};
             f.close(io.io());

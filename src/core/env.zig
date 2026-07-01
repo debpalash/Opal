@@ -99,12 +99,13 @@ test "findValue: key as substring doesn't match" {
     try std.testing.expect(findValue(body, "TMDB_API_TOKEN=") == null);
 }
 
-test "findValue: real JWT token (Opal .env shape)" {
-    const body = "TMDB_API_TOKEN=eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI1ZDljY2EwNmNjMjQzZmM4M2Q0NzM2MzgyZDczODk3ZCIsIm5iZiI6MTYwMjU5ODM4NS41NDMsInN1YiI6IjVmODViNWYxMmQ4ZWYzMDAzOWI5ZDdiMCIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.iSAEJcpiGZT1-1Kg0RUj8EPmoD3_Piy0_VOPytmNP4w";
+test "findValue: JWT token (Opal .env shape)" {
+    // Synthetic v4-shaped token (header.payload.signature) — never a real key.
+    const body = "TMDB_API_TOKEN=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJFWEFNUExFIiwic2NvcGVzIjpbImFwaV9yZWFkIl19.FAKE_SIGNATURE_FOR_TESTS_ONLY";
     const got = findValue(body, "TMDB_API_TOKEN=").?;
-    try std.testing.expect(got.len == 239);
     try std.testing.expect(std.mem.startsWith(u8, got, "eyJhbGci"));
-    try std.testing.expect(std.mem.endsWith(u8, got, "ytmNP4w"));
+    try std.testing.expect(std.mem.endsWith(u8, got, "TESTS_ONLY"));
+    try std.testing.expect(std.mem.count(u8, got, ".") == 2);
 }
 
 test "findValue: multiple keys, first match wins" {

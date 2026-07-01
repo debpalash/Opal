@@ -59,9 +59,9 @@ pub fn isDownloading() bool {
 pub fn ensureAvailable() void {
     if (is_downloading or is_ready) return;
 
-    // Build path: ~/.config/zigzag/bin/yt-dlp
+    // Build path: ~/.config/opal/bin/yt-dlp
     const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
-    const path = std.fmt.bufPrintZ(&bin_path_buf, "{s}/.config/zigzag/bin/yt-dlp", .{home}) catch return;
+    const path = std.fmt.bufPrintZ(&bin_path_buf, "{s}/.config/opal/bin/yt-dlp", .{home}) catch return;
     bin_path_len = path.len;
 
     // Check if binary already exists
@@ -107,7 +107,7 @@ fn downloadWorker() void {
     // Ensure directory exists
     const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
     var dir_buf: [512]u8 = undefined;
-    const dir_path = std.fmt.bufPrintZ(&dir_buf, "{s}/.config/zigzag/bin", .{home}) catch return;
+    const dir_path = std.fmt.bufPrintZ(&dir_buf, "{s}/.config/opal/bin", .{home}) catch return;
     @import("../core/io_global.zig").cwdMakePath(dir_path) catch {};
 
     const builtin = @import("builtin");

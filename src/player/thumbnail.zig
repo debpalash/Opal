@@ -50,11 +50,11 @@ pub fn startGeneration(thumb: *ThumbnailState, file_path: []const u8, duration_s
         hash = hash *% 31 +% ch;
     }
     
-    const dir_str = std.fmt.bufPrintZ(&thumb.dir_buf, "/tmp/zigzag_thumbs/{x}", .{hash}) catch return;
+    const dir_str = std.fmt.bufPrintZ(&thumb.dir_buf, "/tmp/opal_thumbs/{x}", .{hash}) catch return;
     thumb.dir_len = dir_str.len;
 
     // Create directory
-    @import("../core/io_global.zig").makeDirAbsolute("/tmp/zigzag_thumbs") catch {};
+    @import("../core/io_global.zig").makeDirAbsolute("/tmp/opal_thumbs") catch {};
     @import("../core/io_global.zig").makeDirAbsolute(dir_str) catch {};
 
     // Store source info

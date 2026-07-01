@@ -3,7 +3,7 @@ const logs = @import("logs.zig");
 const alloc = @import("alloc.zig");
 
 // ══════════════════════════════════════════════════════════
-// ZigZag v3 — Native HTTP Client (no curl)
+// Opal v3 — Native HTTP Client (no curl)
 //
 // Replaces curl child process with std.http.Client.
 // Benefits:

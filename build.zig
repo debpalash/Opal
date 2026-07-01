@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "headless", headless);
 
     const exe = b.addExecutable(.{
-        .name = "zigzag",
+        .name = "opal",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -157,6 +157,15 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_voice).step);
 
+    const test_plugins_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/plugins_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_plugins_pure).step);
+
     const test_deps = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/deps_test.zig"),
@@ -174,6 +183,33 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_env).step);
+
+    const test_workers = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/workers.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_workers).step);
+
+    const test_chrome = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ui/chrome_autohide.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_chrome).step);
+
+    const test_resume = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/resume_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_resume).step);
 
     const test_intent = b.addTest(.{
         .root_module = b.createModule(.{

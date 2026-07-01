@@ -50,11 +50,11 @@ pub fn initDb() void {
 
     const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
     var path_buf: [256]u8 = undefined;
-    const db_path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/zigzag/queue.db", .{home}) catch return;
+    const db_path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/opal/queue.db", .{home}) catch return;
     
     // Ensure directory exists
     var dir_buf: [256]u8 = undefined;
-    const dir_path = std.fmt.bufPrintZ(&dir_buf, "{s}/.config/zigzag", .{home}) catch return;
+    const dir_path = std.fmt.bufPrintZ(&dir_buf, "{s}/.config/opal", .{home}) catch return;
     _ = @import("../core/io_global.zig").makeDirAbsolute(dir_path) catch {};
     
     if (c.sqlite.sqlite3_open(db_path.ptr, &db) != c.sqlite.SQLITE_OK) {
@@ -563,7 +563,7 @@ fn swapQueueItems(idx_a: usize, idx_b: usize) void {
     queue_items[idx_b].id = id_a;
 }
 
-const thumb_cache_dir = "/tmp/zigzag_thumbs/queue";
+const thumb_cache_dir = "/tmp/opal_thumbs/queue";
 
 fn thumbCachePath(item_id: i64, out: *[384]u8) ?[]const u8 {
     return std.fmt.bufPrintZ(out, thumb_cache_dir ++ "/{d}.jpg", .{item_id}) catch null;

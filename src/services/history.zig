@@ -184,7 +184,7 @@ pub fn saveDownloadHistory() void {
 pub fn migrateSearchHistory() void {
     // Old path was /tmp — likely already gone, but try anyway
     const old_paths = [_][]const u8{
-        "/tmp/zigzag_search_history.json",
+        "/tmp/opal_search_history.json",
     };
 
     for (old_paths) |old_path| {
@@ -212,7 +212,7 @@ pub fn migrateSearchHistory() void {
 
 pub fn migrateDownloadHistory() void {
     const old_paths = [_][]const u8{
-        "/tmp/zigzag_download_history.json",
+        "/tmp/opal_download_history.json",
     };
 
     for (old_paths) |old_path| {

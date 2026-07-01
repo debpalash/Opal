@@ -7,6 +7,7 @@ const logs = @import("../core/logs.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
+const workers = @import("../core/workers.zig");
 
 fn percentEncode(input: []const u8, out: []u8) usize {
     const hex = "0123456789ABCDEF";
@@ -156,6 +157,8 @@ pub fn closeComic() void {
 }
 
 fn fetchComicThread() void {
+    workers.enter();
+    defer workers.leave();
     const url = state.app.comic.url_buf[0..state.app.comic.url_len];
 
     // Try external plugins first
@@ -188,6 +191,11 @@ fn fetchComicThread() void {
     const html_bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, html_buf) catch 0 else 0;
     _ = child.wait() catch {};
 
+    if (workers.isQuitting()) {
+        state.app.comic.is_loading.store(false, .release);
+        return;
+    }
+
     if (html_bytes == 0) {
         logs.pushLog("error", "comics", "Empty response from curl", true);
         state.app.comic.is_loading.store(false, .release);
@@ -205,7 +213,7 @@ fn fetchComicThread() void {
     downloadPages();
 }
 
-/// Scan ~/.config/zigzag/plugins/comics/ for .lua/.py/.sh scripts,
+/// Scan ~/.config/opal/plugins/comics/ for .lua/.py/.sh scripts,
 /// execute each with url as arg1, parse JSON stdout.
 fn tryPlugins(url: []const u8) bool {
     // 1) Try bundled plugins/ directory (shipped with app)
@@ -214,7 +222,7 @@ fn tryPlugins(url: []const u8) bool {
     // 2) Try user plugins directory
     const home = @import("../core/io_global.zig").getenv("HOME") orelse return false;
     var dir_buf: [256]u8 = undefined;
-    const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/.config/zigzag/plugins/comics", .{home}) catch return false;
+    const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/.config/opal/plugins/comics", .{home}) catch return false;
     return tryPluginsInDir(dir_path, url);
 }
 
@@ -431,6 +439,8 @@ fn downloadPages() void {
 }
 
 fn downloadSinglePage(i: usize) void {
+    workers.enter();
+    defer workers.leave();
     const url = state.app.comic.page_urls[i][0..state.app.comic.page_url_lens[i]];
     if (url.len == 0) return;
 
@@ -453,12 +463,17 @@ fn downloadSinglePage(i: usize) void {
 
     if (child.stdout) |*stdout| {
         while (total < max_img) {
+            if (workers.isQuitting()) return; // bail mid-download; defer frees tmp_buf
             const n = @import("../core/io_global.zig").read(stdout, tmp_buf[total..]) catch break;
             if (n == 0) break;
             total += n;
         }
     }
     _ = child.wait() catch {};
+
+    // Quitting → freeComicPages may already have run; don't publish a buffer
+    // nothing will free.
+    if (workers.isQuitting()) return;
 
     if (total > 100) {
         const pixels = alloc.dupe(u8, tmp_buf[0..total]) catch return;
@@ -596,13 +611,15 @@ pub fn searchComics(query: []const u8) void {
 /// (1-based). `paged=1` omits the param (the bare URL is page 1). This is the
 /// single source-specific URL seam — adding a source means adding one builder.
 fn buildSearchUrl(out: []u8, query: []const u8, paged: u32) ?[:0]const u8 {
+    // Endpoint migrated to opal-plugins — null until the user installs "readallcomics".
+    const base = @import("../core/source_config.zig").get("readallcomics", "base") orelse return null;
     var encoded_query: [512]u8 = undefined;
     const enc_len = percentEncode(query, &encoded_query);
     const eq = encoded_query[0..enc_len];
     if (paged <= 1) {
-        return std.fmt.bufPrintZ(out, "https://readallcomics.com/?story={s}&s=&type=comic", .{eq}) catch null;
+        return std.fmt.bufPrintZ(out, "{s}/?story={s}&s=&type=comic", .{ base, eq }) catch null;
     }
-    return std.fmt.bufPrintZ(out, "https://readallcomics.com/?story={s}&s=&type=comic&paged={d}", .{ eq, paged }) catch null;
+    return std.fmt.bufPrintZ(out, "{s}/?story={s}&s=&type=comic&paged={d}", .{ base, eq, paged }) catch null;
 }
 
 /// curl a search-results page into `dst`; returns bytes read (0 on failure).
@@ -929,6 +946,8 @@ fn thumbnailize(url: []const u8, out: []u8) []const u8 {
 }
 
 fn coverWorker(idx: usize) void {
+    workers.enter();
+    defer workers.leave();
     defer sr_cover_fetching[idx].store(false, .release);
     defer _ = cover_in_flight.fetchSub(1, .acq_rel); // release the global slot
 
@@ -960,6 +979,7 @@ fn coverWorker(idx: usize) void {
     var total: usize = 0;
     if (child.stdout) |*so| {
         while (total < max_img) {
+            if (workers.isQuitting()) return; // bail mid-download; defer frees tmp_buf
             const n = @import("../core/io_global.zig").read(so, tmp_buf[total..]) catch break;
             if (n == 0) break;
             total += n;
@@ -981,8 +1001,9 @@ fn coverWorker(idx: usize) void {
     @memcpy(p_slice, pixels[0..p_len]);
 
     // Publish only if this result slot is still alive (a newer search could have
-    // freed/repurposed it). The render thread uploads + frees the pixels.
-    if (sr_cover_url_lens[idx] == 0) {
+    // freed/repurposed it) and we're not shutting down (freeSearchCovers may
+    // already have run). The render thread uploads + frees the pixels.
+    if (sr_cover_url_lens[idx] == 0 or workers.isQuitting()) {
         alloc.free(p_slice);
         return;
     }
@@ -1151,9 +1172,9 @@ pub fn renderContent() void {
             });
         }
 
-        renderChip("Invincible", 1, "https://readallcomics.com/invincible-001/");
-        renderChip("The Boys", 2, "https://readallcomics.com/the-boys-001-2006/");
-        renderChip("Saga", 3, "https://readallcomics.com/saga-001-2012/");
+        renderChip("Invincible", 1, "/invincible-001/");
+        renderChip("The Boys", 2, "/the-boys-001-2006/");
+        renderChip("Saga", 3, "/saga-001-2012/");
 
         if (dvui.buttonIcon(@src(), "comic-card-smaller", icons.tvg.lucide.@"zoom-out", .{}, .{}, .{
             .id_extra = 9001,
@@ -1294,7 +1315,7 @@ fn renderPluginSourceBadges() void {
     showPluginBadgesInDir("plugins", &shown);
     const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
     var dir_buf: [256]u8 = undefined;
-    const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/.config/zigzag/plugins/comics", .{home}) catch return;
+    const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/.config/opal/plugins/comics", .{home}) catch return;
     showPluginBadgesInDir(dir_path, &shown);
 }
 
@@ -1328,7 +1349,10 @@ fn showPluginBadgesInDir(dir_path: []const u8, shown: *usize) void {
 }
 
 /// A toolbar quick-link chip that loads a known issue directly.
-fn renderChip(label: []const u8, id: usize, url: []const u8) void {
+// `path` is a source-relative slug (e.g. "/invincible-001/"); the host comes from
+// the installed "readallcomics" plugin. No plugin → no popular chips.
+fn renderChip(label: []const u8, id: usize, path: []const u8) void {
+    const base = @import("../core/source_config.zig").get("readallcomics", "base") orelse return;
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = id + 70000,
         .color_fill = theme.colors.bg_glass,
@@ -1338,6 +1362,8 @@ fn renderChip(label: []const u8, id: usize, url: []const u8) void {
         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         .gravity_y = 0.5,
     })) {
+        var url_buf: [320]u8 = undefined;
+        const url = std.fmt.bufPrint(&url_buf, "{s}{s}", .{ base, path }) catch return;
         loadComic(url);
     }
 }

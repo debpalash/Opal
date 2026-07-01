@@ -7,11 +7,11 @@ const logs = @import("../core/logs.zig");
 
 const MAX_INPUT_LEN = 512;
 pub const LANG_SERVER_PORT: u16 = 41594;
-pub const MIC_WAV_PATH = "/tmp/zigzag_ai_mic.wav";
-pub const TTS_WAV_PATH = "/tmp/zigzag_ai_tts.wav";
-const STT_SOCKET = "/tmp/zigzag-stt.sock";
-const TTS_SOCKET = "/tmp/zigzag-tts.sock";
-const VOICE_SOCKET = "/tmp/zigzag-voice.sock";
+pub const MIC_WAV_PATH = "/tmp/opal_ai_mic.wav";
+pub const TTS_WAV_PATH = "/tmp/opal_ai_tts.wav";
+const STT_SOCKET = "/tmp/opal-stt.sock";
+const TTS_SOCKET = "/tmp/opal-tts.sock";
+const VOICE_SOCKET = "/tmp/opal-voice.sock";
 
 // ── Voice state (shared with ai_chat.zig) ──
 // Thread safety: conv_phase mutations must go through setPhase() which
@@ -158,23 +158,23 @@ pub fn killStaleServers() void {
     @import("../core/io_global.zig").deleteFileAbsolute(STT_SOCKET) catch {};
     // Kill any running python server processes by script name
     var kv = @import("../core/io_global.zig").Child.init(
-        &.{ "pkill", "-f", "zigzag-voice-server.py" },
+        &.{ "pkill", "-f", "opal-voice-server.py" },
         @import("../core/alloc.zig").allocator,
     );
     kv.stdout_behavior = .Ignore;
     kv.stderr_behavior = .Ignore;
     _ = kv.spawnAndWait() catch {};
     var kt = @import("../core/io_global.zig").Child.init(
-        &.{ "pkill", "-f", "zigzag-tts-server.py" },
+        &.{ "pkill", "-f", "opal-tts-server.py" },
         @import("../core/alloc.zig").allocator,
     );
     kt.stdout_behavior = .Ignore;
     kt.stderr_behavior = .Ignore;
     _ = kt.spawnAndWait() catch {};
     // STT server is spawned later by ensureSttServer — kill any leftover too,
-    // otherwise it accumulates as a zombie zigzag-stt-server.py across runs.
+    // otherwise it accumulates as a zombie opal-stt-server.py across runs.
     var ks = @import("../core/io_global.zig").Child.init(
-        &.{ "pkill", "-f", "zigzag-stt-server.py" },
+        &.{ "pkill", "-f", "opal-stt-server.py" },
         @import("../core/alloc.zig").allocator,
     );
     ks.stdout_behavior = .Ignore;
@@ -225,16 +225,16 @@ fn ensureVoiceServer() void {
         voice_server_started = true;
         return;
     } else |_| {}
-    @import("../core/io_global.zig").cwdAccess("bin/zigzag-voice-server.py", .{}) catch {
+    @import("../core/io_global.zig").cwdAccess("bin/opal-voice-server.py", .{}) catch {
         logs.pushLog("warn", "voice", "voice-server.py not found — skipping", true);
         return;
     };
-    if (!serverDepsReady("bin/zigzag-voice-server.py")) {
+    if (!serverDepsReady("bin/opal-voice-server.py")) {
         logs.pushLog("info", "voice", "voice-server deps missing — using fallback", true);
         return;
     }
     var child = @import("../core/io_global.zig").Child.init(
-        &.{ "python3", "bin/zigzag-voice-server.py" },
+        &.{ "python3", "bin/opal-voice-server.py" },
         @import("../core/alloc.zig").allocator,
     );
     child.stdout_behavior = .Ignore;
@@ -257,12 +257,12 @@ pub fn ensureSttServer() void {
         stt_server_started = true;
         return;
     } else |_| {}
-    @import("../core/io_global.zig").cwdAccess("bin/zigzag-stt-server.py", .{}) catch {
+    @import("../core/io_global.zig").cwdAccess("bin/opal-stt-server.py", .{}) catch {
         return;
     };
-    if (!serverDepsReady("bin/zigzag-stt-server.py")) return;
+    if (!serverDepsReady("bin/opal-stt-server.py")) return;
     var child = @import("../core/io_global.zig").Child.init(
-        &.{ "python3", "bin/zigzag-stt-server.py" },
+        &.{ "python3", "bin/opal-stt-server.py" },
         @import("../core/alloc.zig").allocator,
     );
     child.stdout_behavior = .Ignore;
@@ -284,12 +284,12 @@ pub fn ensureTtsServer() void {
         tts_server_started = true;
         return;
     } else |_| {}
-    @import("../core/io_global.zig").cwdAccess("bin/zigzag-tts-server.py", .{}) catch {
+    @import("../core/io_global.zig").cwdAccess("bin/opal-tts-server.py", .{}) catch {
         return;
     };
-    if (!serverDepsReady("bin/zigzag-tts-server.py")) return;
+    if (!serverDepsReady("bin/opal-tts-server.py")) return;
     var child = @import("../core/io_global.zig").Child.init(
-        &.{ "python3", "bin/zigzag-tts-server.py" },
+        &.{ "python3", "bin/opal-tts-server.py" },
         @import("../core/alloc.zig").allocator,
     );
     child.stdout_behavior = .Ignore;
@@ -833,11 +833,11 @@ fn transcribeAndSend() void {
     }
 
     // Fallback: spawn one-shot Faster-Whisper process
-    const out_txt_path = "/tmp/zigzag_ai_mic.wav.txt";
+    const out_txt_path = "/tmp/opal_ai_mic.wav.txt";
     _ = @import("../core/io_global.zig").deleteFileAbsolute(out_txt_path) catch {};
 
     var fw_child = @import("../core/io_global.zig").Child.init(
-        &.{ "python3", "bin/zigzag-stt.py", MIC_WAV_PATH },
+        &.{ "python3", "bin/opal-stt.py", MIC_WAV_PATH },
         @import("../core/alloc.zig").allocator,
     );
     fw_child.stdout_behavior = .Pipe;
@@ -1025,7 +1025,7 @@ fn ttsWorker() void {
     }
 
     // Strategy 2: One-shot KittenTTS (cold start fallback)
-    if (@import("../core/io_global.zig").cwdCreateFile("/tmp/zigzag_tts_input.txt", .{})) |f| {
+    if (@import("../core/io_global.zig").cwdCreateFile("/tmp/opal_tts_input.txt", .{})) |f| {
         @import("../core/io_global.zig").writeAll(f, text) catch {};
         f.close(@import("../core/io_global.zig").io());
     } else |_| {}
@@ -1040,8 +1040,8 @@ fn ttsWorker() void {
     const tts_cmd = std.fmt.bufPrintZ(
         &tts_cmd_buf,
         "from kittentts import KittenTTS; " ++
-            "text = open('/tmp/zigzag_tts_input.txt').read().strip(); " ++
-            "tts = KittenTTS(); tts.generate_to_file(text, '/tmp/zigzag_ai_tts.wav', voice='{s}', speed={d:.1})",
+            "text = open('/tmp/opal_tts_input.txt').read().strip(); " ++
+            "tts = KittenTTS(); tts.generate_to_file(text, '/tmp/opal_ai_tts.wav', voice='{s}', speed={d:.1})",
         .{ voice_name, state.app.tts_speed },
     ) catch return;
 

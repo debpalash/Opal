@@ -1,6 +1,6 @@
 //! Pure headless-mode detection.
 //!
-//! Decides whether Opal/zigzag should run in headless (no-GUI) server mode.
+//! Decides whether Opal should run in headless (no-GUI) server mode.
 //! This module is intentionally PURE: it takes environment values as plain
 //! parameters and imports NOTHING from the src/ boundary (no io_global, no
 //! state), so it stays standalone-unit-testable with `zig build test`.

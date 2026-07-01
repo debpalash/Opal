@@ -487,7 +487,7 @@ fn mlxWhisperTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
     };
 
     // mlx_whisper creates a .txt file named after the input:
-    // e.g. /tmp/opal_mlx_whisper/zigzag_ai_mic.txt
+    // e.g. /tmp/opal_mlx_whisper/opal_ai_mic.txt
     // Extract basename from wav_path, change extension to .txt
     var txt_path_buf: [512]u8 = undefined;
     const basename = blk: {

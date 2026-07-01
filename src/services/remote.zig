@@ -8,7 +8,7 @@ const sync = @import("../core/sync.zig");
 const io_g = @import("../core/io_global.zig");
 
 // ══════════════════════════════════════════════════════════
-// Web Remote Control — JSON API for ZigZag Web UI
+// Web Remote Control — JSON API for Opal Web UI
 // API bridge on :9876, Web UI (Ziex) on :3000
 // ══════════════════════════════════════════════════════════
 
@@ -18,7 +18,7 @@ pub var port: u16 = 41595;
 
 // ── Bearer-token auth ──
 // 32 hex chars = 128 bits of entropy. Generated on first launch, persisted to
-// ~/.config/zigzag/api.token (mode 0600), reused on subsequent runs.
+// ~/.config/opal/api.token (mode 0600), reused on subsequent runs.
 const TOKEN_HEX_LEN: usize = 32;
 var api_token: [TOKEN_HEX_LEN]u8 = std.mem.zeroes([TOKEN_HEX_LEN]u8);
 var api_token_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
@@ -65,7 +65,7 @@ fn fillRandomHex(out: *[TOKEN_HEX_LEN]u8) bool {
 fn tokenPath(buf: []u8) []const u8 {
     var dir_buf: [512]u8 = undefined;
     const dir = paths_mod.configDir(&dir_buf);
-    return std.fmt.bufPrint(buf, "{s}/api.token", .{dir}) catch "/tmp/zigzag_api.token";
+    return std.fmt.bufPrint(buf, "{s}/api.token", .{dir}) catch "/tmp/opal_api.token";
 }
 
 fn isHexAll(s: []const u8) bool {
@@ -596,7 +596,7 @@ fn serveStaticFile(stream: std.Io.net.Stream, path: []const u8, content_type: []
     // `/` is served pre-auth so the token would be handed to ANY LAN client that
     // GETs the page = full remote takeover. On 0.0.0.0 we leave the placeholder
     // (page's 32-hex-validator rejects it → no token) and the operator must
-    // supply the token (from ~/.config/zigzag/api.token) out of band.
+    // supply the token (from ~/.config/opal/api.token) out of band.
     var body: []const u8 = raw;
     var injected: ?[]u8 = null;
     defer if (injected) |buf| alloc.free(buf);

@@ -1,4 +1,4 @@
-//! Headless (no-GUI) server entry for Opal/zigzag.
+//! Headless (no-GUI) server entry for Opal.
 //!
 //! When `core/headless_detect.detect` decides we have no display (typical
 //! Linux server box, or forced via OPAL_HEADLESS=1), `main.main` dispatches

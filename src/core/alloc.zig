@@ -1,6 +1,6 @@
 const std = @import("std");
 
-/// Centralized allocator for ZigZag — replaces page_allocator usage.
+/// Centralized allocator for Opal — replaces page_allocator usage.
 /// GeneralPurposeAllocator pools allocations internally, avoiding
 /// mmap/munmap syscalls on every small string allocation.
 var gpa_instance = std.heap.DebugAllocator(.{

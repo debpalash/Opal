@@ -9,14 +9,14 @@ const paths = @import("../core/paths.zig");
 const sync = @import("../core/sync.zig");
 
 // ══════════════════════════════════════════════════════════
-// ZigZag Plugin System
+// Opal Plugin System
 //
 // Plugins are external, user-installed modules that provide
 // content sources. The core app ships clean with no
 // scraping/piracy code. Plugins are language-agnostic 
 // executables that communicate via JSON over stdin/stdout.
 //
-// Plugin directory: ~/.config/zigzag/plugins/<name>/
+// Plugin directory: ~/.config/opal/plugins/<name>/
 // Each plugin has:
 //   manifest.json — metadata + capabilities
 //   search        — executable: search <query> → JSON results
@@ -77,6 +77,10 @@ pub const Plugin = struct {
     enabled: bool = true,
     loaded: bool = false,
     allow_unsafe: bool = false,
+    // User-created trust marker (`<plugin_dir>/.trusted`). `allow_unsafe` is only
+    // honored when this is also set — the plugin can't forge it. See
+    // plugins_pure.runMode.
+    user_trusted: bool = false,
 };
 
 // ── Global Plugin State ──
@@ -122,7 +126,7 @@ fn endLoading() void {
 
 pub fn getPluginDir(buf: *[512]u8) []const u8 {
     if (@import("../core/io_global.zig").getenv("HOME")) |home| {
-        return std.fmt.bufPrint(buf, "{s}/.config/zigzag/plugins", .{home}) catch "";
+        return std.fmt.bufPrint(buf, "{s}/.config/opal/plugins", .{home}) catch "";
     }
     return "";
 }
@@ -187,6 +191,10 @@ pub fn scanPlugins() void {
         p.has_search = fileExists(p.path[0..p.path_len], "search");
         p.has_resolve = fileExists(p.path[0..p.path_len], "resolve");
         p.has_trending = fileExists(p.path[0..p.path_len], "trending");
+
+        // User trust marker: allow_unsafe (and unsandboxed native execution) is
+        // only honored when the user has created `<plugin_dir>/.trusted`.
+        p.user_trusted = fileExists(p.path[0..p.path_len], ".trusted");
         
         p.enabled = true;
         p.loaded = true;
@@ -234,9 +242,10 @@ fn fileExists(dir: []const u8, name: []const u8) bool {
 // / Linux `bwrap`), manifest `require` allow-list, and a one-time
 // user consent prompt for `allow_unsafe = true` plugins.
 const LUA_SANDBOX_PRELUDE: []const u8 =
-    \\os.execute=nil os.remove=nil os.rename=nil os.exit=nil os.tmpname=nil
+    \\os.execute=nil os.remove=nil os.rename=nil os.exit=nil os.tmpname=nil os.getenv=nil
     \\io.popen=nil io.open=nil io.input=nil io.output=nil io.lines=nil
-    \\if package then package.loadlib=nil end
+    \\if package then package.loadlib=nil package.path="" package.cpath="" package.preload={} end
+    \\debug=nil
     \\dofile=nil loadfile=nil loadstring=nil load=nil
     \\require=function(m) error("require denied: "..tostring(m)) end
     \\
@@ -281,8 +290,14 @@ fn logSandboxed(name: []const u8) void {
 
 fn logUnsafeWarn(name: []const u8) void {
     var buf: [160]u8 = undefined;
-    const msg = std.fmt.bufPrintZ(&buf, "Lua sandbox skipped (allow_unsafe): {s}", .{name}) catch "Lua sandbox skipped";
+    const msg = std.fmt.bufPrintZ(&buf, "Lua sandbox skipped (allow_unsafe + user-trusted): {s}", .{name}) catch "Lua sandbox skipped";
     logs.pushLog("warn", "plugins", msg, false);
+}
+
+fn logUntrustedNative(name: []const u8) void {
+    var buf: [200]u8 = undefined;
+    const msg = std.fmt.bufPrintZ(&buf, "Running UNSANDBOXED native plugin (no .trusted marker): {s}", .{name}) catch "Unsandboxed native plugin";
+    logs.pushLog("warn", "plugins", msg, true);
 }
 
 /// Surface a plugin/child-process spawn failure (e.g. missing `lua` or
@@ -314,16 +329,22 @@ pub fn runPluginSearch(query: []const u8) void {
             var exec_buf: [600]u8 = undefined;
             const exec = std.fmt.bufPrint(&exec_buf, "{s}/search", .{p.path[0..p.path_len]}) catch return;
 
-            if (detectLuaScript(exec) and !p.allow_unsafe) {
-                var sandbox_argv: [8][]const u8 = undefined;
-                const extras = [_][]const u8{q};
-                const argv = buildSandboxedLuaArgv(&sandbox_argv, exec, &extras);
-                logSandboxed(p.name[0..p.name_len]);
-                executeAndParse(argv);
-            } else {
-                if (p.allow_unsafe) logUnsafeWarn(p.name[0..p.name_len]);
-                const argv = [_][]const u8{ exec, q };
-                executeAndParse(&argv);
+            const pp = @import("plugins_pure.zig");
+            const is_lua = detectLuaScript(exec);
+            switch (pp.runMode(is_lua, p.allow_unsafe, p.user_trusted)) {
+                .sandbox_lua => {
+                    var sandbox_argv: [8][]const u8 = undefined;
+                    const extras = [_][]const u8{q};
+                    const argv = buildSandboxedLuaArgv(&sandbox_argv, exec, &extras);
+                    logSandboxed(p.name[0..p.name_len]);
+                    executeAndParse(argv);
+                },
+                .direct => {
+                    if (p.allow_unsafe and p.user_trusted) logUnsafeWarn(p.name[0..p.name_len]);
+                    if (pp.untrustedNative(is_lua, p.user_trusted)) logUntrustedNative(p.name[0..p.name_len]);
+                    const argv = [_][]const u8{ exec, q };
+                    executeAndParse(&argv);
+                },
             }
         }
     }.worker, .{ q_buf, qlen, active_plugin })) |t| t.detach() else |_| {
@@ -344,15 +365,21 @@ pub fn runPluginTrending() void {
             var exec_buf: [600]u8 = undefined;
             const exec = std.fmt.bufPrint(&exec_buf, "{s}/trending", .{p.path[0..p.path_len]}) catch return;
 
-            if (detectLuaScript(exec) and !p.allow_unsafe) {
-                var sandbox_argv: [8][]const u8 = undefined;
-                const argv = buildSandboxedLuaArgv(&sandbox_argv, exec, &.{});
-                logSandboxed(p.name[0..p.name_len]);
-                executeAndParse(argv);
-            } else {
-                if (p.allow_unsafe) logUnsafeWarn(p.name[0..p.name_len]);
-                const argv = [_][]const u8{exec};
-                executeAndParse(&argv);
+            const pp = @import("plugins_pure.zig");
+            const is_lua = detectLuaScript(exec);
+            switch (pp.runMode(is_lua, p.allow_unsafe, p.user_trusted)) {
+                .sandbox_lua => {
+                    var sandbox_argv: [8][]const u8 = undefined;
+                    const argv = buildSandboxedLuaArgv(&sandbox_argv, exec, &.{});
+                    logSandboxed(p.name[0..p.name_len]);
+                    executeAndParse(argv);
+                },
+                .direct => {
+                    if (p.allow_unsafe and p.user_trusted) logUnsafeWarn(p.name[0..p.name_len]);
+                    if (pp.untrustedNative(is_lua, p.user_trusted)) logUntrustedNative(p.name[0..p.name_len]);
+                    const argv = [_][]const u8{exec};
+                    executeAndParse(&argv);
+                },
             }
         }
     }.worker, .{active_plugin})) |t| t.detach() else |_| {
@@ -394,16 +421,23 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
             var exec_buf: [600]u8 = undefined;
             const exec = std.fmt.bufPrint(&exec_buf, "{s}/resolve", .{p.path[0..p.path_len]}) catch return;
 
+            const pp = @import("plugins_pure.zig");
+            const is_lua = detectLuaScript(exec);
             const direct_argv = [_][]const u8{ exec, rid, rep };
             var sandbox_argv: [8][]const u8 = undefined;
             const argv: []const []const u8 = blk: {
-                if (detectLuaScript(exec) and !p.allow_unsafe) {
-                    const extras = [_][]const u8{ rid, rep };
-                    logSandboxed(p.name[0..p.name_len]);
-                    break :blk buildSandboxedLuaArgv(&sandbox_argv, exec, &extras);
+                switch (pp.runMode(is_lua, p.allow_unsafe, p.user_trusted)) {
+                    .sandbox_lua => {
+                        const extras = [_][]const u8{ rid, rep };
+                        logSandboxed(p.name[0..p.name_len]);
+                        break :blk buildSandboxedLuaArgv(&sandbox_argv, exec, &extras);
+                    },
+                    .direct => {
+                        if (p.allow_unsafe and p.user_trusted) logUnsafeWarn(p.name[0..p.name_len]);
+                        if (pp.untrustedNative(is_lua, p.user_trusted)) logUntrustedNative(p.name[0..p.name_len]);
+                        break :blk &direct_argv;
+                    },
                 }
-                if (p.allow_unsafe) logUnsafeWarn(p.name[0..p.name_len]);
-                break :blk &direct_argv;
             };
             var child = @import("../core/io_global.zig").Child.init(argv, c_alloc);
             child.stdout_behavior = .Pipe;
@@ -438,6 +472,16 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                     const tlen = @min(title.len, 255);
                     @memcpy(state.app.comic.title[0..tlen], title[0..tlen]);
                     state.app.comic.title_len = tlen;
+                }
+
+                // Optional per-plugin Referer for page fetches (some manga CDNs
+                // 403 without it). Empty → workers derive it from the image
+                // origin. See plugins_pure.refererHeader.
+                state.app.comic.referer_len = 0;
+                if (extractField(json, "referer")) |ref| {
+                    const rlen = @min(ref.len, state.app.comic.referer.len);
+                    @memcpy(state.app.comic.referer[0..rlen], ref[0..rlen]);
+                    state.app.comic.referer_len = rlen;
                 }
                 
                 // Parse images array
@@ -525,10 +569,15 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                                             const u = state.app.comic.page_urls[idx][0..state.app.comic.page_url_lens[idx]];
                                             if (u.len == 0) return;
                                             const a = @import("../core/alloc.zig").allocator;
+                                            // Referer: plugin-supplied if any, else this image's own
+                                            // origin (replaces a hardcoded coffeemanga.io referer).
+                                            const plugin_ref = state.app.comic.referer[0..state.app.comic.referer_len];
+                                            var ref_buf: [600]u8 = undefined;
+                                            const ref_hdr = @import("plugins_pure.zig").refererHeader(plugin_ref, u, &ref_buf) orelse "Referer:";
                                             const argv2 = [_][]const u8{
                                                 "curl", "-sL",
                                                 "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-                                                "-H", "Referer: https://coffeemanga.io/",
+                                                "-H", ref_hdr,
                                                 "--max-time", "15",
                                                 u,
                                             };
@@ -813,26 +862,197 @@ pub fn fetchPoster(item: *PluginResult) void {
 // UI Rendering
 // ══════════════════════════════════════════════════════════
 
+/// Source-endpoint plugins (opal-plugins repo): supply URLs/creds for Opal's
+/// built-in connectors. Rendered at the top of the Plugins page.
+// ── shared card primitives ──────────────────────────────────────────────────
+fn cardBegin(src: std.builtin.SourceLocation, id: usize) *dvui.BoxWidget {
+    const card = dvui.box(src, .{ .dir = .vertical }, .{
+        .id_extra = id,
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .corner_radius = dvui.Rect.all(theme.radius.lg),
+        .padding = dvui.Rect.all(theme.spacing.md),
+        .margin = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+    });
+    return card;
+}
+
+fn cardTitle(src: std.builtin.SourceLocation, text: []const u8, sub: []const u8) void {
+    _ = dvui.label(src, "{s}", .{text}, .{ .color_text = theme.colors.text_main, .font = dvui.themeGet().font_title });
+    if (sub.len > 0) {
+        _ = dvui.label(@src(), "{s}", .{sub}, .{ .color_text = theme.colors.text_dim, .expand = .horizontal, .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 } });
+    }
+}
+
+fn renderSourcePlugins() void {
+    const pr = @import("plugin_repo.zig");
+
+    // Auto-load on first view: show the bundled manifest instantly (offline, no
+    // network) so the list is never empty, then kick a network refresh that
+    // overwrites it with the live repo list when reachable. On a failed refresh
+    // the bundled list stays (refreshWorker leaves plugin_count untouched on
+    // error), so the page degrades gracefully with no connectivity.
+    const Auto = struct {
+        var done: bool = false;
+    };
+    if (!Auto.done) {
+        Auto.done = true;
+        pr.loadLocalManifest();
+        pr.refresh();
+    }
+
+    var card = cardBegin(@src(), 0);
+    defer card.deinit();
+
+    // Header row: title + a small Refresh.
+    {
+        var hrow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        defer hrow.deinit();
+        _ = dvui.label(@src(), "Available plugins", .{}, .{ .color_text = theme.colors.text_main, .font = dvui.themeGet().font_title, .gravity_y = 0.5 });
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
+        if (dvui.button(@src(), "Refresh", .{}, .{ .color_fill = theme.colors.bg_glass, .color_text = theme.colors.text_muted, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 }, .gravity_y = 0.5 })) {
+            pr.plugin_count = 0;
+            pr.refresh();
+        }
+    }
+    _ = dvui.label(@src(), "Click Install to enable a source. Only install sources you trust.", .{}, .{ .color_text = theme.colors.text_dim, .expand = .horizontal, .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 } });
+
+    if (pr.plugin_count == 0) {
+        const fetching = pr.status.load(.acquire) == .fetching;
+        _ = dvui.label(@src(), "{s}", .{if (fetching) "Loading sources…" else "No sources available."}, .{ .color_text = theme.colors.text_dim, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
+        return;
+    }
+
+    // Available sources — one tidy row each.
+    var list = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
+    defer list.deinit();
+    for (0..pr.plugin_count) |i| {
+        const p = &pr.plugins[i];
+        var rowb = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 81000, .expand = .horizontal, .padding = .{ .x = 0, .y = 5, .w = 0, .h = 5 } });
+        defer rowb.deinit();
+        _ = dvui.label(@src(), "{s}", .{p.nameSlice()}, .{ .id_extra = i + 81100, .color_text = theme.colors.text_main, .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "  {s}", .{p.kindSlice()}, .{ .id_extra = i + 81200, .color_text = theme.colors.text_dim, .gravity_y = 0.5 });
+        {
+            var sp = dvui.box(@src(), .{}, .{ .id_extra = i + 81300, .expand = .horizontal });
+            sp.deinit();
+        }
+        const installed = pr.isInstalled(p.idSlice());
+        if (dvui.button(@src(), if (installed) "Uninstall" else "Install", .{}, .{ .id_extra = i + 81400, .color_fill = if (installed) theme.colors.bg_glass else theme.colors.accent, .color_text = if (installed) theme.colors.text_muted else dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 }, .gravity_y = 0.5 })) {
+            if (installed) pr.uninstall(i) else pr.install(i);
+        }
+    }
+}
+
+fn renderDebrid() void {
+    const pr = @import("plugin_repo.zig");
+    var card = cardBegin(@src(), 1);
+    defer card.deinit();
+
+    cardTitle(@src(), "Debrid", "Instant cached streams via Stremio add-ons (Torrentio). Optional.");
+
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+    defer row.deinit();
+
+    const providers = [_][]const u8{ "realdebrid", "alldebrid", "premiumize", "torbox", "debridlink" };
+    if (dvui.button(@src(), pr.debridProvider(), .{}, .{ .color_fill = theme.colors.bg_glass, .color_text = theme.colors.accent, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 }, .gravity_y = 0.5 })) {
+        var idx: usize = 0;
+        for (providers, 0..) |p, k| {
+            if (std.mem.eql(u8, p, pr.debridProvider())) idx = k;
+        }
+        const next = providers[(idx + 1) % providers.len];
+        @memcpy(pr.debrid_provider_buf[0..next.len], next);
+        pr.debrid_provider_len = next.len;
+        pr.saveDebrid();
+    }
+    var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &pr.debrid_key_buf }, .placeholder = "debrid API key" }, .{ .expand = .horizontal, .gravity_y = 0.5, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 } });
+    te.deinit();
+    pr.debrid_key_len = std.mem.indexOfScalar(u8, &pr.debrid_key_buf, 0) orelse pr.debrid_key_buf.len;
+    if (dvui.button(@src(), "Save", .{}, .{ .color_fill = theme.colors.bg_glass, .color_text = theme.colors.text_muted, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
+        pr.saveDebrid();
+        state.showToastTyped("Debrid saved", .success);
+    }
+}
+
+/// Trakt.tv connect panel — scrobble + sync watched to the user's Trakt account.
+fn renderTrakt() void {
+    const tr = @import("trakt.zig");
+    var card = cardBegin(@src(), 2);
+    defer card.deinit();
+
+    cardTitle(@src(), "Trakt.tv", "Sync your watched history.");
+
+    if (tr.isConnected()) {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        defer row.deinit();
+        _ = dvui.label(@src(), "Connected", .{}, .{ .color_text = theme.colors.success, .gravity_y = 0.5 });
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
+        if (dvui.button(@src(), "Disconnect", .{}, .{ .color_fill = theme.colors.bg_glass, .color_text = theme.colors.text_muted, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 }, .gravity_y = 0.5 })) {
+            tr.disconnect();
+        }
+        return;
+    }
+
+    _ = dvui.label(@src(), "Create an app at trakt.tv/oauth/applications (redirect urn:ietf:wg:oauth:2.0:oob), then paste id + secret.", .{}, .{ .color_text = theme.colors.text_dim, .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 } });
+
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+    defer row.deinit();
+
+    var idte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &tr.client_id }, .placeholder = "Trakt client id" }, .{ .expand = .horizontal, .gravity_y = 0.5 });
+    idte.deinit();
+    tr.client_id_len = std.mem.indexOfScalar(u8, &tr.client_id, 0) orelse tr.client_id.len;
+
+    var scte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &tr.client_secret }, .placeholder = "client secret" }, .{ .expand = .horizontal, .gravity_y = 0.5, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 } });
+    scte.deinit();
+    tr.client_secret_len = std.mem.indexOfScalar(u8, &tr.client_secret, 0) orelse tr.client_secret.len;
+
+    const label_txt = if (tr.auth_pending and tr.user_code_len > 0) "Waiting" else "Connect";
+    if (dvui.button(@src(), label_txt, .{}, .{ .color_fill = theme.colors.accent, .color_text = dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
+        tr.save();
+        tr.startDeviceAuth();
+    }
+
+    if (tr.auth_pending and tr.user_code_len > 0) {
+        _ = dvui.label(@src(), "Enter code {s} at trakt.tv/activate", .{tr.user_code[0..tr.user_code_len]}, .{ .color_text = theme.colors.accent, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
+    }
+}
+
 pub fn renderContent() void {
     if (!scanned) scanPlugins();
-    
-    // Plugin selector + search bar
+
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_app });
+    defer scroll.deinit();
+
+    renderSourcePlugins();
+    renderDebrid();
+    renderTrakt();
+
+    // ── Content plugins (external executables) — advanced, own card ──
+    var card = cardBegin(@src(), 3);
+    defer card.deinit();
+    cardTitle(@src(), "Content plugins", "Advanced: external executable plugins.");
+
     {
         var top = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal, .padding = .{ .x = 8, .y = 8, .w = 8, .h = 4 },
-            .background = true, .color_fill = theme.colors.bg_header,
+            .expand = .horizontal,
         });
         defer top.deinit();
-        
+
         if (plugin_count == 0) {
-            _ = dvui.label(@src(), "No plugins installed", .{}, .{
+            _ = dvui.label(@src(), "No content plugins installed", .{}, .{
                 .color_text = theme.colors.text_muted, .expand = .horizontal,
             });
             
             var hint_buf: [256]u8 = undefined;
             var dir_buf2: [512]u8 = undefined;
             const pd = getPluginDir(&dir_buf2);
-            const hint = std.fmt.bufPrintZ(&hint_buf, "Install plugins to: {s}", .{pd}) catch "~/.config/zigzag/plugins/";
+            const hint = std.fmt.bufPrintZ(&hint_buf, "Install plugins to: {s}", .{pd}) catch "~/.config/opal/plugins/";
             _ = dvui.label(@src(), "{s}", .{hint}, .{
                 .color_text = theme.colors.text_dim, .expand = .horizontal,
             });
@@ -940,8 +1160,8 @@ pub fn renderContent() void {
         return;
     }
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
-    defer scroll.deinit();
+    var results_scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
+    defer results_scroll.deinit();
 
     // Hold the lock across the render loop: a worker only ever rewrites
     // `results` while holding `results_mutex` (see executeAndParse), so this

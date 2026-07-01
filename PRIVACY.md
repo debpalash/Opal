@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Opal — Play everything** (binary and config dir: `zigzag`)
+**Opal — Play everything** (config dir: `opal`)
 
 _Last updated: 2026-06-26_
 
@@ -19,8 +19,8 @@ network requests it makes (and only when), and how to delete everything.
 ## TL;DR
 
 - **No telemetry / analytics / tracking.** Audited; none is present.
-- **Your data lives on your disk** under `~/.config/zigzag` and
-  `~/.cache/zigzag` (plus your chosen downloads folder).
+- **Your data lives on your disk** under `~/.config/opal` and
+  `~/.cache/opal` (plus your chosen downloads folder).
 - **Network requests happen only for features you use** — TMDB, Jellyfin,
   YouTube, torrent trackers/indexers, scraper sites, and optional AI/voice
   backends. When you talk to those services, **their** privacy policies apply,
@@ -36,7 +36,7 @@ network requests it makes (and only when), and how to delete everything.
 All persistent data lives under your XDG config and cache directories. Opal
 never writes to hidden cloud locations.
 
-### Configuration — `~/.config/zigzag/`
+### Configuration — `~/.config/opal/`
 
 | File / item | Contents |
 | --- | --- |
@@ -46,7 +46,7 @@ never writes to hidden cloud locations.
 | `api.token` (mode `0600`) | Bearer token for the local remote JSON API |
 | `plugins/<name>/` | Any third-party content-source plugins you install |
 
-### Local database — `~/.config/zigzag/zigzag.db` (SQLite)
+### Local database — `~/.config/opal/opal.db` (SQLite)
 
 A single local SQLite database holds:
 
@@ -60,12 +60,12 @@ A single local SQLite database holds:
 
 This database is **local-only**. It is never uploaded.
 
-### Cache — `~/.cache/zigzag/`
+### Cache — `~/.cache/opal/`
 
 Transient data: poster images, thumbnails, and other regenerable caches. Safe
 to delete at any time.
 
-### Downloads — `~/Downloads/zigzag` (default, configurable)
+### Downloads — `~/Downloads/opal` (default, configurable)
 
 Media you download or stream via torrents/other sources is written here.
 
@@ -160,25 +160,25 @@ Because everything is local, deleting your data is straightforward.
 - **Clear caches** (safe, regenerable):
 
   ```sh
-  rm -rf ~/.cache/zigzag
+  rm -rf ~/.cache/opal
   ```
 
 - **Delete history, AI memory, and the local database:**
 
   ```sh
-  rm -f ~/.config/zigzag/zigzag.db
+  rm -f ~/.config/opal/opal.db
   ```
 
 - **Remove all configuration, tokens, keys, and plugins:**
 
   ```sh
-  rm -rf ~/.config/zigzag
+  rm -rf ~/.config/opal
   ```
 
 - **Remove everything Opal stored, including downloads:**
 
   ```sh
-  rm -rf ~/.config/zigzag ~/.cache/zigzag ~/Downloads/zigzag
+  rm -rf ~/.config/opal ~/.cache/opal ~/Downloads/opal
   ```
 
   (Adjust the downloads path if you configured a custom location.)
@@ -186,7 +186,7 @@ Because everything is local, deleting your data is straightforward.
 After deletion, Opal will start fresh on next launch as if newly installed.
 
 You may also delete individual tokens/keys by removing the corresponding files
-in `~/.config/zigzag/`, or clear specific tables in `zigzag.db` with any SQLite
+in `~/.config/opal/`, or clear specific tables in `opal.db` with any SQLite
 tool if you want fine-grained control.
 
 ---

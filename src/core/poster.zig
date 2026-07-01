@@ -3,7 +3,7 @@ const dvui = @import("dvui");
 const http = @import("http.zig");
 
 // ══════════════════════════════════════════════════════════
-// ZigZag v2 — Poster Daemon
+// Opal v2 — Poster Daemon
 //
 // Single shared poster fetching engine used by all content
 // providers (TMDB, Anime, Jellyfin, YouTube, Plugins).
@@ -130,7 +130,7 @@ pub fn uploadIfReady(pixels: *?[]u8, w: u32, h: u32, tex: *?dvui.Texture) bool {
 /// Free a poster texture and associated memory.
 pub fn deinitPoster(pixels: *?[]u8, tex: *?dvui.Texture) void {
     if (tex.*) |t| {
-        t.deinit();
+        dvui.textureDestroyLater(t);
         tex.* = null;
     }
     if (pixels.*) |p| {

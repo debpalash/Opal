@@ -26,6 +26,23 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/Opal"
 chmod +x "$APP_DIR/Contents/MacOS/Opal"
 
+# ── 2b. Bundle runtime resources resolved relative to the resource root ────────
+# The app spawns `python3 engines/nova2.py` (torrent search). From a /Applications
+# launch the CWD is "/", so the binary locates these via SDL_GetBasePath() →
+# Contents/Resources/. Copy the lightweight (Python) resource dirs in.
+echo "[build-app] Bundling runtime resources (engines/)…"
+if [ -d "$ROOT/engines" ]; then
+    cp -R "$ROOT/engines" "$APP_DIR/Contents/Resources/engines"
+    # Drop caches so the bundle stays lean + reproducible.
+    find "$APP_DIR/Contents/Resources/engines" -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null || true
+fi
+
+# Bundle the source-plugin manifest so the Plugins page shows the full list
+# instantly + offline (plugin_repo.loadLocalManifest reads it from Resources).
+if [ -f "$ROOT/plugins-manifest.json" ]; then
+    cp "$ROOT/plugins-manifest.json" "$APP_DIR/Contents/Resources/plugins-manifest.json"
+fi
+
 # ── 3. Info.plist ──────────────────────────────────────────────
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

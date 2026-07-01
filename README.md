@@ -21,9 +21,6 @@ companion web UI.
 It is **local-first with no telemetry** — watch history and AI memory live in a local
 SQLite database, and your tokens live in your config directory. Nothing phones home.
 
-> **Note on naming:** the project is **Opal**, but the binary, app name, and config
-> directory all use the legacy name **`zigzag`** (e.g. `~/.config/zigzag/`).
-
 ---
 
 ## ✨ Features
@@ -141,11 +138,11 @@ pass/fail tally.
 
 Opal is **XDG-compliant**:
 
-- **Config:** `~/.config/zigzag/` — `config.tsv`, your TMDB token, plus optional
+- **Config:** `~/.config/opal/` — `config.tsv`, your TMDB token, plus optional
   OpenSubtitles / Jellyfin / Trakt / AniList / SIMKL keys and `api.token` (mode `0600`).
-- **Cache:** `~/.cache/zigzag/`
-- **Database:** `~/.config/zigzag/zigzag.db` (watch history, AI memory, caches).
-- **Downloads:** default `~/Downloads/zigzag`.
+- **Cache:** `~/.cache/opal/`
+- **Database:** `~/.config/opal/opal.db` (watch history, AI memory, caches).
+- **Downloads:** default `~/Downloads/opal`.
 
 Never hard-code paths — Opal resolves everything through `src/core/paths.zig`.
 
@@ -154,7 +151,7 @@ Never hard-code paths — Opal resolves everything through `src/core/paths.zig`.
 ## 🧩 Plugins
 
 Opal ships clean: the core app contains no scraping code. Content sources are provided by
-**external, user-installed plugins** under `~/.config/zigzag/plugins/<name>/`. Each plugin
+**external, user-installed plugins** under `~/.config/opal/plugins/<name>/`. Each plugin
 has a `manifest.json` and language-agnostic executables (`search`, `resolve`, optional
 `trending`) that emit JSON on stdout. Lua scripts run under a sandbox prelude that nils
 dangerous globals unless the manifest opts into `allow_unsafe`; **native binaries and

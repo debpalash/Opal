@@ -1776,7 +1776,7 @@ fn renderStorageTab() void {
         var vid_path_buf: [256]u8 = undefined;
         const dl_path = paths.defaultSavePath(&dl_path_buf);
         const vid_path = paths.videosSavePath(&vid_path_buf);
-        const preset_paths = [_][]const u8{ dl_path, vid_path, "/tmp/zigzag_torrents" };
+        const preset_paths = [_][]const u8{ dl_path, vid_path, "/tmp/opal_torrents" };
         const path_names = [_][]const u8{ "~/Downloads (default)", "~/Videos", "/tmp (tmpfs)" };
 
         var sel: usize = path_names.len; // none-active sentinel
@@ -1819,7 +1819,7 @@ fn renderStorageTab() void {
 
     // Database info
     settingRow("Database", 52, @src());
-    _ = dvui.label(@src(), "SQLite: ~/.config/zigzag/zigzag.db", .{}, .{
+    _ = dvui.label(@src(), "SQLite: ~/.config/opal/opal.db", .{}, .{
         .color_text = theme.colors.text_tertiary,
     });
 }
@@ -2239,7 +2239,7 @@ fn renderScriptsTab() void {
     settingRow("Installed Scripts", 71, @src());
 
     if (state.app.script_count == 0) {
-        _ = dvui.label(@src(), "No scripts found in ~/.config/mpv/scripts/ or ~/.config/zigzag/scripts/", .{}, .{
+        _ = dvui.label(@src(), "No scripts found in ~/.config/mpv/scripts/ or ~/.config/opal/scripts/", .{}, .{
             .color_text = theme.colors.text_tertiary,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
         });

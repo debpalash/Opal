@@ -64,6 +64,10 @@ pub const std_options: std.Options = .{ .logFn = dvui.App.logFn, .log_level = .w
 /// remote JSON API, and the background DB/library load thread. Nothing here
 /// reads dvui_win / state.app.dvui_win, so the window may be assigned after.
 pub fn coreInit() !void {
+    // One-time legacy rename: ~/.config/zigzag → ~/.config/opal (+ cache + the
+    // db file). MUST run before any path is read. Idempotent.
+    @import("core/paths.zig").migrateLegacyDir();
+
     // Runtime initialization (env vars can't be read at comptime)
     state.initPaths();
     state.loadTmdbTokenFromEnv();
@@ -154,6 +158,15 @@ pub fn coreInit() !void {
             hist.loadSearchHistory();
             hist.loadDownloadHistory();
             watch.load();
+            // Load installed source endpoints (opal-plugins). No file → every
+            // gated source stays inert until the user installs it.
+            @import("core/source_config.zig").reload();
+            @import("services/plugin_repo.zig").init(); // load saved GitHub token
+            @import("services/trakt.zig").init(); // load saved Trakt credentials/token
+            @import("services/plex.zig").init(); // load saved Plex token/server
+            // Signal the UI thread that watch history is ready so the "resume
+            // last played?" launch prompt can arm (monotonic one-way flag).
+            state.app.init_history_loaded = true;
             tmdb_store.loadLists();
 
             // Ensure yt-dlp binary is available
@@ -167,6 +180,32 @@ pub fn coreInit() !void {
             logs.pushLog("info", "init", "Background init complete", false);
         }
     }.worker, .{})) |t| t.detach() else |_| {}
+}
+
+/// Find the directory holding bundled runtime resources (engines/, scripts/, …).
+/// Dev launches already have these reachable from the CWD; a /Applications launch
+/// has CWD "/", so fall back to the macOS bundle's Resources dir via
+/// SDL_GetBasePath. Result stored in state.app.resource_root (empty = use CWD).
+fn detectResourceRoot() void {
+    const io_g = @import("core/io_global.zig");
+    // Dev / launched-from-project: engines/ is already reachable from the CWD.
+    if (io_g.cwdAccess("engines/nova2.py", .{})) |_| return else |_| {}
+
+    // Bundled: SDL_GetBasePath() → "<App>/Contents/Resources/" (trailing slash).
+    const base = c.sdl.SDL_GetBasePath();
+    if (base == null) return;
+    defer c.sdl.SDL_free(base);
+    const base_slice = std.mem.span(base);
+    if (base_slice.len == 0 or base_slice.len >= state.app.resource_root.len) return;
+
+    // Commit only if engines/ actually lives there.
+    var probe: [1100]u8 = undefined;
+    const probe_path = std.fmt.bufPrint(&probe, "{s}engines/nova2.py", .{base_slice}) catch return;
+    io_g.cwdAccess(probe_path, .{}) catch return;
+
+    @memcpy(state.app.resource_root[0..base_slice.len], base_slice);
+    state.app.resource_root_len = base_slice.len;
+    logs.pushLog("info", "init", "Using bundled resource root", false);
 }
 
 fn appInit(win: *dvui.Window) !void {
@@ -190,8 +229,12 @@ fn appInit(win: *dvui.Window) !void {
     _ = c.sdl.SDL_EventState(c.sdl.SDL_DROPFILE, c.sdl.SDL_ENABLE);
     c.sdl.SDL_AddEventWatch(sdlEventWatch, null);
 
+    // Locate bundled resources (engines/ etc.) so streaming works when launched
+    // from /Applications (CWD "/"), not just from the project dir in dev.
+    detectResourceRoot();
+
     // ── CLI argument handling ──
-    // `zigzag /path/to/file.mp4` or `zigzag https://example.com/stream`
+    // `opal /path/to/file.mp4` or `opal https://example.com/stream`
     // Deferred: store in buffer, appFrame loads after player is ready.
     if (dvui.App.main_init) |init_data| {
         var args_iter = init_data.minimal.args.iterate();
@@ -212,6 +255,12 @@ pub fn appDeinit() void {
     voice.is_recording = false;
     voice.is_speaking = false;
 
+    // Settle in-flight download/decode workers (comic pages, comic covers, yt
+    // thumbnails) before we free the buffers they publish into — otherwise the
+    // leak check races their still-live tmp_buf/p_slice. Workers poll isQuitting
+    // in their read loops, so this drains in well under the timeout.
+    @import("core/workers.zig").beginShutdownAndDrain(800);
+
     // Clean up players natively to prevent memory leaks
     for (state.app.players.items) |p| {
         p.deinit(@import("core/alloc.zig").allocator);
@@ -223,13 +272,16 @@ pub fn appDeinit() void {
     // Free downloaded comic page pixels (decoded-but-unviewed pages keep their
     // heap buffer until the texture is uploaded).
     @import("services/comics.zig").freeComicPages();
+    // Free search-result cover pixels the renderer never uploaded.
+    @import("services/comics.zig").freeSearchCovers();
 
     // Clean up UI arrays
     state.app.tmdb.results.deinit(@import("core/alloc.zig").allocator);
     state.app.tmdb.favorites.deinit(@import("core/alloc.zig").allocator);
     state.app.tmdb.watchlist.deinit(@import("core/alloc.zig").allocator);
     state.app.tmdb.watching.deinit(@import("core/alloc.zig").allocator);
-    state.app.yt.results.deinit(@import("core/alloc.zig").allocator);
+    // Frees per-item thumb_pixels + the index-aligned date arrays, then the list.
+    @import("services/youtube.zig").deinit();
 
     // Join search thread so its defers (free query, deinit argv) run cleanly
     search.search_abort.store(true, .release);
@@ -241,13 +293,13 @@ pub fn appDeinit() void {
 
     // Kill any spawned child processes that may still be running
     const kill_targets = [_][]const u8{
-        "aplay.*zigzag",
+        "aplay.*opal",
         "kittentts",
-        "zigzag-stt",
-        "zigzag-tts-server",
-        "zigzag-stt-server",
-        "zigzag-voice-server",
-        "rec.*zigzag_ai_mic",
+        "opal-stt",
+        "opal-tts-server",
+        "opal-stt-server",
+        "opal-voice-server",
+        "rec.*opal_ai_mic",
     };
 
     for (kill_targets) |target| {
@@ -776,45 +828,38 @@ fn appFrame() !dvui.App.Result {
     // theme.setPreset on the background worker, which can't touch dvui directly).
     theme.reapplyIfPending();
 
-    // Session restore: rehydrate players from last exit, paused.
-    // Config loads async on a worker thread, so we re-check each frame
-    // until session_restore_count becomes non-zero, then run once.
-    if (!state.app.session_restore_done and state.app.session_restore_count > 0) {
+    // Resume prompt (replaces the old silent session restore): once watch history
+    // has loaded, arm a one-shot banner offering to reopen the most-recent item
+    // instead of auto-reopening it. Cold start only — skip if something already
+    // plays (e.g. a CLI/file-arg open). See resume_pure for the predicate.
+    if (!state.app.resume_prompt_checked and state.app.init_history_loaded) {
+        state.app.resume_prompt_checked = true;
         state.app.session_restore_done = true;
-        const browser = @import("services/browser.zig");
-        var i: usize = 0;
-        while (i < state.app.session_restore_count) : (i += 1) {
-            const url_len = state.app.session_restore_lens[i];
-            if (url_len == 0 or url_len >= 2048) continue;
-            const url = state.app.session_restore_urls[i][0..url_len];
-            // Skip local files that no longer exist — avoids noisy mpv errors
-            // for media deleted between sessions.
-            const is_local = url.len > 0 and (url[0] == '/' or std.mem.startsWith(u8, url, "file://"));
-            if (is_local) {
-                const fs_path = if (std.mem.startsWith(u8, url, "file://")) url[7..] else url;
+        const wh = @import("player/watch_history.zig");
+        const rp = @import("player/resume_pure.zig");
+        if (state.app.players.items.len == 0 and wh.count > 0 and
+            rp.isResumable(wh.entries[0].link_len, wh.entries[0].percent))
+        {
+            const e = &wh.entries[0]; // load() orders by updated_at DESC → most recent
+            const link = e.link[0..e.link_len];
+            // Don't offer a dead resume for a local file deleted between sessions.
+            const is_local = link.len > 0 and (link[0] == '/' or std.mem.startsWith(u8, link, "file://"));
+            const exists = if (is_local) blk: {
+                const fs_path = if (std.mem.startsWith(u8, link, "file://")) link[7..] else link;
                 const io_g = @import("core/io_global.zig");
                 if (io_g.openFileAbsolute(fs_path, .{})) |f| {
                     f.close(io_g.io());
-                } else |_| {
-                    logs.pushLog("info", "session", "Skipping missing file from previous session", false);
-                    continue;
-                }
+                    break :blk true;
+                } else |_| break :blk false;
+            } else true;
+            if (exists) {
+                const ll = @min(link.len, state.app.resume_prompt_link.len);
+                @memcpy(state.app.resume_prompt_link[0..ll], link[0..ll]);
+                state.app.resume_prompt_link_len = ll;
+                state.app.resume_prompt_label_len = rp.cleanTitle(e.name[0..e.name_len], &state.app.resume_prompt_label);
+                state.app.resume_prompt_pct = @intFromFloat(std.math.clamp(e.percent, 0, 100));
+                state.app.resume_prompt_active = true;
             }
-            const p = player.MediaPlayer.init(@import("core/alloc.zig").allocator) catch continue;
-            // Start paused; mpv honors the pause property across loadfile.
-            _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "pause", "yes");
-            state.app.players.append(@import("core/alloc.zig").allocator, p) catch {
-                p.deinit(@import("core/alloc.zig").allocator);
-                continue;
-            };
-            state.app.active_player_idx = state.app.players.items.len - 1;
-            browser.loadContent(url);
-            // Single-media mode — restore only the first existing stream.
-            break;
-        }
-        if (state.app.players.items.len > 0) {
-            state.app.active_player_idx = 0;
-            logs.pushLog("info", "session", "Restored previous session (paused)", false);
         }
     }
 
@@ -917,6 +962,10 @@ fn appFrame() !dvui.App.Result {
             }
             if (state.app.players.items.len == 0) {
                 state.app.active_player_idx = 0;
+                // Page shell: the Player route now has nothing to render — leave
+                // it for the last non-player page (or Home) so closing the player
+                // doesn't drop the user on an empty grid.
+                if (state.app.page_shell_enabled) state.app.router.leavePlayer();
             }
         }
         state.app.pending_remove_player_idx = -1;
@@ -1097,7 +1146,32 @@ fn appFrame() !dvui.App.Result {
         // New website-like page shell (redesign). Behind a flag until parity.
         try @import("ui/shell.zig").render();
     } else {
-        if (state.app.fullscreen_player_idx == null) {
+        // Auto-hide the navbar + bottom tray once the mouse goes idle during
+        // video playback, so the video gets the whole window (the player control
+        // bar already self-hides on the same idle clock — footer.zig). Any mouse
+        // motion bumps last_mouse_move_ms (above) and reveals the chrome again.
+        const hide_chrome = blk: {
+            var playing_video = false;
+            if (state.app.active_player_idx < state.app.players.items.len) {
+                const ap = state.app.players.items[state.app.active_player_idx];
+                playing_video = ap.texture != null and !ap.cached_paused;
+            }
+            const text_len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
+            const now_ms = @import("core/io_global.zig").milliTimestamp();
+            break :blk @import("ui/chrome_autohide.zig").shouldHideChrome(.{
+                .playing_video = playing_video,
+                .typing = text_len > 0,
+                .idle_ms = now_ms - state.app.last_mouse_move_ms,
+                .threshold_ms = 2500,
+            });
+        };
+
+        // Immersive = give the video the whole window: hide ALL chrome (navbar,
+        // tab bar, drawer, language bar, bottom tray). True in fullscreen, or once
+        // the mouse goes idle during playback. Mouse motion reveals it again.
+        const immersive = state.app.fullscreen_player_idx != null or hide_chrome;
+
+        if (!immersive) {
             ui.renderHeader();
             ui.renderTabBar();
         }
@@ -1120,8 +1194,9 @@ fn appFrame() !dvui.App.Result {
                     grid_inner.deinit();
                 }
 
-                // Language Learning subtitle bar (non-expanding, below grid)
-                {
+                // Language Learning subtitle bar (non-expanding, below grid) —
+                // hidden in immersive playback so the video reaches the bottom edge.
+                if (!immersive) {
                     const lang_learn = @import("services/lang_learn.zig");
                     lang_learn.pollSubtitle();
                     lang_learn.renderSubtitleBar();
@@ -1130,12 +1205,14 @@ fn appFrame() !dvui.App.Result {
                 grid_area.deinit();
             }
 
-            // 2. Tabbed Drawer (non-expanding, fixed width on right side)
-            drawer.renderDrawer();
+            // 2. Tabbed Drawer (fixed width, right side) — hidden in immersive
+            // playback so the video gets the full window width.
+            if (!immersive) drawer.renderDrawer();
         }
 
-        // 3. Global Status Bottom Tray (hide when player controls overlay is active)
-        if (state.app.fullscreen_player_idx == null and !state.app.show_cell_overlay) {
+        // 3. Global Status Bottom Tray (hidden in immersive playback and when the
+        // player controls overlay is active)
+        if (!immersive and !state.app.show_cell_overlay) {
             ui.renderGlobalBottomTray();
         }
     } // end else — legacy header+grid+drawer layout
@@ -1162,6 +1239,7 @@ fn appFrame() !dvui.App.Result {
     }
 
     ui.renderWorkspaceModals();
+    @import("ui/footer.zig").renderResumePrompt();
     ui.renderToast();
 
     // ── AI Chat: input-extension dropdown.

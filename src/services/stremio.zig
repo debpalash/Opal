@@ -140,6 +140,78 @@ pub fn fetchCatalog() void {
 
 /// Ensure at least the well-known addons are installed so streaming sources
 /// work without manual UI setup. Idempotent: no-op once any addon is installed.
+/// Substitute {provider}/{key} in a debrid URL template, or null if it won't fit.
+fn applyDebrid(tmpl: []const u8, provider: []const u8, key: []const u8, out: []u8) ?[]const u8 {
+    var tmp: [512]u8 = undefined;
+    const s1_len = std.mem.replacementSize(u8, tmpl, "{provider}", provider);
+    if (s1_len > tmp.len) return null;
+    _ = std.mem.replace(u8, tmpl, "{provider}", provider, &tmp);
+    const out_len = std.mem.replacementSize(u8, tmp[0..s1_len], "{key}", key);
+    if (out_len > out.len) return null;
+    _ = std.mem.replace(u8, tmp[0..s1_len], "{key}", key, out);
+    return out[0..out_len];
+}
+
+/// Neutral: populate installed_addons ONLY from user-installed Stremio plugins
+/// (~/.config/opal/plugins/sources/<id>.json files that carry a "stremio" field
+/// = the addon manifest URL, written by the plugin manager). No addon is active
+/// until the user installs it. The universal resolver reads installed_addons.
+pub fn loadInstalledAddons() void {
+    const io = @import("../core/io_global.zig");
+    const sc = @import("../core/source_config.zig");
+    installed_count = 0;
+
+    var dir_buf: [600]u8 = undefined;
+    const dir_path = sc.sourcesDir(&dir_buf);
+    var dir = io.cwdOpenDir(dir_path, .{ .iterate = true }) catch return;
+    defer dir.close(io.io());
+
+    var it = dir.iterate();
+    while (it.next(io.io()) catch null) |entry| {
+        if (installed_count >= installed_addons.len) break;
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".json")) continue;
+
+        var fp_buf: [700]u8 = undefined;
+        const fp = std.fmt.bufPrint(&fp_buf, "{s}/{s}", .{ dir_path, entry.name }) catch continue;
+        const body = io.cwdReadFileAlloc(fp, alloc, 16 * 1024) catch continue;
+        defer alloc.free(body);
+
+        var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch continue;
+        defer parsed.deinit();
+        if (parsed.value != .object) continue;
+        const url_v = parsed.value.object.get("stremio") orelse continue; // not a Stremio addon
+        if (url_v != .string or url_v.string.len == 0) continue;
+
+        var inst = &installed_addons[installed_count];
+        inst.* = std.mem.zeroes(Addon);
+        const id = entry.name[0 .. entry.name.len - 5];
+        const nlen = @min(id.len, inst.name.len - 1);
+        @memcpy(inst.name[0..nlen], id[0..nlen]);
+        inst.name_len = nlen;
+
+        // Debrid: if the user set a debrid key and this add-on carries a "debrid"
+        // URL template, use the substituted URL (instant cached HTTP streams).
+        var dbuf: [512]u8 = undefined;
+        var addon_url = url_v.string;
+        const pr = @import("plugin_repo.zig");
+        if (pr.debridKey().len > 0) {
+            if (parsed.value.object.get("debrid")) |dv| if (dv == .string) {
+                if (applyDebrid(dv.string, pr.debridProvider(), pr.debridKey(), &dbuf)) |u| addon_url = u;
+            };
+        }
+        const ulen = @min(addon_url.len, inst.url.len - 1);
+        @memcpy(inst.url[0..ulen], addon_url[0..ulen]);
+        inst.url_len = ulen;
+        if (parsed.value.object.get("types")) |tv| if (tv == .string) {
+            const tl = @min(tv.string.len, inst.types.len - 1);
+            @memcpy(inst.types[0..tl], tv.string[0..tl]);
+            inst.types_len = tl;
+        };
+        inst.installed = true;
+        installed_count += 1;
+    }
+}
+
 /// Populates installed_addons directly (the universal resolver reads that list).
 pub fn ensureDefaultAddons() void {
     if (installed_count > 0) return;
@@ -163,6 +235,15 @@ fn addKnownAddons() void {
         .{ .name = "Comet", .desc = "Debrid streaming via Real-Debrid/AllDebrid", .url = "https://comet.elfhosted.com/manifest.json", .types = "movie,series" },
         .{ .name = "Anime Kitsu", .desc = "Anime catalog with Kitsu integration", .url = "https://anime-kitsu.strem.fun/manifest.json", .types = "anime" },
         .{ .name = "OpenSubtitles", .desc = "Subtitles from OpenSubtitles.com", .url = "https://opensubtitles-v3.strem.io/manifest.json", .types = "movie,series" },
+        .{ .name = "KnightCrawler", .desc = "Self-hosted torrent indexer streams", .url = "https://knightcrawler.elfhosted.com/manifest.json", .types = "movie,series" },
+        .{ .name = "ThePirateBay+", .desc = "ThePirateBay streams (debrid-capable)", .url = "https://thepiratebay-plus.strem.fun/manifest.json", .types = "movie,series" },
+        .{ .name = "TMDB", .desc = "Rich movie/series catalog + metadata", .url = "https://tmdb.elfhosted.com/manifest.json", .types = "movie,series" },
+        .{ .name = "USA TV Next", .desc = "Live US TV channels", .url = "https://raw.githubusercontent.com/yowmamasita/usa-tv-next/main/manifest.json", .types = "tv" },
+        .{ .name = "Streaming Catalogs", .desc = "Trending on Netflix/Disney+/HBO/Prime", .url = "https://7a82163c306e-stremio-netflix-catalog-addon.baby-beamup.club/manifest.json", .types = "movie,series" },
+        .{ .name = "Public Domain Movies", .desc = "Legal public-domain films with streams", .url = "https://caching.stremio.net/publicdomainmovies.now.sh/manifest.json", .types = "movie" },
+        .{ .name = "Cinemeta", .desc = "Canonical IMDb metadata backbone", .url = "https://v3-cinemeta.strem.io/manifest.json", .types = "movie,series" },
+        .{ .name = "WatchHub", .desc = "Deep-links to legal streaming services", .url = "https://watchhub.strem.io/manifest.json", .types = "movie,series" },
+        .{ .name = "YouTube Channels", .desc = "Browse YouTube channels", .url = "https://v3-channels.strem.io/manifest.json", .types = "channel" },
     };
     for (known, 0..) |k, i| {
         if (i >= 32) break;

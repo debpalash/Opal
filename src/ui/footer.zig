@@ -436,9 +436,9 @@ fn renderScrubber(
 ) void {
     var scrub_band = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = 32 },
-        .max_size_content = .{ .w = 0, .h = 32 },
-        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = 0 },
+        .min_size_content = .{ .w = 0, .h = 22 },
+        .max_size_content = .{ .w = 0, .h = 22 },
+        .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = 0 },
     });
     defer scrub_band.deinit();
 
@@ -1106,11 +1106,12 @@ pub fn renderLiquidGlassOverlay() void {
     var anchor = dvui.box(@src(), .{ .dir = .vertical }, .{ .gravity_y = 1.0, .expand = .horizontal });
     defer anchor.deinit();
 
-    // ── Footer panel: bg_surface + 1px top border ──
+    // ── Footer panel: semi-transparent dark glass so the video shows through
+    // for a content-focused feel (was opaque bg_surface). 1px top border. ──
     var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = .{ .r = 12, .g = 12, .b = 17, .a = 200 },
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
@@ -1184,9 +1185,9 @@ pub fn renderLiquidGlassOverlay() void {
     {
         var ctrl_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 40 },
-            .max_size_content = .{ .w = 0, .h = 40 },
-            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+            .min_size_content = .{ .w = 0, .h = 34 },
+            .max_size_content = .{ .w = 0, .h = 34 },
+            .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = 2 },
         });
         defer ctrl_row.deinit();
 
@@ -1652,15 +1653,15 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     var volume: f64 = 100.0;
     _ = c.mpv.mpv_get_property(p.mpv_ctx, "volume", c.mpv.MPV_FORMAT_DOUBLE, &volume);
 
-    // ── Bar panel: bg_surface + 1px top border, ~100px tall ──
+    // ── Bar panel: bg_surface + 1px top border, ~84px tall (compact) ──
     var bar = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
         .color_fill = theme.colors.bg_surface,
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
-        .min_size_content = .{ .w = 0, .h = 100 },
-        .max_size_content = .{ .w = 0, .h = 100 },
+        .min_size_content = .{ .w = 0, .h = 84 },
+        .max_size_content = .{ .w = 0, .h = 84 },
     });
     defer bar.deinit();
 
@@ -1670,8 +1671,8 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     // ── Row 2: [thumb + title] | [transport] | [time] | [volume] | [queue] ──
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = 56 },
-        .max_size_content = .{ .w = 0, .h = 56 },
+        .min_size_content = .{ .w = 0, .h = 48 },
+        .max_size_content = .{ .w = 0, .h = 48 },
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
     });
     defer row.deinit();
@@ -1690,8 +1691,8 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         // A small thumbnail when mpv exposed one, else a music/film glyph.
         if (p.thumb_texture != null) {
             _ = dvui.image(@src(), .{ .source = .{ .texture = p.thumb_texture.? } }, .{
-                .min_size_content = .{ .w = 40, .h = 40 },
-                .max_size_content = .{ .w = 40, .h = 40 },
+                .min_size_content = .{ .w = 32, .h = 32 },
+                .max_size_content = .{ .w = 32, .h = 32 },
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .gravity_y = 0.5,
                 .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -1856,22 +1857,16 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
 fn renderTorrentActivityStrip() void {
     const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
-    var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .horizontal,
-        .background = true,
-        .color_fill = theme.colors.bg_header,
-        .color_border = theme.colors.border_drawer,
-        .border = dvui.Rect{ .x = 0, .y = 1, .w = 0, .h = 0 },
-        .padding = .{ .x = 10, .y = 2, .w = 10, .h = 2 },
-    });
-    defer b.deinit();
-
+    // Tally first — the strip only earns its space when a torrent is actually
+    // present. Otherwise it sat at the bottom forever reading "0 Active / 0 Peers".
     var total_dl: f32 = 0.0;
     var total_peers: i32 = 0;
     var total_active: i32 = 0;
+    var any_torrent = false;
 
     for (state.app.players.items) |p| {
         if (p.is_torrent and p.current_torrent_id >= 0) {
+            any_torrent = true;
             var dl_rate: i32 = 0;
             var peers: i32 = 0;
             var pct: f32 = 0;
@@ -1881,6 +1876,18 @@ fn renderTorrentActivityStrip() void {
             if (dl_rate > 0) total_active += 1;
         }
     }
+
+    if (!any_torrent) return; // no bottom bar when there's nothing to report
+
+    var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = theme.colors.bg_header,
+        .color_border = theme.colors.border_drawer,
+        .border = dvui.Rect{ .x = 0, .y = 1, .w = 0, .h = 0 },
+        .padding = .{ .x = theme.spacing.sm, .y = 1, .w = theme.spacing.sm, .h = 1 },
+    });
+    defer b.deinit();
 
     // Single accent — the leading "Active" indicator. Everything else reads
     // on the neutral text ramp (rate brightens to text_primary when live).
@@ -1942,6 +1949,75 @@ pub fn renderGlobalBottomTray() void {
     }
 
     renderTorrentActivityStrip();
+}
+
+/// One-shot "Resume last played?" banner shown on launch (top-center, below the
+/// navbar). Resume reopens the saved link; the per-media seek (player.zig) jumps
+/// to the stored position. Armed in main.zig from watch history. Dismisses itself
+/// the moment anything is playing — including right after Resume opens a player.
+pub fn renderResumePrompt() void {
+    if (!state.app.resume_prompt_active) return;
+    if (state.app.players.items.len > 0) {
+        state.app.resume_prompt_active = false;
+        return;
+    }
+
+    var anchor = dvui.overlay(@src(), .{ .expand = .both });
+    defer anchor.deinit();
+
+    var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .gravity_x = 0.5,
+        .gravity_y = 0.08,
+        .background = true,
+        .color_fill = theme.colors.bg_elevated,
+        .corner_radius = dvui.Rect.all(theme.radius.lg),
+        .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
+        .box_shadow = .{
+            .color = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 },
+            .offset = .{ .x = 0, .y = 4 },
+            .fade = 20,
+        },
+    });
+    defer bar.deinit();
+
+    _ = dvui.icon(@src(), "", icons.tvg.lucide.play, .{}, .{
+        .color_text = theme.colors.accent,
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+    });
+
+    var lb: [128]u8 = undefined;
+    const label = @import("../core/text.zig").safeUtf8Buf(state.app.resume_prompt_label[0..state.app.resume_prompt_label_len], &lb);
+    var msg_buf: [200]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, "Resume \u{201c}{s}\u{201d} \u{b7} {d}%", .{ label, state.app.resume_prompt_pct }) catch label;
+    _ = dvui.label(@src(), "{s}", .{msg}, .{
+        .color_text = theme.colors.text_primary,
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.md, .h = 0 },
+    });
+
+    if (dvui.button(@src(), "Resume", .{}, .{
+        .color_fill = theme.colors.accent,
+        .color_text = dvui.Color.white,
+        .corner_radius = theme.dims.rad_sm,
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
+    })) {
+        // loadContent creates a player if none exists on a cold start.
+        @import("../services/browser.zig").resumePlayback(state.app.resume_prompt_link[0..state.app.resume_prompt_link_len]);
+        state.app.resume_prompt_active = false;
+    }
+
+    if (dvui.button(@src(), "\u{2715}", .{}, .{
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_text = theme.colors.text_tertiary,
+        .border = dvui.Rect.all(0),
+        .corner_radius = theme.dims.rad_sm,
+        .gravity_y = 0.5,
+    })) {
+        state.app.resume_prompt_active = false;
+    }
 }
 
 pub fn renderToast() void {

@@ -26,7 +26,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-BIN="./zig-out/bin/zigzag"
+BIN="./zig-out/bin/opal"
 WATCH_PATHS=(src tools build.${ZIG:-zig} build.zig.zon)
 PID=""
 BUILD_N=0
@@ -76,9 +76,9 @@ cleanup() {
     echo
     warn "Shutting down…"
     kill_running
-    pkill -f zigzag-voice-server 2>/dev/null || true
-    pkill -f zigzag-tts-server   2>/dev/null || true
-    pkill -f zigzag-stt-server   2>/dev/null || true
+    pkill -f opal-voice-server 2>/dev/null || true
+    pkill -f opal-tts-server   2>/dev/null || true
+    pkill -f opal-stt-server   2>/dev/null || true
     exit 0
 }
 trap cleanup INT TERM

@@ -270,8 +270,8 @@ fn downloadThread(engine: *SubtitleEngine) void {
     const r = &engine.results[engine.selected_idx];
     const url = r.download_url[0..r.download_url_len];
     
-    @import("../core/io_global.zig").cwdMakePath("/tmp/zigzag_subs") catch {};
-    const srt_path = std.fmt.bufPrintZ(&engine.srt_path, "/tmp/zigzag_subs/current.srt", .{}) catch {
+    @import("../core/io_global.zig").cwdMakePath("/tmp/opal_subs") catch {};
+    const srt_path = std.fmt.bufPrintZ(&engine.srt_path, "/tmp/opal_subs/current.srt", .{}) catch {
         engine.state = .failed;
         return;
     };
@@ -304,7 +304,7 @@ fn downloadThread(engine: *SubtitleEngine) void {
     // Check if it's gzip-compressed (magic bytes 0x1F 0x8B)
     if (data.len >= 2 and data[0] == 0x1F and data[1] == 0x8B) {
         // Save as .gz, then decompress with gunzip
-        const gz_path = "/tmp/zigzag_subs/current.srt.gz";
+        const gz_path = "/tmp/opal_subs/current.srt.gz";
         const gz_file = @import("../core/io_global.zig").cwdCreateFile(gz_path, .{ .truncate = true }) catch {
             engine.state = .failed;
             return;
@@ -319,7 +319,7 @@ fn downloadThread(engine: *SubtitleEngine) void {
             logs.pushLog("error", "subs", "gunzip failed", true);
             return;
         };
-        // gunzip produces /tmp/zigzag_subs/current.srt
+        // gunzip produces /tmp/opal_subs/current.srt
     } else {
         // Already uncompressed, write directly
         const file = @import("../core/io_global.zig").cwdCreateFile(srt_path, .{ .truncate = true }) catch {

@@ -15,7 +15,7 @@ import urllib.request
 import urllib.error
 import sqlite3
 
-DB_PATH = os.path.expanduser("~/.config/zigzag/zigzag.db")
+DB_PATH = os.path.expanduser("~/.config/opal/opal.db")
 LLM_URL = "http://127.0.0.1:8080"
 EMBED_URL = "http://127.0.0.1:8082"
 RESULTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results.json")
@@ -114,7 +114,7 @@ def test_voice_socket():
     try:
         s = sock.socket(sock.AF_UNIX, sock.SOCK_STREAM)
         s.settimeout(1)
-        s.connect("/tmp/zigzag-voice.sock")
+        s.connect("/tmp/opal-voice.sock")
         s.close()
         dt = int((time.time() - t0) * 1000)
         add_result("Voice Server Socket", "Connectivity", "pass", "Connected to voice server", dt)

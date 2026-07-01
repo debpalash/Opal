@@ -492,9 +492,11 @@ fn resolveComics(query_buf: [256]u8, qlen: usize) void {
         }
     }
 
+    // Endpoint migrated to opal-plugins — inert until the user installs "readallcomics".
+    const base = @import("../core/source_config.zig").get("readallcomics", "base") orelse return;
     var url_buf: [640]u8 = undefined;
     // Same URL comics.zig builds for page 1.
-    const url = std.fmt.bufPrint(&url_buf, "https://readallcomics.com/?story={s}&s=&type=comic", .{enc[0..el]}) catch return;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/?story={s}&s=&type=comic", .{ base, enc[0..el] }) catch return;
 
     // readallcomics pages can be large — heap the fetch buffer (never on the
     // worker stack, per the >64KB rule).
@@ -839,6 +841,9 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
     var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
+    // Run from the bundled resource root when installed (CWD is "/" from a
+    // /Applications launch); null in dev keeps the inherited project-dir CWD.
+    child.cwd = state.resourceRoot();
     _ = child.spawn() catch {
         logs.pushLog("warn", "resolver", "nova2.py spawn failed", false);
         return;
@@ -958,8 +963,11 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
         }
     }
 
+    // Endpoint migrated to opal-plugins — inert until the user installs "1337x".
+    const base = @import("../core/source_config.zig").get("1337x", "base") orelse return;
+
     var url_buf: [512]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "https://1337x.to/search/{s}/1/", .{enc[0..el]}) catch return;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/search/{s}/1/", .{ base, enc[0..el] }) catch return;
 
     // v2: throttle to ≤1 req/sec per origin so parallel queries don't trip rate limits.
     @import("../core/rate_limit.zig").acquire("1337x", 1.0);
@@ -1045,7 +1053,7 @@ fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
 
         // Build full URL for magnet fetch
         var detail_url: [512]u8 = undefined;
-        const du = std.fmt.bufPrint(&detail_url, "https://1337x.to{s}", .{href}) catch {
+        const du = std.fmt.bufPrint(&detail_url, "{s}{s}", .{ base, href }) catch {
             pos = title_end + 1;
             continue;
         };
@@ -1117,16 +1125,19 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
     var enc: [512]u8 = undefined;
     const enc_q = @import("../core/http.zig").urlEncode(query, &enc);
 
+    // Endpoint migrated to opal-plugins — inert until the user installs "yts".
+    const api = @import("../core/source_config.zig").get("yts", "api") orelse return;
+
     var url_buf: [512]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "https://yts.mx/api/v2/list_movies.json?query_term={s}&limit=8&sort_by=seeds", .{
-        enc_q,
+    const url = std.fmt.bufPrint(&url_buf, "{s}?query_term={s}&limit=8&sort_by=seeds", .{
+        api, enc_q,
     }) catch return;
 
     var buf: [64 * 1024]u8 = undefined;
     @import("../core/rate_limit.zig").acquire("yts", 1.0);
     const body = @import("../core/http.zig").fetch(url, &buf, .{
         .timeout_secs = 6,
-        .user_agent = "ZigZag/1.0",
+        .user_agent = "Opal/1.0",
     }) orelse return;
     const n = body.len;
 
@@ -1373,6 +1384,28 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
 // Backend: Stremio (query installed addons via TMDB IMDB ID)
 // ══════════════════════════════════════════════════════════
 
+/// Parse S(\d+)E(\d+) from a query like "from s01e05" (case-insensitive).
+/// Sets *season and *episode to 0 if not found.
+fn parseSxxEyy(query: []const u8, out_season: *i32, out_episode: *i32) void {
+    out_season.* = 0;
+    out_episode.* = 0;
+    var i: usize = 0;
+    while (i < query.len) : (i += 1) {
+        if (std.ascii.toLower(query[i]) != 's') continue;
+        // Collect digits after 's'
+        var se = i + 1;
+        while (se < query.len and std.ascii.isDigit(query[se])) se += 1;
+        if (se == i + 1) continue; // no digits
+        if (se >= query.len or std.ascii.toLower(query[se]) != 'e') continue;
+        var ee = se + 1;
+        while (ee < query.len and std.ascii.isDigit(query[ee])) ee += 1;
+        if (ee == se + 1) continue; // no episode digits
+        out_season.* = std.fmt.parseInt(i32, query[i + 1 .. se], 10) catch continue;
+        out_episode.* = std.fmt.parseInt(i32, query[se + 1 .. ee], 10) catch continue;
+        return;
+    }
+}
+
 fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
     defer {
         status_stremio.store(.done, .release);
@@ -1380,115 +1413,128 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
     }
 
     const stremio = @import("stremio.zig");
-    // Lazily install the well-known addons so the stremio source works
-    // out of the box without separate UI wiring (S15). Idempotent.
-    stremio.ensureDefaultAddons();
+    // Neutral: query only the Stremio addons the user has installed via the
+    // plugin manager (re-read each search so installs/uninstalls take effect).
+    stremio.loadInstalledAddons();
     if (stremio.installed_count == 0) return;
 
     const query = query_buf[0..qlen];
-
-    // First, search TMDB to get IMDB ID
-    var enc: [512]u8 = undefined;
-    var el: usize = 0;
-    for (query) |ch| {
-        if (el + 3 >= enc.len) break;
-        if (ch == ' ') {
-            enc[el] = '+';
-            el += 1;
-        } else if (ch == '%') {
-            enc[el] = '%';
-            enc[el + 1] = '2';
-            enc[el + 2] = '5';
-            el += 3;
-        } else if (ch == '&') {
-            enc[el] = '%';
-            enc[el + 1] = '2';
-            enc[el + 2] = '6';
-            el += 3;
-        } else if (ch == '=') {
-            enc[el] = '%';
-            enc[el + 1] = '3';
-            enc[el + 2] = 'D';
-            el += 3;
-        } else if (ch == '#') {
-            enc[el] = '%';
-            enc[el + 1] = '2';
-            enc[el + 2] = '3';
-            el += 3;
-        } else if (ch == '?') {
-            enc[el] = '%';
-            enc[el + 1] = '3';
-            enc[el + 2] = 'F';
-            el += 3;
-        } else {
-            enc[el] = ch;
-            el += 1;
-        }
-    }
-
     const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
     if (api_key.len == 0) return;
 
-    var tmdb_url: [512]u8 = undefined;
-    const turl = std.fmt.bufPrint(&tmdb_url, "https://api.themoviedb.org/3/search/multi?api_key={s}&query={s}&page=1", .{
-        api_key, enc[0..el],
-    }) catch return;
+    // Parse season/episode from query (e.g. "from s01e05" → season=1, episode=5)
+    var ep_season: i32 = 0;
+    var ep_episode: i32 = 0;
+    parseSxxEyy(query, &ep_season, &ep_episode);
 
-    var buf: [32 * 1024]u8 = undefined;
-    @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
-    // curl + HTTPS→HTTP fallback (NOT http.fetch/std.http, which SEGV-crashes on
-    // the api.themoviedb.org TLS reset that SNI-blocked networks return).
-    const n = @import("tmdb_api.zig").tmdbCurlInto(turl, &buf);
-
-    if (n < 20) return;
-
-    // Find first result with an IMDB ID (via external_ids endpoint)
-    // First get the TMDB ID and media type
-    var tmdb_id: [16]u8 = undefined;
-    var tmdb_id_len: usize = 0;
-    var media_type: [16]u8 = undefined;
-    var media_type_len: usize = 0;
-
-    if (extractNumStr(buf[0..n], "\"id\":")) |id_str| {
-        const clen = @min(id_str.len, 15);
-        @memcpy(tmdb_id[0..clen], id_str[0..clen]);
-        tmdb_id_len = clen;
-    }
-
-    if (extractStr(buf[0..n], "\"media_type\":\"")) |mt| {
-        const mtl = @min(mt.len, 15);
-        @memcpy(media_type[0..mtl], mt[0..mtl]);
-        media_type_len = mtl;
-    }
-
-    if (tmdb_id_len == 0) return;
-
-    // Fetch external IDs to get IMDB ID
-    const mt_str = if (media_type_len > 0) media_type[0..media_type_len] else "movie";
-    var ext_url: [256]u8 = undefined;
-    const eurl = std.fmt.bufPrint(&ext_url, "https://api.themoviedb.org/3/{s}/{s}/external_ids?api_key={s}", .{
-        mt_str, tmdb_id[0..tmdb_id_len], api_key,
-    }) catch return;
-
-    var buf2: [4096]u8 = undefined;
-    @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
-    const n2 = @import("tmdb_api.zig").tmdbCurlInto(eurl, &buf2);
-    if (n2 == 0) return;
-
-    if (n2 < 10) return;
-
+    // ── Resolve TMDB ID → IMDB ID ──
+    // Fast path when intent="tv": we already know the TMDB TV ID from the detail
+    // view — skip the text search, use the stored ID directly for external_ids.
     var imdb_id: [16]u8 = undefined;
     var imdb_len: usize = 0;
-    if (extractStr(buf2[0..n2], "\"imdb_id\":\"")) |imdb| {
-        imdb_len = @min(imdb.len, 15);
-        @memcpy(imdb_id[0..imdb_len], imdb[0..imdb_len]);
+    var stremio_type: []const u8 = "movie";
+
+    const intent = resolver_intent[0..resolver_intent_len];
+    const tv_id = state.app.tmdb.tv_id;
+
+    if (std.mem.eql(u8, intent, "tv") and tv_id > 0) {
+        // Direct external_ids lookup — one fewer TMDB API call
+        stremio_type = "series";
+        var ext_url: [256]u8 = undefined;
+        const eurl = std.fmt.bufPrint(&ext_url, "/3/tv/{d}/external_ids", .{tv_id}) catch return;
+        var buf2: [4096]u8 = undefined;
+        @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
+        const n2 = @import("tmdb_api.zig").tmdbApiInto(eurl, api_key, &buf2);
+        if (n2 < 10) return;
+        if (extractStr(buf2[0..n2], "\"imdb_id\":\"")) |imdb| {
+            imdb_len = @min(imdb.len, 15);
+            @memcpy(imdb_id[0..imdb_len], imdb[0..imdb_len]);
+        }
+    } else {
+        // General path: text search to find TMDB ID, then external_ids
+        var enc: [512]u8 = undefined;
+        var el: usize = 0;
+        for (query) |ch| {
+            if (el + 3 >= enc.len) break;
+            if (ch == ' ') {
+                enc[el] = '+';
+                el += 1;
+            } else if (ch == '%') {
+                enc[el] = '%';
+                enc[el + 1] = '2';
+                enc[el + 2] = '5';
+                el += 3;
+            } else if (ch == '&') {
+                enc[el] = '%';
+                enc[el + 1] = '2';
+                enc[el + 2] = '6';
+                el += 3;
+            } else if (ch == '=') {
+                enc[el] = '%';
+                enc[el + 1] = '3';
+                enc[el + 2] = 'D';
+                el += 3;
+            } else if (ch == '#') {
+                enc[el] = '%';
+                enc[el + 1] = '2';
+                enc[el + 2] = '3';
+                el += 3;
+            } else if (ch == '?') {
+                enc[el] = '%';
+                enc[el + 1] = '3';
+                enc[el + 2] = 'F';
+                el += 3;
+            } else {
+                enc[el] = ch;
+                el += 1;
+            }
+        }
+
+        var tmdb_url: [512]u8 = undefined;
+        const turl = std.fmt.bufPrint(&tmdb_url, "/3/search/multi?query={s}&page=1", .{enc[0..el]}) catch return;
+
+        var buf: [32 * 1024]u8 = undefined;
+        @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
+        const n = @import("tmdb_api.zig").tmdbApiInto(turl, api_key, &buf);
+        if (n < 20) return;
+
+        var tmdb_id: [16]u8 = undefined;
+        var tmdb_id_len: usize = 0;
+        var media_type: [16]u8 = undefined;
+        var media_type_len: usize = 0;
+
+        if (extractNumStr(buf[0..n], "\"id\":")) |id_str| {
+            const clen = @min(id_str.len, 15);
+            @memcpy(tmdb_id[0..clen], id_str[0..clen]);
+            tmdb_id_len = clen;
+        }
+        if (extractStr(buf[0..n], "\"media_type\":\"")) |mt| {
+            const mtl = @min(mt.len, 15);
+            @memcpy(media_type[0..mtl], mt[0..mtl]);
+            media_type_len = mtl;
+        }
+        if (tmdb_id_len == 0) return;
+
+        const mt_str = if (media_type_len > 0) media_type[0..media_type_len] else "movie";
+        stremio_type = if (std.mem.eql(u8, mt_str, "tv")) "series" else "movie";
+
+        var ext_url: [256]u8 = undefined;
+        const eurl = std.fmt.bufPrint(&ext_url, "/3/{s}/{s}/external_ids", .{ mt_str, tmdb_id[0..tmdb_id_len] }) catch return;
+
+        var buf2: [4096]u8 = undefined;
+        @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
+        const n2 = @import("tmdb_api.zig").tmdbApiInto(eurl, api_key, &buf2);
+        if (n2 < 10) return;
+
+        if (extractStr(buf2[0..n2], "\"imdb_id\":\"")) |imdb| {
+            imdb_len = @min(imdb.len, 15);
+            @memcpy(imdb_id[0..imdb_len], imdb[0..imdb_len]);
+        }
     }
 
     if (imdb_len == 0) return;
 
-    // Now query each installed addon
-    const stremio_type = if (std.mem.eql(u8, mt_str, "tv")) "series" else "movie";
-
+    // ── Query each installed addon ──
     for (0..stremio.installed_count) |ai| {
         const addon = &stremio.installed_addons[ai];
         const base = addon.url[0..addon.url_len];
@@ -1501,10 +1547,16 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
             @min(base.len, 255);
         @memcpy(base_url[0..blen], base[0..blen]);
 
+        // Stremio series streams need {imdb_id}:{season}:{episode} per the protocol
         var stream_url: [512]u8 = undefined;
-        const surl = std.fmt.bufPrint(&stream_url, "{s}/stream/{s}/{s}.json", .{
-            base_url[0..blen], stremio_type, imdb_id[0..imdb_len],
-        }) catch continue;
+        const surl: []u8 = if (std.mem.eql(u8, stremio_type, "series") and ep_season > 0 and ep_episode > 0)
+            std.fmt.bufPrint(&stream_url, "{s}/stream/{s}/{s}:{d}:{d}.json", .{
+                base_url[0..blen], stremio_type, imdb_id[0..imdb_len], ep_season, ep_episode,
+            }) catch continue
+        else
+            std.fmt.bufPrint(&stream_url, "{s}/stream/{s}/{s}.json", .{
+                base_url[0..blen], stremio_type, imdb_id[0..imdb_len],
+            }) catch continue;
 
         var sbuf: [64 * 1024]u8 = undefined;
         @import("../core/rate_limit.zig").acquire("stremio", 1.0); // third-party addon — be gentle
@@ -1557,6 +1609,51 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
             item.quality = detectQuality(item.name[0..item.name_len]);
             if (item.url_len > 0) _ = pushResult(item);
             spos = uabs + ue;
+        }
+
+        // Torrentio (and similar) without debrid returns "infoHash" with no "url".
+        // Convert each infoHash to a magnet link so it can be fed to the torrent engine.
+        var ih_pos: usize = 0;
+        while (ih_pos < sn) {
+            const ih_key = "\"infoHash\":\"";
+            const ih_next = std.mem.indexOf(u8, sbuf[ih_pos..sn], ih_key) orelse break;
+            const ih_abs = ih_pos + ih_next + ih_key.len;
+            const ih_end = std.mem.indexOfScalar(u8, sbuf[ih_abs..sn], '"') orelse break;
+            const hash = sbuf[ih_abs .. ih_abs + ih_end];
+            // Valid SHA-1 info hash is exactly 40 hex chars; SHA-256 is 64
+            if (hash.len >= 40 and hash.len <= 64) {
+                var ih_item = std.mem.zeroes(ResolvedItem);
+                ih_item.source = .stremio;
+                var mag_buf: [256]u8 = undefined;
+                if (std.fmt.bufPrint(&mag_buf, "magnet:?xt=urn:btih:{s}", .{hash})) |mag| {
+                    const mlen = @min(mag.len, 2047);
+                    @memcpy(ih_item.url[0..mlen], mag[0..mlen]);
+                    ih_item.url_len = mlen;
+                    // Look backward in this chunk for a "title" field
+                    const look_start = if (ih_next > 512) ih_pos + ih_next - 512 else ih_pos;
+                    if (std.mem.lastIndexOf(u8, sbuf[look_start .. ih_pos + ih_next], "\"title\":\"")) |tp| {
+                        const tabs = look_start + tp + 9;
+                        const tee = std.mem.indexOfScalar(u8, sbuf[tabs..sn], '"') orelse 0;
+                        const tlen = @min(tee, 255);
+                        @memcpy(ih_item.name[0..tlen], sbuf[tabs .. tabs + tlen]);
+                        ih_item.name_len = tlen;
+                    }
+                    if (ih_item.name_len == 0) {
+                        const aname = addon.name[0..addon.name_len];
+                        var fb: [128]u8 = undefined;
+                        const fbs = std.fmt.bufPrint(&fb, "Stream from {s}", .{aname}) catch "Stream";
+                        const fbl = @min(fbs.len, 255);
+                        @memcpy(ih_item.name[0..fbl], fbs[0..fbl]);
+                        ih_item.name_len = fbl;
+                    }
+                    const aname = addon.name[0..addon.name_len];
+                    const det = std.fmt.bufPrint(&ih_item.detail, "Stremio · {s}", .{aname}) catch "Stremio";
+                    ih_item.detail_len = det.len;
+                    ih_item.quality = detectQuality(ih_item.name[0..ih_item.name_len]);
+                    _ = pushResult(ih_item);
+                } else |_| {}
+            }
+            ih_pos = ih_abs + ih_end;
         }
     }
 }

@@ -488,12 +488,12 @@ fn executeTmdbLookup(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     }
 
     const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
-    const url = std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org/3/search/multi?api_key={s}&query={s}&page=1", .{ api_key, escaped_query[0..eq_len] }) catch return null;
+    const url = std.fmt.bufPrint(&url_buf, "/3/search/multi?query={s}&page=1", .{escaped_query[0..eq_len]}) catch return null;
 
-    // curl + HTTPS→HTTP fallback (api.themoviedb.org 443 is SNI-blocked on some
-    // networks; HTTP works and the key is in the query string already).
+    // curl + HTTPS→HTTP fallback; tmdbApiInto picks Bearer (v4 JWT) vs ?api_key=
+    // (v3) by key shape and rejects ISP HTML block pages.
     var result_buf: [8192]u8 = undefined;
-    const n = @import("tmdb_api.zig").tmdbCurlInto(url, &result_buf);
+    const n = @import("tmdb_api.zig").tmdbApiInto(url, api_key, &result_buf);
 
     if (n == 0) return std.fmt.allocPrint(alloc, "Error: Failed to fetch TMDB", .{}) catch null;
 

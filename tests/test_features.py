@@ -13,7 +13,7 @@ import time
 import socket
 import sys
 
-DB_PATH = os.path.expanduser("~/.config/zigzag/zigzag.db")
+DB_PATH = os.path.expanduser("~/.config/opal/opal.db")
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESULTS_FILE = os.path.join(PROJECT_DIR, "tests", "results.json")
 
@@ -67,7 +67,7 @@ def test_db_exists():
     if os.path.exists(DB_PATH):
         size = os.path.getsize(DB_PATH)
         return "pass", f"Size: {size/1024:.1f} KB"
-    return "fail", "zigzag.db not found"
+    return "fail", "opal.db not found"
 
 @test("Config Table", "Database")
 def test_config_table():
@@ -278,7 +278,7 @@ def test_zig_build():
             capture_output=True, text=True, timeout=120
         )
         if result.returncode == 0:
-            binary = os.path.join(PROJECT_DIR, "zig-out/bin/zigzag")
+            binary = os.path.join(PROJECT_DIR, "zig-out/bin/opal")
             if os.path.exists(binary):
                 size = os.path.getsize(binary) / (1024*1024)
                 return "pass", f"Binary: {size:.1f} MB"
@@ -289,7 +289,7 @@ def test_zig_build():
 
 @test("Binary Exists", "Build")
 def test_binary_exists():
-    binary = os.path.join(PROJECT_DIR, "zig-out/bin/zigzag")
+    binary = os.path.join(PROJECT_DIR, "zig-out/bin/opal")
     if os.path.exists(binary):
         size = os.path.getsize(binary) / (1024*1024)
         mtime = time.strftime("%H:%M:%S", time.localtime(os.path.getmtime(binary)))
@@ -308,7 +308,7 @@ def test_llm_model():
 
 @test("Voice Server Script", "Build")
 def test_voice_server_script():
-    script = os.path.join(PROJECT_DIR, "bin/zigzag-voice-server.py")
+    script = os.path.join(PROJECT_DIR, "bin/opal-voice-server.py")
     if os.path.exists(script):
         size = os.path.getsize(script)
         return "pass", f"{size} bytes"
@@ -330,7 +330,7 @@ def test_libtorrent():
 
 @test("Voice Server Socket", "Voice")
 def test_voice_socket():
-    sock_path = "/tmp/zigzag-voice.sock"
+    sock_path = "/tmp/opal-voice.sock"
     if os.path.exists(sock_path):
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -608,10 +608,10 @@ def test_conversation_persistence():
 # ══════════════════════════════════════════════════════════
 
 VOICE_SCRIPTS = [
-    "zigzag-stt.py",
-    "zigzag-stt-server.py",
-    "zigzag-tts-server.py",
-    "zigzag-voice-server.py",
+    "opal-stt.py",
+    "opal-stt-server.py",
+    "opal-tts-server.py",
+    "opal-voice-server.py",
 ]
 
 
@@ -658,7 +658,7 @@ def _make_check_test(script):
     return _fn
 
 
-for _s in ("zigzag-stt-server.py", "zigzag-tts-server.py", "zigzag-voice-server.py"):
+for _s in ("opal-stt-server.py", "opal-tts-server.py", "opal-voice-server.py"):
     globals()[f"test_check_{_s.replace('-', '_').replace('.', '_')}"] = _make_check_test(_s)
 
 
@@ -1284,9 +1284,8 @@ def test_now_playing_bar():
 
 @test("Brand Is Opal", "Page Shell")
 def test_brand_is_opal():
-    # User-facing brand unified to "Opal — Play everything" (the binary/config
-    # dir stay `zigzag` by design). Guard the display surfaces against regressing
-    # to the old "ZigZag Media Console" wording.
+    # User-facing brand unified to "Opal — Play everything". Guard the display
+    # surfaces against regressing to the old "ZigZag Media Console" wording.
     main = _src("src/main.zig")
     web = _src("web/index.html")
     tools = _src("src/services/ai_tools.zig")
@@ -1297,7 +1296,7 @@ def test_brand_is_opal():
     }
     missing = [k for k, v in checks.items() if not v]
     if not missing:
-        return "pass", "display brand = Opal / Play everything (binary/config stay zigzag)"
+        return "pass", "display brand = Opal / Play everything"
     return "fail", f"brand regressed: {missing}"
 
 
@@ -1361,6 +1360,265 @@ def test_transfers_wired():
     if "pub fn renderTransfersContent" in t:
         return "pass", "transfers content renderer present"
     return "fail", "transfers not wired"
+
+
+@test("Player Init Applies Field Defaults", "Stability")
+def test_player_init_defaults():
+    # Regression: MediaPlayer.init does `allocator.create` (undefined memory) +
+    # field-by-field assignment, so struct-declaration DEFAULTS are NOT applied.
+    # Forgotten fields read 0xaa garbage — a garbage dialogue_head/count drove an
+    # out-of-bounds crash in updateDialogueRing on the first subtitle. Guard the
+    # whole class: every default-valued field MUST be assigned in init.
+    import re
+    p = _src("src/player/player.zig")
+    decl = p.split("pub const MediaPlayer = struct", 1)[-1].split("pub fn init", 1)[0]
+    init_body = p.split("pub fn init", 1)[-1].split("return self;", 1)[0]
+    default_fields = re.findall(r"^    ([a-zA-Z_]\w*)\s*:\s*[^,]*=\s", decl, re.M)
+    missed = [f for f in default_fields
+              if not re.search(r"self\." + re.escape(f) + r"\b", init_body)]
+    if missed:
+        return "fail", "init never assigns default field(s): " + ", ".join(missed[:8])
+    return "pass", f"all {len(default_fields)} default-valued fields assigned in init"
+
+
+@test("Stream Resources Resolvable When Bundled", "Stability")
+def test_stream_resource_root():
+    # Regression: `python3 engines/nova2.py` (torrent search) is spawned with a
+    # RELATIVE path, so a /Applications launch (CWD "/") found nothing → "loading
+    # stream not working". Fix: a resource root (SDL_GetBasePath bundle Resources)
+    # used as the child cwd, plus engines/ copied into the .app bundle.
+    st = _src("src/core/state.zig")
+    rv = _src("src/services/resolver.zig")
+    sr = _src("src/services/search.zig")
+    mn = _src("src/main.zig")
+    sh = os.path.join(PROJECT_DIR, "scripts/build-app.sh")
+    sh_txt = open(sh).read() if os.path.exists(sh) else ""
+    checks = {
+        "state.resourceRoot helper": "pub fn resourceRoot()" in st,
+        "startup detection": "detectResourceRoot" in mn and "SDL_GetBasePath" in mn,
+        "resolver uses cwd": "child.cwd = state.resourceRoot()" in rv,
+        "search uses cwd": "child.cwd = state.resourceRoot()" in sr,
+        "bundle copies engines/": "Contents/Resources/engines" in sh_txt,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "stream resource wiring missing: " + ", ".join(missing)
+    return "pass", "resource-root cwd wired for nova2 + engines/ bundled"
+
+
+@test("Source Endpoints Externalized To Plugins", "Stability")
+def test_sources_externalized():
+    # Neutral-player: connector CODE stays in the app, but source URLs/creds are
+    # migrated to opal-plugins and read via core/source_config. No installed
+    # endpoint → the source is inert. Guard that the migrated sources route
+    # through source_config.get and no longer hardcode their URL builder.
+    sc = _src("src/core/source_config.zig")
+    rv = _src("src/services/resolver.zig")
+    sr = _src("src/services/search.zig")
+    cm = _src("src/services/comics.zig")
+    checks = {
+        "source_config.get exists": "pub fn get(" in sc and "plugins/sources" in sc,
+        "1337x via config": 'get("1337x"' in rv,
+        "yts via config": 'get("yts"' in rv,
+        "eztv via config": 'get("eztv"' in sr,
+        "readallcomics via config": 'get("readallcomics"' in rv and 'get("readallcomics"' in cm,
+        # The old hardcoded URL builders must be gone (validators may remain).
+        "no hardcoded 1337x search": '"https://1337x.to/search' not in rv,
+        "no hardcoded yts api": "yts.mx/api/v2/list_movies" not in rv,
+        "no hardcoded eztv api": "eztvx.to/api/get-torrents" not in sr,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "source externalization gaps: " + ", ".join(missing)
+    return "pass", "1337x/yts/eztv/readallcomics endpoints read from installed plugins"
+
+
+@test("Plugin Manager Wired", "Page Shell")
+def test_plugin_manager():
+    # qBittorrent-style source-endpoint manager: fetch opal-plugins manifest →
+    # Install writes ~/.config/opal/plugins/sources/<id>.json (read by
+    # source_config) → the built-in connector goes live.
+    pr = _src("src/services/plugin_repo.zig")
+    pg = _src("src/services/plugins.zig")
+    ok = (
+        "pub fn refresh()" in pr
+        and "pub fn install(" in pr
+        and "pub fn uninstall(" in pr
+        and "api.github.com/repos" in pr
+        and "source_config.reload()" in pr
+        and "renderSourcePlugins" in pg
+    )
+    debrid = (
+        "debridKey()" in pr
+        and "applyDebrid" in _src("src/services/stremio.zig")
+        and "loadInstalledAddons" in _src("src/services/resolver.zig")
+    )
+    if not ok:
+        return "fail", "plugin manager not wired"
+    if not debrid:
+        return "fail", "debrid not wired"
+    return "pass", "fetch/install/uninstall + UI + debrid wired"
+
+
+@test("Bundled Plugin Manifest", "Page Shell")
+def test_bundled_manifest():
+    # The Plugins page must show the source list instantly + offline: a checked-in
+    # plugins-manifest.json is loaded via loadLocalManifest() before the network
+    # refresh, bundled into the .app by build-app.sh, and read from resourceRoot.
+    import json
+    mpath = os.path.join(PROJECT_DIR, "plugins-manifest.json")
+    if not os.path.exists(mpath):
+        return "fail", "plugins-manifest.json missing at repo root"
+    try:
+        m = json.load(open(mpath))
+    except Exception as e:
+        return "fail", f"manifest not valid JSON: {e}"
+    plugins = m.get("plugins")
+    if not isinstance(plugins, list) or len(plugins) == 0:
+        return "fail", "manifest has no plugins[]"
+    for p in plugins:
+        if not p.get("id") or not p.get("type"):
+            return "fail", f"plugin missing id/type: {p!r}"
+    if "zigzag" in json.dumps(m):
+        return "fail", "manifest still references legacy 'zigzag' path"
+    # Wiring: loaded before refresh, and bundled by the packager.
+    pg = _src("src/services/plugins.zig")
+    pr = _src("src/services/plugin_repo.zig")
+    sh = _src("scripts/build-app.sh")
+    if "loadLocalManifest()" not in pg:
+        return "fail", "loadLocalManifest() not called from Plugins page"
+    if "pub fn loadLocalManifest" not in pr:
+        return "fail", "loadLocalManifest not defined"
+    if "plugins-manifest.json" not in sh:
+        return "fail", "build-app.sh does not bundle plugins-manifest.json"
+    return "pass", f"{len(plugins)} plugins, offline-loaded + bundled"
+
+
+@test("Added Torrent Engines Wired", "Page Shell")
+def test_added_torrent_engines():
+    # The 10 ported nova2 torrent engines: each needs (a) an engine .py whose
+    # class name == module name == id (nova2 imports getattr(module, id)), and
+    # (b) a matching torrent entry in the bundled manifest so it's installable.
+    import json, os, re
+    ids = ["therarbg", "torrentdownloads", "rutor", "glotorrents", "bitsearch",
+           "torrentgalaxy", "academictorrents", "ilcorsaronero", "tokyotoshokan", "torrentfunk"]
+    eng_dir = os.path.join(PROJECT_DIR, "engines", "engines")
+    m = json.load(open(os.path.join(PROJECT_DIR, "plugins-manifest.json")))
+    torrent_ids = {p["id"] for p in m["plugins"] if p.get("type") == "torrent"}
+    missing_eng, bad_class, missing_manifest = [], [], []
+    for eid in ids:
+        p = os.path.join(eng_dir, f"{eid}.py")
+        if not os.path.exists(p):
+            missing_eng.append(eid); continue
+        src = open(p).read()
+        # class name must equal the module/id (nova2 getattr contract)
+        if not re.search(rf"^class {re.escape(eid)}\b", src, re.M):
+            bad_class.append(eid)
+        if "prettyPrinter" not in src:
+            bad_class.append(eid + "(no prettyPrinter)")
+        if eid not in torrent_ids:
+            missing_manifest.append(eid)
+    if missing_eng:
+        return "fail", f"engine .py missing: {missing_eng}"
+    if bad_class:
+        return "fail", f"class!=module / no prettyPrinter: {bad_class}"
+    if missing_manifest:
+        return "fail", f"no manifest entry: {missing_manifest}"
+    return "pass", f"{len(ids)} engines placed, class==module, manifest-wired"
+
+
+@test("Content Plugin Sandbox Hardened", "Stability")
+def test_plugin_sandbox_hardened():
+    # Lua content-plugin sandbox: allow_unsafe must require a USER trust marker
+    # (plugin can't self-declare its way out), the prelude nils escape vectors
+    # (debug library, os.getenv, package paths), and native plugins warn when
+    # untrusted. Decision logic lives in plugins_pure.runMode (unit-tested).
+    pg = _src("src/services/plugins.zig")
+    pgp = _src("src/services/plugins_pure.zig")
+    # Prelude closes the debug-library escape + env/package surface.
+    prelude_hardened = all(
+        s in pg for s in ("debug=nil", "os.getenv=nil", 'package.path=""', 'package.cpath=""')
+    )
+    # allow_unsafe now gated behind a user-created marker, routed via pure runMode.
+    gated = (
+        "user_trusted" in pg
+        and '".trusted"' in pg
+        and "runMode(" in pg
+        and "untrustedNative(" in pg
+        and "and p.user_trusted" in pg  # allow_unsafe honored only WITH user trust
+    )
+    # Pure decision + regression tests present.
+    pure_ok = (
+        "pub fn runMode(" in pgp
+        and "pub fn untrustedNative(" in pgp
+        and 'test "runMode sandboxes Lua' in pgp
+    )
+    if not prelude_hardened:
+        return "fail", "Lua prelude missing debug/getenv/package hardening"
+    if not gated:
+        return "fail", "allow_unsafe not gated behind user trust marker via runMode"
+    if not pure_ok:
+        return "fail", "plugins_pure runMode/tests missing"
+    return "pass", "user-trust gate + hardened prelude + native warn, pure-tested"
+
+
+@test("Page Shell Immersive Hides Nav", "Page Shell")
+def test_shell_immersive_navbar():
+    # On the Player route, the page-shell top nav (and compact bottom tabs) must
+    # auto-hide during immersive playback (fullscreen or idle-while-watching), so
+    # the video gets the whole window. Decision reuses the unit-tested pure
+    # chrome_autohide.shouldHideChrome; this checks the shell wiring.
+    sh = _src("src/ui/shell.zig")
+    ok = (
+        "shouldHideChrome" in sh
+        and "if (!immersive) renderTopNav" in sh
+        and "router.current != .player" in sh          # scoped so browsing keeps the nav
+        and "fullscreen_player_idx != null" in sh
+        and "and !immersive) renderBottomTabs" in sh    # compact bottom tabs hide too
+    )
+    if not ok:
+        return "fail", "shell top nav not gated on immersive playback"
+    return "pass", "top nav + bottom tabs auto-hide on immersive Player route"
+
+
+@test("Plex Client Wired", "Page Shell")
+def test_plex_wired():
+    # Plex client: PIN auth → server discovery → library browse → direct-play,
+    # with a .Plex nav tab.
+    px = _src("src/services/plex.zig")
+    dr = _src("src/ui/drawer.zig")
+    en = _src("src/core/state.zig")
+    ok = (
+        "api/v2/pins" in px
+        and "api/v2/resources" in px
+        and "/library/sections" in px
+        and "pub fn renderContent()" in px
+        and "X-Plex-Token" in px
+        and ".Plex =>" in dr
+        and "Plex," in en.split("DrawerTab = enum")[1].split("}")[0]
+        and 'plex.zig").init()' in _src("src/main.zig")
+    )
+    return ("pass", "PIN auth + discovery + browse + play + tab wired") if ok else ("fail", "plex not fully wired")
+
+
+@test("Trakt Sync Wired", "Page Shell")
+def test_trakt_wired():
+    # Trakt was dead code missing client_secret (auth couldn't complete). Now:
+    # device flow w/ secret + persistence, a Connect UI, and id-based mark-watched
+    # wired to TMDB episode play.
+    tr = _src("src/services/trakt.zig")
+    pg = _src("src/services/plugins.zig")
+    tm = _src("src/services/tmdb.zig")
+    ok = (
+        "client_secret" in tr
+        and "markWatchedEpisode" in tr
+        and "pub fn init()" in tr
+        and tr.count("client_secret") >= 4  # decl + save + load + token poll
+        and "renderTrakt" in pg
+        and "markWatchedEpisode" in tm
+        and "trakt.zig\").init()" in _src("src/main.zig")
+    )
+    return ("pass", "device-flow + persistence + mark-watched wired") if ok else ("fail", "trakt not fully wired")
 
 
 @test("Threads Detached (project-wide)", "Stability")
