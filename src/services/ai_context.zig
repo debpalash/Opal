@@ -1518,6 +1518,13 @@ pub fn generateResponse() void {
 
                 ti += advance;
             }
+            // Wake the UI once per streamed token chunk (not per char) so the chat
+            // shows live text instead of only updating on incidental repaints — the
+            // chat view has no timer/animation of its own. Thread-safe *Window form;
+            // cheap at token cadence. Only while we're emitting the visible message.
+            if (msg_state == 2 or msg_state == 3) {
+                if (state.app.dvui_win) |win| @import("dvui").refresh(win, @src(), null);
+            }
         } else {
             if (line_pos < line_buf.len) {
                 line_buf[line_pos] = byte[0];

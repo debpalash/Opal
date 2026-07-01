@@ -1562,6 +1562,27 @@ def test_plugin_sandbox_hardened():
     return "pass", "user-trust gate + hardened prelude + native warn, pure-tested"
 
 
+@test("Playback Repaint Gated + Async UI Wakes", "Stability")
+def test_smoothness_repaint():
+    # Phase 1 smoothness (GUI/thread-only wiring — verified by presence):
+    #  1. the continuous playback refresh no longer runs every frame — it's gated
+    #     on the control chrome being visible (mouse active), so immersive watching
+    #     falls back to callback-driven, video-fps repaints instead of 60Hz relayout.
+    #  2. poster decode workers wake the UI (dvui.refresh) so posters don't pop in
+    #     only on incidental repaints.
+    #  3. AI chat streaming wakes the UI per token chunk so live text renders.
+    mn = _src("src/main.zig")
+    ps = _src("src/core/poster.zig")
+    ac = _src("src/services/ai_context.zig")
+    if "chrome_live" not in mn or "last_mouse_move_ms) < 2500" not in mn:
+        return "fail", "playback refresh not gated on chrome visibility (main.zig)"
+    if "dvui_win" not in ps or "dvui.refresh(win" not in ps:
+        return "fail", "poster worker does not wake the UI after decode"
+    if "dvui_win" not in ac or "refresh(win" not in ac:
+        return "fail", "AI streaming does not wake the UI"
+    return "pass", "playback repaint gated; poster + AI-stream wakes wired"
+
+
 @test("Page Shell Immersive Hides Nav", "Page Shell")
 def test_shell_immersive_navbar():
     # On the Player route, the page-shell top nav (and compact bottom tabs) must

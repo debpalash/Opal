@@ -93,6 +93,12 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
             args.w.* = @intCast(w);
             args.h.* = @intCast(h);
             args.pix.* = p_slice;
+            // Wake the UI thread so the poster shows immediately. Browse/TMDB
+            // grids have no timer, so without this the decoded poster only
+            // "pops in" on the next incidental repaint (mouse move, etc.). The
+            // *Window form of refresh is thread-safe and its lock also publishes
+            // the w/h/pix writes above with proper ordering for uploadIfReady.
+            if (@import("state.zig").app.dvui_win) |win| dvui.refresh(win, @src(), null);
         }
     }.worker, .{Args{ .url_buf = url_buf, .url_len = url.len, .pix = pixels_out, .w = w_out, .h = h_out, .flag = fetching_flag }})) |t| {
         t.detach();

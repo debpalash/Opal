@@ -1272,13 +1272,19 @@ fn appFrame() !dvui.App.Result {
         }
     }
 
-    // Continuous refresh: when any player is actively playing (not paused),
-    // request another frame immediately so the video texture keeps updating.
-    // Without this, dvui only redraws on input events and the video freezes.
-    for (state.app.players.items) |p| {
-        if (p.provider == .mpv) {
-            // Cached via mpv property observer (A4) — no per-frame IPC.
-            if (!p.cached_paused) {
+    // Keep the on-screen scrubber/overlay ticking during playback — but only
+    // while the control chrome is actually visible. Video FRAMES already repaint
+    // on their own via mpv's render-update callback (player.mpvRenderUpdateCallback
+    // → thread-safe dvui.refresh), so once the chrome auto-hides (mouse idle
+    // > 2.5 s, same threshold as chrome_autohide) there is nothing that needs a
+    // between-frames repaint, and we let the loop fall back to callback-driven,
+    // video-fps updates instead of re-laying-out the whole tree at 60 Hz. This is
+    // the big immersive-playback smoothness/CPU win. `cached_paused` is observer-
+    // cached (no per-frame IPC).
+    const chrome_live = (@import("core/io_global.zig").milliTimestamp() - state.app.last_mouse_move_ms) < 2500;
+    if (chrome_live) {
+        for (state.app.players.items) |p| {
+            if (p.provider == .mpv and !p.cached_paused) {
                 dvui.refresh(null, @src(), null);
                 break;
             }
