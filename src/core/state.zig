@@ -325,6 +325,11 @@ pub const AppState = struct {
     toast_len: usize = 0,
     toast_expire: i64 = 0,
     toast_type: ToastType = .info,
+    // Monotonic per-toast id. Keys the toast fade-in's AnimateWidget id so each
+    // new toast re-triggers the fade — toast_expire has only 1s granularity, so
+    // two toasts in the same second would otherwise collide and the 2nd wouldn't
+    // fade (see footer.renderToast).
+    toast_seq: u64 = 0,
     config_dirty: bool = false,
     last_config_save: i64 = 0,
     // ── Usage metrics (Home dashboard) ──
@@ -786,6 +791,7 @@ pub fn showToastTyped(msg: []const u8, toast_type: ToastType) void {
     @memcpy(app.toast_buf[0..copy_len], msg[0..copy_len]);
     app.toast_len = copy_len;
     app.toast_expire = @import("io_global.zig").timestamp() + 3;
+    app.toast_seq +%= 1;
     // Auto-detect type from common emoji prefixes if caller used .info
     if (toast_type == .info and copy_len >= 2) {
         const txt = app.toast_buf[0..copy_len];

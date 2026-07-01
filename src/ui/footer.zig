@@ -1115,6 +1115,14 @@ pub fn renderLiquidGlassOverlay() void {
         1.0
     else
         1.0 - @min(@as(f32, 1.0), @as(f32, @floatFromInt(idle_ms - FADE_START_MS)) / @as(f32, @floatFromInt(FADE_LEN_MS)));
+    // Self-drive the fade: main.zig only forces continuous repaints while idle
+    // < FADE_START_MS, and the mpv frame callback doesn't fire for audio-only /
+    // buffering / still-image playback — so without this the overlay would render
+    // once at ~full opacity and FREEZE visible, never reaching the hidden early-
+    // return above. Requesting a frame through the fade window animates it out.
+    if (!chrome_held and idle_ms > FADE_START_MS and idle_ms <= FADE_START_MS + FADE_LEN_MS) {
+        dvui.refresh(null, @src(), null);
+    }
     const prev_chrome_alpha = dvui.alpha(chrome_vis);
     defer dvui.alphaSet(prev_chrome_alpha);
 
@@ -2047,11 +2055,13 @@ pub fn renderToast() void {
     var toast_anchor = dvui.overlay(@src(), .{ .expand = .both });
     defer toast_anchor.deinit();
 
-    // Fade each toast in. id_extra keyed on the (unique) expiry timestamp so a
-    // NEW toast gets a fresh widget id → firstFrame true → the fade re-triggers
-    // (AnimateWidget only auto-starts on the first frame of a given id).
+    // Fade each toast in. id_extra keyed on the monotonic toast_seq so every new
+    // toast gets a fresh widget id → firstFrame true → the fade re-triggers
+    // (AnimateWidget only auto-starts on the first frame of a given id). Using a
+    // counter (not toast_expire, which has 1s granularity) means back-to-back
+    // toasts in the same second still each fade in.
     var toast_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.base, .easing = theme.motion.enter }, .{
-        .id_extra = @as(usize, @bitCast(state.app.toast_expire)),
+        .id_extra = @as(usize, @truncate(state.app.toast_seq)),
         .expand = .both,
     });
     defer toast_fade.deinit();
