@@ -436,9 +436,9 @@ fn renderScrubber(
 ) void {
     var scrub_band = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = 28 },
-        .max_size_content = .{ .w = 0, .h = 28 },
-        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = 0 },
+        .min_size_content = .{ .w = 0, .h = 22 },
+        .max_size_content = .{ .w = 0, .h = 22 },
+        .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = 0 },
     });
     defer scrub_band.deinit();
 
@@ -1106,11 +1106,12 @@ pub fn renderLiquidGlassOverlay() void {
     var anchor = dvui.box(@src(), .{ .dir = .vertical }, .{ .gravity_y = 1.0, .expand = .horizontal });
     defer anchor.deinit();
 
-    // ── Footer panel: bg_surface + 1px top border ──
+    // ── Footer panel: semi-transparent dark glass so the video shows through
+    // for a content-focused feel (was opaque bg_surface). 1px top border. ──
     var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = .{ .r = 12, .g = 12, .b = 17, .a = 200 },
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
@@ -1184,9 +1185,9 @@ pub fn renderLiquidGlassOverlay() void {
     {
         var ctrl_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 40 },
-            .max_size_content = .{ .w = 0, .h = 40 },
-            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+            .min_size_content = .{ .w = 0, .h = 34 },
+            .max_size_content = .{ .w = 0, .h = 34 },
+            .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = 2 },
         });
         defer ctrl_row.deinit();
 
@@ -2004,7 +2005,7 @@ pub fn renderResumePrompt() void {
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
     })) {
         // loadContent creates a player if none exists on a cold start.
-        @import("../services/browser.zig").loadContent(state.app.resume_prompt_link[0..state.app.resume_prompt_link_len]);
+        @import("../services/browser.zig").resumePlayback(state.app.resume_prompt_link[0..state.app.resume_prompt_link_len]);
         state.app.resume_prompt_active = false;
     }
 

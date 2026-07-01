@@ -324,7 +324,7 @@ fn doDownload(file_id: i64) void {
 
     // Download .srt to /tmp
     var path_buf: [128]u8 = undefined;
-    const sub_path = std.fmt.bufPrintZ(&path_buf, "/tmp/zigzag_sub_{d}.srt", .{file_id}) catch return;
+    const sub_path = std.fmt.bufPrintZ(&path_buf, "/tmp/opal_sub_{d}.srt", .{file_id}) catch return;
 
     // Need null-terminated link for curl
     var link_z: [512]u8 = undefined;

@@ -15,10 +15,10 @@ pub fn scanScripts() void {
     state.app.script_count = 0;
 
     // Scan Opal scripts dir first
-    var zigzag_dir_buf: [512]u8 = undefined;
+    var opal_dir_buf: [512]u8 = undefined;
     const home = @import("../core/io_global.zig").getenv("HOME") orelse "";
-    const zigzag_scripts = std.fmt.bufPrint(&zigzag_dir_buf, "{s}/.config/opal/scripts", .{home}) catch "";
-    if (zigzag_scripts.len > 0) scanDir(zigzag_scripts);
+    const opal_scripts = std.fmt.bufPrint(&opal_dir_buf, "{s}/.config/opal/scripts", .{home}) catch "";
+    if (opal_scripts.len > 0) scanDir(opal_scripts);
 
     // Scan mpv scripts dir
     var mpv_dir_buf: [512]u8 = undefined;

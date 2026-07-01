@@ -695,7 +695,7 @@ pub fn updateTorrentBackgroundTasks() void {
                                     p.selected_file_idx = next_idx;
                                     p.torrent_is_ready = false;
                                     p.has_metadata = true;
-                                    logs.pushLog("info", "zigzag", "Auto-advancing to next episode...", false);
+                                    logs.pushLog("info", "opal", "Auto-advancing to next episode...", false);
                                     continue;
                                 }
                             }
@@ -708,7 +708,7 @@ pub fn updateTorrentBackgroundTasks() void {
                     // Wait and reload with a longer backoff to give pieces time to arrive.
                     const now = @import("../core/io_global.zig").milliTimestamp();
                     if (now - p.last_error_time > 3000) {
-                        logs.pushLog("warn", "zigzag", "Buffering: waiting for torrent data...", true);
+                        logs.pushLog("warn", "opal", "Buffering: waiting for torrent data...", true);
                         p.torrent_is_ready = false;
                         p.has_metadata = true;
                         p.last_error_time = now;

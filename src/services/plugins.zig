@@ -77,6 +77,10 @@ pub const Plugin = struct {
     enabled: bool = true,
     loaded: bool = false,
     allow_unsafe: bool = false,
+    // User-created trust marker (`<plugin_dir>/.trusted`). `allow_unsafe` is only
+    // honored when this is also set — the plugin can't forge it. See
+    // plugins_pure.runMode.
+    user_trusted: bool = false,
 };
 
 // ── Global Plugin State ──
@@ -187,6 +191,10 @@ pub fn scanPlugins() void {
         p.has_search = fileExists(p.path[0..p.path_len], "search");
         p.has_resolve = fileExists(p.path[0..p.path_len], "resolve");
         p.has_trending = fileExists(p.path[0..p.path_len], "trending");
+
+        // User trust marker: allow_unsafe (and unsandboxed native execution) is
+        // only honored when the user has created `<plugin_dir>/.trusted`.
+        p.user_trusted = fileExists(p.path[0..p.path_len], ".trusted");
         
         p.enabled = true;
         p.loaded = true;
@@ -234,9 +242,10 @@ fn fileExists(dir: []const u8, name: []const u8) bool {
 // / Linux `bwrap`), manifest `require` allow-list, and a one-time
 // user consent prompt for `allow_unsafe = true` plugins.
 const LUA_SANDBOX_PRELUDE: []const u8 =
-    \\os.execute=nil os.remove=nil os.rename=nil os.exit=nil os.tmpname=nil
+    \\os.execute=nil os.remove=nil os.rename=nil os.exit=nil os.tmpname=nil os.getenv=nil
     \\io.popen=nil io.open=nil io.input=nil io.output=nil io.lines=nil
-    \\if package then package.loadlib=nil end
+    \\if package then package.loadlib=nil package.path="" package.cpath="" package.preload={} end
+    \\debug=nil
     \\dofile=nil loadfile=nil loadstring=nil load=nil
     \\require=function(m) error("require denied: "..tostring(m)) end
     \\
@@ -281,8 +290,14 @@ fn logSandboxed(name: []const u8) void {
 
 fn logUnsafeWarn(name: []const u8) void {
     var buf: [160]u8 = undefined;
-    const msg = std.fmt.bufPrintZ(&buf, "Lua sandbox skipped (allow_unsafe): {s}", .{name}) catch "Lua sandbox skipped";
+    const msg = std.fmt.bufPrintZ(&buf, "Lua sandbox skipped (allow_unsafe + user-trusted): {s}", .{name}) catch "Lua sandbox skipped";
     logs.pushLog("warn", "plugins", msg, false);
+}
+
+fn logUntrustedNative(name: []const u8) void {
+    var buf: [200]u8 = undefined;
+    const msg = std.fmt.bufPrintZ(&buf, "Running UNSANDBOXED native plugin (no .trusted marker): {s}", .{name}) catch "Unsandboxed native plugin";
+    logs.pushLog("warn", "plugins", msg, true);
 }
 
 /// Surface a plugin/child-process spawn failure (e.g. missing `lua` or
@@ -314,16 +329,22 @@ pub fn runPluginSearch(query: []const u8) void {
             var exec_buf: [600]u8 = undefined;
             const exec = std.fmt.bufPrint(&exec_buf, "{s}/search", .{p.path[0..p.path_len]}) catch return;
 
-            if (detectLuaScript(exec) and !p.allow_unsafe) {
-                var sandbox_argv: [8][]const u8 = undefined;
-                const extras = [_][]const u8{q};
-                const argv = buildSandboxedLuaArgv(&sandbox_argv, exec, &extras);
-                logSandboxed(p.name[0..p.name_len]);
-                executeAndParse(argv);
-            } else {
-                if (p.allow_unsafe) logUnsafeWarn(p.name[0..p.name_len]);
-                const argv = [_][]const u8{ exec, q };
-                executeAndParse(&argv);
+            const pp = @import("plugins_pure.zig");
+            const is_lua = detectLuaScript(exec);
+            switch (pp.runMode(is_lua, p.allow_unsafe, p.user_trusted)) {
+                .sandbox_lua => {
+                    var sandbox_argv: [8][]const u8 = undefined;
+                    const extras = [_][]const u8{q};
+                    const argv = buildSandboxedLuaArgv(&sandbox_argv, exec, &extras);
+                    logSandboxed(p.name[0..p.name_len]);
+                    executeAndParse(argv);
+                },
+                .direct => {
+                    if (p.allow_unsafe and p.user_trusted) logUnsafeWarn(p.name[0..p.name_len]);
+                    if (pp.untrustedNative(is_lua, p.user_trusted)) logUntrustedNative(p.name[0..p.name_len]);
+                    const argv = [_][]const u8{ exec, q };
+                    executeAndParse(&argv);
+                },
             }
         }
     }.worker, .{ q_buf, qlen, active_plugin })) |t| t.detach() else |_| {
@@ -344,15 +365,21 @@ pub fn runPluginTrending() void {
             var exec_buf: [600]u8 = undefined;
             const exec = std.fmt.bufPrint(&exec_buf, "{s}/trending", .{p.path[0..p.path_len]}) catch return;
 
-            if (detectLuaScript(exec) and !p.allow_unsafe) {
-                var sandbox_argv: [8][]const u8 = undefined;
-                const argv = buildSandboxedLuaArgv(&sandbox_argv, exec, &.{});
-                logSandboxed(p.name[0..p.name_len]);
-                executeAndParse(argv);
-            } else {
-                if (p.allow_unsafe) logUnsafeWarn(p.name[0..p.name_len]);
-                const argv = [_][]const u8{exec};
-                executeAndParse(&argv);
+            const pp = @import("plugins_pure.zig");
+            const is_lua = detectLuaScript(exec);
+            switch (pp.runMode(is_lua, p.allow_unsafe, p.user_trusted)) {
+                .sandbox_lua => {
+                    var sandbox_argv: [8][]const u8 = undefined;
+                    const argv = buildSandboxedLuaArgv(&sandbox_argv, exec, &.{});
+                    logSandboxed(p.name[0..p.name_len]);
+                    executeAndParse(argv);
+                },
+                .direct => {
+                    if (p.allow_unsafe and p.user_trusted) logUnsafeWarn(p.name[0..p.name_len]);
+                    if (pp.untrustedNative(is_lua, p.user_trusted)) logUntrustedNative(p.name[0..p.name_len]);
+                    const argv = [_][]const u8{exec};
+                    executeAndParse(&argv);
+                },
             }
         }
     }.worker, .{active_plugin})) |t| t.detach() else |_| {
@@ -394,16 +421,23 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
             var exec_buf: [600]u8 = undefined;
             const exec = std.fmt.bufPrint(&exec_buf, "{s}/resolve", .{p.path[0..p.path_len]}) catch return;
 
+            const pp = @import("plugins_pure.zig");
+            const is_lua = detectLuaScript(exec);
             const direct_argv = [_][]const u8{ exec, rid, rep };
             var sandbox_argv: [8][]const u8 = undefined;
             const argv: []const []const u8 = blk: {
-                if (detectLuaScript(exec) and !p.allow_unsafe) {
-                    const extras = [_][]const u8{ rid, rep };
-                    logSandboxed(p.name[0..p.name_len]);
-                    break :blk buildSandboxedLuaArgv(&sandbox_argv, exec, &extras);
+                switch (pp.runMode(is_lua, p.allow_unsafe, p.user_trusted)) {
+                    .sandbox_lua => {
+                        const extras = [_][]const u8{ rid, rep };
+                        logSandboxed(p.name[0..p.name_len]);
+                        break :blk buildSandboxedLuaArgv(&sandbox_argv, exec, &extras);
+                    },
+                    .direct => {
+                        if (p.allow_unsafe and p.user_trusted) logUnsafeWarn(p.name[0..p.name_len]);
+                        if (pp.untrustedNative(is_lua, p.user_trusted)) logUntrustedNative(p.name[0..p.name_len]);
+                        break :blk &direct_argv;
+                    },
                 }
-                if (p.allow_unsafe) logUnsafeWarn(p.name[0..p.name_len]);
-                break :blk &direct_argv;
             };
             var child = @import("../core/io_global.zig").Child.init(argv, c_alloc);
             child.stdout_behavior = .Pipe;
@@ -438,6 +472,16 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                     const tlen = @min(title.len, 255);
                     @memcpy(state.app.comic.title[0..tlen], title[0..tlen]);
                     state.app.comic.title_len = tlen;
+                }
+
+                // Optional per-plugin Referer for page fetches (some manga CDNs
+                // 403 without it). Empty → workers derive it from the image
+                // origin. See plugins_pure.refererHeader.
+                state.app.comic.referer_len = 0;
+                if (extractField(json, "referer")) |ref| {
+                    const rlen = @min(ref.len, state.app.comic.referer.len);
+                    @memcpy(state.app.comic.referer[0..rlen], ref[0..rlen]);
+                    state.app.comic.referer_len = rlen;
                 }
                 
                 // Parse images array
@@ -525,10 +569,15 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                                             const u = state.app.comic.page_urls[idx][0..state.app.comic.page_url_lens[idx]];
                                             if (u.len == 0) return;
                                             const a = @import("../core/alloc.zig").allocator;
+                                            // Referer: plugin-supplied if any, else this image's own
+                                            // origin (replaces a hardcoded coffeemanga.io referer).
+                                            const plugin_ref = state.app.comic.referer[0..state.app.comic.referer_len];
+                                            var ref_buf: [600]u8 = undefined;
+                                            const ref_hdr = @import("plugins_pure.zig").refererHeader(plugin_ref, u, &ref_buf) orelse "Referer:";
                                             const argv2 = [_][]const u8{
                                                 "curl", "-sL",
                                                 "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-                                                "-H", "Referer: https://coffeemanga.io/",
+                                                "-H", ref_hdr,
                                                 "--max-time", "15",
                                                 u,
                                             };
@@ -839,14 +888,17 @@ fn cardTitle(src: std.builtin.SourceLocation, text: []const u8, sub: []const u8)
 fn renderSourcePlugins() void {
     const pr = @import("plugin_repo.zig");
 
-    // Auto-load the list on first view so all available plugins show without a
-    // manual Refresh (needs a token for the private repo).
+    // Auto-load on first view: show the bundled manifest instantly (offline, no
+    // network) so the list is never empty, then kick a network refresh that
+    // overwrites it with the live repo list when reachable. On a failed refresh
+    // the bundled list stays (refreshWorker leaves plugin_count untouched on
+    // error), so the page degrades gracefully with no connectivity.
     const Auto = struct {
         var done: bool = false;
     };
-    // Auto-load the list on first view (public repo — no token needed).
-    if (!Auto.done and pr.plugin_count == 0 and pr.status.load(.acquire) == .idle) {
+    if (!Auto.done) {
         Auto.done = true;
+        pr.loadLocalManifest();
         pr.refresh();
     }
 

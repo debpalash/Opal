@@ -153,7 +153,7 @@ fn applyDebrid(tmpl: []const u8, provider: []const u8, key: []const u8, out: []u
 }
 
 /// Neutral: populate installed_addons ONLY from user-installed Stremio plugins
-/// (~/.config/zigzag/plugins/sources/<id>.json files that carry a "stremio" field
+/// (~/.config/opal/plugins/sources/<id>.json files that carry a "stremio" field
 /// = the addon manifest URL, written by the plugin manager). No addon is active
 /// until the user installs it. The universal resolver reads installed_addons.
 pub fn loadInstalledAddons() void {
@@ -235,6 +235,15 @@ fn addKnownAddons() void {
         .{ .name = "Comet", .desc = "Debrid streaming via Real-Debrid/AllDebrid", .url = "https://comet.elfhosted.com/manifest.json", .types = "movie,series" },
         .{ .name = "Anime Kitsu", .desc = "Anime catalog with Kitsu integration", .url = "https://anime-kitsu.strem.fun/manifest.json", .types = "anime" },
         .{ .name = "OpenSubtitles", .desc = "Subtitles from OpenSubtitles.com", .url = "https://opensubtitles-v3.strem.io/manifest.json", .types = "movie,series" },
+        .{ .name = "KnightCrawler", .desc = "Self-hosted torrent indexer streams", .url = "https://knightcrawler.elfhosted.com/manifest.json", .types = "movie,series" },
+        .{ .name = "ThePirateBay+", .desc = "ThePirateBay streams (debrid-capable)", .url = "https://thepiratebay-plus.strem.fun/manifest.json", .types = "movie,series" },
+        .{ .name = "TMDB", .desc = "Rich movie/series catalog + metadata", .url = "https://tmdb.elfhosted.com/manifest.json", .types = "movie,series" },
+        .{ .name = "USA TV Next", .desc = "Live US TV channels", .url = "https://raw.githubusercontent.com/yowmamasita/usa-tv-next/main/manifest.json", .types = "tv" },
+        .{ .name = "Streaming Catalogs", .desc = "Trending on Netflix/Disney+/HBO/Prime", .url = "https://7a82163c306e-stremio-netflix-catalog-addon.baby-beamup.club/manifest.json", .types = "movie,series" },
+        .{ .name = "Public Domain Movies", .desc = "Legal public-domain films with streams", .url = "https://caching.stremio.net/publicdomainmovies.now.sh/manifest.json", .types = "movie" },
+        .{ .name = "Cinemeta", .desc = "Canonical IMDb metadata backbone", .url = "https://v3-cinemeta.strem.io/manifest.json", .types = "movie,series" },
+        .{ .name = "WatchHub", .desc = "Deep-links to legal streaming services", .url = "https://watchhub.strem.io/manifest.json", .types = "movie,series" },
+        .{ .name = "YouTube Channels", .desc = "Browse YouTube channels", .url = "https://v3-channels.strem.io/manifest.json", .types = "channel" },
     };
     for (known, 0..) |k, i| {
         if (i >= 32) break;

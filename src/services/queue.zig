@@ -563,7 +563,7 @@ fn swapQueueItems(idx_a: usize, idx_b: usize) void {
     queue_items[idx_b].id = id_a;
 }
 
-const thumb_cache_dir = "/tmp/zigzag_thumbs/queue";
+const thumb_cache_dir = "/tmp/opal_thumbs/queue";
 
 fn thumbCachePath(item_id: i64, out: *[384]u8) ?[]const u8 {
     return std.fmt.bufPrintZ(out, thumb_cache_dir ++ "/{d}.jpg", .{item_id}) catch null;

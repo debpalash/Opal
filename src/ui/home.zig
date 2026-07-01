@@ -300,7 +300,7 @@ fn renderRecentlyPlayed() void {
         defer row.deinit();
 
         if (e.link_len > 0 and dvui.clicked(row.data(), .{})) {
-            browser.loadContent(e.link[0..e.link_len]);
+            browser.resumePlayback(e.link[0..e.link_len]);
         }
         row.drawBackground();
 

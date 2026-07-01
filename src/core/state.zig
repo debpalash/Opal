@@ -120,6 +120,13 @@ pub const TvEpisode = struct {
     still_path_len: usize = 0,
     vote_average: f32 = 0,
     runtime: u16 = 0,
+    // Episode still image (lazy-loaded from TMDB image CDN on demand)
+    still_fetching: bool = false,
+    still_attempted: bool = false,
+    still_pixels: ?[]u8 = null,
+    still_w: u32 = 0,
+    still_h: u32 = 0,
+    still_tex: ?dvui.Texture = null,
 };
 
 /// One TV Continue-Watching entry (resume the next episode of a series).
@@ -504,6 +511,12 @@ pub const AppState = struct {
         next_url_len: usize = 0,
         prev_url: [512]u8 = std.mem.zeroes([512]u8),
         prev_url_len: usize = 0,
+        // Referer header a content-plugin's resolve response supplied for page
+        // image fetches (some manga CDNs 403 without it). Empty → the fetch
+        // worker derives the referer from each image URL's own origin. Replaced
+        // a hardcoded coffeemanga.io referer that broke every other source.
+        referer: [512]u8 = std.mem.zeroes([512]u8),
+        referer_len: usize = 0,
         view_mode: enum { scroll, single_page } = .scroll,
         current_page: usize = 0,
         dl_progress: std.atomic.Value(usize) = std.atomic.Value(usize).init(0), // images downloaded (atomic: written by ≤8 concurrent workers)

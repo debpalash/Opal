@@ -9,7 +9,7 @@ const TRANSPARENT: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
 const is_macos = builtin.os.tag == .macos;
 
-const DESKTOP_ID = "zigzag.desktop";
+const DESKTOP_ID = "opal.desktop";
 const BUNDLE_ID  = "com.debpalash.opal";
 
 const MimeGroup = struct {
@@ -325,7 +325,7 @@ fn ensureDesktopFileBlocking() void {
     const dp = std.fmt.bufPrintZ(&db, "{s}/.local/share/applications", .{home}) catch return;
     @import("../core/io_global.zig").cwdMakePath(dp) catch {};
     var fb: [512]u8 = undefined;
-    const fp = std.fmt.bufPrintZ(&fb, "{s}/zigzag.desktop", .{dp}) catch return;
+    const fp = std.fmt.bufPrintZ(&fb, "{s}/opal.desktop", .{dp}) catch return;
     const ml = "video/mp4;video/x-matroska;video/x-msvideo;video/webm;video/quicktime;video/mpeg;video/ogg;video/x-flv;video/x-ms-wmv;video/3gpp;" ++
                "audio/mpeg;audio/flac;audio/ogg;audio/wav;audio/x-wav;audio/aac;audio/mp4;audio/x-m4a;audio/opus;audio/webm;" ++
                "application/x-bittorrent;x-scheme-handler/magnet;" ++
@@ -333,7 +333,7 @@ fn ensureDesktopFileBlocking() void {
                "application/x-cbz;application/x-cbr;application/x-cb7;application/x-cbt;application/vnd.comicbook+zip;application/vnd.comicbook-rar;";
     var cb: [2560]u8 = undefined;
     const ct = std.fmt.bufPrint(&cb,
-        "[Desktop Entry]\nName=Opal\nComment=Opal — Play everything\nExec={s} %U\nIcon=zigzag\nTerminal=false\nType=Application\nCategories=AudioVideo;Video;Audio;Player;\nMimeType={s}\nStartupNotify=true\n",
+        "[Desktop Entry]\nName=Opal\nComment=Opal — Play everything\nExec={s} %U\nIcon=opal\nTerminal=false\nType=Application\nCategories=AudioVideo;Video;Audio;Player;\nMimeType={s}\nStartupNotify=true\n",
         .{ exe, ml }) catch return;
     @import("../core/io_global.zig").cwdWriteFile(.{ .sub_path = fp, .data = ct }) catch {};
 }

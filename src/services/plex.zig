@@ -12,7 +12,7 @@ const paths = @import("../core/paths.zig");
 const logs = @import("../core/logs.zig");
 const state = @import("../core/state.zig");
 
-const CLIENT_ID = "opal-zigzag-9a3f"; // X-Plex-Client-Identifier (stable per build)
+const CLIENT_ID = "opal-media-9a3f"; // X-Plex-Client-Identifier (stable per build)
 const Json = std.json.Value;
 
 pub const ConnState = enum(u8) { disconnected, awaiting, connected, err };

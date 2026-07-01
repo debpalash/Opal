@@ -107,9 +107,9 @@ pub fn processGlobalInputs() void {
                 lang_learn.onToggle(state.app.lang_learn_enabled);
                 const ll_logs = @import("../core/logs.zig");
                 if (state.app.lang_learn_enabled) {
-                    ll_logs.pushLog("info", "zigzag", "Language Learning ON (Ctrl+L)", false);
+                    ll_logs.pushLog("info", "opal", "Language Learning ON (Ctrl+L)", false);
                 } else {
-                    ll_logs.pushLog("info", "zigzag", "Language Learning OFF", false);
+                    ll_logs.pushLog("info", "opal", "Language Learning OFF", false);
                 }
                 dvui.refresh(null, @src(), null);
                 continue;

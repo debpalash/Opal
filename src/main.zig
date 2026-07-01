@@ -234,7 +234,7 @@ fn appInit(win: *dvui.Window) !void {
     detectResourceRoot();
 
     // ── CLI argument handling ──
-    // `zigzag /path/to/file.mp4` or `zigzag https://example.com/stream`
+    // `opal /path/to/file.mp4` or `opal https://example.com/stream`
     // Deferred: store in buffer, appFrame loads after player is ready.
     if (dvui.App.main_init) |init_data| {
         var args_iter = init_data.minimal.args.iterate();
@@ -293,13 +293,13 @@ pub fn appDeinit() void {
 
     // Kill any spawned child processes that may still be running
     const kill_targets = [_][]const u8{
-        "aplay.*zigzag",
+        "aplay.*opal",
         "kittentts",
-        "zigzag-stt",
-        "zigzag-tts-server",
-        "zigzag-stt-server",
-        "zigzag-voice-server",
-        "rec.*zigzag_ai_mic",
+        "opal-stt",
+        "opal-tts-server",
+        "opal-stt-server",
+        "opal-voice-server",
+        "rec.*opal_ai_mic",
     };
 
     for (kill_targets) |target| {
@@ -962,6 +962,10 @@ fn appFrame() !dvui.App.Result {
             }
             if (state.app.players.items.len == 0) {
                 state.app.active_player_idx = 0;
+                // Page shell: the Player route now has nothing to render — leave
+                // it for the last non-player page (or Home) so closing the player
+                // doesn't drop the user on an empty grid.
+                if (state.app.page_shell_enabled) state.app.router.leavePlayer();
             }
         }
         state.app.pending_remove_player_idx = -1;

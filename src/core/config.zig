@@ -4,7 +4,7 @@ const paths = @import("paths.zig");
 const db = @import("db.zig");
 const theme = @import("../ui/theme.zig");
 
-/// Persistent config — saves/loads from zigzag.db config table.
+/// Persistent config — saves/loads from opal.db config table.
 /// Migrates from old config.tsv on first run.
 pub fn ensureDir() void {
     var buf: [512]u8 = undefined;

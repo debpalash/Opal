@@ -40,6 +40,29 @@ pub fn freeImageBuffers() void {
     }
 }
 
+/// Free episode still images that are not currently being fetched.
+/// Call from the UI thread before clearing tv_episode_count.
+fn freeEpisodeStills() void {
+    const t = &state.app.tmdb;
+    const poster = @import("../core/poster.zig");
+    for (0..t.tv_episode_count) |i| {
+        var e = &t.tv_episodes[i];
+        if (e.still_fetching) continue; // worker in-flight — leave it
+        poster.deinitPoster(&e.still_pixels, &e.still_tex);
+    }
+}
+
+/// Start an async fetch for episode still image (w300 landscape thumbnail).
+fn fetchEpisodeStill(e: *state.TvEpisode) void {
+    if (e.still_attempted or e.still_fetching or e.still_path_len == 0) return;
+    var url_buf: [256]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w300{s}", .{
+        e.still_path[0..@min(e.still_path_len, e.still_path.len)],
+    }) catch return;
+    e.still_attempted = true;
+    @import("../core/poster.zig").fetchAsync(url, &e.still_pixels, &e.still_w, &e.still_h, &e.still_fetching);
+}
+
 // ══════════════════════════════════════════════════════════
 // TMDB Content Renderer (called from drawer.zig)
 // ══════════════════════════════════════════════════════════
@@ -895,6 +918,7 @@ fn openTvDetail(item: *state.TmdbItem) void {
 /// any in-flight worker can't repopulate state after we leave.
 fn closeTvDetail() void {
     const t = &state.app.tmdb;
+    freeEpisodeStills();
     t.tv_detail_open = false;
     t.tv_season_count = 0;
     t.tv_episode_count = 0;
@@ -1081,6 +1105,7 @@ fn arrayEnd(json: []const u8, open: usize) usize {
 
 fn fetchEpisodes(tmdb_id: i32, season_number: i32) void {
     if (state.app.tmdb.api_key_len == 0) return;
+    freeEpisodeStills(); // free GPU textures before overwriting episode slots
     state.app.tmdb.tv_episodes_loading = true;
     state.app.tmdb.tv_episode_count = 0;
     const my_gen = tv_gen.load(.acquire);
@@ -1331,13 +1356,26 @@ fn playTvEpisodeThread(qbuf: [256]u8, qlen: usize) void {
     defer resolver.results_mutex.unlock();
     for (0..resolver.result_count) |i| {
         const item = resolver.results[i];
-        if (item.source == .torrent or item.source == .stremio) {
-            search.loadTorrentToPlayer(item.url[0..item.url_len]);
-            logs.pushLog("info", "tmdb", "Playing TV episode", false);
+        const url = item.url[0..item.url_len];
+        if (url.len == 0) continue;
+        if (item.source == .stremio) {
+            if (std.mem.startsWith(u8, url, "magnet:")) {
+                // infoHash-converted magnet (Torrentio without debrid) — BitTorrent
+                search.loadTorrentToPlayer(url);
+            } else {
+                // Direct HTTP stream (debrid, cached) — bypass routing, load into mpv
+                @import("browser.zig").loadContentDirect(url);
+            }
+            logs.pushLog("info", "tmdb", "Playing TV episode via Stremio", false);
+            return;
+        }
+        if (item.source == .torrent) {
+            search.loadTorrentToPlayer(url);
+            logs.pushLog("info", "tmdb", "Playing TV episode via torrent", false);
             return;
         }
     }
-    logs.pushLog("error", "tmdb", "No streams found for episode. Try universal search.", true);
+    logs.pushLog("error", "tmdb", "No streams found. Install a Stremio addon or torrent source in Plugins.", true);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1346,6 +1384,7 @@ fn playTvEpisodeThread(qbuf: [256]u8, qlen: usize) void {
 
 fn renderTvDetail() void {
     const t = &state.app.tmdb;
+    const poster = @import("../core/poster.zig");
 
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer page.deinit();
@@ -1354,17 +1393,19 @@ fn renderTvDetail() void {
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
+            .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
             .background = true,
             .color_fill = theme.colors.bg_card,
+            .color_border = theme.colors.bg_header_border,
+            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         });
         defer hdr.deinit();
 
-        if (dvui.button(@src(), "< Back", .{}, .{
-            .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
+        if (dvui.button(@src(), "← Back", .{}, .{
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = theme.colors.accent,
             .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
             .margin = .{ .x = 0, .y = 0, .w = 10, .h = 0 },
             .gravity_y = 0.5,
         })) {
@@ -1379,20 +1420,21 @@ fn renderTvDetail() void {
             .font = dvui.themeGet().font_heading,
             .gravity_y = 0.5,
         });
-    }
 
-    if (t.tv_stream_loading) {
-        _ = dvui.label(@src(), "Loading stream...", .{}, .{
-            .color_text = theme.colors.accent,
-            .padding = .{ .x = 12, .y = 6, .w = 0, .h = 0 },
-        });
+        if (t.tv_stream_loading) {
+            _ = dvui.label(@src(), "Finding stream…", .{}, .{
+                .color_text = theme.colors.accent,
+                .gravity_y = 0.5,
+                .padding = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
+            });
+        }
     }
 
     // ── Season selector row ──
     if (t.tv_seasons_loading and t.tv_season_count == 0) {
-        _ = dvui.label(@src(), "Loading seasons...", .{}, .{
+        _ = dvui.label(@src(), "Loading seasons…", .{}, .{
             .color_text = theme.colors.accent,
-            .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
+            .padding = .{ .x = 14, .y = 12, .w = 0, .h = 0 },
         });
         return;
     }
@@ -1400,7 +1442,7 @@ fn renderTvDetail() void {
     {
         var sbar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 4 },
+            .padding = .{ .x = 10, .y = 8, .w = 10, .h = 4 },
         });
         defer sbar.deinit();
 
@@ -1419,12 +1461,11 @@ fn renderTvDetail() void {
                 .color_fill = if (active) theme.colors.accent else theme.colors.bg_card,
                 .color_text = if (active) dvui.Color.white else theme.colors.text_muted,
                 .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-                .margin = .{ .x = 0, .y = 0, .w = 4, .h = 4 },
+                .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+                .margin = .{ .x = 0, .y = 0, .w = 6, .h = 2 },
             })) {
                 if (si != t.tv_sel_season) {
                     t.tv_sel_season = si;
-                    // New generation supersedes any in-flight episode fetch.
                     _ = tv_gen.fetchAdd(1, .acq_rel);
                     fetchEpisodes(t.tv_id, sn);
                 }
@@ -1432,54 +1473,97 @@ fn renderTvDetail() void {
         }
     }
 
-    // ── Progress line + Resume ──
-    if (t.tv_episode_count > 0) {
-        var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+    // ── Season info + watched progress bar ──
+    if (t.tv_episode_count > 0 or (t.tv_sel_season < t.tv_season_count)) {
+        var sinfo = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 2, .w = 8, .h = 4 },
+            .padding = .{ .x = 12, .y = 0, .w = 12, .h = 6 },
         });
-        defer prow.deinit();
+        defer sinfo.deinit();
 
-        const watched = tvWatchedCount();
-        const total = t.tv_episode_count;
-        const next_ep = tvNextUnwatched();
-
-        if (dvui.button(@src(), "Resume", .{}, .{
-            .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
-            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-            .gravity_y = 0.5,
-        })) {
-            playTvEpisode(next_ep);
-        }
-
-        {
-            var rl: [16]u8 = undefined;
-            const rs = std.fmt.bufPrint(&rl, "E{d}", .{next_ep}) catch "";
-            _ = dvui.label(@src(), "{s}", .{rs}, .{
+        // Season name / episode count from the season struct
+        if (t.tv_sel_season < t.tv_season_count) {
+            const s = t.tv_seasons[t.tv_sel_season];
+            var si_buf: [64]u8 = undefined;
+            const year = if (s.air_date_len >= 4) s.air_date[0..4] else "";
+            const ep_count = if (t.tv_episode_count > 0) t.tv_episode_count else @as(usize, s.episode_count);
+            const si_str = if (year.len > 0)
+                (std.fmt.bufPrint(&si_buf, "{d} episodes · {s}", .{ ep_count, year }) catch "")
+            else
+                (std.fmt.bufPrint(&si_buf, "{d} episodes", .{ep_count}) catch "");
+            _ = dvui.label(@src(), "{s}", .{si_str}, .{
                 .color_text = theme.colors.text_muted,
                 .gravity_y = 0.5,
-                .padding = .{ .x = 0, .y = 0, .w = 12, .h = 0 },
             });
         }
 
-        {
-            var cb: [32]u8 = undefined;
-            const cs = std.fmt.bufPrint(&cb, "{d}/{d} watched", .{ watched, total }) catch "";
-            _ = dvui.label(@src(), "{s}", .{cs}, .{
-                .color_text = theme.colors.text_main,
+        // Spacer + watched count (right-aligned)
+        if (t.tv_episode_count > 0) {
+            var spacer = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+            spacer.deinit();
+
+            const watched = tvWatchedCount();
+            const total = t.tv_episode_count;
+            var wbuf: [32]u8 = undefined;
+            const ws = std.fmt.bufPrint(&wbuf, "{d}/{d} watched", .{ watched, total }) catch "";
+            _ = dvui.label(@src(), "{s}", .{ws}, .{
+                .color_text = theme.colors.text_muted,
                 .gravity_y = 0.5,
             });
         }
     }
 
+    // Thin progress bar (watched fraction)
+    if (t.tv_episode_count > 0) {
+        const watched = tvWatchedCount();
+        const total = t.tv_episode_count;
+        var frac: f32 = if (total > 0) @as(f32, @floatFromInt(watched)) / @as(f32, @floatFromInt(total)) else 0;
+        _ = dvui.slider(@src(), .{ .fraction = &frac }, .{
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 10, .h = 4 },
+            .color_fill = dvui.Color{ .r = 35, .g = 35, .b = 45, .a = 255 },
+            .color_text = theme.colors.accent,
+            .corner_radius = dvui.Rect.all(0),
+        });
+    }
+
+    // ── Resume row ──
+    if (t.tv_episode_count > 0) {
+        const next_ep = tvNextUnwatched();
+        var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
+            .background = true,
+            .color_fill = dvui.Color{ .r = 16, .g = 18, .b = 26, .a = 255 },
+            .color_border = theme.colors.bg_header_border,
+            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+        });
+        defer prow.deinit();
+
+        if (dvui.button(@src(), "▶  Resume", .{}, .{
+            .color_fill = theme.colors.accent,
+            .color_text = dvui.Color.white,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 14, .y = 5, .w = 14, .h = 5 },
+            .margin = .{ .x = 0, .y = 0, .w = 12, .h = 0 },
+            .gravity_y = 0.5,
+        })) {
+            playTvEpisode(next_ep);
+        }
+
+        var ep_lbl: [32]u8 = undefined;
+        const ep_str = std.fmt.bufPrint(&ep_lbl, "Episode {d}", .{next_ep}) catch "";
+        _ = dvui.label(@src(), "{s}", .{ep_str}, .{
+            .color_text = theme.colors.text_muted,
+            .gravity_y = 0.5,
+        });
+    }
+
     // ── Episode list ──
     if (t.tv_episodes_loading and t.tv_episode_count == 0) {
-        _ = dvui.label(@src(), "Loading episodes...", .{}, .{
+        _ = dvui.label(@src(), "Loading episodes…", .{}, .{
             .color_text = theme.colors.accent,
-            .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
+            .padding = .{ .x = 14, .y = 16, .w = 0, .h = 0 },
         });
         return;
     }
@@ -1487,10 +1571,12 @@ fn renderTvDetail() void {
     if (t.tv_episode_count == 0) {
         _ = dvui.label(@src(), "No episodes available.", .{}, .{
             .color_text = theme.colors.text_muted,
-            .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
+            .padding = .{ .x = 14, .y = 16, .w = 0, .h = 0 },
         });
         return;
     }
+
+    const next_ep_num = tvNextUnwatched();
 
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = false });
     defer scroll.deinit();
@@ -1499,84 +1585,196 @@ fn renderTvDetail() void {
     while (ei < t.tv_episode_count) : (ei += 1) {
         const e = &t.tv_episodes[ei];
         const is_watched = ei < t.tv_episode_watched.len and t.tv_episode_watched[ei];
+        const is_next = e.episode_number == next_ep_num;
 
-        const fill_color = if (is_watched)
-            dvui.Color{ .r = 18, .g = 22, .b = 30, .a = 255 }
+        // Upload still texture if pixel data arrived from the fetch worker.
+        _ = poster.uploadIfReady(&e.still_pixels, e.still_w, e.still_h, &e.still_tex);
+
+        const card_fill = if (is_watched)
+            dvui.Color{ .r = 16, .g = 18, .b = 24, .a = 255 }
+        else if (is_next)
+            dvui.Color{ .r = 22, .g = 26, .b = 36, .a = 255 }
         else
             theme.colors.bg_card;
 
-        var ecard = dvui.box(@src(), .{ .dir = .vertical }, .{
+        const border_color = if (is_next) theme.colors.accent else theme.colors.bg_header_border;
+        const border_rect: dvui.Rect = if (is_next)
+            .{ .x = 2, .y = 0, .w = 0, .h = 1 }
+        else
+            .{ .x = 0, .y = 0, .w = 0, .h = 1 };
+
+        var ecard = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = ei + 40000,
             .expand = .horizontal,
             .background = true,
-            .color_fill = fill_color,
-            .color_border = theme.colors.bg_header_border,
-            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-            .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
+            .color_fill = card_fill,
+            .color_border = border_color,
+            .border = border_rect,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         });
         defer ecard.deinit();
 
-        // Top row: watched toggle + "E{n}  {name}" + Play.
+        // ── Left: episode still thumbnail ──
         {
-            var top = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = ei + 41000,
-                .expand = .horizontal,
-            });
-            defer top.deinit();
-
-            const chk_label: []const u8 = if (is_watched) "\xe2\x9c\x93" else "\xe2\x97\x8b"; // ✓ / ○
-            if (dvui.button(@src(), chk_label, .{}, .{
-                .id_extra = ei + 41100,
+            var still_box = dvui.box(@src(), .{ .dir = .vertical }, .{
+                .id_extra = ei + 42000,
                 .background = true,
-                .color_fill = if (is_watched) theme.colors.success else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = if (is_watched) dvui.Color.white else theme.colors.text_muted,
-                .corner_radius = dvui.Rect.all(10),
-                .padding = .{ .x = 5, .y = 1, .w = 5, .h = 1 },
-                .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+                .color_fill = dvui.Color{ .r = 12, .g = 14, .b = 20, .a = 255 },
+                .min_size_content = .{ .w = 160, .h = 90 },
                 .gravity_y = 0.5,
-            })) {
-                tvToggleWatched(ei, e.episode_number);
-            }
+            });
+            defer still_box.deinit();
 
-            // "E{n}  {name}" — clickable to play.
-            var title_buf: [160]u8 = undefined;
-            var ep_name_buf: [128]u8 = undefined;
-            const ep_name = safeUtf8Buf(e.name[0..@min(e.name_len, e.name.len)], &ep_name_buf);
-            const title = std.fmt.bufPrint(&title_buf, "E{d}  {s}", .{ e.episode_number, ep_name }) catch ep_name;
-            if (dvui.button(@src(), title, .{}, .{
-                .id_extra = ei + 41200,
-                .expand = .horizontal,
-                .color_text = if (is_watched) theme.colors.text_muted else theme.colors.text_main,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
-                .gravity_y = 0.5,
-            })) {
-                playTvEpisode(e.episode_number);
-            }
-
-            if (dvui.button(@src(), "Play", .{}, .{
-                .id_extra = ei + 41300,
-                .color_fill = theme.colors.accent,
-                .color_text = dvui.Color.white,
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
-                .gravity_y = 0.5,
-            })) {
-                playTvEpisode(e.episode_number);
+            if (e.still_tex) |*tex| {
+                _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+                    .id_extra = ei + 42100,
+                    .expand = .both,
+                });
+            } else {
+                // Placeholder: episode number centered
+                var ep_num_buf: [8]u8 = undefined;
+                const ep_num_str = std.fmt.bufPrint(&ep_num_buf, "{d}", .{e.episode_number}) catch "";
+                _ = dvui.label(@src(), "{s}", .{ep_num_str}, .{
+                    .id_extra = ei + 42200,
+                    .color_text = dvui.Color{ .r = 60, .g = 65, .b = 80, .a = 255 },
+                    .gravity_x = 0.5,
+                    .gravity_y = 0.5,
+                    .expand = .both,
+                    .font = dvui.themeGet().font_heading,
+                });
+                // Start the fetch if available and not yet tried
+                if (!e.still_attempted and e.still_path_len > 0) {
+                    fetchEpisodeStill(e);
+                }
             }
         }
 
-        // Muted meta line: {air_date} · {runtime}m · {vote%}.
+        // ── Right: info column ──
         {
-            var meta: [64]u8 = undefined;
-            const pct = @as(u8, @intFromFloat(std.math.clamp(e.vote_average * 10.0, 0.0, 100.0)));
-            const air = e.air_date[0..@min(e.air_date_len, e.air_date.len)];
-            const ms = std.fmt.bufPrint(&meta, "{s} · {d}m · {d}%", .{ air, e.runtime, pct }) catch "";
-            _ = dvui.label(@src(), "{s}", .{ms}, .{
-                .id_extra = ei + 41400,
-                .color_text = theme.colors.text_muted,
-                .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+            var info = dvui.box(@src(), .{ .dir = .vertical }, .{
+                .id_extra = ei + 43000,
+                .expand = .both,
+                .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
             });
+            defer info.deinit();
+
+            // Title row: "E{n}" chip + episode name (expandable) + [▶] play button
+            {
+                var title_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                    .id_extra = ei + 43100,
+                    .expand = .horizontal,
+                });
+                defer title_row.deinit();
+
+                // E{n} number chip
+                {
+                    var en_buf: [8]u8 = undefined;
+                    const en_str = std.fmt.bufPrint(&en_buf, "E{d}", .{e.episode_number}) catch "";
+                    _ = dvui.label(@src(), "{s}", .{en_str}, .{
+                        .id_extra = ei + 43110,
+                        .color_text = if (is_next) theme.colors.accent else theme.colors.text_muted,
+                        .gravity_y = 0.5,
+                        .padding = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+                    });
+                }
+
+                // "Next" badge for the next unwatched episode
+                if (is_next) {
+                    _ = dvui.label(@src(), "Next", .{}, .{
+                        .id_extra = ei + 43115,
+                        .background = true,
+                        .color_fill = theme.colors.accent,
+                        .color_text = dvui.Color.white,
+                        .corner_radius = theme.dims.rad_sm,
+                        .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
+                        .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+                        .gravity_y = 0.5,
+                    });
+                }
+
+                // Episode title (clickable → play)
+                var ep_name_buf: [128]u8 = undefined;
+                const ep_name = safeUtf8Buf(e.name[0..@min(e.name_len, e.name.len)], &ep_name_buf);
+                if (dvui.button(@src(), ep_name, .{}, .{
+                    .id_extra = ei + 43120,
+                    .expand = .horizontal,
+                    .color_text = if (is_watched) theme.colors.text_muted else theme.colors.text_main,
+                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+                    .gravity_y = 0.5,
+                })) {
+                    playTvEpisode(e.episode_number);
+                }
+
+                // Play button
+                if (dvui.button(@src(), "▶", .{}, .{
+                    .id_extra = ei + 43130,
+                    .background = true,
+                    .color_fill = theme.colors.accent,
+                    .color_text = dvui.Color.white,
+                    .corner_radius = dvui.Rect.all(14),
+                    .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+                    .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
+                    .gravity_y = 0.5,
+                })) {
+                    playTvEpisode(e.episode_number);
+                }
+
+                // Watched toggle (right-most)
+                const chk_label: []const u8 = if (is_watched) "\xe2\x9c\x93" else "\xe2\x97\x8b"; // ✓ / ○
+                if (dvui.button(@src(), chk_label, .{}, .{
+                    .id_extra = ei + 43140,
+                    .background = true,
+                    .color_fill = if (is_watched) theme.colors.success else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .color_text = if (is_watched) dvui.Color.white else theme.colors.text_muted,
+                    .corner_radius = dvui.Rect.all(12),
+                    .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
+                    .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
+                    .gravity_y = 0.5,
+                })) {
+                    tvToggleWatched(ei, e.episode_number);
+                }
+            }
+
+            // Overview snippet (truncated to 120 chars)
+            if (e.overview_len > 0) {
+                const ov_raw = e.overview[0..@min(e.overview_len, e.overview.len)];
+                var ov_buf: [128]u8 = undefined;
+                const ov_str = if (ov_raw.len <= 120)
+                    safeUtf8Buf(ov_raw, &ov_buf)
+                else blk: {
+                    @memcpy(ov_buf[0..117], ov_raw[0..117]);
+                    ov_buf[117] = '.';
+                    ov_buf[118] = '.';
+                    ov_buf[119] = '.';
+                    break :blk safeUtf8Buf(ov_buf[0..120], &ov_buf);
+                };
+                _ = dvui.label(@src(), "{s}", .{ov_str}, .{
+                    .id_extra = ei + 43200,
+                    .color_text = dvui.Color{ .r = 140, .g = 145, .b = 160, .a = 255 },
+                    .padding = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
+                });
+            }
+
+            // Meta line: air_date · runtime · ★ rating
+            {
+                var meta: [80]u8 = undefined;
+                const air = e.air_date[0..@min(e.air_date_len, e.air_date.len)];
+                const rating = e.vote_average;
+                const ms = if (e.runtime > 0 and air.len > 0)
+                    std.fmt.bufPrint(&meta, "{s}  ·  {d}m  ·  \xe2\x98\x85 {d:.1}", .{ air, e.runtime, rating }) catch ""
+                else if (air.len > 0)
+                    std.fmt.bufPrint(&meta, "{s}  ·  \xe2\x98\x85 {d:.1}", .{ air, rating }) catch ""
+                else if (e.runtime > 0)
+                    std.fmt.bufPrint(&meta, "{d}m  ·  \xe2\x98\x85 {d:.1}", .{ e.runtime, rating }) catch ""
+                else
+                    std.fmt.bufPrint(&meta, "\xe2\x98\x85 {d:.1}", .{rating}) catch "";
+                _ = dvui.label(@src(), "{s}", .{ms}, .{
+                    .id_extra = ei + 43300,
+                    .color_text = theme.colors.text_muted,
+                    .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+                });
+            }
         }
     }
 }

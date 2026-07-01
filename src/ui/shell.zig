@@ -39,7 +39,30 @@ pub fn render() !void {
     const w = root.data().rect.w;
     const compact = w > 1 and w < 760;
 
-    renderTopNav(compact);
+    // Immersive playback: on the Player route, give the video the whole window by
+    // hiding the top nav (and compact bottom tabs) once the viewer goes idle or
+    // enters fullscreen — parity with the legacy layout's chrome auto-hide
+    // (main.zig). Scoped to .player so the nav never vanishes while browsing with
+    // a background player. Mouse motion bumps last_mouse_move_ms → reveals it.
+    const immersive = blk: {
+        if (state.app.router.current != .player) break :blk false;
+        if (state.app.fullscreen_player_idx != null) break :blk true;
+        var playing_video = false;
+        if (state.app.active_player_idx < state.app.players.items.len) {
+            const ap = state.app.players.items[state.app.active_player_idx];
+            playing_video = ap.texture != null and !ap.cached_paused;
+        }
+        const text_len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
+        const now_ms = @import("../core/io_global.zig").milliTimestamp();
+        break :blk @import("chrome_autohide.zig").shouldHideChrome(.{
+            .playing_video = playing_video,
+            .typing = text_len > 0,
+            .idle_ms = now_ms - state.app.last_mouse_move_ms,
+            .threshold_ms = 2500,
+        });
+    };
+
+    if (!immersive) renderTopNav(compact);
 
     {
         // The Player route owns its full bleed (video grid); every other page
@@ -63,8 +86,9 @@ pub fn render() !void {
         footer.renderGlobalBottomTray();
     }
 
-    // Compact: bottom tab bar (mobile-style) below everything.
-    if (compact) renderBottomTabs();
+    // Compact: bottom tab bar (mobile-style) below everything — also hidden in
+    // immersive playback so the video reaches the bottom edge.
+    if (compact and !immersive) renderBottomTabs();
 }
 
 /// True if ANY player has media loaded (so playback stays reachable via the
@@ -79,11 +103,14 @@ fn anyHasMedia() bool {
 // ── Top navigation ──
 
 fn renderTopNav(compact: bool) void {
+    // Transparent title bar — the nav floats over the app background (no solid
+    // fill) for a lighter, content-focused feel; a hairline bottom border keeps
+    // it separated from the page.
     var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .min_size_content = .{ .w = 0, .h = 32 },
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = transparent,
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = 2 },

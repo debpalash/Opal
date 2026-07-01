@@ -1,4 +1,4 @@
-# zigzag voice helpers — optional Python dependencies.
+# Opal voice helpers — optional Python dependencies.
 #
 # Install with:  python3 -m pip install -r bin/requirements.txt
 #
@@ -7,15 +7,15 @@
 # under bin/whisper.cpp/models/) for STT and macOS `say` for TTS.
 
 # Speech-to-text (CTranslate2 backend; pulls models from the HF hub).
-# Used by zigzag-stt.py, zigzag-stt-server.py, zigzag-voice-server.py.
+# Used by opal-stt.py, opal-stt-server.py, opal-voice-server.py.
 faster-whisper>=1.0.0
 
-# Continuous mic capture for hands-free conversation (zigzag-voice-server.py).
+# Continuous mic capture for hands-free conversation (opal-voice-server.py).
 sounddevice>=0.4.6
 numpy>=1.24
 
 # Better voice-activity detection (optional; energy-gate fallback otherwise).
 webrtcvad>=2.0.10
 
-# Neural TTS (optional; macOS `say` is the fallback). Used by zigzag-tts-server.py.
+# Neural TTS (optional; macOS `say` is the fallback). Used by opal-tts-server.py.
 kittentts>=0.1.0

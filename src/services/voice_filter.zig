@@ -32,7 +32,7 @@ pub fn isHallucination(text: []const u8) bool {
         "thank you for listening", "subscribe",
         "please subscribe", "like and subscribe",
         "see you next time", "bye bye",  "goodbye",
-        "feature of zigzag", "zigzag",   "nando",
+        "feature of opal", "opal media", "nando",
         "...",               "um,",      "uh,",
     };
     for (phrases) |p| {
@@ -71,7 +71,7 @@ test "common hallucination phrases filtered" {
     try std.testing.expect(isHallucination("Please subscribe for more"));
     try std.testing.expect(isHallucination("Like and subscribe to my channel"));
     try std.testing.expect(isHallucination("see you next time"));
-    try std.testing.expect(isHallucination("a feature of zigzag"));
+    try std.testing.expect(isHallucination("a feature of opal"));
 }
 
 test "tiny input filtered" {

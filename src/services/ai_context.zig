@@ -486,7 +486,7 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
     {
         var path_buf: [128]u8 = undefined;
         const ts = @import("../core/io_global.zig").timestamp();
-        const path = std.fmt.bufPrint(&path_buf, "/tmp/zigzag_chat_{d}.txt", .{ts}) catch "/tmp/zigzag_chat.txt";
+        const path = std.fmt.bufPrint(&path_buf, "/tmp/opal_chat_{d}.txt", .{ts}) catch "/tmp/opal_chat.txt";
         if (@import("../core/io_global.zig").cwdCreateFile(path, .{})) |f| {
             defer f.close(@import("../core/io_global.zig").io());
             var i: usize = 0;
@@ -543,7 +543,7 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
 
     // "start listening" / "listen" — activate conversation mode
     if (std.mem.eql(u8, fl, "start listening") or std.mem.eql(u8, fl, "listen") or
-        std.mem.eql(u8, fl, "hey zigzag") or std.mem.eql(u8, fl, "hey zig zag"))
+        std.mem.eql(u8, fl, "hey opal") or std.mem.eql(u8, fl, "hey zig zag"))
     {
         if (!voice.conversation_active) {
             voice.toggleConversation();
@@ -1342,7 +1342,7 @@ pub fn generateResponse() void {
     };
 
     // Write to temp file
-    if (@import("../core/io_global.zig").cwdCreateFile("/tmp/zigzag_ai_req.json", .{})) |f| {
+    if (@import("../core/io_global.zig").cwdCreateFile("/tmp/opal_ai_req.json", .{})) |f| {
         @import("../core/io_global.zig").writeAll(f, json_str) catch {};
         f.close(@import("../core/io_global.zig").io());
     } else |_| {}
@@ -1382,7 +1382,7 @@ pub fn generateResponse() void {
     server.model_status = .checking;
 
     var child = @import("../core/io_global.zig").Child.init(
-        &.{ "curl", "-s", "-N", "--max-time", "60", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", "@/tmp/zigzag_ai_req.json", url },
+        &.{ "curl", "-s", "-N", "--max-time", "60", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", "@/tmp/opal_ai_req.json", url },
         @import("../core/alloc.zig").allocator,
     );
     child.stdout_behavior = .Pipe;

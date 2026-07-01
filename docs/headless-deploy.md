@@ -1,9 +1,9 @@
-# Headless deployment (Opal / zigzag)
+# Headless deployment (Opal)
 
-Run zigzag as a headless server in Docker. The JSON API (`:41595`) and web UI
+Run Opal as a headless server in Docker. The JSON API (`:41595`) and web UI
 (`:3000`) are exposed; no GUI/window is opened in headless mode.
 
-> The binary, app name, and on-disk config dir are all **`zigzag`** (legacy) —
+> The binary, app name, and on-disk config dir is `opal` --
 > do not expect an `opal` path anywhere.
 
 ## Build & run
@@ -12,21 +12,21 @@ On a **real Linux/Docker host** (see the macOS caveat at the bottom):
 
 ```sh
 docker compose up --build -d      # build image + start, detached
-docker compose logs -f zigzag     # follow logs
+docker compose logs -f opal     # follow logs
 docker compose down               # stop
 ```
 
 Or with plain Docker:
 
 ```sh
-docker build -t opal-zigzag:headless .
+docker build -t opal:headless .
 docker run -d \
   -e OPAL_HEADLESS=1 \
   -p 41595:41595 -p 3000:3000 \
   -v "$PWD/data/config:/config" \
   -v "$PWD/data/cache:/cache" \
   -v "$PWD/data/media:/media" \
-  opal-zigzag:headless
+  opal:headless
 ```
 
 ## The 0.0.0.0 bind (T6)
@@ -58,26 +58,26 @@ without TLS termination and access control in front.
 | `/cache`   | caches, thumbnails, transient data       | `XDG_CACHE_HOME`       |
 | `/media`   | local media library                      | —                      |
 
-With `XDG_CONFIG_HOME=/config`, the config dir resolves to **`/config/zigzag/`**.
+With `XDG_CONFIG_HOME=/config`, the config dir resolves to **`/config/opal/`**.
 
 ## Config setup
 
-Mount your config so it lands at `/config/zigzag/`:
+Mount your config so it lands at `/config/opal/`:
 
 ```
-data/config/zigzag/config.json   # TMDB key, Jellyfin URL/keys, etc.
-data/config/zigzag/api.token     # Bearer token for the JSON API + web UI
+data/config/opal/config.json   # TMDB key, Jellyfin URL/keys, etc.
+data/config/opal/api.token     # Bearer token for the JSON API + web UI
 ```
 
 - `config.json` — TMDB / Jellyfin / scraper keys and preferences.
 - `api.token` — the API token. If absent, the server creates one on first boot
-  (`loadOrCreateToken()`); read it back from `/config/zigzag/api.token` to
+  (`loadOrCreateToken()`); read it back from `/config/opal/api.token` to
   configure clients. Provide your own to keep it stable across rebuilds.
 
 Call the API with the token:
 
 ```sh
-curl -H "Authorization: Bearer $(cat data/config/zigzag/api.token)" \
+curl -H "Authorization: Bearer $(cat data/config/opal/api.token)" \
   http://HOST:41595/api/status
 ```
 

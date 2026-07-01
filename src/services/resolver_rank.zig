@@ -236,3 +236,50 @@ test "computeMatch: quality preference — 1080p beats 480p at tie" {
     const ranked = rankAll(&items, "inception", "movie", &buf);
     try std.testing.expectEqual(@as(usize, 0), ranked[0].index);
 }
+
+// ── parseSxxEyy pure tests ──
+// Mirrors the parseSxxEyy function in resolver.zig so it can be unit-tested
+// without pulling in the full app (state, io_global, etc.).
+
+pub fn parseSxxEyy(query: []const u8, out_season: *i32, out_episode: *i32) void {
+    out_season.* = 0;
+    out_episode.* = 0;
+    var i: usize = 0;
+    while (i < query.len) : (i += 1) {
+        if (std.ascii.toLower(query[i]) != 's') continue;
+        var se = i + 1;
+        while (se < query.len and std.ascii.isDigit(query[se])) se += 1;
+        if (se == i + 1) continue;
+        if (se >= query.len or std.ascii.toLower(query[se]) != 'e') continue;
+        var ee = se + 1;
+        while (ee < query.len and std.ascii.isDigit(query[ee])) ee += 1;
+        if (ee == se + 1) continue;
+        out_season.* = std.fmt.parseInt(i32, query[i + 1 .. se], 10) catch continue;
+        out_episode.* = std.fmt.parseInt(i32, query[se + 1 .. ee], 10) catch continue;
+        return;
+    }
+}
+
+test "parseSxxEyy: standard S01E05 format" {
+    var s: i32 = 0;
+    var e: i32 = 0;
+    parseSxxEyy("from s01e05", &s, &e);
+    try std.testing.expectEqual(@as(i32, 1), s);
+    try std.testing.expectEqual(@as(i32, 5), e);
+}
+
+test "parseSxxEyy: uppercase S03E12" {
+    var s: i32 = 0;
+    var e: i32 = 0;
+    parseSxxEyy("FROM S03E12", &s, &e);
+    try std.testing.expectEqual(@as(i32, 3), s);
+    try std.testing.expectEqual(@as(i32, 12), e);
+}
+
+test "parseSxxEyy: no match returns zeros" {
+    var s: i32 = 0;
+    var e: i32 = 0;
+    parseSxxEyy("inception 2010", &s, &e);
+    try std.testing.expectEqual(@as(i32, 0), s);
+    try std.testing.expectEqual(@as(i32, 0), e);
+}

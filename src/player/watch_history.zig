@@ -157,7 +157,7 @@ pub fn load() void {
     }
 }
 
-/// Export watch history as JSON to ~/Downloads/zigzag/watch_history.json
+/// Export watch history as JSON to ~/Downloads/opal/watch_history.json
 pub fn exportJson() void {
     var dir_buf: [512]u8 = undefined;
     const dl_dir = paths.defaultSavePath(&dir_buf);

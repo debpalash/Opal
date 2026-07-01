@@ -252,7 +252,7 @@ fn recordWorker() void {
     // Create recordings directory
     const home = @import("../core/io_global.zig").getenv("HOME") orelse "/tmp";
     var dir_buf: [256]u8 = undefined;
-    const rec_dir = std.fmt.bufPrint(&dir_buf, "{s}/Videos/zigzag_recordings", .{home}) catch "/tmp";
+    const rec_dir = std.fmt.bufPrint(&dir_buf, "{s}/Videos/opal_recordings", .{home}) catch "/tmp";
     @import("../core/io_global.zig").cwdMakePath(rec_dir) catch {};
 
     // Generate filename with timestamp

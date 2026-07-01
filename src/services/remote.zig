@@ -65,7 +65,7 @@ fn fillRandomHex(out: *[TOKEN_HEX_LEN]u8) bool {
 fn tokenPath(buf: []u8) []const u8 {
     var dir_buf: [512]u8 = undefined;
     const dir = paths_mod.configDir(&dir_buf);
-    return std.fmt.bufPrint(buf, "{s}/api.token", .{dir}) catch "/tmp/zigzag_api.token";
+    return std.fmt.bufPrint(buf, "{s}/api.token", .{dir}) catch "/tmp/opal_api.token";
 }
 
 fn isHexAll(s: []const u8) bool {

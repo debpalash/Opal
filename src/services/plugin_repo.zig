@@ -1,6 +1,6 @@
 //! Source-endpoint plugin manager (qBittorrent-style). Fetches a manifest from
 //! the `opal-plugins` repo and Installs/Uninstalls *endpoints* for Opal's built-in
-//! connectors. Installing writes `~/.config/zigzag/plugins/sources/<id>.json`
+//! connectors. Installing writes `~/.config/opal/plugins/sources/<id>.json`
 //! (read by core/source_config); the app holds the connector CODE, the plugin
 //! supplies only the URL/creds. Nothing is active until the user installs it.
 //!

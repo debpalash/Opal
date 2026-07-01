@@ -290,7 +290,7 @@ fn ttsWorker(word_idx: usize) void {
     if (body_len < 44) return;
     
     // TODO: use unique temp paths for security (predictable /tmp names on multi-user systems)
-    const wav_path = "/tmp/zigzag_tts_word.wav";
+    const wav_path = "/tmp/opal_tts_word.wav";
     const file = @import("../core/io_global.zig").cwdCreateFile(wav_path, .{ .truncate = true }) catch return;
     @import("../core/io_global.zig").writeAll(file, wav_buf[0..body_len]) catch { file.close(@import("../core/io_global.zig").io()); return; };
     file.close(@import("../core/io_global.zig").io());
@@ -350,7 +350,7 @@ fn ttsLineWorker() void {
     if (body_len < 44) return;
     
     // TODO: use unique temp paths for security (predictable /tmp names on multi-user systems)
-    const wav_path = "/tmp/zigzag_tts_line.wav";
+    const wav_path = "/tmp/opal_tts_line.wav";
     const file = @import("../core/io_global.zig").cwdCreateFile(wav_path, .{ .truncate = true }) catch return;
     @import("../core/io_global.zig").writeAll(file, wav_buf[0..body_len]) catch { file.close(@import("../core/io_global.zig").io()); return; };
     file.close(@import("../core/io_global.zig").io());
