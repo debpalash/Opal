@@ -623,7 +623,7 @@ pub fn renderSearchContent() void {
         defer bar.deinit();
 
         const uni_active = state.app.universal_search;
-        // Segmented control — shared border, no gap, suppresses focus ring clash.
+        // Mode pills WITH icons — same pill grammar as the source filters.
         {
             var seg = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .background = true,
@@ -637,39 +637,55 @@ pub fn renderSearchContent() void {
             });
             defer seg.deinit();
 
-            const seg_btn = struct {
-                fn opts(active: bool, id: usize) dvui.Options {
-                    return .{
-                        .id_extra = id,
-                        .color_fill = if (active) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                        .color_text = if (active) dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 } else theme.colors.text_secondary,
-                        .color_border = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                        .border = dvui.Rect.all(0),
-                        .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
-                        .corner_radius = dvui.Rect.all(4),
-                        .gravity_y = 0.5,
-                    };
-                }
+            const Mode = struct { icon: []const u8, name: []const u8, universal: bool };
+            const modes = [_]Mode{
+                .{ .icon = icons.tvg.lucide.globe, .name = "Universal", .universal = true },
+                .{ .icon = icons.tvg.lucide.magnet, .name = "Torrent", .universal = false },
             };
-
-            if (dvui.button(@src(), "Universal", .{}, seg_btn.opts(uni_active, 8000))) {
-                state.app.universal_search = true;
-            }
-            if (dvui.button(@src(), "Torrent", .{}, seg_btn.opts(!uni_active, 8001))) {
-                state.app.universal_search = false;
+            for (modes, 0..) |m, mi| {
+                const active = uni_active == m.universal;
+                var pill = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                    .id_extra = mi + 8000,
+                    .background = true,
+                    .color_fill = if (active) theme.colors.accent else theme.transparent,
+                    .corner_radius = dvui.Rect.all(4),
+                    .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+                    .gravity_y = 0.5,
+                });
+                var hovered = false;
+                const clicked = dvui.clicked(pill.data(), .{ .hovered = &hovered });
+                if (hovered and !active) pill.data().options.color_fill = theme.colors.bg_hover;
+                pill.drawBackground();
+                const fg = if (active) theme.colors.text_on_accent else theme.colors.text_secondary;
+                dvui.icon(@src(), m.name, m.icon, .{}, .{
+                    .id_extra = mi + 8000,
+                    .color_text = fg,
+                    .min_size_content = .{ .w = 13, .h = 13 },
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = 0, .y = 0, .w = 5, .h = 0 },
+                });
+                _ = dvui.label(@src(), "{s}", .{m.name}, .{
+                    .id_extra = mi + 8000,
+                    .color_text = fg,
+                    .gravity_y = 0.5,
+                });
+                pill.deinit();
+                if (clicked) state.app.universal_search = m.universal;
             }
         }
 
         const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+        // Input pill — FIXED compact width (360px, was full remaining width)
+        // so the source-filter pills get the room; a spacer after it absorbs
+        // the leftover width and keeps the pills right-aligned.
         var input_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
             .background = true,
             .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 26, .a = 255 },
             .corner_radius = dvui.Rect.all(8),
             .border = dvui.Rect.all(1),
             .color_border = dvui.Color{ .r = 40, .g = 40, .b = 55, .a = 180 },
             .padding = .{ .x = 2, .y = 1, .w = 2, .h = 1 },
-            .min_size_content = .{ .w = 160, .h = 0 },
+            .min_size_content = .{ .w = 360, .h = 0 },
             .gravity_y = 0.5,
         });
 
@@ -735,8 +751,15 @@ pub fn renderSearchContent() void {
         }
         input_row.deinit();
 
-        // Live source status — icon-only chips + count, INLINE in the toolbar
-        // (replaces the old separate header + chip rows).
+        // Spacer absorbs the width freed by the fixed input, pushing the
+        // filter pills to the right edge.
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
+
+        // Source FILTER pills (click to include/exclude; live status tint
+        // while resolving) + spinner/count — inline in the toolbar.
         if (uni_active) renderSourceStatusCluster();
     }
 
@@ -1322,74 +1345,92 @@ fn renderUniversalCapabilities() void {
 
 /// Live search progress — a header with the query + a running result count,
 /// and a chip per source that flips searching → done/failed in real time.
-/// Compact, icon-only source status for the toolbar: live count + one tinted
-/// glyph per source (accent = searching, green = done, red = failed; the full
-/// name + state live in the tooltip). While resolving, a self-refreshing
-/// spinner keeps counts live and a 200ms timer polls worker status.
+/// Source FILTER pills for the toolbar — always visible in universal mode.
+/// Each pill is a toggle: click to exclude/include that source from the next
+/// search (disabled sources aren't even spawned) AND from the visible result
+/// groups. While a search runs, the pill tint doubles as live status
+/// (accent = searching, green = done, red = failed); disabled pills are
+/// dimmed. A spinner + live count leads the cluster while resolving.
 fn renderSourceStatusCluster() void {
     const resolver = @import("resolver.zig");
     const resolving = resolver.isResolving();
-    if (!resolving) return; // when done, the results header below carries the count
 
-    // Live count.
-    dvui.spinner(@src(), .{
-        .color_text = theme.colors.accent,
-        .min_size_content = .{ .w = 14, .h = 14 },
-        .gravity_y = 0.5,
-        .margin = .{ .x = 8, .y = 0, .w = 4, .h = 0 },
-    });
-    var cb: [16]u8 = undefined;
-    const cs = std.fmt.bufPrint(&cb, "{d}", .{resolver.result_count}) catch "0";
-    _ = dvui.label(@src(), "{s}", .{cs}, .{
-        .color_text = theme.colors.text_secondary,
-        .gravity_y = 0.5,
-        .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
-    });
+    if (resolving) {
+        dvui.spinner(@src(), .{
+            .color_text = theme.colors.accent,
+            .min_size_content = .{ .w = 14, .h = 14 },
+            .gravity_y = 0.5,
+            .margin = .{ .x = 8, .y = 0, .w = 4, .h = 0 },
+        });
+        var cb: [16]u8 = undefined;
+        const cs = std.fmt.bufPrint(&cb, "{d}", .{resolver.result_count}) catch "0";
+        _ = dvui.label(@src(), "{s}", .{cs}, .{
+            .color_text = theme.colors.text_secondary,
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+        });
+        // Liveness: the spinner runs on a dvui keyed animation, which keeps
+        // frames coming while resolving — status flips render with no timer.
+    }
 
-    const Row = struct { icon: []const u8, name: []const u8, st: resolver.SourceStatus };
+    const Row = struct { icon: []const u8, name: []const u8, bit: resolver.SourceBit, st: resolver.SourceStatus };
     const rows = [_]Row{
-        .{ .icon = icons.tvg.lucide.@"hard-drive", .name = "On disk", .st = resolver.status_local.load(.acquire) },
-        .{ .icon = icons.tvg.lucide.magnet, .name = "Torrents", .st = combinedTorrentStatus() },
-        .{ .icon = icons.tvg.lucide.server, .name = "Jellyfin", .st = resolver.status_jf.load(.acquire) },
-        .{ .icon = icons.tvg.lucide.youtube, .name = "YouTube", .st = resolver.status_yt.load(.acquire) },
-        .{ .icon = icons.tvg.lucide.tv, .name = "Anime", .st = resolver.status_anime.load(.acquire) },
-        .{ .icon = icons.tvg.lucide.image, .name = "Comics", .st = resolver.status_comics.load(.acquire) },
-        .{ .icon = icons.tvg.lucide.clapperboard, .name = "Stremio", .st = resolver.status_stremio.load(.acquire) },
-        .{ .icon = icons.tvg.lucide.rss, .name = "RSS", .st = resolver.status_rss.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.@"hard-drive", .name = "On disk", .bit = .local, .st = resolver.status_local.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.magnet, .name = "Torrents", .bit = .torrent, .st = combinedTorrentStatus() },
+        .{ .icon = icons.tvg.lucide.server, .name = "Jellyfin", .bit = .jellyfin, .st = resolver.status_jf.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.youtube, .name = "YouTube", .bit = .youtube, .st = resolver.status_yt.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.tv, .name = "Anime", .bit = .anime, .st = resolver.status_anime.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.image, .name = "Comics", .bit = .comics, .st = resolver.status_comics.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.clapperboard, .name = "Stremio", .bit = .stremio, .st = resolver.status_stremio.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.rss, .name = "RSS", .bit = .rss, .st = resolver.status_rss.load(.acquire) },
     };
     for (rows, 0..) |r, i| {
-        const tint = switch (r.st) {
+        const enabled = resolver.sourceOn(r.bit);
+        const tint = if (!enabled)
+            theme.colors.text_tertiary
+        else if (resolving) switch (r.st) {
             .searching => theme.colors.accent,
             .done => theme.colors.success,
             .failed => theme.colors.danger,
             .idle => theme.colors.text_tertiary,
-        };
+        } else theme.colors.text_secondary;
+
         var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i + 9220,
+            .background = true,
+            .color_fill = if (enabled) theme.colors.bg_elevated else theme.transparent,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
             .gravity_y = 0.5,
-            .padding = dvui.Rect.all(3),
+            .padding = dvui.Rect.all(5),
+            .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         });
+        var hovered = false;
+        const clicked = dvui.clicked(chip.data(), .{ .hovered = &hovered });
+        if (hovered) chip.data().options.color_fill = theme.colors.bg_hover;
+        chip.drawBackground();
         dvui.icon(@src(), r.name, r.icon, .{}, .{
             .id_extra = i + 9221,
             .color_text = tint,
-            .min_size_content = .{ .w = 14, .h = 14 },
+            .min_size_content = theme.iconSize(.sm),
             .gravity_y = 0.5,
         });
-        const state_name: []const u8 = switch (r.st) {
+        const state_name: []const u8 = if (!enabled)
+            "excluded — click to include"
+        else if (resolving) switch (r.st) {
             .searching => "searching",
             .done => "done",
             .failed => "failed",
             .idle => "idle",
-        };
-        var tip_buf: [48]u8 = undefined;
+        } else "included — click to exclude";
+        var tip_buf: [64]u8 = undefined;
         const tip_txt = std.fmt.bufPrint(&tip_buf, "{s} — {s}", .{ r.name, state_name }) catch r.name;
         components.tipId(@src(), chip.data().*, tip_txt, i);
         chip.deinit();
-    }
 
-    // Liveness: the spinner above runs on a dvui keyed animation, which keeps
-    // frames coming while resolving — worker status flips and the live count
-    // render without any extra polling timer.
+        if (clicked) {
+            resolver.toggleSource(r.bit);
+        }
+    }
 }
 
 /// Torrent sources span three backends (nova2, 1337x, YTS) — show one chip:
@@ -1445,9 +1486,12 @@ fn renderUniversalResults() void {
         const nsfw_label = if (state.app.nsfw_filter_enabled) "NSFW: off" else "NSFW: on";
         if (dvui.button(@src(), nsfw_label, .{}, .{
             .id_extra = 9060,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = theme.colors.text_secondary,
+            .color_fill = if (state.app.nsfw_filter_enabled) theme.transparent else theme.colors.bg_elevated,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_text = if (state.app.nsfw_filter_enabled) theme.colors.text_secondary else theme.colors.warning,
             .border = dvui.Rect.all(0),
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
             .gravity_y = 0.5,
             .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
         })) {
@@ -1509,16 +1553,17 @@ fn renderUniversalResults() void {
         src: resolver.SourceType,
         rss: bool, // when src==.torrent, true=RSS-only, false=torrents-only
         st: resolver.SourceStatus,
+        bit: resolver.SourceBit, // toolbar filter pill controlling this group
     };
     const sections = [_]Section{
-        .{ .name = "Torrents", .src = .torrent, .rss = false, .st = combinedTorrentStatus() },
-        .{ .name = "Jellyfin", .src = .jellyfin, .rss = false, .st = resolver.status_jf.load(.acquire) },
-        .{ .name = "Anime", .src = .anime, .rss = false, .st = resolver.status_anime.load(.acquire) },
-        .{ .name = "YouTube", .src = .youtube, .rss = false, .st = resolver.status_yt.load(.acquire) },
-        .{ .name = "Comics", .src = .comics, .rss = false, .st = resolver.status_comics.load(.acquire) },
-        .{ .name = "Stremio", .src = .stremio, .rss = false, .st = resolver.status_stremio.load(.acquire) },
-        .{ .name = "RSS", .src = .torrent, .rss = true, .st = resolver.status_rss.load(.acquire) },
-        .{ .name = "On-disk", .src = .local, .rss = false, .st = resolver.status_local.load(.acquire) },
+        .{ .name = "Torrents", .src = .torrent, .rss = false, .st = combinedTorrentStatus(), .bit = .torrent },
+        .{ .name = "Jellyfin", .src = .jellyfin, .rss = false, .st = resolver.status_jf.load(.acquire), .bit = .jellyfin },
+        .{ .name = "Anime", .src = .anime, .rss = false, .st = resolver.status_anime.load(.acquire), .bit = .anime },
+        .{ .name = "YouTube", .src = .youtube, .rss = false, .st = resolver.status_yt.load(.acquire), .bit = .youtube },
+        .{ .name = "Comics", .src = .comics, .rss = false, .st = resolver.status_comics.load(.acquire), .bit = .comics },
+        .{ .name = "Stremio", .src = .stremio, .rss = false, .st = resolver.status_stremio.load(.acquire), .bit = .stremio },
+        .{ .name = "RSS", .src = .torrent, .rss = true, .st = resolver.status_rss.load(.acquire), .bit = .rss },
+        .{ .name = "On-disk", .src = .local, .rss = false, .st = resolver.status_local.load(.acquire), .bit = .local },
     };
 
     // Classify one result into a section bucket (RSS vs Torrents split).
@@ -1534,6 +1579,8 @@ fn renderUniversalResults() void {
     };
 
     for (sections, 0..) |sec, si| {
+        // Groups whose toolbar pill is toggled off vanish entirely.
+        if (!resolver.sourceOn(sec.bit)) continue;
         // Per-source count (respects the NSFW filter so the header matches what
         // the user actually sees).
         var count: usize = 0;

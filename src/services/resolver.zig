@@ -71,6 +71,23 @@ pub var status_comics = std.atomic.Value(SourceStatus).init(.idle);
 // Explicit u8 backing so std.atomic.Value(SourceStatus) is byte-atomic.
 pub const SourceStatus = enum(u8) { idle, searching, done, failed };
 
+/// UI source filter — one bit per Search-toolbar pill. Disabled sources are
+/// not spawned by resolve() (their status reads .idle) and their result
+/// groups are hidden. A mask of 0 is treated as "everything on" so the user
+/// can never filter themselves into a permanently empty search.
+pub const SourceBit = enum(u4) { local, torrent, jellyfin, youtube, anime, comics, stremio, rss };
+pub var source_mask: std.atomic.Value(u16) = std.atomic.Value(u16).init(0xFF);
+
+pub fn sourceOn(bit: SourceBit) bool {
+    const m = source_mask.load(.acquire);
+    if (m & 0xFF == 0) return true; // empty mask = all on
+    return (m >> @intFromEnum(bit)) & 1 == 1;
+}
+
+pub fn toggleSource(bit: SourceBit) void {
+    _ = source_mask.fetchXor(@as(u16, 1) << @intFromEnum(bit), .acq_rel);
+}
+
 /// Atomic accessor for is_resolving (UI reads, workers clear via checkAllDone).
 pub fn isResolving() bool {
     return is_resolving.load(.acquire);
@@ -266,19 +283,26 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     results_mutex.unlock();
 
     is_resolving.store(true, .release);
-    // IMPORTANT: Set ALL to .searching BEFORE spawning any thread.
-    // Otherwise a fast-finishing thread (e.g. no Jellyfin) calls
+    // IMPORTANT: Set ALL to their final pre-spawn state BEFORE spawning any
+    // thread. Otherwise a fast-finishing thread (e.g. no Jellyfin) calls
     // checkAllDone() before others start → premature is_resolving=false.
-    status_jf.store(.searching, .release);
-    status_stremio.store(.searching, .release);
-    status_torrent.store(.searching, .release);
-    status_anime.store(.searching, .release);
-    status_yt.store(.searching, .release);
-    status_1337x.store(.searching, .release);
-    status_yts.store(.searching, .release);
-    status_local.store(.searching, .release);
-    status_rss.store(.searching, .release);
-    status_comics.store(.searching, .release);
+    // Sources the user filtered out (source_mask) sit at .idle and are never
+    // spawned; checkAllDone treats .idle as complete.
+    const Pre = struct {
+        fn set(st: *std.atomic.Value(SourceStatus), bit: SourceBit) void {
+            st.store(if (sourceOn(bit)) .searching else .idle, .release);
+        }
+    };
+    Pre.set(&status_jf, .jellyfin);
+    Pre.set(&status_stremio, .stremio);
+    Pre.set(&status_torrent, .torrent);
+    Pre.set(&status_anime, .anime);
+    Pre.set(&status_yt, .youtube);
+    Pre.set(&status_1337x, .torrent);
+    Pre.set(&status_yts, .torrent);
+    Pre.set(&status_local, .local);
+    Pre.set(&status_rss, .rss);
+    Pre.set(&status_comics, .comics);
 
     // Fire every backend in parallel. Each handle is detached (never joined) —
     // discarding it via `_ =` leaks the pthread resource for the process life.
@@ -292,16 +316,20 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
             }
         }
     };
-    Spawn.go(resolveLocalFiles, &status_local); // instant — already on disk
-    Spawn.go(resolveRss, &status_rss); // already-fetched magnets matching query
-    Spawn.go(resolveJellyfin, &status_jf);
-    Spawn.go(resolveTorrentsNova2, &status_torrent);
-    Spawn.go(resolve1337x, &status_1337x);
-    Spawn.go(resolveYts, &status_yts);
-    Spawn.go(resolveAnime, &status_anime);
-    Spawn.go(resolveYouTube, &status_yt);
-    Spawn.go(resolveComics, &status_comics); // readallcomics.com HTML scrape
-    Spawn.go(resolveStremio, &status_stremio); // needs IMDB id — TMDB then addons
+    if (sourceOn(.local)) Spawn.go(resolveLocalFiles, &status_local); // instant — already on disk
+    if (sourceOn(.rss)) Spawn.go(resolveRss, &status_rss); // already-fetched magnets matching query
+    if (sourceOn(.jellyfin)) Spawn.go(resolveJellyfin, &status_jf);
+    if (sourceOn(.torrent)) Spawn.go(resolveTorrentsNova2, &status_torrent);
+    if (sourceOn(.torrent)) Spawn.go(resolve1337x, &status_1337x);
+    if (sourceOn(.torrent)) Spawn.go(resolveYts, &status_yts);
+    if (sourceOn(.anime)) Spawn.go(resolveAnime, &status_anime);
+    if (sourceOn(.youtube)) Spawn.go(resolveYouTube, &status_yt);
+    if (sourceOn(.comics)) Spawn.go(resolveComics, &status_comics); // readallcomics.com HTML scrape
+    if (sourceOn(.stremio)) Spawn.go(resolveStremio, &status_stremio); // needs IMDB id — TMDB then addons
+
+    // If filtering left nothing to spawn, close the resolve immediately —
+    // no worker exists to call checkAllDone().
+    checkAllDone();
 }
 
 fn pushResult(item: ResolvedItem) bool {
