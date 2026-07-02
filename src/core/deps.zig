@@ -21,6 +21,8 @@ pub const Status = struct {
     sherpa_mic_cli: bool = false,
     mlx_whisper_cli: bool = false, // pip install mlx-whisper (Apple Silicon)
     mlx_whisper_model: bool = false, // HF cache: mlx-community/whisper-large-v3-turbo
+    parakeet_v2_model: bool = false, // NVIDIA Parakeet TDT 0.6B v2 (English) — sherpa-onnx int8 export
+    parakeet_v3_model: bool = false, // NVIDIA Parakeet TDT 0.6B v3 (25 languages) — sherpa-onnx int8 export
 };
 
 /// Returns true when the full sherpa stack (CLI + STT + TTS + streaming
@@ -84,6 +86,14 @@ fn realCheck() Status {
     var sherpa_kokoro_buf: [512]u8 = undefined;
     if (std.fmt.bufPrintZ(&sherpa_kokoro_buf, "{s}/.config/opal/models/sherpa-kokoro/model.onnx", .{home2})) |p| {
         s.sherpa_kokoro_model = have(p);
+    } else |_| {}
+    var pk2_buf: [512]u8 = undefined;
+    if (std.fmt.bufPrintZ(&pk2_buf, "{s}/.config/opal/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/encoder.int8.onnx", .{home2})) |p| {
+        s.parakeet_v2_model = have(p);
+    } else |_| {}
+    var pk3_buf: [512]u8 = undefined;
+    if (std.fmt.bufPrintZ(&pk3_buf, "{s}/.config/opal/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/encoder.int8.onnx", .{home2})) |p| {
+        s.parakeet_v3_model = have(p);
     } else |_| {}
     s.sherpa_mic_cli = have("/opt/homebrew/bin/sherpa-onnx-microphone") or
         have("/usr/local/bin/sherpa-onnx-microphone");
@@ -155,6 +165,76 @@ pub fn installCmd(buf: []u8, s: Status) []const u8 {
 /// (tokens + encoder + decoder) to ~/.config/opal/models/sherpa-whisper-tiny/.
 /// ~40 MB compressed. Runs on a background thread. Idempotent.
 pub var sherpa_model_downloading: bool = false;
+
+// ── NVIDIA Parakeet TDT (sherpa-onnx int8 exports) ──
+// URLs + file names verified against the k2-fsa release assets (2026-07-02).
+// No sherpa export of the 1.1b exists — 0.6b v2/v3 are the largest (and
+// newest) Parakeet TDT models runnable through sherpa-onnx-offline.
+pub var parakeet_v2_downloading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+pub var parakeet_v3_downloading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+pub fn fetchParakeetAsync(v3: bool) void {
+    const flag = if (v3) &parakeet_v3_downloading else &parakeet_v2_downloading;
+    if (flag.swap(true, .acq_rel)) return; // already running
+    const S = struct {
+        fn worker(is_v3: bool) void {
+            const f = if (is_v3) &parakeet_v3_downloading else &parakeet_v2_downloading;
+            defer f.store(false, .release);
+            const dir_name = if (is_v3)
+                "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
+            else
+                "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
+            const url = if (is_v3)
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2"
+            else
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2";
+
+            var home_buf: [512]u8 = undefined;
+            const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return;
+            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
+            io_global.makeDirAbsolute(models_dir) catch {};
+
+            // Already extracted → no-op.
+            var check_buf: [512]u8 = undefined;
+            const check_path = std.fmt.bufPrintZ(&check_buf, "{s}/{s}/encoder.int8.onnx", .{ models_dir, dir_name }) catch return;
+            if (io_global.cwdAccess(check_path, .{})) |_| return else |_| {}
+
+            var tar_buf: [512]u8 = undefined;
+            const tar_path = std.fmt.bufPrintZ(&tar_buf, "{s}/{s}.tar.bz2", .{ models_dir, dir_name }) catch return;
+
+            logs.pushLog("info", "deps", if (is_v3) "Fetching Parakeet TDT 0.6B v3 (~490MB)…" else "Fetching Parakeet TDT 0.6B v2 (~480MB)…", false);
+            var curl = io_global.Child.init(&.{
+                "curl", "-L", "--fail", "--silent", "--show-error", "-o", tar_path, url,
+            }, @import("alloc.zig").allocator);
+            curl.stdout_behavior = .Ignore;
+            curl.stderr_behavior = .Ignore;
+            curl.spawn() catch {
+                logs.pushLog("error", "deps", "curl missing — can't fetch Parakeet model", true);
+                return;
+            };
+            _ = curl.wait() catch {};
+
+            // Archive extracts to a top-level dir named exactly dir_name.
+            var untar = io_global.Child.init(&.{
+                "tar", "-xjf", tar_path, "-C", models_dir,
+            }, @import("alloc.zig").allocator);
+            untar.stdout_behavior = .Ignore;
+            untar.stderr_behavior = .Ignore;
+            _ = untar.spawnAndWait() catch {};
+
+            io_global.deleteFileAbsolute(tar_path) catch {};
+
+            if (io_global.cwdAccess(check_path, .{})) |_| {
+                logs.pushLog("info", "deps", "Parakeet TDT model ready", false);
+            } else |_| {
+                logs.pushLog("error", "deps", "Parakeet download/extract failed — see network and disk space", true);
+            }
+        }
+    };
+    if (std.Thread.spawn(.{}, S.worker, .{v3})) |t| t.detach() else |_| {
+        flag.store(false, .release);
+    }
+}
 
 pub fn fetchSherpaWhisperAsync() void {
     if (sherpa_model_downloading) return;

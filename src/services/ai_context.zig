@@ -484,6 +484,10 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
     if (std.mem.eql(u8, fl, "save chat") or std.mem.eql(u8, fl, "export chat") or
         std.mem.eql(u8, fl, "save conversation"))
     {
+        if (@import("../core/state.zig").app.incognito_mode) {
+            addInstantResponse(raw_input, "Incognito is on — this chat won't be saved anywhere.");
+            return true;
+        }
         var path_buf: [128]u8 = undefined;
         const ts = @import("../core/io_global.zig").timestamp();
         const path = std.fmt.bufPrint(&path_buf, "/tmp/opal_chat_{d}.txt", .{ts}) catch "/tmp/opal_chat.txt";
@@ -977,7 +981,10 @@ pub fn generateResponse() void {
     // RAG: Build context from vector DB + watch history
     const user_text = chat.messages[assistant_idx - 1].text[0..chat.messages[assistant_idx - 1].text_len];
     var rag_context: ?[]u8 = null;
-    rag_context = memory.buildContext(@import("../core/alloc.zig").allocator, user_text);
+    // Incognito: fresh brain — no vector-memory / watch-history retrieval.
+    if (!@import("../core/state.zig").app.incognito_mode) {
+        rag_context = memory.buildContext(@import("../core/alloc.zig").allocator, user_text);
+    }
     defer if (rag_context) |ctx| @import("../core/alloc.zig").allocator.free(ctx);
 
     // System prompt with RAG context (must be JSON-escaped at runtime
@@ -1106,8 +1113,9 @@ pub fn generateResponse() void {
         }
     }
 
-    // Cross-session conversation history (persistent across restarts)
-    {
+    // Cross-session conversation history (persistent across restarts).
+    // Skipped in incognito — past sessions must not leak into the prompt.
+    if (!@import("../core/state.zig").app.incognito_mode) {
         const convo_ctx = memory.getRecentConversations(@import("../core/alloc.zig").allocator);
         defer if (convo_ctx) |cc| @import("../core/alloc.zig").allocator.free(cc);
 
@@ -1153,8 +1161,8 @@ pub fn generateResponse() void {
         }
     }
 
-    // Learned preferences
-    {
+    // Learned preferences — also skipped in incognito.
+    if (!@import("../core/state.zig").app.incognito_mode) {
         const pref_ctx = memory.getTopPreferences(@import("../core/alloc.zig").allocator);
         defer if (pref_ctx) |pc| @import("../core/alloc.zig").allocator.free(pc);
 
@@ -1535,6 +1543,13 @@ pub fn generateResponse() void {
 
     _ = child.wait() catch {};
     server.model_status = .online;
+
+    // Incognito: the request body (system prompt + last-8 history) was staged
+    // at /tmp/opal_ai_req.json for curl — don't leave a disk residue of a
+    // conversation the user asked us not to remember.
+    if (@import("../core/state.zig").app.incognito_mode) {
+        @import("../core/io_global.zig").deleteFileAbsolute("/tmp/opal_ai_req.json") catch {};
+    }
 
     // Aborted by barge-in / Stop — leave whatever partial text was streamed and
     // bail without surfacing a "no response" error or parsing tool calls on a

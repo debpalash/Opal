@@ -61,6 +61,7 @@ const Ring = struct {
 /// dur_secs — total duration (currently informational; reserved).
 /// text     — joined subtitle + recent-dialogue + OCR blob.
 pub fn ingestScene(title: []const u8, pos_secs: f64, dur_secs: f64, text: []const u8) void {
+    if (@import("../core/state.zig").app.incognito_mode) return; // incognito: no lifetime scene memory
     _ = dur_secs; // reserved; position is the recall anchor.
 
     // (1a) Trim and length-gate. Tiny or empty blobs aren't worth a row.

@@ -1739,6 +1739,71 @@ def test_subtab_layout():
     return "pass", "fade wraps one column; sub-tabs reserve their row"
 
 
+@test("Parakeet TDT Voice Backend Wired", "AI Features")
+def test_parakeet_backend():
+    # NVIDIA Parakeet TDT (sherpa-onnx int8 exports): backend kinds, verified
+    # download URLs, transducer CLI flags, deps status + settings rows.
+    vb = _src("src/services/voice_backend.zig")
+    dp = _src("src/core/deps.zig")
+    st = _src("src/ui/settings.zig")
+    if "parakeet_tdt_v2" not in vb or "parakeet_tdt_v3" not in vb:
+        return "fail", "parakeet kinds missing from voice_backend"
+    if "--model-type=nemo_transducer" not in vb or "--joiner=" not in vb:
+        return "fail", "nemo transducer CLI flags missing"
+    for url_bit in ("sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2",
+                    "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2"):
+        if url_bit not in dp:
+            return "fail", f"parakeet bundle URL missing: {url_bit}"
+    if "fetchParakeetAsync" not in dp or "parakeet_v2_model" not in dp:
+        return "fail", "parakeet fetcher/status missing from deps"
+    if "parakeetModelRow" not in st:
+        return "fail", "parakeet download rows missing from settings"
+    return "pass", "parakeet v2/v3 backends + downloads + settings rows wired"
+
+
+@test("Incognito Chat Leaves No Trace", "AI Features")
+def test_incognito_chat():
+    # Every conversation persistence sink is guarded on incognito_mode, and
+    # retrieval (RAG/past sessions/preferences) is skipped so past data can't
+    # leak into an incognito prompt either.
+    am = _src("src/services/ai_memory.zig")
+    ac = _src("src/services/ai_context.zig")
+    ch = _src("src/services/ai_chat.zig")
+    sm = _src("src/services/scene_memory.zig")
+    hm = _src("src/ui/home.zig")
+    if am.count("incognito_mode") < 2:
+        return "fail", "ai_memory sinks (saveConversation/ingestMemory) not guarded"
+    if ac.count("incognito_mode") < 5:
+        return "fail", "ai_context guards missing (save-chat, RAG, past sessions, prefs, req-file cleanup)"
+    if "incognito_mode" not in ch:
+        return "fail", "starred-to-DB not guarded"
+    if "incognito_mode" not in sm:
+        return "fail", "scene memory ingestion not guarded"
+    if "Incognito" not in hm:
+        return "fail", "incognito toggle missing from the chat composer"
+    return "pass", "sinks guarded + retrieval skipped + composer toggle present"
+
+
+@test("Chat Console: Wrapped Transcript + Agent Steps", "AI Features")
+def test_chat_console():
+    # The chat surface: wrapped textLayout messages (labels never wrap — long
+    # replies used to clip), avatar/bubble asymmetry, live phase spinner, copy
+    # action, home hero + suggestion chips, pinned composer.
+    gr = _src("src/ui/grid.zig")
+    hm = _src("src/ui/home.zig")
+    if "textLayout" not in gr.split("renderChatMessages")[1].split("pub fn computeGridColumns")[0]:
+        return "fail", "chat messages not on wrapping textLayout"
+    if "dvui.spinner" not in gr or "clipboardTextSet" not in gr:
+        return "fail", "streaming spinner / copy action missing"
+    if "phaseLabel" not in gr:
+        return "fail", "agent phase (tool steps) not surfaced in transcript"
+    if "renderChatMode" not in hm or "What are we watching tonight?" not in hm:
+        return "fail", "home chat console (hero/transcript/composer) missing"
+    if "scrollToOffset" not in hm:
+        return "fail", "auto-follow scroll missing"
+    return "pass", "console transcript + hero + follow-scroll + agent steps wired"
+
+
 @test("Plex Client Wired", "Page Shell")
 def test_plex_wired():
     # Plex client: PIN auth → server discovery → library browse → direct-play,

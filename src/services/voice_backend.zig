@@ -23,6 +23,10 @@ pub const Kind = enum {
     speaches,
     /// MLX Whisper — Apple Silicon native (whisper-large-v3-turbo via MLX)
     mlx_whisper,
+    /// NVIDIA Parakeet TDT 0.6B v2 (English) — sherpa-onnx int8 export
+    parakeet_tdt_v2,
+    /// NVIDIA Parakeet TDT 0.6B v3 (25 languages) — sherpa-onnx int8 export
+    parakeet_tdt_v3,
 };
 
 pub const Backend = struct {
@@ -189,6 +193,99 @@ fn sherpaOnnxTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
         return out_buf[0..copy_len];
     }
     return null;
+}
+
+// ────────── Impl: NVIDIA Parakeet TDT via sherpa-onnx ──────────
+// Bundles: sherpa-onnx-nemo-parakeet-tdt-0.6b-v{2,3}-int8 under
+// ~/.config/opal/models/ (downloaded by deps.fetchParakeetAsync). Flags
+// verified against the sherpa docs: --encoder/--decoder/--joiner/--tokens
+// + --model-type=nemo_transducer.
+
+fn parakeetTranscribe(dir_name: []const u8, wav_path: []const u8, out_buf: []u8) ?[]const u8 {
+    const bin: []const u8 = blk: {
+        if (io_global.cwdAccess("/opt/homebrew/bin/sherpa-onnx-offline", .{})) |_| {
+            break :blk "/opt/homebrew/bin/sherpa-onnx-offline";
+        } else |_| {}
+        if (io_global.cwdAccess("/usr/local/bin/sherpa-onnx-offline", .{})) |_| {
+            break :blk "/usr/local/bin/sherpa-onnx-offline";
+        } else |_| {}
+        logs.pushLog("error", "voice_backend", "sherpa-onnx-offline not found — install sherpa-onnx to use Parakeet", false);
+        return null;
+    };
+
+    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+    var enc_buf: [640]u8 = undefined;
+    var dec_buf: [640]u8 = undefined;
+    var joi_buf: [640]u8 = undefined;
+    var tok_buf: [640]u8 = undefined;
+    const enc = std.fmt.bufPrint(&enc_buf, "--encoder={s}/.config/opal/models/{s}/encoder.int8.onnx", .{ home, dir_name }) catch return null;
+    const dec = std.fmt.bufPrint(&dec_buf, "--decoder={s}/.config/opal/models/{s}/decoder.int8.onnx", .{ home, dir_name }) catch return null;
+    const joi = std.fmt.bufPrint(&joi_buf, "--joiner={s}/.config/opal/models/{s}/joiner.int8.onnx", .{ home, dir_name }) catch return null;
+    const tok = std.fmt.bufPrint(&tok_buf, "--tokens={s}/.config/opal/models/{s}/tokens.txt", .{ home, dir_name }) catch return null;
+
+    // Model present?
+    io_global.cwdAccess(enc["--encoder=".len..], .{}) catch {
+        logs.pushLog("warn", "voice_backend", "Parakeet model missing — download it in Settings › AI & Voice", false);
+        return null;
+    };
+
+    var child = io_global.Child.init(&.{
+        bin, enc, dec, joi, tok, "--model-type=nemo_transducer", "--num-threads=4", wav_path,
+    }, @import("../core/alloc.zig").allocator);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch |err| {
+        var eb: [128]u8 = undefined;
+        const em = std.fmt.bufPrint(&eb, "parakeet spawn: {s}", .{@errorName(err)}) catch "parakeet spawn fail";
+        logs.pushLog("error", "voice_backend", em, false);
+        return null;
+    };
+    defer _ = child.wait() catch {};
+
+    const stdout = child.stdout orelse return null;
+    var full_buf: [8192]u8 = undefined;
+    const n = io_global.readAll(stdout, &full_buf) catch 0;
+    if (n == 0) return null;
+    const raw = full_buf[0..n];
+
+    // Prefer the JSON result line: nemo_transducer output includes a
+    // {"text": "..."} object; fall back to the whisper-style line scan.
+    if (std.mem.indexOf(u8, raw, "\"text\"")) |tpos| {
+        const after = raw[tpos..];
+        if (std.mem.indexOfScalar(u8, after, ':')) |cpos| {
+            const val = std.mem.trimStart(u8, after[cpos + 1 ..], " \t");
+            if (val.len > 1 and val[0] == '"') {
+                if (std.mem.indexOfScalarPos(u8, val, 1, '"')) |endq| {
+                    const text = val[1..endq];
+                    const copy_len = @min(text.len, out_buf.len);
+                    @memcpy(out_buf[0..copy_len], text[0..copy_len]);
+                    if (copy_len > 0) return out_buf[0..copy_len];
+                }
+            }
+        }
+    }
+    var parts = std.mem.splitScalar(u8, raw, '\n');
+    while (parts.next()) |line| {
+        const t = std.mem.trim(u8, line, " \t\r");
+        if (t.len == 0) continue;
+        if (std.mem.indexOf(u8, t, ".wav")) |_| continue;
+        if (t[0] == '{' or t[0] == '-') continue;
+        if (std.mem.startsWith(u8, t, "Transcription")) continue;
+        if (std.mem.startsWith(u8, t, "Elapsed")) continue;
+        if (std.mem.startsWith(u8, t, "Audio duration")) continue;
+        if (std.mem.startsWith(u8, t, "Real time")) continue;
+        const copy_len = @min(t.len, out_buf.len);
+        @memcpy(out_buf[0..copy_len], t[0..copy_len]);
+        return out_buf[0..copy_len];
+    }
+    return null;
+}
+
+fn parakeetV2Transcribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
+    return parakeetTranscribe("sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8", wav_path, out_buf);
+}
+fn parakeetV3Transcribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
+    return parakeetTranscribe("sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8", wav_path, out_buf);
 }
 
 /// Selected Kokoro speaker ID. 0–53 in the English v0_19 release.
@@ -556,6 +653,20 @@ const mlx_whisper_backend: Backend = .{
     .name = "MLX Whisper (Apple Silicon · large-v3-turbo)",
 };
 
+const parakeet_v2_backend: Backend = .{
+    .kind = .parakeet_tdt_v2,
+    .transcribeFn = parakeetV2Transcribe,
+    .speakFn = sherpaOnnxSpeak, // Kokoro/Piper when installed; falls back to `say`
+    .name = "Parakeet TDT 0.6B v2 (NVIDIA · English)",
+};
+
+const parakeet_v3_backend: Backend = .{
+    .kind = .parakeet_tdt_v3,
+    .transcribeFn = parakeetV3Transcribe,
+    .speakFn = sherpaOnnxSpeak,
+    .name = "Parakeet TDT 0.6B v3 (NVIDIA · 25 languages)",
+};
+
 /// Runtime selection — default to the one that ships with brew today.
 pub var active_kind: Kind = .whisper_cpp_plus_say;
 
@@ -573,11 +684,13 @@ pub fn backendFor(kind: Kind) Backend {
         .apple_native => apple_native_backend,
         .speaches => speaches_backend,
         .mlx_whisper => mlx_whisper_backend,
+        .parakeet_tdt_v2 => parakeet_v2_backend,
+        .parakeet_tdt_v3 => parakeet_v3_backend,
     };
 }
 
 pub fn allKinds() []const Kind {
-    return &.{ .whisper_cpp_plus_say, .sherpa_onnx, .apple_native, .speaches, .mlx_whisper };
+    return &.{ .whisper_cpp_plus_say, .sherpa_onnx, .parakeet_tdt_v2, .parakeet_tdt_v3, .apple_native, .speaches, .mlx_whisper };
 }
 
 /// Spawn sherpa-onnx-microphone in the background for continuous,

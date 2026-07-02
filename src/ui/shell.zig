@@ -548,9 +548,14 @@ pub fn iconForTab(t: state.DrawerTab) []const u8 {
 /// narrow windows, and flexbox wrapping reported a collapsed min height here,
 /// letting the page content render on top of the bar.
 fn subTabs(tabs: []const state.DrawerTab, sel: *state.DrawerTab, id_extra: usize) void {
-    // Strip height must fit the full row: 24px pill content + 3+3 pill padding
-    // + 4+4 bar padding = 38. At 34 the pills rendered clipped top/bottom.
-    const strip_h: f32 = 24 + 2 * 3 + 2 * theme.spacing.xs;
+    // Strip height: SELF-MEASURED from the previous frame's laid-out bar
+    // (plus a fallback floor). Exact-fit constants kept clipping label
+    // descenders whenever the type ramp or fonts changed — the bar knows its
+    // own height better than any hand-derived formula.
+    const MeasuredH = struct {
+        var h: f32 = 0;
+    };
+    const strip_h: f32 = if (MeasuredH.h > 1) MeasuredH.h else 42;
     var strip = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none, .horizontal_bar = .hide }, .{
         .id_extra = id_extra,
         .expand = .horizontal,
@@ -565,6 +570,9 @@ fn subTabs(tabs: []const state.DrawerTab, sel: *state.DrawerTab, id_extra: usize
         .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = theme.spacing.xs, .h = theme.spacing.xs },
     });
     defer bar.deinit();
+    // Record the bar's converged height (previous frame's min size) so the
+    // strip tracks the real content height instead of clipping descenders.
+    if (dvui.minSizeGet(bar.data().id)) |ms| MeasuredH.h = ms.h;
 
     for (tabs, 0..) |t, i| {
         const active = sel.* == t;

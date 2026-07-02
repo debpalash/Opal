@@ -232,6 +232,34 @@ fn renderChatMode() void {
             var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
             defer meta.deinit();
 
+            // Incognito chat toggle — when on, this conversation is not
+            // persisted (no conversation log, no vector memory, no starring
+            // to DB). Same switch as incognito watch history.
+            var inc_wd: dvui.WidgetData = undefined;
+            if (dvui.buttonIcon(@src(), "incognito-chat", if (state.app.incognito_mode) icons.tvg.lucide.@"eye-off" else icons.tvg.lucide.eye, .{}, .{}, .{
+                .data_out = &inc_wd,
+                .color_text = if (state.app.incognito_mode) theme.colors.warning else theme.colors.text_tertiary,
+                .color_fill = theme.transparent,
+                .color_fill_hover = theme.colors.bg_hover,
+                .border = dvui.Rect.all(0),
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
+                .min_size_content = theme.iconSize(.xs),
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+            })) {
+                state.app.incognito_mode = !state.app.incognito_mode;
+                state.showToast(if (state.app.incognito_mode) "Incognito ON — chat & history won't be remembered" else "Incognito OFF");
+            }
+            @import("components.zig").tip(@src(), inc_wd, if (state.app.incognito_mode) "Incognito chat: ON — nothing is persisted" else "Incognito chat: off");
+            if (state.app.incognito_mode) {
+                _ = dvui.label(@src(), "Incognito", .{}, .{
+                    .color_text = theme.colors.warning,
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+                });
+            }
+
             const has_media = state.app.active_player_idx < state.app.players.items.len;
             if (has_media) {
                 const ap = state.app.players.items[state.app.active_player_idx];

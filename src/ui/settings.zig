@@ -716,6 +716,71 @@ fn renderAIContentBody() void {
                 components.statusPill("Not installed", .info);
             }
         }
+
+        // NVIDIA Parakeet TDT — sherpa-onnx int8 exports (URLs verified
+        // against the k2-fsa release assets). The largest Parakeet TDT with a
+        // sherpa export is 0.6B; there is no 1.1b export.
+        parakeetModelRow("Parakeet TDT 0.6B v2 · English (480MB)", ds.parakeet_v2_model, deps.parakeet_v2_downloading.load(.acquire), false, 5006);
+        parakeetModelRow("Parakeet TDT 0.6B v3 · 25 languages (490MB)", ds.parakeet_v3_model, deps.parakeet_v3_downloading.load(.acquire), true, 5007);
+    }
+}
+
+/// One NVIDIA Parakeet model row: name + Installed pill / live download
+/// spinner / Download button. Requires the sherpa-onnx CLI (same engine the
+/// sherpa rows use).
+fn parakeetModelRow(comptime name: []const u8, installed: bool, downloading: bool, v3: bool, id_extra: usize) void {
+    const deps = @import("../core/deps.zig");
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = id_extra,
+        .expand = .horizontal,
+        .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.sm },
+    });
+    defer row.deinit();
+
+    dvui.icon(@src(), "", icons.tvg.lucide.@"audio-waveform", .{}, .{
+        .id_extra = id_extra + 10,
+        .color_text = if (installed) theme.colors.accent else theme.colors.text_secondary,
+        .min_size_content = theme.iconSize(.sm),
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+    });
+    _ = dvui.label(@src(), name, .{}, .{
+        .id_extra = id_extra + 20,
+        .color_text = theme.colors.text_primary,
+        .gravity_y = 0.5,
+    });
+    {
+        var sp = dvui.box(@src(), .{}, .{ .id_extra = id_extra + 30, .expand = .horizontal });
+        sp.deinit();
+    }
+    if (downloading) {
+        dvui.spinner(@src(), .{
+            .id_extra = id_extra + 40,
+            .color_text = theme.colors.warning,
+            .min_size_content = theme.iconSize(.sm),
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        });
+        _ = dvui.label(@src(), "Downloading…", .{}, .{
+            .id_extra = id_extra + 50,
+            .color_text = theme.colors.warning,
+            .gravity_y = 0.5,
+        });
+    } else if (installed) {
+        components.statusPill("Installed", .success);
+    } else {
+        if (dvui.button(@src(), "Download", .{}, .{
+            .id_extra = id_extra + 60,
+            .color_fill = theme.colors.accent,
+            .color_text = theme.colors.text_on_accent,
+            .border = dvui.Rect.all(0),
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+            .gravity_y = 0.5,
+        })) {
+            deps.fetchParakeetAsync(v3);
+            state.showToast("Downloading Parakeet TDT — watch the row for progress");
+        }
     }
 }
 

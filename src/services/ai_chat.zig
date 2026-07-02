@@ -34,7 +34,8 @@ pub fn toggleStar(idx: usize) void {
     if (idx >= message_count) return;
     messages[idx].starred = !messages[idx].starred;
     if (messages[idx].starred) {
-        saveStarredToDb(messages[idx]);
+        // Incognito: star works for the session but is never written to DB.
+        if (!@import("../core/state.zig").app.incognito_mode) saveStarredToDb(messages[idx]);
     } else {
         removeStarredFromDb(messages[idx]);
     }
@@ -387,7 +388,7 @@ pub fn renderChatBody() void {
                     .color_text = theme.colors.text_secondary,
                 });
             } else if (voice.conv_phase == .thinking) {
-                _ = dvui.label(@src(), "Thinking...", .{}, .{
+                _ = dvui.label(@src(), "{s}", .{phaseLabel(phase)}, .{
                     .color_text = theme.colors.text_secondary,
                 });
             } else if (voice.conv_phase == .speaking) {
@@ -400,7 +401,7 @@ pub fn renderChatBody() void {
                 });
             }
         } else if (is_generating.load(.acquire)) {
-            _ = dvui.label(@src(), "Thinking...", .{}, .{
+            _ = dvui.label(@src(), "{s}", .{phaseLabel(phase)}, .{
                 .color_text = theme.colors.text_secondary,
             });
         } else if (voice.is_speaking) {

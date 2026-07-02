@@ -126,6 +126,9 @@ fn ingestWorker(args: IngestArgs) void {
 
 /// Asynchronously ingest a message into the vector DB (non-blocking).
 pub fn ingestMemory(role: []const u8, content: []const u8, context_type: []const u8, media_title: []const u8) void {
+    // Sink-level incognito guard — covers the chat turns AND the unguarded
+    // media hooks (player load_file / torrent start titles).
+    if (@import("../core/state.zig").app.incognito_mode) return;
     if (content.len == 0) return;
     if (isJunkTurn(content)) return; // same poison filter as saveConversation
     const allocator = @import("../core/alloc.zig").allocator;
@@ -278,6 +281,7 @@ pub fn isJunkTurn(content: []const u8) bool {
 /// Save a conversation exchange to the persistent log.
 /// Only saves substantial messages (>10 chars) to avoid noise.
 pub fn saveConversation(role: []const u8, content: []const u8) void {
+    if (@import("../core/state.zig").app.incognito_mode) return; // incognito chat: nothing persists
     if (content.len < 10) return; // skip trivial messages
     if (isJunkTurn(content)) return; // reject tool-plumbing poison
     const q = "INSERT INTO conversation_log(role, content) VALUES(?1, ?2)";
