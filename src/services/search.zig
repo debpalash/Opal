@@ -1429,6 +1429,7 @@ fn renderSourceStatusCluster() void {
 
         if (clicked) {
             resolver.toggleSource(r.bit);
+            state.markConfigDirty(); // persisted as "search_sources"
         }
     }
 }

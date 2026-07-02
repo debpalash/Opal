@@ -86,6 +86,11 @@ pub fn save() void {
     const voice_backend = @import("../services/voice_backend.zig");
     setKey("voice_backend", @tagName(voice_backend.active_kind));
 
+    // Universal-search source filter (bit per source pill) — exclusions stick
+    // across restarts.
+    const resolver = @import("../services/resolver.zig");
+    setKey("search_sources", fmtInt(&fb, resolver.source_mask.load(.acquire)));
+
     saveSessionUrls();
 
     db.exec("COMMIT");
@@ -319,6 +324,10 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         if (std.meta.stringToEnum(voice_backend.Kind, val)) |k| {
             voice_backend.active_kind = k;
         }
+    } else if (std.mem.eql(u8, key, "search_sources")) {
+        const resolver = @import("../services/resolver.zig");
+        const mask = std.fmt.parseInt(u16, val, 10) catch 0xFF;
+        resolver.source_mask.store(mask, .release);
     }
 }
 

@@ -120,9 +120,12 @@ fn renderHero() void {
     {
         var center = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.5 });
         defer center.deinit();
+        // Fixed width — dvui expand ignores max_size_content.
+        const avail = center.data().rect.w;
+        const colw: f32 = if (avail > 1) @min(720.0, avail) else 720.0;
         var input_col = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal,
-            .max_size_content = dvui.Options.MaxSize.width(720),
+            .min_size_content = .{ .w = colw, .h = 0 },
+            .max_size_content = dvui.Options.MaxSize.width(colw),
         });
         defer input_col.deinit();
         @import("header.zig").renderUrlInput(true);
@@ -174,6 +177,10 @@ fn renderChatMode() void {
     defer page.deinit();
 
     // Transcript — the page scroll, centered reading column.
+    // NOTE: dvui `expand` IGNORES max_size_content (expansion always fills the
+    // parent rect), so `.expand + .max_size_content` was a full-window column —
+    // user bubbles glued to the right window edge. Compute a FIXED column
+    // width instead: min(760, available), one-frame lag on first paint.
     {
         var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &chat_si }, .{
             .expand = .both,
@@ -183,9 +190,11 @@ fn renderChatMode() void {
 
         var center = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.5 });
         defer center.deinit();
+        const avail = center.data().rect.w;
+        const colw: f32 = if (avail > 1) @min(760.0, avail) else 760.0;
         var col = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal,
-            .max_size_content = dvui.Options.MaxSize.width(760),
+            .min_size_content = .{ .w = colw, .h = 0 },
+            .max_size_content = dvui.Options.MaxSize.width(colw),
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.md, .w = theme.spacing.md, .h = theme.spacing.md },
         });
         defer col.deinit();
@@ -221,9 +230,12 @@ fn renderChatMode() void {
 
         var center = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.5 });
         defer center.deinit();
+        // Same fixed-width treatment as the transcript (expand ignores max).
+        const avail = center.data().rect.w;
+        const colw: f32 = if (avail > 1) @min(760.0, avail) else 760.0;
         var col = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal,
-            .max_size_content = dvui.Options.MaxSize.width(760),
+            .min_size_content = .{ .w = colw, .h = 0 },
+            .max_size_content = dvui.Options.MaxSize.width(colw),
         });
         defer col.deinit();
 
