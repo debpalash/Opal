@@ -213,7 +213,7 @@ fn sectionHeader(title: []const u8, icon: []const u8, view: state.TmdbView, id: 
     dvui.icon(@src(), title, icon, .{}, .{
         .id_extra = id + 6000,
         .color_text = theme.colors.accent,
-        .min_size_content = .{ .w = 16, .h = 16 },
+        .min_size_content = theme.iconSize(.sm),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
     });
@@ -270,7 +270,7 @@ fn renderRecentlyPlayed() void {
         defer hdr.deinit();
         dvui.icon(@src(), "recent", icons.tvg.lucide.history, .{}, .{
             .color_text = theme.colors.accent,
-            .min_size_content = .{ .w = 16, .h = 16 },
+            .min_size_content = theme.iconSize(.sm),
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
@@ -347,7 +347,7 @@ fn renderEmptyState() void {
 
     dvui.icon(@src(), "empty", icons.tvg.lucide.@"clapperboard", .{}, .{
         .color_text = theme.colors.accent_dim,
-        .min_size_content = .{ .w = 48, .h = 48 },
+        .min_size_content = theme.iconSize(.hero),
         .gravity_x = 0.5,
     });
     _ = dvui.label(@src(), "Your hub is empty", .{}, .{

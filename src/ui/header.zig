@@ -151,7 +151,7 @@ pub fn renderHeader() void {
         dvui.icon(@src(), "brand", icons.tvg.lucide.zap, .{}, .{
             .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
-            .min_size_content = .{ .w = 16, .h = 16 },
+            .min_size_content = theme.iconSize(.sm),
             .max_size_content = .{ .w = 16, .h = 16 },
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });

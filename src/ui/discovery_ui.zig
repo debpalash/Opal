@@ -41,7 +41,7 @@ pub fn renderForYouRail() void {
 
         dvui.icon(@src(), "for-you", icons.tvg.lucide.sparkles, .{}, .{
             .color_text = theme.colors.accent,
-            .min_size_content = .{ .w = 16, .h = 16 },
+            .min_size_content = theme.iconSize(.sm),
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
@@ -158,7 +158,7 @@ fn renderCard(rec: *const recommendations.Recommendation, id: usize) void {
         dvui.icon(@src(), "because", icons.tvg.lucide.@"message-circle", .{}, .{
             .id_extra = id,
             .color_text = theme.colors.text_secondary,
-            .min_size_content = .{ .w = 12, .h = 12 },
+            .min_size_content = theme.iconSize(.xs),
             .gravity_y = 0.0,
             .margin = .{ .x = 0, .y = 2, .w = theme.spacing.xs, .h = 0 },
         });

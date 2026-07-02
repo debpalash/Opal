@@ -136,7 +136,7 @@ fn renderInlineChat() void {
                     .border = dvui.Rect.all(0),
                     .corner_radius = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
-                    .min_size_content = .{ .w = 12, .h = 12 },
+                    .min_size_content = theme.iconSize(.xs),
                 })) {
                     ai_chat.toggleStar(mi);
                 }
@@ -150,7 +150,7 @@ fn renderInlineChat() void {
                     .border = dvui.Rect.all(0),
                     .corner_radius = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
-                    .min_size_content = .{ .w = 12, .h = 12 },
+                    .min_size_content = theme.iconSize(.xs),
                 })) {
                     ai_chat.regenerateFrom(mi);
                 }

@@ -308,7 +308,7 @@ fn renderLibraries() void {
             .id_extra = i,
             .gravity_y = 0.5,
             .color_text = theme.colors.text_secondary,
-            .min_size_content = .{ .w = 16, .h = 16 },
+            .min_size_content = theme.iconSize(.sm),
         });
     }
 }
@@ -644,7 +644,7 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
                 .color_text = theme.colors.text_on_accent,
                 .padding = dvui.Rect.all(theme.spacing.xs),
                 .corner_radius = theme.dims.rad_sm,
-                .min_size_content = .{ .w = 16, .h = 16 },
+                .min_size_content = theme.iconSize(.sm),
             })) {
                 const id = item.id[0..item.id_len];
                 const mt = item.media_type[0..item.media_type_len];

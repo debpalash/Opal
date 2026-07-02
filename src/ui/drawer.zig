@@ -116,7 +116,7 @@ pub fn renderDrawer() void {
                     .min_size_content = .{ .w = 3, .h = 3 },
                     .background = true,
                     .color_fill = handle_color,
-                    .corner_radius = dvui.Rect.all(99),
+                    .corner_radius = dvui.Rect.all(theme.radius.pill),
                     .margin = .{ .x = 4, .y = 1, .w = 4, .h = 1 },
                     .gravity_x = 0.5,
                 });
@@ -381,7 +381,7 @@ fn renderRailTab(tab: state.DrawerTab, icon_data: anytype, label: []const u8, id
             .min_size_content = .{ .w = 6, .h = 6 },
             .background = true,
             .color_fill = badge_color,
-            .corner_radius = dvui.Rect.all(99),
+            .corner_radius = dvui.Rect.all(theme.radius.pill),
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
         });
@@ -514,7 +514,13 @@ fn renderHistoryContent() void {
     }
 
     if (watch_history.count == 0) {
-        if (components.emptyStateCta(icons.tvg.lucide.history, "No watch history yet", "Played items will appear here", "Browse")) {
+        if (watch_history.backup_available) {
+            // A cleared snapshot exists — offer the one-level undo.
+            if (components.emptyStateCta(icons.tvg.lucide.history, "No watch history yet", "You cleared it — the last snapshot can be restored.", "Restore cleared history")) {
+                watch_history.restoreBackup();
+                state.showToast("Watch history restored");
+            }
+        } else if (components.emptyStateCta(icons.tvg.lucide.history, "No watch history yet", "Played items will appear here", "Browse")) {
             state.navigateToTab(.TMDB);
         }
         return;

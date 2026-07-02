@@ -427,7 +427,7 @@ pub fn renderContent() void {
                 _ = dvui.icon(@src(), "", icons.tvg.lucide.@"monitor-up", .{}, .{
                     .id_extra = i + 8000,
                     .color_text = seed_color,
-                    .min_size_content = .{ .w = 12, .h = 12 },
+                    .min_size_content = theme.iconSize(.xs),
                 });
 
                 var seed_buf: [8]u8 = undefined;
@@ -448,7 +448,7 @@ pub fn renderContent() void {
                 _ = dvui.icon(@src(), "", icons.tvg.lucide.@"monitor-down", .{}, .{
                     .id_extra = i + 9000,
                     .color_text = theme.colors.text_secondary,
-                    .min_size_content = .{ .w = 12, .h = 12 },
+                    .min_size_content = theme.iconSize(.xs),
                 });
 
                 var peer_buf: [8]u8 = undefined;

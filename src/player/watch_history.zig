@@ -119,10 +119,36 @@ pub fn getCount() usize {
     return count;
 }
 
-/// Clear all watch history (both DB and in-memory).
+/// True when a cleared history snapshot exists and can be restored.
+pub var backup_available: bool = false;
+
+/// Refresh backup_available from the DB (called once after history loads).
+pub fn checkBackup() void {
+    const stmt = db.prepare("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='watch_history_backup'") orelse return;
+    defer db.finalize(stmt);
+    if (db.step(stmt) == db.c.SQLITE_ROW) {
+        backup_available = db.columnDouble(stmt, 0) > 0;
+    }
+}
+
+/// Clear all watch history (both DB and in-memory) — but snapshot it first so
+/// a confirmed-but-regretted clear is recoverable via restoreBackup(). One
+/// level of undo: a second clear overwrites the previous snapshot.
 pub fn clearAll() void {
+    db.exec("DROP TABLE IF EXISTS watch_history_backup");
+    db.exec("CREATE TABLE watch_history_backup AS SELECT * FROM watch_history");
     db.exec("DELETE FROM watch_history");
+    backup_available = true;
     init();
+}
+
+/// Restore the snapshot taken by the last clearAll().
+pub fn restoreBackup() void {
+    if (!backup_available) return;
+    db.exec("INSERT INTO watch_history SELECT * FROM watch_history_backup");
+    db.exec("DROP TABLE watch_history_backup");
+    backup_available = false;
+    load();
 }
 
 /// Load from SQLite into in-memory cache.

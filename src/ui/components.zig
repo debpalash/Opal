@@ -405,6 +405,19 @@ pub fn segment(
             .margin = .{ .x = 1, .y = 1, .w = 1, .h = 1 },
         });
 
+        // Keyboard: each segment takes a tab stop; Enter/Space selects it.
+        const sid = seg.data().id;
+        dvui.tabIndexSet(sid, null);
+        const seg_focused = dvui.focusedWidgetId() == sid;
+        if (seg_focused) {
+            for (dvui.events()) |*e| {
+                if (e.handled) continue;
+                if (e.evt == .key and e.evt.key.action == .down and e.evt.key.matchBind("activate")) {
+                    e.handle(@src(), seg.data());
+                    clicked_index = i;
+                }
+            }
+        }
         if (dvui.clicked(seg.data(), .{ .hovered = &hovered })) {
             clicked_index = i;
         }
@@ -412,6 +425,7 @@ pub fn segment(
         // background drawn at init couldn't know hover yet (see toggleRow).
         if (hovered and !is_active) seg.data().options.color_fill = tk.bg_hover();
         seg.drawBackground();
+        if (seg_focused) seg.data().focusBorder();
 
         _ = dvui.label(@src(), "{s}", .{opt}, .{
             .id_extra = i,

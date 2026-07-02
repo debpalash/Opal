@@ -192,7 +192,7 @@ fn renderToolbar(count: usize) void {
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = dim,
         .border = dvui.Rect.all(0),
-        .min_size_content = .{ .w = 16, .h = 16 },
+        .min_size_content = theme.iconSize(.sm),
         .padding = dvui.Rect.all(3),
         .gravity_y = 0.5,
     })) {
@@ -202,7 +202,7 @@ fn renderToolbar(count: usize) void {
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = dim,
         .border = dvui.Rect.all(0),
-        .min_size_content = .{ .w = 16, .h = 16 },
+        .min_size_content = theme.iconSize(.sm),
         .padding = dvui.Rect.all(3),
         .gravity_y = 0.5,
     })) {
@@ -395,7 +395,7 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
         if (loading or underfilled) {
             dvui.spinner(@src(), .{
                 .color_text = theme.colors.accent,
-                .min_size_content = .{ .w = 24, .h = 24 },
+                .min_size_content = theme.iconSize(.lg),
                 .gravity_x = 0.5,
                 .margin = dvui.Rect.all(12),
             });
@@ -609,7 +609,7 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
                 .color_fill = trans,
                 .color_text = fc,
                 .padding = dvui.Rect.all(1),
-                .min_size_content = .{ .w = 12, .h = 12 },
+                .min_size_content = theme.iconSize(.xs),
             })) {
                 store.toggleList(&state.app.tmdb.favorites, item);
                 store.saveLists();
@@ -623,7 +623,7 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
                 .color_fill = trans,
                 .color_text = wc,
                 .padding = dvui.Rect.all(1),
-                .min_size_content = .{ .w = 12, .h = 12 },
+                .min_size_content = theme.iconSize(.xs),
             })) {
                 store.toggleList(&state.app.tmdb.watchlist, item);
                 store.saveLists();
@@ -635,7 +635,7 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
             .color_fill = trans,
             .color_text = theme.colors.accent,
             .padding = dvui.Rect.all(1),
-            .min_size_content = .{ .w = 12, .h = 12 },
+            .min_size_content = theme.iconSize(.xs),
         })) {
             sendToSearch(item);
         }
@@ -1747,7 +1747,7 @@ fn renderTvDetail() void {
                     .background = true,
                     .color_fill = if (is_watched) theme.colors.success else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .color_text = if (is_watched) dvui.Color.white else theme.colors.text_secondary,
-                    .corner_radius = dvui.Rect.all(12),
+                    .corner_radius = theme.dims.rad_xl,
                     .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
                     .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
                     .gravity_y = 0.5,

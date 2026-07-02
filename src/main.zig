@@ -158,6 +158,7 @@ pub fn coreInit() !void {
             hist.loadSearchHistory();
             hist.loadDownloadHistory();
             watch.load();
+            watch.checkBackup(); // arms the "Restore cleared history" affordance
             // Load installed source endpoints (opal-plugins). No file → every
             // gated source stays inert until the user installs it.
             @import("core/source_config.zig").reload();

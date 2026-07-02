@@ -831,7 +831,7 @@ fn renderToolbar() void {
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = dim,
         .border = dvui.Rect.all(0),
-        .min_size_content = .{ .w = 16, .h = 16 },
+        .min_size_content = theme.iconSize(.sm),
         .padding = dvui.Rect.all(3),
         .gravity_y = 0.5,
     })) {
@@ -841,7 +841,7 @@ fn renderToolbar() void {
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = dim,
         .border = dvui.Rect.all(0),
-        .min_size_content = .{ .w = 16, .h = 16 },
+        .min_size_content = theme.iconSize(.sm),
         .padding = dvui.Rect.all(3),
         .gravity_y = 0.5,
     })) {

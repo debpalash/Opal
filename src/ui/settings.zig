@@ -226,7 +226,7 @@ fn sectionMatchesSearch(tab: state.SettingsTab) bool {
         .Network => &.{ "Download", "Trackers", "Proxy", "Speed", "Limit", "Port" },
         .Storage => &.{ "Download Path", "Watch History", "Database", "Cache", "Clear" },
         .Scripts => &.{ "SponsorBlock", "AI Backend", "Remote", "Watch Party", "Scripts", "Gemma", "Apple Intelligence", "Model", "Voice" },
-        .AI => &.{ "Voice Backend", "STT", "TTS", "Whisper", "Kokoro", "MLX", "Sherpa", "Language Learning" },
+        .AI => &.{ "Voice Backend", "STT", "TTS", "Whisper", "Kokoro", "MLX", "Sherpa", "Co-Watcher", "Models", "Dependencies" },
         .LangLearn => &.{ "Translate", "ASR", "Dubbing", "TTS", "Voice", "Speed", "Flashcard", "Transcribe" },
         .FileAssoc => &.{ "File Associations", "Default Handler", "Register", "Video", "Audio", "Torrent", "Playlist", "Comics" },
     };
@@ -289,7 +289,7 @@ fn navTabRow(tab: state.SettingsTab, label: []const u8, icon: []const u8, id_ext
         .id_extra = id_extra,
         .gravity_y = 0.5,
         .color_text = fg,
-        .min_size_content = .{ .w = 16, .h = 16 },
+        .min_size_content = theme.iconSize(.sm),
         .max_size_content = .{ .w = 16, .h = 16 },
     });
 
@@ -618,50 +618,15 @@ fn renderAIContentBody() void {
         }
     }
 
-    // ── Language Learning ──
-    aiSectionWithIcon(icons.tvg.lucide.languages, "Language Learning", "ASR, dubbing, and translation for video", 60, @src());
-
-    // Language Learning Mode toggle — flips a bool then runs onToggle.
-    {
-        const before = state.app.lang_learn_enabled;
-        components.toggleRow(@src(), "Language Learning Mode", "ASR + dubbing + translation while watching", &state.app.lang_learn_enabled);
-        if (state.app.lang_learn_enabled != before) {
-            const lang_learn = @import("../services/lang_learn.zig");
-            lang_learn.onToggle(state.app.lang_learn_enabled);
-            state.markConfigDirty();
-        }
-    }
-
-    settingRow("Translate To", 64, @src());
-    langSegment(&state.app.translate_lang_buf, &state.app.translate_lang_len, 200);
-
-    // Translation toggle — pure bool flip.
-    {
-        const before = state.app.translate_enabled;
-        components.toggleRow(@src(), "Translation", "Enable subtitle translation", &state.app.translate_enabled);
-        if (state.app.translate_enabled != before) state.markConfigDirty();
-    }
-
-    // ASR toggle — pure bool flip.
-    {
-        const before = state.app.asr_enabled;
-        components.toggleRow(@src(), "Speech Recognition (ASR)", "Transcribe audio when no subtitles (Cohere 2B)", &state.app.asr_enabled);
-        if (state.app.asr_enabled != before) state.markConfigDirty();
-    }
-
-    // Audio Dubbing toggle — bool flip + reset dub hash on enable.
-    {
-        const before = state.app.dubbing_enabled;
-        components.toggleRow(@src(), "Audio Dubbing", "Speak translated subtitles via TTS", &state.app.dubbing_enabled);
-        if (state.app.dubbing_enabled != before) {
-            if (state.app.dubbing_enabled) state.app.dub_last_hash = 0;
-            state.markConfigDirty();
-        }
-    }
+    // ── Co-Watcher ── (voice-mode feature, so it lives with the voice engine.
+    // The language-learning rows that used to sit here duplicated the whole
+    // Settings › Language tab with drifted hint copy — they now live ONLY
+    // there, one pointer row below.)
 
     // Proactive Co-Watcher sensitivity — the AI may speak ONE short, spoiler-
     // safe remark about what is on screen when you pause or rewind in voice
     // mode. Quiet by default; this control just assigns the module var.
+    aiSectionWithIcon(icons.tvg.lucide.@"message-square-text", "Co-Watcher", "The AI comments while you watch (voice mode)", 60, @src());
     settingRow("Co-Watcher", 65, @src());
     _ = dvui.label(@src(), "AI comments on what you missed when you pause or rewind (voice mode)", .{}, .{
         .id_extra = 651,
@@ -688,53 +653,10 @@ fn renderAIContentBody() void {
         }
     }
 
-    settingRow("TTS Voice", 61, @src());
-    ttsVoiceSegment(0);
-
-    settingRow("Speech Speed", 62, @src());
-    ttsSpeedSegment(0);
-
-    settingRow("TTS Server", 63, @src());
-    {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .gravity_y = 0.5,
-        });
-        defer row.deinit();
-        if (state.app.tts_server_ok) {
-            components.statusPill("Running", .success);
-        } else {
-            components.statusPill("Not running", .info);
-        }
-        {
-            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            spacer.deinit();
-        }
-        const lang_learn = @import("../services/lang_learn.zig");
-        if (!state.app.tts_server_ok) {
-            if (dvui.button(@src(), "Start Server", .{}, .{
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.text_on_accent,
-                .border = dvui.Rect.all(0),
-                .corner_radius = theme.dims.rad_md,
-                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-            })) {
-                lang_learn.startServer();
-            }
-        } else {
-            if (dvui.button(@src(), "Stop Server", .{}, .{
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.danger,
-                .border = dvui.Rect.all(0),
-                .corner_radius = theme.dims.rad_md,
-                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-            })) {
-                lang_learn.stopServer();
-            }
-        }
-    }
-    _ = dvui.label(@src(), "KittenTTS (80MB) | Cohere ASR (2B) | Google Translate", .{}, .{
+    // Pointer to the single home of the language-learning controls.
+    _ = dvui.label(@src(), "Subtitle translation, ASR, dubbing, and TTS voice live in Settings › Language.", .{}, .{
         .color_text = theme.colors.text_tertiary,
+        .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
     });
 
     // ── Models Management ──
@@ -743,7 +665,7 @@ fn renderAIContentBody() void {
         const deps = @import("../core/deps.zig");
         const ds = deps.check();
         // Whisper.cpp tiny model (~39MB)
-        modelRow("Whisper Tiny (39MB)", icons.tvg.lucide.@"audio-waveform", ds.whisper_model, deps.sherpa_model_downloading, 5000, @src());
+        modelRow("Whisper Tiny (39MB)", icons.tvg.lucide.@"audio-waveform", ds.whisper_model, deps.whisper_model_downloading.load(.acquire), 5000, @src());
         // Sherpa STT model (~40MB)
         modelRow("Sherpa STT (40MB)", icons.tvg.lucide.mic, ds.sherpa_model, deps.sherpa_model_downloading, 5001, @src());
         // Sherpa Piper TTS (~40MB)
@@ -1897,7 +1819,21 @@ fn renderStorageTab() void {
         // watch_history, irreversibly dropping every resume position.
         if (components.confirmDangerButton(@src(), "Clear Watch History", 0)) {
             watch.clearAll();
-            state.showToast("Watch history cleared");
+            state.showToast("Watch history cleared — restore below");
+        }
+        // One-level undo: clearAll() snapshots into watch_history_backup.
+        if (watch.backup_available) {
+            if (dvui.button(@src(), "Restore last cleared history", .{}, .{
+                .color_fill = theme.colors.bg_elevated,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(0),
+                .corner_radius = theme.dims.rad_md,
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
+            })) {
+                watch.restoreBackup();
+                state.showToast("Watch history restored");
+            }
         }
     }
 
@@ -2041,50 +1977,36 @@ fn renderScriptsTab() void {
         if (state.app.sponsorblock_enabled != before) state.markConfigDirty();
     }
 
-    // ── AI Backend picker ──
+    // ── AI Backend picker ── (components.segment — the same single-select
+    // grammar every other two-option setting uses; the old accent-text button
+    // pair was one of four different pick-one idioms on this page)
     settingRow("AI Backend", 71, @src());
     {
         const ai_server = @import("../services/ai_server.zig");
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.0 });
-        defer row.deinit();
-
-        // Active backend = accent text on a quiet bg_elevated fill (the one
-        // accent affordance); inactive = transparent + secondary text.
+        const set_backend = struct {
+            fn apply(kind: @TypeOf(ai_server.backend_kind), toast: []const u8) void {
+                const srv = @import("../services/ai_server.zig");
+                if (srv.backend_kind == kind) return;
+                srv.stopServer();
+                srv.backend_kind = kind;
+                srv.resetDetection();
+                state.markConfigDirty(); // ai_backend IS persisted — without this the switch reverted on restart
+                state.showToast(toast);
+            }
+        };
         if (ai_server.is_macos) {
-            const apfel_active = ai_server.backend_kind == .apfel;
-            if (dvui.button(@src(), "Apple Intelligence", .{}, .{
-                .color_fill = if (apfel_active) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = if (apfel_active) theme.colors.accent else theme.colors.text_secondary,
-                .border = dvui.Rect.all(0),
-                .corner_radius = theme.dims.rad_md,
-                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
-            })) {
-                if (!apfel_active) {
-                    ai_server.stopServer();
-                    ai_server.backend_kind = .apfel;
-                    ai_server.resetDetection();
-                    state.markConfigDirty(); // ai_backend IS persisted — without this the switch reverted on restart
-                    state.showToast("AI backend: Apple Intelligence");
+            const labels = [_][]const u8{ "Apple Intelligence", "Local LLM (Hugging Face)" };
+            const sel: usize = if (ai_server.backend_kind == .apfel) 0 else 1;
+            if (components.segment(@src(), &labels, sel)) |clicked| {
+                if (clicked == 0) {
+                    set_backend.apply(.apfel, "AI backend: Apple Intelligence");
+                } else {
+                    set_backend.apply(.gemma_llama, "AI backend: Local LLM (Hugging Face)");
                 }
             }
-        }
-
-        const llama_active = ai_server.backend_kind == .gemma_llama;
-        if (dvui.button(@src(), "Local LLM (Hugging Face)", .{}, .{
-            .color_fill = if (llama_active) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (llama_active) theme.colors.accent else theme.colors.text_secondary,
-            .border = dvui.Rect.all(0),
-            .corner_radius = theme.dims.rad_md,
-            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-        })) {
-            if (!llama_active) {
-                ai_server.stopServer();
-                ai_server.backend_kind = .gemma_llama;
-                ai_server.resetDetection();
-                state.markConfigDirty();
-                state.showToast("AI backend: Local LLM (Hugging Face)");
-            }
+        } else {
+            const labels = [_][]const u8{"Local LLM (Hugging Face)"};
+            _ = components.segment(@src(), &labels, 0);
         }
     }
 
@@ -2098,35 +2020,56 @@ fn renderScriptsTab() void {
                 .color_text = theme.colors.text_secondary,
                 .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.xs },
             });
+            // Rows with a leading check glyph + trailing status pill — the old
+            // version baked ●/○ radio glyphs and "downloaded" into one string,
+            // which wasn't scannable and used a third selection idiom.
             for (ai_server.MODEL_CATALOG, 0..) |m, i| {
                 const sel = i == ai_server.active_model_idx;
                 const have = ai_server.modelDownloaded(i);
-                var row_buf: [160]u8 = undefined;
-                const row = std.fmt.bufPrint(&row_buf, "{s}{s}  ·  {s}  ·  {s}{s}", .{
-                    if (sel) "● " else "○ ",
-                    m.name,
-                    m.size_label,
-                    m.note,
-                    if (have) "downloaded" else "",
-                }) catch m.name;
-                if (dvui.button(@src(), row, .{}, .{
+
+                var mrow = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .id_extra = i,
-                    .color_fill = if (sel) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                    .color_text = if (sel) theme.colors.accent else theme.colors.text_secondary,
-                    .border = dvui.Rect.all(0),
+                    .expand = .horizontal,
+                    .background = true,
+                    .color_fill = if (sel) theme.colors.bg_elevated else theme.transparent,
                     .corner_radius = theme.dims.rad_md,
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                    .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+                });
+                defer mrow.deinit();
+
+                var hovered = false;
+                const clicked_row = dvui.clicked(mrow.data(), .{ .hovered = &hovered });
+                if (hovered and !sel) mrow.data().options.color_fill = theme.colors.bg_hover;
+                mrow.drawBackground();
+
+                dvui.icon(@src(), "model-sel", if (sel) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, .{}, .{
+                    .id_extra = i,
+                    .color_text = if (sel) theme.colors.accent else theme.colors.text_tertiary,
+                    .min_size_content = theme.iconSize(.sm),
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+                });
+                var name_buf: [128]u8 = undefined;
+                const name_line = std.fmt.bufPrint(&name_buf, "{s}  ·  {s}  ·  {s}", .{ m.name, m.size_label, m.note }) catch m.name;
+                _ = dvui.label(@src(), "{s}", .{name_line}, .{
+                    .id_extra = i,
+                    .color_text = if (sel) theme.colors.text_primary else theme.colors.text_secondary,
+                    .gravity_y = 0.5,
                     .expand = .horizontal,
-                })) {
-                    if (!sel) {
-                        ai_server.stopServer();
-                        ai_server.selectModelByIndex(i);
-                        state.markConfigDirty();
-                        if (ai_server.modelDownloaded(i))
-                            state.showToast("Model selected")
-                        else
-                            state.showToast("Model selected — download below in AI panel");
-                    }
+                });
+                if (have) {
+                    components.statusPill("Downloaded", .success);
+                }
+
+                if (clicked_row and !sel) {
+                    ai_server.stopServer();
+                    ai_server.selectModelByIndex(i);
+                    state.markConfigDirty();
+                    if (have)
+                        state.showToast("Model selected")
+                    else
+                        state.showToast("Model selected — download below in AI panel");
                 }
             }
         }
@@ -2349,14 +2292,17 @@ fn renderScriptsTab() void {
             });
             defer row.deinit();
 
-            // Compact text toggle — accent text when on (single affordance),
-            // tertiary when off; transparent fill, no box.
+            // Compact chip toggle — same active grammar as iconButton (quiet
+            // bg_elevated fill + accent text when on) instead of a bare text
+            // link, with an explicit hover fill so it reads as clickable.
             const toggle_label = if (enabled) "On" else "Off";
             if (dvui.button(@src(), toggle_label, .{}, .{
                 .id_extra = i + 7000,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = if (enabled) theme.colors.bg_elevated else theme.transparent,
+                .color_fill_hover = theme.colors.bg_hover,
                 .color_text = if (enabled) theme.colors.accent else theme.colors.text_tertiary,
                 .border = dvui.Rect.all(0),
+                .corner_radius = theme.dims.rad_sm,
                 .min_size_content = .{ .w = 32, .h = 0 },
                 .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
                 .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -2607,7 +2553,7 @@ pub fn renderDepsModal() void {
         .min_size_content = .{ .w = 580, .h = 400 },
         .color_fill = theme.colors.bg_surface,
         .color_border = theme.colors.accent,
-        .corner_radius = dvui.Rect.all(10),
+        .corner_radius = theme.dims.rad_xl,
     });
     defer win.deinit();
 

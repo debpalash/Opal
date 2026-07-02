@@ -613,7 +613,7 @@ pub fn renderContent() void {
             .color_border = dvui.Color{ .r = 50, .g = 50, .b = 60, .a = 200 },
             .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(12),
+            .corner_radius = theme.dims.rad_xl,
             .margin = .{ .x = 3, .y = 0, .w = 3, .h = 0 },
             .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
         });

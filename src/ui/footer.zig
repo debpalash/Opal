@@ -409,7 +409,7 @@ pub fn renderSubPicker() void {
             _ = dvui.icon(@src(), "dl-ic", icons.tvg.lucide.@"arrow-down", .{}, .{
                 .id_extra = ri + 58350,
                 .color_text = theme.colors.text_tertiary,
-                .min_size_content = .{ .w = 12, .h = 12 },
+                .min_size_content = theme.iconSize(.xs),
                 .max_size_content = .{ .w = 12, .h = 12 },
                 .gravity_y = 0.5,
             });
@@ -592,7 +592,7 @@ fn renderScrubber(
             .id_extra = 4,
             .background = true,
             .color_fill = theme.colors.accent,
-            .corner_radius = dvui.Rect.all(99),
+            .corner_radius = dvui.Rect.all(theme.radius.pill),
             .min_size_content = .{ .w = 8, .h = 8 },
             .max_size_content = .{ .w = 8, .h = 8 },
             .gravity_x = knob_frac,
@@ -1272,7 +1272,7 @@ pub fn renderLiquidGlassOverlay() void {
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .gravity_y = 0.5,
                 .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
-                .min_size_content = .{ .w = 32, .h = 32 },
+                .min_size_content = theme.iconSize(.xl),
                 .max_size_content = .{ .w = 32, .h = 32 },
             })) {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-prev");
@@ -1339,7 +1339,7 @@ pub fn renderLiquidGlassOverlay() void {
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .gravity_y = 0.5,
                 .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
-                .min_size_content = .{ .w = 32, .h = 32 },
+                .min_size_content = theme.iconSize(.xl),
                 .max_size_content = .{ .w = 32, .h = 32 },
             })) {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-next");
@@ -1455,6 +1455,26 @@ pub fn renderLiquidGlassOverlay() void {
         });
         const slider_rect = slider_host.data().contentRectScale().r;
         const slider_hover = mouseOverRect(slider_rect);
+
+        // Wheel over the volume group = ±5 volume (the scrubber band already
+        // seeks on wheel; the volume slider ignored it).
+        for (dvui.events()) |*ev| {
+            if (ev.handled or ev.evt != .mouse) continue;
+            const me = ev.evt.mouse;
+            if (me.floating_win != dvui.subwindowCurrentId()) continue;
+            switch (me.action) {
+                .wheel_y => |wy| {
+                    if (me.p.x >= slider_rect.x and me.p.x <= slider_rect.x + slider_rect.w and
+                        me.p.y >= slider_rect.y and me.p.y <= slider_rect.y + slider_rect.h)
+                    {
+                        _ = c.mpv.mpv_command_string(active_p.mpv_ctx, if (wy > 0) "add volume 5" else "add volume -5");
+                        SlowProps.frame_ctr = 7; // refresh cached volume next frame
+                        ev.handled = true;
+                    }
+                },
+                else => {},
+            }
+        }
 
         const vol_f64: f64 = SlowProps.volume;
         var vol_val: f32 = @floatCast(@max(0.0, @min(1.0, vol_f64 / 100.0)));
@@ -1760,7 +1780,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         // A small thumbnail when mpv exposed one, else a music/film glyph.
         if (p.thumb_texture != null) {
             _ = dvui.image(@src(), .{ .source = .{ .texture = p.thumb_texture.? } }, .{
-                .min_size_content = .{ .w = 32, .h = 32 },
+                .min_size_content = theme.iconSize(.xl),
                 .max_size_content = .{ .w = 32, .h = 32 },
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .gravity_y = 0.5,
@@ -1885,7 +1905,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     {
         _ = dvui.icon(@src(), "np-vol-ic", icons.tvg.lucide.@"volume-2", .{}, .{
             .color_text = theme.colors.text_secondary,
-            .min_size_content = .{ .w = 16, .h = 16 },
+            .min_size_content = theme.iconSize(.sm),
             .max_size_content = .{ .w = 16, .h = 16 },
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
@@ -2056,7 +2076,7 @@ pub fn renderResumePrompt() void {
 
     _ = dvui.icon(@src(), "", icons.tvg.lucide.play, .{}, .{
         .color_text = theme.colors.accent,
-        .min_size_content = .{ .w = 16, .h = 16 },
+        .min_size_content = theme.iconSize(.sm),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
     });
@@ -2219,56 +2239,78 @@ pub fn renderStatsOverlay() void {
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xs },
     });
 
-    // Helper: query a string prop from mpv
+    // SNAPSHOT the mpv reads (500ms TTL + a timer tick): ~10 synchronous
+    // property reads per frame — 3 of them allocating string reads — contended
+    // with the demux/render threads for the whole time the overlay was open.
+    // Live stats still update twice a second, which is what the eye can use.
     const stat_props = [_][2][]const u8{
         .{ "video-codec", "Video" },
         .{ "audio-codec-name", "Audio" },
         .{ "hwdec-current", "HW Dec" },
     };
+    const Snap = struct {
+        var res: [48]u8 = undefined;
+        var res_len: usize = 0;
+        var br: [48]u8 = undefined;
+        var br_len: usize = 0;
+        var drop: [24]u8 = undefined;
+        var drop_len: usize = 0;
+        var strs: [stat_props.len][64]u8 = undefined;
+        var str_lens: [stat_props.len]usize = .{0} ** stat_props.len;
+        var last_ms: i64 = 0;
+        var last_ctx: usize = 0;
+    };
+    const now_ms = @import("../core/io_global.zig").milliTimestamp();
+    const ctx_key = @intFromPtr(p.mpv_ctx);
+    if (now_ms - Snap.last_ms > 500 or Snap.last_ctx != ctx_key) {
+        Snap.last_ms = now_ms;
+        Snap.last_ctx = ctx_key;
 
-    // Resolution + FPS (from cached SlowProps would be ideal, but we query directly here)
-    {
         var w: i64 = 0;
         var h: i64 = 0;
         var fps: f64 = 0;
         _ = c.mpv.mpv_get_property(p.mpv_ctx, "width", c.mpv.MPV_FORMAT_INT64, &w);
         _ = c.mpv.mpv_get_property(p.mpv_ctx, "height", c.mpv.MPV_FORMAT_INT64, &h);
         _ = c.mpv.mpv_get_property(p.mpv_ctx, "estimated-vf-fps", c.mpv.MPV_FORMAT_DOUBLE, &fps);
+        Snap.res_len = if (std.fmt.bufPrint(&Snap.res, "{d}×{d} @ {d:.1} fps", .{ w, h, fps })) |sres| sres.len else |_| 0;
 
-        var res_buf: [48]u8 = undefined;
-        const res_str = std.fmt.bufPrint(&res_buf, "{d}×{d} @ {d:.1} fps", .{ w, h, fps }) catch "—";
-        renderStatRow("Resolution", res_str, 0);
-    }
-
-    // Bitrate
-    {
         var vbr: f64 = 0;
         var abr: f64 = 0;
         _ = c.mpv.mpv_get_property(p.mpv_ctx, "video-bitrate", c.mpv.MPV_FORMAT_DOUBLE, &vbr);
         _ = c.mpv.mpv_get_property(p.mpv_ctx, "audio-bitrate", c.mpv.MPV_FORMAT_DOUBLE, &abr);
-        const vbr_kbps = @as(i64, @intFromFloat(vbr / 1000.0));
-        const abr_kbps = @as(i64, @intFromFloat(abr / 1000.0));
-        var br_buf: [48]u8 = undefined;
-        const br_str = std.fmt.bufPrint(&br_buf, "V: {d} kb/s  A: {d} kb/s", .{ vbr_kbps, abr_kbps }) catch "—";
-        renderStatRow("Bitrate", br_str, 1);
-    }
+        Snap.br_len = if (std.fmt.bufPrint(&Snap.br, "V: {d} kb/s  A: {d} kb/s", .{
+            @as(i64, @intFromFloat(vbr / 1000.0)),
+            @as(i64, @intFromFloat(abr / 1000.0)),
+        })) |sbr| sbr.len else |_| 0;
 
-    // Dropped frames
-    {
         var dropped: i64 = 0;
         _ = c.mpv.mpv_get_property(p.mpv_ctx, "frame-drop-count", c.mpv.MPV_FORMAT_INT64, &dropped);
-        var drop_buf: [24]u8 = undefined;
-        const drop_str = std.fmt.bufPrint(&drop_buf, "{d}", .{dropped}) catch "0";
-        renderStatRow("Dropped", drop_str, 2);
-    }
+        Snap.drop_len = if (std.fmt.bufPrint(&Snap.drop, "{d}", .{dropped})) |sdrop| sdrop.len else |_| 0;
 
-    // String props (codec, hwdec)
+        for (stat_props, 0..) |prop, idx| {
+            const val_ptr: ?[*:0]u8 = @ptrCast(c.mpv.mpv_get_property_string(p.mpv_ctx, @ptrCast(prop[0].ptr)));
+            if (val_ptr) |vp| {
+                const span = std.mem.span(vp);
+                const n = @min(span.len, Snap.strs[idx].len);
+                @memcpy(Snap.strs[idx][0..n], span[0..n]);
+                Snap.str_lens[idx] = n;
+                c.mpv.mpv_free(vp);
+            } else {
+                Snap.str_lens[idx] = 0;
+            }
+        }
+    }
+    // Tick a frame every 500ms while open so the numbers keep moving even
+    // when nothing else repaints (re-arm pattern — 2 frames/s).
+    const tick_id = stats_box.data().id;
+    if (dvui.timerDoneOrNone(tick_id)) dvui.timer(tick_id, 500_000);
+
+    renderStatRow("Resolution", Snap.res[0..Snap.res_len], 0);
+    renderStatRow("Bitrate", Snap.br[0..Snap.br_len], 1);
+    renderStatRow("Dropped", Snap.drop[0..Snap.drop_len], 2);
     for (stat_props, 0..) |prop, idx| {
-        const val_ptr: ?[*:0]u8 = @ptrCast(c.mpv.mpv_get_property_string(p.mpv_ctx, @ptrCast(prop[0].ptr)));
-        if (val_ptr) |vp| {
-            const val_str = std.mem.span(vp);
-            renderStatRow(prop[1], val_str, idx + 10);
-            c.mpv.mpv_free(vp);
+        if (Snap.str_lens[idx] > 0) {
+            renderStatRow(prop[1], @import("../core/text.zig").safeUtf8(Snap.strs[idx][0..Snap.str_lens[idx]]), idx + 10);
         } else {
             renderStatRow(prop[1], "—", idx + 10);
         }

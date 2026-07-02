@@ -1362,7 +1362,7 @@ fn renderUniversalProgress() void {
         defer hdr.deinit();
         dvui.icon(@src(), "searching", icons.tvg.lucide.@"loader-circle", .{}, .{
             .color_text = theme.colors.accent,
-            .min_size_content = .{ .w = 16, .h = 16 },
+            .min_size_content = theme.iconSize(.sm),
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
         });

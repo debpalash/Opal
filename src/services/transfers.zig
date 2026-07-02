@@ -69,7 +69,7 @@ fn renderTopBar() void {
             .color_text = if (active) dvui.Color{ .r = 10, .g = 10, .b = 15, .a = 255 } else theme.colors.text_secondary,
             .color_border = if (active) theme.colors.accent else dvui.Color{ .r = 45, .g = 45, .b = 60, .a = 200 },
             .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(99),
+            .corner_radius = dvui.Rect.all(theme.radius.pill),
             .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
             .margin = .{ .x = 0, .y = 0, .w = 5, .h = 0 },
             .gravity_y = 0.5,

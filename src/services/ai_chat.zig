@@ -283,7 +283,7 @@ pub fn renderChatBody() void {
 
         _ = dvui.icon(@src(), "", icons.tvg.lucide.cpu, .{}, .{
             .color_text = theme.colors.accent,
-            .min_size_content = .{ .w = 16, .h = 16 },
+            .min_size_content = theme.iconSize(.sm),
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
         _ = dvui.label(@src(), switch (server.backend_kind) {

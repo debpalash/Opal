@@ -368,7 +368,8 @@ fn omnibox() void {
     const len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
 
     // Inline affordances next to the box: clear-✕ while text is present
-    // (mouse users had no way to empty it), paste when empty.
+    // (mouse users had no way to empty it), paste when empty, and the voice
+    // conversation toggle (was legacy-header-only).
     if (len > 0) {
         if (components.iconButton(@src(), icons.tvg.lucide.x, "Clear", false)) {
             @memset(&state.app.magnet_buf, 0);
@@ -378,6 +379,18 @@ fn omnibox() void {
         if (components.iconButton(@src(), icons.tvg.lucide.@"clipboard-paste", "Paste", false)) {
             header.handleClipboardPaste();
             return;
+        }
+    }
+    {
+        const voice = @import("../services/ai_voice.zig");
+        const voice_icon = if (voice.conv_phase == .speaking)
+            icons.tvg.lucide.@"volume-2"
+        else if (voice.conv_phase == .listening or voice.is_recording)
+            icons.tvg.lucide.mic
+        else
+            icons.tvg.lucide.headphones;
+        if (components.iconButton(@src(), voice_icon, "Voice / conversation mode", voice.conversation_active)) {
+            voice.toggleConversation();
         }
     }
     {

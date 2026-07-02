@@ -1059,7 +1059,7 @@ pub fn renderContent() void {
             .color_text = theme.colors.accent,
             .gravity_y = 0.5,
             .margin = .{ .x = 2, .y = 0, .w = 10, .h = 0 },
-            .min_size_content = .{ .w = 20, .h = 20 },
+            .min_size_content = theme.iconSize(.md),
         });
 
         const input = std.mem.sliceTo(&state.app.comic.search_buf, 0);

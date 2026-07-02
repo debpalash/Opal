@@ -1655,7 +1655,7 @@ pub fn renderContent() void {
                             .background = true,
                             .color_fill = if (is_watched) theme.colors.success else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                             .color_text = if (is_watched) dvui.Color.white else theme.colors.text_secondary,
-                            .corner_radius = dvui.Rect.all(10),
+                            .corner_radius = theme.dims.rad_xl,
                             .padding = .{ .x = 5, .y = 1, .w = 5, .h = 1 },
                             .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
                             .gravity_y = 0.5,
@@ -1861,7 +1861,7 @@ fn renderModeToolbar(count: usize) void {
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = dim,
         .border = dvui.Rect.all(0),
-        .min_size_content = .{ .w = 16, .h = 16 },
+        .min_size_content = theme.iconSize(.sm),
         .padding = dvui.Rect.all(3),
         .gravity_y = 0.5,
     })) {
@@ -1871,7 +1871,7 @@ fn renderModeToolbar(count: usize) void {
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = dim,
         .border = dvui.Rect.all(0),
-        .min_size_content = .{ .w = 16, .h = 16 },
+        .min_size_content = theme.iconSize(.sm),
         .padding = dvui.Rect.all(3),
         .gravity_y = 0.5,
     })) {
@@ -2328,7 +2328,7 @@ fn renderToolbar(count: usize) void {
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = dim,
         .border = dvui.Rect.all(0),
-        .min_size_content = .{ .w = 16, .h = 16 },
+        .min_size_content = theme.iconSize(.sm),
         .padding = dvui.Rect.all(3),
         .gravity_y = 0.5,
     })) {
@@ -2338,7 +2338,7 @@ fn renderToolbar(count: usize) void {
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = dim,
         .border = dvui.Rect.all(0),
-        .min_size_content = .{ .w = 16, .h = 16 },
+        .min_size_content = theme.iconSize(.sm),
         .padding = dvui.Rect.all(3),
         .gravity_y = 0.5,
     })) {
