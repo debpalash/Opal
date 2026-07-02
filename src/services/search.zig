@@ -607,91 +607,58 @@ pub fn triggerSearch(query_text: []const u8) void {
 pub fn renderSearchContent() void {
     const resolver = @import("resolver.zig");
 
-    // ── Mode toggle: Torrent vs Universal ──
+    // ── ONE compact toolbar: mode segment · input pill · live source status ──
+    // Previously FOUR stacked rows (mode toggle + letter dots, the input, a
+    // "Searching …" header, and a chip row) — vertical bloat the results paid
+    // for. Responsive: the input pill expands between the fixed mode segment
+    // and the icon-only status cluster, shrinking to a 160px floor on narrow
+    // windows.
     {
-        var mode_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 2 },
+            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
             .background = true,
             .color_fill = theme.colors.bg_surface,
         });
-        defer mode_row.deinit();
+        defer bar.deinit();
 
         const uni_active = state.app.universal_search;
         // Segmented control — shared border, no gap, suppresses focus ring clash.
-        var seg = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .background = true,
-            .color_fill = dvui.Color{ .r = 22, .g = 22, .b = 32, .a = 255 },
-            .color_border = dvui.Color{ .r = 42, .g = 42, .b = 58, .a = 200 },
-            .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(6),
-            .padding = dvui.Rect.all(2),
-            .gravity_y = 0.5,
-        });
-        defer seg.deinit();
-
-        const seg_btn = struct {
-            fn opts(active: bool, id: usize) dvui.Options {
-                return .{
-                    .id_extra = id,
-                    .color_fill = if (active) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                    .color_text = if (active) dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 } else theme.colors.text_secondary,
-                    .color_border = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                    .border = dvui.Rect.all(0),
-                    .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
-                    .corner_radius = dvui.Rect.all(4),
-                    .gravity_y = 0.5,
-                };
-            }
-        };
-
-        if (dvui.button(@src(), "Universal", .{}, seg_btn.opts(uni_active, 8000))) {
-            state.app.universal_search = true;
-        }
-        if (dvui.button(@src(), "Torrent", .{}, seg_btn.opts(!uni_active, 8001))) {
-            state.app.universal_search = false;
-        }
-
         {
-            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            spacer.deinit();
-        }
+            var seg = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .background = true,
+                .color_fill = dvui.Color{ .r = 22, .g = 22, .b = 32, .a = 255 },
+                .color_border = dvui.Color{ .r = 42, .g = 42, .b = 58, .a = 200 },
+                .border = dvui.Rect.all(1),
+                .corner_radius = dvui.Rect.all(6),
+                .padding = dvui.Rect.all(2),
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+            });
+            defer seg.deinit();
 
-        // Source status indicators (universal mode)
-        if (uni_active and resolver.isResolving()) {
-            const dots = [_]struct { name: []const u8, st: resolver.SourceStatus, color: dvui.Color }{
-                .{ .name = "JF", .st = resolver.status_jf.load(.acquire), .color = dvui.Color{ .r = 100, .g = 180, .b = 255, .a = 255 } },
-                .{ .name = "ST", .st = resolver.status_stremio.load(.acquire), .color = dvui.Color{ .r = 100, .g = 220, .b = 100, .a = 255 } },
-                .{ .name = "TR", .st = resolver.status_torrent.load(.acquire), .color = dvui.Color{ .r = 255, .g = 180, .b = 80, .a = 255 } },
-                .{ .name = "AN", .st = resolver.status_anime.load(.acquire), .color = dvui.Color{ .r = 255, .g = 120, .b = 180, .a = 255 } },
-                .{ .name = "YT", .st = resolver.status_yt.load(.acquire), .color = dvui.Color{ .r = 255, .g = 80, .b = 80, .a = 255 } },
+            const seg_btn = struct {
+                fn opts(active: bool, id: usize) dvui.Options {
+                    return .{
+                        .id_extra = id,
+                        .color_fill = if (active) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                        .color_text = if (active) dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 } else theme.colors.text_secondary,
+                        .color_border = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                        .border = dvui.Rect.all(0),
+                        .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
+                        .corner_radius = dvui.Rect.all(4),
+                        .gravity_y = 0.5,
+                    };
+                }
             };
-            for (dots, 0..) |d, di| {
-                const tc = switch (d.st) {
-                    .searching => d.color,
-                    .done => theme.colors.success,
-                    .failed => theme.colors.danger,
-                    .idle => theme.colors.text_secondary,
-                };
-                _ = dvui.label(@src(), "{s}", .{safeUtf8(d.name)}, .{
-                    .id_extra = di + 8010,
-                    .color_text = tc,
-                    .padding = .{ .x = 3, .y = 0, .w = 3, .h = 0 },
-                    .gravity_y = 0.5,
-                });
+
+            if (dvui.button(@src(), "Universal", .{}, seg_btn.opts(uni_active, 8000))) {
+                state.app.universal_search = true;
+            }
+            if (dvui.button(@src(), "Torrent", .{}, seg_btn.opts(!uni_active, 8001))) {
+                state.app.universal_search = false;
             }
         }
-    }
-
-    // ── Search input row (single pill with inline button, matches paste-box) ──
-    {
-        var outer = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-        });
-        defer outer.deinit();
 
         const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
         var input_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -702,8 +669,9 @@ pub fn renderSearchContent() void {
             .border = dvui.Rect.all(1),
             .color_border = dvui.Color{ .r = 40, .g = 40, .b = 55, .a = 180 },
             .padding = .{ .x = 2, .y = 1, .w = 2, .h = 1 },
+            .min_size_content = .{ .w = 160, .h = 0 },
+            .gravity_y = 0.5,
         });
-        defer input_row.deinit();
 
         var te_opts = theme.optInput();
         te_opts.color_fill = transparent;
@@ -765,6 +733,11 @@ pub fn renderSearchContent() void {
                 resolver.clearResults();
             }
         }
+        input_row.deinit();
+
+        // Live source status — icon-only chips + count, INLINE in the toolbar
+        // (replaces the old separate header + chip rows).
+        if (uni_active) renderSourceStatusCluster();
     }
 
     // ── Universal results (if in universal mode) ──
@@ -1349,35 +1322,34 @@ fn renderUniversalCapabilities() void {
 
 /// Live search progress — a header with the query + a running result count,
 /// and a chip per source that flips searching → done/failed in real time.
-fn renderUniversalProgress() void {
+/// Compact, icon-only source status for the toolbar: live count + one tinted
+/// glyph per source (accent = searching, green = done, red = failed; the full
+/// name + state live in the tooltip). While resolving, a self-refreshing
+/// spinner keeps counts live and a 200ms timer polls worker status.
+fn renderSourceStatusCluster() void {
     const resolver = @import("resolver.zig");
+    const resolving = resolver.isResolving();
+    if (!resolving) return; // when done, the results header below carries the count
 
-    // Header: query + live count.
-    {
-        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = 9200,
-            .expand = .horizontal,
-            .padding = .{ .x = 12, .y = 8, .w = 12, .h = 4 },
-        });
-        defer hdr.deinit();
-        dvui.icon(@src(), "searching", icons.tvg.lucide.@"loader-circle", .{}, .{
-            .color_text = theme.colors.accent,
-            .min_size_content = theme.iconSize(.sm),
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-        });
-        const q = resolver.resolver_query[0..resolver.resolver_query_len];
-        var hb: [320]u8 = undefined;
-        const hs = std.fmt.bufPrintZ(&hb, "Searching “{s}” — {d} found", .{ safeUtf8(q), resolver.result_count }) catch "Searching…";
-        _ = dvui.label(@src(), "{s}", .{hs}, .{ .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
-    }
+    // Live count.
+    dvui.spinner(@src(), .{
+        .color_text = theme.colors.accent,
+        .min_size_content = .{ .w = 14, .h = 14 },
+        .gravity_y = 0.5,
+        .margin = .{ .x = 8, .y = 0, .w = 4, .h = 0 },
+    });
+    var cb: [16]u8 = undefined;
+    const cs = std.fmt.bufPrint(&cb, "{d}", .{resolver.result_count}) catch "0";
+    _ = dvui.label(@src(), "{s}", .{cs}, .{
+        .color_text = theme.colors.text_secondary,
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+    });
 
-    // Per-source status chips (live).
     const Row = struct { icon: []const u8, name: []const u8, st: resolver.SourceStatus };
-    const tr = combinedTorrentStatus();
     const rows = [_]Row{
         .{ .icon = icons.tvg.lucide.@"hard-drive", .name = "On disk", .st = resolver.status_local.load(.acquire) },
-        .{ .icon = icons.tvg.lucide.magnet, .name = "Torrents", .st = tr },
+        .{ .icon = icons.tvg.lucide.magnet, .name = "Torrents", .st = combinedTorrentStatus() },
         .{ .icon = icons.tvg.lucide.server, .name = "Jellyfin", .st = resolver.status_jf.load(.acquire) },
         .{ .icon = icons.tvg.lucide.youtube, .name = "YouTube", .st = resolver.status_yt.load(.acquire) },
         .{ .icon = icons.tvg.lucide.tv, .name = "Anime", .st = resolver.status_anime.load(.acquire) },
@@ -1385,30 +1357,39 @@ fn renderUniversalProgress() void {
         .{ .icon = icons.tvg.lucide.clapperboard, .name = "Stremio", .st = resolver.status_stremio.load(.acquire) },
         .{ .icon = icons.tvg.lucide.rss, .name = "RSS", .st = resolver.status_rss.load(.acquire) },
     };
-    var flow = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .id_extra = 9210, .expand = .horizontal, .padding = .{ .x = 12, .y = 2, .w = 12, .h = 6 } });
-    defer flow.deinit();
     for (rows, 0..) |r, i| {
-        const done = r.st == .done;
-        const failed = r.st == .failed;
-        const accent = if (failed) theme.colors.danger else if (done) theme.colors.success else theme.colors.accent;
+        const tint = switch (r.st) {
+            .searching => theme.colors.accent,
+            .done => theme.colors.success,
+            .failed => theme.colors.danger,
+            .idle => theme.colors.text_tertiary,
+        };
         var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i + 9220,
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
-            .margin = dvui.Rect.all(3),
+            .gravity_y = 0.5,
+            .padding = dvui.Rect.all(3),
         });
-        defer chip.deinit();
-        dvui.icon(@src(), r.name, r.icon, .{}, .{ .id_extra = i + 9220, .color_text = if (done or failed) theme.colors.text_secondary else theme.colors.accent, .min_size_content = .{ .w = 14, .h = 14 }, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 } });
-        _ = dvui.label(@src(), "{s}", .{r.name}, .{ .id_extra = i + 9220, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
-        const glyph = if (failed) icons.tvg.lucide.@"circle-x" else if (done) icons.tvg.lucide.@"circle-check" else icons.tvg.lucide.@"loader-circle";
-        dvui.icon(@src(), "st", glyph, .{}, .{ .id_extra = i + 9230, .color_text = accent, .min_size_content = .{ .w = 13, .h = 13 }, .gravity_y = 0.5, .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 } });
+        dvui.icon(@src(), r.name, r.icon, .{}, .{
+            .id_extra = i + 9221,
+            .color_text = tint,
+            .min_size_content = .{ .w = 14, .h = 14 },
+            .gravity_y = 0.5,
+        });
+        const state_name: []const u8 = switch (r.st) {
+            .searching => "searching",
+            .done => "done",
+            .failed => "failed",
+            .idle => "idle",
+        };
+        var tip_buf: [48]u8 = undefined;
+        const tip_txt = std.fmt.bufPrint(&tip_buf, "{s} — {s}", .{ r.name, state_name }) catch r.name;
+        components.tipId(@src(), chip.data().*, tip_txt, i);
+        chip.deinit();
     }
 
-    // Poll ~5×/s while resolving so counts/status update live without input.
-    const tid = flow.data().id;
-    if (dvui.timerDoneOrNone(tid)) dvui.timer(tid, 200_000);
+    // Liveness: the spinner above runs on a dvui keyed animation, which keeps
+    // frames coming while resolving — worker status flips and the live count
+    // render without any extra polling timer.
 }
 
 /// Torrent sources span three backends (nova2, 1337x, YTS) — show one chip:
@@ -1426,9 +1407,14 @@ fn combinedTorrentStatus() @import("resolver.zig").SourceStatus {
 fn renderUniversalResults() void {
     const resolver = @import("resolver.zig");
 
-    // Status / loading indicator
+    // While resolving, the toolbar's status cluster (spinner · count · source
+    // icons) carries ALL the progress signal — the content area shows a quiet
+    // searching state instead of the old stacked header + chip rows.
     if (resolver.isResolving()) {
-        renderUniversalProgress();
+        const q = resolver.resolver_query[0..resolver.resolver_query_len];
+        var hb: [300]u8 = undefined;
+        const hs = std.fmt.bufPrint(&hb, "Searching \u{201c}{s}\u{201d} across every source\u{2026}", .{safeUtf8(q)}) catch "Searching…";
+        components.loadingState(hs);
     } else if (resolver.result_count > 0) {
         // Count + sort/filter row.
         var fr = dvui.box(@src(), .{ .dir = .horizontal }, .{
