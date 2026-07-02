@@ -37,6 +37,15 @@ pub fn render() void {
 
     renderStats();
 
+    // AI chat lives on Home now (was squatting on the player's empty cell).
+    // Renders nothing until a conversation exists; the omnibox ('>' prefix or
+    // trailing '?') routes here.
+    {
+        var chat_center = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.5 });
+        defer chat_center.deinit();
+        @import("grid.zig").renderChatSection();
+    }
+
     // Taste Receipts: the For-You rail. Generate recommendations once per
     // session (DB + vec0 KNN — a one-time cost on first Home view; off-thread
     // optimization is a follow-up), then render the rail (no-op when empty).

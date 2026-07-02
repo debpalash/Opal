@@ -417,10 +417,9 @@ fn omnibox() void {
     }
     if (text[0] == '>' or text[len - 1] == '?') {
         header.submitInput(); // → AI chat
-        // Land on the player/home surface where the inline chat history renders
-        // (the streaming reply also shows in the chat overlay). The .assistant
-        // route now hosts AI SETTINGS, not the conversation.
-        state.app.router.navigate(.player);
+        // The conversation renders on HOME (grid.renderChatSection); the
+        // .assistant route hosts AI SETTINGS, not the chat.
+        state.app.router.navigate(.home);
         return;
     }
     // Default: unified search across every source.

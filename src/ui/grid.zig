@@ -64,6 +64,73 @@ pub fn cleanDisplayName(out: []u8, raw: []const u8) []const u8 {
     return if (written > 0) out[0..written] else raw;
 }
 
+/// The AI chat surface: history bubbles + "Seeing:" context + voice phase +
+/// confirm-gated Clear. Renders nothing until a conversation exists. Hosted on
+/// the HOME page (home.zig); it used to live in the player's empty cell, where
+/// it competed with playback for the surface.
+pub fn renderChatSection() void {
+    const ai_chat = @import("../services/ai_chat.zig");
+    const has_chat = ai_chat.message_count > 0 or ai_chat.is_generating.load(.acquire);
+    if (!has_chat) return;
+
+    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .background = false,
+        .border = dvui.Rect.all(0),
+        .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.sm, .w = theme.spacing.xs, .h = theme.spacing.sm },
+        .max_size_content = dvui.Options.MaxSize.width(760),
+    });
+    defer card.deinit();
+
+    renderInlineChat();
+
+    // ── Context line + voice phase ──
+    {
+        const voice = @import("../services/ai_voice.zig");
+        const has_media = state.app.active_player_idx < state.app.players.items.len;
+        if (has_media) {
+            const ap = state.app.players.items[state.app.active_player_idx];
+            var title_buf: [128]u8 = undefined;
+            const title_len = ap.getMediaTitle(&title_buf);
+            var mb: [128]u8 = undefined;
+            const media_label = @import("../core/text.zig").safeUtf8Buf(title_buf[0..title_len], &mb);
+            var chip_buf: [256]u8 = undefined;
+            if (media_label.len > 0) {
+                const chip_txt = std.fmt.bufPrint(&chip_buf, "Seeing: {s}", .{media_label}) catch "";
+                if (chip_txt.len > 0) {
+                    // Borderless, quiet context line.
+                    _ = dvui.label(@src(), "{s}", .{chip_txt}, .{
+                        .color_text = theme.colors.text_tertiary,
+                        .margin = .{ .y = theme.spacing.xs },
+                        .gravity_x = 0.5,
+                    });
+                }
+            }
+        }
+
+        // Voice phase — one quiet text_tertiary line.
+        const phase_txt: ?[]const u8 = switch (voice.conv_phase) {
+            .listening => "Listening…",
+            .transcribing => "Transcribing…",
+            .thinking => "Thinking…",
+            .speaking => "Speaking…",
+            .idle => if (ai_chat.is_generating.load(.acquire)) "Thinking…" else null,
+        };
+        if (phase_txt) |txt| {
+            _ = dvui.label(@src(), "{s}", .{txt}, .{
+                .color_text = theme.colors.text_tertiary,
+                .margin = .{ .y = theme.spacing.xs },
+                .gravity_x = 0.5,
+            });
+        }
+    }
+
+    // Clear chat — two-step confirm to avoid accidental wipe.
+    if (components.confirmDangerButton(@src(), "Clear chat", 0)) {
+        ai_chat.clearHistory();
+    }
+}
+
 fn renderInlineChat() void {
     const ai_chat = @import("../services/ai_chat.zig");
 
@@ -588,26 +655,23 @@ pub fn renderGrid() !void {
 
                     const header = @import("header.zig");
                     if (p.current_torrent_id < 0 and i == state.app.active_player_idx and header.shouldUrlInputBeInGrid()) {
-                        const ai_chat = @import("../services/ai_chat.zig");
-                        const has_chat = ai_chat.message_count > 0 or ai_chat.is_generating.load(.acquire);
-
+                        // Player empty cell = hero input + resume list ONLY.
+                        // The chat interface moved to the Home page
+                        // (renderChatSection, called from home.zig) — the
+                        // player surface stays about playback.
                         var outer = dvui.box(@src(), .{ .dir = .vertical }, .{
                             .id_extra = i,
                             .expand = .both,
-                            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                            .color_fill = theme.transparent,
                         });
 
                         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
                             .id_extra = i,
                             .gravity_x = 0.5,
-                            // Empty state stays vertically centered; once a conversation
-                            // starts, anchor near the top so the growing chat expands
-                            // downward instead of creeping up under the toolbar.
-                            .gravity_y = if (has_chat) @as(f32, 0.04) else 0.34,
+                            .gravity_y = 0.34,
                             .background = false,
                             .border = dvui.Rect.all(0),
                             .padding = .{ .x = 24, .y = 20, .w = 24, .h = 20 },
-                            .margin = .{ .x = 0, .y = if (has_chat) @as(f32, 10) else 0, .w = 0, .h = 0 },
                             .min_size_content = .{ .w = 620, .h = 0 },
                             .max_size_content = .{ .w = 760, .h = std.math.floatMax(f32) },
                         });
@@ -617,85 +681,6 @@ pub fn renderGrid() !void {
 
                         // Continue Watching — returning users want this front and center
                         renderContinueWatching();
-
-                        // Empty home: the hero input above is the single focal point —
-                        // no separate drop-zone hint (the input placeholder carries it).
-                        // The inline chat only appears once a conversation exists.
-                        if (has_chat) {
-                            renderInlineChat();
-                        }
-
-                        // ── Context line + voice phase ──
-                        // Both are conversation affordances — suppressed entirely on the
-                        // empty home so the hero input stays the single focal point.
-                        if (has_chat) {
-                            const voice = @import("../services/ai_voice.zig");
-                            const has_media = state.app.active_player_idx < state.app.players.items.len;
-                            if (has_media) {
-                                const ap = state.app.players.items[state.app.active_player_idx];
-                                var title_buf: [128]u8 = undefined;
-                                const title_len = ap.getMediaTitle(&title_buf);
-                                var mb: [128]u8 = undefined;
-                                const media_label = @import("../core/text.zig").safeUtf8Buf(title_buf[0..title_len], &mb);
-                                var chip_buf: [256]u8 = undefined;
-                                if (media_label.len > 0) {
-                                    const chip_txt = std.fmt.bufPrint(&chip_buf, "Seeing: {s}", .{media_label}) catch "";
-                                    if (chip_txt.len > 0) {
-                                        // Borderless, quiet context line.
-                                        _ = dvui.label(@src(), "{s}", .{chip_txt}, .{
-                                            .color_text = theme.colors.text_tertiary,
-                                            .margin = .{ .y = theme.spacing.xs },
-                                            .gravity_x = 0.5,
-                                        });
-                                    }
-                                }
-                            }
-
-                            // Voice phase — one quiet text_tertiary line.
-                            const ai_chat_mod = @import("../services/ai_chat.zig");
-                            const phase_txt: ?[]const u8 = switch (voice.conv_phase) {
-                                .listening => "Listening…",
-                                .transcribing => "Transcribing…",
-                                .thinking => "Thinking…",
-                                .speaking => "Speaking…",
-                                .idle => if (ai_chat_mod.is_generating.load(.acquire)) "Thinking…" else null,
-                            };
-                            if (phase_txt) |txt| {
-                                _ = dvui.label(@src(), "{s}", .{txt}, .{
-                                    .color_text = theme.colors.text_tertiary,
-                                    .margin = .{ .y = theme.spacing.xs },
-                                    .gravity_x = 0.5,
-                                });
-                            }
-                        }
-
-                        if (has_chat) {
-                            // Clear chat — two-step confirm to avoid accidental wipe.
-                            // Uses a static Guard var so the confirm state survives
-                            // across frames but resets if user clicks elsewhere.
-                            const Guard = struct {
-                                var armed: bool = false;
-                            };
-                            const label: []const u8 = if (Guard.armed) "Click again to confirm" else "Clear chat";
-                            // Calm: ghost button. Armed state reads as danger TEXT only —
-                            // no resting red fill.
-                            if (dvui.button(@src(), label, .{}, .{
-                                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                                .color_text = if (Guard.armed) theme.colors.danger else theme.colors.text_secondary,
-                                .border = dvui.Rect.all(0),
-                                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-                                .margin = .{ .y = theme.spacing.sm },
-                                .gravity_x = 0.5,
-                                .corner_radius = theme.dims.rad_sm,
-                            })) {
-                                if (Guard.armed) {
-                                    ai_chat.clearHistory();
-                                    Guard.armed = false;
-                                } else {
-                                    Guard.armed = true;
-                                }
-                            }
-                        }
 
                         card.deinit();
                         outer.deinit();

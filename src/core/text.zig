@@ -33,8 +33,18 @@ pub fn safeUtf8(s: []const u8) []const u8 {
 /// buffer as `out`.
 pub fn safeUtf8Buf(s: []const u8, out: []u8) []const u8 {
     const n = @min(s.len, out.len);
+    // Defensive: a caller passing a slice OF `out` itself already owns a
+    // stable copy — @memcpy would panic ("arguments alias"; crashed the TV
+    // detail view). Just validate in place.
+    if (s.ptr == out.ptr) return safeUtf8(s[0..n]);
     @memcpy(out[0..n], s[0..n]);
     return safeUtf8(out[0..n]);
+}
+
+test "safeUtf8Buf tolerates aliased src/dst (in-place validation)" {
+    var buf: [8]u8 = undefined;
+    @memcpy(buf[0..5], "hello");
+    try std.testing.expectEqualStrings("hello", safeUtf8Buf(buf[0..5], &buf));
 }
 
 test "safeUtf8 passes valid through and trims invalid tail" {

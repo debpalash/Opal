@@ -1767,7 +1767,10 @@ fn renderTvDetail() void {
                     ov_buf[117] = '.';
                     ov_buf[118] = '.';
                     ov_buf[119] = '.';
-                    break :blk safeUtf8Buf(ov_buf[0..120], &ov_buf);
+                    // In-place validation only — ov_buf is already a stable
+                    // copy. safeUtf8Buf(ov_buf, &ov_buf) was an @memcpy-
+                    // arguments-alias PANIC for any overview > 120 bytes.
+                    break :blk safeUtf8(ov_buf[0..120]);
                 };
                 _ = dvui.label(@src(), "{s}", .{ov_str}, .{
                     .id_extra = ei + 43200,
