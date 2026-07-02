@@ -18,9 +18,9 @@ const browser = @import("../services/browser.zig");
 
 const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
-const STRIP_CARD_W: f32 = 132;
-const STRIP_POSTER_H: f32 = STRIP_CARD_W * 1.5;
 const STRIP_MAX: usize = 24; // cap cards per strip (perf)
+const STRIP_CHROME: f32 = 88; // pct/type row + wrapped title under each poster
+const RAIL_EXTRA: f32 = STRIP_CHROME + 38; // strip chrome + section header
 
 // ── Chat-mode page state ──
 // Own the transcript's ScrollInfo so new messages can pin the view to the
@@ -29,12 +29,31 @@ const STRIP_MAX: usize = 24; // cap cards per strip (perf)
 var chat_si: dvui.ScrollInfo = .{};
 var chat_last_sig: u64 = 0;
 
+// Logo-click escape hatch: view the Home overview while a conversation
+// exists. Cleared automatically when the conversation grows (new submit).
+var overview_requested: bool = false;
+var overview_seen_count: usize = 0;
+
+/// Called by the shell brand button: show the hub even mid-conversation.
+pub fn showOverview() void {
+    overview_requested = true;
+    overview_seen_count = @import("../services/ai_chat.zig").message_count;
+}
+var chat_sidebar_open: bool = true; // Claude-style history rail (auto-hidden when narrow)
+
 pub fn render() void {
     // Home is the conversational console: once a conversation exists the page
     // IS the chat (transcript + pinned composer, like ChatGPT/Claude); when
     // idle it's a hero prompt over the media hub (rails + stats).
     const ai_chat = @import("../services/ai_chat.zig");
-    const has_chat = ai_chat.message_count > 0 or ai_chat.is_generating.load(.acquire);
+    // A new message while overviewing pulls the page back into the chat.
+    if (overview_requested and ai_chat.message_count != overview_seen_count)
+        overview_requested = false;
+    const has_chat = @import("home_pure.zig").chatModeActive(
+        ai_chat.message_count,
+        ai_chat.is_generating.load(.acquire),
+        overview_requested,
+    );
     if (has_chat) {
         renderChatMode();
         return;
@@ -52,14 +71,11 @@ pub fn render() void {
     });
     defer col.deinit();
 
-    renderHero();
-
-    // Everything below the hero lives in ONE centered reading column — the
-    // console layout (like the chat transcript), not a full-width dashboard.
-    // dvui expand ignores max_size_content, so compute a fixed width.
-    // Centering caveat: a horizontal box packs children left along its main
-    // axis (gravity there is ignored) — cross-axis gravity in a VERTICAL
-    // parent is what actually centers a fixed-width child.
+    // Everything lives in ONE centered reading column — the console layout
+    // (like the chat transcript), not a full-width dashboard. dvui expand
+    // ignores max_size_content, so compute a fixed width. Centering caveat:
+    // a horizontal box packs children left along its main axis (gravity there
+    // is ignored) — cross-axis gravity in a VERTICAL parent is what centers.
     var wrap = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
     defer wrap.deinit();
     const avail = wrap.data().rect.w;
@@ -85,28 +101,69 @@ pub fn render() void {
         }
     }
 
+    // Kick the trending fetch independently of layout: the rail's budget
+    // gate must never decide whether data loads (it once did, and a short
+    // window meant trending never fetched at all this session).
+    kickTrendingFetch();
+
     const watching = &state.app.tmdb.watching;
     const watchlist = &state.app.tmdb.watchlist;
     const favorites = &state.app.tmdb.favorites;
 
-    // Console order: what you're mid-way through, then discovery (trending +
-    // taste), then your lists, then raw history. No stats dashboard — the
-    // conversation and the media are the page.
-    if (watching.items.len > 0)
-        posterStrip("Continue Watching", icons.tvg.lucide.play, watching, .Watching, 1);
-    renderTrendingRail();
-    @import("discovery_ui.zig").renderForYouRail();
-    if (watchlist.items.len > 0)
-        posterStrip("Watchlist", icons.tvg.lucide.bookmark, watchlist, .Watchlist, 2);
-    if (favorites.items.len > 0)
-        posterStrip("Favorites", icons.tvg.lucide.star, favorites, .Favorites, 3);
-    renderRecentlyPlayed();
+    // ── App-shell fit ──
+    // Home reads as ONE screen, not a scrolling feed: measure everything
+    // above the rails (previous frame's min size — the shell.zig MeasuredH
+    // pattern; estimating heights drifted ~120px and clipped rail titles),
+    // then render rails in priority order while they fit the leftover.
+    // "See all" covers the rest; the scrollArea stays as a safety net.
+    var top = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+    const top_h: f32 = if (dvui.minSizeGet(top.data().id)) |ms| ms.h else 430;
 
-    // Nothing at all to show (no TMDB key, no history) → gentle CTA.
+    renderHero();
+    // Resume first — the most actionable row lives right under the prompt.
+    renderRecentlyPlayed();
+    top.deinit();
+
+    const win_h = dvui.windowRect().h;
+    const tall = win_h >= 980;
+    var budget: f32 = win_h - 52 - top_h; // 52 ≈ app header bar + page chrome
+    // Card sizing: when the leftover fits only one rail, let the posters grow
+    // into it (down to 84px before a rail is dropped — a small rail beats an
+    // empty shell). With room for several rails, use the preferred size.
+    const pref_w: f32 = if (tall) 132 else 104;
+    const two_rails: f32 = 2 * (84.0 * 1.5 + RAIL_EXTRA);
+    const fit_w: f32 = (budget - RAIL_EXTRA) / 1.5; // invert rail_h(card_w)
+    const card_w: f32 = if (budget < two_rails)
+        std.math.clamp(fit_w, 84.0, 132.0)
+    else
+        std.math.clamp(@min(pref_w, fit_w), 84.0, 132.0);
+    const rail_h: f32 = card_w * 1.5 + RAIL_EXTRA;
+    const foryou_h: f32 = 132 + 24 + 38; // discovery_ui CARD_H + strip + header
+
+    if (watching.items.len > 0 and budget >= rail_h) {
+        posterStrip("Continue Watching", icons.tvg.lucide.play, watching, .Watching, 1, card_w);
+        budget -= rail_h;
+    }
+    if (budget >= rail_h and renderTrendingRail(card_w)) budget -= rail_h;
+    if (budget >= foryou_h and @import("../services/recommendations.zig").rec_count > 0) {
+        @import("discovery_ui.zig").renderForYouRail();
+        budget -= foryou_h;
+    }
+    if (watchlist.items.len > 0 and budget >= rail_h) {
+        posterStrip("Watchlist", icons.tvg.lucide.bookmark, watchlist, .Watchlist, 2, card_w);
+        budget -= rail_h;
+    }
+    if (favorites.items.len > 0 and budget >= rail_h) {
+        posterStrip("Favorites", icons.tvg.lucide.star, favorites, .Favorites, 3, card_w);
+        budget -= rail_h;
+    }
+
+    // Nothing at all to show → the value-prop tiles + gentle CTA fill the shell.
     const everything_empty = watching.items.len == 0 and watchlist.items.len == 0 and
         favorites.items.len == 0 and wh.count == 0;
-    if (everything_empty and state.app.tmdb.api_key_len == 0) {
-        renderEmptyState();
+    if (everything_empty) {
+        renderCapabilities();
+        if (state.app.tmdb.api_key_len == 0) renderEmptyState();
     }
 }
 
@@ -115,11 +172,10 @@ pub fn render() void {
 /// instantly from the disk cache on relaunch); kicks ONE fetch per session
 /// when the list is empty. Hidden while the shared list holds a search or
 /// genre-discover result set — those aren't trending.
-fn renderTrendingRail() void {
+fn kickTrendingFetch() void {
     const t = &state.app.tmdb;
     if (t.api_key_len == 0) return;
     if (t.view != .Trending or t.genre_idx != 0) return;
-
     const Once = struct {
         var kicked: bool = false;
     };
@@ -128,9 +184,16 @@ fn renderTrendingRail() void {
         t.loaded_once = true; // Browse must not immediately refetch over this
         @import("../services/tmdb_api.zig").fetchCurrentView(false);
     }
-    if (t.results.items.len == 0) return;
+}
 
-    posterStrip("Trending tonight", icons.tvg.lucide.flame, &t.results, .Trending, 4);
+fn renderTrendingRail(card_w: f32) bool {
+    const t = &state.app.tmdb;
+    if (t.api_key_len == 0) return false;
+    if (t.view != .Trending or t.genre_idx != 0) return false;
+    if (t.results.items.len == 0) return false;
+
+    posterStrip("Trending tonight", icons.tvg.lucide.flame, &t.results, .Trending, 4, card_w);
+    return true;
 }
 
 // ── Hero (idle console) — greeting + big prompt + suggestion chips ──
@@ -138,14 +201,15 @@ fn renderTrendingRail() void {
 fn renderHero() void {
     const home_pure = @import("home_pure.zig");
 
-    // Breathing room scales with the window so the prompt sits like a landing
-    // hero, not a toolbar row. windowRect() is logical units (same as layout).
+    // App-shell hero: compact enough that the rails below stay on-screen.
+    // windowRect() is logical units (same space as layout).
     const win_h = dvui.windowRect().h;
-    const top_pad = std.math.clamp(win_h * 0.11, 20.0, 140.0);
+    const tall = win_h >= 980;
+    const top_pad = std.math.clamp(win_h * 0.018, 6.0, 32.0);
 
     var hero = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
-        .padding = .{ .x = theme.spacing.lg, .y = top_pad, .w = theme.spacing.lg, .h = theme.spacing.sm },
+        .padding = .{ .x = theme.spacing.lg, .y = top_pad, .w = theme.spacing.lg, .h = 0 },
     });
     defer hero.deinit();
 
@@ -167,19 +231,20 @@ fn renderHero() void {
         });
     }
 
-    // Headline — one size above the compact ramp on purpose: this is the one
-    // landing-page moment in the app.
+    // Headline — big when there's room, ramp-display when the shell is tight.
     _ = dvui.label(@src(), "{s}", .{home_pure.headlineForHour(hour)}, .{
         .color_text = theme.colors.text_primary,
-        .font = dvui.themeGet().font_title.withSize(27),
+        .font = dvui.themeGet().font_title.withSize(if (tall) 26 else 21),
         .gravity_x = 0.5,
-        .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
+        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
     });
-    _ = dvui.label(@src(), "Ask for a mood, a title, or paste any link — Opal finds it, plays it, and learns your taste.", .{}, .{
-        .color_text = theme.colors.text_tertiary,
-        .gravity_x = 0.5,
-        .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.md },
-    });
+    if (tall) {
+        _ = dvui.label(@src(), "Ask for a mood, a title, or paste any link — Opal finds it, plays it, and learns your taste.", .{}, .{
+            .color_text = theme.colors.text_tertiary,
+            .gravity_x = 0.5,
+            .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.sm },
+        });
+    }
 
     // The big prompt — same unified input the header uses (media plays,
     // questions go to the AI, everything else fans out to search). The pill
@@ -190,11 +255,11 @@ fn renderHero() void {
     {
         var wrap = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
-            .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = 0 },
+            .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
         });
         defer wrap.deinit();
         const avail = wrap.data().rect.w;
-        const chips_w: f32 = if (avail > 1) @min(720.0, avail) else 720.0;
+        const chips_w: f32 = if (avail > 1) @min(800.0, avail) else 800.0;
         var chips = dvui.flexbox(@src(), .{ .justify_content = .center }, .{
             .gravity_x = 0.5,
             .min_size_content = .{ .w = chips_w, .h = 0 },
@@ -203,7 +268,7 @@ fn renderHero() void {
         defer chips.deinit();
 
         const starters = [_]struct { icon: []const u8, label: []const u8, prompt: []const u8 }{
-            .{ .icon = icons.tvg.lucide.@"wand-sparkles", .label = "Recommend tonight's movie", .prompt = "Recommend a movie for tonight" },
+            .{ .icon = icons.tvg.lucide.@"wand-sparkles", .label = "Movie for tonight", .prompt = "Recommend a movie for tonight" },
             .{ .icon = icons.tvg.lucide.flame, .label = "What's trending?", .prompt = "What's trending this week?" },
             .{ .icon = icons.tvg.lucide.laugh, .label = "Something funny", .prompt = "Play something funny" },
             .{ .icon = icons.tvg.lucide.telescope, .label = "Mind-bending sci-fi", .prompt = "Find a mind-bending sci-fi show" },
@@ -244,12 +309,10 @@ fn renderHero() void {
             });
         }
     }
-
-    renderCapabilities();
 }
 
-/// Three quiet value-prop tiles under the hero — what the agent can do.
-/// Informational (no hover/click): landing copy, not chrome.
+/// Three quiet value-prop tiles — the agent pitch. Shown only when the hub
+/// has no content yet (informational, no hover/click: landing copy, not chrome).
 fn renderCapabilities() void {
     const caps = [_]struct { icon: []const u8, title: []const u8, body: []const u8 }{
         .{ .icon = icons.tvg.lucide.zap, .title = "Plays everything", .body = "Magnets, torrents, files, streams — paste it and it plays." },
@@ -337,12 +400,131 @@ fn localHour() u8 {
 
 // ── Chat mode — full-page transcript + pinned composer ──
 
+/// Claude-style history sidebar: New chat on top, then past conversations
+/// (titled by their first user message), current one highlighted. Clicking a
+/// session restores its transcript and continues it.
+fn renderChatSidebar() void {
+    const ai_chat = @import("../services/ai_chat.zig");
+    const home_pure = @import("home_pure.zig");
+    ai_chat.loadSessions();
+
+    var sb = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .vertical,
+        .min_size_content = .{ .w = 236, .h = 0 },
+        .max_size_content = dvui.Options.MaxSize.width(236),
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .color_border = theme.colors.border_subtle,
+        .border = .{ .x = 0, .y = 0, .w = 1, .h = 0 },
+        .padding = dvui.Rect.all(theme.spacing.sm),
+    });
+    defer sb.deinit();
+
+    // New chat — wipes the live transcript (history stays), lands on the hero.
+    {
+        var nc = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .background = true,
+            .color_fill = theme.colors.bg_elevated,
+            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
+        });
+        defer nc.deinit();
+        var nc_hover = false;
+        const nc_clicked = dvui.clicked(nc.data(), .{ .hovered = &nc_hover });
+        if (nc_hover) nc.data().options.color_fill = theme.colors.bg_hover;
+        nc.drawBackground();
+        dvui.icon(@src(), "new-chat", icons.tvg.lucide.@"square-pen", .{}, .{
+            .color_text = theme.colors.accent,
+            .min_size_content = .{ .w = 14, .h = 14 },
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        });
+        _ = dvui.label(@src(), "New chat", .{}, .{
+            .color_text = theme.colors.text_primary,
+            .gravity_y = 0.5,
+        });
+        if (nc_clicked) {
+            ai_chat.newChat();
+            chat_last_sig = 0;
+            return; // message_count is 0 now — the page flips to the hero
+        }
+    }
+
+    _ = dvui.label(@src(), "Recents", .{}, .{
+        .color_text = theme.colors.text_tertiary,
+        .margin = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xs },
+    });
+
+    var list = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = false });
+    defer list.deinit();
+
+    const cur_sid = ai_chat.session_id[0..ai_chat.session_id_len];
+    var clicked_session: ?usize = null;
+
+    for (ai_chat.sessions[0..ai_chat.session_count], 0..) |*s, si| {
+        const is_current = s.sid_len > 0 and std.mem.eql(u8, s.sid[0..s.sid_len], cur_sid);
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = si + 88000,
+            .expand = .horizontal,
+            .background = true,
+            .color_fill = if (is_current) theme.colors.bg_hover else transparent,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+        });
+        defer row.deinit();
+        var hov = false;
+        if (dvui.clicked(row.data(), .{ .hovered = &hov })) clicked_session = si;
+        if (hov and !is_current) row.data().options.color_fill = theme.colors.bg_hover;
+        row.drawBackground();
+
+        // Title = first user message, clipped on a UTF-8 boundary; validate
+        // (DB content is external input) before dvui measures it.
+        var clip_buf: [64]u8 = undefined;
+        const clipped = if (s.title_len > 0)
+            home_pure.clipLabel(&clip_buf, s.title[0..s.title_len], 46)
+        else
+            "Untitled chat";
+        var safe_buf: [72]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(clipped, &safe_buf)}, .{
+            .id_extra = si + 88000,
+            .expand = .horizontal,
+            .color_text = if (is_current) theme.colors.text_primary else theme.colors.text_secondary,
+            .gravity_y = 0.5,
+        });
+    }
+
+    if (ai_chat.session_count == 0) {
+        _ = dvui.label(@src(), "No past chats yet", .{}, .{
+            .color_text = theme.colors.text_tertiary,
+            .padding = dvui.Rect.all(theme.spacing.sm),
+        });
+    }
+
+    // Restore AFTER the loop — loadSession rewrites the live transcript.
+    if (clicked_session) |si| {
+        const s = &ai_chat.sessions[si];
+        ai_chat.loadSession(s.sid[0..s.sid_len]);
+        chat_last_sig = 0; // re-pin the follow-scroll to the loaded bottom
+    }
+}
+
 fn renderChatMode() void {
     const ai_chat = @import("../services/ai_chat.zig");
     const grid = @import("grid.zig");
 
-    var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+    // Claude-style shell: history sidebar on the left (collapsible; auto-
+    // hidden on narrow windows), transcript + composer in the main column.
+    var page = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
     defer page.deinit();
+
+    const win_w = dvui.windowRect().w;
+    if (chat_sidebar_open and win_w >= 880) renderChatSidebar();
+
+    var main = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+    defer main.deinit();
 
     // Transcript — the page scroll, centered reading column.
     // NOTE: dvui `expand` IGNORES max_size_content (expansion always fills the
@@ -373,13 +555,18 @@ fn renderChatMode() void {
         grid.renderChatMessages();
     }
 
-    // Follow the conversation: when the transcript grows (new message or new
-    // streamed bytes), pin the scroll to the bottom — manual scrolling back
-    // is untouched between growth events.
+    // Follow the conversation: when the transcript grows (new message, new
+    // streamed bytes, inline results landing, catalog posters arriving), pin
+    // the scroll to the bottom — content used to grow AFTER the message and
+    // slip below the fold. Manual scrolling back is untouched between events.
     {
         var sig: u64 = ai_chat.message_count;
         if (ai_chat.message_count > 0) {
             sig = sig *% 1000003 +% ai_chat.messages[ai_chat.message_count - 1].text_len;
+        }
+        sig = sig *% 1000003 +% ai_chat.chat_result_count;
+        if (ai_chat.catalog_rail_active) {
+            sig = sig *% 1000003 +% state.app.tmdb.results.items.len;
         }
         if (sig != chat_last_sig) {
             chat_last_sig = sig;
@@ -415,6 +602,24 @@ fn renderChatMode() void {
         {
             var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
             defer meta.deinit();
+
+            // History sidebar toggle (Claude-style rail on the left).
+            var sb_wd: dvui.WidgetData = undefined;
+            if (dvui.buttonIcon(@src(), "chat-sidebar", icons.tvg.lucide.@"panel-left", .{}, .{}, .{
+                .data_out = &sb_wd,
+                .color_text = if (chat_sidebar_open) theme.colors.accent else theme.colors.text_tertiary,
+                .color_fill = theme.transparent,
+                .color_fill_hover = theme.colors.bg_hover,
+                .border = dvui.Rect.all(0),
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
+                .min_size_content = theme.iconSize(.xs),
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+            })) {
+                chat_sidebar_open = !chat_sidebar_open;
+            }
+            @import("components.zig").tip(@src(), sb_wd, if (chat_sidebar_open) "Hide chat history" else "Show chat history");
 
             // Incognito chat toggle — when on, this conversation is not
             // persisted (no conversation log, no vector memory, no starring
@@ -493,16 +698,17 @@ fn renderChatMode() void {
 
 // ── Poster strips (Continue / Trending / Watchlist / Favorites) ──
 
-fn posterStrip(title: []const u8, icon: []const u8, items: *std.ArrayListUnmanaged(state.TmdbItem), view: state.TmdbView, id: usize) void {
+fn posterStrip(title: []const u8, icon: []const u8, items: *std.ArrayListUnmanaged(state.TmdbItem), view: state.TmdbView, id: usize, card_w: f32) void {
     sectionHeader(title, icon, view, id);
 
+    const poster_h = card_w * 1.5;
     var scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
         .id_extra = id,
         .expand = .horizontal,
         // Transparent — dvui's default scroll fill is light; show the dark page.
         .background = false,
-        .min_size_content = .{ .w = 10, .h = STRIP_POSTER_H + 70 },
-        .max_size_content = .{ .w = std.math.floatMax(f32), .h = STRIP_POSTER_H + 70 },
+        .min_size_content = .{ .w = 10, .h = poster_h + STRIP_CHROME },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = poster_h + STRIP_CHROME },
         .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },
     });
     defer scroll.deinit();
@@ -513,7 +719,7 @@ fn posterStrip(title: []const u8, icon: []const u8, items: *std.ArrayListUnmanag
     const n = @min(items.items.len, STRIP_MAX);
     var i: usize = 0;
     while (i < n) : (i += 1) {
-        tmdb.renderPosterCard(&items.items[i], i, STRIP_CARD_W, STRIP_POSTER_H);
+        tmdb.renderPosterCard(&items.items[i], i, card_w, poster_h);
     }
 }
 
@@ -581,7 +787,7 @@ fn renderRecentlyPlayed() void {
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.sm, .w = theme.spacing.xs, .h = theme.spacing.xs },
+            .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = theme.spacing.xs, .h = 2 },
         });
         defer hdr.deinit();
         dvui.icon(@src(), "recent", icons.tvg.lucide.history, .{}, .{

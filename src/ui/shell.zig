@@ -173,18 +173,38 @@ fn renderTopNav(compact: bool) void {
     });
     defer bar.deinit();
 
-    // Brand
-    dvui.icon(@src(), "brand", icons.tvg.lucide.zap, .{}, .{
-        .color_text = theme.colors.accent,
-        .min_size_content = theme.iconSize(.md),
-        .gravity_y = 0.5,
-    });
-    if (!compact) {
-        _ = dvui.label(@src(), "Opal", .{}, .{
-            .color_text = theme.colors.text_primary,
+    // Brand — clickable: always returns to the Home overview (even out of
+    // the chat transcript, which otherwise owns the Home route while a
+    // conversation exists).
+    {
+        var brand = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .background = true,
+            .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
             .gravity_y = 0.5,
-            .margin = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.md, .h = 0 },
         });
+        defer brand.deinit();
+        var hovered = false;
+        if (dvui.clicked(brand.data(), .{ .hovered = &hovered })) {
+            @import("home.zig").showOverview();
+            state.app.router.navigate(.home);
+        }
+        if (hovered) brand.data().options.color_fill = theme.colors.bg_hover;
+        brand.drawBackground();
+        dvui.icon(@src(), "brand", icons.tvg.lucide.zap, .{}, .{
+            .color_text = theme.colors.accent,
+            .min_size_content = theme.iconSize(.md),
+            .gravity_y = 0.5,
+        });
+        if (!compact) {
+            _ = dvui.label(@src(), "Opal", .{}, .{
+                .color_text = theme.colors.text_primary,
+                .gravity_y = 0.5,
+                .margin = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = 0 },
+            });
+        }
     }
 
     // Back / forward — disabled (dimmed, inert) when there's no history in

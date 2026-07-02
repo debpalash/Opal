@@ -69,3 +69,18 @@ test "clipLabel clips on UTF-8 boundaries with ellipsis" {
     // 2-byte é straddles the cut — must back off, not split.
     try std.testing.expectEqualStrings("caf\xe2\x80\xa6", clipLabel(&buf, "caf\xc3\xa9 society", 4));
 }
+
+/// Home shows the chat transcript while a conversation exists — unless the
+/// user explicitly stepped back to the overview (logo click). A new message
+/// (count grew) always pulls the page back into the chat.
+pub fn chatModeActive(msg_count: usize, generating: bool, overview_requested: bool) bool {
+    if (overview_requested) return false;
+    return msg_count > 0 or generating;
+}
+
+test "chatModeActive respects the overview escape hatch" {
+    try std.testing.expect(chatModeActive(3, false, false));
+    try std.testing.expect(chatModeActive(0, true, false));
+    try std.testing.expect(!chatModeActive(3, false, true)); // logo click wins
+    try std.testing.expect(!chatModeActive(0, false, false));
+}

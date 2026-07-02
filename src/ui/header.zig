@@ -510,7 +510,7 @@ pub fn renderUrlInput(is_large: bool) void {
         box_opts.min_size_content = .{ .w = 480, .h = 56 };
         box_opts.max_size_content = .{ .w = 620, .h = 56 };
         box_opts.padding = .{ .x = 10, .y = 6, .w = 8, .h = 6 };
-        box_opts.margin = .{ .x = 0, .y = 18, .w = 0, .h = 0 };
+        box_opts.margin = .{ .x = 0, .y = 10, .w = 0, .h = 0 };
         box_opts.gravity_x = 0.5;
     } else {
         box_opts.expand = .horizontal;
