@@ -417,7 +417,7 @@ fn omnibox() void {
     }
     if (text[0] == '>' or text[len - 1] == '?') {
         header.submitInput(); // → AI chat
-        // The conversation renders on HOME (grid.renderChatSection); the
+        // The conversation renders on HOME (home.zig chat mode); the
         // .assistant route hosts AI SETTINGS, not the chat.
         state.app.router.navigate(.home);
         return;

@@ -22,7 +22,24 @@ const STRIP_CARD_W: f32 = 132;
 const STRIP_POSTER_H: f32 = STRIP_CARD_W * 1.5;
 const STRIP_MAX: usize = 24; // cap cards per strip (perf)
 
+// ── Chat-mode page state ──
+// Own the transcript's ScrollInfo so new messages can pin the view to the
+// bottom (ChatGPT-style follow), and remember a content signature so we only
+// force-scroll when the conversation actually grew.
+var chat_si: dvui.ScrollInfo = .{};
+var chat_last_sig: u64 = 0;
+
 pub fn render() void {
+    // Home is the conversational console: once a conversation exists the page
+    // IS the chat (transcript + pinned composer, like ChatGPT/Claude); when
+    // idle it's a hero prompt over the media hub (rails + stats).
+    const ai_chat = @import("../services/ai_chat.zig");
+    const has_chat = ai_chat.message_count > 0 or ai_chat.is_generating.load(.acquire);
+    if (has_chat) {
+        renderChatMode();
+        return;
+    }
+
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = false,
@@ -35,16 +52,7 @@ pub fn render() void {
     });
     defer col.deinit();
 
-    renderStats();
-
-    // AI chat lives on Home now (was squatting on the player's empty cell).
-    // Renders nothing until a conversation exists; the omnibox ('>' prefix or
-    // trailing '?') routes here.
-    {
-        var chat_center = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.5 });
-        defer chat_center.deinit();
-        @import("grid.zig").renderChatSection();
-    }
+    renderHero();
 
     // Taste Receipts: the For-You rail. Generate recommendations once per
     // session (DB + vec0 KNN — a one-time cost on first Home view; off-thread
@@ -81,6 +89,194 @@ pub fn render() void {
         posterStrip("Watchlist", icons.tvg.lucide.bookmark, watchlist, .Watchlist, 2);
     if (favorites.items.len > 0)
         posterStrip("Favorites", icons.tvg.lucide.star, favorites, .Favorites, 3);
+
+    // Usage metrics — demoted to the bottom of the hub (the conversation and
+    // the media rails are the console; the stats are trivia).
+    renderStats();
+}
+
+// ── Hero (idle console) — greeting + big prompt + suggestion chips ──
+
+fn renderHero() void {
+    var hero = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.xxl, .w = theme.spacing.lg, .h = theme.spacing.lg },
+    });
+    defer hero.deinit();
+
+    _ = dvui.label(@src(), "What are we watching tonight?", .{}, .{
+        .color_text = theme.colors.text_primary,
+        .font = dvui.themeGet().font_title,
+        .gravity_x = 0.5,
+    });
+    _ = dvui.label(@src(), "Ask, search, or paste a link — magnets, files, and questions all work.", .{}, .{
+        .color_text = theme.colors.text_tertiary,
+        .gravity_x = 0.5,
+        .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.md },
+    });
+
+    // The big prompt — same unified input the player hero uses (media plays,
+    // questions go to the AI, everything else fans out to search).
+    {
+        var center = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.5 });
+        defer center.deinit();
+        var input_col = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .horizontal,
+            .max_size_content = dvui.Options.MaxSize.width(720),
+        });
+        defer input_col.deinit();
+        @import("header.zig").renderUrlInput(true);
+    }
+
+    // Suggestion chips — ChatGPT-style starters that submit straight to the AI.
+    {
+        var center = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.5, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
+        defer center.deinit();
+        var chips = dvui.flexbox(@src(), .{ .justify_content = .center }, .{
+            .max_size_content = dvui.Options.MaxSize.width(720),
+        });
+        defer chips.deinit();
+
+        const prompts = [_][]const u8{
+            "Recommend a movie for tonight",
+            "What's trending this week?",
+            "Play something funny",
+            "Find a mind-bending sci-fi show",
+        };
+        for (prompts, 0..) |prompt, i| {
+            if (dvui.button(@src(), prompt, .{}, .{
+                .id_extra = i,
+                .color_fill = theme.colors.bg_surface,
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_text = theme.colors.text_secondary,
+                .border = dvui.Rect.all(1),
+                .color_border = theme.colors.border_subtle,
+                .corner_radius = dvui.Rect.all(theme.radius.pill),
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                .margin = dvui.Rect.all(3),
+            })) {
+                @memset(&state.app.magnet_buf, 0);
+                const n = @min(prompt.len, state.app.magnet_buf.len - 1);
+                @memcpy(state.app.magnet_buf[0..n], prompt[0..n]);
+                @import("header.zig").submitInput(); // → AI chat; page flips to chat mode
+            }
+        }
+    }
+}
+
+// ── Chat mode — full-page transcript + pinned composer ──
+
+fn renderChatMode() void {
+    const ai_chat = @import("../services/ai_chat.zig");
+    const grid = @import("grid.zig");
+
+    var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+    defer page.deinit();
+
+    // Transcript — the page scroll, centered reading column.
+    {
+        var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &chat_si }, .{
+            .expand = .both,
+            .background = false,
+        });
+        defer scroll.deinit();
+
+        var center = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.5 });
+        defer center.deinit();
+        var col = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .horizontal,
+            .max_size_content = dvui.Options.MaxSize.width(760),
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.md, .w = theme.spacing.md, .h = theme.spacing.md },
+        });
+        defer col.deinit();
+
+        grid.renderChatMessages();
+    }
+
+    // Follow the conversation: when the transcript grows (new message or new
+    // streamed bytes), pin the scroll to the bottom — manual scrolling back
+    // is untouched between growth events.
+    {
+        var sig: u64 = ai_chat.message_count;
+        if (ai_chat.message_count > 0) {
+            sig = sig *% 1000003 +% ai_chat.messages[ai_chat.message_count - 1].text_len;
+        }
+        if (sig != chat_last_sig) {
+            chat_last_sig = sig;
+            chat_si.scrollToOffset(.vertical, std.math.floatMax(f32)); // clamped to max
+        }
+    }
+
+    // Composer — pinned under the transcript, ChatGPT-style.
+    {
+        var bar = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .horizontal,
+            .background = true,
+            .color_fill = theme.colors.bg_app,
+            .color_border = theme.colors.border_subtle,
+            .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+        });
+        defer bar.deinit();
+
+        var center = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.5 });
+        defer center.deinit();
+        var col = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .horizontal,
+            .max_size_content = dvui.Options.MaxSize.width(760),
+        });
+        defer col.deinit();
+
+        // Context + voice phase — one quiet line above the input.
+        {
+            var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+            defer meta.deinit();
+
+            const has_media = state.app.active_player_idx < state.app.players.items.len;
+            if (has_media) {
+                const ap = state.app.players.items[state.app.active_player_idx];
+                var title_buf: [128]u8 = undefined;
+                const title_len = ap.getMediaTitle(&title_buf);
+                var mb: [128]u8 = undefined;
+                const media_label = @import("../core/text.zig").safeUtf8Buf(title_buf[0..title_len], &mb);
+                if (media_label.len > 0) {
+                    var chip_buf: [160]u8 = undefined;
+                    const chip_txt = std.fmt.bufPrint(&chip_buf, "Seeing: {s}", .{media_label}) catch "";
+                    _ = dvui.label(@src(), "{s}", .{chip_txt}, .{
+                        .color_text = theme.colors.text_tertiary,
+                        .gravity_y = 0.5,
+                    });
+                }
+            }
+
+            const voice = @import("../services/ai_voice.zig");
+            const phase_txt: ?[]const u8 = switch (voice.conv_phase) {
+                .listening => "Listening…",
+                .transcribing => "Transcribing…",
+                .thinking => "Thinking…",
+                .speaking => "Speaking…",
+                .idle => if (ai_chat.is_generating.load(.acquire)) "Thinking…" else null,
+            };
+            if (phase_txt) |txt| {
+                _ = dvui.label(@src(), "  ·  {s}", .{txt}, .{
+                    .color_text = theme.colors.accent,
+                    .gravity_y = 0.5,
+                });
+            }
+
+            {
+                var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+                sp.deinit();
+            }
+            // Clear chat — two-step confirm; returns Home to the idle hub.
+            if (@import("components.zig").confirmDangerButton(@src(), "Clear chat", 0)) {
+                ai_chat.clearHistory();
+                chat_last_sig = 0;
+            }
+        }
+
+        @import("header.zig").renderUrlInput(true);
+    }
 }
 
 // ── Metrics ──
@@ -101,15 +297,17 @@ fn renderStats() void {
     // no busy loop).
     const clock_id = hdr.data().id;
     {
-        dvui.icon(@src(), "home", icons.tvg.lucide.house, .{}, .{
-            .color_text = theme.colors.accent,
-            .min_size_content = .{ .w = 22, .h = 22 },
+        // Small section label — the stats sit at the BOTTOM of the hub now
+        // (the conversation is the page), so no big page title here.
+        dvui.icon(@src(), "activity", icons.tvg.lucide.activity, .{}, .{
+            .color_text = theme.colors.text_tertiary,
+            .min_size_content = theme.iconSize(.sm),
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
-        _ = dvui.label(@src(), "Home", .{}, .{
-            .color_text = theme.colors.text_primary,
-            .font = dvui.themeGet().font_title,
+        _ = dvui.label(@src(), "Activity", .{}, .{
+            .color_text = theme.colors.text_secondary,
+            .font = dvui.themeGet().font_heading,
             .gravity_y = 0.5,
         });
     }

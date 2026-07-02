@@ -1296,7 +1296,7 @@ fn appFrame() !dvui.App.Result {
             const voice_active = voice_mod.conv_phase != .idle or voice_mod.is_recording;
             const is_thinking = ai_chat_mod.is_generating.load(.acquire);
             // Skip the overlay on the Home route — the chat renders inline
-            // there (grid.renderChatSection via home.zig); overlay + inline
+            // there (home.zig chat mode); overlay + inline
             // would double-render the same conversation.
             const home_hosts_chat = state.app.page_shell_enabled and state.app.router.current == .home;
             if ((is_typing or voice_active or is_thinking) and !home_hosts_chat) {
