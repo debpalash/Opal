@@ -457,8 +457,19 @@ fn renderChatSidebar() void {
         .margin = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xs },
     });
 
-    var list = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = false });
-    defer list.deinit();
+    // Explicit height (sidebar minus New-chat/Recents/bottom-rail chrome) —
+    // same reasoning as the composer: expand-clamping must not push the
+    // bottom rail out of view when the session list grows.
+    const sb_h = sb.data().rect.h;
+    const list_h: f32 = if (sb_h > 1) @max(80, sb_h - 128) else 400;
+    var list = dvui.scrollArea(@src(), .{}, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 10, .h = list_h },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = list_h },
+        .background = false,
+    });
+    var list_closed = false;
+    defer if (!list_closed) list.deinit();
 
     const cur_sid = ai_chat.session_id[0..ai_chat.session_id_len];
     var clicked_session: ?usize = null;
@@ -509,6 +520,44 @@ fn renderChatSidebar() void {
         ai_chat.loadSession(s.sid[0..s.sid_len]);
         chat_last_sig = 0; // re-pin the follow-scroll to the loaded bottom
     }
+
+    list.deinit();
+    list_closed = true;
+
+    // Bottom rail: incognito hint (left) + hide-sidebar control (right) —
+    // the collapse affordance lives on the thing it collapses.
+    {
+        var foot = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = 0, .h = 0 },
+        });
+        defer foot.deinit();
+        if (state.app.incognito_mode) {
+            dvui.icon(@src(), "sb-incog", icons.tvg.lucide.@"eye-off", .{}, .{
+                .color_text = theme.colors.warning,
+                .min_size_content = .{ .w = 12, .h = 12 },
+                .gravity_y = 0.5,
+            });
+        }
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
+        var hide_wd: dvui.WidgetData = undefined;
+        if (dvui.buttonIcon(@src(), "hide-sidebar", icons.tvg.lucide.@"panel-left-close", .{}, .{}, .{
+            .data_out = &hide_wd,
+            .color_text = theme.colors.text_tertiary,
+            .color_fill = theme.transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .border = dvui.Rect.all(0),
+            .corner_radius = theme.dims.rad_sm,
+            .padding = dvui.Rect.all(theme.spacing.xs),
+            .min_size_content = theme.iconSize(.sm),
+        })) {
+            chat_sidebar_open = false;
+        }
+        @import("components.zig").tip(@src(), hide_wd, "Hide chat list");
+    }
 }
 
 fn renderChatMode() void {
@@ -531,9 +580,22 @@ fn renderChatMode() void {
     // parent rect), so `.expand + .max_size_content` was a full-window column —
     // user bubbles glued to the right window edge. Compute a FIXED column
     // width instead: min(760, available), one-frame lag on first paint.
+    //
+    // PINNED COMPOSER: the transcript viewport gets an EXPLICIT height —
+    // main minus the composer's measured height (previous frame, MeasuredH
+    // pattern). Relying on `.expand = .both` to clamp the scroll inside the
+    // column let the composer slide below the fold once the conversation
+    // outgrew the window.
+    const Measured = struct {
+        var composer_h: f32 = 96;
+    };
+    const main_h = main.data().rect.h;
+    const scroll_h: f32 = if (main_h > 1) @max(120, main_h - Measured.composer_h) else 480;
     {
         var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &chat_si }, .{
-            .expand = .both,
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 10, .h = scroll_h },
+            .max_size_content = .{ .w = std.math.floatMax(f32), .h = scroll_h },
             .background = false,
         });
         defer scroll.deinit();
@@ -585,6 +647,7 @@ fn renderChatMode() void {
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
         });
         defer bar.deinit();
+        if (dvui.minSizeGet(bar.data().id)) |ms| Measured.composer_h = ms.h;
 
         // Same fixed-width + cross-axis-gravity treatment as the transcript.
         var wrap = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
@@ -603,23 +666,26 @@ fn renderChatMode() void {
             var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
             defer meta.deinit();
 
-            // History sidebar toggle (Claude-style rail on the left).
-            var sb_wd: dvui.WidgetData = undefined;
-            if (dvui.buttonIcon(@src(), "chat-sidebar", icons.tvg.lucide.@"panel-left", .{}, .{}, .{
-                .data_out = &sb_wd,
-                .color_text = if (chat_sidebar_open) theme.colors.accent else theme.colors.text_tertiary,
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .border = dvui.Rect.all(0),
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
-                .min_size_content = theme.iconSize(.xs),
-                .gravity_y = 0.5,
-                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
-            })) {
-                chat_sidebar_open = !chat_sidebar_open;
+            // Reopen-sidebar affordance — only while the rail is hidden;
+            // the "hide" control lives at the sidebar's own bottom-right.
+            if (!chat_sidebar_open) {
+                var sb_wd: dvui.WidgetData = undefined;
+                if (dvui.buttonIcon(@src(), "chat-sidebar", icons.tvg.lucide.@"panel-left", .{}, .{}, .{
+                    .data_out = &sb_wd,
+                    .color_text = theme.colors.text_tertiary,
+                    .color_fill = theme.transparent,
+                    .color_fill_hover = theme.colors.bg_hover,
+                    .border = dvui.Rect.all(0),
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
+                    .min_size_content = theme.iconSize(.xs),
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+                })) {
+                    chat_sidebar_open = true;
+                }
+                @import("components.zig").tip(@src(), sb_wd, "Show chat history");
             }
-            @import("components.zig").tip(@src(), sb_wd, if (chat_sidebar_open) "Hide chat history" else "Show chat history");
 
             // Incognito chat toggle — when on, this conversation is not
             // persisted (no conversation log, no vector memory, no starring
@@ -657,11 +723,28 @@ fn renderChatMode() void {
                 var mb: [128]u8 = undefined;
                 const media_label = @import("../core/text.zig").safeUtf8Buf(title_buf[0..title_len], &mb);
                 if (media_label.len > 0) {
-                    var chip_buf: [160]u8 = undefined;
-                    const chip_txt = std.fmt.bufPrint(&chip_buf, "Seeing: {s}", .{media_label}) catch "";
-                    _ = dvui.label(@src(), "{s}", .{chip_txt}, .{
-                        .color_text = theme.colors.text_tertiary,
+                    var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                        .background = true,
+                        .color_fill = theme.colors.bg_surface,
+                        .border = dvui.Rect.all(1),
+                        .color_border = theme.colors.border_subtle,
+                        .corner_radius = dvui.Rect.all(theme.radius.pill),
+                        .padding = .{ .x = theme.spacing.sm, .y = 1, .w = theme.spacing.sm, .h = 1 },
                         .gravity_y = 0.5,
+                    });
+                    defer chip.deinit();
+                    dvui.icon(@src(), "seeing", icons.tvg.lucide.tv, .{}, .{
+                        .color_text = theme.colors.accent,
+                        .min_size_content = .{ .w = 11, .h = 11 },
+                        .gravity_y = 0.5,
+                        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
+                    });
+                    var clip_buf2: [40]u8 = undefined;
+                    const short = @import("home_pure.zig").clipLabel(&clip_buf2, media_label, 28);
+                    _ = dvui.label(@src(), "{s}", .{short}, .{
+                        .color_text = theme.colors.text_secondary,
+                        .gravity_y = 0.5,
+                        .padding = dvui.Rect.all(0),
                     });
                 }
             }
