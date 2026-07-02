@@ -25,12 +25,14 @@ pub fn processGlobalInputs() void {
 
             // ── Always-active shortcuts (work even when text is focused) ──
 
-            // Escape = staged close. Defocus first, then peel panels one at a
-            // time (playlist → settings → drawer) so a single Escape doesn't
-            // nuke everything at once.
+            // Escape = staged close. Defocus first, then leave fullscreen,
+            // then peel panels one at a time (playlist → settings → drawer)
+            // so a single Escape doesn't nuke everything at once.
             if (key == .escape) {
                 if (dvui.focusedWidgetId() != null) {
                     dvui.focusWidget(null, null, null);
+                } else if (state.app.fullscreen_player_idx != null) {
+                    state.app.fullscreen_player_idx = null;
                 } else if (state.app.playlist_drawer_open) {
                     state.app.playlist_drawer_open = false;
                 } else if (state.app.settings_open) {
@@ -42,8 +44,10 @@ pub fn processGlobalInputs() void {
                 continue;
             }
 
-            // Ctrl+shortcuts always work
-            if (mod.control()) {
+            // Ctrl+shortcuts always work (Cmd on macOS via the platform-aware
+            // "ctrl/cmd" keybind — Ctrl still accepted everywhere).
+            const ctrl_or_cmd = mod.control() or mod.matchBind("ctrl/cmd");
+            if (ctrl_or_cmd) {
                 if (key == .comma) {
                     state.app.settings_open = !state.app.settings_open;
                     dvui.refresh(null, @src(), null);
@@ -57,6 +61,11 @@ pub fn processGlobalInputs() void {
                 if (key == .q) {
                     gracefulShutdown();
                 }
+                if (key == .i) {
+                    state.app.media_info_open = !state.app.media_info_open;
+                    dvui.refresh(null, @src(), null);
+                    continue;
+                }
             }
 
             // ── If a text entry is focused, suppress single-key shortcuts ──
@@ -64,9 +73,25 @@ pub fn processGlobalInputs() void {
                 continue;
             }
 
-            // D = Toggle drawer
+            // Shift+I = keyboard-shortcuts cheat sheet. Must live OUTSIDE the
+            // no-modifier switch below — the old placement (`if (mod.shift())`
+            // inside a `!mod.shift()` guard) was dead code, leaving the cheat
+            // sheet unreachable in the default page-shell UI.
+            if (key == .i and mod.shift() and !mod.control() and !mod.alt()) {
+                state.app.cheatsheet_open = !state.app.cheatsheet_open;
+                dvui.refresh(null, @src(), null);
+                continue;
+            }
+
+            // D = Toggle drawer (legacy layout). In the default page shell the
+            // drawer never renders, so the old toggle was a silent no-op —
+            // route to the Library page there instead (the drawer's analog).
             if (key == .d and !mod.control() and !mod.shift()) {
-                state.app.drawer_open = !state.app.drawer_open;
+                if (state.app.page_shell_enabled) {
+                    state.navigateToTab(.Queue);
+                } else {
+                    state.app.drawer_open = !state.app.drawer_open;
+                }
                 dvui.refresh(null, @src(), null);
                 continue;
             }
@@ -80,7 +105,7 @@ pub fn processGlobalInputs() void {
             }
 
             // Ctrl+W = Close active player (like browser tab close)
-            if (key == .w and mod.control()) {
+            if (key == .w and ctrl_or_cmd) {
                 if (state.app.players.items.len > 1) {
                     const idx = state.app.active_player_idx;
                     if (idx < state.app.players.items.len) {
@@ -101,7 +126,7 @@ pub fn processGlobalInputs() void {
             }
 
             // Ctrl+L = Toggle Language Learning
-            if (key == .l and mod.control()) {
+            if (key == .l and ctrl_or_cmd) {
                 state.app.lang_learn_enabled = !state.app.lang_learn_enabled;
                 const lang_learn = @import("../services/lang_learn.zig");
                 lang_learn.onToggle(state.app.lang_learn_enabled);
@@ -116,7 +141,7 @@ pub fn processGlobalInputs() void {
             }
 
             // Ctrl+S = Save current subtitle flashcard
-            if (key == .s and mod.control()) {
+            if (key == .s and ctrl_or_cmd) {
                 const lang_learn = @import("../services/lang_learn.zig");
                 lang_learn.saveSubtitleFlashcard();
                 dvui.refresh(null, @src(), null);
@@ -124,7 +149,7 @@ pub fn processGlobalInputs() void {
             }
 
             // Ctrl+Shift+T = Reopen last closed player (like Chrome tabs)
-            if (key == .t and mod.control() and mod.shift()) {
+            if (key == .t and ctrl_or_cmd and mod.shift()) {
                 var restore_buf: [2048]u8 = undefined;
                 if (state.popClosedUrl(&restore_buf)) |url| {
                     const player = @import("../player/player.zig");
@@ -146,7 +171,7 @@ pub fn processGlobalInputs() void {
 
             // Ctrl+T = New player tab — retired. The app plays one media at a
             // time now; opening media replaces the current stream.
-            if (key == .t and mod.control() and !mod.shift()) {
+            if (key == .t and ctrl_or_cmd and !mod.shift()) {
                 state.showToast("Single-player mode — open media to replace the current one");
                 dvui.refresh(null, @src(), null);
                 continue;
@@ -159,8 +184,12 @@ pub fn processGlobalInputs() void {
             }
 
             // Global UI overrides (Toggle Drawers / Fullscreen)
-            // Ensure no shift/ctrl/alt are pressed to avoid messing up typical text inputs or OS shortcuts
-            if (!mod.shift() and !mod.control() and !mod.alt()) {
+            // No shift/ctrl/alt to avoid clashing with text inputs / OS shortcuts.
+            // Every matched key `continue`s — previously a match FELL THROUGH to
+            // the player-specific switch below, so e.g. one press of P toggled
+            // the playlist drawer AND took a screenshot, and I toggled incognito
+            // AND the stats overlay.
+            if (!mod.shift() and !mod.control() and !mod.alt() and !mod.command()) {
                 switch (key) {
                     .f => {
                         if (state.app.fullscreen_player_idx == null) {
@@ -169,16 +198,19 @@ pub fn processGlobalInputs() void {
                             state.app.fullscreen_player_idx = null;
                         }
                         dvui.refresh(null, @src(), null);
+                        continue;
                     },
                     .s => {
                         state.navigateToTab(.Search);
                         dvui.refresh(null, @src(), null);
+                        continue;
                     },
 
-                    // P = Playlist
+                    // P = Playlist (Shift+P = screenshot, player section below)
                     .p => {
                         state.app.playlist_drawer_open = !state.app.playlist_drawer_open;
                         dvui.refresh(null, @src(), null);
+                        continue;
                     },
                     .g => {
                         state.app.grid_mode = switch (state.app.grid_mode) {
@@ -189,28 +221,30 @@ pub fn processGlobalInputs() void {
                             .cols_4 => .auto,
                         };
                         dvui.refresh(null, @src(), null);
+                        continue;
                     },
                     // (A handled above in early if-chain with continue)
                     .y => {
                         state.app.seek_sync = !state.app.seek_sync;
+                        state.showToast(if (state.app.seek_sync) "Seek sync ON" else "Seek sync OFF");
+                        dvui.refresh(null, @src(), null);
+                        continue;
                     },
-                    // I = Toggle incognito mode, Shift+I = Cheatsheet
+                    // I = Toggle incognito mode (Shift+I = cheat sheet, above)
                     .i => {
-                        if (mod.shift()) {
-                            state.app.cheatsheet_open = !state.app.cheatsheet_open;
+                        state.app.incognito_mode = !state.app.incognito_mode;
+                        if (state.app.incognito_mode) {
+                            state.showToast("Incognito ON — no history saved");
                         } else {
-                            state.app.incognito_mode = !state.app.incognito_mode;
-                            if (state.app.incognito_mode) {
-                                state.showToast("Incognito ON — no history saved");
-                            } else {
-                                state.showToast("Incognito OFF — history recording resumed");
-                            }
+                            state.showToast("Incognito OFF — history recording resumed");
                         }
                         dvui.refresh(null, @src(), null);
+                        continue;
                     },
                     .h => {
                         state.navigateToTab(.History);
                         dvui.refresh(null, @src(), null);
+                        continue;
                     },
                     .one, .two, .three, .four, .five, .six, .seven, .eight, .nine => {
                         const cell_idx = @intFromEnum(key) - @intFromEnum(dvui.enums.Key.one);
@@ -218,6 +252,7 @@ pub fn processGlobalInputs() void {
                             state.app.active_player_idx = @intCast(cell_idx);
                             dvui.refresh(null, @src(), null);
                         }
+                        continue;
                     },
                     // Z = Toggle video fill mode (fit / cover)
                     .z => {
@@ -230,11 +265,13 @@ pub fn processGlobalInputs() void {
                         const mode_str = if (state.app.video_fill_mode == .cover) "Cover (crop fill)" else "Fit (letterbox)";
                         state.showToast(mode_str);
                         dvui.refresh(null, @src(), null);
+                        continue;
                     },
                     // B = Open the in-app web browser (Browse › Web tab)
                     .b => {
                         state.navigateToTab(.Web);
                         dvui.refresh(null, @src(), null);
+                        continue;
                     },
                     // C = Switch active cell to comic viewer
                     .c => {
@@ -242,6 +279,7 @@ pub fn processGlobalInputs() void {
                             state.app.players.items[state.app.active_player_idx].provider = .comic_viewer;
                             dvui.refresh(null, @src(), null);
                         }
+                        continue;
                     },
                     // U = Cycle audio track
                     .u => {
@@ -251,6 +289,7 @@ pub fn processGlobalInputs() void {
                             _ = c.mpv.mpv_command_string(ap.mpv_ctx, "show-text \"${audio}\" 2000");
                             state.showToast("Cycling audio track");
                         }
+                        continue;
                     },
                     // V = Cycle subtitle track
                     .v => {
@@ -260,20 +299,10 @@ pub fn processGlobalInputs() void {
                             _ = c.mpv.mpv_command_string(ap.mpv_ctx, "show-text \"${sub}\" 2000");
                             state.showToast("Cycling subtitle track");
                         }
+                        continue;
                     },
-                    // K = Sub delay +100ms, Shift+K = Sub delay -100ms
-                    .k => {
-                        if (state.app.active_player_idx < state.app.players.items.len) {
-                            const ap = state.app.players.items[state.app.active_player_idx];
-                            if (mod.shift()) {
-                                _ = c.mpv.mpv_command_string(ap.mpv_ctx, "add sub-delay -0.1");
-                                state.showToast("Sub delay -100ms");
-                            } else {
-                                _ = c.mpv.mpv_command_string(ap.mpv_ctx, "add sub-delay 0.1");
-                                state.showToast("Sub delay +100ms");
-                            }
-                        }
-                    },
+                    // (K = sub delay lives in the player section below, where
+                    // Shift+K is actually reachable — it was dead here.)
                     else => {},
                 }
             }
@@ -311,20 +340,15 @@ pub fn processGlobalInputs() void {
                 }
             }
 
-            // Ctrl+I = Media Info
-            if (key == .i and mod.control()) {
-                state.app.media_info_open = !state.app.media_info_open;
-                dvui.refresh(null, @src(), null);
-                continue;
-            }
-
             // Player Specific Shortcuts (Only execute if a text entry field / drawer isn't active, to prevent typing from seeking video)
             // To be robust, we check if search_drawer is open, because typically that's where users type.
             if (state.app.active_player_idx < state.app.players.items.len and !state.app.drawer_open) {
                 const p = state.app.players.items[state.app.active_player_idx];
 
-                // Active cell modifiers / controls
-                if (key == .left or key == .right) {
+                // Active cell modifiers / controls. Modifier guards matter:
+                // without them Ctrl+Arrow (cell swap) ALSO seeked ±10s and
+                // Shift+Arrow (pan) ALSO changed the volume.
+                if ((key == .left or key == .right) and !mod.control() and !mod.shift() and !mod.alt() and !mod.command()) {
                     var seek_cmd: [64]u8 = undefined;
                     if (std.fmt.bufPrintZ(&seek_cmd, "seek {d}", .{if (key == .left) @as(i32, -10) else @as(i32, 10)})) |cmd| {
                         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
@@ -336,14 +360,14 @@ pub fn processGlobalInputs() void {
                     } else |_| {}
                 }
 
-                if (key == .up or key == .down) {
+                if ((key == .up or key == .down) and !mod.control() and !mod.shift() and !mod.alt() and !mod.command()) {
                     var vol_cmd: [64]u8 = undefined;
                     if (std.fmt.bufPrintZ(&vol_cmd, "add volume {d}", .{if (key == .down) @as(i32, -5) else @as(i32, 5)})) |cmd| {
                         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
                     } else |_| {}
                 }
 
-                if (!mod.control() and !mod.alt()) {
+                if (!mod.control() and !mod.alt() and !mod.command()) {
                     switch (key) {
                         .space => {
                             _ = c.mpv.mpv_command_string(p.mpv_ctx, "cycle pause");
@@ -411,14 +435,34 @@ pub fn processGlobalInputs() void {
                         .t => {
                             p.toggleFlip();
                         },
-                        // Screenshot
+                        // Shift+P = Screenshot (unmodified P toggles the
+                        // playlist drawer in the global section above).
                         .p => {
-                            _ = c.mpv.mpv_command_string(p.mpv_ctx, "screenshot");
-                            state.showToast("Screenshot saved");
+                            if (mod.shift()) {
+                                _ = c.mpv.mpv_command_string(p.mpv_ctx, "screenshot");
+                                state.showToast("Screenshot saved");
+                            }
                         },
-                        // Stats for Nerds overlay toggle
-                        .i => {
-                            state.app.stats_overlay_open = !state.app.stats_overlay_open;
+                        // Shift+S = Stats for Nerds overlay (unmodified S
+                        // navigates to Search; the old unmodified-I binding
+                        // collided with the global incognito toggle).
+                        .s => {
+                            if (mod.shift()) {
+                                state.app.stats_overlay_open = !state.app.stats_overlay_open;
+                                dvui.refresh(null, @src(), null);
+                            }
+                        },
+                        // K = sub delay +100ms, Shift+K = −100ms. (Moved from
+                        // the no-shift global section, where the Shift branch
+                        // was unreachable.)
+                        .k => {
+                            if (mod.shift()) {
+                                _ = c.mpv.mpv_command_string(p.mpv_ctx, "add sub-delay -0.1");
+                                state.showToast("Sub delay -100ms");
+                            } else {
+                                _ = c.mpv.mpv_command_string(p.mpv_ctx, "add sub-delay 0.1");
+                                state.showToast("Sub delay +100ms");
+                            }
                         },
                         // Zoom
                         .equal => {
@@ -456,7 +500,7 @@ pub fn processGlobalInputs() void {
                 }
 
                 // Shift+arrows = pan (when zoomed)
-                if (mod.shift() and !mod.control()) {
+                if (mod.shift() and !mod.control() and !mod.command()) {
                     switch (key) {
                         .left => {
                             _ = c.mpv.mpv_command_string(p.mpv_ctx, "add video-pan-x 0.02");

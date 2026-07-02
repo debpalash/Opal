@@ -61,6 +61,19 @@ const HeaderState = struct {
     var stream_key_open: bool = false;
 };
 
+/// Shell-facing accessors — the stream-key chip/popover logic lives here, but
+/// the page shell (default UI) never renders the legacy header, so it needs a
+/// way to reach the popover from its overflow menu.
+pub fn hasStreamToken() bool {
+    return activeStreamToken() != null;
+}
+pub fn toggleStreamKeyPopover() void {
+    HeaderState.stream_key_open = !HeaderState.stream_key_open;
+}
+pub fn renderStreamKeyPopoverIfOpen() void {
+    if (HeaderState.stream_key_open) renderStreamKeyPopover();
+}
+
 // Tracks URL-input focus across frames so the outer box can show the accent
 // focus ring (resting = hairline). One-frame lag, matching components.searchInput.
 const UrlInputState = struct {
@@ -368,7 +381,9 @@ fn renderTitleLabel() void {
     const max_display: usize = 60;
     var name_buf: [80]u8 = undefined;
     const truncated = clean_len > max_display;
-    const display_slice = clean_buf[0..@min(clean_len, max_display)];
+    // Byte-boundary cut can split a multi-byte codepoint — trim to a valid
+    // UTF-8 boundary before dvui measures it.
+    const display_slice = @import("../core/text.zig").safeUtf8(clean_buf[0..@min(clean_len, max_display)]);
     const written: []const u8 = if (truncated)
         (std.fmt.bufPrint(&name_buf, "{s}…", .{display_slice}) catch display_slice)
     else
@@ -417,10 +432,20 @@ fn renderStreamKeyPopover() void {
     });
     defer body.deinit();
 
-    _ = dvui.label(@src(), "Per-stream auth token for this player's local HTTP proxy. Treat it like a password — anyone with this key can read the active stream.", .{}, .{
-        .color_text = theme.colors.text_tertiary,
-        .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
-    });
+    // textLayout (wraps) — a single dvui.label never wraps, so this ~150-char
+    // sentence either stretched the popover to full text width or clipped.
+    {
+        var tl = dvui.textLayout(@src(), .{}, .{
+            .background = false,
+            .max_size_content = dvui.Options.MaxSize.width(320),
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
+            .padding = dvui.Rect.all(0),
+        });
+        tl.addText("Per-stream auth token for this player's local HTTP proxy. Treat it like a password — anyone with this key can read the active stream.", .{
+            .color_text = theme.colors.text_tertiary,
+        });
+        tl.deinit();
+    }
 
     const token_slice = activeStreamToken() orelse {
         _ = dvui.label(@src(), "No active stream.", .{}, .{
@@ -474,7 +499,7 @@ pub fn renderUrlInput(is_large: bool) void {
 
     var box_opts = dvui.Options{
         .background = true,
-        .color_fill = theme.colors.bg_input,
+        .color_fill = theme.colors.bg_elevated,
         .corner_radius = dvui.Rect.all(theme.radius.md),
         .border = dvui.Rect.all(1),
         .color_border = if (has_focus) theme.colors.accent else theme.colors.border_subtle,
@@ -532,7 +557,7 @@ pub fn renderUrlInput(is_large: bool) void {
             .color_text = if (mem_on) theme.colors.accent else theme.colors.text_tertiary,
             .color_fill = transparent,
             .border = dvui.Rect.all(0),
-            .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
+            .padding = dvui.Rect.all(theme.spacing.xs),
             .min_size_content = .{ .w = 18, .h = 18 },
         })) {
             search.memory_mode = !search.memory_mode;
@@ -548,7 +573,7 @@ pub fn renderUrlInput(is_large: bool) void {
         .color_text = theme.colors.accent,
         .color_fill = transparent,
         .border = dvui.Rect.all(0),
-        .padding = .{ .x = 5, .y = 4, .w = 3, .h = 4 },
+        .padding = dvui.Rect.all(theme.spacing.xs),
     });
     if (!is_large) components.tip(@src(), play_wd, "Load URL / magnet");
 
@@ -560,7 +585,7 @@ pub fn renderUrlInput(is_large: bool) void {
         .color_text = theme.colors.text_tertiary,
         .color_fill = transparent,
         .border = dvui.Rect.all(0),
-        .padding = .{ .x = 3, .y = 4, .w = 5, .h = 4 },
+        .padding = dvui.Rect.all(theme.spacing.xs),
     })) {
         handleClipboardPaste();
     }
@@ -581,10 +606,10 @@ pub fn renderUrlInput(is_large: bool) void {
             .color_text = mic_color,
             .color_fill = transparent,
             .border = dvui.Rect.all(0),
-            .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
+            .padding = dvui.Rect.all(theme.spacing.xs),
             .min_size_content = .{ .w = 18, .h = 18 },
         })) {
-            @import("../core/logs.zig").pushLog("info", "mic", "button clicked", true);
+            @import("../core/logs.zig").pushLog("info", "mic", "button clicked", false);
             voice.toggleMicRecording();
             ai_chat_mod.is_bubble_open = true;
         }
@@ -600,7 +625,7 @@ pub fn renderUrlInput(is_large: bool) void {
                 .color_text = theme.colors.danger,
                 .color_fill = transparent,
                 .border = dvui.Rect.all(0),
-                .padding = .{ .x = 3, .y = 4, .w = 3, .h = 4 },
+                .padding = dvui.Rect.all(theme.spacing.xs),
             })) {
                 ai_chat_mod.stopAll();
             }
@@ -778,7 +803,7 @@ pub fn renderTabBar() void {
             while (clean_len > 0 and clean_buf[clean_len - 1] == ' ') clean_len -= 1;
             if (clean_len > 0) {
                 // Truncate to ~25 chars
-                tab_label = clean_buf[0..@min(clean_len, 25)];
+                tab_label = @import("../core/text.zig").safeUtf8(clean_buf[0..@min(clean_len, 25)]);
             }
         }
 

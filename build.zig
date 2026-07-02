@@ -211,6 +211,26 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_resume).step);
 
+    // Workspace name sanitization (path-traversal / separator neutralization).
+    const test_workspace_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ui/workspace_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_workspace_pure).step);
+
+    // Deferred-navigation slot encode/decode (u4 saturating-add regression).
+    const test_nav_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/nav_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_nav_pure).step);
+
     const test_intent = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/ai_intent_pure.zig"),

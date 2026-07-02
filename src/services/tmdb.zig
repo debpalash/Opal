@@ -127,14 +127,14 @@ fn activeList() *std.ArrayListUnmanaged(state.TmdbItem) {
 fn renderNoApiKey() void {
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .gravity_x = 0.5, .gravity_y = 0.4, .padding = dvui.Rect.all(24) });
     defer box.deinit();
-    _ = dvui.label(@src(), "TMDB API Key Required", .{}, .{ .color_text = theme.colors.text_main, .gravity_x = 0.5 });
-    _ = dvui.label(@src(), "Add your free API key in Settings > General", .{}, .{ .color_text = theme.colors.text_muted, .gravity_x = 0.5 });
+    _ = dvui.label(@src(), "TMDB API Key Required", .{}, .{ .color_text = theme.colors.text_primary, .gravity_x = 0.5 });
+    _ = dvui.label(@src(), "Add your free API key in Settings > General", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_x = 0.5 });
     _ = dvui.label(@src(), "Get one at: themoviedb.org/settings/api", .{}, .{ .color_text = theme.colors.accent, .gravity_x = 0.5 });
     if (dvui.button(@src(), "Open Settings", .{}, .{
         .gravity_x = 0.5,
         .margin = .{ .x = 0, .y = 12, .w = 0, .h = 0 },
         .color_fill = theme.colors.accent,
-        .color_text = theme.colors.bg_header,
+        .color_text = theme.colors.bg_app,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 16, .y = 8, .w = 16, .h = 8 },
     })) {
@@ -186,7 +186,7 @@ fn renderToolbar(count: usize) void {
 
     // Item count + card-size controls.
     toolbarDivider(950);
-    _ = dvui.label(@src(), "{d} items", .{count}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
+    _ = dvui.label(@src(), "{d} items", .{count}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
     const dim = dvui.Color{ .r = 120, .g = 120, .b = 148, .a = 200 };
     if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -227,9 +227,9 @@ fn toolbarDivider(id: usize) void {
 fn renderSearchInline() void {
     var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.tmdb.search_buf }, .placeholder = "Search movies & TV…" }, .{
         .min_size_content = .{ .w = 240, .h = 28 },
-        .color_fill = theme.colors.bg_input,
-        .color_border = theme.colors.border_input,
-        .color_text = theme.colors.text_main,
+        .color_fill = theme.colors.bg_elevated,
+        .color_border = theme.colors.border_subtle,
+        .color_text = theme.colors.text_primary,
         .border = dvui.Rect.all(1),
         .corner_radius = theme.dims.rad_sm,
         .gravity_y = 0.5,
@@ -238,7 +238,7 @@ fn renderSearchInline() void {
     te.deinit();
     if (dvui.button(@src(), "Go", .{}, .{
         .color_fill = theme.colors.accent,
-        .color_text = theme.colors.bg_header,
+        .color_text = theme.colors.bg_app,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
         .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
@@ -251,8 +251,8 @@ fn renderSearchInline() void {
 
 fn renderSubTab(idx: usize, view: state.TmdbView, label: []const u8) void {
     const active = state.app.tmdb.view == view;
-    const bg = if (active) theme.colors.accent else theme.colors.bg_card;
-    const fg = if (active) dvui.Color.white else theme.colors.text_muted;
+    const bg = if (active) theme.colors.accent else theme.colors.bg_surface;
+    const fg = if (active) dvui.Color.white else theme.colors.text_secondary;
 
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = idx,
@@ -279,7 +279,7 @@ fn switchView(view: state.TmdbView) void {
 // ══════════════════════════════════════════════════════════
 
 fn renderCatChip(idx: usize, cat: state.TmdbCategory, label: []const u8) void {
-    const fg = if (state.app.tmdb.category == cat) theme.colors.accent else theme.colors.text_muted;
+    const fg = if (state.app.tmdb.category == cat) theme.colors.accent else theme.colors.text_secondary;
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = idx + 2000,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -296,8 +296,8 @@ fn renderFilterChip(idx: usize, filter: state.TmdbMediaFilter, label: []const u8
     const active = state.app.tmdb.media_filter == filter;
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = idx + 3000,
-        .color_fill = if (active) theme.colors.accent else theme.colors.bg_card,
-        .color_text = if (active) dvui.Color.white else theme.colors.text_muted,
+        .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
+        .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
         .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
@@ -309,7 +309,7 @@ fn renderFilterChip(idx: usize, filter: state.TmdbMediaFilter, label: []const u8
 }
 
 fn renderTimeChip(idx: usize, tw: state.TmdbTimeWindow, label: []const u8) void {
-    const fg = if (state.app.tmdb.time_window == tw) theme.colors.accent else theme.colors.text_muted;
+    const fg = if (state.app.tmdb.time_window == tw) theme.colors.accent else theme.colors.text_secondary;
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = idx + 4000,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -329,14 +329,14 @@ fn renderTimeChip(idx: usize, tw: state.TmdbTimeWindow, label: []const u8) void 
 fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more: bool) void {
     if (items.items.len == 0 and !state.app.tmdb.is_loading.load(.acquire)) {
         _ = dvui.label(@src(), "No items to display.", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .gravity_x = 0.5,
             .margin = dvui.Rect.all(24),
         });
         return;
     }
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
 
     // Responsive columns from the LIVE page width (one-frame lag; first paint
@@ -364,23 +364,43 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
         i += cols;
     }
 
-    // Infinite scroll: auto-fetch the next page when the user nears the bottom
-    // (one-frame lag on si is fine). Bounded by is_loading, page<total_pages,
-    // AND a hard item cap below the reserved buffer capacity (2048) so append()
-    // can never reallocate the buffer out from under in-flight poster workers.
+    // Infinite scroll: auto-fetch the next page when the user nears the bottom.
+    // Bounded by is_loading, page<total_pages, AND a hard item cap below the
+    // reserved buffer capacity (2048) so append() can never reallocate the
+    // buffer out from under in-flight poster workers.
     const ITEM_CAP = 1900;
     if (show_load_more and state.app.tmdb.page < state.app.tmdb.total_pages and items.items.len < ITEM_CAP) {
+        const loading = state.app.tmdb.is_loading.load(.acquire);
         const max_y = scroll.si.scrollMax(.vertical);
+        // Only a real scroll-to-bottom (needs scrollable content); the
+        // short-content case is handled by `underfilled` below with its own
+        // stall guard, so keep the max_y > 0 precondition here.
         const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
-        if (near_bottom and !state.app.tmdb.is_loading.load(.acquire)) {
+        // Also fetch when the content is SHORTER than the viewport (max_y == 0):
+        // at dense scales the first page doesn't fill the screen, so there's
+        // nothing to scroll and the old near-bottom-only trigger stuck at page 1
+        // forever under a permanent "Loading more…". Keep pulling pages until
+        // the viewport fills (each fetch gated by is_loading) or pages run out.
+        // Stall guard: require prior pages to have delivered ~full results
+        // (>=10/page) before auto-advancing, so a short/failed page halts the
+        // loop instead of spamming fetches through all total_pages.
+        const delivering = items.items.len >= state.app.tmdb.page * 10;
+        const underfilled = max_y <= 0 and delivering;
+        if ((near_bottom or underfilled) and !loading) {
             state.app.tmdb.page += 1;
             api.fetchCurrentView(true);
         }
-        _ = dvui.label(@src(), "Loading more…", .{}, .{
-            .color_text = theme.colors.text_muted,
-            .gravity_x = 0.5,
-            .padding = dvui.Rect.all(12),
-        });
+        // Show the indicator ONLY while a fetch is actually in flight — a
+        // resting "Loading more…" over empty space read as a stuck spinner.
+        if (loading or underfilled) {
+            dvui.spinner(@src(), .{
+                .color_text = theme.colors.accent,
+                .min_size_content = .{ .w = 24, .h = 24 },
+                .gravity_x = 0.5,
+                .margin = dvui.Rect.all(12),
+            });
+            dvui.refresh(null, @src(), null); // wake until the worker's items land
+        }
     }
 }
 
@@ -400,7 +420,7 @@ fn renderHoverMeta(item: *state.TmdbItem, idx: usize) void {
     _ = dvui.label(@src(), "{s}", .{safeUtf8(item.title[0..@min(item.title_len, item.title.len)])}, .{
         .id_extra = idx + 161,
         .expand = .horizontal,
-        .color_text = theme.colors.text_main,
+        .color_text = theme.colors.text_primary,
         .font = dvui.themeGet().font_heading,
     });
 
@@ -415,7 +435,7 @@ fn renderHoverMeta(item: *state.TmdbItem, idx: usize) void {
             _ = dvui.label(@src(), "{s}", .{ps}, .{ .id_extra = idx + 163, .color_text = sc });
         } else |_| {}
         if (item.year_len > 0) {
-            _ = dvui.label(@src(), "  {s}", .{item.year[0..item.year_len]}, .{ .id_extra = idx + 164, .color_text = theme.colors.text_muted });
+            _ = dvui.label(@src(), "  {s}", .{item.year[0..item.year_len]}, .{ .id_extra = idx + 164, .color_text = theme.colors.text_secondary });
         }
     }
 
@@ -555,7 +575,7 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
     if (dvui.button(@src(), title, .{}, .{
         .id_extra = idx + 500,
         .expand = .horizontal,
-        .color_text = theme.colors.text_main,
+        .color_text = theme.colors.text_primary,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
     })) {
@@ -566,7 +586,7 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
     if (item.year_len > 0) {
         _ = dvui.label(@src(), "{s}", .{item.year[0..item.year_len]}, .{
             .id_extra = idx + 520,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         });
     }
@@ -633,8 +653,8 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
         .id_extra = idx,
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_card,
-        .color_border = theme.colors.bg_header_border,
+        .color_fill = theme.colors.bg_surface,
+        .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .padding = .{ .x = 10, .y = 10, .w = 10, .h = 10 },
     });
@@ -688,7 +708,7 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
         if (dvui.button(@src(), title, .{}, .{
             .id_extra = idx + 500,
             .expand = .horizontal,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .padding = dvui.Rect.all(0),
         })) {
@@ -712,16 +732,16 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
                     dvui.Color{ .r = 56, .g = 189, .b = 248, .a = 255 };
                 const mt_label = if (std.mem.eql(u8, mt, "tv")) "TV" else "Film";
                 _ = dvui.label(@src(), "{s}", .{mt_label}, .{ .id_extra = idx + 605, .color_text = mt_color });
-                _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 606, .color_text = theme.colors.text_muted });
+                _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 606, .color_text = theme.colors.text_secondary });
             }
 
             if (item.release_date_len > 0) {
-                _ = dvui.label(@src(), "{s}", .{item.release_date[0..item.release_date_len]}, .{ .id_extra = idx + 610, .color_text = theme.colors.text_muted });
+                _ = dvui.label(@src(), "{s}", .{item.release_date[0..item.release_date_len]}, .{ .id_extra = idx + 610, .color_text = theme.colors.text_secondary });
             } else if (item.year_len > 0) {
-                _ = dvui.label(@src(), "{s}", .{item.year[0..item.year_len]}, .{ .id_extra = idx + 611, .color_text = theme.colors.text_muted });
+                _ = dvui.label(@src(), "{s}", .{item.year[0..item.year_len]}, .{ .id_extra = idx + 611, .color_text = theme.colors.text_secondary });
             }
 
-            _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 620, .color_text = theme.colors.text_muted });
+            _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 620, .color_text = theme.colors.text_secondary });
 
             const pct = @as(u8, @intFromFloat(std.math.clamp(item.rating * 10.0, 0.0, 100.0)));
             const sc = if (pct >= 70) theme.colors.success else if (pct >= 50) theme.colors.warning else theme.colors.danger;
@@ -736,7 +756,7 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
             var genre_buf: [64]u8 = undefined;
             if (dvui.button(@src(), safeUtf8Buf(item.genre_text[0..item.genre_text_len], &genre_buf), .{}, .{
                 .id_extra = idx + 650,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .expand = .horizontal,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 .padding = dvui.Rect.all(0),
@@ -750,7 +770,7 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
             var ov2_buf: [512]u8 = undefined;
             _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(item.overview[0..@min(item.overview_len, ov2_buf.len)], &ov2_buf)}, .{
                 .id_extra = idx + 700,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .expand = .horizontal,
                 .padding = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
             });
@@ -822,8 +842,8 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
         if (ctext.activePoint()) |cp| {
             var fw = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(cp) }, .{
                 .id_extra = idx + 11000,
-                .color_fill = theme.colors.bg_card,
-                .color_border = theme.colors.border_drawer,
+                .color_fill = theme.colors.bg_surface,
+                .color_border = theme.colors.border_subtle,
             });
             defer fw.deinit();
 
@@ -1395,8 +1415,8 @@ fn renderTvDetail() void {
             .expand = .horizontal,
             .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
             .background = true,
-            .color_fill = theme.colors.bg_card,
-            .color_border = theme.colors.bg_header_border,
+            .color_fill = theme.colors.bg_surface,
+            .color_border = theme.colors.border_subtle,
             .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         });
         defer hdr.deinit();
@@ -1415,7 +1435,7 @@ fn renderTvDetail() void {
 
         var tvn_buf: [128]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)], &tvn_buf)}, .{
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .expand = .horizontal,
             .font = dvui.themeGet().font_heading,
             .gravity_y = 0.5,
@@ -1458,8 +1478,8 @@ fn renderTvDetail() void {
             if (dvui.button(@src(), lbl, .{}, .{
                 .id_extra = si + 30000,
                 .background = true,
-                .color_fill = if (active) theme.colors.accent else theme.colors.bg_card,
-                .color_text = if (active) dvui.Color.white else theme.colors.text_muted,
+                .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
+                .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
                 .margin = .{ .x = 0, .y = 0, .w = 6, .h = 2 },
@@ -1492,7 +1512,7 @@ fn renderTvDetail() void {
             else
                 (std.fmt.bufPrint(&si_buf, "{d} episodes", .{ep_count}) catch "");
             _ = dvui.label(@src(), "{s}", .{si_str}, .{
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .gravity_y = 0.5,
             });
         }
@@ -1507,7 +1527,7 @@ fn renderTvDetail() void {
             var wbuf: [32]u8 = undefined;
             const ws = std.fmt.bufPrint(&wbuf, "{d}/{d} watched", .{ watched, total }) catch "";
             _ = dvui.label(@src(), "{s}", .{ws}, .{
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .gravity_y = 0.5,
             });
         }
@@ -1535,7 +1555,7 @@ fn renderTvDetail() void {
             .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
             .background = true,
             .color_fill = dvui.Color{ .r = 16, .g = 18, .b = 26, .a = 255 },
-            .color_border = theme.colors.bg_header_border,
+            .color_border = theme.colors.border_subtle,
             .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         });
         defer prow.deinit();
@@ -1554,7 +1574,7 @@ fn renderTvDetail() void {
         var ep_lbl: [32]u8 = undefined;
         const ep_str = std.fmt.bufPrint(&ep_lbl, "Episode {d}", .{next_ep}) catch "";
         _ = dvui.label(@src(), "{s}", .{ep_str}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
         });
     }
@@ -1570,7 +1590,7 @@ fn renderTvDetail() void {
 
     if (t.tv_episode_count == 0) {
         _ = dvui.label(@src(), "No episodes available.", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .padding = .{ .x = 14, .y = 16, .w = 0, .h = 0 },
         });
         return;
@@ -1595,9 +1615,9 @@ fn renderTvDetail() void {
         else if (is_next)
             dvui.Color{ .r = 22, .g = 26, .b = 36, .a = 255 }
         else
-            theme.colors.bg_card;
+            theme.colors.bg_surface;
 
-        const border_color = if (is_next) theme.colors.accent else theme.colors.bg_header_border;
+        const border_color = if (is_next) theme.colors.accent else theme.colors.border_subtle;
         const border_rect: dvui.Rect = if (is_next)
             .{ .x = 2, .y = 0, .w = 0, .h = 1 }
         else
@@ -1672,7 +1692,7 @@ fn renderTvDetail() void {
                     const en_str = std.fmt.bufPrint(&en_buf, "E{d}", .{e.episode_number}) catch "";
                     _ = dvui.label(@src(), "{s}", .{en_str}, .{
                         .id_extra = ei + 43110,
-                        .color_text = if (is_next) theme.colors.accent else theme.colors.text_muted,
+                        .color_text = if (is_next) theme.colors.accent else theme.colors.text_secondary,
                         .gravity_y = 0.5,
                         .padding = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
                     });
@@ -1698,7 +1718,7 @@ fn renderTvDetail() void {
                 if (dvui.button(@src(), ep_name, .{}, .{
                     .id_extra = ei + 43120,
                     .expand = .horizontal,
-                    .color_text = if (is_watched) theme.colors.text_muted else theme.colors.text_main,
+                    .color_text = if (is_watched) theme.colors.text_secondary else theme.colors.text_primary,
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
                     .gravity_y = 0.5,
@@ -1726,7 +1746,7 @@ fn renderTvDetail() void {
                     .id_extra = ei + 43140,
                     .background = true,
                     .color_fill = if (is_watched) theme.colors.success else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                    .color_text = if (is_watched) dvui.Color.white else theme.colors.text_muted,
+                    .color_text = if (is_watched) dvui.Color.white else theme.colors.text_secondary,
                     .corner_radius = dvui.Rect.all(12),
                     .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
                     .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
@@ -1771,7 +1791,7 @@ fn renderTvDetail() void {
                     std.fmt.bufPrint(&meta, "\xe2\x98\x85 {d:.1}", .{rating}) catch "";
                 _ = dvui.label(@src(), "{s}", .{ms}, .{
                     .id_extra = ei + 43300,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
                 });
             }

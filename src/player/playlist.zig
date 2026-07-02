@@ -28,12 +28,12 @@ pub fn renderDrawer() void {
     
     var drawer_box = dvui.box(@src(), .{ .dir = .vertical }, .{
         .background = true,
-        .color_fill = theme.colors.bg_drawer,
+        .color_fill = theme.colors.bg_surface,
         .expand = .vertical,
         .min_size_content = .{ .w = 350, .h = 0 },
         .max_size_content = .{ .w = w, .h = std.math.floatMax(f32) },
         .border = dvui.Rect{ .x=1, .y=0, .w=0, .h=0 },
-        .color_border = theme.colors.border_drawer,
+        .color_border = theme.colors.border_subtle,
         .box_shadow = .{ .color = dvui.Color{ .r=0, .g=0, .b=0, .a=160 }, .offset = .{ .x=-2, .y=0 }, .fade = 16.0 },
     });
     defer drawer_box.deinit();
@@ -44,8 +44,8 @@ pub fn renderDrawer() void {
             .expand = .horizontal,
             .padding = dvui.Rect.all(10),
             .background = true,
-            .color_fill = theme.colors.bg_header,
-            .color_border = theme.colors.border_drawer,
+            .color_fill = theme.colors.bg_app,
+            .color_border = theme.colors.border_subtle,
             .border = .{ .x=0, .y=0, .w=0, .h=1 },
         });
         defer head.deinit();
@@ -53,7 +53,7 @@ pub fn renderDrawer() void {
         // Queue tab
         if (dvui.button(@src(), "Queue", .{}, .{
             .color_fill = if (active_tab == .queue) theme.colors.accent else dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
-            .color_text = if (active_tab == .queue) theme.colors.bg_header else theme.colors.text_muted,
+            .color_text = if (active_tab == .queue) theme.colors.bg_app else theme.colors.text_secondary,
             .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
             .corner_radius = theme.dims.rad_sm,
             .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
@@ -64,7 +64,7 @@ pub fn renderDrawer() void {
         // Playlist tab
         if (dvui.button(@src(), "Playlist", .{}, .{
             .color_fill = if (active_tab == .playlist) theme.colors.accent else dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
-            .color_text = if (active_tab == .playlist) theme.colors.bg_header else theme.colors.text_muted,
+            .color_text = if (active_tab == .playlist) theme.colors.bg_app else theme.colors.text_secondary,
             .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
             .corner_radius = theme.dims.rad_sm,
         })) {
@@ -101,8 +101,8 @@ fn renderPlaylistTab() void {
     // Empty state
     if (state.app.playlist == null) {
         var empty_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .gravity_x = 0.5, .gravity_y = 0.5, .padding = dvui.Rect.all(24) });
-        _ = dvui.label(@src(), "No playlist loaded.", .{}, .{ .color_text = theme.colors.text_muted });
-        _ = dvui.label(@src(), "Drop an .m3u file or folder here.", .{}, .{ .color_text = theme.colors.text_muted });
+        _ = dvui.label(@src(), "No playlist loaded.", .{}, .{ .color_text = theme.colors.text_secondary });
+        _ = dvui.label(@src(), "Drop an .m3u file or folder here.", .{}, .{ .color_text = theme.colors.text_secondary });
         empty_box.deinit();
         return;
     }
@@ -117,12 +117,12 @@ fn renderPlaylistTab() void {
         });
         defer filter_row.deinit();
         
-        dvui.icon(@src(), "", icons.tvg.lucide.@"search", .{}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5, .margin = .{ .x=0, .y=0, .w=6, .h=0 } });
+        dvui.icon(@src(), "", icons.tvg.lucide.@"search", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5, .margin = .{ .x=0, .y=0, .w=6, .h=0 } });
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &filter_buf } }, .{
             .expand = .horizontal,
-            .color_fill = theme.colors.bg_input,
-            .color_border = theme.colors.border_input,
-            .color_text = theme.colors.text_main,
+            .color_fill = theme.colors.bg_elevated,
+            .color_border = theme.colors.border_subtle,
+            .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_sm,
         });
@@ -185,7 +185,7 @@ fn renderPlaylistTab() void {
 
         // Cap visible items for performance
         if (rendered >= 500) {
-            _ = dvui.label(@src(), "... and more (refine filter)", .{}, .{ .color_text = theme.colors.text_muted });
+            _ = dvui.label(@src(), "... and more (refine filter)", .{}, .{ .color_text = theme.colors.text_secondary });
             break;
         }
         rendered += 1;
@@ -213,8 +213,8 @@ fn renderPlaylistTab() void {
         }
 
         const is_active = active_url.len > 0 and std.mem.eql(u8, active_url, entry.url);
-        const bg_color = if (is_active) theme.colors.accent else theme.colors.bg_card;
-        const fg_color = if (is_active) theme.colors.bg_header else theme.colors.text_main;
+        const bg_color = if (is_active) theme.colors.accent else theme.colors.bg_surface;
+        const fg_color = if (is_active) theme.colors.bg_app else theme.colors.text_primary;
         
         // Title/group are trimmed at byte boundaries (can cut a codepoint) and
         // come from untrusted M3U/IPTV playlists — validate before dvui draws it

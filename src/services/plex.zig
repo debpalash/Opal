@@ -379,7 +379,7 @@ pub fn renderContent() void {
         var panel = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = dvui.Rect.all(16) });
         defer panel.deinit();
         _ = dvui.label(@src(), "Plex", .{}, .{ .color_text = theme.colors.accent });
-        _ = dvui.label(@src(), "Sign in with your Plex account.", .{}, .{ .color_text = theme.colors.text_muted, .padding = .{ .x = 0, .y = 4, .w = 0, .h = 8 } });
+        _ = dvui.label(@src(), "Sign in with your Plex account.", .{}, .{ .color_text = theme.colors.text_secondary, .padding = .{ .x = 0, .y = 4, .w = 0, .h = 8 } });
         const awaiting = conn_state.load(.acquire) == .awaiting;
         if (dvui.button(@src(), if (awaiting) "Waiting…" else "Connect with Plex", .{}, .{
             .color_fill = theme.colors.accent,
@@ -397,14 +397,14 @@ pub fn renderContent() void {
 
     // Header: server + section tabs + disconnect.
     {
-        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 8, .y = 8, .w = 8, .h = 6 }, .background = true, .color_fill = theme.colors.bg_header });
+        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 8, .y = 8, .w = 8, .h = 6 }, .background = true, .color_fill = theme.colors.bg_app });
         defer hdr.deinit();
         _ = dvui.label(@src(), "Plex · {s}", .{server_name[0..server_name_len]}, .{ .color_text = theme.colors.accent, .gravity_y = 0.5 });
         {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
         }
-        if (dvui.button(@src(), "Disconnect", .{}, .{ .color_fill = theme.colors.bg_glass, .color_text = theme.colors.text_muted, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 }, .gravity_y = 0.5 })) {
+        if (dvui.button(@src(), "Disconnect", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 }, .gravity_y = 0.5 })) {
             disconnect();
             return;
         }
@@ -417,8 +417,8 @@ pub fn renderContent() void {
             const active = i == active_section;
             if (dvui.button(@src(), sec.title[0..sec.title_len], .{}, .{
                 .id_extra = i + 90000,
-                .color_fill = if (active) theme.colors.accent else theme.colors.bg_glass,
-                .color_text = if (active) dvui.Color.white else theme.colors.text_muted,
+                .color_fill = if (active) theme.colors.accent else theme.colors.bg_elevated,
+                .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
                 .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
@@ -435,8 +435,8 @@ pub fn renderContent() void {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 91000, .expand = .horizontal, .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 } });
         defer row.deinit();
         var tb: [180]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(it.title[0..it.title_len], &tb)}, .{ .id_extra = i + 91100, .color_text = theme.colors.text_main, .gravity_y = 0.5 });
-        if (it.year_len > 0) _ = dvui.label(@src(), "  {s}", .{it.year[0..it.year_len]}, .{ .id_extra = i + 91200, .color_text = theme.colors.text_dim, .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(it.title[0..it.title_len], &tb)}, .{ .id_extra = i + 91100, .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
+        if (it.year_len > 0) _ = dvui.label(@src(), "  {s}", .{it.year[0..it.year_len]}, .{ .id_extra = i + 91200, .color_text = theme.colors.text_tertiary, .gravity_y = 0.5 });
         {
             var sp = dvui.box(@src(), .{}, .{ .id_extra = i + 91300, .expand = .horizontal });
             sp.deinit();

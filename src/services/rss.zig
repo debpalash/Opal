@@ -218,12 +218,12 @@ pub fn renderContent() void {
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
             .background = true,
-            .color_fill = theme.colors.bg_drawer,
+            .color_fill = theme.colors.bg_surface,
         });
         defer hdr.deinit();
 
         _ = dvui.label(@src(), "RSS Feeds", .{}, .{
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .gravity_y = 0.5,
         });
 
@@ -239,7 +239,7 @@ pub fn renderContent() void {
             });
         } else {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.activity, .{}, .{}, .{
-                .color_fill = theme.colors.bg_glass,
+                .color_fill = theme.colors.bg_elevated,
                 .color_text = theme.colors.accent,
             })) {
                 if (feed_count > 0) fetchFeed(active_feed_idx);
@@ -253,15 +253,15 @@ pub fn renderContent() void {
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
             .background = true,
-            .color_fill = theme.colors.bg_header,
+            .color_fill = theme.colors.bg_app,
         });
         defer tab_row.deinit();
 
         for (0..feed_count) |fi| {
             const f = &feeds[fi];
             const active = (fi == active_feed_idx);
-            const bg = if (active) theme.colors.accent else theme.colors.bg_glass;
-            const fg = if (active) dvui.Color.white else theme.colors.text_muted;
+            const bg = if (active) theme.colors.accent else theme.colors.bg_elevated;
+            const fg = if (active) dvui.Color.white else theme.colors.text_secondary;
             if (dvui.button(@src(), f.name[0..f.name_len], .{}, .{
                 .id_extra = fi,
                 .color_fill = bg,
@@ -278,7 +278,7 @@ pub fn renderContent() void {
         // "+" add feed button
         if (feed_count < MAX_FEEDS) {
             if (dvui.button(@src(), "+", .{}, .{
-                .color_fill = theme.colors.bg_glass,
+                .color_fill = theme.colors.bg_elevated,
                 .color_text = theme.colors.success,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
@@ -295,20 +295,20 @@ pub fn renderContent() void {
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
             .background = true,
-            .color_fill = theme.colors.bg_card,
+            .color_fill = theme.colors.bg_surface,
         });
         defer form.deinit();
 
         _ = dvui.label(@src(), "Add RSS Feed", .{}, .{
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
         });
 
         // Name input
         var te_name = dvui.textEntry(@src(), .{ .text = .{ .buffer = &add_name_buf } }, .{
             .expand = .horizontal,
             .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
-            .color_fill = theme.colors.bg_input,
-            .color_text = theme.colors.text_main,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_primary,
             .corner_radius = theme.dims.rad_sm,
         });
         te_name.deinit();
@@ -317,8 +317,8 @@ pub fn renderContent() void {
         var te_url = dvui.textEntry(@src(), .{ .text = .{ .buffer = &add_url_buf } }, .{
             .expand = .horizontal,
             .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
-            .color_fill = theme.colors.bg_input,
-            .color_text = theme.colors.text_main,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_primary,
             .corner_radius = theme.dims.rad_sm,
         });
         const url_enter = te_url.enter_pressed;
@@ -348,8 +348,8 @@ pub fn renderContent() void {
         }
 
         if (dvui.button(@src(), "Cancel", .{}, .{
-            .color_fill = theme.colors.bg_glass,
-            .color_text = theme.colors.text_muted,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
             .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
@@ -369,7 +369,7 @@ pub fn renderContent() void {
     // Items list
     if (item_count == 0 and !is_fetching and !fetch_error) {
         _ = dvui.label(@src(), "No items — click Refresh to load", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
         });
         return;
@@ -378,7 +378,7 @@ pub fn renderContent() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_drawer,
+        .color_fill = theme.colors.bg_surface,
     });
     defer scroll.deinit();
 
@@ -392,8 +392,8 @@ pub fn renderContent() void {
             .id_extra = i,
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_card,
-            .color_border = theme.colors.bg_header_border,
+            .color_fill = theme.colors.bg_surface,
+            .color_border = theme.colors.border_subtle,
             .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
         });
@@ -410,7 +410,7 @@ pub fn renderContent() void {
             // Title
             _ = dvui.label(@src(), "{s}", .{title}, .{
                 .id_extra = i + 4000,
-                .color_text = theme.colors.text_main,
+                .color_text = theme.colors.text_primary,
                 .expand = .horizontal,
             });
 
@@ -423,7 +423,7 @@ pub fn renderContent() void {
                 defer meta.deinit();
 
                 // Seeds icon (arrow-up = upload/seed)
-                const seed_color = if (item.seeds > 10) theme.colors.success else if (item.seeds > 0) theme.colors.warning else theme.colors.text_muted;
+                const seed_color = if (item.seeds > 10) theme.colors.success else if (item.seeds > 0) theme.colors.warning else theme.colors.text_secondary;
                 _ = dvui.icon(@src(), "", icons.tvg.lucide.@"monitor-up", .{}, .{
                     .id_extra = i + 8000,
                     .color_text = seed_color,
@@ -440,14 +440,14 @@ pub fn renderContent() void {
 
                 _ = dvui.label(@src(), " · ", .{}, .{
                     .id_extra = i + 8500,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .gravity_y = 0.5,
                 });
 
                 // Peers icon
                 _ = dvui.icon(@src(), "", icons.tvg.lucide.@"monitor-down", .{}, .{
                     .id_extra = i + 9000,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .min_size_content = .{ .w = 12, .h = 12 },
                 });
 
@@ -455,20 +455,20 @@ pub fn renderContent() void {
                 const peer_str = std.fmt.bufPrintZ(&peer_buf, "{d}", .{item.peers}) catch "?";
                 _ = dvui.label(@src(), "{s}", .{peer_str}, .{
                     .id_extra = i + 9500,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .gravity_y = 0.5,
                 });
 
                 _ = dvui.label(@src(), " · ", .{}, .{
                     .id_extra = i + 9600,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .gravity_y = 0.5,
                 });
 
                 // Size
                 _ = dvui.label(@src(), "{s}", .{size_str}, .{
                     .id_extra = i + 5000,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .gravity_y = 0.5,
                 });
             }
@@ -496,8 +496,8 @@ pub fn renderContent() void {
             if (ctext.activePoint()) |cp| {
                 var fw = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(cp) }, .{
                     .id_extra = i + 10000,
-                    .color_fill = theme.colors.bg_card,
-                    .color_border = theme.colors.border_drawer,
+                    .color_fill = theme.colors.bg_surface,
+                    .color_border = theme.colors.border_subtle,
                 });
                 defer fw.deinit();
 

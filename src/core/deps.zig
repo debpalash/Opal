@@ -31,7 +31,31 @@ pub fn sherpaReady(s: Status) bool {
         s.sherpa_stream_model and s.sherpa_mic_cli;
 }
 
+// TTL cache for check(): the settings AI tab calls it up to 3× per frame and
+// each realCheck() is ~18 access() syscalls plus a HuggingFace-hub directory
+// scan — thousands of syscalls per second while the tab was open, for values
+// that change at most once per install. Cache for 1s; downloads that finish
+// force a recheck on their next status flip anyway (flag change → new frame →
+// TTL soon expires).
+//
+// Mutex-guarded: check() is called from the UI thread every frame AND from
+// worker threads (voice conversation loop → voice_backend.spawnStreamingConvo),
+// so the unguarded version could hand a worker a torn Status snapshot.
+var check_mutex: @import("sync.zig").Mutex = .{};
+var check_cache: Status = .{};
+var check_cache_ms: i64 = 0;
+
 pub fn check() Status {
+    check_mutex.lock();
+    defer check_mutex.unlock();
+    const now = io_global.milliTimestamp();
+    if (check_cache_ms != 0 and now - check_cache_ms < 1000) return check_cache;
+    check_cache = realCheck();
+    check_cache_ms = now;
+    return check_cache;
+}
+
+fn realCheck() Status {
     var s: Status = .{};
 
     s.apfel = have("/opt/homebrew/bin/apfel") or have("/usr/local/bin/apfel");
@@ -397,9 +421,15 @@ pub fn fetchSherpaStreamAsync() void {
     }
 }
 
+/// True while the whisper-tiny model download worker is running. The settings
+/// model row used to show the SHERPA flag here, so whisper-tiny downloads
+/// displayed "Not installed" and sherpa downloads lit up BOTH rows.
+pub var whisper_model_downloading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
 pub fn fetchWhisperModelAsync() void {
     const S = struct {
         fn worker() void {
+            defer whisper_model_downloading.store(false, .release);
             var home_buf: [512]u8 = undefined;
             const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return;
             const dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
@@ -410,7 +440,7 @@ pub fn fetchWhisperModelAsync() void {
             const model_path = std.fmt.bufPrintZ(&path_buf, "{s}/ggml-tiny.en.bin", .{dir}) catch return;
             io_global.cwdAccess(model_path, .{}) catch {
                 // Missing — fetch
-                logs.pushLog("info", "deps", "Fetching whisper tiny model (~39MB)…", true);
+                logs.pushLog("info", "deps", "Fetching whisper tiny model (~39MB)…", false);
                 var curl = io_global.Child.init(&.{
                     "curl", "-L",       "--fail",                                                                     "--silent", "--show-error",
                     "-o",   model_path, "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
@@ -418,16 +448,19 @@ pub fn fetchWhisperModelAsync() void {
                 curl.stdout_behavior = .Ignore;
                 curl.stderr_behavior = .Ignore;
                 curl.spawn() catch {
-                    logs.pushLog("error", "deps", "curl not found — cannot fetch whisper model", false);
+                    logs.pushLog("error", "deps", "curl not found — cannot fetch whisper model", true);
                     return;
                 };
                 _ = curl.wait() catch {};
-                logs.pushLog("info", "deps", "Whisper model ready at ~/.config/opal/models/", true);
+                logs.pushLog("info", "deps", "Whisper model ready at ~/.config/opal/models/", false);
                 return;
             };
         }
     };
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {}
+    if (whisper_model_downloading.swap(true, .acq_rel)) return; // already running
+    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {
+        whisper_model_downloading.store(false, .release);
+    }
 }
 
 // ══════════════════════════════════════════════════════════

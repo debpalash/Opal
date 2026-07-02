@@ -484,7 +484,7 @@ pub fn renderModal() void {
         .min_size_content = .{ .w = 520, .h = 200 },
         .max_size_content = .{ .w = 700, .h = 600 },
         .color_fill = theme.colors.bg_elevated,
-        .color_border = theme.colors.border_card,
+        .color_border = theme.colors.border_subtle,
         .corner_radius = theme.dims.rad_lg,
         .border = dvui.Rect.all(1),
         .box_shadow = .{ .color = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 }, .offset = .{ .x = 0, .y = 4 }, .fade = 20.0 },
@@ -510,7 +510,7 @@ pub fn renderModal() void {
     // No results
     if (torrent_count == 0) {
         _ = dvui.label(@src(), "No torrents found on this page.", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 24, .w = 0, .h = 24 },
         });
@@ -528,7 +528,7 @@ pub fn renderModal() void {
         var count_buf: [48]u8 = undefined;
         const count_str = std.fmt.bufPrintZ(&count_buf, "{d} torrent(s) available", .{torrent_count}) catch "Torrents";
         _ = dvui.label(@src(), "{s}", .{count_str}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
         });
 
         { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
@@ -543,7 +543,7 @@ pub fn renderModal() void {
         }
         if (probing_started and !all_done) {
             _ = dvui.label(@src(), "loading sizes...", .{}, .{
-                .color_text = theme.colors.text_dim,
+                .color_text = theme.colors.text_tertiary,
             });
         }
     }
@@ -554,7 +554,7 @@ pub fn renderModal() void {
     // Torrent list
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
-        .color_fill = theme.colors.bg_drawer,
+        .color_fill = theme.colors.bg_surface,
         .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
     });
     defer scroll.deinit();
@@ -568,8 +568,8 @@ pub fn renderModal() void {
             .id_extra = idx + 5000,
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_card,
-            .color_border = theme.colors.border_card,
+            .color_fill = theme.colors.bg_surface,
+            .color_border = theme.colors.border_subtle,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_md,
             .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
@@ -590,7 +590,7 @@ pub fn renderModal() void {
             // the whole app. Validate before display.
             _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(display_name)}, .{
                 .id_extra = idx + 5100,
-                .color_text = theme.colors.text_main,
+                .color_text = theme.colors.text_primary,
                 .expand = .horizontal,
                 .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
             });
@@ -632,7 +632,7 @@ pub fn renderModal() void {
 
             _ = dvui.label(@src(), " · ", .{}, .{
                 .id_extra = idx + 5500,
-                .color_text = theme.colors.text_dim,
+                .color_text = theme.colors.text_tertiary,
                 .gravity_y = 0.5,
             });
 
@@ -649,7 +649,7 @@ pub fn renderModal() void {
             if (t.total_size > 0) {
                 _ = dvui.label(@src(), " · ", .{}, .{
                     .id_extra = idx + 5650,
-                    .color_text = theme.colors.text_dim,
+                    .color_text = theme.colors.text_tertiary,
                     .gravity_y = 0.5,
                 });
 
@@ -663,12 +663,12 @@ pub fn renderModal() void {
             } else if (!t.probe_done and t.probe_tid >= 0) {
                 _ = dvui.label(@src(), " · ", .{}, .{
                     .id_extra = idx + 5650,
-                    .color_text = theme.colors.text_dim,
+                    .color_text = theme.colors.text_tertiary,
                     .gravity_y = 0.5,
                 });
                 _ = dvui.label(@src(), "...", .{}, .{
                     .id_extra = idx + 5660,
-                    .color_text = theme.colors.text_dim,
+                    .color_text = theme.colors.text_tertiary,
                     .gravity_y = 0.5,
                 });
             }
@@ -677,7 +677,7 @@ pub fn renderModal() void {
             if (t.badge_len > 0) {
                 _ = dvui.label(@src(), " · ", .{}, .{
                     .id_extra = idx + 5700,
-                    .color_text = theme.colors.text_dim,
+                    .color_text = theme.colors.text_tertiary,
                     .gravity_y = 0.5,
                 });
 
@@ -686,7 +686,7 @@ pub fn renderModal() void {
                 else if (std.mem.eql(u8, t.badge[0..t.badge_len], "New"))
                     theme.colors.success
                 else
-                    theme.colors.text_muted;
+                    theme.colors.text_secondary;
 
                 _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(t.badge[0..t.badge_len])}, .{
                     .id_extra = idx + 5750,
@@ -699,12 +699,12 @@ pub fn renderModal() void {
             if (t.date_len > 0) {
                 _ = dvui.label(@src(), " · ", .{}, .{
                     .id_extra = idx + 5800,
-                    .color_text = theme.colors.text_dim,
+                    .color_text = theme.colors.text_tertiary,
                     .gravity_y = 0.5,
                 });
                 _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(t.date[0..t.date_len])}, .{
                     .id_extra = idx + 5850,
-                    .color_text = theme.colors.text_dim,
+                    .color_text = theme.colors.text_tertiary,
                     .gravity_y = 0.5,
                 });
             }

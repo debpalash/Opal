@@ -41,7 +41,7 @@ fn renderLoginForm() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_drawer,
+        .color_fill = theme.colors.bg_surface,
     });
     defer scroll.deinit();
 
@@ -57,7 +57,7 @@ fn renderLoginForm() void {
             .color_text = theme.colors.accent,
         });
         _ = dvui.label(@src(), "Connect to your Jellyfin or Emby server (for Emby, append /emby to the URL if needed)", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .padding = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
         });
     }
@@ -71,7 +71,7 @@ fn renderLoginForm() void {
         defer form.deinit();
 
         _ = dvui.label(@src(), "Server URL", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
 
@@ -86,8 +86,8 @@ fn renderLoginForm() void {
         }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_card,
-            .color_border = theme.colors.border_drawer,
+            .color_fill = theme.colors.bg_surface,
+            .color_border = theme.colors.border_subtle,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
@@ -96,7 +96,7 @@ fn renderLoginForm() void {
         url_te.deinit();
 
         _ = dvui.label(@src(), "Username", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
         var user_te = dvui.textEntry(@src(), .{
@@ -104,8 +104,8 @@ fn renderLoginForm() void {
         }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_card,
-            .color_border = theme.colors.border_drawer,
+            .color_fill = theme.colors.bg_surface,
+            .color_border = theme.colors.border_subtle,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
@@ -114,7 +114,7 @@ fn renderLoginForm() void {
         user_te.deinit();
 
         _ = dvui.label(@src(), "Password", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
         var pass_te = dvui.textEntry(@src(), .{
@@ -122,8 +122,8 @@ fn renderLoginForm() void {
         }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_card,
-            .color_border = theme.colors.border_drawer,
+            .color_fill = theme.colors.bg_surface,
+            .color_border = theme.colors.border_subtle,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
@@ -153,7 +153,7 @@ fn renderLoginForm() void {
         } else {
             _ = dvui.label(@src(), "Connecting...", .{}, .{
                 .expand = .horizontal,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .gravity_x = 0.5,
                 .padding = .{ .x = 0, .y = 10, .w = 0, .h = 10 },
             });
@@ -172,13 +172,13 @@ fn renderLibraries() void {
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
             .background = true,
-            .color_fill = theme.colors.bg_drawer,
+            .color_fill = theme.colors.bg_surface,
         });
         defer hdr.deinit();
 
         if (dvui.buttonIcon(@src(), "search", icons.tvg.lucide.search, .{}, .{}, .{
-            .color_fill = theme.colors.bg_glass,
-            .color_text = theme.colors.text_muted,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_secondary,
             .padding = dvui.Rect.all(5),
             .corner_radius = theme.dims.rad_sm,
         })) {
@@ -201,8 +201,8 @@ fn renderLibraries() void {
         }
 
         if (dvui.buttonIcon(@src(), "disconnect", icons.tvg.lucide.@"log-out", .{}, .{}, .{
-            .color_fill = theme.colors.bg_glass,
-            .color_text = theme.colors.text_muted,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_secondary,
             .padding = dvui.Rect.all(5),
             .corner_radius = theme.dims.rad_sm,
         })) {
@@ -218,7 +218,7 @@ fn renderLibraries() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_drawer,
+        .color_fill = theme.colors.bg_surface,
     });
     defer scroll.deinit();
 
@@ -235,7 +235,7 @@ fn renderLibraries() void {
     // ── Continue Watching Section ──
     if (state.app.jf.resume_count > 0) {
         _ = dvui.label(@src(), "Continue Watching", .{}, .{
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .padding = .{ .x = 12, .y = 10, .w = 0, .h = 4 },
         });
 
@@ -260,7 +260,7 @@ fn renderLibraries() void {
     // ── Library Rows ──
     if (state.app.jf.library_count > 0) {
         _ = dvui.label(@src(), "Libraries", .{}, .{
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 4 },
         });
     }
@@ -292,7 +292,7 @@ fn renderLibraries() void {
             .expand = .horizontal,
             .gravity_y = 0.5,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .padding = dvui.Rect.all(0),
         })) {
             const id = lib.id[0..lib.id_len];
@@ -307,7 +307,7 @@ fn renderLibraries() void {
         dvui.icon(@src(), "", icons.tvg.lucide.@"chevron-right", .{}, .{
             .id_extra = i,
             .gravity_y = 0.5,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .min_size_content = .{ .w = 16, .h = 16 },
         });
     }
@@ -324,13 +324,13 @@ fn renderItems() void {
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
             .background = true,
-            .color_fill = theme.colors.bg_drawer,
+            .color_fill = theme.colors.bg_surface,
         });
         defer hdr.deinit();
 
         if (dvui.buttonIcon(@src(), "back", icons.tvg.lucide.@"arrow-left", .{}, .{}, .{
-            .color_fill = theme.colors.bg_glass,
-            .color_text = theme.colors.text_muted,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_secondary,
             .padding = dvui.Rect.all(5),
             .corner_radius = theme.dims.rad_sm,
         })) {
@@ -340,7 +340,7 @@ fn renderItems() void {
         if (state.app.jf.parent_name_len > 0) {
             var pn_buf: [128]u8 = undefined;
             _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(state.app.jf.parent_name[0..state.app.jf.parent_name_len], &pn_buf)}, .{
-                .color_text = theme.colors.text_main,
+                .color_text = theme.colors.text_primary,
                 .gravity_y = 0.5,
                 .padding = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
             });
@@ -353,7 +353,7 @@ fn renderItems() void {
 
         if (state.app.jf.is_loading.load(.acquire)) {
             _ = dvui.label(@src(), "Loading...", .{}, .{
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .gravity_y = 0.5,
             });
         }
@@ -384,7 +384,7 @@ fn renderItems() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_drawer,
+        .color_fill = theme.colors.bg_surface,
     });
     defer scroll.deinit();
 
@@ -414,7 +414,7 @@ fn renderSkeletonRows() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_drawer,
+        .color_fill = theme.colors.bg_surface,
     });
     defer scroll.deinit();
 
@@ -555,7 +555,7 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
 
         _ = dvui.label(@src(), "{s}", .{display}, .{
             .id_extra = idx + 210,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
         });
 
         // Meta row: type badge + year
@@ -571,25 +571,25 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
                 // Media-type is metadata, not an affordance — quiet text.
                 _ = dvui.label(@src(), "{s}", .{mt}, .{
                     .id_extra = idx + 310,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                 });
             }
 
             if (item.year > 0) {
-                _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 320, .color_text = theme.colors.text_muted });
+                _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 320, .color_text = theme.colors.text_secondary });
                 var yr_buf: [8]u8 = undefined;
                 const yr = std.fmt.bufPrintZ(&yr_buf, "{d}", .{item.year}) catch "?";
-                _ = dvui.label(@src(), "{s}", .{yr}, .{ .id_extra = idx + 330, .color_text = theme.colors.text_muted });
+                _ = dvui.label(@src(), "{s}", .{yr}, .{ .id_extra = idx + 330, .color_text = theme.colors.text_secondary });
             }
 
             // Runtime
             if (item.runtime_ticks > 0) {
                 const mins = @divTrunc(item.runtime_ticks, 600000000);
                 if (mins > 0) {
-                    _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 340, .color_text = theme.colors.text_muted });
+                    _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 340, .color_text = theme.colors.text_secondary });
                     var rt_buf: [16]u8 = undefined;
                     const rt = std.fmt.bufPrintZ(&rt_buf, "{d}m", .{mins}) catch "?";
-                    _ = dvui.label(@src(), "{s}", .{rt}, .{ .id_extra = idx + 350, .color_text = theme.colors.text_muted });
+                    _ = dvui.label(@src(), "{s}", .{rt}, .{ .id_extra = idx + 350, .color_text = theme.colors.text_secondary });
                 }
             }
         }
@@ -606,7 +606,7 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
             var ov_buf: [512]u8 = undefined;
             _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(item.overview[0..item.overview_len], &ov_buf)}, .{
                 .id_extra = idx + 500,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .expand = .horizontal,
                 .padding = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
             });
@@ -625,7 +625,7 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-right", .{}, .{}, .{
                 .id_extra = idx + 610,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .padding = dvui.Rect.all(4),
             })) {
                 // Push current state before navigating deeper
@@ -661,7 +661,7 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.info, .{}, .{}, .{
                 .id_extra = idx + 630,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = if (item.expanded) theme.colors.accent else theme.colors.text_muted,
+                .color_text = if (item.expanded) theme.colors.accent else theme.colors.text_secondary,
                 .padding = dvui.Rect.all(3),
                 .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
             })) {
@@ -678,8 +678,8 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
         if (ctext.activePoint()) |cp| {
             var fw = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(cp) }, .{
                 .id_extra = idx + 800,
-                .color_fill = theme.colors.bg_card,
-                .color_border = theme.colors.border_drawer,
+                .color_fill = theme.colors.bg_surface,
+                .color_border = theme.colors.border_subtle,
             });
             defer fw.deinit();
 
@@ -701,7 +701,7 @@ fn renderPosterCard(item: *state.JfItem, idx: usize, card_w: f32, show_progress:
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = idx,
         .background = true,
-        .color_fill = theme.colors.bg_card,
+        .color_fill = theme.colors.bg_surface,
         .corner_radius = dvui.Rect.all(6),
         .min_size_content = .{ .w = card_w, .h = 10 },
         .max_size_content = .{ .w = card_w, .h = poster_h + 32 },
@@ -785,7 +785,7 @@ fn renderPosterCard(item: *state.JfItem, idx: usize, card_w: f32, show_progress:
             .min_size_content = .{ .w = 10, .h = 2 },
             .max_size_content = .{ .w = card_w, .h = 2 },
             .background = true,
-            .color_fill = theme.colors.bg_input,
+            .color_fill = theme.colors.bg_elevated,
         });
         var fill = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = idx + 85,
@@ -803,7 +803,7 @@ fn renderPosterCard(item: *state.JfItem, idx: usize, card_w: f32, show_progress:
     _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(item.name[0..item.name_len], &jf_title_buf)}, .{
         .id_extra = idx + 90,
         .expand = .horizontal,
-        .color_text = theme.colors.text_main,
+        .color_text = theme.colors.text_primary,
         .padding = .{ .x = 4, .y = 3, .w = 4, .h = 2 },
     });
 }
@@ -818,13 +818,13 @@ fn renderSearch() void {
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
             .background = true,
-            .color_fill = theme.colors.bg_drawer,
+            .color_fill = theme.colors.bg_surface,
         });
         defer hdr.deinit();
 
         if (dvui.buttonIcon(@src(), "back", icons.tvg.lucide.@"arrow-left", .{}, .{}, .{
-            .color_fill = theme.colors.bg_glass,
-            .color_text = theme.colors.text_muted,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_secondary,
             .padding = dvui.Rect.all(5),
             .corner_radius = theme.dims.rad_sm,
         })) {
@@ -836,8 +836,8 @@ fn renderSearch() void {
         }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_card,
-            .color_border = theme.colors.border_drawer,
+            .color_fill = theme.colors.bg_surface,
+            .color_border = theme.colors.border_subtle,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },

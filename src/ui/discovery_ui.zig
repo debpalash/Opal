@@ -96,7 +96,7 @@ fn renderCard(rec: *const recommendations.Recommendation, id: usize) void {
         .min_size_content = .{ .w = CARD_W, .h = CARD_H },
         .max_size_content = .{ .w = CARD_W, .h = CARD_H },
         .background = true,
-        .color_fill = theme.colors.bg_card,
+        .color_fill = theme.colors.bg_surface,
         .color_fill_hover = theme.colors.bg_hover,
         .corner_radius = dvui.Rect.all(theme.radius.md),
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
@@ -157,7 +157,7 @@ fn renderCard(rec: *const recommendations.Recommendation, id: usize) void {
 
         dvui.icon(@src(), "because", icons.tvg.lucide.@"message-circle", .{}, .{
             .id_extra = id,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .min_size_content = .{ .w = 12, .h = 12 },
             .gravity_y = 0.0,
             .margin = .{ .x = 0, .y = 2, .w = theme.spacing.xs, .h = 0 },

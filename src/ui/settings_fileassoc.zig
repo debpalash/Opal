@@ -352,11 +352,17 @@ pub fn render() void {
     const status_snap = g.status;
     g.mutex.unlock();
 
-    if (!checking and !pending and now - last > 5000) {
+    // Idle re-check every 30s (was 5s — each sweep spawns ~37 serial `swift -e`
+    // interpreter runs on macOS, near-continuous background CPU burn). Actions
+    // (register/unregister) still force an immediate re-check by zeroing
+    // last_check_ms.
+    if (!checking and !pending and now - last > 30_000) {
         triggerCheck();
     }
 
     const busy = checking or pending;
+    // Keep the status text live while the worker runs (no UI wake otherwise).
+    if (busy) dvui.refresh(null, @src(), null);
 
     // Instruction line — quiet tertiary text, no banner box (calm: separate by
     // whitespace, not a colored bordered panel).
@@ -382,7 +388,7 @@ pub fn render() void {
         defer brow.deinit();
 
         if (dvui.button(@src(), if (busy) "Working…" else "Register All", .{}, .{
-            .color_fill = if (busy) theme.colors.bg_elevated else theme.colors.accent_primary,
+            .color_fill = if (busy) theme.colors.bg_elevated else theme.colors.accent,
             .color_text = if (busy) theme.colors.text_secondary else theme.colors.text_on_accent,
             .corner_radius = theme.dims.rad_md,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
@@ -391,13 +397,13 @@ pub fn render() void {
             if (!busy) triggerRegisterAll();
         }
 
-        if (dvui.button(@src(), "Unregister All", .{}, .{
-            .color_fill = TRANSPARENT,
-            .color_text = if (busy) theme.colors.text_tertiary else theme.colors.danger,
-            .corner_radius = theme.dims.rad_md,
-            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
-        })) {
-            if (!busy) triggerUnregisterAll();
+        // Two-step confirm — one click silently reset the default-app handler
+        // for all ~37 UTIs across every group.
+        if (components.confirmDangerButton(@src(), "Unregister All", 0)) {
+            if (!busy) {
+                triggerUnregisterAll();
+                state.showToast("Removing file associations…");
+            }
         }
 
         if (busy) {
@@ -447,7 +453,7 @@ pub fn render() void {
                 const sl: []const u8 = if (is_reg) "Default" else "Not set";
                 _ = dvui.label(@src(), "{s}", .{sl}, .{
                     .id_extra = grp.id_base + 3,
-                    .color_text = if (is_reg) theme.colors.semantic_success else theme.colors.text_tertiary,
+                    .color_text = if (is_reg) theme.colors.success else theme.colors.text_tertiary,
                     .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
                     .gravity_y = 0.5,
                 });
@@ -456,7 +462,7 @@ pub fn render() void {
             if (!is_reg) {
                 if (dvui.button(@src(), "Register", .{}, .{
                     .id_extra = grp.id_base + 4,
-                    .color_fill = if (pending) theme.colors.bg_elevated else theme.colors.accent_primary,
+                    .color_fill = if (pending) theme.colors.bg_elevated else theme.colors.accent,
                     .color_text = if (pending) theme.colors.text_secondary else theme.colors.text_on_accent,
                     .corner_radius = theme.dims.rad_md,
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },

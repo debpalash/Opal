@@ -1483,7 +1483,7 @@ pub fn renderContent() void {
                     .expand = .horizontal,
                     .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
                     .background = true,
-                    .color_fill = theme.colors.bg_card,
+                    .color_fill = theme.colors.bg_surface,
                 });
                 defer sel_row.deinit();
 
@@ -1499,7 +1499,7 @@ pub fn renderContent() void {
 
                 var rn_buf: [128]u8 = undefined;
                 _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(r.name[0..r.name_len], &rn_buf)}, .{
-                    .color_text = theme.colors.text_main,
+                    .color_text = theme.colors.text_primary,
                     .expand = .horizontal,
                     .padding = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
                 });
@@ -1510,7 +1510,7 @@ pub fn renderContent() void {
                     const info = std.fmt.bufPrintZ(&ep_info, "{d} ep", .{state.app.anime.episode_count}) catch "?";
                     _ = dvui.label(@src(), "{s}", .{info}, .{
                         .id_extra = 50,
-                        .color_text = theme.colors.text_muted,
+                        .color_text = theme.colors.text_secondary,
                     });
                 }
             }
@@ -1547,7 +1547,7 @@ pub fn renderContent() void {
                     const rs = std.fmt.bufPrintZ(&rl, "E{d}", .{nextUnwatchedEp()}) catch "";
                     _ = dvui.label(@src(), "{s}", .{rs}, .{
                         .id_extra = 62,
-                        .color_text = theme.colors.text_muted,
+                        .color_text = theme.colors.text_secondary,
                         .gravity_y = 0.5,
                         .padding = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
                     });
@@ -1561,7 +1561,7 @@ pub fn renderContent() void {
                         .expand = .horizontal,
                         .min_size_content = .{ .w = 80, .h = 8 },
                         .background = true,
-                        .color_fill = theme.colors.bg_input,
+                        .color_fill = theme.colors.bg_elevated,
                         .corner_radius = dvui.Rect.all(4),
                         .gravity_y = 0.5,
                     });
@@ -1584,7 +1584,7 @@ pub fn renderContent() void {
                     const cs = std.fmt.bufPrintZ(&cb, "{d}/{d}", .{ watched, total }) catch "";
                     _ = dvui.label(@src(), "{s}", .{cs}, .{
                         .id_extra = 65,
-                        .color_text = theme.colors.text_main,
+                        .color_text = theme.colors.text_primary,
                         .gravity_y = 0.5,
                         .padding = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
                     });
@@ -1626,14 +1626,14 @@ pub fn renderContent() void {
                     else if (is_watched)
                         dvui.Color{ .r = 18, .g = 22, .b = 30, .a = 255 }
                     else
-                        theme.colors.bg_card;
+                        theme.colors.bg_surface;
 
                     var ep_card = dvui.box(@src(), .{ .dir = .vertical }, .{
                         .id_extra = ep_i + 2000,
                         .expand = .horizontal,
                         .background = true,
                         .color_fill = fill_color,
-                        .color_border = theme.colors.bg_header_border,
+                        .color_border = theme.colors.border_subtle,
                         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
                         .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
                     });
@@ -1654,7 +1654,7 @@ pub fn renderContent() void {
                             .id_extra = ep_i + 3050,
                             .background = true,
                             .color_fill = if (is_watched) theme.colors.success else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                            .color_text = if (is_watched) dvui.Color.white else theme.colors.text_muted,
+                            .color_text = if (is_watched) dvui.Color.white else theme.colors.text_secondary,
                             .corner_radius = dvui.Rect.all(10),
                             .padding = .{ .x = 5, .y = 1, .w = 5, .h = 1 },
                             .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
@@ -1669,7 +1669,7 @@ pub fn renderContent() void {
                         const badge = std.fmt.bufPrintZ(&ep_badge, "Ep {s}", .{ep_str}) catch "?";
                         _ = dvui.label(@src(), "{s}", .{badge}, .{
                             .id_extra = ep_i + 3100,
-                            .color_text = if (is_watched) theme.colors.text_muted else theme.colors.accent,
+                            .color_text = if (is_watched) theme.colors.text_secondary else theme.colors.accent,
                         });
 
                         // Filler badge
@@ -1704,7 +1704,7 @@ pub fn renderContent() void {
                         if (dvui.button(@src(), title, .{}, .{
                             .id_extra = ep_i + 4000,
                             .expand = .horizontal,
-                            .color_text = theme.colors.text_main,
+                            .color_text = theme.colors.text_primary,
                             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                             .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
                         })) {
@@ -1715,7 +1715,7 @@ pub fn renderContent() void {
                         if (dvui.button(@src(), "▶ Play", .{}, .{
                             .id_extra = ep_i + 4000,
                             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                            .color_text = theme.colors.text_main,
+                            .color_text = theme.colors.text_primary,
                             .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
                         })) {
                             playEpisode(ep_str);
@@ -1727,13 +1727,13 @@ pub fn renderContent() void {
                     if (aired_len > 0) {
                         _ = dvui.label(@src(), "{s}", .{state.app.anime.episode_aired[ep_i][0..aired_len]}, .{
                             .id_extra = ep_i + 5000,
-                            .color_text = theme.colors.text_muted,
+                            .color_text = theme.colors.text_secondary,
                         });
                     }
                 }
             } else {
                 _ = dvui.label(@src(), "No episodes available", .{}, .{
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
                 });
             }
@@ -1820,7 +1820,7 @@ fn renderModeToolbar(count: usize) void {
         .expand = .horizontal,
         .padding = .{ .x = 8, .y = 8, .w = 8, .h = 6 },
         .background = true,
-        .color_fill = theme.colors.bg_header,
+        .color_fill = theme.colors.bg_app,
     });
     defer bar.deinit();
 
@@ -1853,7 +1853,7 @@ fn renderModeToolbar(count: usize) void {
     // Result count + card-size −/+ (always, same row).
     toolbarDivider(950);
     _ = dvui.label(@src(), "{d} results", .{count}, .{
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_secondary,
         .gravity_y = 0.5,
     });
     const dim = dvui.Color{ .r = 120, .g = 120, .b = 148, .a = 200 };
@@ -1884,8 +1884,8 @@ fn renderModeTab(idx: usize, m: state.AnimeMode, label: []const u8) void {
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = idx + 20000,
         .background = true,
-        .color_fill = if (active) theme.colors.accent else theme.colors.bg_card,
-        .color_text = if (active) dvui.Color.white else theme.colors.text_muted,
+        .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
+        .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
         .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
@@ -1909,8 +1909,8 @@ fn renderSeasonChip(idx: usize, sel: state.AnimeSeasonSel, label: []const u8) vo
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = idx + 21000,
         .background = true,
-        .color_fill = if (active) theme.colors.accent else theme.colors.bg_card,
-        .color_text = if (active) dvui.Color.white else theme.colors.text_muted,
+        .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
+        .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
         .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
@@ -1933,8 +1933,8 @@ fn renderSeasonalSubToolbar() void {
     if (dvui.button(@src(), "−", .{}, .{
         .id_extra = 21100,
         .background = true,
-        .color_fill = theme.colors.bg_card,
-        .color_text = theme.colors.text_main,
+        .color_fill = theme.colors.bg_surface,
+        .color_text = theme.colors.text_primary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
         .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
@@ -1946,7 +1946,7 @@ fn renderSeasonalSubToolbar() void {
         const ys = std.fmt.bufPrint(&yb, "{d}", .{state.app.anime.season_year}) catch "----";
         _ = dvui.label(@src(), "{s}", .{ys}, .{
             .id_extra = 21101,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .gravity_y = 0.5,
             .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         });
@@ -1954,8 +1954,8 @@ fn renderSeasonalSubToolbar() void {
     if (dvui.button(@src(), "+", .{}, .{
         .id_extra = 21102,
         .background = true,
-        .color_fill = theme.colors.bg_card,
-        .color_text = theme.colors.text_main,
+        .color_fill = theme.colors.bg_surface,
+        .color_text = theme.colors.text_primary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
         .margin = .{ .x = 3, .y = 0, .w = 3, .h = 0 },
@@ -1972,8 +1972,8 @@ fn renderCalDayChip(idx: usize, day: u8, label: []const u8) void {
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = idx + 22000,
         .background = true,
-        .color_fill = if (active) theme.colors.accent else theme.colors.bg_card,
-        .color_text = if (active) dvui.Color.white else theme.colors.text_muted,
+        .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
+        .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
         .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
@@ -2001,14 +2001,14 @@ fn renderCalendarSubToolbar() void {
 fn renderContinueGrid() void {
     if (state.app.anime.continue_count == 0) {
         _ = dvui.label(@src(), "Nothing here yet — play an episode and it'll show up to resume.", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .gravity_x = 0.5,
             .margin = dvui.Rect.all(24),
         });
         return;
     }
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
 
     const rect_w = scroll.data().rect.w;
@@ -2042,7 +2042,7 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
         .min_size_content = .{ .w = card_w, .h = 10 },
         .max_size_content = .{ .w = card_w, .h = poster_h + 70 },
         .background = true,
-        .color_fill = theme.colors.bg_card,
+        .color_fill = theme.colors.bg_surface,
         .corner_radius = dvui.Rect.all(6),
         .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
@@ -2126,7 +2126,7 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
         if (dvui.button(@src(), safeUtf8(title), .{}, .{
             .id_extra = idx + 30500,
             .expand = .horizontal,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .padding = dvui.Rect.all(0),
         })) {
@@ -2140,7 +2140,7 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
             const rs = std.fmt.bufPrintZ(&rb, "Continue E{d}/{d}", .{ next_ep, item.total_episodes }) catch "Continue";
             _ = dvui.label(@src(), "{s}", .{rs}, .{
                 .id_extra = idx + 30600,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
             });
         }
@@ -2163,7 +2163,7 @@ fn renderRelationsRail() void {
 
     _ = dvui.label(@src(), "Seasons & Related", .{}, .{
         .id_extra = 80001,
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_secondary,
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
     });
 
@@ -2193,8 +2193,8 @@ fn renderRelationsRail() void {
         if (dvui.button(@src(), ls, .{}, .{
             .id_extra = i + 80100,
             .background = true,
-            .color_fill = theme.colors.bg_card,
-            .color_text = theme.colors.text_main,
+            .color_fill = theme.colors.bg_surface,
+            .color_text = theme.colors.text_primary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
             .margin = .{ .x = 0, .y = 0, .w = 4, .h = 4 },
@@ -2217,7 +2217,7 @@ fn renderSearchBar() void {
         .expand = .horizontal,
         .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
         .background = true,
-        .color_fill = theme.colors.bg_header,
+        .color_fill = theme.colors.bg_app,
     });
     defer search_row.deinit();
 
@@ -2227,9 +2227,9 @@ fn renderSearchBar() void {
     }, .{
         .expand = .horizontal,
         .min_size_content = .{ .w = 200, .h = 20 },
-        .color_fill = theme.colors.bg_input,
-        .color_border = theme.colors.border_input,
-        .color_text = theme.colors.text_main,
+        .color_fill = theme.colors.bg_elevated,
+        .color_border = theme.colors.border_subtle,
+        .color_text = theme.colors.text_primary,
         .border = dvui.Rect.all(1),
         .corner_radius = theme.dims.rad_sm,
     });
@@ -2317,7 +2317,7 @@ fn renderToolbar(count: usize) void {
 
     // Result count.
     _ = dvui.label(@src(), "{d} results", .{count}, .{
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_secondary,
         .gravity_y = 0.5,
     });
 
@@ -2364,8 +2364,8 @@ fn renderTrendChip(idx: usize, filter: TrendFilter, label: []const u8) void {
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = idx + 8000,
         .background = true,
-        .color_fill = if (active) theme.colors.accent else theme.colors.bg_card,
-        .color_text = if (active) dvui.Color.white else theme.colors.text_muted,
+        .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
+        .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
         .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
@@ -2386,14 +2386,14 @@ fn renderTrendChip(idx: usize, filter: TrendFilter, label: []const u8) void {
 fn renderGallery() void {
     if (state.app.anime.result_count == 0 and !state.app.anime.is_loading.load(.acquire)) {
         _ = dvui.label(@src(), "Search for anime or wait for trending...", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .gravity_x = 0.5,
             .margin = dvui.Rect.all(24),
         });
         return;
     }
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
 
     // Responsive poster grid from the LIVE page width (one-frame lag; first
@@ -2428,13 +2428,13 @@ fn renderGallery() void {
                 .id_extra = 80001,
                 .expand = .horizontal,
                 .gravity_x = 0.5,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .margin = .{ .x = 3, .y = 8, .w = 3, .h = 12 },
             });
         } else if (dvui.button(@src(), "▾ Load more", .{}, .{
             .id_extra = 80002,
             .expand = .horizontal,
-            .color_fill = theme.colors.bg_glass,
+            .color_fill = theme.colors.bg_elevated,
             .color_text = theme.colors.accent,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 12, .w = 8, .h = 12 },
@@ -2473,7 +2473,7 @@ fn renderHoverMeta(item: *state.AnimeResult, idx: usize) void {
     _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(item.name[0..@min(item.name_len, item.name.len)], &hover_name_buf)}, .{
         .id_extra = idx + 1601,
         .expand = .horizontal,
-        .color_text = theme.colors.text_main,
+        .color_text = theme.colors.text_primary,
         .font = dvui.themeGet().font_heading,
     });
 
@@ -2495,7 +2495,7 @@ fn renderHoverMeta(item: *state.AnimeResult, idx: usize) void {
 
         var eb: [24]u8 = undefined;
         if (std.fmt.bufPrint(&eb, "  {d} eps", .{item.episodes})) |es| {
-            _ = dvui.label(@src(), "{s}", .{es}, .{ .id_extra = idx + 1604, .color_text = theme.colors.text_muted });
+            _ = dvui.label(@src(), "{s}", .{es}, .{ .id_extra = idx + 1604, .color_text = theme.colors.text_secondary });
         } else |_| {}
     }
 
@@ -2526,7 +2526,7 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
         .min_size_content = .{ .w = card_w, .h = 10 },
         .max_size_content = .{ .w = card_w, .h = poster_h + 92 },
         .background = true,
-        .color_fill = theme.colors.bg_card,
+        .color_fill = theme.colors.bg_surface,
         .corner_radius = dvui.Rect.all(6),
         .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
@@ -2609,7 +2609,7 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
         if (dvui.button(@src(), title, .{}, .{
             .id_extra = idx + 500,
             .expand = .horizontal,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .padding = dvui.Rect.all(0),
         })) {
@@ -2628,10 +2628,10 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
             // Episode count
             var ep_buf: [32]u8 = undefined;
             if (std.fmt.bufPrintZ(&ep_buf, "{d} eps", .{item.episodes})) |eps| {
-                _ = dvui.label(@src(), "{s}", .{eps}, .{ .id_extra = idx + 610, .color_text = theme.colors.text_muted });
+                _ = dvui.label(@src(), "{s}", .{eps}, .{ .id_extra = idx + 610, .color_text = theme.colors.text_secondary });
             } else |_| {}
 
-            _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 620, .color_text = theme.colors.text_muted });
+            _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 620, .color_text = theme.colors.text_secondary });
 
             // Score percentage
             const pct = @as(u8, @intFromFloat(std.math.clamp(item.score * 10.0, 0.0, 100.0)));
@@ -2680,7 +2680,7 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
             if (std.fmt.bufPrintZ(&btn_buf, "{s}{s}", .{ snip, suffix })) |snip_z| {
                 if (dvui.button(@src(), snip_z, .{}, .{
                     .id_extra = idx + 650,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .expand = .horizontal,
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .padding = dvui.Rect.all(0),
@@ -2695,7 +2695,7 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
             var ov_buf: [512]u8 = undefined;
             _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(item.overview[0..@min(item.overview_len, ov_buf.len)], &ov_buf)}, .{
                 .id_extra = idx + 700,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .expand = .horizontal,
                 .padding = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
             });
@@ -2710,8 +2710,8 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
         if (ctext.activePoint()) |cp| {
             var fw = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(cp) }, .{
                 .id_extra = idx + 3000,
-                .color_fill = theme.colors.bg_card,
-                .color_border = theme.colors.border_drawer,
+                .color_fill = theme.colors.bg_surface,
+                .color_border = theme.colors.border_subtle,
             });
             defer fw.deinit();
 

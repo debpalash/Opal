@@ -81,6 +81,11 @@ pub fn save() void {
     });
     setKey("ai_model_id", ai_server.activeModelId());
 
+    // Voice (STT/TTS) backend — the settings page said "Changes saved
+    // automatically." while this selection silently reset on restart.
+    const voice_backend = @import("../services/voice_backend.zig");
+    setKey("voice_backend", @tagName(voice_backend.active_kind));
+
     saveSessionUrls();
 
     db.exec("COMMIT");
@@ -309,6 +314,11 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         ai_server.backend_kind = if (std.mem.eql(u8, val, "apfel")) .apfel else .gemma_llama;
     } else if (std.mem.eql(u8, key, "ai_model_id")) {
         @import("../services/ai_server.zig").selectModelById(val);
+    } else if (std.mem.eql(u8, key, "voice_backend")) {
+        const voice_backend = @import("../services/voice_backend.zig");
+        if (std.meta.stringToEnum(voice_backend.Kind, val)) |k| {
+            voice_backend.active_kind = k;
+        }
     }
 }
 

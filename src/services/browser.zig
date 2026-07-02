@@ -566,7 +566,7 @@ pub fn renderContent() void {
 
         const icon_btn_style = dvui.Options{
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 3, .y = 2, .w = 3, .h = 2 },
             .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
@@ -611,7 +611,7 @@ pub fn renderContent() void {
             .min_size_content = .{ .w = 200, .h = 18 },
             .color_fill = dvui.Color{ .r = 28, .g = 28, .b = 34, .a = 255 },
             .color_border = dvui.Color{ .r = 50, .g = 50, .b = 60, .a = 200 },
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(1),
             .corner_radius = dvui.Rect.all(12),
             .margin = .{ .x = 3, .y = 0, .w = 3, .h = 0 },
@@ -646,7 +646,7 @@ pub fn renderContent() void {
     if (b.title_len > 0) {
         var tbuf: [256]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(b.title[0..b.title_len], &tbuf)}, .{
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .padding = .{ .x = 8, .y = 2, .w = 8, .h = 2 },
             .background = true,
             .color_fill = dvui.Color{ .r = 22, .g = 22, .b = 28, .a = 255 },
@@ -747,7 +747,7 @@ pub fn renderContent() void {
         defer empty.deinit();
 
         _ = dvui.label(@src(), "Opal Browser", .{}, .{
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
         });
@@ -761,21 +761,21 @@ pub fn renderContent() void {
             });
             _ = dvui.label(@src(), "Real browser rendering · Cloudflare bypass · Full JS support", .{}, .{
                 .id_extra = 6,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .gravity_x = 0.5,
                 .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
             });
         } else if (bridge_starting.load(.acquire)) {
             _ = dvui.label(@src(), "Starting Camoufox browser engine...", .{}, .{
                 .id_extra = 3,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .gravity_x = 0.5,
                 .padding = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
             });
         } else {
             _ = dvui.label(@src(), "Browser engine not started", .{}, .{
                 .id_extra = 3,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .gravity_x = 0.5,
                 .padding = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
             });
@@ -789,7 +789,7 @@ pub fn renderContent() void {
 
         _ = dvui.label(@src(), "Enter a URL above to browse", .{}, .{
             .id_extra = 5,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
         });

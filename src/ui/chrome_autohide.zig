@@ -6,6 +6,14 @@
 
 const std = @import("std");
 
+/// Single source of truth for the chrome idle clock. Previously the 2500ms
+/// threshold was hand-copied into shell.zig, main.zig (twice) and footer.zig —
+/// changing the timing required four synchronized edits or the chrome layers
+/// (top nav / control bar / repaint gate) desynchronized.
+pub const DEFAULT_THRESHOLD_MS: i64 = 2500;
+/// Duration of the chrome fade-out that starts once the threshold is crossed.
+pub const FADE_MS: i64 = 220;
+
 pub const Inputs = struct {
     /// Active player has a video texture AND is currently playing (not paused).
     playing_video: bool,
@@ -40,4 +48,9 @@ test "hides only while playing video and idle past the threshold" {
 
     // Typing in the omnibox keeps the chrome regardless of idle time.
     try std.testing.expect(!shouldHideChrome(.{ .playing_video = true, .typing = true, .idle_ms = 9999, .threshold_ms = 2500 }));
+}
+
+test "chrome idle constants are sane (fade fits inside the idle window)" {
+    try std.testing.expect(DEFAULT_THRESHOLD_MS > 0);
+    try std.testing.expect(FADE_MS > 0 and FADE_MS < DEFAULT_THRESHOLD_MS);
 }

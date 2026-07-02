@@ -1611,7 +1611,7 @@ def test_smoothness_repaint():
     mn = _src("src/main.zig")
     ps = _src("src/core/poster.zig")
     ac = _src("src/services/ai_context.zig")
-    if "chrome_live" not in mn or "last_mouse_move_ms) < 2500" not in mn:
+    if "chrome_live" not in mn or "DEFAULT_THRESHOLD_MS" not in mn:
         return "fail", "playback refresh not gated on chrome visibility (main.zig)"
     if "dvui_win" not in ps or "dvui.refresh(win" not in ps:
         return "fail", "poster worker does not wake the UI after decode"
@@ -1629,14 +1629,114 @@ def test_shell_immersive_navbar():
     sh = _src("src/ui/shell.zig")
     ok = (
         "shouldHideChrome" in sh
-        and "if (!immersive) renderTopNav" in sh
-        and "router.current != .player" in sh          # scoped so browsing keeps the nav
+        and "renderTopNav(compact)" in sh
+        and "if (!immersive)" in sh
+        and "nav_alpha" in sh                          # phase 4: nav fades instead of popping
+        and "router.current == .player" in sh          # scoped so browsing keeps the nav
         and "fullscreen_player_idx != null" in sh
         and "and !immersive) renderBottomTabs" in sh    # compact bottom tabs hide too
     )
     if not ok:
         return "fail", "shell top nav not gated on immersive playback"
     return "pass", "top nav + bottom tabs auto-hide on immersive Player route"
+
+
+@test("Frame Loop: Seq Ids Reset + Deferred Nav", "Stability")
+def test_frame_loop_integrity():
+    # Phase 4 (GUI/thread wiring — verified by presence):
+    #  1. components.beginFrame() resets the sectionHeader/divider/statusPill
+    #     id sequence every frame — without it every one of those widgets is a
+    #     "first frame" id and dvui force-refreshes, pinning the app at full
+    #     repaint rate whenever Settings or a status pill is visible.
+    #  2. navigateToTab from worker threads is deferred through an atomic and
+    #     applied on the UI thread (router history writes raced the render read).
+    #  3. The native file-open dialog is polled unconditionally in appFrame —
+    #     it used to be polled only by the legacy header, so Ctrl+O results were
+    #     silently dropped in the default page shell.
+    mn = _src("src/main.zig")
+    cp = _src("src/ui/components.zig")
+    st = _src("src/core/state.zig")
+    if "pub fn beginFrame" not in cp or 'components.zig").beginFrame()' not in mn:
+        return "fail", "per-frame id sequence reset not wired (components.beginFrame)"
+    if "pending_nav" not in st or "applyPendingNav" not in mn:
+        return "fail", "worker navigation not deferred to the UI thread"
+    if "ui.pollFileOpen()" not in mn:
+        return "fail", "file-open dialog not polled from appFrame"
+    return "pass", "seq-id reset + deferred nav + file-open poll wired"
+
+
+@test("Interaction States Render (Hover/Focus/Confirm)", "Page Shell")
+def test_interaction_states():
+    # Phase 4: hover/focus states must be applied AFTER dvui.clicked() reports
+    # hover (plain boxes draw their background at creation, so the old
+    # `if (hovered)` ternaries at init were provably dead code), transparent-
+    # fill buttons must spell out explicit hover fills (dvui derives hover by
+    # lightening the fill, and lighten(transparent) is still transparent), and
+    # destructive actions go through the two-step confirmDangerButton.
+    cp = _src("src/ui/components.zig")
+    sh = _src("src/ui/shell.zig")
+    dr = _src("src/ui/drawer.zig")
+    stg = _src("src/ui/settings.zig")
+    if "color_fill_hover" not in cp or "confirmDangerButton" not in cp:
+        return "fail", "components missing hover fills / confirm button"
+    if "options.color_fill = tk.bg_hover()" not in cp:
+        return "fail", "post-clicked hover repaint missing in components"
+    if "navRowInteract" not in sh:
+        return "fail", "shell nav rows missing hover/focus/keyboard interaction"
+    if "confirmDangerButton" not in dr or "confirmDangerButton" not in stg:
+        return "fail", "destructive clears not confirm-gated"
+    return "pass", "hover repaint + focus rings + confirm-gated destructive actions"
+
+
+@test("Color Aliases Collapsed To Canonical Tokens", "Page Shell")
+def test_color_alias_collapse():
+    # Phase 4: the duplicated color aliases (two divergent text ramps, 7-way
+    # identical border token, 5-way elevated-bg token) are collapsed — the
+    # legacy names must be GONE from ThemeColors and from all call sites.
+    th = _src("src/ui/theme.zig")
+    struct_body = th.split("ThemeColors = struct")[1].split("};")[0]
+    for legacy in ("text_main", "text_muted", "text_dim", "accent_primary",
+                   "semantic_error", "border_input", "bg_card", "bg_drawer",
+                   "bg_input", "active_border"):
+        if legacy + ":" in struct_body:
+            return "fail", f"legacy color alias still defined: {legacy}"
+    import subprocess
+    r = subprocess.run(["grep", "-rn", "colors.text_main\|colors.semantic_\|colors.bg_input\|colors.accent_primary",
+                        "src/"], capture_output=True, text=True)
+    hits = [l for l in r.stdout.splitlines() if ".zig:" in l]
+    if hits:
+        return "fail", f"legacy alias call sites remain: {hits[:3]}"
+    if "pub const transparent" not in th:
+        return "fail", "theme.transparent shared token missing"
+    return "pass", "canonical tokens only; legacy aliases deleted"
+
+
+@test("Compact Type Ramp Drives dvui Fonts", "Page Shell")
+def test_typography_unified():
+    # Phase 4: one type ramp. applyToDvui routes dvui's font_body/heading/title
+    # through theme.font_size, so labels that use themeGet() fonts and
+    # components that use fontAt() finally agree; ramp is the compact one.
+    th = _src("src/ui/theme.zig")
+    if "font_body.withSize(font_size.body)" not in th:
+        return "fail", "dvui font_body not routed through the token ramp"
+    if "font_heading.withSize(font_size.title)" not in th or "font_title.withSize(font_size.display)" not in th:
+        return "fail", "dvui heading/title fonts not routed through tokens"
+    if "body: f32 = 11" not in th:
+        return "fail", "type ramp is not the compact one (body should be 11)"
+    return "pass", "compact ramp drives dvui + component fonts"
+
+
+@test("Browse Sub-Tabs Own Their Row", "Page Shell")
+def test_subtab_layout():
+    # Phase 4 regression guard: the route fade (AnimateWidget) wraps a SINGLE
+    # child; pages with sub-tabs render two siblings, which used to each get
+    # the full page rect and draw interleaved (Browse toolbar over sub-tabs).
+    sh = _src("src/ui/shell.zig")
+    if "var page_col = dvui.box" not in sh:
+        return "fail", "route fade missing the single-child column wrapper"
+    if "scrollArea" not in sh.split("fn subTabs")[1].split("fn ")[0]:
+        return "fail", "sub-tab strip not in a height-reserving scroll strip"
+    return "pass", "fade wraps one column; sub-tabs reserve their row"
 
 
 @test("Plex Client Wired", "Page Shell")

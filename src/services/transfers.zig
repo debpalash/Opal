@@ -23,7 +23,7 @@ pub fn renderTransfersContent() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_drawer,
+        .color_fill = theme.colors.bg_surface,
     });
     defer scroll.deinit();
 
@@ -47,13 +47,13 @@ fn renderTopBar() void {
         .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 26, .a = 255 },
         .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        .color_border = theme.colors.border_drawer,
+        .color_border = theme.colors.border_subtle,
     });
     defer row.deinit();
 
     _ = dvui.label(@src(), "Limit:", .{}, .{
         .gravity_y = 0.5,
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_secondary,
         .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
     });
 
@@ -66,7 +66,7 @@ fn renderTopBar() void {
         if (dvui.button(@src(), labels[k], .{}, .{
             .id_extra = k,
             .color_fill = if (active) theme.colors.accent else dvui.Color{ .r = 24, .g = 24, .b = 34, .a = 255 },
-            .color_text = if (active) dvui.Color{ .r = 10, .g = 10, .b = 15, .a = 255 } else theme.colors.text_muted,
+            .color_text = if (active) dvui.Color{ .r = 10, .g = 10, .b = 15, .a = 255 } else theme.colors.text_secondary,
             .color_border = if (active) theme.colors.accent else dvui.Color{ .r = 45, .g = 45, .b = 60, .a = 200 },
             .border = dvui.Rect.all(1),
             .corner_radius = dvui.Rect.all(99),
@@ -108,7 +108,7 @@ fn renderTabBar() void {
             .id_extra = k + 90000,
             .expand = .horizontal,
             .color_fill = if (sel) theme.colors.accent else dvui.Color{ .r = 22, .g = 22, .b = 32, .a = 255 },
-            .color_text = if (sel) dvui.Color{ .r = 10, .g = 10, .b = 15, .a = 255 } else theme.colors.text_muted,
+            .color_text = if (sel) dvui.Color{ .r = 10, .g = 10, .b = 15, .a = 255 } else theme.colors.text_secondary,
             .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
             .border = .{ .x = 0, .y = 0, .w = 0, .h = if (sel) @as(f32, 2) else @as(f32, 0) },
             .color_border = theme.colors.accent,
@@ -163,7 +163,7 @@ fn renderFilesInline() void {
         if (dvui.button(@src(), lbl, .{}, .{
             .expand = .horizontal,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .border = dvui.Rect.all(0),
             .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
             .gravity_y = 0.5,
@@ -196,7 +196,7 @@ fn renderFilesInline() void {
             });
         } else {
             _ = dvui.label(@src(), "Download folder is empty.", .{}, .{
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .padding = .{ .x = 14, .y = 14, .w = 0, .h = 0 },
             });
         }
@@ -214,7 +214,7 @@ fn renderFilesInline() void {
             .color_border = dvui.Color{ .r = 40, .g = 40, .b = 60, .a = 200 },
         });
         defer hdr.deinit();
-        _ = dvui.label(@src(), "Name", .{}, .{ .expand = .horizontal, .color_text = theme.colors.text_dim });
+        _ = dvui.label(@src(), "Name", .{}, .{ .expand = .horizontal, .color_text = theme.colors.text_tertiary });
         _ = dvui.label(@src(), "  ", .{}, .{ .min_size_content = .{ .w = 114, .h = 0 } }); // reserve for sticky actions
     }
 
@@ -245,7 +245,7 @@ fn renderFilesInline() void {
 
         // Icon
         const ficon = if (is_dir) icons.tvg.lucide.folder else if (is_video) icons.tvg.lucide.film else if (is_audio) icons.tvg.lucide.music else icons.tvg.lucide.file;
-        const icol = if (is_dir) dvui.Color{ .r = 100, .g = 170, .b = 255, .a = 255 } else if (is_video) dvui.Color{ .r = 100, .g = 220, .b = 120, .a = 255 } else if (is_audio) dvui.Color{ .r = 255, .g = 180, .b = 80, .a = 255 } else theme.colors.text_dim;
+        const icol = if (is_dir) dvui.Color{ .r = 100, .g = 170, .b = 255, .a = 255 } else if (is_video) dvui.Color{ .r = 100, .g = 220, .b = 120, .a = 255 } else if (is_audio) dvui.Color{ .r = 255, .g = 180, .b = 80, .a = 255 } else theme.colors.text_tertiary;
         _ = dvui.icon(@src(), "", ficon, .{}, .{
             .id_extra = fi + 20100,
             .color_text = icol,
@@ -263,7 +263,7 @@ fn renderFilesInline() void {
         _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(displayName(name), &nm_buf)}, .{
             .id_extra = fi + 20200,
             .expand = .horizontal,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .gravity_y = 0.5,
         });
 
@@ -293,7 +293,7 @@ fn renderFilesInline() void {
                 std.fmt.bufPrintZ(&sbuf, "{d:.0}K", .{sf / 1024.0}) catch "?";
             _ = dvui.label(@src(), "{s}", .{s}, .{
                 .id_extra = fi + 20300,
-                .color_text = theme.colors.text_dim,
+                .color_text = theme.colors.text_tertiary,
                 .min_size_content = .{ .w = 38, .h = 0 },
                 .gravity_y = 0.5,
                 .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
@@ -368,7 +368,7 @@ fn renderActiveInline() void {
 
     if (t_count == 0) {
         _ = dvui.label(@src(), "No active downloads.", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .padding = .{ .x = 14, .y = 20, .w = 0, .h = 0 },
         });
         return;
@@ -385,8 +385,8 @@ fn renderActiveInline() void {
             .color_border = dvui.Color{ .r = 40, .g = 40, .b = 60, .a = 200 },
         });
         defer hdr.deinit();
-        _ = dvui.label(@src(), "Torrent", .{}, .{ .expand = .horizontal, .color_text = theme.colors.text_dim });
-        _ = dvui.label(@src(), "Speed", .{}, .{ .color_text = theme.colors.text_dim, .min_size_content = .{ .w = 90, .h = 0 } });
+        _ = dvui.label(@src(), "Torrent", .{}, .{ .expand = .horizontal, .color_text = theme.colors.text_tertiary });
+        _ = dvui.label(@src(), "Speed", .{}, .{ .color_text = theme.colors.text_tertiary, .min_size_content = .{ .w = 90, .h = 0 } });
         _ = dvui.label(@src(), "  ", .{}, .{ .min_size_content = .{ .w = 72, .h = 0 } });
     }
 
@@ -430,7 +430,7 @@ fn renderActiveInline() void {
 
         // Progress arc indicator (colored left border)
         {
-            const prog_col = if (progress >= 1.0) theme.colors.success else if (is_paused) theme.colors.text_dim else theme.colors.accent;
+            const prog_col = if (progress >= 1.0) theme.colors.success else if (is_paused) theme.colors.text_tertiary else theme.colors.accent;
             var bar = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = ui + 30050,
                 .min_size_content = .{ .w = 3, .h = 0 },
@@ -456,7 +456,7 @@ fn renderActiveInline() void {
                 .id_extra = ui + 30110,
                 .expand = .horizontal,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = if (is_paused) theme.colors.text_muted else theme.colors.text_main,
+                .color_text = if (is_paused) theme.colors.text_secondary else theme.colors.text_primary,
                 .padding = dvui.Rect.all(0),
             })) {
                 expanded_torrent_id = if (expanded_torrent_id == i) -1 else i;
@@ -485,7 +485,7 @@ fn renderActiveInline() void {
                 std.fmt.bufPrintZ(&spd_buf, "↓{d:.1}M {d}%", .{ dl_mb, pct }) catch "...";
             _ = dvui.label(@src(), "{s}", .{spd_str}, .{
                 .id_extra = ui + 30200,
-                .color_text = if (is_paused) theme.colors.text_dim else theme.colors.text_muted,
+                .color_text = if (is_paused) theme.colors.text_tertiary else theme.colors.text_secondary,
                 .min_size_content = .{ .w = 90, .h = 0 },
                 .gravity_y = 0.5,
             });
@@ -518,7 +518,7 @@ fn renderActiveInline() void {
         }
         {
             const pic = if (is_paused) icons.tvg.lucide.play else icons.tvg.lucide.pause;
-            const pcol = if (is_paused) theme.colors.accent else theme.colors.text_muted;
+            const pcol = if (is_paused) theme.colors.accent else theme.colors.text_secondary;
             if (dvui.buttonIcon(@src(), "", pic, .{}, .{}, .{
                 .id_extra = ui + 30400,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -576,10 +576,10 @@ fn renderExpandedFiles(torrent_id: i32) void {
             .color_border = theme.colors.accent,
         });
         defer xhdr.deinit();
-        _ = dvui.label(@src(), "Files", .{}, .{ .color_text = theme.colors.text_dim, .expand = .horizontal });
-        _ = dvui.label(@src(), "Size", .{}, .{ .color_text = theme.colors.text_dim, .min_size_content = .{ .w = 56, .h = 0 } });
-        _ = dvui.label(@src(), "Progress", .{}, .{ .color_text = theme.colors.text_dim, .min_size_content = .{ .w = 80, .h = 0 } });
-        _ = dvui.label(@src(), "Priority", .{}, .{ .color_text = theme.colors.text_dim });
+        _ = dvui.label(@src(), "Files", .{}, .{ .color_text = theme.colors.text_tertiary, .expand = .horizontal });
+        _ = dvui.label(@src(), "Size", .{}, .{ .color_text = theme.colors.text_tertiary, .min_size_content = .{ .w = 56, .h = 0 } });
+        _ = dvui.label(@src(), "Progress", .{}, .{ .color_text = theme.colors.text_tertiary, .min_size_content = .{ .w = 80, .h = 0 } });
+        _ = dvui.label(@src(), "Priority", .{}, .{ .color_text = theme.colors.text_tertiary });
     }
 
     var f_idx: i32 = 0;
@@ -629,7 +629,7 @@ fn renderExpandedFiles(torrent_id: i32) void {
         _ = dvui.label(@src(), "{s}", .{safeUtf8(f_name[0..f_len])}, .{
             .id_extra = cid + 200,
             .expand = .horizontal,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .gravity_y = 0.5,
         });
 
@@ -643,7 +643,7 @@ fn renderExpandedFiles(torrent_id: i32) void {
                 std.fmt.bufPrintZ(&sbuf, "{d:.0}M", .{mb}) catch "?";
             _ = dvui.label(@src(), "{s}", .{s}, .{
                 .id_extra = cid + 300,
-                .color_text = theme.colors.text_dim,
+                .color_text = theme.colors.text_tertiary,
                 .min_size_content = .{ .w = 56, .h = 0 },
                 .gravity_y = 0.5,
             });
@@ -666,7 +666,7 @@ fn renderExpandedFiles(torrent_id: i32) void {
         if (dvui.button(@src(), "Skip", .{}, .{
             .id_extra = cid + 500,
             .color_fill = dvui.Color{ .r = 50, .g = 20, .b = 20, .a = 255 },
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
             .margin = .{ .x = 4, .y = 0, .w = 2, .h = 0 },
@@ -700,7 +700,7 @@ fn renderHistoryInline() void {
 
     if (!has_dl and !has_watch) {
         _ = dvui.label(@src(), "No history yet.", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .padding = .{ .x = 14, .y = 20, .w = 0, .h = 0 },
         });
         return;
@@ -719,7 +719,7 @@ fn renderHistoryInline() void {
                 .color_border = dvui.Color{ .r = 40, .g = 40, .b = 60, .a = 200 },
             });
             defer shdr.deinit();
-            _ = dvui.label(@src(), "Download History", .{}, .{ .expand = .horizontal, .color_text = theme.colors.text_dim });
+            _ = dvui.label(@src(), "Download History", .{}, .{ .expand = .horizontal, .color_text = theme.colors.text_tertiary });
             _ = dvui.label(@src(), "  ", .{}, .{ .min_size_content = .{ .w = 50, .h = 0 } });
         }
 
@@ -753,7 +753,7 @@ fn renderHistoryInline() void {
             _ = dvui.label(@src(), "{s}", .{displayName(display)}, .{
                 .id_extra = hi + 40100,
                 .expand = .horizontal,
-                .color_text = theme.colors.text_main,
+                .color_text = theme.colors.text_primary,
                 .gravity_y = 0.5,
             });
 
@@ -780,7 +780,7 @@ fn renderHistoryInline() void {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
                 .id_extra = hi + 40300,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = theme.colors.text_dim,
+                .color_text = theme.colors.text_tertiary,
                 .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
                 .gravity_y = 0.5,
             })) {
@@ -803,7 +803,7 @@ fn renderHistoryInline() void {
                 .margin = .{ .x = 0, .y = 8, .w = 0, .h = 0 },
             });
             defer shdr.deinit();
-            _ = dvui.label(@src(), "Recently Played", .{}, .{ .expand = .horizontal, .color_text = theme.colors.text_dim });
+            _ = dvui.label(@src(), "Recently Played", .{}, .{ .expand = .horizontal, .color_text = theme.colors.text_tertiary });
         }
 
         var hi: usize = 0;
@@ -834,7 +834,7 @@ fn renderHistoryInline() void {
 
             _ = dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
                 .id_extra = hi + 50100,
-                .color_text = theme.colors.text_dim,
+                .color_text = theme.colors.text_tertiary,
                 .min_size_content = .{ .w = 13, .h = 13 },
                 .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
                 .gravity_y = 0.5,
@@ -842,7 +842,7 @@ fn renderHistoryInline() void {
             _ = dvui.label(@src(), "{s}", .{displayName(e.name[0..e.name_len])}, .{
                 .id_extra = hi + 50200,
                 .expand = .horizontal,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .gravity_y = 0.5,
             });
         }

@@ -15,7 +15,7 @@ pub const GridMode = enum { auto, cols_1, cols_2, cols_3, cols_4 };
 pub const ContentProvider = enum { mpv, comic_viewer };
 pub const VideoFillMode = enum { fit, cover };
 pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web };
-pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, Scripts, LangLearn, FileAssoc };
+pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, Scripts, AI, LangLearn, FileAssoc };
 pub const TmdbView = enum { Trending, Search, Favorites, Watchlist, Watching };
 pub const TmdbCategory = enum { trending, now_playing, top_rated, upcoming, popular };
 pub const TmdbMediaFilter = enum { all, movie, tv };
@@ -258,7 +258,6 @@ pub const AppState = struct {
     grid_mode: GridMode = .auto,
     seek_sync: bool = false,
     hwdec_enabled: bool = false,
-    overlay_hide_timer: i64 = 0,
     show_cell_overlay: bool = true,
     hovered_cell_idx: ?usize = null,
     video_fill_mode: VideoFillMode = .fit,
@@ -323,7 +322,7 @@ pub const AppState = struct {
     deps_modal_checked: bool = false,
     toast_buf: [128]u8 = std.mem.zeroes([128]u8),
     toast_len: usize = 0,
-    toast_expire: i64 = 0,
+    toast_expire: i64 = 0, // wall-clock ms deadline (milliTimestamp), NOT seconds
     toast_type: ToastType = .info,
     // Monotonic per-toast id. Keys the toast fade-in's AnimateWidget id so each
     // new toast re-triggers the fade — toast_expire has only 1s granularity, so
@@ -790,7 +789,7 @@ pub fn showToastTyped(msg: []const u8, toast_type: ToastType) void {
     const copy_len = @min(msg.len, app.toast_buf.len - 1);
     @memcpy(app.toast_buf[0..copy_len], msg[0..copy_len]);
     app.toast_len = copy_len;
-    app.toast_expire = @import("io_global.zig").timestamp() + 3;
+    app.toast_expire = @import("io_global.zig").milliTimestamp() + 3500; // ms — fine-grained so the toast can fade out
     app.toast_seq +%= 1;
     // Auto-detect type from common emoji prefixes if caller used .info
     if (toast_type == .info and copy_len >= 2) {
@@ -820,11 +819,45 @@ pub fn markConfigDirty() void {
     app.config_dirty = true;
 }
 
+/// Wake the UI thread so a state change made off-frame (worker completion,
+/// deferred navigation) renders now instead of after the next mouse move.
+/// Safe from any thread — dvui.refresh with an explicit window routes through
+/// the backend. No-op before appInit stores the window.
+pub fn wakeUi() void {
+    if (app.dvui_win) |w| dvui.refresh(w, @src(), null);
+}
+
+/// Deferred cross-thread navigation. router.History.navigate() is a multi-step
+/// non-atomic mutation on arrays the UI thread reads every frame; AI tools and
+/// resolver callbacks used to call it directly from worker threads — a race
+/// that could publish back_len before the back[] store and hand the render
+/// switch an undefined Route byte. Workers now enqueue the tab here (single
+/// atomic store) and appFrame applies it on the UI thread.
+/// Encoding: 0 = none, else @intFromEnum(tab) + 1.
+pub var pending_nav: std.atomic.Value(u8) = std.atomic.Value(u8).init(0);
+
+/// Navigate to the page that hosts a given legacy DrawerTab — from ANY thread.
+/// The actual router mutation is deferred to the next appFrame on the UI
+/// thread (applyPendingNav); wakeUi() makes that frame happen immediately.
+pub fn navigateToTab(tab: DrawerTab) void {
+    pending_nav.store(@import("nav_pure.zig").encode(DrawerTab, tab), .release);
+    wakeUi();
+}
+
+/// Consume a deferred navigateToTab request. Call once per frame from
+/// appFrame, before rendering.
+pub fn applyPendingNav() void {
+    const v = pending_nav.swap(0, .acq_rel);
+    if (v == 0) return;
+    const tab = @import("nav_pure.zig").decode(DrawerTab, v) orelse return; // corrupted — drop rather than crash
+    navigateToTabNow(tab);
+}
+
 /// Navigate to the page that hosts a given legacy DrawerTab. Updates BOTH the
 /// new page router (+ the relevant Browse/Library/System sub-tab) and the
 /// legacy drawer state, so navigation works whether or not page_shell is on.
-/// Safe to call from any thread (enum/usize writes; UI reads are per-frame).
-pub fn navigateToTab(tab: DrawerTab) void {
+/// UI THREAD ONLY — off-thread callers must use navigateToTab().
+pub fn navigateToTabNow(tab: DrawerTab) void {
     app.drawer_tab = tab; // legacy drawer
     app.drawer_open = true;
     switch (tab) {

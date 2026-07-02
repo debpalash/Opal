@@ -106,7 +106,7 @@ pub fn renderMetadataDialog() void {
     }
 
     // Primary action — the single accent affordance of the dialog.
-    if (dvui.button(@src(), "Start Download", .{}, .{ .color_fill = theme.colors.accent_primary, .color_text = theme.colors.text_on_accent, .padding = theme.dims.pad_md, .margin = .{ .x=theme.spacing.sm, .y=0, .w=0, .h=0 } })) {
+    if (dvui.button(@src(), "Start Download", .{}, .{ .color_fill = theme.colors.accent, .color_text = theme.colors.text_on_accent, .padding = theme.dims.pad_md, .margin = .{ .x=theme.spacing.sm, .y=0, .w=0, .h=0 } })) {
         var fi: i32 = 0;
         const shown_dl = @min(f_count, @as(@TypeOf(f_count), @intCast(state.app.pending_files_selection.len)));
         while (fi < shown_dl) : (fi += 1) {

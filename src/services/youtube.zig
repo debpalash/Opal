@@ -692,14 +692,14 @@ pub fn renderContent() void {
 
     if (state.app.yt.results.items.len == 0 and !state.app.yt.is_loading.load(.acquire)) {
         _ = dvui.label(@src(), "No results. Try searching for something.", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .gravity_x = 0.5,
             .margin = dvui.Rect.all(24),
         });
         return;
     }
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
 
     yt_mutex.lock();
@@ -739,7 +739,7 @@ pub fn renderContent() void {
         }
         if (loading_more.load(.acquire)) {
             _ = dvui.label(@src(), "Loading more…", .{}, .{
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .gravity_x = 0.5,
                 .padding = dvui.Rect.all(12),
             });
@@ -824,7 +824,7 @@ fn renderToolbar() void {
 
     // Item count + card-size controls.
     toolbarDivider(950);
-    _ = dvui.label(@src(), "{d} videos", .{state.app.yt.results.items.len}, .{ .color_text = theme.colors.text_muted, .gravity_y = 0.5 });
+    _ = dvui.label(@src(), "{d} videos", .{state.app.yt.results.items.len}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
 
     const dim = dvui.Color{ .r = 120, .g = 120, .b = 148, .a = 200 };
     if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
@@ -867,9 +867,9 @@ fn toolbarDivider(id: usize) void {
 fn renderSearchInline() void {
     var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.yt.search_buf }, .placeholder = "Search YouTube…" }, .{
         .min_size_content = .{ .w = 240, .h = 28 },
-        .color_fill = theme.colors.bg_input,
-        .color_border = theme.colors.border_input,
-        .color_text = theme.colors.text_main,
+        .color_fill = theme.colors.bg_elevated,
+        .color_border = theme.colors.border_subtle,
+        .color_text = theme.colors.text_primary,
         .border = dvui.Rect.all(1),
         .corner_radius = theme.dims.rad_sm,
         .gravity_y = 0.5,
@@ -879,7 +879,7 @@ fn renderSearchInline() void {
 
     if (dvui.button(@src(), "Go", .{}, .{
         .color_fill = theme.colors.accent,
-        .color_text = theme.colors.bg_header,
+        .color_text = theme.colors.bg_app,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
         .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
@@ -896,8 +896,8 @@ fn renderCatChip(idx: usize, chip: CatChip, current: []const u8) void {
     if (dvui.button(@src(), chip.label, .{}, .{
         .id_extra = idx + 2000,
         .background = true,
-        .color_fill = if (active) theme.colors.accent else theme.colors.bg_card,
-        .color_text = if (active) dvui.Color.white else theme.colors.text_muted,
+        .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
+        .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
         .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
@@ -927,7 +927,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = idx,
         .background = true,
-        .color_fill = theme.colors.bg_card,
+        .color_fill = theme.colors.bg_surface,
         .corner_radius = dvui.Rect.all(6),
         .min_size_content = .{ .w = the_card_w, .h = 10 },
         .max_size_content = .{ .w = the_card_w, .h = thumb_h + 150 },
@@ -982,7 +982,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
                     .id_extra = idx + 150,
                     .gravity_x = 0.5,
                     .gravity_y = 0.5,
-                    .color_text = theme.colors.bg_glass,
+                    .color_text = theme.colors.bg_elevated,
                     .expand = .both,
                 });
             }
@@ -1037,7 +1037,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
         _ = dvui.labelNoFmt(@src(), title_2l, .{}, .{
             .id_extra = idx + 300,
             .expand = .horizontal,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
         });
 
         // Two-line meta: channel on its own line, then "1.5M views · 3w ago".
@@ -1057,7 +1057,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
                 _ = dvui.labelNoFmt(@src(), ch, .{}, .{
                     .id_extra = idx + 410,
                     .expand = .horizontal,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                 });
             }
 
@@ -1070,7 +1070,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
                 _ = dvui.labelNoFmt(@src(), ml, .{}, .{
                     .id_extra = idx + 430,
                     .expand = .horizontal,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                 });
             }
         }
@@ -1084,7 +1084,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
                 sendToPlayer(item, false);
             }
 
-            if (dvui.button(@src(), "  Queue  ", .{}, .{ .id_extra = idx + 520, .color_fill = theme.colors.bg_glass, .color_text = theme.colors.accent, .color_border = theme.colors.accent, .border = dvui.Rect.all(1), .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 16, .y = 4, .w = 16, .h = 4 }, .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 } })) {
+            if (dvui.button(@src(), "  Queue  ", .{}, .{ .id_extra = idx + 520, .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.accent, .color_border = theme.colors.accent, .border = dvui.Rect.all(1), .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 16, .y = 4, .w = 16, .h = 4 }, .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 } })) {
                 sendToPlayer(item, true);
             }
         }
@@ -1098,8 +1098,8 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
         if (ctext.activePoint()) |cp| {
             var fw = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(cp) }, .{
                 .id_extra = idx + 700,
-                .color_fill = theme.colors.bg_card,
-                .color_border = theme.colors.border_drawer,
+                .color_fill = theme.colors.bg_surface,
+                .color_border = theme.colors.border_subtle,
             });
             defer fw.deinit();
 
@@ -1257,7 +1257,7 @@ fn renderHoverMeta(item: *state.YtItem, idx: usize) void {
     _ = dvui.label(@src(), "{s}", .{safeUtf8(item.title[0..item.title_len])}, .{
         .id_extra = idx + 601,
         .expand = .horizontal,
-        .color_text = theme.colors.text_main,
+        .color_text = theme.colors.text_primary,
         .font = dvui.themeGet().font_heading,
     });
 
@@ -1277,15 +1277,15 @@ fn renderHoverMeta(item: *state.YtItem, idx: usize) void {
 
         if (item.views > 0) {
             var vbuf: [32]u8 = undefined;
-            _ = dvui.label(@src(), "{s}", .{viewsStr(item.views, &vbuf)}, .{ .id_extra = idx + 604, .color_text = theme.colors.text_muted });
+            _ = dvui.label(@src(), "{s}", .{viewsStr(item.views, &vbuf)}, .{ .id_extra = idx + 604, .color_text = theme.colors.text_secondary });
         }
         const ymd = dateFor(idx);
         if (ymd.len == 8) {
             var abuf: [16]u8 = undefined;
             const ago = formatAgo(ymd, &abuf);
             if (ago.len > 0) {
-                if (item.views > 0) _ = dvui.label(@src(), "  ·  ", .{}, .{ .id_extra = idx + 605, .color_text = theme.colors.border_drawer });
-                _ = dvui.label(@src(), "{s}", .{ago}, .{ .id_extra = idx + 606, .color_text = theme.colors.text_muted });
+                if (item.views > 0) _ = dvui.label(@src(), "  ·  ", .{}, .{ .id_extra = idx + 605, .color_text = theme.colors.border_subtle });
+                _ = dvui.label(@src(), "{s}", .{ago}, .{ .id_extra = idx + 606, .color_text = theme.colors.text_secondary });
             }
         }
     }

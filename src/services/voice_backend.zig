@@ -560,7 +560,14 @@ const mlx_whisper_backend: Backend = .{
 pub var active_kind: Kind = .whisper_cpp_plus_say;
 
 pub fn active() Backend {
-    return switch (active_kind) {
+    return backendFor(active_kind);
+}
+
+/// Pure lookup — resolve a Backend WITHOUT touching active_kind. The settings
+/// UI used to fetch display names by transiently mutating active_kind every
+/// frame, racing the detached TTS worker that reads it concurrently.
+pub fn backendFor(kind: Kind) Backend {
+    return switch (kind) {
         .whisper_cpp_plus_say => whisper_cpp_plus_say_backend,
         .sherpa_onnx => sherpa_onnx_backend,
         .apple_native => apple_native_backend,

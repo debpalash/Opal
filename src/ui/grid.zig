@@ -19,7 +19,7 @@ const components = @import("components.zig");
 /// Writes into `out` (capacity = `out.len`) and returns the populated
 /// slice. Returns `raw` unchanged if cleanup would produce an empty
 /// string.
-fn cleanDisplayName(out: []u8, raw: []const u8) []const u8 {
+pub fn cleanDisplayName(out: []u8, raw: []const u8) []const u8 {
     if (out.len == 0) return raw;
 
     // Step 1: basename
@@ -371,10 +371,28 @@ pub fn renderGrid() !void {
                     var cell_overlay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
                     const img_wd = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .expand = .both, .gravity_x = 0.5, .gravity_y = 0.5 });
 
+                    // Raw click-on-video handling. Guards matter here:
+                    //  • compare against the PHYSICAL screen rect — me.p is
+                    //    physical; img_wd.rect is parent-local (they only
+                    //    coincided for a single cell at 1x scale);
+                    //  • skip events belonging to floating windows (pickers,
+                    //    modals) — the raw event list contains those too, so a
+                    //    click inside a popover used to ALSO toggle pause;
+                    //  • skip the control-bar band — its buttons render AFTER
+                    //    the grid each frame, so a click on Play/Pause fired
+                    //    both handlers (pause toggled on press, button on
+                    //    release → net no-op) and Rewind also paused;
+                    //  • skip while the pre-download metadata dialog (a plain
+                    //    overlay, not a floating window) is up.
+                    const img_rs = img_wd.borderRectScale().r;
+                    const footer_mod = @import("footer.zig");
+                    const cell_clicks_blocked = state.app.pending_magnet_tid >= 0 or state.app.settings_open;
                     for (dvui.events()) |*e| {
-                        if (e.evt == .mouse) {
+                        if (e.evt == .mouse and !e.handled and !cell_clicks_blocked) {
                             const me = e.evt.mouse;
-                            if (me.p.x >= img_wd.rect.x and me.p.x <= img_wd.rect.x + img_wd.rect.w and me.p.y >= img_wd.rect.y and me.p.y <= img_wd.rect.y + img_wd.rect.h) {
+                            if (me.floating_win != dvui.subwindowCurrentId()) continue;
+                            const over_controls = state.app.show_cell_overlay and footer_mod.mouseInControlPanel(me.p);
+                            if (!over_controls and me.p.x >= img_rs.x and me.p.x <= img_rs.x + img_rs.w and me.p.y >= img_rs.y and me.p.y <= img_rs.y + img_rs.h) {
                                 if (me.action == .press and me.button == .left) {
                                     state.app.active_player_idx = i;
                                     // Double-click detection → fullscreen toggle
@@ -715,7 +733,7 @@ pub fn renderGrid() !void {
                             .id_extra = i + 5510,
                             .expand = .both,
                             .color_fill = theme.colors.bg_deep,
-                            .color_text = theme.colors.text_main,
+                            .color_text = theme.colors.text_primary,
                             .border = dvui.Rect.all(0),
                             .corner_radius = theme.dims.rad_sm,
                         })) {
@@ -793,15 +811,9 @@ fn renderContinueWatching() void {
             components.sectionHeader("Continue Watching");
         }
 
-        if (dvui.button(@src(), "Clear", .{}, .{
-            .id_extra = 43900,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = theme.colors.text_tertiary,
-            .border = dvui.Rect.all(0),
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-            .gravity_y = 0.5,
-        })) {
+        // Two-step confirm — this was a bare one-click DELETE of the entire
+        // watch history, sitting right next to the resume cards.
+        if (components.confirmDangerButton(@src(), "Clear", 43900)) {
             watch_history.clearAll();
             state.showToast("Watch history cleared");
             return;
@@ -926,7 +938,7 @@ fn renderContinueWatching() void {
             var fill_box = dvui.box(@src(), .{}, .{
                 .id_extra = si + 43600,
                 .background = true,
-                .color_fill = theme.colors.accent_primary,
+                .color_fill = theme.colors.accent,
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .min_size_content = .{ .w = fill_w, .h = bar_h },
                 .max_size_content = .{ .w = fill_w, .h = bar_h },

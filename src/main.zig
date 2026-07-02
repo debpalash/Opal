@@ -225,6 +225,11 @@ fn appInit(win: *dvui.Window) !void {
     // callback, etc.) can wake the UI via dvui.refresh from any thread.
     state.app.dvui_win = win;
 
+    // Seed the chrome idle clock so the control overlay starts visible for the
+    // usual idle window instead of instantly hidden (last_mouse_move_ms == 0
+    // would read as "idle for 56 years").
+    state.app.last_mouse_move_ms = @import("core/io_global.zig").milliTimestamp();
+
     // Register SDL Event Watch for file drops (must be on main thread)
     _ = c.sdl.SDL_EventState(c.sdl.SDL_DROPFILE, c.sdl.SDL_ENABLE);
     c.sdl.SDL_AddEventWatch(sdlEventWatch, null);
@@ -527,14 +532,14 @@ fn renderSlashMenu() void {
         }
         _ = dvui.label(@src(), "{s}", .{cmd.desc}, .{
             .id_extra = i + 100,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
         });
     }
 
     if (!any_shown) {
         _ = dvui.label(@src(), "No commands match.", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .gravity_x = 0.5,
             .margin = .{ .y = 12 },
         });
@@ -598,7 +603,7 @@ fn renderChatDropdown() void {
                     .gravity_y = 0.5,
                 });
                 _ = dvui.label(@src(), "Seeing: {s}", .{title_buf[0..tl]}, .{
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .gravity_y = 0.5,
                 });
             }
@@ -675,7 +680,7 @@ fn renderChatDropdown() void {
             defer hdr.deinit();
             _ = dvui.label(@src(), "{s}", .{if (is_user) "You" else "AI"}, .{
                 .id_extra = mi,
-                .color_text = if (is_user) theme.colors.accent else theme.colors.text_muted,
+                .color_text = if (is_user) theme.colors.accent else theme.colors.text_secondary,
             });
             if (!is_user) {
                 {
@@ -687,7 +692,7 @@ fn renderChatDropdown() void {
                     .color_text = if (m.starred)
                         dvui.Color{ .r = 255, .g = 200, .b = 80, .a = 255 }
                     else
-                        theme.colors.text_muted,
+                        theme.colors.text_secondary,
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .border = dvui.Rect.all(0),
                     .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
@@ -697,7 +702,7 @@ fn renderChatDropdown() void {
                 }
                 if (dvui.buttonIcon(@src(), "", @import("icons").tvg.lucide.@"rotate-ccw", .{}, .{}, .{
                     .id_extra = mi + 91800,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .border = dvui.Rect.all(0),
                     .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
@@ -710,7 +715,7 @@ fn renderChatDropdown() void {
         var mtbuf: [2048]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{@import("core/text.zig").safeUtf8Buf(m.text[0..m.text_len], &mtbuf)}, .{
             .id_extra = mi + 1,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
         });
     }
 
@@ -753,7 +758,7 @@ fn renderInlineChatDock() void {
                 .gravity_y = 0.5,
             });
             _ = dvui.label(@src(), "Seeing: {s}", .{title_buf[0..tl]}, .{
-                .color_text = @import("ui/theme.zig").colors.text_muted,
+                .color_text = @import("ui/theme.zig").colors.text_secondary,
                 .gravity_y = 0.5,
             });
         }
@@ -808,12 +813,12 @@ fn renderInlineChatDock() void {
         defer msg_box.deinit();
         _ = dvui.label(@src(), "{s}", .{if (is_user) "You" else "AI"}, .{
             .id_extra = mi,
-            .color_text = if (is_user) @import("ui/theme.zig").colors.accent else @import("ui/theme.zig").colors.text_muted,
+            .color_text = if (is_user) @import("ui/theme.zig").colors.accent else @import("ui/theme.zig").colors.text_secondary,
         });
         var mtbuf2: [2048]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{@import("core/text.zig").safeUtf8Buf(m.text[0..m.text_len], &mtbuf2)}, .{
             .id_extra = mi + 1,
-            .color_text = @import("ui/theme.zig").colors.text_main,
+            .color_text = @import("ui/theme.zig").colors.text_primary,
         });
     }
 }
@@ -827,6 +832,21 @@ fn appFrame() !dvui.App.Result {
     // Apply any theme change requested off the UI thread (config.load runs
     // theme.setPreset on the background worker, which can't touch dvui directly).
     theme.reapplyIfPending();
+
+    // Reset the per-frame widget-id sequence counters (sectionHeader / divider /
+    // statusPill). Without this every one of those widgets is a "first frame"
+    // id for dvui, which force-refreshes — a permanent full-rate repaint while
+    // Settings or any status pill is on screen.
+    @import("ui/components.zig").beginFrame();
+    @import("ui/settings.zig").beginFrame();
+
+    // Consume a navigation queued from a worker thread (AI tools, resolver).
+    state.applyPendingNav();
+
+    // Poll the native file-open dialog worker. This used to live in the legacy
+    // header (renderHeader), which never runs in the default page shell — so
+    // Ctrl+O picked a file that then silently never loaded.
+    ui.pollFileOpen();
 
     // Resume prompt (replaces the old silent session restore): once watch history
     // has loaded, arm a one-shot banner offering to reopen the most-recent item
@@ -1020,10 +1040,14 @@ fn appFrame() !dvui.App.Result {
             }
         }
     }
-    // Update window title with now-playing media name (~2x per second)
+    // Update window title with now-playing media name (checked ~2x per second,
+    // but SDL_SetWindowTitle — a real window-property round-trip on macOS/X11 —
+    // only fires when the formatted title actually changed).
     {
         const TitleState = struct {
             var title_ctr: u32 = 0;
+            var last_title: [300]u8 = std.mem.zeroes([300]u8);
+            var last_len: usize = 0;
         };
         TitleState.title_ctr +%= 1;
         if (TitleState.title_ctr % 30 == 0) {
@@ -1039,14 +1063,17 @@ fn appFrame() !dvui.App.Result {
                         name_len = active_p.getMediaTitle(&name_buf);
                     }
 
-                    if (name_len > 0) {
-                        var win_title: [300]u8 = undefined;
-                        const wt = std.fmt.bufPrintZ(&win_title, "\xe2\x9a\xa1 {s} \xe2\x80\x94 Opal", .{name_buf[0..name_len]}) catch null;
-                        if (wt) |t| {
+                    var win_title: [300]u8 = undefined;
+                    const wt: ?[:0]u8 = if (name_len > 0)
+                        std.fmt.bufPrintZ(&win_title, "\xe2\x9a\xa1 {s} \xe2\x80\x94 Opal", .{name_buf[0..name_len]}) catch null
+                    else
+                        std.fmt.bufPrintZ(&win_title, "\xe2\x9a\xa1 Opal \xe2\x80\x94 Play everything", .{}) catch null;
+                    if (wt) |t| {
+                        if (!std.mem.eql(u8, t, TitleState.last_title[0..TitleState.last_len])) {
                             c.sdl.SDL_SetWindowTitle(sw, t.ptr);
+                            @memcpy(TitleState.last_title[0..t.len], t);
+                            TitleState.last_len = t.len;
                         }
-                    } else {
-                        c.sdl.SDL_SetWindowTitle(sw, "\xe2\x9a\xa1 Opal \xe2\x80\x94 Play everything");
                     }
                 }
             }
@@ -1096,26 +1123,36 @@ fn appFrame() !dvui.App.Result {
 
     input.processGlobalInputs();
 
-    // Auto-hide overlays on mouse idle
-    var has_mouse_movement = false;
+    // Track mouse motion — feeds the shared chrome idle clock.
     for (dvui.events()) |*e| {
         if (e.evt == .mouse and e.evt.mouse.action == .motion) {
-            has_mouse_movement = true;
             state.app.last_mouse_x = e.evt.mouse.p.x;
             state.app.last_mouse_y = e.evt.mouse.p.y;
             state.app.last_mouse_move_ms = @import("core/io_global.zig").milliTimestamp();
         }
     }
 
-    if (has_mouse_movement) {
-        state.app.overlay_hide_timer = 0;
-        state.app.show_cell_overlay = true;
-    } else {
-        if (state.app.overlay_hide_timer < 1000) state.app.overlay_hide_timer += 1;
-        // ~3 seconds at 60fps
-        if (state.app.overlay_hide_timer > 180) {
-            state.app.show_cell_overlay = false;
+    // Control-overlay visibility follows the same WALL-CLOCK idle threshold as
+    // every other chrome layer (chrome_autohide). The old version counted
+    // frames ("~3s at 60fps"), which drifted under the gated repaint loop —
+    // at video-callback rate a 24fps stream stretched the hide delay, and the
+    // overlay hid on a different clock than the nav/control-bar fade.
+    //
+    // Three deliberate extensions of the bare threshold:
+    //  • + FADE_MS so the control bar's 220ms fade-out (footer.zig) actually
+    //    renders before the gate stops drawing the overlay entirely;
+    //  • held while the active player is PAUSED (controls must not vanish
+    //    under a paused video — the old frame counter got this by accident,
+    //    because paused playback stopped generating frames);
+    //  • held while a picker popover is open (its anchor bar must stay).
+    {
+        const autohide = @import("ui/chrome_autohide.zig");
+        const idle_ms = @import("core/io_global.zig").milliTimestamp() - state.app.last_mouse_move_ms;
+        var hold = @import("ui/footer.zig").pickerOpen();
+        if (!hold and state.app.active_player_idx < state.app.players.items.len) {
+            hold = state.app.players.items[state.app.active_player_idx].cached_paused;
         }
+        state.app.show_cell_overlay = hold or idle_ms < autohide.DEFAULT_THRESHOLD_MS + autohide.FADE_MS;
     }
 
     // Seek sync: when active player seeks, sync all others
@@ -1158,11 +1195,12 @@ fn appFrame() !dvui.App.Result {
             }
             const text_len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
             const now_ms = @import("core/io_global.zig").milliTimestamp();
-            break :blk @import("ui/chrome_autohide.zig").shouldHideChrome(.{
+            const autohide = @import("ui/chrome_autohide.zig");
+            break :blk autohide.shouldHideChrome(.{
                 .playing_video = playing_video,
                 .typing = text_len > 0,
                 .idle_ms = now_ms - state.app.last_mouse_move_ms,
-                .threshold_ms = 2500,
+                .threshold_ms = autohide.DEFAULT_THRESHOLD_MS,
             });
         };
 
@@ -1281,7 +1319,7 @@ fn appFrame() !dvui.App.Result {
     // video-fps updates instead of re-laying-out the whole tree at 60 Hz. This is
     // the big immersive-playback smoothness/CPU win. `cached_paused` is observer-
     // cached (no per-frame IPC).
-    const chrome_live = (@import("core/io_global.zig").milliTimestamp() - state.app.last_mouse_move_ms) < 2500;
+    const chrome_live = (@import("core/io_global.zig").milliTimestamp() - state.app.last_mouse_move_ms) < @import("ui/chrome_autohide.zig").DEFAULT_THRESHOLD_MS;
     if (chrome_live) {
         for (state.app.players.items) |p| {
             if (p.provider == .mpv and !p.cached_paused) {

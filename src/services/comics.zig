@@ -1051,7 +1051,7 @@ pub fn renderContent() void {
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
             .background = true,
-            .color_fill = theme.colors.bg_header,
+            .color_fill = theme.colors.bg_app,
         });
         defer search_row.deinit();
 
@@ -1070,9 +1070,9 @@ pub fn renderContent() void {
         }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 240, .h = 26 },
-            .color_fill = theme.colors.bg_input,
-            .color_border = if (input.len > 0) theme.colors.accent else theme.colors.border_input,
-            .color_text = theme.colors.text_main,
+            .color_fill = theme.colors.bg_elevated,
+            .color_border = if (input.len > 0) theme.colors.accent else theme.colors.border_subtle,
+            .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(if (input.len > 0) 2 else 1),
             .corner_radius = theme.dims.rad_md,
             .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 },
@@ -1087,8 +1087,8 @@ pub fn renderContent() void {
         if (input.len > 0) {
             if (dvui.buttonIcon(@src(), "comic-search-clear", icons.tvg.lucide.x, .{}, .{}, .{
                 .id_extra = 9100,
-                .color_fill = theme.colors.bg_glass,
-                .color_text = theme.colors.text_muted,
+                .color_fill = theme.colors.bg_elevated,
+                .color_text = theme.colors.text_secondary,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 6, .y = 5, .w = 6, .h = 5 },
                 .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
@@ -1144,7 +1144,7 @@ pub fn renderContent() void {
         defer bar.deinit();
 
         _ = dvui.label(@src(), "Source:", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
         });
@@ -1154,7 +1154,7 @@ pub fn renderContent() void {
 
         // Divider between the source group and the result/quick-link group.
         _ = dvui.label(@src(), "  •  ", .{}, .{
-            .color_text = theme.colors.border_drawer,
+            .color_text = theme.colors.border_subtle,
             .gravity_y = 0.5,
         });
 
@@ -1166,7 +1166,7 @@ pub fn renderContent() void {
             else
                 std.fmt.bufPrint(&cb, "{d} results", .{sr_count}) catch "";
             _ = dvui.label(@src(), "{s}", .{cs}, .{
-                .color_text = if (sr_searching and sr_count == 0) theme.colors.accent else theme.colors.text_muted,
+                .color_text = if (sr_searching and sr_count == 0) theme.colors.accent else theme.colors.text_secondary,
                 .gravity_y = 0.5,
                 .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
             });
@@ -1178,8 +1178,8 @@ pub fn renderContent() void {
 
         if (dvui.buttonIcon(@src(), "comic-card-smaller", icons.tvg.lucide.@"zoom-out", .{}, .{}, .{
             .id_extra = 9001,
-            .color_fill = theme.colors.bg_glass,
-            .color_text = theme.colors.text_main,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_primary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 5, .y = 4, .w = 5, .h = 4 },
             .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
@@ -1189,8 +1189,8 @@ pub fn renderContent() void {
         }
         if (dvui.buttonIcon(@src(), "comic-card-bigger", icons.tvg.lucide.@"zoom-in", .{}, .{}, .{
             .id_extra = 9002,
-            .color_fill = theme.colors.bg_glass,
-            .color_text = theme.colors.text_main,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_primary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 5, .y = 4, .w = 5, .h = 4 },
             .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
@@ -1211,7 +1211,7 @@ pub fn renderContent() void {
     }
     if (sr_count == 0) {
         _ = dvui.label(@src(), "No comics found. Try another title.", .{}, .{
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .gravity_x = 0.5,
             .margin = dvui.Rect.all(24),
         });
@@ -1222,7 +1222,7 @@ pub fn renderContent() void {
     // before drawing the current grid — keeps the render thread the sole owner.
     reclaimStaleCovers();
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
 
     // Responsive columns from the live page width (one-frame lag on first paint).
@@ -1252,7 +1252,7 @@ pub fn renderContent() void {
         if (dvui.button(@src(), lbl, .{}, .{
             .id_extra = 60001,
             .expand = .horizontal,
-            .color_fill = theme.colors.bg_glass,
+            .color_fill = theme.colors.bg_elevated,
             .color_text = theme.colors.accent,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 12, .w = 8, .h = 12 },
@@ -1273,7 +1273,7 @@ pub fn renderContent() void {
         _ = dvui.label(@src(), "— end of results —", .{}, .{
             .id_extra = 60002,
             .expand = .horizontal,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .gravity_x = 0.5,
             .margin = .{ .x = 0, .y = 8, .w = 0, .h = 12 },
         });
@@ -1287,8 +1287,8 @@ fn renderSourceChip(label: []const u8, id: usize, src: Source) void {
     const active = active_source == src;
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = id + 72000,
-        .color_fill = if (active) theme.colors.accent else theme.colors.bg_glass,
-        .color_text = if (active) dvui.Color.white else theme.colors.text_main,
+        .color_fill = if (active) theme.colors.accent else theme.colors.bg_elevated,
+        .color_text = if (active) dvui.Color.white else theme.colors.text_primary,
         .corner_radius = theme.dims.rad_md,
         .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
@@ -1337,7 +1337,7 @@ fn showPluginBadgesInDir(dir_path: []const u8, shown: *usize) void {
         _ = dvui.label(@src(), "{s}", .{lbl}, .{
             .id_extra = shown.* + 73000,
             .color_text = theme.colors.text_secondary,
-            .color_fill = theme.colors.bg_glass,
+            .color_fill = theme.colors.bg_elevated,
             .background = true,
             .corner_radius = theme.dims.rad_md,
             .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
@@ -1355,7 +1355,7 @@ fn renderChip(label: []const u8, id: usize, path: []const u8) void {
     const base = @import("../core/source_config.zig").get("readallcomics", "base") orelse return;
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = id + 70000,
-        .color_fill = theme.colors.bg_glass,
+        .color_fill = theme.colors.bg_elevated,
         .color_text = theme.colors.accent,
         .corner_radius = theme.dims.rad_md,
         .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
@@ -1467,7 +1467,7 @@ fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
                     .id_extra = idx + 161,
                     .expand = .horizontal,
                     .gravity_y = 0.5,
-                    .color_text = theme.colors.text_main,
+                    .color_text = theme.colors.text_primary,
                     .font = dvui.themeGet().font_heading,
                 });
             }
@@ -1485,7 +1485,7 @@ fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
     _ = dvui.label(@src(), "{s}", .{title}, .{
         .id_extra = idx + 200,
         .expand = .horizontal,
-        .color_text = theme.colors.text_main,
+        .color_text = theme.colors.text_primary,
         .max_size_content = .{ .w = cw, .h = 40 },
         .padding = .{ .x = 2, .y = 3, .w = 2, .h = 0 },
     });
@@ -1539,7 +1539,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
         // Title
         if (state.app.comic.title_len > 0) {
             _ = dvui.label(@src(), "{s}", .{safeUtf8(state.app.comic.title[0..state.app.comic.title_len])}, .{
-                .color_text = theme.colors.text_main,
+                .color_text = theme.colors.text_primary,
                 .expand = .horizontal,
                 .gravity_x = 0.5,
             });
@@ -1553,7 +1553,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             else
                 std.fmt.bufPrintZ(&info_buf, "{d}pp {d}↓", .{ state.app.comic.page_count, state.app.comic.dl_progress.load(.acquire) }) catch "?";
             _ = dvui.label(@src(), "{s}", .{info}, .{
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .padding = .{ .x = 4, .y = 0, .w = 2, .h = 0 },
             });
         }
@@ -1563,8 +1563,8 @@ pub fn renderPaneContent(pane_idx: usize) void {
             const mode_icon = if (state.app.comic.view_mode == .scroll) icons.tvg.lucide.@"scroll-text" else icons.tvg.lucide.@"book-open";
             if (dvui.buttonIcon(@src(), "comic-view-mode", mode_icon, .{}, .{}, .{
                 .id_extra = 10,
-                .color_fill = theme.colors.bg_glass,
-                .color_text = theme.colors.text_main,
+                .color_fill = theme.colors.bg_elevated,
+                .color_text = theme.colors.text_primary,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
                 .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
@@ -1577,8 +1577,8 @@ pub fn renderPaneContent(pane_idx: usize) void {
         if (state.app.comic.current_page > 0) {
             if (dvui.button(@src(), "‹", .{}, .{
                 .id_extra = 11,
-                .color_fill = theme.colors.bg_glass,
-                .color_text = theme.colors.text_main,
+                .color_fill = theme.colors.bg_elevated,
+                .color_text = theme.colors.text_primary,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
                 .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
@@ -1590,8 +1590,8 @@ pub fn renderPaneContent(pane_idx: usize) void {
         if (state.app.comic.current_page + 1 < state.app.comic.page_count) {
             if (dvui.button(@src(), "›", .{}, .{
                 .id_extra = 12,
-                .color_fill = theme.colors.bg_glass,
-                .color_text = theme.colors.text_main,
+                .color_fill = theme.colors.bg_elevated,
+                .color_text = theme.colors.text_primary,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
                 .margin = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
@@ -1624,8 +1624,8 @@ pub fn renderPaneContent(pane_idx: usize) void {
         // OCR text toggle
         if (dvui.buttonIcon(@src(), "comic-ocr", icons.tvg.lucide.@"scan-text", .{}, .{}, .{
             .id_extra = 20,
-            .color_fill = if (state.app.comic.show_ocr_overlay) theme.colors.accent else theme.colors.bg_glass,
-            .color_text = if (state.app.comic.show_ocr_overlay) dvui.Color.white else theme.colors.text_main,
+            .color_fill = if (state.app.comic.show_ocr_overlay) theme.colors.accent else theme.colors.bg_elevated,
+            .color_text = if (state.app.comic.show_ocr_overlay) dvui.Color.white else theme.colors.text_primary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
             .margin = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
@@ -1636,8 +1636,8 @@ pub fn renderPaneContent(pane_idx: usize) void {
         // Narrate toggle
         if (dvui.buttonIcon(@src(), "comic-narrate", if (state.app.comic.narrating) icons.tvg.lucide.@"circle-stop" else icons.tvg.lucide.@"volume-2", .{}, .{}, .{
             .id_extra = 21,
-            .color_fill = if (state.app.comic.narrating) theme.colors.accent else theme.colors.bg_glass,
-            .color_text = if (state.app.comic.narrating) dvui.Color.white else theme.colors.text_main,
+            .color_fill = if (state.app.comic.narrating) theme.colors.accent else theme.colors.bg_elevated,
+            .color_text = if (state.app.comic.narrating) dvui.Color.white else theme.colors.text_primary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
             .margin = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
@@ -1720,7 +1720,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 });
             } else {
                 _ = dvui.label(@src(), "Downloading...", .{}, .{
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .gravity_x = 0.5,
                     .gravity_y = 0.5,
                     .expand = .both,
@@ -1758,7 +1758,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 const h_lbl = std.fmt.bufPrintZ(&h_buf, "Page {d}", .{pg + 1}) catch "...";
                 _ = dvui.label(@src(), "{s}", .{h_lbl}, .{
                     .id_extra = pg + 12000,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .gravity_x = 0.5,
                     .min_size_content = .{ .w = 100, .h = 200 },
                 });
@@ -1784,7 +1784,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 const lbl = std.fmt.bufPrintZ(&lbl_buf, "Page {d} downloading...", .{pg + 1}) catch "?";
                 _ = dvui.label(@src(), "{s}", .{lbl}, .{
                     .id_extra = pg + 11000,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .gravity_x = 0.5,
                     .padding = .{ .x = 0, .y = 20, .w = 0, .h = 20 },
                 });
@@ -1828,12 +1828,12 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 const ocr_safe = @import("../core/text.zig").safeUtf8Buf(state.app.comic.ocr_texts[pg][0..text_len], &ocr_safe_buf);
                 _ = dvui.label(@src(), "{s}", .{ocr_safe}, .{
                     .id_extra = 30000,
-                    .color_text = theme.colors.text_main,
+                    .color_text = theme.colors.text_primary,
                 });
             } else {
                 _ = dvui.label(@src(), "No text detected on this page", .{}, .{
                     .id_extra = 30001,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                 });
             }
         } else if (pg < 128 and !state.app.comic.ocr_done[pg]) {

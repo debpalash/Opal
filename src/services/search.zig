@@ -613,7 +613,7 @@ pub fn renderSearchContent() void {
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 2 },
             .background = true,
-            .color_fill = theme.colors.bg_drawer,
+            .color_fill = theme.colors.bg_surface,
         });
         defer mode_row.deinit();
 
@@ -635,7 +635,7 @@ pub fn renderSearchContent() void {
                 return .{
                     .id_extra = id,
                     .color_fill = if (active) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                    .color_text = if (active) dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 } else theme.colors.text_muted,
+                    .color_text = if (active) dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 } else theme.colors.text_secondary,
                     .color_border = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .border = dvui.Rect.all(0),
                     .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
@@ -671,7 +671,7 @@ pub fn renderSearchContent() void {
                     .searching => d.color,
                     .done => theme.colors.success,
                     .failed => theme.colors.danger,
-                    .idle => theme.colors.text_muted,
+                    .idle => theme.colors.text_secondary,
                 };
                 _ = dvui.label(@src(), "{s}", .{safeUtf8(d.name)}, .{
                     .id_extra = di + 8010,
@@ -689,7 +689,7 @@ pub fn renderSearchContent() void {
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
             .background = true,
-            .color_fill = theme.colors.bg_drawer,
+            .color_fill = theme.colors.bg_surface,
         });
         defer outer.deinit();
 
@@ -755,7 +755,7 @@ pub fn renderSearchContent() void {
         if (has_text or search_results.items.len > 0 or resolver.result_count > 0) {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
                 .color_fill = transparent,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .border = dvui.Rect.all(0),
                 .gravity_y = 0.5,
                 .padding = .{ .x = 3, .y = 4, .w = 5, .h = 4 },
@@ -779,16 +779,16 @@ pub fn renderSearchContent() void {
             .expand = .horizontal,
             .padding = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
             .background = true,
-            .color_fill = theme.colors.bg_drawer,
+            .color_fill = theme.colors.bg_surface,
         });
         defer filter_row.deinit();
 
-        _ = dvui.label(@src(), "Sort: ", .{}, .{ .gravity_y = 0.5, .color_text = theme.colors.text_muted });
+        _ = dvui.label(@src(), "Sort: ", .{}, .{ .gravity_y = 0.5, .color_text = theme.colors.text_secondary });
 
         inline for (std.meta.fields(SortType)) |field| {
             const is_active = current_sort == @field(SortType, field.name);
-            const color = if (is_active) theme.colors.accent else theme.colors.bg_glass;
-            if (dvui.button(@src(), field.name, .{}, .{ .id_extra = field.value, .color_fill = color, .color_text = theme.colors.text_main, .corner_radius = theme.dims.rad_sm })) {
+            const color = if (is_active) theme.colors.accent else theme.colors.bg_elevated;
+            if (dvui.button(@src(), field.name, .{}, .{ .id_extra = field.value, .color_fill = color, .color_text = theme.colors.text_primary, .corner_radius = theme.dims.rad_sm })) {
                 current_sort = @enumFromInt(field.value);
                 search_results_mutex.lock();
                 std.sort.block(SearchResult, search_results.items, {}, sortResults);
@@ -808,8 +808,8 @@ pub fn renderSearchContent() void {
             const seed_lbl = std.fmt.bufPrintZ(&seed_label_buf, "{d}+ seeds", .{min_seed_filter}) catch "0+";
             if (dvui.button(@src(), seed_lbl, .{}, .{
                 .id_extra = 8900,
-                .color_fill = if (min_seed_filter > 0) dvui.Color{ .r = 40, .g = 80, .b = 50, .a = 255 } else theme.colors.bg_glass,
-                .color_text = if (min_seed_filter > 0) dvui.Color{ .r = 80, .g = 220, .b = 120, .a = 255 } else theme.colors.text_muted,
+                .color_fill = if (min_seed_filter > 0) dvui.Color{ .r = 40, .g = 80, .b = 50, .a = 255 } else theme.colors.bg_elevated,
+                .color_text = if (min_seed_filter > 0) dvui.Color{ .r = 80, .g = 220, .b = 120, .a = 255 } else theme.colors.text_secondary,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
                 .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
@@ -842,8 +842,8 @@ pub fn renderSearchContent() void {
         // Engine filter selector
         if (dvui.button(@src(), engine_filter.label(), .{}, .{
             .id_extra = 9000,
-            .color_fill = if (engine_filter != .all) theme.colors.accent else theme.colors.bg_glass,
-            .color_text = if (engine_filter != .all) dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 } else theme.colors.text_muted,
+            .color_fill = if (engine_filter != .all) theme.colors.accent else theme.colors.bg_elevated,
+            .color_text = if (engine_filter != .all) dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 } else theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
         })) {
@@ -895,17 +895,17 @@ pub fn renderSearchContent() void {
             });
             defer hdr.deinit();
             _ = dvui.icon(@src(), "", icons.tvg.lucide.eye, .{}, .{
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .min_size_content = .{ .w = 14, .h = 14 },
                 .gravity_y = 0.5,
             });
             _ = dvui.label(@src(), " Recent Searches", .{}, .{
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .gravity_y = 0.5,
             });
         }
 
-        var scroll_hist = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
+        var scroll_hist = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
         defer scroll_hist.deinit();
 
         var hi: usize = 0;
@@ -915,8 +915,8 @@ pub fn renderSearchContent() void {
                 .id_extra = hi,
                 .expand = .horizontal,
                 .background = true,
-                .color_fill = theme.colors.bg_card,
-                .color_border = theme.colors.bg_header_border,
+                .color_fill = theme.colors.bg_surface,
+                .color_border = theme.colors.border_subtle,
                 .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
                 .padding = .{ .x = 12, .y = 8, .w = 8, .h = 8 },
                 .margin = .{ .x = 6, .y = 0, .w = 6, .h = 2 },
@@ -927,7 +927,7 @@ pub fn renderSearchContent() void {
             // Clock icon
             _ = dvui.icon(@src(), "", icons.tvg.lucide.search, .{}, .{
                 .id_extra = hi + 1000,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .min_size_content = .{ .w = 14, .h = 14 },
                 .gravity_y = 0.5,
             });
@@ -937,7 +937,7 @@ pub fn renderSearchContent() void {
                 .id_extra = hi,
                 .expand = .horizontal,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = theme.colors.text_main,
+                .color_text = theme.colors.text_primary,
                 .corner_radius = theme.dims.rad_sm,
                 .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
             })) {
@@ -950,7 +950,7 @@ pub fn renderSearchContent() void {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
                 .id_extra = hi,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
             })) {
                 history.removeSearchHistory(hi);
                 return;
@@ -983,7 +983,7 @@ pub fn renderSearchContent() void {
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 2, .w = 8, .h = 4 },
             .background = true,
-            .color_fill = theme.colors.bg_drawer,
+            .color_fill = theme.colors.bg_surface,
         });
         defer page_row.deinit();
 
@@ -1003,12 +1003,12 @@ pub fn renderSearchContent() void {
 
         // Prev button
         if (dvui.buttonIcon(@src(), "prev", icons.tvg.lucide.@"chevron-left", .{}, .{}, .{
-            .color_fill = if (search_page > 0) theme.colors.bg_card else theme.colors.bg_glass,
-            .color_text = if (search_page > 0) theme.colors.accent else theme.colors.text_muted,
+            .color_fill = if (search_page > 0) theme.colors.bg_surface else theme.colors.bg_elevated,
+            .color_text = if (search_page > 0) theme.colors.accent else theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = dvui.Rect.all(5),
             .border = dvui.Rect.all(1),
-            .color_border = theme.colors.border_drawer,
+            .color_border = theme.colors.border_subtle,
         })) {
             if (search_page > 0) search_page -= 1;
         }
@@ -1018,25 +1018,25 @@ pub fn renderSearchContent() void {
         const page_str = std.fmt.bufPrintZ(&page_label, "{d}/{d}", .{ search_page + 1, total_pages }) catch "?";
         _ = dvui.label(@src(), "{s}", .{page_str}, .{
             .gravity_y = 0.5,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .padding = .{ .x = 6, .y = 0, .w = 6, .h = 0 },
         });
 
         // Next button
         if (dvui.buttonIcon(@src(), "next", icons.tvg.lucide.@"chevron-right", .{}, .{}, .{
-            .color_fill = if (search_page < total_pages - 1) theme.colors.bg_card else theme.colors.bg_glass,
-            .color_text = if (search_page < total_pages - 1) theme.colors.accent else theme.colors.text_muted,
+            .color_fill = if (search_page < total_pages - 1) theme.colors.bg_surface else theme.colors.bg_elevated,
+            .color_text = if (search_page < total_pages - 1) theme.colors.accent else theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = dvui.Rect.all(5),
             .border = dvui.Rect.all(1),
-            .color_border = theme.colors.border_drawer,
+            .color_border = theme.colors.border_subtle,
         })) {
             if (search_page < total_pages - 1) search_page += 1;
         }
     }
 
     // ── Scrollable results list ──
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
 
     const start_idx = search_page * SEARCH_ITEMS_PER_PAGE;
@@ -1054,8 +1054,8 @@ pub fn renderSearchContent() void {
                 .id_extra = idx,
                 .expand = .horizontal,
                 .background = true,
-                .color_fill = theme.colors.bg_card,
-                .color_border = if (r.is_nsfw) theme.colors.danger else theme.colors.bg_header_border,
+                .color_fill = theme.colors.bg_surface,
+                .color_border = if (r.is_nsfw) theme.colors.danger else theme.colors.border_subtle,
                 .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
                 .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
             });
@@ -1065,7 +1065,7 @@ pub fn renderSearchContent() void {
             _ = dvui.label(@src(), "{s}", .{safeUtf8(r.name)}, .{
                 .id_extra = idx,
                 .expand = .horizontal,
-                .color_text = if (r.is_nsfw) theme.colors.warning else theme.colors.text_main,
+                .color_text = if (r.is_nsfw) theme.colors.warning else theme.colors.text_primary,
             });
 
             // ── Row 1b: Quality badge (if detected) ──
@@ -1083,7 +1083,7 @@ pub fn renderSearchContent() void {
                         4 => dvui.Color{ .r = 255, .g = 215, .b = 0, .a = 255 },
                         3 => dvui.Color{ .r = 100, .g = 200, .b = 255, .a = 255 },
                         2 => dvui.Color{ .r = 180, .g = 200, .b = 140, .a = 255 },
-                        else => theme.colors.text_muted,
+                        else => theme.colors.text_secondary,
                     };
                     _ = dvui.label(@src(), "{s}", .{q_text}, .{
                         .id_extra = idx + 80000,
@@ -1127,7 +1127,7 @@ pub fn renderSearchContent() void {
                 // Separator
                 _ = dvui.label(@src(), " · ", .{}, .{
                     .id_extra = idx,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .gravity_y = 0.5,
                 });
 
@@ -1141,7 +1141,7 @@ pub fn renderSearchContent() void {
                 // Separator
                 _ = dvui.label(@src(), " · ", .{}, .{
                     .id_extra = idx + 10000,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .gravity_y = 0.5,
                 });
 
@@ -1183,7 +1183,7 @@ pub fn renderSearchContent() void {
                 if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.clipboard, .{}, .{}, .{
                     .id_extra = idx + 90000,
                     .color_fill = dvui.Color{ .r = 30, .g = 30, .b = 45, .a = 255 },
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .corner_radius = theme.dims.rad_sm,
                     .padding = dvui.Rect.all(4),
                     .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
@@ -1268,8 +1268,8 @@ pub fn renderSearchContent() void {
                 if (ctext.activePoint()) |cp| {
                     var fw = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(cp) }, .{
                         .id_extra = idx,
-                        .color_fill = theme.colors.bg_card,
-                        .color_border = theme.colors.border_drawer,
+                        .color_fill = theme.colors.bg_surface,
+                        .color_border = theme.colors.border_subtle,
                     });
                     defer fw.deinit();
 
@@ -1316,8 +1316,8 @@ fn renderUniversalCapabilities() void {
         .gravity_x = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
     });
-    _ = dvui.label(@src(), "Universal search", .{}, .{ .color_text = theme.colors.text_main, .font = dvui.themeGet().font_title, .gravity_x = 0.5 });
-    _ = dvui.label(@src(), "One query, every source — searched in parallel.", .{}, .{ .color_text = theme.colors.text_muted, .gravity_x = 0.5 });
+    _ = dvui.label(@src(), "Universal search", .{}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_title, .gravity_x = 0.5 });
+    _ = dvui.label(@src(), "One query, every source — searched in parallel.", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_x = 0.5 });
 
     const Src = struct { icon: []const u8, name: []const u8 };
     const sources = [_]Src{
@@ -1336,7 +1336,7 @@ fn renderUniversalCapabilities() void {
         var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i + 9700,
             .background = true,
-            .color_fill = theme.colors.bg_card,
+            .color_fill = theme.colors.bg_surface,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
             .margin = dvui.Rect.all(4),
@@ -1369,7 +1369,7 @@ fn renderUniversalProgress() void {
         const q = resolver.resolver_query[0..resolver.resolver_query_len];
         var hb: [320]u8 = undefined;
         const hs = std.fmt.bufPrintZ(&hb, "Searching “{s}” — {d} found", .{ safeUtf8(q), resolver.result_count }) catch "Searching…";
-        _ = dvui.label(@src(), "{s}", .{hs}, .{ .color_text = theme.colors.text_main, .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "{s}", .{hs}, .{ .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
     }
 
     // Per-source status chips (live).
@@ -1394,7 +1394,7 @@ fn renderUniversalProgress() void {
         var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i + 9220,
             .background = true,
-            .color_fill = theme.colors.bg_card,
+            .color_fill = theme.colors.bg_surface,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
             .margin = dvui.Rect.all(3),
@@ -1442,7 +1442,7 @@ fn renderUniversalResults() void {
         const clbl = std.fmt.bufPrintZ(&count_buf, "{d} results for “{s}”", .{ resolver.result_count, safeUtf8(resolver.resolver_query[0..resolver.resolver_query_len]) }) catch "Results";
         _ = dvui.label(@src(), "{s}", .{clbl}, .{
             .id_extra = 9001,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
         });
         {
@@ -1460,7 +1460,7 @@ fn renderUniversalResults() void {
         if (dvui.button(@src(), nsfw_label, .{}, .{
             .id_extra = 9060,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .border = dvui.Rect.all(0),
             .gravity_y = 0.5,
             .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
@@ -1499,7 +1499,7 @@ fn renderUniversalResults() void {
     }
 
     // Results list
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
 
     var list_layout = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = .{ .x = 0, .y = 4, .w = 0, .h = 100 } });
@@ -1606,7 +1606,7 @@ fn renderUniversalResults() void {
             const ptxt = std.fmt.bufPrintZ(&pbuf, "No results from {s}", .{sec.name}) catch "No results";
             _ = dvui.label(@src(), "{s}", .{ptxt}, .{
                 .id_extra = 12000 + si * 64 + 3,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .padding = .{ .x = 22, .y = 2, .w = 12, .h = 6 },
             });
         }
@@ -1692,7 +1692,7 @@ fn renderUniversalCard(idx: usize, item: *const @import("resolver.zig").Resolved
             const q_color = switch (item.quality) {
                 4 => dvui.Color{ .r = 255, .g = 215, .b = 0, .a = 255 }, // Gold
                 3 => dvui.Color{ .r = 100, .g = 200, .b = 255, .a = 255 }, // Blue
-                else => theme.colors.text_muted,
+                else => theme.colors.text_secondary,
             };
             _ = dvui.label(@src(), "{s}", .{q_text}, .{
                 .id_extra = idx + 9400,
@@ -1706,7 +1706,7 @@ fn renderUniversalCard(idx: usize, item: *const @import("resolver.zig").Resolved
         _ = dvui.label(@src(), "{s}", .{safeUtf8(item.name[0..item.name_len])}, .{
             .id_extra = idx + 9500,
             .expand = .horizontal,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .padding = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
             .gravity_y = 0.5,
         });
@@ -1743,7 +1743,7 @@ fn renderUniversalCard(idx: usize, item: *const @import("resolver.zig").Resolved
     if (item.detail_len > 0) {
         _ = dvui.label(@src(), "{s}", .{safeUtf8(item.detail[0..item.detail_len])}, .{
             .id_extra = idx + 9600,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
         });
     }
@@ -2002,7 +2002,7 @@ pub fn renderNsfwModal() void {
         .open_flag = &state.app.nsfw_confirm_pending,
     }, .{
         .min_size_content = .{ .w = 400, .h = 10 },
-        .color_fill = theme.colors.bg_drawer,
+        .color_fill = theme.colors.bg_surface,
         .color_border = theme.colors.danger,
     });
     defer win.deinit();
@@ -2015,7 +2015,7 @@ pub fn renderNsfwModal() void {
     });
 
     _ = dvui.label(@src(), "This content may contain adult material:", .{}, .{
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_secondary,
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
     });
 
@@ -2026,7 +2026,7 @@ pub fn renderNsfwModal() void {
     });
 
     _ = dvui.label(@src(), "Are you sure you want to load this?", .{}, .{
-        .color_text = theme.colors.text_main,
+        .color_text = theme.colors.text_primary,
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 12 },
     });
 
@@ -2037,8 +2037,8 @@ pub fn renderNsfwModal() void {
     defer btn_row.deinit();
 
     if (dvui.button(@src(), "Cancel", .{}, .{
-        .color_fill = theme.colors.bg_glass,
-        .color_text = theme.colors.text_main,
+        .color_fill = theme.colors.bg_elevated,
+        .color_text = theme.colors.text_primary,
         .corner_radius = theme.dims.rad_sm,
         .margin = dvui.Rect{ .w = 8 },
     })) {

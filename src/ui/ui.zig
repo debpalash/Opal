@@ -138,11 +138,16 @@ pub fn pollFileOpen() void {
     }
 }
 
+// Arms the "replace current session?" confirm on a Load-workspace row; reset
+// whenever the modal is (re)opened or another row is clicked.
+var ws_load_armed: ?usize = null;
+
 pub fn renderWorkspaceModals() void {
     const workspace = @import("workspace.zig");
 
     // ═══════════════════════════════════════════════════════
-    // SAVE WORKSPACE MODAL
+    // SAVE WORKSPACE MODAL — one dialog language app-wide: windowHeader +
+    // bg_surface + radius.lg (matches the stream-key popover / sub picker).
     // ═══════════════════════════════════════════════════════
     if (state.app.ws_save_open) {
         var win = dvui.floatingWindow(@src(), .{
@@ -150,82 +155,59 @@ pub fn renderWorkspaceModals() void {
             .open_flag = &state.app.ws_save_open,
         }, .{
             .min_size_content = .{ .w = 360, .h = 120 },
-            .color_fill = theme.colors.bg_drawer,
-            .color_border = theme.colors.border_card,
-            .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(12),
+            .color_fill = theme.colors.bg_surface,
+            .corner_radius = dvui.Rect.all(theme.radius.lg),
         });
         defer win.deinit();
+        win.dragAreaSet(dvui.windowHeader("Save Workspace", "", &state.app.ws_save_open));
 
-        // Header
-        {
-            var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal,
-                .background = true,
-                .color_fill = theme.colors.bg_header,
-                .padding = .{ .x = 12, .y = 8, .w = 8, .h = 8 },
-                .color_border = theme.colors.bg_header_border,
-                .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-            });
-            defer hdr.deinit();
-
-            dvui.icon(@src(), "", icons.tvg.lucide.@"save", .{}, .{
-                .color_text = theme.colors.accent,
-                .gravity_y = 0.5,
-            });
-            _ = dvui.label(@src(), " Save Workspace", .{}, .{
-                .color_text = theme.colors.text_main,
-                .gravity_y = 0.5,
-            });
-
-            { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
-
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"x", .{}, .{}, .{
-                .color_text = theme.colors.text_muted,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .border = dvui.Rect.all(0),
-                .gravity_y = 0.5,
-            })) {
-                state.app.ws_save_open = false;
-            }
-        }
+        // Fade the dialog content in (dvui floating windows have no built-in
+        // open animation; AnimateWidget self-drives its repaints).
+        var fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.fast, .easing = theme.motion.enter }, .{ .expand = .both });
+        defer fade.deinit();
 
         // Body
         {
             var body = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .expand = .horizontal,
-                .padding = .{ .x = 16, .y = 12, .w = 16, .h = 12 },
+                .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.md },
             });
             defer body.deinit();
 
             _ = dvui.label(@src(), "Workspace name:", .{}, .{
-                .color_text = theme.colors.text_muted,
-                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
+                .color_text = theme.colors.text_secondary,
+                .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xs },
             });
 
-            var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.ws_name_input } }, .{
+            var te = dvui.textEntry(@src(), .{
+                .text = .{ .buffer = &state.app.ws_name_input },
+                .placeholder = "e.g. Evening movies",
+            }, .{
                 .expand = .horizontal,
-                .color_fill = theme.colors.bg_input,
-                .color_text = theme.colors.text_main,
-                .color_border = theme.colors.divider,
+                .color_fill = theme.colors.bg_elevated,
+                .color_text = theme.colors.text_primary,
+                .color_border = theme.colors.border_subtle,
                 .border = dvui.Rect.all(1),
-                .corner_radius = dvui.Rect.all(6),
-                .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
+                .corner_radius = theme.dims.rad_md,
+                .padding = .{ .x = theme.spacing.sm, .y = 6, .w = theme.spacing.sm, .h = 6 },
             });
             const enter_pressed = te.enter_pressed;
             te.deinit();
 
-            { var gap = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 0, .h = 10 } }); gap.deinit(); }
+            {
+                var gap = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 0, .h = 10 } });
+                gap.deinit();
+            }
 
             var btn_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
             defer btn_row.deinit();
 
             if (dvui.button(@src(), "Save", .{}, .{
                 .color_fill = theme.colors.accent,
-                .color_text = theme.colors.bg_app,
-                .corner_radius = dvui.Rect.all(6),
+                .color_text = theme.colors.text_on_accent,
+                .corner_radius = theme.dims.rad_md,
                 .border = dvui.Rect.all(0),
-                .padding = .{ .x = 16, .y = 6, .w = 16, .h = 6 },
+                .padding = .{ .x = theme.spacing.lg, .y = 6, .w = theme.spacing.lg, .h = 6 },
             }) or enter_pressed) {
                 const name_len = std.mem.indexOfScalar(u8, &state.app.ws_name_input, 0) orelse state.app.ws_name_input.len;
                 if (name_len > 0) {
@@ -234,15 +216,18 @@ pub fn renderWorkspaceModals() void {
                 }
             }
 
-            { var s = dvui.box(@src(), .{}, .{ .expand = .horizontal }); s.deinit(); }
+            {
+                var s = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+                s.deinit();
+            }
 
             if (dvui.button(@src(), "Cancel", .{}, .{
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = theme.colors.text_muted,
-                .corner_radius = dvui.Rect.all(6),
+                .color_fill = theme.transparent,
+                .color_text = theme.colors.text_secondary,
+                .corner_radius = theme.dims.rad_md,
                 .border = dvui.Rect.all(1),
-                .color_border = theme.colors.divider,
-                .padding = .{ .x = 16, .y = 6, .w = 16, .h = 6 },
+                .color_border = theme.colors.border_subtle,
+                .padding = .{ .x = theme.spacing.lg, .y = 6, .w = theme.spacing.lg, .h = 6 },
             })) {
                 state.app.ws_save_open = false;
             }
@@ -258,84 +243,76 @@ pub fn renderWorkspaceModals() void {
             .open_flag = &state.app.ws_load_open,
         }, .{
             .min_size_content = .{ .w = 360, .h = 120 },
-            .color_fill = theme.colors.bg_drawer,
-            .color_border = theme.colors.border_card,
-            .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(12),
+            .color_fill = theme.colors.bg_surface,
+            .corner_radius = dvui.Rect.all(theme.radius.lg),
         });
         defer win.deinit();
+        win.dragAreaSet(dvui.windowHeader("Load Workspace", "", &state.app.ws_load_open));
 
-        // Header
-        {
-            var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal,
-                .background = true,
-                .color_fill = theme.colors.bg_header,
-                .padding = .{ .x = 12, .y = 8, .w = 8, .h = 8 },
-                .color_border = theme.colors.bg_header_border,
-                .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-            });
-            defer hdr.deinit();
-
-            dvui.icon(@src(), "", icons.tvg.lucide.@"folder-open", .{}, .{
-                .color_text = theme.colors.accent,
-                .gravity_y = 0.5,
-            });
-            _ = dvui.label(@src(), " Load Workspace", .{}, .{
-                .color_text = theme.colors.text_main,
-                .gravity_y = 0.5,
-            });
-
-            { var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal }); spacer.deinit(); }
-
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"x", .{}, .{}, .{
-                .color_text = theme.colors.text_muted,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .border = dvui.Rect.all(0),
-                .gravity_y = 0.5,
-            })) {
-                state.app.ws_load_open = false;
-            }
-        }
+        var fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.fast, .easing = theme.motion.enter }, .{ .expand = .both });
+        defer fade.deinit();
 
         // Body
         {
             var body = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .expand = .horizontal,
-                .padding = .{ .x = 16, .y = 12, .w = 16, .h = 12 },
+                .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.md },
             });
             defer body.deinit();
 
             if (state.app.ws_count == 0) {
                 _ = dvui.label(@src(), "No saved workspaces yet.", .{}, .{
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .margin = .{ .x = 0, .y = 12, .w = 0, .h = 4 },
                     .gravity_x = 0.5,
                 });
                 _ = dvui.label(@src(), "Save one first with the save button.", .{}, .{
-                    .color_text = theme.colors.text_dim,
+                    .color_text = theme.colors.text_tertiary,
                     .gravity_x = 0.5,
                     .margin = .{ .x = 0, .y = 0, .w = 0, .h = 12 },
                 });
             } else {
+                // Loading replaces the whole session (players are torn down).
+                // If media is loaded, require a second confirming click on the
+                // same row instead of destroying playback on a stray click.
+                var session_live = false;
+                for (state.app.players.items) |p| {
+                    if (p.current_url_len > 0) {
+                        session_live = true;
+                        break;
+                    }
+                }
                 for (0..state.app.ws_count) |wi| {
                     const name = state.app.ws_names[wi][0..state.app.ws_name_lens[wi]];
-                    if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(name), .{}, .{
+                    const armed = ws_load_armed == wi;
+                    var nb: [96]u8 = undefined;
+                    const row_label: []const u8 = if (armed)
+                        (std.fmt.bufPrint(&nb, "Replace current session with \u{201c}{s}\u{201d}?", .{@import("../core/text.zig").safeUtf8(name)}) catch "Replace current session?")
+                    else
+                        @import("../core/text.zig").safeUtf8(name);
+                    if (dvui.button(@src(), row_label, .{}, .{
                         .id_extra = wi,
                         .expand = .horizontal,
-                        .color_fill = theme.colors.bg_card,
-                        .color_text = theme.colors.text_main,
-                        .color_border = theme.colors.divider,
+                        .color_fill = theme.colors.bg_surface,
+                        .color_text = if (armed) theme.colors.danger else theme.colors.text_primary,
+                        .color_border = theme.colors.border_subtle,
                         .border = dvui.Rect.all(1),
-                        .corner_radius = dvui.Rect.all(6),
-                        .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
+                        .corner_radius = theme.dims.rad_md,
+                        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
                         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
                     })) {
-                        workspace.loadWorkspaceNamed(@import("../core/alloc.zig").allocator, name);
-                        state.app.ws_load_open = false;
+                        if (!session_live or armed) {
+                            ws_load_armed = null;
+                            workspace.loadWorkspaceNamed(@import("../core/alloc.zig").allocator, name);
+                            state.app.ws_load_open = false;
+                        } else {
+                            ws_load_armed = wi;
+                        }
                     }
                 }
             }
         }
+    } else {
+        ws_load_armed = null;
     }
 }

@@ -754,7 +754,7 @@ pub fn renderSubtitleBar() void {
             defer ctrl_row.deinit();
             
             // Speak all
-            const speak_color = if (speaking_word_idx == -2) theme.colors.accent else theme.colors.text_muted;
+            const speak_color = if (speaking_word_idx == -2) theme.colors.accent else theme.colors.text_secondary;
             if (dvui.button(@src(), "Speak", .{}, .{
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 .color_text = speak_color,
@@ -765,7 +765,7 @@ pub fn renderSubtitleBar() void {
             
             // Translate toggle
             {
-                const trans_color = if (state.app.translate_enabled) dvui.Color{ .r = 130, .g = 180, .b = 255, .a = 255 } else theme.colors.text_muted;
+                const trans_color = if (state.app.translate_enabled) dvui.Color{ .r = 130, .g = 180, .b = 255, .a = 255 } else theme.colors.text_secondary;
                 if (dvui.button(@src(), if (state.app.translate_enabled) "TR ON" else "TR", .{}, .{
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .color_text = trans_color,
@@ -781,7 +781,7 @@ pub fn renderSubtitleBar() void {
             
             // Dubbing toggle
             {
-                const dub_color = if (state.app.dubbing_enabled) dvui.Color{ .r = 255, .g = 180, .b = 80, .a = 255 } else theme.colors.text_muted;
+                const dub_color = if (state.app.dubbing_enabled) dvui.Color{ .r = 255, .g = 180, .b = 80, .a = 255 } else theme.colors.text_secondary;
                 if (dvui.button(@src(), if (state.app.dubbing_enabled) "DUB ON" else "DUB", .{}, .{
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .color_text = dub_color,
@@ -794,7 +794,7 @@ pub fn renderSubtitleBar() void {
             
             // ASR toggle
             {
-                const asr_color = if (state.app.asr_enabled) dvui.Color{ .r = 180, .g = 255, .b = 180, .a = 255 } else theme.colors.text_muted;
+                const asr_color = if (state.app.asr_enabled) dvui.Color{ .r = 180, .g = 255, .b = 180, .a = 255 } else theme.colors.text_secondary;
                 if (dvui.button(@src(), if (state.app.asr_enabled) "ASR ON" else "ASR", .{}, .{
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .color_text = asr_color,

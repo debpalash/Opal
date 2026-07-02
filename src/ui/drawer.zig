@@ -44,8 +44,27 @@ const MIN_DRAWER_W: f32 = 560;
 // Transparent color used as the "no fill" baseline for icon buttons.
 const TRANSPARENT: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
+// Bumped each time the drawer transitions closed→open so the open fade-in
+// re-triggers (AnimateWidget only auto-starts on the first frame of an id).
+var drawer_open_seq: usize = 0;
+var drawer_was_open: bool = false;
+
 pub fn renderDrawer() void {
-    if (!state.app.drawer_open) return;
+    if (!state.app.drawer_open) {
+        drawer_was_open = false;
+        return;
+    }
+    if (!drawer_was_open) {
+        drawer_was_open = true;
+        drawer_open_seq +%= 1;
+    }
+    // Fade the drawer in on open — the largest chrome transition in the app
+    // was an instant 560px pop while routes and toasts animate.
+    var open_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.base, .easing = theme.motion.enter }, .{
+        .id_extra = drawer_open_seq,
+        .expand = .vertical,
+    });
+    defer open_fade.deinit();
 
     // Expanded mode: use huge width so it fills the content area
     const is_expanded = state.app.drawer_expanded;
@@ -64,7 +83,7 @@ pub fn renderDrawer() void {
         .min_size_content = .{ .w = if (is_expanded) 10 else w, .h = 10 },
         .max_size_content = if (is_expanded) .{ .w = std.math.floatMax(f32), .h = std.math.floatMax(f32) } else .{ .w = w, .h = std.math.floatMax(f32) },
         .background = true,
-        .color_fill = theme.colors.bg_drawer,
+        .color_fill = theme.colors.bg_surface,
     });
     defer container.deinit();
 
@@ -74,7 +93,7 @@ pub fn renderDrawer() void {
             .expand = .vertical,
             .min_size_content = .{ .w = 14, .h = 10 },
             .background = true,
-            // Borderless: separated by fill-tier alone (bg_app sits below bg_drawer).
+            // Borderless: separated by fill-tier alone (bg_app sits below bg_surface).
             .color_fill = theme.colors.bg_app,
         });
 
@@ -85,7 +104,7 @@ pub fn renderDrawer() void {
             const handle_color = if (state.app.is_drawer_resizing)
                 theme.colors.accent
             else
-                theme.colors.text_dim;
+                theme.colors.text_tertiary;
 
             {
                 var spacer_top = dvui.box(@src(), .{}, .{ .expand = .vertical });
@@ -170,7 +189,7 @@ pub fn renderDrawer() void {
     var content = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_drawer,
+        .color_fill = theme.colors.bg_surface,
     });
     defer content.deinit();
 
@@ -193,29 +212,35 @@ pub fn renderDrawer() void {
         defer rail.deinit();
 
         // ── Group 1: Find & Manage ──
-        renderRailTab(.Search, icons.tvg.lucide.search, "Search", 0);
-        renderRailTab(.Downloads, icons.tvg.lucide.download, "Downloads", 1);
-        renderRailTab(.Queue, icons.tvg.lucide.list, "Queue", 2);
-        renderRailTab(.History, icons.tvg.lucide.clock, "History", 9);
+        // Icons come from shell.iconForTab so the rail and the page shell
+        // speak one icon language (the rail used to give the same tabs
+        // different glyphs — Anime even wore the app's brand mark). Ids are
+        // numbered in VISUAL order: tab_index = id + 1, so keyboard focus
+        // walks the rail top-to-bottom instead of jumping around.
+        const shell = @import("shell.zig");
+        renderRailTab(.Search, shell.iconForTab(.Search), "Search", 0);
+        renderRailTab(.Downloads, shell.iconForTab(.Downloads), "Downloads", 1);
+        renderRailTab(.Queue, shell.iconForTab(.Queue), "Queue", 2);
+        renderRailTab(.History, shell.iconForTab(.History), "History", 3);
 
         railGroupGap(0);
 
         // ── Group 2: Sources ──
-        renderRailTab(.TMDB, icons.tvg.lucide.film, "TMDB", 3);
-        renderRailTab(.YouTube, icons.tvg.lucide.play, "YouTube", 4);
-        renderRailTab(.Anime, icons.tvg.lucide.zap, "Anime", 5);
-        renderRailTab(.Comics, icons.tvg.lucide.image, "Comics", 6);
-        renderRailTab(.Web, icons.tvg.lucide.globe, "Web", 15);
-        renderRailTab(.RSS, icons.tvg.lucide.rss, "RSS", 7);
-        renderRailTab(.Jellyfin, icons.tvg.lucide.server, "Jellyfin / Emby", 8);
-        renderRailTab(.Plex, icons.tvg.lucide.server, "Plex", 8);
+        renderRailTab(.TMDB, shell.iconForTab(.TMDB), "TMDB", 4);
+        renderRailTab(.YouTube, shell.iconForTab(.YouTube), "YouTube", 5);
+        renderRailTab(.Anime, shell.iconForTab(.Anime), "Anime", 6);
+        renderRailTab(.Comics, shell.iconForTab(.Comics), "Comics", 7);
+        renderRailTab(.Web, shell.iconForTab(.Web), "Web", 8);
+        renderRailTab(.RSS, shell.iconForTab(.RSS), "RSS", 9);
+        renderRailTab(.Jellyfin, shell.iconForTab(.Jellyfin), "Jellyfin / Emby", 10);
+        renderRailTab(.Plex, shell.iconForTab(.Plex), "Plex", 11);
 
         railGroupGap(1);
 
         // ── Group 3: Configure ──
-        renderRailTab(.AI, icons.tvg.lucide.brain, "AI", 14);
-        renderRailTab(.Plugins, icons.tvg.lucide.package, "Plugins", 11);
-        renderRailTab(.Settings, icons.tvg.lucide.settings, "Settings", 13);
+        renderRailTab(.AI, shell.iconForTab(.AI), "AI", 12);
+        renderRailTab(.Plugins, shell.iconForTab(.Plugins), "Plugins", 13);
+        renderRailTab(.Settings, shell.iconForTab(.Settings), "Settings", 14);
 
         // Spacer to push bottom controls to the bottom of the rail.
         {
@@ -251,7 +276,7 @@ pub fn renderDrawer() void {
         var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .both,
             .background = true,
-            .color_fill = theme.colors.bg_drawer,
+            .color_fill = theme.colors.bg_surface,
         });
         defer panel.deinit();
 
@@ -317,7 +342,7 @@ fn renderRailTab(tab: state.DrawerTab, icon_data: anytype, label: []const u8, id
             .expand = .vertical,
             .min_size_content = .{ .w = 2, .h = 0 },
             .background = active,
-            .color_fill = if (active) theme.colors.accent_primary else TRANSPARENT,
+            .color_fill = if (active) theme.colors.accent else TRANSPARENT,
         });
         indicator.deinit();
     }
@@ -331,7 +356,7 @@ fn renderRailTab(tab: state.DrawerTab, icon_data: anytype, label: []const u8, id
         .id_extra = id + 1000,
         .color_fill = TRANSPARENT,
         .color_fill_hover = theme.colors.bg_hover,
-        .color_text = if (active) theme.colors.accent_primary else theme.colors.text_secondary,
+        .color_text = if (active) theme.colors.accent else theme.colors.text_secondary,
         .border = dvui.Rect.all(0),
         .corner_radius = RADIUS_SM,
         .padding = dvui.Rect.all((BTN_SIZE - ICON_GLYPH) / 2),
@@ -399,7 +424,7 @@ fn renderBottomIcon(action: BottomAction, icon_data: anytype, label: []const u8,
         .id_extra = id + 1000,
         .color_fill = TRANSPARENT,
         .color_fill_hover = theme.colors.bg_hover,
-        .color_text = if (is_active) theme.colors.accent_primary else theme.colors.text_secondary,
+        .color_text = if (is_active) theme.colors.accent else theme.colors.text_secondary,
         .border = dvui.Rect.all(0),
         .corner_radius = RADIUS_SM,
         .padding = dvui.Rect.all((BTN_SIZE - ICON_GLYPH) / 2),
@@ -443,8 +468,8 @@ fn tabHasBadge(tab: state.DrawerTab) bool {
 
 fn tabBadgeColor(tab: state.DrawerTab) dvui.Color {
     return switch (tab) {
-        .Search => theme.colors.accent_primary,
-        .Queue => theme.colors.accent_primary,
+        .Search => theme.colors.accent,
+        .Queue => theme.colors.accent,
         else => theme.colors.text_secondary,
     };
 }
@@ -479,21 +504,19 @@ fn renderHistoryContent() void {
                 .margin = .{ .x = 0, .y = 0, .w = theme.spacing.md, .h = 0 },
             });
 
-            // Text-only danger — transient action, not a resting red fill.
-            if (dvui.button(@src(), "Clear All", .{}, .{
-                .color_fill = TRANSPARENT,
-                .color_text = theme.colors.danger,
-                .corner_radius = RADIUS_SM,
-                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-                .gravity_y = 0.5,
-            })) {
+            // Destructive: two-step arm — one stray click used to wipe the
+            // entire watch history irreversibly.
+            if (components.confirmDangerButton(@src(), "Clear All", 0)) {
                 watch_history.clearAll();
+                state.showToast("Watch history cleared");
             }
         }
     }
 
     if (watch_history.count == 0) {
-        components.emptyState(icons.tvg.lucide.clock, "No watch history yet", "Played items will appear here");
+        if (components.emptyStateCta(icons.tvg.lucide.history, "No watch history yet", "Played items will appear here", "Browse")) {
+            state.navigateToTab(.TMDB);
+        }
         return;
     }
 
@@ -501,7 +524,7 @@ fn renderHistoryContent() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_drawer,
+        .color_fill = theme.colors.bg_surface,
     });
     defer scroll.deinit();
 
@@ -510,24 +533,26 @@ fn renderHistoryContent() void {
         const name = entry.name[0..entry.name_len];
         const pct = @as(u8, @intFromFloat(std.math.clamp(entry.percent, 0.0, 100.0)));
 
-        // Clickable row — click to resume playback. Spacing-only list: no
-        // resting fill and no per-row border; hover lifts the background.
-        const clicked = dvui.button(@src(), "", .{}, .{
-            .id_extra = i + 10000,
-            .expand = .horizontal,
-            .color_fill = TRANSPARENT,
-            .color_fill_hover = theme.colors.bg_hover,
-            .border = dvui.Rect.all(0),
-            .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
-            .corner_radius = RADIUS_SM,
-        });
-
+        // Clickable row — click to resume playback. The old code used an
+        // empty-label dvui.button as a SIBLING above the visible row, so the
+        // actual click/hover target was an invisible one-line strip and
+        // clicking the visible title did nothing. The row box itself is the
+        // target now; its click is evaluated AFTER the children so the inner
+        // remove-✕ button wins (it marks its events handled), and hover uses
+        // last frame's state so the lift can be painted before the children.
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i,
             .expand = .horizontal,
+            .background = true,
+            .color_fill = TRANSPARENT,
+            .corner_radius = RADIUS_SM,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
         });
         defer row.deinit();
+        if (dvui.dataGet(null, row.data().id, "_hover", bool) orelse false) {
+            row.data().options.color_fill = theme.colors.bg_hover;
+            row.drawBackground();
+        }
 
         // Progress — quiet metadata, not a resting status hue.
         var pct_buf: [8]u8 = undefined;
@@ -553,10 +578,12 @@ fn renderHistoryContent() void {
             .gravity_y = 0.5,
         });
 
-        // Remove button
+        // Remove button (processes its click before the row's, and marks it
+        // handled — so removing an entry never also resumes it).
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
             .id_extra = i + 7000,
             .color_fill = TRANSPARENT,
+            .color_fill_hover = theme.colors.bg_hover,
             .color_text = theme.colors.text_secondary,
             .padding = dvui.Rect.all(theme.spacing.xs),
         })) {
@@ -564,13 +591,15 @@ fn renderHistoryContent() void {
             return; // list shifted
         }
 
+        var hovered = false;
+        const clicked = dvui.clicked(row.data(), .{ .hovered = &hovered });
+        dvui.dataSet(null, row.data().id, "_hover", hovered);
         if (clicked) {
-            // Load into active player — resume position is auto-applied by tryResumePosition()
-            if (state.app.active_player_idx < state.app.players.items.len) {
-                const browser = @import("../services/browser.zig");
-                browser.loadContent(name);
-                state.showToast("Resuming playback...");
-            }
+            // loadContent creates a player on a cold start, so no active-player
+            // guard — resume position is auto-applied by tryResumePosition().
+            const browser = @import("../services/browser.zig");
+            browser.loadContent(name);
+            state.showToast("Resuming playback...");
         }
     }
 }
@@ -597,10 +626,14 @@ fn renderLogsContent() void {
 
         // Filter toggle — calm active state: accent glyph on a subtle
         // bg_elevated fill (no saturated pill). Reserve accent for this single
-        // active affordance.
+        // active affordance. buttonIcon's name string is accessibility-only
+        // (never rendered), so the state cue lives in the TOOLTIP.
+        var filter_wd: dvui.WidgetData = undefined;
         if (dvui.buttonIcon(@src(), if (logs.show_only_errors) "Errors" else "All", icons.tvg.lucide.eye, .{}, .{}, .{
+            .data_out = &filter_wd,
             .color_fill = if (logs.show_only_errors) theme.colors.bg_elevated else TRANSPARENT,
-            .color_text = if (logs.show_only_errors) theme.colors.accent_primary else theme.colors.text_secondary,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_text = if (logs.show_only_errors) theme.colors.accent else theme.colors.text_secondary,
             .corner_radius = RADIUS_SM,
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
@@ -608,16 +641,11 @@ fn renderLogsContent() void {
         })) {
             logs.show_only_errors = !logs.show_only_errors;
         }
+        components.tip(@src(), filter_wd, if (logs.show_only_errors) "Showing errors only — click for all logs" else "Showing all logs — click for errors only");
 
-        // Clear button — text-only danger.
-        if (dvui.buttonIcon(@src(), "Clear", icons.tvg.lucide.@"trash-2", .{}, .{}, .{
-            .color_fill = TRANSPARENT,
-            .color_text = theme.colors.danger,
-            .corner_radius = RADIUS_SM,
-            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-            .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
-            .gravity_y = 0.5,
-        })) {
+        // Clear — two-step arm (was an unlabeled trash icon that wiped the
+        // console in one click, with no tooltip either).
+        if (components.confirmDangerButton(@src(), "Clear", 0)) {
             logs.clear(); // locked — never call unlocked clearAll() from the UI thread
         }
     }
@@ -630,25 +658,52 @@ fn renderLogsContent() void {
 
     const count = logs.logCount();
     if (count == 0) {
-        _ = dvui.label(@src(), "No logs yet", .{}, .{
-            .color_text = theme.colors.text_tertiary,
-            .gravity_x = 0.5,
-            .margin = .{ .x = 0, .y = theme.spacing.xl, .w = 0, .h = 0 },
-        });
+        components.emptyState(icons.tvg.lucide.@"scroll-text", "No logs yet", "App activity will appear here");
         return;
     }
 
     // Hold the log lock across read+draw so a worker's pushLog eviction can't free
     // a text slice mid-draw (use-after-free). Validate UTF-8 — log text is
     // untrusted (mpv stderr / scraper output) and would otherwise panic dvui.
+    //
+    // Render only the most recent MAX_RENDER entries: the ring holds up to
+    // 1024, and laying out a label per entry EVERY frame made the Logs tab the
+    // most expensive page in the app while mostly drawing rows outside the
+    // scroll viewport.
+    const MAX_RENDER: usize = 200;
     logs.lockRead();
     defer logs.unlockRead();
     const snap = logs.logCount();
+
+    // Apply the errors-only filter BEFORE the render window, so toggling the
+    // filter shows the last 200 MATCHING entries — windowing first could show
+    // an empty list while older errors still sat in the ring.
+    var matching: usize = 0;
+    {
+        var ci: usize = 0;
+        while (ci < snap) : (ci += 1) {
+            if (logs.show_only_errors and !logs.getLog(ci).is_error) continue;
+            matching += 1;
+        }
+    }
+    if (matching > MAX_RENDER) {
+        var note_buf: [64]u8 = undefined;
+        const note = std.fmt.bufPrint(&note_buf, "Showing the last {d} of {d} entries", .{ MAX_RENDER, matching }) catch "";
+        _ = dvui.label(@src(), "{s}", .{note}, .{
+            .color_text = theme.colors.text_tertiary,
+            .margin = .{ .x = 0, .y = 1, .w = 0, .h = theme.spacing.xs },
+        });
+    }
+    var to_skip = matching -| MAX_RENDER;
     var li: usize = 0;
     while (li < snap) : (li += 1) {
         const l = logs.getLog(li);
         if (logs.show_only_errors and !l.is_error) continue;
-        const col = if (l.is_error) theme.colors.danger else theme.colors.text_dim;
+        if (to_skip > 0) {
+            to_skip -= 1;
+            continue;
+        }
+        const col = if (l.is_error) theme.colors.danger else theme.colors.text_tertiary;
         _ = dvui.labelNoFmt(@src(), @import("../core/text.zig").safeUtf8(l.text), .{}, .{
             .id_extra = li,
             .color_text = col,

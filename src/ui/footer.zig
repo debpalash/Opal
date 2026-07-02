@@ -26,6 +26,25 @@ var open_picker: PickerKind = .none;
 // before the button is rendered (one frame of lag is acceptable for hover).
 var close_button_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 
+// Physical rect of the in-player control panel, captured each frame it draws.
+// grid.zig uses it to keep video-cell click handling (pause toggle / cell
+// select) out of the control-bar band — those buttons render AFTER the grid,
+// so the grid can't rely on `handled` flags to avoid double-firing.
+var control_panel_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+
+/// True when a physical mouse point lies within the control panel captured
+/// last frame (one frame of lag — fine for click exclusion).
+pub fn mouseInControlPanel(p: dvui.Point.Physical) bool {
+    const r = control_panel_rect;
+    return p.x >= r.x and p.x <= r.x + r.w and p.y >= r.y and p.y <= r.y + r.h;
+}
+
+/// True while any in-player picker popover is open — main.zig holds the
+/// control overlay visible so a popover can't outlive its anchor bar.
+pub fn pickerOpen() bool {
+    return open_picker != .none;
+}
+
 // ── Helpers ──
 
 /// Pretty-format a duration in seconds as HH:MM:SS or MM:SS (when under 1h).
@@ -58,17 +77,17 @@ pub fn aspectDropdownMenu(ctx: *c.mpv.mpv_handle, id_extra: usize) void {
     var btn_lbl: [32]u8 = undefined;
     const label = std.fmt.bufPrintZ(&btn_lbl, "{s}", .{current_ar}) catch "AR";
 
-    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_muted })) |r| {
+    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_secondary })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
-        var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_drawer, .border = dvui.Rect.all(1), .color_border = theme.colors.border_drawer });
+        var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_surface, .border = dvui.Rect.all(1), .color_border = theme.colors.border_subtle });
         defer menu.deinit();
 
         const modes = [_][]const u8{ "-1", "16:9", "4:3", "21:9" };
         const mode_labels = [_][]const u8{ "Auto", "16:9", "4:3", "21:9" };
 
         for (modes, 0..) |mode, k| {
-            if (dvui.menuItemLabel(@src(), mode_labels[k], .{}, .{ .id_extra = k, .expand = .horizontal, .color_text = theme.colors.text_main })) |_| {
+            if (dvui.menuItemLabel(@src(), mode_labels[k], .{}, .{ .id_extra = k, .expand = .horizontal, .color_text = theme.colors.text_primary })) |_| {
                 var set_cmd_buf: [64]u8 = undefined;
                 if (std.fmt.bufPrintZ(&set_cmd_buf, "set video-aspect-override \"{s}\"", .{mode})) |cmd| {
                     _ = c.mpv.mpv_command_string(ctx, cmd.ptr);
@@ -125,10 +144,10 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
     const kind_id: usize = if (is_aud) 1 else 2;
 
     // mpv track lang/title is untrusted metadata — validate before dvui.
-    if (dvui.menuItemLabel(@src(), @import("../core/text.zig").safeUtf8(label), .{ .submenu = true }, .{ .id_extra = kind_id, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_muted })) |r| {
+    if (dvui.menuItemLabel(@src(), @import("../core/text.zig").safeUtf8(label), .{ .submenu = true }, .{ .id_extra = kind_id, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_secondary })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
-        var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_drawer, .border = dvui.Rect.all(1), .color_border = theme.colors.border_drawer });
+        var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_surface, .border = dvui.Rect.all(1), .color_border = theme.colors.border_subtle });
         defer menu.deinit();
 
         for (0..@as(usize, @intCast(@max(@as(i64, 0), count)))) |i| {
@@ -165,7 +184,7 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
                         }
                     }
 
-                    if (dvui.menuItemLabel(@src(), @import("../core/text.zig").safeUtf8(row_name), .{}, .{ .id_extra = i, .expand = .horizontal, .color_text = theme.colors.text_main })) |_| {
+                    if (dvui.menuItemLabel(@src(), @import("../core/text.zig").safeUtf8(row_name), .{}, .{ .id_extra = i, .expand = .horizontal, .color_text = theme.colors.text_primary })) |_| {
                         var set_cmd_buf: [64]u8 = undefined;
                         const prop = if (is_aud) "aid" else "sid";
                         if (std.fmt.bufPrintZ(&set_cmd_buf, "set {s} {d}", .{ prop, t_id })) |cmd| {
@@ -184,10 +203,10 @@ pub fn playlistDropdownMenu(p: *player.MediaPlayer) void {
     const file_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, p.current_torrent_id);
     if (file_count <= 1) return;
 
-    if (dvui.menuItemLabel(@src(), "Files", .{ .submenu = true }, .{ .id_extra = 99, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_muted })) |r| {
+    if (dvui.menuItemLabel(@src(), "Files", .{ .submenu = true }, .{ .id_extra = 99, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_secondary })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
-        var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_drawer, .border = dvui.Rect.all(1), .color_border = theme.colors.border_drawer });
+        var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_surface, .border = dvui.Rect.all(1), .color_border = theme.colors.border_subtle });
         defer menu.deinit();
 
         for (0..@as(usize, @intCast(@max(@as(c_int, 0), file_count)))) |i| {
@@ -203,7 +222,7 @@ pub fn playlistDropdownMenu(p: *player.MediaPlayer) void {
             if (dvui.menuItemLabel(@src(), label, .{}, .{
                 .id_extra = i,
                 .expand = .horizontal,
-                .color_text = if (p.selected_file_idx == @as(i32, @intCast(i))) theme.colors.accent else theme.colors.text_main,
+                .color_text = if (p.selected_file_idx == @as(i32, @intCast(i))) theme.colors.accent else theme.colors.text_primary,
             })) |_| {
                 if (p.selected_file_idx != @as(i32, @intCast(i))) {
                     // Stop current playback immediately
@@ -228,17 +247,17 @@ pub fn subLanguageDropdown() void {
     var btn_lbl: [16]u8 = undefined;
     const label = std.fmt.bufPrintZ(&btn_lbl, "{s}", .{current_lang}) catch "lang";
 
-    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = 300, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_muted })) |r| {
+    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = 300, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_secondary })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
-        var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_drawer, .border = dvui.Rect.all(1), .color_border = theme.colors.border_drawer });
+        var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_surface, .border = dvui.Rect.all(1), .color_border = theme.colors.border_subtle });
         defer menu.deinit();
 
         const langs = [_][]const u8{ "eng", "spa", "fre", "ger", "por", "ita", "dut", "pol", "rus", "chi", "jpn", "kor", "ara", "hin", "tur" };
         const lang_names = [_][]const u8{ "English", "Spanish", "French", "German", "Portuguese", "Italian", "Dutch", "Polish", "Russian", "Chinese", "Japanese", "Korean", "Arabic", "Hindi", "Turkish" };
 
         for (langs, 0..) |l, k| {
-            if (dvui.menuItemLabel(@src(), lang_names[k], .{}, .{ .id_extra = k, .expand = .horizontal, .color_text = theme.colors.text_main })) |_| {
+            if (dvui.menuItemLabel(@src(), lang_names[k], .{}, .{ .id_extra = k, .expand = .horizontal, .color_text = theme.colors.text_primary })) |_| {
                 @memcpy(state.app.sub_lang_buf[0..l.len], l);
                 state.app.sub_lang_len = l.len;
             }
@@ -322,9 +341,16 @@ pub fn renderSubPicker() void {
         var err_buf: [128]u8 = undefined;
         const safe_err = @import("../core/text.zig").safeUtf8Buf(subs.search_error[0..subs.search_error_len], &err_buf);
         _ = dvui.label(@src(), "{s}", .{safe_err}, .{
-            .color_text = theme.colors.semantic_warn,
+            .color_text = theme.colors.warning,
             .margin = .{ .y = theme.spacing.xs },
         });
+    }
+
+    // Keep the modal live while a worker runs: "Searching…"/"Generating…"
+    // are worker-written states with no UI wake of their own — under the
+    // gated frame loop they froze until the next mouse move.
+    if (subs.is_searching or @import("../services/auto_subs.zig").in_progress or subs.is_downloading) {
+        dvui.refresh(null, @src(), null);
     }
 
     if (subs.result_count == 0 and !subs.is_searching) {
@@ -502,7 +528,7 @@ fn renderScrubber(
             var played = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = 3,
                 .background = true,
-                .color_fill = theme.colors.accent_primary,
+                .color_fill = theme.colors.accent,
                 .corner_radius = dvui.Rect.all(track_h * 0.5),
                 .min_size_content = .{ .w = track_rect.w * played_frac, .h = track_h },
                 .max_size_content = .{ .w = track_rect.w * played_frac, .h = track_h },
@@ -513,32 +539,49 @@ fn renderScrubber(
         }
     }
 
-    // 4. Chapter pips — only after metadata is loaded.
+    // 4. Chapter pips — only after metadata is loaded. Chapter times are
+    // CACHED (refreshed at most every 2s per player): they only change on
+    // file load, but this block used to make up to 65 synchronous mpv IPC
+    // calls per frame for the whole time the scrubber was visible.
     if (active_p.has_metadata and duration > 0) {
-        var ch_count: i64 = 0;
-        _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "chapter-list/count", c.mpv.MPV_FORMAT_INT64, &ch_count);
-        if (ch_count > 1) {
-            const max_pips: i64 = @min(ch_count, 64);
-            var ci: i64 = 0;
-            while (ci < max_pips) : (ci += 1) {
-                var q_buf: [64]u8 = undefined;
-                const q = std.fmt.bufPrintZ(&q_buf, "chapter-list/{d}/time", .{ci}) catch continue;
-                var t: f64 = 0;
-                _ = c.mpv.mpv_get_property(active_p.mpv_ctx, q.ptr, c.mpv.MPV_FORMAT_DOUBLE, &t);
-                if (std.math.isNan(t) or t <= 0 or t >= duration) continue;
-                const pip_frac: f32 = @floatCast(t / duration);
-
-                var pip = dvui.box(@src(), .{ .dir = .vertical }, .{
-                    .id_extra = @as(usize, @intCast(ci)) + 1024,
-                    .background = true,
-                    .color_fill = theme.colors.text_tertiary,
-                    .min_size_content = .{ .w = 2, .h = track_h },
-                    .max_size_content = .{ .w = 2, .h = track_h },
-                    .gravity_x = pip_frac,
-                    .gravity_y = 0.5,
-                });
-                pip.deinit();
+        const PipCache = struct {
+            var fracs: [64]f32 = undefined;
+            var count: usize = 0;
+            var ctx_key: usize = 0;
+            var last_ms: i64 = 0;
+        };
+        const pc_key = @intFromPtr(active_p.mpv_ctx);
+        if (PipCache.ctx_key != pc_key or now_ms - PipCache.last_ms > 2000) {
+            PipCache.ctx_key = pc_key;
+            PipCache.last_ms = now_ms;
+            PipCache.count = 0;
+            var ch_count: i64 = 0;
+            _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "chapter-list/count", c.mpv.MPV_FORMAT_INT64, &ch_count);
+            if (ch_count > 1) {
+                const max_pips: i64 = @min(ch_count, 64);
+                var ci: i64 = 0;
+                while (ci < max_pips) : (ci += 1) {
+                    var q_buf: [64]u8 = undefined;
+                    const q = std.fmt.bufPrintZ(&q_buf, "chapter-list/{d}/time", .{ci}) catch continue;
+                    var t: f64 = 0;
+                    _ = c.mpv.mpv_get_property(active_p.mpv_ctx, q.ptr, c.mpv.MPV_FORMAT_DOUBLE, &t);
+                    if (std.math.isNan(t) or t <= 0 or t >= duration) continue;
+                    PipCache.fracs[PipCache.count] = @floatCast(t / duration);
+                    PipCache.count += 1;
+                }
             }
+        }
+        for (PipCache.fracs[0..PipCache.count], 0..) |pip_frac, pi| {
+            var pip = dvui.box(@src(), .{ .dir = .vertical }, .{
+                .id_extra = pi + 1024,
+                .background = true,
+                .color_fill = theme.colors.text_tertiary,
+                .min_size_content = .{ .w = 2, .h = track_h },
+                .max_size_content = .{ .w = 2, .h = track_h },
+                .gravity_x = pip_frac,
+                .gravity_y = 0.5,
+            });
+            pip.deinit();
         }
     }
 
@@ -548,7 +591,7 @@ fn renderScrubber(
         var knob = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = 4,
             .background = true,
-            .color_fill = theme.colors.accent_primary,
+            .color_fill = theme.colors.accent,
             .corner_radius = dvui.Rect.all(99),
             .min_size_content = .{ .w = 8, .h = 8 },
             .max_size_content = .{ .w = 8, .h = 8 },
@@ -836,7 +879,7 @@ fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
             .id_extra = i,
             .expand = .horizontal,
             .color_fill = if (is_current) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (is_current) theme.colors.accent_primary else theme.colors.text_primary,
+            .color_text = if (is_current) theme.colors.accent else theme.colors.text_primary,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
@@ -879,7 +922,7 @@ fn renderAspectPickerPopover(active_p: *player.MediaPlayer) void {
             .id_extra = k,
             .expand = .horizontal,
             .color_fill = if (is_cur) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (is_cur) theme.colors.accent_primary else theme.colors.text_primary,
+            .color_text = if (is_cur) theme.colors.accent else theme.colors.text_primary,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
@@ -962,7 +1005,7 @@ fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []const u
             .id_extra = @as(usize, @intCast(i)),
             .expand = .horizontal,
             .color_fill = if (is_selected) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (is_selected) theme.colors.accent_primary else theme.colors.text_primary,
+            .color_text = if (is_selected) theme.colors.accent else theme.colors.text_primary,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
@@ -1008,7 +1051,7 @@ fn renderLangPickerPopover() void {
             .id_extra = k,
             .expand = .horizontal,
             .color_fill = if (is_cur) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (is_cur) theme.colors.accent_primary else theme.colors.text_primary,
+            .color_text = if (is_cur) theme.colors.accent else theme.colors.text_primary,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
@@ -1063,7 +1106,7 @@ fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
             .id_extra = i,
             .expand = .horizontal,
             .color_fill = if (is_sel) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (is_sel) theme.colors.accent_primary else theme.colors.text_primary,
+            .color_text = if (is_sel) theme.colors.accent else theme.colors.text_primary,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
@@ -1135,12 +1178,13 @@ pub fn renderLiquidGlassOverlay() void {
     var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = .{ .r = 12, .g = 12, .b = 17, .a = 200 },
+        .color_fill = theme.colors.bg_glass,
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     });
     defer panel.deinit();
+    control_panel_rect = panel.data().borderRectScale().r;
 
     // ── Wheel on scrubber band = ±5s seek ──
     for (dvui.events()) |*ev| {
@@ -1256,7 +1300,7 @@ pub fn renderLiquidGlassOverlay() void {
         // footer; carries the accent fill in BOTH play and pause states.
         if (dvui.buttonIcon(@src(), "toggle-pp", toggle_icon, .{}, .{}, .{
             .data_out = &wd,
-            .color_fill = theme.colors.accent_primary,
+            .color_fill = theme.colors.accent,
             .color_text = theme.colors.text_on_accent,
             .border = dvui.Rect.all(0),
             .corner_radius = dvui.Rect.all(theme.radius.md),
@@ -1342,6 +1386,7 @@ pub fn renderLiquidGlassOverlay() void {
             if (dvui.clicked(time_box.data(), .{})) {
                 time_show_remaining = !time_show_remaining;
             }
+            components.tip(@src(), time_box.data().*, if (time_show_remaining) "Showing remaining — click for total" else "Click to show remaining time");
 
             _ = dvui.label(@src(), "{s}", .{cur_str}, .{
                 .color_text = theme.colors.text_primary,
@@ -1532,7 +1577,7 @@ pub fn renderLiquidGlassOverlay() void {
         if (dvui.buttonIcon(@src(), "close", icons.tvg.lucide.x, .{}, .{}, .{
             .data_out = &wd,
             .color_fill = transparent,
-            .color_text = if (close_hovered_now) theme.colors.semantic_error else theme.colors.text_secondary,
+            .color_text = if (close_hovered_now) theme.colors.danger else theme.colors.text_secondary,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .border = dvui.Rect.all(0),
             .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
@@ -1780,7 +1825,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         const toggle_icon = if (is_paused != 0) icons.tvg.lucide.play else icons.tvg.lucide.pause;
         if (dvui.buttonIcon(@src(), "np-pp", toggle_icon, .{}, .{}, .{
             .data_out = &wd,
-            .color_fill = theme.colors.accent_primary,
+            .color_fill = theme.colors.accent,
             .color_text = theme.colors.text_on_accent,
             .border = dvui.Rect.all(0),
             .corner_radius = dvui.Rect.all(theme.radius.md),
@@ -1906,8 +1951,8 @@ fn renderTorrentActivityStrip() void {
     var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_header,
-        .color_border = theme.colors.border_drawer,
+        .color_fill = theme.colors.bg_app,
+        .color_border = theme.colors.border_subtle,
         .border = dvui.Rect{ .x = 0, .y = 1, .w = 0, .h = 0 },
         .padding = .{ .x = theme.spacing.sm, .y = 1, .w = theme.spacing.sm, .h = 1 },
     });
@@ -1989,6 +2034,11 @@ pub fn renderResumePrompt() void {
     var anchor = dvui.overlay(@src(), .{ .expand = .both });
     defer anchor.deinit();
 
+    // Fade in like the toast — the banner is the first thing a returning user
+    // sees; popping in fully formed read as a glitch.
+    var prompt_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.base, .easing = theme.motion.enter }, .{ .expand = .both });
+    defer prompt_fade.deinit();
+
     var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .gravity_x = 0.5,
         .gravity_y = 0.08,
@@ -2023,7 +2073,7 @@ pub fn renderResumePrompt() void {
 
     if (dvui.button(@src(), "Resume", .{}, .{
         .color_fill = theme.colors.accent,
-        .color_text = dvui.Color.white,
+        .color_text = theme.colors.text_on_accent,
         .corner_radius = theme.dims.rad_sm,
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
@@ -2046,7 +2096,7 @@ pub fn renderResumePrompt() void {
 
 pub fn renderToast() void {
     if (state.app.toast_len == 0) return;
-    const now = @import("../core/io_global.zig").timestamp();
+    const now = @import("../core/io_global.zig").milliTimestamp();
     if (now >= state.app.toast_expire) {
         state.app.toast_len = 0;
         return;
@@ -2058,13 +2108,33 @@ pub fn renderToast() void {
     // Fade each toast in. id_extra keyed on the monotonic toast_seq so every new
     // toast gets a fresh widget id → firstFrame true → the fade re-triggers
     // (AnimateWidget only auto-starts on the first frame of a given id). Using a
-    // counter (not toast_expire, which has 1s granularity) means back-to-back
-    // toasts in the same second still each fade in.
+    // counter (not toast_expire) means back-to-back toasts still each fade in.
     var toast_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.base, .easing = theme.motion.enter }, .{
         .id_extra = @as(usize, @truncate(state.app.toast_seq)),
         .expand = .both,
     });
     defer toast_fade.deinit();
+
+    // Fade OUT over the final motion.base window instead of popping away.
+    // Self-drive repaints through the fade (and request the expiry frame) so
+    // the exit animates even when nothing else refreshes the UI.
+    const remaining_ms = state.app.toast_expire - now;
+    const fade_out_ms: i64 = @divTrunc(theme.motion.base, 1000);
+    if (remaining_ms <= fade_out_ms) {
+        const t: f32 = @as(f32, @floatFromInt(remaining_ms)) / @as(f32, @floatFromInt(fade_out_ms));
+        const prev = dvui.alpha(theme.motion.exit(std.math.clamp(t, 0.0, 1.0)));
+        defer dvui.alphaSet(prev);
+        dvui.refresh(null, @src(), null);
+        renderToastBody();
+        return;
+    }
+    // Ask for a frame at the moment the fade-out should begin, so an idle UI
+    // still starts the exit on time (timer arms a wakeup that many µs out).
+    dvui.timer(toast_anchor.data().id, @intCast(@max(1, (remaining_ms - fade_out_ms) * 1000)));
+    renderToastBody();
+}
+
+fn renderToastBody() void {
 
     // Semantic colors based on toast type
     const toast_color = switch (state.app.toast_type) {
@@ -2215,11 +2285,11 @@ fn renderStatRow(label: []const u8, value: []const u8, id_extra: usize) void {
 
     _ = dvui.label(@src(), "{s}", .{label}, .{
         .id_extra = id_extra + 100,
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_secondary,
         .min_size_content = .{ .w = 80, .h = 0 },
     });
     _ = dvui.label(@src(), "{s}", .{value}, .{
         .id_extra = id_extra + 200,
-        .color_text = theme.colors.text_main,
+        .color_text = theme.colors.text_primary,
     });
 }

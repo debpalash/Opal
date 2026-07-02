@@ -296,7 +296,7 @@ pub fn renderChatBody() void {
 
         // Status indicator — two-state quiet text dot.
         if (server.model_status == .online) {
-            _ = dvui.label(@src(), "Online", .{}, .{ .color_text = theme.colors.semantic_success });
+            _ = dvui.label(@src(), "Online", .{}, .{ .color_text = theme.colors.success });
         } else {
             _ = dvui.label(@src(), if (server.server_running) "Starting" else "Offline", .{}, .{ .color_text = theme.colors.text_tertiary });
         }
@@ -526,7 +526,7 @@ pub fn renderChatBody() void {
             // Error display (at top — most urgent). Transient semantic text only.
             if (last_error_len > 0) {
                 _ = dvui.label(@src(), "{s}", .{last_error[0..last_error_len]}, .{
-                    .color_text = theme.colors.semantic_error,
+                    .color_text = theme.colors.danger,
                     .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
                 });
             }
@@ -576,7 +576,7 @@ fn renderControlPanel() void {
                 .expand = .horizontal,
             });
             _ = dvui.label(@src(), "Ready", .{}, .{
-                .color_text = theme.colors.semantic_success,
+                .color_text = theme.colors.success,
             });
         } else if (server.model_exists) {
             _ = dvui.label(@src(), "TinyLlama 1.1B  669 MB", .{}, .{
@@ -584,7 +584,7 @@ fn renderControlPanel() void {
                 .expand = .horizontal,
             });
             _ = dvui.label(@src(), "Ready", .{}, .{
-                .color_text = theme.colors.semantic_success,
+                .color_text = theme.colors.success,
             });
         } else if (server.model_downloading) {
             _ = dvui.label(@src(), "{s}", .{server.download_progress_buf[0..server.download_progress_len]}, .{
@@ -593,7 +593,7 @@ fn renderControlPanel() void {
             });
         } else {
             _ = dvui.label(@src(), "Model not downloaded", .{}, .{
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .expand = .horizontal,
             });
             if (dvui.button(@src(), "Download", .{}, .{
@@ -630,11 +630,11 @@ fn renderControlPanel() void {
                     .expand = .horizontal,
                 });
                 _ = dvui.label(@src(), "Found", .{}, .{
-                    .color_text = theme.colors.semantic_success,
+                    .color_text = theme.colors.success,
                 });
             } else {
                 _ = dvui.label(@src(), "apfel not found", .{}, .{
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .expand = .horizontal,
                 });
                 _ = dvui.label(@src(), "brew install apfel", .{}, .{
@@ -647,11 +647,11 @@ fn renderControlPanel() void {
                 .expand = .horizontal,
             });
             _ = dvui.label(@src(), "Found", .{}, .{
-                .color_text = theme.colors.semantic_success,
+                .color_text = theme.colors.success,
             });
         } else {
             _ = dvui.label(@src(), "Shimmy missing", .{}, .{
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .expand = .horizontal,
             });
             if (dvui.button(@src(), "Install", .{}, .{
@@ -800,7 +800,7 @@ fn renderMessage(mi: usize) void {
         _ = dvui.label(@src(), "{s}", .{ph}, .{
             .id_extra = mi + 7100,
             .expand = .horizontal,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
         });
         return;
@@ -960,7 +960,7 @@ pub fn renderInlineResults() void {
 
                 _ = dvui.label(@src(), "{s}", .{meta_buf[0..w]}, .{
                     .id_extra = ci + 9900,
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                 });
             }
         }
@@ -1244,8 +1244,8 @@ pub fn renderFloatingBubble() void {
             .rect = &S.win_rect,
         }, .{
             .min_size_content = .{ .w = min_w, .h = min_h },
-            .color_fill = theme.colors.bg_glass,
-            .color_border = theme.colors.border_glass,
+            .color_fill = theme.colors.bg_elevated,
+            .color_border = theme.colors.border_subtle,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_lg,
         });
@@ -1257,7 +1257,7 @@ pub fn renderFloatingBubble() void {
                 .expand = .horizontal,
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
                 .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-                .color_border = theme.colors.divider,
+                .color_border = theme.colors.border_subtle,
             });
 
             // Make header the drag area so user can reposition the window
@@ -1287,17 +1287,17 @@ pub fn renderFloatingBubble() void {
                 }
 
                 _ = dvui.label(@src(), "Seeing: ", .{}, .{
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .gravity_y = 0.5,
                 });
                 dvui.labelEx(@src(), "{s}", .{curr_title}, .{ .ellipsize = true }, .{
-                    .color_text = theme.colors.text_main,
+                    .color_text = theme.colors.text_primary,
                     .gravity_y = 0.5,
                     .expand = .horizontal,
                 });
             } else {
                 _ = dvui.label(@src(), "AI Chat", .{}, .{
-                    .color_text = theme.colors.text_muted,
+                    .color_text = theme.colors.text_secondary,
                     .gravity_y = 0.5,
                     .expand = .horizontal,
                 });
@@ -1305,7 +1305,7 @@ pub fn renderFloatingBubble() void {
 
             // Close button
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 .border = dvui.Rect.all(0),
                 .gravity_y = 0.5,

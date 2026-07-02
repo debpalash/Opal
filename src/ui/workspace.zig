@@ -66,14 +66,16 @@ pub fn scanWorkspaces() void {
     }
 }
 
-/// Save workspace under the given name.
-pub fn saveWorkspaceNamed(allocator: std.mem.Allocator, name: []const u8) void {
+/// Save workspace under the given name (sanitized — see workspace_pure).
+pub fn saveWorkspaceNamed(allocator: std.mem.Allocator, raw_name: []const u8) void {
     if (state.app.incognito_mode) {
         state.showToast("Cannot save workspace in incognito mode");
         return;
     }
+    var name_buf: [64]u8 = undefined;
+    const name = @import("workspace_pure.zig").sanitizeName(&name_buf, raw_name);
     if (name.len == 0) {
-        state.showToast("Workspace name cannot be empty");
+        state.showToast("Invalid workspace name");
         return;
     }
 
@@ -162,8 +164,15 @@ pub fn saveWorkspaceNamed(allocator: std.mem.Allocator, name: []const u8) void {
     scanWorkspaces();
 }
 
-/// Load a workspace by name.
-pub fn loadWorkspaceNamed(allocator: std.mem.Allocator, name: []const u8) void {
+/// Load a workspace by name (sanitized — the list itself comes from disk, but
+/// the "default" wrapper and any future callers pass user-influenced strings).
+pub fn loadWorkspaceNamed(allocator: std.mem.Allocator, raw_name: []const u8) void {
+    var name_buf: [64]u8 = undefined;
+    const name = @import("workspace_pure.zig").sanitizeName(&name_buf, raw_name);
+    if (name.len == 0) {
+        state.showToast("Invalid workspace name");
+        return;
+    }
     var dir_buf: [512]u8 = undefined;
     const ws_dir = workspacesDir(&dir_buf);
     var path_buf: [640]u8 = undefined;

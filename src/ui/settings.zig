@@ -98,9 +98,10 @@ fn matchesSearch(label: []const u8) bool {
 pub fn renderSettingsModal() void {
     if (!state.app.settings_open) return;
     // Redirect to the Settings page (works in both shell and legacy drawer).
+    // No markConfigDirty here: merely opening settings changes no persisted
+    // state, and the flag forced a needless full config rewrite to SQLite.
     state.navigateToTab(.Settings);
     state.app.settings_open = false;
-    state.markConfigDirty();
 }
 
 /// Drawer-hosted settings content — rendered by drawer.zig
@@ -175,6 +176,7 @@ fn renderLeftNav(compact: bool) void {
         .{ .tab = .Network, .label = "Network", .icon = icons.tvg.lucide.wifi },
         .{ .tab = .Storage, .label = "Storage", .icon = icons.tvg.lucide.@"hard-drive" },
         .{ .tab = .Scripts, .label = "AI & Scripts", .icon = icons.tvg.lucide.sparkles },
+        .{ .tab = .AI, .label = "AI & Voice", .icon = icons.tvg.lucide.@"message-square-text" },
         .{ .tab = .LangLearn, .label = "Language", .icon = icons.tvg.lucide.languages },
         .{ .tab = .FileAssoc, .label = "File Types", .icon = icons.tvg.lucide.@"file-cog" },
     };
@@ -199,6 +201,17 @@ fn renderLeftNav(compact: bool) void {
                 .h = theme.spacing.sm,
             },
         });
+        if (dvui.button(@src(), "Clear search", .{}, .{
+            .color_fill = theme.transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_text = theme.colors.accent,
+            .border = dvui.Rect.all(0),
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+        })) {
+            @memset(&search_buf, 0);
+            search_len = 0;
+        }
     }
 }
 
@@ -207,14 +220,15 @@ fn renderLeftNav(compact: bool) void {
 fn sectionMatchesSearch(tab: state.SettingsTab) bool {
     if (search_len == 0) return true;
     const sections: []const []const u8 = switch (tab) {
-        .General => &.{ "Interface", "Behavior", "TMDB", "Theme", "Scale", "Grid" },
-        .Playback => &.{ "Video Processing", "Audio Equalizer", "Streaming", "About", "Shortcuts", "Filters", "Capture" },
-        .Subtitles => &.{ "OpenSubtitles", "Language", "Search", "API Key" },
-        .Network => &.{ "Download", "Trackers", "Proxy", "Speed" },
-        .Storage => &.{ "Download Path", "Watch History", "Database" },
-        .Scripts => &.{ "SponsorBlock", "AI Backend", "Remote", "Watch Party", "Scripts", "Gemma" },
-        .LangLearn => &.{ "Translate", "ASR", "Dubbing", "TTS", "Voice", "Speed" },
-        .FileAssoc => &.{ "File Associations", "Default Handler" },
+        .General => &.{ "Interface", "Behavior", "TMDB", "Theme", "Scale", "Grid", "NSFW", "Seek Sync", "API Key" },
+        .Playback => &.{ "Video Processing", "Audio Equalizer", "Streaming", "About", "Shortcuts", "Filters", "Capture", "Hardware", "Decode", "Deband", "Interpolation", "Brightness", "Contrast", "Saturation", "Gamma", "Screenshot", "Auto-advance", "Resume" },
+        .Subtitles => &.{ "OpenSubtitles", "Language", "Search", "API Key", "Font", "Delay", "Whisper" },
+        .Network => &.{ "Download", "Trackers", "Proxy", "Speed", "Limit", "Port" },
+        .Storage => &.{ "Download Path", "Watch History", "Database", "Cache", "Clear" },
+        .Scripts => &.{ "SponsorBlock", "AI Backend", "Remote", "Watch Party", "Scripts", "Gemma", "Apple Intelligence", "Model", "Voice" },
+        .AI => &.{ "Voice Backend", "STT", "TTS", "Whisper", "Kokoro", "MLX", "Sherpa", "Language Learning" },
+        .LangLearn => &.{ "Translate", "ASR", "Dubbing", "TTS", "Voice", "Speed", "Flashcard", "Transcribe" },
+        .FileAssoc => &.{ "File Associations", "Default Handler", "Register", "Video", "Audio", "Torrent", "Playlist", "Comics" },
     };
     for (sections) |s| if (matchesSearch(s)) return true;
     return false;
@@ -231,8 +245,8 @@ fn navTabRow(tab: state.SettingsTab, label: []const u8, icon: []const u8, id_ext
         .expand = .horizontal,
         .min_size_content = .{ .w = 0, .h = if (compact) 40 else 34 },
         .background = true,
-        .color_fill = if (is_active) theme.colors.bg_elevated else if (hovered) theme.colors.bg_hover else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_border = if (is_active) theme.colors.accent_primary else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = if (is_active) theme.colors.bg_elevated else theme.transparent,
+        .color_border = if (is_active) theme.colors.accent else theme.transparent,
         .border = if (is_active and !compact) .{ .x = 2, .y = 0, .w = 0, .h = 0 } else dvui.Rect.all(0),
         .corner_radius = dvui.Rect.all(theme.radius.sm),
         .padding = .{
@@ -246,11 +260,28 @@ fn navTabRow(tab: state.SettingsTab, label: []const u8, icon: []const u8, id_ext
     });
     defer row.deinit();
 
-    // Whole-row click target (colors drawn manually above).
+    // Whole-row click target. Keyboard: tab stop + Enter/Space activates.
+    const rid = row.data().id;
+    dvui.tabIndexSet(rid, null);
+    const row_focused = dvui.focusedWidgetId() == rid;
+    if (row_focused) {
+        for (dvui.events()) |*e| {
+            if (e.handled) continue;
+            if (e.evt == .key and e.evt.key.action == .down and e.evt.key.matchBind("activate")) {
+                e.handle(@src(), row.data());
+                state.app.settings_tab = tab;
+            }
+        }
+    }
     if (dvui.clicked(row.data(), .{ .hovered = &hovered })) {
         state.app.settings_tab = tab;
     }
+    // Hover lift — must be applied AFTER hover is known; the ternary that
+    // referenced `hovered` at box creation was provably dead code (boxes draw
+    // their background inside dvui.box()).
+    if (hovered and !is_active) row.data().options.color_fill = theme.colors.bg_hover;
     row.drawBackground();
+    if (row_focused) row.data().focusBorder();
 
     const fg = if (is_active) theme.colors.text_primary else theme.colors.text_secondary;
 
@@ -286,7 +317,19 @@ fn renderRightPane() void {
     });
     defer pane.deinit();
 
+    // Crossfade tab switches — the inner settings navigation popped instantly
+    // while every shell route fades with the same motion tokens.
+    var tab_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.base, .easing = theme.motion.enter }, .{
+        .id_extra = @intFromEnum(state.app.settings_tab),
+        .expand = .both,
+    });
+    defer tab_fade.deinit();
+
+    // Per-tab scroll offset: without id_extra all 8 tabs shared ONE persisted
+    // dvui scroll position, so switching from deep in Playback opened Storage
+    // pre-scrolled to Playback's offset.
     var scroll = dvui.scrollArea(@src(), .{}, .{
+        .id_extra = @intFromEnum(state.app.settings_tab),
         .expand = .both,
         .background = false,
     });
@@ -322,6 +365,7 @@ fn renderRightPane() void {
         .Network => "Network Settings",
         .Storage => "Storage Settings",
         .Scripts => "AI, Remote & Scripts",
+        .AI => "AI & Voice",
         .LangLearn => "Language Learning",
         .FileAssoc => "File Associations",
     });
@@ -333,6 +377,7 @@ fn renderRightPane() void {
         .Subtitles => renderSubtitlesTab(),
         .Storage => renderStorageTab(),
         .Scripts => renderScriptsTab(),
+        .AI => renderAIContentBody(),
         .LangLearn => renderLangLearnTab(),
         .FileAssoc => renderFileAssocTab(),
     }
@@ -372,7 +417,8 @@ fn bigTitle(title: []const u8) void {
     });
 }
 
-/// Drawer-hosted AI tab — Voice, ASR, TTS, Language Learning
+/// Drawer-hosted AI tab (legacy .assistant route) — wraps the shared body in
+/// its own header + scroll + centred column.
 pub fn renderAIContent() void {
     // Header
     {
@@ -380,8 +426,8 @@ pub fn renderAIContent() void {
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
             .background = true,
-            .color_fill = theme.colors.bg_header,
-            .color_border = theme.colors.divider,
+            .color_fill = theme.colors.bg_app,
+            .color_border = theme.colors.border_subtle,
             .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         });
         defer hdr.deinit();
@@ -392,7 +438,7 @@ pub fn renderAIContent() void {
             .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
         });
         _ = dvui.label(@src(), "AI & Voice", .{}, .{
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
             .gravity_y = 0.5,
         });
     }
@@ -402,7 +448,7 @@ pub fn renderAIContent() void {
         .expand = .both,
         .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
         .background = true,
-        .color_fill = theme.colors.bg_drawer,
+        .color_fill = theme.colors.bg_surface,
     });
     defer scroll.deinit();
 
@@ -415,6 +461,15 @@ pub fn renderAIContent() void {
     });
     defer content.deinit();
 
+    renderAIContentBody();
+}
+
+/// The AI & Voice control sections themselves — reused by BOTH the legacy
+/// .assistant route (via renderAIContent) and the Settings › AI & Voice tab
+/// (which supplies its own bigTitle + scroll + centred column, so this must
+/// NOT add its own chrome). This is why the "Assistant" nav entry could move
+/// into Settings without duplicating the page.
+fn renderAIContentBody() void {
     // ── Voice Backend ──
     aiSectionWithIcon(icons.tvg.lucide.mic, "Voice Backend", "STT + TTS engine for mic / conversation mode", 24, @src());
     {
@@ -431,14 +486,16 @@ pub fn renderAIContent() void {
         for (vb.allKinds(), 0..) |kind, i| {
             const active = kind == vb.active_kind;
 
-            const tmp_kind = vb.active_kind;
-            vb.active_kind = kind;
-            const b = vb.active();
-            vb.active_kind = tmp_kind;
+            // backendFor is a pure lookup. The old code mutated active_kind
+            // transiently EVERY frame to fetch each name — a data race with
+            // the detached TTS worker, which reads active_kind concurrently
+            // and could pick up the wrong STT/TTS engine mid-speech.
+            const b = vb.backendFor(kind);
 
             if (dvui.button(@src(), b.name, .{}, .{
                 .id_extra = 4000 + i,
-                .color_fill = if (active) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = if (active) theme.colors.bg_elevated else theme.transparent,
+                .color_fill_hover = theme.colors.bg_hover,
                 .color_text = if (active) theme.colors.accent else theme.colors.text_secondary,
                 .border = dvui.Rect.all(0),
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
@@ -448,6 +505,7 @@ pub fn renderAIContent() void {
                 .gravity_x = 0.0,
             })) {
                 vb.active_kind = kind;
+                state.markConfigDirty();
                 state.showToast("Voice backend changed");
             }
         }
@@ -467,12 +525,16 @@ pub fn renderAIContent() void {
             if (dep_status.mlx_whisper_model and dep_status.mlx_whisper_cli) {
                 components.statusPill("Ready", .success);
             } else if (deps.mlx_whisper_downloading) {
+                // Worker-written buffer — snapshot + validate so a torn multi-
+                // byte write ("Installing uv…") can't hand dvui invalid UTF-8.
                 const status_len = std.mem.indexOfScalar(u8, &deps.mlx_whisper_status, 0) orelse 0;
-                const status_txt = if (status_len > 0) deps.mlx_whisper_status[0..status_len] else "Setting up…";
+                var status_snap: [128]u8 = undefined;
+                const status_txt = if (status_len > 0) @import("../core/text.zig").safeUtf8Buf(deps.mlx_whisper_status[0..status_len], &status_snap) else "Setting up…";
                 _ = dvui.label(@src(), "{s}", .{status_txt}, .{
-                    .color_text = theme.colors.semantic_warn,
+                    .color_text = theme.colors.warning,
                     .gravity_y = 0.5,
                 });
+                dvui.refresh(null, @src(), null); // live-update while the worker runs
             } else {
                 if (dvui.button(@src(), "Set up (~1.6GB)", .{}, .{
                     .color_fill = theme.colors.accent,
@@ -718,12 +780,14 @@ pub fn renderAIContent() void {
 
             if (deps.mlx_whisper_downloading) {
                 const slen = std.mem.indexOfScalar(u8, &deps.mlx_whisper_status, 0) orelse 0;
-                const stxt = if (slen > 0) deps.mlx_whisper_status[0..slen] else "Setting up…";
+                var ssnap: [128]u8 = undefined;
+                const stxt = if (slen > 0) @import("../core/text.zig").safeUtf8Buf(deps.mlx_whisper_status[0..slen], &ssnap) else "Setting up…";
                 _ = dvui.label(@src(), "{s}", .{stxt}, .{
                     .id_extra = 5045,
-                    .color_text = theme.colors.semantic_warn,
+                    .color_text = theme.colors.warning,
                     .gravity_y = 0.5,
                 });
+                dvui.refresh(null, @src(), null); // live-update while the worker runs
             } else if (mlx_installed) {
                 components.statusPill("Installed", .success);
             } else {
@@ -763,6 +827,13 @@ inline fn labelText() dvui.Color {
 // disambiguate. Like components.divider()/sectionHeader(), a monotonic seq is
 // the robust way to keep each header's wrap box + subtitle label unique.
 var sectionheader_seq: usize = 0;
+
+/// Reset the per-frame id sequence. Called from main.zig appFrame alongside
+/// components.beginFrame() — see the rationale there (never-reset counters
+/// force a first-frame dvui refresh every frame → permanent full-rate repaint).
+pub fn beginFrame() void {
+    sectionheader_seq = 0;
+}
 fn sectionHeader(comptime title: []const u8, comptime subtitle: []const u8, id_extra: usize, src: std.builtin.SourceLocation) void {
     _ = id_extra;
     _ = src;
@@ -923,11 +994,12 @@ fn renderGeneralTab() void {
     // ── Interface ── (whitespace-separated, no card chrome)
     sectionHeader("Interface", "Customize how Opal looks and feels", 10, @src());
 
-    // UI Scale — short ramp via segment.
+    // UI Scale — short ramp via segment, including sub-1× steps for users who
+    // want denser chrome than the compact type ramp alone provides.
     settingRow("UI Scale", 100, @src());
     {
-        const scales = [_]f32{ 1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 2.0 };
-        const scale_labels = [_][]const u8{ "1.0x", "1.1x", "1.2x", "1.3x", "1.5x", "1.7x", "2.0x" };
+        const scales = [_]f32{ 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 2.0 };
+        const scale_labels = [_][]const u8{ "0.8x", "0.9x", "1.0x", "1.1x", "1.2x", "1.3x", "1.5x", "1.7x", "2.0x" };
         var sel: usize = 0;
         for (scales, 0..) |s, idx| {
             if (@abs(state.app.ui_scale - s) < 0.05) {
@@ -1001,12 +1073,12 @@ fn renderGeneralTab() void {
 
     settingRow("API Key", 140, @src());
     {
-        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.tmdb.api_key }, .password_char = "•" }, .{
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.tmdb.api_key }, .placeholder = "Paste API key from themoviedb.org", .password_char = "•" }, .{
             .id_extra = 142,
             .expand = .horizontal,
             .min_size_content = .{ .w = 300, .h = 20 },
-            .color_fill = theme.colors.bg_input,
-            .color_border = theme.colors.border_input,
+            .color_fill = theme.colors.bg_elevated,
+            .color_border = theme.colors.border_subtle,
             .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_sm,
@@ -1122,6 +1194,7 @@ fn renderPlaybackTab() void {
         }
         if (ytdlp.isDownloading()) {
             components.statusPill("Downloading", .info);
+            dvui.refresh(null, @src(), null); // worker has no UI wake — poll while pending
         } else if (ytdlp.getPath() != null) {
             components.statusPill("Installed", .success);
             if (dvui.button(@src(), "Update", .{}, .{ .id_extra = 2901, .color_fill = btn_inactive, .color_text = theme.colors.accent, .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md })) {
@@ -1154,7 +1227,7 @@ fn renderPlaybackTab() void {
             defer brand.deinit();
 
             dvui.icon(@src(), "", icons.tvg.lucide.@"circle-play", .{}, .{
-                .color_text = theme.colors.accent_primary,
+                .color_text = theme.colors.accent,
                 .min_size_content = .{ .w = 28, .h = 28 },
                 .gravity_y = 0.5,
                 .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -1187,6 +1260,7 @@ fn renderPlaybackTab() void {
             }
             if (updater.is_checking) {
                 _ = dvui.label(@src(), "Checking…", .{}, .{ .id_extra = 2511, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+                dvui.refresh(null, @src(), null); // worker has no UI wake — poll while pending
             } else if (dvui.button(@src(), "Check for Updates", .{}, .{
                 .id_extra = 2512,
                 .color_fill = btn_inactive,
@@ -1218,7 +1292,7 @@ fn renderPlaybackTab() void {
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
             defer row.deinit();
             _ = dvui.label(@src(), "Latest", .{}, .{ .color_text = labelText(), .gravity_y = 0.5 });
-            _ = dvui.label(@src(), "  v{s}", .{updater.latestTag()}, .{ .id_extra = 2520, .color_text = theme.colors.semantic_success, .gravity_y = 0.5 });
+            _ = dvui.label(@src(), "  v{s}", .{updater.latestTag()}, .{ .id_extra = 2520, .color_text = theme.colors.success, .gravity_y = 0.5 });
             {
                 var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
                 spacer.deinit();
@@ -1237,15 +1311,15 @@ fn renderPlaybackTab() void {
                     updater.downloadAndOpenAsync();
                 }
             } else {
-                _ = dvui.label(@src(), "No .dmg asset on release", .{}, .{ .id_extra = 2523, .color_text = theme.colors.semantic_warn, .gravity_y = 0.5 });
+                _ = dvui.label(@src(), "No .dmg asset on release", .{}, .{ .id_extra = 2523, .color_text = theme.colors.warning, .gravity_y = 0.5 });
             }
         } else if (updater.last_check_ts > 0 and !updater.is_checking) {
             components.divider();
-            _ = dvui.label(@src(), "Up to date", .{}, .{ .id_extra = 2530, .color_text = theme.colors.semantic_success });
+            _ = dvui.label(@src(), "Up to date", .{}, .{ .id_extra = 2530, .color_text = theme.colors.success });
         }
 
         if (updater.last_error_len > 0) {
-            _ = dvui.label(@src(), "  {s}", .{updater.lastError()}, .{ .id_extra = 2540, .color_text = theme.colors.semantic_warn, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
+            _ = dvui.label(@src(), "  {s}", .{updater.lastError()}, .{ .id_extra = 2540, .color_text = theme.colors.warning, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
         }
     }
 
@@ -1255,7 +1329,7 @@ fn renderPlaybackTab() void {
         _ = dvui.label(@src(), "Space=Pause  Arrows=Seek  Up/Down=Vol  M=Mute", .{}, .{ .id_extra = 2100, .color_text = mutedText() });
         _ = dvui.label(@src(), "+/-=Zoom  0=Reset  Shift+Arrows=Pan", .{}, .{ .id_extra = 2101, .color_text = mutedText() });
         _ = dvui.label(@src(), "V=Subs  K=SubDelay  []=Speed  L=Loop  R=Rotate  T=Flip", .{}, .{ .id_extra = 2102, .color_text = mutedText() });
-        _ = dvui.label(@src(), "A=AI  D=Drawer  Shift+I=Info  Ctrl+O=Open  Ctrl+Q=Quit", .{}, .{ .id_extra = 2103, .color_text = mutedText() });
+        _ = dvui.label(@src(), "A=AI  D=Drawer/Library  Shift+I=Shortcuts  Ctrl+I=Info  Ctrl+O=Open  Ctrl+Q=Quit", .{}, .{ .id_extra = 2103, .color_text = mutedText() });
     }
 
     // ── Video Filters ── (no card chrome)
@@ -1308,17 +1382,31 @@ fn renderPlaybackTab() void {
                 } else |_| {}
             }
 
-            // Current value
+            // Current value — throttled: mpv property reads take the core lock
+            // synchronously, and 4 per frame while Settings sat open added
+            // frame-time jitter to active playback. Refresh at most ~4×/s
+            // (clicks read fresh next tick anyway).
             {
-                var val: i64 = 0;
+                const FilterCache = struct {
+                    var vals: [4]i64 = .{ 0, 0, 0, 0 };
+                    var last_ms: i64 = 0;
+                };
                 if (state.app.active_player_idx < state.app.players.items.len) {
-                    _ = c.mpv.mpv_get_property(state.app.players.items[state.app.active_player_idx].mpv_ctx, @ptrCast(f.prop.ptr), c.mpv.MPV_FORMAT_INT64, &val);
+                    const now_ms = @import("../core/io_global.zig").milliTimestamp();
+                    if (f.idx == 0 and now_ms - FilterCache.last_ms > 250) {
+                        FilterCache.last_ms = now_ms;
+                        const ctx = state.app.players.items[state.app.active_player_idx].mpv_ctx;
+                        inline for (filters, 0..) |ff, fi| {
+                            _ = c.mpv.mpv_get_property(ctx, @ptrCast(ff.prop.ptr), c.mpv.MPV_FORMAT_INT64, &FilterCache.vals[fi]);
+                        }
+                    }
                 }
+                const val = FilterCache.vals[f.idx];
                 var val_buf: [12]u8 = undefined;
                 const val_str = std.fmt.bufPrintZ(&val_buf, "{d}", .{val}) catch "0";
                 _ = dvui.label(@src(), "{s}", .{val_str}, .{
                     .id_extra = f.idx + 3030,
-                    .color_text = theme.colors.text_main,
+                    .color_text = theme.colors.text_primary,
                     .min_size_content = .{ .w = 30, .h = 0 },
                     .gravity_x = 0.5,
                     .gravity_y = 0.5,
@@ -1470,8 +1558,8 @@ fn renderNetworkTab() void {
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.proxy_url } }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 250, .h = 20 },
-            .color_fill = theme.colors.bg_input,
-            .color_border = theme.colors.border_input,
+            .color_fill = theme.colors.bg_elevated,
+            .color_border = theme.colors.border_subtle,
             .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_sm,
@@ -1527,8 +1615,8 @@ fn renderSubtitlesTab() void {
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.opensub_api_key }, .placeholder = "Paste API key from opensubtitles.com", .password_char = "•" }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 250, .h = 20 },
-            .color_fill = theme.colors.bg_input,
-            .color_border = theme.colors.border_input,
+            .color_fill = theme.colors.bg_elevated,
+            .color_border = theme.colors.border_subtle,
             .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_sm,
@@ -1579,9 +1667,9 @@ fn renderSubtitlesTab() void {
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.sub_search_buf }, .placeholder = "Movie/show name..." }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 200, .h = 20 },
-            .color_fill = theme.colors.bg_input,
-            .color_border = theme.colors.border_input,
-            .color_text = theme.colors.text_main,
+            .color_fill = theme.colors.bg_elevated,
+            .color_border = theme.colors.border_subtle,
+            .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_sm,
         });
@@ -1630,7 +1718,7 @@ fn renderSubtitlesTab() void {
             const safe_err = @import("../core/text.zig").safeUtf8Buf(subs.search_error[0..subs.search_error_len], &err_buf);
             _ = dvui.label(@src(), "{s}", .{safe_err}, .{
                 .id_extra = 4400,
-                .color_text = theme.colors.semantic_warn,
+                .color_text = theme.colors.warning,
                 .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
             });
         }
@@ -1805,13 +1893,9 @@ fn renderStorageTab() void {
             .color_text = theme.colors.text_secondary,
         });
 
-        if (dvui.button(@src(), "Clear Watch History", .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.danger,
-            .border = dvui.Rect.all(0),
-            .corner_radius = theme.dims.rad_md,
-            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-        })) {
+        // Two-step confirm — a single stray click used to run DELETE FROM
+        // watch_history, irreversibly dropping every resume position.
+        if (components.confirmDangerButton(@src(), "Clear Watch History", 0)) {
             watch.clearAll();
             state.showToast("Watch history cleared");
         }
@@ -1980,6 +2064,7 @@ fn renderScriptsTab() void {
                     ai_server.stopServer();
                     ai_server.backend_kind = .apfel;
                     ai_server.resetDetection();
+                    state.markConfigDirty(); // ai_backend IS persisted — without this the switch reverted on restart
                     state.showToast("AI backend: Apple Intelligence");
                 }
             }
@@ -2102,30 +2187,32 @@ fn renderScriptsTab() void {
                 .color_text = theme.colors.text_secondary,
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = 2, .h = theme.spacing.xs },
             });
-            var host_ip_input = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.party_host_ip_buf } }, .{
+            var host_ip_input = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.party_host_ip_buf }, .placeholder = "192.168.x.x" }, .{
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 120, .h = 20 },
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-                .color_fill = theme.colors.bg_input,
-                .color_border = theme.colors.border_input,
+                .color_fill = theme.colors.bg_elevated,
+                .color_border = theme.colors.border_subtle,
                 .border = dvui.Rect.all(1),
                 .corner_radius = theme.dims.rad_md,
             });
             const ip_enter = host_ip_input.enter_pressed;
             host_ip_input.deinit();
             const ip_len = std.mem.indexOfScalar(u8, &state.app.party_host_ip_buf, 0) orelse 0;
-            if (ip_len > 0) {
-                const clicked_join = dvui.button(@src(), "Join", .{}, .{
-                    .color_fill = theme.colors.bg_elevated,
-                    .color_text = theme.colors.text_primary,
-                    .border = dvui.Rect.all(0),
-                    .corner_radius = theme.dims.rad_md,
-                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-                    .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
-                });
-                if (clicked_join or ip_enter) {
-                    party.joinParty(state.app.party_host_ip_buf[0..ip_len]);
-                }
+            // Always render Join; gate the ACTION on a non-empty IP instead.
+            // The button popping in and out of existence reflowed the row on
+            // the first keystroke, right where the user was typing.
+            const join_ready = ip_len > 0;
+            const clicked_join = dvui.button(@src(), "Join", .{}, .{
+                .color_fill = theme.colors.bg_elevated,
+                .color_text = if (join_ready) theme.colors.text_primary else theme.colors.text_tertiary,
+                .border = dvui.Rect.all(0),
+                .corner_radius = theme.dims.rad_md,
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
+            });
+            if (join_ready and (clicked_join or ip_enter)) {
+                party.joinParty(state.app.party_host_ip_buf[0..ip_len]);
             }
         } else {
             // Leave button — danger as TEXT on a quiet fill (not a red box).
@@ -2157,7 +2244,7 @@ fn renderScriptsTab() void {
                     .id_extra = 7500,
                     .expand = .horizontal,
                     .background = true,
-                    .color_fill = theme.colors.bg_input,
+                    .color_fill = theme.colors.bg_elevated,
                     .corner_radius = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
                     .min_size_content = .{ .w = 0, .h = 80 },
@@ -2191,8 +2278,8 @@ fn renderScriptsTab() void {
                 var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &party.chat_input } }, .{
                     .expand = .horizontal,
                     .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-                    .color_fill = theme.colors.bg_input,
-                    .color_border = theme.colors.border_input,
+                    .color_fill = theme.colors.bg_elevated,
+                    .color_border = theme.colors.border_subtle,
                     .border = dvui.Rect.all(1),
                     .corner_radius = theme.dims.rad_sm,
                 });
@@ -2359,15 +2446,21 @@ pub fn renderCheatSheet() void {
         .open_flag = &state.app.cheatsheet_open,
     }, .{
         .min_size_content = .{ .w = 650, .h = 520 },
-        .color_fill = theme.colors.bg_drawer,
-        .color_border = theme.colors.border_drawer,
+        .color_fill = theme.colors.bg_surface,
+        .color_border = theme.colors.border_subtle,
     });
     defer win.deinit();
 
     win.dragAreaSet(dvui.windowHeader("Keyboard Shortcuts", "", &state.app.cheatsheet_open));
 
-    var settings_scale: f32 = 1.4;
-    var scale_w = dvui.scale(@src(), .{ .scale = &settings_scale }, .{ .expand = .both });
+    // Scroll area — without it the ~60-row list (at 1.4× scale) exceeded any
+    // normal window height and dvui simply clipped the bottom half of the
+    // shortcuts plus the whole AI Keywords section, unreachable.
+    var sheet_scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = false });
+    defer sheet_scroll.deinit();
+
+    var settings_scale: f32 = 1.2;
+    var scale_w = dvui.scale(@src(), .{ .scale = &settings_scale }, .{ .expand = .horizontal });
     defer scale_w.deinit();
 
     const shortcuts = [_][2][]const u8{
@@ -2391,12 +2484,13 @@ pub fn renderCheatSheet() void {
         .{ "Shift+Arrows", "Pan Video" },
         .{ "R", "Rotate Video" },
         .{ "T", "Flip Video" },
-        .{ "P", "Screenshot" },
+        .{ "Shift+P", "Screenshot" },
+        .{ "Shift+S", "Stats for Nerds" },
         .{ "Ctrl+I", "Media Info Panel" },
         .{ "A", "Toggle AI Bubble" },
-        .{ "S", "Toggle Search Drawer" },
-        .{ "D", "Toggle Downloads Drawer" },
-        .{ "H", "Toggle Watch History" },
+        .{ "S", "Search" },
+        .{ "D", "Drawer (classic) / Library" },
+        .{ "H", "Watch History" },
         .{ "G", "Cycle Grid Mode" },
         .{ "Y", "Toggle Seek Sync" },
         .{ "I", "Toggle Incognito Mode" },
@@ -2406,7 +2500,6 @@ pub fn renderCheatSheet() void {
         .{ "Ctrl+Arrows", "Swap Cell Position" },
         .{ "1-9", "Select Player Cell" },
         .{ "Ctrl+,", "Settings" },
-        .{ "Ctrl+T", "New Player Tab" },
         .{ "Ctrl+W", "Close Player Tab" },
         .{ "Ctrl+Shift+T", "Restore Closed Tab" },
         .{ "Ctrl+L", "Language Learning Mode" },
@@ -2416,7 +2509,7 @@ pub fn renderCheatSheet() void {
         .{ "Ctrl+V", "Paste URL / Magnet" },
         .{ "P", "Toggle Playlist Drawer" },
         .{ "Shift+I", "This Cheat Sheet" },
-        .{ "Esc", "Close Overlay / Drawer" },
+        .{ "Esc", "Close Overlay / Fullscreen" },
     };
 
     for (shortcuts, 0..) |sc, idx| {
@@ -2436,7 +2529,7 @@ pub fn renderCheatSheet() void {
 
         _ = dvui.label(@src(), "{s}", .{sc[1]}, .{
             .id_extra = idx + 1000,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
         });
     }
 
@@ -2478,7 +2571,7 @@ pub fn renderCheatSheet() void {
         });
         _ = dvui.label(@src(), "{s}", .{k[1]}, .{
             .id_extra = idx + 6000,
-            .color_text = theme.colors.text_main,
+            .color_text = theme.colors.text_primary,
         });
     }
 }
@@ -2512,7 +2605,7 @@ pub fn renderDepsModal() void {
         .open_flag = &state.app.deps_modal_open,
     }, .{
         .min_size_content = .{ .w = 580, .h = 400 },
-        .color_fill = theme.colors.bg_drawer,
+        .color_fill = theme.colors.bg_surface,
         .color_border = theme.colors.accent,
         .corner_radius = dvui.Rect.all(10),
     });
@@ -2520,18 +2613,23 @@ pub fn renderDepsModal() void {
 
     win.dragAreaSet(dvui.windowHeader("Setup", "", &state.app.deps_modal_open));
 
+    // Scrollable — on short windows the bottom rows (and their Download
+    // buttons) were silently clipped.
+    var deps_scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = false });
+    defer deps_scroll.deinit();
+
     var pad_scale: f32 = 1.15;
-    var scale_w = dvui.scale(@src(), .{ .scale = &pad_scale }, .{ .expand = .both });
+    var scale_w = dvui.scale(@src(), .{ .scale = &pad_scale }, .{ .expand = .horizontal });
     defer scale_w.deinit();
 
     var pad = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .expand = .both,
+        .expand = .horizontal,
         .padding = .{ .x = 16, .y = 12, .w = 16, .h = 12 },
     });
     defer pad.deinit();
 
     _ = dvui.label(@src(), "Opal works best with these installed:", .{}, .{
-        .color_text = theme.colors.text_main,
+        .color_text = theme.colors.text_primary,
         .margin = .{ .y = 4 },
     });
 
@@ -2566,27 +2664,31 @@ pub fn renderDepsModal() void {
         });
         defer row.deinit();
 
-        // Status icon — lucide glyph, colored by semantic token.
-        const icon_data = if (r.ok)
-            icons.tvg.lucide.@"circle-check-big"
-        else if (r.pending)
-            icons.tvg.lucide.@"loader-circle"
-        else
-            icons.tvg.lucide.@"circle-x";
-        const icon_color = if (r.ok)
-            theme.colors.semantic_success
-        else if (r.pending)
-            theme.colors.semantic_warn
-        else
-            theme.colors.semantic_error;
-
-        _ = dvui.icon(@src(), "", icon_data, .{}, .{
-            .id_extra = i,
-            .color_text = icon_color,
-            .min_size_content = .{ .w = 18, .h = 18 },
-            .gravity_y = 0.5,
-            .margin = .{ .w = 10 },
-        });
+        // Status icon — lucide glyph, colored by semantic token. Pending rows
+        // get a real SPINNER (self-refreshing) instead of a frozen
+        // loader-circle glyph, which also keeps the modal's "installs show up
+        // live" promise honest under the gated frame loop.
+        if (r.pending) {
+            dvui.spinner(@src(), .{
+                .id_extra = i,
+                .color_text = theme.colors.warning,
+                .min_size_content = .{ .w = 18, .h = 18 },
+                .gravity_y = 0.5,
+                .margin = .{ .w = 10 },
+            });
+        } else {
+            const icon_data = if (r.ok)
+                icons.tvg.lucide.@"circle-check-big"
+            else
+                icons.tvg.lucide.@"circle-x";
+            _ = dvui.icon(@src(), "", icon_data, .{}, .{
+                .id_extra = i,
+                .color_text = if (r.ok) theme.colors.success else theme.colors.danger,
+                .min_size_content = .{ .w = 18, .h = 18 },
+                .gravity_y = 0.5,
+                .margin = .{ .w = 10 },
+            });
+        }
         _ = dvui.label(@src(), "{s}", .{r.name}, .{
             .id_extra = i + 1000,
             .color_text = theme.colors.text_primary,
@@ -2715,11 +2817,11 @@ pub fn renderDepsModal() void {
                 else
                     icons.tvg.lucide.@"circle-x";
                 const icon_color = if (r.ok)
-                    theme.colors.semantic_success
+                    theme.colors.success
                 else if (r.pending)
-                    theme.colors.semantic_warn
+                    theme.colors.warning
                 else
-                    theme.colors.semantic_error;
+                    theme.colors.danger;
 
                 _ = dvui.icon(@src(), "", icon_data, .{}, .{
                     .id_extra = 9000 + gi,
@@ -2797,7 +2899,7 @@ pub fn renderDepsModal() void {
         var code_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_input,
+            .color_fill = theme.colors.bg_elevated,
             .corner_radius = theme.dims.rad_md,
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
             .margin = .{ .y = 4 },
@@ -2888,7 +2990,7 @@ pub fn renderMediaInfo() void {
     }, .{
         .min_size_content = .{ .w = 420, .h = 320 },
         .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_drawer,
+        .color_border = theme.colors.border_subtle,
     });
     defer win.deinit();
 
@@ -2898,7 +3000,9 @@ pub fn renderMediaInfo() void {
     var scale_w = dvui.scale(@src(), .{ .scale = &info_scale }, .{ .expand = .both });
     defer scale_w.deinit();
 
-    // Query mpv properties
+    // Query mpv properties — SNAPSHOTTED at most 2×/s. Each string read is a
+    // synchronous allocation under mpv's core lock; 14 per frame contended
+    // with the demux/render threads during playback and added frame jitter.
     const props = [_][2][]const u8{
         .{ "filename", "File" },
         .{ "video-codec", "Video Codec" },
@@ -2915,10 +3019,36 @@ pub fn renderMediaInfo() void {
         .{ "file-size", "File Size" },
         .{ "hwdec-current", "HW Decode" },
     };
+    const Snap = struct {
+        var bufs: [props.len][96]u8 = undefined;
+        var lens: [props.len]usize = .{0} ** props.len;
+        var last_ms: i64 = 0;
+        var last_ctx: usize = 0;
+    };
+    const now_ms = @import("../core/io_global.zig").milliTimestamp();
+    const ctx_key = @intFromPtr(p.mpv_ctx);
+    if (now_ms - Snap.last_ms > 500 or Snap.last_ctx != ctx_key) {
+        Snap.last_ms = now_ms;
+        Snap.last_ctx = ctx_key;
+        for (props, 0..) |prop, idx| {
+            const val_ptr: ?[*:0]u8 = @ptrCast(c.mpv.mpv_get_property_string(p.mpv_ctx, @ptrCast(prop[0].ptr)));
+            if (val_ptr) |vp| {
+                const span = std.mem.span(vp);
+                const n = @min(span.len, Snap.bufs[idx].len);
+                @memcpy(Snap.bufs[idx][0..n], span[0..n]);
+                Snap.lens[idx] = n;
+                c.mpv.mpv_free(vp);
+            } else {
+                Snap.lens[idx] = 0;
+            }
+        }
+    }
+    // Tick a frame every 500ms while the panel is open so the snapshot stays
+    // fresh even under the gated frame loop (re-arm pattern, 2 frames/s).
+    const tick_id = win.data().id;
+    if (dvui.timerDoneOrNone(tick_id)) dvui.timer(tick_id, 500_000);
 
     for (props, 0..) |prop, idx| {
-        const val_ptr: ?[*:0]u8 = @ptrCast(c.mpv.mpv_get_property_string(p.mpv_ctx, @ptrCast(prop[0].ptr)));
-
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = idx,
             .expand = .horizontal,
@@ -2928,21 +3058,20 @@ pub fn renderMediaInfo() void {
 
         _ = dvui.label(@src(), "{s}", .{prop[1]}, .{
             .id_extra = idx,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .min_size_content = .{ .w = 120, .h = 0 },
         });
 
-        if (val_ptr) |vp| {
-            const val_str = std.mem.span(vp);
-            _ = dvui.label(@src(), "{s}", .{val_str}, .{
+        if (Snap.lens[idx] > 0) {
+            // mpv strings (filename!) are untrusted — trim to valid UTF-8.
+            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(Snap.bufs[idx][0..Snap.lens[idx]])}, .{
                 .id_extra = idx + 500,
-                .color_text = theme.colors.text_main,
+                .color_text = theme.colors.text_primary,
             });
-            c.mpv.mpv_free(vp);
         } else {
             _ = dvui.label(@src(), "-", .{}, .{
                 .id_extra = idx + 500,
-                .color_text = theme.colors.text_muted,
+                .color_text = theme.colors.text_secondary,
             });
         }
     }

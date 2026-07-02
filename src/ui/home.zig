@@ -40,12 +40,14 @@ pub fn render() void {
     // Taste Receipts: the For-You rail. Generate recommendations once per
     // session (DB + vec0 KNN — a one-time cost on first Home view; off-thread
     // optimization is a follow-up), then render the rail (no-op when empty).
+    // Wait for the async history load — generating on the very first frame
+    // raced it and permanently produced the "No watch history yet" fallback.
     {
         const recs = @import("../services/recommendations.zig");
         const Once = struct {
             var done: bool = false;
         };
-        if (!Once.done) {
+        if (!Once.done and state.app.init_history_loaded) {
             Once.done = true;
             recs.generateRecommendations();
         }
@@ -128,7 +130,7 @@ fn statCard(id: usize, icon: []const u8, label: []const u8, value: []const u8, a
         .id_extra = id,
         .min_size_content = .{ .w = 150, .h = 0 },
         .background = true,
-        .color_fill = theme.colors.bg_card,
+        .color_fill = theme.colors.bg_surface,
         .corner_radius = dvui.Rect.all(theme.radius.md),
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
         .margin = dvui.Rect.all(theme.spacing.xs),
@@ -147,7 +149,7 @@ fn statCard(id: usize, icon: []const u8, label: []const u8, value: []const u8, a
         });
         _ = dvui.label(@src(), "{s}", .{label}, .{
             .id_extra = id,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
         });
     }
@@ -283,7 +285,11 @@ fn renderRecentlyPlayed() void {
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const e = &wh.entries[i];
-        const name = tmdb.safeUtf8(e.name[0..e.name_len]);
+        // Show a cleaned display name (basename, no extension, dots→spaces)
+        // instead of raw paths/URLs — same formatter the poster tiles use.
+        var clean_buf: [128]u8 = undefined;
+        const cleaned = @import("grid.zig").cleanDisplayName(&clean_buf, e.name[0..e.name_len]);
+        const name = tmdb.safeUtf8(cleaned);
         const pct: u8 = @intFromFloat(std.math.clamp(e.percent * 100.0, 0.0, 100.0));
 
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -306,7 +312,7 @@ fn renderRecentlyPlayed() void {
 
         dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
             .id_extra = i + 70000,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .min_size_content = .{ .w = 14, .h = 14 },
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -321,7 +327,7 @@ fn renderRecentlyPlayed() void {
         if (std.fmt.bufPrint(&pb, "{d}%", .{pct})) |ps| {
             _ = dvui.label(@src(), "{s}", .{ps}, .{
                 .id_extra = i + 70500,
-                .color_text = if (pct >= 90) theme.colors.success else theme.colors.text_muted,
+                .color_text = if (pct >= 90) theme.colors.success else theme.colors.text_secondary,
                 .gravity_y = 0.5,
             });
         } else |_| {}
@@ -350,7 +356,7 @@ fn renderEmptyState() void {
         .gravity_x = 0.5,
     });
     _ = dvui.label(@src(), "Browse to discover, then star and bookmark to fill this page.", .{}, .{
-        .color_text = theme.colors.text_muted,
+        .color_text = theme.colors.text_secondary,
         .gravity_x = 0.5,
     });
     if (dvui.button(@src(), "Browse", .{}, .{

@@ -261,7 +261,7 @@ pub fn renderContent() void {
             .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
         });
         _ = dvui.label(@src(), "Play Queue", .{}, .{
-            .color_text = theme.colors.text_main, .gravity_y = 0.5,
+            .color_text = theme.colors.text_primary, .gravity_y = 0.5,
         });
 
         { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
@@ -288,7 +288,7 @@ pub fn renderContent() void {
         }
 
         if (dvui.button(@src(), "Clear Played", .{}, .{
-            .color_fill = theme.colors.bg_glass, .color_text = theme.colors.text_muted,
+            .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
         })) {
             clearPlayed();
@@ -302,7 +302,7 @@ pub fn renderContent() void {
     {
         var sep = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal, .background = true,
-            .color_fill = theme.colors.border_drawer,
+            .color_fill = theme.colors.border_subtle,
             .min_size_content = .{ .w = 0, .h = 1 }, .max_size_content = .{ .w = 0, .h = 1 },
             .margin = .{ .x = 0, .y = 8, .w = 0, .h = 8 },
         });
@@ -312,12 +312,12 @@ pub fn renderContent() void {
     // ── Persisted Queue Items ──
     if (queue_count == 0) {
         _ = dvui.label(@src(), "Queue is empty. Add tracks from Tunes or paste a link.", .{}, .{
-            .color_text = theme.colors.text_muted, .gravity_x = 0.5, .margin = dvui.Rect.all(24),
+            .color_text = theme.colors.text_secondary, .gravity_x = 0.5, .margin = dvui.Rect.all(24),
         });
         return;
     }
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_drawer });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
 
     for (queue_items[0..queue_count], 0..) |*item, idx| {
@@ -357,7 +357,7 @@ fn renderNowPlaying() void {
             .color_text = theme.colors.accent,
         });
         _ = dvui.labelNoFmt(@src(), title, .{}, .{
-            .color_text = theme.colors.text_main, .expand = .horizontal,
+            .color_text = theme.colors.text_primary, .expand = .horizontal,
         });
     }
 }
@@ -368,8 +368,8 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
 
     var card = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = idx, .expand = .horizontal, .background = true,
-        .color_fill = if (item.played) dvui.Color{ .r = 20, .g = 22, .b = 28, .a = 120 } else theme.colors.bg_card,
-        .color_border = theme.colors.bg_header_border,
+        .color_fill = if (item.played) dvui.Color{ .r = 20, .g = 22, .b = 28, .a = 120 } else theme.colors.bg_surface,
+        .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
     });
@@ -405,7 +405,7 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
             if (!item.thumb_fetching and !item.thumb_failed and item.thumb_url_len > 0) fetchQueueThumb(item);
             dvui.icon(@src(), "", icons.tvg.lucide.@"image", .{}, .{
                 .id_extra = idx + 510, .gravity_x = 0.5, .gravity_y = 0.5,
-                .color_text = theme.colors.bg_glass,
+                .color_text = theme.colors.bg_elevated,
             });
         }
     } else {
@@ -418,7 +418,7 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
             icons.tvg.lucide.@"link";
 
         dvui.icon(@src(), "", src_icon, .{}, .{
-            .id_extra = idx + 600, .color_text = if (item.played) theme.colors.text_muted else theme.colors.accent,
+            .id_extra = idx + 600, .color_text = if (item.played) theme.colors.text_secondary else theme.colors.accent,
             .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 10, .h = 0 },
         });
     }
@@ -435,11 +435,11 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         const display_title = title[0..@min(title.len, max_title)];
         _ = dvui.labelNoFmt(@src(), display_title, .{}, .{
             .id_extra = idx + 710,
-            .color_text = if (item.played) theme.colors.text_muted else theme.colors.text_main,
+            .color_text = if (item.played) theme.colors.text_secondary else theme.colors.text_primary,
         });
 
         _ = dvui.label(@src(), "{s}", .{source}, .{
-            .id_extra = idx + 720, .color_text = theme.colors.border_drawer,
+            .id_extra = idx + 720, .color_text = theme.colors.border_subtle,
         });
     }
 
@@ -454,7 +454,7 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         // Move up
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-up", .{}, .{}, .{
             .id_extra = idx + 805,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         })) {
             if (idx > 0) swapQueueItems(idx - 1, idx);
@@ -463,7 +463,7 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         // Move down
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-down", .{}, .{}, .{
             .id_extra = idx + 808,
-            .color_text = theme.colors.text_muted,
+            .color_text = theme.colors.text_secondary,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         })) {
             if (idx + 1 < queue_count) swapQueueItems(idx, idx + 1);
