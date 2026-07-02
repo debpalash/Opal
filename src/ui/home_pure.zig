@@ -84,3 +84,20 @@ test "chatModeActive respects the overview escape hatch" {
     try std.testing.expect(!chatModeActive(3, false, true)); // logo click wins
     try std.testing.expect(!chatModeActive(0, false, false));
 }
+
+/// If `link` points at the local filesystem, return the plain fs path
+/// (strips a file:// scheme); null for streams/magnets/http — those can't
+/// be existence-checked and are always shown.
+pub fn localFsPath(link: []const u8) ?[]const u8 {
+    if (std.mem.startsWith(u8, link, "file://")) return link[7..];
+    if (link.len > 0 and link[0] == '/') return link;
+    return null;
+}
+
+test "localFsPath: local files verifiable, streams passed through" {
+    try std.testing.expectEqualStrings("/a/b.mkv", localFsPath("/a/b.mkv").?);
+    try std.testing.expectEqualStrings("/a/b.mkv", localFsPath("file:///a/b.mkv").?);
+    try std.testing.expect(localFsPath("magnet:?xt=urn:btih:abc") == null);
+    try std.testing.expect(localFsPath("https://x.test/v.m3u8") == null);
+    try std.testing.expect(localFsPath("") == null);
+}

@@ -863,9 +863,44 @@ fn sectionHeader(title: []const u8, icon: []const u8, view: state.TmdbView, id: 
 
 // ── Jump back in (watch history) — resume cards with progress ──
 
+/// True when a history entry's media still exists: local files are stat'd
+/// (deleted downloads/library files must not resurface as resume cards);
+/// non-local links (magnets, http, jellyfin) can't be checked and pass.
+/// Results are cached and re-verified every few seconds or when history
+/// changes — stat'ing every entry every frame would be syscall noise.
+fn playableHistory() []const bool {
+    const io_g = @import("../core/io_global.zig");
+    const home_pure = @import("home_pure.zig");
+    const S = struct {
+        var ok: [wh.MAX_WATCH_HISTORY]bool = undefined;
+        var last_ts: i64 = 0;
+        var last_count: usize = 0;
+    };
+    const now = io_g.timestamp();
+    if (wh.count != S.last_count or now - S.last_ts >= 5) {
+        S.last_count = wh.count;
+        S.last_ts = now;
+        for (0..wh.count) |i| {
+            const e = &wh.entries[i];
+            const link = e.link[0..e.link_len];
+            S.ok[i] = if (home_pure.localFsPath(link)) |fs_path| blk: {
+                _ = io_g.cwdStatFile(fs_path) catch break :blk false;
+                break :blk true;
+            } else true;
+        }
+    }
+    return S.ok[0..wh.count];
+}
+
 fn renderRecentlyPlayed() void {
     if (wh.count == 0) return;
     const home_pure = @import("home_pure.zig");
+    const playable = playableHistory();
+    // Everything deleted → no section at all (header with zero cards reads broken).
+    const any_playable = for (playable) |p| {
+        if (p) break true;
+    } else false;
+    if (!any_playable) return;
 
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -897,9 +932,11 @@ fn renderRecentlyPlayed() void {
     var strip = dvui.box(@src(), .{ .dir = .horizontal }, .{});
     defer strip.deinit();
 
-    const n = @min(wh.count, 12);
+    var shown: usize = 0;
     var i: usize = 0;
-    while (i < n) : (i += 1) {
+    while (i < wh.count and shown < 12) : (i += 1) {
+        if (!playable[i]) continue; // media deleted from disk — no dead resume card
+        shown += 1;
         const e = &wh.entries[i];
         // Cleaned display name (basename, no extension, dots→spaces); bare
         // content hashes ("8248045d…") get a friendly torrent label.
