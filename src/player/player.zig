@@ -371,6 +371,28 @@ pub const MediaPlayer = struct {
     }
 
     pub fn load_file(self: *MediaPlayer, path: [*c]const u8) void {
+        // Guard the mpv boundary. Every play path funnels through here, and
+        // mpv does two hostile things with junk input: loadfile("") logs a
+        // "Cannot open file ''" error, and loadfile(<directory>) expands the
+        // directory into a recursive playlist walk of the entire tree (saw it
+        // march through ~/Desktop/github trying every .sol/.ts file). Reject
+        // both before touching player state.
+        const guard_span = std.mem.span(path);
+        if (!@import("resume_pure.zig").plausibleMediaPath(guard_span)) {
+            @import("../core/logs.zig").pushLog("warn", "player", "Ignored empty media path", true);
+            return;
+        }
+        if (guard_span[0] == '/') {
+            const io_g = @import("../core/io_global.zig");
+            if (io_g.cwdStatFile(guard_span)) |st| {
+                if (st.kind == .directory) {
+                    @import("../core/logs.zig").pushLog("warn", "player", "Folders can't be played directly - open a media file inside", true);
+                    state.showToast("That's a folder - pick a media file inside it");
+                    return;
+                }
+            } else |_| {}
+        }
+
         // Save position of current video before switching
         self.saveCurrentPosition();
 

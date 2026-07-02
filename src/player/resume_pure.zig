@@ -44,3 +44,27 @@ test "cleanTitle de-dots and collapses" {
     const m = cleanTitle("_a__b._", &buf);
     try std.testing.expectEqualStrings("a b", buf[0..m]);
 }
+
+/// Guard for the mpv loadfile boundary: reject strings that are never a
+/// playable path — empty/whitespace, bare "." / "..", or the filesystem root.
+/// (Directories need a stat and are checked at the caller.)
+pub fn plausibleMediaPath(path: []const u8) bool {
+    const t = std.mem.trim(u8, path, " \t\r\n");
+    if (t.len == 0) return false;
+    if (std.mem.eql(u8, t, ".") or std.mem.eql(u8, t, "..") or std.mem.eql(u8, t, "/")) return false;
+    return true;
+}
+
+test "plausibleMediaPath blocks the loadfile('')/directory-walk incident" {
+    // mpv logged "Cannot open file ''" then recursively walked ~/Desktop/github
+    // after being handed an empty path and a directory. Empty and dot paths
+    // must never reach loadfile.
+    try std.testing.expect(!plausibleMediaPath(""));
+    try std.testing.expect(!plausibleMediaPath("   "));
+    try std.testing.expect(!plausibleMediaPath("."));
+    try std.testing.expect(!plausibleMediaPath(".."));
+    try std.testing.expect(!plausibleMediaPath("/"));
+    try std.testing.expect(plausibleMediaPath("/Users/x/movie.mkv"));
+    try std.testing.expect(plausibleMediaPath("https://example.com/v.m3u8"));
+    try std.testing.expect(plausibleMediaPath("magnet:?xt=urn:btih:abc"));
+}
