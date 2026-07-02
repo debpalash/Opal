@@ -260,6 +260,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_tmdb_pure).step);
 
+    // Home console display helpers (hex-hash watch-history names,
+    // time-aware greeting, UTF-8-safe label clipping).
+    const test_home_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ui/home_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_home_pure).step);
+
     // Pipeline test imports ai_intent_pure + resolver_rank siblings.
     const test_pipeline = b.addTest(.{
         .root_module = b.createModule(.{

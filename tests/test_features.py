@@ -1797,7 +1797,8 @@ def test_chat_console():
         return "fail", "streaming spinner / copy action missing"
     if "phaseLabel" not in gr:
         return "fail", "agent phase (tool steps) not surfaced in transcript"
-    if "renderChatMode" not in hm or "What are we watching tonight?" not in hm:
+    hp = _src("src/ui/home_pure.zig")
+    if "renderChatMode" not in hm or "What are we watching tonight?" not in (hm + hp):
         return "fail", "home chat console (hero/transcript/composer) missing"
     if "scrollToOffset" not in hm:
         return "fail", "auto-follow scroll missing"
