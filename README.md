@@ -176,17 +176,39 @@ own automations.
 
 ## 🚀 Get it
 
-**One command, any supported platform** — picks the right artifact (brew tap /
-`.deb` / `.rpm` / AUR / AppImage), verifies checksums, and doubles as the
-updater (`… | sh -s -- update`) and version manager (`OPAL_VERSION=v0.1.0 …`):
+One command. It figures out your platform, verifies checksums, and it's also
+the updater (`… -s -- update`) and version manager (`OPAL_VERSION=v0.1.0 …`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/debpalash/Opal/main/scripts/install.sh | sh
 ```
 
-Or **grab a build yourself** from [Releases](../../releases) (macOS arm64
-`.dmg`/`.app`, Linux `.deb`/`.rpm`/AppImage/`.run`), or build from source —
-you need Zig **0.16.x** and a handful of native friends:
+Prefer to do it yourself? Find your row — every file is on the
+[Releases](../../releases) page:
+
+|  | Platform | The move |
+|---|---|---|
+| 🍎 | **macOS** (Apple silicon) | open the `.dmg`, drag, done |
+| 🍺 | **Homebrew** | `brew install debpalash/tap/opal` |
+| 📦 | **Debian / Ubuntu** | `sudo apt install ./opal_*_amd64.deb` |
+| 🎩 | **Fedora / openSUSE** | `sudo dnf install ./opal-*.x86_64.rpm` |
+| 🏹 | **Arch** | `yay -S opal-bin` (or `opal` to build) |
+| 🐧 | **Any Linux** | `chmod +x Opal-*.AppImage` and run it |
+| 🛠 | **From source** | `git clone` → `zig build run` (deps below) |
+
+<sub>🪟 Windows: not yet — there's no port, and we don't ship pretend
+binaries. 🍎 Intel Macs: source build works (`HOMEBREW_PREFIX=/usr/local`).</sub>
+
+**First launch:** open **Settings** (<kbd>⌘</kbd><kbd>,</kbd>) and paste a free
+**TMDB v4 token** to light up movie/TV browsing. Voice and AI models are
+opt-in downloads — one button each, nothing installs itself.
+
+<details>
+<summary><b>🧱 Building from source</b></summary>
+
+<br/>
+
+Zig **0.16.x** plus a handful of native friends:
 
 ```sh
 brew install zig mpv sqlite onnxruntime sdl2
@@ -197,12 +219,10 @@ cd Opal
 zig build run        # first build is slow; incrementals are fast
 ```
 
-**First launch:** open **Settings** (<kbd>⌘</kbd><kbd>,</kbd>) and paste a free
-**TMDB v4 token** to light up movie/TV browsing. Voice and AI models are
-opt-in downloads — one button each, nothing installs itself.
-
 **Linux/Wayland:** use `make run` (forces system SDL2 — the bundled one is
-X11-only). macOS builds hard-code `/opt/homebrew/{lib,include}`.
+X11-only). macOS builds read `HOMEBREW_PREFIX` (default `/opt/homebrew`).
+
+</details>
 
 <details>
 <summary><b>🔧 For hackers: dev loops, tests, and the contract</b></summary>
