@@ -1,13 +1,13 @@
-# Opal / zigzag — headless server
+# Opal — headless server
 #
 # NOT verifiable on macOS dev. Run on a real Linux/Docker host.
 #   docker compose up --build -d
 services:
-  zigzag:
+  opal:
     build:
       context: .
       dockerfile: Dockerfile
-    image: opal-zigzag:headless
+    image: opal:headless
     restart: unless-stopped
     environment:
       # Triggers state.app.is_headless -> JSON API binds 0.0.0.0 (see T6).
@@ -16,7 +16,7 @@ services:
       - "41595:41595" # JSON API (remote.zig)
       - "3000:3000"   # web UI
     volumes:
-      # Mount config.json + api.token under /config/zigzag/ (XDG_CONFIG_HOME=/config).
+      # Mount config.json + api.token under /config/opal/ (XDG_CONFIG_HOME=/config).
       - ./data/config:/config
       - ./data/cache:/cache
       - ./data/media:/media

@@ -49,6 +49,6 @@ conversation server with barge-in.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `ZIGZAG_STT_MODEL` | `base.en` | faster-whisper model size (`tiny.en`, `small.en`, …) |
-| `ZIGZAG_TTS_VOICE` | `Bella` | KittenTTS voice |
-| `ZIGZAG_TTS_SPEED` | `1.0` | KittenTTS speed multiplier |
+| `OPAL_STT_MODEL` | `base.en` | faster-whisper model size (`tiny.en`, `small.en`, …) |
+| `OPAL_TTS_VOICE` | `Bella` | KittenTTS voice |
+| `OPAL_TTS_SPEED` | `1.0` | KittenTTS speed multiplier |

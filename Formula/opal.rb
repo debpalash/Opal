@@ -2,9 +2,9 @@ class Opal < Formula
   desc "Pure-Zig desktop media browser + AI copilot (dvui + mpv + apfel)"
   homepage "https://github.com/debpalash/Opal"
   url "https://github.com/debpalash/Opal.git",
-      tag: "v0.0.1",
+      tag: "v0.1.0",
       revision: "HEAD"
-  license "MIT"
+  license "GPL-3.0-only"
   head "https://github.com/debpalash/Opal.git", branch: "main"
 
   # Build-time
@@ -36,7 +36,7 @@ class Opal < Formula
     system ENV["HOMEBREW_PREFIX"].to_s + "/bin/zig", "build",
            "-Doptimize=ReleaseFast",
            "--prefix", prefix
-    bin.install "zig-out/bin/zigzag" => "opal"
+    bin.install "zig-out/bin/opal"
   end
 
   def post_install
@@ -63,6 +63,8 @@ class Opal < Formula
   end
 
   test do
-    assert_match "zigzag", shell_output("#{bin}/opal --version 2>&1", 0)
+    # The binary is a GUI app with no --version flag (it would open a window
+    # and never exit), so assert install shape rather than launching it.
+    assert_predicate bin/"opal", :executable?
   end
 end

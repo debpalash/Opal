@@ -1,4 +1,4 @@
-# ZigZag Media Console — Build targets
+# Opal — Build targets
 # SDL_VIDEODRIVER=wayland forces native Wayland instead of XWayland.
 # This is required for window title updates to work on COSMIC DE.
 # -fsys=sdl2 uses the system's SDL2 (sdl2-compat/SDL3) which has Wayland support.

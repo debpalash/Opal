@@ -1,4 +1,4 @@
-# Opal / zigzag — headless server image
+# Opal — headless server image
 #
 # IMPORTANT: This Dockerfile is NOT verifiable on the macOS dev host. `docker
 # build` on a real Linux/x86_64 host is the actual gate. Package names for
@@ -52,7 +52,7 @@ COPY . .
 RUN zig build -Doptimize=ReleaseSafe
 
 # Artifacts to copy out of the builder into the runtime stage:
-#   - the zigzag binary            (zig-out/bin/zigzag)
+#   - the opal binary              (zig-out/bin/opal)
 #   - libtorrent_wrapper.so        (built by build.zig from src/torrent_wrapper.cpp)
 #   - any ort/ shared lib          (PP-OCR ONNX pipeline, if produced as a .so)
 #   - the web/ dir                 (web UI served on :3000)
@@ -79,17 +79,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy build artifacts. Adjust source paths to match build.zig install layout.
-COPY --from=builder /src/zig-out/bin/zigzag /usr/local/bin/zigzag
+COPY --from=builder /src/zig-out/bin/opal /usr/local/bin/opal
 # COPY --from=builder /src/zig-out/lib/libtorrent_wrapper.so /usr/local/lib/
 # COPY --from=builder /src/zig-out/lib/libocr_ort.so /usr/local/lib/
-COPY --from=builder /src/web /opt/zigzag/web
-# COPY --from=builder /src/models /opt/zigzag/models   # ONNX/whisper assets
+COPY --from=builder /src/web /opt/opal/web
+# COPY --from=builder /src/models /opt/opal/models   # ONNX/whisper assets
 # RUN ldconfig
 
 # Mountable data dirs.
 RUN mkdir -p /config /cache /media
 
-# XDG dirs map config to ~/.config/zigzag, cache to ~/.cache/zigzag.
+# XDG dirs map config to ~/.config/opal, cache to ~/.cache/opal.
 ENV XDG_CONFIG_HOME=/config \
     XDG_CACHE_HOME=/cache \
     HOME=/config \
@@ -104,4 +104,4 @@ EXPOSE 41595 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS -o /dev/null http://localhost:41595/health
 
-ENTRYPOINT ["/usr/local/bin/zigzag"]
+ENTRYPOINT ["/usr/local/bin/opal"]

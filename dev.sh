@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ZigZag Dev Server — HMR-style rebuild loop.
+# Opal Dev Server — HMR-style rebuild loop.
 #
 # Watches src/ tools/ build.zig. On change:
 #   - Rebuild. On failure, keep old binary running (zero downtime).
@@ -143,7 +143,7 @@ build_and_launch() {
 
 # ── Banner ─────────────────────────────────────────────────────
 printf "%b╔════════════════════════════════════════════╗%b\n" "$C_MAGENTA" "$C_RST"
-printf "%b║  ZigZag Dev Server                         ║%b\n" "$C_MAGENTA" "$C_RST"
+printf "%b║  Opal Dev Server                           ║%b\n" "$C_MAGENTA" "$C_RST"
 printf "%b║  watcher: %-32s ║%b\n" "$C_MAGENTA" "$WATCHER" "$C_RST"
 printf "%b║  mode:    %-32s ║%b\n" "$C_MAGENTA" "${OPTIMIZE:-Debug}" "$C_RST"
 OLD_IFS="$IFS"; IFS=' '; PATHS_STR="${WATCH_PATHS[*]}"; IFS="$OLD_IFS"

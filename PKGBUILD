@@ -1,11 +1,11 @@
 # Maintainer: pal
-pkgname=zigzag
+pkgname=opal
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="All-in-one media suite — torrent streaming, video player, manga reader, cam grid, AI assistant"
 arch=('x86_64')
 url="https://github.com/debpalash/Opal"
-license=('MIT')
+license=('GPL-3.0-only')
 depends=(
     'mpv'
     'sdl2'
@@ -27,8 +27,8 @@ optdepends=(
     'python-camoufox: stealth browser scraping'
     'onnxruntime: OCR bubble detection'
 )
-provides=('zigzag')
 conflicts=('zigzag')
+replaces=('zigzag')
 
 # For local builds — override with actual git source for AUR publishing
 source=()
@@ -48,11 +48,11 @@ build() {
         -ltorrent-rasterbar
 
     # 2. Build the Zig binary
-    echo "==> Building zigzag with zig build..."
+    echo "==> Building opal with zig build..."
     zig build -Doptimize=ReleaseSafe 2>&1 || true
     # The "error: warning(link)" from LLD is cosmetic — binary is produced
-    
-    if [ ! -f zig-out/bin/zigzag ]; then
+
+    if [ ! -f zig-out/bin/opal ]; then
         echo "ERROR: zig build failed — no binary produced"
         return 1
     fi
@@ -61,11 +61,11 @@ build() {
 package() {
     cd "${startdir}"
 
-    local instdir="${pkgdir}/opt/zigzag"
+    local instdir="${pkgdir}/opt/opal"
     local bindir="${pkgdir}/usr/bin"
 
     # ── Core binary ──
-    install -Dm755 zig-out/bin/zigzag "${instdir}/zigzag"
+    install -Dm755 zig-out/bin/opal "${instdir}/opal"
 
     # ── Shared libraries ──
     install -Dm755 libtorrent_wrapper.so "${instdir}/libtorrent_wrapper.so"
@@ -76,80 +76,42 @@ package() {
     install -Dm644 ort/ocr_ort.h   "${instdir}/ort/ocr_ort.h"
 
     # ── Camoufox bridge (stealth browser) ──
-    install -Dm755 camoufox_bridge.py "${instdir}/camoufox_bridge.py"
+    install -Dm755 scripts/camoufox_bridge.py "${instdir}/camoufox_bridge.py"
 
     # ── Launcher script (sets up library paths) ──
     install -dm755 "${bindir}"
-    cat > "${pkgdir}/usr/bin/zigzag" << 'LAUNCHER'
+    cat > "${pkgdir}/usr/bin/opal" << 'LAUNCHER'
 #!/bin/bash
-# ZigZag launcher — sets library paths for bundled .so files
-export LD_LIBRARY_PATH="/opt/zigzag${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export ZIGZAG_HOME="/opt/zigzag"
+# Opal launcher — sets library paths for bundled .so files
+export LD_LIBRARY_PATH="/opt/opal${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export OPAL_HOME="/opt/opal"
 
 # Ensure user config directory
-mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/zigzag"
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/opal"
 
-exec /opt/zigzag/zigzag "$@"
+exec /opt/opal/opal "$@"
 LAUNCHER
-    chmod 755 "${pkgdir}/usr/bin/zigzag"
+    chmod 755 "${pkgdir}/usr/bin/opal"
 
     # ── Desktop entry ──
-    install -Dm644 /dev/stdin "${pkgdir}/usr/share/applications/zigzag.desktop" << 'DESKTOP'
+    install -Dm644 /dev/stdin "${pkgdir}/usr/share/applications/opal.desktop" << 'DESKTOP'
 [Desktop Entry]
 Type=Application
-Name=ZigZag
+Name=Opal
 GenericName=Media Suite
 Comment=All-in-one media suite — torrent streaming, video player, manga reader
-Exec=zigzag
-Icon=zigzag
+Exec=opal
+Icon=opal
 Terminal=false
 Categories=AudioVideo;Video;Player;
 Keywords=media;torrent;streaming;video;manga;
 StartupNotify=true
-StartupWMClass=zigzag
+StartupWMClass=opal
 DESKTOP
 
-    # ── Icon (generate a simple SVG) ──
-    install -Dm644 /dev/stdin "${pkgdir}/usr/share/icons/hicolor/scalable/apps/zigzag.svg" << 'ICON'
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#0e0e14"/>
-      <stop offset="100%" stop-color="#1c1c26"/>
-    </linearGradient>
-    <linearGradient id="accent" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#468caa"/>
-      <stop offset="100%" stop-color="#5fa0b9"/>
-    </linearGradient>
-  </defs>
-  <rect width="128" height="128" rx="24" fill="url(#bg)"/>
-  <path d="M32 38 L96 38 L56 64 L96 64 L32 90 L72 64 L32 64 Z"
-        fill="url(#accent)" opacity="0.95"/>
-</svg>
-ICON
+    # ── Icon (the opal mark — assets/logo.svg) ──
+    install -Dm644 assets/logo.svg "${pkgdir}/usr/share/icons/hicolor/scalable/apps/opal.svg"
 
-    # ── License ──
-    install -Dm644 /dev/stdin "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE" << 'LICENSE'
-MIT License
-
-Copyright (c) 2024-2026 ZigZag Contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-LICENSE
+    # ── License (GPL-3.0 — ship the repo's actual LICENSE, not an embedded copy) ──
+    install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 }

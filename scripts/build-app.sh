@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build Opal.app macOS bundle from zig-out/bin/zigzag.
+# Build Opal.app macOS bundle from zig-out/bin/opal.
 # Optional codesign + notarize if CODESIGN_IDENTITY + APPLE_ID env set.
 # Optional DMG packaging via create-dmg (brew install create-dmg) if present.
 set -euo pipefail
@@ -7,7 +7,7 @@ set -euo pipefail
 ZIG=${ZIG:-zig}
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_DIR="$ROOT/dist/Opal.app"
-BIN_PATH="$ROOT/zig-out/bin/zigzag"
+BIN_PATH="$ROOT/zig-out/bin/opal"
 VERSION="${OPAL_VERSION:-0.0.1}"
 
 cd "$ROOT"

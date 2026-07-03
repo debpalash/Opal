@@ -45,10 +45,10 @@ llama.cpp/
 # bin/ holds runtime artifacts (downloaded models, compiled helpers) — ignored,
 # EXCEPT the voice helper scripts + their docs, which are tracked source.
 bin/*
-!bin/zigzag-stt.py
-!bin/zigzag-stt-server.py
-!bin/zigzag-tts-server.py
-!bin/zigzag-voice-server.py
+!bin/opal-stt.py
+!bin/opal-stt-server.py
+!bin/opal-tts-server.py
+!bin/opal-voice-server.py
 !bin/requirements.txt
 !bin/README.md
 models/
