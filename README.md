@@ -21,7 +21,8 @@
     <a href="#see-it"><b>See it</b></a> ·
     <a href="#the-ai"><b>The AI</b></a> ·
     <a href="#under-the-hood"><b>Under the hood</b></a> ·
-    <a href="#support"><b>Support</b></a>
+    <a href="#support"><b>Support Development</b></a>
+    (<a href="https://ko-fi.com/debpalash">Ko-fi</a>, <a href="https://paypal.me/palashCoder">PayPal</a>)
   </p>
 
   <img src="assets/screenshots/home.png" alt="Opal home — time-aware greeting, an ask-anything box, and tonight's trending row" width="100%" />
@@ -233,14 +234,15 @@ and you can un-install them just as fast
 
 <a id="support"></a>
 
-## 💜 Support the project
+## 💜 Support development
 
 Opal has no telemetry to monetize and no account system to upsell — it runs on
 goodwill:
 
+- ☕ **[Buy the maintainer a coffee on Ko-fi](https://ko-fi.com/debpalash)** or
+  💸 **[chip in via PayPal](https://paypal.me/palashCoder)** — donations keep
+  the release cadence honest and the coffee supply uninterrupted.
 - ⭐ **Star the repo** — it's genuinely how people find it.
-- 💖 **[Sponsor development](https://github.com/sponsors/debpalash)** — keeps
-  the maintainer caffeinated and the release cadence honest.
 - 🐛 **File good bugs** ([how](SUPPORT.md)) · 🔧 **send PRs** ([how](CONTRIBUTING.md)).
 - 📣 **Show someone.** This pitch lands best as a 30-second demo — the GIFs
   above are yours to share.

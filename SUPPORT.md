@@ -31,5 +31,7 @@
 
 ## Supporting the project
 
-Opal is built by volunteers. Stars, sponsorships, and pull requests all
-genuinely help — see the *Support the project* section in the README.
+Opal is built by volunteers. Stars, donations
+([Ko-fi](https://ko-fi.com/debpalash) ·
+[PayPal](https://paypal.me/palashCoder)), and pull requests all genuinely
+help — see the *Support development* section in the README.

@@ -1,6 +1,4 @@
-# Shown as the "Sponsor" button on the repo. Fill in the platforms you use;
-# lines left commented render nothing.
-github: [debpalash]
-# ko_fi: your-kofi-name
-# buy_me_a_coffee: your-bmac-name
-# custom: ["https://example.com/donate"]
+# Shown as the "Sponsor" button on the repo.
+ko_fi: debpalash
+custom: ["https://paypal.me/palashCoder"]
+# github: [debpalash]   # enable if/when enrolled in GitHub Sponsors
