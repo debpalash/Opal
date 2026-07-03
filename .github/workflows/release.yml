@@ -286,9 +286,12 @@ jobs:
           & "$wix\heat.exe" dir staging -nologo -cg OpalFiles -dr INSTALLFOLDER `
               -srd -sfrag -scom -sreg -gg -var var.StagingDir -out harvest.wxs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Every -d must be quoted: PowerShell's native-arg passing splits
+          # unquoted `-dName=path.ext` tokens (attempt #2: candle received a
+          # literal '.ico' as its source).
           & "$wix\candle.exe" -nologo -arch x64 `
-              "-dProductVersion=$msiVersion" -dStagingDir=staging `
-              -dIconPath=packaging\windows\opal.ico `
+              "-dProductVersion=$msiVersion" "-dStagingDir=staging" `
+              "-dIconPath=packaging\windows\opal.ico" `
               packaging\windows\opal.wxs harvest.wxs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # -sval skips ICE validation: heat-generated fragments trip advisory
