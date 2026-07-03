@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-07-03T16:59:05",
-  "total": 135,
-  "passed": 127,
+  "timestamp": "2026-07-03T19:12:28",
+  "total": 136,
+  "passed": 128,
   "failed": 0,
   "warnings": 1,
   "skipped": 7,
@@ -127,7 +127,7 @@
       "skip": 0
     },
     "Stability": {
-      "pass": 9,
+      "pass": 10,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -175,14 +175,14 @@
       "name": "Config Table",
       "category": "Database",
       "status": "pass",
-      "detail": "42 config entries",
-      "duration_ms": 2
+      "detail": "43 config entries",
+      "duration_ms": 24
     },
     {
       "name": "Watch History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "9 watch entries",
+      "detail": "10 watch entries",
       "duration_ms": 0
     },
     {
@@ -225,7 +225,7 @@
       "category": "Database",
       "status": "pass",
       "detail": "651 cached posters",
-      "duration_ms": 92
+      "duration_ms": 108
     },
     {
       "name": "Conversation Log Table",
@@ -238,7 +238,7 @@
       "name": "User Preferences Table",
       "category": "Memory",
       "status": "pass",
-      "detail": "active_hour=9:00 (w:221)",
+      "detail": "active_hour=11:00 (w:222)",
       "duration_ms": 0
     },
     {
@@ -302,13 +302,13 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 41.2 MB",
-      "duration_ms": 548
+      "duration_ms": 748
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "41.2 MB, built at 16:54:40",
+      "detail": "41.2 MB, built at 19:12:10",
       "duration_ms": 0
     },
     {
@@ -344,35 +344,35 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 1436
+      "duration_ms": 2011
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "skip",
       "detail": "faster-whisper not installed (optional)",
-      "duration_ms": 24
+      "duration_ms": 33
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 22
+      "duration_ms": 31
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 25
+      "duration_ms": 26
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 25
+      "duration_ms": 33
     },
     {
       "name": "Embedding Server Health",
@@ -477,14 +477,14 @@
       "category": "Integration",
       "status": "pass",
       "detail": "Media play \u2192 memory + preference learning",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Startup Proactive Greeting",
       "category": "Integration",
       "status": "pass",
       "detail": "Injects 'continue watching' on first frame",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Conversation Persistence",
@@ -498,77 +498,77 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 28
+      "duration_ms": 55
     },
     {
       "name": "Compiles: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 27
+      "duration_ms": 58
     },
     {
       "name": "Compiles: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 27
+      "duration_ms": 44
     },
     {
       "name": "Compiles: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 28
+      "duration_ms": 43
     },
     {
       "name": "--check degrades: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 23
+      "duration_ms": 40
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 26
+      "duration_ms": 48
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 25
+      "duration_ms": 57
     },
     {
       "name": "Compiles: camoufox_bridge.py",
       "category": "Browser",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 31
+      "duration_ms": 53
     },
     {
       "name": "Bridge protocol selftest",
       "category": "Browser",
       "status": "pass",
       "detail": "framing + pump model OK",
-      "duration_ms": 31
+      "duration_ms": 52
     },
     {
       "name": "Poster cache SQL matches schema",
       "category": "Database",
       "status": "pass",
       "detail": "4 statements OK against schema",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "name": "Browser bookmarks SQL matches schema",
       "category": "Browser",
       "status": "pass",
       "detail": "3 statements OK against schema",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Local LLM is the default brain (apfel retired)",
@@ -603,7 +603,7 @@
       "category": "Memory",
       "status": "pass",
       "detail": "sidebar SELECT + restore + tagged INSERT OK against schema",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "browser_pure registered in zig tests",
@@ -624,7 +624,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 2545
+      "duration_ms": 3135
     },
     {
       "name": "Sherpa Model Canonicalization",
@@ -687,14 +687,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 7610
+      "duration_ms": 7470
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 65
+      "duration_ms": 73
     },
     {
       "name": "Page Router",
@@ -715,7 +715,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 7
+      "duration_ms": 9
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -1030,7 +1030,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 99
+      "duration_ms": 146
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1086,13 +1086,20 @@
       "category": "Stability",
       "status": "pass",
       "detail": "no discarded std.Thread.spawn handles in src/",
-      "duration_ms": 12
+      "duration_ms": 15
     },
     {
       "name": "TMDB Fetch Stages Results Off-Thread",
       "category": "Stability",
       "status": "pass",
       "detail": "fetch worker stages into pending_results; UI thread owns live list",
+      "duration_ms": 0
+    },
+    {
+      "name": "Poster Pixels Freed With C Allocator",
+      "category": "Stability",
+      "status": "pass",
+      "detail": "fetchAsync-owned poster pixels freed with the matching C allocator",
       "duration_ms": 0
     },
     {
@@ -1107,7 +1114,7 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 978
+      "duration_ms": 1669
     }
   ]
 }

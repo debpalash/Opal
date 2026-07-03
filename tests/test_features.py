@@ -2141,6 +2141,20 @@ def test_tmdb_fetch_stages_results():
     return "pass", "fetch worker stages into pending_results; UI thread owns live list"
 
 
+@test("Poster Pixels Freed With C Allocator", "Stability")
+def test_poster_pixel_allocator():
+    # core/poster.zig fetchAsync allocates pixel buffers with the C allocator;
+    # freeing them with the global DebugAllocator aborts the app (freeLarge
+    # assert — the 2026-07-03 shutdown crash in freeImageBuffers).
+    tmdb = open(os.path.join(PROJECT_DIR, "src/services/tmdb.zig")).read()
+    fib = tmdb.split("pub fn freeImageBuffers")[1].split("\n}")[0]
+    if "std.heap.c_allocator.free" not in fib:
+        return "fail", "freeImageBuffers no longer frees poster pixels via the C allocator"
+    if "alloc.free(px)" in fib:
+        return "fail", "freeImageBuffers frees c_alloc pixels with the debug allocator again"
+    return "pass", "fetchAsync-owned poster pixels freed with the matching C allocator"
+
+
 @test("Anime Tab Honors NSFW Filter", "Page Shell")
 def test_anime_nsfw_filter():
     # Settings › NSFW toggle must govern anime browsing, not just search:

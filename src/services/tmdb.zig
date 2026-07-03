@@ -34,7 +34,11 @@ pub fn freeImageBuffers() void {
         for (list.items) |*it| {
             if (it.poster_fetching) continue; // worker may still write — leave it
             if (it.poster_pixels) |px| {
-                alloc.free(px);
+                // These pixels come from core/poster.zig fetchAsync, which
+                // allocates with the C allocator — freeing them with the
+                // global DebugAllocator was the shutdown abort in appDeinit
+                // (freeLarge assert, crash report 2026-07-03 11:41).
+                std.heap.c_allocator.free(px);
                 it.poster_pixels = null;
             }
         }
