@@ -176,8 +176,17 @@ own automations.
 
 ## 🚀 Get it
 
-**Grab a build** from [Releases](../../releases) (macOS arm64 `.dmg` / `.app`),
-or build from source — you need Zig **0.16.x** and a handful of native friends:
+**One command, any supported platform** — picks the right artifact (brew tap /
+`.deb` / `.rpm` / AUR / AppImage), verifies checksums, and doubles as the
+updater (`… | sh -s -- update`) and version manager (`OPAL_VERSION=v0.1.0 …`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/debpalash/Opal/main/scripts/install.sh | sh
+```
+
+Or **grab a build yourself** from [Releases](../../releases) (macOS arm64
+`.dmg`/`.app`, Linux `.deb`/`.rpm`/AppImage/`.run`), or build from source —
+you need Zig **0.16.x** and a handful of native friends:
 
 ```sh
 brew install zig mpv sqlite onnxruntime sdl2

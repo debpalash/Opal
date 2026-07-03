@@ -12,7 +12,7 @@ const state = @import("../core/state.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 
 /// Current app version. Kept in sync with build.zig.zon + Info.plist.
-pub const APP_VERSION: []const u8 = "0.0.1";
+pub const APP_VERSION: []const u8 = "0.1.0";
 
 const RELEASE_API = "https://api.github.com/repos/debpalash/Opal/releases/latest";
 

@@ -173,6 +173,12 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+      - name: Generate SHA256SUMS.txt
+        # scripts/install.sh verifies every download against this manifest.
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -184,5 +190,6 @@ jobs:
             artifacts/opal-*.x86_64.rpm
             artifacts/Opal-*-x86_64.AppImage
             artifacts/opal-*-linux-x86_64.run
+            artifacts/SHA256SUMS.txt
           generate_release_notes: true
           draft: false
