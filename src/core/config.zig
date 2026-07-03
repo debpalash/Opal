@@ -315,8 +315,13 @@ fn applyConfig(key: []const u8, val: []const u8) void {
             }
         }
     } else if (std.mem.eql(u8, key, "ai_backend")) {
+        // Apple Intelligence (apfel) is retired as a persisted default —
+        // ~5 tok/s generation and broken JSON-format compliance. Configs
+        // auto-persisted "apfel" on every save, so a stored value is NOT an
+        // explicit user choice: migrate everyone to the local llama brain.
+        // (Settings can still switch to apfel for the running session.)
         const ai_server = @import("../services/ai_server.zig");
-        ai_server.backend_kind = if (std.mem.eql(u8, val, "apfel")) .apfel else .gemma_llama;
+        ai_server.backend_kind = .gemma_llama;
     } else if (std.mem.eql(u8, key, "ai_model_id")) {
         @import("../services/ai_server.zig").selectModelById(val);
     } else if (std.mem.eql(u8, key, "voice_backend")) {

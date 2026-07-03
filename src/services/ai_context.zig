@@ -810,6 +810,10 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
     const query = query_buf[0..query_len];
     resolver.resolve(query, "auto");
 
+    // Rich catalog rail — the "play …"/"find …" fast path skipped the LLM
+    // tool, so the transcript showed only plain source rows.
+    chat.kickCatalogRail(query);
+
     // Wait for results. Torrent aggregators routinely take 10-20s — the old
     // 5s cap caused "0 results" fallbacks while the side panel was still
     // filling. New policy:
@@ -822,8 +826,14 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
     while (waited < max_ticks) : (waited += 1) {
         const rc = resolver.result_count;
         const done = !resolver.isResolving();
-        // Plenty of results — don't keep users waiting on slow trackers
-        if (rc >= 5 and waited >= 10) break;
+        // play_best must NOT early-exit on the first fast results: YouTube
+        // answers in ~1s while torrents take 5-15s, so the auto-pick kept
+        // grabbing a 66%-match clip before any real source arrived ("play
+        // iron man three" → suit-up clip). Wait out the full fan-out for the
+        // pick; plain search keeps the snappy early display.
+        if (action != .play_best) {
+            if (rc >= 5 and waited >= 10) break;
+        }
         // Resolver finished. Give one extra tick for late mutex writers, then stop.
         if (done and waited >= 10) break;
         // Resolver finished with something — exit
@@ -902,8 +912,10 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
                 1 => "480p",
                 else => "SD",
             };
+            // Plain text — the transcript doesn't render markdown, so "**"
+            // showed literally around the pick.
             w.print(
-                "Picked **{s}** ({d}% title match · {s} · {d} seeds).\n",
+                "Picked {s} ({d}% title match · {s} · {d} seeds).\n",
                 .{ best, best_item.match_pct, best_q, best_item.seeds },
             ) catch {};
             if (filtered_count > 1) {
@@ -923,10 +935,12 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
                     w.print("· {s} ({d}% · {s} · {d} seeds)\n", .{ nm, it.match_pct, q, it.seeds }) catch {};
                 }
             }
-            w.writeAll("Say **play** or **yes** to start. Or click another.") catch {};
+            w.writeAll("Say \"play\" or \"yes\" to start — or click another.") catch {};
             resp_len = w.buffered().len;
         } else {
-            const r = std.fmt.bufPrint(&resp_buf, "Found {d} results. Pick one from the list or click ▶ to play.", .{filtered_count}) catch "Results ready.";
+            // No "▶" here — the glyph is missing from the UI font (rendered
+            // as tofu). Plain words read better anyway.
+            const r = std.fmt.bufPrint(&resp_buf, "Found {d} results — pick one below, or hit Play on a card.", .{filtered_count}) catch "Results ready.";
             resp_len = r.len;
         }
 
@@ -978,11 +992,17 @@ pub fn generateResponse() void {
     var msg_part: [6144]u8 = undefined;
     var msg_off: usize = 0;
 
+    // Voice-lean mode: during a live voice conversation every millisecond of
+    // prompt ingest is felt (on-device model, ~1ms per ~2 prompt bytes). Skip
+    // the RAG lookup + retrieval text and the long-tail tools — voice turns
+    // are commands and short questions, not research.
+    const voice_lean = voice.conversation_active;
+
     // RAG: Build context from vector DB + watch history
     const user_text = chat.messages[assistant_idx - 1].text[0..chat.messages[assistant_idx - 1].text_len];
     var rag_context: ?[]u8 = null;
     // Incognito: fresh brain — no vector-memory / watch-history retrieval.
-    if (!@import("../core/state.zig").app.incognito_mode) {
+    if (!@import("../core/state.zig").app.incognito_mode and !voice_lean) {
         rag_context = memory.buildContext(@import("../core/alloc.zig").allocator, user_text);
     }
     defer if (rag_context) |ctx| @import("../core/alloc.zig").allocator.free(ctx);
@@ -1007,26 +1027,39 @@ pub fn generateResponse() void {
     }
     dw.writeAll("\n<tools>\n[") catch {};
 
-    // Core tools (always)
+    // Core tools. Voice-lean keeps ONLY find_and_play — every other intent a
+    // voice turn produces is either handled by the intent fast-path (no LLM)
+    // or rare enough to not pay its prompt weight on every single turn.
     dw.writeAll(
         \\
-        \\  {"name":"find_and_play","description":"Search/play media.","parameters":{"type":"object","properties":{"query":{"type":"string"},"content_type":{"type":"string","enum":["auto","movie","show","anime","youtube","comic"]},"action":{"type":"string","enum":["search","play_best"]}},"required":["query"]}},
-        \\  {"name":"navigate","description":"Switch UI tabs.","parameters":{"type":"object","properties":{"target":{"type":"string","enum":["search","downloads","tmdb","youtube","queue","comics","anime","history","rss","jellyfin","ai","settings","close_drawer","fullscreen"]}},"required":["target"]}},
-        \\  {"name":"youtube_search","description":"Search YouTube.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}},
-        \\  {"name":"anime_search","description":"Search anime.","parameters":{"type":"object","properties":{"query":{"type":"string"},"episode":{"type":"string"}},"required":["query"]}},
-        \\  {"name":"browse_tmdb","description":"TMDB lookup.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}
+        \\  {"name":"find_and_play","description":"Search/play media.","parameters":{"type":"object","properties":{"query":{"type":"string"},"content_type":{"type":"string","enum":["auto","movie","show","anime","youtube","comic"]},"action":{"type":"string","enum":["search","play_best"]}},"required":["query"]}}
     ) catch {};
+    if (!voice_lean) {
+        dw.writeAll(
+            \\,
+            \\  {"name":"navigate","description":"Switch UI tabs.","parameters":{"type":"object","properties":{"target":{"type":"string","enum":["search","downloads","tmdb","youtube","queue","comics","anime","history","rss","jellyfin","ai","settings","close_drawer","fullscreen"]}},"required":["target"]}},
+            \\  {"name":"youtube_search","description":"Search YouTube.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}},
+            \\  {"name":"anime_search","description":"Search anime.","parameters":{"type":"object","properties":{"query":{"type":"string"},"episode":{"type":"string"}},"required":["query"]}},
+            \\  {"name":"browse_tmdb","description":"TMDB lookup.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}
+        ) catch {};
+    }
 
-    // Player tools — only when player is active
+    // Player tools — only when player is active. Voice-lean keeps the two
+    // transport essentials; OCR/scene-recall/queue stay text-chat features.
     if (has_player) {
         dw.writeAll(
             \\,
             \\  {"name":"player_control","description":"Playback: pause/resume/stop/seek/volume/speed/fullscreen.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["pause","resume","toggle_pause","stop","seek_forward","seek_backward","seek_to","set_volume","set_speed","fullscreen","exit_fullscreen"]},"value":{"type":"string"}},"required":["action"]}},
-            \\  {"name":"player_info","description":"Now playing info.","parameters":{"type":"object","properties":{}}},
-            \\  {"name":"look_at_screen","description":"Returns on-screen text (OCR), the current subtitle, and recent dialogue. Use when the user asks who someone is, what was just said, what is happening on screen, or for a recap.","parameters":{"type":"object","properties":{}}},
-            \\  {"name":"recall_scene","description":"Find a remembered scene from the user's own watch history by describing it in natural language (what was said, what happened, a feeling) and jump the player there. Use when the user asks to find or return to a scene/moment they saw before.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}},
-            \\  {"name":"queue_manage","description":"Queue ops.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["list","play_next","clear","clear_played"]}},"required":["action"]}}
+            \\  {"name":"player_info","description":"Now playing info.","parameters":{"type":"object","properties":{}}}
         ) catch {};
+        if (!voice_lean) {
+            dw.writeAll(
+                \\,
+                \\  {"name":"look_at_screen","description":"Returns on-screen text (OCR), the current subtitle, and recent dialogue. Use when the user asks who someone is, what was just said, what is happening on screen, or for a recap.","parameters":{"type":"object","properties":{}}},
+                \\  {"name":"recall_scene","description":"Find a remembered scene from the user's own watch history by describing it in natural language (what was said, what happened, a feeling) and jump the player there. Use when the user asks to find or return to a scene/moment they saw before.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}},
+                \\  {"name":"queue_manage","description":"Queue ops.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["list","play_next","clear","clear_played"]}},"required":["action"]}}
+            ) catch {};
+        }
     }
 
     dw.writeAll("\n]\n</tools>") catch {};
@@ -1286,7 +1319,13 @@ pub fn generateResponse() void {
     msg_off += sys_end.len;
 
     // Last 8 messages (tight context for speed — RAG handles long-term memory)
-    const history_end = chat.message_count - 1;
+    // apfel/OpenAI-style servers REJECT a request whose last message is
+    // 'assistant' ("Last message must have role 'user' or 'tool'" → 400 →
+    // silent dead turn, the "AI just answers sometimes" bug). Fast-path
+    // replies and regenerates can leave trailing assistant turns — trim them
+    // from the REQUEST only (the UI transcript keeps them).
+    var history_end = chat.message_count - 1;
+    while (history_end > 1 and chat.messages[history_end - 1].role == .assistant) history_end -= 1;
     const start = if (history_end > 8) history_end - 8 else 0;
     for (start..history_end) |mi| {
         const msg = &chat.messages[mi];
@@ -1572,10 +1611,20 @@ pub fn generateResponse() void {
             chat.setAssistantError(assistant_idx, emsg);
             return;
         }
-        // Fallback: show whatever raw text was received
-        const fallback_len = @min(resp_len, chat.MAX_MSG_LEN);
-        @memcpy(chat.messages[assistant_idx].text[0..fallback_len], response_text[0..fallback_len]);
-        chat.messages[assistant_idx].text_len = fallback_len;
+        // Salvage: small on-device models often ALMOST follow the format —
+        // `message: Hello there! … tool_call: null` without JSON quotes. The
+        // raw dump put "message:"/"tool_call: null" into the transcript AND
+        // the TTS spoke it aloud. Extract the human sentence when possible.
+        if (salvageMessage(response_text)) |msg| {
+            const slen = @min(msg.len, chat.MAX_MSG_LEN);
+            @memcpy(chat.messages[assistant_idx].text[0..slen], msg[0..slen]);
+            chat.messages[assistant_idx].text_len = slen;
+        } else {
+            // Fallback: show whatever raw text was received
+            const fallback_len = @min(resp_len, chat.MAX_MSG_LEN);
+            @memcpy(chat.messages[assistant_idx].text[0..fallback_len], response_text[0..fallback_len]);
+            chat.messages[assistant_idx].text_len = fallback_len;
+        }
     }
 
     // 2. Check for tool call (with recursion limit to prevent infinite loops)
@@ -1660,6 +1709,22 @@ fn extractContent(json: []const u8) ?[]const u8 {
     }
     if (e <= s) return null;
     return json[s..e];
+}
+
+/// Salvage the human sentence from a reply that ALMOST followed the response
+/// format but lost its JSON quoting: `message: Hi there … tool_call: null`.
+/// Returns the text between the "message" key and the "tool_call" key (or
+/// end), trimmed of JSON syntax; null when there's no message key at all.
+fn salvageMessage(raw: []const u8) ?[]const u8 {
+    const mkey = std.mem.indexOf(u8, raw, "message") orelse return null;
+    var s = mkey + "message".len;
+    while (s < raw.len and (raw[s] == ':' or raw[s] == '"' or raw[s] == ' ' or raw[s] == '\\')) s += 1;
+    var e = raw.len;
+    if (std.mem.indexOfPos(u8, raw, s, "tool_call")) |tp| e = tp;
+    if (e <= s) return null;
+    const out = std.mem.trim(u8, raw[s..e], " \t\r\n\"\\,{}");
+    if (out.len == 0) return null;
+    return out;
 }
 
 fn extractError(json: []const u8) ?[]const u8 {

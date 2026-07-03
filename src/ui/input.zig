@@ -96,14 +96,6 @@ pub fn processGlobalInputs() void {
                 continue;
             }
 
-            // A = Toggle AI Bubble (global, exclusive — not duplicated in player section)
-            if (key == .a and !mod.control() and !mod.shift() and !mod.alt()) {
-                const ai_chat = @import("../services/ai_chat.zig");
-                ai_chat.is_bubble_open = !ai_chat.is_bubble_open;
-                dvui.refresh(null, @src(), null);
-                continue;
-            }
-
             // Ctrl+W = Close active player (like browser tab close)
             if (key == .w and ctrl_or_cmd) {
                 if (state.app.players.items.len > 1) {
@@ -223,7 +215,6 @@ pub fn processGlobalInputs() void {
                         dvui.refresh(null, @src(), null);
                         continue;
                     },
-                    // (A handled above in early if-chain with continue)
                     .y => {
                         state.app.seek_sync = !state.app.seek_sync;
                         state.showToast(if (state.app.seek_sync) "Seek sync ON" else "Seek sync OFF");
@@ -476,8 +467,8 @@ pub fn processGlobalInputs() void {
                             _ = c.mpv.mpv_command_string(p.mpv_ctx, "set video-pan-x 0");
                             _ = c.mpv.mpv_command_string(p.mpv_ctx, "set video-pan-y 0");
                         },
-                        // Audio track cycle (A is now AI bubble; use U for audio cycle)
-                        // .a removed — conflicts with AI bubble global shortcut
+                        // Audio track cycle lives on U (.a is unassigned; the
+                        // AI bubble overlay it used to toggle was removed)
                         // Next/Prev episode (N/Shift+N)
                         .n => {
                             if (mod.shift()) {

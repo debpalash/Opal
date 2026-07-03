@@ -124,38 +124,9 @@ fn loadListFromDb(list_name: []const u8, target: *std.ArrayListUnmanaged(state.T
     }
 }
 
-// ══════════════════════════════════════════════════════════
-// Poster Cache
-// ══════════════════════════════════════════════════════════
-
-pub fn cachePosterData(item_id: i32, jpeg_data: []const u8, width: u32, height: u32) void {
-    const sql = "INSERT OR REPLACE INTO poster_cache (item_id, jpeg_data, width, height) VALUES (?1, ?2, ?3, ?4)";
-    const stmt = db.prepare(sql) orelse return;
-    defer db.finalize(stmt);
-    db.bindInt(stmt, 1, item_id);
-    db.bindBlob(stmt, 2, jpeg_data);
-    _ = db.c.sqlite3_bind_int(stmt, 3, @intCast(width));
-    _ = db.c.sqlite3_bind_int(stmt, 4, @intCast(height));
-    _ = db.step(stmt);
-}
-
-pub fn loadCachedPoster(item_id: i32) ?struct { data: []u8, w: u32, h: u32 } {
-    const sql = "SELECT jpeg_data, width, height FROM poster_cache WHERE item_id = ?1";
-    const stmt = db.prepare(sql) orelse return null;
-    defer db.finalize(stmt);
-    db.bindInt(stmt, 1, item_id);
-
-    if (db.step(stmt) == db.c.SQLITE_ROW) {
-        if (db.columnBlob(stmt, 0)) |blob| {
-            const w: u32 = @intCast(db.columnInt(stmt, 1));
-            const h: u32 = @intCast(db.columnInt(stmt, 2));
-            const copy = alloc.alloc(u8, blob.len) catch return null;
-            @memcpy(copy, blob);
-            return .{ .data = copy, .w = w, .h = h };
-        }
-    }
-    return null;
-}
+// Poster caching lives in core/poster.zig (URL-hash keyed, shared by all
+// providers, wired into fetchAsync). The old item_id-keyed helpers that sat
+// here were never called and were removed.
 
 // ══════════════════════════════════════════════════════════
 // Migration from old tmdb_lists.tsv

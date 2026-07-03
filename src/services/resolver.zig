@@ -755,7 +755,12 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
     // Inter-torrent ordering is still preserved via the remaining spread.
     const seed_bonus: u32 = if (item.seeds > 100) 7 else if (item.seeds > 50) 6 else if (item.seeds > 20) 5 else if (item.seeds > 10) 4 else if (item.seeds > 5) 3 else if (item.seeds > 0) 1 else 0;
 
-    const raw = relevance + source_w + quality_bonus;
+    // Derivative-content demotion (lyric videos, compilations, clips…) — the
+    // "play iron man → Black Sabbath (lyrics)" regression. Pure + tested in
+    // resolver_rank; only fires when the query didn't ask for that class.
+    const junk = @import("resolver_rank.zig").junkTitlePenalty(lower_name[0..nlen], lower_query[0..ql]);
+
+    const raw = relevance + source_w + quality_bonus + junk;
     const score = if (raw > seed_bonus) raw - seed_bonus else 0;
 
     return .{ .match_pct = pct, .score = score };
@@ -1382,8 +1387,12 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
         item.source = .youtube;
 
         if (extractStr(line, "\"title\": \"")) |title| {
-            const tlen = @min(title.len, 255);
-            @memcpy(item.name[0..tlen], title[0..tlen]);
+            // yt-dlp titles carry JSON escapes (’ etc.) — decode them
+            // or the UI shows "You’ve" literally.
+            var unesc_buf: [256]u8 = undefined;
+            const clean = @import("json_pure.zig").jsonUnescape(title, &unesc_buf);
+            const tlen = @min(clean.len, 255);
+            @memcpy(item.name[0..tlen], clean[0..tlen]);
             item.name_len = tlen;
         }
         if (extractStr(line, "\"url\": \"")) |url| {

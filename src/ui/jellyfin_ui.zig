@@ -394,15 +394,38 @@ fn renderItems() void {
     const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / 150)));
     const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
 
-    var i: usize = 0;
-    while (i < state.app.jf.item_count) {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 60000, .expand = .horizontal });
+    // ── Virtualization (same shape as tmdb.zig renderGallery) ──
+    // Uniform cards → fixed row pitch: poster + footer + 3px margins each way.
+    const total = state.app.jf.item_count;
+    const row_h: f32 = card_w * 1.45 + CARD_FOOTER_H + 6;
+    const total_rows = (total + cols - 1) / cols;
+    const win = @import("../services/tmdb_pure.zig").visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
+
+    if (win.first > 0) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 59998,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) },
+        });
+        sp.deinit();
+    }
+
+    var r: usize = win.first;
+    while (r < win.last) : (r += 1) {
+        const base = r * cols;
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = base + 60000, .expand = .horizontal });
         defer row.deinit();
         var col: usize = 0;
-        while (col < cols and i + col < state.app.jf.item_count) : (col += 1) {
-            renderPosterCard(&state.app.jf.items[i + col], i + col, card_w, true);
+        while (col < cols and base + col < total) : (col += 1) {
+            renderPosterCard(&state.app.jf.items[base + col], base + col, card_w, true);
         }
-        i += cols;
+    }
+
+    if (win.last < total_rows) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 59999,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(total_rows - win.last)) },
+        });
+        sp.deinit();
     }
 }
 
@@ -696,15 +719,20 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
 // Poster Card — compact vertical card for horizontal scrolling
 // ══════════════════════════════════════════════════════════
 
+/// Card footer height below the poster — referenced by the uniform card
+/// sizing AND the grid's virtualization row pitch. Keep single-sourced.
+const CARD_FOOTER_H: f32 = 32;
+
 fn renderPosterCard(item: *state.JfItem, idx: usize, card_w: f32, show_progress: bool) void {
     const poster_h: f32 = card_w * 1.45;
+    // min == max height → uniform row pitch for the virtualized grid.
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = idx,
         .background = true,
         .color_fill = theme.colors.bg_surface,
         .corner_radius = dvui.Rect.all(6),
-        .min_size_content = .{ .w = card_w, .h = 10 },
-        .max_size_content = .{ .w = card_w, .h = poster_h + 32 },
+        .min_size_content = .{ .w = card_w, .h = poster_h + CARD_FOOTER_H },
+        .max_size_content = .{ .w = card_w, .h = poster_h + CARD_FOOTER_H },
         .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
     });
     defer card.deinit();

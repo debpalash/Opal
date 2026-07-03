@@ -890,10 +890,13 @@ fn apiTmdb(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) v
         sendJson(stream, "{\"ok\":true,\"action\":\"tmdb_search\"}");
         return;
     }
-    // Return current TMDB results
+    // Return current TMDB results. HTTP thread — hold results_mutex while
+    // iterating: the UI thread mutates `results` under it (applyPendingResults).
     var json_buf: [32768]u8 = undefined;
     var w = std.Io.Writer.fixed(&json_buf);
     w.writeAll("{\"items\":[") catch return;
+    state.app.tmdb.results_mutex.lock();
+    defer state.app.tmdb.results_mutex.unlock();
     const items = &state.app.tmdb.results;
     for (items.items, 0..) |item, idx| {
         if (idx > 0) w.writeAll(",") catch return;
@@ -1266,8 +1269,11 @@ fn apiUnifiedSearch(stream: std.Io.net.Stream, query: []const u8) void {
         }
     }
 
-    // ── TMDB results ──
+    // ── TMDB results ── (HTTP thread: iterate under results_mutex — the UI
+    // thread mutates `results` under it in applyPendingResults)
     if (state.app.tmdb.api_key_len > 0) {
+        state.app.tmdb.results_mutex.lock();
+        defer state.app.tmdb.results_mutex.unlock();
         for (state.app.tmdb.results.items, 0..) |item, idx| {
             if (idx >= 10) break;
             if (w.end + 2048 > json_buf.len) break;

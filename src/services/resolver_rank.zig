@@ -117,7 +117,8 @@ pub fn computeMatch(item: Item, query: []const u8, intent: []const u8) MatchInfo
         else if (item.seeds > 0) 1
         else 0;
 
-    const raw = relevance + source_w + quality_bonus;
+    const junk = junkTitlePenalty(lower_name[0..nlen], lower_query[0..ql]);
+    const raw = relevance + source_w + quality_bonus + junk;
     const score = if (raw > seed_bonus) raw - seed_bonus else 0;
 
     return .{
@@ -126,6 +127,62 @@ pub fn computeMatch(item: Item, query: []const u8, intent: []const u8) MatchInfo
         .match_words = match_words,
         .total_words = total_words,
     };
+}
+
+// ══════════════════════════════════════════════════════════
+// Derivative-content demotion
+// ══════════════════════════════════════════════════════════
+
+/// Title fragments that signal a DERIVATIVE of the work rather than the work
+/// itself — lyric videos, compilations, isolated scenes, reactions. These
+/// flooded "play iron man" with 100%-match YouTube junk (the Black Sabbath
+/// lyrics video outranked everything). Markers are matched against the
+/// lowercased title; a marker the QUERY itself contains is skipped, so
+/// "iron man lyrics" still ranks lyric videos normally.
+const junk_markers = [_][]const u8{
+    "lyric",       "karaoke",     "compilation",       "movie clip",
+    "(clip",       " clip)",      "(scene",            " scene)",
+    "trailer",     "teaser",      "reaction",          "recap",
+    "explained",   "behind the scenes",                "soundtrack",
+    "suit up",     "best of",     "top 10",            "top 20",
+    "8d audio",    "fan made",    "fanmade",           "(cover",
+    "full ost",    " clip",       "film review",       "& review",
+    "fact & ",     "action scenes",                    "final battle",
+};
+
+/// Additive score penalty (lower score = better rank, so junk sinks well
+/// below any clean title regardless of source). 0 when the query asked for
+/// that content class itself.
+pub fn junkTitlePenalty(lower_name: []const u8, lower_query: []const u8) u32 {
+    for (junk_markers) |m| {
+        const bare = std.mem.trim(u8, m, " ()");
+        if (std.mem.indexOf(u8, lower_query, bare) != null) continue; // asked for it
+        if (std.mem.indexOf(u8, lower_name, m) != null) return 80;
+    }
+    return 0;
+}
+
+test "junkTitlePenalty demotes derivative titles (play iron man regression)" {
+    // The exact top results that outranked everything for "play iron man".
+    try std.testing.expect(junkTitlePenalty("black sabbath - iron man (lyrics)", "iron man") > 0);
+    try std.testing.expect(junkTitlePenalty("tony stark's best iron man suit ups | mcu compilation (4k)", "iron man") > 0);
+    try std.testing.expect(junkTitlePenalty("iron man nanotechnology suit up | avengers | official clip", "iron man") > 0);
+    try std.testing.expect(junkTitlePenalty("tony stark builds miniature arc reactor (scene) - movie clip hd", "iron man") > 0);
+    // Round 2 — the exact titles that won "play iron man three/movie":
+    try std.testing.expect(junkTitlePenalty("iron man suits save tony and rhodey | iron man 3 | official clip", "iron man three") > 0);
+    try std.testing.expect(junkTitlePenalty("iron man full movie (2008) | robert downey jr | fact & review", "iron man movie") > 0);
+    try std.testing.expect(junkTitlePenalty("iron man 3 movie (2013) action/sci-fi | film review & facts", "iron man three") > 0);
+    try std.testing.expect(junkTitlePenalty("iron man all action scenes in hindi avengers iron man movies", "iron man movie") > 0);
+    // Clean titles pass untouched.
+    try std.testing.expect(junkTitlePenalty("iron man (2008) 1080p bluray", "iron man") == 0);
+    try std.testing.expect(junkTitlePenalty("iron man", "iron man") == 0);
+    try std.testing.expect(junkTitlePenalty("iron.man.three.2013.1080p.bluray.avc", "iron man three") == 0);
+    // Asking for the derivative keeps it rankable.
+    try std.testing.expect(junkTitlePenalty("black sabbath - iron man (lyrics)", "iron man lyrics") == 0);
+    try std.testing.expect(junkTitlePenalty("dune official trailer", "dune trailer") == 0);
+    // "clip"/"scene" only match with delimiters — not inside words.
+    try std.testing.expect(junkTitlePenalty("total eclipse of the heart", "eclipse") == 0);
+    try std.testing.expect(junkTitlePenalty("the obscene tape", "tape") == 0);
 }
 
 pub const Ranked = struct {

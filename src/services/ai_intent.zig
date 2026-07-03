@@ -68,9 +68,22 @@ fn recommendationWorker(assistant_idx: usize) void {
             @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
         }
 
-        // Build response from TMDB trending
-        const items = state.app.tmdb.results.items;
-        const count = @min(items.len, 8);
+        // Build response from TMDB trending. AI worker thread: SNAPSHOT the
+        // top items under results_mutex (the UI thread mutates `results`
+        // under it in applyPendingResults), preferring a staged-but-not-yet-
+        // applied page so the one-frame apply lag can't misreport "empty".
+        var items: [8]state.TmdbItem = undefined;
+        var count: usize = 0;
+        {
+            state.app.tmdb.results_mutex.lock();
+            defer state.app.tmdb.results_mutex.unlock();
+            const src = if (state.app.tmdb.pending_ready)
+                state.app.tmdb.pending_results.items
+            else
+                state.app.tmdb.results.items;
+            count = @min(src.len, items.len);
+            @memcpy(items[0..count], src[0..count]);
+        }
 
         if (count > 0) {
             var resp_buf: [1024]u8 = undefined;
@@ -184,40 +197,28 @@ pub fn handleGenreBrowse(raw_input: []const u8) bool {
     // Map genre name to TMDB genre ID for /discover/movie endpoint
     const genre_id = genreNameToId(genre);
 
-    // Use discover API via direct fetch instead of search piggyback
-    state.navigateToTab(.TMDB);
-    state.app.tmdb.view = .Search;
-    state.app.tmdb.page = 1;
-
+    // The results render INLINE as the transcript's catalog rail — stay in
+    // the conversation (the old flow yanked the user to the Browse tab).
     if (genre_id > 0) {
-        // Set response message before spawning thread (no closure captures)
-        var resp_buf2: [256]u8 = undefined;
-        const resp2 = std.fmt.bufPrint(&resp_buf2, "Here are popular {s} titles! Browse the TMDB drawer.", .{genre}) catch "Opened genre browse.";
-        chat.messages[assistant_idx].text_len = @min(resp2.len, chat.MAX_MSG_LEN);
-        @memcpy(chat.messages[assistant_idx].text[0..chat.messages[assistant_idx].text_len], resp2[0..chat.messages[assistant_idx].text_len]);
-
-        // Spawn worker to call /discover/movie?with_genres=ID
-        const S = struct {
-            var gid: u32 = 0;
-        };
-        S.gid = genre_id;
-        if (std.Thread.spawn(.{}, struct {
-            fn worker() void {
-                const tmdb_api = @import("tmdb_api.zig");
-                tmdb_api.fetchDiscover(S.gid);
-            }
-        }.worker, .{})) |t| t.detach() else |_| {}
+        // fetchDiscover routes through genre_idx + fetchCurrentView (which
+        // spawns its own fetch worker) and switches the shared list to
+        // genre-discover mode; Browse › Movies & TV mirrors it.
+        @import("tmdb_api.zig").fetchDiscover(genre_id);
+        chat.catalog_rail_active = true; // poster rail inline in the transcript
     } else {
         // Fallback to search by genre keyword
+        state.app.tmdb.view = .Search;
+        state.app.tmdb.page = 1;
         @memset(&state.app.tmdb.search_buf, 0);
         const glen = @min(genre.len, state.app.tmdb.search_buf.len - 1);
         @memcpy(state.app.tmdb.search_buf[0..glen], genre[0..glen]);
         const tmdb_api = @import("tmdb_api.zig");
         tmdb_api.fetchCurrentView(false);
+        chat.catalog_rail_active = true;
     }
 
     var resp_buf: [256]u8 = undefined;
-    const resp = std.fmt.bufPrint(&resp_buf, "Browsing {s} — check the TMDB drawer. Say 'play <title>' to start.", .{genre}) catch "Opened TMDB genre browse.";
+    const resp = std.fmt.bufPrint(&resp_buf, "Here are {s} picks from the catalog — click a poster to open it, or say 'play <title>'.", .{genre}) catch "Genre picks are on the cards above.";
     chat.messages[assistant_idx].text_len = @min(resp.len, chat.MAX_MSG_LEN);
     @memcpy(chat.messages[assistant_idx].text[0..chat.messages[assistant_idx].text_len], resp[0..chat.messages[assistant_idx].text_len]);
 
@@ -226,7 +227,7 @@ pub fn handleGenreBrowse(raw_input: []const u8) bool {
 }
 
 /// TMDB movie genre IDs (from https://api.themoviedb.org/3/genre/movie/list)
-fn genreNameToId(genre: []const u8) u32 {
+pub fn genreNameToId(genre: []const u8) u32 {
     const Map = struct { name: []const u8, id: u32 };
     const table = [_]Map{
         .{ .name = "Action", .id = 28 },

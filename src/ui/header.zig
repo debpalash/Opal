@@ -611,7 +611,6 @@ pub fn renderUrlInput(is_large: bool) void {
         })) {
             @import("../core/logs.zig").pushLog("info", "mic", "button clicked", false);
             voice.toggleMicRecording();
-            ai_chat_mod.is_bubble_open = true;
         }
         if (!is_large) components.tip(@src(), mic_wd, "Mic / push-to-talk");
 
@@ -631,28 +630,6 @@ pub fn renderUrlInput(is_large: bool) void {
             }
             if (!is_large) components.tip(@src(), stop_wd, "Stop");
         }
-    }
-
-    // Auto-expand chat bubble on input transition (empty → non-empty) OR voice start.
-    // Collapse on input-clear transition (non-empty → empty) when idle.
-    {
-        const ExpandState = struct {
-            var last_text_len: usize = 0;
-            var last_conv_phase: @import("../services/ai_voice.zig").ConvPhase = .idle;
-        };
-        const voice = @import("../services/ai_voice.zig");
-        const ai_chat_mod = @import("../services/ai_chat.zig");
-        const first_zero = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
-        const text_became_nonempty = ExpandState.last_text_len == 0 and first_zero > 0;
-        const voice_started = ExpandState.last_conv_phase == .idle and voice.conv_phase != .idle;
-        const text_became_empty = ExpandState.last_text_len > 0 and first_zero == 0;
-        const has_activity = first_zero > 0 or voice.conv_phase != .idle or voice.is_recording or ai_chat_mod.is_generating.load(.acquire);
-
-        if (text_became_nonempty or voice_started) ai_chat_mod.is_bubble_open = true;
-        if (text_became_empty and !has_activity and ai_chat_mod.message_count == 0) ai_chat_mod.is_bubble_open = false;
-
-        ExpandState.last_text_len = first_zero;
-        ExpandState.last_conv_phase = voice.conv_phase;
     }
 
     // Handle Enter / Play click

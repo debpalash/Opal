@@ -8,6 +8,7 @@ const search = @import("search.zig");
 // Sub-modules
 const api = @import("tmdb_api.zig");
 const store = @import("tmdb_store.zig");
+const tmdb_pure = @import("tmdb_pure.zig");
 
 const alloc = @import("tmdb_parse.zig").alloc;
 
@@ -101,12 +102,8 @@ pub fn renderTmdbContent() void {
     // search box (Find), item count, and card-size controls all on one row.
     renderToolbar(list.items.len);
 
-    // Only show the loading line on an INITIAL load (nothing to show yet).
-    // During a stale-refresh the current results stay on screen — seamless.
-    if (state.app.tmdb.is_loading.load(.acquire) and activeList().items.len == 0) {
-        _ = dvui.label(@src(), "Loading...", .{}, .{ .color_text = theme.colors.accent, .gravity_x = 0.5, .margin = dvui.Rect.all(12) });
-    }
-
+    // Initial load (nothing to show yet) renders skeleton tiles inside the
+    // gallery; a stale-refresh keeps the current results on screen — seamless.
     const show_load_more = state.app.tmdb.view == .Trending or state.app.tmdb.view == .Search;
     renderGallery(list, show_load_more);
 }
@@ -145,6 +142,11 @@ fn renderNoApiKey() void {
 /// One compact, full-width toolbar replacing the old 3–4 stacked filter rows.
 /// Wraps gracefully on narrow widths via flexbox.
 fn renderToolbar(count: usize) void {
+    // Cleared every frame; renderSearchInline re-asserts it while the Find
+    // box is focused. Without this, leaving Find mode with the box focused
+    // left the flag stuck true and arrows dead.
+    search_focused = false;
+
     var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
         .expand = .horizontal,
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
@@ -175,10 +177,18 @@ fn renderToolbar(count: usize) void {
             renderFilterChip(10, .all, "All");
             renderFilterChip(11, .movie, "Movies");
             renderFilterChip(12, .tv, "TV");
-            if (state.app.tmdb.category == .trending) {
+            if (state.app.tmdb.category == .trending and state.app.tmdb.genre_idx == 0) {
                 toolbarDivider(903);
                 renderTimeChip(20, .week, "Week");
                 renderTimeChip(21, .day, "Today");
+            }
+            toolbarDivider(904);
+            renderGenreDropdown();
+            if (state.app.tmdb.genre_idx != 0) {
+                toolbarDivider(905);
+                renderSortChip(30, 0, "Popular");
+                renderSortChip(31, 1, "Top rated");
+                renderSortChip(32, 2, "Newest");
             }
         },
         else => {},
@@ -210,6 +220,51 @@ fn renderToolbar(count: usize) void {
     }
 }
 
+/// Genre selector — drives /discover?with_genres browsing (paginated like any
+/// category). Selecting a genre overrides the category chips; picking a
+/// category chip resets back to "All genres".
+fn renderGenreDropdown() void {
+    var sel: usize = state.app.tmdb.genre_idx;
+    const active = sel != 0;
+    if (dvui.dropdown(@src(), &tmdb_pure.GENRE_NAMES, .{ .choice = &sel }, .{}, .{
+        .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
+        .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+        .gravity_y = 0.5,
+    })) {
+        if (sel != state.app.tmdb.genre_idx) {
+            state.app.tmdb.genre_idx = sel;
+            // /discover has no "multi" endpoint — with the filter on All, a
+            // genre pick would silently return movies while "All" stayed
+            // highlighted. Reflect reality in the UI instead.
+            if (sel != 0 and state.app.tmdb.media_filter == .all) {
+                state.app.tmdb.media_filter = .movie;
+            }
+            state.app.tmdb.page = 1;
+            resetGalleryScroll();
+            api.fetchCurrentView(false);
+        }
+    }
+}
+
+/// Discover ordering chip — only shown while a genre is active (the category
+/// endpoints have fixed server-side ordering; /discover accepts sort_by).
+fn renderSortChip(idx: usize, tag: u8, label: []const u8) void {
+    const fg = if (state.app.tmdb.discover_sort == tag) theme.colors.accent else theme.colors.text_secondary;
+    if (dvui.button(@src(), label, .{}, .{
+        .id_extra = idx + 5000,
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_text = fg,
+        .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
+    })) {
+        state.app.tmdb.discover_sort = tag;
+        state.app.tmdb.page = 1;
+        resetGalleryScroll();
+        api.fetchCurrentView(false);
+    }
+}
+
 /// A faint vertical separator between toolbar groups.
 fn toolbarDivider(id: usize) void {
     var d = dvui.box(@src(), .{}, .{
@@ -225,26 +280,27 @@ fn toolbarDivider(id: usize) void {
 
 /// Compact inline search box (Find mode) — replaces the old full-width bar.
 fn renderSearchInline() void {
+    const components = @import("../ui/components.zig");
+    // Canonical compact toolbar input (shared with YouTube/Comics so every
+    // Browse sub-toolbar has identical input height + padding).
     var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.tmdb.search_buf }, .placeholder = "Search movies & TV…" }, .{
-        .min_size_content = .{ .w = 240, .h = 28 },
+        .min_size_content = .{ .w = 240, .h = components.TOOLBAR_INPUT_H },
+        .max_size_content = .{ .w = 240, .h = components.TOOLBAR_INPUT_H },
         .color_fill = theme.colors.bg_elevated,
         .color_border = theme.colors.border_subtle,
         .color_text = theme.colors.text_primary,
         .border = dvui.Rect.all(1),
         .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
         .gravity_y = 0.5,
     });
     const enter_pressed = te.enter_pressed;
+    // Grid arrow-nav must yield to the text field while it's being edited.
+    if (dvui.focusedWidgetId() == te.data().id) search_focused = true;
     te.deinit();
-    if (dvui.button(@src(), "Go", .{}, .{
-        .color_fill = theme.colors.accent,
-        .color_text = theme.colors.bg_app,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
-        .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
-        .gravity_y = 0.5,
-    }) or enter_pressed) {
+    if (components.toolbarGo(@src(), "Go") or enter_pressed) {
         state.app.tmdb.page = 1;
+        resetGalleryScroll();
         api.fetchCurrentView(false);
     }
 }
@@ -268,6 +324,7 @@ fn renderSubTab(idx: usize, view: state.TmdbView, label: []const u8) void {
 }
 
 fn switchView(view: state.TmdbView) void {
+    if (view != state.app.tmdb.view) resetGalleryScroll();
     state.app.tmdb.view = view;
     if (view == .Trending and state.app.tmdb.results.items.len == 0) {
         api.fetchCurrentView(false);
@@ -279,7 +336,10 @@ fn switchView(view: state.TmdbView) void {
 // ══════════════════════════════════════════════════════════
 
 fn renderCatChip(idx: usize, cat: state.TmdbCategory, label: []const u8) void {
-    const fg = if (state.app.tmdb.category == cat) theme.colors.accent else theme.colors.text_secondary;
+    // While a genre is active, browsing goes through /discover and the
+    // category is inert — don't highlight a chip that isn't driving results.
+    const cat_active = state.app.tmdb.category == cat and state.app.tmdb.genre_idx == 0;
+    const fg = if (cat_active) theme.colors.accent else theme.colors.text_secondary;
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = idx + 2000,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -287,7 +347,9 @@ fn renderCatChip(idx: usize, cat: state.TmdbCategory, label: []const u8) void {
         .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
     })) {
         state.app.tmdb.category = cat;
+        state.app.tmdb.genre_idx = 0; // category chips exit genre-discover mode
         state.app.tmdb.page = 1;
+        resetGalleryScroll();
         api.fetchCurrentView(false);
     }
 }
@@ -304,6 +366,7 @@ fn renderFilterChip(idx: usize, filter: state.TmdbMediaFilter, label: []const u8
     })) {
         state.app.tmdb.media_filter = filter;
         state.app.tmdb.page = 1;
+        resetGalleryScroll();
         api.fetchCurrentView(false);
     }
 }
@@ -318,6 +381,7 @@ fn renderTimeChip(idx: usize, tw: state.TmdbTimeWindow, label: []const u8) void 
     })) {
         state.app.tmdb.time_window = tw;
         state.app.tmdb.page = 1;
+        resetGalleryScroll();
         api.fetchCurrentView(false);
     }
 }
@@ -326,17 +390,94 @@ fn renderTimeChip(idx: usize, tw: state.TmdbTimeWindow, label: []const u8) void 
 // Gallery & Cards
 // ══════════════════════════════════════════════════════════
 
+/// Uniform card geometry — the virtualization spacer math depends on every
+/// card having the same pitch, so these are THE constants: card height is
+/// poster_h + CARD_FOOTER_H (min == max in renderPosterCard), each card has
+/// CARD_VMARGIN above and below, and skeleton tiles use the same size.
+const CARD_FOOTER_H: f32 = 64;
+const CARD_VMARGIN: f32 = 3;
+
+/// Gallery scroll position — module-level so it survives sub-tab/page-route
+/// switches (dvui's per-id retained scroll state is dropped whenever the
+/// widget skips a frame). Reset explicitly when the view/filters change.
+var gallery_si: dvui.ScrollInfo = .{};
+
+/// Keyboard focus: index of the arrow-key-focused card (null = keyboard nav
+/// inactive; the first arrow press lights index 0). UI thread only.
+var grid_focus: ?usize = null;
+
+/// True while the Find-mode search box has focus — arrows/Enter belong to the
+/// text field then, not the grid (set each frame in renderSearchInline).
+var search_focused: bool = false;
+
+/// Jump the gallery back to the top — call whenever the underlying result set
+/// changes meaning (view/category/filter/search), not on pagination appends.
+pub fn resetGalleryScroll() void {
+    gallery_si.scrollToOffset(.vertical, 0);
+    grid_focus = null;
+}
+
+/// Arrow/Enter/Escape handling for the poster grid (couch-style navigation).
+/// Runs before layout so the focus ring and scroll-into-view land this frame.
+fn processGridKeys(items: *std.ArrayListUnmanaged(state.TmdbItem), cols: usize, row_h: f32) void {
+    const total = items.items.len;
+    if (total == 0 or search_focused) return;
+
+    for (dvui.events()) |*e| {
+        if (e.handled) continue;
+        if (e.evt != .key) continue;
+        const k = e.evt.key;
+        if (k.action != .down and k.action != .repeat) continue;
+        if (k.mod.control() or k.mod.command() or k.mod.alt()) continue;
+
+        var dx: i32 = 0;
+        var dy: i32 = 0;
+        switch (k.code) {
+            .left => dx = -1,
+            .right => dx = 1,
+            .up => dy = -1,
+            .down => dy = 1,
+            .enter => {
+                if (grid_focus) |gf| {
+                    if (gf < total) {
+                        e.handled = true;
+                        openOrSearch(&items.items[gf]);
+                    }
+                }
+                continue;
+            },
+            .escape => {
+                if (grid_focus != null) {
+                    grid_focus = null;
+                    e.handled = true;
+                    dvui.refresh(null, @src(), null);
+                }
+                continue;
+            },
+            else => continue,
+        }
+
+        // First arrow press just lights the first card; then it moves.
+        grid_focus = if (grid_focus) |cur| tmdb_pure.moveFocus(cur, total, cols, dx, dy) else 0;
+        e.handled = true;
+
+        // Keep the focused row on screen (virtualization renders it once the
+        // viewport includes it).
+        const row = grid_focus.? / @max(cols, 1);
+        if (tmdb_pure.scrollOffsetForRow(row, row_h, gallery_si.viewport.y, gallery_si.viewport.h)) |off| {
+            gallery_si.scrollToOffset(.vertical, off);
+        }
+        dvui.refresh(null, @src(), null);
+    }
+}
+
 fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more: bool) void {
     if (items.items.len == 0 and !state.app.tmdb.is_loading.load(.acquire)) {
-        _ = dvui.label(@src(), "No items to display.", .{}, .{
-            .color_text = theme.colors.text_secondary,
-            .gravity_x = 0.5,
-            .margin = dvui.Rect.all(24),
-        });
+        renderEmptyOrFailed();
         return;
     }
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
+    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &gallery_si }, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
 
     // Responsive columns from the LIVE page width (one-frame lag; first paint
@@ -348,20 +489,75 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
     const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
     const poster_h: f32 = card_w * 1.5;
 
-    var i: usize = 0;
-    while (i < items.items.len) {
+    // Initial load with nothing to show yet → skeleton tiles instead of a
+    // bare "Loading..." line (matches the Jellyfin grid's pattern).
+    if (items.items.len == 0) {
+        renderSkeletonRows(cols, card_w, poster_h);
+        return;
+    }
+
+    // ── Virtualization ──
+    // Cards are uniform (min==max height in renderPosterCard), so rows have a
+    // fixed pitch: content + top/bottom card margins. Rows outside the
+    // viewport (±2 overscan) collapse into two spacer boxes — a 1900-item
+    // gallery lays out a handful of rows per frame instead of all of them.
+    const row_h: f32 = poster_h + CARD_FOOTER_H + 2 * CARD_VMARGIN;
+    const total_rows = (items.items.len + cols - 1) / cols;
+
+    // Keyboard nav (arrows/Enter/Escape) — drop a stale focus index when the
+    // list shrank (view switch, filter change).
+    if (grid_focus) |gf| {
+        if (gf >= items.items.len) grid_focus = null;
+    }
+    processGridKeys(items, cols, row_h);
+    const win = tmdb_pure.visibleRows(total_rows, row_h, gallery_si.viewport.y, gallery_si.viewport.h, 2);
+
+    if (win.first > 0) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49998,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) },
+        });
+        sp.deinit();
+    }
+
+    var r: usize = win.first;
+    while (r < win.last) : (r += 1) {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = i + 50000,
+            .id_extra = r + 50000,
             .expand = .horizontal,
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
         });
         defer row.deinit();
 
+        const base = r * cols;
         var col: usize = 0;
-        while (col < cols and i + col < items.items.len) : (col += 1) {
-            renderPosterCard(&items.items[i + col], i + col, card_w, poster_h);
+        while (col < cols and base + col < items.items.len) : (col += 1) {
+            renderPosterCard(&items.items[base + col], base + col, card_w, poster_h);
         }
-        i += cols;
+    }
+
+    if (win.last < total_rows) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49999,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(total_rows - win.last)) },
+        });
+        sp.deinit();
+    }
+
+    // Poster prefetch: warm the next couple of rows below the window so fast
+    // scrolling hits ready textures instead of film-icon placeholders. Same
+    // guards as the render path; fetchAsync's global cap bounds the burst.
+    {
+        var pi: usize = win.last * cols;
+        const prefetch_end = @min(items.items.len, (win.last + 2) * cols);
+        while (pi < prefetch_end) : (pi += 1) {
+            const it = &items.items[pi];
+            if (!it.poster_failed and !it.poster_fetching and it.poster_pixels == null and
+                it.poster_tex == null and it.poster_path_len > 0)
+            {
+                api.fetchPoster(it);
+            }
+        }
     }
 
     // Infinite scroll: auto-fetch the next page when the user nears the bottom.
@@ -402,6 +598,52 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
             dvui.refresh(null, @src(), null); // wake until the worker's items land
         }
     }
+}
+
+/// Empty gallery: for the fetching views (Hot/Find) this doubles as the
+/// failed-to-load state with a Retry button — a network or parse failure used
+/// to leave a bare "No items" with no way forward but restarting the app.
+/// Uses the canonical components empty-state so it matches every other tab.
+fn renderEmptyOrFailed() void {
+    const components = @import("../ui/components.zig");
+    const retryable = state.app.tmdb.view == .Trending or state.app.tmdb.view == .Search;
+    if (retryable) {
+        if (components.emptyStateCta(
+            icons.tvg.lucide.film,
+            "Nothing loaded",
+            "The fetch may have failed or returned no results.",
+            "Retry",
+        )) {
+            state.app.tmdb.page = 1;
+            api.fetchCurrentView(false);
+        }
+    } else {
+        components.emptyState(icons.tvg.lucide.film, "No items to display.", "");
+    }
+}
+
+/// Skeleton tiles while the first page is in flight — same shape as the real
+/// cards so the layout doesn't jump when results land (Jellyfin grid pattern).
+fn renderSkeletonRows(cols: usize, card_w: f32, poster_h: f32) void {
+    var r: usize = 0;
+    while (r < 3) : (r += 1) {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = r + 61000, .expand = .horizontal });
+        defer row.deinit();
+        var col: usize = 0;
+        while (col < cols) : (col += 1) {
+            var tile = dvui.box(@src(), .{ .dir = .vertical }, .{
+                .id_extra = r * 32 + col + 61100,
+                .min_size_content = .{ .w = card_w, .h = poster_h + CARD_FOOTER_H },
+                .max_size_content = .{ .w = card_w, .h = poster_h + CARD_FOOTER_H },
+                .margin = dvui.Rect.all(CARD_VMARGIN),
+                .background = true,
+                .color_fill = theme.colors.bg_elevated,
+                .corner_radius = dvui.Rect.all(8),
+            });
+            tile.deinit();
+        }
+    }
+    dvui.refresh(null, @src(), null); // keep waking until the worker's items land
 }
 
 /// Dimmed scrim + metadata shown over a poster while hovered.
@@ -461,12 +703,19 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
     const h1: u8 = @truncate(hue & 0xFF);
     const h2: u8 = @truncate((hue >> 8) & 0xFF);
 
-    // Each poster card is a vertical box: poster image + title below
+    // Each poster card is a vertical box: poster image + title below.
+    // min == max height → every card (and thus every row) has the same pitch,
+    // which the gallery's virtualization spacer math depends on.
+    // The arrow-key-focused card carries a 2px accent ring.
+    const kb_focused = grid_focus != null and grid_focus.? == idx;
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = idx,
-        .min_size_content = .{ .w = card_w, .h = 10 },
-        .max_size_content = .{ .w = card_w, .h = poster_h + 64 },
-        .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
+        .min_size_content = .{ .w = card_w, .h = poster_h + CARD_FOOTER_H },
+        .max_size_content = .{ .w = card_w, .h = poster_h + CARD_FOOTER_H },
+        .margin = dvui.Rect.all(CARD_VMARGIN),
+        .border = if (kb_focused) dvui.Rect.all(2) else dvui.Rect.all(0),
+        .color_border = theme.colors.accent,
+        .corner_radius = dvui.Rect.all(8),
     });
     defer card.deinit();
 
@@ -1421,16 +1670,35 @@ fn renderTvDetail() void {
         });
         defer hdr.deinit();
 
-        if (dvui.button(@src(), "← Back", .{}, .{
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = theme.colors.accent,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-            .margin = .{ .x = 0, .y = 0, .w = 10, .h = 0 },
-            .gravity_y = 0.5,
-        })) {
-            closeTvDetail();
-            return;
+        // Back — lucide chevron + label (the old "←" glyph was missing from
+        // the UI font and rendered as tofu).
+        {
+            var back = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .background = true,
+                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = 6, .y = 4, .w = 10, .h = 4 },
+                .margin = .{ .x = 0, .y = 0, .w = 10, .h = 0 },
+                .gravity_y = 0.5,
+            });
+            defer back.deinit();
+            var back_hover = false;
+            const back_clicked = dvui.clicked(back.data(), .{ .hovered = &back_hover });
+            if (back_hover) back.data().options.color_fill = theme.colors.bg_hover;
+            back.drawBackground();
+            dvui.icon(@src(), "tv-back", icons.tvg.lucide.@"chevron-left", .{}, .{
+                .color_text = theme.colors.accent,
+                .min_size_content = .{ .w = 15, .h = 15 },
+                .gravity_y = 0.5,
+            });
+            _ = dvui.label(@src(), "Back", .{}, .{
+                .color_text = theme.colors.accent,
+                .gravity_y = 0.5,
+            });
+            if (back_clicked) {
+                closeTvDetail();
+                return;
+            }
         }
 
         var tvn_buf: [128]u8 = undefined;
@@ -1533,18 +1801,29 @@ fn renderTvDetail() void {
         }
     }
 
-    // Thin progress bar (watched fraction)
+    // Thin progress bar (watched fraction) — plain track + fill boxes. The
+    // old dvui.slider here was DRAGGABLE and took the control-blue fill
+    // instead of the theme accent (the stray blue bar in the season header).
     if (t.tv_episode_count > 0) {
         const watched = tvWatchedCount();
         const total = t.tv_episode_count;
-        var frac: f32 = if (total > 0) @as(f32, @floatFromInt(watched)) / @as(f32, @floatFromInt(total)) else 0;
-        _ = dvui.slider(@src(), .{ .fraction = &frac }, .{
+        const frac: f32 = if (total > 0) @as(f32, @floatFromInt(watched)) / @as(f32, @floatFromInt(total)) else 0;
+        var track = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .min_size_content = .{ .w = 10, .h = 4 },
-            .color_fill = dvui.Color{ .r = 35, .g = 35, .b = 45, .a = 255 },
-            .color_text = theme.colors.accent,
-            .corner_radius = dvui.Rect.all(0),
+            .background = true,
+            .color_fill = theme.colors.bg_elevated,
+            .min_size_content = .{ .w = 0, .h = 3 },
+            .max_size_content = .{ .w = std.math.floatMax(f32), .h = 3 },
         });
+        const track_w = track.data().contentRectScale().r.w;
+        var fill = dvui.box(@src(), .{}, .{
+            .background = true,
+            .color_fill = theme.colors.accent,
+            .min_size_content = .{ .w = frac * track_w, .h = 3 },
+            .max_size_content = .{ .w = frac * track_w, .h = 3 },
+        });
+        fill.deinit();
+        track.deinit();
     }
 
     // ── Resume row ──
@@ -1560,15 +1839,31 @@ fn renderTvDetail() void {
         });
         defer prow.deinit();
 
-        if (dvui.button(@src(), "▶  Resume", .{}, .{
-            .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 14, .y = 5, .w = 14, .h = 5 },
-            .margin = .{ .x = 0, .y = 0, .w = 12, .h = 0 },
-            .gravity_y = 0.5,
-        })) {
-            playTvEpisode(next_ep);
+        // Resume — lucide play + label (the "▶" glyph rendered as tofu).
+        {
+            var res = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .background = true,
+                .color_fill = theme.colors.accent,
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = 12, .y = 5, .w = 14, .h = 5 },
+                .margin = .{ .x = 0, .y = 0, .w = 12, .h = 0 },
+                .gravity_y = 0.5,
+            });
+            defer res.deinit();
+            var res_hover = false;
+            const res_clicked = dvui.clicked(res.data(), .{ .hovered = &res_hover });
+            res.drawBackground();
+            dvui.icon(@src(), "tv-resume", icons.tvg.lucide.play, .{}, .{
+                .color_text = theme.colors.text_on_accent,
+                .min_size_content = .{ .w = 13, .h = 13 },
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            });
+            _ = dvui.label(@src(), "Resume", .{}, .{
+                .color_text = theme.colors.text_on_accent,
+                .gravity_y = 0.5,
+            });
+            if (res_clicked) playTvEpisode(next_ep);
         }
 
         var ep_lbl: [32]u8 = undefined;
@@ -1726,30 +2021,29 @@ fn renderTvDetail() void {
                     playTvEpisode(e.episode_number);
                 }
 
-                // Play button
-                if (dvui.button(@src(), "▶", .{}, .{
+                // Play button — lucide icon in an accent pill.
+                if (dvui.buttonIcon(@src(), "ep-play", icons.tvg.lucide.play, .{}, .{}, .{
                     .id_extra = ei + 43130,
-                    .background = true,
                     .color_fill = theme.colors.accent,
-                    .color_text = dvui.Color.white,
-                    .corner_radius = dvui.Rect.all(14),
-                    .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+                    .color_text = theme.colors.text_on_accent,
+                    .corner_radius = dvui.Rect.all(theme.radius.pill),
+                    .padding = .{ .x = 7, .y = 5, .w = 7, .h = 5 },
                     .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
+                    .min_size_content = .{ .w = 14, .h = 14 },
                     .gravity_y = 0.5,
                 })) {
                     playTvEpisode(e.episode_number);
                 }
 
-                // Watched toggle (right-most)
-                const chk_label: []const u8 = if (is_watched) "\xe2\x9c\x93" else "\xe2\x97\x8b"; // ✓ / ○
-                if (dvui.button(@src(), chk_label, .{}, .{
+                // Watched toggle (right-most) — lucide check/circle.
+                if (dvui.buttonIcon(@src(), "ep-watched", if (is_watched) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, .{}, .{}, .{
                     .id_extra = ei + 43140,
-                    .background = true,
                     .color_fill = if (is_watched) theme.colors.success else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                     .color_text = if (is_watched) dvui.Color.white else theme.colors.text_secondary,
-                    .corner_radius = theme.dims.rad_xl,
-                    .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
+                    .corner_radius = dvui.Rect.all(theme.radius.pill),
+                    .padding = .{ .x = 5, .y = 5, .w = 5, .h = 5 },
                     .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
+                    .min_size_content = .{ .w = 14, .h = 14 },
                     .gravity_y = 0.5,
                 })) {
                     tvToggleWatched(ei, e.episode_number);
@@ -1779,24 +2073,44 @@ fn renderTvDetail() void {
                 });
             }
 
-            // Meta line: air_date · runtime · ★ rating
+            // Meta line: air_date · runtime · [star icon] rating (the old
+            // star text glyph was missing from the UI font — lucide instead).
             {
-                var meta: [80]u8 = undefined;
+                var mrow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = ei + 43300 });
+                defer mrow.deinit();
+
+                var meta: [48]u8 = undefined;
                 const air = e.air_date[0..@min(e.air_date_len, e.air_date.len)];
-                const rating = e.vote_average;
                 const ms = if (e.runtime > 0 and air.len > 0)
-                    std.fmt.bufPrint(&meta, "{s}  ·  {d}m  ·  \xe2\x98\x85 {d:.1}", .{ air, e.runtime, rating }) catch ""
+                    std.fmt.bufPrint(&meta, "{s}  ·  {d}m", .{ air, e.runtime }) catch ""
                 else if (air.len > 0)
-                    std.fmt.bufPrint(&meta, "{s}  ·  \xe2\x98\x85 {d:.1}", .{ air, rating }) catch ""
+                    air
                 else if (e.runtime > 0)
-                    std.fmt.bufPrint(&meta, "{d}m  ·  \xe2\x98\x85 {d:.1}", .{ e.runtime, rating }) catch ""
+                    std.fmt.bufPrint(&meta, "{d}m", .{e.runtime}) catch ""
                 else
-                    std.fmt.bufPrint(&meta, "\xe2\x98\x85 {d:.1}", .{rating}) catch "";
-                _ = dvui.label(@src(), "{s}", .{ms}, .{
-                    .id_extra = ei + 43300,
-                    .color_text = theme.colors.text_secondary,
-                    .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
-                });
+                    "";
+                if (ms.len > 0) {
+                    _ = dvui.label(@src(), "{s}", .{ms}, .{
+                        .id_extra = ei + 43310,
+                        .color_text = theme.colors.text_secondary,
+                        .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+                        .gravity_y = 0.5,
+                    });
+                }
+                if (e.vote_average > 0) {
+                    dvui.icon(@src(), "ep-rating", icons.tvg.lucide.star, .{}, .{
+                        .id_extra = ei + 43320,
+                        .color_text = theme.colors.warning,
+                        .min_size_content = .{ .w = 11, .h = 11 },
+                        .gravity_y = 0.5,
+                        .margin = .{ .x = if (ms.len > 0) 8 else 0, .y = 0, .w = 3, .h = 0 },
+                    });
+                    _ = dvui.label(@src(), "{d:.1}", .{e.vote_average}, .{
+                        .id_extra = ei + 43330,
+                        .color_text = theme.colors.text_secondary,
+                        .gravity_y = 0.5,
+                    });
+                }
             }
         }
     }

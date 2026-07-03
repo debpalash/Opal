@@ -159,6 +159,15 @@ fn createTables() void {
         \\)
     );
 
+    // In-app browser bookmarks (Browse › Web star button)
+    exec(
+        \\CREATE TABLE IF NOT EXISTS browser_bookmarks (
+        \\  url TEXT PRIMARY KEY,
+        \\  title TEXT,
+        \\  added_at INTEGER DEFAULT (strftime('%s','now'))
+        \\)
+    );
+
     // Vector DB extensions for RAG Memory
     exec(
         \\CREATE TABLE IF NOT EXISTS aimemory (

@@ -821,6 +821,54 @@ var sectionheader_seq: usize = 0;
 pub fn beginFrame() void {
     sectionheader_seq = 0;
 }
+
+/// Open a URL in the system browser (macOS `open`, elsewhere `xdg-open`).
+fn openExternal(url: []const u8) void {
+    const opener: []const u8 = if (@import("builtin").os.tag == .macos) "open" else "xdg-open";
+    const io = @import("../core/io_global.zig");
+    var child = io.Child.init(&.{ opener, url }, @import("../core/alloc.zig").allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    _ = child.spawn() catch {
+        state.showToast("Could not open the link");
+        return;
+    };
+    _ = child.wait() catch {}; // `open` returns immediately after handing off
+}
+
+/// About-section link chip: icon + label, opens `url` externally on click.
+fn aboutLink(id: usize, icon: []const u8, label: []const u8, url: []const u8, icon_color: dvui.Color) void {
+    var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = id,
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .corner_radius = dvui.Rect.all(theme.radius.pill),
+        .padding = .{ .x = theme.spacing.md, .y = 4, .w = theme.spacing.md, .h = 4 },
+        .margin = .{ .x = 0, .y = 2, .w = theme.spacing.sm, .h = 2 },
+        .gravity_y = 0.5,
+    });
+    defer chip.deinit();
+    var hovered = false;
+    const clicked = dvui.clicked(chip.data(), .{ .hovered = &hovered });
+    if (hovered) chip.data().options.color_fill = theme.colors.bg_hover;
+    chip.drawBackground();
+
+    dvui.icon(@src(), "about-link", icon, .{}, .{
+        .id_extra = id,
+        .color_text = icon_color,
+        .min_size_content = .{ .w = 13, .h = 13 },
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
+    });
+    _ = dvui.label(@src(), "{s}", .{label}, .{
+        .id_extra = id,
+        .color_text = theme.colors.text_secondary,
+        .gravity_y = 0.5,
+    });
+
+    if (clicked) openExternal(url);
+}
 fn sectionHeader(comptime title: []const u8, comptime subtitle: []const u8, id_extra: usize, src: std.builtin.SourceLocation) void {
     _ = id_extra;
     _ = src;
@@ -1260,17 +1308,26 @@ fn renderPlaybackTab() void {
             }
         }
 
-        // Link chips.
+        // Credits line — who built it, under what terms.
+        _ = dvui.label(@src(), "Crafted by Palash Deb (@debpalash) · free and open source, GPL-3.0", .{}, .{
+            .id_extra = 2530,
+            .color_text = theme.colors.text_tertiary,
+            .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
+        });
+
+        // Real links — GitHub, license, and the donate pair. Each opens in
+        // the system browser (the old pills here were dead decorations).
         components.divider();
         {
-            var links = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            var links = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
                 .expand = .horizontal,
                 .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
             });
             defer links.deinit();
-            components.statusPill("GitHub", .info);
-            components.statusPill("Privacy", .info);
-            components.statusPill("Roadmap", .info);
+            aboutLink(2540, icons.tvg.lucide.github, "GitHub", "https://github.com/debpalash/Opal", theme.colors.text_secondary);
+            aboutLink(2541, icons.tvg.lucide.scale, "License (GPL-3.0)", "https://www.gnu.org/licenses/gpl-3.0.html", theme.colors.text_secondary);
+            aboutLink(2542, icons.tvg.lucide.heart, "Donate · PayPal", "https://paypal.me/palashCoder", theme.colors.danger);
+            aboutLink(2543, icons.tvg.lucide.coffee, "Buy me a Ko-fi", "https://ko-fi.com/debpalash", theme.colors.warning);
         }
 
         // Status row — only show once we have a signal.

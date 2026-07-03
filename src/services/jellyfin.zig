@@ -503,6 +503,7 @@ pub fn fetchPoster(item: *state.JfItem) void {
             defer ptr.poster_fetching = false;
             defer @import("../core/poster.zig").releaseSlot();
 
+            const poster = @import("../core/poster.zig");
             const server = state.app.jf.server_url[0..state.app.jf.server_url_len];
             const token = state.app.jf.token[0..state.app.jf.token_len];
             const item_id = ptr.id[0..ptr.id_len];
@@ -510,19 +511,42 @@ pub fn fetchPoster(item: *state.JfItem) void {
             var url_buf: [512]u8 = undefined;
             const url = std.fmt.bufPrint(&url_buf, "{s}/Items/{s}/Images/Primary?maxWidth=200&quality=80&api_key={s}", .{ server, item_id, token }) catch return;
 
-            const img_buf = alloc.alloc(u8, 512 * 1024) catch return;
-            defer alloc.free(img_buf);
-            const img = @import("../core/http.zig").fetch(url, img_buf, .{ .timeout_secs = 8 }) orelse return;
-            const img_len = img.len;
+            // Cache key EXCLUDES the api_key — a token rotation must not
+            // orphan every cached Jellyfin poster.
+            var key_buf: [512]u8 = undefined;
+            const cache_url = std.fmt.bufPrint(&key_buf, "{s}/Items/{s}/Images/Primary?maxWidth=200", .{ server, item_id }) catch return;
 
+            const cached = poster.cacheLoadForUrl(cache_url);
+            defer if (cached) |cb| poster.cacheFreeEncoded(cb);
+
+            var img_buf: ?[]u8 = null;
+            defer if (img_buf) |ib| alloc.free(ib);
+
+            var pixels: [*c]u8 = null;
             var w: c_int = 0;
             var h: c_int = 0;
-            var comp: c_int = 0;
-            const pixels = dvui.c.stbi_load_from_memory(img_buf[0..img_len].ptr, @intCast(img_len), &w, &h, &comp, 4);
+            var attempt: u8 = 0;
+            while (attempt < 2) : (attempt += 1) {
+                const used_cache = attempt == 0 and cached != null;
+                const img: []const u8 = if (used_cache) cached.? else blk: {
+                    if (img_buf == null) img_buf = alloc.alloc(u8, 512 * 1024) catch return;
+                    break :blk @import("../core/http.zig").fetch(url, img_buf.?, .{ .timeout_secs = 8 }) orelse return;
+                };
+
+                var comp: c_int = 0;
+                w = 0;
+                h = 0;
+                pixels = dvui.c.stbi_load_from_memory(img.ptr, @intCast(img.len), &w, &h, &comp, 4);
+                if (pixels != null and w > 0 and h > 0) {
+                    if (!used_cache) poster.cacheStoreForUrl(cache_url, img, @intCast(w), @intCast(h));
+                    break;
+                }
+                if (pixels != null) dvui.c.stbi_image_free(pixels);
+                pixels = null;
+                if (used_cache) poster.cacheDeleteForUrl(cache_url) else return;
+            }
             if (pixels == null) return;
             defer dvui.c.stbi_image_free(pixels);
-
-            if (w <= 0 or h <= 0) return;
             // usize-first: w*h*4 in c_int overflows on a large crafted image and
             // panics this worker thread (whole-app abort).
             const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;

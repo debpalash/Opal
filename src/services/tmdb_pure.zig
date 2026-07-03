@@ -155,3 +155,187 @@ test "looksLikeJson accepts JSON, rejects ISP HTML block pages" {
     try std.testing.expect(!looksLikeJson("   "));
     try std.testing.expect(!looksLikeJson(""));
 }
+
+// ══════════════════════════════════════════════════════════
+// Grid virtualization — visible row window
+// ══════════════════════════════════════════════════════════
+
+pub const RowWindow = struct { first: usize, last: usize };
+
+/// Which rows of a uniform-row grid intersect the scroll viewport, padded by
+/// `overscan` rows on each side. Rows outside [first, last) are replaced by
+/// fixed-height spacers, so a 1900-item gallery lays out ~5 rows per frame
+/// instead of all of them. Returns half-open [first, last).
+pub fn visibleRows(total_rows: usize, row_h: f32, viewport_y: f32, viewport_h: f32, overscan: usize) RowWindow {
+    if (total_rows == 0 or row_h <= 0) return .{ .first = 0, .last = 0 };
+    const y = @max(0.0, viewport_y);
+    const first_vis: usize = @intFromFloat(y / row_h);
+    // ceil((y + h) / row_h) without float ceil: floor + 1 covers a partial row.
+    const last_vis: usize = @as(usize, @intFromFloat((y + @max(0.0, viewport_h)) / row_h)) + 1;
+    const first = @min(total_rows, first_vis -| overscan);
+    const last = @min(total_rows, last_vis + overscan);
+    return .{ .first = first, .last = @max(first, last) };
+}
+
+test "visibleRows windows a tall grid" {
+    // 100 rows of 200px, viewport 600px tall scrolled to 2000px.
+    const w = visibleRows(100, 200, 2000, 600, 2);
+    // Rows 10..13 visible; ±2 overscan → [8, 16).
+    try std.testing.expectEqual(@as(usize, 8), w.first);
+    try std.testing.expectEqual(@as(usize, 16), w.last);
+}
+
+test "visibleRows clamps at the edges" {
+    // Top of the list — no negative underflow from overscan.
+    const top = visibleRows(100, 200, 0, 600, 2);
+    try std.testing.expectEqual(@as(usize, 0), top.first);
+    try std.testing.expectEqual(@as(usize, 6), top.last);
+    // Bottom of the list — last clamps to total_rows.
+    const bot = visibleRows(10, 200, 1400, 600, 2);
+    try std.testing.expectEqual(@as(usize, 5), bot.first);
+    try std.testing.expectEqual(@as(usize, 10), bot.last);
+    // Everything fits — window is the whole list.
+    const all = visibleRows(3, 200, 0, 600, 2);
+    try std.testing.expectEqual(@as(usize, 0), all.first);
+    try std.testing.expectEqual(@as(usize, 3), all.last);
+}
+
+test "visibleRows degenerate inputs" {
+    const none = visibleRows(0, 200, 0, 600, 2);
+    try std.testing.expectEqual(@as(usize, 0), none.last);
+    const zero_h = visibleRows(10, 0, 0, 600, 2);
+    try std.testing.expectEqual(@as(usize, 0), zero_h.last);
+}
+
+// ══════════════════════════════════════════════════════════
+// Genre discover — static TMDB genre table
+// ══════════════════════════════════════════════════════════
+
+/// Movie and TV genre ids differ on TMDB (e.g. movie Action=28 vs TV
+/// Action & Adventure=10759). Where TV has no exact counterpart (Horror,
+/// Thriller, History) the closest TV genre is used.
+pub const Genre = struct { name: []const u8, movie_id: u32, tv_id: u32 };
+
+pub const GENRES = [_]Genre{
+    .{ .name = "All genres", .movie_id = 0, .tv_id = 0 },
+    .{ .name = "Action", .movie_id = 28, .tv_id = 10759 },
+    .{ .name = "Adventure", .movie_id = 12, .tv_id = 10759 },
+    .{ .name = "Animation", .movie_id = 16, .tv_id = 16 },
+    .{ .name = "Comedy", .movie_id = 35, .tv_id = 35 },
+    .{ .name = "Crime", .movie_id = 80, .tv_id = 80 },
+    .{ .name = "Documentary", .movie_id = 99, .tv_id = 99 },
+    .{ .name = "Drama", .movie_id = 18, .tv_id = 18 },
+    .{ .name = "Family", .movie_id = 10751, .tv_id = 10751 },
+    .{ .name = "Fantasy", .movie_id = 14, .tv_id = 10765 },
+    .{ .name = "History", .movie_id = 36, .tv_id = 10768 },
+    .{ .name = "Horror", .movie_id = 27, .tv_id = 9648 },
+    .{ .name = "Music", .movie_id = 10402, .tv_id = 10402 },
+    .{ .name = "Mystery", .movie_id = 9648, .tv_id = 9648 },
+    .{ .name = "Romance", .movie_id = 10749, .tv_id = 10749 },
+    .{ .name = "Sci-Fi", .movie_id = 878, .tv_id = 10765 },
+    .{ .name = "Thriller", .movie_id = 53, .tv_id = 80 },
+    .{ .name = "War", .movie_id = 10752, .tv_id = 10768 },
+    .{ .name = "Western", .movie_id = 37, .tv_id = 37 },
+};
+
+/// Dropdown entry labels (parallel to GENRES).
+pub const GENRE_NAMES = blk: {
+    var names: [GENRES.len][]const u8 = undefined;
+    for (GENRES, 0..) |g, gi| names[gi] = g.name;
+    break :blk names;
+};
+
+/// The with_genres id for a selection, respecting the media filter.
+/// Index 0 ("All genres") and out-of-range both return 0 = no genre filter.
+pub fn genreId(genre_idx: usize, is_tv: bool) u32 {
+    if (genre_idx >= GENRES.len) return 0;
+    return if (is_tv) GENRES[genre_idx].tv_id else GENRES[genre_idx].movie_id;
+}
+
+test "genreId maps movie vs tv ids and bounds" {
+    try std.testing.expectEqual(@as(u32, 0), genreId(0, false)); // All genres
+    try std.testing.expectEqual(@as(u32, 28), genreId(1, false)); // Action movie
+    try std.testing.expectEqual(@as(u32, 10759), genreId(1, true)); // Action & Adventure TV
+    try std.testing.expectEqual(@as(u32, 878), genreId(15, false)); // Sci-Fi movie
+    try std.testing.expectEqual(@as(u32, 10765), genreId(15, true)); // Sci-Fi & Fantasy TV
+    try std.testing.expectEqual(@as(u32, 0), genreId(999, false)); // out of range
+}
+
+/// Reverse lookup for AI-intent calls that arrive with a raw TMDB movie genre
+/// id (e.g. 28 for Action): the GENRES index that drives the dropdown/state.
+pub fn genreIndexForMovieId(movie_id: u32) ?usize {
+    if (movie_id == 0) return null;
+    for (GENRES, 0..) |g, gi| {
+        if (g.movie_id == movie_id) return gi;
+    }
+    return null;
+}
+
+test "genreIndexForMovieId reverse lookup" {
+    try std.testing.expectEqual(@as(?usize, 1), genreIndexForMovieId(28)); // Action
+    try std.testing.expectEqual(@as(?usize, 15), genreIndexForMovieId(878)); // Sci-Fi
+    try std.testing.expectEqual(@as(?usize, null), genreIndexForMovieId(0));
+    try std.testing.expectEqual(@as(?usize, null), genreIndexForMovieId(424242));
+}
+
+// ══════════════════════════════════════════════════════════
+// Discover sort + grid keyboard navigation
+// ══════════════════════════════════════════════════════════
+
+/// sort_by query fragment for /discover. tag: 0=popularity, 1=rating,
+/// 2=newest. Rating carries a vote-count floor — without it TMDB returns
+/// obscure 10.0-rated entries with 3 votes.
+pub fn discoverSortParam(tag: u8, is_tv: bool) []const u8 {
+    return switch (tag) {
+        1 => "vote_average.desc&vote_count.gte=200",
+        2 => if (is_tv) "first_air_date.desc" else "primary_release_date.desc",
+        else => "popularity.desc",
+    };
+}
+
+test "discoverSortParam maps tags and media type" {
+    try std.testing.expectEqualStrings("popularity.desc", discoverSortParam(0, false));
+    try std.testing.expectEqualStrings("vote_average.desc&vote_count.gte=200", discoverSortParam(1, true));
+    try std.testing.expectEqualStrings("primary_release_date.desc", discoverSortParam(2, false));
+    try std.testing.expectEqualStrings("first_air_date.desc", discoverSortParam(2, true));
+    try std.testing.expectEqualStrings("popularity.desc", discoverSortParam(99, false)); // unknown → default
+}
+
+/// Arrow-key movement across a uniform grid: dx=±1 column, dy=±1 row.
+/// Clamps to [0, total) — never wraps, never leaves the list.
+pub fn moveFocus(current: usize, total: usize, cols: usize, dx: i32, dy: i32) usize {
+    if (total == 0) return 0;
+    const cur: i64 = @intCast(@min(current, total - 1));
+    var idx: i64 = cur + dx + dy * @as(i64, @intCast(@max(cols, 1)));
+    if (idx < 0) idx = 0;
+    if (idx >= total) idx = @intCast(total - 1);
+    return @intCast(idx);
+}
+
+test "moveFocus clamps at grid edges" {
+    // 10 items, 4 cols: rows are [0..3][4..7][8..9]
+    try std.testing.expectEqual(@as(usize, 1), moveFocus(0, 10, 4, 1, 0)); // right
+    try std.testing.expectEqual(@as(usize, 0), moveFocus(0, 10, 4, -1, 0)); // left at start clamps
+    try std.testing.expectEqual(@as(usize, 4), moveFocus(0, 10, 4, 0, 1)); // down one row
+    try std.testing.expectEqual(@as(usize, 9), moveFocus(6, 10, 4, 0, 1)); // down past end clamps to last
+    try std.testing.expectEqual(@as(usize, 0), moveFocus(2, 10, 4, 0, -1)); // up from row 0 clamps
+    try std.testing.expectEqual(@as(usize, 9), moveFocus(42, 10, 4, 0, 0)); // stale index clamps
+    try std.testing.expectEqual(@as(usize, 0), moveFocus(0, 0, 4, 1, 0)); // empty list
+}
+
+/// New scroll offset to bring `row` fully into view, or null if it already is.
+pub fn scrollOffsetForRow(row: usize, row_h: f32, viewport_y: f32, viewport_h: f32) ?f32 {
+    const top = @as(f32, @floatFromInt(row)) * row_h;
+    const bottom = top + row_h;
+    if (top < viewport_y) return top;
+    if (viewport_h > 0 and bottom > viewport_y + viewport_h) return bottom - viewport_h;
+    return null;
+}
+
+test "scrollOffsetForRow scrolls only when needed" {
+    // 200px rows, viewport shows 600px starting at 400 (rows 2..4 visible).
+    try std.testing.expectEqual(@as(?f32, null), scrollOffsetForRow(2, 200, 400, 600));
+    try std.testing.expectEqual(@as(?f32, null), scrollOffsetForRow(4, 200, 400, 600));
+    try std.testing.expectEqual(@as(?f32, 200), scrollOffsetForRow(1, 200, 400, 600)); // above → align top
+    try std.testing.expectEqual(@as(?f32, 600), scrollOffsetForRow(5, 200, 400, 600)); // below → align bottom
+}

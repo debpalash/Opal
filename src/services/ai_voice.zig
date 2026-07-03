@@ -312,6 +312,9 @@ pub fn toggleMicRecording() void {
         is_recording = false;
     } else {
         if (is_transcribing) return;
+        // Same callback wiring as conversation mode — one-shot dictation
+        // dropped its transcript into a null callback otherwise.
+        @import("ai_chat.zig").ensureInit();
         is_recording = true;
         mic_thread = std.Thread.spawn(.{}, micRecordWorker, .{}) catch {
             is_recording = false;
@@ -339,17 +342,37 @@ pub fn toggleConversation() void {
         stopAllAudio();
         logs.pushLog("info", "voice", "Conversation mode stopped", true);
     } else {
+        // Wire the transcript/error callbacks no matter how conversation mode
+        // was entered — without this, transcripts vanish into a null callback.
+        @import("ai_chat.zig").ensureInit();
+
         // Pre-check: ensure at least one voice path is viable
         const vb = @import("voice_backend.zig");
+        const vs = @import("voice_setup.zig");
         const deps = @import("../core/deps.zig");
+        const state_mod = @import("../core/state.zig");
         const ds = deps.check();
         const b = vb.active();
-        const has_streaming = b.supports_streaming and ds.sherpa_stream_model;
+        const has_parakeet_convo = vs.convoReady();
+        const has_streaming = (b.supports_streaming and ds.sherpa_stream_model) or has_parakeet_convo;
         const has_whisper = ds.whisper or ds.whisper_model or ds.sherpa_model;
+
         if (!has_streaming and !has_whisper) {
-            const state_mod = @import("../core/state.zig");
-            state_mod.showToast("No voice backend ready — install a model in AI tab first");
+            // Nothing viable → self-install the full conversational stack
+            // (sherpa CLIs + silero VAD + Parakeet v3) and tell the user.
+            if (vs.setup_state.load(.acquire) != @intFromEnum(vs.SetupState.running)) {
+                vs.installAsync();
+            }
+            state_mod.showToast("Setting up voice (one-time ~520 MB download) — try again in a few minutes");
             return;
+        }
+
+        // First-run background upgrade: a legacy path works today, but the
+        // fast conversational stack isn't installed yet — fetch it now so the
+        // NEXT conversation gets Parakeet v3 + natural turn-taking.
+        if (!has_parakeet_convo and vs.setup_state.load(.acquire) == @intFromEnum(vs.SetupState.idle)) {
+            vs.installAsync();
+            state_mod.showToast("Upgrading voice in the background: Parakeet v3 conversational stack (~520 MB)");
         }
 
         // Start conversation
@@ -357,8 +380,8 @@ pub fn toggleConversation() void {
         voice_mode = true;
         setPhase(.listening);
 
-        // Pick loop: streaming if active backend supports it + deps ready,
-        // else fall back to the legacy ffmpeg-record + STT-server v2 path.
+        // Pick loop: streaming if a streaming pipeline is ready (Parakeet VAD
+        // or zipformer mic), else the legacy ffmpeg-record + STT path.
         const use_streaming = has_streaming;
         conv_thread = (if (use_streaming)
             std.Thread.spawn(.{}, conversationLoopSherpa, .{})
@@ -373,6 +396,10 @@ pub fn toggleConversation() void {
         logs.pushLog("info", "voice", if (use_streaming) "Conv mode: sherpa streaming" else "Conv mode: v2 (legacy)", true);
     }
 }
+
+/// Transcripts arriving before this timestamp are presumed speaker echo
+/// (set whenever TTS/generation was active when a segment landed).
+var echo_guard_until_ms: i64 = 0;
 
 pub var auto_conversation: bool = false;
 
@@ -406,57 +433,79 @@ fn conversationLoopSherpa() void {
     }
 
     const vb = @import("voice_backend.zig");
-    // Transcripts are dispatched inline below (reading child.stdout), so
-    // spawnStreamingConvo no longer takes a callback.
-    var child = vb.spawnStreamingConvo() orelse {
-        logs.pushLog("error", "voice", "Sherpa streaming spawn failed — falling back to v2", false);
+    // Pipeline preference: Parakeet VAD+offline first — measured RTF ~0.1 on
+    // Apple Silicon CPU with flawless punctuation. Nemotron 3.5 streaming is
+    // wired but ranked below it: its int8 export measured RTF 1.3 on an M-
+    // series Air (can't keep up live on CPU); it only runs when Parakeet is
+    // absent. Then the brew zipformer mic, then the legacy record loop. All
+    // sherpa mic tools print results to STDERR via their Display helper.
+    var child = vb.spawnParakeetVadConvo() orelse vb.spawnNemotronStreamingConvo() orelse vb.spawnStreamingConvo() orelse {
+        logs.pushLog("error", "voice", "No streaming voice pipeline — falling back to v2", false);
         conversationLoopV2();
         return;
     };
     defer _ = child.kill() catch {};
 
-    const stdout = child.stdout orelse {
-        logs.pushLog("error", "voice", "Sherpa child has no stdout pipe", false);
+    const stdout = child.stderr orelse child.stdout orelse {
+        logs.pushLog("error", "voice", "Sherpa child has no output pipe", false);
         return;
     };
 
-    // sherpa-onnx-microphone output format:
-    //   "0:Text here"     → interim partial
-    //   "OK"               → silence/pause boundary
-    // We dispatch on each non-empty text line that looks like a final.
+    // Output contract (verified against sherpa v1.13.3 sources):
+    //  * finals end with '\n'; in-flight partials are '\r'-overwritten on the
+    //    same line, so a '\n'-line may embed partial snapshots — the text
+    //    after the LAST '\r' is the final;
+    //  * every result line is "N: text" (segment index prefix). Banner/config
+    //    lines never match the digit-colon shape, which filters them all.
     var reader_buf: [4096]u8 = undefined;
     var reader = stdout.reader(@import("../core/io_global.zig").io(), &reader_buf);
 
     setPhase(.listening);
     while (conversation_active) {
-        const line = reader.interface.takeDelimiter('\n') catch break orelse break;
+        var line = reader.interface.takeDelimiter('\n') catch break orelse break;
+        if (std.mem.lastIndexOfScalar(u8, line, '\r')) |rp| line = line[rp + 1 ..];
         const trimmed = std.mem.trim(u8, line, " \t\r");
         if (trimmed.len == 0) continue;
 
-        // Strip sherpa's "N:" prefix (chunk counter)
-        const text = blk: {
-            if (std.mem.indexOfScalar(u8, trimmed, ':')) |idx| {
-                break :blk std.mem.trim(u8, trimmed[idx + 1 ..], " \t");
-            }
-            break :blk trimmed;
-        };
-        if (text.len < 3) continue;
-        if (@import("voice_filter.zig").isHallucination(text)) continue;
-
-        // Barge-in for the streaming path: this loop has no separate interrupt
-        // channel, but a fresh utterance arriving while the assistant is
-        // speaking IS the interruption. Cut the current reply, abort its
-        // generation, and wait for it to unwind so onTranscribed (which drops
-        // turns while is_generating) accepts this new one.
-        if (is_speaking or @import("ai_chat.zig").is_generating.load(.acquire)) {
-            barge_in.store(true, .release);
-            @import("ai_chat.zig").gen_abort.store(true, .release);
-            stopAllAudio();
-            var w: usize = 0;
-            while (@import("ai_chat.zig").is_generating.load(.acquire) and w < 50) : (w += 1) {
-                @import("../core/io_global.zig").sleep(10 * std.time.ns_per_ms);
+        // Require the "N: text" segment shape — everything before the first
+        // ':' must be digits (banners, config dumps and paths never match).
+        const colon = std.mem.indexOfScalar(u8, trimmed, ':') orelse continue;
+        if (colon == 0) continue;
+        var all_digits = true;
+        for (trimmed[0..colon]) |ch| {
+            if (!std.ascii.isDigit(ch) and ch != ' ') {
+                all_digits = false;
+                break;
             }
         }
+        if (!all_digits) continue;
+        const text = std.mem.trim(u8, trimmed[colon + 1 ..], " \t");
+
+        if (text.len < 3) continue;
+        var has_alpha = false;
+        for (text) |ch| {
+            if (std.ascii.isAlphabetic(ch)) {
+                has_alpha = true;
+                break;
+            }
+        }
+        if (!has_alpha) continue;
+        if (@import("voice_filter.zig").isHallucination(text)) continue;
+
+        // Echo guard: with open speakers the mic hears the assistant's OWN
+        // TTS — the old "fresh utterance while speaking = barge-in" logic
+        // made the app interrupt itself and dispatch its own sentence as a
+        // user turn ("Message? Hello there…" bubbles in the transcript).
+        // Without echo cancellation, drop anything captured while speaking or
+        // generating, plus a short tail for room reverb / VAD lag. Voice
+        // barge-in is traded away for never talking to itself; the stop
+        // button still cuts speech instantly.
+        const echo_now = @import("../core/io_global.zig").milliTimestamp();
+        if (is_speaking or @import("ai_chat.zig").is_generating.load(.acquire)) {
+            echo_guard_until_ms = echo_now + 700;
+            continue;
+        }
+        if (echo_now < echo_guard_until_ms) continue;
 
         setPhase(.transcribing);
         // New user turn — clear any prior barge-in so this reply may speak.

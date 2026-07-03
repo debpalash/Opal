@@ -606,33 +606,60 @@ pub fn fetchThumb(item: *state.YtItem) void {
             defer ptr.thumb_fetching = false;
             defer @import("../core/poster.zig").releaseSlot();
 
-            var client = std.http.Client{ .allocator = alloc, .io = io.io() };
-            defer client.deinit();
+            const poster = @import("../core/poster.zig");
+            const turl = ptr.thumbnail_url[0..ptr.thumbnail_url_len];
 
-            const uri = std.Uri.parse(ptr.thumbnail_url[0..ptr.thumbnail_url_len]) catch return;
-            var req = client.request(.GET, uri, .{ .extra_headers = &.{.{ .name = "Accept", .value = "image/jpeg, image/webp" }} }) catch return;
-            defer req.deinit();
-            req.sendBodiless() catch return;
+            // Shared poster disk cache: a hit skips the network; a cached blob
+            // that fails to decode is deleted and refetched (same policy as
+            // fetchAsync in core/poster.zig).
+            const cached = poster.cacheLoadForUrl(turl);
+            defer if (cached) |cb| poster.cacheFreeEncoded(cb);
 
-            var redirect_buf: [8192]u8 = undefined;
-            var response = req.receiveHead(&redirect_buf) catch return;
-            if (response.head.status != .ok) return;
+            var net_body: ?[]u8 = null;
+            defer if (net_body) |bo| alloc.free(bo);
 
-            var transfer_buf: [4096]u8 = undefined;
-            var decompress: std.http.Decompress = undefined;
-            var rdr = response.readerDecompressing(&transfer_buf, &decompress, &.{});
-
-            const body = rdr.allocRemaining(alloc, std.Io.Limit.limited(5 * 1024 * 1024)) catch return;
-            defer alloc.free(body);
-
+            var pixels: [*c]u8 = null;
             var w: c_int = 0;
             var h: c_int = 0;
-            var comp: c_int = 0;
-            const pixels = dvui.c.stbi_load_from_memory(body.ptr, @intCast(body.len), &w, &h, &comp, 4);
+            var attempt: u8 = 0;
+            while (attempt < 2) : (attempt += 1) {
+                const used_cache = attempt == 0 and cached != null;
+                const body: []const u8 = if (used_cache) cached.? else blk: {
+                    var client = std.http.Client{ .allocator = alloc, .io = io.io() };
+                    defer client.deinit();
+
+                    const uri = std.Uri.parse(turl) catch return;
+                    var req = client.request(.GET, uri, .{ .extra_headers = &.{.{ .name = "Accept", .value = "image/jpeg, image/webp" }} }) catch return;
+                    defer req.deinit();
+                    req.sendBodiless() catch return;
+
+                    var redirect_buf: [8192]u8 = undefined;
+                    var response = req.receiveHead(&redirect_buf) catch return;
+                    if (response.head.status != .ok) return;
+
+                    var transfer_buf: [4096]u8 = undefined;
+                    var decompress: std.http.Decompress = undefined;
+                    var rdr = response.readerDecompressing(&transfer_buf, &decompress, &.{});
+
+                    const body = rdr.allocRemaining(alloc, std.Io.Limit.limited(5 * 1024 * 1024)) catch return;
+                    net_body = body;
+                    break :blk body;
+                };
+
+                var comp: c_int = 0;
+                w = 0;
+                h = 0;
+                pixels = dvui.c.stbi_load_from_memory(body.ptr, @intCast(body.len), &w, &h, &comp, 4);
+                if (pixels != null and w > 0 and h > 0) {
+                    if (!used_cache) poster.cacheStoreForUrl(turl, body, @intCast(w), @intCast(h));
+                    break;
+                }
+                if (pixels != null) dvui.c.stbi_image_free(pixels);
+                pixels = null;
+                if (used_cache) poster.cacheDeleteForUrl(turl) else return;
+            }
             if (pixels == null) return;
             defer dvui.c.stbi_image_free(pixels);
-
-            if (w <= 0 or h <= 0) return;
             // usize-first: w*h*4 in c_int overflows on a large crafted image and
             // panics this worker thread (whole-app abort).
             const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
@@ -865,26 +892,11 @@ fn toolbarDivider(id: usize) void {
 /// Compact inline search box. Enter/Go fire immediately; typing is handled by
 /// the debounced live search in maybeFireLiveSearch().
 fn renderSearchInline() void {
-    var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.yt.search_buf }, .placeholder = "Search YouTube…" }, .{
-        .min_size_content = .{ .w = 240, .h = 28 },
-        .color_fill = theme.colors.bg_elevated,
-        .color_border = theme.colors.border_subtle,
-        .color_text = theme.colors.text_primary,
-        .border = dvui.Rect.all(1),
-        .corner_radius = theme.dims.rad_sm,
-        .gravity_y = 0.5,
-    });
-    const enter_pressed = te.enter_pressed;
-    te.deinit();
+    const components = @import("../ui/components.zig");
+    // Canonical compact toolbar input — same height/padding as Movies & TV.
+    const enter_pressed = components.toolbarSearch(@src(), &state.app.yt.search_buf, "Search YouTube…", 240);
 
-    if (dvui.button(@src(), "Go", .{}, .{
-        .color_fill = theme.colors.accent,
-        .color_text = theme.colors.bg_app,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
-        .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
-        .gravity_y = 0.5,
-    }) or enter_pressed) {
+    if (components.toolbarGo(@src(), "Go") or enter_pressed) {
         const q = currentQuery();
         recordFired(q);
         fetchYoutube(q);

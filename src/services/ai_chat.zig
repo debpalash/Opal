@@ -137,7 +137,6 @@ pub var last_error_len: usize = 0;
 var show_controls: bool = false;
 var callbacks_initialized: bool = false;
 pub var incognito_mode: bool = false;
-pub var is_bubble_open: bool = false;
 
 pub fn clearHistory() void {
     // Preserve starred messages by compacting them to the front before wipe.
@@ -157,6 +156,7 @@ pub fn clearHistory() void {
     last_error_len = 0;
     chat_result_count = 0;
     chat_results_active = false;
+    catalog_rail_active = false;
     awaiting_confirmation = false;
     recommended_idx = null;
     last_show_len = 0;
@@ -171,6 +171,142 @@ pub var chat_results_active: bool = false;
 pub var recommended_idx: ?usize = null;
 pub var awaiting_confirmation: bool = false;
 
+// ── Conversation sessions (Claude-style history sidebar) ──
+// conversation_log rows carry a session_id; the sidebar groups by it. The id
+// is stamped lazily from the wall clock on the first persisted turn.
+pub var session_id: [24]u8 = std.mem.zeroes([24]u8);
+pub var session_id_len: usize = 0;
+
+pub fn currentSessionId() []const u8 {
+    if (session_id_len == 0) {
+        const ms = @import("../core/io_global.zig").milliTimestamp();
+        const s = std.fmt.bufPrint(&session_id, "{d}", .{ms}) catch return "";
+        session_id_len = s.len;
+    }
+    return session_id[0..session_id_len];
+}
+
+pub const ChatSession = struct {
+    sid: [24]u8 = std.mem.zeroes([24]u8),
+    sid_len: usize = 0,
+    title: [96]u8 = std.mem.zeroes([96]u8),
+    title_len: usize = 0,
+};
+pub var sessions: [24]ChatSession = std.mem.zeroes([24]ChatSession);
+pub var session_count: usize = 0;
+pub var sessions_dirty: bool = true; // set on every persisted turn
+
+/// Refresh the sidebar list: one row per session, newest activity first,
+/// titled by the session's first user message.
+pub fn loadSessions() void {
+    if (!sessions_dirty) return;
+    sessions_dirty = false;
+    session_count = 0;
+    const sql =
+        \\SELECT c1.session_id,
+        \\  (SELECT c2.content FROM conversation_log c2
+        \\    WHERE c2.session_id = c1.session_id AND c2.role = 'user'
+        \\    ORDER BY c2.id LIMIT 1)
+        \\FROM conversation_log c1
+        \\WHERE c1.session_id IS NOT NULL AND c1.session_id != ''
+        \\GROUP BY c1.session_id
+        \\ORDER BY MAX(c1.created_at) DESC
+        \\LIMIT 24
+    ;
+    const stmt = db.prepare(sql) orelse return;
+    defer db.finalize(stmt);
+    while (db.step(stmt) == db.c.SQLITE_ROW and session_count < sessions.len) {
+        const s = &sessions[session_count];
+        db.copyColumn(stmt, 0, &s.sid, &s.sid_len);
+        db.copyColumn(stmt, 1, &s.title, &s.title_len);
+        if (s.sid_len > 0) session_count += 1;
+    }
+}
+
+/// Start a blank conversation (Claude "New chat"): wipes the in-memory
+/// transcript — the DB log keeps every past session — and re-arms a fresh
+/// session id for the next turn.
+pub fn newChat() void {
+    for (0..MAX_MESSAGES) |i| messages[i] = .{};
+    message_count = 0;
+    @memset(&input_buf, 0);
+    input_len = 0;
+    is_generating.store(false, .release);
+    last_error_len = 0;
+    chat_result_count = 0;
+    chat_results_active = false;
+    catalog_rail_active = false;
+    awaiting_confirmation = false;
+    recommended_idx = null;
+    last_show_len = 0;
+    last_season = 0;
+    last_episode = 0;
+    session_id_len = 0;
+    sessions_dirty = true;
+}
+
+/// Load a past session's transcript from the log into the live chat and
+/// CONTINUE it — new turns append to the same session id.
+pub fn loadSession(sid: []const u8) void {
+    newChat();
+    const n = @min(sid.len, session_id.len);
+    @memcpy(session_id[0..n], sid[0..n]);
+    session_id_len = n;
+
+    const stmt = db.prepare("SELECT role, content FROM conversation_log WHERE session_id = ?1 ORDER BY id LIMIT 50") orelse return;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, sid);
+    while (db.step(stmt) == db.c.SQLITE_ROW and message_count < MAX_MESSAGES) {
+        const m = &messages[message_count];
+        var role_buf: [16]u8 = undefined;
+        var role_len: usize = 0;
+        db.copyColumn(stmt, 0, &role_buf, &role_len);
+        m.role = if (std.mem.eql(u8, role_buf[0..role_len], "user")) .user else .assistant;
+        db.copyColumn(stmt, 1, &m.text, &m.text_len);
+        if (m.text_len > 0) message_count += 1;
+    }
+}
+
+// ── Rich catalog rail (set alongside chat_results) ──
+// When a discovery/find query also kicked a TMDB fetch, the transcript shows
+// the shared state.app.tmdb.results as a poster rail — the same rich cards
+// Browse renders — above the plain playable-source rows.
+pub var catalog_rail_active: bool = false;
+
+/// Kick a TMDB fetch for `query` and surface it as the transcript's rich
+/// catalog rail. Genre-flavored queries ("mind-bending sci-fi show") go to
+/// /discover — a literal TMDB title search returns nothing for those;
+/// concrete titles use search. Shared by BOTH find paths (the LLM
+/// find_and_play tool AND ai_context's "play …" fast path).
+var rail_retry_done: bool = false; // one-shot; re-armed by each kick
+
+pub fn kickCatalogRail(query: []const u8) void {
+    if (state.app.tmdb.api_key_len == 0) return;
+    rail_retry_done = false;
+    const tmdb_api = @import("tmdb_api.zig");
+    var lower_buf: [256]u8 = undefined;
+    const qslice = query[0..@min(query.len, lower_buf.len)];
+    const qlower = std.ascii.lowerString(&lower_buf, qslice);
+    const gid: u32 = if (@import("ai_intent_pure.zig").findGenre(qlower)) |gname|
+        @import("ai_intent.zig").genreNameToId(gname)
+    else
+        0;
+    if (gid > 0) {
+        tmdb_api.fetchDiscover(gid);
+    } else {
+        @memset(&state.app.tmdb.search_buf, 0);
+        const qn = @min(query.len, state.app.tmdb.search_buf.len - 1);
+        @memcpy(state.app.tmdb.search_buf[0..qn], query[0..qn]);
+        state.app.tmdb.view = .Search;
+        state.app.tmdb.genre_idx = 0;
+        state.app.tmdb.page = 1;
+        state.app.tmdb.loaded_once = true;
+        @import("tmdb.zig").resetGalleryScroll();
+        tmdb_api.fetchCurrentView(false);
+    }
+    catalog_rail_active = true;
+}
+
 // ── Last search context (for "next episode" etc.) ──
 pub var last_show: [128]u8 = std.mem.zeroes([128]u8);
 pub var last_show_len: usize = 0;
@@ -184,6 +320,23 @@ fn initCallbacks() void {
     callbacks_initialized = true;
     voice.setCallbacks(&onTranscribed, &setError);
     server.setErrorCallback(&setError);
+}
+
+/// One-time service wiring: voice transcript callback, error sink, zombie
+/// server sweep, LLM path check. MUST NOT live only inside a render fn —
+/// it used to run in renderChatBody, which lost all callers when chat moved
+/// to Home, leaving on_transcribed_fn null: voice conversations recorded and
+/// transcribed fine, then dropped every transcript silently.
+pub fn ensureInit() void {
+    server.checkPaths();
+    initCallbacks();
+    const K = struct {
+        var done: bool = false;
+    };
+    if (!K.done) {
+        K.done = true;
+        voice.killStaleServers();
+    }
 }
 
 /// Re-export for player.zig media hooks
@@ -230,16 +383,16 @@ pub fn stopAll() void {
 // ══════════════════════════════════════════════════════════
 
 pub fn renderChatBody() void {
-    server.checkPaths();
-    initCallbacks();
-    { // Kill zombie servers from previous runs — once at startup only
+    ensureInit();
+    { // Pre-warm STT/TTS only when this legacy panel actually renders —
+        // ensureInit (per-frame, app-wide) must not spawn python servers for
+        // users who never touch voice; the voice entry points start them.
         const K = struct {
             var done: bool = false;
         };
         if (!K.done) {
             K.done = true;
-            voice.killStaleServers();
-            voice.preWarmServers(); // Start STT/TTS servers in background early
+            voice.preWarmServers();
         }
     }
 
@@ -851,8 +1004,69 @@ fn renderMessage(mi: usize) void {
     // Inline results are rendered separately after the message loop
 }
 
+/// Rich catalog rail — the SAME poster cards Browse renders, inline in the
+/// transcript. Reads the shared state.app.tmdb.results that the query's
+/// TMDB fetch populated (posters, ratings, hover metadata, quick actions).
+fn renderCatalogRail() void {
+    if (!catalog_rail_active) return;
+    const tmdb = @import("tmdb.zig");
+    const items = &state.app.tmdb.results;
+
+    if (items.items.len == 0) {
+        // Self-heal: the kick's fetch is silently dropped when another TMDB
+        // fetch was in flight (fetchCurrentView's is_loading guard). One
+        // retry once the line is free brings the rail up instead of leaving
+        // an invisible nothing.
+        if (!state.app.tmdb.is_loading.load(.acquire) and !rail_retry_done) {
+            rail_retry_done = true;
+            @import("tmdb_api.zig").fetchCurrentView(false);
+        }
+        if (state.app.tmdb.is_loading.load(.acquire)) {
+            var lrow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 9300 });
+            defer lrow.deinit();
+            dvui.spinner(@src(), .{
+                .color_text = theme.colors.accent,
+                .min_size_content = .{ .w = 12, .h = 12 },
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+            });
+            _ = dvui.label(@src(), "Fetching the catalog…", .{}, .{
+                .color_text = theme.colors.text_tertiary,
+                .gravity_y = 0.5,
+            });
+            dvui.refresh(null, @src(), null);
+        }
+        return;
+    }
+
+    components.sectionHeader("From the catalog");
+
+    const card_w: f32 = 116;
+    const poster_h: f32 = card_w * 1.5;
+    const strip_h: f32 = poster_h + 64 + 8; // card content + footer + margins
+
+    var rail = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
+        .id_extra = 9310,
+        .expand = .horizontal,
+        .background = false,
+        .min_size_content = .{ .w = 10, .h = strip_h },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = strip_h },
+    });
+    defer rail.deinit();
+
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 9311 });
+    defer row.deinit();
+
+    const n = @min(items.items.len, 10);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        tmdb.renderPosterCard(&items.items[i], i, card_w, poster_h);
+    }
+}
+
 // ── Inline search results widget (from find_and_play tool) ──
 pub fn renderInlineResults() void {
+    renderCatalogRail();
     if (!chat_results_active or chat_result_count == 0) return;
 
     const source_label = struct {
@@ -889,8 +1103,8 @@ pub fn renderInlineResults() void {
     });
     defer results_box.deinit();
 
-    // Header
-    components.sectionHeader("Results");
+    // Header — these are the playable SOURCES; the rich cards live above.
+    components.sectionHeader("Sources");
 
     for (0..chat_result_count) |ci| {
         const item = &chat_results[ci];
@@ -1063,13 +1277,9 @@ pub fn regenerateFrom(assistant_idx: usize) void {
 }
 
 pub fn trySendMessage() void {
-    // Ensure path detection has run (renderChatBody normally does this,
-    // but input submit may fire before the drawer is ever opened).
-    server.checkPaths();
-    // Auto-start server if not running
-    if (!server.server_running and server.model_exists and server.llama_server_exists) {
-        server.startServer();
-    }
+    // Detect paths, auto-download the default model when missing, and start
+    // the server when it's on disk — first message self-installs the brain.
+    server.ensureReady();
     sendMessage();
 }
 
@@ -1175,152 +1385,4 @@ fn onTranscribed(transcribed: []const u8) void {
     @memset(input_buf[tlen..], 0);
     input_len = tlen;
     trySendMessage();
-}
-
-// ══════════════════════════════════════════════════════════
-//  Next-Gen Floating AI Bubble Overlay
-// ══════════════════════════════════════════════════════════
-
-pub fn renderFloatingBubble() void {
-    const min_w: f32 = 300.0;
-    const min_h: f32 = 400.0;
-    const default_w: f32 = 400.0;
-    const default_h: f32 = 550.0;
-
-    // Persistent rect — tracks position across frames for BOTH collapsed and expanded modes.
-    // Initialized to bottom-right on first open.
-    const S = struct {
-        var win_rect: dvui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
-        var initialized: bool = false;
-        var was_expanded: bool = true;
-    };
-
-    if (!S.initialized) {
-        const wr = dvui.windowRect();
-        if (is_bubble_open) {
-            S.win_rect = .{
-                .x = wr.w - default_w - 30, // Default to right side
-                .y = wr.h - default_h - 80, // Default to bottom
-                .w = default_w + 4,
-                .h = default_h + 4,
-            };
-        } else {
-            S.win_rect = .{
-                .x = wr.w - 56 - 30, // Bottom-right corner specifically for the small bubble
-                .y = wr.h - 56 - 80,
-                .w = 60,
-                .h = 90,
-            };
-        }
-        S.initialized = true;
-        S.was_expanded = is_bubble_open;
-    }
-
-    // Handle seamless resizing by anchoring the bottom-right corner
-    if (is_bubble_open and !S.was_expanded) {
-        // Just expanded: grow up and left
-        S.win_rect.x -= (default_w + 4 - S.win_rect.w);
-        S.win_rect.y -= (default_h + 4 - S.win_rect.h);
-        S.win_rect.w = default_w + 4;
-        S.win_rect.h = default_h + 4;
-        S.was_expanded = true;
-    } else if (!is_bubble_open and S.was_expanded) {
-        // Just collapsed: shrink down and right
-        S.win_rect.x += (S.win_rect.w - 60);
-        S.win_rect.y += (S.win_rect.h - 90);
-        S.win_rect.w = 60;
-        S.win_rect.h = 90;
-        S.was_expanded = false;
-    }
-
-    if (is_bubble_open) {
-        // ══════════════════════════════════════════════════
-        // EXPANDED: dvui.floatingWindow — a true top-level
-        // subwindow that sits above ALL content and captures
-        // ALL mouse/keyboard events within its bounds.
-        // ══════════════════════════════════════════════════
-        var chat_win = dvui.floatingWindow(@src(), .{
-            .modal = false,
-            .resize = .all,
-            .rect = &S.win_rect,
-        }, .{
-            .min_size_content = .{ .w = min_w, .h = min_h },
-            .color_fill = theme.colors.bg_elevated,
-            .color_border = theme.colors.border_subtle,
-            .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_lg,
-        });
-        defer chat_win.deinit();
-
-        // Header — also the draggable region
-        {
-            var ctx_hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal,
-                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
-                .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-                .color_border = theme.colors.border_subtle,
-            });
-
-            // Make header the drag area so user can reposition the window
-            chat_win.dragAreaSet(ctx_hdr.data().borderRectScale().r);
-
-            _ = dvui.icon(@src(), "", icons.tvg.lucide.bot, .{}, .{
-                .color_text = theme.colors.accent,
-                .min_size_content = .{ .w = 14, .h = 14 },
-                .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
-                .gravity_y = 0.5,
-            });
-
-            // Read what's playing
-            const state_mod = @import("../core/state.zig");
-            if (state_mod.app.active_player_idx < state_mod.app.players.items.len) {
-                const ap = state_mod.app.players.items[state_mod.app.active_player_idx];
-                var name_buf: [128]u8 = undefined;
-                var curr_title: []const u8 = "Media";
-
-                const path = &ap.current_url;
-                const path_len = std.mem.indexOfScalar(u8, path, 0) orelse path.len;
-                if (path_len > 0) {
-                    const basename = std.fs.path.basename(path[0..path_len]);
-                    const safe_len = @min(basename.len, 128);
-                    @memcpy(name_buf[0..safe_len], basename[0..safe_len]);
-                    curr_title = name_buf[0..safe_len];
-                }
-
-                _ = dvui.label(@src(), "Seeing: ", .{}, .{
-                    .color_text = theme.colors.text_secondary,
-                    .gravity_y = 0.5,
-                });
-                dvui.labelEx(@src(), "{s}", .{curr_title}, .{ .ellipsize = true }, .{
-                    .color_text = theme.colors.text_primary,
-                    .gravity_y = 0.5,
-                    .expand = .horizontal,
-                });
-            } else {
-                _ = dvui.label(@src(), "AI Chat", .{}, .{
-                    .color_text = theme.colors.text_secondary,
-                    .gravity_y = 0.5,
-                    .expand = .horizontal,
-                });
-            }
-
-            // Close button
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
-                .color_text = theme.colors.text_secondary,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .border = dvui.Rect.all(0),
-                .gravity_y = 0.5,
-            })) {
-                is_bubble_open = false;
-            }
-
-            ctx_hdr.deinit();
-        }
-
-        // Render the inner chat UI
-        renderChatBody();
-    } else {
-        // Collapsed mode handled by header bot-toggle. No floating FAB.
-        return;
-    }
 }

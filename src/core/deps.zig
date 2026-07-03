@@ -173,6 +173,63 @@ pub var sherpa_model_downloading: bool = false;
 pub var parakeet_v2_downloading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 pub var parakeet_v3_downloading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
+/// Download + extract a Parakeet TDT bundle synchronously (caller owns the
+/// thread — voice_setup's installer runs it inline for sequenced progress).
+/// Idempotent: returns true immediately when the model is already on disk.
+pub fn fetchParakeetBlocking(is_v3: bool) bool {
+    const dir_name = if (is_v3)
+        "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
+    else
+        "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
+    const url = if (is_v3)
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2"
+    else
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2";
+
+    var home_buf: [512]u8 = undefined;
+    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return false;
+    const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return false;
+    io_global.makeDirAbsolute(models_dir) catch {};
+
+    // Already extracted → no-op.
+    var check_buf: [512]u8 = undefined;
+    const check_path = std.fmt.bufPrintZ(&check_buf, "{s}/{s}/encoder.int8.onnx", .{ models_dir, dir_name }) catch return false;
+    if (io_global.cwdAccess(check_path, .{})) |_| return true else |_| {}
+
+    var tar_buf: [512]u8 = undefined;
+    const tar_path = std.fmt.bufPrintZ(&tar_buf, "{s}/{s}.tar.bz2", .{ models_dir, dir_name }) catch return false;
+
+    logs.pushLog("info", "deps", if (is_v3) "Fetching Parakeet TDT 0.6B v3 (~490MB)…" else "Fetching Parakeet TDT 0.6B v2 (~480MB)…", false);
+    var curl = io_global.Child.init(&.{
+        "curl", "-L", "--fail", "--silent", "--show-error", "-o", tar_path, url,
+    }, @import("alloc.zig").allocator);
+    curl.stdout_behavior = .Ignore;
+    curl.stderr_behavior = .Ignore;
+    curl.spawn() catch {
+        logs.pushLog("error", "deps", "curl missing — can't fetch Parakeet model", true);
+        return false;
+    };
+    _ = curl.wait() catch {};
+
+    // Archive extracts to a top-level dir named exactly dir_name.
+    var untar = io_global.Child.init(&.{
+        "tar", "-xjf", tar_path, "-C", models_dir,
+    }, @import("alloc.zig").allocator);
+    untar.stdout_behavior = .Ignore;
+    untar.stderr_behavior = .Ignore;
+    _ = untar.spawnAndWait() catch {};
+
+    io_global.deleteFileAbsolute(tar_path) catch {};
+
+    if (io_global.cwdAccess(check_path, .{})) |_| {
+        logs.pushLog("info", "deps", "Parakeet TDT model ready", false);
+        return true;
+    } else |_| {
+        logs.pushLog("error", "deps", "Parakeet download/extract failed — see network and disk space", true);
+        return false;
+    }
+}
+
 pub fn fetchParakeetAsync(v3: bool) void {
     const flag = if (v3) &parakeet_v3_downloading else &parakeet_v2_downloading;
     if (flag.swap(true, .acq_rel)) return; // already running
@@ -180,55 +237,7 @@ pub fn fetchParakeetAsync(v3: bool) void {
         fn worker(is_v3: bool) void {
             const f = if (is_v3) &parakeet_v3_downloading else &parakeet_v2_downloading;
             defer f.store(false, .release);
-            const dir_name = if (is_v3)
-                "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
-            else
-                "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
-            const url = if (is_v3)
-                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2"
-            else
-                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2";
-
-            var home_buf: [512]u8 = undefined;
-            const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return;
-            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
-            io_global.makeDirAbsolute(models_dir) catch {};
-
-            // Already extracted → no-op.
-            var check_buf: [512]u8 = undefined;
-            const check_path = std.fmt.bufPrintZ(&check_buf, "{s}/{s}/encoder.int8.onnx", .{ models_dir, dir_name }) catch return;
-            if (io_global.cwdAccess(check_path, .{})) |_| return else |_| {}
-
-            var tar_buf: [512]u8 = undefined;
-            const tar_path = std.fmt.bufPrintZ(&tar_buf, "{s}/{s}.tar.bz2", .{ models_dir, dir_name }) catch return;
-
-            logs.pushLog("info", "deps", if (is_v3) "Fetching Parakeet TDT 0.6B v3 (~490MB)…" else "Fetching Parakeet TDT 0.6B v2 (~480MB)…", false);
-            var curl = io_global.Child.init(&.{
-                "curl", "-L", "--fail", "--silent", "--show-error", "-o", tar_path, url,
-            }, @import("alloc.zig").allocator);
-            curl.stdout_behavior = .Ignore;
-            curl.stderr_behavior = .Ignore;
-            curl.spawn() catch {
-                logs.pushLog("error", "deps", "curl missing — can't fetch Parakeet model", true);
-                return;
-            };
-            _ = curl.wait() catch {};
-
-            // Archive extracts to a top-level dir named exactly dir_name.
-            var untar = io_global.Child.init(&.{
-                "tar", "-xjf", tar_path, "-C", models_dir,
-            }, @import("alloc.zig").allocator);
-            untar.stdout_behavior = .Ignore;
-            untar.stderr_behavior = .Ignore;
-            _ = untar.spawnAndWait() catch {};
-
-            io_global.deleteFileAbsolute(tar_path) catch {};
-
-            if (io_global.cwdAccess(check_path, .{})) |_| {
-                logs.pushLog("info", "deps", "Parakeet TDT model ready", false);
-            } else |_| {
-                logs.pushLog("error", "deps", "Parakeet download/extract failed — see network and disk space", true);
-            }
+            _ = fetchParakeetBlocking(is_v3);
         }
     };
     if (std.Thread.spawn(.{}, S.worker, .{v3})) |t| t.detach() else |_| {

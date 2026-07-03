@@ -284,12 +284,15 @@ pub fn saveConversation(role: []const u8, content: []const u8) void {
     if (@import("../core/state.zig").app.incognito_mode) return; // incognito chat: nothing persists
     if (content.len < 10) return; // skip trivial messages
     if (isJunkTurn(content)) return; // reject tool-plumbing poison
-    const q = "INSERT INTO conversation_log(role, content) VALUES(?1, ?2)";
+    const chat = @import("ai_chat.zig");
+    const q = "INSERT INTO conversation_log(role, content, session_id) VALUES(?1, ?2, ?3)";
     const stmt = db.prepare(q) orelse return;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, role);
     db.bindText(stmt, 2, content);
+    db.bindText(stmt, 3, chat.currentSessionId());
     _ = db.step(stmt);
+    chat.sessions_dirty = true; // history sidebar refreshes lazily
 }
 
 /// One-time purge of already-poisoned rows. Idempotent — WHERE clause is

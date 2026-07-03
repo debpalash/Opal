@@ -260,8 +260,29 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_tmdb_pure).step);
 
-    // Home console display helpers (hex-hash watch-history names,
-    // time-aware greeting, UTF-8-safe label clipping).
+    // Browser pure helpers: smart address bar (host vs search heuristic),
+    // query percent-encoding, keypress-vs-text forwarding (double-type
+    // regression), content routing.
+    const test_browser_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/browser_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_browser_pure).step);
+
+    // JSON string unescaping (yt-dlp titles rendered "You’ve" raw).
+    const test_json_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/json_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_json_pure).step);
+
+    // Home console display helpers (hex-hash watch-history names).
     const test_home_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ui/home_pure.zig"),

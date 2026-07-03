@@ -815,31 +815,52 @@ pub fn fetchPoster(item: *PluginResult) void {
         fn worker(ptr: *PluginResult) void {
             defer ptr.poster_fetching = false;
             defer @import("../core/poster.zig").releaseSlot();
+            const poster = @import("../core/poster.zig");
             const url = ptr.poster_url[0..ptr.poster_url_len];
-            
-            const argv = [_][]const u8{ "curl", "-sL", "--max-time", "10", url };
-            var child = @import("../core/io_global.zig").Child.init(&argv, c_alloc);
-            child.stdout_behavior = .Pipe;
-            child.stderr_behavior = .Ignore;
-            _ = child.spawn() catch {
-                logSpawnFail(argv[0]);
-                return;
-            };
 
-            const img_buf = c_alloc.alloc(u8, 512 * 1024) catch return;
-            defer c_alloc.free(img_buf);
-            const img_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, img_buf) catch 0 else 0;
-            _ = child.wait() catch {};
-            if (img_len < 100) return;
-            
+            const cached = poster.cacheLoadForUrl(url);
+            defer if (cached) |cb| poster.cacheFreeEncoded(cb);
+
+            var img_buf: ?[]u8 = null;
+            defer if (img_buf) |ib| c_alloc.free(ib);
+
+            var pixels: [*c]u8 = null;
             var w: c_int = 0;
             var h: c_int = 0;
-            var comp: c_int = 0;
-            const pixels = dvui.c.stbi_load_from_memory(img_buf[0..img_len].ptr, @intCast(img_len), &w, &h, &comp, 4);
+            var attempt: u8 = 0;
+            while (attempt < 2) : (attempt += 1) {
+                const used_cache = attempt == 0 and cached != null;
+                const img: []const u8 = if (used_cache) cached.? else blk: {
+                    const argv = [_][]const u8{ "curl", "-sL", "--max-time", "10", url };
+                    var child = @import("../core/io_global.zig").Child.init(&argv, c_alloc);
+                    child.stdout_behavior = .Pipe;
+                    child.stderr_behavior = .Ignore;
+                    _ = child.spawn() catch {
+                        logSpawnFail(argv[0]);
+                        return;
+                    };
+
+                    if (img_buf == null) img_buf = c_alloc.alloc(u8, 512 * 1024) catch return;
+                    const img_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, img_buf.?) catch 0 else 0;
+                    _ = child.wait() catch {};
+                    if (img_len < 100) return;
+                    break :blk img_buf.?[0..img_len];
+                };
+
+                var comp: c_int = 0;
+                w = 0;
+                h = 0;
+                pixels = dvui.c.stbi_load_from_memory(img.ptr, @intCast(img.len), &w, &h, &comp, 4);
+                if (pixels != null and w > 0 and h > 0) {
+                    if (!used_cache) poster.cacheStoreForUrl(url, img, @intCast(w), @intCast(h));
+                    break;
+                }
+                if (pixels != null) dvui.c.stbi_image_free(pixels);
+                pixels = null;
+                if (used_cache) poster.cacheDeleteForUrl(url) else return;
+            }
             if (pixels == null) return;
             defer dvui.c.stbi_image_free(pixels);
-            
-            if (w <= 0 or h <= 0) return;
             // usize-first: w*h*4 in c_int overflows on a large crafted image and
             // panics this worker thread (whole-app abort).
             const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;

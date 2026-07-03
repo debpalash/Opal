@@ -1,6 +1,6 @@
 .{
-    .name = .zigzag,
-    .version = "0.0.1",
+    .name = .opal,
+    .version = "0.1.0",
     .dependencies = .{
         .dvui = .{
             .url = "git+https://github.com/debpalash/dvui#766e4333966dc7c624f6bea5e53f46cec5c48b5a",
@@ -13,5 +13,5 @@
     },
     .minimum_zig_version = "0.15.2",
     .paths = .{""},
-    .fingerprint = 0xdffe161964faa576,
+    .fingerprint = 0x2e12278c22c5aa8b,
 }

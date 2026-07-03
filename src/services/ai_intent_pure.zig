@@ -113,11 +113,21 @@ pub fn classifyIntent(input_lower: []const u8) Intent {
     }
     for (genre_keywords) |gk| {
         if (std.mem.indexOf(u8, input_lower, gk.keyword) != null) {
-            const has_media_word = std.mem.indexOf(u8, input_lower, "movies") != null or
-                std.mem.indexOf(u8, input_lower, "shows") != null or
-                std.mem.indexOf(u8, input_lower, "anime") != null or
-                std.mem.indexOf(u8, input_lower, "series") != null or
-                std.mem.indexOf(u8, input_lower, "films") != null;
+            // SINGULAR media words count too — "find a mind-bending sci-fi
+            // show" used to fall through to a literal title search of the
+            // whole vibe phrase (all-YouTube-listicle results). indexOf on
+            // the singular also matches the plural. The "show me …" filler
+            // prefix is excluded so "show me war of the worlds" (genre word
+            // "war", verb "show") stays a specific-title query.
+            const media_scope = if (std.mem.startsWith(u8, input_lower, "show me "))
+                input_lower[8..]
+            else
+                input_lower;
+            const has_media_word = std.mem.indexOf(u8, media_scope, "movie") != null or
+                std.mem.indexOf(u8, media_scope, "show") != null or
+                std.mem.indexOf(u8, media_scope, "anime") != null or
+                std.mem.indexOf(u8, media_scope, "series") != null or
+                std.mem.indexOf(u8, media_scope, "film") != null;
             if (has_media_word) return .browse_genre;
         }
     }
@@ -310,6 +320,16 @@ test "classifyIntent: genre browse requires media word" {
     try std.testing.expectEqual(Intent.browse_genre, classifyIntent("comedy shows"));
     // No media word → genre alone should NOT classify as browse_genre
     try std.testing.expectEqual(Intent.specific_title, classifyIntent("play horror 2023"));
+}
+
+test "classifyIntent: singular media words (mind-bending sci-fi show regression)" {
+    // The Home suggestion chip — used to fall through to a literal title
+    // search of the whole phrase and return YouTube listicles.
+    try std.testing.expectEqual(Intent.browse_genre, classifyIntent("find a mind-bending sci-fi show"));
+    try std.testing.expectEqual(Intent.browse_genre, classifyIntent("find a horror movie"));
+    try std.testing.expectEqual(Intent.browse_genre, classifyIntent("a good war film"));
+    // "show me <title>" must NOT count the verb "show" as a media word.
+    try std.testing.expectEqual(Intent.specific_title, classifyIntent("show me war of the worlds"));
 }
 
 test "classifyIntent: specific title fallback" {

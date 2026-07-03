@@ -230,8 +230,8 @@ fn renderTopNav(compact: bool) void {
 
     // Right-side actions (icon-only). The former "Assistant" button opened the
     // AI/Voice SETTINGS page (renderAIContent) — that now lives in Settings ›
-    // AI & Voice, so it's dropped from the primary nav. AI chat is still
-    // reachable via the omnibox ('>' or trailing '?') + the chat overlay.
+    // AI & Voice, so it's dropped from the primary nav. AI chat is reachable
+    // via the omnibox ('>' or trailing '?') — the conversation lives on Home.
     if (components.iconButton(@src(), icons.tvg.lucide.play, "Now playing", state.app.router.current == .player)) {
         state.app.router.navigate(.player);
     }

@@ -202,14 +202,10 @@ fn sherpaOnnxTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
 // + --model-type=nemo_transducer.
 
 fn parakeetTranscribe(dir_name: []const u8, wav_path: []const u8, out_buf: []u8) ?[]const u8 {
-    const bin: []const u8 = blk: {
-        if (io_global.cwdAccess("/opt/homebrew/bin/sherpa-onnx-offline", .{})) |_| {
-            break :blk "/opt/homebrew/bin/sherpa-onnx-offline";
-        } else |_| {}
-        if (io_global.cwdAccess("/usr/local/bin/sherpa-onnx-offline", .{})) |_| {
-            break :blk "/usr/local/bin/sherpa-onnx-offline";
-        } else |_| {}
-        logs.pushLog("error", "voice_backend", "sherpa-onnx-offline not found — install sherpa-onnx to use Parakeet", false);
+    // Self-installed bundle (voice_setup) first, then brew/local.
+    var bin_buf: [512]u8 = undefined;
+    const bin = @import("voice_setup.zig").sherpaBin("sherpa-onnx-offline", &bin_buf) orelse {
+        logs.pushLog("error", "voice_backend", "sherpa-onnx-offline not found — run voice setup (or brew install sherpa-onnx)", false);
         return null;
     };
 
@@ -693,6 +689,99 @@ pub fn allKinds() []const Kind {
     return &.{ .whisper_cpp_plus_say, .sherpa_onnx, .parakeet_tdt_v2, .parakeet_tdt_v3, .apple_native, .speaches, .mlx_whisper };
 }
 
+/// Spawn the TRUE streaming conversation pipeline: sherpa-onnx-microphone +
+/// Nemotron 3.5 ASR streaming (160 ms chunks). Partials while you speak,
+/// endpoint-segmented finals — the fastest conversational path we have.
+/// NOTE: sherpa mic tools print results to STDERR (Display helper), so
+/// stderr is the piped stream here.
+pub fn spawnNemotronStreamingConvo() ?io_global.Child {
+    const vs = @import("voice_setup.zig");
+
+    var bin_buf: [512]u8 = undefined;
+    const bin = vs.sherpaBin("sherpa-onnx-microphone", &bin_buf) orelse return null;
+    if (!vs.nemotronPresent()) return null;
+
+    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return null;
+
+    var enc_arg: [640]u8 = undefined;
+    var dec_arg: [640]u8 = undefined;
+    var joi_arg: [640]u8 = undefined;
+    var tok_arg: [640]u8 = undefined;
+    const a_enc = std.fmt.bufPrint(&enc_arg, "--encoder={s}/.config/opal/models/{s}/encoder.int8.onnx", .{ home, vs.NEMOTRON_DIR }) catch return null;
+    const a_dec = std.fmt.bufPrint(&dec_arg, "--decoder={s}/.config/opal/models/{s}/decoder.int8.onnx", .{ home, vs.NEMOTRON_DIR }) catch return null;
+    const a_joi = std.fmt.bufPrint(&joi_arg, "--joiner={s}/.config/opal/models/{s}/joiner.int8.onnx", .{ home, vs.NEMOTRON_DIR }) catch return null;
+    const a_tok = std.fmt.bufPrint(&tok_arg, "--tokens={s}/.config/opal/models/{s}/tokens.txt", .{ home, vs.NEMOTRON_DIR }) catch return null;
+
+    io_global.cwdAccess(a_enc["--encoder=".len..], .{}) catch return null;
+
+    var child = io_global.Child.init(&.{
+        bin, a_enc, a_dec, a_joi, a_tok, "--num-threads=4",
+    }, @import("../core/alloc.zig").allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Pipe; // results + partials arrive here
+    child.spawn() catch |err| {
+        var eb: [128]u8 = undefined;
+        const em = std.fmt.bufPrint(&eb, "nemotron streaming spawn: {s}", .{@errorName(err)}) catch "nemotron spawn fail";
+        logs.pushLog("error", "voice_backend", em, false);
+        return null;
+    };
+    logs.pushLog("info", "voice_backend", "Nemotron 3.5 streaming conversation started (160ms)", true);
+    return child;
+}
+
+/// Spawn the Parakeet conversational pipeline: sherpa's VAD+offline-ASR mic
+/// tool (silero segments turns naturally, Parakeet transcribes each one).
+/// This is the "fast + conversational" path — no fixed record windows, no
+/// python. Returns null when any piece is missing (caller falls back).
+pub fn spawnParakeetVadConvo() ?io_global.Child {
+    const vs = @import("voice_setup.zig");
+
+    var bin_buf: [512]u8 = undefined;
+    const bin = vs.sherpaBin("sherpa-onnx-vad-microphone-offline-asr", &bin_buf) orelse return null;
+    var sil_buf: [512]u8 = undefined;
+    const silero = vs.sileroPath(&sil_buf) orelse return null;
+
+    // Prefer the active kind's model when it's a parakeet; else v3, else v2.
+    const dir_name: []const u8 = blk: {
+        if (active_kind == .parakeet_tdt_v2 and vs.parakeetV2Present())
+            break :blk "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
+        if (vs.parakeetV3Present()) break :blk "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8";
+        if (vs.parakeetV2Present()) break :blk "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
+        return null;
+    };
+
+    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return null;
+
+    var vad_arg: [640]u8 = undefined;
+    var enc_arg: [640]u8 = undefined;
+    var dec_arg: [640]u8 = undefined;
+    var joi_arg: [640]u8 = undefined;
+    var tok_arg: [640]u8 = undefined;
+    const a_vad = std.fmt.bufPrint(&vad_arg, "--silero-vad-model={s}", .{silero}) catch return null;
+    const a_enc = std.fmt.bufPrint(&enc_arg, "--encoder={s}/.config/opal/models/{s}/encoder.int8.onnx", .{ home, dir_name }) catch return null;
+    const a_dec = std.fmt.bufPrint(&dec_arg, "--decoder={s}/.config/opal/models/{s}/decoder.int8.onnx", .{ home, dir_name }) catch return null;
+    const a_joi = std.fmt.bufPrint(&joi_arg, "--joiner={s}/.config/opal/models/{s}/joiner.int8.onnx", .{ home, dir_name }) catch return null;
+    const a_tok = std.fmt.bufPrint(&tok_arg, "--tokens={s}/.config/opal/models/{s}/tokens.txt", .{ home, dir_name }) catch return null;
+
+    io_global.cwdAccess(a_enc["--encoder=".len..], .{}) catch return null;
+
+    var child = io_global.Child.init(&.{
+        bin, a_vad, a_enc, a_dec, a_joi, a_tok, "--model-type=nemo_transducer", "--num-threads=4",
+    }, @import("../core/alloc.zig").allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Pipe; // results print via fprintf(stderr, "%2d: %s")
+    child.spawn() catch |err| {
+        var eb: [128]u8 = undefined;
+        const em = std.fmt.bufPrint(&eb, "parakeet vad convo spawn: {s}", .{@errorName(err)}) catch "parakeet convo spawn fail";
+        logs.pushLog("error", "voice_backend", em, false);
+        return null;
+    };
+    logs.pushLog("info", "voice_backend", "Parakeet VAD conversation pipeline started", true);
+    return child;
+}
+
 /// Spawn sherpa-onnx-microphone in the background for continuous,
 /// VAD-driven transcription. Returns the spawned Child so the caller can read
 /// its stdout (one transcript per voiced turn) and kill it on convo-mode exit.
@@ -731,8 +820,10 @@ pub fn spawnStreamingConvo() ?io_global.Child {
         "/opt/homebrew/bin/sherpa-onnx-microphone",
         a_tok, a_enc, a_dec, a_join,
     }, @import("../core/alloc.zig").allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    // sherpa mic tools print results via a stderr Display helper — piping
+    // stdout here meant the reader loop never saw a single transcript.
+    child.stderr_behavior = .Pipe;
     child.spawn() catch return null;
 
     // Reader loop belongs to a caller thread in ai_voice when we wire

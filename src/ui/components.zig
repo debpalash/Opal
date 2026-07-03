@@ -750,3 +750,42 @@ pub fn searchInput(
 
     return changed;
 }
+
+// ══════════════════════════════════════════════════════════
+// Toolbar kit — ONE compact search input for every Browse sub-toolbar
+// (Movies & TV / YouTube / Comics), so heights and padding stay aligned.
+// ══════════════════════════════════════════════════════════
+
+pub const TOOLBAR_INPUT_H: f32 = 24;
+
+/// Canonical compact toolbar search box: fixed width, 24px content height,
+/// tight padding, centered on the toolbar row. Returns enter_pressed.
+pub fn toolbarSearch(src: std.builtin.SourceLocation, buf: []u8, placeholder: []const u8, width: f32) bool {
+    var te = dvui.textEntry(src, .{ .text = .{ .buffer = buf }, .placeholder = placeholder }, .{
+        .min_size_content = .{ .w = width, .h = TOOLBAR_INPUT_H },
+        .max_size_content = .{ .w = width, .h = TOOLBAR_INPUT_H },
+        .color_fill = theme.colors.bg_elevated,
+        .color_border = theme.colors.border_subtle,
+        .color_text = theme.colors.text_primary,
+        .border = dvui.Rect.all(1),
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+        .gravity_y = 0.5,
+    });
+    const enter = te.enter_pressed;
+    te.deinit();
+    return enter;
+}
+
+/// Canonical compact toolbar action button (Go / Search) matched to the
+/// toolbarSearch height.
+pub fn toolbarGo(src: std.builtin.SourceLocation, label: []const u8) bool {
+    return dvui.button(src, label, .{}, .{
+        .color_fill = theme.colors.accent,
+        .color_text = theme.colors.text_on_accent,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+        .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
+        .gravity_y = 0.5,
+    });
+}

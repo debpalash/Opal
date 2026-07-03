@@ -17,9 +17,12 @@ pub const is_macos = builtin.os.tag == .macos;
 
 pub const BackendKind = enum { apfel, gemma_llama };
 
-/// Default backend per OS. macOS stays on apfel for zero-install UX; users
-/// can switch to Gemma in Settings. Other OSes have no apfel so Gemma wins.
-pub var backend_kind: BackendKind = if (is_macos) .apfel else .gemma_llama;
+/// Default backend: local llama-server everywhere. Apple Intelligence
+/// (apfel) is RETIRED as a default — measured ~5 tok/s generation (6+ s per
+/// one-line reply) and it drops the JSON response format. It stays reachable
+/// via Settings for the curious; legacy configs that auto-persisted "apfel"
+/// migrate to the llama backend on load (config.zig).
+pub var backend_kind: BackendKind = .gemma_llama;
 
 // ── Hugging Face GGUF model catalog ──
 // A curated set of llama.cpp-servable GGUF models pulled directly from the
@@ -79,7 +82,9 @@ pub const MODEL_CATALOG = [_]GgufModel{
 };
 
 /// Index into MODEL_CATALOG for the active llama-server model.
-pub var active_model_idx: usize = 0;
+/// Default = Qwen2.5 3B Instruct: 2.1 GB Q4, strong tool/JSON discipline,
+/// ~100 tok/s on M-series Airs — the "small, intelligent, fast" pick.
+pub var active_model_idx: usize = 1;
 
 pub fn activeModel() GgufModel {
     return MODEL_CATALOG[@min(active_model_idx, MODEL_CATALOG.len - 1)];
@@ -302,6 +307,24 @@ fn detectGemmaLlama() void {
         }
     }
     _ = which_child.wait() catch {};
+}
+
+/// Self-install path for the default local brain: detect paths, kick the
+/// model download when it's missing (llama-server present), start the server
+/// when everything's on disk. Idempotent — call from any send path.
+pub fn ensureReady() void {
+    checkPaths();
+    if (server_running) return;
+    if (backend_kind == .gemma_llama and llama_server_exists and !model_exists) {
+        if (!model_downloading) {
+            startModelDownload();
+            var tb: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&tb, "Downloading {s} ({s}) — chat unlocks when it lands", .{ activeModel().name, activeModel().size_label }) catch "Downloading AI model…";
+            state.showToast(msg);
+        }
+        return;
+    }
+    if (model_exists and llama_server_exists) startServer();
 }
 
 pub fn startServer() void {
@@ -539,12 +562,12 @@ fn downloadModelThread() void {
         const done = "Download complete!";
         @memcpy(download_progress_buf[0..done.len], done);
         download_progress_len = done.len;
-        const log_msg = switch (backend_kind) {
-            .apfel => "",
-            .gemma_llama => "Gemma 4 E2B model downloaded",
-        };
+        var lb: [96]u8 = undefined;
+        const log_msg = std.fmt.bufPrint(&lb, "{s} downloaded", .{activeModel().name}) catch "Model downloaded";
         logs.pushLog("info", "ai", log_msg, true);
-        state.showToast("Model downloaded!");
+        state.showToast("AI model ready — starting the local brain");
+        // Self-install completion → bring the server up without another click.
+        startServer();
     } else {
         setError("Download failed (curl exit error)");
     }

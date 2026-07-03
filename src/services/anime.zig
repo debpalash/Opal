@@ -78,6 +78,11 @@ var trend_filter: TrendFilter = .airing;
 /// User-cyclable card width (compact ↔ large), clamped 110–320 in the +/- wires.
 var card_w_pref: f32 = 150;
 
+/// Grid card footer height (title + meta rows) below the poster. Referenced
+/// by renderCard's uniform min==max sizing AND the grid's virtualization row
+/// pitch — keep single-sourced.
+const GRID_CARD_EXTRA_H: f32 = 92;
+
 // ── Mode dispatch (Trending | Seasonal | Calendar | Search | My List) ──
 // Every grid mode reuses results[]/renderGallery; only the fetch differs. A
 // single monotonic generation (`search_gen`, already declared below) guards all
@@ -2404,15 +2409,40 @@ fn renderGallery() void {
     const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / card_target_w)));
     const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
 
-    var i: usize = 0;
-    while (i < state.app.anime.result_count) {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 70000, .expand = .horizontal });
+    // ── Virtualization (same shape as tmdb.zig renderGallery) ──
+    // Uniform cards → fixed row pitch: content (poster + footer) + the card's
+    // 6px bottom padding + 3px top/bottom margins. Off-viewport rows (±2
+    // overscan) collapse into spacer boxes.
+    const total = state.app.anime.result_count;
+    const row_h: f32 = card_w * 1.45 + GRID_CARD_EXTRA_H + 6 + 6;
+    const total_rows = (total + cols - 1) / cols;
+    const win = @import("tmdb_pure.zig").visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
+
+    if (win.first > 0) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 69998,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) },
+        });
+        sp.deinit();
+    }
+
+    var r: usize = win.first;
+    while (r < win.last) : (r += 1) {
+        const base = r * cols;
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = base + 70000, .expand = .horizontal });
         defer row.deinit();
         var col: usize = 0;
-        while (col < cols and i + col < state.app.anime.result_count) : (col += 1) {
-            renderCard(&state.app.anime.results[i + col], i + col, card_w);
+        while (col < cols and base + col < total) : (col += 1) {
+            renderCard(&state.app.anime.results[base + col], base + col, card_w);
         }
-        i += cols;
+    }
+
+    if (win.last < total_rows) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 69999,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(total_rows - win.last)) },
+        });
+        sp.deinit();
     }
 
     // ── Infinite scroll: a status row at the grid's tail (mirrors comics.zig).
@@ -2521,10 +2551,12 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
     const h2: u8 = @truncate((hue >> 8) & 0xFF);
 
     const poster_h: f32 = card_w * 1.45;
+    // min == max height → uniform row pitch, which the grid's virtualization
+    // spacer math depends on (see GRID_CARD_EXTRA_H).
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = idx + 1000,
-        .min_size_content = .{ .w = card_w, .h = 10 },
-        .max_size_content = .{ .w = card_w, .h = poster_h + 92 },
+        .min_size_content = .{ .w = card_w, .h = poster_h + GRID_CARD_EXTRA_H },
+        .max_size_content = .{ .w = card_w, .h = poster_h + GRID_CARD_EXTRA_H },
         .background = true,
         .color_fill = theme.colors.bg_surface,
         .corner_radius = dvui.Rect.all(6),

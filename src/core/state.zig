@@ -420,10 +420,29 @@ pub const AppState = struct {
         category: TmdbCategory = .trending,
         media_filter: TmdbMediaFilter = .all,
         time_window: TmdbTimeWindow = .week,
+        // Index into tmdb_pure.GENRES (0 = All genres → category endpoints;
+        // otherwise browse goes through /discover with with_genres).
+        genre_idx: usize = 0,
+        // Discover sort (genre mode only): tag for tmdb_pure.discoverSortParam
+        // — 0=popularity, 1=rating, 2=newest.
+        discover_sort: u8 = 0,
         last_fetch_s: i64 = 0, // SWR cache timestamp (Trending view)
         page: u32 = 1,
         total_pages: u32 = 1,
+        // `results` is UI-THREAD-OWNED: only the UI thread mutates it (the
+        // frame-start apply in tmdb_api.applyPendingResults + shutdown deinit).
+        // Fetch workers stage into `pending_results` under `results_mutex`;
+        // the worker used to clear/append `results` directly, which raced the
+        // render loop iterating it → renderCatalogRail out-of-bounds panic
+        // (crash reports 2026-07-03). Non-UI READERS (remote HTTP thread,
+        // ai_intent worker) must hold `results_mutex` too — the apply mutates
+        // under that same lock.
         results: std.ArrayListUnmanaged(TmdbItem) = .empty,
+        pending_results: std.ArrayListUnmanaged(TmdbItem) = .empty,
+        pending_append: bool = false,
+        pending_total_pages: u32 = 1,
+        pending_ready: bool = false,
+        results_mutex: @import("sync.zig").Mutex = .{},
         favorites: std.ArrayListUnmanaged(TmdbItem) = .empty,
         watchlist: std.ArrayListUnmanaged(TmdbItem) = .empty,
         watching: std.ArrayListUnmanaged(TmdbItem) = .empty,
@@ -672,24 +691,19 @@ pub var players_mutex: @import("sync.zig").Mutex = .{};
 // Utility Functions
 // ══════════════════════════════════════════════════════════
 
-/// Load TMDB token from $ZIGZAG_TMDB_TOKEN env, or fall back to .env file.
+/// Load TMDB token from the environment ($OPAL_TMDB_TOKEN, $TMDB_API_TOKEN,
+/// or legacy $ZIGZAG_TMDB_TOKEN), or fall back to .env file.
 pub fn loadTmdbTokenFromEnv() void {
-    // 1. Try env var first
-    if (if (std.c.getenv("ZIGZAG_TMDB_TOKEN")) |raw| std.mem.span(raw) else null) |token| {
-        if (token.len > 0) {
-            const len = @min(token.len, app.tmdb.api_key.len);
-            @memcpy(app.tmdb.api_key[0..len], token[0..len]);
-            app.tmdb.api_key_len = len;
-            return;
-        }
-    }
-    // Also check TMDB_API_TOKEN
-    if (if (std.c.getenv("TMDB_API_TOKEN")) |raw| std.mem.span(raw) else null) |token| {
-        if (token.len > 0) {
-            const len = @min(token.len, app.tmdb.api_key.len);
-            @memcpy(app.tmdb.api_key[0..len], token[0..len]);
-            app.tmdb.api_key_len = len;
-            return;
+    // 1. Try env vars first (new name, generic name, legacy name).
+    const env_names = [_][*:0]const u8{ "OPAL_TMDB_TOKEN", "TMDB_API_TOKEN", "ZIGZAG_TMDB_TOKEN" };
+    for (env_names) |name| {
+        if (if (std.c.getenv(name)) |raw| std.mem.span(raw) else null) |token| {
+            if (token.len > 0) {
+                const len = @min(token.len, app.tmdb.api_key.len);
+                @memcpy(app.tmdb.api_key[0..len], token[0..len]);
+                app.tmdb.api_key_len = len;
+                return;
+            }
         }
     }
     // 2. Fall back to .env file in cwd
@@ -725,7 +739,7 @@ fn loadTmdbFromDotEnv() void {
 
     // TMDB — only if not already set from process env
     if (app.tmdb.api_key_len == 0) {
-        const keys = [_][]const u8{ "TMDB_API_TOKEN=", "ZIGZAG_TMDB_TOKEN=" };
+        const keys = [_][]const u8{ "TMDB_API_TOKEN=", "OPAL_TMDB_TOKEN=", "ZIGZAG_TMDB_TOKEN=" };
         for (keys) |key| {
             if (env.findValue(content, key)) |token| {
                 const len = @min(token.len, app.tmdb.api_key.len);

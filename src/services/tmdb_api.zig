@@ -50,6 +50,8 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
         var category: state.TmdbCategory = .trending;
         var media_filter: state.TmdbMediaFilter = .all;
         var time_window: state.TmdbTimeWindow = .week;
+        var genre_idx: usize = 0;
+        var discover_sort: u8 = 0;
         var page: u32 = 1;
     };
 
@@ -58,6 +60,8 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
     S.category = state.app.tmdb.category;
     S.media_filter = state.app.tmdb.media_filter;
     S.time_window = state.app.tmdb.time_window;
+    S.genre_idx = state.app.tmdb.genre_idx;
+    S.discover_sort = state.app.tmdb.discover_sort;
     S.page = state.app.tmdb.page;
     if (query.len > 0) {
         const ql = @min(query.len, 255);
@@ -76,17 +80,26 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
             const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
 
             var url_buf: [512]u8 = undefined;
-            const url = buildApiUrl(&url_buf, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.time_window, S.page) orelse return;
+            const url = buildApiUrl(&url_buf, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.time_window, S.genre_idx, S.discover_sort, S.page) orelse return;
 
             const body = httpGet(url, key) orelse return;
             defer alloc.free(body);
 
-            if (!S.do_append) {
-                state.app.tmdb.results.clearRetainingCapacity();
-            }
+            // Parse into a LOCAL list and stage it — never mutate the live
+            // `results` the UI thread is iterating mid-frame (that race was
+            // the renderCatalogRail out-of-bounds crash). The UI thread swaps
+            // staged pages in at frame start via applyPendingResults().
+            var staged: std.ArrayListUnmanaged(state.TmdbItem) = .empty;
+            const total_pages: u32 = @intCast(@max(1, parse.extractJsonInt(body, "\"total_pages\":")));
+            parse.parseTmdbResponse(body, &staged);
 
-            state.app.tmdb.total_pages = @intCast(@max(1, parse.extractJsonInt(body, "\"total_pages\":")));
-            parse.parseTmdbResponse(body);
+            state.app.tmdb.results_mutex.lock();
+            defer state.app.tmdb.results_mutex.unlock();
+            state.app.tmdb.pending_results.deinit(alloc);
+            state.app.tmdb.pending_results = staged;
+            state.app.tmdb.pending_append = S.do_append;
+            state.app.tmdb.pending_total_pages = total_pages;
+            state.app.tmdb.pending_ready = true;
         }
     }.worker, .{}) catch blk: {
         state.app.tmdb.is_loading.store(false, .release);
@@ -95,7 +108,27 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
     if (state.app.tmdb.thread) |t| t.detach(); // never joined — detach to avoid leaking the handle
 }
 
-fn buildApiUrl(buf: *[512]u8, mode: FetchMode, query: []const u8, cat: state.TmdbCategory, mf: state.TmdbMediaFilter, tw: state.TmdbTimeWindow, page: u32) ?[]const u8 {
+/// UI-THREAD ONLY — called once per frame (main.appFrame, next to
+/// state.applyPendingNav). Swaps worker-staged pages into the live list.
+/// Post-init, this is the ONLY place `results` is mutated, so render code can
+/// iterate it without locking; non-UI readers (remote, ai_intent) take
+/// `results_mutex`, which this holds while mutating.
+pub fn applyPendingResults() void {
+    const t = &state.app.tmdb;
+    t.results_mutex.lock();
+    defer t.results_mutex.unlock();
+    if (!t.pending_ready) return;
+    t.pending_ready = false;
+    if (!t.pending_append) t.results.clearRetainingCapacity();
+    // Within the capacity reserved by fetchCurrentView — no realloc, so
+    // poster workers' *TmdbItem pointers stay valid (see the CRITICAL note).
+    t.results.appendSlice(alloc, t.pending_results.items) catch {};
+    t.pending_results.clearRetainingCapacity();
+    t.total_pages = t.pending_total_pages;
+    dvui.refresh(null, @src(), null);
+}
+
+fn buildApiUrl(buf: *[512]u8, mode: FetchMode, query: []const u8, cat: state.TmdbCategory, mf: state.TmdbMediaFilter, tw: state.TmdbTimeWindow, genre_idx: usize, discover_sort: u8, page: u32) ?[]const u8 {
     const trending_mt = switch (mf) {
         .all => "all",
         .movie => "movie",
@@ -110,6 +143,17 @@ fn buildApiUrl(buf: *[512]u8, mode: FetchMode, query: []const u8, cat: state.Tmd
         .day => "day",
         .week => "week",
     };
+
+    // Genre browsing goes through /discover (paginated like any category);
+    // the genre dropdown overrides the category chips while active, and the
+    // sort chips (Popular/Top rated/Newest) pick the discover ordering.
+    if (mode == .browse) {
+        const gid = @import("tmdb_pure.zig").genreId(genre_idx, mf == .tv);
+        if (gid != 0) {
+            const sort = @import("tmdb_pure.zig").discoverSortParam(discover_sort, mf == .tv);
+            return std.fmt.bufPrint(buf, "https://api.themoviedb.org/3/discover/{s}?with_genres={d}&sort_by={s}&page={d}", .{ list_mt, gid, sort, page }) catch null;
+        }
+    }
 
     if (mode == .search) {
         var enc_buf: [256]u8 = undefined;
@@ -135,39 +179,21 @@ fn buildApiUrl(buf: *[512]u8, mode: FetchMode, query: []const u8, cat: state.Tmd
 // Genre Discover
 // ══════════════════════════════════════════════════════════
 
-/// Fetch movies by TMDB genre ID (e.g. 28 = Action, 878 = Sci-Fi).
-/// Populates the same results grid as the search/browse views.
+/// Fetch movies by TMDB genre ID (e.g. 28 = Action, 878 = Sci-Fi) — used by
+/// AI intent ("show me action movies"). Routes through the same genre_idx +
+/// fetchCurrentView path as the toolbar dropdown so pagination, the dropdown
+/// selection and filter chips stay coherent; the old standalone /discover
+/// worker left genre_idx=0, so infinite scroll appended TRENDING pages onto
+/// discover results and the UI showed "All genres" over genre results.
 pub fn fetchDiscover(genre_id: u32) void {
-    if (state.app.tmdb.is_loading.load(.acquire)) return;
-    if (state.app.tmdb.api_key_len == 0) return;
-    state.app.tmdb.is_loading.store(true, .release);
-
-    const S = struct {
-        var gid: u32 = 0;
-    };
-    S.gid = genre_id;
-
-    state.app.tmdb.thread = std.Thread.spawn(.{}, struct {
-        fn worker() void {
-            defer {
-                state.app.tmdb.is_loading.store(false, .release);
-            }
-            const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
-            var url_buf: [512]u8 = undefined;
-            const url = std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org/3/discover/movie?with_genres={d}&sort_by=popularity.desc&page=1", .{S.gid}) catch return;
-
-            const body = httpGet(url, key) orelse return;
-            defer alloc.free(body);
-
-            state.app.tmdb.results.clearRetainingCapacity();
-            state.app.tmdb.total_pages = @intCast(@max(1, parse.extractJsonInt(body, "\"total_pages\":")));
-            parse.parseTmdbResponse(body);
-        }
-    }.worker, .{}) catch blk: {
-        state.app.tmdb.is_loading.store(false, .release);
-        break :blk null;
-    };
-    if (state.app.tmdb.thread) |t| t.detach(); // never joined — detach to avoid leaking the handle
+    const idx = @import("tmdb_pure.zig").genreIndexForMovieId(genre_id) orelse return;
+    state.app.tmdb.view = .Trending;
+    state.app.tmdb.genre_idx = idx;
+    if (state.app.tmdb.media_filter == .all) state.app.tmdb.media_filter = .movie; // discover has no multi endpoint
+    state.app.tmdb.page = 1;
+    state.app.tmdb.loaded_once = true; // Browse must not immediately refetch over this
+    @import("tmdb.zig").resetGalleryScroll();
+    fetchCurrentView(false);
 }
 
 // ══════════════════════════════════════════════════════════

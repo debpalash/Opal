@@ -1045,53 +1045,34 @@ pub fn renderContent() void {
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer page.deinit();
 
-    // ── Search bar (live-as-you-type + Load button + URL paste) ──
+    // ── ONE unified toolbar row (matches Movies & TV): compact search ·
+    //    Search button · Source chips · result count · quick-links · −/+
+    //    (wraps if the window is narrow). ReadAllComics is the only natively-
+    //    readable source today; plugins surface as read-only badge chips. ──
     {
-        var search_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
-            .background = true,
-            .color_fill = theme.colors.bg_app,
+            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 6 },
         });
-        defer search_row.deinit();
+        defer bar.deinit();
 
-        dvui.icon(@src(), "", icons.tvg.lucide.search, .{}, .{
-            .color_text = theme.colors.accent,
-            .gravity_y = 0.5,
-            .margin = .{ .x = 2, .y = 0, .w = 10, .h = 0 },
-            .min_size_content = theme.iconSize(.md),
-        });
-
+        const components = @import("../ui/components.zig");
         const input = std.mem.sliceTo(&state.app.comic.search_buf, 0);
-
-        var te = dvui.textEntry(@src(), .{
-            .text = .{ .buffer = &state.app.comic.search_buf },
-            .placeholder = "Search comics…  (title or paste a readallcomics URL)",
-        }, .{
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 240, .h = 26 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_border = if (input.len > 0) theme.colors.accent else theme.colors.border_subtle,
-            .color_text = theme.colors.text_primary,
-            .border = dvui.Rect.all(if (input.len > 0) 2 else 1),
-            .corner_radius = theme.dims.rad_md,
-            .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 },
-            .font = dvui.themeGet().font_heading,
-        });
-        const enter_pressed = te.enter_pressed;
-        te.deinit();
-
         const is_url = std.mem.startsWith(u8, input, "http");
 
-        // Clear button (×) — visible only when there's text, resets the listing.
+        // Canonical compact toolbar input — fixed width instead of the old
+        // full-width bar; pasted URLs still load directly.
+        const enter_pressed = components.toolbarSearch(@src(), &state.app.comic.search_buf, "Search comics… (or URL)", 260);
+
+        // Clear button (×) — visible only when there's text.
         if (input.len > 0) {
             if (dvui.buttonIcon(@src(), "comic-search-clear", icons.tvg.lucide.x, .{}, .{}, .{
                 .id_extra = 9100,
                 .color_fill = theme.colors.bg_elevated,
                 .color_text = theme.colors.text_secondary,
                 .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 6, .y = 5, .w = 6, .h = 5 },
-                .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
+                .padding = .{ .x = 5, .y = 3, .w = 5, .h = 3 },
+                .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
                 .gravity_y = 0.5,
             })) {
                 state.app.comic.search_buf[0] = 0;
@@ -1099,25 +1080,16 @@ pub fn renderContent() void {
             }
         }
 
-        const clicked = dvui.button(@src(), "Search", .{}, .{
-            .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
-            .corner_radius = theme.dims.rad_md,
-            .padding = .{ .x = 14, .y = 6, .w = 14, .h = 6 },
-            .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
-            .gravity_y = 0.5,
-            .font = dvui.themeGet().font_heading,
-        });
+        const clicked = components.toolbarGo(@src(), "Search");
 
-        // Explicit submit (Enter / Load) — URLs load directly, text searches.
+        // Explicit submit (Enter / Search) — URLs load directly, text searches.
         if (clicked or enter_pressed) {
             if (input.len > 0) {
                 if (is_url) loadComic(input) else searchComics(input);
             }
         } else {
-            // ── Live / incremental debounced search ──
-            // Fire when: buffer differs from the last fired query, ≥2 chars, not
-            // a URL, and 400ms have elapsed since the buffer last changed.
+            // Live / incremental debounced search: buffer differs from the
+            // last fired query, ≥2 chars, not a URL, 400ms since last edit.
             const now_ms = @import("../core/io_global.zig").milliTimestamp();
             const changed = !(input.len == last_fired_len and std.mem.eql(u8, input, last_fired_query[0..last_fired_len]));
             if (changed) last_edit_ms = now_ms;
@@ -1127,21 +1099,11 @@ pub fn renderContent() void {
                 searchComics(input);
             }
         }
-    }
 
-    // ── Source selector (chips) ──
-    // ReadAllComics is the only natively-readable source today (its issue pages
-    // embed blogspot-CDN images the reader consumes). The "All" chip is the
-    // default and aggregates every available source; any user/bundled comic
-    // plugins are surfaced as read-only badge chips so the user sees they exist.
-    // ── Single unified toolbar row: Source chips · result count · quick-links
-    //    · card-size −/+ (wraps if the window is narrow). ──
-    {
-        var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 6 },
+        _ = dvui.label(@src(), "  •  ", .{}, .{
+            .color_text = theme.colors.border_subtle,
+            .gravity_y = 0.5,
         });
-        defer bar.deinit();
 
         _ = dvui.label(@src(), "Source:", .{}, .{
             .color_text = theme.colors.text_secondary,

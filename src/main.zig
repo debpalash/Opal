@@ -89,6 +89,15 @@ pub fn coreInit() !void {
         if (deps.sherpaReady(deps.check())) {
             vb.active_kind = .sherpa_onnx;
         }
+        // Parakeet promotion outranks it: when the self-installed
+        // conversational stack (voice_setup) is present, default to the
+        // fastest ASR we ship. Settings choice still overrides afterwards.
+        if (@import("services/voice_setup.zig").convoReady()) {
+            vb.active_kind = if (@import("services/voice_setup.zig").parakeetV3Present())
+                .parakeet_tdt_v3
+            else
+                .parakeet_tdt_v2;
+        }
     }
     state.app.players = .empty;
     search.search_results = .empty;
@@ -283,6 +292,7 @@ pub fn appDeinit() void {
 
     // Clean up UI arrays
     state.app.tmdb.results.deinit(@import("core/alloc.zig").allocator);
+    state.app.tmdb.pending_results.deinit(@import("core/alloc.zig").allocator);
     state.app.tmdb.favorites.deinit(@import("core/alloc.zig").allocator);
     state.app.tmdb.watchlist.deinit(@import("core/alloc.zig").allocator);
     state.app.tmdb.watching.deinit(@import("core/alloc.zig").allocator);
@@ -547,283 +557,6 @@ fn renderSlashMenu() void {
     }
 }
 
-/// Dropdown chat panel — floats below navbar input, overlays video.
-/// User dismisses via close (X) button OR by clearing input + idle state.
-fn renderChatDropdown() void {
-    const ai_chat_mod = @import("services/ai_chat.zig");
-    const voice_mod = @import("services/ai_voice.zig");
-
-    // Anchor near top, centered horizontally, fixed max width.
-    const vw = dvui.windowRectPixels().w;
-    const w: f32 = @min(780, vw * 0.75);
-    const x: f32 = (vw - w) / 2;
-
-    const ns = dvui.windowNaturalScale();
-    var drop_rect = dvui.Rect{ .x = x / ns, .y = 52 / ns, .w = w / ns, .h = 340 / ns };
-    var fw = dvui.floatingWindow(@src(), .{
-        .rect = &drop_rect,
-        .stay_above_parent_window = false,
-    }, .{
-        .background = true,
-        .color_fill = dvui.Color{ .r = 14, .g = 14, .b = 20, .a = 245 },
-        .color_border = theme.colors.accent,
-        .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(10),
-        .box_shadow = .{
-            .color = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 180 },
-            .offset = .{ .x = 0, .y = 6 },
-            .fade = 24,
-        },
-    });
-    defer fw.deinit();
-
-    var pad = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .expand = .both,
-        .padding = .{ .x = 14, .y = 10, .w = 14, .h = 10 },
-    });
-    defer pad.deinit();
-
-    // Top row: Seeing chip + close X
-    {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .margin = .{ .h = 6 },
-            .gravity_y = 0.5,
-        });
-        defer row.deinit();
-
-        if (state.app.players.items.len > 0 and state.app.active_player_idx < state.app.players.items.len) {
-            const ap = state.app.players.items[state.app.active_player_idx];
-            var title_buf: [128]u8 = undefined;
-            const tl = ap.getMediaTitle(&title_buf);
-            if (tl > 0) {
-                _ = dvui.icon(@src(), "", @import("icons").tvg.lucide.bot, .{}, .{
-                    .color_text = theme.colors.accent,
-                    .min_size_content = .{ .w = 14, .h = 14 },
-                    .margin = .{ .w = 6 },
-                    .gravity_y = 0.5,
-                });
-                _ = dvui.label(@src(), "Seeing: {s}", .{title_buf[0..tl]}, .{
-                    .color_text = theme.colors.text_secondary,
-                    .gravity_y = 0.5,
-                });
-            }
-        }
-        {
-            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            sp.deinit();
-        }
-        if (dvui.buttonIcon(@src(), "", @import("icons").tvg.lucide.x, .{}, .{}, .{
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = dvui.Color{ .r = 220, .g = 90, .b = 90, .a = 255 },
-            .border = dvui.Rect.all(0),
-            .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
-            .min_size_content = .{ .w = 16, .h = 16 },
-        })) {
-            ai_chat_mod.is_bubble_open = false;
-        }
-    }
-
-    // Status line
-    const phase_txt: ?[]const u8 = switch (voice_mod.conv_phase) {
-        .listening => "Listening…",
-        .transcribing => "Transcribing…",
-        .thinking => "Thinking…",
-        .speaking => "Speaking…",
-        .idle => blk: {
-            const chat_phase_label = ai_chat_mod.phaseLabel(ai_chat_mod.phase);
-            if (chat_phase_label.len > 0) break :blk chat_phase_label;
-            break :blk null;
-        },
-    };
-    if (phase_txt) |txt| {
-        _ = dvui.label(@src(), "〰 {s}", .{txt}, .{
-            .color_text = theme.colors.accent,
-            .margin = .{ .y = 2 },
-        });
-    }
-
-    // Last 5 messages, scrollable. background=false so the overlay's own dark
-    // fill shows through — otherwise the scrollArea paints dvui's default
-    // (light) theme background and an empty conversation renders as a white box.
-    var scroll = dvui.scrollArea(@src(), .{}, .{
-        .expand = .both,
-        .background = false,
-    });
-    defer scroll.deinit();
-
-    const start: usize = if (ai_chat_mod.message_count > 5) ai_chat_mod.message_count - 5 else 0;
-    var mi: usize = start;
-    while (mi < ai_chat_mod.message_count) : (mi += 1) {
-        const m = ai_chat_mod.messages[mi];
-        if (m.text_len == 0) continue;
-        if (m.role == .system) continue;
-        const is_user = m.role == .user;
-        var msg_box = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = mi + 90000,
-            .expand = .horizontal,
-            .margin = .{ .y = 3 },
-            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
-            .background = true,
-            .color_fill = if (is_user)
-                dvui.Color{ .r = 26, .g = 26, .b = 38, .a = 255 }
-            else
-                dvui.Color{ .r = 16, .g = 20, .b = 28, .a = 255 },
-            .corner_radius = dvui.Rect.all(6),
-        });
-        defer msg_box.deinit();
-        // Header row: role label + regenerate on AI replies
-        {
-            var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = mi + 91500,
-                .expand = .horizontal,
-            });
-            defer hdr.deinit();
-            _ = dvui.label(@src(), "{s}", .{if (is_user) "You" else "AI"}, .{
-                .id_extra = mi,
-                .color_text = if (is_user) theme.colors.accent else theme.colors.text_secondary,
-            });
-            if (!is_user) {
-                {
-                    var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-                    sp.deinit();
-                }
-                if (dvui.buttonIcon(@src(), "", @import("icons").tvg.lucide.star, .{}, .{}, .{
-                    .id_extra = mi + 91700,
-                    .color_text = if (m.starred)
-                        dvui.Color{ .r = 255, .g = 200, .b = 80, .a = 255 }
-                    else
-                        theme.colors.text_secondary,
-                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                    .border = dvui.Rect.all(0),
-                    .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
-                    .min_size_content = .{ .w = 12, .h = 12 },
-                })) {
-                    ai_chat_mod.toggleStar(mi);
-                }
-                if (dvui.buttonIcon(@src(), "", @import("icons").tvg.lucide.@"rotate-ccw", .{}, .{}, .{
-                    .id_extra = mi + 91800,
-                    .color_text = theme.colors.text_secondary,
-                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                    .border = dvui.Rect.all(0),
-                    .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
-                    .min_size_content = .{ .w = 12, .h = 12 },
-                })) {
-                    ai_chat_mod.regenerateFrom(mi);
-                }
-            }
-        }
-        var mtbuf: [2048]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{@import("core/text.zig").safeUtf8Buf(m.text[0..m.text_len], &mtbuf)}, .{
-            .id_extra = mi + 1,
-            .color_text = theme.colors.text_primary,
-        });
-    }
-
-    // Torrent / stream result cards (fast-path output)
-    ai_chat_mod.renderInlineResults();
-}
-
-/// DEPRECATED: inline dock. Kept unused to avoid churn; renderChatDropdown
-/// is the floating variant actually used.
-fn renderInlineChatDock() void {
-    const ai_chat_mod = @import("services/ai_chat.zig");
-    const voice_mod = @import("services/ai_voice.zig");
-
-    var dock = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .expand = .horizontal,
-        .background = true,
-        .color_fill = dvui.Color{ .r = 14, .g = 14, .b = 20, .a = 240 },
-        .color_border = dvui.Color{ .r = 40, .g = 40, .b = 55, .a = 200 },
-        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
-        .max_size_content = .{ .w = std.math.floatMax(f32), .h = 260 },
-    });
-    defer dock.deinit();
-
-    // Seeing chip
-    if (state.app.players.items.len > 0 and state.app.active_player_idx < state.app.players.items.len) {
-        const ap = state.app.players.items[state.app.active_player_idx];
-        var title_buf: [128]u8 = undefined;
-        const tl = ap.getMediaTitle(&title_buf);
-        if (tl > 0) {
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .margin = .{ .y = 2 },
-                .gravity_y = 0.5,
-            });
-            defer row.deinit();
-            _ = dvui.icon(@src(), "", @import("icons").tvg.lucide.bot, .{}, .{
-                .color_text = @import("ui/theme.zig").colors.accent,
-                .min_size_content = .{ .w = 14, .h = 14 },
-                .margin = .{ .w = 6 },
-                .gravity_y = 0.5,
-            });
-            _ = dvui.label(@src(), "Seeing: {s}", .{title_buf[0..tl]}, .{
-                .color_text = @import("ui/theme.zig").colors.text_secondary,
-                .gravity_y = 0.5,
-            });
-        }
-    }
-
-    // Status line
-    const phase_txt: ?[]const u8 = switch (voice_mod.conv_phase) {
-        .listening => "Listening…",
-        .transcribing => "Transcribing…",
-        .thinking => "Thinking…",
-        .speaking => "Speaking…",
-        .idle => blk: {
-            const chat_phase_label = ai_chat_mod.phaseLabel(ai_chat_mod.phase);
-            if (chat_phase_label.len > 0) break :blk chat_phase_label;
-            break :blk null;
-        },
-    };
-    if (phase_txt) |txt| {
-        _ = dvui.label(@src(), "〰 {s}", .{txt}, .{
-            .color_text = @import("ui/theme.zig").colors.accent,
-            .margin = .{ .y = 2 },
-        });
-    }
-
-    // Last 3 messages
-    var scroll = dvui.scrollArea(@src(), .{}, .{
-        .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = 80 },
-        .max_size_content = .{ .w = std.math.floatMax(f32), .h = 180 },
-    });
-    defer scroll.deinit();
-
-    const start: usize = if (ai_chat_mod.message_count > 3) ai_chat_mod.message_count - 3 else 0;
-    var mi: usize = start;
-    while (mi < ai_chat_mod.message_count) : (mi += 1) {
-        const m = ai_chat_mod.messages[mi];
-        if (m.text_len == 0) continue;
-        if (m.role == .system) continue;
-        const is_user = m.role == .user;
-        var msg_box = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = mi + 80000,
-            .expand = .horizontal,
-            .margin = .{ .y = 2 },
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-            .background = true,
-            .color_fill = if (is_user)
-                dvui.Color{ .r = 26, .g = 26, .b = 38, .a = 255 }
-            else
-                dvui.Color{ .r = 16, .g = 20, .b = 28, .a = 255 },
-            .corner_radius = dvui.Rect.all(6),
-        });
-        defer msg_box.deinit();
-        _ = dvui.label(@src(), "{s}", .{if (is_user) "You" else "AI"}, .{
-            .id_extra = mi,
-            .color_text = if (is_user) @import("ui/theme.zig").colors.accent else @import("ui/theme.zig").colors.text_secondary,
-        });
-        var mtbuf2: [2048]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{@import("core/text.zig").safeUtf8Buf(m.text[0..m.text_len], &mtbuf2)}, .{
-            .id_extra = mi + 1,
-            .color_text = @import("ui/theme.zig").colors.text_primary,
-        });
-    }
-}
-
 fn appFrame() !dvui.App.Result {
     // Suppress dvui's debug widget outline (red 1px rect) — shows when
     // debug.widget_id matches a rendered widget. Can get stuck if user
@@ -844,10 +577,21 @@ fn appFrame() !dvui.App.Result {
     // Consume a navigation queued from a worker thread (AI tools, resolver).
     state.applyPendingNav();
 
+    // Swap in TMDB pages staged by fetch workers (UI thread owns `results`;
+    // workers staging + this apply is what keeps the render loop's iteration
+    // safe — see state.zig tmdb.results comment).
+    @import("services/tmdb_api.zig").applyPendingResults();
+
     // Poll the native file-open dialog worker. This used to live in the legacy
     // header (renderHeader), which never runs in the default page shell — so
     // Ctrl+O picked a file that then silently never loaded.
     ui.pollFileOpen();
+
+    // One-time AI service wiring (voice transcript/error callbacks + zombie
+    // server sweep). Previously lived only in the AI tab's render fn, which
+    // lost all callers when chat moved to Home — voice conversations then
+    // dropped every transcript into a null callback. Idempotent.
+    @import("services/ai_chat.zig").ensureInit();
 
     // Resume prompt (replaces the old silent session restore): once watch history
     // has loaded, arm a one-shot banner offering to reopen the most-recent item
@@ -1281,29 +1025,12 @@ fn appFrame() !dvui.App.Result {
     @import("ui/footer.zig").renderResumePrompt();
     ui.renderToast();
 
-    // ── AI Chat: input-extension dropdown.
-    // Behaves like the input box with chat history attached:
-    // shows ONLY while user is typing, voice mode is live, or
-    // an AI response is currently streaming. Hides as soon as
-    // user clears input + no activity, even if messages linger.
+    // Slash-command autocomplete popover — shows only when the omnibox input's
+    // first char is '/'. (The omnibox chat overlay that used to render here was
+    // removed — AI conversations live on the Home page, home.zig chat mode.)
     if (state.app.fullscreen_player_idx == null) {
         const header_mod = @import("ui/header.zig");
         if (!header_mod.shouldUrlInputBeInGrid()) {
-            const ai_chat_mod = @import("services/ai_chat.zig");
-            const voice_mod = @import("services/ai_voice.zig");
-            const text_len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
-            const is_typing = text_len > 0;
-            const voice_active = voice_mod.conv_phase != .idle or voice_mod.is_recording;
-            const is_thinking = ai_chat_mod.is_generating.load(.acquire);
-            // Skip the overlay on the Home route — the chat renders inline
-            // there (home.zig chat mode); overlay + inline
-            // would double-render the same conversation.
-            const home_hosts_chat = state.app.page_shell_enabled and state.app.router.current == .home;
-            if ((is_typing or voice_active or is_thinking) and !home_hosts_chat) {
-                renderChatDropdown();
-            }
-            // Slash-command autocomplete popover — shows only when input
-            // first char is '/'. Independent of the chat dropdown.
             renderSlashMenu();
         }
     }

@@ -662,6 +662,252 @@ for _s in ("opal-stt-server.py", "opal-tts-server.py", "opal-voice-server.py"):
     globals()[f"test_check_{_s.replace('-', '_').replace('.', '_')}"] = _make_check_test(_s)
 
 
+# ══════════════════════════════════════════════════════════
+# In-app Browser (Browse › Web — Camoufox bridge)
+# ══════════════════════════════════════════════════════════
+
+@test("Compiles: camoufox_bridge.py", "Browser")
+def test_camoufox_bridge_compiles():
+    path = os.path.join(PROJECT_DIR, "scripts", "camoufox_bridge.py")
+    if not os.path.exists(path):
+        return "fail", "script missing"
+    r = subprocess.run(
+        [sys.executable, "-m", "py_compile", path],
+        capture_output=True, text=True, timeout=30,
+    )
+    if r.returncode == 0:
+        return "pass", "py_compile OK"
+    return "fail", r.stderr[:80]
+
+
+@test("Bridge protocol selftest", "Browser")
+def test_camoufox_bridge_selftest():
+    # --selftest exercises J/F frame framing, viewport clamps and the adaptive
+    # pump cadence model WITHOUT importing camoufox — runs on any machine.
+    path = os.path.join(PROJECT_DIR, "scripts", "camoufox_bridge.py")
+    if not os.path.exists(path):
+        return "fail", "script missing"
+    r = subprocess.run(
+        [sys.executable, path, "--selftest"],
+        capture_output=True, text=True, timeout=15,
+    )
+    if r.returncode == 0:
+        return "pass", "framing + pump model OK"
+    return "fail", (r.stderr or r.stdout).strip()[:80]
+
+
+@test("Poster cache SQL matches schema", "Database")
+def test_poster_cache_sql():
+    # core/poster.zig now reads/writes the poster_cache table from its fetch
+    # workers. Execute the exact SQL strings shipped in poster.zig against the
+    # CREATE TABLE from db.zig in a scratch sqlite — catches column renames or
+    # SQL typos that would silently no-op the disk cache (db helpers swallow
+    # prepare errors).
+    import re
+    poster_src = open(os.path.join(PROJECT_DIR, "src/core/poster.zig")).read()
+    db_src = open(os.path.join(PROJECT_DIR, "src/core/db.zig")).read()
+
+    # Reassemble the Zig multiline string (`\\`-prefixed lines) for the table.
+    lines = db_src.splitlines()
+    start = next((i for i, l in enumerate(lines)
+                  if "CREATE TABLE IF NOT EXISTS poster_cache" in l), None)
+    if start is None:
+        return "fail", "poster_cache CREATE TABLE not found in db.zig"
+    sql_lines = []
+    for l in lines[start:]:
+        stripped = l.strip().lstrip("\\")
+        sql_lines.append(stripped)
+        if stripped == ")":
+            break
+    create_sql = "\n".join(sql_lines)
+
+    stmts = re.findall(r'"((?:INSERT|SELECT|DELETE)[^"]+poster_cache[^"]*)"', poster_src)
+    if len(stmts) < 3:
+        return "fail", f"expected >=3 poster_cache statements in poster.zig, found {len(stmts)}"
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(create_sql)
+    for sql in stmts:
+        n_params = len(set(re.findall(r"\?\d+", sql)))
+        params = tuple(b"x" if i == 1 else 1 for i in range(n_params))
+        conn.execute(sql, params)
+    conn.close()
+    return "pass", f"{len(stmts)} statements OK against schema"
+
+
+@test("Browser bookmarks SQL matches schema", "Browser")
+def test_browser_bookmarks_sql():
+    # browser.zig persists Browse › Web bookmarks in the browser_bookmarks
+    # table. Same source-extracted SQL-vs-schema check as the poster cache —
+    # a column rename or SQL typo would silently no-op bookmarks.
+    import re
+    browser_src = open(os.path.join(PROJECT_DIR, "src/services/browser.zig")).read()
+    db_src = open(os.path.join(PROJECT_DIR, "src/core/db.zig")).read()
+
+    lines = db_src.splitlines()
+    start = next((i for i, l in enumerate(lines)
+                  if "CREATE TABLE IF NOT EXISTS browser_bookmarks" in l), None)
+    if start is None:
+        return "fail", "browser_bookmarks CREATE TABLE not found in db.zig"
+    sql_lines = []
+    for l in lines[start:]:
+        stripped = l.strip().lstrip("\\")
+        sql_lines.append(stripped)
+        if stripped == ")":
+            break
+    create_sql = "\n".join(sql_lines)
+
+    stmts = re.findall(r'"((?:INSERT|SELECT|DELETE)[^"]+browser_bookmarks[^"]*)"', browser_src)
+    if len(stmts) < 3:
+        return "fail", f"expected >=3 browser_bookmarks statements, found {len(stmts)}"
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(create_sql)
+    for sql in stmts:
+        n_params = len(set(re.findall(r"\?\d+", sql)))
+        params = tuple("x" for _ in range(n_params))
+        conn.execute(sql, params)
+    conn.close()
+    return "pass", f"{len(stmts)} statements OK against schema"
+
+
+@test("Local LLM is the default brain (apfel retired)", "AI Features")
+def test_local_llm_default():
+    # Apple Intelligence measured ~5 tok/s + broken JSON compliance — the
+    # default brain is now Qwen2.5-3B via llama-server, self-installing on
+    # first message (ensureReady: detect → download → start).
+    srv = open(os.path.join(PROJECT_DIR, "src/services/ai_server.zig")).read()
+    chat = open(os.path.join(PROJECT_DIR, "src/services/ai_chat.zig")).read()
+    cfg = open(os.path.join(PROJECT_DIR, "src/core/config.zig")).read()
+    if "backend_kind: BackendKind = .gemma_llama" not in srv:
+        return "fail", "default backend is not gemma_llama"
+    if "active_model_idx: usize = 1" not in srv:
+        return "fail", "default model is not the qwen2.5-3b catalog entry"
+    if "pub fn ensureReady" not in srv or "server.ensureReady()" not in chat:
+        return "fail", "self-install path (ensureReady) not wired into send"
+    if "ai_server.backend_kind = .gemma_llama" not in cfg:
+        return "fail", "config migration for legacy 'apfel' missing"
+    return "pass", "gemma_llama default + qwen2.5-3b + first-message self-install + config migration"
+
+
+@test("Parakeet conversational self-install wired", "Voice")
+def test_voice_self_install():
+    # First-run self-install: sherpa CLI bundle + silero VAD + Parakeet v3,
+    # kicked from toggleConversation; the VAD pipeline is preferred in the
+    # streaming loop; startup promotes the backend when the stack is present.
+    vs_path = os.path.join(PROJECT_DIR, "src/services/voice_setup.zig")
+    if not os.path.exists(vs_path):
+        return "fail", "voice_setup.zig missing"
+    vs = open(vs_path).read()
+    voice = open(os.path.join(PROJECT_DIR, "src/services/ai_voice.zig")).read()
+    vb = open(os.path.join(PROJECT_DIR, "src/services/voice_backend.zig")).read()
+    main_src = open(os.path.join(PROJECT_DIR, "src/main.zig")).read()
+    for needle, where in (
+        ("sherpa-onnx-v1.13.3-osx-arm64-shared.tar.bz2", vs),
+        ("silero_vad.onnx", vs),
+        ("fetchParakeetBlocking", vs),
+        ("installAsync", voice),
+        ("spawnParakeetVadConvo", vb),
+        ("spawnParakeetVadConvo", voice),
+        ("convoReady", main_src),
+    ):
+        if needle not in where:
+            return "fail", f"missing wiring: {needle}"
+    return "pass", "installer + VAD convo pipeline + startup promotion all wired"
+
+
+@test("Tool results are exact-sized allocations", "AI Features")
+def test_tool_result_alloc_discipline():
+    # Regression: normResult freed ptr[0..MAX_TOOL_RESULT] for EVERY short
+    # result, but error paths return exact-sized allocPrint strings — the
+    # guessed-length free was an Invalid free panic (whole-app abort when a
+    # tool found no results). Discipline now: scratch buffers are shrunk via
+    # realloc at the return site; no raw sub-slice of a scratch buffer may
+    # escape a tool function.
+    src = open(os.path.join(PROJECT_DIR, "src/services/ai_tools.zig")).read()
+    import re
+    if "normResult(" in src.replace("fn normResult", ""):
+        return "fail", "normResult guessing wrapper is back"
+    if re.search(r"return result\[0\.\.", src):
+        return "fail", "raw scratch-buffer slice returned (unfreeable length)"
+    if "fn shrinkResult" not in src or src.count("shrinkResult(alloc, result") < 6:
+        return "fail", "shrinkResult not applied at all return sites"
+    return "pass", "6 scratch returns shrunk via realloc; no guessed-length frees"
+
+
+@test("Voice callbacks wired outside render", "Voice")
+def test_voice_callbacks_wired():
+    # Regression: initCallbacks lived only in renderChatBody, which lost all
+    # callers when chat moved to Home — voice transcripts then vanished into
+    # a null on_transcribed_fn. ensureInit must be reachable from the frame
+    # loop AND both voice entry points.
+    chat_src = open(os.path.join(PROJECT_DIR, "src/services/ai_chat.zig")).read()
+    voice_src = open(os.path.join(PROJECT_DIR, "src/services/ai_voice.zig")).read()
+    main_src = open(os.path.join(PROJECT_DIR, "src/main.zig")).read()
+    if "pub fn ensureInit" not in chat_src:
+        return "fail", "ai_chat.ensureInit missing"
+    if "ensureInit()" not in main_src:
+        return "fail", "main.zig frame loop does not call ensureInit"
+    if voice_src.count("ensureInit()") < 2:
+        return "fail", "voice entry points (conversation + dictation) not wired"
+    return "pass", "frame loop + toggleConversation + toggleMicRecording all wire callbacks"
+
+
+@test("Chat session SQL matches schema", "Memory")
+def test_chat_sessions_sql():
+    # The Claude-style history sidebar groups conversation_log rows by
+    # session_id (ai_chat.loadSessions/loadSession; ai_memory writes the tag).
+    # Execute the shipped SQL against the real schema in a scratch sqlite.
+    import re
+    chat_src = open(os.path.join(PROJECT_DIR, "src/services/ai_chat.zig")).read()
+    mem_src = open(os.path.join(PROJECT_DIR, "src/services/ai_memory.zig")).read()
+    db_src = open(os.path.join(PROJECT_DIR, "src/core/db.zig")).read()
+
+    lines = db_src.splitlines()
+    start = next((i for i, l in enumerate(lines)
+                  if "CREATE TABLE IF NOT EXISTS conversation_log" in l), None)
+    if start is None:
+        return "fail", "conversation_log CREATE TABLE not found"
+    sql_lines = []
+    for l in lines[start:]:
+        stripped = l.strip().lstrip("\\")
+        sql_lines.append(stripped)
+        if stripped == ")":
+            break
+    conn = sqlite3.connect(":memory:")
+    conn.execute("\n".join(sql_lines))
+
+    # Multiline sidebar SELECT (Zig \\-string containing the GROUP BY).
+    m = re.search(r"const sql =\n((?:\s*\\\\.*\n)+)\s*;", chat_src)
+    if not m or "GROUP BY c1.session_id" not in m.group(1):
+        return "fail", "loadSessions SQL not found in ai_chat.zig"
+    sidebar_sql = "\n".join(l.strip().lstrip("\\") for l in m.group(1).splitlines())
+    conn.execute(sidebar_sql)
+
+    # Single-line statements: session restore + the tagged INSERT.
+    for src, needle in ((chat_src, "SELECT role, content FROM conversation_log WHERE session_id"),
+                        (mem_src, "INSERT INTO conversation_log(role, content, session_id)")):
+        stmt = next((s for s in re.findall(r'"([^"\n]+)"', src) if needle in s), None)
+        if stmt is None:
+            return "fail", f"missing statement: {needle[:50]}"
+        n_params = len(set(re.findall(r"\?\d+", stmt)))
+        conn.execute(stmt, tuple("x" for _ in range(n_params)))
+    conn.close()
+    return "pass", "sidebar SELECT + restore + tagged INSERT OK against schema"
+
+
+@test("browser_pure registered in zig tests", "Browser")
+def test_browser_pure_registered():
+    # The smart-address / keypress-forwarding / routing logic must stay in the
+    # `zig build test` gate (its tests run via the folded Zig unit suite).
+    build_zig = os.path.join(PROJECT_DIR, "build.zig")
+    with open(build_zig) as f:
+        content = f.read()
+    if "browser_pure.zig" in content:
+        return "pass", "in build.zig test step"
+    return "fail", "browser_pure.zig missing from build.zig"
+
+
 @test("Whisper Model Present", "Voice Scripts")
 def test_whisper_model_present():
     mdir = os.path.join(PROJECT_DIR, "bin/whisper.cpp/models")
@@ -962,9 +1208,12 @@ def test_home_distinct():
     # Home must route to home.zig (not alias the TMDB browse content).
     if ".home => @import(\"home.zig\").render()" not in shell:
         return "fail", "home route still aliases TMDB content"
-    if "Continue Watching" in home and "Time in app" in home:
-        return "pass", "Home is a distinct metrics/lists dashboard"
-    return "fail", "home dashboard lacks metrics/continue-watching"
+    # 2026-07 console redesign: Home is the agentic console — hero prompt +
+    # centered rails (continue/trending/for-you), NOT a metrics dashboard.
+    if ("Continue Watching" in home and "Trending tonight" in home
+            and "renderHero" in home and "Time in app" not in home):
+        return "pass", "Home is the media console (hero + rails, no stats dashboard)"
+    return "fail", "home console lacks hero/rails or still has the stats dashboard"
 
 
 @test("Usage Metrics Persisted", "Page Shell")
@@ -1863,6 +2112,32 @@ def test_threads_detached():
     if offenders:
         return "fail", "leaked thread handle(s): " + ", ".join(offenders[:6])
     return "pass", "no discarded std.Thread.spawn handles in src/"
+
+
+@test("TMDB Fetch Stages Results Off-Thread", "Stability")
+def test_tmdb_fetch_stages_results():
+    # Regression guard for the renderCatalogRail out-of-bounds crash
+    # (2026-07-03): the detached fetch worker cleared/appended the LIVE
+    # state.app.tmdb.results list while the UI thread iterated it mid-frame.
+    # The fix: workers parse into a local list and stage it (pending_results,
+    # under results_mutex); ONLY the UI thread mutates `results`, via
+    # applyPendingResults() at frame start.
+    api = open(os.path.join(PROJECT_DIR, "src/services/tmdb_api.zig")).read()
+    parse_src = open(os.path.join(PROJECT_DIR, "src/services/tmdb_parse.zig")).read()
+    main_src = open(os.path.join(PROJECT_DIR, "src/main.zig")).read()
+    for needle in ("pending_results", "results_mutex", "fn applyPendingResults"):
+        if needle not in api:
+            return "fail", f"tmdb_api.zig lost the staged-results swap ({needle})"
+    # The live-list clear may exist ONLY inside applyPendingResults (UI thread).
+    clear = "results.clearRetainingCapacity()"
+    before_apply = api.split("fn applyPendingResults")[0]
+    if clear in before_apply.replace("pending_" + clear, ""):
+        return "fail", "fetch worker clears the live results list again (UI-render race)"
+    if "state.app.tmdb.results.append" in parse_src:
+        return "fail", "tmdb_parse.zig appends to the live results list (must parse into `out`)"
+    if "applyPendingResults()" not in main_src:
+        return "fail", "appFrame no longer applies staged TMDB pages (applyPendingResults)"
+    return "pass", "fetch worker stages into pending_results; UI thread owns live list"
 
 
 # ══════════════════════════════════════════════════════════

@@ -127,65 +127,57 @@ pub fn executeTool(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     const name = tc.name[0..tc.name_len];
 
     if (std.mem.eql(u8, name, "find_and_play")) {
-        return normResult(alloc, executeFindAndPlay(alloc, tc));
+        return executeFindAndPlay(alloc, tc);
     } else if (std.mem.eql(u8, name, "search_media") or std.mem.eql(u8, name, "play_media")) {
-        return normResult(alloc, executeFindAndPlay(alloc, tc));
+        return executeFindAndPlay(alloc, tc);
     } else if (std.mem.eql(u8, name, "player_control")) {
-        return normResult(alloc, executePlayerControl(alloc, tc));
+        return executePlayerControl(alloc, tc);
     } else if (std.mem.eql(u8, name, "player_info")) {
-        return normResult(alloc, executePlayerInfo(alloc));
+        return executePlayerInfo(alloc);
     } else if (std.mem.eql(u8, name, "look_at_screen")) {
-        return normResult(alloc, executeLookAtScreen(alloc));
+        return executeLookAtScreen(alloc);
     } else if (std.mem.eql(u8, name, "recall_scene")) {
-        return normResult(alloc, executeRecallScene(alloc, tc));
+        return executeRecallScene(alloc, tc);
     } else if (std.mem.eql(u8, name, "navigate")) {
-        return normResult(alloc, executeNavigate(alloc, tc));
+        return executeNavigate(alloc, tc);
     } else if (std.mem.eql(u8, name, "queue_manage")) {
-        return normResult(alloc, executeQueueManage(alloc, tc));
+        return executeQueueManage(alloc, tc);
     } else if (std.mem.eql(u8, name, "youtube_search")) {
-        return normResult(alloc, executeYoutubeSearch(alloc, tc));
+        return executeYoutubeSearch(alloc, tc);
     } else if (std.mem.eql(u8, name, "anime_search")) {
-        return normResult(alloc, executeAnimeSearch(alloc, tc));
+        return executeAnimeSearch(alloc, tc);
     } else if (std.mem.eql(u8, name, "jellyfin_browse")) {
-        return normResult(alloc, executeJellyfinBrowse(alloc, tc));
+        return executeJellyfinBrowse(alloc, tc);
     } else if (std.mem.eql(u8, name, "get_watch_history")) {
-        return normResult(alloc, executeGetWatchHistory(alloc, tc));
+        return executeGetWatchHistory(alloc, tc);
     } else if (std.mem.eql(u8, name, "tmdb_lookup")) {
-        return normResult(alloc, executeTmdbLookup(alloc, tc));
+        return executeTmdbLookup(alloc, tc);
     } else if (std.mem.eql(u8, name, "browse_tmdb")) {
-        return normResult(alloc, executeBrowseTmdb(alloc, tc));
+        return executeBrowseTmdb(alloc, tc);
     } else if (std.mem.eql(u8, name, "read_webpage")) {
-        return normResult(alloc, executeReadWebpage(alloc, tc));
+        return executeReadWebpage(alloc, tc);
     } else if (std.mem.eql(u8, name, "comic_control")) {
-        return normResult(alloc, executeComicControl(alloc, tc));
+        return executeComicControl(alloc, tc);
     } else if (std.mem.eql(u8, name, "comic_info")) {
-        return normResult(alloc, executeComicInfo(alloc));
+        return executeComicInfo(alloc);
     }
 
     // Unknown tool
     return std.fmt.allocPrint(alloc, "Unknown tool: {s}", .{name}) catch null;
 }
 
-/// Normalize a tool result so callers can free it with alloc.free(result).
-/// Sub-functions return result[0..off] from alloc(u8, MAX_TOOL_RESULT) —
-/// the GPA requires free-length == alloc-length. We copy into an exact-
-/// sized buffer and free the original MAX_TOOL_RESULT-sized allocation.
-/// Note: allocPrint results from error paths within sub-functions also pass
-/// through here; for those the original alloc size != MAX_TOOL_RESULT, so we
-/// just return them as-is (they're already exact-sized and freeable).
-fn normResult(alloc: std.mem.Allocator, raw: ?[]u8) ?[]u8 {
-    const result = raw orelse return null;
-    // If the result fills the entire buffer, it's already exact-sized
-    if (result.len == MAX_TOOL_RESULT) return result;
-    // Copy into an exact-sized allocation
-    const exact = alloc.alloc(u8, result.len) catch return null;
-    @memcpy(exact, result);
-    // Free the original buffer. Sub-functions that allocate MAX_TOOL_RESULT
-    // bytes return result[0..off] where result.ptr is the start of the
-    // MAX_TOOL_RESULT-sized allocation.
-    const original: []u8 = result.ptr[0..MAX_TOOL_RESULT];
-    alloc.free(original);
-    return exact;
+/// Shrink a scratch tool-result allocation to its used prefix so the caller
+/// can alloc.free() it normally (the DebugAllocator panics with "Invalid
+/// free" when the freed length doesn't match the allocated length). `buf`
+/// MUST be the full original allocation. Replaces the old normResult, which
+/// GUESSED every short result was a MAX_TOOL_RESULT slice and crashed on the
+/// exact-sized allocPrint strings the error paths return ("No results
+/// found…" → invalid free → whole-app abort mid-conversation).
+fn shrinkResult(alloc: std.mem.Allocator, buf: []u8, used: usize) ?[]u8 {
+    return alloc.realloc(buf, used) catch {
+        alloc.free(buf);
+        return null;
+    };
 }
 
 /// Format tool result as a message for the LLM (sanitized for JSON safety)
@@ -279,10 +271,23 @@ fn executeFindAndPlay(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     const resolver = @import("resolver.zig");
     resolver.resolve(query, content_type);
 
-    // Wait for results — max 5s, early exit when ≥3 results after 1.5s
+    // Rich catalog rail: also kick a TMDB fetch so the transcript shows
+    // Browse-grade poster cards, not just plain source rows (shared helper —
+    // ai_context's "play …" fast path uses the same one). Only comics are
+    // excluded: the model sometimes tags genre phrases ("sci-fi show") as
+    // content_type=youtube, and those queries want catalog cards the most.
+    if (!std.mem.eql(u8, content_type, "comic")) {
+        chat.kickCatalogRail(query);
+    }
+
+    // Wait for results — search: max 5s with early exit at ≥3 results;
+    // play_best: wait out the full fan-out (15s cap) so slow-but-real
+    // sources (torrents) can outrank the instant YouTube clips.
+    const is_play_best = std.mem.eql(u8, action, "play_best");
     var waited: usize = 0;
-    while (resolver.isResolving() and waited < 50) : (waited += 1) {
-        if (resolver.result_count >= 3 and waited >= 15) break;
+    const wait_cap: usize = if (is_play_best) 150 else 50;
+    while (resolver.isResolving() and waited < wait_cap) : (waited += 1) {
+        if (!is_play_best and resolver.result_count >= 3 and waited >= 15) break;
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
     }
 
@@ -333,7 +338,7 @@ fn executeFindAndPlay(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         off += note.len;
     }
 
-    return result[0..off];
+    return shrinkResult(alloc, result, off);
 }
 
 fn executeGetWatchHistory(alloc: std.mem.Allocator, _: *const ToolCall) ?[]u8 {
@@ -398,7 +403,7 @@ fn executeGetWatchHistory(alloc: std.mem.Allocator, _: *const ToolCall) ?[]u8 {
         return std.fmt.allocPrint(alloc, "No watch history or favorites found yet.", .{}) catch null;
     }
 
-    return result[0..off];
+    return shrinkResult(alloc, result, off);
 }
 
 fn executeBrowseTmdb(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
@@ -619,7 +624,7 @@ fn executeReadWebpage(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         if (ch.* < 32) ch.* = ' ';
     }
 
-    return result[0..total];
+    return shrinkResult(alloc, result, total);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -852,7 +857,7 @@ fn executeLookAtScreen(alloc: std.mem.Allocator) ?[]u8 {
         off += s.len;
     }
 
-    return result[0..off];
+    return shrinkResult(alloc, result, off);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1007,7 +1012,7 @@ fn executeQueueManage(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
             alloc.free(result);
             return std.fmt.allocPrint(alloc, "Queue is empty.", .{}) catch null;
         }
-        return result[0..off];
+        return shrinkResult(alloc, result, off);
     }
 
     return std.fmt.allocPrint(alloc, "Unknown queue action: {s}", .{action}) catch null;
@@ -1202,5 +1207,5 @@ fn executeComicInfo(alloc: std.mem.Allocator) ?[]u8 {
         }
     }
 
-    return result[0..off];
+    return shrinkResult(alloc, result, off);
 }

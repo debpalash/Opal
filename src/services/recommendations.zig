@@ -122,8 +122,9 @@ pub fn generateRecommendations() void {
             }
 
             if (genre_total == 0) {
-                // No data — suggest popular
-                addRec("Browse Trending on TMDB", "No watch history yet", 0, 1.0);
+                // No data — render nothing. Home shows the Trending rail
+                // instead; the old "Browse Trending on TMDB / No watch
+                // history yet" placeholder card read as broken UI.
                 return;
             }
 

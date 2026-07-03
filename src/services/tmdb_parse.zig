@@ -87,9 +87,13 @@ pub fn formatDate(out_buf: *[16]u8, iso: []const u8) []const u8 {
 // Response Parsing
 // ══════════════════════════════════════════════════════════
 
-pub fn parseTmdbResponse(body: []const u8) void {
+/// Parses into `out`. Worker threads pass a LOCAL list and stage it via
+/// tmdb_api's pending swap — never the live `state.app.tmdb.results` that the
+/// UI thread iterates mid-frame (that race was the renderCatalogRail
+/// out-of-bounds crash).
+pub fn parseTmdbResponse(body: []const u8, out: *std.ArrayListUnmanaged(state.TmdbItem)) void {
     if (std.mem.indexOf(u8, body, "\"results\":[") == null) {
-        parseAndAddItem(body) catch {};
+        parseAndAddItem(body, out) catch {};
         return;
     }
     // String-aware split (tmdb_pure.splitResultObjects, unit-tested): a '{'/'}'
@@ -98,10 +102,10 @@ pub fn parseTmdbResponse(body: []const u8) void {
     // (the "FROM"/"House of the Dragon" TV-detail bug). 64 ≥ a TMDB page (20).
     var objs: [64][]const u8 = undefined;
     const n = @import("tmdb_pure.zig").splitResultObjects(body, &objs);
-    for (objs[0..n]) |obj| parseAndAddItem(obj) catch {};
+    for (objs[0..n]) |obj| parseAndAddItem(obj, out) catch {};
 }
 
-fn parseAndAddItem(json_obj: []const u8) !void {
+fn parseAndAddItem(json_obj: []const u8, out: *std.ArrayListUnmanaged(state.TmdbItem)) !void {
     var item = state.TmdbItem{};
 
     item.id = extractJsonInt(json_obj, "\"id\":");
@@ -167,7 +171,7 @@ fn parseAndAddItem(json_obj: []const u8) !void {
     }
 
     if (item.title_len > 0) {
-        state.app.tmdb.results.append(alloc, item) catch {};
+        out.append(alloc, item) catch {};
     }
 }
 

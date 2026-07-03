@@ -1542,21 +1542,50 @@ fn renderUniversalResults() void {
     defer resolver.results_mutex.unlock();
     const snap_count = resolver.result_count;
 
-    // Group results BY SOURCE in a fixed display order. Each section gets a
-    // header ("<Source> (<count>)") with a live status glyph, the matching
-    // cards, and — once that source stops searching with zero hits — a muted
-    // "No results from <Source>" placeholder.
-    //
-    // RSS magnets are pushed with source=.torrent (they carry magnet URIs), so
-    // we split the .torrent bucket by detail: "RSS feed" → RSS, else Torrents.
-    const Section = struct {
+    // ── One flat compact table ──
+    // Every result in the resolver's global sort order (the Relevance /
+    // Quality / Seeds segment above) — no per-source sections. The source
+    // shows as a colored chip on the RIGHT of each row; sources that finished
+    // with nothing collapse into one muted summary line at the bottom.
+    for (0..snap_count) |idx| {
+        const item = &resolver.results[idx];
+        if (item.name_len == 0) continue;
+        if (state.app.nsfw_filter_enabled and item.is_nsfw) continue;
+        if (!resolver.sourceOn(sourceBitOf(item))) continue;
+        renderCompactRow(idx, item);
+    }
+
+    renderSourceSummary(snap_count);
+}
+
+/// Toolbar filter pill governing a result (RSS magnets are pushed with
+/// source=.torrent, split from real torrents by their detail prefix).
+fn sourceBitOf(item: *const @import("resolver.zig").ResolvedItem) @import("resolver.zig").SourceBit {
+    return switch (item.source) {
+        .torrent => if (std.mem.startsWith(u8, item.detail[0..item.detail_len], "RSS")) .rss else .torrent,
+        .jellyfin => .jellyfin,
+        .anime => .anime,
+        .youtube => .youtube,
+        .comics => .comics,
+        .stremio => .stremio,
+        .local => .local,
+        .tmdb => .torrent, // not produced by the universal fan-out
+    };
+}
+
+/// One muted line summarizing sources that finished (or failed) with no
+/// matches — replaces the old full-height "No results from X" sections.
+/// Caller holds results_mutex.
+fn renderSourceSummary(snap_count: usize) void {
+    const resolver = @import("resolver.zig");
+    const Entry = struct {
         name: []const u8,
         src: resolver.SourceType,
-        rss: bool, // when src==.torrent, true=RSS-only, false=torrents-only
+        rss: bool,
         st: resolver.SourceStatus,
-        bit: resolver.SourceBit, // toolbar filter pill controlling this group
+        bit: resolver.SourceBit,
     };
-    const sections = [_]Section{
+    const entries = [_]Entry{
         .{ .name = "Torrents", .src = .torrent, .rss = false, .st = combinedTorrentStatus(), .bit = .torrent },
         .{ .name = "Jellyfin", .src = .jellyfin, .rss = false, .st = resolver.status_jf.load(.acquire), .bit = .jellyfin },
         .{ .name = "Anime", .src = .anime, .rss = false, .st = resolver.status_anime.load(.acquire), .bit = .anime },
@@ -1567,94 +1596,67 @@ fn renderUniversalResults() void {
         .{ .name = "On-disk", .src = .local, .rss = false, .st = resolver.status_local.load(.acquire), .bit = .local },
     };
 
-    // Classify one result into a section bucket (RSS vs Torrents split).
-    const Match = struct {
-        fn ok(item: *const resolver.ResolvedItem, sec: Section) bool {
-            if (item.source != sec.src) return false;
-            if (sec.src == .torrent) {
-                const is_rss = std.mem.startsWith(u8, item.detail[0..item.detail_len], "RSS");
-                return is_rss == sec.rss;
+    const append = struct {
+        fn f(buf: []u8, w: *usize, s: []const u8) void {
+            if (w.* > 0) {
+                const sep = ", ";
+                const n0 = @min(sep.len, buf.len - w.*);
+                @memcpy(buf[w.*..][0..n0], sep[0..n0]);
+                w.* += n0;
             }
-            return true;
+            const n = @min(s.len, buf.len - w.*);
+            @memcpy(buf[w.*..][0..n], s[0..n]);
+            w.* += n;
         }
-    };
+    }.f;
 
-    for (sections, 0..) |sec, si| {
-        // Groups whose toolbar pill is toggled off vanish entirely.
-        if (!resolver.sourceOn(sec.bit)) continue;
-        // Per-source count (respects the NSFW filter so the header matches what
-        // the user actually sees).
-        var count: usize = 0;
+    var quiet_buf: [160]u8 = undefined;
+    var qw: usize = 0;
+    var failed_buf: [160]u8 = undefined;
+    var fw: usize = 0;
+
+    for (entries) |en| {
+        if (!resolver.sourceOn(en.bit)) continue;
+        if (en.st == .searching) continue;
+        var has = false;
         for (0..snap_count) |idx| {
-            const item = &resolver.results[idx];
-            if (item.name_len == 0) continue;
-            if (state.app.nsfw_filter_enabled and item.is_nsfw) continue;
-            if (Match.ok(item, sec)) count += 1;
+            const it = &resolver.results[idx];
+            if (it.name_len == 0 or it.source != en.src) continue;
+            if (en.src == .torrent) {
+                const is_rss = std.mem.startsWith(u8, it.detail[0..it.detail_len], "RSS");
+                if (is_rss != en.rss) continue;
+            }
+            has = true;
+            break;
         }
-
-        const searching = sec.st == .searching;
-        const failed = sec.st == .failed;
-
-        // Section header — "<Source> (<count>)" + status glyph. Stable id_extra
-        // base per section (si*64) keeps headers + placeholders unique.
-        {
-            var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = 12000 + si * 64,
-                .expand = .horizontal,
-                .padding = .{ .x = 14, .y = 8, .w = 12, .h = 2 },
-            });
-            defer hdr.deinit();
-            const glyph = if (failed) icons.tvg.lucide.@"circle-x" else if (searching) icons.tvg.lucide.@"loader-circle" else icons.tvg.lucide.@"circle-check";
-            const gcol = if (failed) theme.colors.danger else if (searching) theme.colors.accent else theme.colors.success;
-            dvui.icon(@src(), "sec", glyph, .{}, .{
-                .id_extra = 12000 + si * 64 + 1,
-                .color_text = gcol,
-                .min_size_content = .{ .w = 14, .h = 14 },
-                .gravity_y = 0.5,
-                .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-            });
-            var hbuf: [64]u8 = undefined;
-            const htxt = std.fmt.bufPrintZ(&hbuf, "{s} ({d})", .{ sec.name, count }) catch sec.name;
-            _ = dvui.label(@src(), "{s}", .{htxt}, .{
-                .id_extra = 12000 + si * 64 + 2,
-                .color_text = theme.colors.text_secondary,
-                .font = dvui.themeGet().font_heading,
-                .gravity_y = 0.5,
-            });
-        }
-
-        // Cards for this section. Use the result idx for id_extra (as before) so
-        // every card stays globally unique across the grouped loop.
-        for (0..snap_count) |idx| {
-            const item = &resolver.results[idx];
-            if (item.name_len == 0) continue;
-            if (state.app.nsfw_filter_enabled and item.is_nsfw) continue;
-            if (!Match.ok(item, sec)) continue;
-            renderUniversalCard(idx, item);
-        }
-
-        // Empty placeholder — only once this source has finished (or failed)
-        // with no matches.
-        if (count == 0 and !searching) {
-            var pbuf: [80]u8 = undefined;
-            const ptxt = std.fmt.bufPrintZ(&pbuf, "No results from {s}", .{sec.name}) catch "No results";
-            _ = dvui.label(@src(), "{s}", .{ptxt}, .{
-                .id_extra = 12000 + si * 64 + 3,
-                .color_text = theme.colors.text_secondary,
-                .padding = .{ .x = 22, .y = 2, .w = 12, .h = 6 },
-            });
-        }
+        if (has) continue;
+        if (en.st == .failed) append(&failed_buf, &fw, en.name) else append(&quiet_buf, &qw, en.name);
     }
+
+    if (qw == 0 and fw == 0) return;
+
+    var line_buf: [400]u8 = undefined;
+    const line = if (qw > 0 and fw > 0)
+        std.fmt.bufPrint(&line_buf, "No hits: {s}  ·  Failed: {s}", .{ quiet_buf[0..qw], failed_buf[0..fw] }) catch return
+    else if (fw > 0)
+        std.fmt.bufPrint(&line_buf, "Failed: {s}", .{failed_buf[0..fw]}) catch return
+    else
+        std.fmt.bufPrint(&line_buf, "No hits: {s}", .{quiet_buf[0..qw]}) catch return;
+
+    _ = dvui.label(@src(), "{s}", .{line}, .{
+        .id_extra = 12900,
+        .color_text = theme.colors.text_tertiary,
+        .padding = .{ .x = 14, .y = 8, .w = 12, .h = 6 },
+    });
 }
 
-/// Render a single universal-search result card (badge + name + detail, with
-/// play/queue affordances). Pulled out of the flat loop so the by-source
-/// grouping can reuse the exact same card markup. Caller holds results_mutex.
-fn renderUniversalCard(idx: usize, item: *const @import("resolver.zig").ResolvedItem) void {
+/// One compact single-line result row: title (expands, ellipsizes) · muted
+/// quality/seeds meta · SOURCE chip on the right · play (+queue for
+/// torrents). Whole row clicks to play. Caller holds results_mutex.
+fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedItem) void {
     const resolver = @import("resolver.zig");
 
-    // Source badge colors
-    const badge_color = switch (item.source) {
+    const chip_color = switch (item.source) {
         .jellyfin => dvui.Color{ .r = 100, .g = 180, .b = 255, .a = 255 },
         .stremio => dvui.Color{ .r = 100, .g = 220, .b = 100, .a = 255 },
         .torrent => dvui.Color{ .r = 255, .g = 180, .b = 80, .a = 255 },
@@ -1664,122 +1666,110 @@ fn renderUniversalCard(idx: usize, item: *const @import("resolver.zig").Resolved
         .tmdb => dvui.Color{ .r = 1, .g = 180, .b = 228, .a = 255 },
         .comics => dvui.Color{ .r = 200, .g = 150, .b = 255, .a = 255 },
     };
-    const badge_text = switch (item.source) {
-        .jellyfin => "JELLYFIN",
-        .stremio => "STREAM",
-        .torrent => "TORRENT",
-        .anime => "ANIME",
-        .youtube => "YT",
-        .local => "ON DISK",
-        .tmdb => "CATALOG",
-        .comics => "COMICS",
+    const chip_text = switch (item.source) {
+        .jellyfin => "Jellyfin",
+        .stremio => "Stream",
+        .torrent => "Torrent",
+        .anime => "Anime",
+        .youtube => "YouTube",
+        .local => "On disk",
+        .tmdb => "Catalog",
+        .comics => "Comics",
     };
 
-    // Result card — the whole card is clickable (→ play), plus an explicit
-    // Play button and (for torrents) a +queue button below.
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = idx + 9100,
         .expand = .horizontal,
         .background = true,
-        .color_fill = dvui.Color{ .r = 22, .g = 22, .b = 30, .a = 255 },
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_border = dvui.Color{ .r = 40, .g = 40, .b = 55, .a = 180 },
-        .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(8),
-        .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
-        .margin = .{ .x = 8, .y = 2, .w = 8, .h = 2 },
+        .color_fill = theme.transparent,
+        .color_border = theme.colors.border_subtle,
+        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 }, // hairline separator
+        .padding = .{ .x = 12, .y = 3, .w = 8, .h = 3 },
+        .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
     });
-    defer card.deinit();
-    if (dvui.clicked(card.data(), .{})) resolver.playItem(idx);
-    card.drawBackground();
+    defer row.deinit();
+    // Plain boxes never render color_fill_hover (dvui gotcha) — set the fill
+    // manually while hovered, then draw.
+    var hovered = false;
+    if (dvui.clicked(row.data(), .{ .hovered = &hovered })) resolver.playItem(idx);
+    if (hovered) row.data().options.color_fill = theme.colors.bg_hover;
+    row.drawBackground();
 
-    // Top row: badge + name
+    // Title — single line, expands, ellipsizes.
+    _ = dvui.label(@src(), "{s}", .{safeUtf8(item.name[0..item.name_len])}, .{
+        .id_extra = idx + 9500,
+        .expand = .horizontal,
+        .color_text = theme.colors.text_primary,
+        .gravity_y = 0.5,
+    });
+
+    // Muted meta: quality · seeds — compact, right of the title.
     {
-        var top_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = idx + 9200,
-            .expand = .horizontal,
-        });
-        defer top_row.deinit();
-
-        // Source badge
-        if (dvui.button(@src(), badge_text, .{}, .{
-            .id_extra = idx + 9300,
-            .color_fill = badge_color,
-            .color_text = dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 },
-            .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
-            .corner_radius = dvui.Rect.all(4),
-            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-        })) {
-            // Badge click = play
-            resolver.playItem(idx);
+        var meta_buf: [40]u8 = undefined;
+        var w: usize = 0;
+        const q_text: []const u8 = switch (item.quality) {
+            4 => "4K",
+            3 => "1080p",
+            2 => "720p",
+            1 => "480p",
+            else => "",
+        };
+        if (q_text.len > 0) {
+            @memcpy(meta_buf[0..q_text.len], q_text);
+            w = q_text.len;
         }
-
-        // Quality badge
-        if (item.quality > 0) {
-            const q_text = switch (item.quality) {
-                4 => "4K",
-                3 => "1080p",
-                2 => "720p",
-                1 => "480p",
-                else => "",
-            };
-            const q_color = switch (item.quality) {
-                4 => dvui.Color{ .r = 255, .g = 215, .b = 0, .a = 255 }, // Gold
-                3 => dvui.Color{ .r = 100, .g = 200, .b = 255, .a = 255 }, // Blue
-                else => theme.colors.text_secondary,
-            };
-            _ = dvui.label(@src(), "{s}", .{q_text}, .{
-                .id_extra = idx + 9400,
-                .color_text = q_color,
+        if (item.seeds > 0) {
+            const rest = std.fmt.bufPrint(meta_buf[w..], "{s}{d} seeds", .{ if (w > 0) " · " else "", item.seeds }) catch "";
+            w += rest.len;
+        }
+        if (w > 0) {
+            _ = dvui.label(@src(), "{s}", .{meta_buf[0..w]}, .{
+                .id_extra = idx + 9600,
+                .color_text = theme.colors.text_secondary,
                 .gravity_y = 0.5,
-                .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+                .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
             });
         }
+    }
 
-        // Name — expands to fill (dvui ellipsizes long titles).
-        _ = dvui.label(@src(), "{s}", .{safeUtf8(item.name[0..item.name_len])}, .{
-            .id_extra = idx + 9500,
-            .expand = .horizontal,
-            .color_text = theme.colors.text_primary,
-            .padding = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
-            .gravity_y = 0.5,
-        });
+    // Source chip — the category, fixed on the right before the actions.
+    _ = dvui.label(@src(), "{s}", .{chip_text}, .{
+        .id_extra = idx + 9300,
+        .color_text = chip_color,
+        .color_border = chip_color,
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(theme.radius.pill),
+        .padding = .{ .x = 8, .y = 1, .w = 8, .h = 1 },
+        .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+        .gravity_y = 0.5,
+        .min_size_content = .{ .w = 58, .h = 0 },
+    });
 
-        // Explicit Play affordance (don't rely on discovering the badge).
-        if (dvui.buttonIcon(@src(), "play", icons.tvg.lucide.play, .{}, .{}, .{
-            .id_extra = idx + 9700,
+    // Explicit Play affordance.
+    if (dvui.buttonIcon(@src(), "play", icons.tvg.lucide.play, .{}, .{}, .{
+        .id_extra = idx + 9700,
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_text = theme.colors.accent,
+        .border = dvui.Rect.all(0),
+        .gravity_y = 0.5,
+        .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
+    })) {
+        resolver.playItem(idx);
+    }
+
+    // Torrent results can also be queued for later.
+    if (item.source == .torrent) {
+        if (dvui.buttonIcon(@src(), "queue", icons.tvg.lucide.plus, .{}, .{}, .{
+            .id_extra = idx + 9800,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = theme.colors.accent,
+            .color_text = theme.colors.text_secondary,
             .border = dvui.Rect.all(0),
             .gravity_y = 0.5,
             .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
         })) {
-            resolver.playItem(idx);
+            @import("queue.zig").addToQueue(item.url[0..item.url_len], item.name[0..item.name_len], "torrent");
+            state.showToast("Added to queue");
         }
-
-        // Torrent results can also be queued for later.
-        if (item.source == .torrent) {
-            if (dvui.buttonIcon(@src(), "queue", icons.tvg.lucide.plus, .{}, .{}, .{
-                .id_extra = idx + 9800,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = theme.colors.text_secondary,
-                .border = dvui.Rect.all(0),
-                .gravity_y = 0.5,
-                .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
-            })) {
-                @import("queue.zig").addToQueue(item.url[0..item.url_len], item.name[0..item.name_len], "torrent");
-                state.showToast("Added to queue");
-            }
-        }
-    }
-
-    // Detail row
-    if (item.detail_len > 0) {
-        _ = dvui.label(@src(), "{s}", .{safeUtf8(item.detail[0..item.detail_len])}, .{
-            .id_extra = idx + 9600,
-            .color_text = theme.colors.text_secondary,
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
-        });
     }
 }
 

@@ -5,6 +5,8 @@ const theme = @import("../ui/theme.zig");
 const logs = @import("../core/logs.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
+const pure = @import("browser_pure.zig");
+const io_g = @import("../core/io_global.zig");
 
 // ══════════════════════════════════════════════════════════
 // Camoufox Browser Engine — CDP screenshot streaming
@@ -29,23 +31,169 @@ var bridge_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var bridge_starting: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var bridge_reader_thread: ?std.Thread = null;
 
-// Frame buffer — latest screenshot from Camoufox
-var frame_jpeg: ?[]u8 = null;
-var frame_jpeg_len: usize = 0;
+// Frame buffer — latest screenshot from Camoufox, already decoded to RGBA on
+// the reader thread (a 12fps JPEG decode on the UI thread stalled the whole
+// app; the reader owns the bytes anyway). frame_lock scopes the pointer swap.
+// RGBA buffers use the C allocator to match the stbi/poster-daemon pattern.
+const frame_alloc = std.heap.c_allocator;
+var frame_pixels: ?[]u8 = null; // RGBA, len == frame_pix_w * frame_pix_h * 4
+var frame_pix_w: u32 = 0;
+var frame_pix_h: u32 = 0;
 var frame_texture: ?dvui.Texture = null;
-var frame_w: u32 = 0;
+var frame_w: u32 = 0; // dims of the CURRENT texture (UI thread only)
 var frame_h: u32 = 0;
 var frame_dirty: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var frame_lock: @import("../core/sync.zig").Mutex = .{};
 
-// JSON response buffer
-var json_response: [8192]u8 = undefined;
-var json_response_len: usize = 0;
-var json_response_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+// Nav updates (url/title) are STAGED by the reader thread and applied on the
+// UI thread at frame start — the URL bar's textEntry edits state.app.browser
+// .url_buf live, so a worker-side write would race it (and clobber typing).
+var nav_stage_lock: @import("../core/sync.zig").Mutex = .{};
+var nav_stage_url: [2048]u8 = undefined;
+var nav_stage_url_len: usize = 0;
+var nav_stage_title: [256]u8 = undefined;
+var nav_stage_title_len: usize = 0;
+var nav_stage_dirty: bool = false; // guarded by nav_stage_lock
+var url_bar_focused: bool = false; // UI thread only
 
-// Pending navigate URL (queued before bridge is ready)
+// Loading watchdog: navigate() stamps this; renderContent clears is_loading
+// if no response arrives within the deadline (bridge missing/crashed).
+var loading_since_ms: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+const LOADING_TIMEOUT_MS: i64 = 25_000; // just beyond the bridge's 20s goto timeout
+
+// Pending navigate URL (queued before bridge is ready). Written by the UI
+// thread (navigate) and consumed by the bridge-start thread — lock both sides.
 var pending_url: [2048]u8 = undefined;
 var pending_url_len: usize = 0;
+var pending_lock: @import("../core/sync.zig").Mutex = .{};
+
+// ── Engine installer (venv + pip camoufox + browser download) ──
+// One idempotent worker: creates ~/.config/opal/venv if missing, pip-installs
+// camoufox into it, then `python -m camoufox fetch` downloads the browser.
+// Progress streams line-by-line into install_msg for the landing page.
+pub const InstallState = enum(u8) { idle, running, failed, done };
+var install_state: std.atomic.Value(u8) = std.atomic.Value(u8).init(0);
+var install_msg: [256]u8 = undefined;
+var install_msg_len: usize = 0;
+var install_lock: @import("../core/sync.zig").Mutex = .{};
+
+fn setInstallMsg(msg: []const u8) void {
+    install_lock.lock();
+    const n = @min(msg.len, install_msg.len);
+    @memcpy(install_msg[0..n], msg[0..n]);
+    install_msg_len = n;
+    install_lock.unlock();
+    state.wakeUi();
+}
+
+pub fn installEngine() void {
+    if (install_state.load(.acquire) == @intFromEnum(InstallState.running)) return;
+    install_state.store(@intFromEnum(InstallState.running), .release);
+    setInstallMsg("Preparing…");
+    if (std.Thread.spawn(.{}, installWorker, .{})) |t| t.detach() else |_| {
+        install_state.store(@intFromEnum(InstallState.failed), .release);
+        setInstallMsg("Could not start the installer thread");
+    }
+}
+
+/// Run a command, streaming its output (split on \n AND \r so pip/download
+/// progress bars surface) into install_msg. Returns true on exit code 0.
+fn runInstallStep(argv: []const []const u8) bool {
+    var child = io_g.Child.init(argv, alloc);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    _ = child.spawn() catch return false;
+
+    if (child.stdout) |*stdout| {
+        var line_buf: [240]u8 = undefined;
+        var pos: usize = 0;
+        var ch: [1]u8 = undefined;
+        while (true) {
+            const n = io_g.read(stdout, &ch) catch break;
+            if (n == 0) break;
+            if (ch[0] == '\n' or ch[0] == '\r') {
+                if (pos > 0) setInstallMsg(line_buf[0..pos]);
+                pos = 0;
+            } else if (pos < line_buf.len) {
+                line_buf[pos] = ch[0];
+                pos += 1;
+            }
+        }
+        if (pos > 0) setInstallMsg(line_buf[0..pos]);
+    }
+
+    const term = child.wait() catch return false;
+    return switch (term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+}
+
+fn installWorker() void {
+    const fail = struct {
+        fn f(msg: []const u8) void {
+            install_state.store(@intFromEnum(InstallState.failed), .release);
+            setInstallMsg(msg);
+            logs.pushLog("error", "browser", msg, false);
+        }
+    }.f;
+
+    const home = io_g.getenv("HOME") orelse return fail("HOME not set");
+    var venv_buf: [512]u8 = undefined;
+    const venv = std.fmt.bufPrint(&venv_buf, "{s}/.config/opal/venv", .{home}) catch return fail("path too long");
+    var py_buf: [512]u8 = undefined;
+    const py = std.fmt.bufPrint(&py_buf, "{s}/bin/python3", .{venv}) catch return fail("path too long");
+
+    // 1) venv (idempotent — skip when its python already exists)
+    if (io_g.cwdAccess(py, .{})) |_| {} else |_| {
+        setInstallMsg("Creating Python environment…");
+        if (!runInstallStep(&.{ "python3", "-m", "venv", venv }))
+            return fail("Failed to create the Python venv (is python3 installed?)");
+    }
+
+    // 2) camoufox package
+    setInstallMsg("Installing camoufox (pip)…");
+    if (!runInstallStep(&.{ py, "-m", "pip", "install", "--upgrade", "camoufox" }))
+        return fail("pip install camoufox failed — see Logs");
+
+    // 3) the browser itself (~200 MB download)
+    setInstallMsg("Downloading the Camoufox browser (~200 MB)…");
+    if (!runInstallStep(&.{ py, "-m", "camoufox", "fetch" }))
+        return fail("Browser download failed — check network and retry");
+
+    install_state.store(@intFromEnum(InstallState.done), .release);
+    setInstallMsg("Engine installed — starting…");
+    logs.pushLog("info", "browser", "Camoufox engine installed", true);
+    ensureBridge();
+}
+
+/// Engine presence = the venv python exists (checked once per session; the
+/// installer resets it). pip-level breakage still surfaces via bridge logs +
+/// the Install button, which repairs idempotently.
+var engine_checked: bool = false;
+var engine_present: bool = false;
+
+fn engineInstalled() bool {
+    if (install_state.load(.acquire) == @intFromEnum(InstallState.done)) return true;
+    if (!engine_checked) {
+        engine_checked = true;
+        if (getVenvPython()) |py| {
+            engine_present = if (io_g.cwdAccess(py, .{})) |_| true else |_| false;
+        }
+    }
+    return engine_present;
+}
+
+// ── Find-in-page / zoom / bookmarks (UI thread only) ──
+var find_open: bool = false;
+var find_buf: [256]u8 = std.mem.zeroes([256]u8);
+var zoom_level: f32 = 1.0;
+
+const db = @import("../core/db.zig");
+var bookmarks: [64]state.BrowserLink = std.mem.zeroes([64]state.BrowserLink);
+var bookmark_count: usize = 0;
+var bookmarks_loaded: bool = false;
 
 // ── Bridge lifecycle ──
 
@@ -126,14 +274,19 @@ fn startBridgeThread() void {
         if (bridge_ready.load(.acquire)) {
             logs.pushLog("info", "browser", "Camoufox ready", true);
 
-            // Send any pending navigate command
+            // Send any pending navigate command (snapshot under lock — the UI
+            // thread may be queueing a newer URL concurrently).
+            var pend_buf: [2048]u8 = undefined;
+            var pend_len: usize = 0;
+            pending_lock.lock();
             if (pending_url_len > 0) {
-                var esc_buf: [4096]u8 = undefined;
-                const esc_url = escapeJsonString(pending_url[0..pending_url_len], &esc_buf);
-                var cmd_buf: [4200]u8 = undefined;
-                const pcmd = std.fmt.bufPrint(&cmd_buf, "{{\"cmd\":\"navigate\",\"url\":\"{s}\"}}", .{esc_url}) catch return;
-                sendCommand(pcmd);
+                pend_len = pending_url_len;
+                @memcpy(pend_buf[0..pend_len], pending_url[0..pend_len]);
                 pending_url_len = 0;
+            }
+            pending_lock.unlock();
+            if (pend_len > 0) {
+                sendNavigate(pend_buf[0..pend_len]);
             }
             return;
         }
@@ -155,49 +308,61 @@ fn bridgeReaderThread() void {
         if (n == 0) break;
 
         if (tag[0] == 'J') {
-            // JSON response — read until newline
+            // JSON response — read until newline. Oversized lines (scrape/eval
+            // payloads) are drained to the newline so the framing never
+            // desyncs into interpreting mid-JSON bytes as the next tag.
             var buf: [8192]u8 = undefined;
             var pos: usize = 0;
-            while (pos < buf.len) {
+            while (true) {
                 var ch: [1]u8 = undefined;
                 const cn = @import("../core/io_global.zig").read(stdout, &ch) catch break;
                 if (cn == 0) break;
                 if (ch[0] == '\n') break;
-                buf[pos] = ch[0];
-                pos += 1;
+                // Past capacity: keep DRAINING to the newline without storing —
+                // stopping mid-line would desync the tag framing.
+                if (pos < buf.len) {
+                    buf[pos] = ch[0];
+                    pos += 1;
+                }
             }
 
             if (pos > 0) {
-                // Check for ready signal
-                if (std.mem.indexOf(u8, buf[0..pos], "\"ready\"")) |_| {
-                    bridge_ready.store(true, .release);
+                // Stable-prefix classification (contract with the bridge; see
+                // browser_pure.classifyBridgeMsg) — substring matching used to
+                // mistake scrape/eval payloads containing "title" for navs.
+                switch (pure.classifyBridgeMsg(buf[0..pos])) {
+                    .ready => bridge_ready.store(true, .release),
+                    .nav => {
+                        // Stage url/title for the UI thread to apply at frame
+                        // start — direct writes raced the URL bar's textEntry.
+                        nav_stage_lock.lock();
+                        if (extractJsonField(buf[0..pos], "title")) |title| {
+                            const tlen = @min(title.len, nav_stage_title.len);
+                            @memcpy(nav_stage_title[0..tlen], title[0..tlen]);
+                            nav_stage_title_len = tlen;
+                        }
+                        if (extractJsonField(buf[0..pos], "url")) |url| {
+                            const ulen = @min(url.len, nav_stage_url.len);
+                            @memcpy(nav_stage_url[0..ulen], url[0..ulen]);
+                            nav_stage_url_len = ulen;
+                        }
+                        nav_stage_dirty = true;
+                        nav_stage_lock.unlock();
+                        state.app.browser.is_loading.store(false, .release);
+                    },
+                    .err => {
+                        // Failed navigation (or command error): stop the
+                        // loading indicator and surface the reason — the old
+                        // path reported success with the previous page's URL.
+                        state.app.browser.is_loading.store(false, .release);
+                        var msg_buf: [256]u8 = undefined;
+                        const detail = extractJsonField(buf[0..pos], "error") orelse "unknown error";
+                        const msg = std.fmt.bufPrint(&msg_buf, "Navigation failed: {s}", .{detail[0..@min(detail.len, 180)]}) catch "Navigation failed";
+                        logs.pushLog("error", "browser", msg, false);
+                    },
+                    .other => {},
                 }
-
-                // Check for title update (navigate response)
-                if (std.mem.indexOf(u8, buf[0..pos], "\"title\"")) |_| {
-                    // Extract title from JSON
-                    if (extractJsonField(buf[0..pos], "title")) |title| {
-                        const b = &state.app.browser;
-                        const tlen = @min(title.len, 255);
-                        @memcpy(b.title[0..tlen], title[0..tlen]);
-                        b.title_len = tlen;
-                        b.is_loading.store(false, .release);
-                    }
-                    // Extract url
-                    if (extractJsonField(buf[0..pos], "url")) |url| {
-                        const b = &state.app.browser;
-                        const ulen = @min(url.len, 2047);
-                        @memcpy(b.url_buf[0..ulen], url[0..ulen]);
-                        b.url_len = ulen;
-                    }
-                    // Auto-request screenshot after navigation
-                    sendCommand("{\"cmd\":\"screenshot\"}");
-                }
-
-                // Store for general use
-                @memcpy(json_response[0..pos], buf[0..pos]);
-                json_response_len = pos;
-                json_response_ready.store(true, .release);
+                state.wakeUi();
             }
         } else if (tag[0] == 'F') {
             // Frame: 4-byte big-endian length + JPEG data
@@ -219,6 +384,7 @@ fn bridgeReaderThread() void {
 
             // Read JPEG data
             const jpeg_buf = alloc.alloc(u8, frame_size) catch continue;
+            defer alloc.free(jpeg_buf);
             var total_read: usize = 0;
             while (total_read < frame_size) {
                 const fr = @import("../core/io_global.zig").read(stdout, jpeg_buf[total_read..frame_size]) catch break;
@@ -227,17 +393,33 @@ fn bridgeReaderThread() void {
             }
 
             if (total_read == frame_size) {
-                frame_lock.lock();
-                if (frame_jpeg) |old| alloc.free(old);
-                frame_jpeg = jpeg_buf;
-                frame_jpeg_len = frame_size;
-                frame_dirty.store(true, .release);
-                frame_lock.unlock();
-
-                // Mark loading done
-                state.app.browser.is_loading.store(false, .release);
-            } else {
-                alloc.free(jpeg_buf);
+                // Decode HERE (reader thread) — a 12fps JPEG decode on the UI
+                // thread stuttered the whole app. The UI only uploads RGBA.
+                // NOTE: frames deliberately do NOT clear is_loading — the pump
+                // streams continuously, so a pre-goto frame arriving 80ms
+                // after Enter used to dismiss the loading bar mid-navigation.
+                // is_loading clears on the navigate response / error instead.
+                var w: c_int = 0;
+                var h: c_int = 0;
+                var ch: c_int = 0;
+                const rgba = dvui.c.stbi_load_from_memory(jpeg_buf.ptr, @intCast(frame_size), &w, &h, &ch, 4);
+                if (rgba != null and w > 0 and h > 0 and w <= 8192 and h <= 8192) {
+                    defer dvui.c.stbi_image_free(rgba);
+                    const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
+                    if (frame_alloc.alloc(u8, p_len)) |p_slice| {
+                        @memcpy(p_slice, rgba[0..p_len]);
+                        frame_lock.lock();
+                        if (frame_pixels) |old| frame_alloc.free(old);
+                        frame_pixels = p_slice;
+                        frame_pix_w = @intCast(w);
+                        frame_pix_h = @intCast(h);
+                        frame_dirty.store(true, .release);
+                        frame_lock.unlock();
+                        // Wake the UI so streamed frames paint at the pump's
+                        // rate instead of on the next incidental mouse move.
+                        state.wakeUi();
+                    } else |_| {}
+                }
             }
         }
     }
@@ -332,43 +514,168 @@ pub fn navigate(url: []const u8) void {
     const b = &state.app.browser;
     if (url.len == 0 or url.len >= 2048) return;
 
-    // Store URL
-    const buf_ptr: [*]const u8 = @ptrCast(&b.url_buf[0]);
-    if (url.ptr != buf_ptr) {
-        @memcpy(b.url_buf[0..url.len], url);
+    // Store URL. `url` may be a slice INTO url_buf at a nonzero offset — the
+    // smart address bar trims whitespace, so scheme'd input with a leading
+    // space aliases the buffer. @memcpy forbids overlap; copyForwards is safe
+    // here because src is always at or after dst (buffer start).
+    const buf_start = @intFromPtr(&b.url_buf[0]);
+    const url_addr = @intFromPtr(url.ptr);
+    if (url_addr != buf_start) {
+        if (url_addr > buf_start and url_addr < buf_start + b.url_buf.len) {
+            std.mem.copyForwards(u8, b.url_buf[0..url.len], url);
+        } else {
+            @memcpy(b.url_buf[0..url.len], url);
+        }
     }
+    // NUL-terminate so the URL bar's sliceTo(0) never shows a stale tail from
+    // a previously longer URL.
+    if (url.len < b.url_buf.len) b.url_buf[url.len] = 0;
     b.url_len = url.len;
     b.is_loading.store(true, .release);
+    loading_since_ms.store(io_g.milliTimestamp(), .release);
     b.title_len = 0;
 
-    // Push to history
-    if (!state.app.incognito_mode and b.history_count < 32) {
-        const hi = b.history_count;
-        @memcpy(b.history[hi][0..url.len], url);
-        b.history_lens[hi] = url.len;
-        b.history_count += 1;
-        b.history_pos = b.history_count;
+    // Push to history — a ring: when full, the oldest entry falls off instead
+    // of navigation silently stopping being recorded. Consecutive duplicates
+    // (refresh, redirect echo) are suppressed.
+    if (!state.app.incognito_mode) {
+        const is_dup = b.history_count > 0 and blk: {
+            const li = b.history_count - 1;
+            break :blk std.mem.eql(u8, b.history[li][0..b.history_lens[li]], b.url_buf[0..url.len]);
+        };
+        if (!is_dup) {
+            if (b.history_count == b.history.len) {
+                var hi: usize = 0;
+                while (hi + 1 < b.history.len) : (hi += 1) {
+                    b.history[hi] = b.history[hi + 1];
+                    b.history_lens[hi] = b.history_lens[hi + 1];
+                }
+                b.history_count -= 1;
+            }
+            const hi = b.history_count;
+            @memcpy(b.history[hi][0..url.len], b.url_buf[0..url.len]);
+            b.history_lens[hi] = url.len;
+            b.history_count += 1;
+            b.history_pos = b.history_count;
+        }
     }
 
     if (bridge_ready.load(.acquire)) {
-        // Bridge is running — send navigate immediately
-        var esc_buf: [4096]u8 = undefined;
-        const esc_url = escapeJsonString(url, &esc_buf);
-        var cmd_buf: [4200]u8 = undefined;
-        const cmd = std.fmt.bufPrint(&cmd_buf, "{{\"cmd\":\"navigate\",\"url\":\"{s}\"}}", .{esc_url}) catch return;
-        sendCommand(cmd);
+        sendNavigate(b.url_buf[0..url.len]);
     } else {
         // Bridge not ready yet — queue URL for when it starts
         const ulen = @min(url.len, 2047);
-        @memcpy(pending_url[0..ulen], url[0..ulen]);
+        pending_lock.lock();
+        @memcpy(pending_url[0..ulen], b.url_buf[0..ulen]);
         pending_url_len = ulen;
+        pending_lock.unlock();
         ensureBridge();
     }
 }
 
-pub fn sendClick(x: f32, y: f32) void {
+pub fn sendFind(text: []const u8) void {
     if (!bridge_ready.load(.acquire)) return;
-    sendCommandFmt("{{\"cmd\":\"click\",\"x\":{d},\"y\":{d}}}", .{ @as(i32, @intFromFloat(x)), @as(i32, @intFromFloat(y)) });
+    var esc_buf: [4096]u8 = undefined;
+    const esc = escapeJsonString(text, &esc_buf);
+    sendCommandFmt("{{\"cmd\":\"find\",\"text\":\"{s}\"}}", .{esc});
+}
+
+pub fn sendZoom(factor: f32) void {
+    if (!bridge_ready.load(.acquire)) return;
+    sendCommandFmt("{{\"cmd\":\"zoom\",\"factor\":{d:.2}}}", .{factor});
+}
+
+/// Clamp + apply + announce a zoom change (Cmd/Ctrl +/-/0 or the toolbar).
+fn setZoom(z: f32) void {
+    zoom_level = std.math.clamp(z, 0.25, 4.0);
+    sendZoom(zoom_level);
+    var tb: [32]u8 = undefined;
+    if (std.fmt.bufPrint(&tb, "Zoom {d}%", .{@as(i32, @intFromFloat(zoom_level * 100))})) |msg| {
+        state.showToast(msg);
+    } else |_| {}
+}
+
+// ── Bookmarks (browser_bookmarks table; newest first, capped at 64) ──
+
+fn loadBookmarks() void {
+    if (bookmarks_loaded) return;
+    bookmarks_loaded = true;
+    const stmt = db.prepare("SELECT url, title FROM browser_bookmarks ORDER BY added_at DESC LIMIT 64") orelse return;
+    defer db.finalize(stmt);
+    while (db.step(stmt) == db.c.SQLITE_ROW and bookmark_count < bookmarks.len) {
+        const bm = &bookmarks[bookmark_count];
+        db.copyColumn(stmt, 0, &bm.url, &bm.url_len);
+        db.copyColumn(stmt, 1, &bm.text, &bm.text_len);
+        if (bm.url_len > 0) bookmark_count += 1;
+    }
+}
+
+fn findBookmark(url: []const u8) ?usize {
+    loadBookmarks();
+    for (bookmarks[0..bookmark_count], 0..) |*bm, bi| {
+        if (std.mem.eql(u8, bm.url[0..bm.url_len], url)) return bi;
+    }
+    return null;
+}
+
+fn toggleBookmark() void {
+    const b = &state.app.browser;
+    if (b.url_len == 0) return;
+    const url = b.url_buf[0..b.url_len];
+    if (findBookmark(url)) |bi| {
+        const stmt = db.prepare("DELETE FROM browser_bookmarks WHERE url = ?1") orelse return;
+        defer db.finalize(stmt);
+        db.bindText(stmt, 1, url);
+        _ = db.step(stmt);
+        var i = bi;
+        while (i + 1 < bookmark_count) : (i += 1) bookmarks[i] = bookmarks[i + 1];
+        bookmark_count -= 1;
+        state.showToast("Bookmark removed");
+    } else {
+        const stmt = db.prepare("INSERT OR REPLACE INTO browser_bookmarks (url, title) VALUES (?1, ?2)") orelse return;
+        defer db.finalize(stmt);
+        db.bindText(stmt, 1, url);
+        db.bindText(stmt, 2, b.title[0..b.title_len]);
+        _ = db.step(stmt);
+        if (bookmark_count < bookmarks.len) {
+            var i = bookmark_count;
+            while (i > 0) : (i -= 1) bookmarks[i] = bookmarks[i - 1];
+            const bm = &bookmarks[0];
+            const ulen = @min(url.len, bm.url.len);
+            @memcpy(bm.url[0..ulen], url[0..ulen]);
+            bm.url_len = ulen;
+            const tlen = @min(b.title_len, bm.text.len);
+            @memcpy(bm.text[0..tlen], b.title[0..tlen]);
+            bm.text_len = tlen;
+            bookmark_count += 1;
+        }
+        state.showToast("Bookmarked");
+    }
+}
+
+/// Escape + frame + send a navigate command (shared by navigate() and the
+/// pending-URL flush in startBridgeThread — keeping the two paths identical).
+fn sendNavigate(url: []const u8) void {
+    var esc_buf: [4096]u8 = undefined;
+    const esc_url = escapeJsonString(url, &esc_buf);
+    var cmd_buf: [4200]u8 = undefined;
+    const cmd = std.fmt.bufPrint(&cmd_buf, "{{\"cmd\":\"navigate\",\"url\":\"{s}\"}}", .{esc_url}) catch return;
+    sendCommand(cmd);
+}
+
+pub fn sendClickButton(x: f32, y: f32, button: []const u8) void {
+    if (!bridge_ready.load(.acquire)) return;
+    sendCommandFmt("{{\"cmd\":\"click\",\"x\":{d},\"y\":{d},\"button\":\"{s}\"}}", .{ @as(i32, @intFromFloat(x)), @as(i32, @intFromFloat(y)), button });
+}
+
+pub fn sendMouseMove(x: f32, y: f32) void {
+    if (!bridge_ready.load(.acquire)) return;
+    sendCommandFmt("{{\"cmd\":\"mousemove\",\"x\":{d},\"y\":{d}}}", .{ @as(i32, @intFromFloat(x)), @as(i32, @intFromFloat(y)) });
+}
+
+pub fn sendResize(w: u32, h: u32) void {
+    if (!bridge_ready.load(.acquire)) return;
+    sendCommandFmt("{{\"cmd\":\"resize\",\"w\":{d},\"h\":{d}}}", .{ w, h });
 }
 
 pub fn sendScroll(dy: f32) void {
@@ -511,30 +818,53 @@ fn updateFrameTexture() void {
     if (!frame_dirty.load(.acquire)) return;
     frame_dirty.store(false, .release);
 
-    const jpeg = frame_jpeg orelse return;
-    if (jpeg.len < 100) return;
-
-    // Decode JPEG → RGBA via stbi
-    var w: c_int = 0;
-    var h: c_int = 0;
-    var ch: c_int = 0;
-    const rgba = dvui.c.stbi_load_from_memory(jpeg.ptr, @intCast(jpeg.len), &w, &h, &ch, 4);
-    if (rgba == null or w <= 0 or h <= 0) return;
-
-    const uw: u32 = @intCast(w);
-    const uh: u32 = @intCast(h);
+    // RGBA was decoded on the reader thread — this is only a GPU upload.
+    const pixels = frame_pixels orelse return;
+    const uw = frame_pix_w;
+    const uh = frame_pix_h;
     const count = @as(usize, uw) * @as(usize, uh);
-    const pma: [*]const dvui.Color.PMA = @ptrCast(@alignCast(rgba));
+    if (count == 0 or pixels.len != count * 4) return;
 
-    // Destroy old texture
-    if (frame_texture) |old| {
-        old.destroyLater();
+    const pma: []const dvui.Color.PMA = @as([*]const dvui.Color.PMA, @ptrCast(@alignCast(pixels.ptr)))[0..count];
+
+    if (frame_texture != null and frame_w == uw and frame_h == uh) {
+        // Same dims — in-place update, no texture churn.
+        dvui.Texture.update(&frame_texture.?, pma, .linear) catch {
+            frame_texture.?.destroyLater();
+            frame_texture = dvui.textureCreate(pma, uw, uh, .linear, .rgba_32) catch null;
+        };
+    } else {
+        if (frame_texture) |old| old.destroyLater();
+        frame_texture = dvui.textureCreate(pma, uw, uh, .linear, .rgba_32) catch null;
     }
-
-    frame_texture = dvui.textureCreate(pma[0..count], uw, uh, .linear, .rgba_32) catch null;
     frame_w = uw;
     frame_h = uh;
-    dvui.c.stbi_image_free(rgba);
+}
+
+/// Apply reader-thread nav updates on the UI thread. The URL is skipped while
+/// the address bar has focus — an SPA pushState firing mid-edit must not
+/// clobber what the user is typing (the title still updates).
+fn applyStagedNav(b: *@TypeOf(state.app.browser)) void {
+    nav_stage_lock.lock();
+    defer nav_stage_lock.unlock();
+    if (!nav_stage_dirty) return;
+
+    if (nav_stage_title_len > 0) {
+        @memcpy(b.title[0..nav_stage_title_len], nav_stage_title[0..nav_stage_title_len]);
+        b.title_len = nav_stage_title_len;
+    }
+    if (nav_stage_url_len > 0 and !url_bar_focused) {
+        const ulen = @min(nav_stage_url_len, b.url_buf.len - 1);
+        @memcpy(b.url_buf[0..ulen], nav_stage_url[0..ulen]);
+        b.url_buf[ulen] = 0; // sliceTo(0) must not see a stale tail
+        b.url_len = ulen;
+    }
+    // URL held back while focused stays staged (dirty) so it applies once the
+    // user leaves the field without submitting.
+    nav_stage_dirty = url_bar_focused and nav_stage_url_len > 0;
+
+    // CSS zoom is per-document — re-apply after every navigation.
+    if (zoom_level != 1.0) sendZoom(zoom_level);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -553,6 +883,32 @@ pub fn renderContent() void {
     // vanish. Every other Browse content renderer wraps its body the same way.
     var root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer root.deinit();
+
+    // Apply reader-thread nav updates (URL bar text + title) on the UI thread.
+    applyStagedNav(b);
+
+    // Loading watchdog: if the bridge never answers (missing camoufox, crashed
+    // worker), stop the loading indicator instead of animating it — and its
+    // dvui.refresh loop — forever.
+    if (b.is_loading.load(.acquire)) {
+        const since = loading_since_ms.load(.acquire);
+        if (since > 0 and io_g.milliTimestamp() - since > LOADING_TIMEOUT_MS) {
+            b.is_loading.store(false, .release);
+            logs.pushLog("error", "browser", "Navigation timed out — browser engine not responding", false);
+        }
+    }
+
+    // Returning to this tab after it was hidden → poke the bridge for a fresh
+    // frame (the pump idles out after 2 min of silence; a stale page may have
+    // updated underneath). Cheap: the bridge dedups unchanged frames by hash.
+    {
+        const S = struct {
+            var last_seen_ms: i64 = 0;
+        };
+        const now_ms = io_g.milliTimestamp();
+        if (now_ms - S.last_seen_ms > 2000 and bridge_ready.load(.acquire)) requestScreenshot();
+        S.last_seen_ms = now_ms;
+    }
 
     // URL bar with icon buttons
     {
@@ -587,18 +943,19 @@ pub fn renderContent() void {
             requestScreenshot();
         }
 
-        // Status indicator: 🦊 green if ready, orange if loading
+        // Status indicator: spinner while navigating/starting, check when ready
         {
-            if (bridge_ready.load(.acquire)) {
-                dvui.icon(@src(), "browser-ready", icons.tvg.lucide.@"circle-check", .{}, .{
+            if (b.is_loading.load(.acquire) or bridge_starting.load(.acquire)) {
+                dvui.spinner(@src(), .{
+                    .id_extra = 99,
                     .color_text = theme.colors.accent,
                     .min_size_content = .{ .w = 14, .h = 14 },
                     .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
+                    .gravity_y = 0.5,
                 });
-            } else if (bridge_starting.load(.acquire)) {
-                dvui.icon(@src(), "browser-loading", icons.tvg.lucide.@"loader-circle", .{}, .{
-                    .id_extra = 99,
-                    .color_text = dvui.Color{ .r = 255, .g = 165, .b = 0, .a = 255 },
+            } else if (bridge_ready.load(.acquire)) {
+                dvui.icon(@src(), "browser-ready", icons.tvg.lucide.@"circle-check", .{}, .{
+                    .color_text = theme.colors.accent,
                     .min_size_content = .{ .w = 14, .h = 14 },
                     .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
                 });
@@ -618,6 +975,9 @@ pub fn renderContent() void {
             .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
         });
         const enter_pressed = te.enter_pressed;
+        // While the user is editing the address, staged nav updates must not
+        // overwrite their typing (applyStagedNav checks this each frame).
+        url_bar_focused = dvui.focusedWidgetId() == te.data().id;
         te.deinit();
 
         // Go (play icon)
@@ -631,14 +991,123 @@ pub fn renderContent() void {
         if (clicked_go or enter_pressed) {
             const input_text = std.mem.sliceTo(&b.url_buf, 0);
             if (input_text.len > 0) {
-                if (!std.mem.startsWith(u8, input_text, "http://") and !std.mem.startsWith(u8, input_text, "https://")) {
-                    var url_fixed: [2048]u8 = undefined;
-                    const fixed = std.fmt.bufPrint(&url_fixed, "https://{s}", .{input_text}) catch input_text;
-                    loadContent(fixed);
-                } else {
-                    loadContent(input_text);
-                }
+                // Smart address bar: URLs pass through, bare hosts get https://,
+                // anything else becomes a web search (browser_pure logic).
+                var addr_buf: [2048]u8 = undefined;
+                const resolved = pure.resolveAddress(input_text, &addr_buf);
+                if (resolved.len > 0) loadContent(resolved);
             }
+        }
+
+        // Bookmark star — gold when the current page is bookmarked.
+        if (b.url_len > 0) {
+            const bookmarked = findBookmark(b.url_buf[0..b.url_len]) != null;
+            var star_wd: dvui.WidgetData = undefined;
+            var star_style = icon_btn_style;
+            star_style.id_extra = 119;
+            star_style.data_out = &star_wd;
+            if (bookmarked) star_style.color_text = theme.colors.warning;
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.star, .{}, .{}, star_style)) {
+                toggleBookmark();
+            }
+            @import("../ui/components.zig").tipId(@src(), star_wd, if (bookmarked) "Remove bookmark" else "Bookmark this page", 119);
+        }
+
+        // Copy current URL
+        if (b.url_len > 0) {
+            var copy_wd: dvui.WidgetData = undefined;
+            var copy_style = icon_btn_style;
+            copy_style.id_extra = 120;
+            copy_style.data_out = &copy_wd;
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.copy, .{}, .{}, copy_style)) {
+                dvui.clipboardTextSet(b.url_buf[0..b.url_len]);
+                state.showToast("URL copied");
+            }
+            @import("../ui/components.zig").tipId(@src(), copy_wd, "Copy URL", 120);
+        }
+
+        // Open the current page in the media player (yt-dlp handles most
+        // video pages) — the browse-to-watch handoff in one click.
+        if (b.url_len > 0) {
+            var mpv_wd: dvui.WidgetData = undefined;
+            var mpv_style = icon_btn_style;
+            mpv_style.id_extra = 121;
+            mpv_style.data_out = &mpv_wd;
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"monitor-play", .{}, .{}, mpv_style)) {
+                var url_copy: [2048]u8 = undefined;
+                @memcpy(url_copy[0..b.url_len], b.url_buf[0..b.url_len]);
+                state.showToast("Opening in player...");
+                loadContentDirect(url_copy[0..b.url_len]);
+            }
+            @import("../ui/components.zig").tipId(@src(), mpv_wd, "Play this page in the media player", 121);
+        }
+
+        // Zoom out / in (Cmd/Ctrl - and + work too; Cmd/Ctrl 0 resets)
+        {
+            var zo_style = icon_btn_style;
+            zo_style.id_extra = 123;
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"zoom-out", .{}, .{}, zo_style)) {
+                setZoom(zoom_level - 0.1);
+            }
+            var zi_style = icon_btn_style;
+            zi_style.id_extra = 124;
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"zoom-in", .{}, .{}, zi_style)) {
+                setZoom(zoom_level + 0.1);
+            }
+        }
+    }
+
+    // ── Find-in-page bar (Cmd/Ctrl+F; Enter = next match; Esc closes) ──
+    if (find_open) {
+        var frow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
+            .background = true,
+            .color_fill = dvui.Color{ .r = 22, .g = 22, .b = 28, .a = 255 },
+        });
+        defer frow.deinit();
+
+        dvui.icon(@src(), "find", icons.tvg.lucide.search, .{}, .{
+            .color_text = theme.colors.text_secondary,
+            .min_size_content = .{ .w = 13, .h = 13 },
+            .gravity_y = 0.5,
+            .margin = .{ .x = 2, .y = 0, .w = 6, .h = 0 },
+        });
+
+        var fte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &find_buf }, .placeholder = "Find in page…" }, .{
+            .min_size_content = .{ .w = 260, .h = 16 },
+            .color_fill = dvui.Color{ .r = 28, .g = 28, .b = 34, .a = 255 },
+            .color_text = theme.colors.text_primary,
+            .border = dvui.Rect.all(1),
+            .color_border = dvui.Color{ .r = 50, .g = 50, .b = 60, .a = 200 },
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+            .gravity_y = 0.5,
+        });
+        const find_enter = fte.enter_pressed;
+        fte.deinit();
+
+        const next_clicked = dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-right", .{}, .{}, .{
+            .id_extra = 130,
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = theme.colors.text_secondary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 3, .y = 2, .w = 3, .h = 2 },
+            .gravity_y = 0.5,
+        });
+        if (next_clicked or find_enter) {
+            const t = std.mem.sliceTo(&find_buf, 0);
+            if (t.len > 0) sendFind(t);
+        }
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
+            .id_extra = 131,
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = theme.colors.text_secondary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 3, .y = 2, .w = 3, .h = 2 },
+            .gravity_y = 0.5,
+        })) {
+            find_open = false;
         }
     }
 
@@ -654,15 +1123,14 @@ pub fn renderContent() void {
         });
     }
 
-    // Loading state
-    if (b.is_loading.load(.acquire)) {
-        _ = dvui.label(@src(), "Loading...", .{}, .{
-            .color_text = theme.colors.accent,
-            .gravity_x = 0.5,
-            .gravity_y = 0.5,
-            .expand = .both,
-        });
-        return;
+    // Loading state — a slim indeterminate sweep under the URL bar. The
+    // previous page stays visible underneath (browser-style), instead of the
+    // whole pane blanking to a "Loading..." label. Only while the engine can
+    // actually make progress — a sweep animating over "engine not started"
+    // read as a stuck red line.
+    if (b.is_loading.load(.acquire) and (bridge_ready.load(.acquire) or bridge_starting.load(.acquire))) {
+        renderLoadingBar();
+        dvui.refresh(null, @src(), null);
     }
 
     // ── Frame rendering or landing page ──
@@ -685,37 +1153,95 @@ pub fn renderContent() void {
             .gravity_y = 0.0,
         });
 
-        // Handle mouse events in the image area
+        // ── Input forwarding ──
+        // Guards: skip events other widgets already handled (typing in the
+        // URL bar must not leak into the page — it used to double-fire), and
+        // skip mouse events belonging to floating windows (pickers, modals).
+        const rs = img_box.data().contentRectScale();
+        const rect = rs.r;
+        const fw: f32 = @floatFromInt(frame_w);
+        const fh: f32 = @floatFromInt(frame_h);
+        var wheel_accum: f32 = 0;
+
         for (dvui.events()) |*e| {
+            if (e.handled) continue;
             switch (e.evt) {
                 .mouse => |mouse| {
+                    if (mouse.floating_win != dvui.subwindowCurrentId()) continue;
+                    const mx = mouse.p.x - rect.x;
+                    const my = mouse.p.y - rect.y;
+                    const inside = mx >= 0 and my >= 0 and mx < rect.w and my < rect.h;
+                    if (!inside) continue;
+                    const sx = mx * fw / rect.w;
+                    const sy = my * fh / rect.h;
                     switch (mouse.action) {
                         .press => {
-                            if (mouse.button == .left) {
-                                // Get position relative to image
-                                const rs = img_box.data().contentRectScale();
-                                const rect = rs.r;
-                                const mx = mouse.p.x - rect.x;
-                                const my = mouse.p.y - rect.y;
-                                if (mx >= 0 and my >= 0 and mx < rect.w and my < rect.h) {
-                                    const sx = mx * @as(f32, @floatFromInt(frame_w)) / rect.w;
-                                    const sy = my * @as(f32, @floatFromInt(frame_h)) / rect.h;
-                                    sendClick(sx, sy);
-                                    e.handled = true;
-                                }
+                            switch (mouse.button) {
+                                .left => sendClickButton(sx, sy, "left"),
+                                .right => sendClickButton(sx, sy, "right"),
+                                .middle => sendClickButton(sx, sy, "middle"),
+                                else => continue,
                             }
+                            e.handled = true;
                         },
                         .wheel_y => |wy| {
-                            sendScroll(wy);
+                            // Coalesce: a trackpad emits many wheel events per
+                            // frame — one combined scroll command per frame.
+                            wheel_accum += wy;
                             e.handled = true;
+                        },
+                        .position => {
+                            // Hover pass-through (throttled) — page dropdowns,
+                            // hover previews and cursor feedback come alive.
+                            const HS = struct {
+                                var last_ms: i64 = 0;
+                                var last_x: f32 = -1e9;
+                                var last_y: f32 = -1e9;
+                            };
+                            const now_ms = io_g.milliTimestamp();
+                            const moved = @abs(mouse.p.x - HS.last_x) > 3 or @abs(mouse.p.y - HS.last_y) > 3;
+                            if (moved and now_ms - HS.last_ms >= 50) {
+                                HS.last_ms = now_ms;
+                                HS.last_x = mouse.p.x;
+                                HS.last_y = mouse.p.y;
+                                sendMouseMove(sx, sy);
+                            }
                         },
                         else => {},
                     }
                 },
                 .key => |key| {
-                    if (key.action == .down or key.action == .repeat) {
-                        if (mapKeyToPlaywright(key.code)) |pw_key| {
-                            sendKeypress(pw_key);
+                    if (key.action != .down and key.action != .repeat) continue;
+                    const mod = key.mod;
+                    const chord = mod.command() or mod.control();
+                    // Local browser shortcuts — handled here, never forwarded.
+                    if (chord and key.code == .f) {
+                        find_open = true;
+                        e.handled = true;
+                        continue;
+                    }
+                    if (chord and (key.code == .equal or key.code == .minus or key.code == .zero)) {
+                        setZoom(switch (key.code) {
+                            .equal => zoom_level + 0.1,
+                            .minus => zoom_level - 0.1,
+                            else => 1.0,
+                        });
+                        e.handled = true;
+                        continue;
+                    }
+                    if (key.code == .escape and find_open) {
+                        find_open = false;
+                        e.handled = true;
+                        continue;
+                    }
+                    if (mapKeyToPlaywright(key.code)) |base| {
+                        // Plain printable keys arrive again as text events —
+                        // forwarding both double-typed every character. Only
+                        // navigation keys and chords go through keypress.
+                        if (pure.shouldForwardKeypress(base, mod.control(), mod.command(), mod.alt())) {
+                            var combo_buf: [64]u8 = undefined;
+                            const combo = pure.composeKeyCombo(base, mod.control(), mod.command(), mod.alt(), mod.shift(), &combo_buf);
+                            sendKeypress(combo);
                             e.handled = true;
                         }
                     }
@@ -734,6 +1260,12 @@ pub fn renderContent() void {
                 else => {},
             }
         }
+        if (wheel_accum != 0) sendScroll(wheel_accum);
+
+        // Keep the remote viewport matched to the pane (LOGICAL pixels — CSS
+        // px map 1:1 to dvui points, so page text renders at normal size and
+        // the frame fills the pane without stretching).
+        if (rs.s > 0) maybeSyncViewport(rect.w / rs.s, rect.h / rs.s);
     } else {
         // Landing page — no frame yet. expand=.both fills the space BELOW the
         // URL bar; do NOT add gravity_y here — gravity on an expanded box makes
@@ -773,21 +1305,10 @@ pub fn renderContent() void {
                 .padding = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
             });
         } else {
-            _ = dvui.label(@src(), "Browser engine not started", .{}, .{
-                .id_extra = 3,
-                .color_text = theme.colors.text_secondary,
-                .gravity_x = 0.5,
-                .padding = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
-            });
-            _ = dvui.label(@src(), "Enter a URL above to launch Camoufox", .{}, .{
-                .id_extra = 6,
-                .color_text = dvui.Color{ .r = 80, .g = 80, .b = 100, .a = 255 },
-                .gravity_x = 0.5,
-                .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
-            });
+            renderEngineStatus();
         }
 
-        _ = dvui.label(@src(), "Enter a URL above to browse", .{}, .{
+        _ = dvui.label(@src(), "Enter a URL above to browse — or type a search", .{}, .{
             .id_extra = 5,
             .color_text = theme.colors.text_secondary,
             .gravity_x = 0.5,
@@ -799,64 +1320,265 @@ pub fn renderContent() void {
             .gravity_x = 0.5,
         });
 
+        renderBookmarksSection();
+        renderQuickLaunch(b);
+
         // Auto-start bridge on first render if not started
         ensureBridge();
     }
+}
+
+/// Landing-page engine status: install CTA with LIVE progress when the
+/// Camoufox venv is missing, plain status otherwise. The installer streams
+/// pip/download output line-by-line into the label.
+fn renderEngineStatus() void {
+    const inst: InstallState = @enumFromInt(install_state.load(.acquire));
+
+    if (inst == .running) {
+        var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 10, .gravity_x = 0.5 });
+        defer prow.deinit();
+        dvui.spinner(@src(), .{
+            .color_text = theme.colors.accent,
+            .min_size_content = .{ .w = 13, .h = 13 },
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+        });
+        install_lock.lock();
+        var mbuf: [280]u8 = undefined;
+        const msg = safeUtf8Buf(install_msg[0..install_msg_len], &mbuf);
+        install_lock.unlock();
+        _ = dvui.label(@src(), "{s}", .{msg}, .{
+            .id_extra = 11,
+            .color_text = theme.colors.text_secondary,
+            .gravity_y = 0.5,
+        });
+        return;
+    }
+
+    if (!engineInstalled()) {
+        _ = dvui.label(@src(), "Browser engine not installed", .{}, .{
+            .id_extra = 3,
+            .color_text = theme.colors.text_secondary,
+            .gravity_x = 0.5,
+            .padding = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
+        });
+        if (inst == .failed) {
+            install_lock.lock();
+            var mbuf: [280]u8 = undefined;
+            const msg = safeUtf8Buf(install_msg[0..install_msg_len], &mbuf);
+            install_lock.unlock();
+            _ = dvui.label(@src(), "{s}", .{msg}, .{
+                .id_extra = 12,
+                .color_text = theme.colors.danger,
+                .gravity_x = 0.5,
+                .padding = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+            });
+        }
+        if (dvui.button(@src(), if (inst == .failed) "Retry install" else "Install browser engine (~200 MB)", .{}, .{
+            .id_extra = 13,
+            .gravity_x = 0.5,
+            .margin = .{ .x = 0, .y = 8, .w = 0, .h = 8 },
+            .color_fill = theme.colors.accent,
+            .color_text = theme.colors.text_on_accent,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 14, .y = 6, .w = 14, .h = 6 },
+        })) {
+            installEngine();
+        }
+        _ = dvui.label(@src(), "Headless Firefox (Camoufox) rendered inside this pane — anti-bot, full JS", .{}, .{
+            .id_extra = 14,
+            .color_text = theme.colors.text_tertiary,
+            .gravity_x = 0.5,
+            .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+        });
+        return;
+    }
+
+    _ = dvui.label(@src(), "Browser engine not started", .{}, .{
+        .id_extra = 3,
+        .color_text = theme.colors.text_secondary,
+        .gravity_x = 0.5,
+        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
+    });
+    _ = dvui.label(@src(), "Enter a URL above to launch Camoufox", .{}, .{
+        .id_extra = 6,
+        .color_text = theme.colors.text_tertiary,
+        .gravity_x = 0.5,
+        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+    });
+}
+
+/// Landing-page "Bookmarks" list — one-click relaunch, newest first.
+fn renderBookmarksSection() void {
+    loadBookmarks();
+    if (bookmark_count == 0) return;
+
+    _ = dvui.label(@src(), "Bookmarks", .{}, .{
+        .id_extra = 30,
+        .color_text = theme.colors.text_secondary,
+        .gravity_x = 0.5,
+        .padding = .{ .x = 0, .y = 16, .w = 0, .h = 4 },
+    });
+
+    var clicked: ?usize = null;
+    const show = @min(bookmark_count, 6);
+    for (bookmarks[0..show], 0..) |*bm, bi| {
+        // Prefer the page title; fall back to the scheme-stripped URL.
+        var disp: []const u8 = if (bm.text_len > 0) bm.text[0..bm.text_len] else bm.url[0..bm.url_len];
+        if (bm.text_len == 0) {
+            if (std.mem.indexOf(u8, disp, "://")) |p| disp = disp[p + 3 ..];
+        }
+        var dbuf: [64]u8 = undefined;
+        const safe_disp = safeUtf8Buf(disp[0..@min(disp.len, 56)], &dbuf);
+
+        if (dvui.button(@src(), safe_disp, .{}, .{
+            .id_extra = bi + 31,
+            .gravity_x = 0.5,
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_text = theme.colors.warning,
+            .border = dvui.Rect.all(0),
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+        })) {
+            clicked = bi;
+        }
+    }
+
+    if (clicked) |ci| {
+        navigate(bookmarks[ci].url[0..bookmarks[ci].url_len]);
+    }
+}
+
+/// Landing-page "Recent" list — up to 6 deduped session-history entries as
+/// one-click relaunch buttons. Session-only (respects incognito, which never
+/// records history in the first place).
+fn renderQuickLaunch(b: *@TypeOf(state.app.browser)) void {
+    if (b.history_count == 0) return;
+
+    _ = dvui.label(@src(), "Recent", .{}, .{
+        .id_extra = 40,
+        .color_text = theme.colors.text_secondary,
+        .gravity_x = 0.5,
+        .padding = .{ .x = 0, .y = 16, .w = 0, .h = 4 },
+    });
+
+    const MAX_SHOW: usize = 6;
+    var shown_idx: [MAX_SHOW]usize = undefined;
+    var shown: usize = 0;
+    var clicked: ?usize = null;
+
+    var hi: usize = b.history_count;
+    outer: while (hi > 0 and shown < MAX_SHOW) {
+        hi -= 1;
+        const url = b.history[hi][0..b.history_lens[hi]];
+        if (url.len == 0) continue;
+        for (shown_idx[0..shown]) |si| {
+            if (std.mem.eql(u8, b.history[si][0..b.history_lens[si]], url)) continue :outer;
+        }
+        shown_idx[shown] = hi;
+        shown += 1;
+
+        // Display without scheme, truncated.
+        var disp: []const u8 = url;
+        if (std.mem.indexOf(u8, disp, "://")) |p| disp = disp[p + 3 ..];
+        var dbuf: [64]u8 = undefined;
+        const safe_disp = safeUtf8Buf(disp[0..@min(disp.len, 56)], &dbuf);
+
+        if (dvui.button(@src(), safe_disp, .{}, .{
+            .id_extra = shown + 41,
+            .gravity_x = 0.5,
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_text = theme.colors.text_secondary,
+            .border = dvui.Rect.all(0),
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
+        })) {
+            clicked = hi;
+        }
+    }
+
+    // Navigate after the loop — navigate() mutates the history arrays the
+    // loop above is slicing into.
+    if (clicked) |ci| {
+        var nav_buf: [2048]u8 = undefined;
+        const n = b.history_lens[ci];
+        @memcpy(nav_buf[0..n], b.history[ci][0..n]);
+        navigate(nav_buf[0..n]);
+    }
+}
+
+/// Indeterminate 3px sweep — rendered under the URL bar while navigating.
+fn renderLoadingBar() void {
+    var track = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = theme.colors.bg_elevated,
+        .min_size_content = .{ .w = 0, .h = 3 },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = 3 },
+    });
+    defer track.deinit();
+    const track_w = track.data().contentRectScale().r.w;
+    if (track_w <= 0) return;
+    const now_ms = io_g.milliTimestamp();
+    const frac: f32 = @as(f32, @floatFromInt(@mod(now_ms, 1100))) / 1100.0;
+    const seg_w = track_w * 0.28;
+    var fill = dvui.box(@src(), .{}, .{
+        .background = true,
+        .color_fill = theme.colors.accent,
+        .corner_radius = dvui.Rect.all(2),
+        .margin = .{ .x = frac * (track_w - seg_w), .y = 0, .w = 0, .h = 0 },
+        .min_size_content = .{ .w = seg_w, .h = 3 },
+        .max_size_content = .{ .w = seg_w, .h = 3 },
+    });
+    fill.deinit();
+}
+
+/// Debounced pane→viewport sync. When the pane's on-screen size settles
+/// (300 ms without further change), resize the remote viewport to match.
+/// Sizes are LOGICAL px, clamped to the same bounds the bridge enforces —
+/// recording an unclamped size would desync and never re-converge.
+fn maybeSyncViewport(w_in: f32, h_in: f32) void {
+    if (!bridge_ready.load(.acquire)) return;
+    if (w_in < 200 or h_in < 150) return;
+    // Mirror MIN/MAX_VIEW_* in camoufox_bridge.py.
+    const w = std.math.clamp(w_in, 320, 2560);
+    const h = std.math.clamp(h_in, 240, 1600);
+    const S = struct {
+        var sent_w: f32 = 0;
+        var sent_h: f32 = 0;
+        var pend_w: f32 = 0;
+        var pend_h: f32 = 0;
+        var pend_since: i64 = 0;
+    };
+    if (@abs(w - S.sent_w) < 16 and @abs(h - S.sent_h) < 16) return;
+    const now_ms = io_g.milliTimestamp();
+    if (@abs(w - S.pend_w) > 8 or @abs(h - S.pend_h) > 8) {
+        // New candidate size — restart the debounce window.
+        S.pend_w = w;
+        S.pend_h = h;
+        S.pend_since = now_ms;
+        dvui.refresh(null, @src(), null);
+        return;
+    }
+    if (now_ms - S.pend_since < 300) {
+        dvui.refresh(null, @src(), null);
+        return;
+    }
+    S.sent_w = w;
+    S.sent_h = h;
+    sendResize(@intFromFloat(w), @intFromFloat(h));
 }
 
 // ══════════════════════════════════════════════════════════
 // Content Router — auto-detect provider from URL
 // ══════════════════════════════════════════════════════════
 
-pub const ContentRoute = enum { mpv, comic_viewer, web };
-
-/// Determine the correct pane provider for a given URL
-pub fn routeContent(url: []const u8) ContentRoute {
-    // Video/audio extensions → mpv
-    const mpv_exts = [_][]const u8{
-        ".mp4", ".mkv",  ".avi", ".webm", ".flv", ".mov", ".m4v",
-        ".mp3", ".flac", ".ogg", ".wav",  ".aac", ".m4a", ".m3u8",
-        ".ts",
-    };
-    for (mpv_exts) |ext| {
-        if (std.mem.endsWith(u8, url, ext)) return .mpv;
-    }
-
-    // Video hosting sites → mpv (via yt-dlp)
-    const mpv_domains = [_][]const u8{
-        "youtube.com",     "youtu.be",       "twitch.tv",      "vimeo.com",
-        "dailymotion.com", "bilibili.com",   "rumble.com",     "crunchyroll.com",
-        "funimation.com",  "allanime.day",   "gogoanime",      "animixplay",
-        "pornhub.com",     "pornhub.org",
-        // Streamlink-supported live sites
-           "chaturbate.com", "stripchat.com",
-        "bongacams.com",   "cam4.com",       "camsoda.com",    "myfreecams.com",
-        "flirt4free.com",  "livejasmin.com", "kick.com",       "picarto.tv",
-        "dlive.tv",        "afreecatv.com",  "pluto.tv",       "odysee.com",
-    };
-    for (mpv_domains) |domain| {
-        if (std.mem.indexOf(u8, url, domain) != null) return .mpv;
-    }
-
-    // Comic sites → comic_viewer
-    const comic_domains = [_][]const u8{
-        "readallcomics.com", "readcomicsonline", "comicextra.net",
-        "mangadex.org",      "mangakakalot.com", "manganato.com",
-        "webtoons.com",      "tapas.io",
-    };
-    for (comic_domains) |domain| {
-        if (std.mem.indexOf(u8, url, domain) != null) return .comic_viewer;
-    }
-
-    // Image galleries → comic_viewer
-    const img_exts = [_][]const u8{ ".jpg", ".jpeg", ".png", ".gif", ".webp" };
-    for (img_exts) |ext| {
-        if (std.mem.endsWith(u8, url, ext)) return .comic_viewer;
-    }
-
-    // Everything else → web browser
-    return .web;
-}
+// Routing logic lives in browser_pure.zig (unit-tested); re-exported here so
+// callers keep importing browser.routeContent / browser.ContentRoute.
+pub const ContentRoute = pure.ContentRoute;
+pub const routeContent = pure.routeContent;
 
 /// Load a URL directly into mpv without content-type routing.
 /// Use for URLs already known to be video streams (e.g. Stremio debrid links,
