@@ -228,9 +228,11 @@ jobs:
           mkdir -p staging
           cp zig-out/bin/opal.exe staging/
           # The torrent wrapper lands next to the repo root (sh step in
-          # build.zig); accept either extension the port ends up using.
+          # build.zig). The Windows build names it torrent_wrapper.dll — NO
+          # lib prefix (zig's windows-gnu -l search tries `{name}.dll` first,
+          # and the PE import table then references that exact name).
           found_wrapper=""
-          for f in libtorrent_wrapper.dll libtorrent_wrapper.so; do
+          for f in torrent_wrapper.dll libtorrent_wrapper.dll libtorrent_wrapper.so; do
             if [ -f "$f" ]; then cp "$f" staging/; found_wrapper=1; fi
           done
           if [ -z "$found_wrapper" ]; then
