@@ -1,0 +1,39 @@
+# nfpm manifest — .deb / .rpm packaging for Linux releases.
+# Consumed by .github/workflows/release.yml (linux-x86_64 job); run from the
+# repo root after `zig build` so the src paths below resolve.
+# ${VERSION} is interpolated by nfpm from the environment (exported by the
+# workflow as the tag minus its leading "v").
+name: opal
+arch: amd64
+platform: linux
+version: "${VERSION}"
+maintainer: "Palash <via github.com/debpalash>"
+homepage: "https://github.com/debpalash/Opal"
+license: "GPL-3.0-only"
+description: "Play everything — media player, universal search, torrent streaming, local AI."
+
+contents:
+  - src: zig-out/bin/opal
+    dst: /usr/bin/opal
+  # C++ ABI isolation wrapper for libtorrent — built beside the binary by
+  # build.zig; shipped in a private libdir so it never shadows system libs.
+  - src: libtorrent_wrapper.so
+    dst: /usr/lib/opal/libtorrent_wrapper.so
+  - src: packaging/opal.desktop
+    dst: /usr/share/applications/opal.desktop
+  - src: assets/logo.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/opal.svg
+  - src: LICENSE
+    dst: /usr/share/doc/opal/LICENSE
+
+# Runtime deps use Debian/Ubuntu package names, so scope them to the deb
+# target only — Fedora/openSUSE name these differently, and an rpm carrying
+# deb names would be uninstallable.
+overrides:
+  deb:
+    depends:
+      - libmpv2
+      - libsqlite3-0
+      - libsdl2-2.0-0
+      - libtorrent-rasterbar2.0
+      - ffmpeg

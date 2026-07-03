@@ -1,0 +1,188 @@
+# =============================================================================
+# Opal — snapcraft manifest
+#
+# STATUS: UNTESTED SCAFFOLDING.
+#   Nobody has run `snapcraft` against this file yet. It encodes what we
+#   *believe* a working snap build looks like, based on build.zig, the
+#   PKGBUILD, and the Ubuntu 24.04 (core24) archive. Expect to iterate on a
+#   real Linux box before anything reaches the store. Known soft spots are
+#   flagged inline with "VERIFY:".
+#
+# WHERE THIS FILE GOES:
+#   snapcraft looks for `snap/snapcraft.yaml` at the project root. This copy
+#   lives in packaging/ so it doesn't imply the snap is real yet. To build:
+#       mkdir -p snap && cp packaging/snapcraft.yaml snap/snapcraft.yaml
+#       snapcraft            # needs Linux + LXD (or: snapcraft remote-build)
+#
+# STORE REGISTRATION (do these once, in order):
+#   1. Create an Ubuntu One account, then `snapcraft login`.
+#   2. `snapcraft register opal` — first come, first served. If the name is
+#      taken, file a dispute/request in the "store-requests" category on
+#      https://forum.snapcraft.io.
+#   3. Classic confinement is NOT self-service: post a request in the same
+#      store-requests forum category explaining why strict confinement does
+#      not fit (see the `confinement` comment below — that's the argument).
+#      A reviewer must approve the snap for classic before uploads publish.
+#   4. Build, then `snapcraft upload opal_*.snap --release=edge`.
+#   5. Soak on edge, then `snapcraft release opal <revision> stable`.
+# =============================================================================
+
+name: opal
+# Version is derived from git at build time via `craftctl set version=...`
+# in override-build below (this is what `adopt-info: opal` wires up).
+adopt-info: opal
+summary: Play everything — local-first media app with an on-device AI copilot
+description: |
+  Opal is the place where watching starts: one interface that searches your
+  disk, torrents, Jellyfin, Stremio add-ons, anime, YouTube, TMDB and comics
+  at once, streams magnets like files, and answers "what should I watch
+  tonight?" with a local LLM that never leaves your machine.
+
+  No accounts, no telemetry, no cloud — your history is a SQLite file you
+  own. Built in Zig on dvui, with an mpv heart. GPL-3.0.
+
+  Content sources ship OFF: the core has no sources configured and nothing
+  enables itself. See CONTENT_POLICY.md in the repository.
+
+license: GPL-3.0-only
+base: core24
+# grade: devel keeps this out of stable/candidate channels until a human has
+# actually run the snap. Flip to `stable` only after real testing on Linux.
+grade: devel
+
+# -----------------------------------------------------------------------------
+# WHY CLASSIC CONFINEMENT (the justification we'll give the store reviewers):
+#
+#   * Opal spawns arbitrary subprocesses as part of normal operation: ffmpeg
+#     (mic capture + transcode), yt-dlp, whisper-cli, streamlink, python
+#     helper scripts (camoufox_bridge.py, lang_server.py), and its own voice
+#     sidecar servers. Strict confinement would require each of these to be
+#     bundled AND their interfaces plumbed; several are user-installed and
+#     found via PATH by design.
+#   * It is a media player: users open media from anywhere on disk —
+#     removable drives, NAS mounts, ~/Downloads, other users' homes. The
+#     `home` + `removable-media` interfaces cover some of this, but "point it
+#     at any path" is core UX, not an edge case.
+#   * It writes XDG config/cache (~/.config/opal, ~/.cache/opal), binds
+#     network servers (:41595 JSON API, :3000 web remote), and dlopen()s a
+#     sidecar C++ wrapper (libtorrent_wrapper.so) — all doable under strict,
+#     but the subprocess + arbitrary-path story above is the dealbreaker.
+#
+#   For v1, classic is the honest choice. A strict-confinement revisit is a
+#   reasonable v2 milestone once the sidecar story is fully bundled.
+# -----------------------------------------------------------------------------
+confinement: classic
+
+platforms:
+  amd64:
+  # VERIFY: arm64 should work in principle (Zig cross-compiles happily; the
+  # C++ wrapper and stage-packages need an arm64 build host). Enable once
+  # amd64 is proven:
+  # arm64:
+
+parts:
+  opal:
+    # plugin: nil because there is no zig plugin in snapcraft and zig is not
+    # in the Ubuntu 24.04 archive (and even if it were, we need exactly
+    # 0.16.x). We download the official toolchain tarball ourselves.
+    plugin: nil
+    source: .
+    build-packages:
+      - g++                        # compiles src/torrent_wrapper.cpp (C++ ABI isolation)
+      - git                        # for `git describe` version stamping
+      - curl                       # fetches the zig toolchain
+      - ca-certificates
+      - xz-utils                   # unpacks zig-*.tar.xz
+      - pkg-config
+      - libmpv-dev
+      - libsqlite3-dev
+      - libsdl2-dev
+      - libtorrent-rasterbar-dev
+    stage-packages:
+      # VERIFY: exact package names against the noble archive on a real build.
+      # Ubuntu 24.04's 64-bit time_t transition renamed some runtime libs
+      # (e.g. libtorrent-rasterbar2.0 may actually be libtorrent-rasterbar2.0t64).
+      # `apt-cache search <name>` on the build host settles it in seconds.
+      - libmpv2
+      - libsqlite3-0
+      - libsdl2-2.0-0
+      - libtorrent-rasterbar2.0
+      - ffmpeg                     # voice capture + transcode helper
+    override-build: |
+      set -eu
+
+      # ── 1. Fetch the Zig 0.16.0 toolchain ────────────────────────────────
+      # VERIFY: exact tarball name/URL at https://ziglang.org/download/
+      # (naming convention is arch-first since 0.14.1: zig-<arch>-<os>-<ver>).
+      # Consider pinning the tarball's sha256 here once verified — snap
+      # builds should not trust the network blindly.
+      ZIG_VERSION="0.16.0"
+      ZIG_DIST="zig-x86_64-linux-${ZIG_VERSION}"
+      if [ ! -d "${ZIG_DIST}" ]; then
+        curl -fL -o zig.tar.xz "https://ziglang.org/download/${ZIG_VERSION}/${ZIG_DIST}.tar.xz"
+        tar -xf zig.tar.xz
+        rm zig.tar.xz
+      fi
+      export PATH="${PWD}/${ZIG_DIST}:${PATH}"
+      zig version
+
+      # ── 2. C++ torrent wrapper ────────────────────────────────────────────
+      # build.zig also does this via a sh step on Linux, but doing it here
+      # first makes failures loud and early instead of buried in zig output.
+      g++ -std=c++17 -O3 -shared -fPIC \
+        src/torrent_wrapper.cpp -o libtorrent_wrapper.so -ltorrent-rasterbar
+
+      # ── 3. Build Opal ─────────────────────────────────────────────────────
+      # VERIFY: the PKGBUILD notes LLD can emit a cosmetic "error: warning(link)"
+      # while still producing a binary; if that bites here, mirror its
+      # `|| true` + explicit artifact check.
+      zig build -Doptimize=ReleaseFast -fsys=sdl2
+      test -f zig-out/bin/opal
+
+      # ── 4. Version from git ───────────────────────────────────────────────
+      craftctl set version="$(git describe --tags --always --dirty 2>/dev/null || echo '0.1.0')"
+
+      # ── 5. Install into the snap ──────────────────────────────────────────
+      install -Dm755 zig-out/bin/opal        "${CRAFT_PART_INSTALL}/usr/bin/opal.bin"
+      install -Dm755 libtorrent_wrapper.so   "${CRAFT_PART_INSTALL}/usr/lib/opal/libtorrent_wrapper.so"
+      install -Dm755 scripts/camoufox_bridge.py "${CRAFT_PART_INSTALL}/usr/lib/opal/camoufox_bridge.py"
+      install -Dm644 assets/logo.svg \
+        "${CRAFT_PART_INSTALL}/usr/share/icons/hicolor/scalable/apps/opal.svg"
+
+      # Launcher: classic snaps use the host's dynamic linker, so our staged
+      # libraries are invisible without an explicit LD_LIBRARY_PATH.
+      # VERIFY: snapcraft's classic linter will likely complain about
+      # unpatched ELF rpaths; either accept the warnings, patchelf the
+      # binary, or add a `lint: ignore:` block after seeing real output.
+      install -d "${CRAFT_PART_INSTALL}/bin"
+      cat > "${CRAFT_PART_INSTALL}/bin/opal" <<'LAUNCHER'
+      #!/bin/sh
+      SNAP="${SNAP:-$(dirname "$(dirname "$(readlink -f "$0")")")}"
+      export LD_LIBRARY_PATH="${SNAP}/usr/lib/opal:${SNAP}/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+      export OPAL_HOME="${SNAP}/usr/lib/opal"
+      exec "${SNAP}/usr/bin/opal.bin" "$@"
+      LAUNCHER
+      chmod 755 "${CRAFT_PART_INSTALL}/bin/opal"
+
+      # Desktop entry (kept in sync with the PKGBUILD's — update both or
+      # neither). The quoted heredoc keeps ${SNAP} literal for snapd.
+      install -d "${CRAFT_PART_INSTALL}/usr/share/applications"
+      cat > "${CRAFT_PART_INSTALL}/usr/share/applications/opal.desktop" <<'DESKTOP'
+      [Desktop Entry]
+      Type=Application
+      Name=Opal
+      GenericName=Media Suite
+      Comment=Play everything — universal search, torrent streaming, on-device AI
+      Exec=opal %U
+      Icon=${SNAP}/usr/share/icons/hicolor/scalable/apps/opal.svg
+      Terminal=false
+      Categories=AudioVideo;Video;Player;
+      Keywords=media;torrent;streaming;video;manga;mpv;
+      StartupNotify=true
+      StartupWMClass=opal
+      DESKTOP
+
+apps:
+  opal:
+    command: bin/opal
+    desktop: usr/share/applications/opal.desktop

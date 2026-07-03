@@ -112,7 +112,9 @@ behalf) and you believe that **the Opal project's own repository or
 distribution** contains material that infringes your copyright, you may submit a
 takedown request.
 
-**DMCA / Takedown contact:** `[INSERT DMCA CONTACT]`
+**DMCA / Takedown contact:** see [`DMCA.md`](DMCA.md) — open a GitHub issue
+titled `[DMCA]` for non-confidential matters, or use the maintainer email on
+the repository owner's GitHub profile for confidential notices.
 
 To help us act quickly, please include the following in your notice:
 

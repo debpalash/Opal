@@ -4,10 +4,10 @@ name: Release
 #
 # Coverage today:
 #   • macos-arm64  — Opal.app bundle (zip) + bare binary tarball   [primary]
-#   • linux-x86_64 — binary + libtorrent_wrapper.so tarball        [best-effort]
+#   • macos-x86_64 — same, on the Intel runner (brew = /usr/local) [best-effort]
+#   • linux-x86_64 — binary tarball + .deb + .rpm + AppImage + .run [best-effort]
 #
-# Not yet covered (see comments): macos-x86_64 (build.zig hard-codes
-# /opt/homebrew, an arm64 path), Windows (no port), Linux arm64 (no runner
+# Not yet covered (see comments): Windows (no port), Linux arm64 (no runner
 # deps verified). Extend the matrix as those land.
 
 on:
@@ -49,6 +49,45 @@ jobs:
             opal-*-macos-arm64.tar.gz
           if-no-files-found: error
 
+  macos-x86_64:
+    # macos-13 is the last Intel runner image; Homebrew lives at /usr/local
+    # there. build.zig reads HOMEBREW_PREFIX for its lib/include paths, so we
+    # export it on the build step.
+    runs-on: macos-13
+    # Best-effort until an Intel build is verified end-to-end. If this job
+    # breaks, the release still ships from macos-arm64.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install native dependencies
+        run: |
+          brew update
+          brew install mpv sqlite onnxruntime sdl2 libtorrent-rasterbar create-dmg
+      - name: Build .app bundle (ReleaseFast)
+        env:
+          HOMEBREW_PREFIX: /usr/local # Intel brew prefix (arm64 default is /opt/homebrew)
+        run: ./scripts/build-app.sh
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ditto -c -k --keepParent dist/Opal.app "Opal-${VERSION}-macos-x86_64.app.zip"
+          tar -C zig-out/bin -czf "opal-${VERSION}-macos-x86_64.tar.gz" opal
+          # build-app.sh also emits dist/Opal-<ver>.dmg when create-dmg is present
+          if ls dist/Opal-*.dmg >/dev/null 2>&1; then
+            mv dist/Opal-*.dmg "Opal-${VERSION}-macos-x86_64.dmg"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64
+          path: |
+            Opal-*-macos-x86_64.app.zip
+            Opal-*-macos-x86_64.dmg
+            opal-*-macos-x86_64.tar.gz
+          if-no-files-found: error
+
   linux-x86_64:
     runs-on: ubuntu-24.04
     # Best-effort: onnxruntime has no apt package on 24.04; we vendor the
@@ -64,7 +103,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential g++ pkg-config \
-            libmpv-dev libsqlite3-dev libsdl2-dev libtorrent-rasterbar-dev ffmpeg
+            libmpv-dev libsqlite3-dev libsdl2-dev libtorrent-rasterbar-dev ffmpeg \
+            makeself
       - name: Vendor ONNX Runtime
         run: |
           ORT_VER=1.20.1
@@ -76,7 +116,7 @@ jobs:
           sudo ldconfig
       - name: Build (ReleaseSafe)
         run: zig build -Doptimize=ReleaseSafe -fsys=sdl2
-      - name: Package
+      - name: Package binary tarball
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p opal-${VERSION}-linux-x86_64
@@ -84,14 +124,82 @@ jobs:
           cp libtorrent_wrapper.so opal-${VERSION}-linux-x86_64/ 2>/dev/null || true
           cp LICENSE NOTICE.md README.md opal-${VERSION}-linux-x86_64/
           tar czf "opal-${VERSION}-linux-x86_64.tar.gz" opal-${VERSION}-linux-x86_64
+      - name: Package .deb + .rpm (nfpm)
+        run: |
+          # nfpm has no apt package — pin a release binary from GitHub.
+          NFPM_VER=2.41.3
+          curl -fsSL -o nfpm.tgz \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VER}/nfpm_${NFPM_VER}_Linux_x86_64.tar.gz"
+          tar xzf nfpm.tgz nfpm
+          # packaging/nfpm.yaml interpolates ${VERSION} from the environment.
+          export VERSION="${GITHUB_REF_NAME#v}"
+          ./nfpm package -f packaging/nfpm.yaml -p deb -t "opal_${VERSION}_amd64.deb"
+          ./nfpm package -f packaging/nfpm.yaml -p rpm -t "opal-${VERSION}-1.x86_64.rpm"
+      - name: Package AppImage
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Assemble the AppDir by hand: binary + wrapper lib in a private
+          # libdir, desktop file + icon at the AppDir root (appimagetool
+          # requires those), .DirIcon for file managers.
+          mkdir -p AppDir/usr/bin AppDir/usr/lib/opal
+          cp zig-out/bin/opal AppDir/usr/bin/
+          cp libtorrent_wrapper.so AppDir/usr/lib/opal/
+          cp packaging/opal.desktop AppDir/opal.desktop
+          cp assets/logo.svg AppDir/opal.svg
+          cp assets/logo.svg AppDir/.DirIcon
+          # AppRun: the AppImage runtime sets $APPDIR to the mount point; point
+          # the loader at the bundled wrapper lib, then exec the binary.
+          cat > AppDir/AppRun <<'EOF'
+          #!/bin/sh
+          HERE="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
+          export LD_LIBRARY_PATH="$HERE/usr/lib/opal${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "$HERE/usr/bin/opal" "$@"
+          EOF
+          chmod +x AppDir/AppRun
+          # appimagetool itself ships as an AppImage; the runner has no FUSE,
+          # so --appimage-extract-and-run unpacks it to a temp dir first.
+          curl -fsSL -o appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir "Opal-${VERSION}-x86_64.AppImage"
+      - name: Package .run installer (makeself)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Staging dir is the self-extracting payload; install.sh runs from
+          # inside it after extraction and copies into /usr/local (needs sudo).
+          mkdir -p staging
+          cp zig-out/bin/opal staging/
+          cp libtorrent_wrapper.so staging/
+          cp packaging/opal.desktop staging/
+          cp assets/logo.svg staging/opal.svg
+          cp LICENSE staging/
+          cat > staging/install.sh <<'EOF'
+          #!/bin/sh
+          set -e
+          PREFIX="${PREFIX:-/usr/local}"
+          install -Dm755 opal                  "$PREFIX/bin/opal"
+          install -Dm755 libtorrent_wrapper.so "$PREFIX/lib/opal/libtorrent_wrapper.so"
+          install -Dm644 opal.desktop          "$PREFIX/share/applications/opal.desktop"
+          install -Dm644 opal.svg              "$PREFIX/share/icons/hicolor/scalable/apps/opal.svg"
+          echo "Opal installed to $PREFIX/bin/opal"
+          EOF
+          chmod +x staging/install.sh
+          makeself staging/ "opal-${VERSION}-linux-x86_64.run" "Opal ${VERSION}" ./install.sh
       - uses: actions/upload-artifact@v4
         with:
           name: linux-x86_64
-          path: opal-*-linux-x86_64.tar.gz
+          path: |
+            opal-*-linux-x86_64.tar.gz
+            opal_*_amd64.deb
+            opal-*.x86_64.rpm
+            Opal-*-x86_64.AppImage
+            opal-*-linux-x86_64.run
           if-no-files-found: error
 
   publish:
-    needs: [macos-arm64, linux-x86_64]
+    needs: [macos-arm64, macos-x86_64, linux-x86_64]
+    # macos-arm64 must succeed; the best-effort jobs contribute artifacts only
+    # when they happen to pass (unmatched globs below just warn).
     if: always() && needs.macos-arm64.result == 'success'
     runs-on: ubuntu-24.04
     steps:
@@ -101,6 +209,17 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
+          files: |
+            artifacts/Opal-*-macos-arm64.app.zip
+            artifacts/Opal-*-macos-arm64.dmg
+            artifacts/opal-*-macos-arm64.tar.gz
+            artifacts/Opal-*-macos-x86_64.app.zip
+            artifacts/Opal-*-macos-x86_64.dmg
+            artifacts/opal-*-macos-x86_64.tar.gz
+            artifacts/opal-*-linux-x86_64.tar.gz
+            artifacts/opal_*_amd64.deb
+            artifacts/opal-*.x86_64.rpm
+            artifacts/Opal-*-x86_64.AppImage
+            artifacts/opal-*-linux-x86_64.run
           generate_release_notes: true
           draft: false

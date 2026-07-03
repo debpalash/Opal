@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Opal
+GenericName=Media Suite
+Comment=Play everything — media player, universal search, torrent streaming, local AI
+Exec=opal
+Icon=opal
+Terminal=false
+Categories=AudioVideo;Video;Player;
+StartupWMClass=opal

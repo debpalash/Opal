@@ -31,10 +31,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Add Homebrew prefix manually for Apple Silicon devices
+    // Homebrew prefix for macOS lib/include paths. Apple Silicon installs to
+    // /opt/homebrew (default); Intel macs use /usr/local. `brew shellenv`
+    // exports HOMEBREW_PREFIX, so honor it when set.
+    const brew_prefix = b.graph.environ_map.get("HOMEBREW_PREFIX") orelse "/opt/homebrew";
+
     if (target.result.os.tag == .macos) {
-        exe.root_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/lib" });
-        exe.root_module.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include" });
+        exe.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{brew_prefix}) });
+        exe.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{brew_prefix}) });
     } else {
         // Non-macOS: link system SDL2. On macOS, dvui's bundled SDL2 is used
         // (avoids duplicate-class ObjC warnings when both static + dyn SDL2 load).
@@ -71,7 +75,7 @@ pub fn build(b: *std.Build) void {
     // Libtorrent & C++ Linkage (Dynamic Shared Object isolating GCC C++ ABIs)
     // Checking modification times avoids recompiling the heavy C++ wrapper on every `zig build` iteration
     const compile_cmd = if (target.result.os.tag == .macos)
-        "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -I/opt/homebrew/include -L/opt/homebrew/lib src/torrent_wrapper.cpp -o libtorrent_wrapper.so -ltorrent-rasterbar; fi"
+        b.fmt("if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -I{s}/include -L{s}/lib src/torrent_wrapper.cpp -o libtorrent_wrapper.so -ltorrent-rasterbar; fi", .{ brew_prefix, brew_prefix })
     else
         "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC src/torrent_wrapper.cpp -o libtorrent_wrapper.so -ltorrent-rasterbar; fi";
 
@@ -81,6 +85,13 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addLibraryPath(b.path("."));
     exe.root_module.linkSystemLibrary("torrent_wrapper", .{});
     exe.root_module.addRPath(b.path(".")); // Ensure the binary can find the locally compiled wrapper
+    // Packaged-install layouts (deb/rpm/.run/tarball): let the installed
+    // binary find libtorrent_wrapper.so relative to itself — next to the
+    // binary (tarball) or in ../lib/opal (/usr/bin + /usr/lib/opal).
+    if (target.result.os.tag != .macos) {
+        exe.root_module.addRPathSpecial("$ORIGIN");
+        exe.root_module.addRPathSpecial("$ORIGIN/../lib/opal");
+    }
     // For .app bundles: let the binary find libtorrent_wrapper.so in
     // Contents/Frameworks/ when launched via Finder/NSWorkspace (CWD=/).
     if (target.result.os.tag == .macos) {
