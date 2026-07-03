@@ -686,6 +686,30 @@ pub fn updateTorrentBackgroundTasks() void {
 
             if (ev.*.event_id == c.mpv.MPV_EVENT_START_FILE) {
                 p.provider = .mpv;
+            } else if (ev.*.event_id == c.mpv.MPV_EVENT_FILE_LOADED) {
+                // Tracks are parsed now. If the media brought no subtitle track
+                // (no embedded stream, no sidecar picked up by sub-auto=fuzzy),
+                // kick an automatic OpenSubtitles fetch for the best match.
+                // Guarded internally (toggle, API key, per-file dedupe).
+                var sub_count: i64 = 0;
+                _ = c.mpv.mpv_get_property(p.mpv_ctx, "sub", c.mpv.MPV_FORMAT_INT64, &sub_count);
+                var has_sub = false;
+                {
+                    var tc: i64 = 0;
+                    _ = c.mpv.mpv_get_property(p.mpv_ctx, "track-list/count", c.mpv.MPV_FORMAT_INT64, &tc);
+                    var ti: i64 = 0;
+                    while (ti < tc) : (ti += 1) {
+                        var q: [48]u8 = undefined;
+                        const qz = std.fmt.bufPrintZ(&q, "track-list/{d}/type", .{ti}) catch continue;
+                        const ts = c.mpv.mpv_get_property_string(p.mpv_ctx, qz.ptr);
+                        if (ts != null) {
+                            if (std.mem.eql(u8, std.mem.span(ts), "sub")) has_sub = true;
+                            c.mpv.mpv_free(@ptrCast(ts));
+                        }
+                        if (has_sub) break;
+                    }
+                }
+                if (!has_sub) @import("../services/subtitles.zig").autoFetchForPlayer();
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_END_FILE) {
                 if (p.current_torrent_id >= 0 and p.torrent_is_ready) {
                     // Torrent streaming: check if download is complete

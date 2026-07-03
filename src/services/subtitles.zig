@@ -144,7 +144,51 @@ fn doSearch(query: []const u8, lang: []const u8) void {
 
     if (result_count > 0) {
         logs.pushLog("info", "subs", "Found subtitles", false);
+        // Auto mode (fired on playback start): immediately grab the best match
+        // — most-downloaded, non-AI-translated — and sub-add it, inline on this
+        // worker thread (doDownload is just two more curl calls).
+        if (auto_mode) {
+            auto_mode = false;
+            var best_idx: usize = 0;
+            var best_dl: i32 = -1;
+            for (results[0..result_count], 0..) |r, idx| {
+                if (r.ai_translated) continue;
+                if (r.download_count > best_dl) {
+                    best_dl = r.download_count;
+                    best_idx = idx;
+                }
+            }
+            doDownload(results[best_idx].file_id);
+        }
     }
+}
+
+/// Set true by autoFetchForPlayer so the search worker chains straight into
+/// downloading the best result. Reset once consumed.
+var auto_mode: bool = false;
+/// Hash of the media path we last auto-fetched for — dedupes repeat FILE_LOADED
+/// events (seeks, track changes) for the same file.
+var last_auto_hash: u64 = 0;
+
+/// Fire-and-forget auto subtitle fetch for the active player's media. Called
+/// from the mpv FILE_LOADED handler when no subtitle track is present. No-ops
+/// on streams without a usable title, when disabled, without an API key, or if
+/// we already tried this exact file.
+pub fn autoFetchForPlayer() void {
+    if (!state.app.auto_download_subs) return;
+    if (state.app.opensub_api_key_len == 0) return; // can't — silently skip
+    if (is_searching or is_downloading) return;
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
+    const p = state.app.players.items[state.app.active_player_idx];
+
+    // Dedupe on the current media path.
+    if (p.current_url_len > 0 and p.current_url_len <= p.current_url.len) {
+        const h = std.hash.Wyhash.hash(0, p.current_url[0..p.current_url_len]);
+        if (h == last_auto_hash) return;
+        last_auto_hash = h;
+    }
+
+    autoSearchFromPlayer(true); // auto=true → doSearch chains into download
 }
 
 fn hexDigit(val: u8) u8 {
@@ -360,7 +404,8 @@ fn doDownload(file_id: i64) void {
 }
 
 // ── Auto-search from currently playing file ──
-pub fn autoSearchFromPlayer() void {
+pub fn autoSearchFromPlayer(auto: bool) void {
+    auto_mode = auto; // consumed by doSearch on success; harmless if no search fires
     if (state.app.active_player_idx >= state.app.players.items.len) return;
     const p = state.app.players.items[state.app.active_player_idx];
 

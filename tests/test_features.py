@@ -2141,6 +2141,26 @@ def test_tmdb_fetch_stages_results():
     return "pass", "fetch worker stages into pending_results; UI thread owns live list"
 
 
+@test("Auto-Download Subtitles On Play", "Page Shell")
+def test_auto_download_subs():
+    # A video with no embedded/sidecar sub track should trigger an automatic
+    # OpenSubtitles fetch of the best match. Wiring: mpv FILE_LOADED handler
+    # checks for a sub track and calls subtitles.autoFetchForPlayer(); doSearch
+    # chains into doDownload when auto_mode is set; gated by a persisted toggle.
+    player = open(os.path.join(PROJECT_DIR, "src/player/player.zig")).read()
+    subs = open(os.path.join(PROJECT_DIR, "src/services/subtitles.zig")).read()
+    cfg = open(os.path.join(PROJECT_DIR, "src/core/config.zig")).read()
+    if "MPV_EVENT_FILE_LOADED" not in player or "autoFetchForPlayer()" not in player:
+        return "fail", "player has no FILE_LOADED → autoFetchForPlayer hook"
+    if "fn autoFetchForPlayer" not in subs or "auto_mode" not in subs:
+        return "fail", "subtitles.zig lost the auto-fetch/auto-download chain"
+    if "doDownload(results[best_idx].file_id)" not in subs:
+        return "fail", "auto mode no longer downloads the best result"
+    if "auto_download_subs" not in cfg:
+        return "fail", "auto_download_subs toggle not persisted in config"
+    return "pass", "FILE_LOADED with no sub track auto-fetches + downloads best match"
+
+
 @test("SQLite Opened Serialized (Thread-Safe)", "Stability")
 def test_sqlite_serialized():
     # The one shared connection is used by the UI thread and background

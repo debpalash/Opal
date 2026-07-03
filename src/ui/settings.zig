@@ -1666,6 +1666,13 @@ fn renderNetworkTab() void {
 }
 
 fn renderSubtitlesTab() void {
+    // Auto-download toggle — governs the on-play OpenSubtitles fetch.
+    {
+        const before = state.app.auto_download_subs;
+        components.toggleRow(@src(), "Auto-download subtitles", "Fetch the best match when a video has none (needs an API key below)", &state.app.auto_download_subs);
+        if (state.app.auto_download_subs != before) state.markConfigDirty();
+    }
+
     // ── First-run hint when API key is missing ── (plain text, no banner)
     if (state.app.opensub_api_key_len == 0) {
         var banner = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -1786,7 +1793,7 @@ fn renderSubtitlesTab() void {
             .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
             .corner_radius = theme.dims.rad_md,
         })) {
-            subs.autoSearchFromPlayer();
+            subs.autoSearchFromPlayer(false);
         }
 
         if ((search_clicked or enter) and !subs.is_searching) {

@@ -378,7 +378,7 @@ pub fn processGlobalInputs() void {
                             if (mod.shift()) {
                                 // Shift+J = Search subtitles online
                                 const subs = @import("../services/subtitles.zig");
-                                subs.autoSearchFromPlayer();
+                                subs.autoSearchFromPlayer(false);
                                 state.showToast("Searching subtitles...");
                             } else {
                                 _ = c.mpv.mpv_command_string(p.mpv_ctx, "cycle sub");

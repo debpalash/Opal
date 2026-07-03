@@ -312,7 +312,7 @@ pub fn renderSubPicker() void {
             .gravity_y = 0.5,
             .margin = .{ .w = theme.spacing.sm },
         })) {
-            if (!subs.is_searching) subs.autoSearchFromPlayer();
+            if (!subs.is_searching) subs.autoSearchFromPlayer(false);
         }
 
         // Secondary action — quiet filled, demoted from accent.
@@ -1569,7 +1569,7 @@ pub fn renderLiquidGlassOverlay() void {
         if (pickerIconChip(@src(), 705, icons.tvg.lucide.search, "Subs", false, "Find subtitles online")) {
             state.app.sub_picker_open = true;
             const subs = @import("../services/subtitles.zig");
-            if (!subs.is_searching) subs.autoSearchFromPlayer();
+            if (!subs.is_searching) subs.autoSearchFromPlayer(false);
         }
 
         // Files (torrent multi-file playlist).

@@ -482,6 +482,9 @@ pub const AppState = struct {
     // ── OpenSubtitles ──
     opensub_api_key: [128]u8 = std.mem.zeroes([128]u8),
     opensub_api_key_len: usize = 0,
+    // Auto-download subtitles when a video starts and none are present
+    // (embedded or sidecar). Needs opensub_api_key; no-ops silently without it.
+    auto_download_subs: bool = true,
     sub_search_buf: [256]u8 = std.mem.zeroes([256]u8),
 
     // ── MPV Scripts ──
