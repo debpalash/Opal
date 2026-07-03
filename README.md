@@ -72,14 +72,44 @@ walks further in that direction ([`ROADMAP.md`](ROADMAP.md)).
 
 <a id="see-it"></a>
 
+<details open>
+<summary><b>✨ The tour, in motion</b></summary>
+<br/>
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="assets/media/stream-a-torrent.gif" width="100%" alt="Press play on a torrent result; playback starts while it downloads" /><br/>
+      <b>🧲 Magnets behave like files</b><br/>
+      <sub>Press play on a torrent — you're watching while it downloads. <em>(Sintel, © Blender Foundation, CC-BY 3.0)</em></sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="assets/screenshots/search.png" width="100%" alt="One query fanned out across every source, ranked" /><br/>
+      <b>🔭 One search, every source</b><br/>
+      <sub>Disk, torrents, Jellyfin, Stremio, anime, YouTube, TMDB, comics — one ranked, playable list.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="assets/media/browse.gif" width="100%" alt="Scrolling the trending wall, then switching to the YouTube tab" /><br/>
+      <b>🗺️ Browse like you own the place</b><br/>
+      <sub>Trending walls, genres, episode drill-downs — one tab bar, zero franchises acquired.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="assets/media/ask-the-ai.gif" width="100%" alt="A suggestion chip answered by the local AI with a poster rail" /><br/>
+      <b>🤖 An AI that lives on your machine</b><br/>
+      <sub>Local LLM with tool use answers with playable picks — no API key, no bill, no feed.</sub>
+    </td>
+  </tr>
+</table>
+
+</details>
+
 ## 🧲 Press play on a torrent. Just… play.
 
 The party trick: **magnets behave like files.** libtorrent piece-prioritization
 fetches the beginning first, so you press play and you're *watching* while the
 rest downloads. No staging folder, no "check back in an hour."
-
-![Type a query, press play on a torrent result, playback starts while it downloads](assets/media/stream-a-torrent.gif)
-<sub>Sintel, © Blender Foundation, CC-BY 3.0 — demoed with openly licensed film, as intended.</sub>
 
 ## 🔭 Search once. Everything answers.
 
@@ -87,15 +117,11 @@ One query fans out — in parallel — across your disk, torrents, Jellyfin,
 Stremio add-ons, anime, YouTube, TMDB, comics — and comes back as **one ranked
 list** with a play button on every row. Sort by relevance, quality, or seeds.
 
-![One query fanned out across every source, ranked](assets/screenshots/search.png)
-
 ## 🗺️ Browse like a streaming service you actually own
 
 Trending walls, genres, seasons-and-episodes drill-downs — for movies & TV,
 YouTube, anime, comics, RSS, your Jellyfin and Plex libraries, even the open
-web. One tab bar, zero franchises acquired.
-
-![Scrolling the trending wall, then switching to the YouTube tab](assets/media/browse.gif)
+web.
 
 <a id="the-ai"></a>
 
@@ -109,16 +135,18 @@ taste in a vector memory (`sqlite-vec`) that never leaves your disk.
 
 No API key. No monthly bill. No "your conversations help us improve."
 
-![Clicking a suggestion chip; the assistant replies with a poster rail from the catalog](assets/media/ask-the-ai.gif)
-
-![AI chat — a question answered with playable catalog picks](assets/screenshots/chat.jpg)
+<div align="center">
+  <img src="assets/screenshots/chat.jpg" width="640" alt="AI chat — a question answered with playable catalog picks" />
+</div>
 
 ## ▶️ A player that sweats the details
 
 mpv underneath; care on top:
 
-![The player streaming Big Buck Bunny from YouTube](assets/screenshots/player.jpg)
-<sub>Big Buck Bunny, © Blender Foundation, CC-BY 3.0</sub>
+<div align="center">
+  <img src="assets/screenshots/player.jpg" width="640" alt="The player streaming Big Buck Bunny from YouTube" /><br/>
+  <sub>Big Buck Bunny, © Blender Foundation, CC-BY 3.0</sub>
+</div>
 
 - **Subtitles three ways** — embedded, fetched, or *generated on the spot* by Whisper.
 - **SponsorBlock** skips the "smash that like button" for you.
