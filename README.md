@@ -197,8 +197,12 @@ Prefer to do it yourself? Find your row — every file is on the
 | 🪟 | **Windows** (x64) | run the `.msi` — or unzip the portable `.zip` anywhere |
 | 🛠 | **From source** | `git clone` → `zig build run` (deps below) |
 
-<sub>🪟 Windows builds are the newest of the family — treat the first
-releases as adventurous. 🍎 Intel Macs: source build works
+<sub>🍎 macOS calls the downloaded `.dmg` **"damaged"** — it isn't; that's
+Gatekeeper's way of saying we haven't paid Apple $99/yr for notarization yet.
+Either use the one-command installer above (no quarantine, no dialog), or run
+`xattr -cr /Applications/Opal.app` once after dragging. 🪟 Windows builds are
+the newest of the family — treat the first releases as adventurous (SmartScreen
+will also want a word). 🍎 Intel Macs: source build works
 (`HOMEBREW_PREFIX=/usr/local`).</sub>
 
 **First launch:** open **Settings** (<kbd>⌘</kbd><kbd>,</kbd>) and paste a free

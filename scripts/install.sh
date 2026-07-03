@@ -99,6 +99,11 @@ install_macos() {
     mkdir -p "$target"
     rm -rf "$target/Opal.app"
     ditto -xk "$TMP/opal.app.zip" "$target/"
+    # Belt & suspenders: strip any quarantine flag so Gatekeeper never shows
+    # the "damaged" dialog (we're ad-hoc signed, not notarized). curl doesn't
+    # set the flag, but a re-downloaded zip that passed through a browser or
+    # shared folder might carry it.
+    xattr -cr "$target/Opal.app" 2>/dev/null || true
     receipt "app:$target"
     say "installed → $target/Opal.app"
 }

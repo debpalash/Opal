@@ -431,3 +431,16 @@ actually works — and it's free.
 - [ ] In-app updater (`src/services/updater.zig`) polls
       `releases/latest` and matches the `.dmg` asset — bump its `APP_VERSION`
       whenever `build.zig.zon`'s version changes (it is 0.1.0 now).
+
+## Code signing & notarization (kills the scare dialogs)
+
+- [ ] macOS: enroll in the Apple Developer Program ($99/yr) → create a
+      "Developer ID Application" certificate → add it + notarytool credentials
+      as repo secrets → export `CODESIGN_IDENTITY`/`APPLE_ID` in the
+      macos-arm64 release job (scripts/build-app.sh already honors them and
+      handles signing before DMG creation). Result: no "could not verify"
+      dialog, ever.
+- [ ] Windows: an OV/EV Authenticode certificate (or Azure Trusted Signing)
+      signs opal.exe + the .msi and retires SmartScreen's "unknown publisher"
+      interstitial. Until then reputation accrues per-file-hash, so each
+      release restarts it.
