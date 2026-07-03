@@ -2141,6 +2141,18 @@ def test_tmdb_fetch_stages_results():
     return "pass", "fetch worker stages into pending_results; UI thread owns live list"
 
 
+@test("SQLite Opened Serialized (Thread-Safe)", "Stability")
+def test_sqlite_serialized():
+    # The one shared connection is used by the UI thread and background
+    # workers; it MUST be opened SQLITE_OPEN_FULLMUTEX (serialized) or
+    # concurrent access segfaults inside sqlite3Prepare — the file-open
+    # launch crash (DiagnosticReports 2026-07-03 22:06).
+    db = open(os.path.join(PROJECT_DIR, "src/core/db.zig")).read()
+    if "sqlite3_open_v2" not in db or "SQLITE_OPEN_FULLMUTEX" not in db:
+        return "fail", "db.zig no longer opens the connection serialized (FULLMUTEX)"
+    return "pass", "shared sqlite connection opened SQLITE_OPEN_FULLMUTEX"
+
+
 @test("Poster Pixels Freed With C Allocator", "Stability")
 def test_poster_pixel_allocator():
     # core/poster.zig fetchAsync allocates pixel buffers with the C allocator;

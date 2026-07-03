@@ -39,7 +39,16 @@ pub fn init() void {
     var cpath_buf: [512]u8 = undefined;
     const cpath = std.fmt.bufPrintZ(&cpath_buf, "{s}", .{db_path}) catch return;
 
-    if (c.sqlite3_open(cpath.ptr, &db_handle) != c.SQLITE_OK) {
+    // SQLITE_OPEN_FULLMUTEX = serialized threading mode: SQLite takes its own
+    // mutex on every API call, making this ONE shared connection safe to use
+    // from the UI thread and the background init/load + jellyfin/tmdb workers
+    // concurrently. Plain sqlite3_open() inherits the library's compile-time
+    // default (multi-thread on macOS's libsqlite3), where two threads on one
+    // connection corrupt its internals → segfault in sqlite3Prepare. That's
+    // the "Opal quit unexpectedly" crash on file-open launch, where the
+    // worker's createTables races the first home.render query (2026-07-03).
+    const open_flags = c.SQLITE_OPEN_READWRITE | c.SQLITE_OPEN_CREATE | c.SQLITE_OPEN_FULLMUTEX;
+    if (c.sqlite3_open_v2(cpath.ptr, &db_handle, open_flags, null) != c.SQLITE_OK) {
         db_handle = null;
         return;
     }
