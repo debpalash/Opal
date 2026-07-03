@@ -193,9 +193,13 @@ fn renderTopNav(compact: bool) void {
         }
         if (hovered) brand.data().options.color_fill = theme.colors.bg_hover;
         brand.drawBackground();
-        dvui.icon(@src(), "brand", icons.tvg.lucide.zap, .{}, .{
-            .color_text = theme.colors.accent,
+        // Brand mark — the real Opal gem (assets/logo.svg rendered to PNG at
+        // build time via src/ui/opal_logo_64.png), not a generic zap glyph.
+        _ = dvui.image(@src(), .{
+            .source = .{ .imageFile = .{ .bytes = @embedFile("opal_logo_64.png"), .name = "opal-brand" } },
+        }, .{
             .min_size_content = theme.iconSize(.md),
+            .max_size_content = .{ .w = 20, .h = 20 },
             .gravity_y = 0.5,
         });
         if (!compact) {

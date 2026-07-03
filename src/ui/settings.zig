@@ -1244,7 +1244,7 @@ fn renderPlaybackTab() void {
     }
 
     // ── About / Updater ── (no card chrome; whitespace + the brand row)
-    sectionHeader("About", "Installed version + update check", 25, @src());
+    sectionHeader("About", "Version, updates, credits & support", 25, @src());
     {
         const updater = @import("../services/updater.zig");
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -1261,9 +1261,12 @@ fn renderPlaybackTab() void {
             });
             defer brand.deinit();
 
-            dvui.icon(@src(), "", icons.tvg.lucide.@"circle-play", .{}, .{
-                .color_text = theme.colors.accent,
+            // The Opal gem (assets/logo.svg → embedded PNG), not a stock glyph.
+            _ = dvui.image(@src(), .{
+                .source = .{ .imageFile = .{ .bytes = @embedFile("opal_logo_64.png"), .name = "opal-about" } },
+            }, .{
                 .min_size_content = .{ .w = 28, .h = 28 },
+                .max_size_content = .{ .w = 28, .h = 28 },
                 .gravity_y = 0.5,
                 .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
             });
@@ -1282,6 +1285,18 @@ fn renderPlaybackTab() void {
                 .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
             });
         }
+
+        // Positioning line + the short pitch (mirrors the README hero).
+        _ = dvui.label(@src(), "The evolved media player for the next decades of entertainment.", .{}, .{
+            .id_extra = 2505,
+            .color_text = theme.colors.text_primary,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
+        });
+        _ = dvui.label(@src(), "Local-first, an mpv heart, and an AI that never leaves your machine.\nNo accounts · no telemetry · no cloud — your history is a SQLite file you own.", .{}, .{
+            .id_extra = 2506,
+            .color_text = theme.colors.text_secondary,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
+        });
 
         // Version row
         {
@@ -1329,6 +1344,25 @@ fn renderPlaybackTab() void {
             aboutLink(2542, icons.tvg.lucide.heart, "Donate · PayPal", "https://paypal.me/palashCoder", theme.colors.danger);
             aboutLink(2543, icons.tvg.lucide.coffee, "Buy me a Ko-fi", "https://ko-fi.com/debpalash", theme.colors.warning);
         }
+        // Sponsors keep Opal free — no telemetry to monetize, no accounts to
+        // upsell. Donations above are the whole business model.
+        _ = dvui.label(@src(), "Sponsors keep Opal independent — every Ko-fi and PayPal donation funds development directly.", .{}, .{
+            .id_extra = 2545,
+            .color_text = theme.colors.text_tertiary,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+        });
+
+        // Credits — the shoulders this stands on, plus TMDB's required notice.
+        components.divider();
+        _ = dvui.label(@src(), "Built with Zig · dvui · mpv · SDL2 · libtorrent · SQLite + sqlite-vec · ONNX Runtime · whisper.cpp", .{}, .{
+            .id_extra = 2546,
+            .color_text = theme.colors.text_secondary,
+        });
+        _ = dvui.label(@src(), "Metadata from TMDB — this product uses the TMDB API but is not endorsed or certified by TMDB.", .{}, .{
+            .id_extra = 2547,
+            .color_text = theme.colors.text_tertiary,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.xs },
+        });
 
         // Status row — only show once we have a signal.
         if (updater.has_update) {

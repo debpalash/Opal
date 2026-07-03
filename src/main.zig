@@ -810,9 +810,9 @@ fn appFrame() !dvui.App.Result {
 
                     var win_title: [300]u8 = undefined;
                     const wt: ?[:0]u8 = if (name_len > 0)
-                        std.fmt.bufPrintZ(&win_title, "\xe2\x9a\xa1 {s} \xe2\x80\x94 Opal", .{name_buf[0..name_len]}) catch null
+                        std.fmt.bufPrintZ(&win_title, "{s} \xe2\x80\x94 Opal", .{name_buf[0..name_len]}) catch null
                     else
-                        std.fmt.bufPrintZ(&win_title, "\xe2\x9a\xa1 Opal \xe2\x80\x94 Play everything", .{}) catch null;
+                        std.fmt.bufPrintZ(&win_title, "Opal \xe2\x80\x94 Play everything", .{}) catch null;
                     if (wt) |t| {
                         if (!std.mem.eql(u8, t, TitleState.last_title[0..TitleState.last_len])) {
                             c.sdl.SDL_SetWindowTitle(sw, t.ptr);

@@ -147,9 +147,10 @@ pub fn renderHeader() void {
         });
         defer left.deinit();
 
-        // Logo / brand mark — quiet, not the view's accent.
-        dvui.icon(@src(), "brand", icons.tvg.lucide.zap, .{}, .{
-            .color_text = theme.colors.text_secondary,
+        // Logo / brand mark — the Opal gem (shared embed with shell.zig).
+        _ = dvui.image(@src(), .{
+            .source = .{ .imageFile = .{ .bytes = @embedFile("opal_logo_64.png"), .name = "opal-brand" } },
+        }, .{
             .gravity_y = 0.5,
             .min_size_content = theme.iconSize(.sm),
             .max_size_content = .{ .w = 16, .h = 16 },
