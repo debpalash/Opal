@@ -327,6 +327,11 @@ if [ -d "$HELPER_SRC" ]; then
     cp -R "$HELPER_SRC" "$LOGIN_ITEMS/"
 fi
 
+# Dylibs copied from Homebrew's Cellar arrive mode 444 and the zip/dmg
+# preserves that — users then can't `xattr -cr` the installed bundle without
+# sudo (Gatekeeper-workaround UX). Normalize to owner-writable before signing.
+chmod -R u+w "$APP_DIR"
+
 # ── 6. Optional codesign ───────────────────────────────────────
 if [ -n "${CODESIGN_IDENTITY:-}" ]; then
     echo "[build-app] Codesigning with identity: $CODESIGN_IDENTITY"

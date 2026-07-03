@@ -102,7 +102,9 @@ install_macos() {
     # Belt & suspenders: strip any quarantine flag so Gatekeeper never shows
     # the "damaged" dialog (we're ad-hoc signed, not notarized). curl doesn't
     # set the flag, but a re-downloaded zip that passed through a browser or
-    # shared folder might carry it.
+    # shared folder might carry it. chmod first: bundles built before the
+    # 444-dylib fix shipped read-only files that make xattr fail without it.
+    chmod -R u+w "$target/Opal.app" 2>/dev/null || true
     xattr -cr "$target/Opal.app" 2>/dev/null || true
     receipt "app:$target"
     say "installed → $target/Opal.app"
