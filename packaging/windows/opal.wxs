@@ -1,22 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Opal — WiX 3 authoring for the Windows MSI.
+  Opal - WiX 3 authoring for the Windows MSI.
 
   This file owns the product skeleton only (upgrade identity, install
-  location, Start Menu shortcut, ARP metadata). The actual payload — opal.exe,
-  the torrent wrapper DLL, and the harvested MSYS2 runtime DLLs — is generated
+  location, Start Menu shortcut, ARP metadata). The actual payload - opal.exe,
+  the torrent wrapper DLL, and the harvested MSYS2 runtime DLLs - is generated
   at build time by heat.exe from the CI staging directory into a
   ComponentGroup named "OpalFiles" (see .github/workflows/release.yml and
   packaging/windows/README.md).
 
-  Compile-time variables (pass with candle -d…):
+  Compile-time variables (pass with candle -d...):
     ProductVersion  numeric x.y.z from the release tag (e.g. 0.3.1)
     IconPath        path to packaging/windows/opal.ico
 
   Compile with `candle -arch x64` so every component defaults to Win64 and
   ProgramFiles64Folder resolves to the 64-bit Program Files.
 
-  UpgradeCode is FIXED for the lifetime of the product — never regenerate it,
+  UpgradeCode is FIXED for the lifetime of the product - never regenerate it,
   or upgrades will stop replacing older installs and users end up with two
   Opals side by side.
 -->
@@ -31,7 +31,7 @@
     <Package InstallerVersion="500"
              Compressed="yes"
              InstallScope="perMachine"
-             Description="Opal — play everything. The evolved media player."
+             Description="Opal - play everything. The evolved media player."
              Comments="https://github.com/debpalash/Opal" />
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of Opal is already installed." />
@@ -57,14 +57,14 @@
         Non-advertised Start Menu shortcut. The target file lives in the
         heat-generated fragment (its component GUIDs churn per build), so we
         point at [INSTALLFOLDER]opal.exe by path instead of a File reference
-        and give this component its own registry KeyPath — the standard
+        and give this component its own registry KeyPath - the standard
         ICE-clean pattern for shortcuts to harvested files. HKMU resolves to
         HKLM under this per-machine install.
       -->
       <Component Id="StartMenuShortcut" Guid="06F45DA9-313D-4DFE-B4FA-2FF69C917817">
         <Shortcut Id="OpalStartMenuShortcut"
                   Name="Opal"
-                  Description="Play everything — the evolved media player"
+                  Description="Play everything - the evolved media player"
                   Target="[INSTALLFOLDER]opal.exe"
                   WorkingDirectory="INSTALLFOLDER"
                   Icon="OpalIcon" />
