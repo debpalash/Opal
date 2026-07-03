@@ -194,10 +194,12 @@ Prefer to do it yourself? Find your row — every file is on the
 | 🎩 | **Fedora / openSUSE** | `sudo dnf install ./opal-*.x86_64.rpm` |
 | 🏹 | **Arch** | `yay -S opal-bin` (or `opal` to build) |
 | 🐧 | **Any Linux** | `chmod +x Opal-*.AppImage` and run it |
+| 🪟 | **Windows** (x64) | run the `.msi` — or unzip the portable `.zip` anywhere |
 | 🛠 | **From source** | `git clone` → `zig build run` (deps below) |
 
-<sub>🪟 Windows: not yet — there's no port, and we don't ship pretend
-binaries. 🍎 Intel Macs: source build works (`HOMEBREW_PREFIX=/usr/local`).</sub>
+<sub>🪟 Windows builds are the newest of the family — treat the first
+releases as adventurous. 🍎 Intel Macs: source build works
+(`HOMEBREW_PREFIX=/usr/local`).</sub>
 
 **First launch:** open **Settings** (<kbd>⌘</kbd><kbd>,</kbd>) and paste a free
 **TMDB v4 token** to light up movie/TV browsing. Voice and AI models are
