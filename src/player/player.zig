@@ -709,7 +709,34 @@ pub fn updateTorrentBackgroundTasks() void {
                         if (has_sub) break;
                     }
                 }
-                if (!has_sub) @import("../services/subtitles.zig").autoFetchForPlayer();
+                if (!has_sub and state.app.auto_download_subs and p.current_torrent_id < 0) {
+                    // Non-torrent playback: fire the keyless subtitle engine
+                    // (rest.opensubtitles.org → Gestdown) off the media title or
+                    // filename. Torrents already trigger it on metadata-ready.
+                    var title_buf: [256]u8 = undefined;
+                    var qname: []const u8 = "";
+                    const tc = c.mpv.mpv_get_property_string(p.mpv_ctx, "media-title");
+                    if (tc != null) {
+                        const ts = std.mem.span(tc);
+                        if (ts.len > 0 and !std.mem.eql(u8, ts, "No file")) {
+                            const n = @min(ts.len, title_buf.len);
+                            @memcpy(title_buf[0..n], ts[0..n]);
+                            qname = title_buf[0..n];
+                        }
+                        c.mpv.mpv_free(@ptrCast(tc));
+                    }
+                    if (qname.len == 0 and p.current_url_len > 0) {
+                        const url = p.current_url[0..p.current_url_len];
+                        const base_end = std.mem.indexOfScalar(u8, url, '?') orelse url.len;
+                        const path = url[0..base_end];
+                        qname = if (std.mem.lastIndexOfScalar(u8, path, '/')) |ix|
+                            (if (ix + 1 < path.len) path[ix + 1 ..] else path)
+                        else
+                            path;
+                    }
+                    if (qname.len > 0)
+                        @import("subtitles.zig").startSearch(&state.app.sub_engine, qname);
+                }
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_END_FILE) {
                 if (p.current_torrent_id >= 0 and p.torrent_is_ready) {
                     // Torrent streaming: check if download is complete

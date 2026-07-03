@@ -253,10 +253,65 @@ fn searchThread(engine: *SubtitleEngine) void {
         // NOTE: Download runs synchronously on the search thread (intentional —
         // avoids an extra thread spawn and the search→download transition is seamless).
         downloadThread(engine);
+    } else if (gestdownFallback(engine)) {
+        // Second keyless provider (Addic7ed via Gestdown) found a TV match.
+        engine.state = .found;
+        downloadThread(engine);
     } else {
         engine.state = .failed;
-        logs.pushLog("warn", "subs", "No subtitles found", true);
+        logs.pushLog("warn", "subs", "No subtitles found (keyless providers)", true);
     }
+}
+
+/// Keyless provider #2: Gestdown (api.gestdown.info, an Addic7ed proxy) for TV
+/// episodes. Returns true and fills engine.results[0] with a direct .srt URL
+/// when a match is found. No key, no gzip. Runs on the search thread.
+fn gestdownFallback(engine: *SubtitleEngine) bool {
+    const sp = @import("../services/subtitles_pure.zig");
+    var q_buf: [256]u8 = undefined;
+    var show_buf: [256]u8 = undefined;
+    const p = sp.parse(engine.query_buf[0..engine.query_len], &q_buf, &show_buf);
+    if (!p.is_tv or p.show.len == 0) return false;
+
+    const headers = [_]std.http.Header{.{ .name = "User-Agent", .value = "Opal/1.0" }};
+    var enc: [512]u8 = undefined;
+
+    // 1) show search → first show id (a UUID)
+    var url1: [768]u8 = undefined;
+    const su = std.fmt.bufPrintZ(&url1, "https://api.gestdown.info/shows/search/{s}", .{urlEncode(p.show, &enc)}) catch return false;
+    var buf1: [16 * 1024]u8 = undefined;
+    const j1 = httpGet(su, &headers, &buf1) catch return false;
+    const id_key = "\"id\":\"";
+    const id_s = (std.mem.indexOf(u8, j1, id_key) orelse return false) + id_key.len;
+    const id_e = std.mem.indexOfScalarPos(u8, j1, id_s, '"') orelse return false;
+    const show_id = j1[id_s..id_e];
+    if (show_id.len < 8) return false;
+
+    // 2) episode subtitles → first downloadUri
+    const lang_name = sp.langFullName(state.app.sub_lang_buf[0..state.app.sub_lang_len]);
+    var url2: [768]u8 = undefined;
+    const gu = std.fmt.bufPrintZ(&url2, "https://api.gestdown.info/subtitles/get/{s}/{d}/{d}/{s}", .{ show_id, p.season, p.episode, lang_name }) catch return false;
+    var buf2: [32 * 1024]u8 = undefined;
+    const j2 = httpGet(gu, &headers, &buf2) catch return false;
+    const du_key = "\"downloadUri\":\"";
+    const du_s = (std.mem.indexOf(u8, j2, du_key) orelse return false) + du_key.len;
+    const du_e = std.mem.indexOfScalarPos(u8, j2, du_s, '"') orelse return false;
+    const uri = j2[du_s..du_e]; // e.g. "/subtitles/download/<uuid>"
+    if (uri.len < 8) return false;
+
+    var r = &engine.results[0];
+    const full = std.fmt.bufPrint(&r.download_url, "https://api.gestdown.info{s}", .{uri}) catch return false;
+    r.download_url_len = full.len;
+    const mlen = @min(p.show.len, r.movie_name.len);
+    @memcpy(r.movie_name[0..mlen], p.show[0..mlen]);
+    r.movie_name_len = mlen;
+    const llen = @min(lang_name.len, r.lang.len);
+    @memcpy(r.lang[0..llen], lang_name[0..llen]);
+    r.lang_len = llen;
+    engine.result_count = 1;
+    engine.selected_idx = 0;
+    logs.pushLog("info", "subs", "Found subtitle via Gestdown (Addic7ed)", false);
+    return true;
 }
 
 /// Download the selected subtitle (pure Zig HTTP + gzip decompress)

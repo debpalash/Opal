@@ -2141,6 +2141,26 @@ def test_tmdb_fetch_stages_results():
     return "pass", "fetch worker stages into pending_results; UI thread owns live list"
 
 
+@test("Keyless Subtitle Providers Wired", "Page Shell")
+def test_keyless_subtitle_providers():
+    # Auto-subs must work with NO API key via public engines: the legacy
+    # rest.opensubtitles.org (movies+TV, gzipped) plus Gestdown/Addic7ed
+    # (api.gestdown.info, TV, direct SRT) as fallback. Non-torrent playback
+    # triggers the keyless engine from the FILE_LOADED handler.
+    eng = open(os.path.join(PROJECT_DIR, "src/player/subtitles.zig")).read()
+    player = open(os.path.join(PROJECT_DIR, "src/player/player.zig")).read()
+    if "rest.opensubtitles.org" not in eng:
+        return "fail", "keyless legacy OpenSubtitles REST provider missing"
+    if "api.gestdown.info" not in eng or "gestdownFallback" not in eng:
+        return "fail", "Gestdown keyless fallback provider missing"
+    if "startSearch(&state.app.sub_engine" not in player or "current_torrent_id < 0" not in player:
+        return "fail", "non-torrent playback no longer triggers the keyless engine"
+    build = open(os.path.join(PROJECT_DIR, "build.zig")).read()
+    if "subtitles_pure.zig" not in build:
+        return "fail", "subtitles_pure parser tests unregistered"
+    return "pass", "keyless chain: rest.opensubtitles.org → Gestdown, fired on any playback"
+
+
 @test("Auto-Download Subtitles On Play", "Page Shell")
 def test_auto_download_subs():
     # A video with no embedded/sidecar sub track should trigger an automatic
@@ -2148,17 +2168,16 @@ def test_auto_download_subs():
     # checks for a sub track and calls subtitles.autoFetchForPlayer(); doSearch
     # chains into doDownload when auto_mode is set; gated by a persisted toggle.
     player = open(os.path.join(PROJECT_DIR, "src/player/player.zig")).read()
-    subs = open(os.path.join(PROJECT_DIR, "src/services/subtitles.zig")).read()
     cfg = open(os.path.join(PROJECT_DIR, "src/core/config.zig")).read()
-    if "MPV_EVENT_FILE_LOADED" not in player or "autoFetchForPlayer()" not in player:
-        return "fail", "player has no FILE_LOADED → autoFetchForPlayer hook"
-    if "fn autoFetchForPlayer" not in subs or "auto_mode" not in subs:
-        return "fail", "subtitles.zig lost the auto-fetch/auto-download chain"
-    if "doDownload(results[best_idx].file_id)" not in subs:
-        return "fail", "auto mode no longer downloads the best result"
+    # FILE_LOADED handler checks for an existing sub track and, when there's
+    # none, fires the keyless engine (gated by the persisted toggle).
+    if "MPV_EVENT_FILE_LOADED" not in player:
+        return "fail", "player has no FILE_LOADED handler"
+    if "auto_download_subs" not in player or "startSearch(&state.app.sub_engine" not in player:
+        return "fail", "FILE_LOADED no longer auto-triggers the subtitle engine on the toggle"
     if "auto_download_subs" not in cfg:
         return "fail", "auto_download_subs toggle not persisted in config"
-    return "pass", "FILE_LOADED with no sub track auto-fetches + downloads best match"
+    return "pass", "FILE_LOADED with no sub track auto-fires the keyless engine (toggle-gated)"
 
 
 @test("SQLite Opened Serialized (Thread-Safe)", "Stability")
