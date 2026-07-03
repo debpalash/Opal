@@ -269,6 +269,8 @@ test "videosSavePath contains Videos" {
 test "small buffer falls back safely" {
     var tiny: [4]u8 = undefined;
     const path = configDir(&tiny);
-    // Should return fallback /tmp/opal
-    try std.testing.expectEqualStrings("/tmp/opal", path);
+    // Should return the platform's static fallback (the Windows arm mirrors
+    // the POSIX /tmp/opal with C:/Temp/opal).
+    const expected = if (@import("builtin").os.tag == .windows) "C:/Temp/opal" else "/tmp/opal";
+    try std.testing.expectEqualStrings(expected, path);
 }
