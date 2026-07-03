@@ -54,88 +54,6 @@ heart. It opens in a blink, idles in silence, and quits with a receipt:
 
 </div>
 
-## 🎯 The goal
-
-**Become the true alternative to the whole stack** — the streaming apps, the
-server front-ends, the trackers, the recommendation feeds — by being
-**self-sufficient**: one interface that understands what you need and quietly
-takes care of it, powered by an AI that runs on *your* hardware and answers to
-*you*.
-
-A media system shouldn't need a corporation attached. Discovery, curation,
-memory, playback — Opal's bet is that all of it can live on your machine,
-learn your taste without reporting it, and get out of the way. Every release
-walks further in that direction ([`ROADMAP.md`](ROADMAP.md)).
-
----
-
-<a id="see-it"></a>
-
-<details open>
-<summary><b>✨ The tour, in motion</b></summary>
-<br/>
-
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="assets/media/stream-a-torrent.gif" width="100%" alt="Press play on a torrent result; playback starts while it downloads" /><br/>
-      <b>🧲 Magnets behave like files</b><br/>
-      <sub>Press play on a torrent — you're watching while it downloads. <em>(Sintel, © Blender Foundation, CC-BY 3.0)</em></sub>
-    </td>
-    <td width="50%" valign="top">
-      <img src="assets/screenshots/search.png" width="100%" alt="One query fanned out across every source, ranked" /><br/>
-      <b>🔭 One search, every source</b><br/>
-      <sub>Disk, torrents, Jellyfin, Stremio, anime, YouTube, TMDB, comics — one ranked, playable list.</sub>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="assets/media/browse.gif" width="100%" alt="Scrolling the trending wall, then switching to the YouTube tab" /><br/>
-      <b>🗺️ Browse like you own the place</b><br/>
-      <sub>Trending walls, genres, episode drill-downs — one tab bar, zero franchises acquired.</sub>
-    </td>
-    <td width="50%" valign="top">
-      <img src="assets/media/ask-the-ai.gif" width="100%" alt="A suggestion chip answered by the local AI with a poster rail" /><br/>
-      <b>🤖 An AI that lives on your machine</b><br/>
-      <sub>Local LLM with tool use answers with playable picks — no API key, no bill, no feed.</sub>
-    </td>
-  </tr>
-</table>
-
-</details>
-
-<a id="the-ai"></a>
-
-## Why it sticks
-
-- 🧲 **Magnets behave like files** — piece-prioritized streaming: press play
-  on a torrent and you're watching while it downloads.
-- 🔭 **Search once, everything answers** — disk, torrents, Jellyfin, Stremio,
-  anime, YouTube, TMDB, comics → one ranked list, a play button on every row.
-- 🤖 **A local AI copilot** — *"what should I watch if I loved Interstellar?"*
-  answered with playable picks; hands-free voice (Whisper ears, Piper/Kokoro
-  mouth, barge-in); taste memory in on-disk `sqlite-vec`. No API key, no bill,
-  no "your data helps us improve."
-- ▶️ **A player that sweats details** — subtitles embedded, fetched, or
-  Whisper-generated on the spot · SponsorBlock · Chromecast · LAN watch-party ·
-  phone web remote (`:3000`) · session restore mid-sentence.
-- 🗺️ **Browse like you own the place** — trending walls, genres, episode
-  drill-downs across every source, including your Jellyfin and Plex.
-- 🧰 **…and the drawer** — comics & manga reader · live OCR on video frames ·
-  language-learning flashcards · recommendations · history & queue · RSS ·
-  incognito (<kbd>I</kbd>) · seven themes · JSON API (`:41595`) for your own
-  automations.
-
-## ⌨️ Keyboard-first, remote-friendly
-
-| | | | |
-|---|---|---|---|
-| <kbd>S</kbd> search | <kbd>B</kbd> browser | <kbd>D</kbd> library | <kbd>H</kbd> history |
-| <kbd>F</kbd> fullscreen | <kbd>P</kbd> playlist | <kbd>G</kbd> grid layout | <kbd>Z</kbd> fit/crop |
-| <kbd>⌘</kbd><kbd>O</kbd> open file | <kbd>⌘</kbd><kbd>,</kbd> settings | <kbd>Esc</kbd> backs out of things, politely | <kbd>⇧</kbd><kbd>I</kbd> **the cheat sheet** |
-
----
-
 <a id="get-it"></a>
 
 ## 🚀 Get it
@@ -229,6 +147,88 @@ XDG-compliant, no surprises:
   binaries don't — install only what you trust)
 
 </details>
+
+## 🎯 The goal
+
+**Become the true alternative to the whole stack** — the streaming apps, the
+server front-ends, the trackers, the recommendation feeds — by being
+**self-sufficient**: one interface that understands what you need and quietly
+takes care of it, powered by an AI that runs on *your* hardware and answers to
+*you*.
+
+A media system shouldn't need a corporation attached. Discovery, curation,
+memory, playback — Opal's bet is that all of it can live on your machine,
+learn your taste without reporting it, and get out of the way. Every release
+walks further in that direction ([`ROADMAP.md`](ROADMAP.md)).
+
+---
+
+<a id="see-it"></a>
+
+<details open>
+<summary><b>✨ The tour, in motion</b></summary>
+<br/>
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="assets/media/stream-a-torrent.gif" width="100%" alt="Press play on a torrent result; playback starts while it downloads" /><br/>
+      <b>🧲 Magnets behave like files</b><br/>
+      <sub>Press play on a torrent — you're watching while it downloads. <em>(Sintel, © Blender Foundation, CC-BY 3.0)</em></sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="assets/screenshots/search.png" width="100%" alt="One query fanned out across every source, ranked" /><br/>
+      <b>🔭 One search, every source</b><br/>
+      <sub>Disk, torrents, Jellyfin, Stremio, anime, YouTube, TMDB, comics — one ranked, playable list.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="assets/media/browse.gif" width="100%" alt="Scrolling the trending wall, then switching to the YouTube tab" /><br/>
+      <b>🗺️ Browse like you own the place</b><br/>
+      <sub>Trending walls, genres, episode drill-downs — one tab bar, zero franchises acquired.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="assets/media/ask-the-ai.gif" width="100%" alt="A suggestion chip answered by the local AI with a poster rail" /><br/>
+      <b>🤖 An AI that lives on your machine</b><br/>
+      <sub>Local LLM with tool use answers with playable picks — no API key, no bill, no feed.</sub>
+    </td>
+  </tr>
+</table>
+
+</details>
+
+<a id="the-ai"></a>
+
+## Why it sticks
+
+- 🧲 **Magnets behave like files** — piece-prioritized streaming: press play
+  on a torrent and you're watching while it downloads.
+- 🔭 **Search once, everything answers** — disk, torrents, Jellyfin, Stremio,
+  anime, YouTube, TMDB, comics → one ranked list, a play button on every row.
+- 🤖 **A local AI copilot** — *"what should I watch if I loved Interstellar?"*
+  answered with playable picks; hands-free voice (Whisper ears, Piper/Kokoro
+  mouth, barge-in); taste memory in on-disk `sqlite-vec`. No API key, no bill,
+  no "your data helps us improve."
+- ▶️ **A player that sweats details** — subtitles embedded, fetched, or
+  Whisper-generated on the spot · SponsorBlock · Chromecast · LAN watch-party ·
+  phone web remote (`:3000`) · session restore mid-sentence.
+- 🗺️ **Browse like you own the place** — trending walls, genres, episode
+  drill-downs across every source, including your Jellyfin and Plex.
+- 🧰 **…and the drawer** — comics & manga reader · live OCR on video frames ·
+  language-learning flashcards · recommendations · history & queue · RSS ·
+  incognito (<kbd>I</kbd>) · seven themes · JSON API (`:41595`) for your own
+  automations.
+
+## ⌨️ Keyboard-first, remote-friendly
+
+| | | | |
+|---|---|---|---|
+| <kbd>S</kbd> search | <kbd>B</kbd> browser | <kbd>D</kbd> library | <kbd>H</kbd> history |
+| <kbd>F</kbd> fullscreen | <kbd>P</kbd> playlist | <kbd>G</kbd> grid layout | <kbd>Z</kbd> fit/crop |
+| <kbd>⌘</kbd><kbd>O</kbd> open file | <kbd>⌘</kbd><kbd>,</kbd> settings | <kbd>Esc</kbd> backs out of things, politely | <kbd>⇧</kbd><kbd>I</kbd> **the cheat sheet** |
+
+---
 
 <a id="under-the-hood"></a>
 
