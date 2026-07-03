@@ -12,7 +12,7 @@
     <a href="../../releases"><img src="https://img.shields.io/github/v/release/debpalash/Opal?include_prereleases&color=8b5cf6" alt="Release" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License: GPL-3.0" /></a>
     <img src="https://img.shields.io/badge/zig-0.16-f7a41d" alt="Zig 0.16" />
-    <img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux-lightgrey" alt="Platforms: macOS and Linux" />
+    <img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey" alt="Platforms: macOS, Linux, and Windows" />
   </p>
 
   <p>
