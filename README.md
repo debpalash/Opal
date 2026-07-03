@@ -104,63 +104,27 @@ walks further in that direction ([`ROADMAP.md`](ROADMAP.md)).
 
 </details>
 
-## 🧲 Press play on a torrent. Just… play.
-
-The party trick: **magnets behave like files.** libtorrent piece-prioritization
-fetches the beginning first, so you press play and you're *watching* while the
-rest downloads. No staging folder, no "check back in an hour."
-
-## 🔭 Search once. Everything answers.
-
-One query fans out — in parallel — across your disk, torrents, Jellyfin,
-Stremio add-ons, anime, YouTube, TMDB, comics — and comes back as **one ranked
-list** with a play button on every row. Sort by relevance, quality, or seeds.
-
-## 🗺️ Browse like a streaming service you actually own
-
-Trending walls, genres, seasons-and-episodes drill-downs — for movies & TV,
-YouTube, anime, comics, RSS, your Jellyfin and Plex libraries, even the open
-web.
-
 <a id="the-ai"></a>
 
-## 🤖 An AI that lives in your machine — and nowhere else
+## Why it sticks
 
-Ask the box at the top anything: *"what should I watch tonight if I loved
-Interstellar?"* A **local LLM** answers with playable picks — it can search
-your sources, queue things up, and see what's playing. Talk to it hands-free
-(Whisper ears, Piper/Kokoro voice, barge-in interruptions). It remembers your
-taste in a vector memory (`sqlite-vec`) that never leaves your disk.
-
-No API key. No monthly bill. No "your conversations help us improve."
-
-<div align="center">
-  <img src="assets/screenshots/chat.jpg" width="640" alt="AI chat — a question answered with playable catalog picks" />
-</div>
-
-## ▶️ A player that sweats the details
-
-mpv underneath; care on top:
-
-<div align="center">
-  <img src="assets/screenshots/player.jpg" width="640" alt="The player streaming Big Buck Bunny from YouTube" /><br/>
-  <sub>Big Buck Bunny, © Blender Foundation, CC-BY 3.0</sub>
-</div>
-
-- **Subtitles three ways** — embedded, fetched, or *generated on the spot* by Whisper.
-- **SponsorBlock** skips the "smash that like button" for you.
-- **Watch party** over LAN, **Chromecast** to the TV, and a phone-friendly
-  **web remote** (`:3000`) for couch operations.
-- **Session restore** — quit mid-episode, resume mid-sentence.
-- Fullscreen chrome that gets out of the way and comes back when your mouse does.
-
-## …and the rest of the drawer
-
-Comics & manga reader · live OCR on video frames (PP-OCR, for reading signs in
-anime) · language-learning mode with subtitle flashcards · taste-based
-recommendations · watch/search/download history · queue · RSS · incognito mode
-(<kbd>I</kbd>, for research) · seven themes · a JSON API on `:41595` for your
-own automations.
+- 🧲 **Magnets behave like files** — piece-prioritized streaming: press play
+  on a torrent and you're watching while it downloads.
+- 🔭 **Search once, everything answers** — disk, torrents, Jellyfin, Stremio,
+  anime, YouTube, TMDB, comics → one ranked list, a play button on every row.
+- 🤖 **A local AI copilot** — *"what should I watch if I loved Interstellar?"*
+  answered with playable picks; hands-free voice (Whisper ears, Piper/Kokoro
+  mouth, barge-in); taste memory in on-disk `sqlite-vec`. No API key, no bill,
+  no "your data helps us improve."
+- ▶️ **A player that sweats details** — subtitles embedded, fetched, or
+  Whisper-generated on the spot · SponsorBlock · Chromecast · LAN watch-party ·
+  phone web remote (`:3000`) · session restore mid-sentence.
+- 🗺️ **Browse like you own the place** — trending walls, genres, episode
+  drill-downs across every source, including your Jellyfin and Plex.
+- 🧰 **…and the drawer** — comics & manga reader · live OCR on video frames ·
+  language-learning flashcards · recommendations · history & queue · RSS ·
+  incognito (<kbd>I</kbd>) · seven themes · JSON API (`:41595`) for your own
+  automations.
 
 ## ⌨️ Keyboard-first, remote-friendly
 
