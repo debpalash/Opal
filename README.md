@@ -5,8 +5,10 @@
 
   ### Play everything.
 
-  _The media player, evolved: one interface that finds, curates, and plays
-  whatever you're in the mood for — with an AI that never leaves your machine._
+  **The evolved media player for the next decades of entertainment.**
+
+  _One interface that finds, curates, and plays whatever you're in the mood
+  for — with an AI that never leaves your machine._
 
   <p>
     <a href="https://github.com/debpalash/Opal/actions/workflows/ci.yml"><img src="https://github.com/debpalash/Opal/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
