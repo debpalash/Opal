@@ -7,9 +7,6 @@
 
   **The evolved media player for the next decades of entertainment.**
 
-  _One interface that finds, curates, and plays whatever you're in the mood
-  for — with an AI that never leaves your machine._
-
   <p>
     <a href="https://github.com/debpalash/Opal/actions/workflows/ci.yml"><img src="https://github.com/debpalash/Opal/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <a href="../../releases"><img src="https://img.shields.io/github/v/release/debpalash/Opal?include_prereleases&color=8b5cf6" alt="Release" /></a>
