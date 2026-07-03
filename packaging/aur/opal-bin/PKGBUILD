@@ -1,0 +1,41 @@
+# Maintainer: Palash <via github.com/debpalash>
+# AUR binary package for Opal — repackages the official release tarball.
+# Checksums: run `updpkgsums` (or packaging/aur/push-to-aur.sh) once the
+# release is public.
+pkgname=opal-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Play everything — media player, universal search, torrent streaming, local AI (official binary)"
+arch=('x86_64')
+url="https://github.com/debpalash/Opal"
+license=('GPL-3.0-only')
+provides=('opal')
+conflicts=('opal')
+depends=(
+    'mpv'
+    'sdl2'
+    'sqlite'
+    'libtorrent-rasterbar'
+    'curl'
+    'ffmpeg'
+)
+optdepends=(
+    'yt-dlp: YouTube playback and downloads'
+    'streamlink: live stream resolution'
+    'onnxruntime: OCR bubble detection'
+    'python: voice helper scripts (STT/TTS servers)'
+)
+source=("https://github.com/debpalash/Opal/releases/download/v$pkgver/opal-$pkgver-linux-x86_64.tar.gz")
+sha256sums=('SKIP') # filled by updpkgsums at submission time
+
+package() {
+    cd "opal-$pkgver-linux-x86_64"
+
+    # The binary's rpath includes $ORIGIN/../lib/opal, so the wrapper lib
+    # resolves from /usr/lib/opal without ldconfig fiddling.
+    install -Dm755 opal                  "$pkgdir/usr/bin/opal"
+    install -Dm755 libtorrent_wrapper.so "$pkgdir/usr/lib/opal/libtorrent_wrapper.so"
+    install -Dm644 opal.desktop          "$pkgdir/usr/share/applications/opal.desktop"
+    install -Dm644 opal.svg              "$pkgdir/usr/share/icons/hicolor/scalable/apps/opal.svg"
+    install -Dm644 LICENSE               "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
