@@ -135,6 +135,8 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/core/paths.zig"),
             .target = target,
             .optimize = optimize,
+            // paths.zig uses std.c (getenv); Linux requires explicit libc.
+            .link_libc = true,
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_paths).step);
@@ -189,6 +191,8 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/core/workers.zig"),
             .target = target,
             .optimize = optimize,
+            // workers.zig pulls std.c; Linux requires explicit libc.
+            .link_libc = true,
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_workers).step);

@@ -45,7 +45,8 @@ jobs:
         run: test -x zig-out/bin/opal
 
   # Feature suite — source-level checks (DB schema, config, thread-safety
-  # sweeps, script compilation). Optional components report as "skip".
+  # sweeps, script compilation) plus a full zig build, so it needs the same
+  # native deps as build-macos. Optional components report as "skip".
   feature-suite:
     runs-on: macos-14
     steps:
@@ -53,5 +54,9 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
+      - name: Install native dependencies
+        run: |
+          brew update
+          brew install mpv sqlite onnxruntime sdl2 libtorrent-rasterbar
       - name: Run tests/test_features.py
         run: python3 tests/test_features.py
