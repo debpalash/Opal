@@ -4,11 +4,12 @@ name: Release
 #
 # Coverage today:
 #   • macos-arm64  — Opal.app bundle (zip) + bare binary tarball   [primary]
-#   • macos-x86_64 — same, on the Intel runner (brew = /usr/local) [best-effort]
 #   • linux-x86_64 — binary tarball + .deb + .rpm + AppImage + .run [best-effort]
 #
-# Not yet covered (see comments): Windows (no port), Linux arm64 (no runner
-# deps verified). Extend the matrix as those land.
+# Not covered: macos-x86_64 (GitHub retired the free Intel runner images —
+# macos-13 queues forever; Intel Mac users build from source, where build.zig
+# honors HOMEBREW_PREFIX=/usr/local), Windows (no port), Linux arm64 (no
+# runner deps verified). Extend the matrix as those land.
 
 on:
   push:
@@ -47,45 +48,6 @@ jobs:
             Opal-*-macos-arm64.app.zip
             Opal-*-macos-arm64.dmg
             opal-*-macos-arm64.tar.gz
-          if-no-files-found: error
-
-  macos-x86_64:
-    # macos-13 is the last Intel runner image; Homebrew lives at /usr/local
-    # there. build.zig reads HOMEBREW_PREFIX for its lib/include paths, so we
-    # export it on the build step.
-    runs-on: macos-13
-    # Best-effort until an Intel build is verified end-to-end. If this job
-    # breaks, the release still ships from macos-arm64.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
-      - name: Install native dependencies
-        run: |
-          brew update
-          brew install mpv sqlite onnxruntime sdl2 libtorrent-rasterbar create-dmg
-      - name: Build .app bundle (ReleaseFast)
-        env:
-          HOMEBREW_PREFIX: /usr/local # Intel brew prefix (arm64 default is /opt/homebrew)
-        run: ./scripts/build-app.sh
-      - name: Package
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          ditto -c -k --keepParent dist/Opal.app "Opal-${VERSION}-macos-x86_64.app.zip"
-          tar -C zig-out/bin -czf "opal-${VERSION}-macos-x86_64.tar.gz" opal
-          # build-app.sh also emits dist/Opal-<ver>.dmg when create-dmg is present
-          if ls dist/Opal-*.dmg >/dev/null 2>&1; then
-            mv dist/Opal-*.dmg "Opal-${VERSION}-macos-x86_64.dmg"
-          fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: macos-x86_64
-          path: |
-            Opal-*-macos-x86_64.app.zip
-            Opal-*-macos-x86_64.dmg
-            opal-*-macos-x86_64.tar.gz
           if-no-files-found: error
 
   linux-x86_64:
@@ -201,7 +163,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [macos-arm64, macos-x86_64, linux-x86_64]
+    needs: [macos-arm64, linux-x86_64]
     # macos-arm64 must succeed; the best-effort jobs contribute artifacts only
     # when they happen to pass (unmatched globs below just warn).
     if: always() && needs.macos-arm64.result == 'success'
@@ -217,9 +179,6 @@ jobs:
             artifacts/Opal-*-macos-arm64.app.zip
             artifacts/Opal-*-macos-arm64.dmg
             artifacts/opal-*-macos-arm64.tar.gz
-            artifacts/Opal-*-macos-x86_64.app.zip
-            artifacts/Opal-*-macos-x86_64.dmg
-            artifacts/opal-*-macos-x86_64.tar.gz
             artifacts/opal-*-linux-x86_64.tar.gz
             artifacts/opal_*_amd64.deb
             artifacts/opal-*.x86_64.rpm
