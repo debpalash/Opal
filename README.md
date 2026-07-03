@@ -1,11 +1,21 @@
 <div align="center">
-  <img src="assets/opal_logo.png" alt="Opal logo" width="220" />
+  <img src="assets/logo.svg" alt="Opal logo" width="150" />
 
   # Opal
 
   **Play everything.**
 
   _One fast native binary. Every screen you'd otherwise open to watch something._
+
+  <img src="assets/screenshots/home.png" alt="Opal home — time-aware greeting, an ask-anything box, and tonight's trending row" width="100%" />
+
+  <p>
+    <a href="https://github.com/debpalash/Opal/actions/workflows/ci.yml"><img src="https://github.com/debpalash/Opal/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+    <a href="../../releases"><img src="https://img.shields.io/github/v/release/debpalash/Opal?include_prereleases&color=8b5cf6" alt="Release" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License: GPL-3.0" /></a>
+    <img src="https://img.shields.io/badge/zig-0.16-f7a41d" alt="Zig 0.16" />
+    <img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux-lightgrey" alt="Platforms: macOS and Linux" />
+  </p>
 </div>
 
 ---
@@ -50,6 +60,32 @@ No accounts. No telemetry. No cloud. Your watch history is a SQLite file you own
 | 🗂️ **Organize** | Watch/search/download history, continue-watching, queue — all in one local SQLite DB |
 | 🤖 **AI & Voice** | Local LLM (llama-server/Gemma) with tools, STT/TTS, live OCR (ONNX PP-OCR), language-learning mode with flashcards |
 | 🌐 **Remote** | JSON API on `:41595` (bearer auth) + a companion web UI on `:3000` |
+
+## See it
+
+| | |
+|:---:|:---:|
+| ![One query fanned out across every source, ranked](assets/screenshots/search.png) | ![Browse — TMDB trending, with tabs for YouTube, anime, comics, Jellyfin, Plex](assets/screenshots/browse.jpg) |
+| _One query, every source — searched in parallel, ranked together_ | _Browse movies & TV, YouTube, anime, comics, web, RSS, Jellyfin, Plex_ |
+| ![The player streaming Big Buck Bunny from YouTube](assets/screenshots/player.jpg) | ![AI chat — a question answered with playable catalog picks](assets/screenshots/chat.jpg) |
+| _Press play on a search result and it's just… playing (Big Buck Bunny, © Blender Foundation, CC-BY 3.0)_ | _Ask the local AI — it answers with playable picks, chat history in the rail_ |
+
+### In motion
+
+**Search once, press play on a magnet, and you're watching** — libtorrent piece-prioritization
+streams the file while it downloads (Sintel, © Blender Foundation, CC-BY 3.0):
+
+![Type a query, press play on a torrent result, playback starts while it downloads](assets/media/stream-a-torrent.gif)
+
+**Browse the catalog** — TMDB trending wall, then one click over to YouTube:
+
+![Scrolling the trending wall, then switching to the YouTube tab](assets/media/browse.gif)
+
+**Ask the AI** — one click on a home-screen suggestion, answered with playable picks:
+
+![Clicking a suggestion chip; the assistant replies with a poster rail from the catalog](assets/media/ask-the-ai.gif)
+
+_(MP4 versions of these clips live in [`assets/media/`](assets/media/) for release pages and social embeds.)_
 
 ---
 
@@ -115,13 +151,27 @@ web/             # companion web UI (its own Zig project)
 
 One global allocator, fixed-size buffers over heap churn, a single `state.app`
 hub, and a threaded-Io shim for Zig 0.16. The full house rules live in
-[`CLAUDE.md`](CLAUDE.md).
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## Support the project
+
+Opal is independent, open-source software with no telemetry to monetize and no
+account system to upsell — which means it runs on goodwill:
+
+- ⭐ **Star the repo** — it's how other people find it.
+- 💖 **[Sponsor development](https://github.com/sponsors/debpalash)** — keeps
+  the maintainer caffeinated and the release cadence honest.
+- 🐛 **File good bugs** ([how](SUPPORT.md)) and 🔧 **send PRs**
+  ([how](CONTRIBUTING.md)).
+- 📣 **Show someone.** The player-that-plays-everything pitch lands best as a
+  30-second demo — the GIFs above are yours to share.
 
 ## Contributing
 
 Yes please — read [`CONTRIBUTING.md`](CONTRIBUTING.md) and the
 [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), run `just test-all`, and report the
-tally in your PR.
+tally in your PR. Questions belong in [Discussions](../../discussions); see
+[`SUPPORT.md`](SUPPORT.md) for the full help map.
 
 ## License
 
@@ -136,7 +186,8 @@ licenses (libtorrent BSD, dvui/ONNX MIT, SDL2 zlib, SQLite public domain).
 > the legal right to access in your jurisdiction; read
 > [`CONTENT_POLICY.md`](CONTENT_POLICY.md) before enabling content plugins or
 > torrent features. BitTorrent exposes your IP to the swarm — use a VPN if that
-> matters to you.
+> matters to you. Rights holders: see [`DMCA.md`](DMCA.md) for the takedown
+> process.
 
 Provided "as is", no warranty. The authors are not responsible for how the
 software is used or for content reached through third-party sources.

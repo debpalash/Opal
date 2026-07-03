@@ -1,6 +1,6 @@
 # NOTICE
 
-Opal ("Play everything"; binary and config directory named `zigzag`) is a native,
+Opal ("Play everything"; binary and config directory named `opal`) is a native,
 local-first media runtime. This file lists the third-party components Opal
 links against, bundles, or downloads on demand, along with their licenses.
 
@@ -24,7 +24,7 @@ playback backend).
 | dvui | MIT | Immediate-mode GUI (debpalash/dvui fork), vendored as a git dependency in `build.zig.zon`; uses the dvui_sdl2 backend. |
 | onnxruntime | MIT | Local ML inference and the `ort/ocr_ort.c` PP-OCR pipeline via `linkSystemLibrary("onnxruntime")`. |
 | SDL2 | zlib | Window/input/rendering backend; bundled (X11-only) on macOS, or system SDL2 (`-fsys=sdl2`) for Wayland. |
-| sqlite3 | Public Domain | Local unified database at `~/.config/zigzag/zigzag.db` (watch history, AI memory, config, caches). |
+| sqlite3 | Public Domain | Local unified database at `~/.config/opal/opal.db` (watch history, AI memory, config, caches). |
 | sqlite-vec | Apache-2.0 OR MIT (dual) | Vendored C in `src/core/sqlite/sqlite-vec.c`; `vec0` virtual table with `float[768]` embeddings for AI memory vector search. |
 | zig-lib-icons (TVG icons) | MIT | UI icons, git dependency (nat3github/zig-lib-icons) in `build.zig.zon`. |
 | whisper.cpp (ggml) | MIT | STT via `whisper-cli` + ggml models, downloaded from HuggingFace at runtime (not vendored). |

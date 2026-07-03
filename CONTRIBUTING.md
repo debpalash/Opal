@@ -2,7 +2,7 @@
 
 Thanks for your interest in contributing to **Opal** — the blazing-fast, decentralized, local-first intelligent media runtime. ("Play everything.")
 
-> **Naming note:** The project is **Opal**, but the binary, app name, and on-disk config directory all use the legacy name **`zigzag`** (`~/.config/zigzag/`, `~/.cache/zigzag/`). **Do not** rename `zigzag` → `opal` in code or config paths — too many on-disk paths depend on it.
+> **Naming note:** The project, binary, app name, and on-disk config directory are all **`opal`** (`~/.config/opal/`, `~/.cache/opal/`). The legacy name was `zigzag`; `src/core/paths.zig` migrates old on-disk data automatically — don't introduce `zigzag` in new code or paths.
 
 ---
 
@@ -123,7 +123,7 @@ Use `@import("core/logs.zig").pushLog(level, prefix, text, is_error)` — a ring
 
 ### Paths
 
-Use [`src/core/paths.zig`](src/core/paths.zig) (XDG-compliant). Config in `~/.config/zigzag/`, cache in `~/.cache/zigzag/`. **Never** hard-code `/home/...` or `~`.
+Use [`src/core/paths.zig`](src/core/paths.zig) (XDG-compliant). Config in `~/.config/opal/`, cache in `~/.cache/opal/`. **Never** hard-code `/home/...` or `~`.
 
 ### Thread safety
 

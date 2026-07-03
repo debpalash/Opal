@@ -1,0 +1,39 @@
+name: Bug report
+description: Something is broken or crashes
+labels: [bug]
+body:
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: "macOS 15.4 (arm64) / Arch Linux (Wayland) — release artifact or source build?"
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: "opal v0.1.0 · zig 0.16.0 · mpv 0.40"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what happened, what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >
+        Relevant lines from the in-app Logs tab (Logs & Plugins). For macOS
+        crashes, attach the newest `opal-*.ips` from
+        `~/Library/Logs/DiagnosticReports/`.
+      render: text
+  - type: input
+    id: tests
+    attributes:
+      label: just test-all tally
+      placeholder: "125 passed / 0 failed / 7 skipped (or: not run)"

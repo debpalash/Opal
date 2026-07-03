@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Pure-Zig unit tests — no native deps needed (build.zig's test step compiles
+  # only the *_pure.zig modules), so this runs fast on every platform.
+  unit-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: zig build test
+        run: zig build test
+
+  # Full app build on macOS arm64 — the primary supported platform.
+  # build.zig links against /opt/homebrew, which matches arm64 runners.
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install native dependencies
+        run: |
+          brew update
+          brew install mpv sqlite onnxruntime sdl2 libtorrent-rasterbar
+      - name: Build (ReleaseSafe)
+        run: zig build -Doptimize=ReleaseSafe
+      - name: Binary exists
+        run: test -x zig-out/bin/opal
+
+  # Feature suite — source-level checks (DB schema, config, thread-safety
+  # sweeps, script compilation). Optional components report as "skip".
+  feature-suite:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Run tests/test_features.py
+        run: python3 tests/test_features.py

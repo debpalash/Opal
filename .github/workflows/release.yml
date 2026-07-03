@@ -1,0 +1,106 @@
+name: Release
+
+# Tag `vX.Y.Z` → build platform artifacts → publish a GitHub Release.
+#
+# Coverage today:
+#   • macos-arm64  — Opal.app bundle (zip) + bare binary tarball   [primary]
+#   • linux-x86_64 — binary + libtorrent_wrapper.so tarball        [best-effort]
+#
+# Not yet covered (see comments): macos-x86_64 (build.zig hard-codes
+# /opt/homebrew, an arm64 path), Windows (no port), Linux arm64 (no runner
+# deps verified). Extend the matrix as those land.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  macos-arm64:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install native dependencies
+        run: |
+          brew update
+          brew install mpv sqlite onnxruntime sdl2 libtorrent-rasterbar create-dmg
+      - name: Build .app bundle (ReleaseFast)
+        run: ./scripts/build-app.sh
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ditto -c -k --keepParent dist/Opal.app "Opal-${VERSION}-macos-arm64.app.zip"
+          tar -C zig-out/bin -czf "opal-${VERSION}-macos-arm64.tar.gz" opal
+          # build-app.sh also emits dist/Opal-<ver>.dmg when create-dmg is present
+          if ls dist/Opal-*.dmg >/dev/null 2>&1; then
+            mv dist/Opal-*.dmg "Opal-${VERSION}-macos-arm64.dmg"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: |
+            Opal-*-macos-arm64.app.zip
+            Opal-*-macos-arm64.dmg
+            opal-*-macos-arm64.tar.gz
+          if-no-files-found: error
+
+  linux-x86_64:
+    runs-on: ubuntu-24.04
+    # Best-effort: onnxruntime has no apt package on 24.04; we vendor the
+    # upstream release. If this job breaks, the release still ships macOS.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential g++ pkg-config \
+            libmpv-dev libsqlite3-dev libsdl2-dev libtorrent-rasterbar-dev ffmpeg
+      - name: Vendor ONNX Runtime
+        run: |
+          ORT_VER=1.20.1
+          curl -fsSL -o ort.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/onnxruntime-linux-x64-${ORT_VER}.tgz"
+          tar xzf ort.tgz
+          sudo cp -r onnxruntime-linux-x64-${ORT_VER}/include/* /usr/local/include/
+          sudo cp -r onnxruntime-linux-x64-${ORT_VER}/lib/*     /usr/local/lib/
+          sudo ldconfig
+      - name: Build (ReleaseSafe)
+        run: zig build -Doptimize=ReleaseSafe -fsys=sdl2
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p opal-${VERSION}-linux-x86_64
+          cp zig-out/bin/opal opal-${VERSION}-linux-x86_64/
+          cp libtorrent_wrapper.so opal-${VERSION}-linux-x86_64/ 2>/dev/null || true
+          cp LICENSE NOTICE.md README.md opal-${VERSION}-linux-x86_64/
+          tar czf "opal-${VERSION}-linux-x86_64.tar.gz" opal-${VERSION}-linux-x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: opal-*-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [macos-arm64, linux-x86_64]
+    if: always() && needs.macos-arm64.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          draft: false

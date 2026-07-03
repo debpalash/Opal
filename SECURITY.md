@@ -1,6 +1,6 @@
 # Security Policy
 
-Opal ("Play everything"; binary/config dir `zigzag`) is a native, local-first
+Opal ("Play everything"; binary/config dir `opal`) is a native, local-first
 desktop media runtime. It has undergone a security hardening pass, but it is
 provided **as-is, with no warranty** of any kind. Please review the scope and
 reporting guidance below before filing a report.

@@ -1,4 +1,4 @@
-# ZigZag ⚡ Roadmap
+# Opal ⚡ Roadmap
 
 > Local-first, AI-native media runtime — Jellyfin + Stremio + AI in one binary.
 
@@ -119,7 +119,7 @@
 - [x] speaches (OpenAI-compatible server at localhost:8000)
 
 ### 5.4 — Mobile Companion
-- [ ] Android client (stream from ZigZag server)
+- [ ] Android client (stream from Opal server)
 - [ ] iOS client
 - [ ] Offline sync (download for mobile playback)
 

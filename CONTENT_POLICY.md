@@ -4,7 +4,7 @@ This document describes how Opal relates to media content, third-party sources,
 plugins, and copyright. It also explains how to report material you believe
 infringes your rights.
 
-Opal's binary, configuration directory, and legacy internal name are `zigzag`.
+Opal's binary and configuration directory are `opal` (the legacy internal name was `zigzag`; on-disk data migrates automatically).
 References to "Opal," "the project," "the software," and "the application" all
 refer to the same work.
 
