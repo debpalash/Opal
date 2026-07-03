@@ -42,8 +42,12 @@ resolve_version() {
         VERSION="$OPAL_VERSION"
     else
         need_curl
-        VERSION=$(curl -fsSL "$API/releases/latest" | grep -m1 '"tag_name"' | cut -d'"' -f4) \
+        # Capture first, parse second — `curl | grep -m1` makes curl die on
+        # SIGPIPE and print a scary (harmless) error 56 when grep exits early.
+        json=$(curl -fsL "$API/releases/latest") \
             || die "could not resolve the latest release (rate limit? private repo?)"
+        VERSION=$(printf '%s' "$json" | grep -m1 '"tag_name"' | cut -d'"' -f4)
+        [ -n "$VERSION" ] || die "could not parse the latest release tag"
     fi
     case "$VERSION" in v*) ;; *) VERSION="v$VERSION" ;; esac
     VER="${VERSION#v}"
