@@ -200,19 +200,20 @@ assumptions being Linux/macOS-flavored.
       maintainers, listing the dep matrix (Zig 0.16, libtorrent-rasterbar 2.x,
       libmpv, onnxruntime) and offering fast review for portability patches.
 
-### 2.9 Windows — explicitly deferred
+### 2.9 Windows — port compiles; artifacts experimental
 
-There is no Windows port, so there is nothing to put in scoop, winget,
-chocolatey, or an MSI — and listing packages that install nothing is
-vaporware with a manifest. The gap is not the dependencies (mpv, SDL2,
-libtorrent, onnxruntime all have Windows builds); it's the platform layer:
-`io_global` wraps POSIX process/path/time semantics, sidecars are spawned
-Unix-style, the torrent wrapper is compiled by a `sh` build step, and the
-whole runtime assumes XDG paths and a Unix PATH. A minimal port means a
-win32 backend for `io_global`, a vcpkg/MSYS2 dependency story, replacing the
-shell build steps, and a Windows CI runner — a real project, tracked in
-`ROADMAP.md` if/when someone wants it. Until a binary exists, the honest
-Windows section of the README is one sentence: "no Windows support yet."
+The code and build now compile for `x86_64-windows-gnu` (MinGW, matching
+MSYS2 MINGW64 libraries): `io_global` has win32 arms (kernel32 `Sleep`,
+`TerminateProcess`, SRWLOCK-backed mutexes), paths resolve to
+`%APPDATA%\opal` / `%LOCALAPPDATA%\opal\cache`, `build.zig` reads
+`MINGW_PREFIX` for lib/include paths (analogous to `HOMEBREW_PREFIX` on
+macOS), and the torrent wrapper builds as `torrent_wrapper.dll` via the same
+`sh` step (MSYS2 ships `sh` and `g++`). Build inside an MSYS2 MINGW64 shell
+with mingw-w64 packages for mpv, SDL2 (headers), sqlite3, onnxruntime and
+libtorrent-rasterbar: `zig build -Doptimize=ReleaseSafe`. Artifacts are
+**experimental** — untested at runtime, no scoop/winget/chocolatey/MSI
+listings until binaries have real mileage. Runtime hardening (sidecar
+spawning, PATH assumptions in optional features) is tracked in `ROADMAP.md`.
 
 ## 3. Awesome lists & directories
 

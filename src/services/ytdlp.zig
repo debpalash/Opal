@@ -7,6 +7,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 // yt-dlp GitHub releases URL for standalone binary
 const YTDLP_URL_LINUX = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
 const YTDLP_URL_MACOS = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos";
+const YTDLP_URL_WINDOWS = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
 
 var download_thread: ?std.Thread = null;
 var is_downloading: bool = false;
@@ -111,7 +112,11 @@ fn downloadWorker() void {
     @import("../core/io_global.zig").cwdMakePath(dir_path) catch {};
 
     const builtin = @import("builtin");
-    const dl_url = if (comptime builtin.os.tag == .macos) YTDLP_URL_MACOS else YTDLP_URL_LINUX;
+    const dl_url = switch (comptime builtin.os.tag) {
+        .macos => YTDLP_URL_MACOS,
+        .windows => YTDLP_URL_WINDOWS,
+        else => YTDLP_URL_LINUX,
+    };
 
     // Use curl to download (most reliable cross-platform)
     const argv = [_][]const u8{

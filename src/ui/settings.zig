@@ -822,11 +822,22 @@ pub fn beginFrame() void {
     sectionheader_seq = 0;
 }
 
-/// Open a URL in the system browser (macOS `open`, elsewhere `xdg-open`).
+/// Open a URL in the system browser (macOS `open`, Windows `cmd /c start`,
+/// elsewhere `xdg-open`).
 fn openExternal(url: []const u8) void {
-    const opener: []const u8 = if (@import("builtin").os.tag == .macos) "open" else "xdg-open";
     const io = @import("../core/io_global.zig");
-    var child = io.Child.init(&.{ opener, url }, @import("../core/alloc.zig").allocator);
+    // Named locals (not prong temporaries): Child.init stores the slice and
+    // spawn() reads it later, so argv must outlive the switch expression.
+    // The empty "" fills start's window-title slot so the URL isn't eaten by it.
+    const win_argv = [_][]const u8{ "cmd", "/c", "start", "", url };
+    const mac_argv = [_][]const u8{ "open", url };
+    const xdg_argv = [_][]const u8{ "xdg-open", url };
+    const argv: []const []const u8 = switch (@import("builtin").os.tag) {
+        .macos => &mac_argv,
+        .windows => &win_argv,
+        else => &xdg_argv,
+    };
+    var child = io.Child.init(argv, @import("../core/alloc.zig").allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;

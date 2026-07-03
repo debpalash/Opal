@@ -52,6 +52,18 @@ const FileOpenState = struct {
                 &.{ "osascript", "-e", script },
                 alloc,
             );
+        } else if (comptime builtin.os.tag == .windows) blk: {
+            // Windows: native file dialog via PowerShell + WinForms
+            const script =
+                "Add-Type -AssemblyName System.Windows.Forms; " ++
+                "$f = New-Object System.Windows.Forms.OpenFileDialog; " ++
+                "$f.Title = 'Open Media File'; " ++
+                "$f.Filter = 'Media files|*.mp4;*.mkv;*.avi;*.webm;*.mov;*.flv;*.m3u;*.m3u8;*.ts;*.mp3;*.flac;*.wav;*.ogg;*.m4a;*.opus|All files|*.*'; " ++
+                "if ($f.ShowDialog() -eq 'OK') { Write-Output $f.FileName }";
+            break :blk io_global.Child.init(
+                &.{ "powershell", "-NoProfile", "-NonInteractive", "-Command", script },
+                alloc,
+            );
         } else blk: {
             // Linux: zenity file chooser
             break :blk io_global.Child.init(

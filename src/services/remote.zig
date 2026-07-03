@@ -109,10 +109,16 @@ fn loadOrCreateToken() void {
     api_token_ready.store(true, .release);
 
     // Create with mode 0600; chmod again after write in case umask widened it.
+    // Windows has no POSIX modes (Permissions there is an attributes enum with
+    // no fromMode); the profile dir is already user-private, so default suffices.
+    const token_perms = if (@import("builtin").os.tag == .windows)
+        std.Io.File.Permissions.default_file
+    else
+        std.Io.File.Permissions.fromMode(0o600);
     const file = io_g.createFileAbsolute(tok_path, .{
         .read = false,
         .truncate = true,
-        .permissions = std.Io.File.Permissions.fromMode(0o600),
+        .permissions = token_perms,
     }) catch {
         logs.pushLog("error", "remote", "Failed to persist API token (in-memory only)", true);
         return;
@@ -122,7 +128,8 @@ fn loadOrCreateToken() void {
         logs.pushLog("error", "remote", "Failed to write API token", true);
         return;
     };
-    file.setPermissions(io_g.io(), std.Io.File.Permissions.fromMode(0o600)) catch {};
+    if (@import("builtin").os.tag != .windows)
+        file.setPermissions(io_g.io(), std.Io.File.Permissions.fromMode(0o600)) catch {};
 
     var msg_buf: [768]u8 = undefined;
     const msg = std.fmt.bufPrint(&msg_buf, "API token generated at {s}", .{tok_path}) catch tok_path;

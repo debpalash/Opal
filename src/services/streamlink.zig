@@ -232,15 +232,16 @@ pub fn stopRecording() void {
         recording_mutex.unlock();
         return;
     }
-    // Snapshot the pid under the lock, then release before signalling so we
-    // never block the UI thread holding the mutex.
-    const pid: ?std.posix.pid_t = if (recording_child) |*child| child.id else null;
+    // Snapshot the child id under the lock, then release before signalling so
+    // we never block the UI thread holding the mutex.
+    const id_helper = @import("../core/io_global.zig");
+    const pid: ?id_helper.Child.Id = if (recording_child) |*child| child.id else null;
     recording_mutex.unlock();
 
     if (pid) |p| {
-        // Send SIGTERM to gracefully stop; recordWorker's wait() will observe
-        // the exit and tear down the shared state.
-        std.posix.kill(p, std.posix.SIG.TERM) catch {};
+        // SIGTERM (TerminateProcess on Windows) to stop; recordWorker's wait()
+        // will observe the exit and tear down the shared state.
+        id_helper.terminateProcess(p);
     }
     state.showToast("Recording saved");
     std.log.info("[streamlink] Recording stop requested: {s}", .{recording_filename[0..recording_filename_len]});

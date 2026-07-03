@@ -1,7 +1,11 @@
 const std = @import("std");
 
-/// XDG-compliant path resolution for Opal.
+/// XDG-compliant path resolution for Opal (Windows: Known-Folder style —
+/// %APPDATA%\opal for config, %LOCALAPPDATA%\opal\cache for cache).
 /// Replaces all hardcoded `/home/pal/...` paths with portable alternatives.
+/// All windows arms are comptime-gated so POSIX behavior (and the native
+/// unit tests) are byte-identical to before.
+const is_windows = @import("builtin").os.tag == .windows;
 
 /// zig 0.16 removed getenv; wrap libc getenv returning a static slice.
 fn getenv(name: [*:0]const u8) ?[]const u8 {
@@ -9,13 +13,31 @@ fn getenv(name: [*:0]const u8) ?[]const u8 {
     return std.mem.span(raw);
 }
 
-/// Get the user's home directory from $HOME.
+/// Get the user's home directory ($HOME; %USERPROFILE% on Windows).
 fn getHome() []const u8 {
+    if (is_windows) return getenv("USERPROFILE") orelse "C:/Temp";
     return getenv("HOME") orelse "/tmp";
 }
 
-/// ~/.config/opal  (or $XDG_CONFIG_HOME/opal)
+/// Windows config base: %APPDATA% (Roaming). Fallback derives from the
+/// user profile so a bare env never lands us in a shared temp dir.
+fn winConfigBase(buf: []u8) []const u8 {
+    if (getenv("APPDATA")) |appdata| return appdata;
+    return std.fmt.bufPrint(buf, "{s}/AppData/Roaming", .{getHome()}) catch "C:/Temp";
+}
+
+/// Windows cache base: %LOCALAPPDATA%.
+fn winCacheBase(buf: []u8) []const u8 {
+    if (getenv("LOCALAPPDATA")) |local| return local;
+    return std.fmt.bufPrint(buf, "{s}/AppData/Local", .{getHome()}) catch "C:/Temp";
+}
+
+/// ~/.config/opal  (or $XDG_CONFIG_HOME/opal; %APPDATA%/opal on Windows)
 pub fn configDir(buf: []u8) []const u8 {
+    if (is_windows) {
+        var base_buf: [512]u8 = undefined;
+        return std.fmt.bufPrint(buf, "{s}/opal", .{winConfigBase(&base_buf)}) catch "C:/Temp/opal";
+    }
     if (getenv("XDG_CONFIG_HOME")) |xdg| {
         return std.fmt.bufPrint(buf, "{s}/opal", .{xdg}) catch "/tmp/opal";
     }
@@ -25,6 +47,10 @@ pub fn configDir(buf: []u8) []const u8 {
 
 /// ~/.config/opal/config.tsv
 pub fn configFile(buf: []u8) []const u8 {
+    if (is_windows) {
+        var base_buf: [512]u8 = undefined;
+        return std.fmt.bufPrint(buf, "{s}/opal/config.tsv", .{winConfigBase(&base_buf)}) catch "C:/Temp/opal/config.tsv";
+    }
     if (getenv("XDG_CONFIG_HOME")) |xdg| {
         return std.fmt.bufPrint(buf, "{s}/opal/config.tsv", .{xdg}) catch "/tmp/opal/config.tsv";
     }
@@ -34,6 +60,10 @@ pub fn configFile(buf: []u8) []const u8 {
 
 /// ~/.config/opal/watch_history.tsv
 pub fn watchHistoryFile(buf: []u8) []const u8 {
+    if (is_windows) {
+        var base_buf: [512]u8 = undefined;
+        return std.fmt.bufPrint(buf, "{s}/opal/watch_history.tsv", .{winConfigBase(&base_buf)}) catch "C:/Temp/opal_watch_history.tsv";
+    }
     if (getenv("XDG_CONFIG_HOME")) |xdg| {
         return std.fmt.bufPrint(buf, "{s}/opal/watch_history.tsv", .{xdg}) catch "/tmp/opal_watch_history.tsv";
     }
@@ -41,8 +71,13 @@ pub fn watchHistoryFile(buf: []u8) []const u8 {
     return std.fmt.bufPrint(buf, "{s}/.config/opal/watch_history.tsv", .{home}) catch "/tmp/opal_watch_history.tsv";
 }
 
-/// ~/.cache/opal/<name> (or $XDG_CACHE_HOME/opal/<name>)
+/// ~/.cache/opal/<name> (or $XDG_CACHE_HOME/opal/<name>;
+/// %LOCALAPPDATA%/opal/cache/<name> on Windows)
 pub fn cacheFile(buf: []u8, name: []const u8) []const u8 {
+    if (is_windows) {
+        var base_buf: [512]u8 = undefined;
+        return std.fmt.bufPrint(buf, "{s}/opal/cache/{s}", .{ winCacheBase(&base_buf), name }) catch "C:/Temp/opal_cache";
+    }
     if (getenv("XDG_CACHE_HOME")) |xdg| {
         return std.fmt.bufPrint(buf, "{s}/opal/{s}", .{ xdg, name }) catch "/tmp/opal_cache";
     }
@@ -64,6 +99,10 @@ pub fn videosSavePath(buf: []u8) []const u8 {
 
 /// ~/.config/opal/opal.db (unified SQLite database)
 pub fn zigzagDbFile(buf: []u8) []const u8 {
+    if (is_windows) {
+        var base_buf: [512]u8 = undefined;
+        return std.fmt.bufPrint(buf, "{s}/opal/opal.db", .{winConfigBase(&base_buf)}) catch "C:/Temp/opal.db";
+    }
     if (getenv("XDG_CONFIG_HOME")) |xdg| {
         return std.fmt.bufPrint(buf, "{s}/opal/opal.db", .{xdg}) catch "/tmp/opal.db";
     }
@@ -73,6 +112,10 @@ pub fn zigzagDbFile(buf: []u8) []const u8 {
 
 /// ~/.config/opal/tmdb.db (SQLite database for TMDB data)
 pub fn tmdbDbFile(buf: []u8) []const u8 {
+    if (is_windows) {
+        var base_buf: [512]u8 = undefined;
+        return std.fmt.bufPrint(buf, "{s}/opal/tmdb.db", .{winConfigBase(&base_buf)}) catch "C:/Temp/opal_tmdb.db";
+    }
     if (getenv("XDG_CONFIG_HOME")) |xdg| {
         return std.fmt.bufPrint(buf, "{s}/opal/tmdb.db", .{xdg}) catch "/tmp/opal_tmdb.db";
     }
@@ -83,7 +126,11 @@ pub fn tmdbDbFile(buf: []u8) []const u8 {
 /// Ensure the cache directory exists.
 pub fn ensureCacheDir() void {
     var buf: [512]u8 = undefined;
-    if (getenv("XDG_CACHE_HOME")) |xdg| {
+    if (is_windows) {
+        var base_buf: [512]u8 = undefined;
+        const dir = std.fmt.bufPrint(&buf, "{s}/opal/cache", .{winCacheBase(&base_buf)}) catch return;
+        @import("io_global.zig").cwdMakePath(dir) catch {};
+    } else if (getenv("XDG_CACHE_HOME")) |xdg| {
         const dir = std.fmt.bufPrint(&buf, "{s}/opal", .{xdg}) catch return;
         @import("io_global.zig").cwdMakePath(dir) catch {};
     } else {
@@ -155,6 +202,9 @@ fn mergeDir(old: []const u8, new: []const u8, rename_db: bool) void {
 /// + zigzag.db → opal.db). Idempotent; robust to a pre-existing opal dir. MUST
 /// run before config/db are opened.
 pub fn migrateLegacyDir() void {
+    // The legacy `zigzag` app never shipped on Windows — nothing to migrate,
+    // and the XDG/home probing below is meaningless there.
+    if (is_windows) return;
     var ob: [512]u8 = undefined;
     var nb: [512]u8 = undefined;
     mergeDir(

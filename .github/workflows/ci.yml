@@ -17,7 +17,17 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-14]
+        experimental: [false]
+        include:
+          # Windows is tolerated-failing (experimental → continue-on-error):
+          # the *_pure.zig modules have no native deps and should compile with
+          # a stock Windows zig — no MSYS2 needed — but that's unproven on
+          # real runners. Move windows-2022 into the main `os` axis once a few
+          # runs come back green.
+          - os: windows-2022
+            experimental: true
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2

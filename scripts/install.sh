@@ -21,6 +21,10 @@
 #   Arch                   yay/paru -S opal-bin when available on AUR,
 #                          otherwise falls through to the AppImage
 #   any other Linux        AppImage → $OPAL_PREFIX/bin + desktop entry
+#   Windows                not handled by this script (deliberately — a sh
+#                          installer is the wrong tool there). Download the
+#                          .msi installer or the portable .zip from
+#                          https://github.com/debpalash/Opal/releases
 #
 # Every download is verified against the release's SHA256SUMS.txt.
 set -eu
@@ -159,6 +163,9 @@ do_install() {
     case "$(uname -s)" in
         Darwin) install_macos ;;
         Linux)  install_linux ;;
+        MINGW*|MSYS*|CYGWIN*)
+            die "Windows isn't installed via this script — grab the .msi installer or portable .zip:
+  https://github.com/$REPO/releases" ;;
         *) die "unsupported OS: $(uname -s) — see https://github.com/$REPO#get-it" ;;
     esac
 }
@@ -190,6 +197,6 @@ case "${1:-install}" in
     install|update) do_install ;;
     uninstall)      do_uninstall ;;
     list-versions)  do_list ;;
-    -h|--help|help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//' ;;
+    -h|--help|help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//' ;;
     *) die "unknown command: $1 (install | update | uninstall | list-versions)" ;;
 esac

@@ -1,4 +1,14 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
+const is_windows = builtin.os.tag == .windows;
+
+// Minimal kernel32 bindings zig 0.16 std doesn't expose. MinGW/MSVC both
+// export these from kernel32.dll; zig auto-generates the import lib.
+const win = if (is_windows) struct {
+    extern "kernel32" fn Sleep(dwMilliseconds: u32) callconv(.winapi) void;
+    extern "kernel32" fn TerminateProcess(hProcess: ?*anyopaque, uExitCode: c_uint) callconv(.winapi) c_int;
+} else struct {};
 
 /// Global io instance for zig 0.16 migration. Lazy-initialized on first call.
 /// Pre-0.16, std.fs/std.time/std.process.Child were io-free. 0.16 routes all
@@ -47,8 +57,14 @@ pub fn milliTimestamp() i64 {
     return @as(i64, @intCast(tv.sec)) * 1000 + @divTrunc(@as(i64, @intCast(tv.usec)), 1000);
 }
 
-/// Replacement for removed std.Thread.sleep (ns to nanosleep).
+/// Replacement for removed std.Thread.sleep (ns to nanosleep; kernel32
+/// Sleep on Windows, where neither std.c.timespec nor nanosleep exist).
 pub fn sleep(ns: u64) void {
+    if (is_windows) {
+        const ms = @divTrunc(ns + 999_999, 1_000_000); // round up: never busy-spin a 1ms poll loop
+        win.Sleep(@intCast(@min(ms, std.math.maxInt(u32))));
+        return;
+    }
     const ts: std.c.timespec = .{
         .sec = @intCast(@divTrunc(ns, 1_000_000_000)),
         .nsec = @intCast(ns % 1_000_000_000),
@@ -215,8 +231,7 @@ pub fn read(file: anytype, buf: []u8) !usize {
         const n = file.readStreaming(io(), &vec) catch |err| switch (err) {
             error.EndOfStream => return 0,
             error.WouldBlock => {
-                const ts: std.c.timespec = .{ .sec = 0, .nsec = 1_000_000 };
-                _ = std.c.nanosleep(&ts, null);
+                sleep(1_000_000); // 1ms
                 continue;
             },
             else => return err,
@@ -265,8 +280,10 @@ pub const Child = struct {
     stdin: ?std.Io.File = null,
     stdout: ?std.Io.File = null,
     stderr: ?std.Io.File = null,
-    id: std.posix.pid_t = 0,
+    /// POSIX: pid. Windows: process HANDLE. null until spawned.
+    id: ?Id = null,
 
+    pub const Id = std.process.Child.Id;
     pub const StdIo = enum { Inherit, Ignore, Pipe, Close };
     pub const Term = std.process.Child.Term;
 
@@ -299,7 +316,7 @@ pub const Child = struct {
         self.stdin = real.stdin;
         self.stdout = real.stdout;
         self.stderr = real.stderr;
-        if (real.id) |id| self.id = id;
+        self.id = real.id;
         self.real = real;
     }
 
@@ -333,4 +350,16 @@ pub const Child = struct {
         return self.wait();
     }
 };
+
+/// Ask a running child (identified by its snapshotted `Child.Id`) to stop,
+/// WITHOUT reaping it — the owning worker's wait() still observes the exit.
+/// POSIX: SIGTERM (graceful). Windows: TerminateProcess (forceful; PE has no
+/// cross-process console signal for a detached child).
+pub fn terminateProcess(id: Child.Id) void {
+    if (is_windows) {
+        _ = win.TerminateProcess(id, 1);
+    } else {
+        std.posix.kill(id, std.posix.SIG.TERM) catch {};
+    }
+}
 

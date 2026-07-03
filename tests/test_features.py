@@ -2173,6 +2173,38 @@ def test_anime_nsfw_filter():
     return "pass", "sfw=true on all Jikan URLs + Rx/R+ parser drop, gated on the toggle"
 
 
+@test("Windows Port: Source Invariants", "Stability")
+def test_windows_port_invariants():
+    # The x86_64-windows-gnu port is comptime-gated (windows arms never run
+    # natively), so guard its load-bearing invariants at source level. The
+    # real gate is `zig build -Dtarget=x86_64-windows-gnu` reaching the link
+    # stage with zero sema errors; these checks catch accidental regressions
+    # of the arms that made that possible.
+    build = _src("build.zig")
+    if "MINGW_PREFIX" not in build:
+        return "fail", "build.zig lost the MINGW_PREFIX env handling for Windows"
+    if "torrent_wrapper.dll" not in build:
+        return "fail", "build.zig no longer produces torrent_wrapper.dll on Windows"
+    if "libmpv.dll.a" not in build or "libsqlite3.dll.a" not in build or "libonnxruntime.dll.a" not in build:
+        return "fail", "build.zig lost the MinGW .dll.a import-lib objects (zig -l search never finds lib{name}.dll.a)"
+    iog = _src("src/core/io_global.zig")
+    if 'extern "kernel32" fn Sleep' not in iog:
+        return "fail", "io_global.sleep lost its kernel32 Sleep arm (nanosleep does not exist on Windows)"
+    if "terminateProcess" not in iog or "TerminateProcess" not in iog:
+        return "fail", "io_global lost the portable terminateProcess helper"
+    sync = _src("src/core/sync.zig")
+    if "SRWLockExclusive" not in sync:
+        return "fail", "sync.Mutex lost its SRWLOCK arm (std.c.pthread_mutex_t is void on Windows)"
+    paths = _src("src/core/paths.zig")
+    if "APPDATA" not in paths or "LOCALAPPDATA" not in paths:
+        return "fail", "paths.zig lost the %APPDATA%/%LOCALAPPDATA% Windows arms"
+    # posix kill/raw nanosleep outside io_global are Windows compile blockers.
+    sl = _src("src/services/streamlink.zig")
+    if "std.posix.kill" in sl:
+        return "fail", "streamlink regressed to std.posix.kill (breaks Windows compile); use io_global.terminateProcess"
+    return "pass", "MINGW_PREFIX + dll.a link + win arms in io_global/sync/paths intact"
+
+
 # ══════════════════════════════════════════════════════════
 # Zig Unit Tests
 # ══════════════════════════════════════════════════════════

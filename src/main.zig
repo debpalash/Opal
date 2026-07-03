@@ -252,7 +252,13 @@ fn appInit(win: *dvui.Window) !void {
     // `opal /path/to/file.mp4` or `opal https://example.com/stream`
     // Deferred: store in buffer, appFrame loads after player is ready.
     if (dvui.App.main_init) |init_data| {
-        var args_iter = init_data.minimal.args.iterate();
+        // Windows requires the allocating iterator (argv arrives as one
+        // WTF-16 command line that must be split); POSIX iterates in place.
+        var args_iter = if (builtin.os.tag == .windows)
+            init_data.minimal.args.iterateAllocator(@import("core/alloc.zig").allocator) catch return
+        else
+            init_data.minimal.args.iterate();
+        defer args_iter.deinit(); // no-op on POSIX
         _ = args_iter.next(); // skip argv[0] (binary name)
         if (args_iter.next()) |arg| {
             const len = @min(arg.len, cli_open_buf.len - 1);

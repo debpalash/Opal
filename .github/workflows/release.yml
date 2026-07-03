@@ -3,13 +3,14 @@ name: Release
 # Tag `vX.Y.Z` → build platform artifacts → publish a GitHub Release.
 #
 # Coverage today:
-#   • macos-arm64  — Opal.app bundle (zip) + bare binary tarball   [primary]
-#   • linux-x86_64 — binary tarball + .deb + .rpm + AppImage + .run [best-effort]
+#   • macos-arm64    — Opal.app bundle (zip) + bare binary tarball    [primary]
+#   • linux-x86_64   — binary tarball + .deb + .rpm + AppImage + .run [best-effort]
+#   • windows-x86_64 — portable .zip + .msi (MSYS2/UCRT64 build)      [experimental]
 #
 # Not covered: macos-x86_64 (GitHub retired the free Intel runner images —
 # macos-13 queues forever; Intel Mac users build from source, where build.zig
-# honors HOMEBREW_PREFIX=/usr/local), Windows (no port), Linux arm64 (no
-# runner deps verified). Extend the matrix as those land.
+# honors HOMEBREW_PREFIX=/usr/local), Linux arm64 (no runner deps verified).
+# Extend the matrix as those land.
 
 on:
   push:
@@ -162,8 +163,149 @@ jobs:
             opal-*-linux-x86_64.run
           if-no-files-found: error
 
+  # ── EXPERIMENTAL ─────────────────────────────────────────────────────────
+  # First release cycle for the Windows port. continue-on-error keeps the
+  # release shipping (publish gates on macos-arm64 only) even when this job
+  # breaks; drop the flag once a few tagged builds have produced working
+  # artifacts.
+  windows-x86_64:
+    runs-on: windows-2022
+    continue-on-error: true
+    defaults:
+      run:
+        # Build steps run inside the MSYS2 environment: zig build shells out
+        # to `sh` + g++ for the torrent wrapper, and pacman/ldd only exist
+        # here. Packaging steps that need Windows tooling override with pwsh.
+        shell: msys2 {0}
+    steps:
+      - name: Force LF checkout
+        # build.zig's torrent-wrapper step runs through MSYS2 `sh`; CRLF
+        # endings would break it. Must run before checkout — and before MSYS2
+        # exists, hence pwsh.
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          # UCRT64, not MINGW64: onnxruntime is only packaged for the UCRT64
+          # and CLANG64 environments — there is no mingw-w64-x86_64-onnxruntime
+          # (see https://packages.msys2.org/base/mingw-w64-onnxruntime). Every
+          # other dep exists for UCRT64 too, and build.zig locates headers and
+          # libs via $MINGW_PREFIX, which this shell sets to /ucrt64 — so the
+          # environment swap needs no code change. UCRT64 is also MSYS2's
+          # recommended default environment.
+          msystem: UCRT64
+          # Inherit the Windows PATH so zig.exe (installed by setup-zig below)
+          # is visible inside this shell.
+          path-type: inherit
+          update: true
+          # Names verified against https://packages.msys2.org (ucrt64 repo,
+          # 2026-07). pkgconf Provides: pkg-config — the old standalone
+          # pkg-config package is gone.
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-SDL2
+            mingw-w64-ucrt-x86_64-mpv
+            mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-onnxruntime
+            mingw-w64-ucrt-x86_64-libtorrent-rasterbar
+            mingw-w64-ucrt-x86_64-pkgconf
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Build (ReleaseSafe)
+        run: zig build -Doptimize=ReleaseSafe
+
+      - name: Stage portable payload (exe + wrapper + DLL closure)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          mkdir -p staging
+          cp zig-out/bin/opal.exe staging/
+          # The torrent wrapper lands next to the repo root (sh step in
+          # build.zig); accept either extension the port ends up using.
+          found_wrapper=""
+          for f in libtorrent_wrapper.dll libtorrent_wrapper.so; do
+            if [ -f "$f" ]; then cp "$f" staging/; found_wrapper=1; fi
+          done
+          if [ -z "$found_wrapper" ]; then
+            echo "::error::torrent wrapper DLL not found at repo root"
+            exit 1
+          fi
+          # DLL closure: `ldd` on a PE binary prints the full *transitive* set
+          # of DLLs the loader would map. Keep only those under the MSYS2
+          # prefix (/ucrt64) — Windows system DLLs (kernel32, …) stay behind.
+          # Run it over the wrapper too: it's dlopen'd at runtime, so the
+          # exe's closure doesn't include its deps.
+          for bin in staging/*.exe staging/*.dll staging/*.so; do
+            [ -f "$bin" ] || continue
+            deps=$(ldd "$bin" | awk '/=>/ {print $3}' | grep -i "^${MINGW_PREFIX}/" || true)
+            for dll in $deps; do
+              dest="staging/$(basename "$dll")"
+              [ -e "$dest" ] || cp "$dll" "$dest"
+            done
+          done
+          cp LICENSE NOTICE.md staging/
+          cat > staging/README.txt <<EOF
+          Opal ${VERSION} — portable Windows build (x86_64, experimental)
+
+          Run opal.exe. Keep every DLL in this folder next to it — they are
+          the MSYS2/UCRT64 runtime the binary was built against.
+
+          Prefer a normal installer? Grab Opal-${VERSION}-windows-x86_64.msi
+          from the same release page (Start Menu shortcut included).
+
+          https://github.com/debpalash/Opal
+          EOF
+          echo "--- staged payload ---"
+          ls -l staging/
+
+      - name: Package portable zip
+        shell: pwsh
+        run: Compress-Archive -Path staging\* -DestinationPath "opal-${env:VERSION}-windows-x86_64.zip"
+
+      - name: Package MSI (WiX 3)
+        shell: pwsh
+        run: |
+          # windows-2022 images ship WiX Toolset 3.14 preinstalled, but its
+          # bin dir is not on PATH — use absolute paths.
+          $wix = "C:\Program Files (x86)\WiX Toolset v3.14\bin"
+          # MSI ProductVersion must be numeric x.y.z — strip any pre-release
+          # suffix (0.3.1-rc1 -> 0.3.1). The artifact filename keeps the full
+          # tag version.
+          $msiVersion = ($env:VERSION -split '-')[0]
+          # heat harvests the exact staged dir the zip ships, into the
+          # ComponentGroup "OpalFiles" referenced by packaging/windows/opal.wxs.
+          & "$wix\heat.exe" dir staging -nologo -cg OpalFiles -dr INSTALLFOLDER `
+              -srd -sfrag -scom -sreg -gg -var var.StagingDir -out harvest.wxs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$wix\candle.exe" -nologo -arch x64 `
+              "-dProductVersion=$msiVersion" -dStagingDir=staging `
+              -dIconPath=packaging\windows\opal.ico `
+              packaging\windows\opal.wxs harvest.wxs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # -sval skips ICE validation: heat-generated fragments trip advisory
+          # ICEs and validation needs an interactive session on some runners;
+          # the produced MSI is unaffected.
+          & "$wix\light.exe" -nologo -sval opal.wixobj harvest.wixobj `
+              -o "Opal-${env:VERSION}-windows-x86_64.msi"
+          exit $LASTEXITCODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: |
+            opal-*-windows-x86_64.zip
+            Opal-*-windows-x86_64.msi
+          if-no-files-found: error
+
   publish:
-    needs: [macos-arm64, linux-x86_64]
+    needs: [macos-arm64, linux-x86_64, windows-x86_64]
     # macos-arm64 must succeed; the best-effort jobs contribute artifacts only
     # when they happen to pass (unmatched globs below just warn).
     if: always() && needs.macos-arm64.result == 'success'
@@ -190,6 +332,8 @@ jobs:
             artifacts/opal-*.x86_64.rpm
             artifacts/Opal-*-x86_64.AppImage
             artifacts/opal-*-linux-x86_64.run
+            artifacts/opal-*-windows-x86_64.zip
+            artifacts/Opal-*-windows-x86_64.msi
             artifacts/SHA256SUMS.txt
           generate_release_notes: true
           draft: false

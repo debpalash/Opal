@@ -36,9 +36,34 @@ pub fn build(b: *std.Build) void {
     // exports HOMEBREW_PREFIX, so honor it when set.
     const brew_prefix = b.graph.environ_map.get("HOMEBREW_PREFIX") orelse "/opt/homebrew";
 
+    // MSYS2 MINGW64 prefix for Windows lib/include paths. MSYS2 exports
+    // MINGW_PREFIX inside a MINGW64 shell (e.g. C:/msys64/mingw64); honor it
+    // when set, analogous to HOMEBREW_PREFIX on macOS.
+    const mingw_prefix = b.graph.environ_map.get("MINGW_PREFIX") orelse "C:/msys64/mingw64";
+
+    const is_windows = target.result.os.tag == .windows;
+
     if (target.result.os.tag == .macos) {
         exe.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{brew_prefix}) });
         exe.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{brew_prefix}) });
+    } else if (is_windows) {
+        // Windows (MinGW/MSYS2): headers + import libs from the MINGW64 prefix.
+        // dvui's bundled SDL2 supplies the SDL symbols (like macOS), so only
+        // SDL2 *headers* are needed from mingw64 (mingw-w64-SDL2 package).
+        exe.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{mingw_prefix}) });
+        exe.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{mingw_prefix}) });
+        // Aro (zig 0.16's translate-c) predefines _FORTIFY_SOURCE=2 for
+        // optimized builds; the MinGW fortify inline wrappers it then pulls
+        // from <wchar.h> translate into Zig that fails AstGen ("unused local
+        // constant"), breaking every @cImport in ReleaseSafe/ReleaseFast.
+        // Force fortify off for every module that @cImports windows headers:
+        // ours, dvui's (tinyfiledialogs), and dvui's sdl backend (SDL.h).
+        exe.root_module.addCMacro("_FORTIFY_SOURCE", "0");
+        const dvui_mod = dvui_dep.module("dvui_sdl2");
+        dvui_mod.addCMacro("_FORTIFY_SOURCE", "0");
+        if (dvui_mod.import_table.get("backend")) |backend_mod| {
+            backend_mod.addCMacro("_FORTIFY_SOURCE", "0");
+        }
     } else {
         // Non-macOS: link system SDL2. On macOS, dvui's bundled SDL2 is used
         // (avoids duplicate-class ObjC warnings when both static + dyn SDL2 load).
@@ -62,9 +87,17 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("icons", icons_dep.module("icons"));
 
-    // Link MPV and SQLite
-    exe.root_module.linkSystemLibrary("mpv", .{});
-    exe.root_module.linkSystemLibrary("sqlite3", .{});
+    // Link MPV and SQLite.
+    // Windows: zig's -l search for windows-gnu only tries `{name}.dll`,
+    // `{name}.lib` and `lib{name}.a` — it never finds MinGW `lib{name}.dll.a`
+    // import libs, so pass those explicitly as linker objects.
+    if (is_windows) {
+        exe.root_module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/libmpv.dll.a", .{mingw_prefix}) });
+        exe.root_module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/libsqlite3.dll.a", .{mingw_prefix}) });
+    } else {
+        exe.root_module.linkSystemLibrary("mpv", .{});
+        exe.root_module.linkSystemLibrary("sqlite3", .{});
+    }
 
     // SQLite Vector DB
     exe.root_module.addCSourceFile(.{
@@ -73,22 +106,36 @@ pub fn build(b: *std.Build) void {
     });
 
     // Libtorrent & C++ Linkage (Dynamic Shared Object isolating GCC C++ ABIs)
-    // Checking modification times avoids recompiling the heavy C++ wrapper on every `zig build` iteration
+    // Checking modification times avoids recompiling the heavy C++ wrapper on every `zig build` iteration.
+    // Windows note: zig's windows-gnu -l search tries `torrent_wrapper.dll`
+    // first and MinGW-flavored lld links directly against a DLL, so name the
+    // artifact `torrent_wrapper.dll` (no `lib` prefix). MSYS2 has sh + g++.
     const compile_cmd = if (target.result.os.tag == .macos)
         b.fmt("if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -I{s}/include -L{s}/lib src/torrent_wrapper.cpp -o libtorrent_wrapper.so -ltorrent-rasterbar; fi", .{ brew_prefix, brew_prefix })
+    else if (is_windows)
+        b.fmt("if [ ! -f torrent_wrapper.dll ] || [ src/torrent_wrapper.cpp -nt torrent_wrapper.dll ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -I{s}/include -L{s}/lib src/torrent_wrapper.cpp -o torrent_wrapper.dll -ltorrent-rasterbar -lws2_32 -liphlpapi -lcrypt32; fi", .{ mingw_prefix, mingw_prefix })
     else
         "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC src/torrent_wrapper.cpp -o libtorrent_wrapper.so -ltorrent-rasterbar; fi";
 
-    const compile_wrapper = b.addSystemCommand(&.{ "sh", "-c", compile_cmd });
-    exe.step.dependOn(&compile_wrapper.step);
+    // Only invoke the host g++ when it can actually produce a wrapper for the
+    // target (native builds). Cross-compiling (e.g. windows from macOS for a
+    // semantic-analysis check) would otherwise emit a host-ABI object under the
+    // target's expected name and confuse the link.
+    if (b.graph.host.result.os.tag == target.result.os.tag) {
+        const compile_wrapper = b.addSystemCommand(&.{ "sh", "-c", compile_cmd });
+        exe.step.dependOn(&compile_wrapper.step);
+    }
 
     exe.root_module.addLibraryPath(b.path("."));
     exe.root_module.linkSystemLibrary("torrent_wrapper", .{});
-    exe.root_module.addRPath(b.path(".")); // Ensure the binary can find the locally compiled wrapper
+    // rpath is ELF/Mach-O only; PE resolves DLLs next to the exe at runtime.
+    if (!is_windows) {
+        exe.root_module.addRPath(b.path(".")); // Ensure the binary can find the locally compiled wrapper
+    }
     // Packaged-install layouts (deb/rpm/.run/tarball): let the installed
     // binary find libtorrent_wrapper.so relative to itself — next to the
     // binary (tarball) or in ../lib/opal (/usr/bin + /usr/lib/opal).
-    if (target.result.os.tag != .macos) {
+    if (target.result.os.tag != .macos and !is_windows) {
         exe.root_module.addRPathSpecial("$ORIGIN");
         exe.root_module.addRPathSpecial("$ORIGIN/../lib/opal");
     }
@@ -108,8 +155,13 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addIncludePath(b.path("ort"));
     exe.root_module.addLibraryPath(b.path("ort"));
-    exe.root_module.linkSystemLibrary("onnxruntime", .{});
-    exe.root_module.addRPath(b.path("ort"));
+    if (is_windows) {
+        // MinGW import lib (see the mpv/sqlite3 note above).
+        exe.root_module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/libonnxruntime.dll.a", .{mingw_prefix}) });
+    } else {
+        exe.root_module.linkSystemLibrary("onnxruntime", .{});
+        exe.root_module.addRPath(b.path("ort"));
+    }
 
     exe.root_module.addIncludePath(b.path("src"));
 
