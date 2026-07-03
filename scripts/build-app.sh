@@ -8,7 +8,10 @@ ZIG=${ZIG:-zig}
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_DIR="$ROOT/dist/Opal.app"
 BIN_PATH="$ROOT/zig-out/bin/opal"
-VERSION="${OPAL_VERSION:-0.0.1}"
+# Version: explicit override → build.zig.zon's .version → fallback.
+# (The release workflow builds from a tag whose version lives in the zon.)
+ZON_VERSION=$(sed -n 's/^[[:space:]]*\.version = "\(.*\)",$/\1/p' "$(dirname "$0")/../build.zig.zon" 2>/dev/null | head -1)
+VERSION="${OPAL_VERSION:-${ZON_VERSION:-0.1.0}}"
 
 cd "$ROOT"
 
@@ -59,6 +62,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <string>$VERSION</string>
     <key>CFBundleShortVersionString</key>
     <string>$VERSION</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>© 2026 Opal contributors — GPL-3.0. Play everything.</string>
     <key>CFBundleExecutable</key>
     <string>Opal</string>
     <key>CFBundlePackageType</key>
@@ -228,6 +233,31 @@ if [ -f "$ROOT/assets/opal_logo.png" ] && command -v sips >/dev/null && command 
     /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string opal" \
         "$APP_DIR/Contents/Info.plist" 2>/dev/null || true
 fi
+
+# ── Credits.rtf — the standard macOS About panel (app menu → About Opal)
+# renders this in its scrollable body, hyperlinks included. This is what
+# turns the bare icon+version panel into a real About window.
+cat > "$APP_DIR/Contents/Resources/Credits.rtf" <<'CREDITS'
+{\rtf1\ansi\ansicpg1252\cocoartf2761
+{\fonttbl\f0\fswiss\fcharset0 Helvetica-Bold;\f1\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;\red139\green92\blue246;}
+\pard\qc
+\f0\b\fs28 Play everything.\
+\f1\b0\fs22 The evolved media player for the next decades of entertainment.\
+\fs20 \
+Local-first. No accounts, no telemetry, no cloud \'97 your history is a SQLite file you own.\
+\
+\f0\b Support development\f1\b0 \
+{\field{\*\fldinst{HYPERLINK "https://ko-fi.com/debpalash"}}{\fldrslt \cf2 Ko-fi}}  \'b7  {\field{\*\fldinst{HYPERLINK "https://paypal.me/palashCoder"}}{\fldrslt \cf2 PayPal}}  \'b7  {\field{\*\fldinst{HYPERLINK "https://github.com/debpalash/Opal"}}{\fldrslt \cf2 GitHub}}\
+\
+\f0\b Built with\f1\b0 \
+Zig \'b7 dvui \'b7 mpv \'b7 SDL2 \'b7 libtorrent \'b7 SQLite + sqlite-vec \'b7 ONNX Runtime \'b7 whisper.cpp\
+\
+\fs18 Metadata from TMDB \'97 this product uses the TMDB API but is not endorsed or certified by TMDB.\
+Demo media: Big Buck Bunny & Sintel, \'a9 Blender Foundation, CC-BY 3.0.\
+}
+CREDITS
+echo "[build-app] Credits.rtf written (About panel body)"
 
 # ── 5. Bundle dylibs (mpv, libtorrent_wrapper, onnxruntime) ────
 # Copy whatever the binary links so the app runs on systems without brew.

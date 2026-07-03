@@ -226,6 +226,16 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_resume).step);
 
+    // Anime NSFW filter: Jikan rating classification + sfw query param.
+    const test_anime_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/anime_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_anime_pure).step);
+
     // Workspace name sanitization (path-traversal / separator neutralization).
     const test_workspace_pure = b.addTest(.{
         .root_module = b.createModule(.{

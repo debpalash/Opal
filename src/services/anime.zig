@@ -1,6 +1,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const state = @import("../core/state.zig");
+const anime_pure = @import("anime_pure.zig");
 const theme = @import("../ui/theme.zig");
 const icons = @import("icons");
 const logs = @import("../core/logs.zig");
@@ -138,9 +139,9 @@ fn buildGridUrl(out: []u8, mode: state.AnimeMode, page: u32) ?[]const u8 {
             const jikan_api = "https://api.jikan.moe/v4/top/anime";
             const fv = trend_filter.jikan();
             break :blk (if (fv.len == 0)
-                std.fmt.bufPrint(out, "{s}?limit=25&page={d}", .{ jikan_api, page })
+                std.fmt.bufPrint(out, "{s}?limit=25&page={d}{s}", .{ jikan_api, page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) })
             else
-                std.fmt.bufPrint(out, "{s}?filter={s}&limit=25&page={d}", .{ jikan_api, fv, page })) catch null;
+                std.fmt.bufPrint(out, "{s}?filter={s}&limit=25&page={d}{s}", .{ jikan_api, fv, page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) })) catch null;
         },
         .search => blk: {
             var enc_buf: [768]u8 = undefined;
@@ -168,19 +169,19 @@ fn buildGridUrl(out: []u8, mode: state.AnimeMode, page: u32) ?[]const u8 {
                     enc_len += 1;
                 }
             }
-            break :blk std.fmt.bufPrint(out, "https://api.jikan.moe/v4/anime?q={s}&limit=25&page={d}", .{ enc_buf[0..enc_len], page }) catch null;
+            break :blk std.fmt.bufPrint(out, "https://api.jikan.moe/v4/anime?q={s}&limit=25&page={d}{s}", .{ enc_buf[0..enc_len], page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }) catch null;
         },
         .seasonal => switch (state.app.anime.season_sel) {
-            .now => std.fmt.bufPrint(out, "https://api.jikan.moe/v4/seasons/now?limit=25&page={d}", .{page}) catch null,
-            .upcoming => std.fmt.bufPrint(out, "https://api.jikan.moe/v4/seasons/upcoming?limit=25&page={d}", .{page}) catch null,
-            else => std.fmt.bufPrint(out, "https://api.jikan.moe/v4/seasons/{d}/{s}?limit=25&page={d}", .{ state.app.anime.season_year, seasonStr(state.app.anime.season_sel), page }) catch null,
+            .now => std.fmt.bufPrint(out, "https://api.jikan.moe/v4/seasons/now?limit=25&page={d}{s}", .{ page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }) catch null,
+            .upcoming => std.fmt.bufPrint(out, "https://api.jikan.moe/v4/seasons/upcoming?limit=25&page={d}{s}", .{ page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }) catch null,
+            else => std.fmt.bufPrint(out, "https://api.jikan.moe/v4/seasons/{d}/{s}?limit=25&page={d}{s}", .{ state.app.anime.season_year, seasonStr(state.app.anime.season_sel), page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }) catch null,
         },
         .calendar => blk: {
             const day = calDayStr(state.app.anime.cal_day);
             break :blk (if (day.len == 0)
-                std.fmt.bufPrint(out, "https://api.jikan.moe/v4/schedules?limit=25&page={d}", .{page})
+                std.fmt.bufPrint(out, "https://api.jikan.moe/v4/schedules?limit=25&page={d}{s}", .{ page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) })
             else
-                std.fmt.bufPrint(out, "https://api.jikan.moe/v4/schedules?filter={s}&limit=25&page={d}", .{ day, page })) catch null;
+                std.fmt.bufPrint(out, "https://api.jikan.moe/v4/schedules?filter={s}&limit=25&page={d}{s}", .{ day, page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) })) catch null;
         },
         .mylist => null,
     };
@@ -307,9 +308,9 @@ fn trendingThread() void {
     var arg1_buf: [256]u8 = undefined;
     const fv = trend_filter.jikan();
     const arg1 = (if (fv.len == 0)
-        std.fmt.bufPrint(&arg1_buf, "{s}?limit=25&page={d}", .{ jikan_api, grid_page })
+        std.fmt.bufPrint(&arg1_buf, "{s}?limit=25&page={d}{s}", .{ jikan_api, grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) })
     else
-        std.fmt.bufPrint(&arg1_buf, "{s}?filter={s}&limit=25&page={d}", .{ jikan_api, fv, grid_page })) catch return;
+        std.fmt.bufPrint(&arg1_buf, "{s}?filter={s}&limit=25&page={d}{s}", .{ jikan_api, fv, grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) })) catch return;
 
     const argv = [_][]const u8{
         "curl", "-s", "-A", agent, arg1,
@@ -403,7 +404,7 @@ fn searchThread(my_gen: u32) void {
     }
 
     var url_buf: [512]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "{s}?q={s}&limit=25&page={d}", .{ jikan_api, enc_buf[0..enc_len], grid_page }) catch return;
+    const url = std.fmt.bufPrint(&url_buf, "{s}?q={s}&limit=25&page={d}{s}", .{ jikan_api, enc_buf[0..enc_len], grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }) catch return;
 
     const argv = [_][]const u8{
         "curl", "-s", "-A", agent, url,
@@ -457,9 +458,9 @@ fn seasonalThread(my_gen: u32) void {
 
     var url_buf: [256]u8 = undefined;
     const url = switch (sel) {
-        .now => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/now?limit=25&page={d}", .{grid_page}),
-        .upcoming => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/upcoming?limit=25&page={d}", .{grid_page}),
-        else => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/{d}/{s}?limit=25&page={d}", .{ year, seasonStr(sel), grid_page }),
+        .now => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/now?limit=25&page={d}{s}", .{ grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }),
+        .upcoming => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/upcoming?limit=25&page={d}{s}", .{ grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }),
+        else => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/{d}/{s}?limit=25&page={d}{s}", .{ year, seasonStr(sel), grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }),
     } catch return;
 
     const argv = [_][]const u8{ "curl", "-s", "-A", agent, "--max-time", "12", url };
@@ -507,9 +508,9 @@ fn calendarThread(my_gen: u32) void {
     const day = calDayStr(state.app.anime.cal_day);
     var url_buf: [256]u8 = undefined;
     const url = (if (day.len == 0)
-        std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/schedules?limit=25&page={d}", .{grid_page})
+        std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/schedules?limit=25&page={d}{s}", .{ grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) })
     else
-        std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/schedules?filter={s}&limit=25&page={d}", .{ day, grid_page })) catch return;
+        std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/schedules?filter={s}&limit=25&page={d}{s}", .{ day, grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) })) catch return;
 
     const argv = [_][]const u8{ "curl", "-s", "-A", agent, "--max-time", "12", url };
 
@@ -685,6 +686,11 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
         }
 
         const obj_slice = json[pos..next_obj_pos];
+
+        // NSFW filter (Settings › Behavior): drop Rx/R+ rated entries. The
+        // request already asks Jikan for sfw=true; this rating check also
+        // catches R+ (ecchi covers) and anything from cached pages.
+        if (state.app.nsfw_filter_enabled and anime_pure.jikanRatingIsAdult(obj_slice)) continue;
 
         // Extract ID
         var id_str: []const u8 = "0";

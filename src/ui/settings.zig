@@ -1099,7 +1099,7 @@ fn renderGeneralTab() void {
     // NSFW Filter toggle — pure bool flip.
     {
         const before = state.app.nsfw_filter_enabled;
-        components.toggleRow(@src(), "NSFW Filter", "Hide adult content in search", &state.app.nsfw_filter_enabled);
+        components.toggleRow(@src(), "NSFW Filter", "Hide adult content in search & anime browsing", &state.app.nsfw_filter_enabled);
         if (state.app.nsfw_filter_enabled != before) state.markConfigDirty();
     }
 

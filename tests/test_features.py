@@ -2141,6 +2141,24 @@ def test_tmdb_fetch_stages_results():
     return "pass", "fetch worker stages into pending_results; UI thread owns live list"
 
 
+@test("Anime Tab Honors NSFW Filter", "Page Shell")
+def test_anime_nsfw_filter():
+    # Settings › NSFW toggle must govern anime browsing, not just search:
+    # every Jikan grid URL carries sfw=true and the parser drops Rx/R+ rated
+    # entries (anime_pure.jikanRatingIsAdult, unit-tested).
+    anime = open(os.path.join(PROJECT_DIR, "src/services/anime.zig")).read()
+    if "sfwSuffix(state.app.nsfw_filter_enabled)" not in anime:
+        return "fail", "Jikan URLs no longer append the sfw param from the NSFW toggle"
+    if anime.count("sfwSuffix(state.app.nsfw_filter_enabled)") < 15:
+        return "fail", "some Jikan grid URL sites lost the sfw param (expected 15+)"
+    if "jikanRatingIsAdult(obj_slice)" not in anime:
+        return "fail", "parser no longer drops Rx/R+ entries when the filter is on"
+    build = open(os.path.join(PROJECT_DIR, "build.zig")).read()
+    if "anime_pure.zig" not in build:
+        return "fail", "anime_pure tests unregistered from zig build test"
+    return "pass", "sfw=true on all Jikan URLs + Rx/R+ parser drop, gated on the toggle"
+
+
 # ══════════════════════════════════════════════════════════
 # Zig Unit Tests
 # ══════════════════════════════════════════════════════════
