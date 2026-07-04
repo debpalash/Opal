@@ -1862,14 +1862,18 @@ fn decodePageTexture(pg: usize) void {
 // OCR + TTS Narration
 // ══════════════════════════════════════════════════════════
 
-// Native ONNX Runtime OCR via C wrapper
-const ocr_c = @cImport({
+// Native ONNX Runtime OCR via C wrapper. Gated by `-Docr=true`; empty
+// namespace otherwise so the @cImport never runs and onnxruntime isn't required.
+const ocr_build_options = @import("ocr_build_options");
+const has_ocr = ocr_build_options.has_ocr;
+const ocr_c = if (has_ocr) @cImport({
     @cInclude("ocr_ort.h");
-});
+}) else struct {};
 
 var ocr_initialized: bool = false;
 
 fn ensureOcrInit() bool {
+    if (!has_ocr) return false;
     if (ocr_initialized) return true;
 
     // Model paths: prefer PP-OCRv5 (much better accuracy), fall back to v4
@@ -1918,21 +1922,25 @@ pub fn ocrPage(pg: usize) void {
     }
     defer dvui.c.stbi_image_free(rgba);
 
-    // Run OCR via C wrapper
-    const result = ocr_c.ocr_recognize_rgba(
-        @ptrCast(rgba),
-        w,
-        h,
-    );
+    // Run OCR via C wrapper (gated so the empty-struct stub built when
+    // -Docr=false is never type-checked; Zig skips analysis of branches
+    // under a comptime-known condition).
+    if (has_ocr) {
+        const result = ocr_c.ocr_recognize_rgba(
+            @ptrCast(rgba),
+            w,
+            h,
+        );
 
-    if (result != null) {
-        const text: [*:0]const u8 = result.?;
-        const text_slice = std.mem.span(text);
-        const trimmed = std.mem.trim(u8, text_slice, " \t\r\n");
-        const len = @min(trimmed.len, 4095);
-        @memcpy(state.app.comic.ocr_texts[pg][0..len], trimmed[0..len]);
-        state.app.comic.ocr_lens[pg] = len;
-        ocr_c.ocr_free_text(result);
+        if (result != null) {
+            const text: [*:0]const u8 = result.?;
+            const text_slice = std.mem.span(text);
+            const trimmed = std.mem.trim(u8, text_slice, " \t\r\n");
+            const len = @min(trimmed.len, 4095);
+            @memcpy(state.app.comic.ocr_texts[pg][0..len], trimmed[0..len]);
+            state.app.comic.ocr_lens[pg] = len;
+            ocr_c.ocr_free_text(result);
+        }
     }
     state.app.comic.ocr_done[pg] = true;
 }
