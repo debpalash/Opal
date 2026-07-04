@@ -5,7 +5,8 @@ name: Release
 # Coverage today:
 #   • macos-arm64    — Opal.app bundle (zip) + bare binary tarball    [primary]
 #   • linux-x86_64   — binary tarball + .deb + .rpm + AppImage + .run [best-effort]
-#   • windows-x86_64 — portable .zip + .msi (MSYS2/UCRT64 build)      [experimental]
+#   • windows-x86_64 — portable .zip + .msi (MSYS2/MINGW64 build +
+#                      vendored MS onnxruntime; see the job for why)  [experimental]
 #
 # Not covered: macos-x86_64 (GitHub retired the free Intel runner images —
 # macos-13 queues forever; Intel Mac users build from source, where build.zig
@@ -189,34 +190,53 @@ jobs:
 
       - uses: msys2/setup-msys2@v2
         with:
-          # UCRT64, not MINGW64: onnxruntime is only packaged for the UCRT64
-          # and CLANG64 environments — there is no mingw-w64-x86_64-onnxruntime
-          # (see https://packages.msys2.org/base/mingw-w64-onnxruntime). Every
-          # other dep exists for UCRT64 too, and build.zig locates headers and
-          # libs via $MINGW_PREFIX, which this shell sets to /ucrt64 — so the
-          # environment swap needs no code change. UCRT64 is also MSYS2's
-          # recommended default environment.
-          msystem: UCRT64
+          # MINGW64, not UCRT64 (issue #3). v0.1.0 built here against UCRT64
+          # packages, but zig's x86_64-windows-gnu target emits MSVCRT-flavored
+          # MinGW binaries — the UCRT64 DLLs import CRT symbols (strtod, …)
+          # from a different runtime, and the mismatch surfaced on user
+          # machines as "entry point strtod could not be located in opal.exe".
+          # MINGW64 packages link the same msvcrt the zig output does. The one
+          # UCRT64-only dep, onnxruntime (no mingw-w64-x86_64-onnxruntime
+          # exists — packages.msys2.org 404s for the mingw64 repo), is instead
+          # vendored from Microsoft's official MSVC release below.
+          msystem: MINGW64
           # Inherit the Windows PATH so zig.exe (installed by setup-zig below)
           # is visible inside this shell.
           path-type: inherit
           update: true
-          # Names verified against https://packages.msys2.org (ucrt64 repo,
+          # Names verified against https://packages.msys2.org (mingw64 repo,
           # 2026-07). pkgconf Provides: pkg-config — the old standalone
-          # pkg-config package is gone.
+          # pkg-config package is gone. `unzip` (msys repo) unpacks the
+          # vendored onnxruntime zip.
           install: >-
             git
-            mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-SDL2
-            mingw-w64-ucrt-x86_64-mpv
-            mingw-w64-ucrt-x86_64-sqlite3
-            mingw-w64-ucrt-x86_64-onnxruntime
-            mingw-w64-ucrt-x86_64-libtorrent-rasterbar
-            mingw-w64-ucrt-x86_64-pkgconf
+            unzip
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-SDL2
+            mingw-w64-x86_64-mpv
+            mingw-w64-x86_64-sqlite3
+            mingw-w64-x86_64-libtorrent-rasterbar
+            mingw-w64-x86_64-pkgconf
 
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
+
+      - name: Vendor ONNX Runtime (Microsoft MSVC build)
+        run: |
+          # MSVC-built but pure-C-ABI, so it's safe to import from the
+          # windows-gnu binary; build.zig picks up include/ + lib/onnxruntime.lib
+          # via ONNXRUNTIME_DIR. Pin 1.24.x: its DLL serves ORT_API_VERSION 24,
+          # exactly what the vendored ort/onnxruntime_c_api.h header requests —
+          # an older DLL would make OrtGetApiBase()->GetApi(24) return NULL and
+          # silently disable OCR.
+          ORT_VER=1.24.4
+          curl -fsSL -o ort.zip \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/onnxruntime-win-x64-${ORT_VER}.zip"
+          unzip -q ort.zip
+          # pwd -W prints the Windows-style path (D:/a/...) so the value works
+          # for zig and pwsh steps alike.
+          echo "ONNXRUNTIME_DIR=$(pwd -W)/onnxruntime-win-x64-${ORT_VER}" >> "$GITHUB_ENV"
 
       - name: Build (ReleaseSafe)
         run: zig build -Doptimize=ReleaseSafe
@@ -239,25 +259,83 @@ jobs:
             echo "::error::torrent wrapper DLL not found at repo root"
             exit 1
           fi
-          # DLL closure: `ldd` on a PE binary prints the full *transitive* set
-          # of DLLs the loader would map. Keep only those under the MSYS2
-          # prefix (/ucrt64) — Windows system DLLs (kernel32, …) stay behind.
-          # Run it over the wrapper too: it's dlopen'd at runtime, so the
-          # exe's closure doesn't include its deps.
+          # The vendored onnxruntime.dll lives outside MINGW_PREFIX, so the
+          # prefix filter below never harvests it — stage it explicitly. It IS
+          # in the exe's import table (linked via onnxruntime.lib), so a copy
+          # next to opal.exe is mandatory. providers_shared rides along: ORT
+          # dlopens it whenever an execution provider is requested.
+          cp "${ONNXRUNTIME_DIR}/lib/onnxruntime.dll" staging/
+          cp "${ONNXRUNTIME_DIR}/lib/onnxruntime_providers_shared.dll" staging/ 2>/dev/null || true
+          # onnxruntime.dll is Microsoft's MSVC build: it imports the VC++
+          # runtime (msvcp140*, vcruntime140*), which Windows does NOT ship
+          # inbox (the api-ms-win-crt-* UCRT api-sets it also imports ARE
+          # inbox on Win10+). App-local copies spare users the
+          # "VCRUNTIME140.dll was not found" cousin of issue #3. Prefer the
+          # sanctioned VS Redist copies on the runner; fall back to System32
+          # (same binaries).
+          vcredist=$(ls -d "/c/Program Files/Microsoft Visual Studio/2022/"*"/VC/Redist/MSVC/"*"/x64/Microsoft.VC143.CRT" 2>/dev/null | head -n1 || true)
+          for crt in msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll; do
+            if [ -n "$vcredist" ] && [ -f "$vcredist/$crt" ]; then
+              cp "$vcredist/$crt" staging/
+            elif [ -f "/c/Windows/System32/$crt" ]; then
+              cp "/c/Windows/System32/$crt" staging/
+            else
+              echo "::error::VC++ runtime $crt not found on runner"
+              exit 1
+            fi
+          done
+          # DLL closure — fixpoint, not a single pass. `ldd` on a PE binary
+          # resolves against *this shell's* PATH (/mingw64/bin), so one pass
+          # over the exe misses DLLs that only enter the closure through other
+          # copied DLLs. v0.1.0's single pass shipped a zip missing
+          # libbrotlidec/libintl-8/libpng16-16 exactly that way (issue #3).
+          # Re-run ldd over everything staged, copy every dependency under the
+          # MSYS2 prefix not yet staged, and repeat until a pass stages
+          # nothing. Windows system DLLs (kernel32, …) stay behind.
+          while :; do
+            copied=0
+            for bin in staging/*.exe staging/*.dll staging/*.so; do
+              [ -f "$bin" ] || continue
+              deps=$(ldd "$bin" 2>/dev/null | awk '/=>/ {print $3}' | grep -i "^${MINGW_PREFIX}/" || true)
+              for dll in $deps; do
+                dest="staging/$(basename "$dll")"
+                if [ ! -e "$dest" ]; then
+                  cp "$dll" "$dest"
+                  echo "staged $(basename "$dll")"
+                  copied=1
+                fi
+              done
+            done
+            if [ "$copied" -eq 0 ]; then break; fi
+          done
+          # Any import the loader cannot resolve at all is fatal — fail the
+          # job rather than ship another zip that dies on a user's machine.
+          # Cover both ldd failure modes: per-line "not found" markers and a
+          # hard non-zero exit when the target itself refuses to load.
+          unresolved=""
           for bin in staging/*.exe staging/*.dll staging/*.so; do
             [ -f "$bin" ] || continue
-            deps=$(ldd "$bin" | awk '/=>/ {print $3}' | grep -i "^${MINGW_PREFIX}/" || true)
-            for dll in $deps; do
-              dest="staging/$(basename "$dll")"
-              [ -e "$dest" ] || cp "$dll" "$dest"
-            done
+            if out=$(ldd "$bin" 2>&1); then
+              misses=$(printf '%s\n' "$out" | grep -i 'not found' || true)
+              if [ -n "$misses" ]; then
+                unresolved="${unresolved}$(basename "$bin"): ${misses}"$'\n'
+              fi
+            else
+              unresolved="${unresolved}$(basename "$bin"): ldd failed: ${out}"$'\n'
+            fi
           done
+          if [ -n "$unresolved" ]; then
+            echo "::error::unresolved DLL imports in staging/:"
+            printf '%s' "$unresolved"
+            exit 1
+          fi
           cp LICENSE NOTICE.md staging/
           cat > staging/README.txt <<EOF
           Opal ${VERSION} — portable Windows build (x86_64, experimental)
 
           Run opal.exe. Keep every DLL in this folder next to it — they are
-          the MSYS2/UCRT64 runtime the binary was built against.
+          the MSYS2/MINGW64 runtime (plus Microsoft's onnxruntime and the
+          VC++ runtime it needs) that the binary was built against.
 
           Prefer a normal installer? Grab Opal-${VERSION}-windows-x86_64.msi
           from the same release page (Start Menu shortcut included).
@@ -266,6 +344,40 @@ jobs:
           EOF
           echo "--- staged payload ---"
           ls -l staging/
+
+      - name: Smoke test — launch opal.exe outside MSYS2 (issue #3 gate)
+        shell: pwsh
+        run: |
+          # pwsh here has no /mingw64/bin on PATH — the same DLL-search world
+          # as a user's machine, which is precisely where v0.1.0 fell over. If
+          # staging/ is not a self-sufficient closure, the loader kills the
+          # process at startup and this step fails the job.
+          # Suppress the loader's modal "DLL not found" dialog first: without
+          # this a load failure sits "alive" behind a message box for the whole
+          # sleep and the test would pass vacuously. Error mode is inherited by
+          # child processes.
+          $sig = '[DllImport("kernel32.dll")] public static extern uint SetErrorMode(uint uMode);'
+          Add-Type -MemberDefinition $sig -Name ErrMode -Namespace Win32
+          # SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX
+          [void][Win32.ErrMode]::SetErrorMode(0x8003)
+          $staging = Join-Path $PWD 'staging'
+          # Working directory = staging so torrent_wrapper.dll & friends
+          # resolve exactly as they do for a user double-clicking the exe.
+          $proc = Start-Process -FilePath (Join-Path $staging 'opal.exe') `
+            -WorkingDirectory $staging -PassThru
+          # Cache the handle now — without this, .ExitCode is $null after the
+          # process dies (long-standing Start-Process -PassThru quirk).
+          $null = $proc.Handle
+          Start-Sleep -Seconds 10
+          $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
+          if (-not $alive -or $proc.HasExited) {
+            $code = if ($proc.HasExited) { $proc.ExitCode } else { 'unknown' }
+            Write-Host "::error::opal.exe died within 10s (exit code: $code) — incomplete DLL closure or CRT mismatch"
+            exit 1
+          }
+          Write-Host "opal.exe still running after 10s — launch smoke test passed"
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          exit 0
 
       - name: Package portable zip
         shell: pwsh
