@@ -32,6 +32,10 @@ PKGS=("${@:-opal opal-bin}")
 if [[ -n "${AUR_SSH_PRIVATE_KEY:-}" ]]; then
   : "${AUR_USERNAME:?AUR_USERNAME required in CI mode}"
   : "${AUR_EMAIL:?AUR_EMAIL required in CI mode}"
+  if [[ -z "${AUR_SSH_PRIVATE_KEY// }" ]]; then
+    echo "::notice::AUR_SSH_PRIVATE_KEY is empty — AUR publish is a no-op. Register a deploy key on your AUR account and set the repository secret."
+    exit 0
+  fi
   export GIT_SSH_COMMAND="ssh -i $HOME/.aur_id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
   printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$HOME/.aur_id_ed25519"
   chmod 600 "$HOME/.aur_id_ed25519"

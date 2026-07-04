@@ -467,7 +467,10 @@ jobs:
   aur:
     needs: publish
     runs-on: ubuntu-24.04
-    if: ${{ vars.AUR_PUBLISH_ENABLED == 'true' && secrets.AUR_SSH_PRIVATE_KEY != '' }}
+    # GitHub Actions does not allow `secrets.*` in a job-level `if:`.
+    # Gate on vars only here; push-to-aur.sh verifies the secret is set
+    # and bails with a clear message if AUR_SSH_PRIVATE_KEY is empty.
+    if: ${{ vars.AUR_PUBLISH_ENABLED == 'true' }}
     steps:
       - uses: actions/checkout@v4
       #pacman-contrib isn't on Ubuntu; we set AUR_SKIP_MAKEPKG=1 since the
