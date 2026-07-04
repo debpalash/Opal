@@ -2141,24 +2141,53 @@ def test_tmdb_fetch_stages_results():
     return "pass", "fetch worker stages into pending_results; UI thread owns live list"
 
 
+@test("Keyless Subtitle Fetch Works E2E", "Page Shell")
+def test_keyless_subtitle_fetch_e2e():
+    # Three real bugs fixed so auto-download actually lands an SRT:
+    #  1. uppercase queries 302 to a broken host → urlEncode must lowercase
+    #  2. OpenSubtitles JSON escapes slashes (\/) → unescapeJsonSlashes on the URL
+    #  3. the redirect + gzip broke std.http → httpGet uses curl (-L --compressed)
+    eng = open(os.path.join(PROJECT_DIR, "src/player/subtitles.zig")).read()
+    pure = open(os.path.join(PROJECT_DIR, "src/services/subtitles_pure.zig")).read()
+    if "ch + 32" not in eng:
+        return "fail", "urlEncode no longer lowercases (uppercase → broken 302 redirect)"
+    if "unescapeJsonSlashes" not in eng or "unescapeJsonSlashes" not in pure:
+        return "fail", "download URL no longer unescapes JSON \\/ (Uri.parse rejects it)"
+    if '"curl"' not in eng or "--compressed" not in eng:
+        return "fail", "httpGet no longer uses curl (std.http chokes on the OS redirect)"
+    return "pass", "lowercase query + URL unescape + curl fetch — auto-download lands an SRT"
+
+
 @test("Keyless Subtitle Providers Wired", "Page Shell")
 def test_keyless_subtitle_providers():
     # Auto-subs must work with NO API key via public engines: the legacy
     # rest.opensubtitles.org (movies+TV, gzipped) plus Gestdown/Addic7ed
-    # (api.gestdown.info, TV, direct SRT) as fallback. Non-torrent playback
-    # triggers the keyless engine from the FILE_LOADED handler.
+    # (api.gestdown.info, TV, direct SRT). Gestdown APPENDS its matches to the
+    # merged, source-tagged result list (primary first) instead of only
+    # rescuing an empty primary. Non-torrent playback triggers the keyless
+    # engine from the FILE_LOADED handler.
     eng = open(os.path.join(PROJECT_DIR, "src/player/subtitles.zig")).read()
     player = open(os.path.join(PROJECT_DIR, "src/player/player.zig")).read()
     if "rest.opensubtitles.org" not in eng:
         return "fail", "keyless legacy OpenSubtitles REST provider missing"
-    if "api.gestdown.info" not in eng or "gestdownFallback" not in eng:
-        return "fail", "Gestdown keyless fallback provider missing"
+    if "api.gestdown.info" not in eng or "gestdownAppend" not in eng:
+        return "fail", "Gestdown keyless append provider missing"
+    if "MAX_RESULTS = 15" not in eng:
+        return "fail", "merged result list no longer holds 15 entries"
+    if "source: SubSource" not in eng or "pub fn sourceName" not in eng:
+        return "fail", "results lost their provider source tag"
+    # Engine parses provider JSON through the unit-tested pure module.
+    if "osRestResults" not in eng or "gestdownSubs" not in eng:
+        return "fail", "engine no longer routes parsing through subtitles_pure"
+    # Manual UI entries: query search + per-row worker download.
+    if "pub fn searchQuery" not in eng or "pub fn downloadIndex" not in eng:
+        return "fail", "engine lost its manual searchQuery/downloadIndex entry points"
     if "startSearch(&state.app.sub_engine" not in player or "current_torrent_id < 0" not in player:
         return "fail", "non-torrent playback no longer triggers the keyless engine"
     build = open(os.path.join(PROJECT_DIR, "build.zig")).read()
     if "subtitles_pure.zig" not in build:
         return "fail", "subtitles_pure parser tests unregistered"
-    return "pass", "keyless chain: rest.opensubtitles.org → Gestdown, fired on any playback"
+    return "pass", "keyless chain: rest.opensubtitles.org + Gestdown merged (15 tagged results), fired on any playback"
 
 
 @test("Auto-Download Subtitles On Play", "Page Shell")
@@ -2177,7 +2206,50 @@ def test_auto_download_subs():
         return "fail", "FILE_LOADED no longer auto-triggers the subtitle engine on the toggle"
     if "auto_download_subs" not in cfg:
         return "fail", "auto_download_subs toggle not persisted in config"
+    # The auto path must still chain search → download (manual UI searches
+    # set auto_load=false and wait for a per-row downloadIndex instead).
+    eng = open(os.path.join(PROJECT_DIR, "src/player/subtitles.zig")).read()
+    if "auto_load" not in eng or "engine.auto_load" not in eng:
+        return "fail", "engine lost the auto_load search→download chain flag"
     return "pass", "FILE_LOADED with no sub track auto-fires the keyless engine (toggle-gated)"
+
+
+@test("Sub Picker Lists Keyless Results", "Page Shell")
+def test_sub_picker_keyless_results():
+    # The two browsable subtitle lists (footer Find Subtitles modal + Settings
+    # › Subtitles) must render the KEYLESS engine's merged results — source-
+    # tagged rows with a per-row Download — with no API key required. A key
+    # only APPENDS an opensubtitles.com section; without one the hint is a
+    # subtle one-liner, never a blocking banner.
+    footer = open(os.path.join(PROJECT_DIR, "src/ui/footer.zig")).read()
+    settings = open(os.path.join(PROJECT_DIR, "src/ui/settings.zig")).read()
+    if "pub fn renderSubPicker" not in footer:
+        return "fail", "footer lost renderSubPicker"
+    picker = footer.split("pub fn renderSubPicker")[1].split("\npub fn ")[0]
+    if "state.app.sub_engine" not in picker:
+        return "fail", "footer picker no longer renders the keyless engine results"
+    if "downloadIndex" not in picker:
+        return "fail", "footer picker rows lost the per-row keyless Download"
+    if "sourceName" not in picker:
+        return "fail", "footer picker rows lost their provider source chip"
+    if "loaded_idx" not in picker:
+        return "fail", "footer picker no longer marks the loaded subtitle row"
+    if "opensub_api_key_len > 0" not in picker:
+        return "fail", "keyed opensubtitles.com section is no longer gated on the key"
+    if "for more results" not in picker:
+        return "fail", "no-key hint one-liner missing from the picker"
+    # Footer chip kicks the keyless search when opening the picker.
+    if "searchFromActivePlayer(&state.app.sub_engine)" not in footer:
+        return "fail", "footer Subs chip no longer kicks the keyless search"
+    # Settings list mirrors the same wiring.
+    if "searchQuery(engine" not in settings and "searchQuery(&state.app.sub_engine" not in settings:
+        return "fail", "Settings search no longer routes through the keyless engine"
+    if "sourceName" not in settings or "downloadIndex" not in settings:
+        return "fail", "Settings result rows lost keyless source tags / download"
+    # Language change re-fires the search.
+    if "refire" not in footer or "refire" not in settings:
+        return "fail", "language change no longer re-fires the subtitle search"
+    return "pass", "footer + Settings lists render keyless source-tagged rows; key only appends"
 
 
 @test("SQLite Opened Serialized (Thread-Safe)", "Stability")

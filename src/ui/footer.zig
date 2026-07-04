@@ -260,28 +260,85 @@ pub fn subLanguageDropdown() void {
             if (dvui.menuItemLabel(@src(), lang_names[k], .{}, .{ .id_extra = k, .expand = .horizontal, .color_text = theme.colors.text_primary })) |_| {
                 @memcpy(state.app.sub_lang_buf[0..l.len], l);
                 state.app.sub_lang_len = l.len;
+                // Language changed — re-run the current subtitle search with it.
+                @import("../player/subtitles.zig").refire(&state.app.sub_engine);
             }
         }
     }
 }
 
-/// Quick-access subtitle picker. Triggered from the footer toolbar — one
-/// click kicks off an auto-search and opens a floating modal listing hits.
+/// Small source/language chip — pill outline, small font, quiet color.
+fn subChip(text: []const u8, id_extra: usize) void {
+    var f = dvui.themeGet().font_body;
+    f.size = theme.font_size.small;
+    var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = id_extra,
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .border = dvui.Rect.all(1),
+        .color_border = theme.colors.border_subtle,
+        .corner_radius = dvui.Rect.all(theme.radius.pill),
+        .padding = .{ .x = theme.spacing.sm, .y = 1, .w = theme.spacing.sm, .h = 1 },
+        .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
+        .gravity_y = 0.5,
+    });
+    defer chip.deinit();
+    _ = dvui.label(@src(), "{s}", .{text}, .{
+        .id_extra = id_extra,
+        .color_text = theme.colors.text_secondary,
+        .font = f,
+        .gravity_y = 0.5,
+    });
+}
+
+/// Inline spinner + status label row (ai_chat catalog-rail pattern). Keeps its
+/// own repaint chain alive via dvui.refresh.
+fn subStatusRow(text: []const u8, id_extra: usize) void {
+    var lrow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = id_extra,
+        .expand = .horizontal,
+        .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xs },
+    });
+    defer lrow.deinit();
+    dvui.spinner(@src(), .{
+        .color_text = theme.colors.accent,
+        .min_size_content = .{ .w = 12, .h = 12 },
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+    });
+    _ = dvui.label(@src(), "{s}", .{text}, .{
+        .color_text = theme.colors.text_tertiary,
+        .gravity_y = 0.5,
+    });
+    dvui.refresh(null, @src(), null);
+}
+
+/// Quick-access subtitle finder. The footer chip opens this modal AND kicks a
+/// keyless search (rest.opensubtitles.org + Gestdown/Addic7ed) immediately —
+/// no account needed. When an opensubtitles.com API key is configured, its
+/// results are appended under their own section.
 pub fn renderSubPicker() void {
     if (!state.app.sub_picker_open) return;
-    const subs = @import("../services/subtitles.zig");
+    const subs = @import("../services/subtitles.zig"); // keyed: opensubtitles.com
+    const engine_mod = @import("../player/subtitles.zig"); // keyless engine
+    const engine = &state.app.sub_engine;
+    const auto_subs = @import("../services/auto_subs.zig");
+    const text_mod = @import("../core/text.zig");
+    const has_key = state.app.opensub_api_key_len > 0;
 
     var win = dvui.floatingWindow(@src(), .{
         .modal = true,
         .open_flag = &state.app.sub_picker_open,
     }, .{
-        .min_size_content = .{ .w = 560, .h = 420 },
+        .min_size_content = .{ .w = 600, .h = 460 },
         .color_fill = theme.colors.bg_surface,
+        .border = dvui.Rect.all(1),
+        .color_border = theme.colors.border_subtle,
         .corner_radius = dvui.Rect.all(theme.radius.lg),
     });
     defer win.deinit();
 
-    win.dragAreaSet(dvui.windowHeader("Subtitles", "", &state.app.sub_picker_open));
+    win.dragAreaSet(dvui.windowHeader("Find Subtitles", "", &state.app.sub_picker_open));
 
     var pad = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
@@ -289,160 +346,323 @@ pub fn renderSubPicker() void {
     });
     defer pad.deinit();
 
-    var ctrl_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .horizontal,
-        .margin = .{ .y = theme.spacing.xs },
-    });
+    const engine_busy = engine.state == .searching or engine.state == .downloading;
+
+    // ── Search row: free-text query + one accent action ──
     {
-        defer ctrl_row.deinit();
-        const lang = if (state.app.sub_lang_len > 0) state.app.sub_lang_buf[0..state.app.sub_lang_len] else "eng";
-        var lbl_buf: [32]u8 = undefined;
-        const lbl = std.fmt.bufPrint(&lbl_buf, "Lang: {s}", .{lang}) catch "Lang: eng";
-        _ = dvui.label(@src(), "{s}", .{lbl}, .{
-            .color_text = theme.colors.text_secondary,
-            .gravity_y = 0.5,
-            .margin = .{ .w = theme.spacing.md },
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xs },
         });
+        defer row.deinit();
+
+        var te = dvui.textEntry(@src(), .{
+            .text = .{ .buffer = &state.app.sub_search_buf },
+            .placeholder = "Search a title — e.g. The Boys S01E01",
+        }, .{
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 200, .h = 20 },
+            .color_fill = theme.colors.bg_elevated,
+            .color_border = theme.colors.border_subtle,
+            .color_text = theme.colors.text_primary,
+            .border = dvui.Rect.all(1),
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .gravity_y = 0.5,
+        });
+        const enter = te.enter_pressed;
+        te.deinit();
+
         // Primary action — the single accent affordance in this view.
-        if (dvui.button(@src(), if (subs.is_searching) "Searching…" else "Auto-search", .{}, .{
+        const go = dvui.button(@src(), if (engine_busy) "Searching…" else "Search", .{}, .{
             .color_fill = theme.colors.accent,
             .color_text = theme.colors.text_on_accent,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .gravity_y = 0.5,
-            .margin = .{ .w = theme.spacing.sm },
-        })) {
-            if (!subs.is_searching) subs.autoSearchFromPlayer(false);
+            .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
+        });
+        if ((go or enter) and !engine_busy) {
+            const q_len = std.mem.indexOfScalar(u8, &state.app.sub_search_buf, 0) orelse 0;
+            const lang = if (state.app.sub_lang_len > 0) state.app.sub_lang_buf[0..state.app.sub_lang_len] else "en";
+            if (q_len > 0) {
+                engine_mod.searchQuery(engine, state.app.sub_search_buf[0..q_len]);
+                if (has_key and !subs.is_searching) subs.searchByQuery(state.app.sub_search_buf[0..q_len], lang);
+            } else {
+                engine_mod.searchFromActivePlayer(engine);
+                if (has_key and !subs.is_searching) subs.autoSearchFromPlayer(false);
+            }
         }
 
-        // Secondary action — quiet filled, demoted from accent.
-        const auto_subs = @import("../services/auto_subs.zig");
-        const gen_label = if (auto_subs.in_progress) "Generating…" else "Generate (whisper)";
-        if (dvui.button(@src(), gen_label, .{}, .{
+        // Re-detect from the playing file — quiet secondary.
+        if (dvui.button(@src(), "Auto", .{}, .{
             .color_fill = theme.colors.bg_elevated,
             .color_text = theme.colors.text_secondary,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .gravity_y = 0.5,
+            .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
+        })) {
+            if (!engine_busy) {
+                engine_mod.searchFromActivePlayer(engine);
+                if (has_key and !subs.is_searching) subs.autoSearchFromPlayer(false);
+            }
+        }
+
+        // Whisper generation — last resort, quiet.
+        const gen_label = if (auto_subs.in_progress) "Generating…" else "Whisper";
+        var gen_wd: dvui.WidgetData = undefined;
+        if (dvui.button(@src(), gen_label, .{}, .{
+            .data_out = &gen_wd,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_secondary,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+            .gravity_y = 0.5,
+            .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
         })) {
             if (!auto_subs.in_progress) auto_subs.transcribeCurrent();
         }
+        components.tip(@src(), gen_wd, "Transcribe the audio locally (whisper)");
     }
 
-    if (@import("../services/auto_subs.zig").status_len > 0) {
-        const as_mod = @import("../services/auto_subs.zig");
-        _ = dvui.label(@src(), "{s}", .{as_mod.status_buf[0..as_mod.status_len]}, .{
+    // ── Context line: active query + search language ──
+    {
+        var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xs },
+        });
+        defer meta.deinit();
+        if (engine.query_len > 0) {
+            var q_buf: [160]u8 = undefined;
+            const q_show = text_mod.safeUtf8Buf(engine.query_buf[0..@min(engine.query_len, 120)], &q_buf);
+            var lbl_buf: [176]u8 = undefined;
+            const lbl = std.fmt.bufPrint(&lbl_buf, "Looking for: {s}", .{q_show}) catch "Looking for subtitles";
+            _ = dvui.label(@src(), "{s}", .{lbl}, .{
+                .color_text = theme.colors.text_tertiary,
+                .gravity_y = 0.5,
+            });
+        }
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
+        const lang = if (state.app.sub_lang_len > 0) state.app.sub_lang_buf[0..state.app.sub_lang_len] else "eng";
+        var lang_buf: [24]u8 = undefined;
+        const lang_lbl = std.fmt.bufPrint(&lang_buf, "Language: {s}", .{lang}) catch "Language";
+        _ = dvui.label(@src(), "{s}", .{lang_lbl}, .{
+            .id_extra = 57001,
+            .color_text = theme.colors.text_tertiary,
+            .gravity_y = 0.5,
+        });
+    }
+
+    // ── Live status while any worker runs ── (worker states have no UI wake
+    // of their own — the spinner row's refresh keeps the modal repainting.)
+    if (engine.state == .searching) {
+        subStatusRow("Scouring OpenSubtitles and Addic7ed…", 57010);
+    } else if (engine.state == .downloading) {
+        subStatusRow("Downloading subtitle…", 57011);
+    } else if (subs.is_searching or subs.is_downloading) {
+        subStatusRow("Checking opensubtitles.com…", 57012);
+    } else if (auto_subs.in_progress) {
+        subStatusRow("Transcribing with whisper…", 57013);
+    }
+
+    if (auto_subs.status_len > 0 and !auto_subs.in_progress) {
+        _ = dvui.label(@src(), "{s}", .{auto_subs.status_buf[0..auto_subs.status_len]}, .{
             .color_text = theme.colors.text_secondary,
-            .margin = .{ .y = theme.spacing.xs },
+            .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xs },
         });
     }
 
-    if (subs.search_error_len > 0) {
-        var err_buf: [128]u8 = undefined;
-        const safe_err = @import("../core/text.zig").safeUtf8Buf(subs.search_error[0..subs.search_error_len], &err_buf);
-        _ = dvui.label(@src(), "{s}", .{safe_err}, .{
-            .color_text = theme.colors.warning,
-            .margin = .{ .y = theme.spacing.xs },
-        });
-    }
+    const keyed_count = if (has_key) subs.result_count else 0;
+    const any_busy = engine_busy or subs.is_searching or auto_subs.in_progress;
 
-    // Keep the modal live while a worker runs: "Searching…"/"Generating…"
-    // are worker-written states with no UI wake of their own — under the
-    // gated frame loop they froze until the next mouse move.
-    if (subs.is_searching or @import("../services/auto_subs.zig").in_progress or subs.is_downloading) {
-        dvui.refresh(null, @src(), null);
-    }
-
-    if (subs.result_count == 0 and !subs.is_searching) {
-        _ = dvui.label(@src(), "No results yet. Click Auto-search.", .{}, .{
-            .color_text = theme.colors.text_secondary,
-            .margin = .{ .y = theme.spacing.sm },
-            .gravity_x = 0.5,
-        });
+    // ── Empty state ──
+    if (engine.result_count == 0 and keyed_count == 0 and !any_busy) {
+        if (engine.state == .failed) {
+            components.emptyState(icons.tvg.lucide.captions, "Nothing surfaced", "Try a shorter title, or switch the search language from the globe chip.");
+        } else {
+            components.emptyState(icons.tvg.lucide.captions, "Search the open providers", "No account needed — results come straight from OpenSubtitles and Addic7ed.");
+        }
+        if (!has_key) {
+            _ = dvui.label(@src(), "Add an OpenSubtitles.com key in Settings › Subtitles for more results.", .{}, .{
+                .id_extra = 57020,
+                .color_text = theme.colors.text_tertiary,
+                .gravity_x = 0.5,
+            });
+        }
         return;
     }
 
+    // ── Results ──
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
-        .color_fill = theme.colors.bg_app,
+        .background = false,
     });
     defer scroll.deinit();
 
-    for (0..subs.result_count) |ri| {
-        const r = &subs.results[ri];
-        // Borderless row — separated by fill-tier + spacing, no chrome.
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = ri + 58000,
-            .expand = .horizontal,
-            .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(theme.radius.md),
-            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-            .margin = .{ .y = 2 },
-        });
-        defer row.deinit();
-
-        if (r.lang_len > 0) {
-            var fl_buf: [16]u8 = undefined;
-            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(r.language[0..r.lang_len], &fl_buf)}, .{
-                .id_extra = ri + 58100,
-                .color_text = theme.colors.text_secondary,
-                .gravity_y = 0.5,
-                .margin = .{ .w = theme.spacing.sm },
+    // Keyless results — full experience, no key required.
+    if (engine.result_count > 0) {
+        components.sectionHeader("Open providers");
+        for (0..engine.result_count) |ri| {
+            const r = &engine.results[ri];
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = ri + 58000,
+                .expand = .horizontal,
+                .background = true,
+                .color_fill = theme.colors.bg_elevated,
+                .corner_radius = dvui.Rect.all(theme.radius.md),
+                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
             });
-        }
-        if (r.release_len > 0) {
-            const show_len = @min(r.release_len, 70);
-            // OpenSubtitles release names are untrusted + worker-written; snapshot
-            // + validate a copy so an invalid/mid-codepoint byte can't panic dvui.
-            var rel_buf: [128]u8 = undefined;
-            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(r.release[0..show_len], &rel_buf)}, .{
-                .id_extra = ri + 58200,
+            defer row.deinit();
+
+            // Name — untrusted + worker-written; validate a snapshot so an
+            // invalid/mid-codepoint byte can't panic dvui.
+            var nm_buf: [160]u8 = undefined;
+            _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(r.movie_name[0..@min(r.movie_name_len, 120)], &nm_buf)}, .{
+                .id_extra = ri + 58100,
                 .color_text = theme.colors.text_primary,
                 .gravity_y = 0.5,
                 .expand = .horizontal,
             });
-        }
-        if (r.download_count > 0) {
-            var dc_buf: [16]u8 = undefined;
-            const dc_str = std.fmt.bufPrint(&dc_buf, "{d}", .{r.download_count}) catch "";
-            _ = dvui.icon(@src(), "dl-ic", icons.tvg.lucide.@"arrow-down", .{}, .{
-                .id_extra = ri + 58350,
-                .color_text = theme.colors.text_tertiary,
-                .min_size_content = theme.iconSize(.xs),
-                .max_size_content = .{ .w = 12, .h = 12 },
-                .gravity_y = 0.5,
-            });
-            _ = dvui.label(@src(), "{s}", .{dc_str}, .{
-                .id_extra = ri + 58300,
-                .color_text = theme.colors.text_tertiary,
-                .gravity_y = 0.5,
-                .margin = .{ .w = theme.spacing.xs },
-            });
-        }
-        if (r.hearing_impaired) {
-            _ = dvui.label(@src(), "CC", .{}, .{
-                .id_extra = ri + 58400,
-                .color_text = theme.colors.text_tertiary,
-                .gravity_y = 0.5,
-                .margin = .{ .w = theme.spacing.xs },
-            });
-        }
-        // Per-row load — only the selected primary action carries accent; rows
-        // are secondary here, so use a quiet filled button.
-        if (dvui.button(@src(), if (subs.is_downloading) "…" else "Load", .{}, .{
-            .id_extra = ri + 58500,
-            .color_fill = theme.colors.bg_surface,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-            .gravity_y = 0.5,
-        })) {
-            if (!subs.is_downloading and r.file_id > 0) {
-                subs.downloadSubtitle(r.file_id);
-                state.app.sub_picker_open = false;
+
+            if (r.lang_len > 0) {
+                var fl_buf: [16]u8 = undefined;
+                subChip(text_mod.safeUtf8Buf(r.lang[0..r.lang_len], &fl_buf), ri + 58200);
+            }
+            subChip(engine_mod.sourceName(r.source), ri + 58300);
+
+            if (engine.loaded_idx == @as(i32, @intCast(ri))) {
+                _ = dvui.icon(@src(), "sub-loaded", icons.tvg.lucide.check, .{}, .{
+                    .id_extra = ri + 58450,
+                    .color_text = theme.colors.success,
+                    .min_size_content = theme.iconSize(.xs),
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 2, .h = 0 },
+                });
+                _ = dvui.label(@src(), "Loaded", .{}, .{
+                    .id_extra = ri + 58400,
+                    .color_text = theme.colors.success,
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
+                });
+            } else if (engine.state == .downloading and engine.selected_idx == ri) {
+                dvui.spinner(@src(), .{
+                    .id_extra = ri + 58400,
+                    .color_text = theme.colors.accent,
+                    .min_size_content = .{ .w = 12, .h = 12 },
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.xs, .h = 0 },
+                });
+            } else {
+                if (dvui.button(@src(), "Download", .{}, .{
+                    .id_extra = ri + 58500,
+                    .color_fill = theme.colors.bg_surface,
+                    .color_text = theme.colors.text_primary,
+                    .color_fill_hover = theme.colors.bg_hover,
+                    .corner_radius = dvui.Rect.all(theme.radius.sm),
+                    .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
+                })) {
+                    engine_mod.downloadIndex(engine, ri);
+                }
             }
         }
+    }
+
+    // Keyed results — appended under their own section when a key exists.
+    if (has_key) {
+        if (subs.result_count > 0 or subs.search_error_len > 0) {
+            components.sectionHeader("OpenSubtitles.com");
+        }
+        if (subs.search_error_len > 0 and subs.result_count == 0 and !subs.is_searching) {
+            var err_buf: [128]u8 = undefined;
+            _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(subs.search_error[0..subs.search_error_len], &err_buf)}, .{
+                .id_extra = 57030,
+                .color_text = theme.colors.warning,
+                .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xs },
+            });
+        }
+        for (0..subs.result_count) |ri| {
+            const r = &subs.results[ri];
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = ri + 59000,
+                .expand = .horizontal,
+                .background = true,
+                .color_fill = theme.colors.bg_elevated,
+                .corner_radius = dvui.Rect.all(theme.radius.md),
+                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+            });
+            defer row.deinit();
+
+            if (r.release_len > 0) {
+                var rel_buf: [128]u8 = undefined;
+                _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(r.release[0..@min(r.release_len, 70)], &rel_buf)}, .{
+                    .id_extra = ri + 59100,
+                    .color_text = theme.colors.text_primary,
+                    .gravity_y = 0.5,
+                    .expand = .horizontal,
+                });
+            } else {
+                var sp = dvui.box(@src(), .{}, .{ .id_extra = ri + 59150, .expand = .horizontal });
+                sp.deinit();
+            }
+            if (r.download_count > 0) {
+                var dc_buf: [16]u8 = undefined;
+                const dc_str = std.fmt.bufPrint(&dc_buf, "{d}", .{r.download_count}) catch "";
+                _ = dvui.icon(@src(), "dl-ic", icons.tvg.lucide.@"arrow-down", .{}, .{
+                    .id_extra = ri + 59200,
+                    .color_text = theme.colors.text_tertiary,
+                    .min_size_content = theme.iconSize(.xs),
+                    .max_size_content = .{ .w = 12, .h = 12 },
+                    .gravity_y = 0.5,
+                });
+                _ = dvui.label(@src(), "{s}", .{dc_str}, .{
+                    .id_extra = ri + 59300,
+                    .color_text = theme.colors.text_tertiary,
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
+                });
+            }
+            if (r.hearing_impaired) {
+                _ = dvui.label(@src(), "CC", .{}, .{
+                    .id_extra = ri + 59400,
+                    .color_text = theme.colors.text_tertiary,
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
+                });
+            }
+            if (r.lang_len > 0) {
+                var fl_buf: [16]u8 = undefined;
+                subChip(text_mod.safeUtf8Buf(r.language[0..r.lang_len], &fl_buf), ri + 59500);
+            }
+            subChip("OS.com", ri + 59600);
+            if (dvui.button(@src(), if (subs.is_downloading) "…" else "Download", .{}, .{
+                .id_extra = ri + 59700,
+                .color_fill = theme.colors.bg_surface,
+                .color_text = theme.colors.text_primary,
+                .color_fill_hover = theme.colors.bg_hover,
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                .gravity_y = 0.5,
+                .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
+            })) {
+                if (!subs.is_downloading and r.file_id > 0) {
+                    subs.downloadSubtitle(r.file_id);
+                }
+            }
+        }
+    } else {
+        // Quiet upsell — one line, never blocks the keyless flow.
+        _ = dvui.label(@src(), "Add an OpenSubtitles.com key in Settings › Subtitles for more results.", .{}, .{
+            .id_extra = 57040,
+            .color_text = theme.colors.text_tertiary,
+            .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
+        });
     }
 }
 
@@ -944,7 +1164,9 @@ fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []const u
     var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
         .min_size_content = .{ .w = 320, .h = 240 },
         .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .border = dvui.Rect.all(1),
+        .color_border = theme.colors.border_subtle,
+        .corner_radius = dvui.Rect.all(theme.radius.lg),
     });
     defer fw.deinit();
     fw.dragAreaSet(dvui.windowHeader(title, "", &open));
@@ -960,6 +1182,7 @@ fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []const u
     var count: i64 = 0;
     _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "track-list/count", c.mpv.MPV_FORMAT_INT64, &count);
 
+    var rows_rendered: usize = 0;
     var i: i64 = 0;
     while (i < count) : (i += 1) {
         var tq_buf: [64]u8 = undefined;
@@ -1001,11 +1224,15 @@ fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []const u
             }
         }
 
+        rows_rendered += 1;
         if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(row_name), .{}, .{
             .id_extra = @as(usize, @intCast(i)),
             .expand = .horizontal,
             .color_fill = if (is_selected) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = if (is_selected) theme.colors.accent else theme.colors.text_primary,
+            // Transparent fills kill dvui's derived hover — set it explicitly.
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
@@ -1019,6 +1246,37 @@ fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []const u
         }
     }
 
+    if (rows_rendered == 0) {
+        _ = dvui.label(@src(), "{s}", .{if (kind == .audio) "No alternate audio tracks in this file." else "No subtitle tracks yet."}, .{
+            .color_text = theme.colors.text_tertiary,
+            .gravity_x = 0.5,
+            .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = theme.spacing.xs },
+        });
+    }
+
+    // Bridge to the online finder — subtitles rarely end at the embedded list.
+    if (kind == .sub) {
+        components.divider();
+        if (dvui.button(@src(), "Find subtitles online…", .{}, .{
+            .id_extra = 990,
+            .expand = .horizontal,
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = theme.colors.accent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+        })) {
+            open_picker = .none;
+            state.app.sub_picker_open = true;
+            @import("../player/subtitles.zig").searchFromActivePlayer(&state.app.sub_engine);
+            if (state.app.opensub_api_key_len > 0) {
+                const subs = @import("../services/subtitles.zig");
+                if (!subs.is_searching) subs.autoSearchFromPlayer(false);
+            }
+        }
+    }
+
     if (!open) open_picker = .none;
 }
 
@@ -1028,7 +1286,9 @@ fn renderLangPickerPopover() void {
     var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
         .min_size_content = .{ .w = 240, .h = 320 },
         .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .border = dvui.Rect.all(1),
+        .color_border = theme.colors.border_subtle,
+        .corner_radius = dvui.Rect.all(theme.radius.lg),
     });
     defer fw.deinit();
     fw.dragAreaSet(dvui.windowHeader("Subtitle Language", "", &open));
@@ -1041,6 +1301,11 @@ fn renderLangPickerPopover() void {
     });
     defer scroll.deinit();
 
+    _ = dvui.label(@src(), "Searches re-run in the language you pick.", .{}, .{
+        .color_text = theme.colors.text_tertiary,
+        .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = theme.spacing.xs },
+    });
+
     const langs = [_][]const u8{ "eng", "spa", "fre", "ger", "por", "ita", "dut", "pol", "rus", "chi", "jpn", "kor", "ara", "hin", "tur" };
     const names = [_][]const u8{ "English", "Spanish", "French", "German", "Portuguese", "Italian", "Dutch", "Polish", "Russian", "Chinese", "Japanese", "Korean", "Arabic", "Hindi", "Turkish" };
     const current = state.app.sub_lang_buf[0..state.app.sub_lang_len];
@@ -1052,12 +1317,18 @@ fn renderLangPickerPopover() void {
             .expand = .horizontal,
             .color_fill = if (is_cur) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = if (is_cur) theme.colors.accent else theme.colors.text_primary,
+            // Transparent fills kill dvui's derived hover — set it explicitly.
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
         })) {
             @memcpy(state.app.sub_lang_buf[0..l.len], l);
             state.app.sub_lang_len = l.len;
+            state.markConfigDirty();
+            // Language changed — re-run the current subtitle search with it.
+            @import("../player/subtitles.zig").refire(&state.app.sub_engine);
             open_picker = .none;
         }
     }
@@ -1565,11 +1836,16 @@ pub fn renderLiquidGlassOverlay() void {
             }
         }
 
-        // Find Subtitles — direct shortcut.
+        // Find Subtitles — direct shortcut. Opens the picker AND kicks the
+        // keyless search immediately (debounced inside the engine); the keyed
+        // opensubtitles.com search joins in only when a key is configured.
         if (pickerIconChip(@src(), 705, icons.tvg.lucide.search, "Subs", false, "Find subtitles online")) {
             state.app.sub_picker_open = true;
-            const subs = @import("../services/subtitles.zig");
-            if (!subs.is_searching) subs.autoSearchFromPlayer(false);
+            @import("../player/subtitles.zig").searchFromActivePlayer(&state.app.sub_engine);
+            if (state.app.opensub_api_key_len > 0) {
+                const subs = @import("../services/subtitles.zig");
+                if (!subs.is_searching) subs.autoSearchFromPlayer(false);
+            }
         }
 
         // Files (torrent multi-file playlist).

@@ -104,6 +104,104 @@ pub fn parse(name_in: []const u8, query_out: []u8, show_out: []u8) Parsed {
     return .{ .query = q, .is_tv = false };
 }
 
+// ── Provider response parsing (pure — slices point into the input JSON) ──
+
+pub const OsRestSub = struct {
+    url: []const u8,
+    name: []const u8,
+};
+
+/// Parse a rest.opensubtitles.org search response: every result contributes a
+/// `SubDownloadLink` plus the `MovieName` that precedes it in the same object.
+/// Returns how many of `out` were filled; slices point into `json`.
+pub fn osRestResults(json: []const u8, out: []OsRestSub) usize {
+    var count: usize = 0;
+    var pos: usize = 0;
+    const dl_key = "\"SubDownloadLink\":\"";
+    const mn_key = "\"MovieName\":\"";
+    while (count < out.len) {
+        const dl_start = std.mem.indexOfPos(u8, json, pos, dl_key) orelse break;
+        const url_start = dl_start + dl_key.len;
+        const url_end = std.mem.indexOfPos(u8, json, url_start, "\"") orelse break;
+
+        var name: []const u8 = "Unknown";
+        const back = if (dl_start > 2000) dl_start - 2000 else 0;
+        if (std.mem.lastIndexOf(u8, json[back..dl_start], mn_key)) |off| {
+            const ns = back + off + mn_key.len;
+            if (std.mem.indexOfPos(u8, json, ns, "\"")) |ne| name = json[ns..ne];
+        }
+
+        if (url_end > url_start) {
+            out[count] = .{ .url = json[url_start..url_end], .name = name };
+            count += 1;
+        }
+        pos = url_end + 1;
+    }
+    return count;
+}
+
+/// Copy `src` into `out`, collapsing the JSON `\/` escape to `/` (the only
+/// escape OpenSubtitles uses in its download URLs). Returns bytes written.
+pub fn unescapeJsonSlashes(src: []const u8, out: []u8) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < src.len and n < out.len) {
+        if (src[i] == '\\' and i + 1 < src.len and src[i + 1] == '/') {
+            out[n] = '/';
+            n += 1;
+            i += 2;
+        } else {
+            out[n] = src[i];
+            n += 1;
+            i += 1;
+        }
+    }
+    return n;
+}
+
+pub const GestSub = struct {
+    uri: []const u8,
+    version: []const u8,
+};
+
+/// Parse a Gestdown `matchingSubtitles` payload: every entry contributes a
+/// `downloadUri` plus the `version` (release tag) that precedes it in the same
+/// object. Returns how many of `out` were filled; slices point into `json`.
+pub fn gestdownSubs(json: []const u8, out: []GestSub) usize {
+    var count: usize = 0;
+    var pos: usize = 0;
+    const du_key = "\"downloadUri\":\"";
+    const v_key = "\"version\":\"";
+    while (count < out.len) {
+        const du_start = std.mem.indexOfPos(u8, json, pos, du_key) orelse break;
+        const us = du_start + du_key.len;
+        const ue = std.mem.indexOfScalarPos(u8, json, us, '"') orelse break;
+
+        var version: []const u8 = "";
+        const back = if (du_start > 400) du_start - 400 else 0;
+        if (std.mem.lastIndexOf(u8, json[back..du_start], v_key)) |off| {
+            const vs = back + off + v_key.len;
+            if (std.mem.indexOfScalarPos(u8, json, vs, '"')) |ve| version = json[vs..ve];
+        }
+
+        if (ue > us and ue - us >= 8) {
+            out[count] = .{ .uri = json[us..ue], .version = version };
+            count += 1;
+        }
+        pos = ue + 1;
+    }
+    return count;
+}
+
+/// First show id (a UUID) in a Gestdown show-search response, or null.
+pub fn gestdownFirstShowId(json: []const u8) ?[]const u8 {
+    const key = "\"id\":\"";
+    const s = (std.mem.indexOf(u8, json, key) orelse return null) + key.len;
+    const e = std.mem.indexOfScalarPos(u8, json, s, '"') orelse return null;
+    if (e - s < 8) return null;
+    return json[s..e];
+}
+
 /// Map an ISO-ish language code to the full English name Gestdown expects.
 /// Falls back to "English" for anything unmapped.
 pub fn langFullName(code: []const u8) []const u8 {
@@ -154,8 +252,74 @@ test "parse handles lowercase sxxeyy and plain names" {
     try std.testing.expectEqualStrings("Some Movie Title", p2.query);
 }
 
+test "unescapeJsonSlashes collapses backslash-slash" {
+    var out: [128]u8 = undefined;
+    const n = unescapeJsonSlashes("https:\\/\\/dl.opensubtitles.org\\/en\\/x.gz", &out);
+    try std.testing.expectEqualStrings("https://dl.opensubtitles.org/en/x.gz", out[0..n]);
+    // plain URLs pass through unchanged
+    const m = unescapeJsonSlashes("https://api.gestdown.info/x", &out);
+    try std.testing.expectEqualStrings("https://api.gestdown.info/x", out[0..m]);
+}
+
 test "langFullName maps codes, defaults English" {
     try std.testing.expectEqualStrings("Spanish", langFullName("es"));
     try std.testing.expectEqualStrings("English", langFullName("eng"));
     try std.testing.expectEqualStrings("English", langFullName("xx"));
+}
+
+test "osRestResults pairs each download link with its movie name" {
+    const json =
+        "[{\"MovieName\":\"Iron Man\",\"SubLanguageID\":\"eng\",\"SubDownloadLink\":\"https://dl.opensubtitles.org/en/download/a.gz\"}," ++
+        "{\"MovieName\":\"Iron Man 2\",\"SubDownloadLink\":\"https://dl.opensubtitles.org/en/download/b.gz\"}]";
+    var out: [12]OsRestSub = undefined;
+    const n = osRestResults(json, &out);
+    try std.testing.expectEqual(@as(usize, 2), n);
+    try std.testing.expectEqualStrings("Iron Man", out[0].name);
+    try std.testing.expectEqualStrings("https://dl.opensubtitles.org/en/download/a.gz", out[0].url);
+    try std.testing.expectEqualStrings("Iron Man 2", out[1].name);
+    try std.testing.expectEqualStrings("https://dl.opensubtitles.org/en/download/b.gz", out[1].url);
+}
+
+test "osRestResults respects out capacity and tolerates missing names" {
+    const json =
+        "[{\"SubDownloadLink\":\"https://dl.opensubtitles.org/x1.gz\"}," ++
+        "{\"SubDownloadLink\":\"https://dl.opensubtitles.org/x2.gz\"}]";
+    var out: [1]OsRestSub = undefined;
+    const n = osRestResults(json, &out);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqualStrings("Unknown", out[0].name);
+}
+
+test "gestdownSubs extracts multiple uri+version pairs" {
+    const json =
+        "{\"matchingSubtitles\":[" ++
+        "{\"subtitleId\":\"s1\",\"version\":\"HDTV.x264-KILLERS\",\"completed\":true,\"downloadUri\":\"/subtitles/download/aaaa-bbbb\",\"language\":\"English\"}," ++
+        "{\"subtitleId\":\"s2\",\"version\":\"WEB-DL\",\"downloadUri\":\"/subtitles/download/cccc-dddd\",\"language\":\"English\"}]}";
+    var out: [3]GestSub = undefined;
+    const n = gestdownSubs(json, &out);
+    try std.testing.expectEqual(@as(usize, 2), n);
+    try std.testing.expectEqualStrings("/subtitles/download/aaaa-bbbb", out[0].uri);
+    try std.testing.expectEqualStrings("HDTV.x264-KILLERS", out[0].version);
+    try std.testing.expectEqualStrings("/subtitles/download/cccc-dddd", out[1].uri);
+    try std.testing.expectEqualStrings("WEB-DL", out[1].version);
+}
+
+test "gestdownSubs skips too-short uris and caps at out.len" {
+    const json =
+        "{\"matchingSubtitles\":[" ++
+        "{\"version\":\"BAD\",\"downloadUri\":\"/x\"}," ++
+        "{\"version\":\"V1\",\"downloadUri\":\"/subtitles/download/1111\"}," ++
+        "{\"version\":\"V2\",\"downloadUri\":\"/subtitles/download/2222\"}]}";
+    var out: [1]GestSub = undefined;
+    const n = gestdownSubs(json, &out);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqualStrings("/subtitles/download/1111", out[0].uri);
+    try std.testing.expectEqualStrings("V1", out[0].version);
+}
+
+test "gestdownFirstShowId finds the first uuid, rejects short ids" {
+    const json = "[{\"id\":\"3e2ff43b-99a9-4a51-8b71-4e5c1a3f0d10\",\"name\":\"The Boys\"}]";
+    try std.testing.expectEqualStrings("3e2ff43b-99a9-4a51-8b71-4e5c1a3f0d10", gestdownFirstShowId(json).?);
+    try std.testing.expect(gestdownFirstShowId("[{\"id\":\"short\"}]") == null);
+    try std.testing.expect(gestdownFirstShowId("[]") == null);
 }

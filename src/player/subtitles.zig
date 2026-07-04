@@ -18,6 +18,26 @@ pub const SubState = enum {
     failed,
 };
 
+/// Which keyless provider produced a result — shown as a chip in the UI.
+pub const SubSource = enum {
+    opensubtitles, // rest.opensubtitles.org (movies + TV)
+    addic7ed, // api.gestdown.info proxy (TV)
+};
+
+pub fn sourceName(s: SubSource) []const u8 {
+    return switch (s) {
+        .opensubtitles => "OpenSubtitles",
+        .addic7ed => "Addic7ed",
+    };
+}
+
+/// Merged result cap: primary provider first, then Gestdown appendings.
+pub const MAX_RESULTS = 15;
+/// How many of the slots the primary provider may fill.
+pub const MAX_PRIMARY = 12;
+/// How many Gestdown (Addic7ed) matches get appended after the primary.
+pub const MAX_GESTDOWN = 3;
+
 pub const SubResult = struct {
     download_url: [512]u8 = undefined,
     download_url_len: usize = 0,
@@ -25,31 +45,45 @@ pub const SubResult = struct {
     movie_name_len: usize = 0,
     lang: [8]u8 = undefined,
     lang_len: usize = 0,
+    source: SubSource = .opensubtitles,
 };
 
 pub const SubtitleEngine = struct {
     state: SubState = .idle,
-    
-    // Search results (up to 5)
-    results: [5]SubResult = undefined,
+
+    // Merged search results — primary provider first, Gestdown appended.
+    results: [MAX_RESULTS]SubResult = undefined,
     result_count: usize = 0,
     selected_idx: usize = 0,
-    
+
     // Downloaded subtitle path
     srt_path: [384]u8 = undefined,
     srt_path_len: usize = 0,
-    
+
     // Background thread handle
     thread: ?std.Thread = null,
-    
+
     // Query used for search
     query_buf: [256]u8 = undefined,
     query_len: usize = 0,
-    
+
+    /// Auto mode (fired on playback start): the search worker chains straight
+    /// into downloading the best (first) match. Manual searches from the UI
+    /// leave this false and list the results for a per-row Download.
+    auto_load: bool = true,
+
+    /// Row index of the sub last handed to mpv, or -1. Lets the UI show a
+    /// "Loaded" marker after the .ready → .idle handoff consumes the state.
+    loaded_idx: i32 = -1,
+
+    /// Wyhash of the last fired query+lang — dedupes the footer chip so
+    /// reopening the picker doesn't re-hit the providers for the same file.
+    last_fire_hash: u64 = 0,
+
     pub fn init() SubtitleEngine {
         return .{};
     }
-    
+
     pub fn reset(self: *SubtitleEngine) void {
         if (self.thread) |t| {
             t.detach();
@@ -60,6 +94,8 @@ pub const SubtitleEngine = struct {
         self.srt_path_len = 0;
         self.thread = null;
         self.query_len = 0;
+        self.auto_load = true;
+        self.loaded_idx = -1;
     }
 };
 
@@ -120,8 +156,14 @@ fn urlEncode(input: []const u8, out: *[512]u8) []const u8 {
         if (ch == ' ') {
             out[oi] = '-';
             oi += 1;
-        } else if ((ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9')) {
+        } else if ((ch >= 'a' and ch <= 'z') or (ch >= '0' and ch <= '9')) {
             out[oi] = ch;
+            oi += 1;
+        } else if (ch >= 'A' and ch <= 'Z') {
+            // rest.opensubtitles.org 302-redirects any uppercase query to a
+            // BROKEN host (https://_/...), so lowercase up front — that path
+            // returns 200 directly. (Also fine for Gestdown's show search.)
+            out[oi] = ch + 32;
             oi += 1;
         }
         // Skip special chars
@@ -129,40 +171,32 @@ fn urlEncode(input: []const u8, out: *[512]u8) []const u8 {
     return out[0..oi];
 }
 
-/// Perform an HTTP GET request using std.http.Client. Pure Zig, no curl.
-/// Returns the response body length written into `response_buf`.
+/// HTTP GET via curl (already a hard dependency, used across the app). We used
+/// std.http.Client here originally, but rest.opensubtitles.org issues a
+/// redirect whose Location Zig's client rejects (error.HttpRedirectLocation-
+/// Invalid) — curl follows it transparently. curl also handles gzip
+/// (--compressed) and HTTP/2, so this is both simpler and more robust.
+/// `extra_headers` carries a User-Agent (passed via -A). Returns the body
+/// slice inside `response_buf`.
 fn httpGet(url_str: []const u8, extra_headers: []const std.http.Header, response_buf: []u8) ![]const u8 {
-    var client = std.http.Client{ .allocator = @import("../core/alloc.zig").allocator , .io = @import("../core/io_global.zig").io() };
-    defer client.deinit();
-    
-    const uri = std.Uri.parse(url_str) catch return error.HttpFailed;
-    
-    var req = client.request(.GET, uri, .{
-        .redirect_behavior = @enumFromInt(3),
-        .extra_headers = extra_headers,
-    }) catch return error.HttpFailed;
-    defer req.deinit();
-    
-    req.sendBodiless() catch return error.HttpFailed;
-    
-    var redirect_buf: [8 * 1024]u8 = undefined;
-    var response = req.receiveHead(&redirect_buf) catch return error.HttpFailed;
-    
-    if (response.head.status != .ok) {
-        return error.HttpBadStatus;
+    const alloc = @import("../core/alloc.zig").allocator;
+    const io = @import("../core/io_global.zig");
+    var ua: []const u8 = "Opal/1.0";
+    for (extra_headers) |h| {
+        if (std.ascii.eqlIgnoreCase(h.name, "User-Agent")) ua = h.value;
     }
-    
-    // Read body using allocRemaining
-    var transfer_buf: [16 * 1024]u8 = undefined;
-    const reader = response.reader(&transfer_buf);
-    
-    const body = reader.allocRemaining(@import("../core/alloc.zig").allocator, std.Io.Limit.limited(response_buf.len)) catch return error.HttpFailed;
-    defer @import("../core/alloc.zig").allocator.free(body);
-    
-    if (body.len > response_buf.len) return error.HttpFailed;
-    @memcpy(response_buf[0..body.len], body);
-    
-    return response_buf[0..body.len];
+    var child = io.Child.init(&.{
+        "curl", "-s", "-L", "--compressed", "--max-time", "20",
+        "-A", ua, url_str,
+    }, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return error.HttpFailed;
+    var n: usize = 0;
+    if (child.stdout) |*so| n = io.readAll(so, response_buf) catch 0;
+    _ = child.wait() catch {};
+    if (n == 0) return error.HttpFailed;
+    return response_buf[0..n];
 }
 
 /// Background thread: search OpenSubtitles REST API (pure Zig, no curl)
@@ -200,63 +234,48 @@ fn searchThread(engine: *SubtitleEngine) void {
         return;
     }
     
-    // Parse JSON manually — find SubDownloadLink and MovieName entries
+    // Parse via the pure (unit-tested) extractor — primary provider first.
+    const sp = @import("../services/subtitles_pure.zig");
+    var primary: [MAX_PRIMARY]sp.OsRestSub = undefined;
+    const primary_n = sp.osRestResults(json_data, &primary);
+
     var count: usize = 0;
-    var pos: usize = 0;
-    
-    while (count < 5 and pos < json_data.len) {
-        // Find next SubDownloadLink
-        const dl_key = "\"SubDownloadLink\":\"";
-        const dl_start = std.mem.indexOfPos(u8, json_data, pos, dl_key) orelse break;
-        const url_start = dl_start + dl_key.len;
-        const url_end = std.mem.indexOfPos(u8, json_data, url_start, "\"") orelse break;
-        const sub_url = json_data[url_start..url_end];
-        
-        // Find MovieName near this position
-        var movie_name: []const u8 = "Unknown";
-        const mn_key = "\"MovieName\":\"";
-        const search_start = if (dl_start > 2000) dl_start - 2000 else 0;
-        const mn_search = json_data[search_start..dl_start];
-        if (std.mem.lastIndexOf(u8, mn_search, mn_key)) |mn_offset| {
-            const mn_start = search_start + mn_offset + mn_key.len;
-            if (std.mem.indexOfPos(u8, json_data, mn_start, "\"")) |mn_end| {
-                movie_name = json_data[mn_start..mn_end];
-            }
-        }
-        
-        // Store result
+    for (primary[0..primary_n]) |ps| {
         var r = &engine.results[count];
-        const u_len = @min(sub_url.len, r.download_url.len);
-        @memcpy(r.download_url[0..u_len], sub_url[0..u_len]);
-        r.download_url_len = u_len;
-        
-        const m_len = @min(movie_name.len, r.movie_name.len);
-        @memcpy(r.movie_name[0..m_len], movie_name[0..m_len]);
+        // OpenSubtitles JSON escapes every slash as \/, so the raw URL is
+        // "https:\/\/dl.opensubtitles.org\/..." — std.Uri.parse rejects the
+        // backslashes and the download silently fails. Unescape on the way in.
+        r.download_url_len = sp.unescapeJsonSlashes(ps.url, &r.download_url);
+
+        const m_len = @min(ps.name.len, r.movie_name.len);
+        @memcpy(r.movie_name[0..m_len], ps.name[0..m_len]);
         r.movie_name_len = m_len;
-        
-        @memcpy(r.lang[0..lang.len], lang);
-        r.lang_len = lang.len;
-        
+
+        const l_len = @min(lang.len, r.lang.len);
+        @memcpy(r.lang[0..l_len], lang[0..l_len]);
+        r.lang_len = l_len;
+        r.source = .opensubtitles;
         count += 1;
-        pos = url_end + 1;
     }
-    
+
+    // Second keyless provider (Addic7ed via Gestdown) — APPENDS its TV matches
+    // to the merged list rather than only rescuing an empty primary.
+    count = gestdownAppend(engine, count);
+
     engine.result_count = count;
-    
+
     if (count > 0) {
-        engine.state = .found;
         var log_buf: [128]u8 = undefined;
         const msg = std.fmt.bufPrintZ(&log_buf, "Found {d} subtitles", .{count}) catch "Found subtitles";
         logs.pushLog("info", "subs", msg, false);
-        
-        // Auto-download the first result
-        // NOTE: Download runs synchronously on the search thread (intentional —
-        // avoids an extra thread spawn and the search→download transition is seamless).
-        downloadThread(engine);
-    } else if (gestdownFallback(engine)) {
-        // Second keyless provider (Addic7ed via Gestdown) found a TV match.
         engine.state = .found;
-        downloadThread(engine);
+
+        if (engine.auto_load) {
+            // Auto mode (playback start): grab the best match — primary
+            // provider first. Runs synchronously on the search thread
+            // (intentional — avoids an extra spawn; the transition is seamless).
+            downloadThread(engine);
+        }
     } else {
         engine.state = .failed;
         logs.pushLog("warn", "subs", "No subtitles found (keyless providers)", true);
@@ -264,54 +283,61 @@ fn searchThread(engine: *SubtitleEngine) void {
 }
 
 /// Keyless provider #2: Gestdown (api.gestdown.info, an Addic7ed proxy) for TV
-/// episodes. Returns true and fills engine.results[0] with a direct .srt URL
-/// when a match is found. No key, no gzip. Runs on the search thread.
-fn gestdownFallback(engine: *SubtitleEngine) bool {
+/// episodes. Appends up to MAX_GESTDOWN direct-SRT matches after `base` and
+/// returns the new result count. No key, no gzip. Runs on the search thread.
+fn gestdownAppend(engine: *SubtitleEngine, base: usize) usize {
+    if (base >= engine.results.len) return base;
     const sp = @import("../services/subtitles_pure.zig");
     var q_buf: [256]u8 = undefined;
     var show_buf: [256]u8 = undefined;
     const p = sp.parse(engine.query_buf[0..engine.query_len], &q_buf, &show_buf);
-    if (!p.is_tv or p.show.len == 0) return false;
+    if (!p.is_tv or p.show.len == 0) return base;
 
     const headers = [_]std.http.Header{.{ .name = "User-Agent", .value = "Opal/1.0" }};
     var enc: [512]u8 = undefined;
 
     // 1) show search → first show id (a UUID)
     var url1: [768]u8 = undefined;
-    const su = std.fmt.bufPrintZ(&url1, "https://api.gestdown.info/shows/search/{s}", .{urlEncode(p.show, &enc)}) catch return false;
+    const su = std.fmt.bufPrintZ(&url1, "https://api.gestdown.info/shows/search/{s}", .{urlEncode(p.show, &enc)}) catch return base;
     var buf1: [16 * 1024]u8 = undefined;
-    const j1 = httpGet(su, &headers, &buf1) catch return false;
-    const id_key = "\"id\":\"";
-    const id_s = (std.mem.indexOf(u8, j1, id_key) orelse return false) + id_key.len;
-    const id_e = std.mem.indexOfScalarPos(u8, j1, id_s, '"') orelse return false;
-    const show_id = j1[id_s..id_e];
-    if (show_id.len < 8) return false;
+    const j1 = httpGet(su, &headers, &buf1) catch return base;
+    const show_id = sp.gestdownFirstShowId(j1) orelse return base;
 
-    // 2) episode subtitles → first downloadUri
-    const lang_name = sp.langFullName(state.app.sub_lang_buf[0..state.app.sub_lang_len]);
+    // 2) episode subtitles → downloadUri + version per match
+    const lang_code = state.app.sub_lang_buf[0..state.app.sub_lang_len];
+    const lang_name = sp.langFullName(lang_code);
     var url2: [768]u8 = undefined;
-    const gu = std.fmt.bufPrintZ(&url2, "https://api.gestdown.info/subtitles/get/{s}/{d}/{d}/{s}", .{ show_id, p.season, p.episode, lang_name }) catch return false;
+    const gu = std.fmt.bufPrintZ(&url2, "https://api.gestdown.info/subtitles/get/{s}/{d}/{d}/{s}", .{ show_id, p.season, p.episode, lang_name }) catch return base;
     var buf2: [32 * 1024]u8 = undefined;
-    const j2 = httpGet(gu, &headers, &buf2) catch return false;
-    const du_key = "\"downloadUri\":\"";
-    const du_s = (std.mem.indexOf(u8, j2, du_key) orelse return false) + du_key.len;
-    const du_e = std.mem.indexOfScalarPos(u8, j2, du_s, '"') orelse return false;
-    const uri = j2[du_s..du_e]; // e.g. "/subtitles/download/<uuid>"
-    if (uri.len < 8) return false;
+    const j2 = httpGet(gu, &headers, &buf2) catch return base;
 
-    var r = &engine.results[0];
-    const full = std.fmt.bufPrint(&r.download_url, "https://api.gestdown.info{s}", .{uri}) catch return false;
-    r.download_url_len = full.len;
-    const mlen = @min(p.show.len, r.movie_name.len);
-    @memcpy(r.movie_name[0..mlen], p.show[0..mlen]);
-    r.movie_name_len = mlen;
-    const llen = @min(lang_name.len, r.lang.len);
-    @memcpy(r.lang[0..llen], lang_name[0..llen]);
-    r.lang_len = llen;
-    engine.result_count = 1;
-    engine.selected_idx = 0;
-    logs.pushLog("info", "subs", "Found subtitle via Gestdown (Addic7ed)", false);
-    return true;
+    var subs: [MAX_GESTDOWN]sp.GestSub = undefined;
+    const room = @min(subs.len, engine.results.len - base);
+    const n = sp.gestdownSubs(j2, subs[0..room]);
+    if (n == 0) return base;
+
+    var filled: usize = 0;
+    for (subs[0..n]) |gs| {
+        var r = &engine.results[base + filled];
+        const full = std.fmt.bufPrint(&r.download_url, "https://api.gestdown.info{s}", .{gs.uri}) catch continue;
+        r.download_url_len = full.len;
+
+        // Row name: "Show SxxEyy · Version" (version omitted when absent).
+        const name = if (gs.version.len > 0)
+            std.fmt.bufPrint(&r.movie_name, "{s} S{d:0>2}E{d:0>2} \xC2\xB7 {s}", .{ p.show, p.season, p.episode, gs.version }) catch
+                std.fmt.bufPrint(&r.movie_name, "{s}", .{p.show}) catch continue
+        else
+            std.fmt.bufPrint(&r.movie_name, "{s} S{d:0>2}E{d:0>2}", .{ p.show, p.season, p.episode }) catch continue;
+        r.movie_name_len = name.len;
+
+        const llen = @min(lang_code.len, r.lang.len);
+        @memcpy(r.lang[0..llen], lang_code[0..llen]);
+        r.lang_len = llen;
+        r.source = .addic7ed;
+        filled += 1;
+    }
+    if (filled > 0) logs.pushLog("info", "subs", "Gestdown (Addic7ed) matches merged", false);
+    return base + filled;
 }
 
 /// Download the selected subtitle (pure Zig HTTP + gzip decompress)
@@ -405,22 +431,25 @@ fn downloadThread(engine: *SubtitleEngine) void {
 
 // ── Public API ──
 
-/// Start a subtitle search in the background.
-pub fn startSearch(engine: *SubtitleEngine, torrent_name: []const u8) void {
+/// Common search-spawn body. `auto_load` = chain straight into downloading the
+/// best match (playback-start auto path) vs. list results for a manual pick.
+fn fire(engine: *SubtitleEngine, raw_name: []const u8, auto_load: bool) void {
     if (engine.state == .searching or engine.state == .downloading) return;
-    
+
     engine.reset();
-    
+
     var clean_buf: [256]u8 = undefined;
-    const clean = cleanTorrentName(torrent_name, &clean_buf);
+    const clean = cleanTorrentName(raw_name, &clean_buf);
     if (clean.len == 0) return;
-    
+
     const copy_len = @min(clean.len, engine.query_buf.len);
     @memcpy(engine.query_buf[0..copy_len], clean[0..copy_len]);
     engine.query_len = copy_len;
-    
+    engine.auto_load = auto_load;
+    engine.last_fire_hash = fireHash(clean);
+
     engine.state = .searching;
-    
+
     engine.thread = std.Thread.spawn(.{}, searchThread, .{engine}) catch {
         engine.state = .failed;
         logs.pushLog("error", "subs", "Failed to spawn search thread", true);
@@ -428,13 +457,105 @@ pub fn startSearch(engine: *SubtitleEngine, torrent_name: []const u8) void {
     };
 }
 
+/// Wyhash of query+language — the double-fire guard key.
+fn fireHash(clean_query: []const u8) u64 {
+    var h = std.hash.Wyhash.init(0);
+    h.update(clean_query);
+    h.update(state.app.sub_lang_buf[0..state.app.sub_lang_len]);
+    return h.final();
+}
+
+/// Start an automatic subtitle search in the background (playback start):
+/// downloads the best match as soon as the search lands.
+pub fn startSearch(engine: *SubtitleEngine, torrent_name: []const u8) void {
+    fire(engine, torrent_name, true);
+}
+
+/// Manual search from the UI (footer picker / Settings): lists merged,
+/// source-tagged results; nothing downloads until downloadIndex is called.
+pub fn searchQuery(engine: *SubtitleEngine, query: []const u8) void {
+    fire(engine, query, false);
+}
+
+/// Manual search seeded from the active player's media title (or the URL
+/// basename). Debounced: if the same query+language already has results
+/// listed, the existing list is kept instead of re-hitting the providers —
+/// the footer chip calls this every time the picker opens.
+pub fn searchFromActivePlayer(engine: *SubtitleEngine) void {
+    if (engine.state == .searching or engine.state == .downloading) return;
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
+    const p = state.app.players.items[state.app.active_player_idx];
+
+    var title_buf: [256]u8 = undefined;
+    var qname: []const u8 = "";
+    const tc = c.mpv.mpv_get_property_string(p.mpv_ctx, "media-title");
+    if (tc != null) {
+        const ts = std.mem.span(tc);
+        if (ts.len > 0 and !std.mem.eql(u8, ts, "No file") and !std.mem.eql(u8, ts, "stream")) {
+            const n = @min(ts.len, title_buf.len);
+            @memcpy(title_buf[0..n], ts[0..n]);
+            qname = title_buf[0..n];
+        }
+        c.mpv.mpv_free(@ptrCast(tc));
+    }
+    if (qname.len == 0 and p.current_url_len > 0 and p.current_url_len <= p.current_url.len) {
+        const url = p.current_url[0..p.current_url_len];
+        const base_end = std.mem.indexOfScalar(u8, url, '?') orelse url.len;
+        const path = url[0..base_end];
+        qname = if (std.mem.lastIndexOfScalar(u8, path, '/')) |ix|
+            (if (ix + 1 < path.len) path[ix + 1 ..] else path)
+        else
+            path;
+    }
+    if (qname.len == 0) return;
+
+    // Double-fire guard: same query+lang with a live result list → keep it.
+    var clean_buf: [256]u8 = undefined;
+    const clean = cleanTorrentName(qname, &clean_buf);
+    if (clean.len == 0) return;
+    if (fireHash(clean) == engine.last_fire_hash and engine.result_count > 0 and engine.state != .failed) return;
+
+    fire(engine, qname, false);
+}
+
+/// Re-run the current query (e.g. after the search language changed). No-ops
+/// when nothing was searched yet or a worker is busy.
+pub fn refire(engine: *SubtitleEngine) void {
+    if (engine.query_len == 0) return;
+    if (engine.state == .searching or engine.state == .downloading) return;
+    var q_buf: [256]u8 = undefined;
+    const n = @min(engine.query_len, q_buf.len);
+    @memcpy(q_buf[0..n], engine.query_buf[0..n]);
+    fire(engine, q_buf[0..n], false);
+}
+
+/// Download result `idx` on a worker thread. On completion the engine state
+/// flips to .ready and the player poll sub-adds it via loadIntoMpv (that
+/// poll-side contract is unchanged).
+pub fn downloadIndex(engine: *SubtitleEngine, idx: usize) void {
+    if (engine.state == .searching or engine.state == .downloading) return;
+    if (idx >= engine.result_count) return;
+
+    engine.selected_idx = idx;
+    engine.state = .downloading;
+
+    if (engine.thread) |t| t.detach();
+    engine.thread = std.Thread.spawn(.{}, downloadThread, .{engine}) catch {
+        engine.state = .failed;
+        logs.pushLog("error", "subs", "Failed to spawn download thread", true);
+        return;
+    };
+}
+
 /// Load the downloaded subtitle into mpv.
 pub fn loadIntoMpv(engine: *SubtitleEngine, mpv_ctx: *c.mpv.mpv_handle) void {
     if (engine.state != .ready) return;
-    
+
     const path = engine.srt_path[0..engine.srt_path_len];
     var cmd_buf: [512]u8 = undefined;
     const cmd = std.fmt.bufPrintZ(&cmd_buf, "sub-add \"{s}\"", .{path}) catch return;
     _ = c.mpv.mpv_command_string(mpv_ctx, cmd.ptr);
+    engine.loaded_idx = @intCast(@min(engine.selected_idx, std.math.maxInt(i32)));
+    state.showToast("Subtitle loaded");
     logs.pushLog("info", "subs", "Subtitle loaded into player", false);
 }

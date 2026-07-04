@@ -1666,41 +1666,19 @@ fn renderNetworkTab() void {
 }
 
 fn renderSubtitlesTab() void {
-    // Auto-download toggle — governs the on-play OpenSubtitles fetch.
+    const engine_mod = @import("../player/subtitles.zig");
+    const engine = &state.app.sub_engine;
+    const has_key = state.app.opensub_api_key_len > 0;
+
+    // Auto-download toggle — governs the on-play keyless fetch.
     {
         const before = state.app.auto_download_subs;
-        components.toggleRow(@src(), "Auto-download subtitles", "Fetch the best match when a video has none (needs an API key below)", &state.app.auto_download_subs);
+        components.toggleRow(@src(), "Auto-download subtitles", "Fetch the best match when a video has none — works without any key", &state.app.auto_download_subs);
         if (state.app.auto_download_subs != before) state.markConfigDirty();
     }
 
-    // ── First-run hint when API key is missing ── (plain text, no banner)
-    if (state.app.opensub_api_key_len == 0) {
-        var banner = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal,
-            .margin = .{ .x = 0, .y = 4, .w = 0, .h = theme.spacing.md },
-        });
-        defer banner.deinit();
-        _ = dvui.label(@src(), "Set up OpenSubtitles to unlock subtitle search", .{}, .{
-            .id_extra = 4190,
-            .color_text = theme.colors.text_primary,
-        });
-        _ = dvui.label(@src(), "1. Go to opensubtitles.com and create a free account", .{}, .{
-            .id_extra = 4191,
-            .color_text = theme.colors.text_secondary,
-            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
-        });
-        _ = dvui.label(@src(), "2. Navigate to Profile → API Consumers → Create", .{}, .{
-            .id_extra = 4192,
-            .color_text = theme.colors.text_secondary,
-        });
-        _ = dvui.label(@src(), "3. Paste the API key in the field below", .{}, .{
-            .id_extra = 4193,
-            .color_text = theme.colors.text_secondary,
-        });
-    }
-
-    // ── OpenSubtitles API Key ──
-    settingRow("OpenSubtitles API Key", 42, @src());
+    // ── OpenSubtitles API Key ── (optional — keyless search works without it)
+    settingRow("OpenSubtitles.com API Key", 42, @src());
     {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
@@ -1708,7 +1686,7 @@ fn renderSubtitlesTab() void {
         });
         defer row.deinit();
 
-        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.opensub_api_key }, .placeholder = "Paste API key from opensubtitles.com", .password_char = "•" }, .{
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.opensub_api_key }, .placeholder = "Optional — paste API key from opensubtitles.com", .password_char = "•" }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 250, .h = 20 },
             .color_fill = theme.colors.bg_elevated,
@@ -1722,7 +1700,11 @@ fn renderSubtitlesTab() void {
         state.app.opensub_api_key_len = std.mem.indexOfScalar(u8, &state.app.opensub_api_key, 0) orelse 0;
         if (opensub_changed) state.markConfigDirty();
     }
-    _ = dvui.label(@src(), "Get free key: opensubtitles.com → Profile → API Consumers", .{}, .{
+    // Quiet one-liner — search works keyless out of the box; a key only ADDS.
+    _ = dvui.label(@src(), "{s}", .{if (has_key)
+        "Key set — opensubtitles.com results join the keyless providers."
+    else
+        "Add an OpenSubtitles.com key for more results (opensubtitles.com → Profile → API Consumers)."}, .{
         .id_extra = 4200,
         .color_text = theme.colors.text_tertiary,
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 8 },
@@ -1746,13 +1728,16 @@ fn renderSubtitlesTab() void {
             @memcpy(state.app.sub_lang_buf[0..l.len], l);
             state.app.sub_lang_len = l.len;
             state.markConfigDirty();
+            // Language changed — re-run the current subtitle search with it.
+            engine_mod.refire(engine);
         }
     }
 
-    // ── Search Subtitles ──
+    // ── Search Subtitles ── (keyless engine first; keyed joins when set)
     settingRow("Search Subtitles", 43, @src());
     {
         const subs = @import("../services/subtitles.zig");
+        const engine_busy = engine.state == .searching or engine.state == .downloading;
 
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
@@ -1773,7 +1758,7 @@ fn renderSubtitlesTab() void {
         te.deinit();
 
         // Search button — primary affordance.
-        const search_clicked = dvui.button(@src(), if (subs.is_searching) "..." else "Search", .{}, .{
+        const search_clicked = dvui.button(@src(), if (engine_busy) "..." else "Search", .{}, .{
             .id_extra = 4301,
             .color_fill = theme.colors.accent,
             .color_text = theme.colors.text_on_accent,
@@ -1788,60 +1773,173 @@ fn renderSubtitlesTab() void {
             .id_extra = 4302,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = theme.colors.text_secondary,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .border = dvui.Rect.all(0),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
             .corner_radius = theme.dims.rad_md,
         })) {
-            subs.autoSearchFromPlayer(false);
+            engine_mod.searchFromActivePlayer(engine);
+            if (has_key and !subs.is_searching) subs.autoSearchFromPlayer(false);
         }
 
-        if ((search_clicked or enter) and !subs.is_searching) {
+        if ((search_clicked or enter) and !engine_busy) {
             const q_len = std.mem.indexOfScalar(u8, &state.app.sub_search_buf, 0) orelse 0;
             if (q_len > 0) {
-                const lang = if (state.app.sub_lang_len > 0) state.app.sub_lang_buf[0..state.app.sub_lang_len] else "en";
-                subs.searchByQuery(state.app.sub_search_buf[0..q_len], lang);
+                engine_mod.searchQuery(engine, state.app.sub_search_buf[0..q_len]);
+                if (has_key and !subs.is_searching) {
+                    const lang = if (state.app.sub_lang_len > 0) state.app.sub_lang_buf[0..state.app.sub_lang_len] else "en";
+                    subs.searchByQuery(state.app.sub_search_buf[0..q_len], lang);
+                }
             }
         }
     }
 
-    // ── Results ──
+    // ── Results — keyless engine first, keyed section appended ──
     {
         const subs = @import("../services/subtitles.zig");
+        const text_mod = @import("../core/text.zig");
 
-        if (subs.search_error_len > 0) {
-            var err_buf: [128]u8 = undefined;
-            const safe_err = @import("../core/text.zig").safeUtf8Buf(subs.search_error[0..subs.search_error_len], &err_buf);
-            _ = dvui.label(@src(), "{s}", .{safe_err}, .{
-                .id_extra = 4400,
-                .color_text = theme.colors.warning,
-                .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
-            });
-        }
-
-        if (subs.is_searching) {
-            _ = dvui.label(@src(), "Searching...", .{}, .{
+        // Live status while a worker runs (worker states have no UI wake of
+        // their own — the spinner keeps the tab repainting).
+        if (engine.state == .searching or engine.state == .downloading or subs.is_searching or subs.is_downloading) {
+            var lrow = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = 4401,
-                .color_text = theme.colors.text_secondary,
+                .expand = .horizontal,
                 .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
             });
+            defer lrow.deinit();
+            dvui.spinner(@src(), .{
+                .color_text = theme.colors.accent,
+                .min_size_content = .{ .w = 12, .h = 12 },
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+            });
+            _ = dvui.label(@src(), "{s}", .{switch (engine.state) {
+                .searching => "Scouring OpenSubtitles and Addic7ed…",
+                .downloading => "Downloading subtitle…",
+                else => "Checking opensubtitles.com…",
+            }}, .{
+                .color_text = theme.colors.text_tertiary,
+                .gravity_y = 0.5,
+            });
+            dvui.refresh(null, @src(), null);
         }
 
-        if (subs.result_count > 0) {
-            var count_buf: [32]u8 = undefined;
-            const count_str = std.fmt.bufPrintZ(&count_buf, "{d} results", .{subs.result_count}) catch "results";
+        // Keyless rows — source-tagged; no key required.
+        if (engine.result_count > 0) {
+            var count_buf: [48]u8 = undefined;
+            const count_str = std.fmt.bufPrintZ(&count_buf, "{d} results \xC2\xB7 open providers", .{engine.result_count}) catch "results";
             _ = dvui.label(@src(), "{s}", .{count_str}, .{
                 .id_extra = 4402,
                 .color_text = theme.colors.text_tertiary,
                 .margin = .{ .x = 0, .y = 6, .w = 0, .h = 2 },
             });
 
+            for (0..engine.result_count) |ri| {
+                const r = &engine.results[ri];
+                var res_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                    .id_extra = ri + 4500,
+                    .expand = .horizontal,
+                    .background = true,
+                    .color_fill = theme.colors.bg_surface,
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
+                    .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+                });
+                defer res_row.deinit();
+
+                // Untrusted + worker-written: validate a copy before dvui
+                // draws it (invalid UTF-8 panics the whole app).
+                var nm_buf: [128]u8 = undefined;
+                _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(r.movie_name[0..@min(r.movie_name_len, 90)], &nm_buf)}, .{
+                    .id_extra = ri + 4600,
+                    .color_text = theme.colors.text_primary,
+                    .gravity_y = 0.5,
+                    .expand = .horizontal,
+                });
+
+                // Language + source — quiet metadata chips.
+                if (r.lang_len > 0) {
+                    var lb: [16]u8 = undefined;
+                    _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(r.lang[0..r.lang_len], &lb)}, .{
+                        .id_extra = ri + 4700,
+                        .color_text = theme.colors.text_secondary,
+                        .gravity_y = 0.5,
+                        .margin = .{ .x = 6, .y = 0, .w = 4, .h = 0 },
+                    });
+                }
+                _ = dvui.label(@src(), "{s}", .{engine_mod.sourceName(r.source)}, .{
+                    .id_extra = ri + 4800,
+                    .color_text = theme.colors.text_tertiary,
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = 2, .y = 0, .w = 6, .h = 0 },
+                });
+
+                if (engine.loaded_idx == @as(i32, @intCast(ri))) {
+                    _ = dvui.icon(@src(), "sub-loaded", icons.tvg.lucide.check, .{}, .{
+                        .id_extra = ri + 4950,
+                        .color_text = theme.colors.success,
+                        .min_size_content = theme.iconSize(.xs),
+                        .gravity_y = 0.5,
+                        .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+                    });
+                    _ = dvui.label(@src(), "Loaded", .{}, .{
+                        .id_extra = ri + 4900,
+                        .color_text = theme.colors.success,
+                        .gravity_y = 0.5,
+                    });
+                } else if (engine.state == .downloading and engine.selected_idx == ri) {
+                    dvui.spinner(@src(), .{
+                        .id_extra = ri + 4900,
+                        .color_text = theme.colors.accent,
+                        .min_size_content = .{ .w = 12, .h = 12 },
+                        .gravity_y = 0.5,
+                    });
+                } else {
+                    // Download — accent, the single primary action per row.
+                    if (dvui.button(@src(), "Get", .{}, .{
+                        .id_extra = ri + 5000,
+                        .color_fill = theme.colors.accent,
+                        .color_text = theme.colors.text_on_accent,
+                        .border = dvui.Rect.all(0),
+                        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                        .corner_radius = theme.dims.rad_sm,
+                        .gravity_y = 0.5,
+                    })) {
+                        engine_mod.downloadIndex(engine, ri);
+                    }
+                }
+            }
+        } else if (engine.state == .failed) {
+            _ = dvui.label(@src(), "Nothing surfaced from the open providers — try a shorter title or another language.", .{}, .{
+                .id_extra = 4403,
+                .color_text = theme.colors.text_tertiary,
+                .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
+            });
+        }
+
+        // Keyed section — only when a key is configured (no nagging without).
+        if (has_key and (subs.result_count > 0 or (subs.search_error_len > 0 and !subs.is_searching))) {
+            components.sectionHeader("OpenSubtitles.com");
+
+            if (subs.search_error_len > 0 and subs.result_count == 0) {
+                var err_buf: [128]u8 = undefined;
+                const safe_err = text_mod.safeUtf8Buf(subs.search_error[0..subs.search_error_len], &err_buf);
+                _ = dvui.label(@src(), "{s}", .{safe_err}, .{
+                    .id_extra = 4400,
+                    .color_text = theme.colors.warning,
+                    .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
+                });
+            }
+
             for (0..subs.result_count) |ri| {
                 const r = &subs.results[ri];
                 // Calm: a spacing-only row separated by a faint fill tier — no
                 // per-row border. (Encode the boundary once: fill, not border.)
                 var res_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .id_extra = ri + 4500,
+                    .id_extra = ri + 5500,
                     .expand = .horizontal,
                     .background = true,
                     .color_fill = theme.colors.bg_surface,
@@ -1854,8 +1952,8 @@ fn renderSubtitlesTab() void {
                 // Language badge — demoted to secondary text (not accent).
                 if (r.lang_len > 0) {
                     var lb: [16]u8 = undefined;
-                    _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(r.language[0..r.lang_len], &lb)}, .{
-                        .id_extra = ri + 4600,
+                    _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(r.language[0..r.lang_len], &lb)}, .{
+                        .id_extra = ri + 5600,
                         .color_text = theme.colors.text_secondary,
                         .gravity_y = 0.5,
                         .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
@@ -1865,11 +1963,9 @@ fn renderSubtitlesTab() void {
                 // Release name (truncated)
                 if (r.release_len > 0) {
                     const show_len = @min(r.release_len, 60);
-                    // Untrusted + worker-written: validate a copy before dvui draws
-                    // it (invalid/mid-codepoint UTF-8 panics the whole app).
                     var rel_buf: [96]u8 = undefined;
-                    _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(r.release[0..show_len], &rel_buf)}, .{
-                        .id_extra = ri + 4700,
+                    _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(r.release[0..show_len], &rel_buf)}, .{
+                        .id_extra = ri + 5700,
                         .color_text = theme.colors.text_primary,
                         .gravity_y = 0.5,
                     });
@@ -1885,7 +1981,7 @@ fn renderSubtitlesTab() void {
                     var dc_buf: [16]u8 = undefined;
                     const dc_str = std.fmt.bufPrintZ(&dc_buf, "{d}", .{r.download_count}) catch "";
                     _ = dvui.label(@src(), "{s}", .{dc_str}, .{
-                        .id_extra = ri + 4800,
+                        .id_extra = ri + 5800,
                         .color_text = theme.colors.text_tertiary,
                         .gravity_y = 0.5,
                         .margin = .{ .x = 6, .y = 0, .w = 4, .h = 0 },
@@ -1895,7 +1991,7 @@ fn renderSubtitlesTab() void {
                 // HI badge
                 if (r.hearing_impaired) {
                     _ = dvui.label(@src(), "CC", .{}, .{
-                        .id_extra = ri + 4900,
+                        .id_extra = ri + 5900,
                         .color_text = theme.colors.text_tertiary,
                         .gravity_y = 0.5,
                         .margin = .{ .x = 2, .y = 0, .w = 4, .h = 0 },
@@ -1904,7 +2000,7 @@ fn renderSubtitlesTab() void {
 
                 // Download button — accent, the single primary action per row.
                 if (dvui.button(@src(), if (subs.is_downloading) "..." else "Get", .{}, .{
-                    .id_extra = ri + 5000,
+                    .id_extra = ri + 6000,
                     .color_fill = theme.colors.accent,
                     .color_text = theme.colors.text_on_accent,
                     .border = dvui.Rect.all(0),
@@ -1923,15 +2019,13 @@ fn renderSubtitlesTab() void {
     // ── Auto-download status ──
     settingRow("Auto-Download Status", 41, @src());
     {
-        const sub_state = state.app.sub_engine.state;
-        const subtitles_engine = @import("../player/subtitles.zig");
-        const status_text = switch (sub_state) {
-            subtitles_engine.SubState.idle => "Idle",
-            subtitles_engine.SubState.searching => "Searching...",
-            subtitles_engine.SubState.found => "Found subtitles",
-            subtitles_engine.SubState.downloading => "Downloading...",
-            subtitles_engine.SubState.ready => "Loaded",
-            subtitles_engine.SubState.failed => "Not found",
+        const status_text = switch (engine.state) {
+            .idle => "Idle — fires when a video starts without subtitles",
+            .searching => "Searching…",
+            .found => "Found subtitles",
+            .downloading => "Downloading…",
+            .ready => "Loaded",
+            .failed => "Not found",
         };
         _ = dvui.label(@src(), "{s}", .{status_text}, .{
             .color_text = theme.colors.text_secondary,
