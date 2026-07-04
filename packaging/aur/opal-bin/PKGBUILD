@@ -3,7 +3,7 @@
 # Checksums: run `updpkgsums` (or packaging/aur/push-to-aur.sh) once the
 # release is public.
 pkgname=opal-bin
-pkgver=0.1.1
+pkgver=0.1.2
 pkgrel=1
 pkgdesc="Play everything — media player, universal search, torrent streaming, local AI (official binary)"
 arch=('x86_64')

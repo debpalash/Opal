@@ -2,7 +2,7 @@ class Opal < Formula
   desc "Pure-Zig desktop media browser + AI copilot (dvui + mpv + apfel)"
   homepage "https://github.com/debpalash/Opal"
   url "https://github.com/debpalash/Opal.git",
-      tag: "v0.1.1"
+      tag: "v0.1.2"
   license "GPL-3.0-only"
   head "https://github.com/debpalash/Opal.git", branch: "main"
 
