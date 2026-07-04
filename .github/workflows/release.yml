@@ -1,12 +1,16 @@
 name: Release
 
-# Tag `vX.Y.Z` → build platform artifacts → publish a GitHub Release.
+# Tag `vX.Y.Z` → build platform artifacts → publish a GitHub Release →
+# push `opal` + `opal-bin` PKGBUILDs to AUR.
 #
 # Coverage today:
 #   • macos-arm64    — Opal.app bundle (zip) + bare binary tarball    [primary]
 #   • linux-x86_64   — binary tarball + .deb + .rpm + AppImage + .run [best-effort]
 #   • windows-x86_64 — portable .zip + .msi (MSYS2/MINGW64 build +
 #                      vendored MS onnxruntime; see the job for why)  [experimental]
+#   • aur            — opal (source from release tarball) + opal-bin  [gated]
+#                      (binary tarball repackage); gated on
+#                      AUR_PUBLISH_ENABLED='true' + AUR_SSH_PRIVATE_KEY secret.
 #
 # Not covered: macos-x86_64 (GitHub retired the free Intel runner images —
 # macos-13 queues forever; Intel Mac users build from source, where build.zig
@@ -454,3 +458,24 @@ jobs:
             artifacts/SHA256SUMS.txt
           generate_release_notes: true
           draft: false
+
+  # ── AUR publish ─────────────────────────────────────────────────────────
+  # Auto-updates `opal` (source build from the release tarball) and `opal-bin`
+  # (repackage the official binary tarball) on every vX.Y.Z tag. Skipped until
+  # the `AUR_SSH_PRIVATE_KEY` repo secret is set; this lets the rest of the
+  # release ship even before AUR is wired up.
+  aur:
+    needs: publish
+    runs-on: ubuntu-24.04
+    if: ${{ vars.AUR_PUBLISH_ENABLED == 'true' && secrets.AUR_SSH_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      #pacman-contrib isn't on Ubuntu; we set AUR_SKIP_MAKEPKG=1 since the
+      #separate ci.yml Arch job covers the build-proof.
+      - name: Push PKGBUILDs to AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_USERNAME: ${{ vars.AUR_USERNAME }}
+          AUR_EMAIL: ${{ vars.AUR_EMAIL }}
+          AUR_SKIP_MAKEPKG: "1"
+        run: ./packaging/aur/push-to-aur.sh
