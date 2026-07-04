@@ -1,4 +1,11 @@
-# Maintainer: pal
+# Maintainer: pal <pal@users.noreply.github.com>
+# Opal — packaging name `zigzag` (the compiled binary); AUR search uses `zigzag`.
+#
+# Build from a clean checkout:
+#   makepkg -f                 # local build (uses THIS directory as source)
+# AUR publish:
+#   - bump pkgver, run updpkgsums, push to ssh://aur@aur.archlinux.org/zigzag.git
+
 pkgname=zigzag
 pkgver=0.1.0
 pkgrel=1
@@ -6,6 +13,8 @@ pkgdesc="All-in-one media suite — torrent streaming, video player, manga reade
 arch=('x86_64')
 url="https://github.com/debpalash/Opal"
 license=('MIT')
+
+# ── Runtime deps (must be present to RUN the app) ────────────────────────
 depends=(
     'mpv'
     'sdl2'
@@ -17,47 +26,85 @@ depends=(
     'ffmpeg'
     'yt-dlp'
 )
+# ── Build deps ───────────────────────────────────────────────────────────
 makedepends=(
     'zig>=0.15.2'
     'gcc'
     'git'
 )
+# ── Optional features ────────────────────────────────────────────────────
 optdepends=(
     'streamlink: live stream resolution'
-    'python-camoufox: stealth browser scraping'
-    'onnxruntime: OCR bubble detection'
+    'python-camoufox: stealth browser scraping (pip install camoufox)'
+    'onnxruntime: OCR bubble detection (-Docr=true build flag)'
 )
 provides=('zigzag')
 conflicts=('zigzag')
 
-# For local builds — override with actual git source for AUR publishing
-source=()
-sha256sums=()
+# ── Sources ──────────────────────────────────────────────────────────────
+# For AUR publishing: pull from the release tag/tarball of the project.
+# Local builds: replace source=() with empty and run makepkg from the repo
+# root (so $startdir == repo root).
+_source_remote=(
+    "${pkgname}::git+${url}#tag=v${pkgver}"
+    'dvui-sdl-zig0.16.patch::file://scripts/patches/dvui-sdl-zig0.16.patch'
+)
+# Auto-detect: empty source=() means "build from local directory" (startdir
+# layout). When publishing to AUR, swap to _source_remote.
+if [[ -f "src/main.zig" ]]; then
+    source=()
+    sha256sums=()
+else
+    source=("${_source_remote[@]}")
+    # sha256sums filled in by `updpkgsums` / `makepkg -g`
+    sha256sums=('SKIP' 'SKIP')
+fi
 
-# ── Build from local source (for local installs) ──
-# When publishing to AUR, replace this with proper git source
+# ── Prepare: apply Zig 0.16 / dvui compat patch to the vendored dependency
+# This runs AFTER `zig build` has fetched the dvui dep into zig-pkg/, AND on
+# fresh source. We do the fetch lazily in build() below and re-apply the patch.
+prepare() {
+    cd "${startdir}"
+    # Bring the patch into the build dir if AUR fetched it separately
+    if [[ -f "${srcdir}/dvui-sdl-zig0.16.patch" ]]; then
+        cp "${srcdir}/dvui-sdl-zig0.16.patch" scripts/patches/dvui-sdl-zig0.16.patch 2>/dev/null || true
+    fi
+}
 
+# ── Build: compile C++ wrapper, fetch Zig deps, apply patch, build binary ──
 build() {
     cd "${startdir}"
 
-    # 1. Compile the C++ torrent wrapper shared library
+    # 1. Compile the C++ libtorrent wrapper shared library
     echo "==> Compiling libtorrent_wrapper.so..."
     g++ -std=c++17 -O3 -shared -fPIC \
         src/torrent_wrapper.cpp \
         -o libtorrent_wrapper.so \
         -ltorrent-rasterbar
 
-    # 2. Build the Zig binary
-    echo "==> Building zigzag with zig build..."
-    zig build -Doptimize=ReleaseSafe 2>&1 || true
-    # The "error: warning(link)" from LLD is cosmetic — binary is produced
-    
-    if [ ! -f zig-out/bin/zigzag ]; then
+    # 2. Fetch Zig dependencies (first invocation fails compile against
+    #    unpatched dvui — that's expected; we just need the dep extracted).
+    echo "==> Fetching Zig deps (initial compile may fail — that's OK)..."
+    zig build -fsys=sdl2 -Doptimize=ReleaseSafe 2>&1 || true
+
+    # 3. Apply vendored dvui patches (Zig 0.16 compatibility)
+    echo "==> Applying vendored patches..."
+    if [[ -x scripts/apply-patches.sh ]]; then
+        ./scripts/apply-patches.sh
+    fi
+
+    # 4. Build the actual binary with the patched dependency
+    echo "==> Building zigzag (ReleaseSafe) with system SDL2..."
+    zig build -fsys=sdl2 -Doptimize=ReleaseSafe 2>&1 | tee /tmp/opal-build.log
+    # Filter LLD "warning(link)" which Zig 0.16 escalates to an error
+    # when using the bundled static SDL2 — -fsys=sdl2 avoids this entirely.
+    if ! [[ -f zig-out/bin/zigzag ]]; then
         echo "ERROR: zig build failed — no binary produced"
         return 1
     fi
 }
 
+# ── Package: install binary, libs, scripts, desktop entry ─────────────────
 package() {
     cd "${startdir}"
 
@@ -76,18 +123,36 @@ package() {
     install -Dm644 ort/ocr_ort.h   "${instdir}/ort/ocr_ort.h"
 
     # ── Camoufox bridge (stealth browser) ──
-    install -Dm755 camoufox_bridge.py "${instdir}/camoufox_bridge.py"
+    install -Dm755 scripts/camoufox_bridge.py "${instdir}/camoufox_bridge.py"
 
-    # ── Launcher script (sets up library paths) ──
+    # ── Dep installer (lets users repair missing runtime deps post-install) ──
+    install -Dm755 scripts/install-deps.sh "${instdir}/install-deps.sh"
+
+    # ── Launcher script (sets up library paths, auto-installs missing deps)──
     install -dm755 "${bindir}"
     cat > "${pkgdir}/usr/bin/zigzag" << 'LAUNCHER'
 #!/bin/bash
-# ZigZag launcher — sets library paths for bundled .so files
-export LD_LIBRARY_PATH="/opt/zigzag${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# ZigZag launcher — auto-repair missing runtime deps, then run.
 export ZIGZAG_HOME="/opt/zigzag"
+export LD_LIBRARY_PATH="/opt/zigzag${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PATH="/opt/zigzag:$PATH"
 
-# Ensure user config directory
+# Ensure user config dir
 mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/zigzag"
+
+# If a runtime lib/binary is missing, give the user a one-shot helper.
+missing=0
+for soname in libSDL2-2.0.so.0 libmpv.so.2 libsqlite3.so.0 libtorrent-rasterbar.so.2.0; do
+    if ! ldconfig -p 2>/dev/null | grep -q "$soname"; then missing=1; break; fi
+done
+for bin in mpv ffmpeg yt-dlp curl; do
+    command -v "$bin" >/dev/null 2>&1 || { missing=1; break; }
+done
+if [[ "$missing" -eq 1 ]]; then
+    echo "ZigZag: missing system libraries/binary detected." >&2
+    echo "  Run: sudo /opt/zigzag/install-deps.sh" >&2
+    echo "  Or if missing persists, report at https://github.com/debpalash/Opal/issues" >&2
+fi
 
 exec /opt/zigzag/zigzag "$@"
 LAUNCHER
@@ -99,7 +164,7 @@ LAUNCHER
 Type=Application
 Name=ZigZag
 GenericName=Media Suite
-Comment=All-in-one media suite — torrent streaming, video player, manga reader
+Comment=All-in-one media suite — torrent streaming, video player, manga reader, AI assistant
 Exec=zigzag
 Icon=zigzag
 Terminal=false
@@ -109,7 +174,7 @@ StartupNotify=true
 StartupWMClass=zigzag
 DESKTOP
 
-    # ── Icon (generate a simple SVG) ──
+    # ── Icon (SVG) ──
     install -Dm644 /dev/stdin "${pkgdir}/usr/share/icons/hicolor/scalable/apps/zigzag.svg" << 'ICON'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
   <defs>
@@ -129,27 +194,5 @@ DESKTOP
 ICON
 
     # ── License ──
-    install -Dm644 /dev/stdin "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE" << 'LICENSE'
-MIT License
-
-Copyright (c) 2024-2026 ZigZag Contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-LICENSE
+    install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 }

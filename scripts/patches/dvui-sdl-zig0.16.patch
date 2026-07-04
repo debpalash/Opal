@@ -1,0 +1,52 @@
+--- src/backends/sdl.zig	2026-07-04 20:25:15.648623412 +0530
++++ src/backends/sdl.zig	2026-07-04 20:25:15.654071629 +0530
+@@ -211,28 +211,28 @@
+                 //Xft.dpi: 96
+                 //Xft.antialias: 1
+                 if (mdpi == null and builtin.os.tag == .linux) {
+-                    var stdout: std.ArrayListUnmanaged(u8) = .empty;
+-                    defer stdout.deinit(options.allocator);
+-                    var stderr: std.ArrayListUnmanaged(u8) = .empty;
+-                    defer stderr.deinit(options.allocator);
+-                    var child = std.process.Child.init(&.{ "xrdb", "-get", "Xft.dpi" }, options.allocator);
+-                    child.stdout_behavior = .Pipe;
+-                    child.stderr_behavior = .Pipe;
+-                    try child.spawn();
+-                    var ok = true;
+-                    child.collectOutput(options.allocator, &stdout, &stderr, 100) catch {
+-                        ok = false;
+-                    };
+-                    _ = child.wait() catch {};
+-                    if (ok) {
+-                        const end_digits = std.mem.indexOfNone(u8, stdout.items, &.{ '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' }) orelse stdout.items.len;
+-                        const xrdb_dpi = std.fmt.parseInt(u32, stdout.items[0..end_digits], 10) catch null;
+-                        if (xrdb_dpi) |dpi| {
+-                            mdpi = @floatFromInt(dpi);
+-                        }
++                    // Zig 0.16: std.process.Child.init was removed; use
++                    // popen-style fallback via C to read xrdb output.
++                    const xrdb_c = @cImport({
++                        @cDefine("_FORTIFY_SOURCE", "0");
++                        @cInclude("stdio.h");
++                    });
++                    const pipe = xrdb_c.popen("xrdb -get Xft.dpi 2>/dev/null", "r");
++                    if (pipe != null) {
++                        var line_buf: [64]u8 = undefined;
++                        const got = xrdb_c.fgets(&line_buf, 64, pipe);
++                        _ = xrdb_c.pclose(pipe);
++                        if (got != null) {
++                            const span = std.mem.sliceTo(&line_buf, '\n');
++                            const end_digits = std.mem.indexOfNone(u8, span, &.{ '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' }) orelse span.len;
++                            const xrdb_dpi = std.fmt.parseInt(u32, span[0..end_digits], 10) catch null;
++                            if (xrdb_dpi) |dpi| {
++                                mdpi = @floatFromInt(dpi);
++                            }
+ 
+-                        if (mdpi) |dpi| {
+-                            log.info("dpi {d} from xrdb -get Xft.dpi", .{dpi});
++                            if (mdpi) |dpi| {
++                                log.info("dpi {d} from xrdb -get Xft.dpi", .{dpi});
++                            }
+                         }
+                     }
+                 }
