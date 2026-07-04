@@ -148,36 +148,47 @@ pub fn build(b: *std.Build) void {
         exe.headerpad_max_install_names = true;
     }
 
-    // OCR via ONNX Runtime (PP-OCR pipeline)
-    exe.root_module.addCSourceFile(.{
-        .file = b.path("ort/ocr_ort.c"),
-        .flags = &[_][]const u8{ "-O2", "-Wno-unused-result" },
-    });
-    exe.root_module.addIncludePath(b.path("ort"));
-    exe.root_module.addLibraryPath(b.path("ort"));
-    if (is_windows) {
-        // ONNXRUNTIME_DIR: root of a vendored Microsoft onnxruntime release
-        // (github.com/microsoft/onnxruntime, onnxruntime-win-x64-<ver>.zip —
-        // include/*.h + lib/onnxruntime.{lib,dll}). MSYS2 has no onnxruntime
-        // package for the MINGW64 environment, and the UCRT64 one links a
-        // different CRT than zig's x86_64-windows-gnu output — mixing them is
-        // what produced the "entry point strtod could not be located" launch
-        // failure in v0.1.0 (issue #3). The MS build is MSVC-compiled but
-        // exposes a pure C ABI, and its onnxruntime.lib is a plain COFF
-        // import lib that zig's lld links fine from the gnu target.
-        if (b.graph.environ_map.get("ONNXRUNTIME_DIR")) |ort_dir| {
-            exe.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{ort_dir}) });
-            exe.root_module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/onnxruntime.lib", .{ort_dir}) });
+    // OCR via ONNX Runtime (PP-OCR pipeline) — optional, gated by -Docr.
+    // Default off: onnxruntime isn't a standard Arch/Debian package and the
+    // manga/video frame OCR features are only used by a subset of users.
+    // Build with `-Docr=true` to enable (requires `onnxruntime` installed:
+    // Arch: `pacman -S onnxruntime-cpu`, macOS: `brew install onnxruntime`).
+    const enable_ocr = b.option(bool, "ocr", "Enable OCR via ONNX Runtime (default: auto-detect)") orelse false;
+    if (enable_ocr) {
+        exe.root_module.addCSourceFile(.{
+            .file = b.path("ort/ocr_ort.c"),
+            .flags = &[_][]const u8{ "-O2", "-Wno-unused-result" },
+        });
+        exe.root_module.addIncludePath(b.path("ort"));
+        exe.root_module.addLibraryPath(b.path("ort"));
+        if (is_windows) {
+            // ONNXRUNTIME_DIR: root of a vendored Microsoft onnxruntime release
+            // (github.com/microsoft/onnxruntime, onnxruntime-win-x64-<ver>.zip —
+            // include/*.h + lib/onnxruntime.{lib,dll}). MSYS2 has no onnxruntime
+            // package for the MINGW64 environment, and the UCRT64 one links a
+            // different CRT than zig's x86_64-windows-gnu output — mixing them is
+            // what produced the "entry point strtod could not be located" launch
+            // failure in v0.1.0 (issue #3). The MS build is MSVC-compiled but
+            // exposes a pure C ABI, and its onnxruntime.lib is a plain COFF
+            // import lib that zig's lld links fine from the gnu target.
+            if (b.graph.environ_map.get("ONNXRUNTIME_DIR")) |ort_dir| {
+                exe.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{ort_dir}) });
+                exe.root_module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/onnxruntime.lib", .{ort_dir}) });
+            } else {
+                // No vendored dir: fall back to a MinGW-built import lib under
+                // MINGW_PREFIX for anyone who has one (see the mpv/sqlite3 note
+                // above on why .dll.a needs addObjectFile).
+                exe.root_module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/libonnxruntime.dll.a", .{mingw_prefix}) });
+            }
         } else {
-            // No vendored dir: fall back to a MinGW-built import lib under
-            // MINGW_PREFIX for anyone who has one (see the mpv/sqlite3 note
-            // above on why .dll.a needs addObjectFile).
-            exe.root_module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/libonnxruntime.dll.a", .{mingw_prefix}) });
+            exe.root_module.linkSystemLibrary("onnxruntime", .{});
+            exe.root_module.addRPath(b.path("ort"));
         }
-    } else {
-        exe.root_module.linkSystemLibrary("onnxruntime", .{});
-        exe.root_module.addRPath(b.path("ort"));
     }
+    // Surface OCR availability to the app source via `@import("ocr_build_options")`.
+    const ocr_build_options = b.addOptions();
+    ocr_build_options.addOption(bool, "has_ocr", enable_ocr);
+    exe.root_module.addOptions("ocr_build_options", ocr_build_options);
 
     exe.root_module.addIncludePath(b.path("src"));
 

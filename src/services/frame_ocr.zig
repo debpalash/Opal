@@ -20,9 +20,13 @@ const sync = @import("../core/sync.zig");
 const alloc = @import("../core/alloc.zig");
 
 // Native ONNX Runtime OCR via the same C wrapper comics.zig uses.
-const ocr_c = @cImport({
+// Gated by the `-Docr=true` build flag; empty namespace when OCR is off so
+// the @cImport never runs and onnxruntime isn't required.
+const ocr_build_options = @import("ocr_build_options");
+const has_ocr = ocr_build_options.has_ocr;
+const ocr_c = if (has_ocr) @cImport({
     @cInclude("ocr_ort.h");
-});
+}) else struct {};
 
 var ocr_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var ocr_init_failed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
@@ -39,6 +43,7 @@ var scratch_mutex: sync.Mutex = .{};
 
 /// Lazily initialize the OCR pipeline exactly once. Returns true if usable.
 fn ensureOcrInit() bool {
+    if (!has_ocr) return false;
     if (ocr_initialized.load(.acquire)) return true;
     if (ocr_init_failed.load(.acquire)) return false;
 
@@ -120,6 +125,10 @@ pub fn ocrCurrentFrame(out_buf: []u8) usize {
     // Opaque video frame: PMA bytes == straight RGBA bytes. Pass the SNAPSHOT
     // (not the live p.pixels) so a concurrent render/realloc can't corrupt us.
     const rgba_ptr: [*]const u8 = buf.ptr;
+
+    // OCR call is gated by `has_ocr` so the empty-struct stub (`ocr_c={}`)
+    // built when -Docr=false is never type-checked.
+    if (!has_ocr) return 0;
 
     const result = ocr_c.ocr_recognize_rgba(rgba_ptr, w, h);
     if (result == null) return 0;
