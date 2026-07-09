@@ -601,11 +601,19 @@ fn renderHistoryContent() void {
         const clicked = dvui.clicked(row.data(), .{ .hovered = &hovered });
         dvui.dataSet(null, row.data().id, "_hover", hovered);
         if (clicked) {
-            // loadContent creates a player on a cold start, so no active-player
-            // guard — resume position is auto-applied by tryResumePosition().
+            // resumePlayback forces known playback (magnet → torrent engine,
+            // comics → reader, else straight into mpv) instead of loadContent's
+            // auto-routing, which sends a bare title (no extension/domain) to
+            // the web browser tab — creates a player on a cold start, so no
+            // active-player guard needed; resume position is auto-applied by
+            // tryResumePosition().
             const browser = @import("../services/browser.zig");
-            browser.loadContent(name);
-            state.showToast("Resuming playback...");
+            if (entry.link_len > 0) {
+                browser.resumePlayback(entry.link[0..entry.link_len]);
+                state.showToast("Resuming playback...");
+            } else {
+                state.showToast("Can't resume — no saved link for this item");
+            }
         }
     }
 }

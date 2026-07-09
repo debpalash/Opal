@@ -64,8 +64,17 @@ fn fetchEpisodeStill(e: *state.TvEpisode) void {
     const url = std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w300{s}", .{
         e.still_path[0..@min(e.still_path_len, e.still_path.len)],
     }) catch return;
-    e.still_attempted = true;
     @import("../core/poster.zig").fetchAsync(url, &e.still_pixels, &e.still_w, &e.still_h, &e.still_fetching);
+    // Only latch "attempted" once fetchAsync confirmed a worker actually
+    // started (still_fetching flips true synchronously on success). The
+    // shared poster daemon caps global concurrency (MAX_CONCURRENT in
+    // core/poster.zig) and silently no-ops over the cap, leaving
+    // still_fetching false — latching attempted unconditionally here (the
+    // old bug) permanently stranded that episode with no thumbnail whenever
+    // the cap was hit, which read as "sometimes it fetches, sometimes it
+    // doesn't". Leaving attempted false lets the render-site retry on a
+    // later frame once an in-flight slot frees.
+    if (e.still_fetching) e.still_attempted = true;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1128,6 +1137,12 @@ fn sendToSearch(item: *state.TmdbItem) void {
         std.fmt.bufPrint(&query_buf, "{s} {s}", .{ title, year }) catch return
     else
         std.fmt.bufPrint(&query_buf, "{s}", .{title}) catch return;
+    state.stashPendingPlay(
+        title,
+        item.poster_path[0..@min(item.poster_path_len, item.poster_path.len)],
+        safeUtf8(item.overview[0..@min(item.overview_len, item.overview.len)]),
+        false,
+    );
     state.navigateToTab(.Search);
     // Universal (all-source) search — populates resolver.results, which is what
     // the Search tab's universal view renders. triggerSearch() only fills the
@@ -1162,10 +1177,32 @@ var tv_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 /// Open the Seasons → Episodes detail for a TV show. Resets all per-show state,
 /// kicks the seasons fetch (which, on completion, auto-selects the default
 /// season and fetches its episodes).
+/// Open the TV drill-down for a show by id — entry point for surfaces that
+/// don't hold a TmdbItem (the Home "Coming up" rail). Same flow as a poster
+/// click; poster_path may be empty (detail fetch fills what it needs).
+pub fn openTvDetailById(id: i32, name: []const u8, poster_path: []const u8) void {
+    var item = state.TmdbItem{ .id = id };
+    const nlen = @min(name.len, item.title.len);
+    @memcpy(item.title[0..nlen], name[0..nlen]);
+    item.title_len = nlen;
+    const plen = @min(poster_path.len, item.poster_path.len);
+    @memcpy(item.poster_path[0..plen], poster_path[0..plen]);
+    item.poster_path_len = plen;
+    openTvDetail(&item);
+}
+
 fn openTvDetail(item: *state.TmdbItem) void {
     const t = &state.app.tmdb;
     t.tv_detail_open = true;
     t.tv_id = item.id;
+
+    // renderTvDetail() is only ever drawn from the Browse/TMDB route (see
+    // renderTmdbContent). A click from a Home rail (Trending tonight,
+    // Continue Watching, Watchlist, Favorites) would otherwise just flip
+    // this state invisibly while Home keeps rendering — so force the page
+    // over, mirroring sectionHeader's "See all" handler.
+    state.app.browse_source = .TMDB;
+    state.app.router.navigate(.browse);
 
     const nlen = @min(item.title_len, t.tv_name.len);
     @memcpy(t.tv_name[0..nlen], item.title[0..nlen]);
@@ -1399,7 +1436,13 @@ fn fetchEpisodesThread(tmdb_id: i32, season_number: i32, my_gen: u32) void {
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
     const bytes = @import("tmdb_api.zig").tmdbApiInto(url, state.app.tmdb.api_key[0..state.app.tmdb.api_key_len], buf);
-    if (bytes == 0) return;
+    if (bytes == 0) {
+        if (tv_gen.load(.acquire) != my_gen) return; // superseded — drop silently
+        var lb: [96]u8 = undefined;
+        const lm = std.fmt.bufPrint(&lb, "TV episodes fetch FAILED (id={d} s{d}) — empty response", .{ tmdb_id, season_number }) catch "TV episodes fetch failed";
+        logs.pushLog("error", "tmdb", lm, true);
+        return;
+    }
     const body = buf[0..bytes];
 
     if (tv_gen.load(.acquire) != my_gen) return;
@@ -1576,79 +1619,177 @@ fn tvToggleWatched(ep_idx: usize, ep: i32) void {
 
 // ── Episode playback ──
 
-/// Play a specific episode of the selected season. Marks it watched + upserts
-/// the Continue entry, then resolves a torrent for "{name} SxxEyy" in a worker.
+/// Play a specific episode of the selected season. Arms the deferred watch
+/// commit (nothing is marked watched on click — see commitPendingWatch), then
+/// smart-plays: resolve all sources in a worker, auto-play the top-ranked
+/// CONFIDENT stream, and only fall back to the Search source-picker when no
+/// candidate clears the confidence bar (resolver_rank.pickBest).
 fn playTvEpisode(episode: i32) void {
     const t = &state.app.tmdb;
     const season = tvSelSeasonNumber();
     if (episode < 1 or season < 0) return;
 
-    // Mark watched immediately (UI + DB) and update the loaded flag if visible.
+    // Grab this episode's overview (if loaded) for the loading-screen stash.
     var i: usize = 0;
+    var ep_overview: []const u8 = "";
     while (i < t.tv_episode_count) : (i += 1) {
         if (t.tv_episodes[i].episode_number == episode) {
-            if (i < t.tv_episode_watched.len) t.tv_episode_watched[i] = true;
+            ep_overview = safeUtf8(t.tv_episodes[i].overview[0..@min(t.tv_episodes[i].overview_len, t.tv_episodes[i].overview.len)]);
             break;
         }
     }
-    db.tvMarkWatched(t.tv_id, @intCast(season), @intCast(episode), true);
-    @import("trakt.zig").markWatchedEpisode(t.tv_id, season, episode); // Trakt sync (no-op if not connected)
-    db.tvUpsertContinue(t.tv_id, t.tv_name[0..t.tv_name_len], t.tv_poster_path[0..t.tv_poster_path_len], @intCast(season), @intCast(episode));
+    state.stashPendingPlay(
+        safeUtf8(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)]),
+        t.tv_poster_path[0..@min(t.tv_poster_path_len, t.tv_poster_path.len)],
+        ep_overview,
+        true,
+    );
 
-    // Build "{name} S01E02" (zero-padded) and copy BY VALUE into the worker.
-    var qbuf: [256]u8 = std.mem.zeroes([256]u8);
-    var tv_name_buf: [128]u8 = undefined;
-    const name = safeUtf8Buf(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)], &tv_name_buf);
-    const q = std.fmt.bufPrint(&qbuf, "{s} S{d:0>2}E{d:0>2}", .{ name, season, episode }) catch return;
-    var qcopy: [256]u8 = std.mem.zeroes([256]u8);
-    const qlen = @min(q.len, qcopy.len);
-    @memcpy(qcopy[0..qlen], q[0..qlen]);
-
-    state.app.tmdb.tv_stream_loading = true;
-    if (std.Thread.spawn(.{}, playTvEpisodeThread, .{ qcopy, qlen })) |th| {
-        th.detach(); // never joined — detach to avoid leaking the handle
-    } else |_| {
-        state.app.tmdb.tv_stream_loading = false;
+    // Arm the deferred watch commit. The player's time-pos stream commits it
+    // (DB + Trakt + Continue) once real playback passes ~2 minutes — clicking
+    // ▶ used to mark watched instantly, wrong now that a resolve (and possibly
+    // a manual pick) sits between click and playback.
+    {
+        const pw = &state.app.pending_watch;
+        pw.committed = false;
+        pw.tmdb_id = t.tv_id;
+        pw.season = season;
+        pw.episode = episode;
+        const nlen = @min(t.tv_name_len, pw.name.len);
+        @memcpy(pw.name[0..nlen], t.tv_name[0..nlen]);
+        pw.name_len = nlen;
+        const plen = @min(t.tv_poster_path_len, pw.poster_path.len);
+        @memcpy(pw.poster_path[0..plen], t.tv_poster_path[0..plen]);
+        pw.poster_path_len = plen;
+        pw.armed = true; // last — the event thread gates on this
     }
+
+    // Build the search query through the PURE, TESTED helper (normalized
+    // title + zero-padded sXXeYY): "X-Men '97" S2E2 → "x-men s02e02".
+    // Two past bugs live here — the raw TMDB title ("X-Men '97 …") matching
+    // nothing on torrent indexes, and Zig 0.16 printing `{d:0>2}` on i32 as
+    // "+2" ("x-men S+2E+2"). Both are regression-tested in tmdb_pure.zig.
+    var tv_name_buf: [128]u8 = undefined;
+    const raw_name = safeUtf8Buf(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)], &tv_name_buf);
+    var qbuf: [256]u8 = std.mem.zeroes([256]u8);
+    const q = @import("tmdb_pure.zig").episodeQuery(raw_name, season, episode, &qbuf);
+
+    // Smart play in a worker (copy the query BY VALUE per thread conventions).
+    const S = struct {
+        var busy: bool = false;
+        var query: [256]u8 = undefined;
+        var qlen: usize = 0;
+        fn worker() void {
+            defer @This().busy = false;
+            smartPlayEpisode(@This().query[0..@This().qlen]);
+        }
+    };
+    if (S.busy) return;
+    S.busy = true;
+    @memset(&S.query, 0);
+    @memcpy(S.query[0..q.len], q);
+    S.qlen = q.len;
+    if (std.Thread.spawn(.{}, S.worker, .{})) |th| {
+        th.detach();
+    } else |_| {
+        S.busy = false;
+        // Spawn failed — degrade to the visible source picker.
+        search.setUniversalQuery(q);
+        state.navigateToTab(.Search);
+    }
+    state.showToast("Finding the best stream…");
 }
 
-fn playTvEpisodeThread(qbuf: [256]u8, qlen: usize) void {
-    defer state.app.tmdb.tv_stream_loading = false;
-
-    const query = qbuf[0..qlen];
-    logs.pushLog("info", "tmdb", "Resolving TV episode stream...", false);
-
+/// Worker: resolve every source for `query`, auto-play the first CONFIDENT
+/// candidate (rank order; dead magnets and weak title-matches never auto-play
+/// — resolver_rank.pickBest, pure + tested), else land on the Search picker
+/// with the results already populated.
+fn smartPlayEpisode(query: []const u8) void {
+    const rank = @import("resolver_rank.zig");
     resolver.resolve(query, "tv");
 
     var waited: usize = 0;
-    while (resolver.isResolving() and waited < 100) : (waited += 1) {
+    while (resolver.isResolving() and waited < 150) : (waited += 1) {
         io.sleep(100 * std.time.ns_per_ms);
     }
 
-    resolver.results_mutex.lock();
-    defer resolver.results_mutex.unlock();
-    for (0..resolver.result_count) |i| {
-        const item = resolver.results[i];
-        const url = item.url[0..item.url_len];
-        if (url.len == 0) continue;
-        if (item.source == .stremio) {
-            if (std.mem.startsWith(u8, url, "magnet:")) {
-                // infoHash-converted magnet (Torrentio without debrid) — BitTorrent
-                search.loadTorrentToPlayer(url);
-            } else {
-                // Direct HTTP stream (debrid, cached) — bypass routing, load into mpv
-                @import("browser.zig").loadContentDirect(url);
-            }
-            logs.pushLog("info", "tmdb", "Playing TV episode via Stremio", false);
-            return;
+    // Snapshot the chosen candidate under the lock (results are kept
+    // insertion-sorted by score, so rank order == array order).
+    var chosen_url: [2048]u8 = undefined;
+    var chosen_url_len: usize = 0;
+    var chosen_name: [256]u8 = undefined;
+    var chosen_name_len: usize = 0;
+    var chosen_source: resolver.SourceType = .torrent;
+    {
+        resolver.results_mutex.lock();
+        defer resolver.results_mutex.unlock();
+        var cands: [64]rank.PickCand = undefined;
+        const n = @min(resolver.result_count, cands.len);
+        for (0..n) |ci| {
+            const it = &resolver.results[ci];
+            const playable = (it.source == .stremio or it.source == .torrent) and it.url_len > 0;
+            cands[ci] = .{
+                .playable = playable,
+                .needs_seeds = it.source == .torrent,
+                .match_pct = it.match_pct,
+                .seeds = it.seeds,
+            };
         }
-        if (item.source == .torrent) {
-            search.loadTorrentToPlayer(url);
-            logs.pushLog("info", "tmdb", "Playing TV episode via torrent", false);
-            return;
+        if (rank.pickBest(cands[0..n])) |pi| {
+            const it = &resolver.results[pi];
+            chosen_url_len = it.url_len;
+            @memcpy(chosen_url[0..it.url_len], it.url[0..it.url_len]);
+            chosen_name_len = @min(it.name_len, chosen_name.len);
+            @memcpy(chosen_name[0..chosen_name_len], it.name[0..chosen_name_len]);
+            chosen_source = it.source;
         }
     }
-    logs.pushLog("error", "tmdb", "No streams found. Install a Stremio addon or torrent source in Plugins.", true);
+
+    if (chosen_url_len > 0) {
+        const url = chosen_url[0..chosen_url_len];
+        if (std.mem.startsWith(u8, url, "magnet:") or chosen_source == .torrent) {
+            search.loadTorrentToPlayer(url);
+        } else {
+            @import("browser.zig").loadContentDirect(url);
+        }
+        var tb: [160]u8 = undefined;
+        var nb: [128]u8 = undefined;
+        const nm = safeUtf8Buf(chosen_name[0..@min(chosen_name_len, 100)], &nb);
+        state.showToast(std.fmt.bufPrint(&tb, "Playing: {s}", .{nm}) catch "Playing");
+        logs.pushLog("info", "tmdb", "Smart-play picked a stream", false);
+        return;
+    }
+
+    // No confident candidate — hand over to the visible source picker (the
+    // resolve results are already in; no re-fetch happens).
+    search.setUniversalQuery(query);
+    state.navigateToTab(.Search);
+    state.showToast("Pick a source — nothing cleared the auto-play bar");
+}
+
+/// Commit the armed pending-watch: DB watched flag + Trakt scrobble +
+/// Continue-Watching upsert + the open TV detail's in-memory check. Called
+/// from the player event thread once time-pos crosses the threshold (see
+/// player.zig / tmdb_pure.tvWatchCommitDue). db is mutex-guarded and Trakt
+/// spawns its own worker, so this is cheap enough for the event loop.
+pub fn commitPendingWatch() void {
+    const pw = &state.app.pending_watch;
+    db.tvMarkWatched(pw.tmdb_id, @intCast(@max(0, pw.season)), @intCast(@max(1, pw.episode)), true);
+    @import("trakt.zig").markWatchedEpisode(pw.tmdb_id, pw.season, pw.episode);
+    db.tvUpsertContinue(pw.tmdb_id, pw.name[0..pw.name_len], pw.poster_path[0..pw.poster_path_len], @intCast(@max(0, pw.season)), @intCast(@max(1, pw.episode)));
+
+    // Reflect in the TV detail if it's open on the same show + season.
+    const t = &state.app.tmdb;
+    if (t.tv_detail_open and t.tv_id == pw.tmdb_id and tvSelSeasonNumber() == pw.season) {
+        var i: usize = 0;
+        while (i < t.tv_episode_count) : (i += 1) {
+            if (t.tv_episodes[i].episode_number == pw.episode) {
+                if (i < t.tv_episode_watched.len) t.tv_episode_watched[i] = true;
+                break;
+            }
+        }
+    }
+    logs.pushLog("info", "tmdb", "Episode marked watched (2min played)", false);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1712,14 +1853,6 @@ fn renderTvDetail() void {
             .font = dvui.themeGet().font_heading,
             .gravity_y = 0.5,
         });
-
-        if (t.tv_stream_loading) {
-            _ = dvui.label(@src(), "Finding stream…", .{}, .{
-                .color_text = theme.colors.accent,
-                .gravity_y = 0.5,
-                .padding = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
-            });
-        }
     }
 
     // ── Season selector row ──
@@ -1892,6 +2025,19 @@ fn renderTvDetail() void {
             .color_text = theme.colors.text_secondary,
             .padding = .{ .x = 14, .y = 16, .w = 0, .h = 0 },
         });
+        // Manual recourse for the rare case the fetch (now retried internally
+        // in tmdbApiInto) still failed outright, e.g. a fully dead network —
+        // check the Logs tab for the specific error.
+        if (dvui.button(@src(), "Retry", .{}, .{
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_primary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
+            .margin = .{ .x = 14, .y = 4, .w = 0, .h = 0 },
+        })) {
+            const season = tvSelSeasonNumber();
+            if (season >= 0) fetchEpisodes(t.tv_id, season);
+        }
         return;
     }
 

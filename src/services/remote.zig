@@ -190,9 +190,72 @@ fn sendUnauthorized(stream: std.Io.net.Stream) void {
     _ = io_g.streamWriteAll(stream, resp) catch {};
 }
 
+// ── Pairing (phone onboarding) ──
+// A 6-digit code shown in Settings; the web page exchanges it for the bearer
+// token via GET /pair?code=NNNNNN (the ONLY way to obtain the token remotely —
+// it is never injected into the served page). Rotates on every server start
+// and after MAX_PAIR_FAILS bad attempts; each failure sleeps 300ms.
+var pair_code: [6]u8 = std.mem.zeroes([6]u8);
+var pair_ready: bool = false;
+var pair_fails = std.atomic.Value(u32).init(0);
+const MAX_PAIR_FAILS = 10;
+
+pub fn regeneratePairCode() void {
+    var raw: [6]u8 = undefined;
+    if (io_g.openFileAbsolute("/dev/urandom", .{})) |f| {
+        var fh = f;
+        defer fh.close(io_g.io());
+        _ = io_g.readAll(fh, &raw) catch {
+            for (&raw, 0..) |*b, i| b.* = @truncate(@as(u64, @bitCast(io_g.milliTimestamp())) >> @intCast(i * 7));
+        };
+    } else |_| {
+        for (&raw, 0..) |*b, i| b.* = @truncate(@as(u64, @bitCast(io_g.milliTimestamp())) >> @intCast(i * 7));
+    }
+    for (&pair_code, 0..) |*d, i| d.* = '0' + raw[i] % 10;
+    pair_fails.store(0, .release);
+    pair_ready = true;
+}
+
+/// Current pairing code for the Settings UI ("——————" until the server ran).
+pub fn pairingCode() []const u8 {
+    if (!pair_ready) return "------";
+    return pair_code[0..];
+}
+
+// ── LAN address for the Settings hint ──
+var lan_ip_buf: [48]u8 = std.mem.zeroes([48]u8);
+var lan_ip_len: usize = 0;
+var lan_ip_checked: bool = false;
+
+/// Best-effort LAN IPv4 for "open this on your phone" (macOS: ipconfig
+/// getifaddr en0/en1; empty when undetermined). Cached after first call.
+pub fn lanIp() []const u8 {
+    if (!lan_ip_checked) {
+        lan_ip_checked = true;
+        const ifs = [_][]const u8{ "en0", "en1" };
+        for (ifs) |ifname| {
+            var child = io_g.Child.init(&.{ "ipconfig", "getifaddr", ifname }, @import("../core/alloc.zig").allocator);
+            child.stdout_behavior = .Pipe;
+            child.stderr_behavior = .Ignore;
+            child.spawn() catch continue;
+            var buf: [64]u8 = undefined;
+            const n = if (child.stdout) |*so| io_g.readAll(so, &buf) catch 0 else 0;
+            _ = child.wait() catch {};
+            const trimmed = std.mem.trim(u8, buf[0..n], " \r\n\t");
+            if (trimmed.len >= 7 and trimmed.len <= lan_ip_buf.len) {
+                @memcpy(lan_ip_buf[0..trimmed.len], trimmed);
+                lan_ip_len = trimmed.len;
+                break;
+            }
+        }
+    }
+    return lan_ip_buf[0..lan_ip_len];
+}
+
 pub fn start() void {
     if (running.load(.acquire)) return;
     loadOrCreateToken();
+    regeneratePairCode();
     running.store(true, .release);
     server_thread = std.Thread.spawn(.{}, serverLoop, .{}) catch null;
 }
@@ -217,9 +280,10 @@ pub fn isRunning() bool {
 }
 
 fn serverLoop() void {
-    // Headless (e.g. Docker): bind 0.0.0.0 so the container is reachable from
-    // outside. Windowed desktop stays loopback-only (127.0.0.1) for security.
-    const ip = if (state.app.is_headless) "0.0.0.0" else "127.0.0.1";
+    // Bind all interfaces: the server itself is OPT-IN (Settings › Web Remote,
+    // off by default) and its whole point is reaching Opal from a phone on the
+    // LAN. Auth: bearer token, obtainable only via the 6-digit pairing code.
+    const ip = "0.0.0.0";
     const addr = std.Io.net.IpAddress.parseIp4(ip, port) catch return;
     var server = addr.listen(io_g.io(), .{ .reuse_address = true }) catch return;
     defer server.deinit(io_g.io());
@@ -297,13 +361,44 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
         return;
     }
 
-    // The HTML shell is served unauthenticated so the page can bootstrap:
-    // the live bearer token is injected into it (see serveStaticFile), and
-    // the page then attaches it to every /api/* fetch. Serving it requires
-    // no token (otherwise there is no way to obtain one); the data endpoints
-    // below remain behind Bearer auth.
+    // The HTML shell is served unauthenticated (there is no way to bootstrap
+    // otherwise); it contains NO secrets — the page asks for the 6-digit
+    // pairing code and exchanges it below. Bundled copy first (installed
+    // .app), repo copy in dev.
     if (std.mem.eql(u8, path, "/") or std.mem.eql(u8, path, "/index.html")) {
+        var res_buf: [700]u8 = undefined;
+        const bundled: ?[]const u8 = if (state.resourceRoot()) |r|
+            (std.fmt.bufPrint(&res_buf, "{s}/web/index.html", .{r}) catch null)
+        else
+            null;
+        if (bundled) |bp| {
+            if (io_g.cwdOpenFile(bp, .{})) |f| {
+                var fh = f;
+                fh.close(io_g.io());
+                serveStaticFile(stream, bp, "text/html");
+                return;
+            } else |_| {}
+        }
         serveStaticFile(stream, "web/index.html", "text/html");
+        return;
+    }
+
+    // Pairing: exchange the 6-digit Settings code for the bearer token. The
+    // only unauthenticated data route; throttled + code rotates on abuse.
+    if (std.mem.eql(u8, path, "/pair")) {
+        const presented_code = getQueryParam(query, "code") orelse "";
+        const ok = pair_ready and presented_code.len == 6 and
+            constantTimeEqual(presented_code, pair_code[0..]) and
+            api_token_ready.load(.acquire);
+        if (ok) {
+            var jb: [96]u8 = undefined;
+            const j = std.fmt.bufPrint(&jb, "{{\"token\":\"{s}\"}}", .{api_token[0..]}) catch return;
+            sendJson(stream, j);
+        } else {
+            io_g.sleep(300 * std.time.ns_per_ms); // brute-force throttle
+            if (pair_fails.fetchAdd(1, .acq_rel) + 1 >= MAX_PAIR_FAILS) regeneratePairCode();
+            sendUnauthorized(stream);
+        }
         return;
     }
 
@@ -598,30 +693,14 @@ fn serveStaticFile(stream: std.Io.net.Stream, path: []const u8, content_type: []
     const raw = @import("../core/io_global.zig").readToEndAlloc(file, alloc, 512 * 1024) catch return;
     defer alloc.free(raw);
 
-    // Inject the live bearer token into the served page (HTML only) — but ONLY
-    // on the loopback (desktop) bind. In headless mode the API binds 0.0.0.0, and
-    // `/` is served pre-auth so the token would be handed to ANY LAN client that
-    // GETs the page = full remote takeover. On 0.0.0.0 we leave the placeholder
-    // (page's 32-hex-validator rejects it → no token) and the operator must
-    // supply the token (from ~/.config/opal/api.token) out of band.
-    var body: []const u8 = raw;
-    var injected: ?[]u8 = null;
-    defer if (injected) |buf| alloc.free(buf);
-    if (!state.app.is_headless and api_token_ready.load(.acquire) and std.mem.indexOf(u8, raw, TOKEN_PLACEHOLDER) != null) {
-        const new_body = std.mem.replaceOwned(u8, alloc, raw, TOKEN_PLACEHOLDER, api_token[0..]) catch null;
-        if (new_body) |nb| {
-            injected = nb;
-            body = nb;
-        }
-    }
+    // No token injection: since the server binds the LAN (opt-in), a page
+    // carrying the bearer token would hand full control to any device that
+    // GETs `/`. The page bootstraps via the /pair code exchange instead.
+    const body: []const u8 = raw;
 
-    // SECURITY: deliberately NO `Access-Control-Allow-Origin` on this response.
-    // This HTML carries the injected bearer token (above); with wildcard CORS, any
-    // website the user visits could fetch('http://127.0.0.1:41595/') cross-origin
-    // and READ the token out of the body → full local API takeover. Omitting the
-    // header makes the browser block cross-origin reads of the body, while the
-    // same-origin bundled UI (loaded directly from this server) still reads its own
-    // page fine. The token-gated JSON API keeps CORS for the :3000 web UI.
+    // SECURITY: deliberately NO `Access-Control-Allow-Origin` here — a
+    // cross-origin site the user visits must not be able to read this body.
+    // The token-gated JSON API keeps CORS for the :3000 dev web UI.
     var header: [512]u8 = undefined;
     const h = std.fmt.bufPrint(&header, "HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nX-Content-Type-Options: nosniff\r\nContent-Length: {d}\r\n\r\n", .{ content_type, body.len }) catch return;
     _ = @import("../core/io_global.zig").streamWriteAll(stream, h) catch {};

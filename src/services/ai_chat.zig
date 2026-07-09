@@ -328,7 +328,11 @@ fn initCallbacks() void {
 /// to Home, leaving on_transcribed_fn null: voice conversations recorded and
 /// transcribed fine, then dropped every transcript silently.
 pub fn ensureInit() void {
-    server.checkPaths();
+    // NOTE: no server.checkPaths() here — this runs on the app's first frame,
+    // and eager llama/model detection at boot ("[AI] llama-server found…")
+    // read as the AI stack starting with the app. Detection is lazy now:
+    // ensureReady (send path), the Settings AI panel, and the chat setup
+    // card each call checkPaths (idempotent) right before reading its state.
     initCallbacks();
     const K = struct {
         var done: bool = false;
@@ -708,6 +712,7 @@ pub fn renderChatBody() void {
 // ══════════════════════════════════════════════════════════
 
 fn renderControlPanel() void {
+    server.checkPaths(); // lazy detection — idempotent; not run at boot
     // Row 1: Model — spacing only, separated by whitespace.
     {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{

@@ -114,7 +114,6 @@ pub fn render() !void {
         } else {
             const sub_key: usize = switch (r) {
                 .browse => @intFromEnum(state.app.browse_source),
-                .library => @intFromEnum(state.app.library_tab),
                 .system => @intFromEnum(state.app.system_tab),
                 else => 0,
             };
@@ -164,12 +163,12 @@ fn renderTopNav(compact: bool) void {
     // it separated from the page.
     var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = 32 },
+        .min_size_content = .{ .w = 0, .h = 30 },
         .background = true,
         .color_fill = transparent,
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = 2 },
+        .padding = .{ .x = theme.spacing.md, .y = 1, .w = theme.spacing.md, .h = 1 },
     });
     defer bar.deinit();
 
@@ -227,7 +226,9 @@ fn renderTopNav(compact: bool) void {
         navLink(.home, "Home", icons.tvg.lucide.house, 1);
         navLink(.search, "Search", icons.tvg.lucide.search, 2);
         navLink(.browse, "Browse", icons.tvg.lucide.compass, 3);
-        navLink(.library, "Library", icons.tvg.lucide.library, 4);
+        navLink(.downloads, "Downloads", icons.tvg.lucide.download, 4);
+        navLink(.queue, "Queue", icons.tvg.lucide.@"list-video", 5);
+        navLink(.history, "History", icons.tvg.lucide.history, 6);
     }
 
     omnibox();
@@ -338,11 +339,11 @@ fn navLink(r: Route, label: []const u8, icon: []const u8, id_extra: usize) void 
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
-        .min_size_content = .{ .w = 0, .h = 26 },
+        .min_size_content = .{ .w = 0, .h = 24 },
         .background = true,
         .color_fill = if (active) theme.colors.bg_elevated else transparent,
-        .corner_radius = dvui.Rect.all(theme.radius.sm),
-        .padding = .{ .x = theme.spacing.sm, .y = 3, .w = theme.spacing.sm, .h = 3 },
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .padding = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 2 },
         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         .gravity_y = 0.5,
     });
@@ -511,10 +512,9 @@ fn renderPage(r: Route) !void {
             subTabs(&.{ .TMDB, .YouTube, .Anime, .Comics, .Web, .RSS, .Jellyfin, .Plex }, &state.app.browse_source, 100);
             drawer.renderTabContent(state.app.browse_source);
         },
-        .library => {
-            subTabs(&.{ .Queue, .History, .Downloads }, &state.app.library_tab, 200);
-            drawer.renderTabContent(state.app.library_tab);
-        },
+        .downloads => drawer.renderTabContent(.Downloads),
+        .queue => drawer.renderTabContent(.Queue),
+        .history => drawer.renderTabContent(.History),
         .system => {
             subTabs(&.{ .Logs, .Plugins }, &state.app.system_tab, 300);
             drawer.renderTabContent(state.app.system_tab);
@@ -579,7 +579,7 @@ fn subTabs(tabs: []const state.DrawerTab, sel: *state.DrawerTab, id_extra: usize
     const MeasuredH = struct {
         var h: f32 = 0;
     };
-    const strip_h: f32 = if (MeasuredH.h > 1) MeasuredH.h else 42;
+    const strip_h: f32 = if (MeasuredH.h > 1) MeasuredH.h else 32;
     var strip = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none, .horizontal_bar = .hide }, .{
         .id_extra = id_extra,
         .expand = .horizontal,
@@ -591,7 +591,7 @@ fn subTabs(tabs: []const state.DrawerTab, sel: *state.DrawerTab, id_extra: usize
 
     var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
-        .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = theme.spacing.xs, .h = theme.spacing.xs },
+        .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
     });
     defer bar.deinit();
     // Record the bar's converged height (previous frame's min size) so the
@@ -603,11 +603,11 @@ fn subTabs(tabs: []const state.DrawerTab, sel: *state.DrawerTab, id_extra: usize
         const fg = if (active) theme.colors.accent else theme.colors.text_secondary;
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = id_extra + i + 1,
-            .min_size_content = .{ .w = 0, .h = 24 },
+            .min_size_content = .{ .w = 0, .h = 22 },
             .background = true,
             .color_fill = if (active) theme.colors.bg_elevated else transparent,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .padding = .{ .x = theme.spacing.sm, .y = 3, .w = theme.spacing.sm, .h = 3 },
+            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .padding = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 2 },
             .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         });
         defer row.deinit();
@@ -644,7 +644,7 @@ fn renderBottomTabs() void {
     bottomTab(.home, "Home", icons.tvg.lucide.house, 401);
     bottomTab(.search, "Search", icons.tvg.lucide.search, 402);
     bottomTab(.browse, "Browse", icons.tvg.lucide.compass, 403);
-    bottomTab(.library, "Library", icons.tvg.lucide.library, 404);
+    bottomTab(.downloads, "Downloads", icons.tvg.lucide.download, 404);
     bottomTab(.player, "Player", icons.tvg.lucide.play, 405);
 }
 

@@ -15,14 +15,125 @@ const logs = @import("../core/logs.zig");
 
 pub const is_macos = builtin.os.tag == .macos;
 
-pub const BackendKind = enum { apfel, gemma_llama };
+pub const BackendKind = enum { apfel, gemma_llama, cloud };
 
 /// Default backend: local llama-server everywhere. Apple Intelligence
 /// (apfel) is RETIRED as a default — measured ~5 tok/s generation (6+ s per
 /// one-line reply) and it drops the JSON response format. It stays reachable
 /// via Settings for the curious; legacy configs that auto-persisted "apfel"
 /// migrate to the llama backend on load (config.zig).
+/// `.cloud` = any OpenAI-compatible HTTP API (OpenRouter, Google AI Studio,
+/// NVIDIA NIM, Groq, Cerebras presets) configured via .env — see
+/// CLOUD_PROVIDERS below. Nothing local is spawned or downloaded for it.
 pub var backend_kind: BackendKind = .gemma_llama;
+
+// ── Cloud (OpenAI-compatible) providers ──
+// Keys/endpoints come from .env (cwd first — dev runs from the repo root —
+// then ~/.config/opal/.env), NOT the config DB, so secrets stay out of
+// opal.db. Vars per provider: {PREFIX}_API_KEY / _BASE_URL / _MODEL; base +
+// model fall back to the preset defaults when the var is absent.
+pub const CloudProvider = struct {
+    id: []const u8, // stable key for config persistence
+    name: []const u8, // display name (Settings)
+    prefix: []const u8, // .env var prefix
+    default_base: []const u8, // OpenAI-compatible base (includes /v1 path)
+    default_model: []const u8,
+};
+
+pub const CLOUD_PROVIDERS = [_]CloudProvider{
+    .{ .id = "openrouter", .name = "OpenRouter", .prefix = "OPENROUTER", .default_base = "https://openrouter.ai/api/v1", .default_model = "meta-llama/llama-3.3-70b-instruct:free" },
+    .{ .id = "google", .name = "Google AI", .prefix = "GOOGLE_AI", .default_base = "https://generativelanguage.googleapis.com/v1beta/openai", .default_model = "gemini-2.5-flash" },
+    .{ .id = "nvidia", .name = "NVIDIA NIM", .prefix = "NVIDIA", .default_base = "https://integrate.api.nvidia.com/v1", .default_model = "meta/llama-3.3-70b-instruct" },
+    .{ .id = "groq", .name = "Groq", .prefix = "GROQ", .default_base = "https://api.groq.com/openai/v1", .default_model = "llama-3.3-70b-versatile" },
+    .{ .id = "cerebras", .name = "Cerebras", .prefix = "CEREBRAS", .default_base = "https://api.cerebras.ai/v1", .default_model = "llama-3.3-70b" },
+};
+
+pub var cloud_provider_idx: usize = 0;
+
+// .env body cached once (4 KB covers the real file with headroom).
+var env_buf: [8192]u8 = undefined;
+var env_len: usize = 0;
+var env_loaded: bool = false;
+
+fn envContent() []const u8 {
+    if (!env_loaded) {
+        env_loaded = true;
+        const io_g = @import("../core/io_global.zig");
+        // Same search order as state.zig's TMDB loader: cwd (dev) first,
+        // then ~/.config/opal/.env (installed app).
+        blk: {
+            if (io_g.cwdReadFileAlloc(".env", @import("../core/alloc.zig").allocator, env_buf.len)) |body| {
+                defer @import("../core/alloc.zig").allocator.free(body);
+                env_len = @min(body.len, env_buf.len);
+                @memcpy(env_buf[0..env_len], body[0..env_len]);
+                break :blk;
+            } else |_| {}
+            var cfg_buf: [512]u8 = undefined;
+            const cfg = @import("../core/paths.zig").configDir(&cfg_buf);
+            var p_buf: [600]u8 = undefined;
+            const p = std.fmt.bufPrint(&p_buf, "{s}/.env", .{cfg}) catch break :blk;
+            if (io_g.cwdReadFileAlloc(p, @import("../core/alloc.zig").allocator, env_buf.len)) |body| {
+                defer @import("../core/alloc.zig").allocator.free(body);
+                env_len = @min(body.len, env_buf.len);
+                @memcpy(env_buf[0..env_len], body[0..env_len]);
+            } else |_| {}
+        }
+    }
+    return env_buf[0..env_len];
+}
+
+fn envVar(prefix: []const u8, suffix: []const u8) ?[]const u8 {
+    var key_buf: [64]u8 = undefined;
+    const key = std.fmt.bufPrint(&key_buf, "{s}{s}=", .{ prefix, suffix }) catch return null;
+    const v = @import("../core/env.zig").findValue(envContent(), key) orelse return null;
+    if (v.len == 0) return null;
+    return v;
+}
+
+pub fn cloudProvider() CloudProvider {
+    return CLOUD_PROVIDERS[@min(cloud_provider_idx, CLOUD_PROVIDERS.len - 1)];
+}
+
+pub fn cloudKey() ?[]const u8 {
+    return envVar(cloudProvider().prefix, "_API_KEY");
+}
+
+pub fn cloudBase() []const u8 {
+    return envVar(cloudProvider().prefix, "_BASE_URL") orelse cloudProvider().default_base;
+}
+
+pub fn cloudModel() []const u8 {
+    return envVar(cloudProvider().prefix, "_MODEL") orelse cloudProvider().default_model;
+}
+
+/// True when the selected cloud provider has an API key available.
+pub fn cloudConfigured() bool {
+    return cloudKey() != null;
+}
+
+/// True when provider `i` has an API key in .env (Settings status dots).
+pub fn cloudProviderHasKey(i: usize) bool {
+    if (i >= CLOUD_PROVIDERS.len) return false;
+    return envVar(CLOUD_PROVIDERS[i].prefix, "_API_KEY") != null;
+}
+
+/// First provider with a key in .env, or null. Drives the local→cloud
+/// fallback in ensureReady and the fresh-install default.
+pub fn firstCloudProviderWithKey() ?usize {
+    for (0..CLOUD_PROVIDERS.len) |i| {
+        if (cloudProviderHasKey(i)) return i;
+    }
+    return null;
+}
+
+pub fn selectCloudProviderById(id: []const u8) void {
+    for (CLOUD_PROVIDERS, 0..) |p, i| {
+        if (std.mem.eql(u8, p.id, id)) {
+            cloud_provider_idx = i;
+            return;
+        }
+    }
+}
 
 // ── Hugging Face GGUF model catalog ──
 // A curated set of llama.cpp-servable GGUF models pulled directly from the
@@ -125,21 +236,21 @@ pub const DEFAULT_MODELS_DIR = "models";
 
 fn activeModelFilename() []const u8 {
     return switch (backend_kind) {
-        .apfel => "",
+        .apfel, .cloud => "",
         .gemma_llama => activeModel().filename,
     };
 }
 
 fn activeModelUrl() []const u8 {
     return switch (backend_kind) {
-        .apfel => "",
+        .apfel, .cloud => "",
         .gemma_llama => activeModel().url,
     };
 }
 
 fn activeModelSizeLabel() []const u8 {
     return switch (backend_kind) {
-        .apfel => "",
+        .apfel, .cloud => "",
         .gemma_llama => activeModel().size_label,
     };
 }
@@ -207,6 +318,24 @@ pub fn getServerUrl(buf: *[128]u8) []const u8 {
     return std.fmt.bufPrintZ(buf, "http://127.0.0.1:{d}", .{server_port}) catch "http://127.0.0.1:41592";
 }
 
+/// Chat-completions endpoint for the ACTIVE backend. Cloud bases already
+/// carry their version path (…/api/v1, …/v1beta/openai), so only the local
+/// server gets "/v1" inserted.
+pub fn chatCompletionsUrl(buf: []u8) []const u8 {
+    if (backend_kind == .cloud) {
+        return std.fmt.bufPrintZ(buf, "{s}/chat/completions", .{cloudBase()}) catch "";
+    }
+    return std.fmt.bufPrintZ(buf, "http://127.0.0.1:{d}/v1/chat/completions", .{server_port}) catch "";
+}
+
+/// "Authorization: Bearer …" header for cloud requests; null for local
+/// backends (llama-server/apfel need no auth).
+pub fn authHeader(buf: []u8) ?[]const u8 {
+    if (backend_kind != .cloud) return null;
+    const key = cloudKey() orelse return null;
+    return std.fmt.bufPrintZ(buf, "Authorization: Bearer {s}", .{key}) catch null;
+}
+
 pub fn checkPaths() void {
     if (checked_paths) return;
     checked_paths = true;
@@ -214,7 +343,18 @@ pub fn checkPaths() void {
     switch (backend_kind) {
         .apfel => detectApfel(),
         .gemma_llama => detectGemmaLlama(),
+        .cloud => detectCloud(),
     }
+}
+
+fn detectCloud() void {
+    // Cloud backend needs no local binaries or model files — "installed"
+    // means an API key is present. Reuse the existing gates so every
+    // downstream `model_exists and llama_server_exists` check keeps working.
+    const ok = cloudConfigured();
+    model_exists = ok;
+    llama_server_exists = ok;
+    if (ok) model_status = .online;
 }
 
 fn detectApfel() void {
@@ -309,25 +449,40 @@ fn detectGemmaLlama() void {
     _ = which_child.wait() catch {};
 }
 
-/// Self-install path for the default local brain: detect paths, kick the
-/// model download when it's missing (llama-server present), start the server
-/// when everything's on disk. Idempotent — call from any send path.
+/// Make the active brain usable for a send. Idempotent — call from any send
+/// path. NO silent installs: local models download only from an explicit
+/// user action (Settings › AI catalog or the chat setup card), never here —
+/// this used to kick a multi-GB download on the first chat message.
 pub fn ensureReady() void {
     checkPaths();
-    if (server_running) return;
-    if (backend_kind == .gemma_llama and llama_server_exists and !model_exists) {
-        if (!model_downloading) {
-            startModelDownload();
+
+    // Local backend selected but not installed, while a cloud key sits in
+    // .env → use the cloud for this session instead of failing (or worse,
+    // auto-downloading). Explicitly installing a local model later makes the
+    // local path win again; Settings can pin either at any time.
+    if (backend_kind != .cloud and !(model_exists and llama_server_exists)) {
+        if (firstCloudProviderWithKey()) |pi| {
+            cloud_provider_idx = pi;
+            backend_kind = .cloud;
+            resetDetection();
             var tb: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&tb, "Downloading {s} ({s}) — chat unlocks when it lands", .{ activeModel().name, activeModel().size_label }) catch "Downloading AI model…";
+            const msg = std.fmt.bufPrint(&tb, "Using {s} (cloud) — install a local model in Settings › AI to go offline", .{cloudProvider().name}) catch "Using cloud AI";
             state.showToast(msg);
         }
+    }
+
+    if (backend_kind == .cloud) {
+        model_status = if (cloudConfigured()) .online else .offline;
         return;
     }
+    if (server_running) return;
+    // Everything on disk → user is one send away; bring the server up.
+    // Missing pieces → the chat setup card / Settings show install buttons.
     if (model_exists and llama_server_exists) startServer();
 }
 
 pub fn startServer() void {
+    if (backend_kind == .cloud) return; // nothing local to start
     if (server_running) return;
     if (server_installing) return;
     if (!model_exists or !llama_server_exists) return;
@@ -479,9 +634,16 @@ pub fn stopServer() void {
         embed_server_process = null;
     }
 
+    // Cloud: nothing local to kill — clear status and bail before pkill.
+    if (backend_kind == .cloud) {
+        server_running = false;
+        model_status = .offline;
+        return;
+    }
     const pkill_pattern: []const u8 = switch (backend_kind) {
         .apfel => "apfel --serve",
         .gemma_llama => "llama-server",
+        .cloud => unreachable, // handled above
     };
     var pkill = @import("../core/io_global.zig").Child.init(&.{ "pkill", "-f", pkill_pattern }, @import("../core/alloc.zig").allocator);
     pkill.stdout_behavior = .Ignore;
@@ -494,6 +656,7 @@ pub fn stopServer() void {
     const stop_msg = switch (backend_kind) {
         .apfel => "Apple Intelligence stopped",
         .gemma_llama => "Gemma (llama-server) stopped",
+        .cloud => unreachable, // handled above
     };
     logs.pushLog("info", "ai", stop_msg, true);
     state.showToast("AI server stopped");
@@ -753,6 +916,12 @@ pub fn doHealthCheck() void {
 }
 
 fn healthThread() void {
+    if (backend_kind == .cloud) {
+        // No health endpoint to poll — configured means reachable-enough;
+        // real errors surface per-request in the chat pipeline.
+        model_status = if (cloudConfigured()) .online else .offline;
+        return;
+    }
     var url_buf: [128]u8 = undefined;
     var srv_buf: [128]u8 = undefined;
     const srv = getServerUrl(&srv_buf);

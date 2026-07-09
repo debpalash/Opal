@@ -258,7 +258,14 @@ fn normalizeQuery(raw: []const u8, buf: *[256]u8) []const u8 {
 
 /// Main entry: fire all backends in parallel
 pub fn resolve(query: []const u8, intent: []const u8) void {
-    if (query.len == 0 or is_resolving.load(.acquire)) return;
+    if (query.len == 0) return;
+    // Supersede, don't drop: the old `is_resolving` early-return silently ate
+    // every Enter/search-icon press while ANY slow source was still draining
+    // (nova2 fans out to 20+ engines and can run a minute) — fast sources had
+    // long since painted results, so the search looked idle but dead. Bumping
+    // the generation orphans the in-flight wave: its pushResult calls no-op
+    // (worker_gen mismatch) while this wave's workers own the fresh statuses.
+    _ = run_gen.fetchAdd(1, .acq_rel);
 
     // Save query — normalize "season X episode Y" → "SXXEYY"
     var norm_buf: [256]u8 = undefined;
@@ -307,8 +314,17 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     // Fire every backend in parallel. Each handle is detached (never joined) —
     // discarding it via `_ =` leaks the pthread resource for the process life.
     const Spawn = struct {
+        // Wrapper stamps the worker thread's generation (threadlocal) before
+        // running the backend, so pushResult can drop pushes from a superseded
+        // wave. Query still travels BY VALUE through the spawn tuple.
         fn go(comptime f: anytype, st: *std.atomic.Value(SourceStatus)) void {
-            if (std.Thread.spawn(.{}, f, .{ resolver_query, resolver_query_len })) |t| {
+            const Wrap = struct {
+                fn run(wq: [256]u8, wqlen: usize, wg: u32) void {
+                    worker_gen = wg;
+                    f(wq, wqlen);
+                }
+            };
+            if (std.Thread.spawn(.{}, Wrap.run, .{ resolver_query, resolver_query_len, run_gen.load(.acquire) })) |t| {
                 t.detach();
             } else |_| {
                 st.store(.failed, .release);
@@ -332,7 +348,16 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     checkAllDone();
 }
 
+/// Monotonic search generation. Each worker thread carries the generation it
+/// was spawned under (threadlocal, set by Spawn's wrapper); a new resolve()
+/// bumps it, so superseded workers publish nothing and just wind down.
+var run_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+threadlocal var worker_gen: u32 = 0;
+
 fn pushResult(item: ResolvedItem) bool {
+    // Superseded wave (user searched again mid-flight) — drop, don't mix
+    // stale rows for the previous query into the fresh result list.
+    if (worker_gen != run_gen.load(.acquire)) return false;
     results_mutex.lock();
     defer results_mutex.unlock();
     if (result_count >= 64) return false;

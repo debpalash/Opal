@@ -19,8 +19,10 @@ var time_show_remaining: bool = false;
 
 // Active toolbar dropdown — only one open at a time. We use stable id values
 // derived from the picker kind. -1 = none.
-const PickerKind = enum(i32) { none = -1, chapter = 0, aspect = 1, audio = 2, sub = 3, lang = 4, playlist = 5, ar = 6 };
-var open_picker: PickerKind = .none;
+pub const PickerKind = enum(i32) { none = -1, chapter = 0, aspect = 1, audio = 2, sub = 3, lang = 4, playlist = 5, ar = 6 };
+/// pub so input.zig's staged-Escape chain can peel an open picker popover
+/// (audio/sub/chapter/aspect/lang/playlist) before touching bigger surfaces.
+pub var open_picker: PickerKind = .none;
 
 // Persist the close-button screen rect across frames so we can hover-test it
 // before the button is rendered (one frame of lag is acceptable for hover).
@@ -677,39 +679,92 @@ pub fn renderSubPicker() void {
 fn renderScrubber(
     active_p: *player.MediaPlayer,
     percent_pos: f64,
+    time_pos: f64,
     duration: f64,
     now_ms: i64,
 ) void {
-    var scrub_band = dvui.box(@src(), .{ .dir = .vertical }, .{
+    // IINA-style scrub row: elapsed time on the left, the seek band filling
+    // the middle, total/remaining on the right (click the right label to
+    // toggle, same as IINA).
+    var srow = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = 22 },
-        .max_size_content = .{ .w = 0, .h = 22 },
-        .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = 0 },
+        .min_size_content = .{ .w = 0, .h = 26 },
+        .max_size_content = .{ .w = 0, .h = 26 },
+        .padding = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = 0 },
     });
-    defer scrub_band.deinit();
+    defer srow.deinit();
+
+    const safe_time = @max(0.0, if (std.math.isNan(time_pos)) 0.0 else time_pos);
+    const safe_dur = @max(0.0, if (std.math.isNan(duration)) 0.0 else duration);
+    const t_sec: u32 = @intFromFloat(safe_time);
+    const d_sec: u32 = @intFromFloat(safe_dur);
+
+    {
+        var cur_buf: [16]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{formatHmsBuf(&cur_buf, t_sec)}, .{
+            .color_text = theme.colors.text_primary,
+            .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        });
+    }
+
+    var scrub_band = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .both,
+    });
+    defer {
+        scrub_band.deinit();
+        // Right: duration (or remaining) — rendered after the band so it sits
+        // at the row's right edge; click toggles total/remaining.
+        var dur_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .gravity_y = 0.5,
+            .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
+            .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+        });
+        if (dvui.clicked(dur_box.data(), .{})) time_show_remaining = !time_show_remaining;
+        components.tip(@src(), dur_box.data().*, if (time_show_remaining) "Showing remaining — click for total" else "Click to show remaining time");
+        var dur_buf: [20]u8 = undefined;
+        const dur_str = if (time_show_remaining and d_sec >= t_sec) blk: {
+            var b2: [16]u8 = undefined;
+            const r = formatHmsBuf(&b2, d_sec - t_sec);
+            break :blk std.fmt.bufPrint(&dur_buf, "-{s}", .{r}) catch "-0:00";
+        } else formatHmsBuf(&dur_buf, d_sec);
+        _ = dvui.label(@src(), "{s}", .{dur_str}, .{
+            .color_text = theme.colors.text_tertiary,
+            .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+            .gravity_y = 0.5,
+        });
+        dur_box.deinit();
+    }
 
     const band_rect = scrub_band.data().contentRectScale().r;
     const hovered = mouseOverRect(band_rect);
     const track_h: f32 = if (hovered) 6 else 4;
 
+    // The overlay spans the FULL band height: the transparent slider that
+    // captures seek drags fills it, so the grab target is the whole 26px
+    // band — the drawn line stays thin (track_h). It used to be clamped to
+    // the 4-6px visual track, which made drags miss more often than not.
     var track_overlay = dvui.overlay(@src(), .{
-        .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = track_h },
-        .max_size_content = .{ .w = 0, .h = track_h },
-        .gravity_y = 0.5,
+        .expand = .both,
     });
     defer track_overlay.deinit();
 
     const track_rect = track_overlay.data().contentRectScale().r;
 
-    // 1. Base track.
+    // 1. Base track — thin visual line centered in the tall band.
     {
         var base = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = 1,
-            .expand = .both,
             .background = true,
             .color_fill = theme.colors.bg_elevated,
             .corner_radius = dvui.Rect.all(track_h * 0.5),
+            // Explicit width from the measured overlay rect — expand does
+            // NOT stretch inside this overlay (the line collapsed to a dash).
+            .min_size_content = .{ .w = track_rect.w, .h = track_h },
+            .max_size_content = .{ .w = track_rect.w, .h = track_h },
+            .gravity_y = 0.5,
         });
         base.deinit();
     }
@@ -825,7 +880,7 @@ fn renderScrubber(
     var slider_pct: f32 = @floatCast(percent_pos / 100.0);
     if (std.math.isNan(slider_pct)) slider_pct = 0.0;
     if (dvui.slider(@src(), .{ .fraction = &slider_pct }, .{
-        .expand = .horizontal,
+        .expand = .both,
         .min_size_content = .{ .w = 100, .h = track_h },
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -1444,14 +1499,33 @@ pub fn renderLiquidGlassOverlay() void {
     var anchor = dvui.box(@src(), .{ .dir = .vertical }, .{ .gravity_y = 1.0, .expand = .horizontal });
     defer anchor.deinit();
 
-    // ── Footer panel: semi-transparent dark glass so the video shows through
-    // for a content-focused feel (was opaque bg_surface). 1px top border. ──
+    // ── Scrim: thin slices fading upward so the glass panel melts into the
+    // video (the standard streaming-player treatment) instead of ending in a
+    // hard border. Approximates a gradient — dvui has no gradient fill.
+    {
+        const scrim_alphas = [_]u8{ 14, 36, 68, 110 };
+        inline for (scrim_alphas, 0..) |sa, si| {
+            var g = theme.colors.bg_glass;
+            g.a = sa;
+            var sl = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = si + 9200,
+                .expand = .horizontal,
+                .background = true,
+                .color_fill = g,
+                .min_size_content = .{ .w = 0, .h = 5 },
+                .max_size_content = .{ .w = 0, .h = 5 },
+            });
+            sl.deinit();
+        }
+    }
+
+    // ── Footer panel: translucent glass (bg_glass, ~63% opaque) — the video
+    // stays visible through the chrome; the scrim above keeps the transition
+    // soft and the controls legible over bright scenes. ──
     var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
         .color_fill = theme.colors.bg_glass,
-        .color_border = theme.colors.border_subtle,
-        .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     });
     defer panel.deinit();
@@ -1516,7 +1590,7 @@ pub fn renderLiquidGlassOverlay() void {
     // ═══════════════════════════════════════════════════════════════
     // ROW 1 — Scrubber + chapter pips + hover time-at-cursor
     // ═══════════════════════════════════════════════════════════════
-    renderScrubber(active_p, percent_pos, duration, now_ms);
+    renderScrubber(active_p, percent_pos, time_pos, duration, now_ms);
 
     // ═══════════════════════════════════════════════════════════════
     // ROW 2 — Controls: transport | time | volume | pickers | close
@@ -1524,9 +1598,9 @@ pub fn renderLiquidGlassOverlay() void {
     {
         var ctrl_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 34 },
-            .max_size_content = .{ .w = 0, .h = 34 },
-            .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = 2 },
+            .min_size_content = .{ .w = 0, .h = 36 },
+            .max_size_content = .{ .w = 0, .h = 36 },
+            .padding = .{ .x = theme.spacing.md, .y = 1, .w = theme.spacing.md, .h = 1 },
         });
         defer ctrl_row.deinit();
 
@@ -1559,9 +1633,9 @@ pub fn renderLiquidGlassOverlay() void {
             .border = dvui.Rect.all(0),
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .gravity_y = 0.5,
-            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
-            .min_size_content = .{ .w = 36, .h = 36 },
-            .max_size_content = .{ .w = 36, .h = 36 },
+            .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
+            .min_size_content = .{ .w = 30, .h = 30 },
+            .max_size_content = .{ .w = 30, .h = 30 },
         })) {
             _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek -10");
         }
@@ -1576,9 +1650,9 @@ pub fn renderLiquidGlassOverlay() void {
             .border = dvui.Rect.all(0),
             .corner_radius = dvui.Rect.all(theme.radius.md),
             .gravity_y = 0.5,
-            .padding = .{ .x = 10, .y = 10, .w = 10, .h = 10 },
-            .min_size_content = .{ .w = 44, .h = 44 },
-            .max_size_content = .{ .w = 44, .h = 44 },
+            .padding = .{ .x = 7, .y = 7, .w = 7, .h = 7 },
+            .min_size_content = .{ .w = 34, .h = 34 },
+            .max_size_content = .{ .w = 34, .h = 34 },
             .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         })) {
             active_p.togglePause();
@@ -1593,9 +1667,9 @@ pub fn renderLiquidGlassOverlay() void {
             .border = dvui.Rect.all(0),
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .gravity_y = 0.5,
-            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
-            .min_size_content = .{ .w = 36, .h = 36 },
-            .max_size_content = .{ .w = 36, .h = 36 },
+            .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
+            .min_size_content = .{ .w = 30, .h = 30 },
+            .max_size_content = .{ .w = 30, .h = 30 },
         })) {
             _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek 10");
         }
@@ -1618,54 +1692,12 @@ pub fn renderLiquidGlassOverlay() void {
             components.tip(@src(), wd, "Next track");
         }
 
-        // ── Time display — current in text_primary, separator+total in text_tertiary ──
+        // ── Status badges — times moved to the scrub row (IINA layout:
+        // elapsed left of the seek line, total/remaining right of it). ──
         {
-            const safe_time = @max(0.0, if (std.math.isNan(time_pos)) 0.0 else time_pos);
-            const safe_dur = @max(0.0, if (std.math.isNan(duration)) 0.0 else duration);
-            const t_sec = @as(u32, @intFromFloat(safe_time));
-            const d_sec = @as(u32, @intFromFloat(safe_dur));
-
-            var cur_buf: [16]u8 = undefined;
-            const cur_str = formatHmsBuf(&cur_buf, t_sec);
-
-            var rest_buf: [24]u8 = undefined;
-            const rest_str = if (time_show_remaining and d_sec >= t_sec) blk: {
-                const rem = d_sec - t_sec;
-                const h = rem / 3600;
-                const m = (rem % 3600) / 60;
-                const s = rem % 60;
-                break :blk if (h > 0)
-                    (std.fmt.bufPrint(&rest_buf, " / -{d:0>2}:{d:0>2}:{d:0>2}", .{ h, m, s }) catch " / --:--")
-                else
-                    (std.fmt.bufPrint(&rest_buf, " / -{d:0>2}:{d:0>2}", .{ m, s }) catch " / --:--");
-            } else blk: {
-                const h = d_sec / 3600;
-                const m = (d_sec % 3600) / 60;
-                const s = d_sec % 60;
-                break :blk if (h > 0)
-                    (std.fmt.bufPrint(&rest_buf, " / {d:0>2}:{d:0>2}:{d:0>2}", .{ h, m, s }) catch " / 00:00")
-                else
-                    (std.fmt.bufPrint(&rest_buf, " / {d:0>2}:{d:0>2}", .{ m, s }) catch " / 00:00");
-            };
-
             var time_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .gravity_y = 0.5,
                 .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 },
-                .corner_radius = dvui.Rect.all(theme.radius.sm),
-                .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
-            });
-            if (dvui.clicked(time_box.data(), .{})) {
-                time_show_remaining = !time_show_remaining;
-            }
-            components.tip(@src(), time_box.data().*, if (time_show_remaining) "Showing remaining — click for total" else "Click to show remaining time");
-
-            _ = dvui.label(@src(), "{s}", .{cur_str}, .{
-                .color_text = theme.colors.text_primary,
-                .gravity_y = 0.5,
-            });
-            _ = dvui.label(@src(), "{s}", .{rest_str}, .{
-                .color_text = theme.colors.text_tertiary,
-                .gravity_y = 0.5,
             });
 
             // Playlist position / Speed / Loop badges.
@@ -1895,8 +1927,8 @@ pub fn renderLiquidGlassOverlay() void {
     if (active_p.current_torrent_id >= 0) {
         var info_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 22 },
-            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+            .min_size_content = .{ .w = 0, .h = 18 },
+            .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = 2 },
         });
         defer info_row.deinit();
 
@@ -1958,6 +1990,39 @@ pub fn renderLiquidGlassOverlay() void {
                 }
                 state.app.download_rate_limit = limits[next_idx];
                 c.mpv.torrent_set_download_limit(state.app.torrent_ses, state.app.download_rate_limit);
+            }
+        }
+
+        // Stop + delete — two-step confirm (same component as other destructive
+        // actions in the app). Grab the playing file's path via torrent_poll
+        // BEFORE tearing anything down, since torrent_remove() invalidates it.
+        {
+            var del_path: [512]u8 = undefined;
+            var del_pct: f32 = 0;
+            var del_rate: c_int = 0;
+            var del_peers: c_int = 0;
+            const del_status = c.mpv.torrent_poll(state.app.torrent_ses, active_p.current_torrent_id, active_p.selected_file_idx, &del_path, del_path.len, &del_pct, &del_rate, &del_peers);
+
+            if (components.confirmDangerButton(@src(), "Delete", 201)) {
+                const tid = active_p.current_torrent_id;
+                if (del_status >= 1) {
+                    const plen = std.mem.indexOfScalar(u8, &del_path, 0) orelse del_path.len;
+                    @import("../core/io_global.zig").deleteFileAbsolute(del_path[0..plen]) catch {
+                        @import("../core/logs.zig").pushLog("warn", "torrent", "Delete file failed", true);
+                    };
+                }
+                c.mpv.torrent_remove(state.app.torrent_ses, tid);
+                // STABLE-SLOT model: torrent ids are never renumbered on remove,
+                // so other handles stay valid — only clear players on this one.
+                for (state.app.players.items) |p| {
+                    if (p.current_torrent_id == tid) {
+                        p.current_torrent_id = -1;
+                        p.torrent_is_ready = false;
+                        p.has_metadata = false;
+                        _ = c.mpv.mpv_command_string(p.mpv_ctx, "stop");
+                    }
+                }
+                state.showToast("Stopped and deleted");
             }
         }
     }
@@ -2031,7 +2096,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     defer bar.deinit();
 
     // ── Row 1: scrubber + chapter pips (reused, identical seek behavior) ──
-    renderScrubber(p, percent_pos, duration, now_ms);
+    renderScrubber(p, percent_pos, time_pos, duration, now_ms);
 
     // ── Row 2: [thumb + title] | [transport] | [time] | [volume] | [queue] ──
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{

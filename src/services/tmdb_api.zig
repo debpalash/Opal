@@ -291,7 +291,20 @@ pub fn tmdbApiInto(path_query: []const u8, key: []const u8, buf: []u8) usize {
     else
         "";
 
-    return curlFallbackInto(url, auth, buf);
+    // Bounded retry: curlFallbackInto already tries both HTTPS and HTTP, but a
+    // single transient blip (DNS hiccup, dropped connection, curl spawn
+    // stumble) still made the whole call fail with zero recourse — every
+    // caller (seasons, episodes, search, ...) just silently got nothing back.
+    // Only worth retrying on the SAME frame's worth of thread — this is
+    // always called from a background worker (curl itself already blocks up
+    // to 12s/attempt), never the UI thread.
+    var attempt: u8 = 0;
+    while (attempt < 3) : (attempt += 1) {
+        const n = curlFallbackInto(url, auth, buf);
+        if (n > 0) return n;
+        if (attempt < 2) @import("../core/io_global.zig").sleep(400 * std.time.ns_per_ms);
+    }
+    return 0;
 }
 
 fn httpGet(url: []const u8, bearer_token: []const u8) ?[]u8 {

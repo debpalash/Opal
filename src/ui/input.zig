@@ -29,8 +29,16 @@ pub fn processGlobalInputs() void {
             // then peel panels one at a time (playlist → settings → drawer)
             // so a single Escape doesn't nuke everything at once.
             if (key == .escape) {
+                const footer = @import("footer.zig");
                 if (dvui.focusedWidgetId() != null) {
                     dvui.focusWidget(null, null, null);
+                } else if (state.app.sub_picker_open) {
+                    // Player modals peel before bigger surfaces: subtitle
+                    // dialog, then any open picker popover (audio/sub/
+                    // chapter/aspect/lang/playlist).
+                    state.app.sub_picker_open = false;
+                } else if (footer.open_picker != .none) {
+                    footer.open_picker = .none;
                 } else if (state.app.fullscreen_player_idx != null) {
                     state.app.fullscreen_player_idx = null;
                 } else if (state.app.playlist_drawer_open) {

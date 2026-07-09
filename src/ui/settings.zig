@@ -1040,21 +1040,31 @@ fn renderGeneralTab() void {
     // ── Interface ── (whitespace-separated, no card chrome)
     sectionHeader("Interface", "Customize how Opal looks and feels", 10, @src());
 
-    // UI Scale — short ramp via segment, including sub-1× steps for users who
-    // want denser chrome than the compact type ramp alone provides.
+    // UI Scale — "Auto" derives a compact, DPI-aware scale from the display
+    // each launch (see scale_pure.deviceScale); the manual steps pin a fixed
+    // value. Sub-1× steps let users go denser than the compact type ramp alone.
     settingRow("UI Scale", 100, @src());
     {
-        const scales = [_]f32{ 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 2.0 };
-        const scale_labels = [_][]const u8{ "0.8x", "0.9x", "1.0x", "1.1x", "1.2x", "1.3x", "1.5x", "1.7x", "2.0x" };
+        const scales = [_]f32{ 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 2.0 };
+        const scale_labels = [_][]const u8{ "Auto", "0.6x", "0.7x", "0.8x", "0.9x", "1.0x", "1.2x", "1.4x", "1.6x", "2.0x" };
+        // Index 0 = Auto; manual values are offset by one.
         var sel: usize = 0;
-        for (scales, 0..) |s, idx| {
-            if (@abs(state.app.ui_scale - s) < 0.05) {
-                sel = idx;
-                break;
+        if (!state.app.ui_scale_auto) {
+            for (scales, 0..) |s, idx| {
+                if (@abs(state.app.ui_scale - s) < 0.05) {
+                    sel = idx + 1;
+                    break;
+                }
             }
         }
         if (components.segment(@src(), &scale_labels, sel)) |clicked| {
-            state.app.ui_scale = scales[clicked];
+            if (clicked == 0) {
+                state.app.ui_scale_auto = true;
+                state.app.ui_scale = @import("../core/scale_pure.zig").deviceScale(dvui.windowNaturalScale());
+            } else {
+                state.app.ui_scale_auto = false;
+                state.app.ui_scale = scales[clicked - 1];
+            }
             state.markConfigDirty();
         }
     }
@@ -2251,6 +2261,7 @@ fn renderScriptsTab() void {
     settingRow("AI Backend", 71, @src());
     {
         const ai_server = @import("../services/ai_server.zig");
+        ai_server.checkPaths(); // lazy detection — idempotent; not run at boot
         const set_backend = struct {
             fn apply(kind: @TypeOf(ai_server.backend_kind), toast: []const u8) void {
                 const srv = @import("../services/ai_server.zig");
@@ -2263,18 +2274,92 @@ fn renderScriptsTab() void {
             }
         };
         if (ai_server.is_macos) {
-            const labels = [_][]const u8{ "Apple Intelligence", "Local LLM (Hugging Face)" };
-            const sel: usize = if (ai_server.backend_kind == .apfel) 0 else 1;
+            const labels = [_][]const u8{ "Apple Intelligence", "Local LLM (Hugging Face)", "Cloud API" };
+            const sel: usize = switch (ai_server.backend_kind) {
+                .apfel => 0,
+                .gemma_llama => 1,
+                .cloud => 2,
+            };
             if (components.segment(@src(), &labels, sel)) |clicked| {
-                if (clicked == 0) {
-                    set_backend.apply(.apfel, "AI backend: Apple Intelligence");
-                } else {
-                    set_backend.apply(.gemma_llama, "AI backend: Local LLM (Hugging Face)");
+                switch (clicked) {
+                    0 => set_backend.apply(.apfel, "AI backend: Apple Intelligence"),
+                    1 => set_backend.apply(.gemma_llama, "AI backend: Local LLM (Hugging Face)"),
+                    else => set_backend.apply(.cloud, "AI backend: Cloud API"),
                 }
             }
         } else {
-            const labels = [_][]const u8{"Local LLM (Hugging Face)"};
-            _ = components.segment(@src(), &labels, 0);
+            const labels = [_][]const u8{ "Local LLM (Hugging Face)", "Cloud API" };
+            const sel: usize = if (ai_server.backend_kind == .cloud) 1 else 0;
+            if (components.segment(@src(), &labels, sel)) |clicked| {
+                if (clicked == 0)
+                    set_backend.apply(.gemma_llama, "AI backend: Local LLM (Hugging Face)")
+                else
+                    set_backend.apply(.cloud, "AI backend: Cloud API");
+            }
+        }
+    }
+
+    // ── Cloud provider picker ──
+    // Keys come from .env ({PREFIX}_API_KEY in ./.env or ~/.config/opal/.env),
+    // never the config DB. Rows show key presence so a missing key is obvious
+    // before the first failed request.
+    {
+        const ai_server = @import("../services/ai_server.zig");
+        if (ai_server.backend_kind == .cloud) {
+            _ = dvui.label(@src(), "Provider — key from .env", .{}, .{
+                .color_text = theme.colors.text_secondary,
+                .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.xs },
+            });
+            for (ai_server.CLOUD_PROVIDERS, 0..) |p, i| {
+                const sel = i == ai_server.cloud_provider_idx;
+                const have_key = ai_server.cloudProviderHasKey(i);
+
+                var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                    .id_extra = i + 400,
+                    .expand = .horizontal,
+                    .background = true,
+                    .color_fill = if (sel) theme.colors.bg_elevated else theme.transparent,
+                    .corner_radius = theme.dims.rad_md,
+                    .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                    .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+                });
+                defer prow.deinit();
+
+                var hovered = false;
+                const clicked_row = dvui.clicked(prow.data(), .{ .hovered = &hovered });
+                if (hovered and !sel) prow.data().options.color_fill = theme.colors.bg_hover;
+                prow.drawBackground();
+
+                dvui.icon(@src(), "cloud-sel", if (sel) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, .{}, .{
+                    .id_extra = i + 400,
+                    .color_text = if (sel) theme.colors.accent else theme.colors.text_tertiary,
+                    .min_size_content = theme.iconSize(.sm),
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+                });
+                var pname_buf: [160]u8 = undefined;
+                const pname = std.fmt.bufPrint(&pname_buf, "{s}  ·  {s}", .{ p.name, if (sel) ai_server.cloudModel() else p.default_model }) catch p.name;
+                _ = dvui.label(@src(), "{s}", .{pname}, .{
+                    .id_extra = i + 400,
+                    .color_text = if (sel) theme.colors.text_primary else theme.colors.text_secondary,
+                    .gravity_y = 0.5,
+                    .expand = .horizontal,
+                });
+                if (have_key)
+                    components.statusPill("Key found", .success)
+                else
+                    components.statusPill("No key in .env", .info);
+
+                if (clicked_row and !sel) {
+                    ai_server.cloud_provider_idx = i;
+                    ai_server.resetDetection();
+                    state.markConfigDirty();
+                    if (have_key)
+                        state.showToast("Cloud provider selected")
+                    else
+                        state.showToast("Selected — add its API key to .env to activate");
+                }
+            }
         }
     }
 
@@ -2343,19 +2428,53 @@ fn renderScriptsTab() void {
         }
     }
 
-    // ── Web Remote Control ── (toggle row; address shown as a quiet hint)
+    // ── Web Remote Control ── (toggle row; phone URL + pairing code hints)
     {
         const remote = @import("../services/remote.zig");
-        const hint = if (state.app.web_remote_enabled) "http://0.0.0.0:41595" else "Off";
+        var hint_buf: [96]u8 = undefined;
+        const hint: []const u8 = if (!state.app.web_remote_enabled) "Off" else blk: {
+            const ip = remote.lanIp();
+            break :blk if (ip.len > 0)
+                (std.fmt.bufPrint(&hint_buf, "http://{s}:41595", .{ip}) catch "on :41595")
+            else
+                "on :41595";
+        };
         const before = state.app.web_remote_enabled;
         components.toggleRow(@src(), "Web Remote Control", hint, &state.app.web_remote_enabled);
         if (state.app.web_remote_enabled != before) {
+            state.markConfigDirty(); // persisted (web_remote) — survives restarts
             if (state.app.web_remote_enabled) {
                 remote.start();
                 state.showToast("Web Remote started on :41595");
             } else {
                 remote.stop();
                 state.showToast("Web Remote stopped");
+            }
+        }
+
+        // Pairing row — open the URL on the phone, type this code once.
+        if (state.app.web_remote_enabled) {
+            var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .expand = .horizontal,
+                .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = theme.spacing.xs },
+            });
+            defer prow.deinit();
+            var code_buf: [40]u8 = undefined;
+            const code_line = std.fmt.bufPrint(&code_buf, "Pairing code:  {s}", .{remote.pairingCode()}) catch "Pairing code";
+            _ = dvui.label(@src(), "{s}", .{code_line}, .{
+                .color_text = theme.colors.accent,
+                .font = dvui.themeGet().font_mono,
+                .gravity_y = 0.5,
+                .expand = .horizontal,
+            });
+            if (dvui.button(@src(), "New code", .{}, .{
+                .color_fill = theme.colors.bg_elevated,
+                .color_text = theme.colors.text_secondary,
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 2 },
+            })) {
+                remote.regeneratePairCode();
+                state.showToast("Pairing code rotated");
             }
         }
     }
@@ -2804,9 +2923,11 @@ pub fn renderDepsModal() void {
     // Gemma users need llama-server + the GGUF model (validated in the
     // Gemma rows below and via ai_server state).
     const ai_server = @import("../services/ai_server.zig");
+    ai_server.checkPaths(); // lazy detection — idempotent; not run at boot
     const llm_ready = switch (ai_server.backend_kind) {
         .apfel => s.apfel,
         .gemma_llama => ai_server.llama_server_exists and ai_server.model_exists,
+        .cloud => ai_server.cloudConfigured(),
     };
     if (llm_ready and s.ffmpeg and s.whisper and s.whisper_model) {
         state.app.deps_modal_open = false;

@@ -66,7 +66,7 @@ const midnight_colors = ThemeColors{
     .bg_elevated     = .{ .r = 31,  .g = 31,  .b = 41,  .a = 255 },
     .border_subtle    = .{ .r = 255, .g = 255, .b = 255, .a = 14 },
     .border_strong    = .{ .r = 255, .g = 255, .b = 255, .a = 24 },
-    .bg_glass        = .{ .r = 12,  .g = 12, .b = 17, .a = 200 },
+    .bg_glass        = .{ .r = 12,  .g = 12, .b = 17, .a = 160 },
     .overlay         = .{ .r = 0,   .g = 0,   .b = 0,   .a = 160 },
     .accent          = .{ .r = 93,  .g = 208, .b = 255, .a = 255 }, // electric cyan
     .accent_dim      = .{ .r = 93,  .g = 208, .b = 255, .a = 64 },
@@ -88,7 +88,7 @@ const abyss_colors = ThemeColors{
     .bg_elevated     = .{ .r = 20,  .g = 20,  .b = 20,  .a = 255 },
     .border_subtle    = .{ .r = 255, .g = 255, .b = 255, .a = 14 },
     .border_strong    = .{ .r = 255, .g = 255, .b = 255, .a = 24 },
-    .bg_glass        = .{ .r = 0,  .g = 0, .b = 0, .a = 200 },
+    .bg_glass        = .{ .r = 0,  .g = 0, .b = 0, .a = 160 },
     .overlay         = .{ .r = 0,   .g = 0,   .b = 0,   .a = 180 },
     .accent          = .{ .r = 50,  .g = 160, .b = 110, .a = 255 }, // muted green
     .accent_dim      = .{ .r = 50,  .g = 160, .b = 110, .a = 64 },
@@ -110,7 +110,7 @@ const phantom_colors = ThemeColors{
     .bg_elevated     = .{ .r = 40,  .g = 30,  .b = 56,  .a = 255 },
     .border_subtle    = .{ .r = 255, .g = 255, .b = 255, .a = 14 },
     .border_strong    = .{ .r = 255, .g = 255, .b = 255, .a = 24 },
-    .bg_glass        = .{ .r = 10,  .g = 6, .b = 18, .a = 200 },
+    .bg_glass        = .{ .r = 10,  .g = 6, .b = 18, .a = 160 },
     .overlay         = .{ .r = 8,   .g = 4,   .b = 16,  .a = 170 },
     .accent          = .{ .r = 125, .g = 110, .b = 185, .a = 255 }, // muted violet
     .accent_dim      = .{ .r = 125, .g = 110, .b = 185, .a = 64 },
@@ -132,7 +132,7 @@ const nord_colors = ThemeColors{
     .bg_elevated     = .{ .r = 82,  .g = 92,  .b = 112, .a = 255 },
     .border_subtle    = .{ .r = 255, .g = 255, .b = 255, .a = 14 },
     .border_strong    = .{ .r = 255, .g = 255, .b = 255, .a = 24 },
-    .bg_glass        = .{ .r = 36,  .g = 42, .b = 54, .a = 200 },
+    .bg_glass        = .{ .r = 36,  .g = 42, .b = 54, .a = 160 },
     .overlay         = .{ .r = 30,  .g = 34,  .b = 44,  .a = 160 },
     .accent          = .{ .r = 110, .g = 150, .b = 165, .a = 255 }, // muted frost
     .accent_dim      = .{ .r = 110, .g = 150, .b = 165, .a = 64 },
@@ -154,7 +154,7 @@ const solarized_colors = ThemeColors{
     .bg_elevated     = .{ .r = 22,  .g = 68,  .b = 80,  .a = 255 },
     .border_subtle    = .{ .r = 255, .g = 255, .b = 255, .a = 14 },
     .border_strong    = .{ .r = 255, .g = 255, .b = 255, .a = 24 },
-    .bg_glass        = .{ .r = 0,  .g = 36, .b = 46, .a = 200 },
+    .bg_glass        = .{ .r = 0,  .g = 36, .b = 46, .a = 160 },
     .overlay         = .{ .r = 0,   .g = 20,  .b = 28,  .a = 170 },
     .accent          = .{ .r = 160, .g = 85,  .b = 50,  .a = 255 }, // muted orange
     .accent_dim      = .{ .r = 160, .g = 85,  .b = 50,  .a = 64 },
@@ -176,7 +176,7 @@ const rose_colors = ThemeColors{
     .bg_elevated     = .{ .r = 46,  .g = 28,  .b = 40,  .a = 255 },
     .border_subtle    = .{ .r = 255, .g = 255, .b = 255, .a = 14 },
     .border_strong    = .{ .r = 255, .g = 255, .b = 255, .a = 24 },
-    .bg_glass        = .{ .r = 12,  .g = 6, .b = 12, .a = 200 },
+    .bg_glass        = .{ .r = 12,  .g = 6, .b = 12, .a = 160 },
     .overlay         = .{ .r = 12,  .g = 4,   .b = 10,  .a = 170 },
     .accent          = .{ .r = 175, .g = 100, .b = 140, .a = 255 }, // muted rose
     .accent_dim      = .{ .r = 175, .g = 100, .b = 140, .a = 64 },
@@ -198,7 +198,7 @@ const ember_colors = ThemeColors{
     .bg_elevated     = .{ .r = 50,  .g = 36,  .b = 28,  .a = 255 },
     .border_subtle    = .{ .r = 255, .g = 255, .b = 255, .a = 14 },
     .border_strong    = .{ .r = 255, .g = 255, .b = 255, .a = 24 },
-    .bg_glass        = .{ .r = 14,  .g = 10, .b = 6, .a = 200 },
+    .bg_glass        = .{ .r = 14,  .g = 10, .b = 6, .a = 160 },
     .overlay         = .{ .r = 10,  .g = 6,   .b = 4,   .a = 170 },
     .accent          = .{ .r = 185, .g = 120, .b = 65,  .a = 255 }, // muted amber
     .accent_dim      = .{ .r = 185, .g = 120, .b = 65,  .a = 64 },

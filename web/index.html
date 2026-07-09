@@ -1,734 +1,308 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Opal — Play everything</title>
-  <meta name="description" content="Opal — Play everything">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <style>
-    :root {
-      --bg-deep: #0d0d1a; --bg-primary: #1a1a2e; --bg-card: #16213e;
-      --bg-card-hover: #1c2a4a; --bg-input: #0f1729;
-      --accent: #e94560; --accent-hover: #ff6b81; --accent-glow: rgba(233,69,96,0.3);
-      --text: #e8e8f0; --text-muted: #787896; --text-dim: #4a4a6a;
-      --success: #2ecc71; --warning: #f39c12; --danger: #e74c3c;
-      --border: rgba(255,255,255,0.06); --radius: 12px; --radius-sm: 8px;
-    }
-    * { margin:0; padding:0; box-sizing:border-box; }
-    html,body { font-family:'Inter',system-ui,sans-serif; background:var(--bg-deep); color:var(--text); min-height:100vh; -webkit-font-smoothing:antialiased; }
-    .app { display:flex; min-height:100vh; }
-    nav { width:220px; background:var(--bg-primary); border-right:1px solid var(--border); padding:16px 0; display:flex; flex-direction:column; position:fixed; top:0; left:0; bottom:0; z-index:100; transition:transform .3s; overflow-y:auto; }
-    nav .brand { padding:0 16px 16px; border-bottom:1px solid var(--border); margin-bottom:8px; }
-    nav .brand h1 { font-size:1.3em; font-weight:700; background:linear-gradient(135deg,var(--accent),#ff8a5c); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
-    nav .brand small { color:var(--text-dim); font-size:.7em; }
-    nav ul { list-style:none; flex:1; padding:4px 0; }
-    nav ul li a { display:flex; align-items:center; gap:10px; padding:9px 16px; color:var(--text-muted); text-decoration:none; font-size:.85em; font-weight:500; border-left:3px solid transparent; transition:all .15s; }
-    nav ul li a:hover, nav ul li a.active { color:var(--text); background:rgba(233,69,96,.08); border-left-color:var(--accent); }
-    nav ul li a svg { width:18px; height:18px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; flex-shrink:0; }
-    nav .sep { height:1px; background:var(--border); margin:6px 16px; }
-    main { flex:1; margin-left:220px; padding:20px 28px; }
-    .card { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); padding:18px; transition:transform .2s,box-shadow .2s; }
-    .card:hover { transform:translateY(-1px); box-shadow:0 6px 24px rgba(0,0,0,.3); }
-    .now-playing { background:linear-gradient(135deg,var(--bg-card),#0f3460); border:1px solid var(--border); border-radius:var(--radius); padding:20px; display:flex; gap:20px; align-items:center; margin-bottom:20px; }
-    .now-playing .poster { width:80px; height:56px; border-radius:var(--radius-sm); background:var(--bg-deep); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
-    .now-playing .poster svg { width:28px; height:28px; stroke:var(--accent); fill:none; stroke-width:2; }
-    .now-playing .info { flex:1; }
-    .now-playing .title { font-size:1.1em; font-weight:600; }
-    .now-playing .sub { color:var(--text-muted); font-size:.8em; margin-top:2px; }
-    .progress { width:100%; height:5px; background:var(--bg-deep); border-radius:3px; margin-top:10px; cursor:pointer; }
-    .progress .fill { height:100%; background:linear-gradient(90deg,var(--accent),var(--accent-hover)); border-radius:3px; transition:width .5s; }
-    .controls { display:flex; gap:6px; align-items:center; justify-content:center; margin:14px 0; flex-wrap:wrap; }
-    .btn { background:var(--bg-card); border:1px solid var(--border); color:var(--text); border-radius:var(--radius-sm); padding:9px 14px; font-size:.85em; font-weight:500; cursor:pointer; transition:all .15s; font-family:inherit; display:inline-flex; align-items:center; gap:5px; }
-    .btn:hover { background:var(--bg-card-hover); }
-    .btn:active { transform:scale(.96); }
-    .btn svg { width:16px; height:16px; stroke:currentColor; fill:none; stroke-width:2; }
-    .btn-accent { background:linear-gradient(135deg,var(--accent),#c62368); border-color:var(--accent); color:#fff; }
-    .btn-accent:hover { box-shadow:0 0 16px var(--accent-glow); }
-    .btn-round { width:44px; height:44px; padding:0; border-radius:50%; display:flex; align-items:center; justify-content:center; }
-    .btn-sm { padding:6px 10px; font-size:.78em; }
-    .btn-play { width:52px; height:52px; font-size:1.4em; background:linear-gradient(135deg,var(--accent),#c62368); border-color:var(--accent); color:#fff; border-radius:50%; padding:0; display:flex; align-items:center; justify-content:center; }
-    .btn-play svg { width:22px; height:22px; }
-    .grid { display:grid; gap:14px; }
-    .g2 { grid-template-columns:repeat(2,1fr); }
-    .g3 { grid-template-columns:repeat(3,1fr); }
-    .stat { text-align:center; padding:16px; }
-    .stat .val { font-size:1.8em; font-weight:700; background:linear-gradient(135deg,var(--accent),var(--accent-hover)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
-    .stat .lbl { color:var(--text-muted); font-size:.75em; margin-top:2px; }
-    .page { display:none; } .page.active { display:block; }
-    h2 { font-size:1.15em; font-weight:600; margin-bottom:16px; display:flex; align-items:center; gap:8px; }
-    h2 svg { width:20px; height:20px; stroke:currentColor; fill:none; stroke-width:2; }
-    input[type=text],input[type=number] { background:var(--bg-input); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 14px; color:var(--text); font-size:.9em; font-family:inherit; outline:none; transition:border .2s; width:100%; }
-    input:focus { border-color:var(--accent); }
-    .search-bar { display:flex; gap:8px; margin-bottom:18px; position:relative; }
-    .search-bar input { flex:1; }
-    .search-bar .clear { position:absolute; right:120px; top:50%; transform:translateY(-50%); background:none; border:none; color:var(--text-muted); cursor:pointer; padding:4px; font-size:1.1em; display:none; }
-    .search-bar .clear.show { display:block; }
-    table { width:100%; border-collapse:collapse; }
-    th { text-align:left; padding:8px 10px; color:var(--text-muted); font-size:.75em; font-weight:600; text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--border); }
-    td { padding:10px; border-bottom:1px solid var(--border); font-size:.85em; }
-    tr:hover td { background:rgba(233,69,96,.04); }
-    .seeds { color:var(--success); font-weight:600; }
-    .size { color:var(--text-muted); }
-    .item { display:flex; align-items:center; gap:10px; padding:10px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-sm); margin-bottom:6px; transition:background .2s; }
-    .item:hover { background:var(--bg-card-hover); }
-    .item .meta { flex:1; } .item .name { font-weight:500; font-size:.88em; } .item .detail { color:var(--text-muted); font-size:.75em; }
-    .setting { display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid var(--border); }
-    .setting .lbl { font-size:.88em; font-weight:500; } .setting .desc { color:var(--text-muted); font-size:.78em; margin-top:1px; }
-    .toggle { width:40px; height:22px; background:var(--bg-deep); border-radius:11px; position:relative; cursor:pointer; transition:background .3s; flex-shrink:0; }
-    .toggle.on { background:var(--accent); }
-    .toggle::after { content:''; width:16px; height:16px; background:#fff; border-radius:50%; position:absolute; top:3px; left:3px; transition:transform .3s; }
-    .toggle.on::after { transform:translateX(18px); }
-    input[type=range] { -webkit-appearance:none; width:100%; height:5px; background:var(--bg-deep); border-radius:3px; outline:none; margin:8px 0; }
-    input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; background:var(--accent); border-radius:50%; cursor:pointer; box-shadow:0 0 6px var(--accent-glow); }
-    .toast { position:fixed; bottom:20px; right:20px; background:var(--bg-card); border:1px solid var(--accent); border-radius:var(--radius-sm); padding:10px 18px; color:var(--text); font-size:.85em; box-shadow:0 0 16px var(--accent-glow); z-index:1000; animation:slideIn .3s; }
-    @keyframes slideIn { from{transform:translateY(16px);opacity:0}to{transform:translateY(0);opacity:1} }
-    .tabs { display:flex; gap:4px; margin-bottom:14px; flex-wrap:wrap; }
-    .tab { padding:7px 14px; border-radius:var(--radius-sm); background:var(--bg-card); border:1px solid var(--border); color:var(--text-muted); cursor:pointer; font-size:.82em; font-weight:500; transition:all .15s; }
-    .tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
-    .tab:hover { background:var(--bg-card-hover); }
-    .pulse { animation:pulse 1.5s infinite; }
-    @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.5} }
-    .badge { background:var(--accent); color:#fff; font-size:.65em; padding:2px 6px; border-radius:10px; margin-left:6px; }
-    @media(max-width:768px) { nav{transform:translateX(-100%)} nav.open{transform:translateX(0)} main{margin-left:0;padding:14px} .g3{grid-template-columns:repeat(2,1fr)} .now-playing{flex-direction:column;text-align:center} .mob-menu{display:flex!important} }
-    @media(max-width:480px) { .g2,.g3{grid-template-columns:1fr} }
-    .mob-menu { display:none; position:fixed; top:10px; left:10px; z-index:200; }
-    ::-webkit-scrollbar{width:5px} ::-webkit-scrollbar-track{background:var(--bg-deep)} ::-webkit-scrollbar-thumb{background:var(--text-dim);border-radius:3px}
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0c0c11">
+<title>Opal — Play everything</title>
+<style>
+/* Opal Anywhere — theme tokens ported from src/ui/theme.zig (midnight) */
+:root{
+  --bg-app:#0c0c11; --bg-surface:#14141c; --bg-elevated:#1c1c26; --bg-hover:#232330;
+  --border:#2a2a38; --text-1:#e8e8f0; --text-2:#a0a0b4; --text-3:#6c6c80;
+  --accent:#8ab4ff; --accent-dim:#3a4a6a; --success:#7dd87d; --danger:#ff7a7a;
+  --rad:10px; --rad-sm:6px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{background:var(--bg-app);color:var(--text-1);font:15px/1.45 -apple-system,system-ui,Segoe UI,Roboto,sans-serif;
+  padding-bottom:calc(64px + env(safe-area-inset-bottom))}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+input{font:inherit;color:var(--text-1)}
+
+/* ── Pairing screen ── */
+#pair-screen{position:fixed;inset:0;background:var(--bg-app);display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:14px;z-index:50;padding:24px;text-align:center}
+#pair-screen h1{font-size:26px;font-weight:700}
+#pair-screen p{color:var(--text-2);max-width:340px}
+#pair-code{width:200px;text-align:center;letter-spacing:8px;font-size:24px;padding:12px;
+  background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--rad);outline:none}
+#pair-code:focus{border-color:var(--accent)}
+#pair-btn{background:var(--accent);color:#0c0c11;font-weight:600;padding:12px 32px;border-radius:var(--rad)}
+#pair-err{color:var(--danger);min-height:20px;font-size:13px}
+
+/* ── Header ── */
+header{display:flex;align-items:center;gap:10px;padding:14px 16px 8px}
+header .logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#8ab4ff,#6a5acd)}
+header h1{font-size:19px;font-weight:700}
+header .dot{margin-left:auto;width:9px;height:9px;border-radius:50%;background:var(--text-3)}
+header .dot.on{background:var(--success)}
+
+/* ── Tabs (bottom) ── */
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:rgba(20,20,28,.92);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-top:1px solid var(--border);
+  padding-bottom:env(safe-area-inset-bottom);z-index:40}
+nav button{flex:1;padding:11px 0 9px;color:var(--text-3);font-size:12px;display:flex;flex-direction:column;
+  align-items:center;gap:3px}
+nav button.on{color:var(--accent)}
+nav svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+main{padding:6px 16px 16px;max-width:640px;margin:0 auto}
+.page{display:none}.page.on{display:block}
+
+/* ── Now Playing ── */
+#np-title{font-size:17px;font-weight:600;margin:18px 0 4px;word-break:break-word}
+#np-sub{color:var(--text-3);font-size:13px}
+.seek-wrap{margin:22px 0 6px}
+input[type=range]{width:100%;appearance:none;-webkit-appearance:none;height:26px;background:transparent}
+input[type=range]::-webkit-slider-runnable-track{height:5px;border-radius:3px;background:var(--bg-elevated)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;
+  background:var(--accent);margin-top:-6.5px}
+.times{display:flex;justify-content:space-between;color:var(--text-3);font-size:12px;font-variant-numeric:tabular-nums}
+.transport{display:flex;align-items:center;justify-content:center;gap:18px;margin:22px 0}
+.transport button{width:56px;height:56px;border-radius:50%;background:var(--bg-elevated);display:flex;
+  align-items:center;justify-content:center;transition:background .15s}
+.transport button:active{background:var(--bg-hover)}
+.transport button.big{width:74px;height:74px;background:var(--accent);color:#0c0c11}
+.transport svg{width:26px;height:26px;fill:currentColor;stroke:none}
+.vol-row{display:flex;align-items:center;gap:12px;margin-top:10px}
+.vol-row button{color:var(--text-2);width:40px;height:40px;display:flex;align-items:center;justify-content:center}
+.vol-row svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8}
+.quick{display:flex;gap:8px;margin-top:22px;flex-wrap:wrap}
+.quick button{background:var(--bg-elevated);border:1px solid var(--border);border-radius:999px;
+  color:var(--text-2);padding:8px 16px;font-size:13px}
+
+/* ── Search ── */
+.search-row{display:flex;gap:8px;margin:12px 0}
+#q{flex:1;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--rad);
+  padding:11px 14px;outline:none}
+#q:focus{border-color:var(--accent)}
+#go{background:var(--accent);color:#0c0c11;font-weight:600;border-radius:var(--rad);padding:0 18px}
+.hint{color:var(--text-3);font-size:13px;margin:8px 2px}
+.result{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--rad);
+  padding:10px 12px;margin-bottom:8px}
+.result .t{font-size:14px;word-break:break-word}
+.result .m{display:flex;gap:10px;color:var(--text-3);font-size:12px;margin-top:4px;align-items:center}
+.result .src{background:var(--bg-elevated);border-radius:999px;padding:1px 9px;color:var(--text-2)}
+.result .play{margin-left:auto;color:var(--accent);font-weight:600;padding:6px 12px;
+  background:var(--bg-elevated);border-radius:var(--rad-sm)}
+
+/* ── Activity ── */
+.sect{color:var(--text-2);font-weight:600;font-size:13px;text-transform:uppercase;
+  letter-spacing:.06em;margin:18px 0 8px}
+.file{display:flex;align-items:center;gap:10px;background:var(--bg-surface);border:1px solid var(--border);
+  border-radius:var(--rad);padding:10px 12px;margin-bottom:6px;font-size:14px}
+.file .n{flex:1;word-break:break-word}
+.file .play{color:var(--accent);font-weight:600}
+.empty{color:var(--text-3);text-align:center;padding:30px 0}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--text-3);border-top-color:var(--accent);
+  border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style>
 </head>
 <body>
-<button class="btn mob-menu" onclick="document.getElementById('nav').classList.toggle('open')">☰</button>
-<div class="app">
-  <nav id="nav">
-    <div class="brand"><h1>⚡ Opal</h1><small>Play everything</small></div>
-    <ul>
-      <li><a href="#" class="active" data-page="dashboard"><svg><use href="#i-home"/></svg> Dashboard</a></li>
-      <li><a href="#" data-page="search"><svg><use href="#i-search"/></svg> Search</a></li>
-      <li><a href="#" data-page="player"><svg><use href="#i-sliders"/></svg> Player</a></li>
-      <li><a href="#" data-page="queue"><svg><use href="#i-list"/></svg> Queue</a></li>
-      <li><a href="#" data-page="history"><svg><use href="#i-clock"/></svg> History</a></li>
-      <li><a href="#" data-page="transfers"><svg><use href="#i-download"/></svg> Downloads</a></li>
-    </ul>
-    <div class="sep"></div>
-    <ul>
-      <li><a href="#" data-page="unified" style="color:var(--accent)"><svg><use href="#i-zap"/></svg> ⚡ Universal Search</a></li>
-      <li><a href="#" data-page="tmdb"><svg><use href="#i-film"/></svg> TMDB</a></li>
-      <li><a href="#" data-page="youtube"><svg><use href="#i-music"/></svg> YouTube</a></li>
-      <li><a href="#" data-page="anime"><svg><use href="#i-star"/></svg> Anime</a></li>
-      <li><a href="#" data-page="comics"><svg><use href="#i-book"/></svg> Comics</a></li>
-      <li><a href="#" data-page="jellyfin"><svg><use href="#i-server"/></svg> Jellyfin</a></li>
-    </ul>
-    <div class="sep"></div>
-    <ul>
-      <li><a href="#" data-page="rss"><svg><use href="#i-rss"/></svg> RSS Feeds</a></li>
-      <li><a href="#" data-page="party"><svg><use href="#i-users"/></svg> Watch Party</a></li>
-      <li><a href="#" data-page="settings"><svg><use href="#i-settings"/></svg> Settings</a></li>
-    </ul>
-  </nav>
 
-  <main>
-    <!-- Dashboard -->
-    <div class="page active" id="p-dashboard">
-      <div class="now-playing">
-        <div class="poster"><svg><use href="#i-film"/></svg></div>
-        <div class="info">
-          <div class="title" id="np-title">Nothing Playing</div>
-          <div class="sub" id="np-sub">--:-- / --:--</div>
-          <div class="progress" onclick="seekClick(event)"><div class="fill" id="np-bar" style="width:0%"></div></div>
-        </div>
-      </div>
-      <div class="controls">
-        <button class="btn btn-round" onclick="api('back')"><svg><use href="#i-rewind"/></svg></button>
-        <button class="btn btn-play" onclick="api('toggle')" id="btn-play"><svg><use href="#i-play"/></svg></button>
-        <button class="btn btn-round" onclick="api('fwd')"><svg><use href="#i-ff"/></svg></button>
-        <button class="btn btn-round" onclick="api('vol_down')"><svg><use href="#i-vol-down"/></svg></button>
-        <button class="btn btn-round" onclick="api('mute')"><svg><use href="#i-vol-x"/></svg></button>
-        <button class="btn btn-round" onclick="api('vol_up')"><svg><use href="#i-vol-up"/></svg></button>
-      </div>
-      <div class="grid g3" style="margin-top:18px">
-        <div class="card stat"><div class="val" id="s-vol">--</div><div class="lbl">Volume</div></div>
-        <div class="card stat"><div class="val" id="s-pos">--:--</div><div class="lbl">Position</div></div>
-        <div class="card stat"><div class="val" id="s-dur">--:--</div><div class="lbl">Duration</div></div>
-      </div>
-      <div class="grid g2" style="margin-top:18px">
-        <a href="#" class="card" style="text-decoration:none;color:inherit" data-page="search"><h3>🔍 Search</h3><p style="color:var(--text-muted);margin-top:6px;font-size:.85em">Find and stream content</p></a>
-        <a href="#" class="card" style="text-decoration:none;color:inherit" data-page="rss"><h3>📡 RSS Feeds</h3><p style="color:var(--text-muted);margin-top:6px;font-size:.85em">Browse torrent feeds</p></a>
-        <a href="#" class="card" style="text-decoration:none;color:inherit" data-page="queue"><h3>📋 Queue</h3><p style="color:var(--text-muted);margin-top:6px;font-size:.85em">Manage playlist</p></a>
-        <a href="#" class="card" style="text-decoration:none;color:inherit" data-page="party"><h3>🎉 Watch Party</h3><p style="color:var(--text-muted);margin-top:6px;font-size:.85em">Sync with friends</p></a>
-      </div>
-    </div>
-
-    <!-- Search -->
-    <div class="page" id="p-search">
-      <h2><svg><use href="#i-search"/></svg>Search</h2>
-      <div class="search-bar">
-        <input type="text" id="q" placeholder="Search for movies, shows, anime..." oninput="updateClear()">
-        <button class="clear" id="q-clear" onclick="clearSearch()">✕</button>
-        <button class="btn btn-accent" onclick="doSearch()"><svg><use href="#i-search"/></svg>Search</button>
-      </div>
-      <div id="search-status" style="margin-bottom:10px"></div>
-      <div id="search-history" style="display:none">
-        <h3 style="color:var(--text-muted);font-size:.85em;margin-bottom:10px;display:flex;align-items:center;gap:6px"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-clock"/></svg> Recent Searches</h3>
-        <div id="hist-items"></div>
-      </div>
-      <table id="search-table"><thead><tr><th>Title</th><th>Size</th><th>Seeds</th><th>Source</th><th></th></tr></thead><tbody id="res"><tr><td colspan="5" style="text-align:center;color:var(--text-dim);padding:30px">Enter a search query above</td></tr></tbody></table>
-    </div>
-
-    <!-- Unified Search -->
-    <div class="page" id="p-unified">
-      <h2><svg><use href="#i-zap"/></svg>Universal Search</h2>
-      <div class="search-bar">
-        <input type="text" id="uq" placeholder="Search everything — torrents, TMDB, YouTube, anime, Jellyfin...">
-        <button class="btn btn-accent" onclick="doUnified()" style="min-width:90px"><svg><use href="#i-search"/></svg>Search All</button>
-      </div>
-      <div id="u-status" style="margin:8px 0;font-size:.85em"></div>
-      <div id="u-filters" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
-        <button class="btn btn-sm u-filter active" data-src="all" onclick="filterUnified('all')">All</button>
-        <button class="btn btn-sm u-filter" data-src="torrent" onclick="filterUnified('torrent')" style="--badge:var(--success)">Torrents</button>
-        <button class="btn btn-sm u-filter" data-src="tmdb" onclick="filterUnified('tmdb')" style="--badge:#01b4e4">TMDB</button>
-        <button class="btn btn-sm u-filter" data-src="youtube" onclick="filterUnified('youtube')" style="--badge:#ff0000">YouTube</button>
-        <button class="btn btn-sm u-filter" data-src="anime" onclick="filterUnified('anime')" style="--badge:#e040fb">Anime</button>
-        <button class="btn btn-sm u-filter" data-src="jellyfin" onclick="filterUnified('jellyfin')" style="--badge:#00a4dc">Jellyfin</button>
-      </div>
-      <div id="u-results"><div style="color:var(--text-dim);text-align:center;padding:40px">Search across all your media sources at once</div></div>
-    </div>
-
-    <!-- Player -->
-    <div class="page" id="p-player">
-      <h2><svg><use href="#i-sliders"/></svg>Player Controls</h2>
-      <div class="card" style="margin-bottom:18px">
-        <h3 style="margin-bottom:12px">Transport</h3>
-        <div class="controls">
-          <button class="btn btn-round" onclick="api('back')"><svg><use href="#i-rewind"/></svg></button>
-          <button class="btn btn-play" onclick="api('toggle')"><svg><use href="#i-play"/></svg></button>
-          <button class="btn btn-round" onclick="api('fwd')"><svg><use href="#i-ff"/></svg></button>
-        </div>
-        <div style="margin-top:14px"><label style="color:var(--text-muted);font-size:.8em">Seek</label><input type="range" id="seek-r" min="0" max="100" value="0" oninput="api('seek_pct?v='+this.value)"></div>
-        <div style="margin-top:10px"><label style="color:var(--text-muted);font-size:.8em">Volume</label><input type="range" id="vol-r" min="0" max="150" value="100" oninput="api('volume?v='+this.value)"><span id="vol-l" style="color:var(--text-muted);font-size:.8em">100%</span></div>
-      </div>
-      <div class="grid g2">
-        <div class="card"><h3 style="margin-bottom:10px">Tracks</h3><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn" onclick="api('next_audio')"><svg><use href="#i-music"/></svg>Audio</button><button class="btn" onclick="api('next_sub')"><svg><use href="#i-caption"/></svg>Subs</button></div></div>
-        <div class="card"><h3 style="margin-bottom:10px">Display</h3><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn" onclick="api('fullscreen')"><svg><use href="#i-maximize"/></svg>Fullscreen</button><button class="btn" onclick="api('flip')">Flip</button><button class="btn" onclick="api('rotate')">Rotate</button></div></div>
-      </div>
-    </div>
-
-    <!-- Queue -->
-    <div class="page" id="p-queue">
-      <h2><svg><use href="#i-list"/></svg>Queue<button class="btn" style="margin-left:auto" onclick="loadQueue()"><svg><use href="#i-refresh"/></svg>Refresh</button></h2>
-      <div id="queue-list"><div class="item"><div class="meta"><div class="name" style="color:var(--text-dim)">Click refresh to load queue</div></div></div></div>
-    </div>
-
-    <!-- History -->
-    <div class="page" id="p-history">
-      <h2><svg><use href="#i-clock"/></svg>Search History<button class="btn" style="margin-left:auto" onclick="loadHistory()"><svg><use href="#i-refresh"/></svg>Refresh</button></h2>
-      <div id="hist-list"></div>
-    </div>
-
-    <!-- Downloads -->
-    <div class="page" id="p-transfers">
-      <h2><svg><use href="#i-download"/></svg>Downloads<button class="btn" style="margin-left:auto" onclick="loadDownloads()"><svg><use href="#i-refresh"/></svg>Refresh</button></h2>
-      <div id="dl-path" style="color:var(--text-muted);font-size:.8em;margin-bottom:10px;display:flex;align-items:center;gap:6px"></div>
-      <div id="dl-back" style="margin-bottom:8px"></div>
-      <div id="dl-list"><div style="color:var(--text-dim);text-align:center;padding:30px">Loading downloads…</div></div>
-    </div>
-
-    <!-- RSS Feeds -->
-    <div class="page" id="p-rss">
-      <h2><svg><use href="#i-rss"/></svg>RSS Feeds<button class="btn" style="margin-left:auto" onclick="loadRss()"><svg><use href="#i-refresh"/></svg>Refresh</button></h2>
-      <div class="tabs" id="rss-tabs"></div>
-      <div id="rss-status" style="margin-bottom:10px"></div>
-      <div id="rss-list"></div>
-    </div>
-
-    <!-- Watch Party -->
-    <div class="page" id="p-party">
-      <h2><svg><use href="#i-users"/></svg>Watch Party</h2>
-      <div class="grid g2">
-        <div class="card"><h3 style="margin-bottom:10px">Host a Party</h3><p style="color:var(--text-muted);font-size:.85em;margin-bottom:12px">Start synced playback on LAN</p><button class="btn btn-accent" onclick="api('party/host');toast('Started hosting!')">Start Hosting</button></div>
-        <div class="card"><h3 style="margin-bottom:10px">Join a Party</h3><p style="color:var(--text-muted);font-size:.85em;margin-bottom:8px">Connect to a host</p><div style="display:flex;gap:6px"><input type="text" id="party-ip" placeholder="Host IP" style="flex:1"><button class="btn btn-accent" onclick="api('party/join?ip='+enc(el('party-ip').value));toast('Joining...')">Join</button></div></div>
-      </div>
-    </div>
-
-    <!-- TMDB -->
-    <div class="page" id="p-tmdb">
-      <h2><svg><use href="#i-film"/></svg>TMDB — Movies & TV<button class="btn" style="margin-left:auto" onclick="loadTmdb()"><svg><use href="#i-refresh"/></svg>Refresh</button></h2>
-      <div class="search-bar"><input type="text" id="tmdb-q" placeholder="Search movies & TV shows..."><button class="btn btn-accent" onclick="searchTmdb()"><svg><use href="#i-search"/></svg>Search</button></div>
-      <div id="tmdb-status" style="margin-bottom:8px"></div>
-      <div id="tmdb-list"></div>
-    </div>
-
-    <!-- YouTube -->
-    <div class="page" id="p-youtube">
-      <h2><svg><use href="#i-music"/></svg>YouTube<button class="btn" style="margin-left:auto" onclick="loadYoutube()"><svg><use href="#i-refresh"/></svg>Refresh</button></h2>
-      <div class="search-bar"><input type="text" id="yt-q" placeholder="Search YouTube..."><button class="btn btn-accent" onclick="searchYoutube()"><svg><use href="#i-search"/></svg>Search</button></div>
-      <div id="yt-status" style="margin-bottom:8px"></div>
-      <div id="yt-list"></div>
-    </div>
-
-    <!-- Anime -->
-    <div class="page" id="p-anime">
-      <h2><svg><use href="#i-star"/></svg>Anime<button class="btn" style="margin-left:auto" onclick="loadAnime()"><svg><use href="#i-refresh"/></svg>Refresh</button></h2>
-      <div class="search-bar"><input type="text" id="anime-q" placeholder="Search anime (e.g. naruto, one piece)..."><button class="btn btn-accent" onclick="searchAnime()"><svg><use href="#i-search"/></svg>Search</button></div>
-      <div id="anime-status" style="margin-bottom:8px"></div>
-      <div id="anime-list"></div>
-    </div>
-
-    <!-- Comics -->
-    <div class="page" id="p-comics">
-      <h2><svg><use href="#i-book"/></svg>Comics</h2>
-      <div class="search-bar"><input type="text" id="comic-url" placeholder="Paste readallcomics.com URL..."><button class="btn btn-accent" onclick="loadComic()"><svg><use href="#i-play"/></svg>Load</button></div>
-      <div id="comic-status" style="margin-bottom:8px"></div>
-      <div id="comic-info"></div>
-    </div>
-
-    <!-- Jellyfin -->
-    <div class="page" id="p-jellyfin">
-      <h2><svg><use href="#i-server"/></svg>Jellyfin<button class="btn" style="margin-left:auto" onclick="loadJellyfin()"><svg><use href="#i-refresh"/></svg>Refresh</button></h2>
-      <div id="jf-login" style="display:none">
-        <div class="card" style="margin-bottom:16px">
-          <h3 style="margin-bottom:10px">Connect to Jellyfin</h3>
-          <input type="text" id="jf-server" placeholder="Server URL (e.g. http://192.168.1.5:8096)" style="width:100%;margin-bottom:8px;padding:8px;background:var(--bg-primary);border:1px solid var(--border);border-radius:8px;color:var(--text-main)">
-          <input type="text" id="jf-user" placeholder="Username" style="width:100%;margin-bottom:8px;padding:8px;background:var(--bg-primary);border:1px solid var(--border);border-radius:8px;color:var(--text-main)">
-          <input type="password" id="jf-pass" placeholder="Password" style="width:100%;margin-bottom:8px;padding:8px;background:var(--bg-primary);border:1px solid var(--border);border-radius:8px;color:var(--text-main)">
-          <div id="jf-error" style="color:var(--danger);font-size:.85em;margin-bottom:8px"></div>
-          <button class="btn btn-accent" onclick="jfLogin()">Connect</button>
-        </div>
-      </div>
-      <div id="jf-connected" style="display:none">
-        <div style="display:flex;gap:8px;margin-bottom:12px">
-          <div class="search-bar" style="flex:1"><input type="text" id="jf-q" placeholder="Search Jellyfin library..."><button class="btn btn-accent" onclick="jfSearch()"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-search"/></svg>Search</button></div>
-          <button class="btn" onclick="api('jellyfin/disconnect');setTimeout(loadJellyfin,500)" style="color:var(--danger)">Disconnect</button>
-        </div>
-        <div id="jf-status" style="margin-bottom:8px"></div>
-        <div id="jf-libs" style="margin-bottom:12px"></div>
-        <div id="jf-items"></div>
-      </div>
-    </div>
-
-    <!-- Settings -->
-    <div class="page" id="p-settings">
-      <h2><svg><use href="#i-settings"/></svg>Settings</h2>
-      <div class="card" style="margin-bottom:16px">
-        <h3 style="margin-bottom:10px">Playback</h3>
-        <div class="setting"><div><div class="lbl">Auto-Advance Queue</div><div class="desc">Play next when current ends</div></div><div class="toggle" id="t-auto" onclick="toggleSetting(this,'auto_advance')"></div></div>
-        <div class="setting"><div><div class="lbl">SponsorBlock</div><div class="desc">Skip sponsored segments</div></div><div class="toggle" id="t-sponsor" onclick="toggleSetting(this,'sponsorblock')"></div></div>
-      </div>
-      <div class="card" style="margin-bottom:16px"><h3 style="margin-bottom:10px">Content</h3>
-        <div class="setting"><div><div class="lbl">NSFW Filter</div><div class="desc">Hide NSFW content from search results</div></div><div class="toggle" id="t-nsfw" onclick="toggleSetting(this,'nsfw_filter')"></div></div>
-      </div>
-      <div class="card"><h3 style="margin-bottom:10px">Privacy</h3>
-        <div class="setting"><div><div class="lbl">Incognito Mode</div><div class="desc">Don't save watch history</div></div><div class="toggle" id="t-incog" onclick="toggleSetting(this,'incognito')"></div></div>
-      </div>
-    </div>
-  </main>
+<div id="pair-screen">
+  <div class="logo" style="width:52px;height:52px;border-radius:14px;background:linear-gradient(135deg,#8ab4ff,#6a5acd)"></div>
+  <h1>Pair with Opal</h1>
+  <p>Enter the 6-digit code from <b>Settings › Scripts › Web Remote Control</b> on your computer.</p>
+  <input id="pair-code" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="••••••" autocomplete="one-time-code">
+  <button id="pair-btn">Connect</button>
+  <div id="pair-err"></div>
 </div>
 
-<!-- SVG Icon Sprites -->
-<svg style="display:none">
-  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></symbol>
-  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></symbol>
-  <symbol id="i-play" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></symbol>
-  <symbol id="i-rewind" viewBox="0 0 24 24"><polygon points="11 19 2 12 11 5 11 19"/><polygon points="22 19 13 12 22 5 22 19"/></symbol>
-  <symbol id="i-ff" viewBox="0 0 24 24"><polygon points="13 19 22 12 13 5 13 19"/><polygon points="2 19 11 12 2 5 2 19"/></symbol>
-  <symbol id="i-vol-up" viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></symbol>
-  <symbol id="i-vol-down" viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 010 7.07"/></symbol>
-  <symbol id="i-vol-x" viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></symbol>
-  <symbol id="i-film" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/><line x1="17" y1="17" x2="22" y2="17"/></symbol>
-  <symbol id="i-list" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></symbol>
-  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
-  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
-  <symbol id="i-users" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></symbol>
-  <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></symbol>
-  <symbol id="i-sliders" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></symbol>
-  <symbol id="i-refresh" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></symbol>
-  <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></symbol>
-  <symbol id="i-caption" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 15h4M15 15h2M7 11h2M13 11h4"/></symbol>
-  <symbol id="i-maximize" viewBox="0 0 24 24"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></symbol>
-  <symbol id="i-rss" viewBox="0 0 24 24"><path d="M4 11a9 9 0 019 9"/><path d="M4 4a16 16 0 0116 16"/><circle cx="5" cy="19" r="1"/></symbol>
-  <symbol id="i-arrow-up" viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></symbol>
-  <symbol id="i-arrow-down" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></symbol>
-  <symbol id="i-star" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></symbol>
-  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></symbol>
-  <symbol id="i-server" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></symbol>
-  <symbol id="i-zap" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></symbol>
-</svg>
+<header>
+  <div class="logo"></div><h1>Opal</h1><div class="dot" id="conn-dot"></div>
+</header>
+
+<main>
+  <!-- Now Playing -->
+  <section class="page on" id="page-np">
+    <div id="np-title">Nothing playing</div>
+    <div id="np-sub">Play something from Search, or on the desktop.</div>
+    <div class="seek-wrap"><input type="range" id="seek" min="0" max="100" value="0"></div>
+    <div class="times"><span id="t-pos">--:--</span><span id="t-dur">--:--</span></div>
+    <div class="transport">
+      <button id="b-back" aria-label="Back 10s"><svg viewBox="0 0 24 24"><path d="M11 19V5l-9 7 9 7zm2-14v14l9-7-9-7z" transform="scale(-1,1) translate(-24,0)"/></svg></button>
+      <button id="b-toggle" class="big" aria-label="Play/Pause"><svg id="i-pp" viewBox="0 0 24 24"><path d="M8 5v14l11-7L8 5z"/></svg></button>
+      <button id="b-fwd" aria-label="Forward 10s"><svg viewBox="0 0 24 24"><path d="M11 19V5l-9 7 9 7zm2-14v14l9-7-9-7z"/></svg></button>
+    </div>
+    <div class="vol-row">
+      <button id="b-mute" aria-label="Mute"><svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg></button>
+      <input type="range" id="vol" min="0" max="130" value="100">
+    </div>
+    <div class="quick">
+      <button id="b-sub">Subtitles ⭢</button>
+      <button id="b-aud">Audio ⭢</button>
+      <button id="b-fs">Fullscreen</button>
+    </div>
+  </section>
+
+  <!-- Search -->
+  <section class="page" id="page-search">
+    <div class="search-row">
+      <input id="q" placeholder="Search everything…" autocapitalize="off">
+      <button id="go">Go</button>
+    </div>
+    <div class="hint" id="search-hint">Results play on the desktop.</div>
+    <div id="results"></div>
+  </section>
+
+  <!-- Activity -->
+  <section class="page" id="page-act">
+    <div class="sect">Queue</div>
+    <div id="queue"></div>
+    <div class="sect">Downloads</div>
+    <div id="downloads"></div>
+    <div class="sect">History</div>
+    <div id="history"></div>
+  </section>
+</main>
+
+<nav>
+  <button data-page="np" class="on"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg>Now Playing</button>
+  <button data-page="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Search</button>
+  <button data-page="act"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 19h16"/></svg>Activity</button>
+</nav>
 
 <script>
-// Web UI is served on :3000 but the remote JSON API lives on :41595
-// (src/services/remote.zig). Talk to the API host on its own port, not
-// location.origin (which would resolve to the :3000 static server).
-const API = location.protocol + '//' + location.hostname + ':41595';
-// Bearer token injected by the server into the served HTML (see remote.zig
-// serveStaticFile). Falls back to empty if the page was opened without the
-// server substituting the placeholder.
-const API_TOKEN = (function(){ const t = '__ZIGZAG_API_TOKEN__'; return /^[0-9a-fA-F]{32}$/.test(t) ? t : ''; })();
-const AUTH_HEADERS = API_TOKEN ? { 'Authorization': 'Bearer ' + API_TOKEN } : {};
-const el = id => document.getElementById(id);
-const enc = s => encodeURIComponent(s);
-function api(a) { return fetch(API+'/api/'+a, { headers: AUTH_HEADERS }).then(r=>r.json()).catch(()=>({})); }
-function fmt(s) { if(!s||s<0)return'--:--'; const m=Math.floor(s/60),ss=Math.floor(s%60); return m+':'+(ss<10?'0':'')+ss; }
-function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML;}
-function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),3000);}
-function fmtBytes(b) { if(!b||b<=0)return'-'; if(b>1073741824)return(b/1073741824).toFixed(1)+' GB'; if(b>1048576)return(b/1048576).toFixed(1)+' MB'; return(b/1024).toFixed(0)+' KB'; }
+'use strict';
+const BASE = location.origin.startsWith('http') ? location.origin : 'http://' + location.hostname + ':41595';
+let TOKEN = localStorage.getItem('opal_token') || '';
 
-// Navigation
-document.querySelectorAll('[data-page]').forEach(a => {
-  a.addEventListener('click', e => {
-    e.preventDefault();
-    const pg = a.dataset.page;
-    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-    el('p-'+pg).classList.add('active');
-    document.querySelectorAll('nav a').forEach(l=>l.classList.remove('active'));
-    const navLink = document.querySelector('nav a[data-page="'+pg+'"]');
-    if(navLink) navLink.classList.add('active');
-    document.getElementById('nav').classList.remove('open');
-    if(pg==='queue') loadQueue();
-    if(pg==='history') loadHistory();
-    if(pg==='transfers') loadDownloads();
-    if(pg==='rss') loadRss();
-    if(pg==='settings') loadSettings();
-    if(pg==='search') loadSearchHistory();
-    if(pg==='tmdb') loadTmdb();
-    if(pg==='youtube') loadYoutube();
-    if(pg==='anime') loadAnime();
-    if(pg==='comics') loadComicStatus();
-    if(pg==='jellyfin') loadJellyfin();
-    if(pg==='unified') el('uq')?.focus();
-  });
+const $ = id => document.getElementById(id);
+const api = (path) => fetch(BASE + '/api' + path, { headers: TOKEN ? { Authorization: 'Bearer ' + TOKEN } : {} })
+  .then(r => { if (r.status === 401) { unpair(); throw 0; } return r.json(); });
+
+// ── Pairing ──
+function unpair(){ TOKEN=''; localStorage.removeItem('opal_token'); $('pair-screen').style.display='flex'; }
+function paired(){ $('pair-screen').style.display='none'; poll(); }
+$('pair-btn').onclick = async () => {
+  const code = $('pair-code').value.trim();
+  if (code.length !== 6) { $('pair-err').textContent = 'Enter all 6 digits'; return; }
+  $('pair-err').textContent = '';
+  try {
+    const r = await fetch(BASE + '/pair?code=' + encodeURIComponent(code));
+    if (!r.ok) { $('pair-err').textContent = 'Wrong code — check Settings on the desktop'; return; }
+    const d = await r.json();
+    if (d.token) { TOKEN = d.token; localStorage.setItem('opal_token', TOKEN); paired(); }
+  } catch { $('pair-err').textContent = 'Can’t reach Opal — same Wi-Fi?'; }
+};
+$('pair-code').addEventListener('keydown', e => { if (e.key === 'Enter') $('pair-btn').click(); });
+
+// ── Tabs ──
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'page-' + b.dataset.page));
+  if (b.dataset.page === 'act') loadActivity();
 });
 
-// Status polling
-function poll() {
-  api('status').then(d => {
-    if(!d||d.error) return;
-    const t=el('np-title'),s=el('np-sub'),b=el('np-bar');
-    if(t) t.textContent=d.title||'Now Playing';
-    if(s) s.textContent=fmt(d.pos)+' / '+fmt(d.dur)+(d.paused?' ⏸':' ▶');
-    if(b&&d.dur>0) b.style.width=((d.pos/d.dur)*100)+'%';
-    el('s-vol').textContent=Math.round(d.vol)+'%';
-    el('s-pos').textContent=fmt(d.pos);
-    el('s-dur').textContent=fmt(d.dur);
-    const sr=el('seek-r'),vr=el('vol-r'),vl=el('vol-l');
-    if(sr&&d.dur>0&&!sr.matches(':active')) sr.value=(d.pos/d.dur)*100;
-    if(vr&&!vr.matches(':active')) vr.value=d.vol;
-    if(vl) vl.textContent=Math.round(d.vol)+'%';
-  });
+// ── Now Playing ──
+const fmt = s => { if (!isFinite(s) || s < 0) return '--:--';
+  const h = ~~(s/3600), m = ~~((s%3600)/60), ss = ~~(s%60);
+  return (h ? h + ':' + String(m).padStart(2,'0') : m) + ':' + String(ss).padStart(2,'0'); };
+const PLAY = 'M8 5v14l11-7L8 5z', PAUSE = 'M6 5h4v14H6zM14 5h4v14h-4z';
+let pollTimer = null;
+async function poll(){
+  clearTimeout(pollTimer);
+  try {
+    const d = await api('/status');
+    $('conn-dot').classList.add('on');
+    $('np-title').textContent = d.title && d.title !== 'No media' ? d.title : 'Nothing playing';
+    $('np-sub').textContent = d.title && d.title !== 'No media'
+      ? (d.paused ? 'Paused on desktop' : 'Playing on desktop') : 'Play something from Search, or on the desktop.';
+    $('t-pos').textContent = fmt(d.pos); $('t-dur').textContent = fmt(d.dur);
+    $('i-pp').firstElementChild.setAttribute('d', d.paused ? PLAY : PAUSE);
+    if (!seekHeld && d.dur > 0) $('seek').value = d.pos / d.dur * 100;
+    if (!volHeld) $('vol').value = d.vol;
+  } catch { $('conn-dot').classList.remove('on'); }
+  pollTimer = setTimeout(poll, 1000);
 }
-setInterval(poll,1500); poll();
+let seekHeld = false, volHeld = false;
+$('seek').addEventListener('pointerdown', () => seekHeld = true);
+$('seek').addEventListener('change', () => { api('/seek_pct?v=' + Math.round($('seek').value)).catch(()=>{}); seekHeld = false; });
+$('vol').addEventListener('pointerdown', () => volHeld = true);
+$('vol').addEventListener('change', () => { api('/volume?v=' + Math.round($('vol').value)).catch(()=>{}); volHeld = false; });
+$('b-toggle').onclick = () => api('/toggle').then(poll).catch(()=>{});
+$('b-back').onclick   = () => api('/back').catch(()=>{});
+$('b-fwd').onclick    = () => api('/fwd').catch(()=>{});
+$('b-mute').onclick   = () => api('/mute').catch(()=>{});
+$('b-sub').onclick    = () => api('/next_sub').catch(()=>{});
+$('b-aud').onclick    = () => api('/next_audio').catch(()=>{});
+$('b-fs').onclick     = () => api('/fullscreen').catch(()=>{});
 
-// Search
-let searchPoll = null;
-function doSearch() {
-  const q=el('q').value.trim(); if(!q)return;
-  el('res').innerHTML='<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-dim)"><span class="pulse">⏳ Searching…</span></td></tr>';
-  el('search-table').style.display='';
-  el('search-history').style.display='none';
-  el('search-status').innerHTML='<span class="pulse" style="color:var(--warning);font-size:.85em">🔍 Searching for "'+esc(q)+'"…</span>';
-  api('search?q='+enc(q));
-  // Poll for results since search is async
-  if(searchPoll) clearInterval(searchPoll);
-  searchPoll = setInterval(()=>{
-    api('search').then(d=>{
-      if(!d) return;
-      if(!d.searching && d.results && d.results.length>0) {
-        clearInterval(searchPoll); searchPoll=null;
-        el('search-status').innerHTML='<span style="color:var(--text-muted);font-size:.85em">'+d.results.length+' results</span>';
+// ── Search ──
+const esc = s => { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; };
+let searchWatch = null;
+$('go').onclick = () => runSearch();
+$('q').addEventListener('keydown', e => { if (e.key === 'Enter') { runSearch(); $('q').blur(); } });
+function runSearch(){
+  const q = $('q').value.trim(); if (!q) return;
+  $('search-hint').innerHTML = '<span class="spin"></span> Searching all sources…';
+  $('results').innerHTML = '';
+  api('/search?q=' + encodeURIComponent(q)).catch(()=>{});
+  clearInterval(searchWatch);
+  let ticks = 0;
+  searchWatch = setInterval(async () => {
+    ticks++;
+    try {
+      const d = await api('/search');
+      renderResults(d.results || []);
+      if ((!d.searching && ticks > 2) || ticks > 40) {
+        clearInterval(searchWatch);
+        $('search-hint').textContent = (d.results || []).length + ' results — tap to play on the desktop.';
       }
-      renderSearchResults(d);
+    } catch { clearInterval(searchWatch); }
+  }, 900);
+}
+function renderResults(rs){
+  $('results').innerHTML = rs.slice(0, 60).map(r => `
+    <div class="result">
+      <div class="t">${esc(r.title)}</div>
+      <div class="m">
+        ${r.seeds ? `<span>▲ ${esc(String(r.seeds))}</span>` : ''}
+        ${r.size ? `<span>${esc(String(r.size))}</span>` : ''}
+        <span class="src">${esc(r.source || '')}</span>
+        <button class="play" data-url="${encodeURIComponent(r.magnet || r.url || '')}">Play</button>
+      </div>
+    </div>`).join('') || '<div class="empty">No results yet</div>';
+  $('results').querySelectorAll('.play').forEach(b => b.onclick = () => {
+    const u = b.dataset.url; if (!u) return;
+    b.textContent = 'Sent ✓';
+    api('/load?url=' + u).catch(()=>{});
+  });
+}
+
+// ── Activity ──
+async function loadActivity(){
+  try {
+    const q = await api('/queue');
+    $('queue').innerHTML = (q.items || []).map(i =>
+      `<div class="file"><div class="n">${esc(i.title || i.name || '')}</div></div>`).join('')
+      || '<div class="empty">Queue is empty</div>';
+  } catch { $('queue').innerHTML = '<div class="empty">—</div>'; }
+  try {
+    const d = await api('/downloads');
+    $('downloads').innerHTML = (d.files || []).slice(0, 40).map(f => {
+      const name = typeof f === 'string' ? f : (f.name || '');
+      return `<div class="file"><div class="n">${esc(name)}</div>
+        <button class="play" data-n="${encodeURIComponent(name)}">Play</button></div>`;
+    }).join('') || '<div class="empty">No downloads</div>';
+    $('downloads').querySelectorAll('.play').forEach(b => b.onclick = () => {
+      b.textContent = 'Sent ✓';
+      api('/downloads/play?file=' + b.dataset.n).catch(()=>{});
     });
-  }, 1500);
-}
-function renderSearchResults(d) {
-  if(!d||!d.results) return;
-  if(!d.results.length) {
-    if(!d.searching) {
-      el('res').innerHTML='<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-dim)">No results found</td></tr>';
-      el('search-status').innerHTML='';
-    }
-    return;
-  }
-  window._sr = d.results;
-  el('res').innerHTML = d.results.map((r,i)=>
-    '<tr><td>'+esc(r.title)+'</td><td class="size">'+(r.size||'-')+'</td><td class="seeds">'+(r.seeds||'-')+'</td><td>'+(r.source||'-')+'</td><td><button class="btn btn-accent btn-sm" onclick="playRes('+i+')"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-play"/></svg>Play</button></td></tr>'
-  ).join('');
-}
-function playRes(i){if(window._sr&&window._sr[i]){api('load?url='+enc(window._sr[i].magnet||window._sr[i].url));toast('Loading: '+window._sr[i].title);}}
-function updateClear() { el('q-clear').classList.toggle('show', el('q').value.length>0); }
-function clearSearch() {
-  el('q').value=''; updateClear();
-  el('res').innerHTML='<tr><td colspan="5" style="text-align:center;color:var(--text-dim);padding:30px">Enter a search query above</td></tr>';
-  el('search-status').innerHTML='';
-  if(searchPoll){clearInterval(searchPoll);searchPoll=null;}
-  loadSearchHistory();
-}
-function loadSearchHistory() {
-  api('history').then(d=>{
-    if(!d||!d.items||!d.items.length) { el('search-history').style.display='none'; return; }
-    el('search-history').style.display='';
-    el('search-table').style.display = el('q').value.trim() ? '' : 'none';
-    el('hist-items').innerHTML = d.items.map(q=>
-      '<div class="item" style="cursor:pointer" onclick="el(\'q\').value=\''+esc(q)+'\';updateClear();doSearch()"><div class="meta"><div class="name"><svg style="width:14px;height:14px;stroke:var(--text-muted);fill:none;stroke-width:2;vertical-align:middle;margin-right:6px"><use href="#i-search"/></svg>'+esc(q)+'</div></div></div>'
-    ).join('');
-  });
-}
-el('q')?.addEventListener('keydown',e=>{if(e.key==='Enter')doSearch();});
-
-// Queue
-function loadQueue(){api('queue').then(d=>{const l=el('queue-list');if(!l||!d.items)return;if(!d.items.length){l.innerHTML='<div style="color:var(--text-dim);text-align:center;padding:30px">Queue empty</div>';return;}l.innerHTML=d.items.map((item,i)=>'<div class="item"><div class="meta"><div class="name">'+esc(item.title||item.url)+'</div><div class="detail">'+(item.played?'✓ Played':'Pending')+'</div></div><button class="btn btn-sm btn-accent" onclick="api(\'queue/play?id='+i+'\')"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-play"/></svg>Play</button></div>').join('');});}
-
-// Downloads
-let dlSubdir = '';
-function loadDownloads(subdir) {
-  if(subdir !== undefined) dlSubdir = subdir;
-  const qs = dlSubdir ? '?dir='+enc(dlSubdir) : '';
-  api('downloads'+qs).then(d=>{
-    if(!d) return;
-    el('dl-path').innerHTML = '<svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-download"/></svg> ' + esc(d.path||'Downloads');
-    el('dl-back').innerHTML = dlSubdir ? '<button class="btn btn-sm" onclick="dlGoUp()"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-rewind"/></svg> Back</button>' : '';
-    const l = el('dl-list');
-    if(d.error) { l.innerHTML='<div style="color:var(--danger);text-align:center;padding:30px">'+esc(d.error)+'</div>'; return; }
-    if(!d.files||!d.files.length) { l.innerHTML='<div style="color:var(--text-dim);text-align:center;padding:30px">No files in download folder</div>'; return; }
-    const sorted = d.files.sort((a,b)=>{ if(a.is_dir&&!b.is_dir)return -1; if(!a.is_dir&&b.is_dir)return 1; return a.name.localeCompare(b.name); });
-    l.innerHTML = sorted.map(f=>{
-      const icon = f.is_dir ? '#i-list' : '#i-film';
-      const sizeStr = f.is_dir ? '' : fmtBytes(f.size);
-      const path = dlSubdir ? dlSubdir+'/'+f.name : f.name;
-      const action = f.is_dir
-        ? '<button class="btn btn-sm" onclick="loadDownloads(\''+esc(path)+'\')"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-list"/></svg>Open</button>'
-        : '<button class="btn btn-sm btn-accent" onclick="api(\'downloads/play?file='+enc(path)+'\');toast(\'Playing: '+esc(f.name)+'\')"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-play"/></svg>Play</button>';
-      return '<div class="item"><svg style="width:16px;height:16px;stroke:'+(f.is_dir?'var(--accent)':'var(--text-muted)')+';fill:none;stroke-width:2;flex-shrink:0"><use href="'+icon+'"/></svg><div class="meta"><div class="name">'+(f.is_dir?'📁 ':'')+esc(f.name)+'</div><div class="detail">'+(f.is_dir?'Directory':sizeStr)+'</div></div>'+action+'</div>';
-    }).join('');
-  });
-}
-function dlGoUp() {
-  const i = dlSubdir.lastIndexOf('/');
-  dlSubdir = i>=0 ? dlSubdir.substring(0,i) : '';
-  loadDownloads();
-}
-// History page
-function loadHistory() {
-  api('history').then(d=>{
-    const l=el('hist-list');
-    if(!d||!d.items||!d.items.length){l.innerHTML='<div style="color:var(--text-dim);text-align:center;padding:30px">No search history</div>';return;}
-    l.innerHTML = d.items.map(q=>
-      '<div class="item"><div class="meta"><div class="name"><svg style="width:14px;height:14px;stroke:var(--text-muted);fill:none;stroke-width:2;vertical-align:middle;margin-right:6px"><use href="#i-clock"/></svg>'+esc(q)+'</div></div><button class="btn btn-sm" onclick="nav(\'search\');el(\'q\').value=\''+esc(q)+'\';updateClear();doSearch()"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-search"/></svg>Search</button></div>'
-    ).join('');
-  });
-}
-function nav(pg){document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));el('p-'+pg).classList.add('active');document.querySelectorAll('nav a').forEach(l=>l.classList.remove('active'));const a=document.querySelector('nav a[data-page="'+pg+'"]');if(a)a.classList.add('active');}
-
-// RSS
-function loadRss() {
-  api('rss').then(d=>{
-    if(!d) return;
-    // Tabs
-    const tabs = el('rss-tabs');
-    if(d.feeds && d.feeds.length) {
-      tabs.innerHTML = d.feeds.map((f,i)=>'<div class="tab'+(i===0?' active':'')+'" onclick="switchRssFeed('+i+')">'+esc(f)+'</div>').join('') + '<button class="btn btn-sm" onclick="api(\'rss/refresh?idx=0\');toast(\'Refreshing…\');setTimeout(loadRss,2000)"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-refresh"/></svg></button>';
-    }
-    // Status
-    el('rss-status').innerHTML = d.fetching ? '<span class="pulse" style="color:var(--warning);font-size:.85em">📡 Fetching feeds…</span>' : '';
-    // Items
-    const list = el('rss-list');
-    if(!d.items || !d.items.length) {
-      list.innerHTML='<div style="color:var(--text-dim);text-align:center;padding:30px">No RSS items. Click Refresh to fetch.</div>';
-      return;
-    }
-    list.innerHTML = d.items.map((item,i)=>
-      '<div class="item"><div class="meta"><div class="name">'+esc(item.title)+'</div><div class="detail"><span style="color:var(--success)"><svg style="width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;vertical-align:middle"><use href="#i-arrow-up"/></svg> '+item.seeds+'</span> <span style="color:var(--text-muted);margin-left:8px"><svg style="width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;vertical-align:middle"><use href="#i-arrow-down"/></svg> '+item.peers+'</span>'+(item.size?' <span style="margin-left:8px">'+fmtBytes(item.size)+'</span>':'')+'</div></div><button class="btn btn-sm btn-accent" onclick="playRss('+i+')"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-play"/></svg>Play</button></div>'
-    ).join('');
-    window._rss = d.items;
-  });
-}
-function playRss(i){if(window._rss&&window._rss[i]&&window._rss[i].magnet){api('load?url='+enc(window._rss[i].magnet));toast('Loading: '+window._rss[i].title);}}
-function switchRssFeed(idx) { document.querySelectorAll('#rss-tabs .tab').forEach((t,i)=>t.classList.toggle('active',i===idx)); api('rss/refresh?idx='+idx); toast('Loading feed…'); setTimeout(loadRss,2000); }
-
-// Settings
-function loadSettings() {
-  api('settings').then(d=>{
-    if(!d) return;
-    el('t-auto').classList.toggle('on', !!d.auto_advance);
-    el('t-sponsor').classList.toggle('on', !!d.sponsorblock);
-    el('t-nsfw').classList.toggle('on', !!d.nsfw_filter);
-    el('t-incog').classList.toggle('on', !!d.incognito);
-  });
-}
-function toggleSetting(el,key) { el.classList.toggle('on'); api('settings/toggle?key='+key); }
-
-function seekClick(e) { const r=e.currentTarget.getBoundingClientRect(); api('seek_pct?v='+Math.round(((e.clientX-r.left)/r.width)*100)); }
-
-// TMDB
-function fmtViews(v){if(v>=1e6)return(v/1e6).toFixed(1)+'M';if(v>=1e3)return(v/1e3).toFixed(1)+'K';return v;}
-function searchTmdb(){const q=el('tmdb-q').value.trim();if(!q)return;el('tmdb-status').innerHTML='<span class="pulse" style="color:var(--warning);font-size:.85em">🔍 Searching TMDB…</span>';api('tmdb/search?q='+enc(q));setTimeout(loadTmdb,2000);}
-function loadTmdb(){
-  api('tmdb').then(d=>{
-    if(!d)return;
-    el('tmdb-status').innerHTML=d.loading?'<span class="pulse" style="color:var(--warning);font-size:.85em">Loading…</span>':(d.has_key?'':'<span style="color:var(--danger);font-size:.85em">⚠ No TMDB API key. Add in Settings → General.</span>');
-    const l=el('tmdb-list');
-    if(!d.items||!d.items.length){l.innerHTML='<div style="color:var(--text-dim);text-align:center;padding:20px">No results</div>';return;}
-    l.innerHTML=d.items.map(m=>{
-      const sc=m.rating>=70?'var(--success)':m.rating>=50?'var(--warning)':'var(--danger)';
-      const badge=m.type==='tv'?'<span style="color:#9382ff">TV</span>':'<span style="color:#38bdf8">Film</span>';
-      return '<div class="item"><div class="meta"><div class="name">'+badge+' '+esc(m.title)+'</div><div class="detail">'+esc(m.year)+' · <span style="color:'+sc+'">'+m.rating+'%</span></div></div><button class="btn btn-sm btn-accent" onclick="el(\'q\').value=\''+esc(m.title)+' '+esc(m.year)+'\';nav(\'search\');updateClear();doSearch()"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-search"/></svg>Torrent</button></div>';
-    }).join('');
-    if(d.loading) setTimeout(loadTmdb,2000);
-  });
-}
-el('tmdb-q')?.addEventListener('keydown',e=>{if(e.key==='Enter')searchTmdb();});
-
-// YouTube
-function searchYoutube(){const q=el('yt-q').value.trim();if(!q)return;el('yt-status').innerHTML='<span class="pulse" style="color:var(--warning);font-size:.85em">🔍 Searching YouTube…</span>';api('youtube/search?q='+enc(q));setTimeout(loadYoutube,3000);}
-function loadYoutube(){
-  api('youtube').then(d=>{
-    if(!d)return;
-    el('yt-status').innerHTML=d.loading?'<span class="pulse" style="color:var(--warning);font-size:.85em">Searching…</span>':'';
-    const l=el('yt-list');
-    if(!d.items||!d.items.length){l.innerHTML='<div style="color:var(--text-dim);text-align:center;padding:20px">No results. Search for something.</div>';return;}
-    l.innerHTML=d.items.map(v=>{
-      const dur=v.dur_min+':'+(v.dur_sec<10?'0':'')+v.dur_sec;
-      return '<div class="item"><div class="meta"><div class="name">'+esc(v.title)+'</div><div class="detail">'+esc(v.channel)+' · '+fmtViews(v.views)+' views · '+dur+'</div></div><button class="btn btn-sm btn-accent" onclick="api(\'load?url=https://www.youtube.com/watch?v='+v.id+'\');toast(\'Playing: '+esc(v.title)+'\')"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-play"/></svg>Play</button><button class="btn btn-sm" onclick="api(\'load?url=https://www.youtube.com/watch?v='+v.id+'&append=1\');toast(\'Queued!\')"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-list"/></svg>Queue</button></div>';
-    }).join('');
-    if(d.loading) setTimeout(loadYoutube,2000);
-  });
-}
-el('yt-q')?.addEventListener('keydown',e=>{if(e.key==='Enter')searchYoutube();});
-
-// Anime
-function searchAnime(){const q=el('anime-q').value.trim();if(!q)return;el('anime-status').innerHTML='<span class="pulse" style="color:var(--warning);font-size:.85em">🔍 Searching…</span>';api('anime/search?q='+enc(q));setTimeout(loadAnime,2000);}
-function loadAnime(){
-  api('anime').then(d=>{
-    if(!d)return;
-    const st=el('anime-status');
-    st.innerHTML=d.loading?'<span class="pulse" style="color:var(--warning);font-size:.85em">Loading…</span>':(d.stream_loading?'<span class="pulse" style="color:var(--accent);font-size:.85em">Loading stream…</span>':'');
-    const l=el('anime-list');
-    // If episodes are loaded, show episode list
-    if(d.selected!==null && d.episodes && d.episodes.length){
-      const name=d.results[d.selected]?d.results[d.selected].name:'Anime';
-      let html='<div class="item" style="background:var(--bg-primary)"><button class="btn btn-sm" onclick="api(\'anime/episodes?idx=-1\');setTimeout(loadAnime,500)"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-rewind"/></svg>Back</button><div class="meta"><div class="name" style="font-weight:600">'+esc(name)+'</div><div class="detail">'+d.episodes.length+' episodes</div></div></div>';
-      html+=d.episodes.map(ep=>'<div class="item"><div class="meta"><div class="name">Ep '+esc(ep)+'</div></div><button class="btn btn-sm btn-accent" onclick="api(\'anime/play?ep='+enc(ep)+'\');toast(\'Streaming Ep '+esc(ep)+'…\')"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-play"/></svg>Play</button></div>').join('');
-      l.innerHTML=html;
-    } else {
-      // Show search results
-      if(!d.results||!d.results.length){l.innerHTML='<div style="color:var(--text-dim);text-align:center;padding:20px">Search for anime above</div>';return;}
-      l.innerHTML=d.results.map((a,i)=>'<div class="item" style="cursor:pointer" onclick="api(\'anime/episodes?idx='+i+'\');toast(\'Loading episodes…\');setTimeout(loadAnime,2000)"><div class="meta"><div class="name">'+esc(a.name)+'</div><div class="detail">'+a.episodes+' episodes</div></div><svg style="width:14px;height:14px;stroke:var(--text-muted);fill:none;stroke-width:2"><use href="#i-list"/></svg></div>').join('');
-    }
-    if(d.loading||d.stream_loading) setTimeout(loadAnime,1500);
-  });
-}
-el('anime-q')?.addEventListener('keydown',e=>{if(e.key==='Enter')searchAnime();});
-
-// Comics
-function loadComic(){const url=el('comic-url').value.trim();if(!url)return;el('comic-status').innerHTML='<span class="pulse" style="color:var(--warning);font-size:.85em">Loading comic…</span>';api('comics/load?url='+enc(url));setTimeout(loadComicStatus,2000);}
-function loadComicStatus(){
-  api('comics').then(d=>{
-    if(!d)return;
-    el('comic-status').innerHTML=d.loading?'<span class="pulse" style="color:var(--warning);font-size:.85em">Loading… (downloading pages)</span>':'';
-    const info=el('comic-info');
-    if(d.pages>0) info.innerHTML='<div class="card"><div class="stat"><div class="val">'+d.pages+'</div><div class="lbl">Pages loaded</div></div></div><p style="color:var(--text-muted);font-size:.85em;margin-top:10px">Comic is rendering on the desktop app.</p>';
-    else if(!d.loading) info.innerHTML='<div style="color:var(--text-dim);text-align:center;padding:20px">Paste a readallcomics.com URL to load</div>';
-    if(d.loading) setTimeout(loadComicStatus,2000);
-  });
+  } catch { $('downloads').innerHTML = '<div class="empty">—</div>'; }
+  try {
+    const h = await api('/history');
+    $('history').innerHTML = (h.items || []).slice(0, 20).map(i =>
+      `<div class="file"><div class="n">${esc(i.title || i.name || '')}</div></div>`).join('')
+      || '<div class="empty">No history</div>';
+  } catch { $('history').innerHTML = '<div class="empty">—</div>'; }
 }
 
-// Jellyfin
-function jfLogin(){
-  const server=el('jf-server').value.trim();
-  const user=el('jf-user').value.trim();
-  const pass=el('jf-pass').value;
-  if(!server||!user){el('jf-error').textContent='Server URL and username required';return;}
-  el('jf-error').textContent='Connecting...';
-  api('jellyfin/login?server='+enc(server)+'&user='+enc(user)+'&pass='+enc(pass));
-  setTimeout(loadJellyfin,3000);
-}
-function jfSearch(){const q=el('jf-q').value.trim();if(!q)return;el('jf-status').innerHTML='<span class="pulse" style="color:var(--warning);font-size:.85em">Searching...</span>';api('jellyfin/search?q='+enc(q));setTimeout(loadJellyfin,2000);}
-function loadJellyfin(){
-  api('jellyfin').then(d=>{
-    if(!d)return;
-    // Toggle login vs connected view
-    const loginDiv=el('jf-login'), connDiv=el('jf-connected');
-    if(d.connected){loginDiv.style.display='none';connDiv.style.display='block';}
-    else{loginDiv.style.display='block';connDiv.style.display='none';if(d.error)el('jf-error').textContent=d.error;return;}
-    el('jf-status').innerHTML=d.loading?'<span class="pulse" style="color:var(--warning);font-size:.85em">Loading...</span>':'';
-    // Libraries
-    const libs=el('jf-libs');
-    if(d.libraries&&d.libraries.length){
-      libs.innerHTML='<div style="display:flex;flex-wrap:wrap;gap:8px">'+d.libraries.map(lib=>'<button class="btn" onclick="api(\'jellyfin/browse?id='+lib.id+'\');setTimeout(loadJellyfin,1500)">'+esc(lib.name)+'</button>').join('')+'</div>';
-    } else libs.innerHTML='';
-    // Items
-    const items=el('jf-items');
-    if(!d.items||!d.items.length){items.innerHTML='<div style="color:var(--text-dim);text-align:center;padding:20px">Select a library or search above</div>';}
-    else{
-      items.innerHTML=d.items.map(it=>{
-        const dur=it.runtime>0?Math.floor(it.runtime/60)+'m ':'';
-        const yr=it.year>0?' ('+it.year+')':'';
-        let actions='';
-        if(it.folder) actions='<button class="btn btn-sm" onclick="api(\'jellyfin/browse?id='+it.id+'\');setTimeout(loadJellyfin,1500)"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-list"/></svg>Browse</button>';
-        else{
-          const isAudio=it.type==='Audio'||it.type==='MusicAlbum';
-          const endpoint=isAudio?'jellyfin/play_audio':'jellyfin/play';
-          actions='<button class="btn btn-sm btn-accent" onclick="api(\''+endpoint+'?id='+it.id+'\');toast(\'Playing: '+esc(it.name)+'\')"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-play"/></svg>Play</button>';
-        }
-        return '<div class="item"><div class="meta"><div class="name">'+esc(it.name)+yr+'</div><div class="detail">'+esc(it.type)+' '+dur+'</div></div>'+actions+'</div>';
-      }).join('');
-    }
-    if(d.loading) setTimeout(loadJellyfin,1500);
-  });
-}
-el('jf-q')?.addEventListener('keydown',e=>{if(e.key==='Enter')jfSearch();});
-
-// ── Unified Search ──
-let uFilter='all';
-function doUnified(){
-  const q=el('uq').value.trim();if(!q)return;
-  el('u-status').innerHTML='<span class="pulse" style="color:var(--warning)">Searching all sources...</span>';
-  api('unified_search?q='+enc(q));
-  setTimeout(loadUnified,1500);
-  setTimeout(loadUnified,3000);
-  setTimeout(loadUnified,6000);
-}
-function filterUnified(src){
-  uFilter=src;
-  document.querySelectorAll('.u-filter').forEach(b=>b.classList.toggle('active',b.dataset.src===src));
-  renderUnifiedResults(window._uData||[]);
-}
-const srcColors={torrent:'#4caf50',tmdb:'#01b4e4',youtube:'#ff0000',anime:'#e040fb',jellyfin:'#00a4dc'};
-const srcLabels={torrent:'Torrent',tmdb:'TMDB',youtube:'YouTube',anime:'Anime',jellyfin:'Jellyfin'};
-function renderUnifiedResults(results){
-  const filtered=uFilter==='all'?results:results.filter(r=>r.source===uFilter);
-  const box=el('u-results');
-  if(!filtered.length){box.innerHTML='<div style="color:var(--text-dim);text-align:center;padding:40px">'+(results.length?'No results for this filter':'No results yet')+'</div>';return;}
-  // Count by source
-  const counts={}; results.forEach(r=>{counts[r.source]=(counts[r.source]||0)+1;});
-  document.querySelectorAll('.u-filter').forEach(b=>{
-    const s=b.dataset.src; const c=s==='all'?results.length:(counts[s]||0);
-    b.textContent=(srcLabels[s]||s)+' ('+c+')';
-    if(s==='all') b.textContent='All ('+c+')';
-  });
-  box.innerHTML=filtered.map(r=>{
-    const color=srcColors[r.source]||'var(--text-muted)';
-    const badge='<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:.7em;font-weight:600;color:#fff;background:'+color+'">'+esc(srcLabels[r.source]||r.source)+'</span>';
-    let action='';
-    if(r.action==='magnet') action='<button class="btn btn-sm btn-accent" onclick="api(\'queue/add?url='+encodeURIComponent(r.data)+'\');toast(\'Added to queue\')"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-play"/></svg>Queue</button>';
-    else if(r.action==='yt_play') action='<button class="btn btn-sm" style="color:#ff0000" onclick="api(\'youtube/play?id='+r.data+'\');toast(\'Playing YouTube\')"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-play"/></svg>Play</button>';
-    else if(r.action==='tmdb_detail') action='<button class="btn btn-sm" style="color:#01b4e4" onclick="navTo(\'tmdb\')">Details</button>';
-    else if(r.action==='anime_detail') action='<button class="btn btn-sm" style="color:#e040fb" onclick="navTo(\'anime\')">Episodes</button>';
-    else if(r.action==='jf_play') action='<button class="btn btn-sm" style="color:#00a4dc" onclick="api(\'jellyfin/play?id='+r.data+'\');toast(\'Playing from Jellyfin\')"><svg style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><use href="#i-play"/></svg>Play</button>';
-    else if(r.action==='jf_browse') action='<button class="btn btn-sm" style="color:#00a4dc" onclick="api(\'jellyfin/browse?id='+r.data+'\');navTo(\'jellyfin\')">Browse</button>';
-    return '<div class="item"><div class="meta"><div class="name">'+badge+' '+esc(r.title)+'</div><div class="detail">'+esc(r.detail||'')+'</div></div>'+action+'</div>';
-  }).join('');
-}
-function loadUnified(){
-  api('unified_search').then(d=>{
-    if(!d)return;
-    window._uData=d.results||[];
-    renderUnifiedResults(window._uData);
-    el('u-status').innerHTML=d.loading?'<span class="pulse" style="color:var(--warning)">Still searching...</span>':'<span style="color:var(--text-muted)">'+window._uData.length+' results from all sources</span>';
-    if(d.loading) setTimeout(loadUnified,2000);
-  });
-}
-function navTo(page){document.querySelectorAll('[data-page]').forEach(a=>{if(a.dataset.page===page)a.click();});}
-el('uq')?.addEventListener('keydown',e=>{if(e.key==='Enter')doUnified();});
+// ── Boot ──
+if (TOKEN) paired(); else unpair();
 </script>
 </body>
 </html>

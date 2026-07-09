@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-07-04T19:57:49",
-  "total": 142,
-  "passed": 134,
+  "timestamp": "2026-07-10T04:07:09",
+  "total": 146,
+  "passed": 137,
   "failed": 0,
-  "warnings": 1,
+  "warnings": 2,
   "skipped": 7,
   "categories": {
     "Database": {
@@ -13,9 +13,9 @@
       "skip": 0
     },
     "Memory": {
-      "pass": 5,
+      "pass": 4,
       "fail": 0,
-      "warn": 0,
+      "warn": 1,
       "skip": 0
     },
     "Config": {
@@ -73,7 +73,7 @@
       "skip": 0
     },
     "AI Features": {
-      "pass": 5,
+      "pass": 6,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -133,7 +133,13 @@
       "skip": 0
     },
     "Browse": {
-      "pass": 3,
+      "pass": 5,
+      "fail": 0,
+      "warn": 0,
+      "skip": 0
+    },
+    "Remote": {
+      "pass": 1,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -168,35 +174,35 @@
       "name": "Database Exists",
       "category": "Database",
       "status": "pass",
-      "detail": "Size: 19092.0 KB",
+      "detail": "Size: 16900.0 KB",
       "duration_ms": 0
     },
     {
       "name": "Config Table",
       "category": "Database",
       "status": "pass",
-      "detail": "44 config entries",
-      "duration_ms": 21
+      "detail": "47 config entries",
+      "duration_ms": 6
     },
     {
       "name": "Watch History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "12 watch entries",
+      "detail": "6 watch entries",
       "duration_ms": 0
     },
     {
       "name": "Search History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "46 searches",
+      "detail": "1 searches",
       "duration_ms": 0
     },
     {
       "name": "Download History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "38 downloads",
+      "detail": "6 downloads",
       "duration_ms": 0
     },
     {
@@ -210,7 +216,7 @@
       "name": "AI Memory Table",
       "category": "Database",
       "status": "pass",
-      "detail": "0 memories",
+      "detail": "4 memories",
       "duration_ms": 0
     },
     {
@@ -224,21 +230,21 @@
       "name": "Poster Cache Table",
       "category": "Database",
       "status": "pass",
-      "detail": "678 cached posters",
-      "duration_ms": 101
+      "detail": "641 cached posters",
+      "duration_ms": 40
     },
     {
       "name": "Conversation Log Table",
       "category": "Memory",
       "status": "pass",
-      "detail": "58 logged conversations",
+      "detail": "0 logged conversations",
       "duration_ms": 0
     },
     {
       "name": "User Preferences Table",
       "category": "Memory",
       "status": "pass",
-      "detail": "active_hour=14:00 (w:237)",
+      "detail": "active_hour=3:00 (w:11)",
       "duration_ms": 0
     },
     {
@@ -251,15 +257,15 @@
     {
       "name": "Proactive Suggestion Query",
       "category": "Memory",
-      "status": "pass",
-      "detail": "\"magnet:?xt=urn:btih:43F4001DE4AB25D521C63684E2B698\" at 57%",
+      "status": "warn",
+      "detail": "No unfinished content to suggest",
       "duration_ms": 0
     },
     {
       "name": "Theme Persistence",
       "category": "Config",
       "status": "pass",
-      "detail": "Theme: Ros\u00e9",
+      "detail": "Theme: Solarized",
       "duration_ms": 0
     },
     {
@@ -301,14 +307,14 @@
       "name": "Zig Build",
       "category": "Build",
       "status": "pass",
-      "detail": "Binary: 41.2 MB",
-      "duration_ms": 625
+      "detail": "Binary: 41.3 MB",
+      "duration_ms": 422
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "41.2 MB, built at 19:43:32",
+      "detail": "41.3 MB, built at 04:05:20",
       "duration_ms": 0
     },
     {
@@ -344,7 +350,7 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 1380
+      "duration_ms": 1082
     },
     {
       "name": "Faster-Whisper Available",
@@ -358,21 +364,21 @@
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 19
+      "duration_ms": 20
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 26
+      "duration_ms": 21
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 22
+      "duration_ms": 24
     },
     {
       "name": "Embedding Server Health",
@@ -512,49 +518,49 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 24
+      "duration_ms": 25
     },
     {
       "name": "Compiles: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 24
+      "duration_ms": 26
     },
     {
       "name": "--check degrades: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 20
+      "duration_ms": 21
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 22
+      "duration_ms": 23
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 21
+      "duration_ms": 25
     },
     {
       "name": "Compiles: camoufox_bridge.py",
       "category": "Browser",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 26
+      "duration_ms": 30
     },
     {
       "name": "Bridge protocol selftest",
       "category": "Browser",
       "status": "pass",
       "detail": "framing + pump model OK",
-      "duration_ms": 26
+      "duration_ms": 31
     },
     {
       "name": "Poster cache SQL matches schema",
@@ -624,7 +630,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 2471
+      "duration_ms": 1924
     },
     {
       "name": "Sherpa Model Canonicalization",
@@ -687,14 +693,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 7670
+      "duration_ms": 7062
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 86
+      "duration_ms": 84
     },
     {
       "name": "Page Router",
@@ -715,7 +721,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 7
+      "duration_ms": 6
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -872,6 +878,34 @@
       "duration_ms": 0
     },
     {
+      "name": "Cloud LLM Backend + No Silent Local Installs",
+      "category": "AI Features",
+      "status": "pass",
+      "detail": "cloud providers + bearer auth + on-demand-only local models wired",
+      "duration_ms": 0
+    },
+    {
+      "name": "Deferred Watch Commit + Smart Episode Play + Onboarding",
+      "category": "Browse",
+      "status": "pass",
+      "detail": "deferred watch commit + confident auto-play + first-run wizard wired",
+      "duration_ms": 0
+    },
+    {
+      "name": "TV Calendar: Coming-Up Rail + EZTV Availability + HW Decode",
+      "category": "Browse",
+      "status": "pass",
+      "detail": "coming-up rail + eztv availability + hwdec/native-size render wired",
+      "duration_ms": 0
+    },
+    {
+      "name": "Web Companion: Pairing + LAN Bind + Bundled Page",
+      "category": "Remote",
+      "status": "pass",
+      "detail": "pairing-code auth + LAN bind + bundled mobile page wired",
+      "duration_ms": 0
+    },
+    {
       "name": "Anime Seasons/Calendar/Tracking",
       "category": "Browse",
       "status": "pass",
@@ -938,7 +972,7 @@
       "name": "Player Init Applies Field Defaults",
       "category": "Stability",
       "status": "pass",
-      "detail": "all 27 default-valued fields assigned in init",
+      "detail": "all 43 default-valued fields assigned in init",
       "duration_ms": 1
     },
     {
@@ -1030,7 +1064,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 101
+      "duration_ms": 92
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1086,7 +1120,7 @@
       "category": "Stability",
       "status": "pass",
       "detail": "no discarded std.Thread.spawn handles in src/",
-      "duration_ms": 12
+      "duration_ms": 11
     },
     {
       "name": "TMDB Fetch Stages Results Off-Thread",
@@ -1156,7 +1190,7 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 957
+      "duration_ms": 771
     }
   ]
 }

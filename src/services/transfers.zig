@@ -16,8 +16,7 @@ var tab_idx: u8 = 1; // 0=Files 1=Active 2=History
 // ══════════════════════════════════════════════════════════
 
 pub fn renderTransfersContent() void {
-    renderTopBar();
-    renderTabBar();
+    renderControlBar();
 
     // One shared scroll area — all tab content renders inside it directly
     var scroll = dvui.scrollArea(@src(), .{}, .{
@@ -37,10 +36,10 @@ pub fn renderTransfersContent() void {
 }
 
 // ══════════════════════════════════════════════════════════
-// TOP BAR  — speed limits
+// CONTROL BAR — tabs (Files/Active/History) + speed limit, one row
 // ══════════════════════════════════════════════════════════
 
-fn renderTopBar() void {
+fn renderControlBar() void {
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .background = true,
@@ -51,6 +50,43 @@ fn renderTopBar() void {
     });
     defer row.deinit();
 
+    // ── Left: Files / Active / History tabs (content-sized so the speed
+    // limit fits on the same row; a flexible spacer pushes it to the right). ──
+    const t_count = c.mpv.torrent_count(state.app.torrent_ses);
+    const hist_count = state.app.dl_history_count;
+
+    var b0: [24]u8 = undefined;
+    var b1: [24]u8 = undefined;
+    var b2: [24]u8 = undefined;
+    const l0 = std.fmt.bufPrintZ(&b0, "Files ({d})", .{cached_files_count}) catch "Files";
+    const l1 = std.fmt.bufPrintZ(&b1, "Active ({d})", .{t_count}) catch "Active";
+    const l2 = std.fmt.bufPrintZ(&b2, "History ({d})", .{hist_count}) catch "History";
+    const tab_labels = [_][]const u8{ l0, l1, l2 };
+
+    for (tab_labels, 0..) |lbl, k| {
+        const sel = tab_idx == @as(u8, @intCast(k));
+        if (dvui.button(@src(), lbl, .{}, .{
+            .id_extra = k + 90000,
+            .color_fill = if (sel) theme.colors.accent else dvui.Color{ .r = 22, .g = 22, .b = 32, .a = 255 },
+            .color_text = if (sel) dvui.Color{ .r = 10, .g = 10, .b = 15, .a = 255 } else theme.colors.text_secondary,
+            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
+            .corner_radius = dvui.Rect.all(theme.radius.pill),
+            .border = dvui.Rect.all(if (sel) @as(f32, 1) else @as(f32, 0)),
+            .color_border = theme.colors.accent,
+            .gravity_y = 0.5,
+        })) {
+            tab_idx = @intCast(k);
+        }
+    }
+
+    // Flexible spacer — pushes the speed limit to the right edge.
+    {
+        var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+        spacer.deinit();
+    }
+
+    // ── Right: download speed limit. ──
     _ = dvui.label(@src(), "Limit:", .{}, .{
         .gravity_y = 0.5,
         .color_text = theme.colors.text_secondary,
@@ -76,44 +112,6 @@ fn renderTopBar() void {
         })) {
             state.app.download_rate_limit = lim;
             c.mpv.torrent_set_download_limit(state.app.torrent_ses, lim);
-        }
-    }
-}
-
-// ══════════════════════════════════════════════════════════
-// TAB BAR
-// ══════════════════════════════════════════════════════════
-
-fn renderTabBar() void {
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
-    });
-    defer row.deinit();
-
-    const t_count = c.mpv.torrent_count(state.app.torrent_ses);
-    const hist_count = state.app.dl_history_count;
-
-    var b0: [24]u8 = undefined;
-    var b1: [24]u8 = undefined;
-    var b2: [24]u8 = undefined;
-    const l0 = std.fmt.bufPrintZ(&b0, "Files ({d})", .{cached_files_count}) catch "Files";
-    const l1 = std.fmt.bufPrintZ(&b1, "Active ({d})", .{t_count}) catch "Active";
-    const l2 = std.fmt.bufPrintZ(&b2, "History ({d})", .{hist_count}) catch "History";
-    const tab_labels = [_][]const u8{ l0, l1, l2 };
-
-    for (tab_labels, 0..) |lbl, k| {
-        const sel = tab_idx == @as(u8, @intCast(k));
-        if (dvui.button(@src(), lbl, .{}, .{
-            .id_extra = k + 90000,
-            .expand = .horizontal,
-            .color_fill = if (sel) theme.colors.accent else dvui.Color{ .r = 22, .g = 22, .b = 32, .a = 255 },
-            .color_text = if (sel) dvui.Color{ .r = 10, .g = 10, .b = 15, .a = 255 } else theme.colors.text_secondary,
-            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
-            .border = .{ .x = 0, .y = 0, .w = 0, .h = if (sel) @as(f32, 2) else @as(f32, 0) },
-            .color_border = theme.colors.accent,
-        })) {
-            tab_idx = @intCast(k);
         }
     }
 }

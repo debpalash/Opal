@@ -101,3 +101,20 @@ test "localFsPath: local files verifiable, streams passed through" {
     try std.testing.expect(localFsPath("https://x.test/v.m3u8") == null);
     try std.testing.expect(localFsPath("") == null);
 }
+
+/// A history entry with no stored link can never be resumed — the click
+/// handler only fires `resumePlayback` when `link_len > 0` — so "Jump back
+/// in" must filter these out before even reaching the (I/O) file-existence
+/// check, rather than showing a card that does nothing when clicked.
+/// Regression: torrent-streamed rows used to be saved with an empty link
+/// (see player.zig's periodic watch-history autosave), which made every
+/// "Jump back in" card for a torrent-played title silently unclickable.
+pub fn hasResumableLink(link: []const u8) bool {
+    return link.len > 0;
+}
+
+test "hasResumableLink rejects the empty link that made cards unclickable" {
+    try std.testing.expect(!hasResumableLink(""));
+    try std.testing.expect(hasResumableLink("magnet:?xt=urn:btih:abc"));
+    try std.testing.expect(hasResumableLink("/a/b.mkv"));
+}

@@ -1374,12 +1374,14 @@ pub fn generateResponse() void {
         } else |_| break;
     }
 
-    // Model name
+    // Model name — cloud uses the provider's configured model verbatim; the
+    // /v1/models auto-discovery cache only applies to local servers.
     var active_model: []const u8 = switch (server.backend_kind) {
         .apfel => "apple-foundationmodel",
         .gemma_llama => "gemma-4-e2b",
+        .cloud => server.cloudModel(),
     };
-    if (server.cached_model_name_len > 0) {
+    if (server.backend_kind != .cloud and server.cached_model_name_len > 0) {
         active_model = server.cached_model_name[0..server.cached_model_name_len];
     }
 
@@ -1394,16 +1396,18 @@ pub fn generateResponse() void {
         f.close(@import("../core/io_global.zig").io());
     } else |_| {}
 
-    var srv_buf: [128]u8 = undefined;
-    const srv_url = server.getServerUrl(&srv_buf);
-    var url_buf: [192]u8 = undefined;
-    const url = std.fmt.bufPrintZ(&url_buf, "{s}/v1/chat/completions", .{srv_url}) catch {
+    var url_buf: [256]u8 = undefined;
+    const url = server.chatCompletionsUrl(&url_buf);
+    if (url.len == 0) {
         chat.setAssistantError(assistant_idx, "Invalid AI server URL.");
         return;
-    };
+    }
 
-    // Wait for server to become healthy if it was just (re)started
-    {
+    // Wait for a just-(re)started LOCAL server to become healthy. Cloud
+    // endpoints have no /health and need no warmup.
+    if (server.backend_kind != .cloud) {
+        var srv_buf: [128]u8 = undefined;
+        const srv_url = server.getServerUrl(&srv_buf);
         var health_url_buf: [192]u8 = undefined;
         const health_url = std.fmt.bufPrintZ(&health_url_buf, "{s}/health", .{srv_url}) catch null;
         if (health_url) |hurl| {
@@ -1428,10 +1432,21 @@ pub fn generateResponse() void {
 
     server.model_status = .checking;
 
-    var child = @import("../core/io_global.zig").Child.init(
-        &.{ "curl", "-s", "-N", "--max-time", "60", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", "@/tmp/opal_ai_req.json", url },
-        @import("../core/alloc.zig").allocator,
-    );
+    // Cloud providers authenticate via a Bearer key (from .env); local
+    // servers take no auth header. curl ignores an empty -H "" cleanly, but
+    // build distinct argvs anyway so the local path is byte-identical.
+    var auth_buf: [640]u8 = undefined;
+    const auth = server.authHeader(&auth_buf);
+    var child = if (auth) |ah|
+        @import("../core/io_global.zig").Child.init(
+            &.{ "curl", "-s", "-N", "--max-time", "60", "-X", "POST", "-H", "Content-Type: application/json", "-H", ah, "--data-binary", "@/tmp/opal_ai_req.json", url },
+            @import("../core/alloc.zig").allocator,
+        )
+    else
+        @import("../core/io_global.zig").Child.init(
+            &.{ "curl", "-s", "-N", "--max-time", "60", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", "@/tmp/opal_ai_req.json", url },
+            @import("../core/alloc.zig").allocator,
+        );
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     child.spawn() catch {

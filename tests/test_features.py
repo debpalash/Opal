@@ -786,7 +786,9 @@ def test_local_llm_default():
         return "fail", "default model is not the qwen2.5-3b catalog entry"
     if "pub fn ensureReady" not in srv or "server.ensureReady()" not in chat:
         return "fail", "self-install path (ensureReady) not wired into send"
-    if "ai_server.backend_kind = .gemma_llama" not in cfg:
+    # Legacy 'apfel'/'llama' rows migrate to gemma_llama; an explicit "cloud"
+    # row (only ever written after the cloud backend existed) is honored.
+    if 'if (std.mem.eql(u8, val, "cloud")) .cloud else .gemma_llama' not in cfg:
         return "fail", "config migration for legacy 'apfel' missing"
     return "pass", "gemma_llama default + qwen2.5-3b + first-message self-install + config migration"
 
@@ -1492,6 +1494,133 @@ def test_tv_seasons():
     missing = [k for k, v in checks.items() if not v]
     if not missing:
         return "pass", "tv seasons → episodes → resolver play + episode tracking wired"
+    return "fail", f"missing: {missing}"
+
+
+@test("Cloud LLM Backend + No Silent Local Installs", "AI Features")
+def test_cloud_llm_backend():
+    # Cloud (OpenAI-compatible) backend: .env-keyed providers, Bearer auth on
+    # the chat request, and NO silent local-model auto-download on first send
+    # (local models install only from explicit Settings/chat-card actions).
+    srv = _src("src/services/ai_server.zig")
+    ctx = _src("src/services/ai_context.zig")
+    cfg = _src("src/core/config.zig")
+    stg = _src("src/ui/settings.zig")
+    checks = {
+        "cloud kind": "cloud" in srv and "CLOUD_PROVIDERS" in srv,
+        "env-keyed providers": "_API_KEY" in srv and "OPENROUTER" in srv and "GROQ" in srv,
+        "bearer auth wired": "authHeader" in srv and "authHeader" in ctx,
+        "chat url per backend": "chatCompletionsUrl" in srv and "chatCompletionsUrl" in ctx,
+        # ensureReady must NOT kick startModelDownload anymore (the silent
+        # 3.2GB first-message download). The fn still exists for the explicit
+        # Settings/chat-card buttons.
+        "no silent download": "startModelDownload" not in _between(srv, "pub fn ensureReady", "\npub fn"),
+        "config persists cloud": '"cloud"' in cfg and "ai_cloud_provider" in cfg,
+        "settings picker": "Cloud API" in stg and "cloudProviderHasKey" in stg,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if not missing:
+        return "pass", "cloud providers + bearer auth + on-demand-only local models wired"
+    return "fail", f"missing: {missing}"
+
+
+def _between(src, start, end):
+    i = src.find(start)
+    if i < 0:
+        return ""
+    j = src.find(end, i + len(start))
+    return src[i:j if j > 0 else len(src)]
+
+
+@test("Deferred Watch Commit + Smart Episode Play + Onboarding", "Browse")
+def test_watch_commit_smart_play_onboarding():
+    # 1) Clicking ▶ must NOT mark watched — the commit is armed and fires from
+    #    the player's time-pos stream after ~2min (tvWatchCommitDue, pure).
+    # 2) Episode play auto-plays the top-ranked CONFIDENT source (pickBest,
+    #    pure) and falls back to the Search picker otherwise.
+    # 3) First-run wizard: starter source pack + TMDB key + AI note; onboarded
+    #    flag persisted; pre-wizard installs grandfathered.
+    tm = _src("src/services/tmdb.zig")
+    pl = _src("src/player/player.zig")
+    st = _src("src/core/state.zig")
+    rk = _src("src/services/resolver_rank.zig")
+    ob = _src("src/ui/onboarding.zig")
+    pr = _src("src/services/plugin_repo.zig")
+    cfg = _src("src/core/config.zig")
+    mn = _src("src/main.zig")
+    checks = {
+        "no click-time mark": "tvMarkWatched" not in _between(tm, "fn playTvEpisode", "\nfn "),
+        "pending watch state": "pending_watch" in st and "armed" in st,
+        "commit on playback": "tvWatchCommitDue" in pl and "commitPendingWatch" in pl,
+        "commit does db+trakt+continue": ("tvMarkWatched" in _between(tm, "pub fn commitPendingWatch", "\nfn ")
+                                          and "markWatchedEpisode" in _between(tm, "pub fn commitPendingWatch", "\nfn ")
+                                          and "tvUpsertContinue" in _between(tm, "pub fn commitPendingWatch", "\nfn ")),
+        "smart pick pure": "pub fn pickBest" in rk and "PickCand" in rk,
+        "smart play wired": "smartPlayEpisode" in tm and "pickBest" in tm and "setUniversalQuery" in tm,
+        "wizard": "installStarterPack" in ob and "onboarded" in ob,
+        "starter pack": "pub fn installStarterPack" in pr and "torrentio" in pr,
+        "persist + grandfather": '"onboarded"' in cfg and "anyInstalled" in cfg,
+        "wizard rendered": "onboarding.zig" in mn,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if not missing:
+        return "pass", "deferred watch commit + confident auto-play + first-run wizard wired"
+    return "fail", f"missing: {missing}"
+
+
+@test("TV Calendar: Coming-Up Rail + EZTV Availability + HW Decode", "Browse")
+def test_tv_calendar_and_hwdec():
+    # Coming-up rail: TMDB next/last-episode-to-air parsing, countdown labels,
+    # EZTV get-torrents availability (neutral-gated on the eztv source), Home
+    # rail + click-through. Plus the playback-CPU fixes: hw decode ON by
+    # default (legacy auto-persisted hwdec=0 migrated via hwdec2) and the SW
+    # render targeting native video size instead of fixed 1920x1080.
+    calp = _src("src/services/tv_calendar_pure.zig")
+    cal = _src("src/services/tv_calendar.zig")
+    hm = _src("src/ui/home.zig")
+    st = _src("src/core/state.zig")
+    cfg = _src("src/core/config.zig")
+    gr = _src("src/ui/grid.zig")
+    checks = {
+        "pure parsers": ("parseEpisodeToAir" in calp and "eztvEpisodeSeeds" in calp
+                         and "countdownLabel" in calp and "imdbDigits" in calp),
+        "service wired": ("tvGetContinue" in cal and "next_episode_to_air" in cal
+                          and 'has("eztv")' in cal),
+        "home rail": "renderComingUpRail" in hm and "refreshOnce" in hm,
+        "click-through": "openTvDetailById" in hm,
+        "hwdec default on": "hwdec_enabled: bool = true" in st,
+        "hwdec migration": '"hwdec2"' in cfg,
+        "adaptive render size": "dwidth" in gr and "textureDestroyLater" in gr,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if not missing:
+        return "pass", "coming-up rail + eztv availability + hwdec/native-size render wired"
+    return "fail", f"missing: {missing}"
+
+
+@test("Web Companion: Pairing + LAN Bind + Bundled Page", "Remote")
+def test_web_companion():
+    # Phase 1 of docs/web-companion.md: /pair code exchange is the ONLY way to
+    # get the token (no injection into the unauthenticated page), server binds
+    # LAN when the opt-in toggle is on, page served from Resources/web with a
+    # dev fallback, Settings shows LAN URL + pairing code, build bundles it.
+    rm = _src("src/services/remote.zig")
+    stg = _src("src/ui/settings.zig")
+    sh = open(os.path.join(PROJECT_DIR, "scripts/build-app.sh")).read()
+    web = open(os.path.join(PROJECT_DIR, "web/index.html")).read()
+    checks = {
+        "pair route": '"/pair"' in rm and "regeneratePairCode" in rm,
+        "brute-force guard": "MAX_PAIR_FAILS" in rm and "sleep(300" in rm,
+        "no token injection": "replaceOwned" not in rm,
+        "lan bind": '"0.0.0.0"' in rm and "127.0.0.1" not in _between(rm, "fn serverLoop", "std.debug.print"),
+        "bundled serving": "resourceRoot" in rm and "web/index.html" in rm,
+        "settings pairing ui": "pairingCode" in stg and "lanIp" in stg,
+        "build bundles web": "Resources/web" in sh,
+        "client pairs": "/pair?code=" in web and "localStorage" in web and "__ZIGZAG_API_TOKEN__" not in web,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if not missing:
+        return "pass", "pairing-code auth + LAN bind + bundled mobile page wired"
     return "fail", f"missing: {missing}"
 
 

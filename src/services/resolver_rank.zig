@@ -340,3 +340,57 @@ test "parseSxxEyy: no match returns zeros" {
     try std.testing.expectEqual(@as(i32, 0), s);
     try std.testing.expectEqual(@as(i32, 0), e);
 }
+
+// ── Smart episode play: confident auto-pick ──
+
+/// Minimal projection of a resolver result for the auto-pick decision, so
+/// this stays pure (no resolver/state import).
+pub const PickCand = struct {
+    playable: bool, // stremio/torrent with a non-empty url
+    needs_seeds: bool, // plain torrent-index magnet (stremio streams don't)
+    match_pct: u8,
+    seeds: u16,
+};
+
+pub const PICK_MIN_MATCH: u8 = 60;
+pub const PICK_MIN_SEEDS: u16 = 2;
+
+/// First confident auto-playable candidate, or null → show the source picker
+/// instead. `cands` must already be in rank order (resolver.results is kept
+/// insertion-sorted by score). Confidence: a playable url whose title matches
+/// the query well; plain torrents additionally need a couple of seeds so we
+/// never auto-play a dead magnet.
+pub fn pickBest(cands: []const PickCand) ?usize {
+    for (cands, 0..) |c, i| {
+        if (!c.playable) continue;
+        if (c.match_pct < PICK_MIN_MATCH) continue;
+        if (c.needs_seeds and c.seeds < PICK_MIN_SEEDS) continue;
+        return i;
+    }
+    return null;
+}
+
+test "pickBest: first confident hit wins; dead magnets and weak matches skipped" {
+    const cands = [_]PickCand{
+        .{ .playable = false, .needs_seeds = false, .match_pct = 100, .seeds = 0 }, // tmdb card — not a stream
+        .{ .playable = true, .needs_seeds = true, .match_pct = 95, .seeds = 0 }, // dead magnet
+        .{ .playable = true, .needs_seeds = true, .match_pct = 40, .seeds = 900 }, // wrong title
+        .{ .playable = true, .needs_seeds = true, .match_pct = 88, .seeds = 120 }, // ← this one
+        .{ .playable = true, .needs_seeds = false, .match_pct = 90, .seeds = 0 },
+    };
+    try std.testing.expectEqual(@as(?usize, 3), pickBest(&cands));
+}
+
+test "pickBest: stremio streams need no seeds; empty/junk lists yield null" {
+    const stremio_only = [_]PickCand{
+        .{ .playable = true, .needs_seeds = false, .match_pct = 75, .seeds = 0 },
+    };
+    try std.testing.expectEqual(@as(?usize, 0), pickBest(&stremio_only));
+
+    const junk = [_]PickCand{
+        .{ .playable = true, .needs_seeds = true, .match_pct = 59, .seeds = 50 },
+        .{ .playable = false, .needs_seeds = false, .match_pct = 100, .seeds = 0 },
+    };
+    try std.testing.expectEqual(@as(?usize, null), pickBest(&junk));
+    try std.testing.expectEqual(@as(?usize, null), pickBest(&.{}));
+}

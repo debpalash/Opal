@@ -402,9 +402,39 @@ pub fn renderGrid() !void {
                 // is already null-safe.
                 if (p.mpv_gl != null) {
                     const flags = c.mpv.mpv_render_context_update(p.mpv_gl);
-                    const size = [2]c_int{ player.video_w, player.video_h };
+
+                    // Render at the video's NATIVE size (capped to the 1080p
+                    // buffer, aspect-preserving) instead of a fixed 1920×1080.
+                    // The fixed target made mpv software-scale + RGBA-convert
+                    // 8.3MB per frame and upload all of it to the GPU even
+                    // for a 720p file (3.7MB) — a large share of the playback
+                    // CPU. The GPU upscales the smaller texture for free.
+                    var vw: i64 = 0;
+                    var vh: i64 = 0;
+                    _ = c.mpv.mpv_get_property(p.mpv_ctx, "dwidth", c.mpv.MPV_FORMAT_INT64, &vw);
+                    _ = c.mpv.mpv_get_property(p.mpv_ctx, "dheight", c.mpv.MPV_FORMAT_INT64, &vh);
+                    var rw: c_int = player.video_w;
+                    var rh: c_int = player.video_h;
+                    if (vw > 0 and vh > 0) {
+                        if (vw <= player.video_w and vh <= player.video_h) {
+                            rw = @intCast(vw);
+                            rh = @intCast(vh);
+                        } else {
+                            // >1080p source: scale down to fit, keep aspect.
+                            const sc = @min(
+                                @as(f64, @floatFromInt(player.video_w)) / @as(f64, @floatFromInt(vw)),
+                                @as(f64, @floatFromInt(player.video_h)) / @as(f64, @floatFromInt(vh)),
+                            );
+                            rw = @intFromFloat(@as(f64, @floatFromInt(vw)) * sc);
+                            rh = @intFromFloat(@as(f64, @floatFromInt(vh)) * sc);
+                        }
+                        rw = @max(2, rw);
+                        rh = @max(2, rh);
+                    }
+                    const size = [2]c_int{ rw, rh };
                     const img_format = "rgba";
-                    const pitch: usize = player.video_w * 4;
+                    const pitch: usize = @as(usize, @intCast(rw)) * 4;
+                    const npix: usize = @as(usize, @intCast(rw)) * @as(usize, @intCast(rh));
                     var render_params = [_]c.mpv.mpv_render_param{
                         .{ .type = c.mpv.MPV_RENDER_PARAM_SW_SIZE, .data = @constCast(&size) },
                         .{ .type = c.mpv.MPV_RENDER_PARAM_SW_FORMAT, .data = @constCast(img_format.ptr) },
@@ -416,10 +446,18 @@ pub fn renderGrid() !void {
                     if ((flags & c.mpv.MPV_RENDER_UPDATE_FRAME) != 0) {
                         if (c.mpv.mpv_render_context_render(p.mpv_gl, &render_params) >= 0) {
                             // MPV renders with "rgba" format — alpha is already 0xFF, no fill needed
+                            // Size changed (new file / track switch) → the old
+                            // texture can't be updated in place; recreate.
+                            if (p.texture) |tex| {
+                                if (tex.width != @as(u32, @intCast(rw)) or tex.height != @as(u32, @intCast(rh))) {
+                                    dvui.textureDestroyLater(tex);
+                                    p.texture = null;
+                                }
+                            }
                             if (p.texture == null) {
-                                p.texture = try dvui.textureCreate(p.pixels, player.video_w, player.video_h, .linear, .rgba_32);
+                                p.texture = try dvui.textureCreate(p.pixels[0..npix], @intCast(rw), @intCast(rh), .linear, .rgba_32);
                             } else {
-                                try dvui.Texture.update(&p.texture.?, p.pixels, .linear);
+                                try dvui.Texture.update(&p.texture.?, p.pixels[0..npix], .linear);
                             }
                             // First frame rendered — clear loading state
                             p.is_loading = false;
@@ -612,12 +650,47 @@ pub fn renderGrid() !void {
                     }
                 } else if (p.is_loading) {
                     // ── Loading indicator — shown immediately on load_file() ──
-                    // Polished: uses components.emptyState for the canonical
-                    // "loading" surface plus the source path beneath it.
+                    // TMDB-linked plays (movie search / TV episode — see
+                    // search.zig's addMagnetToEngine) stash a poster + title,
+                    // which we use here for a poster+trivia loading screen.
+                    // Everything else (raw magnet paste, plain file/URL) keeps
+                    // the original hourglass + source-path text unchanged.
+                    const text_mod = @import("../core/text.zig");
+                    const has_tmdb_ctx = p.loading_poster_path_len > 0;
+
+                    if (has_tmdb_ctx and !p.loading_meta_fetch_started) {
+                        p.loading_meta_fetch_started = true;
+                        var url_buf: [256]u8 = undefined;
+                        if (std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w500{s}", .{p.loading_poster_path[0..p.loading_poster_path_len]})) |url| {
+                            @import("../core/poster.zig").fetchAsync(url, &p.loading_poster_pixels, &p.loading_poster_w, &p.loading_poster_h, &p.loading_poster_fetching);
+                        } else |_| {}
+                        if (p.loading_title_len > 0) {
+                            @import("../services/wikipedia.zig").fetchTrivia(
+                                p.loading_title[0..p.loading_title_len],
+                                p.loading_is_tv,
+                                &p.loading_trivia,
+                                &p.loading_trivia_len,
+                                &p.loading_trivia_fetching,
+                            );
+                        }
+                    }
+                    if (has_tmdb_ctx) {
+                        _ = @import("../core/poster.zig").uploadIfReady(&p.loading_poster_pixels, p.loading_poster_w, p.loading_poster_h, &p.loading_poster_tex);
+                    }
+
                     var load_overlay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
                     {
-                        // Dark backdrop captures clicks to select this pane.
-                        if (dvui.button(@src(), "", .{}, .{ .id_extra = i + 3000, .expand = .both, .color_fill = theme.colors.bg_deep })) {
+                        if (has_tmdb_ctx and p.loading_poster_tex != null) {
+                            // Full-bleed poster behind a dim scrim so the spinner
+                            // + text stay legible over whatever art loaded.
+                            _ = dvui.image(@src(), .{ .source = .{ .texture = p.loading_poster_tex.? } }, .{
+                                .id_extra = i + 3010,
+                                .expand = .both,
+                            });
+                            var scrim = dvui.box(@src(), .{}, .{ .id_extra = i + 3011, .expand = .both, .background = true, .color_fill = theme.colors.overlay });
+                            scrim.deinit();
+                        } else if (dvui.button(@src(), "", .{}, .{ .id_extra = i + 3000, .expand = .both, .color_fill = theme.colors.bg_deep })) {
+                            // Dark backdrop captures clicks to select this pane.
                             state.app.active_player_idx = i;
                         }
 
@@ -629,22 +702,64 @@ pub fn renderGrid() !void {
                         });
                         defer load_stack.deinit();
 
-                        components.emptyState(icons.tvg.lucide.hourglass, "Loading...", "");
-
-                        // Truncated source path beneath the canonical empty state.
-                        if (p.loading_label_len > 0) {
-                            const src_text = p.loading_label[0..p.loading_label_len];
-                            const display = if (src_text.len > 45) src_text[src_text.len - 45 ..] else src_text;
-                            // loading_label is a file path / network title written
-                            // by the load worker — validate a copy so a non-UTF-8
-                            // byte (or a tail slice cut mid-codepoint) can't panic dvui.
-                            var ll_buf: [64]u8 = undefined;
-                            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(display, &ll_buf)}, .{
-                                .id_extra = i + 4002,
-                                .color_text = theme.colors.text_tertiary,
+                        if (has_tmdb_ctx and p.loading_title_len > 0) {
+                            _ = dvui.icon(@src(), "", icons.tvg.lucide.hourglass, .{}, .{
+                                .id_extra = i + 3150,
+                                .color_text = theme.colors.text_primary,
+                                .min_size_content = .{ .w = 28, .h = 28 },
+                                .max_size_content = .{ .w = 28, .h = 28 },
                                 .gravity_x = 0.5,
-                                .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
+                                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
                             });
+
+                            var title_buf: [128]u8 = undefined;
+                            _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(p.loading_title[0..p.loading_title_len], &title_buf)}, .{
+                                .id_extra = i + 3151,
+                                .color_text = theme.colors.text_primary,
+                                .gravity_x = 0.5,
+                                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
+                            });
+
+                            // Prefer the fetched Wikipedia trivia; fall back to the
+                            // TMDB synopsis stashed at play-start while it's still
+                            // in flight (or if it never lands).
+                            const trivia_src = if (p.loading_trivia_len > 0)
+                                p.loading_trivia[0..p.loading_trivia_len]
+                            else
+                                p.loading_overview[0..p.loading_overview_len];
+
+                            if (trivia_src.len > 0) {
+                                var trivia_wrap = dvui.box(@src(), .{}, .{
+                                    .id_extra = i + 3160,
+                                    .gravity_x = 0.5,
+                                    .max_size_content = .{ .w = 440, .h = std.math.floatMax(f32) },
+                                });
+                                defer trivia_wrap.deinit();
+                                var trivia_buf: [400]u8 = undefined;
+                                dvui.labelEx(@src(), "{s}", .{text_mod.safeUtf8Buf(trivia_src, &trivia_buf)}, .{ .align_x = 0.5 }, .{
+                                    .id_extra = i + 3161,
+                                    .color_text = theme.colors.text_secondary,
+                                    .expand = .horizontal,
+                                });
+                            }
+                        } else {
+                            components.emptyState(icons.tvg.lucide.hourglass, "Loading...", "");
+
+                            // Truncated source path beneath the canonical empty state.
+                            if (p.loading_label_len > 0) {
+                                const src_text = p.loading_label[0..p.loading_label_len];
+                                const display = if (src_text.len > 45) src_text[src_text.len - 45 ..] else src_text;
+                                // loading_label is a file path / network title written
+                                // by the load worker — validate a copy so a non-UTF-8
+                                // byte (or a tail slice cut mid-codepoint) can't panic dvui.
+                                var ll_buf: [64]u8 = undefined;
+                                _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(display, &ll_buf)}, .{
+                                    .id_extra = i + 4002,
+                                    .color_text = theme.colors.text_tertiary,
+                                    .gravity_x = 0.5,
+                                    .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
+                                });
+                            }
                         }
                     }
                     load_overlay.deinit();
@@ -891,14 +1006,19 @@ fn renderContinueWatching() void {
             });
             if (resume_clicked) {
                 const browser = @import("../services/browser.zig");
-                // Watch history stores both the display name and the original
-                // URL/magnet/path. Routing must use the URL — the display name
-                // has no extension or domain so it routes to .browser and opens
-                // the HTML browser instead of mpv. loadContent creates a player
-                // if none exists (cold start on the empty home screen).
-                const url_to_load = if (e.link_len > 0) e.link[0..e.link_len] else raw_name;
-                browser.loadContent(url_to_load);
-                state.showToast("Resuming...");
+                // resumePlayback forces known playback (magnet → torrent
+                // engine, comics → reader, else straight into mpv) instead of
+                // loadContent's auto-routing, which sends the bare display
+                // name (no extension/domain) to the web browser tab instead
+                // of mpv. Creates a player if none exists (cold start on the
+                // empty home screen). No stored link (legacy row saved before
+                // this was fixed) means there's nothing safe to resume into.
+                if (e.link_len > 0) {
+                    browser.resumePlayback(e.link[0..e.link_len]);
+                    state.showToast("Resuming...");
+                } else {
+                    state.showToast("Can't resume — no saved link for this item");
+                }
             }
         }
 

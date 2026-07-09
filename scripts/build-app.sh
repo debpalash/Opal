@@ -46,6 +46,13 @@ if [ -f "$ROOT/plugins-manifest.json" ]; then
     cp "$ROOT/plugins-manifest.json" "$APP_DIR/Contents/Resources/plugins-manifest.json"
 fi
 
+# Bundle the web companion (single self-contained page) — remote.zig serves
+# it at / from Resources/web when Web Remote is enabled.
+if [ -f "$ROOT/web/index.html" ]; then
+    mkdir -p "$APP_DIR/Contents/Resources/web"
+    cp "$ROOT/web/index.html" "$APP_DIR/Contents/Resources/web/index.html"
+fi
+
 # ── 3. Info.plist ──────────────────────────────────────────────
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

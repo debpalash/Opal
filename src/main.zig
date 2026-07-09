@@ -29,6 +29,12 @@ var cli_open_buf: [2048]u8 = std.mem.zeroes([2048]u8);
 var cli_open_len: usize = 0;
 var cli_open_done: bool = false;
 
+// One-shot latch: apply the device-aware default ui_scale on the first frame
+// after config has loaded (needs dvui.windowNaturalScale(), only valid inside a
+// frame). Runtime-only — recomputed each launch so moving to a different-DPI
+// display picks a fresh default.
+var device_scale_applied: bool = false;
+
 pub const dvui_app: dvui.App = .{
     .config = .{ .options = .{ .size = .{ .w = 1400.0, .h = 820.0 }, .title = "Opal — Play everything" } },
     .initFn = appInit,
@@ -114,12 +120,11 @@ pub fn coreInit() !void {
     std.Io.Dir.cwd().createDirPath(@import("core/io_global.zig").io(), state.app.save_path_buf[0..state.app.save_path_len]) catch {};
     try state.app.players.append(@import("core/alloc.zig").allocator, try player.MediaPlayer.init(@import("core/alloc.zig").allocator));
 
-    // Auto-start Web Remote API so the OpalMenubar helper can reach us without
-    // manual Settings toggling. Default state.web_remote_enabled=true; user can
-    // still disable in Settings (which calls remote.stop()).
-    if (state.app.web_remote_enabled) {
-        @import("services/remote.zig").start();
-    }
+    // Web Remote API is OPT-IN: nothing listens on app start unless the user
+    // enabled it (Settings › Scripts › Web Remote Control, persisted as
+    // "web_remote" — config.zig starts the server on load when it's on).
+    // Trade-off: the OpalMenubar helper and web/ UI can't reach the app until
+    // the toggle is on.
 
     // Move heavy DB/migration/loading work to background so UI renders instantly
     if (std.Thread.spawn(.{}, struct {
@@ -573,6 +578,18 @@ fn appFrame() !dvui.App.Result {
     // theme.setPreset on the background worker, which can't touch dvui directly).
     theme.reapplyIfPending();
 
+    // Device-aware default scale — applied once, after config load, when the
+    // user hasn't pinned a manual scale. dvui already multiplies by the display
+    // DPI (natural_scale); this picks a compact-but-readable density on top,
+    // biased denser on high-DPI panels. windowNaturalScale() is only valid
+    // inside a frame, so this can't live in appInit.
+    if (!device_scale_applied and state.app.config_loaded) {
+        device_scale_applied = true;
+        if (state.app.ui_scale_auto) {
+            state.app.ui_scale = @import("core/scale_pure.zig").deviceScale(dvui.windowNaturalScale());
+        }
+    }
+
     // Reset the per-frame widget-id sequence counters (sectionHeader / divider /
     // statusPill). Without this every one of those widgets is a "first frame"
     // id for dvui, which force-refreshes — a permanent full-rate repaint while
@@ -929,6 +946,10 @@ fn appFrame() !dvui.App.Result {
 
     var scale_w = dvui.scale(@src(), .{ .scale = &state.app.ui_scale }, .{ .expand = .both });
     defer scale_w.deinit();
+
+    // First-run wizard — modal over whatever shell renders below; no-op once
+    // onboarded (persisted) or before config load resolves the flag.
+    @import("ui/onboarding.zig").render();
 
     if (state.app.page_shell_enabled) {
         // New website-like page shell (redesign). Behind a flag until parity.

@@ -914,7 +914,7 @@ pub fn renderContent() void {
     {
         var url_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 4, .y = 3, .w = 4, .h = 3 },
+            .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
             .background = true,
             .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 22, .a = 245 },
         });

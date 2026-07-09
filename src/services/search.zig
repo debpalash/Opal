@@ -525,6 +525,16 @@ pub fn submitQuery(query_text: []const u8) void {
     resolver.resolve(search_buf[0..n], "auto");
 }
 
+/// Show `query_text` in the universal Search view WITHOUT re-resolving —
+/// for flows that already ran resolver.resolve and just want the picker to
+/// display the live results (smart episode play's fallback).
+pub fn setUniversalQuery(query_text: []const u8) void {
+    const n = @min(query_text.len, search_buf.len - 1);
+    @memset(&search_buf, 0);
+    @memcpy(search_buf[0..n], query_text[0..n]);
+    state.app.universal_search = true;
+}
+
 /// Omnibox memory-mode flag. When set, the shell's submit path routes the
 /// raw phrase through memorySearch() (conversational "?"-search) instead of the
 /// plain unified search. R4 sets this; R3 honors it via the submit entry.
@@ -1648,6 +1658,34 @@ fn renderSourceSummary(snap_count: usize) void {
         .color_text = theme.colors.text_tertiary,
         .padding = .{ .x = 14, .y = 8, .w = 12, .h = 6 },
     });
+
+    // Fresh-install / post-reset state: Opal ships NEUTRAL — zero source
+    // plugins installed means every torrent/comics/anime engine silently ran
+    // as a no-op above. A bare "No hits" here reads as a broken search (it
+    // cost a real debugging session); say why and offer the one-click fix.
+    if (!@import("../core/source_config.zig").anyInstalled()) {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = 12901,
+            .padding = .{ .x = 14, .y = 0, .w = 12, .h = 6 },
+        });
+        defer row.deinit();
+        _ = dvui.label(@src(), "No source plugins installed — searches can't return torrents yet.", .{}, .{
+            .id_extra = 12902,
+            .color_text = theme.colors.warning,
+            .gravity_y = 0.5,
+        });
+        if (dvui.button(@src(), "Open Plugins", .{}, .{
+            .id_extra = 12903,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.accent,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
+            .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
+            .gravity_y = 0.5,
+        })) {
+            state.navigateToTab(.Plugins);
+        }
+    }
 }
 
 /// One compact single-line result row: title (expands, ellipsizes) · muted
@@ -1995,6 +2033,33 @@ fn addMagnetToEngine(magnet_link: []const u8) void {
         const lbl = "Torrent stream";
         @memcpy(p.loading_label[0..lbl.len], lbl);
         p.loading_label_len = lbl.len;
+
+        // Adopt the TMDB-linked loading context (if any) stashed by whoever
+        // kicked off this play (tmdb.zig's sendToSearch / playTvEpisode), so
+        // grid.zig's loading overlay can show a poster + trivia instead of
+        // the bare hourglass. Free any stale poster from a previous play on
+        // this (reused) player first, then clear the stash so it can't leak
+        // onto a later unrelated magnet (e.g. a raw drag-dropped torrent).
+        @import("../core/poster.zig").deinitPoster(&p.loading_poster_pixels, &p.loading_poster_tex);
+        p.loading_poster_w = 0;
+        p.loading_poster_h = 0;
+        p.loading_poster_fetching = false;
+        p.loading_meta_fetch_started = false;
+        p.loading_trivia_len = 0;
+        p.loading_trivia_fetching = false;
+
+        p.loading_title_len = state.app.pending_play_title_len;
+        @memcpy(p.loading_title[0..p.loading_title_len], state.app.pending_play_title[0..p.loading_title_len]);
+        p.loading_poster_path_len = state.app.pending_play_poster_path_len;
+        @memcpy(p.loading_poster_path[0..p.loading_poster_path_len], state.app.pending_play_poster_path[0..p.loading_poster_path_len]);
+        p.loading_overview_len = state.app.pending_play_overview_len;
+        @memcpy(p.loading_overview[0..p.loading_overview_len], state.app.pending_play_overview[0..p.loading_overview_len]);
+        p.loading_is_tv = state.app.pending_play_is_tv;
+
+        state.app.pending_play_title_len = 0;
+        state.app.pending_play_poster_path_len = 0;
+        state.app.pending_play_overview_len = 0;
+        state.app.pending_play_is_tv = false;
 
         // Store URL for workspace persistence
         const url_len = @min(magnet_link.len, 2048);

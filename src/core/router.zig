@@ -14,7 +14,9 @@ pub const Route = enum {
     home,
     search,
     browse,
-    library,
+    downloads,
+    queue,
+    history,
     player,
     assistant,
     settings,
@@ -113,8 +115,8 @@ test "navigate pushes back and clears forward" {
     try std.testing.expect(h.canGoBack());
     try std.testing.expect(!h.canGoForward());
 
-    h.navigate(.library);
-    try std.testing.expectEqual(Route.library, h.current);
+    h.navigate(.queue);
+    try std.testing.expectEqual(Route.queue, h.current);
     try std.testing.expectEqual(@as(usize, 2), h.back_len);
 }
 
@@ -189,7 +191,7 @@ test "leavePlayer returns to last non-player page or home" {
 
 test "back stack caps without blocking navigation" {
     var h: History = .{};
-    const seq = [_]Route{ .search, .browse, .library, .player, .assistant, .settings, .system };
+    const seq = [_]Route{ .search, .browse, .downloads, .queue, .history, .player, .assistant, .settings, .system };
     // Far more navigations than HISTORY_CAP; must never overflow.
     var n: usize = 0;
     while (n < HISTORY_CAP * 3) : (n += 1) {

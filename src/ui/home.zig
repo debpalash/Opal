@@ -106,6 +106,10 @@ pub fn render() void {
     // window meant trending never fetched at all this session).
     kickTrendingFetch();
 
+    // TV calendar ("Coming up") — one refresh per session, after the DB init
+    // worker has run so tv_continue is readable.
+    if (state.app.init_history_loaded) @import("../services/tv_calendar.zig").refreshOnce();
+
     const watching = &state.app.tmdb.watching;
     const watchlist = &state.app.tmdb.watchlist;
     const favorites = &state.app.tmdb.favorites;
@@ -144,7 +148,13 @@ pub fn render() void {
         posterStrip("Continue Watching", icons.tvg.lucide.play, watching, .Watching, 1, card_w);
         budget -= rail_h;
     }
-    if (budget >= rail_h and renderTrendingRail(card_w)) budget -= rail_h;
+    // Trending is the primary discovery content — always render it (the page is
+    // a scrollArea, so it just scrolls into view). Budget-gating it meant a tall
+    // hero / short window hid all TV/movie content, reading as "nothing loaded".
+    if (renderTrendingRail(card_w)) budget -= rail_h;
+    // "Coming up" — next-episode countdowns + EZTV availability for shows the
+    // user watches. Compact text rail; renders whenever entries exist.
+    if (renderComingUpRail()) budget -= 74;
     if (budget >= foryou_h and @import("../services/recommendations.zig").rec_count > 0) {
         @import("discovery_ui.zig").renderForYouRail();
         budget -= foryou_h;
@@ -186,6 +196,103 @@ fn kickTrendingFetch() void {
     }
 }
 
+/// "Coming up" — one compact card per tracked show: SxxEyy + episode title,
+/// then either an air-date countdown or an "Available · N seeds" badge from
+/// EZTV. Click opens the show's detail. Returns true when the rail rendered.
+fn renderComingUpRail() bool {
+    const cal = @import("../services/tv_calendar.zig");
+    if (cal.count == 0) return false;
+    const text_mod = @import("../core/text.zig");
+
+    // Header
+    {
+        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 2 },
+        });
+        defer hdr.deinit();
+        dvui.icon(@src(), "comingup", icons.tvg.lucide.@"calendar-clock", .{}, .{
+            .color_text = theme.colors.accent,
+            .min_size_content = theme.iconSize(.sm),
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
+        });
+        _ = dvui.label(@src(), "Coming up", .{}, .{
+            .color_text = theme.colors.text_primary,
+            .font = dvui.themeGet().font_heading,
+            .gravity_y = 0.5,
+        });
+    }
+
+    var strip = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none, .horizontal_bar = .hide }, .{
+        .expand = .horizontal,
+        .background = false,
+        .min_size_content = .{ .w = 10, .h = 52 },
+        .max_size_content = dvui.Options.MaxSize.height(52),
+    });
+    defer strip.deinit();
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{});
+    defer row.deinit();
+
+    const now_s = @import("../core/io_global.zig").timestamp();
+    for (0..cal.count) |i| {
+        const e = &cal.entries[i];
+        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = i,
+            .background = true,
+            .color_fill = theme.colors.bg_surface,
+            .color_border = theme.colors.border_subtle,
+            .border = dvui.Rect.all(1),
+            .corner_radius = theme.dims.rad_md,
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        });
+        defer card.deinit();
+        var hovered = false;
+        const clicked = dvui.clicked(card.data(), .{ .hovered = &hovered });
+        if (hovered) card.data().options.color_fill = theme.colors.bg_hover;
+        card.drawBackground();
+
+        var nm_buf: [96]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(e.name[0..@min(e.name_len, 60)], &nm_buf)}, .{
+            .id_extra = i,
+            .color_text = theme.colors.text_primary,
+        });
+
+        var line_buf: [128]u8 = undefined;
+        var cd_buf: [24]u8 = undefined;
+        const pure = @import("../services/tv_calendar_pure.zig");
+        const line: []const u8 = if (e.available) blk: {
+            // Latest aired episode is grabbable right now.
+            break :blk std.fmt.bufPrint(&line_buf, "S{d:0>2}E{d:0>2} available · {d} seeds", .{
+                @as(u32, @intCast(@max(0, e.last_season))),
+                @as(u32, @intCast(@max(0, e.last_episode))),
+                e.seeds,
+            }) catch "available";
+        } else if (e.next_season > 0) blk: {
+            break :blk std.fmt.bufPrint(&line_buf, "S{d:0>2}E{d:0>2} {s}", .{
+                @as(u32, @intCast(@max(0, e.next_season))),
+                @as(u32, @intCast(@max(0, e.next_episode))),
+                pure.countdownLabel(now_s, e.next_air_epoch, &cd_buf),
+            }) catch "soon";
+        } else blk: {
+            break :blk std.fmt.bufPrint(&line_buf, "S{d:0>2}E{d:0>2} out — unwatched", .{
+                @as(u32, @intCast(@max(0, e.last_season))),
+                @as(u32, @intCast(@max(0, e.last_episode))),
+            }) catch "unwatched";
+        };
+        _ = dvui.label(@src(), "{s}", .{line}, .{
+            .id_extra = i,
+            .color_text = if (e.available) theme.colors.success else theme.colors.text_tertiary,
+        });
+
+        if (clicked) {
+            @import("../services/tmdb.zig").openTvDetailById(e.tmdb_id, e.name[0..e.name_len], e.poster_path[0..e.poster_path_len]);
+        }
+    }
+    return true;
+}
+
 fn renderTrendingRail(card_w: f32) bool {
     const t = &state.app.tmdb;
     if (t.api_key_len == 0) return false;
@@ -205,7 +312,10 @@ fn renderHero() void {
     // windowRect() is logical units (same space as layout).
     const win_h = dvui.windowRect().h;
     const tall = win_h >= 980;
-    const top_pad = std.math.clamp(win_h * 0.018, 6.0, 32.0);
+    // Breathing room below the top nav before the greeting. Generous (the user
+    // wants clear separation) but capped so the Trending rail below stays near
+    // the fold rather than being pushed off-screen.
+    const top_pad = std.math.clamp(win_h * 0.08, 64.0, 150.0);
 
     var hero = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
@@ -863,11 +973,14 @@ fn sectionHeader(title: []const u8, icon: []const u8, view: state.TmdbView, id: 
 
 // ── Jump back in (watch history) — resume cards with progress ──
 
-/// True when a history entry's media still exists: local files are stat'd
-/// (deleted downloads/library files must not resurface as resume cards);
-/// non-local links (magnets, http, jellyfin) can't be checked and pass.
-/// Results are cached and re-verified every few seconds or when history
-/// changes — stat'ing every entry every frame would be syscall noise.
+/// True when a history entry's media still exists AND can actually be
+/// resumed: local files are stat'd (deleted downloads/library files must not
+/// resurface as resume cards); a blank link can never be resumed at all (the
+/// click handler below only fires `resumePlayback` when `link_len > 0`), so
+/// those are filtered out too rather than shown as dead, do-nothing cards;
+/// remaining non-local links (magnets, http, jellyfin) can't be checked and
+/// pass. Results are cached and re-verified every few seconds or when
+/// history changes — stat'ing every entry every frame would be syscall noise.
 fn playableHistory() []const bool {
     const io_g = @import("../core/io_global.zig");
     const home_pure = @import("home_pure.zig");
@@ -883,7 +996,9 @@ fn playableHistory() []const bool {
         for (0..wh.count) |i| {
             const e = &wh.entries[i];
             const link = e.link[0..e.link_len];
-            S.ok[i] = if (home_pure.localFsPath(link)) |fs_path| blk: {
+            S.ok[i] = if (!home_pure.hasResumableLink(link))
+                false
+            else if (home_pure.localFsPath(link)) |fs_path| blk: {
                 _ = io_g.cwdStatFile(fs_path) catch break :blk false;
                 break :blk true;
             } else true;

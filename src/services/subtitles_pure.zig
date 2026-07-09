@@ -128,7 +128,11 @@ pub fn osRestResults(json: []const u8, out: []OsRestSub) usize {
         const back = if (dl_start > 2000) dl_start - 2000 else 0;
         if (std.mem.lastIndexOf(u8, json[back..dl_start], mn_key)) |off| {
             const ns = back + off + mn_key.len;
-            if (std.mem.indexOfPos(u8, json, ns, "\"")) |ne| name = json[ns..ne];
+            // Escape-aware closing-quote scan. TV rows come back as
+            // "MovieName":"\"Show\" Episode Title" — a naive indexOf('"')
+            // stops right after the leading escaped quote, so every row's
+            // title rendered as a single backslash.
+            if (jsonStringEnd(json, ns)) |ne| name = json[ns..ne];
         }
 
         if (url_end > url_start) {
@@ -138,6 +142,55 @@ pub fn osRestResults(json: []const u8, out: []OsRestSub) usize {
         pos = url_end + 1;
     }
     return count;
+}
+
+/// Index of the closing (unescaped) `"` of a JSON string starting at `from`
+/// (first byte after the opening quote), or null if unterminated.
+fn jsonStringEnd(json: []const u8, from: usize) ?usize {
+    var i = from;
+    var esc = false;
+    while (i < json.len) : (i += 1) {
+        if (esc) {
+            esc = false;
+            continue;
+        }
+        switch (json[i]) {
+            '\\' => esc = true,
+            '"' => return i,
+            else => {},
+        }
+    }
+    return null;
+}
+
+/// Copy a raw JSON string value into `out` for DISPLAY: collapses \" \\ \/
+/// to their plain characters and drops other escape lead-ins. Returns bytes
+/// written.
+pub fn unescapeJsonString(src: []const u8, out: []u8) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < src.len and n < out.len) {
+        if (src[i] == '\\' and i + 1 < src.len) {
+            const c = src[i + 1];
+            switch (c) {
+                '"', '\\', '/' => {
+                    out[n] = c;
+                    n += 1;
+                },
+                'n', 't', 'r' => {
+                    out[n] = ' ';
+                    n += 1;
+                },
+                else => {},
+            }
+            i += 2;
+        } else {
+            out[n] = src[i];
+            n += 1;
+            i += 1;
+        }
+    }
+    return n;
 }
 
 /// Copy `src` into `out`, collapsing the JSON `\/` escape to `/` (the only
@@ -322,4 +375,19 @@ test "gestdownFirstShowId finds the first uuid, rejects short ids" {
     try std.testing.expectEqualStrings("3e2ff43b-99a9-4a51-8b71-4e5c1a3f0d10", gestdownFirstShowId(json).?);
     try std.testing.expect(gestdownFirstShowId("[{\"id\":\"short\"}]") == null);
     try std.testing.expect(gestdownFirstShowId("[]") == null);
+}
+
+test "osRestResults survives escaped quotes in MovieName (backslash-title regression)" {
+    // Real OpenSubtitles TV shape: episode titles are quoted INSIDE the value.
+    const json =
+        "[{\"MovieName\":\"\\\"X-Men '97\\\" A Force to Be Reckoned With\",\"SubDownloadLink\":\"https://dl.opensubtitles.org/a.gz\"}]";
+    var out: [4]OsRestSub = undefined;
+    const n = osRestResults(json, &out);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    // Raw (still-escaped) slice covers the whole value, not just "\\".
+    try std.testing.expectEqualStrings("\\\"X-Men '97\\\" A Force to Be Reckoned With", out[0].name);
+    // Display unescape renders the human title.
+    var disp: [128]u8 = undefined;
+    const dn = unescapeJsonString(out[0].name, &disp);
+    try std.testing.expectEqualStrings("\"X-Men '97\" A Force to Be Reckoned With", disp[0..dn]);
 }

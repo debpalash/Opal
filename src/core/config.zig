@@ -24,6 +24,7 @@ pub fn save() void {
     setKey("usage_seconds", fmtInt(&fb, @as(usize, @intCast(@max(0, state.app.usage_seconds_total)))));
 
     setKey("ui_scale", fmtFloat(&fb, state.app.ui_scale));
+    setKey("ui_scale_auto", if (state.app.ui_scale_auto) "1" else "0");
     setKey("grid_mode", switch (state.app.grid_mode) {
         .auto => "auto",
         .cols_1 => "1",
@@ -32,7 +33,7 @@ pub fn save() void {
         .cols_4 => "4",
     });
     setKey("seek_sync", if (state.app.seek_sync) "1" else "0");
-    setKey("hwdec", if (state.app.hwdec_enabled) "1" else "0");
+    setKey("hwdec2", if (state.app.hwdec_enabled) "1" else "0");
     setKey("auto_advance", if (state.app.auto_advance) "1" else "0");
     setKey("nsfw_filter", if (state.app.nsfw_filter_enabled) "1" else "0");
     setKey("auto_download_subs", if (state.app.auto_download_subs) "1" else "0");
@@ -79,8 +80,12 @@ pub fn save() void {
     setKey("ai_backend", switch (ai_server.backend_kind) {
         .apfel => "apfel",
         .gemma_llama => "llama",
+        .cloud => "cloud",
     });
     setKey("ai_model_id", ai_server.activeModelId());
+    setKey("ai_cloud_provider", ai_server.cloudProvider().id);
+    setKey("web_remote", if (state.app.web_remote_enabled) "1" else "0");
+    setKey("onboarded", if (state.app.onboarded) "1" else "0");
 
     // Voice (STT/TTS) backend — the settings page said "Changes saved
     // automatically." while this selection silently reset on restart.
@@ -165,6 +170,19 @@ pub fn load() void {
     const now = @import("io_global.zig").timestamp();
     state.app.session_start_s = now;
     state.app.usage_last_tick = now;
+
+    // Grandfather pre-wizard installs: a config that already carries a TMDB
+    // key or has source plugins installed predates onboarding — don't nag.
+    if (!state.app.onboarded and
+        (state.app.tmdb.api_key_len > 0 or @import("source_config.zig").anyInstalled()))
+    {
+        state.app.onboarded = true;
+    }
+
+    // Signal the render loop that saved prefs (incl. ui_scale / ui_scale_auto)
+    // are now in place, so the first frame can apply the device-aware scale
+    // without racing this async load. See main.zig appFrame.
+    state.app.config_loaded = true;
 }
 
 fn setKey(key: []const u8, val: []const u8) void {
@@ -180,13 +198,19 @@ fn applyConfig(key: []const u8, val: []const u8) void {
     if (std.mem.eql(u8, key, "usage_seconds")) {
         state.app.usage_seconds_total = std.fmt.parseInt(i64, val, 10) catch 0;
     } else if (std.mem.eql(u8, key, "ui_scale")) {
-        state.app.ui_scale = std.fmt.parseFloat(f32, val) catch 1.3;
+        state.app.ui_scale = @import("scale_pure.zig").clampScale(std.fmt.parseFloat(f32, val) catch 1.0);
+    } else if (std.mem.eql(u8, key, "ui_scale_auto")) {
+        state.app.ui_scale_auto = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "grid_mode")) {
         state.app.grid_mode = if (std.mem.eql(u8, val, "1")) .cols_1 else if (std.mem.eql(u8, val, "2")) .cols_2 else if (std.mem.eql(u8, val, "3")) .cols_3 else if (std.mem.eql(u8, val, "4")) .cols_4 else .auto;
     } else if (std.mem.eql(u8, key, "seek_sync")) {
         state.app.seek_sync = std.mem.eql(u8, val, "1");
-    } else if (std.mem.eql(u8, key, "hwdec")) {
+    } else if (std.mem.eql(u8, key, "hwdec2")) {
         state.app.hwdec_enabled = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "hwdec")) {
+        // Legacy key: every save auto-persisted the old OFF default, so a
+        // stored 0 is NOT an explicit user choice — ignore it and let the new
+        // hw-decode-on default (or an explicit hwdec2 row) win.
     } else if (std.mem.eql(u8, key, "auto_advance")) {
         state.app.auto_advance = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "nsfw_filter")) {
@@ -321,10 +345,20 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         // Apple Intelligence (apfel) is retired as a persisted default —
         // ~5 tok/s generation and broken JSON-format compliance. Configs
         // auto-persisted "apfel" on every save, so a stored value is NOT an
-        // explicit user choice: migrate everyone to the local llama brain.
+        // explicit user choice: migrate those to the local llama brain.
         // (Settings can still switch to apfel for the running session.)
+        // "cloud" IS an explicit choice (only ever written after the cloud
+        // backend existed) — honor it.
         const ai_server = @import("../services/ai_server.zig");
-        ai_server.backend_kind = .gemma_llama;
+        ai_server.backend_kind = if (std.mem.eql(u8, val, "cloud")) .cloud else .gemma_llama;
+    } else if (std.mem.eql(u8, key, "ai_cloud_provider")) {
+        @import("../services/ai_server.zig").selectCloudProviderById(val);
+    } else if (std.mem.eql(u8, key, "onboarded")) {
+        state.app.onboarded = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "web_remote")) {
+        state.app.web_remote_enabled = std.mem.eql(u8, val, "1");
+        // Config loads AFTER appInit — honor a persisted enable now.
+        if (state.app.web_remote_enabled) @import("../services/remote.zig").start();
     } else if (std.mem.eql(u8, key, "ai_model_id")) {
         @import("../services/ai_server.zig").selectModelById(val);
     } else if (std.mem.eql(u8, key, "voice_backend")) {

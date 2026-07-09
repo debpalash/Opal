@@ -339,3 +339,111 @@ test "scrollOffsetForRow scrolls only when needed" {
     try std.testing.expectEqual(@as(?f32, 200), scrollOffsetForRow(1, 200, 400, 600)); // above → align top
     try std.testing.expectEqual(@as(?f32, 600), scrollOffsetForRow(5, 200, 400, 600)); // below → align bottom
 }
+
+/// Normalize a TMDB show title into a stream-search query token stream:
+/// lowercase ASCII, punctuation stripped (apostrophes/colons/commas break
+/// torrent-index keyword matching — releases are named "X.Men.97.S02E02" /
+/// "X-Men 97 S02E02", never "X-Men '97"), whitespace collapsed, and a
+/// trailing standalone 2- or 4-digit YEAR token dropped ("X-Men '97" →
+/// "x-men", "Dexter (2006)" → "dexter"). Longer numbers stay — "The 100"
+/// must remain "the 100". Hyphens are kept: indexers tokenize "x-men" fine
+/// and stripping it would glue words together.
+pub fn streamQueryTitle(title: []const u8, buf: []u8) []const u8 {
+    var len: usize = 0;
+    var pending_space = false;
+    for (title) |ch| {
+        const c = switch (ch) {
+            'A'...'Z' => ch + 32,
+            'a'...'z', '0'...'9', '-' => ch,
+            else => ' ', // punctuation & non-ASCII → word break
+        };
+        if (c == ' ') {
+            pending_space = len > 0; // collapse runs; no leading space
+            continue;
+        }
+        if (pending_space) {
+            if (len >= buf.len) break;
+            buf[len] = ' ';
+            len += 1;
+            pending_space = false;
+        }
+        if (len >= buf.len) break;
+        buf[len] = c;
+        len += 1;
+    }
+    // Drop a trailing standalone 2- or 4-digit year token ("97", "2006").
+    if (std.mem.lastIndexOfScalar(u8, buf[0..len], ' ')) |sp| {
+        const last = buf[sp + 1 .. len];
+        if ((last.len == 2 or last.len == 4) and blk: {
+            for (last) |d| {
+                if (d < '0' or d > '9') break :blk false;
+            }
+            break :blk true;
+        }) len = sp;
+    }
+    return buf[0..len];
+}
+
+test "streamQueryTitle strips punctuation + trailing year (X-Men '97 regression)" {
+    var b: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("x-men", streamQueryTitle("X-Men '97", &b));
+    try std.testing.expectEqualStrings("dexter", streamQueryTitle("Dexter (2006)", &b));
+    try std.testing.expectEqualStrings("star trek strange new worlds", streamQueryTitle("Star Trek: Strange New Worlds", &b));
+    try std.testing.expectEqualStrings("silo", streamQueryTitle("Silo", &b));
+}
+
+test "streamQueryTitle keeps non-year numbers and handles edge cases" {
+    var b: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("the 100", streamQueryTitle("The 100", &b)); // 3 digits ≠ year
+    try std.testing.expectEqualStrings("9-1-1", streamQueryTitle("9-1-1", &b)); // hyphens kept
+    try std.testing.expectEqualStrings("", streamQueryTitle("", &b));
+    // Non-ASCII bytes word-break (no transliteration) — imperfect for accented
+    // titles but never crashes; indexers' per-token substring match usually
+    // still hits ("gun" ⊂ "shogun").
+    try std.testing.expectEqualStrings("sh gun", streamQueryTitle("Shōgun", &b));
+    var tiny: [4]u8 = undefined;
+    try std.testing.expectEqualStrings("x-me", streamQueryTitle("X-Men '97", &tiny)); // buf cap, no overflow
+}
+
+/// Full stream-search query for a TV episode: normalized title + " sXXeYY".
+/// REGRESSION (the "x-men S+2E+2" bug): Zig 0.16's std.fmt renders zero-fill
+/// on SIGNED ints as a forced sign — `{d:0>2}` with `@as(i32, 2)` prints
+/// "+2", not "02" — so queries built from the i32 season/episode searched
+/// "S+2E+2" and matched nothing. Formatting here goes through unsigned casts;
+/// non-positive inputs clamp to 0 rather than crashing on the cast.
+pub fn episodeQuery(title: []const u8, season: i32, episode: i32, buf: []u8) []const u8 {
+    var tbuf: [128]u8 = undefined;
+    const t = streamQueryTitle(title, &tbuf);
+    const s: u32 = if (season > 0) @intCast(season) else 0;
+    const e: u32 = if (episode > 0) @intCast(episode) else 0;
+    return std.fmt.bufPrint(buf, "{s} s{d:0>2}e{d:0>2}", .{ t, s, e }) catch t;
+}
+
+test "episodeQuery zero-pads via unsigned (x-men S+2E+2 regression)" {
+    var b: [256]u8 = undefined;
+    try std.testing.expectEqualStrings("x-men s02e02", episodeQuery("X-Men '97", 2, 2, &b));
+    try std.testing.expectEqualStrings("silo s01e10", episodeQuery("Silo", 1, 10, &b));
+    try std.testing.expectEqualStrings("the 100 s12e05", episodeQuery("The 100", 12, 5, &b));
+    // Sanity: no '+' anywhere for single-digit numbers.
+    try std.testing.expect(std.mem.indexOfScalar(u8, episodeQuery("Silo", 3, 4, &b), '+') == null);
+    // Degenerate inputs clamp instead of crashing the @intCast.
+    try std.testing.expectEqualStrings("silo s00e00", episodeQuery("Silo", -1, 0, &b));
+}
+
+/// True once playback has progressed enough to count the episode as watched
+/// (2 minutes). Clicking ▶ no longer marks anything — the commit happens from
+/// the player's time-pos stream (see player.zig → tmdb.commitPendingWatch).
+/// NaN-safe: mpv reports NaN time-pos during loading/EOF edges.
+pub fn tvWatchCommitDue(time_pos_s: f64) bool {
+    if (!std.math.isFinite(time_pos_s)) return false;
+    return time_pos_s >= 120.0;
+}
+
+test "tvWatchCommitDue: 2min threshold, NaN-safe" {
+    try std.testing.expect(!tvWatchCommitDue(0));
+    try std.testing.expect(!tvWatchCommitDue(119.9));
+    try std.testing.expect(tvWatchCommitDue(120.0));
+    try std.testing.expect(tvWatchCommitDue(4000));
+    try std.testing.expect(!tvWatchCommitDue(std.math.nan(f64)));
+    try std.testing.expect(!tvWatchCommitDue(-5));
+}

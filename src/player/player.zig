@@ -91,6 +91,28 @@ pub const MediaPlayer = struct {
     // INVALID_HANDLE means no proxy is currently running for this player.
     proxy_handle: @import("stream_proxy.zig").Handle = @import("stream_proxy.zig").INVALID_HANDLE,
 
+    // ── Loading-screen context (poster + trivia while a torrent buffers) ──
+    // Populated from state.app.pending_play_* by addMagnetToEngine when a
+    // TMDB-linked play (movie or TV episode) kicks off. Empty len == no
+    // context (e.g. a raw magnet paste) — the loading overlay falls back to
+    // the plain hourglass + path text it always showed.
+    loading_title: [128]u8 = std.mem.zeroes([128]u8),
+    loading_title_len: usize = 0,
+    loading_poster_path: [64]u8 = std.mem.zeroes([64]u8),
+    loading_poster_path_len: usize = 0,
+    loading_overview: [400]u8 = std.mem.zeroes([400]u8),
+    loading_overview_len: usize = 0,
+    loading_is_tv: bool = false,
+    loading_meta_fetch_started: bool = false,
+    loading_poster_fetching: bool = false,
+    loading_poster_pixels: ?[]u8 = null,
+    loading_poster_w: u32 = 0,
+    loading_poster_h: u32 = 0,
+    loading_poster_tex: ?dvui.Texture = null,
+    loading_trivia: [400]u8 = std.mem.zeroes([400]u8),
+    loading_trivia_len: usize = 0,
+    loading_trivia_fetching: bool = false,
+
     pub fn getMediaTitle(self: *MediaPlayer, out_buf: []u8) usize {
         // 1. If torrent, get torrent name
         if (self.current_torrent_id >= 0) {
@@ -242,6 +264,22 @@ pub const MediaPlayer = struct {
         @memset(&self.cached_sub_text, 0);
         self.cached_sub_text_len = 0;
         @memset(&self.loading_label, 0);
+        self.loading_title_len = 0;
+        @memset(&self.loading_title, 0);
+        self.loading_poster_path_len = 0;
+        @memset(&self.loading_poster_path, 0);
+        self.loading_overview_len = 0;
+        @memset(&self.loading_overview, 0);
+        self.loading_is_tv = false;
+        self.loading_meta_fetch_started = false;
+        self.loading_poster_fetching = false;
+        self.loading_poster_pixels = null;
+        self.loading_poster_w = 0;
+        self.loading_poster_h = 0;
+        self.loading_poster_tex = null;
+        self.loading_trivia_len = 0;
+        @memset(&self.loading_trivia, 0);
+        self.loading_trivia_fetching = false;
         @memset(std.mem.asBytes(&self.dialogue_lines), 0);
         @memset(&self.dialogue_line_lens, 0);
         @memset(&self.dialogue_line_ts, 0);
@@ -654,6 +692,7 @@ pub const MediaPlayer = struct {
 
     pub fn deinit(self: *MediaPlayer, allocator: std.mem.Allocator) void {
         self.saveCurrentPosition();
+        @import("../core/poster.zig").deinitPoster(&self.loading_poster_pixels, &self.loading_poster_tex);
         if (self.proxy_handle.isValid()) {
             @import("stream_proxy.zig").stopProxy(self.proxy_handle);
             self.proxy_handle = @import("stream_proxy.zig").INVALID_HANDLE;
@@ -854,6 +893,23 @@ pub fn updateTorrentBackgroundTasks() void {
                                 @import("../services/co_watch.zig").onPlaybackEvent(.rewound);
                             }
                             p.last_seen_pos = newpos;
+
+                            // Deferred TV watch commit: armed by the episode
+                            // play flow, committed only when the ACTIVE player
+                            // actually crosses the played-enough threshold —
+                            // clicking ▶ alone marks nothing watched.
+                            {
+                                const pw = &state.app.pending_watch;
+                                if (pw.armed and !pw.committed and
+                                    @import("../services/tmdb_pure.zig").tvWatchCommitDue(newpos) and
+                                    state.app.active_player_idx < state.app.players.items.len and
+                                    state.app.players.items[state.app.active_player_idx] == p)
+                                {
+                                    pw.committed = true;
+                                    pw.armed = false;
+                                    @import("../services/tmdb.zig").commitPendingWatch();
+                                }
+                            }
                         }
                     }
                 }
@@ -1020,7 +1076,12 @@ pub fn updateTorrentBackgroundTasks() void {
                     c.mpv.torrent_get_name(state.app.torrent_ses, p.current_torrent_id, &t_name3, 256);
                     const n3_len = std.mem.indexOfScalar(u8, &t_name3, 0) orelse 0;
                     if (n3_len > 0) {
-                        watch.savePosition(t_name3[0..n3_len], percent_pos, "");
+                        // source_url is the magnet this torrent was added from
+                        // (set in search.zig's addMagnetToEngine) — without it,
+                        // this row can never be resumed into the right player
+                        // later (Jump back in / History fall back to guessing
+                        // from the bare name, which routes to the web browser).
+                        watch.savePosition(t_name3[0..n3_len], percent_pos, p.source_url[0..p.source_url_len]);
                     }
                 }
             }

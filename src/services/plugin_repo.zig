@@ -405,3 +405,33 @@ pub fn uninstall(idx: usize) void {
     source_config.reload();
     state.showToastTyped("Uninstalled", .info);
 }
+
+/// One-click starter pack for onboarding: install a curated set of reliable
+/// source plugins from the BUNDLED manifest's inline endpoints (no network,
+/// no GitHub fetch). Skips anything already installed. Deliberately excludes
+/// jackett (needs a local server), academictorrents (junk for media queries)
+/// and region-specific trackers. Returns how many were installed.
+pub fn installStarterPack() usize {
+    loadLocalManifest();
+    const starter_ids = [_][]const u8{
+        "apibay",      "one337x",      "yts",     "eztv",
+        "bitsearch",   "solidtorrents", "therarbg", "torrentgalaxy",
+        "torrentscsv", "limetorrents", "torlock", "glotorrents",
+        "nyaa",        "torrentio",
+    };
+    var installed: usize = 0;
+    for (plugins[0..plugin_count]) |*pl| {
+        const id = pl.idSlice();
+        var wanted = false;
+        for (starter_ids) |sid| {
+            if (std.mem.eql(u8, sid, id)) {
+                wanted = true;
+                break;
+            }
+        }
+        if (!wanted or pl.endpoints_len == 0) continue;
+        if (source_config.has(id)) continue;
+        if (writeSource(id, pl.endpoints[0..pl.endpoints_len])) installed += 1;
+    }
+    return installed;
+}

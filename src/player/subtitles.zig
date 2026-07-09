@@ -247,9 +247,9 @@ fn searchThread(engine: *SubtitleEngine) void {
         // backslashes and the download silently fails. Unescape on the way in.
         r.download_url_len = sp.unescapeJsonSlashes(ps.url, &r.download_url);
 
-        const m_len = @min(ps.name.len, r.movie_name.len);
-        @memcpy(r.movie_name[0..m_len], ps.name[0..m_len]);
-        r.movie_name_len = m_len;
+        // Display-unescape: MovieName arrives with JSON escapes (TV titles are
+        // quoted inside the value — the raw copy rendered as a lone "\").
+        r.movie_name_len = sp.unescapeJsonString(ps.name, &r.movie_name);
 
         const l_len = @min(lang.len, r.lang.len);
         @memcpy(r.lang[0..l_len], lang[0..l_len]);

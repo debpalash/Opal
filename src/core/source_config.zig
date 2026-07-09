@@ -105,6 +105,16 @@ pub fn get(id: []const u8, field: []const u8) ?[]const u8 {
     return null;
 }
 
+/// True if ANY source plugin is installed at all. False is the fresh-install /
+/// post-reset state (Opal ships neutral): every torrent/comics/anime engine is
+/// inert, so searches "run" but can't return source hits — surface that in the
+/// search UI instead of a bare "No hits" (see search.zig renderSourceStatusLine).
+pub fn anyInstalled() bool {
+    mutex.lock();
+    defer mutex.unlock();
+    return entry_count > 0;
+}
+
 /// True if any endpoint is installed for `id`.
 pub fn has(id: []const u8) bool {
     mutex.lock();

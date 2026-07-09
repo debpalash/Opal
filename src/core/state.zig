@@ -254,10 +254,30 @@ fn initTranslateLangBuf() [8]u8 {
 pub const AppState = struct {
     // ── UI ──
     incognito_mode: bool = false,
-    ui_scale: f32 = 1.3,
+    // Compact-first default (the type ramp is already dense; a >1× scale
+    // over-magnifies and overflows the top-nav row so the omnibox + right-side
+    // action icons clip off the window edge). Users who want larger chrome can
+    // raise it in Settings › General › UI Scale.
+    ui_scale: f32 = 1.0,
+    // When true (the default), ui_scale is DERIVED from the display's DPI each
+    // launch via scale_pure.deviceScale (compact on high-DPI, readable on
+    // standard-DPI) instead of using a saved fixed value. Picking a specific
+    // scale in Settings sets this false so the manual choice sticks. See
+    // main.zig's first-frame application and config load/save.
+    ui_scale_auto: bool = true,
+    // Set true once config.load() has run, so the first frame can safely
+    // decide whether to apply the auto device scale (config load is async on
+    // the init worker; without this the device scale could race the saved
+    // ui_scale/ui_scale_auto values).
+    config_loaded: bool = false,
     grid_mode: GridMode = .auto,
     seek_sync: bool = false,
-    hwdec_enabled: bool = false,
+    // Hardware video decoding (VideoToolbox/VAAPI/D3D11 via mpv "auto-safe").
+    // ON by default — software decode was the main CPU eater during playback;
+    // auto-safe falls back to software per-codec when hw fails, so there's no
+    // compatibility downside. Persisted as "hwdec2" (legacy "hwdec" rows were
+    // auto-persisted 0 and are deliberately ignored — apfel-migration pattern).
+    hwdec_enabled: bool = true,
     show_cell_overlay: bool = true,
     hovered_cell_idx: ?usize = null,
     video_fill_mode: VideoFillMode = .fit,
@@ -364,6 +384,29 @@ pub const AppState = struct {
     session_restore_count: usize = 0,
     session_restore_done: bool = false,
 
+    // ── Pending TV watch commit ──
+    // Armed when the user launches an episode; committed (DB + Trakt +
+    // Continue-Watching upsert + in-memory flag) only after playback actually
+    // progresses past the threshold (tmdb_pure.tvWatchCommitDue, ~2min) —
+    // clicking ▶ alone no longer marks anything watched. Written by the UI
+    // thread on arm; read + committed from the player event thread (bool
+    // flip-gated, same convention as the worker-written watched flags).
+    pending_watch: struct {
+        armed: bool = false,
+        committed: bool = false,
+        tmdb_id: i32 = 0,
+        season: i32 = 0,
+        episode: i32 = 0,
+        name: [128]u8 = std.mem.zeroes([128]u8),
+        name_len: usize = 0,
+        poster_path: [64]u8 = std.mem.zeroes([64]u8),
+        poster_path_len: usize = 0,
+    } = .{},
+
+    // First-run onboarding: false until the wizard finishes (or an existing
+    // install is grandfathered — see config.zig load).
+    onboarded: bool = false,
+
     // ── "Resume last played?" launch prompt (replaces silent session restore) ──
     init_history_loaded: bool = false, // set on the init worker after watch.load()
     resume_prompt_checked: bool = false, // one-shot: armed once watch history loads
@@ -393,6 +436,20 @@ pub const AppState = struct {
     download_rate_limit: i32 = 0,
     save_path_buf: [256]u8 = std.mem.zeroes([256]u8),
     save_path_len: usize = 0,
+
+    // Stashed right before a TMDB-linked play (movie search or TV episode)
+    // kicks off a torrent resolve, so whichever call site next sets a
+    // player's current_torrent_id (see search.zig's addMagnetToEngine) can
+    // copy it onto that player's loading_* fields for the poster+trivia
+    // loading screen. Cleared once consumed so it can't leak onto an
+    // unrelated later magnet (e.g. a raw drag-dropped torrent).
+    pending_play_title: [128]u8 = std.mem.zeroes([128]u8),
+    pending_play_title_len: usize = 0,
+    pending_play_poster_path: [64]u8 = std.mem.zeroes([64]u8),
+    pending_play_poster_path_len: usize = 0,
+    pending_play_overview: [400]u8 = std.mem.zeroes([400]u8),
+    pending_play_overview_len: usize = 0,
+    pending_play_is_tv: bool = false,
 
     // Directory that holds bundled runtime resources (engines/, scripts/, …).
     // Empty = use the current working directory (dev: launched from project
@@ -476,7 +533,6 @@ pub const AppState = struct {
         tv_episodes_loading: bool = false,
         // episode N of the selected season → tv_episode_watched[N-1].
         tv_episode_watched: [120]bool = std.mem.zeroes([120]bool),
-        tv_stream_loading: bool = false,
     } = .{},
 
     // ── OpenSubtitles ──
@@ -508,7 +564,11 @@ pub const AppState = struct {
     sponsorblock_enabled: bool = true,
     deband_enabled: bool = true,
     video_scaler: u8 = 0, // 0=ewa_lanczossharp, 1=bilinear, 2=spline36
-    web_remote_enabled: bool = true,
+    // Web Remote JSON API (:41595). OFF by default — nothing should listen on
+    // app start unless the user opted in (Settings › Scripts › Web Remote
+    // Control). Persisted, so an explicit enable sticks across launches. The
+    // OpalMenubar helper and web/ UI need this on to reach the app.
+    web_remote_enabled: bool = false,
     party_host_ip_buf: [46]u8 = std.mem.zeroes([46]u8),
 
     // ── Comics ──
@@ -790,6 +850,21 @@ pub fn resourceRoot() ?[]const u8 {
     return app.resource_root[0..app.resource_root_len];
 }
 
+/// Stash context for a TMDB-linked play (movie search or TV episode) right
+/// before it kicks off a torrent resolve. Consumed by addMagnetToEngine
+/// (search.zig) when the resolved torrent actually attaches to a player, so
+/// the loading screen can show this title's poster + a trivia blurb instead
+/// of a bare hourglass. Overwrites any previous unconsumed stash.
+pub fn stashPendingPlay(title: []const u8, poster_path: []const u8, overview: []const u8, is_tv: bool) void {
+    app.pending_play_title_len = @min(title.len, app.pending_play_title.len);
+    @memcpy(app.pending_play_title[0..app.pending_play_title_len], title[0..app.pending_play_title_len]);
+    app.pending_play_poster_path_len = @min(poster_path.len, app.pending_play_poster_path.len);
+    @memcpy(app.pending_play_poster_path[0..app.pending_play_poster_path_len], poster_path[0..app.pending_play_poster_path_len]);
+    app.pending_play_overview_len = @min(overview.len, app.pending_play_overview.len);
+    @memcpy(app.pending_play_overview[0..app.pending_play_overview_len], overview[0..app.pending_play_overview_len]);
+    app.pending_play_is_tv = is_tv;
+}
+
 /// Show a toast notification for 3 seconds.
 pub const ToastType = enum(u8) {
     info,
@@ -900,18 +975,9 @@ pub fn navigateToTabNow(tab: DrawerTab) void {
             app.browse_source = .RSS;
             app.router.navigate(.browse);
         },
-        .Queue => {
-            app.library_tab = .Queue;
-            app.router.navigate(.library);
-        },
-        .History => {
-            app.library_tab = .History;
-            app.router.navigate(.library);
-        },
-        .Downloads => {
-            app.library_tab = .Downloads;
-            app.router.navigate(.library);
-        },
+        .Queue => app.router.navigate(.queue),
+        .History => app.router.navigate(.history),
+        .Downloads => app.router.navigate(.downloads),
         .Jellyfin => {
             app.browse_source = .Jellyfin;
             app.router.navigate(.browse);

@@ -374,6 +374,38 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_tmdb_pure).step);
 
+    // Wikipedia trivia lookup: disambiguated-title building + JSON extract
+    // parsing (rejects disambiguation pages / too-short extracts).
+    const test_wikipedia_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/wikipedia_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_wikipedia_pure).step);
+
+    // Device-aware display scale: DPI-tier → default ui_scale + clamp bounds.
+    const test_scale_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/scale_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_scale_pure).step);
+
+    // TV calendar: air-date math, countdown labels, TMDB next-episode parse,
+    // EZTV availability extraction.
+    const test_tv_calendar_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/tv_calendar_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_tv_calendar_pure).step);
+
     // Browser pure helpers: smart address bar (host vs search heuristic),
     // query percent-encoding, keypress-vs-text forwarding (double-type
     // regression), content routing.
