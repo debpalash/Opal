@@ -101,6 +101,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .tor .bar{height:4px;border-radius:2px;background:var(--bg-elevated);margin:7px 0 4px;overflow:hidden}
 .tor .bar i{display:block;height:100%;background:var(--accent)}
 .tor .m{font-size:12px;color:var(--text-3)}
+.quick-btn{background:var(--accent);color:#0c0c11;font-weight:600;border-radius:var(--rad);
+  padding:11px 18px;margin:4px 0 6px}
+.quick-btn:disabled{background:var(--bg-elevated);color:var(--text-3)}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--text-3);border-top-color:var(--accent);
   border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -209,6 +212,16 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
     <div class="sect">History</div>
     <div id="history"></div>
   </section>
+
+  <!-- Setup -->
+  <section class="page" id="page-setup">
+    <div class="sect">Sources</div>
+    <div id="setup-sources" class="hint">Checking…</div>
+    <button id="setup-install" class="quick-btn">Install starter sources</button>
+    <div class="sect">TMDB key</div>
+    <div id="setup-tmdb" class="hint">Powers posters, seasons, trending.</div>
+    <div class="search-row"><input id="setup-tmdb-key" placeholder="Paste TMDB API key / token" autocapitalize="off"><button id="setup-tmdb-save">Save</button></div>
+  </section>
 </main>
 
 <nav>
@@ -216,6 +229,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   <button data-page="browse"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Browse</button>
   <button data-page="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Search</button>
   <button data-page="act"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 19h16"/></svg>Activity</button>
+  <button data-page="setup"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 6.6 19l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 13.4H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 6.6l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8v.1a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>Setup</button>
 </nav>
 
 <!-- TV show drill-down -->
@@ -274,6 +288,7 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'page-' + b.dataset.page));
   if (b.dataset.page === 'act') loadActivity();
   if (b.dataset.page === 'browse') loadBrowse();
+  if (b.dataset.page === 'setup') loadSetup();
 });
 
 // ── Now Playing ──
@@ -525,6 +540,27 @@ $('player-close').onclick = () => {
   const v = $('video');
   v.pause(); v.removeAttribute('src'); v.load();
   $('player').classList.remove('on');
+};
+
+// ── Setup (first-run from the browser — essential for hosted mode) ──
+async function loadSetup(){
+  try {
+    const d = await api('/setup');
+    $('setup-sources').textContent = d.has_sources ? 'Sources installed ✓' : 'No sources — search returns nothing until you install some.';
+    $('setup-install').disabled = !!d.has_sources;
+    $('setup-install').textContent = d.has_sources ? 'Starter sources installed' : 'Install starter sources';
+    $('setup-tmdb').textContent = d.has_tmdb ? 'TMDB key set ✓' : 'Powers posters, seasons, trending.';
+  } catch {}
+}
+$('setup-install').onclick = async () => {
+  $('setup-install').textContent = 'Installing…'; $('setup-install').disabled = true;
+  try { const d = await api('/setup/sources'); $('setup-install').textContent = (d.installed || 0) + ' sources installed ✓'; browseLoaded = false; }
+  catch { $('setup-install').textContent = 'Failed'; $('setup-install').disabled = false; }
+};
+$('setup-tmdb-save').onclick = async () => {
+  const k = $('setup-tmdb-key').value.trim(); if (!k) return;
+  try { await api('/setup/tmdb?key=' + encodeURIComponent(k)); $('setup-tmdb').textContent = 'TMDB key set ✓'; $('setup-tmdb-key').value=''; browseLoaded = false; }
+  catch { $('setup-tmdb').textContent = 'Failed to save'; }
 };
 
 // ── Boot ──

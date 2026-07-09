@@ -512,6 +512,36 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         apiTorrents(stream);
         return;
     }
+    // ── First-run setup over the API (hosted mode has no desktop Settings) ──
+    if (std.mem.eql(u8, api_path, "/setup")) {
+        var jb: [128]u8 = undefined;
+        const j = std.fmt.bufPrint(&jb, "{{\"has_sources\":{s},\"has_tmdb\":{s}}}", .{
+            if (@import("../core/source_config.zig").anyInstalled()) "true" else "false",
+            if (state.app.tmdb.api_key_len > 0) "true" else "false",
+        }) catch return;
+        sendJson(stream, j);
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/setup/sources")) {
+        const n = @import("plugin_repo.zig").installStarterPack();
+        var jb: [48]u8 = undefined;
+        sendJson(stream, std.fmt.bufPrint(&jb, "{{\"installed\":{d}}}", .{n}) catch "{\"installed\":0}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/setup/tmdb")) {
+        if (getQueryParam(query, "key")) |raw| {
+            var dec: [400]u8 = undefined;
+            const key = urlDecode(raw, &dec) orelse raw;
+            const n = @min(key.len, state.app.tmdb.api_key.len);
+            if (n > 0) {
+                @memcpy(state.app.tmdb.api_key[0..n], key[0..n]);
+                state.app.tmdb.api_key_len = n;
+                state.markConfigDirty();
+            }
+        }
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
     // Coming-up rail (tv_calendar): next-episode countdowns + EZTV availability.
     if (std.mem.eql(u8, api_path, "/calendar")) {
         apiCalendar(stream);
