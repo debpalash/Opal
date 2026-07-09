@@ -47,15 +47,16 @@ ENV PATH="/opt/zig:${PATH}"
 WORKDIR /src
 COPY . .
 
-# Normal build (full dvui/SDL is still linked — a headless/no-SDL build is the
-# follow-up per T7). ReleaseSafe keeps runtime safety checks on for the server.
-RUN zig build -Doptimize=ReleaseSafe
+# Headless entry (compile-time; no dvui frame loop at runtime — SDL is still
+# LINKED this cycle, the no-SDL link is a follow-up). ReleaseSafe keeps
+# runtime safety checks on for the server.
+RUN zig build -Dheadless=true -Doptimize=ReleaseSafe
 
 # Artifacts to copy out of the builder into the runtime stage:
 #   - the opal binary              (zig-out/bin/opal)
 #   - libtorrent_wrapper.so        (built by build.zig from src/torrent_wrapper.cpp)
 #   - any ort/ shared lib          (PP-OCR ONNX pipeline, if produced as a .so)
-#   - the web/ dir                 (web UI served on :3000)
+#   - web/index.html               (web UI served by opal itself at :41595/)
 #   - ONNX / whisper model assets  (model files the runtime loads)
 # Exact output paths depend on build.zig install steps; verify on a real build.
 
@@ -78,13 +79,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy build artifacts. Adjust source paths to match build.zig install layout.
+# Copy build artifacts. The app resolves web/index.html, engines/ and the
+# plugin manifest relative to its working directory in dev layout, so keep
+# that layout under /opt/opal and run from there.
 COPY --from=builder /src/zig-out/bin/opal /usr/local/bin/opal
-# COPY --from=builder /src/zig-out/lib/libtorrent_wrapper.so /usr/local/lib/
-# COPY --from=builder /src/zig-out/lib/libocr_ort.so /usr/local/lib/
-COPY --from=builder /src/web /opt/opal/web
-# COPY --from=builder /src/models /opt/opal/models   # ONNX/whisper assets
-# RUN ldconfig
+COPY --from=builder /src/libtorrent_wrapper.so /usr/local/lib/
+COPY --from=builder /src/web/index.html /opt/opal/web/index.html
+COPY --from=builder /src/plugins-manifest.json /opt/opal/plugins-manifest.json
+COPY --from=builder /src/engines /opt/opal/engines
+RUN ldconfig
 
 # Mountable data dirs.
 RUN mkdir -p /config /cache /media
@@ -95,8 +98,14 @@ ENV XDG_CONFIG_HOME=/config \
     HOME=/config \
     OPAL_HEADLESS=1
 
-# JSON API (41595) + web UI (3000).
-EXPOSE 41595 3000
+# One port: web UI + JSON API, served by opal itself. Pairing code prints to
+# the container log on start (docker logs). OPAL_PAIR_CODE pins a fixed code.
+EXPOSE 41595
+
+# Non-root + liveness.
+RUN useradd -r -m -d /config opal && chown -R opal /config /cache /media /opt/opal
+USER opal
+WORKDIR /opt/opal
 
 # HEALTHCHECK hits /health — an unauthenticated liveness probe that returns
 # {"ok":true} (see remote.zig handleRequest, served before the Bearer-auth

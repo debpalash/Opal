@@ -1624,6 +1624,42 @@ def test_web_companion():
     return "fail", f"missing: {missing}"
 
 
+@test("Hosted Mode: Stream/VTT/Poster + Docker + Perf Fixes", "Remote")
+def test_hosted_mode_and_perf():
+    # Headless hosting (docs/headless-hosting-spec.md H1+H2+H3 slice) and the
+    # production CPU fixes from the 2026-07-10 profiling session.
+    rs = _src("src/services/remote_stream.zig")
+    rp = _src("src/services/remote_stream_pure.zig")
+    rm = _src("src/services/remote.zig")
+    hl = _src("src/headless.zig")
+    al = _src("src/core/alloc.zig")
+    gr = _src("src/ui/grid.zig")
+    pl = _src("src/player/player.zig")
+    dk = open(os.path.join(PROJECT_DIR, "Dockerfile")).read()
+    ci = open(os.path.join(PROJECT_DIR, ".github/workflows/ci.yml")).read()
+    web = open(os.path.join(PROJECT_DIR, "web/index.html")).read()
+    checks = {
+        "range streaming": "parseRange" in rp and "206 Partial Content" in rs,
+        "srt→vtt": "srtToVtt" in rp and "handleVtt" in rs,
+        "traversal guard": "safeRelPath" in rp and "safeRelPath" in rs,
+        "query-token media auth": '"/stream"' in rm and 'getQueryParam(query, "t")' in rm,
+        "parity routes": '"/calendar"' in rm and '"/tv"' in rm and '"/host"' in rm,
+        "thread-per-conn + api mutex": "api_mutex" in rm and "Thread.spawn(.{}, Handler.run" in rm,
+        "headless serves web": "web_remote_enabled = true" in hl and "pairingCode()" in hl,
+        "docker headless build": "-Dheadless=true" in dk and "OPAL_PAIR_CODE" in dk and "3000" not in dk,
+        "ci gate": "docker-headless" in ci and "/pair?code=123456" in ci,
+        "hosted web player": "openPlayer" in web and "/stream?file=" in web and "/vtt?file=" in web,
+        # Perf: release allocator, non-blocking mpv render, no built-in Lua VMs.
+        "release allocator": "smp_allocator" in al,
+        "no mpv render block": "MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME" in gr,
+        "mpv lua trimmed": "load-osd-console" in pl and "load-stats-overlay" in pl,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if not missing:
+        return "pass", "hosted streaming + docker gate + CPU fixes wired"
+    return "fail", f"missing: {missing}"
+
+
 @test("Anime Seasons/Calendar/Tracking", "Browse")
 def test_anime_netflix_experience():
     # Netflix/Apple-TV+ anime browse: mode toolbar, Seasonal (/seasons),

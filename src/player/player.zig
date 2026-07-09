@@ -308,6 +308,19 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "osd-bar", "no");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "osd-level", "0");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "script-opts", "osc-visibility=auto");
+        // Opal draws all chrome itself — mpv's built-in Lua helpers (console,
+        // select, positioning, commands, context-menu, stats overlay) each
+        // spin up a Lua VM + thread PER PLAYER for UI we never show. CPU
+        // samples put 7 idle Lua threads per mpv instance; drop them. NOTE:
+        // ytdl_hook must stay (it resolves YouTube/streaming URLs), so we
+        // disable the individual scripts rather than load-scripts=no.
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "load-osd-console", "no");
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "load-select", "no");
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "load-positioning", "no");
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "load-commands", "no");
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "load-context-menu", "no");
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "load-stats-overlay", "no");
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "load-auto-profiles", "no");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "input-cursor", "yes");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "msg-level", "all=status");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "terminal", "yes");

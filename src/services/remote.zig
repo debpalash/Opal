@@ -201,6 +201,22 @@ var pair_fails = std.atomic.Value(u32).init(0);
 const MAX_PAIR_FAILS = 10;
 
 pub fn regeneratePairCode() void {
+    // Container/ops override: OPAL_PAIR_CODE=NNNNNN pins a fixed code so a
+    // reverse-proxied deployment doesn't need `docker logs` after restarts.
+    if (@import("../core/io_global.zig").getenv("OPAL_PAIR_CODE")) |pc| {
+        if (pc.len == 6) {
+            var ok = true;
+            for (pc) |ch| {
+                if (ch < '0' or ch > '9') ok = false;
+            }
+            if (ok) {
+                @memcpy(pair_code[0..], pc[0..6]);
+                pair_fails.store(0, .release);
+                pair_ready = true;
+                return;
+            }
+        }
+    }
     var raw: [6]u8 = undefined;
     if (io_g.openFileAbsolute("/dev/urandom", .{})) |f| {
         var fh = f;
@@ -288,44 +304,36 @@ fn serverLoop() void {
     var server = addr.listen(io_g.io(), .{ .reuse_address = true }) catch return;
     defer server.deinit(io_g.io());
 
-    std.debug.print("[remote] JSON API listening on http://{s}:{d}\n", .{ ip, port });
-    std.debug.print("[remote] Web UI: cd web && zig build dev (http://0.0.0.0:3000)\n", .{});
+    std.debug.print("[remote] web UI + JSON API on http://{s}:{d}\n", .{ ip, port });
 
+    // Thread-per-connection: a video /stream (H2) or a slow client must not
+    // freeze every other request the way the old sequential accept→handle
+    // loop did. API handler logic stays serialized via api_mutex, so the
+    // shared-state assumptions of the single-thread era still hold.
     while (running.load(.acquire)) {
         const conn = server.accept(io_g.io()) catch continue;
-        defer conn.close(io_g.io());
-        handleRequest(conn) catch {};
+        const Handler = struct {
+            fn run(c2: std.Io.net.Stream) void {
+                var c3 = c2;
+                defer c3.close(io_g.io());
+                handleRequest(c3) catch {};
+            }
+        };
+        if (std.Thread.spawn(.{}, Handler.run, .{conn})) |t| {
+            t.detach();
+        } else |_| {
+            var c4 = conn;
+            defer c4.close(io_g.io());
+            handleRequest(c4) catch {}; // degraded: serve inline
+        }
     }
 }
 
-/// True if the request's Host header is a loopback name (127.0.0.1 / localhost /
-/// ::1), optionally with a :port. DNS-rebinding defense: a malicious page that
-/// rebinds its own domain to 127.0.0.1 reaches us with Host: attacker.com, which
-/// fails this check. No Host header (HTTP/1.1 requires one) is also rejected.
-fn hostHeaderIsLocal(request: []const u8) bool {
-    var lines = std.mem.splitScalar(u8, request, '\n');
-    _ = lines.next(); // skip the request line
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \r\t");
-        if (trimmed.len < 5 or !std.ascii.eqlIgnoreCase(trimmed[0..5], "host:")) continue;
-        var host = std.mem.trim(u8, trimmed[5..], " \r\t");
-        // Strip a trailing :port (only when what follows the last ':' is all digits,
-        // so the ':' inside a bare "::1" isn't mistaken for a port separator).
-        if (std.mem.lastIndexOfScalar(u8, host, ':')) |ci| {
-            const after = host[ci + 1 ..];
-            var all_digit = after.len > 0;
-            for (after) |ch| if (!std.ascii.isDigit(ch)) {
-                all_digit = false;
-            };
-            if (all_digit) host = host[0..ci];
-        }
-        return std.mem.eql(u8, host, "127.0.0.1") or
-            std.ascii.eqlIgnoreCase(host, "localhost") or
-            std.mem.eql(u8, host, "::1") or
-            std.mem.eql(u8, host, "[::1]");
-    }
-    return false;
-}
+/// Serializes /api/* handler logic across connection threads — exactly the
+/// guarantees handlers were written under when the server was sequential.
+/// Static/stream/pair paths do NOT take it (they touch no shared app state).
+var api_mutex: @import("../core/sync.zig").Mutex = .{};
+
 
 fn handleRequest(stream: std.Io.net.Stream) !void {
     var buf: [4096]u8 = undefined;
@@ -333,16 +341,11 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
     if (n == 0) return;
     const request = buf[0..n];
 
-    // DNS-rebinding defense (loopback bind only): the bundled HTML is served
-    // unauthenticated AND carries the injected bearer token, so a rebound attacker
-    // domain (Host: evil.com → 127.0.0.1) could read it same-origin (the CORS fix
-    // doesn't stop same-origin reads). Require a loopback Host. Headless mode binds
-    // 0.0.0.0 for LAN use and does NOT inject the token, so it's exempt.
-    if (!state.app.is_headless and !hostHeaderIsLocal(request)) {
-        const resp = "HTTP/1.1 403 Forbidden\r\nContent-Length: 9\r\n\r\nForbidden";
-        _ = io_g.streamWriteAll(stream, resp) catch {};
-        return;
-    }
+    // NOTE: no DNS-rebinding Host gate here anymore. It existed to protect the
+    // token-INJECTED page; the token is no longer injected anywhere (the /pair
+    // code exchange is the only bootstrap) and the gate 403'd real phones
+    // (Host: 192.168.x.x) once windowed mode started binding the LAN.
+    // Unauthenticated surface is now: static page, throttled /pair, /health.
 
     var lines = std.mem.splitScalar(u8, request, '\n');
     const first_line = lines.next() orelse return;
@@ -402,6 +405,31 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
         return;
     }
 
+    // Media routes (/stream, /vtt, /poster): <video>/<img> can't attach an
+    // Authorization header, so these take the token as ?t= instead. Same
+    // constant-time check as the Bearer gate; dispatch lives in
+    // remote_stream.zig to keep this file to routing/auth.
+    if (std.mem.eql(u8, path, "/stream") or std.mem.eql(u8, path, "/vtt") or std.mem.eql(u8, path, "/poster")) {
+        const t = getQueryParam(query, "t") orelse "";
+        if (!api_token_ready.load(.acquire) or !constantTimeEqual(t, api_token[0..])) {
+            sendUnauthorized(stream);
+            return;
+        }
+        const rs = @import("remote_stream.zig");
+        var dec_buf: [1200]u8 = undefined;
+        if (std.mem.eql(u8, path, "/stream")) {
+            const rel = urlDecode(getQueryParam(query, "file") orelse "", &dec_buf) orelse "";
+            rs.handleStream(stream, request, rel);
+        } else if (std.mem.eql(u8, path, "/vtt")) {
+            const rel = urlDecode(getQueryParam(query, "file") orelse "", &dec_buf) orelse "";
+            rs.handleVtt(stream, rel);
+        } else {
+            const pp = urlDecode(getQueryParam(query, "path") orelse "", &dec_buf) orelse "";
+            rs.handlePoster(stream, pp);
+        }
+        return;
+    }
+
     // All other endpoints require Bearer auth.
     const presented = extractBearer(request) orelse {
         sendUnauthorized(stream);
@@ -413,6 +441,8 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
     }
 
     if (std.mem.startsWith(u8, path, "/api/")) {
+        api_mutex.lock();
+        defer api_mutex.unlock();
         handleApi(stream, path[4..], query);
     } else {
         const resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
@@ -464,6 +494,27 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     }
     if (std.mem.eql(u8, api_path, "/settings")) {
         apiSettingsGet(stream);
+        return;
+    }
+    // Host capabilities — lets the web client pick hosted (browser <video>)
+    // vs companion (control the desktop player) behavior.
+    if (std.mem.eql(u8, api_path, "/host")) {
+        var jb: [128]u8 = undefined;
+        const j = std.fmt.bufPrint(&jb, "{{\"headless\":{s},\"version\":\"0.1.2\"}}", .{
+            if (state.app.is_headless) "true" else "false",
+        }) catch return;
+        sendJson(stream, j);
+        return;
+    }
+    // Coming-up rail (tv_calendar): next-episode countdowns + EZTV availability.
+    if (std.mem.eql(u8, api_path, "/calendar")) {
+        apiCalendar(stream);
+        return;
+    }
+    // TV drill-down: pass the TMDB /tv/{id} (or season) JSON through verbatim —
+    // the API key stays server-side; the client parses the standard TMDB shape.
+    if (std.mem.eql(u8, api_path, "/tv")) {
+        apiTvPassthrough(stream, query);
         return;
     }
     if (std.mem.eql(u8, api_path, "/settings/toggle")) {
@@ -960,6 +1011,18 @@ fn apiSettingsToggle(query: []const u8) void {
 }
 
 fn apiTmdb(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+    // Kick a trending fetch (web Browse tab); results land in the shared
+    // list the plain /tmdb GET below returns.
+    if (std.mem.eql(u8, api_path, "/tmdb/trending")) {
+        if (!state.app.tmdb.is_loading.load(.acquire) and state.app.tmdb.results.items.len == 0) {
+            state.app.tmdb.view = .Trending;
+            state.app.tmdb.page = 1;
+            state.app.tmdb.loaded_once = true;
+            @import("tmdb_api.zig").fetchCurrentView(false);
+        }
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
     if (std.mem.eql(u8, api_path, "/tmdb/search")) {
         if (getQueryParam(query, "q")) |q| {
             var decoded: [256]u8 = undefined;
@@ -996,6 +1059,9 @@ fn apiTmdb(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) v
         escJsonWrite(&w, item.media_type[0..item.media_type_len]);
         w.writeAll("\",\"overview\":\"") catch return;
         escJsonWrite(&w, item.overview[0..@min(item.overview_len, 200)]);
+        // poster_path feeds the web client's /poster?path= cache proxy.
+        w.writeAll("\",\"poster\":\"") catch return;
+        escJsonWrite(&w, item.poster_path[0..item.poster_path_len]);
         w.writeAll("\"}") catch return;
     }
     w.writeAll("],\"loading\":") catch return;
@@ -1430,4 +1496,52 @@ fn apiUnifiedSearch(stream: std.Io.net.Stream, query: []const u8) void {
 
     w.writeAll("]}") catch return;
     sendJson(stream, json_buf[0..w.end]);
+}
+
+// ── Web parity handlers (H3) ─────────────────────────────────────────────────
+
+fn apiCalendar(stream: std.Io.net.Stream) void {
+    const cal = @import("tv_calendar.zig");
+    cal.refreshOnce(); // no-op after the first session refresh
+    var jb: [8192]u8 = undefined;
+    var w = std.Io.Writer.fixed(&jb);
+    w.writeAll("{\"entries\":[") catch return;
+    for (0..cal.count) |i| {
+        const e = &cal.entries[i];
+        if (i > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"name\":\"") catch return;
+        escJsonWrite(&w, e.name[0..e.name_len]);
+        w.print("\",\"tmdb_id\":{d},\"next_season\":{d},\"next_episode\":{d},\"next_air\":{d},\"last_season\":{d},\"last_episode\":{d},\"available\":{s},\"seeds\":{d},\"unseen\":{s},\"poster\":\"", .{
+            e.tmdb_id,          e.next_season, e.next_episode,
+            e.next_air_epoch,   e.last_season, e.last_episode,
+            if (e.available) "true" else "false", e.seeds,
+            if (e.unseen) "true" else "false",
+        }) catch return;
+        escJsonWrite(&w, e.poster_path[0..e.poster_path_len]);
+        w.writeAll("\"}") catch return;
+    }
+    w.writeAll("]}") catch return;
+    sendJson(stream, jb[0..w.end]);
+}
+
+/// /api/tv?id=123[&season=2] → the raw TMDB JSON for /3/tv/{id} or
+/// /3/tv/{id}/season/{n}. Passthrough keeps the key server-side and spares
+/// us re-modeling TMDB's (already-JSON) shape.
+fn apiTvPassthrough(stream: std.Io.net.Stream, query: []const u8) void {
+    const id_str = getQueryParam(query, "id") orelse return sendJson(stream, "{\"error\":\"id required\"}");
+    const id = std.fmt.parseInt(i32, id_str, 10) catch return sendJson(stream, "{\"error\":\"bad id\"}");
+    if (state.app.tmdb.api_key_len == 0) return sendJson(stream, "{\"error\":\"no tmdb key\"}");
+
+    var path_buf: [96]u8 = undefined;
+    const api_path2 = if (getQueryParam(query, "season")) |sn_str| blk: {
+        const sn = std.fmt.parseInt(i32, sn_str, 10) catch 0;
+        break :blk std.fmt.bufPrint(&path_buf, "/3/tv/{d}/season/{d}", .{ id, sn }) catch return;
+    } else std.fmt.bufPrint(&path_buf, "/3/tv/{d}", .{id}) catch return;
+
+    const alloc2 = @import("../core/alloc.zig").allocator;
+    const body = alloc2.alloc(u8, 256 * 1024) catch return;
+    defer alloc2.free(body);
+    const n = @import("tmdb_api.zig").tmdbApiInto(api_path2, state.app.tmdb.api_key[0..state.app.tmdb.api_key_len], body);
+    if (n == 0) return sendJson(stream, "{\"error\":\"tmdb fetch failed\"}");
+    sendJson(stream, body[0..n]);
 }

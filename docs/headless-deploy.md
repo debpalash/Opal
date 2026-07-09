@@ -1,7 +1,11 @@
 # Headless deployment (Opal)
 
-Run Opal as a headless server in Docker. The JSON API (`:41595`) and web UI
-(`:3000`) are exposed; no GUI/window is opened in headless mode.
+Run Opal as a headless server in Docker — qbittorrent-nox style. ONE port
+(`:41595`) serves both the web UI (`/`) and the JSON API; no GUI/window is
+opened. On start the container log prints the web URL and the 6-digit
+pairing code; open the page, enter the code, done. Pin a fixed code with
+`OPAL_PAIR_CODE=NNNNNN`. Browser playback streams downloaded files via
+HTTP Range (`/stream`) with SRT sidecars served as WebVTT (`/vtt`).
 
 > The binary, app name, and on-disk config dir is `opal` --
 > do not expect an `opal` path anywhere.
@@ -22,7 +26,7 @@ Or with plain Docker:
 docker build -t opal:headless .
 docker run -d \
   -e OPAL_HEADLESS=1 \
-  -p 41595:41595 -p 3000:3000 \
+  -p 41595:41595 \
   -v "$PWD/data/config:/config" \
   -v "$PWD/data/cache:/cache" \
   -v "$PWD/data/media:/media" \

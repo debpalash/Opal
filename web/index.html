@@ -98,6 +98,42 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--text-3);border-top-color:var(--accent);
   border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px}
 @keyframes sp{to{transform:rotate(360deg)}}
+
+/* ── Browse ── */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:10px;margin-top:10px}
+.card{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--rad);overflow:hidden}
+.card img{width:100%;aspect-ratio:2/3;object-fit:cover;display:block;background:var(--bg-elevated)}
+.card .cap{padding:6px 8px;font-size:12px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .rt{color:var(--success);font-size:11px}
+/* show page */
+#show-page{position:fixed;inset:0;background:var(--bg-app);z-index:45;overflow-y:auto;display:none;
+  padding:14px 16px calc(70px + env(safe-area-inset-bottom))}
+#show-page.on{display:block}
+#show-back{color:var(--accent);font-weight:600;padding:6px 0}
+.season-chips{display:flex;gap:8px;overflow-x:auto;padding:8px 0}
+.season-chips button{background:var(--bg-elevated);border:1px solid var(--border);border-radius:999px;
+  padding:6px 14px;color:var(--text-2);white-space:nowrap}
+.season-chips button.on{background:var(--accent);color:#0c0c11;border-color:var(--accent)}
+.ep{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--rad);
+  padding:10px 12px;margin-bottom:6px}
+.ep .h{display:flex;justify-content:space-between;gap:8px;font-size:14px}
+.ep .h .find{color:var(--accent);font-weight:600;white-space:nowrap}
+.ep .o{color:var(--text-3);font-size:12px;margin-top:3px}
+/* calendar rail */
+.cal{display:flex;gap:8px;overflow-x:auto;margin-top:18px;padding-bottom:4px}
+.cal .c{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--rad);
+  padding:8px 12px;min-width:150px}
+.cal .c .n{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cal .c .s{font-size:12px;color:var(--text-3);margin-top:2px}
+.cal .c .s.avail{color:var(--success)}
+/* player overlay */
+#player{position:fixed;inset:0;background:#000;z-index:60;display:none;flex-direction:column}
+#player.on{display:flex}
+#player video{width:100%;flex:1;min-height:0;background:#000}
+#player .bar{display:flex;align-items:center;gap:10px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));
+  background:var(--bg-surface)}
+#player .bar .t{flex:1;font-size:13px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#player .bar button{color:var(--accent);font-weight:600}
 </style>
 </head>
 <body>
@@ -131,11 +167,19 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
       <button id="b-mute" aria-label="Mute"><svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg></button>
       <input type="range" id="vol" min="0" max="130" value="100">
     </div>
-    <div class="quick">
+    <div class="quick" id="np-quick">
       <button id="b-sub">Subtitles ⭢</button>
       <button id="b-aud">Audio ⭢</button>
       <button id="b-fs">Fullscreen</button>
     </div>
+    <div class="sect" id="cal-head" style="display:none">Coming up</div>
+    <div class="cal" id="cal"></div>
+  </section>
+
+  <!-- Browse -->
+  <section class="page" id="page-browse">
+    <div class="hint" id="browse-hint">Trending now</div>
+    <div class="grid" id="browse-grid"></div>
   </section>
 
   <!-- Search -->
@@ -160,10 +204,26 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 </main>
 
 <nav>
-  <button data-page="np" class="on"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg>Now Playing</button>
+  <button data-page="np" class="on"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg>Playing</button>
+  <button data-page="browse"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Browse</button>
   <button data-page="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Search</button>
   <button data-page="act"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 19h16"/></svg>Activity</button>
 </nav>
+
+<!-- TV show drill-down -->
+<div id="show-page">
+  <div id="show-back">‹ Back</div>
+  <h2 id="show-title" style="margin:4px 0 2px"></h2>
+  <div class="hint" id="show-meta"></div>
+  <div class="season-chips" id="season-chips"></div>
+  <div id="episodes"></div>
+</div>
+
+<!-- Hosted inline player -->
+<div id="player">
+  <video id="video" controls playsinline autoplay></video>
+  <div class="bar"><div class="t" id="player-title"></div><button id="player-close">Close</button></div>
+</div>
 
 <script>
 'use strict';
@@ -175,8 +235,18 @@ const api = (path) => fetch(BASE + '/api' + path, { headers: TOKEN ? { Authoriza
   .then(r => { if (r.status === 401) { unpair(); throw 0; } return r.json(); });
 
 // ── Pairing ──
+let HOSTED = false;
 function unpair(){ TOKEN=''; localStorage.removeItem('opal_token'); $('pair-screen').style.display='flex'; }
-function paired(){ $('pair-screen').style.display='none'; poll(); }
+function paired(){
+  $('pair-screen').style.display='none';
+  api('/host').then(h => {
+    HOSTED = !!h.headless;
+    // Hosted box has no desktop player chrome to control.
+    if (HOSTED) $('np-quick').style.display = 'none';
+  }).catch(()=>{});
+  loadCalendar();
+  poll();
+}
 $('pair-btn').onclick = async () => {
   const code = $('pair-code').value.trim();
   if (code.length !== 6) { $('pair-err').textContent = 'Enter all 6 digits'; return; }
@@ -195,6 +265,7 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'page-' + b.dataset.page));
   if (b.dataset.page === 'act') loadActivity();
+  if (b.dataset.page === 'browse') loadBrowse();
 });
 
 // ── Now Playing ──
@@ -289,6 +360,7 @@ async function loadActivity(){
         <button class="play" data-n="${encodeURIComponent(name)}">Play</button></div>`;
     }).join('') || '<div class="empty">No downloads</div>';
     $('downloads').querySelectorAll('.play').forEach(b => b.onclick = () => {
+      if (HOSTED) { openPlayer(decodeURIComponent(b.dataset.n)); return; }
       b.textContent = 'Sent ✓';
       api('/downloads/play?file=' + b.dataset.n).catch(()=>{});
     });
@@ -300,6 +372,134 @@ async function loadActivity(){
       || '<div class="empty">No history</div>';
   } catch { $('history').innerHTML = '<div class="empty">—</div>'; }
 }
+
+// ── Browse (TMDB trending) ──
+let browseLoaded = false;
+async function loadBrowse(){
+  if (browseLoaded) return;
+  $('browse-hint').innerHTML = '<span class="spin"></span> Loading trending…';
+  // /api/tmdb returns the DESKTOP's current results; ask for trending then poll briefly.
+  try { await api('/tmdb/trending'); } catch {}
+  let tries = 0;
+  const t = setInterval(async () => {
+    tries++;
+    try {
+      const d = await api('/tmdb');
+      if ((d.items || []).length || tries > 10) {
+        clearInterval(t);
+        browseLoaded = (d.items || []).length > 0;
+        $('browse-hint').textContent = d.has_key === false
+          ? 'Add a TMDB key on the desktop (Settings) to browse.' : 'Trending now';
+        $('browse-grid').innerHTML = (d.items || []).map(it => `
+          <div class="card" data-id="${it.id}" data-type="${esc(it.type)}" data-title="${esc(it.title)}">
+            ${it.poster ? `<img loading="lazy" src="${BASE}/poster?path=${encodeURIComponent(it.poster)}&t=${TOKEN}">` : '<img>'}
+            <div class="cap">${esc(it.title)}<br><span class="rt">${it.rating || ''}${it.rating ? '%' : ''} ${esc(it.type || '')}</span></div>
+          </div>`).join('') || '<div class="empty">Nothing loaded</div>';
+        $('browse-grid').querySelectorAll('.card').forEach(c => c.onclick = () => {
+          if (c.dataset.type === 'tv') openShow(+c.dataset.id, c.dataset.title);
+          else prefillSearch(c.dataset.title.toLowerCase());
+        });
+      }
+    } catch { clearInterval(t); }
+  }, 800);
+}
+
+// ── TV show drill-down ──
+function normQuery(title){
+  // Mirror of tmdb_pure.streamQueryTitle: lowercase, strip punctuation,
+  // drop a trailing 2/4-digit year token.
+  let t = title.toLowerCase().replace(/[^a-z0-9\- ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return t.replace(/ (\d{2}|\d{4})$/, '');
+}
+function prefillSearch(q){
+  document.querySelector('nav [data-page=search]').click();
+  $('q').value = q;
+  runSearch();
+}
+let showId = 0, showTitle = '';
+async function openShow(id, title){
+  showId = id; showTitle = title;
+  $('show-title').textContent = title;
+  $('show-meta').innerHTML = '<span class="spin"></span> Loading…';
+  $('season-chips').innerHTML = ''; $('episodes').innerHTML = '';
+  $('show-page').classList.add('on');
+  try {
+    const d = await api('/tv?id=' + id);
+    const seasons = (d.seasons || []).filter(x => x.season_number >= 1);
+    $('show-meta').textContent = (d.number_of_seasons || seasons.length) + ' seasons';
+    $('season-chips').innerHTML = seasons.map((x, i) =>
+      `<button data-sn="${x.season_number}" class="${i === 0 ? 'on' : ''}">S${x.season_number}</button>`).join('');
+    $('season-chips').querySelectorAll('button').forEach(b => b.onclick = () => {
+      $('season-chips').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      loadSeason(+b.dataset.sn);
+    });
+    if (seasons.length) loadSeason(seasons[0].season_number);
+  } catch { $('show-meta').textContent = 'Failed to load'; }
+}
+async function loadSeason(sn){
+  $('episodes').innerHTML = '<div class="empty"><span class="spin"></span></div>';
+  try {
+    const d = await api('/tv?id=' + showId + '&season=' + sn);
+    $('episodes').innerHTML = (d.episodes || []).map(e => `
+      <div class="ep"><div class="h">
+        <span>E${String(e.episode_number).padStart(2,'0')} · ${esc(e.name || '')}</span>
+        <button class="find" data-q="${esc(normQuery(showTitle))} s${String(sn).padStart(2,'0')}e${String(e.episode_number).padStart(2,'0')}">Find ⭢</button>
+      </div>
+      <div class="o">${esc((e.overview || '').slice(0, 160))}${e.air_date ? ' · ' + esc(e.air_date) : ''}</div></div>`).join('')
+      || '<div class="empty">No episodes</div>';
+    $('episodes').querySelectorAll('.find').forEach(b => b.onclick = () => {
+      $('show-page').classList.remove('on');
+      prefillSearch(b.dataset.q);
+    });
+  } catch { $('episodes').innerHTML = '<div class="empty">Failed</div>'; }
+}
+$('show-back').onclick = () => $('show-page').classList.remove('on');
+
+// ── Coming up rail ──
+async function loadCalendar(){
+  try {
+    const d = await api('/calendar');
+    const es = d.entries || [];
+    $('cal-head').style.display = es.length ? 'block' : 'none';
+    $('cal').innerHTML = es.map(e => {
+      const lab = e.available
+        ? `S${String(e.last_season).padStart(2,'0')}E${String(e.last_episode).padStart(2,'0')} available · ${e.seeds} seeds`
+        : e.next_season > 0
+          ? `S${String(e.next_season).padStart(2,'0')}E${String(e.next_episode).padStart(2,'0')} ${cd(e.next_air)}`
+          : `S${String(e.last_season).padStart(2,'0')}E${String(e.last_episode).padStart(2,'0')} out — unwatched`;
+      return `<div class="c" data-id="${e.tmdb_id}" data-n="${esc(e.name)}">
+        <div class="n">${esc(e.name)}</div><div class="s ${e.available ? 'avail' : ''}">${lab}</div></div>`;
+    }).join('');
+    $('cal').querySelectorAll('.c').forEach(c => c.onclick = () => openShow(+c.dataset.id, c.dataset.n));
+  } catch {}
+}
+function cd(air){
+  const diff = air - Math.floor(Date.now() / 1000);
+  if (diff <= -86400) return 'aired';
+  if (diff <= 0) return 'today';
+  const dd = Math.floor(diff / 86400);
+  return dd >= 1 ? `in ${dd}d` : `in ${Math.floor(diff / 3600)}h`;
+}
+
+// ── Hosted inline player ──
+function openPlayer(rel){
+  const v = $('video');
+  $('player-title').textContent = rel.split('/').pop();
+  v.src = `${BASE}/stream?file=${encodeURIComponent(rel)}&t=${TOKEN}`;
+  // Sidecar subs: same name, .srt/.vtt
+  [...v.querySelectorAll('track')].forEach(tr => tr.remove());
+  const base = rel.replace(/\.[^.]+$/, '');
+  const tr = document.createElement('track');
+  tr.kind = 'subtitles'; tr.label = 'Subtitles'; tr.default = true;
+  tr.src = `${BASE}/vtt?file=${encodeURIComponent(base + '.srt')}&t=${TOKEN}`;
+  v.appendChild(tr);
+  $('player').classList.add('on');
+}
+$('player-close').onclick = () => {
+  const v = $('video');
+  v.pause(); v.removeAttribute('src'); v.load();
+  $('player').classList.remove('on');
+};
 
 // ── Boot ──
 if (TOKEN) paired(); else unpair();

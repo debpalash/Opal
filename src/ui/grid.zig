@@ -435,11 +435,19 @@ pub fn renderGrid() !void {
                     const img_format = "rgba";
                     const pitch: usize = @as(usize, @intCast(rw)) * 4;
                     const npix: usize = @as(usize, @intCast(rw)) * @as(usize, @intCast(rh));
+                    // Don't let mpv SLEEP the UI thread for frame pacing:
+                    // by default render() blocks until the frame's target
+                    // display time (production samples showed 86% of the
+                    // main thread parked in a cond_wait inside libmpv).
+                    // The frame callback already wakes us exactly when a
+                    // new frame exists; render immediately and move on.
+                    var no_block: c_int = 0;
                     var render_params = [_]c.mpv.mpv_render_param{
                         .{ .type = c.mpv.MPV_RENDER_PARAM_SW_SIZE, .data = @constCast(&size) },
                         .{ .type = c.mpv.MPV_RENDER_PARAM_SW_FORMAT, .data = @constCast(img_format.ptr) },
                         .{ .type = c.mpv.MPV_RENDER_PARAM_SW_STRIDE, .data = @constCast(&pitch) },
                         .{ .type = c.mpv.MPV_RENDER_PARAM_SW_POINTER, .data = p.pixels.ptr },
+                        .{ .type = c.mpv.MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, .data = &no_block },
                         .{ .type = c.mpv.MPV_RENDER_PARAM_INVALID, .data = null },
                     };
 

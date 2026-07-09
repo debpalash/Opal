@@ -395,6 +395,16 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_scale_pure).step);
 
+    // Browser media streaming: HTTP Range parsing, content types, SRT→VTT.
+    const test_remote_stream_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/remote_stream_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_remote_stream_pure).step);
+
     // TV calendar: air-date math, countdown labels, TMDB next-episode parse,
     // EZTV availability extraction.
     const test_tv_calendar_pure = b.addTest(.{

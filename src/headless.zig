@@ -48,13 +48,29 @@ pub fn headlessMain() !void {
         std.posix.sigaction(std.posix.SIG.TERM, &act, null);
     }
 
-    // ── 2. Window-independent startup (remote API, torrent, DB load, …) ──
+    // ── 2. Window-independent startup (torrent, DB load, …) ──
     try @import("main.zig").coreInit();
 
+    // ── 2b. Web UI + JSON API — headless's entire reason to exist ──
+    // The desktop default is web_remote OFF (nothing listens until the user
+    // opts in via Settings); a headless box has no Settings, and an API-less
+    // headless Opal is useless — force it on, qbittorrent-nox style. The
+    // pairing code is the browser bootstrap, so print it to stdout where
+    // `docker logs` / journald can show it.
+    @import("core/state.zig").app.web_remote_enabled = true;
+    const remote = @import("services/remote.zig");
+    remote.start();
+    io.sleep(300 * std.time.ns_per_ms); // let the listener come up before printing
+    std.debug.print(
+        "[opal] web ui:       http://<host>:41595/\n" ++
+            "[opal] pairing code: {s}\n" ++
+            "[opal] api token:    $XDG_CONFIG_HOME/opal/api.token\n",
+        .{remote.pairingCode()},
+    );
     logs.pushLog(
         "info",
         "headless",
-        "headless: remote API on :41595, web control surface active",
+        "headless: web UI + JSON API on :41595",
         false,
     );
 

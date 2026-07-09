@@ -70,3 +70,30 @@ jobs:
           brew install mpv sqlite onnxruntime sdl2 libtorrent-rasterbar
       - name: Run tests/test_features.py
         run: python3 tests/test_features.py
+
+  # Headless Docker image: the ONLY reliable gate for the hosted deployment
+  # (macOS dev hosts cannot validate a Linux image). Builds the image, boots
+  # it, and smoke-tests the unauthenticated surface: /health liveness and the
+  # /pair code exchange (pinned via OPAL_PAIR_CODE) returning the token.
+  docker-headless:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t opal:headless .
+      - name: Boot + smoke
+        run: |
+          docker run -d --name opal -e OPAL_PAIR_CODE=123456 -p 41595:41595 opal:headless
+          for i in $(seq 1 30); do
+            curl -fs http://127.0.0.1:41595/health && break
+            sleep 2
+          done
+          curl -fs http://127.0.0.1:41595/health | grep -q '"ok":true'
+          curl -fs http://127.0.0.1:41595/ | grep -q 'Pair with Opal'
+          curl -fs 'http://127.0.0.1:41595/pair?code=123456' | grep -qE '"token":"[0-9a-f]{32}"'
+          # wrong code must 401
+          ! curl -fs 'http://127.0.0.1:41595/pair?code=000000'
+      - name: Logs on failure
+        if: failure()
+        run: docker logs opal || true
