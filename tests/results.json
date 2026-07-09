@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-07-10T04:56:56",
+  "timestamp": "2026-07-10T05:01:06",
   "total": 147,
   "passed": 138,
   "failed": 0,
@@ -182,14 +182,14 @@
       "category": "Database",
       "status": "pass",
       "detail": "47 config entries",
-      "duration_ms": 6
+      "duration_ms": 2
     },
     {
       "name": "Watch History Table",
       "category": "Database",
       "status": "pass",
       "detail": "8 watch entries",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Search History Table",
@@ -231,7 +231,7 @@
       "category": "Database",
       "status": "pass",
       "detail": "658 cached posters",
-      "duration_ms": 47
+      "duration_ms": 48
     },
     {
       "name": "Conversation Log Table",
@@ -308,7 +308,7 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 41.4 MB",
-      "duration_ms": 408
+      "duration_ms": 434
     },
     {
       "name": "Binary Exists",
@@ -350,35 +350,35 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 1357
+      "duration_ms": 1333
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "skip",
       "detail": "faster-whisper not installed (optional)",
-      "duration_ms": 23
+      "duration_ms": 22
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 22
+      "duration_ms": 21
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 23
+      "duration_ms": 20
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 26
+      "duration_ms": 23
     },
     {
       "name": "Embedding Server Health",
@@ -511,7 +511,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 25
+      "duration_ms": 26
     },
     {
       "name": "Compiles: opal-tts-server.py",
@@ -532,21 +532,21 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 21
+      "duration_ms": 22
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 23
+      "duration_ms": 27
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 23
+      "duration_ms": 24
     },
     {
       "name": "Compiles: camoufox_bridge.py",
@@ -567,7 +567,7 @@
       "category": "Database",
       "status": "pass",
       "detail": "4 statements OK against schema",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Browser bookmarks SQL matches schema",
@@ -630,7 +630,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 4420
+      "duration_ms": 2352
     },
     {
       "name": "Sherpa Model Canonicalization",
@@ -693,14 +693,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 7100
+      "duration_ms": 7528
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 82
+      "duration_ms": 66
     },
     {
       "name": "Page Router",
@@ -1015,7 +1015,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "10 engines placed, class==module, manifest-wired",
-      "duration_ms": 2
+      "duration_ms": 3
     },
     {
       "name": "Content Plugin Sandbox Hardened",
@@ -1071,7 +1071,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 92
+      "duration_ms": 100
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1197,7 +1197,7 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 963
+      "duration_ms": 994
     }
   ]
 }

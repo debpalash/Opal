@@ -390,10 +390,12 @@ async function loadActivity(){
     });
   } catch { $('downloads').innerHTML = '<div class="empty">—</div>'; }
   try {
+    // /api/history = recent SEARCHES (plain strings) — tap to run again.
     const h = await api('/history');
-    $('history').innerHTML = (h.items || []).slice(0, 20).map(i =>
-      `<div class="file"><div class="n">${esc(i.title || i.name || '')}</div></div>`).join('')
+    $('history').innerHTML = (h.items || []).slice(0, 20).map(q =>
+      `<div class="file" data-q="${esc(q)}"><div class="n">${esc(q)}</div><span class="play">Search ⭢</span></div>`).join('')
       || '<div class="empty">No history</div>';
+    $('history').querySelectorAll('.file').forEach(el => el.onclick = () => prefillSearch(el.dataset.q));
   } catch { $('history').innerHTML = '<div class="empty">—</div>'; }
 }
 
