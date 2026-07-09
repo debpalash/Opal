@@ -60,7 +60,14 @@ The Dockerfile exists but has never been gated on a Linux host.
 4. Transcode is OUT of scope (no ffmpeg live transcode in v1) — direct-play
    only; note incompatible codecs in the UI.
 
-## Phase H3 — web feature parity, tier 1 (routes exist or are cheap)
+## Phase H3 — web feature parity, tier 1 (SHIPPED 2026-07-10)
+
+Done: Browse (poster proxy), TV drill-down (/api/tv passthrough + smart-play
+prefill), Coming-up (/api/calendar), live torrents (/api/torrents), history
+rerun, and browser-first setup (/api/setup{,/sources,/tmdb} + Setup tab) so a
+fresh container is self-service. Queue reorder is the one deferred item.
+
+### Original plan
 
 | Surface        | Server work                                   | Web work |
 |----------------|-----------------------------------------------|----------|
