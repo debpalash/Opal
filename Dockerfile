@@ -2,7 +2,6 @@
 #
 # IMPORTANT: This Dockerfile is NOT verifiable on the macOS dev host. `docker
 # build` on a real Linux/x86_64 host is the actual gate. Package names for
-# onnxruntime / libtorrent are best-effort for debian:12 (bookworm) and may
 # need adjustment (vendored install) per distro. See docs/headless-deploy.md.
 #
 # torrent_wrapper.cpp is compiled INSIDE this container by build.zig — it is
@@ -17,7 +16,7 @@ FROM debian:12-slim AS builder
 # Pin a 0.16.x Zig (project requires 0.16.x). Adjust ZIG_VERSION as 0.16.x
 # point releases land; the URL is the official tarball for linux-x86_64.
 ARG ZIG_VERSION=0.16.0
-ARG ZIG_TARBALL=zig-linux-x86_64-${ZIG_VERSION}.tar.xz
+ARG ZIG_TARBALL=zig-x86_64-linux-${ZIG_VERSION}.tar.xz
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
@@ -29,10 +28,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         # -dev packages the build links against:
         libmpv-dev \
         libsqlite3-dev \
-        # onnxruntime: debian may not ship a -dev package. If
-        # `libonnxruntime-dev` is unavailable, vendor the ONNX Runtime release
-        # tarball into /usr/local and point pkg-config/the build at it.
-        libonnxruntime-dev \
         libtorrent-rasterbar-dev \
         ffmpeg \
     && rm -rf /var/lib/apt/lists/*
@@ -68,9 +63,6 @@ FROM debian:12-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libmpv2 \
         libsqlite3-0 \
-        # onnxruntime runtime lib — if no distro package, copy the vendored
-        # shared lib in from the builder / a release tarball instead.
-        libonnxruntime1.16 \
         libtorrent-rasterbar2.0 \
         ffmpeg \
         ca-certificates \
