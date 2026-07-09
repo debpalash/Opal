@@ -506,6 +506,12 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         sendJson(stream, j);
         return;
     }
+    // Active torrents with live progress — the hosted download-then-stream
+    // loop's status feed.
+    if (std.mem.eql(u8, api_path, "/torrents")) {
+        apiTorrents(stream);
+        return;
+    }
     // Coming-up rail (tv_calendar): next-episode countdowns + EZTV availability.
     if (std.mem.eql(u8, api_path, "/calendar")) {
         apiCalendar(stream);
@@ -1519,6 +1525,38 @@ fn apiCalendar(stream: std.Io.net.Stream) void {
         }) catch return;
         escJsonWrite(&w, e.poster_path[0..e.poster_path_len]);
         w.writeAll("\"}") catch return;
+    }
+    w.writeAll("]}") catch return;
+    sendJson(stream, jb[0..w.end]);
+}
+
+fn apiTorrents(stream: std.Io.net.Stream) void {
+    var jb: [16384]u8 = undefined;
+    var w = std.Io.Writer.fixed(&jb);
+    w.writeAll("{\"torrents\":[") catch return;
+    const n = c.mpv.torrent_count(state.app.torrent_ses);
+    var emitted: usize = 0;
+    var i: c_int = 0;
+    while (i < n) : (i += 1) {
+        if (c.mpv.torrent_is_alive(state.app.torrent_ses, i) == 0) continue;
+        var t_name: [256]u8 = undefined;
+        c.mpv.torrent_get_name(state.app.torrent_ses, i, &t_name, 256);
+        const name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse 255;
+        var progress: f32 = 0;
+        var dl_rate: c_int = 0;
+        var seeds: c_int = 0;
+        _ = c.mpv.torrent_poll(state.app.torrent_ses, i, -1, null, 0, &progress, &dl_rate, &seeds);
+        if (emitted > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"name\":\"") catch return;
+        escJsonWrite(&w, t_name[0..name_len]);
+        w.print("\",\"id\":{d},\"pct\":{d},\"rate\":{d},\"seeds\":{d},\"paused\":{s}}}", .{
+            i,
+            @as(u8, @intFromFloat(std.math.clamp(progress * 100.0, 0.0, 100.0))),
+            dl_rate,
+            seeds,
+            if (c.mpv.torrent_is_paused(state.app.torrent_ses, i) != 0) "true" else "false",
+        }) catch return;
+        emitted += 1;
     }
     w.writeAll("]}") catch return;
     sendJson(stream, jb[0..w.end]);
