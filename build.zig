@@ -401,6 +401,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_scale_pure).step);
 
+    // Media file classification: playable vs executable/archive (torrent
+    // file auto-selection safety).
+    const test_media_ext = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/media_ext.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_media_ext).step);
+
     // Browser media streaming: HTTP Range parsing, content types, SRT→VTT.
     const test_remote_stream_pure = b.addTest(.{
         .root_module = b.createModule(.{

@@ -1662,6 +1662,27 @@ def test_hosted_mode_and_perf():
     return "fail", f"missing: {missing}"
 
 
+@test("Torrent File Safety: skip executables/archives", "Stability")
+def test_torrent_file_safety():
+    # A mislabeled/malicious torrent shipping a big .exe/.rar as its largest
+    # file must NOT be auto-selected (fed mpv garbage) or auto-opened (malware).
+    # The player picks the largest PLAYABLE file via the tested classifier and
+    # aborts with a warning when the torrent has no media.
+    me = _src("src/core/media_ext.zig")
+    pl = _src("src/player/player.zig")
+    checks = {
+        "classifier": "pub fn isPlayable" in me and "pub fn isExecutableOrArchive" in me,
+        "risky set": '"exe"' in me and '"rar"' in me and '"zip"' in me and '"iso"' in me,
+        "auto-select uses it": "isPlayable" in pl and "isExecutableOrArchive" in pl,
+        "aborts on no media": "-2" in pl and "possible malware" in pl,
+        "advance skips non-media": pl.count("media_ext.isPlayable") >= 2,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if not missing:
+        return "pass", "non-media torrent files skipped; executables never auto-opened"
+    return "fail", f"missing: {missing}"
+
+
 @test("Anime Seasons/Calendar/Tracking", "Browse")
 def test_anime_netflix_experience():
     # Netflix/Apple-TV+ anime browse: mode toolbar, Seasonal (/seasons),

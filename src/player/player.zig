@@ -801,19 +801,15 @@ pub fn updateTorrentBackgroundTasks() void {
                         if (state.app.auto_advance) {
                             const file_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, p.current_torrent_id);
                             if (file_count > 1 and p.selected_file_idx >= 0 and p.selected_file_idx + 1 < file_count) {
-                                // Find next video file (skip non-video files like .nfo, .txt)
+                                // Advance to the next PLAYABLE file (skip .nfo,
+                                // .txt, and — critically — .exe/.rar/.zip), via
+                                // the shared tested classifier (media_ext).
+                                const media_ext = @import("../core/media_ext.zig");
                                 var next_idx = p.selected_file_idx + 1;
                                 while (next_idx < file_count) {
                                     var fname: [512]u8 = undefined;
                                     c.mpv.torrent_get_file_name(state.app.torrent_ses, p.current_torrent_id, next_idx, &fname, 512);
-                                    const name = std.mem.sliceTo(&fname, 0);
-                                    // Check if it's a video file
-                                    const is_video = std.mem.endsWith(u8, name, ".mkv") or
-                                        std.mem.endsWith(u8, name, ".mp4") or
-                                        std.mem.endsWith(u8, name, ".avi") or
-                                        std.mem.endsWith(u8, name, ".wmv") or
-                                        std.mem.endsWith(u8, name, ".mov");
-                                    if (is_video) break;
+                                    if (media_ext.isPlayable(std.mem.sliceTo(&fname, 0))) break;
                                     next_idx += 1;
                                 }
                                 if (next_idx < file_count) {
@@ -954,28 +950,62 @@ pub fn updateTorrentBackgroundTasks() void {
                 }
 
                 if (p.has_metadata) {
-                    // Auto-select largest file if not yet selected
+                    // Auto-select the largest PLAYABLE file if not yet selected.
+                    // Non-media (.exe/.rar/.zip/…) is never auto-selected: it fed
+                    // mpv garbage ("Failed to recognize file format") and, for
+                    // executables, would auto-open a possible malware payload.
+                    // -2 is the terminal "no playable media, aborted" sentinel.
                     if (p.selected_file_idx == -1) {
+                        const media_ext = @import("../core/media_ext.zig");
                         const f_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, p.current_torrent_id);
                         var max_sz: i64 = 0;
-                        var max_idx: i32 = 0;
+                        var max_idx: i32 = -1;
+                        var risky_count: i32 = 0;
                         var i: i32 = 0;
                         while (i < f_count) : (i += 1) {
+                            c.mpv.torrent_set_file_priority(state.app.torrent_ses, p.current_torrent_id, i, 0);
+                            var fname: [512]u8 = undefined;
+                            c.mpv.torrent_get_file_name(state.app.torrent_ses, p.current_torrent_id, i, &fname, 512);
+                            const name = std.mem.sliceTo(&fname, 0);
+                            if (media_ext.isExecutableOrArchive(name)) risky_count += 1;
+                            if (!media_ext.isPlayable(name)) continue; // skip non-media
                             const sz = c.mpv.torrent_get_file_size(state.app.torrent_ses, p.current_torrent_id, i);
                             if (sz > max_sz) {
                                 max_sz = sz;
                                 max_idx = i;
                             }
-                            c.mpv.torrent_set_file_priority(state.app.torrent_ses, p.current_torrent_id, i, 0);
                         }
+
+                        if (max_idx < 0) {
+                            // No playable file at all — refuse to load, warn.
+                            var lb: [96]u8 = undefined;
+                            const msg = if (risky_count > 0)
+                                (std.fmt.bufPrint(&lb, "No playable media — {d} executable/archive file(s) NOT opened (possible malware)", .{risky_count}) catch "No playable media in torrent")
+                            else
+                                "No playable media found in this torrent";
+                            logs.pushLog("error", "opal", msg, true);
+                            state.showToast(msg);
+                            p.selected_file_idx = -2; // terminal: won't re-enter (-1 gate)
+                            p.is_loading = false;
+                            continue;
+                        }
+
+                        if (risky_count > 0) {
+                            var lb: [96]u8 = undefined;
+                            logs.pushLog("warn", "opal", std.fmt.bufPrint(&lb, "Skipped {d} executable/archive file(s) in this torrent (not opened)", .{risky_count}) catch "Skipped non-media files", false);
+                        }
+
                         p.selected_file_idx = max_idx;
-                        if (max_idx >= 0 and max_idx < f_count) {
-                            c.mpv.torrent_set_file_priority(state.app.torrent_ses, p.current_torrent_id, max_idx, 7);
-                        }
+                        c.mpv.torrent_set_file_priority(state.app.torrent_ses, p.current_torrent_id, max_idx, 7);
 
                         // Re-poll to apply streaming window for selected file
                         _ = c.mpv.torrent_poll(state.app.torrent_ses, p.current_torrent_id, p.selected_file_idx, &buffering_path, @intCast(buffering_path.len), null, null, null);
                     }
+
+                    // Torrent had no playable media (-2, set above) — nothing
+                    // to start; leave the pane idle instead of polling a bogus
+                    // index.
+                    if (p.selected_file_idx < 0) break;
 
                     // ── START PLAYBACK IMMEDIATELY ──
                     // Don't wait for any piece! The HTTP streaming proxy blocks reads
