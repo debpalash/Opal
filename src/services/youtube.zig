@@ -5,6 +5,7 @@ const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const io = @import("../core/io_global.zig");
 const workers = @import("../core/workers.zig");
+const tmdb_pure = @import("tmdb_pure.zig"); // unit-tested grid virtualization (visibleRows)
 
 pub const alloc = @import("../core/alloc.zig").allocator;
 
@@ -73,6 +74,16 @@ const DEBOUNCE_MS: i64 = 400;
 var card_w: f32 = 200; // user-cyclable card width, clamp 150..360
 const CARD_MIN: f32 = 150;
 const CARD_MAX: f32 = 360;
+
+/// Card footer height below the 16:9 thumbnail — holds the 2-line title, the
+/// channel + "views · date" meta lines, and the Play/Queue action row. Referenced
+/// by BOTH the uniform card sizing (renderCard pins min==max = thumb_h + this) AND
+/// the grid's virtualization row pitch, so the spacer math and the card can never
+/// drift (mirrors tmdb.zig/comics.zig/jellyfin_ui.zig CARD_FOOTER_H). 150 == the
+/// footer allowance the card's max_size_content already used before pinning, so no
+/// card that fit before can clip now — the footer content (font-driven, ~110 logical
+/// px at body=11) sits well inside it at every UI scale.
+const CARD_FOOTER_H: f32 = 150;
 
 // ── Infinite scroll / load-more ──
 // yt-dlp's flat search has no page cursor, so we re-run `ytsearch{N}:` with a
@@ -739,15 +750,45 @@ pub fn renderContent() void {
     const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / card_w)));
     const real_card_w: f32 = @max(120, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
 
-    var i: usize = 0;
-    while (i < state.app.yt.results.items.len) {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 80000, .expand = .horizontal });
+    // ── Virtualization (same shape as tmdb.zig/comics.zig/jellyfin_ui.zig) ──
+    // Cards are uniform (renderCard pins min==max height), so rows have a fixed
+    // pitch: thumb + footer content, plus the card's 6px bottom padding and 3px
+    // top/bottom margins (min_sizeGet = padSize(min_size_content) adds padding +
+    // margin around the content → +12 total). Rows outside the viewport (±2
+    // overscan) collapse into two spacer boxes, so the grid lays out a handful of
+    // rows per frame instead of all ~200 card widget trees. The base index of
+    // each row (row * cols) is IDENTICAL to the prior loop's `i`, so every card's
+    // id_extra scheme is unchanged and retained widget state is unaffected.
+    const thumb_h: f32 = real_card_w * 9.0 / 16.0;
+    const row_h: f32 = thumb_h + CARD_FOOTER_H + 12;
+    const total_rows = (state.app.yt.results.items.len + cols - 1) / cols;
+    const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
+
+    if (win.first > 0) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49998,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) },
+        });
+        sp.deinit();
+    }
+
+    var r: usize = win.first;
+    while (r < win.last) : (r += 1) {
+        const base = r * cols;
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = base + 80000, .expand = .horizontal });
         defer row.deinit();
         var col: usize = 0;
-        while (col < cols and i + col < state.app.yt.results.items.len) : (col += 1) {
-            renderCard(&state.app.yt.results.items[i + col], i + col, real_card_w);
+        while (col < cols and base + col < state.app.yt.results.items.len) : (col += 1) {
+            renderCard(&state.app.yt.results.items[base + col], base + col, real_card_w);
         }
-        i += cols;
+    }
+
+    if (win.last < total_rows) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49999,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(total_rows - win.last)) },
+        });
+        sp.deinit();
     }
 
     // ── Infinite scroll ──
@@ -936,13 +977,17 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
     const title = safeUtf8(item.title[0..item.title_len]);
     const thumb_h: f32 = the_card_w * 9.0 / 16.0;
 
+    // min == max height → uniform row pitch, which the grid's virtualization
+    // spacer math depends on (row_h = thumb_h + CARD_FOOTER_H + padding + margins).
+    // CARD_FOOTER_H (150) is the same footer allowance max_size_content used
+    // before, so nothing that fit under the old cap can clip now.
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = idx,
         .background = true,
         .color_fill = theme.colors.bg_surface,
         .corner_radius = dvui.Rect.all(6),
-        .min_size_content = .{ .w = the_card_w, .h = 10 },
-        .max_size_content = .{ .w = the_card_w, .h = thumb_h + 150 },
+        .min_size_content = .{ .w = the_card_w, .h = thumb_h + CARD_FOOTER_H },
+        .max_size_content = .{ .w = the_card_w, .h = thumb_h + CARD_FOOTER_H },
         .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
     });
