@@ -243,28 +243,12 @@ fi
 
 # ── Credits.rtf — the standard macOS About panel (app menu → About Opal)
 # renders this in its scrollable body, hyperlinks included. This is what
-# turns the bare icon+version panel into a real About window.
-cat > "$APP_DIR/Contents/Resources/Credits.rtf" <<'CREDITS'
-{\rtf1\ansi\ansicpg1252\cocoartf2761
-{\fonttbl\f0\fswiss\fcharset0 Helvetica-Bold;\f1\fswiss\fcharset0 Helvetica;}
-{\colortbl;\red255\green255\blue255;\red139\green92\blue246;}
-\pard\qc
-\f0\b\fs28 Play everything.\
-\f1\b0\fs22 The evolved media player for the next decades of entertainment.\
-\fs20 \
-Local-first. No accounts, no telemetry, no cloud \'97 your history is a SQLite file you own.\
-\
-\f0\b Support development\f1\b0 \
-{\field{\*\fldinst{HYPERLINK "https://ko-fi.com/debpalash"}}{\fldrslt \cf2 Ko-fi}}  \'b7  {\field{\*\fldinst{HYPERLINK "https://paypal.me/palashCoder"}}{\fldrslt \cf2 PayPal}}  \'b7  {\field{\*\fldinst{HYPERLINK "https://github.com/debpalash/Opal"}}{\fldrslt \cf2 GitHub}}\
-\
-\f0\b Built with\f1\b0 \
-Zig \'b7 dvui \'b7 mpv \'b7 SDL2 \'b7 libtorrent \'b7 SQLite + sqlite-vec \'b7 ONNX Runtime \'b7 whisper.cpp\
-\
-\fs18 Metadata from TMDB \'97 this product uses the TMDB API but is not endorsed or certified by TMDB.\
-Demo media: Big Buck Bunny & Sintel, \'a9 Blender Foundation, CC-BY 3.0.\
-}
-CREDITS
-echo "[build-app] Credits.rtf written (About panel body)"
+# turns the bare icon+version panel into a real About window. Shared source
+# in assets/ so the dev-app skeleton (scripts/dev-app.sh) uses the same text.
+if [ -f "$ROOT/assets/Credits.rtf" ]; then
+    cp "$ROOT/assets/Credits.rtf" "$APP_DIR/Contents/Resources/Credits.rtf"
+    echo "[build-app] Credits.rtf written (About panel body)"
+fi
 
 # ── 5. Bundle dylibs (mpv, libtorrent_wrapper, onnxruntime) ────
 # Copy whatever the binary links so the app runs on systems without brew.

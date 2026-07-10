@@ -119,10 +119,16 @@ build_and_launch() {
     if [[ $rc -eq 0 ]]; then
         (( VERBOSE )) || printf "%bok%b %s\n" "$C_GREEN" "$C_RST" "$elapsed"
         kill_running
+        # Launch through a lightweight .app skeleton so macOS gives the dev run a
+        # real bundle identity (name "Opal", logo in Dock + About, Credits body).
+        # Falls back to the bare binary if the wrapper can't be built. CWD stays
+        # the project root, so CWD-relative resource lookups still resolve.
+        local launch_bin
+        launch_bin=$(./scripts/dev-app.sh 2>/dev/null) || launch_bin="$BIN"
         if [[ ${#PASSTHROUGH[@]} -gt 0 ]]; then
-            "$BIN" "${PASSTHROUGH[@]}" &
+            "$launch_bin" "${PASSTHROUGH[@]}" &
         else
-            "$BIN" &
+            "$launch_bin" &
         fi
         PID=$!
         ok "launched pid=$PID  ${C_DIM}(Ctrl+C to stop)${C_RST}"
@@ -187,6 +193,6 @@ case "$WATCHER" in
             --ignore '*.swp' --ignore '*~' \
             --watch src --watch tools --watch build.zig --watch build.zig.zon \
             --on-busy-update restart --stop-signal SIGTERM \
-            -- bash -c "${ZIG:-zig} build $OPTIMIZE && exec $BIN ${PASSTHROUGH[*]:-}"
+            -- bash -c "${ZIG:-zig} build $OPTIMIZE && exec \"\$(./scripts/dev-app.sh 2>/dev/null || echo $BIN)\" ${PASSTHROUGH[*]:-}"
         ;;
 esac
