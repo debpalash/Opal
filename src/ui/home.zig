@@ -152,9 +152,9 @@ pub fn render() void {
     // a scrollArea, so it just scrolls into view). Budget-gating it meant a tall
     // hero / short window hid all TV/movie content, reading as "nothing loaded".
     if (renderTrendingRail(card_w)) budget -= rail_h;
-    // "Coming up" — next-episode countdowns + EZTV availability for shows the
-    // user watches. Compact text rail; renders whenever entries exist.
-    if (renderComingUpRail()) budget -= 74;
+    // "Coming up" — poster cards (like Trending) with next-episode countdowns
+    // + EZTV availability for the shows the user watches.
+    if (budget >= rail_h and renderComingUpRail(card_w)) budget -= rail_h;
     if (budget >= foryou_h and @import("../services/recommendations.zig").rec_count > 0) {
         @import("discovery_ui.zig").renderForYouRail();
         budget -= foryou_h;
@@ -196,26 +196,28 @@ fn kickTrendingFetch() void {
     }
 }
 
-/// "Coming up" — one compact card per tracked show: SxxEyy + episode title,
-/// then either an air-date countdown or an "Available · N seeds" badge from
-/// EZTV. Click opens the show's detail. Returns true when the rail rendered.
-fn renderComingUpRail() bool {
+/// "Coming up" — poster cards (matching Trending tonight) for shows the user
+/// watches: poster, show name, then an air-date countdown or an EZTV
+/// "available · N seeds" badge. Click opens the show. Returns true if rendered.
+fn renderComingUpRail(card_w: f32) bool {
     const cal = @import("../services/tv_calendar.zig");
     if (cal.count == 0) return false;
     const text_mod = @import("../core/text.zig");
+    const poster = @import("../core/poster.zig");
+    const poster_h = card_w * 1.5;
 
-    // Header
+    // Section header (icon + title) — same grammar as posterStrip's.
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 2 },
+            .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.sm, .w = theme.spacing.xs, .h = theme.spacing.xs },
         });
         defer hdr.deinit();
         dvui.icon(@src(), "comingup", icons.tvg.lucide.@"calendar-clock", .{}, .{
             .color_text = theme.colors.accent,
             .min_size_content = theme.iconSize(.sm),
             .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
         _ = dvui.label(@src(), "Coming up", .{}, .{
             .color_text = theme.colors.text_primary,
@@ -227,68 +229,82 @@ fn renderComingUpRail() bool {
     var strip = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none, .horizontal_bar = .hide }, .{
         .expand = .horizontal,
         .background = false,
-        .min_size_content = .{ .w = 10, .h = 52 },
-        .max_size_content = dvui.Options.MaxSize.height(52),
+        .min_size_content = .{ .w = 10, .h = poster_h + STRIP_CHROME },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = poster_h + STRIP_CHROME },
+        .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },
     });
     defer strip.deinit();
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{});
     defer row.deinit();
 
     const now_s = @import("../core/io_global.zig").timestamp();
-    for (0..cal.count) |i| {
+    const n = @min(cal.count, STRIP_MAX);
+    for (0..n) |i| {
         const e = &cal.entries[i];
+        var it = &cal.cal_items[i];
+
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = i,
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .color_border = theme.colors.border_subtle,
-            .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_md,
-            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+            .id_extra = i + 47000,
+            .min_size_content = .{ .w = card_w, .h = poster_h + STRIP_CHROME },
+            .max_size_content = .{ .w = card_w, .h = poster_h + STRIP_CHROME },
+            .margin = dvui.Rect.all(4),
         });
         defer card.deinit();
-        var hovered = false;
-        const clicked = dvui.clicked(card.data(), .{ .hovered = &hovered });
-        if (hovered) card.data().options.color_fill = theme.colors.bg_hover;
-        card.drawBackground();
 
+        // Poster — clickable; fetched through the shared poster daemon.
+        {
+            var bw: dvui.ButtonWidget = undefined;
+            bw.init(@src(), .{}, .{
+                .id_extra = i + 47100,
+                .background = true,
+                .color_fill = theme.colors.bg_surface,
+                .corner_radius = dvui.Rect.all(8),
+                .min_size_content = .{ .w = card_w, .h = poster_h },
+                .max_size_content = .{ .w = card_w, .h = poster_h },
+                .padding = dvui.Rect.all(0),
+            });
+            bw.processEvents();
+            bw.drawBackground();
+            if (bw.clicked()) {
+                @import("../services/tmdb.zig").openTvDetailById(e.tmdb_id, e.name[0..e.name_len], e.poster_path[0..e.poster_path_len]);
+            }
+            if (poster.uploadIfReady(&it.poster_pixels, it.poster_w, it.poster_h, &it.poster_tex)) {
+                if (it.poster_tex) |*tex| {
+                    _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+                        .id_extra = i + 47200,
+                        .expand = .both,
+                        .corner_radius = dvui.Rect.all(8),
+                    });
+                }
+            } else if (it.poster_path_len > 0 and !it.poster_failed) {
+                @import("../services/tmdb_api.zig").fetchPoster(it);
+            }
+            bw.deinit();
+        }
+
+        // Show name.
         var nm_buf: [96]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(e.name[0..@min(e.name_len, 60)], &nm_buf)}, .{
-            .id_extra = i,
+            .id_extra = i + 47300,
             .color_text = theme.colors.text_primary,
+            .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
         });
 
+        // Status caption: EZTV availability (green) or air-date countdown.
         var line_buf: [128]u8 = undefined;
         var cd_buf: [24]u8 = undefined;
         const pure = @import("../services/tv_calendar_pure.zig");
-        const line: []const u8 = if (e.available) blk: {
-            // Latest aired episode is grabbable right now.
-            break :blk std.fmt.bufPrint(&line_buf, "S{d:0>2}E{d:0>2} available · {d} seeds", .{
-                @as(u32, @intCast(@max(0, e.last_season))),
-                @as(u32, @intCast(@max(0, e.last_episode))),
-                e.seeds,
-            }) catch "available";
-        } else if (e.next_season > 0) blk: {
-            break :blk std.fmt.bufPrint(&line_buf, "S{d:0>2}E{d:0>2} {s}", .{
-                @as(u32, @intCast(@max(0, e.next_season))),
-                @as(u32, @intCast(@max(0, e.next_episode))),
-                pure.countdownLabel(now_s, e.next_air_epoch, &cd_buf),
-            }) catch "soon";
-        } else blk: {
-            break :blk std.fmt.bufPrint(&line_buf, "S{d:0>2}E{d:0>2} out — unwatched", .{
-                @as(u32, @intCast(@max(0, e.last_season))),
-                @as(u32, @intCast(@max(0, e.last_episode))),
-            }) catch "unwatched";
-        };
+        const line: []const u8 = if (e.available)
+            (std.fmt.bufPrint(&line_buf, "S{d:0>2}E{d:0>2} · {d} seeds", .{ @as(u32, @intCast(@max(0, e.last_season))), @as(u32, @intCast(@max(0, e.last_episode))), e.seeds }) catch "available")
+        else if (e.next_season > 0)
+            (std.fmt.bufPrint(&line_buf, "S{d:0>2}E{d:0>2} {s}", .{ @as(u32, @intCast(@max(0, e.next_season))), @as(u32, @intCast(@max(0, e.next_episode))), pure.countdownLabel(now_s, e.next_air_epoch, &cd_buf) }) catch "soon")
+        else
+            (std.fmt.bufPrint(&line_buf, "S{d:0>2}E{d:0>2} unwatched", .{ @as(u32, @intCast(@max(0, e.last_season))), @as(u32, @intCast(@max(0, e.last_episode))) }) catch "unwatched");
         _ = dvui.label(@src(), "{s}", .{line}, .{
-            .id_extra = i,
+            .id_extra = i + 47400,
             .color_text = if (e.available) theme.colors.success else theme.colors.text_tertiary,
+            .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
         });
-
-        if (clicked) {
-            @import("../services/tmdb.zig").openTvDetailById(e.tmdb_id, e.name[0..e.name_len], e.poster_path[0..e.poster_path_len]);
-        }
     }
     return true;
 }

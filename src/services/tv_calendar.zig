@@ -37,6 +37,10 @@ pub const Entry = struct {
 };
 
 pub var entries: [12]Entry = undefined;
+/// Parallel TmdbItem per entry — carries the poster-fetch state so the Home
+/// rail can show real poster cards (like Trending) via the shared poster
+/// daemon, instead of duplicating that machinery. Index-aligned with entries.
+pub var cal_items: [12]state.TmdbItem = undefined;
 pub var count: usize = 0;
 pub var loading = std.atomic.Value(bool).init(false);
 var fetched_once: bool = false;
@@ -148,7 +152,22 @@ fn worker() void {
 
         // Keep only rows with something to say: a scheduled next episode or
         // an unseen aired one.
-        if (e.next_season > 0 or e.unseen) built += 1;
+        if (e.next_season > 0 or e.unseen) {
+            // Mirror into a TmdbItem for the poster-card rail (fresh state so
+            // no stale texture/pixels carry over from a previous refresh).
+            var it = &cal_items[built];
+            it.* = .{};
+            it.id = e.tmdb_id;
+            const inl = @min(e.name_len, it.title.len);
+            @memcpy(it.title[0..inl], e.name[0..inl]);
+            it.title_len = inl;
+            const ipl = @min(e.poster_path_len, it.poster_path.len);
+            @memcpy(it.poster_path[0..ipl], e.poster_path[0..ipl]);
+            it.poster_path_len = ipl;
+            @memcpy(it.media_type[0..2], "tv");
+            it.media_type_len = 2;
+            built += 1;
+        }
     }
 
     count = built; // publish last
