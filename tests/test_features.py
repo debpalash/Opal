@@ -1976,6 +1976,52 @@ def test_sources_externalized():
     return "pass", "1337x/yts/eztv/readallcomics endpoints read from installed plugins"
 
 
+@test("Legal Direct-Play Sources (NASA / Commons / IA-Audio)", "Stability")
+def test_legal_directplay_sources():
+    # Three legal, DEFAULT-ON direct-play search sources mirror the Internet
+    # Archive worker: NASA library, Wikimedia Commons, and an intent-aware IA
+    # AUDIO path. Each rides the .stremio source variant (HTTP-direct mpv), runs
+    # with NO source_config marker (default-on), and routes JSON parsing through
+    # a tested *_pure sibling.
+    rv = _src("src/services/resolver.zig")
+    npu = _src("src/services/nasa_pure.zig")
+    cpu = _src("src/services/commons_pure.zig")
+    apu = _src("src/services/archive_pure.zig")
+    bz = open(os.path.join(PROJECT_DIR, "build.zig")).read()
+    checks = {
+        # NASA worker + endpoint + two-stage best-mp4 pick
+        "resolveNasa worker": "fn resolveNasa(" in rv,
+        "nasa status atomic": "status_nasa" in rv,
+        "nasa spawned under stremio": "Spawn.go(resolveNasa, &status_nasa)" in rv,
+        "nasa in checkAllDone": "status_nasa.load(.acquire) != .searching" in rv,
+        "nasa endpoint": "images-api.nasa.gov/search" in rv,
+        "nasa_pure pickBestMp4": "pub fn pickBestMp4(" in npu and "pub fn iterateItems(" in npu,
+        "nasa_pure registered": "nasa_pure.zig" in bz,
+        # Wikimedia Commons worker + single-fetch endpoint + pages{} parse
+        "resolveCommons worker": "fn resolveCommons(" in rv,
+        "commons status atomic": "status_commons" in rv,
+        "commons spawned under stremio": "Spawn.go(resolveCommons, &status_commons)" in rv,
+        "commons in checkAllDone": "status_commons.load(.acquire) != .searching" in rv,
+        "commons endpoint": "commons.wikimedia.org/w/api.php" in rv,
+        "commons UA policy": "https://github.com/debpalash/Opal" in rv,
+        "commons_pure iteratePages": "pub fn iteratePages(" in cpu and "stripFilePrefix" in cpu,
+        "commons_pure registered": "commons_pure.zig" in bz,
+        # IA audio: intent-aware, no new worker, librivox/etree, VBR>ogg>flac
+        "IA audio intent gate": "isAudioIntent" in rv and "pub fn isAudioIntent(" in apu,
+        "IA audio best file": "pub fn pickBestAudioFile(" in apu and "pickBestAudioFile(meta)" in rv,
+        "IA audio collections": "librivoxaudio" in rv and "etree" in rv,
+        "IA default path intact": "mediatype:(movies)" in rv,
+        "no bare audio in default": "mediatype:(audio)" not in rv,
+        # Default-on: none of the three gate on a source_config marker.
+        "nasa not marker-gated": 'get("nasa"' not in rv,
+        "commons not marker-gated": 'get("commons"' not in rv,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "legal direct-play wiring gaps: " + ", ".join(missing)
+    return "pass", "NASA + Commons + IA-audio wired, default-on, *_pure-routed"
+
+
 @test("Plugin Manager Wired", "Page Shell")
 def test_plugin_manager():
     # qBittorrent-style source-endpoint manager: fetch opal-plugins manifest →

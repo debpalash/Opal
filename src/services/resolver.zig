@@ -69,6 +69,8 @@ pub var status_rss = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_comics = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_torznab = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_archive = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_nasa = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_commons = std.atomic.Value(SourceStatus).init(.idle);
 
 // Explicit u8 backing so std.atomic.Value(SourceStatus) is byte-atomic.
 pub const SourceStatus = enum(u8) { idle, searching, done, failed };
@@ -314,6 +316,8 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     Pre.set(&status_comics, .comics);
     Pre.set(&status_torznab, .torrent); // generic Torznab/Prowlarr — a torrent source
     Pre.set(&status_archive, .stremio); // Internet Archive — legal HTTP-direct streams (rides the Stremio pill)
+    Pre.set(&status_nasa, .stremio); // NASA image/video library — legal HTTP-direct, rides the Stremio pill
+    Pre.set(&status_commons, .stremio); // Wikimedia Commons — legal HTTP-direct, rides the Stremio pill
 
 
 
@@ -350,6 +354,8 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     if (sourceOn(.comics)) Spawn.go(resolveComics, &status_comics); // readallcomics.com HTML scrape
     if (sourceOn(.stremio)) Spawn.go(resolveStremio, &status_stremio); // needs IMDB id — TMDB then addons
     if (sourceOn(.stremio)) Spawn.go(resolveArchive, &status_archive); // archive.org public-domain — legal, default-on
+    if (sourceOn(.stremio)) Spawn.go(resolveNasa, &status_nasa); // NASA library — legal HTTP-direct, default-on
+    if (sourceOn(.stremio)) Spawn.go(resolveCommons, &status_commons); // Wikimedia Commons — legal HTTP-direct, default-on
 
     // If filtering left nothing to spawn, close the resolve immediately —
     // no worker exists to call checkAllDone().
@@ -660,7 +666,8 @@ fn checkAllDone() void {
         status_yt.load(.acquire) != .searching and status_1337x.load(.acquire) != .searching and
         status_yts.load(.acquire) != .searching and status_local.load(.acquire) != .searching and
         status_rss.load(.acquire) != .searching and status_comics.load(.acquire) != .searching and
-        status_torznab.load(.acquire) != .searching and status_archive.load(.acquire) != .searching)
+        status_torznab.load(.acquire) != .searching and status_archive.load(.acquire) != .searching and
+        status_nasa.load(.acquire) != .searching and status_commons.load(.acquire) != .searching)
     {
         is_resolving.store(false, .release);
     }
@@ -1418,10 +1425,23 @@ fn resolveArchive(query_buf: [256]u8, qlen: usize) void {
     const http = @import("../core/http.zig");
     const query = query_buf[0..qlen];
 
-    // q = "<query> AND mediatype:(movies)" — percent-encode the whole value.
-    var q_raw: [384]u8 = undefined;
-    const q_val = std.fmt.bufPrint(&q_raw, "{s} AND mediatype:(movies)", .{query}) catch return;
-    var q_enc: [768]u8 = undefined;
+    // Intent-aware: a music/audiobook query searches IA's legal audio collections
+    // (LibriVox public-domain audiobooks + etree trade-friendly live concerts)
+    // and picks an audio file; every other intent keeps the default movies path
+    // exactly as-is. The intent is the same global computeMatch reads (set before
+    // any worker spawns); worker_gen still guards pushResult against stale waves.
+    const audio_mode = ap.isAudioIntent(resolver_intent[0..resolver_intent_len]);
+
+    // q value — percent-encode the whole thing (urlEncode handles the spaces,
+    // parens and colons IA's Lucene query syntax needs). A broad audio-mediatype
+    // filter is deliberately kept OUT of the default query — the audio path is
+    // scoped to the two legal collections below.
+    var q_raw: [512]u8 = undefined;
+    const q_val = if (audio_mode)
+        std.fmt.bufPrint(&q_raw, "{s} AND (collection:(librivoxaudio) OR collection:(etree))", .{query}) catch return
+    else
+        std.fmt.bufPrint(&q_raw, "{s} AND mediatype:(movies)", .{query}) catch return;
+    var q_enc: [1024]u8 = undefined;
     const enc_q = http.urlEncode(q_val, &q_enc);
 
     // fl[] param names carry literal brackets (IA expects them); only the q
@@ -1469,7 +1489,10 @@ fn resolveArchive(query_buf: [256]u8, qlen: usize) void {
         }) orelse continue;
         if (meta.len < 20) continue;
 
-        const file_name = ap.pickBestVideoFile(meta) orelse continue;
+        const file_name = if (audio_mode)
+            ap.pickBestAudioFile(meta) orelse continue
+        else
+            ap.pickBestVideoFile(meta) orelse continue;
 
         // Build the direct-play URL: download/{id}/{file}. Percent-encode each
         // path segment (space→%20, NOT '+', which is literal in a path).
@@ -1503,10 +1526,11 @@ fn resolveArchive(query_buf: [256]u8, qlen: usize) void {
         item.quality = detectQuality(raw_title);
 
         var det: [128]u8 = undefined;
+        const label = if (audio_mode) "Internet Archive · Audio" else "Internet Archive";
         const dstr = if (doc.year.len > 0)
-            std.fmt.bufPrint(&det, "Internet Archive · {s}", .{doc.year}) catch "Internet Archive"
+            std.fmt.bufPrint(&det, "{s} · {s}", .{ label, doc.year }) catch label
         else
-            std.fmt.bufPrint(&det, "Internet Archive", .{}) catch "Internet Archive";
+            std.fmt.bufPrint(&det, "{s}", .{label}) catch label;
         const dlen = @min(dstr.len, 127);
         @memcpy(item.detail[0..dlen], dstr[0..dlen]);
         item.detail_len = dlen;
@@ -1539,6 +1563,225 @@ fn encPathSegment(seg: []const u8, out: []u8) usize {
         }
     }
     return w;
+}
+
+/// Copy a JSON-string URL into `out`, undoing `\/` and `\\` escapes (MediaWiki's
+/// default format=json escapes forward slashes) and rewriting an `http://`
+/// prefix to `https://`. Returns bytes written (0 if it wouldn't fit).
+fn writeSafeUrl(src: []const u8, out: []u8) usize {
+    var tmp: [2048]u8 = undefined;
+    var t: usize = 0;
+    var i: usize = 0;
+    while (i < src.len and t < tmp.len) : (i += 1) {
+        if (src[i] == '\\' and i + 1 < src.len and (src[i + 1] == '/' or src[i + 1] == '\\')) {
+            tmp[t] = src[i + 1];
+            t += 1;
+            i += 1;
+            continue;
+        }
+        tmp[t] = src[i];
+        t += 1;
+    }
+    const cleaned = tmp[0..t];
+    // Upgrade http:// → https:// (NASA asset URLs, some Commons mirrors).
+    var w: usize = 0;
+    if (std.mem.startsWith(u8, cleaned, "http://")) {
+        const https = "https://";
+        if (https.len + (cleaned.len - "http://".len) > out.len) return 0;
+        @memcpy(out[0..https.len], https);
+        w = https.len;
+        const rest = cleaned["http://".len..];
+        @memcpy(out[w .. w + rest.len], rest);
+        w += rest.len;
+    } else {
+        if (cleaned.len > out.len) return 0;
+        @memcpy(out[0..cleaned.len], cleaned);
+        w = cleaned.len;
+    }
+    return w;
+}
+
+// ══════════════════════════════════════════════════════════
+// Backend: NASA image/video library (images-api.nasa.gov)
+//
+// LEGAL, default-on direct-play source — NASA media is public domain. Two-stage
+// like Archive: a search returns collection.items[], each pointing at a
+// per-asset collection.json we fetch to pick the best playable .mp4. The emitted
+// URL is a real https stream mpv opens directly; results ride the .stremio
+// source variant + Stremio filter pill. All JSON parsing is routed through the
+// tested nasa_pure.zig.
+// ══════════════════════════════════════════════════════════
+
+fn resolveNasa(query_buf: [256]u8, qlen: usize) void {
+    defer {
+        status_nasa.store(.done, .release);
+        checkAllDone();
+    }
+    if (qlen == 0) return;
+
+    const np = @import("nasa_pure.zig");
+    const http = @import("../core/http.zig");
+    const query = query_buf[0..qlen];
+
+    var enc: [512]u8 = undefined;
+    const enc_q = http.urlEncode(query, &enc);
+
+    var url_buf: [640]u8 = undefined;
+    const url = std.fmt.bufPrint(
+        &url_buf,
+        "https://images-api.nasa.gov/search?q={s}&media_type=video&page_size=10",
+        .{enc_q},
+    ) catch return;
+
+    // Heap the response — keep it off this spawned worker's 512 KB stack.
+    const page = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(page);
+
+    @import("../core/rate_limit.zig").acquire("nasa", 1.0);
+    const body = http.fetch(url, page, .{
+        .timeout_secs = 8,
+        .user_agent = "Opal/1.0 (https://github.com/debpalash/Opal)",
+    }) orelse return;
+    if (body.len < 30) return;
+
+    // Reused heap buffer for the per-asset collection.json fetch (bounded work).
+    const coll_buf = alloc.alloc(u8, 128 * 1024) catch return;
+    defer alloc.free(coll_buf);
+
+    const max_hits = 8;
+    var found: usize = 0;
+    var it = np.iterateItems(body);
+    while (it.next()) |hit| {
+        if (found >= max_hits) break;
+        if (hit.href.len < 8 or hit.href.len > 1024) continue;
+        if (hit.title.len == 0) continue; // no title → can't match query; skip
+
+        // Fetch the asset's collection.json and pick the best .mp4.
+        @import("../core/rate_limit.zig").acquire("nasa", 1.0);
+        const coll = http.fetch(hit.href, coll_buf, .{
+            .timeout_secs = 8,
+            .user_agent = "Opal/1.0 (https://github.com/debpalash/Opal)",
+        }) orelse continue;
+        if (coll.len < 5) continue;
+
+        const mp4 = np.pickBestMp4(coll) orelse continue;
+
+        var url_out: [2048]u8 = undefined;
+        const w = writeSafeUrl(mp4, &url_out);
+        if (w < 12) continue;
+
+        var item = std.mem.zeroes(ResolvedItem);
+        item.source = .stremio; // HTTP-direct stream — plays via mpv load_file
+
+        const nlen = @min(hit.title.len, 255);
+        @memcpy(item.name[0..nlen], hit.title[0..nlen]);
+        item.name_len = nlen;
+
+        const ulen = @min(w, 2047);
+        @memcpy(item.url[0..ulen], url_out[0..ulen]);
+        item.url_len = ulen;
+
+        item.quality = detectQuality(hit.title);
+
+        var det: [128]u8 = undefined;
+        const dstr = if (hit.year.len > 0)
+            std.fmt.bufPrint(&det, "NASA · {s}", .{hit.year}) catch "NASA"
+        else
+            std.fmt.bufPrint(&det, "NASA", .{}) catch "NASA";
+        const dlen = @min(dstr.len, 127);
+        @memcpy(item.detail[0..dlen], dstr[0..dlen]);
+        item.detail_len = dlen;
+
+        if (pushResult(item)) found += 1;
+    }
+
+    if (found > 0) {
+        logs.pushLog("info", "resolver", "NASA library results found", false);
+    }
+}
+
+// ══════════════════════════════════════════════════════════
+// Backend: Wikimedia Commons (commons.wikimedia.org MediaWiki API)
+//
+// LEGAL, default-on direct-play source — Commons hosts freely-licensed media. A
+// SINGLE generator=search query returns query.pages{} where each page's
+// imageinfo[0].url is the direct upload.wikimedia.org file (.webm/.ogv, mpv
+// native). Results ride the .stremio source variant + Stremio filter pill. A
+// descriptive User-Agent is sent per Wikimedia's UA policy. All JSON parsing is
+// routed through the tested commons_pure.zig.
+// ══════════════════════════════════════════════════════════
+
+fn resolveCommons(query_buf: [256]u8, qlen: usize) void {
+    defer {
+        status_commons.store(.done, .release);
+        checkAllDone();
+    }
+    if (qlen == 0) return;
+
+    const cp = @import("commons_pure.zig");
+    const http = @import("../core/http.zig");
+    const query = query_buf[0..qlen];
+
+    var enc: [512]u8 = undefined;
+    const enc_q = http.urlEncode(query, &enc);
+
+    // gsrsearch = "filetype:video <query>"; iiprop separators (|) are %7C.
+    var url_buf: [768]u8 = undefined;
+    const url = std.fmt.bufPrint(
+        &url_buf,
+        "https://commons.wikimedia.org/w/api.php?action=query&generator=search" ++
+            "&gsrsearch=filetype:video%20{s}&gsrnamespace=6&gsrlimit=10" ++
+            "&prop=imageinfo&iiprop=url%7Csize%7Cmime&format=json",
+        .{enc_q},
+    ) catch return;
+
+    // Heap the response — off this spawned worker's 512 KB stack.
+    const page = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(page);
+
+    @import("../core/rate_limit.zig").acquire("commons", 1.0);
+    const body = http.fetch(url, page, .{
+        .timeout_secs = 8,
+        // Wikimedia UA policy requires a descriptive, contactable agent.
+        .user_agent = "Opal/1.0 (https://github.com/debpalash/Opal)",
+    }) orelse return;
+    if (body.len < 30) return;
+
+    const max_hits = 10;
+    var found: usize = 0;
+    var it = cp.iteratePages(body);
+    while (it.next()) |pg| {
+        if (found >= max_hits) break;
+        if (pg.url.len < 12 or pg.url.len > 2000) continue;
+        if (pg.title.len == 0) continue;
+
+        var url_out: [2048]u8 = undefined;
+        const w = writeSafeUrl(pg.url, &url_out);
+        if (w < 12) continue;
+
+        var item = std.mem.zeroes(ResolvedItem);
+        item.source = .stremio; // HTTP-direct stream — plays via mpv load_file
+
+        const nlen = @min(pg.title.len, 255);
+        @memcpy(item.name[0..nlen], pg.title[0..nlen]);
+        item.name_len = nlen;
+
+        const ulen = @min(w, 2047);
+        @memcpy(item.url[0..ulen], url_out[0..ulen]);
+        item.url_len = ulen;
+
+        item.quality = detectQuality(pg.title);
+
+        const d = "Wikimedia Commons";
+        @memcpy(item.detail[0..d.len], d);
+        item.detail_len = d.len;
+
+        if (pushResult(item)) found += 1;
+    }
+
+    if (found > 0) {
+        logs.pushLog("info", "resolver", "Wikimedia Commons results found", false);
+    }
 }
 
 // ══════════════════════════════════════════════════════════

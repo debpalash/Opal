@@ -445,6 +445,30 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_archive_pure).step);
 
+    // NASA images-api JSON parsing: search items[] iteration (asset href/title/
+    // year, pagination-link exclusion) + collection.json best-mp4 pick +
+    // malformed-JSON regression. Reuses archive_pure's field extractors.
+    const test_nasa_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/nasa_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_nasa_pure).step);
+
+    // Wikimedia Commons JSON parsing: query.pages{} iteration (title/url/mime/
+    // size/duration, File: prefix strip, descriptionurl disambiguation) +
+    // malformed-JSON regression. Reuses archive_pure's field extractors.
+    const test_commons_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/commons_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_commons_pure).step);
+
     // Wikipedia trivia lookup: disambiguated-title building + JSON extract
     // parsing (rejects disambiguation pages / too-short extracts).
     const test_wikipedia_pure = b.addTest(.{

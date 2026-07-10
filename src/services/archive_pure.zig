@@ -241,6 +241,67 @@ pub fn pickBestVideoFile(json: []const u8) ?[]const u8 {
     return best_mp4 orelse best_other;
 }
 
+// ── metadata/{id}: pick the best playable AUDIO file (LibriVox / etree) ───────
+
+/// Preference tier for an audio file name (lower = better): a full-bitrate MP3
+/// (VBR — i.e. NOT the `_64kb` derivative) beats Ogg Vorbis beats FLAC. Returns
+/// null for non-audio names and for the low-bitrate `_64kb` MP3 derivative
+/// (always skipped so we never surface the worse copy when a VBR sits beside it).
+fn audioTier(name: []const u8) ?u8 {
+    if (name.len == 0 or name.len > 512) return null;
+    var lower: [512]u8 = undefined;
+    for (0..name.len) |i| lower[i] = std.ascii.toLower(name[i]);
+    const l = lower[0..name.len];
+    if (std.mem.indexOf(u8, l, "_64kb") != null) return null; // skip low-bitrate copy
+    if (std.mem.endsWith(u8, l, ".mp3")) return 0; // VBR / full-bitrate MP3
+    if (std.mem.endsWith(u8, l, ".ogg") or std.mem.endsWith(u8, l, ".oga")) return 1;
+    if (std.mem.endsWith(u8, l, ".flac")) return 2;
+    return null;
+}
+
+/// Choose the file name of the best AUDIO track in a metadata/{id} JSON
+/// response (LibriVox audiobooks, etree concerts). Prefers VBR MP3 > Ogg > FLAC
+/// and skips the `_64kb` derivative; within the best available tier the FIRST
+/// listed file wins (track 1 of an album/audiobook, not the longest chapter).
+/// Returns the raw `name` (caller percent-encodes). Null when no audio present.
+pub fn pickBestAudioFile(json: []const u8) ?[]const u8 {
+    const files_key = std.mem.indexOf(u8, json, "\"files\"");
+    var pos: usize = files_key orelse 0;
+
+    var best: ?[]const u8 = null;
+    var best_tier: u8 = 255;
+
+    while (std.mem.indexOfPos(u8, json, pos, "\"name\"")) |ki| {
+        const obj_start = std.mem.lastIndexOfScalar(u8, json[0..ki], '{') orelse {
+            pos = ki + 6;
+            continue;
+        };
+        const obj_e = objEnd(json, obj_start);
+        const block = json[obj_start..obj_e];
+        pos = if (obj_e > pos) obj_e else ki + 6;
+
+        const name = stringField(block, "name") orelse continue;
+        const tier = audioTier(name) orelse continue;
+        if (best == null or tier < best_tier) {
+            best = name;
+            best_tier = tier;
+        }
+    }
+    return best;
+}
+
+// ── intent gate for the audio path ───────────────────────────────────────────
+
+/// True when the resolver intent asks for audio content, so the Archive worker
+/// should search LibriVox/etree audio (and pick an audio file) instead of the
+/// default movies path. Kept here (pure + tested) so the shipped gate is the
+/// tested gate.
+pub fn isAudioIntent(intent: []const u8) bool {
+    const audio_kinds = [_][]const u8{ "music", "audiobook", "audio", "song", "podcast" };
+    for (audio_kinds) |k| if (std.ascii.eqlIgnoreCase(intent, k)) return true;
+    return false;
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 const sample_search =
@@ -329,4 +390,57 @@ test "malformed JSON regression: no crash, null/empty results" {
     try std.testing.expect(d != null);
     try std.testing.expectEqualStrings("ok", d.?.identifier);
     try std.testing.expect(it2.next() == null);
+}
+
+// ── Audio-file selection tests (LibriVox / etree) ─────────────────────────────
+
+const sample_audio_metadata =
+    \\{"server":"ia800","metadata":{"identifier":"librivox_book"},"files":[
+    \\  {"name":"book_spectrogram.png","format":"PNG","size":"1000"},
+    \\  {"name":"book_01_64kb.mp3","format":"64Kbps MP3","size":"2000000"},
+    \\  {"name":"book_01.mp3","format":"VBR MP3","size":"5000000"},
+    \\  {"name":"book_02.mp3","format":"VBR MP3","size":"6000000"},
+    \\  {"name":"book.ogg","format":"Ogg Vorbis","size":"4000000"},
+    \\  {"name":"book_meta.xml","format":"Metadata","size":"900"}
+    \\]}
+;
+
+test "pickBestAudioFile prefers VBR MP3 over ogg and skips _64kb" {
+    // The _64kb copy is skipped; the first VBR MP3 (track 1) wins over ogg.
+    const f = pickBestAudioFile(sample_audio_metadata).?;
+    try std.testing.expectEqualStrings("book_01.mp3", f);
+}
+
+test "pickBestAudioFile falls back ogg > flac when no full-bitrate mp3" {
+    const ogg_flac =
+        "{\"files\":[{\"name\":\"a.flac\",\"size\":\"9\"}," ++
+        "{\"name\":\"a.ogg\",\"size\":\"5\"}," ++
+        "{\"name\":\"a_64kb.mp3\",\"size\":\"3\"}]}";
+    // _64kb mp3 skipped → ogg (tier 1) beats flac (tier 2), first-of-tier.
+    try std.testing.expectEqualStrings("a.ogg", pickBestAudioFile(ogg_flac).?);
+
+    const only_flac = "{\"files\":[{\"name\":\"x.flac\",\"size\":\"9\"},{\"name\":\"x_64kb.mp3\",\"size\":\"3\"}]}";
+    try std.testing.expectEqualStrings("x.flac", pickBestAudioFile(only_flac).?);
+}
+
+test "pickBestAudioFile returns null when only images/64kb present" {
+    const none = "{\"files\":[{\"name\":\"a.jpg\",\"size\":\"5\"},{\"name\":\"a_64kb.mp3\",\"size\":\"3\"}]}";
+    try std.testing.expect(pickBestAudioFile(none) == null);
+    // Malformed input must not crash.
+    _ = pickBestAudioFile("{\"files\":[{\"name\":\"trunc");
+    _ = pickBestAudioFile("");
+}
+
+test "isAudioIntent gates only audio kinds" {
+    try std.testing.expect(isAudioIntent("music"));
+    try std.testing.expect(isAudioIntent("audiobook"));
+    try std.testing.expect(isAudioIntent("audio"));
+    try std.testing.expect(isAudioIntent("song"));
+    try std.testing.expect(isAudioIntent("podcast"));
+    try std.testing.expect(isAudioIntent("MUSIC")); // case-insensitive
+    // Default/video intents keep the movies path.
+    try std.testing.expect(!isAudioIntent("auto"));
+    try std.testing.expect(!isAudioIntent("movie"));
+    try std.testing.expect(!isAudioIntent("show"));
+    try std.testing.expect(!isAudioIntent(""));
 }
