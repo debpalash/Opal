@@ -445,6 +445,18 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_tv_calendar_pure).step);
 
+    // TVmaze keyless enrichment: show-id extraction, next-episode + episode
+    // air-date parsing (nested _links objects), airs-label formatting,
+    // malformed-JSON regression.
+    const test_tvmaze_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/tvmaze_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_tvmaze_pure).step);
+
     // Browser pure helpers: smart address bar (host vs search heuristic),
     // query percent-encoding, keypress-vs-text forwarding (double-type
     // regression), content routing.

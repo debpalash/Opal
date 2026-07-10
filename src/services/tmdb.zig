@@ -1222,6 +1222,10 @@ fn openTvDetail(item: *state.TmdbItem) void {
     _ = tv_gen.fetchAdd(1, .acq_rel);
 
     fetchSeasons(item.id);
+
+    // Keyless TVmaze air-date enrichment (fills TMDB's gaps): a "Next: SxEy ·
+    // airs {date}" line + real per-episode dates. Async; the UI reads the cache.
+    @import("tvmaze.zig").onTvDetailOpen(item.id, t.tv_name[0..t.tv_name_len]);
 }
 
 /// Clear the TV detail view and return to the gallery. Bumps the generation so
@@ -1855,6 +1859,18 @@ fn renderTvDetail() void {
         });
     }
 
+    // ── TVmaze "Next episode" line (keyless; fills TMDB's gap). Only shown for
+    //    currently-airing shows that have a scheduled next episode. ──
+    {
+        var next_buf: [96]u8 = undefined;
+        if (@import("tvmaze.zig").nextLabel(t.tv_id, &next_buf)) |next_str| {
+            _ = dvui.label(@src(), "{s}", .{next_str}, .{
+                .color_text = theme.colors.accent,
+                .padding = .{ .x = 14, .y = 4, .w = 14, .h = 2 },
+            });
+        }
+    }
+
     // ── Season selector row ──
     if (t.tv_seasons_loading and t.tv_season_count == 0) {
         _ = dvui.label(@src(), "Loading seasons…", .{}, .{
@@ -2042,6 +2058,7 @@ fn renderTvDetail() void {
     }
 
     const next_ep_num = tvNextUnwatched();
+    const sel_season_num = tvSelSeasonNumber(); // for TVmaze air-date backfill
 
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = false });
     defer scroll.deinit();
@@ -2230,7 +2247,13 @@ fn renderTvDetail() void {
                 defer mrow.deinit();
 
                 var meta: [48]u8 = undefined;
-                const air = e.air_date[0..@min(e.air_date_len, e.air_date.len)];
+                // Prefer TMDB's air_date; fall back to keyless TVmaze where TMDB
+                // has none (its common gap for recent/upcoming episodes).
+                var tv_air_buf: [16]u8 = undefined;
+                const air = if (e.air_date_len > 0)
+                    e.air_date[0..@min(e.air_date_len, e.air_date.len)]
+                else
+                    (@import("tvmaze.zig").airdateFor(t.tv_id, sel_season_num, e.episode_number, &tv_air_buf) orelse "");
                 const ms = if (e.runtime > 0 and air.len > 0)
                     std.fmt.bufPrint(&meta, "{s}  ·  {d}m", .{ air, e.runtime }) catch ""
                 else if (air.len > 0)
