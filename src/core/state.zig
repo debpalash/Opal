@@ -7,6 +7,7 @@ const MediaPlayer = player.MediaPlayer;
 const thumbnail = @import("../player/thumbnail.zig");
 const subtitles_mod = @import("../player/subtitles.zig");
 const podcasts_pure = @import("../services/podcasts_pure.zig");
+const radio_pure = @import("../services/radio_pure.zig");
 
 // ══════════════════════════════════════════════════════════
 // Type Definitions
@@ -15,7 +16,7 @@ const podcasts_pure = @import("../services/podcasts_pure.zig");
 pub const GridMode = enum { auto, cols_1, cols_2, cols_3, cols_4 };
 pub const ContentProvider = enum { mpv, comic_viewer };
 pub const VideoFillMode = enum { fit, cover };
-pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web };
+pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web };
 pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, Scripts, AI, LangLearn, FileAssoc, About };
 pub const TmdbView = enum { Trending, Search, Favorites, Watchlist, Watching };
 pub const TmdbCategory = enum { trending, now_playing, top_rated, upcoming, popular };
@@ -717,6 +718,20 @@ pub const AppState = struct {
         episode_count: usize = 0,
     } = .{},
 
+    // ── Internet Radio (RadioBrowser API → audio stream via mpv) ──
+    // One level shallower than `podcasts`: search → station list → play. All
+    // parsing lives in services/radio_pure.zig; the fetch worker publishes here
+    // under radio.zig's parse_mutex. See services/radio.zig.
+    radio: struct {
+        search_buf: [256]u8 = std.mem.zeroes([256]u8),
+        // Atomic like the podcasts/anime loaders: read by the UI + remote API
+        // threads, written by the detached fetch worker. A plain bool is a race.
+        is_loading: std.atomic.Value(bool) = .init(false),
+        fetch_error: bool = false,
+        results: [30]radio_pure.Station = std.mem.zeroes([30]radio_pure.Station),
+        result_count: usize = 0,
+    } = .{},
+
     // ── Browser (global singleton — the in-app web browser lives in the
     //     Browse › Web tab now, independent of any MediaPlayer) ──
     browser: struct {
@@ -1040,6 +1055,10 @@ pub fn navigateToTabNow(tab: DrawerTab) void {
         },
         .Podcasts => {
             app.browse_source = .Podcasts;
+            app.router.navigate(.browse);
+        },
+        .Radio => {
+            app.browse_source = .Radio;
             app.router.navigate(.browse);
         },
         .Comics => {

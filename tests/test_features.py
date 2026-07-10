@@ -1344,6 +1344,35 @@ def test_podcasts_wired():
     return "fail", "podcasts wiring incomplete: " + ", ".join(missing)
 
 
+@test("Radio Tab Wired", "Page Shell")
+def test_radio_wired():
+    # New media class: search (RadioBrowser) → station list → stream audio.
+    # Verify the tab is present end-to-end: enum + routing + service + parser,
+    # and that url_resolved reaches mpv plus the click-count ping fires.
+    st = _src("src/core/state.zig")
+    drawer = _src("src/ui/drawer.zig")
+    shell = _src("src/ui/shell.zig")
+    svc = _src("src/services/radio.zig")
+    pure = _src("src/services/radio_pure.zig")
+    checks = {
+        "enum variant": "Radio," in st and "radio: struct" in st,
+        "drawer route": ".Radio =>" in drawer and "radio.zig" in drawer,
+        "shell label+icon": '.Radio => "Radio"' in shell and "lucide.radio" in shell,
+        "service search→play": all(
+            f"pub fn {fn}" in svc for fn in ("searchRadio", "playStation")
+        ),
+        "radiobrowser endpoint": "all.api.radio-browser.info/json/stations/search" in svc,
+        "url_resolved→mpv": "url_resolved" in svc and "loadContentDirect" in svc,
+        "click-count ping": "/json/url/" in svc,
+        "pure parser": "pub fn parseStations" in pure,
+        "threads detached": "_ = std.Thread.spawn(" not in svc,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if not missing:
+        return "pass", "radio tab wired: enum→nav→service→pure (url_resolved→mpv)"
+    return "fail", "radio wiring incomplete: " + ", ".join(missing)
+
+
 # ══════════════════════════════════════════════════════════
 # Session features: single-media, browser, voice, Co-Watcher, Recall
 # (wiring/regression guards so the build+test gate exercises new code)
