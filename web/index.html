@@ -267,7 +267,7 @@ function paired(){
     if (HOSTED) $('np-quick').style.display = 'none';
   }).catch(()=>{});
   loadCalendar();
-  poll();
+  startStatus();
 }
 $('pair-btn').onclick = async () => {
   const code = $('pair-code').value.trim();
@@ -296,28 +296,38 @@ const fmt = s => { if (!isFinite(s) || s < 0) return '--:--';
   const h = ~~(s/3600), m = ~~((s%3600)/60), ss = ~~(s%60);
   return (h ? h + ':' + String(m).padStart(2,'0') : m) + ':' + String(ss).padStart(2,'0'); };
 const PLAY = 'M8 5v14l11-7L8 5z', PAUSE = 'M6 5h4v14H6zM14 5h4v14h-4z';
-let pollTimer = null;
+function applyStatus(d){
+  $('conn-dot').classList.add('on');
+  $('np-title').textContent = d.title && d.title !== 'No media' ? d.title : 'Nothing playing';
+  $('np-sub').textContent = d.title && d.title !== 'No media'
+    ? (d.paused ? 'Paused on desktop' : 'Playing on desktop') : 'Play something from Search, or on the desktop.';
+  $('t-pos').textContent = fmt(d.pos); $('t-dur').textContent = fmt(d.dur);
+  $('i-pp').firstElementChild.setAttribute('d', d.paused ? PLAY : PAUSE);
+  if (!seekHeld && d.dur > 0) $('seek').value = d.pos / d.dur * 100;
+  if (!volHeld) $('vol').value = d.vol;
+}
+// Server-pushed status via SSE (EventSource can't set headers → token in ?t=),
+// with a 1s polling fallback if the stream errors.
+let es = null, pollTimer = null;
+function startStatus(){
+  if (es) { es.close(); es = null; }
+  try {
+    es = new EventSource(BASE + '/events?t=' + encodeURIComponent(TOKEN));
+    es.onmessage = e => { try { applyStatus(JSON.parse(e.data)); } catch {} };
+    es.onerror = () => { es.close(); es = null; $('conn-dot').classList.remove('on'); poll(); };
+  } catch { poll(); }
+}
 async function poll(){
   clearTimeout(pollTimer);
-  try {
-    const d = await api('/status');
-    $('conn-dot').classList.add('on');
-    $('np-title').textContent = d.title && d.title !== 'No media' ? d.title : 'Nothing playing';
-    $('np-sub').textContent = d.title && d.title !== 'No media'
-      ? (d.paused ? 'Paused on desktop' : 'Playing on desktop') : 'Play something from Search, or on the desktop.';
-    $('t-pos').textContent = fmt(d.pos); $('t-dur').textContent = fmt(d.dur);
-    $('i-pp').firstElementChild.setAttribute('d', d.paused ? PLAY : PAUSE);
-    if (!seekHeld && d.dur > 0) $('seek').value = d.pos / d.dur * 100;
-    if (!volHeld) $('vol').value = d.vol;
-  } catch { $('conn-dot').classList.remove('on'); }
-  pollTimer = setTimeout(poll, 1000);
+  try { applyStatus(await api('/status')); } catch { $('conn-dot').classList.remove('on'); }
+  pollTimer = setTimeout(poll, 1000); // fallback loop only
 }
 let seekHeld = false, volHeld = false;
 $('seek').addEventListener('pointerdown', () => seekHeld = true);
 $('seek').addEventListener('change', () => { api('/seek_pct?v=' + Math.round($('seek').value)).catch(()=>{}); seekHeld = false; });
 $('vol').addEventListener('pointerdown', () => volHeld = true);
 $('vol').addEventListener('change', () => { api('/volume?v=' + Math.round($('vol').value)).catch(()=>{}); volHeld = false; });
-$('b-toggle').onclick = () => api('/toggle').then(poll).catch(()=>{});
+$('b-toggle').onclick = () => api('/toggle').catch(()=>{});
 $('b-back').onclick   = () => api('/back').catch(()=>{});
 $('b-fwd').onclick    = () => api('/fwd').catch(()=>{});
 $('b-mute').onclick   = () => api('/mute').catch(()=>{});

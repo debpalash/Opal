@@ -409,10 +409,27 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
     // Authorization header, so these take the token as ?t= instead. Same
     // constant-time check as the Bearer gate; dispatch lives in
     // remote_stream.zig to keep this file to routing/auth.
-    if (std.mem.eql(u8, path, "/stream") or std.mem.eql(u8, path, "/vtt") or std.mem.eql(u8, path, "/poster")) {
+    if (std.mem.eql(u8, path, "/events") or std.mem.eql(u8, path, "/stream") or std.mem.eql(u8, path, "/vtt") or std.mem.eql(u8, path, "/poster")) {
         const t = getQueryParam(query, "t") orelse "";
         if (!api_token_ready.load(.acquire) or !constantTimeEqual(t, api_token[0..])) {
             sendUnauthorized(stream);
+            return;
+        }
+        // SSE status stream — pushes playback status ~1×/s so the web client
+        // drops its 1s polling. Held OPEN on this connection thread (not under
+        // api_mutex), so it never blocks other requests. Bounded to ~1h.
+        if (std.mem.eql(u8, path, "/events")) {
+            const hdr = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n";
+            io_g.streamWriteAll(stream, hdr) catch return;
+            var json: [512]u8 = undefined;
+            var frame: [640]u8 = undefined;
+            var ticks: usize = 0;
+            while (running.load(.acquire) and ticks < 3600) : (ticks += 1) {
+                const body = buildStatusJson(&json);
+                const ev = std.fmt.bufPrint(&frame, "data: {s}\n\n", .{body}) catch break;
+                io_g.streamWriteAll(stream, ev) catch break; // client closed
+                io_g.sleep(1 * std.time.ns_per_s);
+            }
             return;
         }
         const rs = @import("remote_stream.zig");
@@ -692,29 +709,8 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
 
         // ── Status (enhanced) ──
     } else if (std.mem.eql(u8, api_path, "/status")) {
-        var pos: f64 = 0;
-        var dur: f64 = 0;
-        var vol: f64 = 0;
-        var paused: c_int = 0;
-        _ = c.mpv.mpv_get_property(ap.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &pos);
-        _ = c.mpv.mpv_get_property(ap.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur);
-        _ = c.mpv.mpv_get_property(ap.mpv_ctx, "volume", c.mpv.MPV_FORMAT_DOUBLE, &vol);
-        _ = c.mpv.mpv_get_property(ap.mpv_ctx, "pause", c.mpv.MPV_FORMAT_FLAG, &paused);
-
-        // Get media title
-        var title_prop: [*c]u8 = null;
-        _ = c.mpv.mpv_get_property(ap.mpv_ctx, "media-title", c.mpv.MPV_FORMAT_STRING, @ptrCast(&title_prop));
-        defer if (title_prop != null) c.mpv.mpv_free(@ptrCast(title_prop));
-        const title_str = if (title_prop != null) std.mem.span(title_prop) else "No media";
-
         var json: [512]u8 = undefined;
-        var sw = std.Io.Writer.fixed(&json);
-        sw.print("{{\"pos\":{d:.1},\"dur\":{d:.1},\"vol\":{d:.0},\"paused\":{s},\"title\":\"", .{
-            pos, dur, vol, if (paused != 0) "true" else "false",
-        }) catch return;
-        escJsonWrite(&sw, title_str);
-        sw.writeAll("\"}") catch return;
-        sendJson(stream, json[0..sw.end]);
+        sendJson(stream, buildStatusJson(&json));
 
         // ── Queue ──
     } else if (std.mem.eql(u8, api_path, "/queue")) {
@@ -1535,6 +1531,35 @@ fn apiUnifiedSearch(stream: std.Io.net.Stream, query: []const u8) void {
 }
 
 // ── Web parity handlers (H3) ─────────────────────────────────────────────────
+
+/// Snapshot the active player's status as JSON into `buf`. Empty-media when no
+/// player is active. Shared by /api/status and the /events SSE stream.
+fn buildStatusJson(buf: []u8) []const u8 {
+    var w = std.Io.Writer.fixed(buf);
+    if (state.app.active_player_idx >= state.app.players.items.len) {
+        w.writeAll("{\"pos\":0,\"dur\":0,\"vol\":0,\"paused\":true,\"title\":\"No media\"}") catch return buf[0..0];
+        return buf[0..w.end];
+    }
+    const ap = state.app.players.items[state.app.active_player_idx];
+    var pos: f64 = 0;
+    var dur: f64 = 0;
+    var vol: f64 = 0;
+    var paused: c_int = 0;
+    _ = c.mpv.mpv_get_property(ap.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &pos);
+    _ = c.mpv.mpv_get_property(ap.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur);
+    _ = c.mpv.mpv_get_property(ap.mpv_ctx, "volume", c.mpv.MPV_FORMAT_DOUBLE, &vol);
+    _ = c.mpv.mpv_get_property(ap.mpv_ctx, "pause", c.mpv.MPV_FORMAT_FLAG, &paused);
+    var title_prop: [*c]u8 = null;
+    _ = c.mpv.mpv_get_property(ap.mpv_ctx, "media-title", c.mpv.MPV_FORMAT_STRING, @ptrCast(&title_prop));
+    defer if (title_prop != null) c.mpv.mpv_free(@ptrCast(title_prop));
+    const title_str = if (title_prop != null) std.mem.span(title_prop) else "No media";
+    w.print("{{\"pos\":{d:.1},\"dur\":{d:.1},\"vol\":{d:.0},\"paused\":{s},\"title\":\"", .{
+        pos, dur, vol, if (paused != 0) "true" else "false",
+    }) catch return buf[0..0];
+    escJsonWrite(&w, title_str);
+    w.writeAll("\"}") catch return buf[0..0];
+    return buf[0..w.end];
+}
 
 fn apiCalendar(stream: std.Io.net.Stream) void {
     const cal = @import("tv_calendar.zig");

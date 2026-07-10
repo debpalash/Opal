@@ -1651,6 +1651,7 @@ def test_hosted_mode_and_perf():
         "hosted web player": "openPlayer" in web and "/stream?file=" in web and "/vtt?file=" in web,
         "web torrent progress": "pollTorrents" in web,
         "browser-first setup": '"/setup/sources"' in rm and "installStarterPack" in rm and "loadSetup" in web,
+        "sse push": '"/events"' in rm and "text/event-stream" in rm and "buildStatusJson" in rm and "EventSource" in web,
         # Perf: release allocator, non-blocking mpv render, no built-in Lua VMs.
         "release allocator": "smp_allocator" in al,
         "no mpv render block": "MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME" in gr,
