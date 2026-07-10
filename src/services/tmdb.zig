@@ -1226,6 +1226,10 @@ fn openTvDetail(item: *state.TmdbItem) void {
     // Keyless TVmaze air-date enrichment (fills TMDB's gaps): a "Next: SxEy ·
     // airs {date}" line + real per-episode dates. Async; the UI reads the cache.
     @import("tvmaze.zig").onTvDetailOpen(item.id, t.tv_name[0..t.tv_name_len]);
+
+    // OMDb ratings enrichment (real IMDb / RT / Metacritic — TMDB can't provide
+    // these). Async; INERT without a user OMDb key. UI reads the cache each frame.
+    @import("omdb.zig").onDetailOpen(item.id, "tv");
 }
 
 /// Clear the TV detail view and return to the gallery. Bumps the generation so
@@ -1867,6 +1871,27 @@ fn renderTvDetail() void {
             _ = dvui.label(@src(), "{s}", .{next_str}, .{
                 .color_text = theme.colors.accent,
                 .padding = .{ .x = 14, .y = 4, .w = 14, .h = 2 },
+            });
+        }
+    }
+
+    // ── OMDb ratings row (real IMDb / RT / Metacritic — TMDB can't provide
+    //    these). Inert without a user OMDb key; only drawn once data arrives. ──
+    {
+        var rat_buf: [96]u8 = undefined;
+        if (@import("omdb.zig").ratingsLabel(t.tv_id, &rat_buf)) |rat_str| {
+            var safe_buf: [96]u8 = undefined;
+            _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(rat_str, &safe_buf)}, .{
+                .color_text = theme.colors.text_secondary,
+                .padding = .{ .x = 14, .y = 2, .w = 14, .h = 2 },
+            });
+        }
+        var det_buf: [160]u8 = undefined;
+        if (@import("omdb.zig").detailsLabel(t.tv_id, &det_buf)) |det_str| {
+            var safe_buf: [160]u8 = undefined;
+            _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(det_str, &safe_buf)}, .{
+                .color_text = theme.colors.text_tertiary,
+                .padding = .{ .x = 14, .y = 0, .w = 14, .h = 4 },
             });
         }
     }

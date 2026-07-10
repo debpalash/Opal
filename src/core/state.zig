@@ -553,6 +553,12 @@ pub const AppState = struct {
     // ── OpenSubtitles ──
     opensub_api_key: [128]u8 = std.mem.zeroes([128]u8),
     opensub_api_key_len: usize = 0,
+
+    // ── OMDb (omdbapi.com) ratings enrichment ──
+    // User-supplied free key (omdbapi.com, 1k/day). Empty → the OMDb worker is
+    // fully inert (no fetch). Persisted like tmdb/opensub keys; see config.zig.
+    omdb_api_key: [128]u8 = std.mem.zeroes([128]u8),
+    omdb_api_key_len: usize = 0,
     // Auto-download subtitles when a video starts and none are present
     // (embedded or sidecar). Needs opensub_api_key; no-ops silently without it.
     auto_download_subs: bool = true,

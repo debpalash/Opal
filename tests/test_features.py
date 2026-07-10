@@ -2594,6 +2594,74 @@ def test_windows_port_invariants():
 
 
 # ══════════════════════════════════════════════════════════
+# OMDb Ratings Enrichment
+# ══════════════════════════════════════════════════════════
+
+@test("OMDb Ratings Enrichment", "Enrichment")
+def test_omdb_enrichment():
+    """OMDb ratings enrichment is wired end-to-end: pure parser + worker exist,
+    the detail view triggers + renders it, the key is stateful + persisted, and
+    it ships inert (no fetch without a user key)."""
+    def read(rel):
+        p = os.path.join(PROJECT_DIR, rel)
+        if not os.path.exists(p):
+            return None
+        with open(p) as f:
+            return f.read()
+
+    pure = read("src/services/omdb_pure.zig")
+    worker = read("src/services/omdb.zig")
+    if pure is None or worker is None:
+        return "fail", "omdb_pure.zig / omdb.zig missing"
+    # Pure parser exposes the parse + format + id helpers.
+    for sym in ["pub fn parse", "pub fn extractImdbId", "pub fn normalizeImdbId",
+                "pub fn formatScores", "Rotten Tomatoes", "Metacritic"]:
+        if sym not in pure:
+            return "fail", f"omdb_pure.zig missing '{sym}'"
+    # Worker: OMDb endpoint, inert-without-key gate, mutex + gen/busy atomics.
+    if "omdbapi.com" not in worker:
+        return "fail", "omdb.zig missing omdbapi.com endpoint"
+    if "omdb_api_key_len == 0" not in worker:
+        return "fail", "omdb.zig not inert without a key"
+    for sym in ["data_mutex", "gen", "busy", "onDetailOpen", "ratingsLabel"]:
+        if sym not in worker:
+            return "fail", f"omdb.zig missing '{sym}'"
+    # State field + config persistence (save + load).
+    st = read("src/core/state.zig") or ""
+    if "omdb_api_key" not in st:
+        return "fail", "state.zig missing omdb_api_key"
+    cfg = read("src/core/config.zig") or ""
+    if cfg.count("omdb_api_key") < 2:
+        return "fail", "config.zig missing omdb_api_key save/load"
+    # tmdb.zig triggers + renders; settings.zig exposes the key field.
+    tmdb = read("src/services/tmdb.zig") or ""
+    if 'onDetailOpen' not in tmdb or 'ratingsLabel' not in tmdb:
+        return "fail", "tmdb.zig not wired to omdb trigger/render"
+    settings = read("src/ui/settings.zig") or ""
+    if "omdb_api_key" not in settings or "omdbapi.com" not in settings:
+        return "fail", "settings.zig missing OMDb key field"
+    # Registered as a unit-test in build.zig.
+    build = read("build.zig") or ""
+    if "omdb_pure.zig" not in build:
+        return "fail", "build.zig missing test_omdb_pure registration"
+
+    # If a key happens to be configured in the live DB, note it (still inert-safe).
+    conn = get_db()
+    keyed = False
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT value FROM config WHERE key='omdb_api_key'")
+            row = cur.fetchone()
+            keyed = bool(row and row[0])
+        except Exception:
+            pass
+        finally:
+            conn.close()
+    return "pass", f"OMDb enrichment wired (parser+worker+UI+persist); key set={keyed}"
+
+
+# ══════════════════════════════════════════════════════════
 # Zig Unit Tests
 # ══════════════════════════════════════════════════════════
 

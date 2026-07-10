@@ -1153,6 +1153,37 @@ fn renderGeneralTab() void {
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
         });
     }
+
+    // ── OMDb Ratings ── (optional — adds real IMDb / RT / Metacritic scores to
+    // the detail view; TMDB can't provide these. Inert until a key is set.)
+    sectionHeader("OMDb Ratings", "Real IMDb, Rotten Tomatoes & Metacritic scores on the detail view", 15, @src());
+
+    settingRow("API Key", 150, @src());
+    {
+        const has_omdb = state.app.omdb_api_key_len > 0;
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.omdb_api_key }, .placeholder = "Optional — paste free key from omdbapi.com", .password_char = "•" }, .{
+            .id_extra = 152,
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 300, .h = 20 },
+            .color_fill = theme.colors.bg_elevated,
+            .color_border = theme.colors.border_subtle,
+            .color_text = theme.colors.text_primary,
+            .border = dvui.Rect.all(1),
+            .corner_radius = theme.dims.rad_sm,
+        });
+        const omdb_changed = te.text_changed;
+        te.deinit();
+        state.app.omdb_api_key_len = std.mem.indexOfScalar(u8, &state.app.omdb_api_key, 0) orelse 0;
+        if (omdb_changed) state.markConfigDirty();
+        _ = dvui.label(@src(), "{s}", .{if (has_omdb)
+            "Key set — IMDb / RT / Metacritic scores show on movie & show pages."
+        else
+            "Free key (1,000/day) from omdbapi.com/apikey.aspx — leave blank to disable."}, .{
+            .id_extra = 153,
+            .color_text = theme.colors.text_tertiary,
+            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
+        });
+    }
 }
 
 fn renderAboutTab() void {
