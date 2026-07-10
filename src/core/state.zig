@@ -606,6 +606,13 @@ pub const AppState = struct {
         view_mode: enum { scroll, single_page } = .scroll,
         current_page: usize = 0,
         dl_progress: std.atomic.Value(usize) = std.atomic.Value(usize).init(0), // images downloaded (atomic: written by ≤8 concurrent workers)
+        // ── Download cancellation (UAF guard) ──
+        // loadComic/closeComic bump `dl_gen` to invalidate in-flight page
+        // download workers spawned for a PREVIOUS comic; `dl_in_flight` counts
+        // active download writers so freeComicPages can wait for them to drain
+        // before freeing page_pixels. See services/comics.zig.
+        dl_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+        dl_in_flight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
         // ── Comic Narration (OCR + TTS) ──
         ocr_texts: [128][4096]u8 = std.mem.zeroes([128][4096]u8),

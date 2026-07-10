@@ -297,7 +297,21 @@ pub const MediaPlayer = struct {
             @memset(self.pixels, dvui.Color.PMA.black);
         }
 
-        self.mpv_ctx = c.mpv.mpv_create() orelse @panic("fail mpv");
+        self.mpv_ctx = c.mpv.mpv_create() orelse {
+            // mpv handle creation failed (OOM / broken mpv install). Don't abort
+            // the whole process — surface it and fail player creation cleanly so
+            // no half-initialized player is ever added to state.app.players. All
+            // runtime call sites use `if (init(...)) |p| … else |_|` and skip
+            // adding the player on error; the startup call site (`try` in
+            // main.zig) turns this into a clean error exit instead of a panic.
+            logs.pushLog("error", "player", "mpv handle creation failed (out of memory or broken mpv install) — playback unavailable", true);
+            state.showToast("Playback engine unavailable — check your mpv install");
+            // self.pixels was allocated just above (empty slice when headless);
+            // free it and the struct so this failed init leaks nothing.
+            allocator.free(self.pixels);
+            allocator.destroy(self);
+            return error.MpvCreateFailed;
+        };
         const hw_val = if (state.app.hwdec_enabled) "auto-safe" else "no";
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "hwdec", hw_val);
         // Headless: use the null video output so libmpv never opens a display
@@ -408,7 +422,13 @@ pub const MediaPlayer = struct {
             // frame-ready callback. Headless leaves mpv_gl == null (vo=null,
             // no pixel buffer) — the render path is skipped entirely there.
             if (c.mpv.mpv_render_context_create(&self.mpv_gl, self.mpv_ctx, &params) < 0) {
-                @panic("fail render");
+                // Render-context creation failed (rare — driver/OOM). Don't abort
+                // the whole app: leave mpv_gl == null and degrade to the same
+                // no-video path the headless build already runs safely (audio +
+                // controls still work; the render/texture path is null-mpv_gl-safe).
+                self.mpv_gl = null;
+                logs.pushLog("error", "player", "mpv render-context creation failed — video disabled for this player (audio still works)", true);
+                return self;
             }
             // Wake the UI loop whenever mpv has a new frame ready. Without
             // this, dvui sleeps on input idle (no mouse movement) and the

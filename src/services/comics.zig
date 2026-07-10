@@ -99,14 +99,36 @@ pub fn loadComic(url: []const u8) void {
 
     freeComicPages();
 
+    // freeComicPages() just bumped dl_gen; capture the fresh generation and hand
+    // it to the fetch/download pipeline so every worker it spawns is tagged with
+    // THIS load. Workers from a superseded comic carry a stale gen and bail
+    // before writing page_pixels (UAF guard).
+    const my_gen = state.app.comic.dl_gen.load(.acquire);
+
     // Comics read inside the Browse › Comics tab now (the player route is for
     // playback only) — no player pane is claimed here.
-    state.app.comic.thread = std.Thread.spawn(.{}, fetchComicThread, .{}) catch null;
+    state.app.comic.thread = std.Thread.spawn(.{}, fetchComicThread, .{my_gen}) catch null;
 }
 
 /// Free all downloaded page textures/pixels and the OCR cache.
 pub fn freeComicPages() void {
-    // UAF guard: the narration + OCR workers read state.app.comic.page_pixels
+    // UAF guard #1 — page-download workers (downloadSinglePage): switching comics
+    // mid-download would otherwise free page_pixels while ≤8 detached download
+    // threads are still writing into it. Bump dl_gen to CANCEL every in-flight
+    // download worker (they compare dl_gen right before writing page_pixels[i],
+    // and re-check it inside the read loop, so a cancelled worker bails fast),
+    // then wait for the active-writer count (dl_in_flight) to drain to 0. A
+    // worker holds dl_in_flight from entry until after its write, so once the
+    // count is 0 no worker can touch a buffer we're about to free. Workers never
+    // call back into the UI thread, so this can't self-deadlock; the wait is
+    // bounded by curl's --max-time (fast in the common case — an actively
+    // downloading worker sees the cancel on its next read chunk).
+    _ = state.app.comic.dl_gen.fetchAdd(1, .acq_rel);
+    while (state.app.comic.dl_in_flight.load(.acquire) > 0) {
+        @import("../core/io_global.zig").sleep(1 * std.time.ns_per_ms);
+    }
+
+    // UAF guard #2: the narration + OCR workers read state.app.comic.page_pixels
     // (and re-decode via stbi). Freeing those buffers here while a worker is
     // mid-read is a use-after-free. Signal stop and JOIN both before freeing.
     // Both callers (closeComic / loadComic) run on the UI thread, and neither
@@ -156,7 +178,7 @@ pub fn closeComic() void {
     state.app.comic.dl_progress.store(0, .release);
 }
 
-fn fetchComicThread() void {
+fn fetchComicThread(gen: u32) void {
     workers.enter();
     defer workers.leave();
     const url = state.app.comic.url_buf[0..state.app.comic.url_len];
@@ -165,7 +187,7 @@ fn fetchComicThread() void {
     if (tryPlugins(url)) {
         logs.pushLog("info", "comics", "Comic loaded via plugin", false);
         state.app.comic.is_loading.store(false, .release);
-        downloadPages();
+        downloadPages(gen);
         return;
     }
 
@@ -210,7 +232,7 @@ fn fetchComicThread() void {
 
     logs.pushLog("info", "comics", "Comic loaded (native)", false);
     state.app.comic.is_loading.store(false, .release);
-    downloadPages();
+    downloadPages(gen);
 }
 
 /// Scan ~/.config/opal/plugins/comics/ for .lua/.py/.sh scripts,
@@ -408,13 +430,15 @@ fn parseNavLinks(html: []const u8) void {
     }
 }
 
-fn downloadPages() void {
+fn downloadPages(gen: u32) void {
     // Download comic page images in PARALLEL — 8 concurrent threads
     const BATCH = 8;
     var threads: [BATCH]?std.Thread = [_]?std.Thread{null} ** BATCH;
     var page_idx: usize = 0;
 
     while (page_idx < state.app.comic.page_count) {
+        // Superseded by a newer comic load → stop spawning work for this one.
+        if (state.app.comic.dl_gen.load(.acquire) != gen) return;
         var active: usize = 0;
 
         // Spawn batch of download threads
@@ -425,7 +449,7 @@ fn downloadPages() void {
                 page_idx += 1;
                 continue;
             }
-            threads[active] = std.Thread.spawn(.{}, downloadSinglePage, .{page_idx}) catch null;
+            threads[active] = std.Thread.spawn(.{}, downloadSinglePage, .{ page_idx, gen }) catch null;
             active += 1;
             page_idx += 1;
         }
@@ -438,9 +462,19 @@ fn downloadPages() void {
     }
 }
 
-fn downloadSinglePage(i: usize) void {
+fn downloadSinglePage(i: usize, gen: u32) void {
     workers.enter();
     defer workers.leave();
+    // Register as an active download writer for the whole of this function so
+    // freeComicPages (which waits for dl_in_flight to hit 0 after cancelling)
+    // cannot free page_pixels while we might still write into it. See the UAF
+    // guard in freeComicPages().
+    _ = state.app.comic.dl_in_flight.fetchAdd(1, .acq_rel);
+    defer _ = state.app.comic.dl_in_flight.fetchSub(1, .acq_rel);
+
+    // Cancelled before we even started (comic switched) → bail.
+    if (state.app.comic.dl_gen.load(.acquire) != gen) return;
+
     const url = state.app.comic.page_urls[i][0..state.app.comic.page_url_lens[i]];
     if (url.len == 0) return;
 
@@ -464,6 +498,9 @@ fn downloadSinglePage(i: usize) void {
     if (child.stdout) |*stdout| {
         while (total < max_img) {
             if (workers.isQuitting()) return; // bail mid-download; defer frees tmp_buf
+            // Comic switched under us → stop reading and bail fast (this is what
+            // keeps freeComicPages's drain wait short for an active download).
+            if (state.app.comic.dl_gen.load(.acquire) != gen) return;
             const n = @import("../core/io_global.zig").read(stdout, tmp_buf[total..]) catch break;
             if (n == 0) break;
             total += n;
@@ -477,6 +514,14 @@ fn downloadSinglePage(i: usize) void {
 
     if (total > 100) {
         const pixels = alloc.dupe(u8, tmp_buf[0..total]) catch return;
+        // Re-check the generation IMMEDIATELY before publishing. If the comic was
+        // switched, this buffer belongs to no one — free it and bail rather than
+        // write into a page_pixels slot the new comic owns. We still hold
+        // dl_in_flight here, so freeComicPages cannot have freed the array yet.
+        if (state.app.comic.dl_gen.load(.acquire) != gen) {
+            alloc.free(pixels);
+            return;
+        }
         state.app.comic.page_pixels[i] = pixels;
         _ = state.app.comic.dl_progress.fetchAdd(1, .acq_rel);
     }

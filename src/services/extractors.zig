@@ -183,14 +183,22 @@ fn extractThread() void {
         }
     }
 
-    // Play first video immediately
-    if (first_url_len > 0 and state.app.active_player_idx < state.app.players.items.len) {
-        const p = state.app.players.items[state.app.active_player_idx];
-        p.provider = .mpv;
-        var url_z: [2049]u8 = undefined;
-        @memcpy(url_z[0..first_url_len], first_url_buf[0..first_url_len]);
-        url_z[first_url_len] = 0;
-        p.load_file(@ptrCast(&url_z[0]));
+    // Play first video immediately. This runs on the detached extraction thread,
+    // seconds after it started — the user may have closed the player meanwhile,
+    // which frees the *MediaPlayer. Hold players_mutex across the lookup + the
+    // load_file call and re-check the bound INSIDE the lock so `p` can't dangle
+    // (mirrors ai_tools.zig / watch_party.zig / remote.zig).
+    if (first_url_len > 0) {
+        state.players_mutex.lock();
+        defer state.players_mutex.unlock();
+        if (state.app.active_player_idx < state.app.players.items.len) {
+            const p = state.app.players.items[state.app.active_player_idx];
+            p.provider = .mpv;
+            var url_z: [2049]u8 = undefined;
+            @memcpy(url_z[0..first_url_len], first_url_buf[0..first_url_len]);
+            url_z[first_url_len] = 0;
+            p.load_file(@ptrCast(&url_z[0]));
+        }
     }
 
     if (count > 0) {
