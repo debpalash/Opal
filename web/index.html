@@ -94,6 +94,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   border-radius:var(--rad);padding:10px 12px;margin-bottom:6px;font-size:14px}
 .file .n{flex:1;word-break:break-word}
 .file .play{color:var(--accent);font-weight:600}
+.file .qmv{color:var(--text-2);width:30px;font-size:16px}
+.file .qmv:disabled{color:var(--text-3);opacity:.4}
 .empty{color:var(--text-3);text-align:center;padding:30px 0}
 .tor{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--rad);
   padding:10px 12px;margin-bottom:6px}
@@ -397,9 +399,16 @@ async function loadActivity(){
   pollTorrents();
   try {
     const q = await api('/queue');
-    $('queue').innerHTML = (q.items || []).map(i =>
-      `<div class="file"><div class="n">${esc(i.title || i.name || '')}</div></div>`).join('')
-      || '<div class="empty">Queue is empty</div>';
+    const items = q.items || [];
+    $('queue').innerHTML = items.map((i, idx) =>
+      `<div class="file"><div class="n">${esc(i.title || i.name || '')}</div>
+        <button class="qmv" data-idx="${idx}" data-dir="up"${idx===0?' disabled':''}>↑</button>
+        <button class="qmv" data-idx="${idx}" data-dir="down"${idx===items.length-1?' disabled':''}>↓</button>
+      </div>`).join('') || '<div class="empty">Queue is empty</div>';
+    $('queue').querySelectorAll('.qmv').forEach(b => b.onclick = async () => {
+      await api('/queue/move?idx=' + b.dataset.idx + '&dir=' + b.dataset.dir).catch(()=>{});
+      loadActivity();
+    });
   } catch { $('queue').innerHTML = '<div class="empty">—</div>'; }
   try {
     const d = await api('/downloads');

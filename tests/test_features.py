@@ -1652,6 +1652,7 @@ def test_hosted_mode_and_perf():
         "web torrent progress": "pollTorrents" in web,
         "browser-first setup": '"/setup/sources"' in rm and "installStarterPack" in rm and "loadSetup" in web,
         "sse push": '"/events"' in rm and "text/event-stream" in rm and "buildStatusJson" in rm and "EventSource" in web,
+        "queue reorder": '"/queue/move"' in rm and "moveQueueItem" in _src("src/services/queue.zig") and "qmv" in web,
         # Perf: release allocator, non-blocking mpv render, no built-in Lua VMs.
         "release allocator": "smp_allocator" in al,
         "no mpv render block": "MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME" in gr,

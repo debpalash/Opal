@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-07-10T06:20:11",
+  "timestamp": "2026-07-10T06:25:22",
   "total": 148,
   "passed": 139,
   "failed": 0,
@@ -182,7 +182,7 @@
       "category": "Database",
       "status": "pass",
       "detail": "47 config entries",
-      "duration_ms": 18
+      "duration_ms": 8
     },
     {
       "name": "Watch History Table",
@@ -231,7 +231,7 @@
       "category": "Database",
       "status": "pass",
       "detail": "671 cached posters",
-      "duration_ms": 1
+      "duration_ms": 48
     },
     {
       "name": "Conversation Log Table",
@@ -308,13 +308,13 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 41.4 MB",
-      "duration_ms": 431
+      "duration_ms": 357
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "41.4 MB, built at 06:18:45",
+      "detail": "41.4 MB, built at 06:24:25",
       "duration_ms": 0
     },
     {
@@ -322,7 +322,7 @@
       "category": "Build",
       "status": "pass",
       "detail": "gemma-4-E2B-it-UD-Q4_K_XL.gguf, qwen2.5-3b-instruct-q4_k_m.gguf (4.9 GB)",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Voice Server Script",
@@ -350,35 +350,35 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 1238
+      "duration_ms": 1163
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "skip",
       "detail": "faster-whisper not installed (optional)",
-      "duration_ms": 21
+      "duration_ms": 20
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 19
+      "duration_ms": 18
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 24
+      "duration_ms": 23
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 24
+      "duration_ms": 23
     },
     {
       "name": "Embedding Server Health",
@@ -504,49 +504,49 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 25
+      "duration_ms": 24
     },
     {
       "name": "Compiles: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 24
+      "duration_ms": 23
     },
     {
       "name": "Compiles: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 23
+      "duration_ms": 25
     },
     {
       "name": "Compiles: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 25
+      "duration_ms": 24
     },
     {
       "name": "--check degrades: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 21
+      "duration_ms": 20
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 23
+      "duration_ms": 22
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 21
+      "duration_ms": 20
     },
     {
       "name": "Compiles: camoufox_bridge.py",
@@ -567,7 +567,7 @@
       "category": "Database",
       "status": "pass",
       "detail": "4 statements OK against schema",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Browser bookmarks SQL matches schema",
@@ -630,14 +630,14 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 1844
+      "duration_ms": 1787
     },
     {
       "name": "Sherpa Model Canonicalization",
       "category": "ASR Streaming",
       "status": "pass",
       "detail": "canonicalization step present",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Streaming Convo Wired",
@@ -693,14 +693,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 7565
+      "duration_ms": 7297
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 71
+      "duration_ms": 54
     },
     {
       "name": "Page Router",
@@ -721,7 +721,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 6
+      "duration_ms": 7
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -910,7 +910,7 @@
       "category": "Remote",
       "status": "pass",
       "detail": "hosted streaming + docker gate + CPU fixes wired",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Torrent File Safety: skip executables/archives",
@@ -1078,7 +1078,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 94
+      "duration_ms": 91
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1134,7 +1134,7 @@
       "category": "Stability",
       "status": "pass",
       "detail": "no discarded std.Thread.spawn handles in src/",
-      "duration_ms": 12
+      "duration_ms": 11
     },
     {
       "name": "TMDB Fetch Stages Results Off-Thread",
@@ -1204,7 +1204,7 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 1085
+      "duration_ms": 931
     }
   ]
 }

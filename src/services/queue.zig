@@ -517,6 +517,14 @@ fn swapStep(sql: [*c]const u8, bind1: ?i64, bind2: ?i64) bool {
     return c.sqlite.sqlite3_step(stmt) == c.sqlite.SQLITE_DONE;
 }
 
+/// Move the item at `idx` up (dir < 0) or down (dir > 0) one slot; persists
+/// the new order. No-op at the ends. Exposed for the web remote's reorder.
+pub fn moveQueueItem(idx: usize, dir: i32) void {
+    if (idx >= queue_count) return;
+    if (dir < 0 and idx > 0) swapQueueItems(idx, idx - 1);
+    if (dir > 0 and idx + 1 < queue_count) swapQueueItems(idx, idx + 1);
+}
+
 fn swapQueueItems(idx_a: usize, idx_b: usize) void {
     if (idx_a >= queue_count or idx_b >= queue_count) return;
     if (idx_a == idx_b) return;

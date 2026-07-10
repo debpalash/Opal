@@ -713,6 +713,12 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         sendJson(stream, buildStatusJson(&json));
 
         // ── Queue ──
+    } else if (std.mem.eql(u8, api_path, "/queue/move")) {
+        const q = @import("queue.zig");
+        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
+        const dir: i32 = if (std.mem.eql(u8, getQueryParam(query, "dir") orelse "", "up")) -1 else 1;
+        q.moveQueueItem(idx, dir);
+        sendJson(stream, "{\"ok\":true}");
     } else if (std.mem.eql(u8, api_path, "/queue")) {
         const queue_svc = @import("queue.zig");
         var json_buf: [8192]u8 = undefined;
