@@ -67,6 +67,7 @@ pub var status_yts = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_local = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_rss = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_comics = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_torznab = std.atomic.Value(SourceStatus).init(.idle);
 
 // Explicit u8 backing so std.atomic.Value(SourceStatus) is byte-atomic.
 pub const SourceStatus = enum(u8) { idle, searching, done, failed };
@@ -310,6 +311,9 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     Pre.set(&status_local, .local);
     Pre.set(&status_rss, .rss);
     Pre.set(&status_comics, .comics);
+    Pre.set(&status_torznab, .torrent); // generic Torznab/Prowlarr — a torrent source
+
+
 
     // Fire every backend in parallel. Each handle is detached (never joined) —
     // discarding it via `_ =` leaks the pthread resource for the process life.
@@ -338,6 +342,7 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     if (sourceOn(.torrent)) Spawn.go(resolveTorrentsNova2, &status_torrent);
     if (sourceOn(.torrent)) Spawn.go(resolve1337x, &status_1337x);
     if (sourceOn(.torrent)) Spawn.go(resolveYts, &status_yts);
+    if (sourceOn(.torrent)) Spawn.go(resolveTorznab, &status_torznab); // self-hosted Prowlarr/Jackett — inert w/o marker
     if (sourceOn(.anime)) Spawn.go(resolveAnime, &status_anime);
     if (sourceOn(.youtube)) Spawn.go(resolveYouTube, &status_yt);
     if (sourceOn(.comics)) Spawn.go(resolveComics, &status_comics); // readallcomics.com HTML scrape
@@ -651,7 +656,8 @@ fn checkAllDone() void {
         status_torrent.load(.acquire) != .searching and status_anime.load(.acquire) != .searching and
         status_yt.load(.acquire) != .searching and status_1337x.load(.acquire) != .searching and
         status_yts.load(.acquire) != .searching and status_local.load(.acquire) != .searching and
-        status_rss.load(.acquire) != .searching and status_comics.load(.acquire) != .searching)
+        status_rss.load(.acquire) != .searching and status_comics.load(.acquire) != .searching and
+        status_torznab.load(.acquire) != .searching)
     {
         is_resolving.store(false, .release);
     }
@@ -1261,6 +1267,128 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
             found += 1;
         }
         pos = he + 1;
+    }
+}
+
+// ══════════════════════════════════════════════════════════
+// Backend: Torznab / Prowlarr / Jackett (generic self-hosted indexer)
+//
+// One adapter for the user's OWN self-hosted Prowlarr/Jackett: it aggregates
+// every indexer the user has configured there via the standard Torznab endpoint,
+// instead of hardcoding each tracker. Ships INERT — no endpoint is baked into
+// the binary. The source stays silent until the user installs a marker at
+// ~/.config/opal/plugins/sources/torznab.json supplying {base, apikey, indexer}.
+// With no marker, get("torznab","base") is null → this returns immediately →
+// zero network activity (neutral-ship). XML item parsing is routed through the
+// tested torznab_pure.zig helpers.
+// ══════════════════════════════════════════════════════════
+
+fn resolveTorznab(query_buf: [256]u8, qlen: usize) void {
+    defer {
+        status_torznab.store(.done, .release);
+        checkAllDone();
+    }
+
+    const query = query_buf[0..qlen];
+    const sc = @import("../core/source_config.zig");
+
+    // Endpoint migrated to opal-plugins — inert until the user installs "torznab".
+    // get() returns a slice into a static table that reload() can mutate, so copy
+    // every config value into a local buffer before issuing the next get().
+    const base_raw = sc.get("torznab", "base") orelse return;
+    if (base_raw.len == 0 or base_raw.len > 512) return;
+    var base_buf: [512]u8 = undefined;
+    @memcpy(base_buf[0..base_raw.len], base_raw);
+    var base: []const u8 = base_buf[0..base_raw.len];
+    if (base.len > 0 and base[base.len - 1] == '/') base = base[0 .. base.len - 1]; // strip trailing slash
+
+    var key_buf: [256]u8 = undefined;
+    var key_len: usize = 0;
+    if (sc.get("torznab", "apikey")) |k| {
+        if (k.len > 0 and k.len <= key_buf.len) {
+            @memcpy(key_buf[0..k.len], k);
+            key_len = k.len;
+        }
+    }
+
+    var idx_buf: [64]u8 = undefined;
+    var indexer: []const u8 = "all"; // default: query every configured indexer
+    if (sc.get("torznab", "indexer")) |ix| {
+        if (ix.len > 0 and ix.len <= idx_buf.len) {
+            @memcpy(idx_buf[0..ix.len], ix);
+            indexer = idx_buf[0..ix.len];
+        }
+    }
+
+    // Percent-encode the query + apikey (both go in the query string) per CLAUDE.md.
+    var q_enc: [512]u8 = undefined;
+    const enc_q = @import("../core/http.zig").urlEncode(query, &q_enc);
+    var k_enc: [512]u8 = undefined;
+    const enc_k = @import("../core/http.zig").urlEncode(key_buf[0..key_len], &k_enc);
+
+    // Standard Prowlarr/Jackett Torznab/Newznab search endpoint.
+    var url_buf: [1024]u8 = undefined;
+    const url = std.fmt.bufPrint(
+        &url_buf,
+        "{s}/api/v2.0/indexers/{s}/results/torznab/api?apikey={s}&t=search&q={s}",
+        .{ base, indexer, enc_k, enc_q },
+    ) catch return;
+
+    // Heap, not stack: a Torznab response with many indexers can be large; keep
+    // it off this spawned worker's 512 KB stack.
+    const page_buf = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(page_buf);
+
+    @import("../core/rate_limit.zig").acquire("torznab", 1.0);
+    const body = @import("../core/http.zig").fetch(url, page_buf, .{
+        .timeout_secs = 12,
+        .user_agent = "Opal/1.0",
+    }) orelse return;
+    const n = body.len;
+    if (n < 50) return;
+
+    const tz = @import("torznab_pure.zig");
+
+    var pos: usize = 0;
+    var found: usize = 0;
+    while (found < 20 and pos < n) {
+        const item_start = std.mem.indexOfPos(u8, body, pos, "<item>") orelse break;
+        const item_end = std.mem.indexOfPos(u8, body, item_start, "</item>") orelse break;
+        const block = body[item_start..item_end];
+        pos = item_end + 7; // skip "</item>"
+
+        const title = tz.extractTag(block, "<title>", "</title>") orelse continue;
+        if (title.len < 2) continue;
+
+        const link = tz.pickLink(block) orelse continue; // magnet or .torrent url
+        if (link.len < 8) continue;
+
+        var item = std.mem.zeroes(ResolvedItem);
+        item.source = .torrent;
+
+        const nlen = @min(title.len, 255);
+        @memcpy(item.name[0..nlen], title[0..nlen]);
+        item.name_len = nlen;
+
+        const ulen = @min(link.len, 2047);
+        @memcpy(item.url[0..ulen], link[0..ulen]);
+        item.url_len = ulen;
+
+        item.quality = detectQuality(title);
+        item.seeds = tz.seeders(block);
+
+        var det: [128]u8 = undefined;
+        const dstr = std.fmt.bufPrint(&det, "Torrent · Torznab · {d} seeds", .{item.seeds}) catch "Torrent · Torznab";
+        const dlen = @min(dstr.len, 127);
+        @memcpy(item.detail[0..dlen], dstr[0..dlen]);
+        item.detail_len = dlen;
+
+        _ = pushResult(item);
+        found += 1;
+    }
+
+    if (found > 0) {
+        logs.pushLog("info", "resolver", "torznab results found", false);
     }
 }
 

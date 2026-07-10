@@ -136,6 +136,17 @@
       "file": "plugins/jackett.json"
     },
     {
+      "id": "torznab",
+      "name": "Torznab / Prowlarr",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "",
+        "apikey": "",
+        "indexer": "all"
+      }
+    },
+    {
       "id": "readallcomics",
       "name": "ReadAllComics",
       "type": "comics",
