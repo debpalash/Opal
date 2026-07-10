@@ -85,8 +85,8 @@ pub fn startServer() void {
             logs.pushLog("info", "tts", "TTS server started (python3 lang_server.py)", false);
             server_starting = false;
             
-            // Give server time to load model before health checking
-            state.app.tts_health_check_time = @import("../core/io_global.zig").timestamp() + 8;
+            // Give server time to load model before the first health probe.
+            HealthProbe.last_check.store(@import("../core/io_global.zig").timestamp() + 8, .release);
             return;
         } else |_| {
             continue;
@@ -124,6 +124,41 @@ pub fn onToggle(enabled: bool) void {
 /// Called on app shutdown — clean up server process.
 pub fn deinit() void {
     stopServer();
+}
+
+/// TTS server health probe — runs on a DETACHED worker so a hung localhost
+/// sidecar (curl `--max-time 10` inside httpGetRaw) can NEVER block the render
+/// thread. Mirrors the pollASR/pollDubbing detached-worker template: the UI
+/// thread only throttles + spawns; the worker does the blocking curl and
+/// writes the cached result to state.app.tts_server_ok (which the UI reads).
+const HealthProbe = struct {
+    // Single-flight guard. Read on the render thread (kick) and written by both
+    // the render thread and the worker (defer reset) → atomic acquire/release.
+    var busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+    // Throttle timestamp (unix seconds). Seeded by startServer's warm-up delay
+    // and updated on each kick → atomic acquire/release.
+    var last_check: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+
+    fn worker() void {
+        defer @This().busy.store(false, .release);
+        // Blocking curl happens here, OFF the render thread.
+        state.app.tts_server_ok = checkServerHealth();
+    }
+};
+
+/// Kick the TTS health probe if ~5s have elapsed and none is in flight. Never
+/// blocks: spawns a detached worker for the curl. Safe to call every frame.
+fn kickHealthProbe() void {
+    const now = @import("../core/io_global.zig").timestamp();
+    if (now - HealthProbe.last_check.load(.acquire) <= 5) return; // throttled
+    if (HealthProbe.busy.load(.acquire)) return; // one probe in flight
+    HealthProbe.busy.store(true, .release);
+    HealthProbe.last_check.store(now, .release);
+    const t = std.Thread.spawn(.{}, HealthProbe.worker, .{}) catch {
+        HealthProbe.busy.store(false, .release);
+        return;
+    };
+    t.detach();
 }
 
 /// Poll current subtitle text from mpv and tokenize into words.
@@ -164,13 +199,12 @@ pub fn pollSubtitle() void {
         translated_len = 0;
     }
 
-    // Periodic health check (every 5 seconds)
-    const now = @import("../core/io_global.zig").timestamp();
-    if (now - state.app.tts_health_check_time > 5) {
-        state.app.tts_health_check_time = now;
-        state.app.tts_server_ok = checkServerHealth();
-    }
-    
+    // TTS server health — kick a throttled, single-flight DETACHED probe rather
+    // than running the blocking curl (httpGetRaw, --max-time 10) on the render
+    // thread. pollSubtitle stays read-only w.r.t. the server: the status UI reads
+    // the cached state.app.tts_server_ok, which the worker refreshes off-thread.
+    kickHealthProbe();
+
     // Poll ASR and dubbing
     pollASR();
     pollDubbing();
