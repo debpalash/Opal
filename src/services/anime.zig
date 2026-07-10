@@ -9,6 +9,8 @@ const player = @import("../player/player.zig");
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 const poster = @import("../core/poster.zig");
+const anilist = @import("anilist.zig");
+const anilist_pure = @import("anilist_pure.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -855,7 +857,91 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
     // have superseded us during parsing. If so, drop our results.
     if (search_gen.load(.acquire) != my_gen) return 0;
     state.app.anime.result_count = count;
+    // Fire-and-forget AniList metadata enrichment for a fresh grid load (all
+    // modes route through here). Additive only — see spawnAniListEnrich.
+    if (start_offset == 0 and count > 0) spawnAniListEnrich(my_gen);
     return count - start_offset; // rows actually added (0 ⇒ no more pages worth fetching)
+}
+
+// ══════════════════════════════════════════════════════════
+// AniList metadata enrichment (additive, keyless GraphQL)
+// ══════════════════════════════════════════════════════════
+// After a fresh Jikan grid load we ask AniList — in ONE batched GraphQL query
+// keyed by the visible cards' MAL ids — for score / cover / synopsis, and fill
+// ONLY the fields Jikan left empty (score == 0, no poster, no synopsis). Existing
+// Jikan/AllAnime data is never overwritten, so the base browsing path is
+// unchanged; AniList strictly improves coverage where MAL was thin (common for
+// seasonal/upcoming titles). SFW-gated to honor the same NSFW toggle Jikan uses.
+//
+// Thread-safety: the merge shares state.app.anime.results[] with the Jikan
+// parse, so it takes the same anime_parse_mutex and re-checks search_gen before
+// touching anything. Stale generations (superseded by a newer search) exit at
+// the snapshot gen-check before any network work, so at most one enrich worker
+// per settled query ever reaches curl — no busy flag needed.
+
+fn spawnAniListEnrich(my_gen: u32) void {
+    if (std.Thread.spawn(.{}, anilistEnrichThread, .{my_gen})) |t| t.detach() else |_| {}
+}
+
+fn anilistEnrichThread(my_gen: u32) void {
+    // 1) Snapshot the visible MAL ids as a CSV under the parse mutex.
+    var csv_buf: [512]u8 = undefined;
+    var csv_len: usize = 0;
+    var sfw = false;
+    {
+        anime_parse_mutex.lock();
+        defer anime_parse_mutex.unlock();
+        if (search_gen.load(.acquire) != my_gen) return; // superseded — bail cheaply
+        sfw = state.app.nsfw_filter_enabled;
+        const n = @min(state.app.anime.result_count, 50); // AniList Page perPage cap
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            const r = &state.app.anime.results[i];
+            if (r.id_len == 0) continue;
+            const need = r.id_len + @as(usize, if (csv_len > 0) 1 else 0);
+            if (csv_len + need > csv_buf.len) break;
+            if (csv_len > 0) {
+                csv_buf[csv_len] = ',';
+                csv_len += 1;
+            }
+            @memcpy(csv_buf[csv_len..][0..r.id_len], r.id[0..r.id_len]);
+            csv_len += r.id_len;
+        }
+    }
+    if (csv_len == 0) return;
+
+    // 2) Network fetch OUTSIDE the lock (heap buffer — never a big worker stack).
+    const buf = alloc.alloc(u8, 1024 * 1024) catch return;
+    defer alloc.free(buf);
+    const bytes = anilist.fetchMetaByMalIds(csv_buf[0..csv_len], sfw, buf);
+    if (bytes == 0) return;
+
+    // 3) Merge under the lock, re-checking the generation.
+    anime_parse_mutex.lock();
+    defer anime_parse_mutex.unlock();
+    if (search_gen.load(.acquire) != my_gen) return;
+
+    var it = anilist_pure.Iter{ .json = buf[0..bytes] };
+    var merged: usize = 0;
+    while (it.next()) |m| {
+        if (m.id_mal <= 0) continue;
+        var j: usize = 0;
+        while (j < state.app.anime.result_count) : (j += 1) {
+            const r = &state.app.anime.results[j];
+            if (r.id_len == 0) continue;
+            const rid = std.fmt.parseInt(i64, r.id[0..r.id_len], 10) catch continue;
+            if (rid != m.id_mal) continue;
+            // Fill only where Jikan was empty — never clobber live data.
+            if (r.score == 0.0 and m.score10 > 0.0) r.score = m.score10;
+            if (r.overview_len == 0 and m.description.len > 0)
+                r.overview_len = decodeJsonEscapes(m.description, &r.overview);
+            if (r.poster_url_len == 0 and m.cover.len > 0)
+                r.poster_url_len = decodeJsonEscapes(m.cover, &r.poster_url);
+            merged += 1;
+            break;
+        }
+    }
+    if (merged > 0) logs.pushLog("info", "anime", "AniList metadata merged", false);
 }
 
 pub fn loadEpisodes(idx: usize) void {

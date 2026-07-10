@@ -331,6 +331,16 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_anime_pure).step);
 
+    // AniList metadata parsing (Page.media[] iterator + malformed-JSON regression).
+    const test_anilist_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/anilist_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_anilist_pure).step);
+
     // Workspace name sanitization (path-traversal / separator neutralization).
     const test_workspace_pure = b.addTest(.{
         .root_module = b.createModule(.{
