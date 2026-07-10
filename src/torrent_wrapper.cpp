@@ -18,6 +18,7 @@
 #include <thread>
 #include <chrono>
 #include <mutex>
+#include <atomic>
 #include <map>
 
 struct TorrentNode {
@@ -42,6 +43,12 @@ struct SessionContext {
     int next_id = 0;
     // Guards session add/remove against concurrent reads in torrent_read_bytes.
     std::mutex mtx;
+    // Set true by torrent_destroy() BEFORE it tears the session down; get_node()
+    // then refuses to hand out nodes so no new reader touches a dying ctx. This
+    // is a defense-in-depth latch only — it does NOT drain readers already past
+    // get_node() (see the SAFETY note above torrent_destroy). torrent_destroy is
+    // currently unwired, so in practice this flag never flips.
+    std::atomic<bool> closing{false};
 };
 
 // ─── Helper: snapshot a torrent node under the lock ───
@@ -54,6 +61,9 @@ struct SessionContext {
 // read as not-alive/-1/0, exactly as a dead slot did before).
 static std::shared_ptr<TorrentNode> get_node(SessionContext* ctx, int id) {
     if (!ctx) return nullptr;
+    // Refuse new nodes once teardown has begun (see torrent_destroy). Cheap
+    // acquire load; the real add/remove serialization is still ctx->mtx below.
+    if (ctx->closing.load(std::memory_order_acquire)) return nullptr;
     std::lock_guard<std::mutex> lk(ctx->mtx);
     auto it = ctx->torrents.find(id);
     return it == ctx->torrents.end() ? nullptr : it->second;
@@ -423,9 +433,26 @@ extern "C" int torrent_is_alive(TorrentSession session, int torrent_id) {
     return 0;
 }
 
+// SAFETY: torrent_destroy is INTENTIONALLY UNWIRED — no .zig caller invokes it.
+// The session (and its background threads) is deliberately leaked at process
+// exit; the OS reclaims everything, which is cheaper and race-free than an
+// in-process teardown.
+//
+// MUST NOT be called while ANY reader / proxy thread may still touch the ctx.
+// It does `delete ctx->ses` / `delete ctx`, so a concurrent torrent_read_bytes
+// (or a remote streaming read) holding this ctx would dereference freed memory
+// → use-after-free. The `closing` latch below (checked in get_node) stops NEW
+// readers from acquiring a node, but it does NOT drain readers already past
+// get_node. A genuinely safe teardown would: (1) set `closing`, (2) block until
+// every in-flight reader has finished (refcount / quiescence barrier), THEN
+// (3) delete. Until that drain exists, DO NOT wire this into any caller.
 extern "C" void torrent_destroy(TorrentSession session) {
     if (!session) return;
     SessionContext* ctx = static_cast<SessionContext*>(session);
+    // Latch teardown so get_node() stops handing out nodes. NOTE: insufficient
+    // on its own — see the SAFETY note; readers already past get_node are not
+    // drained here.
+    ctx->closing.store(true, std::memory_order_release);
     try {
         delete ctx->ses;
     } catch(...) {}
@@ -494,15 +521,37 @@ extern "C" int torrent_get_piece_map(TorrentSession session, int torrent_id, cha
 
     try {
         if (node->alive && node->handle.is_valid()) {
+            // status()/pieces read happens OUTSIDE ctx->mtx (get_node released it);
+            // libtorrent's handle is internally synchronized.
             lt::torrent_status st = node->handle.status();
             int num_pieces = st.pieces.size();
-            int copy_len = num_pieces > max_len - 1 ? max_len - 1 : num_pieces;
-            
-            for (int i = 0; i < copy_len; ++i) {
-                out_map[i] = st.pieces.get_bit(i) ? '1' : '0';
+            if (num_pieces <= 0) { out_map[0] = '\0'; return 0; }
+
+            // Reserve one byte for the NUL terminator so the buffer stays a valid
+            // C-string for any caller that treats it as one.
+            int cap = max_len - 1;
+            if (cap <= 0) { out_map[0] = '\0'; return 0; }
+
+            // Emit a PROPORTIONAL map of `n_out` bytes ('1' = have, '0' = not).
+            // footer.zig (the only consumer) draws a single buffered-fill bar of
+            // width (count of '1') / n_out and never uses per-byte positions, so
+            // what matters is the have RATIO, not where the '1's sit. We set the
+            // number of '1' bytes to round(n_out * have / num_pieces). This fixes
+            // the old >cap truncation (which mis-reported large torrents by mapping
+            // only their first `cap` pieces) AND keeps the bar proportional while
+            // downloading — an all-or-nothing per-bucket rule would under-report
+            // scattered progress until whole ranges complete. For num_pieces <= cap
+            // this equals have/num_pieces, identical (as a count) to the old 1:1 map.
+            int n_out = num_pieces < cap ? num_pieces : cap;
+            long long have = 0;
+            for (int p = 0; p < num_pieces; ++p) {
+                if (st.pieces.get_bit(p)) ++have;
             }
-            out_map[copy_len] = '\0';
-            return copy_len;
+            int ones = (int)(((long long)n_out * have + num_pieces / 2) / num_pieces); // rounded
+            if (ones > n_out) ones = n_out;
+            for (int k = 0; k < n_out; ++k) out_map[k] = (k < ones) ? '1' : '0';
+            out_map[n_out] = '\0';
+            return n_out;
         }
     } catch(...) {}
     out_map[0] = '\0';
