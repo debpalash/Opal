@@ -334,6 +334,12 @@ const $ = id => document.getElementById(id);
 const api = (path) => fetch(BASE + '/api' + path, { headers: TOKEN ? { Authorization: 'Bearer ' + TOKEN } : {} })
   .then(r => { if (r.status === 401) { unpair(); throw 0; } return r.json(); });
 
+// Per-container cache of the last innerHTML we assigned. Renderers that poll
+// (search/torrents/anime/podcast/rss) build the HTML string, then only touch
+// the DOM when it actually changed — avoids re-parsing identical markup and
+// re-requesting <img> sources every tick.
+const lastHtml = {};
+
 // ── Pairing ──
 let HOSTED = false;
 function unpair(){ TOKEN=''; localStorage.removeItem('opal_token'); $('pair-screen').style.display='flex'; }
@@ -362,6 +368,11 @@ $('pair-code').addEventListener('keydown', e => { if (e.key === 'Enter') $('pair
 
 // ── Tabs ──
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  // Leaving the current tab: stop any settle watchers still polling a now-hidden
+  // page (they otherwise keep hitting the server for ~36s). clearInterval on a
+  // null/stale handle is a harmless no-op.
+  clearInterval(searchWatch); clearInterval(animeWatch); clearInterval(podWatch); clearInterval(jfWatch);
+  jfLibTries = 0;
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'page-' + b.dataset.page));
   if (b.dataset.page === 'act') loadActivity();
@@ -425,7 +436,7 @@ $('q').addEventListener('keydown', e => { if (e.key === 'Enter') { runSearch(); 
 function runSearch(){
   const q = $('q').value.trim(); if (!q) return;
   $('search-hint').innerHTML = '<span class="spin"></span> Searching all sources…';
-  $('results').innerHTML = '';
+  $('results').innerHTML = ''; lastHtml.results = '';
   api('/search?q=' + encodeURIComponent(q)).catch(()=>{});
   clearInterval(searchWatch);
   let ticks = 0;
@@ -442,7 +453,7 @@ function runSearch(){
   }, 900);
 }
 function renderResults(rs){
-  $('results').innerHTML = rs.slice(0, 60).map(r => `
+  const html = rs.slice(0, 60).map(r => `
     <div class="result">
       <div class="t">${esc(r.title)}</div>
       <div class="m">
@@ -452,6 +463,9 @@ function renderResults(rs){
         <button class="play" data-url="${encodeURIComponent(r.magnet || r.url || '')}">Play</button>
       </div>
     </div>`).join('') || '<div class="empty">No results yet</div>';
+  if (html === lastHtml.results) return;
+  lastHtml.results = html;
+  $('results').innerHTML = html;
   $('results').querySelectorAll('.play').forEach(b => b.onclick = () => {
     const u = b.dataset.url; if (!u) return;
     b.textContent = 'Sent ✓';
@@ -467,12 +481,13 @@ async function pollTorrents(){
   try {
     const d = await api('/torrents');
     const ts = d.torrents || [];
-    $('torrents').innerHTML = ts.map(t => `
+    const html = ts.map(t => `
       <div class="tor"><div class="n">${esc(t.name)}</div>
         <div class="bar"><i style="width:${t.pct}%"></i></div>
         <div class="m">${t.pct}% · ${(t.rate/1024/1024).toFixed(1)} MB/s · ${t.seeds} seeds${t.paused ? ' · paused' : ''}</div>
       </div>`).join('') || '<div class="empty">Nothing downloading</div>';
-  } catch { $('torrents').innerHTML = '<div class="empty">—</div>'; }
+    if (html !== lastHtml.torrents) { $('torrents').innerHTML = html; lastHtml.torrents = html; }
+  } catch { $('torrents').innerHTML = '<div class="empty">—</div>'; lastHtml.torrents = '<div class="empty">—</div>'; }
   torTimer = setTimeout(pollTorrents, 2000);
 }
 async function loadActivity(){
@@ -675,7 +690,7 @@ $('anime-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runAnim
 function runAnime(){
   const q = $('anime-q').value.trim(); if (!q) return;
   $('anime-hint').innerHTML = '<span class="spin"></span> Searching anime…';
-  $('anime-results').innerHTML = ''; $('anime-episodes').innerHTML = '';
+  $('anime-results').innerHTML = ''; lastHtml.animeResults = ''; $('anime-episodes').innerHTML = '';
   api('/anime/search?q=' + encodeURIComponent(q)).catch(()=>{});
   clearInterval(animeWatch);
   let ticks = 0;
@@ -692,12 +707,15 @@ function runAnime(){
   }, 900);
 }
 function renderAnimeResults(rs){
-  $('anime-results').innerHTML = rs.map((r, i) => `
+  const html = rs.map((r, i) => `
     <div class="result">
       <div class="t">${esc(r.name)}</div>
       <div class="m"><span class="src">${r.episodes || 0} eps</span>
         <button class="play" data-idx="${i}">Episodes ⭢</button></div>
     </div>`).join('') || '<div class="empty">No results yet</div>';
+  if (html === lastHtml.animeResults) return;
+  lastHtml.animeResults = html;
+  $('anime-results').innerHTML = html;
   $('anime-results').querySelectorAll('.play').forEach(b => b.onclick = () => loadAnimeEpisodes(+b.dataset.idx));
 }
 function loadAnimeEpisodes(idx){
@@ -737,7 +755,7 @@ $('pod-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runPodcas
 function runPodcasts(){
   const q = $('pod-q').value.trim(); if (!q) return;
   $('pod-hint').innerHTML = '<span class="spin"></span> Searching podcasts…';
-  $('pod-results').innerHTML = ''; $('pod-episodes').innerHTML = '';
+  $('pod-results').innerHTML = ''; lastHtml.podResults = ''; $('pod-episodes').innerHTML = '';
   api('/podcasts/search?q=' + encodeURIComponent(q)).catch(()=>{});
   clearInterval(podWatch);
   let ticks = 0;
@@ -754,7 +772,7 @@ function runPodcasts(){
   }, 900);
 }
 function renderPodResults(rs){
-  $('pod-results').innerHTML = rs.map((r, i) => `
+  const html = rs.map((r, i) => `
     <div class="result pod">
       ${r.art
         ? `<img class="thumb" loading="lazy" src="${BASE}/api/podcasts/poster?idx=${i}&t=${TOKEN}">`
@@ -764,6 +782,9 @@ function renderPodResults(rs){
         <div class="m"><button class="play" data-idx="${i}">Episodes ⭢</button></div>
       </div>
     </div>`).join('') || '<div class="empty">No results yet</div>';
+  if (html === lastHtml.podResults) return;
+  lastHtml.podResults = html;
+  $('pod-results').innerHTML = html;
   $('pod-results').querySelectorAll('.play').forEach(b => b.onclick = () => loadPodEpisodes(+b.dataset.idx));
 }
 function loadPodEpisodes(idx){
@@ -797,6 +818,8 @@ function renderPodEpisodes(eps){
 // GET /jellyfin -> {connected,loading,error?,libraries:[{id,name,type}],items:[{id,name,type,year,folder,runtime}]}.
 // /jellyfin/{login,libraries,browse,search,play,play_audio,disconnect} trigger async work.
 let jfWatch = null;
+let jfLibTries = 0;          // bounded retry counter for empty-library polling
+const JF_LIB_MAX = 8;        // stop after this many tries so we never hammer forever
 async function loadJellyfin(){
   try { renderJellyfin(await api('/jellyfin')); } catch {}
 }
@@ -808,7 +831,16 @@ function renderJellyfin(d){
   if (conn) {
     renderJfLibraries(d.libraries || []);
     renderJfItems(d.items || []);
-    if (!(d.libraries || []).length) { api('/jellyfin/libraries').catch(()=>{}); setTimeout(loadJellyfin, 900); }
+    if ((d.libraries || []).length) {
+      jfLibTries = 0; // got libraries — done retrying
+    } else if (document.getElementById('page-jf').classList.contains('on') && jfLibTries < JF_LIB_MAX) {
+      // Libraries still empty: kick the background fetch ONCE (first retry only),
+      // then re-poll — bounded by JF_LIB_MAX and only while the Jellyfin tab is
+      // active. Stops when capped or the page is hidden.
+      if (jfLibTries === 0) api('/jellyfin/libraries').catch(()=>{});
+      jfLibTries++;
+      setTimeout(loadJellyfin, 900);
+    }
   }
 }
 function isJfAudio(t){ return t === 'Audio'; }
@@ -856,6 +888,7 @@ $('jf-connect').onclick = () => {
   const s = $('jf-server').value.trim(), u = $('jf-user').value.trim(), p = $('jf-pass').value;
   if (!s || !u) { $('jf-hint').textContent = 'Enter server URL and username'; return; }
   $('jf-hint').innerHTML = '<span class="spin"></span> Connecting…';
+  jfLibTries = 0; // fresh connection: allow the bounded library retry again
   api('/jellyfin/login?server=' + encodeURIComponent(s) + '&user=' + encodeURIComponent(u) + '&pass=' + encodeURIComponent(p)).catch(()=>{});
   clearInterval(jfWatch);
   let tries = 0;
@@ -923,7 +956,7 @@ function refreshFeed(idx, btn){
   }, 900);
 }
 function renderRssItems(items, fetching){
-  $('rss-items').innerHTML = items.slice(0, 80).map(it => `
+  const html = items.slice(0, 80).map(it => `
     <div class="result">
       <div class="t">${esc(it.title)}</div>
       <div class="m">
@@ -932,6 +965,9 @@ function renderRssItems(items, fetching){
         <button class="play" data-url="${encodeURIComponent(it.magnet || '')}">Play</button>
       </div>
     </div>`).join('') || (fetching ? '<div class="empty"><span class="spin"></span></div>' : '<div class="empty">No items — refresh a feed</div>');
+  if (html === lastHtml.rssItems) return;
+  lastHtml.rssItems = html;
+  $('rss-items').innerHTML = html;
   $('rss-items').querySelectorAll('.play').forEach(b => b.onclick = () => {
     const u = b.dataset.url; if (!u) return;
     b.textContent = 'Sent ✓';
