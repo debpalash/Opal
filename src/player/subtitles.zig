@@ -22,21 +22,28 @@ pub const SubState = enum {
 pub const SubSource = enum {
     opensubtitles, // rest.opensubtitles.org (movies + TV)
     addic7ed, // api.gestdown.info proxy (TV)
+    stremio_os, // opensubtitles-v3.strem.io addon (movies + TV, plain SRT)
 };
 
 pub fn sourceName(s: SubSource) []const u8 {
     return switch (s) {
         .opensubtitles => "OpenSubtitles",
         .addic7ed => "Addic7ed",
+        .stremio_os => "OpenSubtitles v3",
     };
 }
 
-/// Merged result cap: primary provider first, then Gestdown appendings.
+/// Merged result cap, SHARED across the chain: primary provider first, then
+/// Gestdown and Stremio each append into whatever slots remain (same model both
+/// appenders already use — `results.len - base`).
 pub const MAX_RESULTS = 15;
 /// How many of the slots the primary provider may fill.
 pub const MAX_PRIMARY = 12;
 /// How many Gestdown (Addic7ed) matches get appended after the primary.
 pub const MAX_GESTDOWN = 3;
+/// How many Stremio OpenSubtitles-v3 matches get appended after Gestdown
+/// (bounded further by the slots left in the shared MAX_RESULTS pool).
+pub const MAX_STREMIO = 3;
 
 pub const SubResult = struct {
     download_url: [512]u8 = undefined,
@@ -262,6 +269,10 @@ fn searchThread(engine: *SubtitleEngine) void {
     // to the merged list rather than only rescuing an empty primary.
     count = gestdownAppend(engine, count);
 
+    // Third keyless provider (Stremio's OpenSubtitles-v3 addon) — resolves an
+    // IMDB id via TMDB, then appends its plain-SRT matches after Gestdown.
+    count = stremioOsAppend(engine, count);
+
     engine.result_count = count;
 
     if (count > 0) {
@@ -337,6 +348,118 @@ fn gestdownAppend(engine: *SubtitleEngine, base: usize) usize {
         filled += 1;
     }
     if (filled > 0) logs.pushLog("info", "subs", "Gestdown (Addic7ed) matches merged", false);
+    return base + filled;
+}
+
+/// Keyless provider #3: Stremio's OpenSubtitles-v3 addon
+/// (opensubtitles-v3.strem.io). It is IMDB-id-keyed, so we first resolve one via
+/// a single TMDB search + external_ids lookup (mirrors resolver.zig's pattern),
+/// then append up to MAX_STREMIO plain-SRT matches after `base`. The addon
+/// returns every language, so we filter client-side against the search language.
+/// Skips gracefully when there is no TMDB key or no resolvable IMDB id. Runs on
+/// the search thread. Returns the new result count.
+fn stremioOsAppend(engine: *SubtitleEngine, base: usize) usize {
+    if (base >= engine.results.len) return base;
+    const sp = @import("../services/subtitles_pure.zig");
+    const tmdb = @import("../services/tmdb_api.zig");
+    const http = @import("../core/http.zig");
+    const alloc = @import("../core/alloc.zig").allocator;
+
+    // IMDB resolution rides on TMDB — a keyless chain step, but no key ⇒ skip.
+    const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
+    if (api_key.len == 0) return base;
+
+    // Snapshot the search language (stable during a search, but copy anyway —
+    // this runs off the UI thread).
+    var lang_buf: [8]u8 = undefined;
+    const ll = @min(state.app.sub_lang_len, lang_buf.len);
+    @memcpy(lang_buf[0..ll], state.app.sub_lang_buf[0..ll]);
+    const want_lang = lang_buf[0..ll];
+
+    // Reuse the pure parser for show/season/episode + a clean movie query.
+    var q_buf: [256]u8 = undefined;
+    var show_buf: [256]u8 = undefined;
+    const p = sp.parse(engine.query_buf[0..engine.query_len], &q_buf, &show_buf);
+
+    const is_series = p.is_tv and p.season > 0;
+    const search_type: []const u8 = if (p.is_tv) "tv" else "movie";
+    const search_term = if (p.is_tv and p.show.len > 0) p.show else p.query;
+    if (search_term.len == 0) return base;
+
+    // One heap buffer, reused for all three responses sequentially (keeps the
+    // search-worker stack small — see the >64KB stack rule).
+    const buf = alloc.alloc(u8, 96 * 1024) catch return base;
+    defer alloc.free(buf);
+
+    // 1) TMDB text search → first result's TMDB id.
+    var enc: [512]u8 = undefined;
+    const encoded = http.urlEncode(search_term, &enc);
+    var url1: [768]u8 = undefined;
+    const surl = std.fmt.bufPrint(&url1, "/3/search/{s}?query={s}&page=1", .{ search_type, encoded }) catch return base;
+    @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
+    const sn = tmdb.tmdbApiInto(surl, api_key, buf);
+    if (sn < 20) return base;
+    var id_buf: [16]u8 = undefined;
+    const id_src = sp.firstTmdbId(buf[0..sn]) orelse return base;
+    const idl = @min(id_src.len, id_buf.len);
+    @memcpy(id_buf[0..idl], id_src[0..idl]);
+    const tmdb_id = id_buf[0..idl];
+
+    // 2) external_ids → imdb id (kept with its "tt" prefix).
+    var url2: [256]u8 = undefined;
+    const eurl = std.fmt.bufPrint(&url2, "/3/{s}/{s}/external_ids", .{ search_type, tmdb_id }) catch return base;
+    @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
+    const en = tmdb.tmdbApiInto(eurl, api_key, buf);
+    if (en < 10) return base;
+    var imdb_buf: [16]u8 = undefined;
+    const imdb_src = sp.imdbFromExternalIds(buf[0..en]) orelse return base;
+    const iml = @min(imdb_src.len, imdb_buf.len);
+    @memcpy(imdb_buf[0..iml], imdb_src[0..iml]);
+    const imdb_id = imdb_buf[0..iml];
+
+    // 3) Stremio OpenSubtitles-v3 addon → plain-SRT subtitle list.
+    var url3: [768]u8 = undefined;
+    const endpoint = if (is_series)
+        std.fmt.bufPrint(&url3, "https://opensubtitles-v3.strem.io/subtitles/series/{s}:{d}:{d}.json", .{ imdb_id, p.season, p.episode }) catch return base
+    else
+        std.fmt.bufPrint(&url3, "https://opensubtitles-v3.strem.io/subtitles/movie/{s}.json", .{imdb_id}) catch return base;
+
+    const headers = [_]std.http.Header{.{ .name = "User-Agent", .value = "Opal/1.0" }};
+    @import("../core/rate_limit.zig").acquire("stremio", 1.0); // third-party addon — be gentle
+    const json = httpGet(endpoint, &headers, buf) catch return base;
+
+    // Parse generously, then keep only language-matching rows up to MAX_STREMIO.
+    var subs: [64]sp.StremioSub = undefined;
+    const n = sp.stremioSubs(json, &subs);
+    if (n == 0) return base;
+
+    const title = if (p.show.len > 0) p.show else p.query;
+    var filled: usize = 0;
+    for (subs[0..n]) |ss| {
+        if (base + filled >= engine.results.len or filled >= MAX_STREMIO) break;
+        if (ss.url.len == 0) continue;
+        if (!sp.langMatches(want_lang, ss.lang)) continue;
+
+        var r = &engine.results[base + filled];
+        const ulen = @min(ss.url.len, r.download_url.len);
+        @memcpy(r.download_url[0..ulen], ss.url[0..ulen]);
+        r.download_url_len = ulen;
+
+        const name = if (is_series)
+            std.fmt.bufPrint(&r.movie_name, "{s} S{d:0>2}E{d:0>2}", .{ title, p.season, p.episode }) catch continue
+        else
+            std.fmt.bufPrint(&r.movie_name, "{s}", .{title}) catch continue;
+        r.movie_name_len = name.len;
+
+        // Prefer the addon's own language tag; fall back to the search language.
+        const label = if (ss.lang.len > 0) ss.lang else want_lang;
+        const llen = @min(label.len, r.lang.len);
+        @memcpy(r.lang[0..llen], label[0..llen]);
+        r.lang_len = llen;
+        r.source = .stremio_os;
+        filled += 1;
+    }
+    if (filled > 0) logs.pushLog("info", "subs", "Stremio OpenSubtitles-v3 matches merged", false);
     return base + filled;
 }
 

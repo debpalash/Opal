@@ -255,6 +255,119 @@ pub fn gestdownFirstShowId(json: []const u8) ?[]const u8 {
     return json[s..e];
 }
 
+// ── Stremio OpenSubtitles-v3 addon (keyless chain step #3) ──
+
+pub const StremioSub = struct {
+    id: []const u8,
+    url: []const u8,
+    lang: []const u8,
+};
+
+/// Value for `key` (e.g. "\"lang\":") inside a JSON object slice, whether the
+/// value is quoted ("eng") or bare (7). Returns the inner text without quotes,
+/// or null when the key is absent. Escape-aware for quoted values.
+fn jsonFieldValue(obj: []const u8, key: []const u8) ?[]const u8 {
+    var i = (std.mem.indexOf(u8, obj, key) orelse return null) + key.len;
+    while (i < obj.len and (obj[i] == ' ' or obj[i] == '\t')) i += 1;
+    if (i >= obj.len) return null;
+    if (obj[i] == '"') {
+        const s = i + 1;
+        const e = jsonStringEnd(obj, s) orelse return null;
+        return obj[s..e];
+    }
+    var e = i;
+    while (e < obj.len) : (e += 1) switch (obj[e]) {
+        ',', '}', ']', ' ', '\n', '\t', '\r' => break,
+        else => {},
+    };
+    if (e == i) return null;
+    return obj[i..e];
+}
+
+/// Parse a Stremio OpenSubtitles-v3 addon response:
+/// `{"subtitles":[{"id":..,"url":"..","lang":".."}, ...]}`. Each entry
+/// contributes id/url/lang; the `url` is a plain-SRT download link. Returns how
+/// many of `out` were filled; slices point into `json`. Field order within an
+/// entry is not assumed. Malformed / truncated input yields as many well-formed
+/// entries as were parsed and never traps.
+pub fn stremioSubs(json: []const u8, out: []StremioSub) usize {
+    var count: usize = 0;
+    var pos: usize = 0;
+    const url_key = "\"url\":\"";
+    while (count < out.len) {
+        const uk = std.mem.indexOfPos(u8, json, pos, url_key) orelse break;
+        const url_start = uk + url_key.len;
+        const url_end = jsonStringEnd(json, url_start) orelse break;
+        const url = json[url_start..url_end];
+
+        // Enclosing { .. } window for this entry — bound the id/lang lookups to
+        // it so one entry never borrows a sibling's field.
+        const obj_start = std.mem.lastIndexOfScalar(u8, json[0..uk], '{') orelse uk;
+        const obj_end = std.mem.indexOfScalarPos(u8, json, url_end + 1, '}') orelse (json.len - 1);
+        const obj = json[obj_start..@min(obj_end + 1, json.len)];
+
+        const lang = jsonFieldValue(obj, "\"lang\":") orelse "";
+        const id = jsonFieldValue(obj, "\"id\":") orelse "";
+
+        if (url.len >= 8) {
+            out[count] = .{ .id = id, .url = url, .lang = lang };
+            count += 1;
+        }
+        pos = url_end + 1;
+    }
+    return count;
+}
+
+/// Normalise a 2-letter ISO-639-1 code to its 3-letter ISO-639-2/B form so a
+/// user's "en" matches a provider's "eng". Unknown / already-3-letter codes
+/// pass through unchanged (the case-insensitive compare lives in `langMatches`).
+fn langAlias3(code: []const u8) []const u8 {
+    const pairs = [_]struct { a: []const u8, b: []const u8 }{
+        .{ .a = "en", .b = "eng" }, .{ .a = "es", .b = "spa" },
+        .{ .a = "fr", .b = "fre" }, .{ .a = "de", .b = "ger" },
+        .{ .a = "it", .b = "ita" }, .{ .a = "pt", .b = "por" },
+        .{ .a = "ru", .b = "rus" }, .{ .a = "ja", .b = "jpn" },
+        .{ .a = "ko", .b = "kor" }, .{ .a = "zh", .b = "chi" },
+        .{ .a = "nl", .b = "dut" }, .{ .a = "pl", .b = "pol" },
+        .{ .a = "ar", .b = "ara" }, .{ .a = "tr", .b = "tur" },
+    };
+    for (pairs) |p| if (std.ascii.eqlIgnoreCase(p.a, code)) return p.b;
+    return code;
+}
+
+/// True when a provider-returned language `got` satisfies the user's configured
+/// `want` code. Case-insensitive; treats 2- and 3-letter codes for the same
+/// language as equal. An empty `want` accepts everything.
+pub fn langMatches(want: []const u8, got: []const u8) bool {
+    if (want.len == 0) return true;
+    if (std.ascii.eqlIgnoreCase(want, got)) return true;
+    return std.ascii.eqlIgnoreCase(langAlias3(want), langAlias3(got));
+}
+
+/// First numeric `"id":` value in a TMDB search response — the top result's
+/// TMDB id — as a digit string, or null. (`"genre_ids":` never contains the
+/// `"id":` needle, so the first hit is the result object's own id.)
+pub fn firstTmdbId(json: []const u8) ?[]const u8 {
+    const key = "\"id\":";
+    var i = (std.mem.indexOf(u8, json, key) orelse return null) + key.len;
+    while (i < json.len and (json[i] == ' ' or json[i] == '"')) i += 1;
+    const s = i;
+    while (i < json.len and json[i] >= '0' and json[i] <= '9') i += 1;
+    if (i == s) return null;
+    return json[s..i];
+}
+
+/// The `imdb_id` ("tt…") from a TMDB `/external_ids` body, or null when absent,
+/// JSON-null, or malformed. Keeps the `tt` prefix — Stremio addon ids need it.
+pub fn imdbFromExternalIds(json: []const u8) ?[]const u8 {
+    const key = "\"imdb_id\":\"";
+    const s = (std.mem.indexOf(u8, json, key) orelse return null) + key.len;
+    const e = std.mem.indexOfScalarPos(u8, json, s, '"') orelse return null;
+    const v = json[s..e];
+    if (v.len < 3 or v[0] != 't' or v[1] != 't') return null;
+    return v;
+}
+
 /// Map an ISO-ish language code to the full English name Gestdown expects.
 /// Falls back to "English" for anything unmapped.
 pub fn langFullName(code: []const u8) []const u8 {
@@ -375,6 +488,81 @@ test "gestdownFirstShowId finds the first uuid, rejects short ids" {
     try std.testing.expectEqualStrings("3e2ff43b-99a9-4a51-8b71-4e5c1a3f0d10", gestdownFirstShowId(json).?);
     try std.testing.expect(gestdownFirstShowId("[{\"id\":\"short\"}]") == null);
     try std.testing.expect(gestdownFirstShowId("[]") == null);
+}
+
+test "stremioSubs parses id/url/lang entries" {
+    const json =
+        "{\"subtitles\":[" ++
+        "{\"id\":\"1\",\"url\":\"https://opensubtitles-v3.strem.io/subtitles/download/a.srt\",\"lang\":\"eng\"}," ++
+        "{\"id\":\"2\",\"url\":\"https://opensubtitles-v3.strem.io/subtitles/download/b.srt\",\"lang\":\"spa\"}]}";
+    var out: [4]StremioSub = undefined;
+    const n = stremioSubs(json, &out);
+    try std.testing.expectEqual(@as(usize, 2), n);
+    try std.testing.expectEqualStrings("1", out[0].id);
+    try std.testing.expectEqualStrings("https://opensubtitles-v3.strem.io/subtitles/download/a.srt", out[0].url);
+    try std.testing.expectEqualStrings("eng", out[0].lang);
+    try std.testing.expectEqualStrings("2", out[1].id);
+    try std.testing.expectEqualStrings("spa", out[1].lang);
+}
+
+test "stremioSubs handles bare numeric id and reordered fields" {
+    const json = "{\"subtitles\":[{\"lang\":\"fre\",\"id\":7,\"url\":\"https://x/y/7.srt\"}]}";
+    var out: [2]StremioSub = undefined;
+    const n = stremioSubs(json, &out);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqualStrings("7", out[0].id);
+    try std.testing.expectEqualStrings("fre", out[0].lang);
+    try std.testing.expectEqualStrings("https://x/y/7.srt", out[0].url);
+}
+
+test "stremioSubs regression: malformed/truncated JSON never traps" {
+    var out: [4]StremioSub = undefined;
+    // Truncated after url (no closing brace, no lang): still yields the url, empty lang.
+    const n1 = stremioSubs("{\"subtitles\":[{\"id\":\"1\",\"url\":\"https://x/aaa.srt\"", &out);
+    try std.testing.expectEqual(@as(usize, 1), n1);
+    try std.testing.expectEqualStrings("https://x/aaa.srt", out[0].url);
+    try std.testing.expectEqualStrings("", out[0].lang);
+    // No url key / empty / garbage → zero, no trap.
+    try std.testing.expectEqual(@as(usize, 0), stremioSubs("{\"subtitles\":[garbage", &out));
+    try std.testing.expectEqual(@as(usize, 0), stremioSubs("", &out));
+    // Unterminated url string → break, zero.
+    try std.testing.expectEqual(@as(usize, 0), stremioSubs("{\"url\":\"no-end", &out));
+    // Too-short url skipped.
+    try std.testing.expectEqual(@as(usize, 0), stremioSubs("{\"url\":\"x\",\"lang\":\"en\"}", &out));
+}
+
+test "stremioSubs respects out capacity" {
+    const json =
+        "{\"subtitles\":[" ++
+        "{\"url\":\"https://x/1.srt\",\"lang\":\"eng\"}," ++
+        "{\"url\":\"https://x/2.srt\",\"lang\":\"eng\"}," ++
+        "{\"url\":\"https://x/3.srt\",\"lang\":\"eng\"}]}";
+    var out: [2]StremioSub = undefined;
+    try std.testing.expectEqual(@as(usize, 2), stremioSubs(json, &out));
+}
+
+test "langMatches equates 2- and 3-letter codes, case-insensitively" {
+    try std.testing.expect(langMatches("eng", "eng"));
+    try std.testing.expect(langMatches("en", "eng"));
+    try std.testing.expect(langMatches("EN", "eng"));
+    try std.testing.expect(langMatches("es", "spa"));
+    try std.testing.expect(langMatches("", "anything")); // no preference → accept all
+    try std.testing.expect(!langMatches("eng", "spa"));
+    try std.testing.expect(!langMatches("en", "fre"));
+    try std.testing.expect(!langMatches("eng", "")); // provider omitted lang → no match
+}
+
+test "firstTmdbId reads the top result id, ignoring genre_ids" {
+    const json = "{\"page\":1,\"results\":[{\"genre_ids\":[28,12],\"id\":27205,\"title\":\"Inception\"}]}";
+    try std.testing.expectEqualStrings("27205", firstTmdbId(json).?);
+    try std.testing.expect(firstTmdbId("{\"results\":[]}") == null);
+}
+
+test "imdbFromExternalIds keeps the tt prefix, rejects null/empty" {
+    try std.testing.expectEqualStrings("tt1375666", imdbFromExternalIds("{\"id\":27205,\"imdb_id\":\"tt1375666\"}").?);
+    try std.testing.expect(imdbFromExternalIds("{\"imdb_id\":null}") == null);
+    try std.testing.expect(imdbFromExternalIds("{\"imdb_id\":\"\"}") == null);
+    try std.testing.expect(imdbFromExternalIds("{}") == null);
 }
 
 test "osRestResults survives escaped quotes in MovieName (backslash-title regression)" {
