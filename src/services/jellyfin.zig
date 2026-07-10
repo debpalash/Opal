@@ -431,6 +431,15 @@ fn parseItemsResponse(body: []const u8) void {
             item.runtime_ticks = t;
         }
 
+        // Primary image presence: Jellyfin serializes `"ImageTags":{"Primary":…}`
+        // on items that have cover art. Scope the "Primary" lookup to the
+        // ImageTags object so an unrelated field can't false-positive.
+        if (std.mem.indexOf(u8, obj, "\"ImageTags\":{")) |it_at| {
+            const it_start = it_at + "\"ImageTags\":".len;
+            const it_end = findObjEnd(obj, it_start);
+            item.has_image = std.mem.indexOf(u8, obj[it_start..it_end], "\"Primary\"") != null;
+        }
+
         state.app.jf.item_count += 1;
         pos = obj_end;
     }
@@ -524,13 +533,14 @@ pub fn fetchPoster(item: *state.JfItem) void {
             const token = state.app.jf.token[0..state.app.jf.token_len];
             const item_id = ptr.id[0..ptr.id_len];
 
+            const jp = @import("jellyfin_pure.zig");
             var url_buf: [512]u8 = undefined;
-            const url = std.fmt.bufPrint(&url_buf, "{s}/Items/{s}/Images/Primary?maxWidth=200&quality=80&api_key={s}", .{ server, item_id, token }) catch return;
+            const url = jp.primaryImageUrl(server, item_id, token, &url_buf) orelse return;
 
             // Cache key EXCLUDES the api_key — a token rotation must not
             // orphan every cached Jellyfin poster.
             var key_buf: [512]u8 = undefined;
-            const cache_url = std.fmt.bufPrint(&key_buf, "{s}/Items/{s}/Images/Primary?maxWidth=200", .{ server, item_id }) catch return;
+            const cache_url = jp.primaryImageCacheKey(server, item_id, &key_buf) orelse return;
 
             const cached = poster.cacheLoadForUrl(cache_url);
             defer if (cached) |cb| poster.cacheFreeEncoded(cb);

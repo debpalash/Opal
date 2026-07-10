@@ -18,9 +18,35 @@ const theme = @import("../ui/theme.zig");
 const logs = @import("../core/logs.zig");
 const pure = @import("podcasts_pure.zig");
 const io = @import("../core/io_global.zig");
+const poster = @import("../core/poster.zig");
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 
 const alloc = @import("../core/alloc.zig").allocator;
+
+// ── Desktop cover art ──
+// Podcast covers reuse the shared poster daemon (poster.zig: async fetch, the
+// global in-flight cap, disk cache, texture upload) — the exact path the
+// anime/TMDB grid cards use. The Podcast record lives in podcasts_pure.zig,
+// which must stay free of dvui/atomics (std.mem.zeroes), so the GPU texture +
+// pixel state lives HERE in a module-static array parallel to
+// state.app.podcasts.results[] by index. The array is never reallocated, so the
+// raw &slot.* pointers handed to poster.fetchAsync stay valid for the detached
+// worker. All slot access is UI-thread only except that worker, which writes
+// ONLY its own slot's pixels/w/h/fetching. A slot's url_hash pins it to the
+// show currently at that index: when a re-search puts a different show there,
+// the hash mismatch frees the old texture/pixels and refetches, so a cover can
+// never bleed across searches. pixels are c_alloc'd inside poster.zig (not the
+// tracked global allocator), so an un-uploaded cover at shutdown is not a
+// leak-report; textures free via textureDestroyLater.
+const PodPoster = struct {
+    pixels: ?[]u8 = null,
+    tex: ?dvui.Texture = null,
+    w: u32 = 0,
+    h: u32 = 0,
+    fetching: bool = false,
+    url_hash: u64 = 0,
+};
+var pod_posters: [50]PodPoster = [_]PodPoster{.{}} ** 50;
 
 const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0";
 
@@ -290,6 +316,51 @@ fn renderSearchBar() void {
     }
 }
 
+/// Draw the show's cover art (48×48) at the row's leading edge, reusing the
+/// shared poster daemon. Falls back to the podcast glyph while loading or when
+/// the show has no artwork URL. UI-thread only.
+fn renderCover(i: usize, p: *const pure.Podcast) void {
+    const COVER: f32 = 48;
+    const slot = &pod_posters[i];
+    const art = p.artwork[0..p.artwork_len];
+
+    if (art.len > 0) {
+        // Pin the slot to whatever show is at index i now — a re-search can
+        // reorder results[], so a URL-hash change means "different show here":
+        // free the stale texture/pixels and refetch. Only when not mid-fetch,
+        // so we never spawn a second worker onto the same slot.
+        const h = std.hash.Fnv1a_64.hash(art);
+        if (slot.url_hash != h and !slot.fetching) {
+            poster.deinitPoster(&slot.pixels, &slot.tex);
+            slot.w = 0;
+            slot.h = 0;
+            slot.url_hash = h;
+        }
+        _ = poster.uploadIfReady(&slot.pixels, slot.w, slot.h, &slot.tex);
+        if (slot.tex == null and !slot.fetching and slot.pixels == null)
+            poster.fetchAsync(art, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
+    }
+
+    if (slot.tex) |*tex| {
+        _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+            .id_extra = i + 1000,
+            .min_size_content = .{ .w = COVER, .h = COVER },
+            .max_size_content = .{ .w = COVER, .h = COVER },
+            .corner_radius = theme.dims.rad_sm,
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+        });
+    } else {
+        _ = dvui.icon(@src(), "", icons.tvg.lucide.podcast, .{}, .{
+            .id_extra = i + 1000,
+            .color_text = theme.colors.text_tertiary,
+            .min_size_content = theme.iconSize(.sm),
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+        });
+    }
+}
+
 fn renderResults() void {
     if (state.app.podcasts.result_count == 0) {
         if (!state.app.podcasts.is_loading.load(.acquire)) {
@@ -324,13 +395,7 @@ fn renderResults() void {
         });
         defer row.deinit();
 
-        _ = dvui.icon(@src(), "", icons.tvg.lucide.podcast, .{}, .{
-            .id_extra = i + 1000,
-            .color_text = theme.colors.text_tertiary,
-            .min_size_content = theme.iconSize(.sm),
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-        });
+        renderCover(i, p);
 
         _ = dvui.label(@src(), "{s}", .{name}, .{
             .id_extra = i + 2000,

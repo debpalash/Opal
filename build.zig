@@ -351,6 +351,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_podcasts_pure).step);
 
+    // Jellyfin image-proxy URL building + item-id validation (SSRF/injection
+    // gate for the web /api/jellyfin/poster proxy).
+    const test_jellyfin_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/jellyfin_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_jellyfin_pure).step);
+
     // Workspace name sanitization (path-traversal / separator neutralization).
     const test_workspace_pure = b.addTest(.{
         .root_module = b.createModule(.{

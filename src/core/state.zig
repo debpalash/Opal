@@ -186,6 +186,9 @@ pub const JfItem = struct {
     overview_len: usize = 0,
     is_folder: bool = false,
     has_subtitles: bool = false,
+    // Item carries a Primary image (parsed from ImageTags) — lets the web
+    // companion render a poster card vs. a text-only fallback row.
+    has_image: bool = false,
     runtime_ticks: i64 = 0,
     played_ticks: i64 = 0,
     poster_fetching: bool = false,

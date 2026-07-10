@@ -86,6 +86,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .result .src{background:var(--bg-elevated);border-radius:999px;padding:1px 9px;color:var(--text-2)}
 .result .play{margin-left:auto;color:var(--accent);font-weight:600;padding:6px 12px;
   background:var(--bg-elevated);border-radius:var(--rad-sm)}
+/* podcast row: leading cover thumbnail */
+.result.pod{display:flex;gap:10px;align-items:center}
+.result.pod .thumb{width:52px;height:52px;border-radius:8px;object-fit:cover;
+  background:var(--bg-elevated);flex:none}
+.result.pod .body{flex:1;min-width:0}
 
 /* ── Activity ── */
 .sect{color:var(--text-2);font-weight:600;font-size:13px;text-transform:uppercase;
@@ -750,9 +755,14 @@ function runPodcasts(){
 }
 function renderPodResults(rs){
   $('pod-results').innerHTML = rs.map((r, i) => `
-    <div class="result">
-      <div class="t">${esc(r.name)}</div>
-      <div class="m"><button class="play" data-idx="${i}">Episodes ⭢</button></div>
+    <div class="result pod">
+      ${r.art
+        ? `<img class="thumb" loading="lazy" src="${BASE}/api/podcasts/poster?idx=${i}&t=${TOKEN}">`
+        : '<div class="thumb"></div>'}
+      <div class="body">
+        <div class="t">${esc(r.name)}</div>
+        <div class="m"><button class="play" data-idx="${i}">Episodes ⭢</button></div>
+      </div>
     </div>`).join('') || '<div class="empty">No results yet</div>';
   $('pod-results').querySelectorAll('.play').forEach(b => b.onclick = () => loadPodEpisodes(+b.dataset.idx));
 }
@@ -807,20 +817,23 @@ function renderJfLibraries(libs){
   $('jf-libs').querySelectorAll('button').forEach(b => b.onclick = () => jfBrowse(b.dataset.id));
 }
 function renderJfItems(items){
-  $('jf-items').innerHTML = items.map(it => {
-    const action = it.folder ? 'Open ⭢' : (isJfAudio(it.type) ? 'Play ♪' : 'Play ▶');
-    return `<div class="result" data-id="${esc(it.id)}" data-folder="${it.folder}" data-type="${esc(it.type || '')}">
-      <div class="t">${esc(it.name)}</div>
-      <div class="m"><span class="src">${esc(it.type || '')}</span>
-        ${it.year ? `<span>${it.year}</span>` : ''}${it.runtime ? `<span>${fmt(it.runtime)}</span>` : ''}
-        <button class="play">${action}</button></div></div>`;
-  }).join('') || '<div class="empty">Nothing here</div>';
-  $('jf-items').querySelectorAll('.result').forEach(el => el.querySelector('.play').onclick = () => {
+  // Poster cards (image + title). Items without a Primary image (it.image
+  // false) fall back to the placeholder <img> tile — graceful, still labelled.
+  $('jf-items').innerHTML = items.length
+    ? '<div class="grid">' + items.map(it => {
+        const meta = [it.type, it.year || '', it.runtime ? fmt(it.runtime) : ''].filter(Boolean).join(' · ');
+        return `<div class="card" data-id="${esc(it.id)}" data-folder="${it.folder}" data-type="${esc(it.type || '')}">
+          ${it.image ? `<img loading="lazy" src="${BASE}/api/jellyfin/poster?id=${encodeURIComponent(it.id)}&t=${TOKEN}">` : '<img>'}
+          <div class="cap">${esc(it.name)}<br><span class="rt">${esc(meta)}</span></div>
+        </div>`;
+      }).join('') + '</div>'
+    : '<div class="empty">Nothing here</div>';
+  $('jf-items').querySelectorAll('.card').forEach(el => el.onclick = () => {
     const id = el.dataset.id;
     if (el.dataset.folder === 'true') { jfBrowse(id); return; }
     const ep = isJfAudio(el.dataset.type) ? '/jellyfin/play_audio?id=' : '/jellyfin/play?id=';
     api(ep + encodeURIComponent(id)).catch(()=>{});
-    el.querySelector('.play').textContent = HOSTED ? 'Queued ✓' : 'Sent ✓';
+    el.style.opacity = '.55';
   });
 }
 function jfPollItems(){

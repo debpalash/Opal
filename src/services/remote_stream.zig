@@ -107,28 +107,84 @@ pub fn handleVtt(stream: std.Io.net.Stream, rel: []const u8) void {
 /// desktop grid uses, so phone browsing warms the desktop and vice versa).
 pub fn handlePoster(stream: std.Io.net.Stream, tmdb_path: []const u8) void {
     if (tmdb_path.len == 0 or tmdb_path.len > 96 or tmdb_path[0] != '/') return send404(stream);
-    const poster = @import("../core/poster.zig");
     var url_buf: [160]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w185{s}", .{tmdb_path}) catch return send404(stream);
+    serveProxied(stream, url, url);
+}
 
+/// GET /api/jellyfin/poster?id=<itemId>[&t=] — proxy a Jellyfin item's Primary
+/// image through the shared poster disk cache. The connected server URL + auth
+/// token live in state (never sent by the browser), so the phone never sees the
+/// Jellyfin credentials; `<img>` just references this same-origin route. The id
+/// is validated (jellyfin_pure.validItemId) before it reaches the URL — it can't
+/// escape the path or inject query params.
+pub fn handleJfPoster(stream: std.Io.net.Stream, item_id: []const u8) void {
+    const jp = @import("jellyfin_pure.zig");
+    if (!jp.validItemId(item_id)) return send404(stream);
+    if (!state.app.jf.connected) return send404(stream);
+
+    // Snapshot server + token into locals (avoid a torn read if the UI edits
+    // them, and to bound them).
+    var server_buf: [256]u8 = undefined;
+    const server_len = @min(state.app.jf.server_url_len, server_buf.len);
+    @memcpy(server_buf[0..server_len], state.app.jf.server_url[0..server_len]);
+    const server = server_buf[0..server_len];
+    if (server.len == 0) return send404(stream);
+
+    var token_buf: [256]u8 = undefined;
+    const token_len = @min(state.app.jf.token_len, token_buf.len);
+    @memcpy(token_buf[0..token_len], state.app.jf.token[0..token_len]);
+    const token = token_buf[0..token_len];
+
+    // Cache key omits the api_key so a token rotation can't orphan cached
+    // posters (shared with the desktop worker via jellyfin_pure).
+    var key_buf: [512]u8 = undefined;
+    const cache_key = jp.primaryImageCacheKey(server, item_id, &key_buf) orelse return send404(stream);
+    var url_buf: [600]u8 = undefined;
+    const url = jp.primaryImageUrl(server, item_id, token, &url_buf) orelse return send404(stream);
+    serveProxied(stream, url, cache_key);
+}
+
+/// GET /api/podcasts/poster?idx=<n>[&t=] — proxy a podcast show's iTunes cover
+/// (a public https URL held in state) through the shared poster disk cache. By
+/// index (not an arbitrary URL param) so the proxy can only ever fetch an
+/// artwork URL the desktop already parsed — no SSRF surface.
+pub fn handlePodcastPoster(stream: std.Io.net.Stream, idx: usize) void {
+    if (idx >= state.app.podcasts.result_count) return send404(stream);
+    const r = &state.app.podcasts.results[idx];
+    // Snapshot the URL — a concurrent re-search may rewrite results[idx].
+    var art_buf: [300]u8 = undefined;
+    const alen = @min(r.artwork_len, art_buf.len);
+    if (alen == 0) return send404(stream);
+    @memcpy(art_buf[0..alen], r.artwork[0..alen]);
+    const url = art_buf[0..alen];
+    if (!std.mem.startsWith(u8, url, "https://") and !std.mem.startsWith(u8, url, "http://"))
+        return send404(stream);
+    serveProxied(stream, url, url);
+}
+
+/// Serve `fetch_url` as an image, backed by the shared poster disk cache keyed
+/// by `cache_key`. Cache hit → serve the stored encoded bytes; miss → curl
+/// once, store, serve. Runs on the connection thread (blocking curl ok).
+fn serveProxied(stream: std.Io.net.Stream, fetch_url: []const u8, cache_key: []const u8) void {
+    const poster = @import("../core/poster.zig");
     // Two ownership paths, two frees: the cache hands back c_alloc bytes
     // (cacheFreeEncoded); a network fetch lives in our own app-alloc buffer.
-    if (poster.cacheLoadForUrl(url)) |cached| {
+    if (poster.cacheLoadForUrl(cache_key)) |cached| {
         defer poster.cacheFreeEncoded(cached);
         sendImage(stream, cached);
         return;
     }
-    // Cache miss — curl once, store, serve. (Connection thread; blocking ok.)
     const buf = alloc.alloc(u8, 512 * 1024) catch return send404(stream);
     defer alloc.free(buf);
-    var child = io_g.Child.init(&.{ "curl", "-s", "--max-time", "10", url }, alloc);
+    var child = io_g.Child.init(&.{ "curl", "-s", "--max-time", "10", fetch_url }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     child.spawn() catch return send404(stream);
     const n = if (child.stdout) |*so| io_g.readAll(so, buf) catch 0 else 0;
     _ = child.wait() catch {};
     if (n < 100) return send404(stream);
-    poster.cacheStoreForUrl(url, buf[0..n], 0, 0);
+    poster.cacheStoreForUrl(cache_key, buf[0..n], 0, 0);
     sendImage(stream, buf[0..n]);
 }
 

@@ -409,7 +409,7 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
     // Authorization header, so these take the token as ?t= instead. Same
     // constant-time check as the Bearer gate; dispatch lives in
     // remote_stream.zig to keep this file to routing/auth.
-    if (std.mem.eql(u8, path, "/events") or std.mem.eql(u8, path, "/stream") or std.mem.eql(u8, path, "/vtt") or std.mem.eql(u8, path, "/poster")) {
+    if (std.mem.eql(u8, path, "/events") or std.mem.eql(u8, path, "/stream") or std.mem.eql(u8, path, "/vtt") or std.mem.eql(u8, path, "/poster") or std.mem.eql(u8, path, "/api/jellyfin/poster") or std.mem.eql(u8, path, "/api/podcasts/poster")) {
         const t = getQueryParam(query, "t") orelse "";
         if (!api_token_ready.load(.acquire) or !constantTimeEqual(t, api_token[0..])) {
             sendUnauthorized(stream);
@@ -440,6 +440,14 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
         } else if (std.mem.eql(u8, path, "/vtt")) {
             const rel = urlDecode(getQueryParam(query, "file") orelse "", &dec_buf) orelse "";
             rs.handleVtt(stream, rel);
+        } else if (std.mem.eql(u8, path, "/api/jellyfin/poster")) {
+            const id = urlDecode(getQueryParam(query, "id") orelse "", &dec_buf) orelse "";
+            rs.handleJfPoster(stream, id);
+        } else if (std.mem.eql(u8, path, "/api/podcasts/poster")) {
+            // Bad/missing idx → maxInt, which handlePodcastPoster's bounds check
+            // rejects with a 404.
+            const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "", 10) catch std.math.maxInt(usize);
+            rs.handlePodcastPoster(stream, idx);
         } else {
             const pp = urlDecode(getQueryParam(query, "path") orelse "", &dec_buf) orelse "";
             rs.handlePoster(stream, pp);
@@ -1256,7 +1264,11 @@ fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
         if (ri > 0) w.writeAll(",") catch return;
         w.writeAll("{\"name\":\"") catch return;
         escJsonWrite(&w, r.name[0..r.name_len]);
-        w.writeAll("\"}") catch return;
+        // `art` tells the web client whether to request the cover proxy
+        // (/api/podcasts/poster?idx=…) or fall back to a placeholder tile.
+        w.writeAll("\",\"art\":") catch return;
+        w.writeAll(if (r.artwork_len > 0) "true" else "false") catch return;
+        w.writeAll("}") catch return;
     }
     w.writeAll("],\"episodes\":[") catch return;
     for (0..state.app.podcasts.episode_count) |ei| {
@@ -1432,10 +1444,11 @@ fn apiJellyfin(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
         escJsonWrite(&w, item.name[0..item.name_len]);
         w.writeAll("\",\"type\":\"") catch return;
         escJsonWrite(&w, item.media_type[0..item.media_type_len]);
-        w.print("\",\"year\":{d},\"folder\":{s},\"runtime\":{d}}}", .{
+        w.print("\",\"year\":{d},\"folder\":{s},\"runtime\":{d},\"image\":{s}}}", .{
             item.year,
             if (item.is_folder) "true" else "false",
             runtime_sec,
+            if (item.has_image) "true" else "false",
         }) catch return;
     }
     w.writeAll("]}") catch return;
