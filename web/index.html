@@ -231,6 +231,17 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
     <div id="anime-episodes"></div>
   </section>
 
+  <!-- Podcasts -->
+  <section class="page" id="page-podcasts">
+    <div class="search-row">
+      <input id="pod-q" placeholder="Search podcasts…" autocapitalize="off">
+      <button id="pod-go">Go</button>
+    </div>
+    <div class="hint" id="pod-hint">Search podcasts — tap a show for episodes.</div>
+    <div id="pod-results"></div>
+    <div id="pod-episodes"></div>
+  </section>
+
   <!-- Jellyfin -->
   <section class="page" id="page-jf">
     <div id="jf-login">
@@ -287,6 +298,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   <button data-page="browse"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Browse</button>
   <button data-page="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Search</button>
   <button data-page="anime"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg>Anime</button>
+  <button data-page="podcasts"><svg viewBox="0 0 24 24"><circle cx="12" cy="11" r="3"/><path d="M12 14v7"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M6 14a8 8 0 1 1 12 0"/></svg>Podcasts</button>
   <button data-page="jf"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>Jellyfin</button>
   <button data-page="rss"><svg viewBox="0 0 24 24"><circle cx="5.5" cy="18.5" r="1.5"/><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/></svg>RSS</button>
   <button data-page="act"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 19h16"/></svg>Activity</button>
@@ -351,6 +363,7 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   if (b.dataset.page === 'browse') loadBrowse();
   if (b.dataset.page === 'setup') loadSetup();
   if (b.dataset.page === 'anime') loadAnime();
+  if (b.dataset.page === 'podcasts') loadPodcasts();
   if (b.dataset.page === 'jf') loadJellyfin();
   if (b.dataset.page === 'rss') loadRss();
 });
@@ -701,6 +714,71 @@ function renderAnimeEpisodes(eps){
     : '';
   $('anime-episodes').querySelectorAll('.ep-btn').forEach(b => b.onclick = () => {
     api('/anime/play?ep=' + encodeURIComponent(b.dataset.ep)).catch(()=>{});
+    b.textContent = '▶';
+  });
+}
+
+// ── Podcasts ──
+// Server routes are async: /podcasts/search & /podcasts/episodes trigger
+// background work and return {ok:true}; poll GET /podcasts for
+// {results,episodes,selected,loading,episodes_loading}.
+let podWatch = null;
+async function loadPodcasts(){
+  try { renderPodcasts(await api('/podcasts')); } catch {}
+}
+function renderPodcasts(d){ renderPodResults(d.results || []); renderPodEpisodes(d.episodes || []); }
+$('pod-go').onclick = () => runPodcasts();
+$('pod-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runPodcasts(); $('pod-q').blur(); } });
+function runPodcasts(){
+  const q = $('pod-q').value.trim(); if (!q) return;
+  $('pod-hint').innerHTML = '<span class="spin"></span> Searching podcasts…';
+  $('pod-results').innerHTML = ''; $('pod-episodes').innerHTML = '';
+  api('/podcasts/search?q=' + encodeURIComponent(q)).catch(()=>{});
+  clearInterval(podWatch);
+  let ticks = 0;
+  podWatch = setInterval(async () => {
+    ticks++;
+    try {
+      const d = await api('/podcasts');
+      renderPodResults(d.results || []);
+      if ((!d.loading && ticks > 2) || ticks > 40) {
+        clearInterval(podWatch);
+        $('pod-hint').textContent = (d.results || []).length + ' shows — tap one for episodes.';
+      }
+    } catch { clearInterval(podWatch); }
+  }, 900);
+}
+function renderPodResults(rs){
+  $('pod-results').innerHTML = rs.map((r, i) => `
+    <div class="result">
+      <div class="t">${esc(r.name)}</div>
+      <div class="m"><button class="play" data-idx="${i}">Episodes ⭢</button></div>
+    </div>`).join('') || '<div class="empty">No results yet</div>';
+  $('pod-results').querySelectorAll('.play').forEach(b => b.onclick = () => loadPodEpisodes(+b.dataset.idx));
+}
+function loadPodEpisodes(idx){
+  $('pod-episodes').innerHTML = '<div class="empty"><span class="spin"></span></div>';
+  api('/podcasts/episodes?idx=' + idx).catch(()=>{});
+  let tries = 0;
+  const t = setInterval(async () => {
+    tries++;
+    try {
+      const d = await api('/podcasts');
+      if ((d.episodes || []).length || tries > 20) { clearInterval(t); renderPodEpisodes(d.episodes || []); }
+    } catch { clearInterval(t); }
+  }, 700);
+}
+function renderPodEpisodes(eps){
+  $('pod-episodes').innerHTML = eps.length
+    ? '<div class="sect">Episodes</div>' + eps.map((e, i) => `
+      <div class="result">
+        <div class="t">${esc(e.title)}</div>
+        <div class="m"><span class="src">${esc([e.date, e.duration].filter(Boolean).join(' · '))}</span>
+          <button class="play" data-ep="${i}">▶ Play</button></div>
+      </div>`).join('')
+    : '<div class="empty">No episodes</div>';
+  $('pod-episodes').querySelectorAll('.play').forEach(b => b.onclick = () => {
+    api('/podcasts/play?idx=' + encodeURIComponent(b.dataset.ep)).catch(()=>{});
     b.textContent = '▶';
   });
 }

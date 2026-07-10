@@ -600,6 +600,11 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         apiAnime(stream, api_path, query);
         return;
     }
+    // Podcasts
+    if (std.mem.startsWith(u8, api_path, "/podcasts")) {
+        apiPodcasts(stream, api_path, query);
+        return;
+    }
     // Comics
     if (std.mem.startsWith(u8, api_path, "/comics")) {
         apiComics(stream, api_path, query);
@@ -1210,6 +1215,72 @@ fn apiAnime(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
     w.writeAll(if (state.app.anime.is_loading.load(.acquire)) "true" else "false") catch return;
     w.writeAll(",\"stream_loading\":") catch return;
     w.writeAll(if (state.app.anime.stream_loading) "true" else "false") catch return;
+    w.writeAll("}") catch return;
+    sendJson(stream, json_buf[0..w.end]);
+}
+
+fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+    const podcasts_svc = @import("podcasts.zig");
+    if (std.mem.eql(u8, api_path, "/podcasts/search")) {
+        if (getQueryParam(query, "q")) |q| {
+            var decoded: [256]u8 = undefined;
+            const dq = urlDecode(q, &decoded) orelse q;
+            podcasts_svc.searchPodcasts(dq);
+        }
+        sendJson(stream, "{\"ok\":true,\"action\":\"podcast_search\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/podcasts/episodes")) {
+        if (getQueryParam(query, "idx")) |idx_str| {
+            const idx = std.fmt.parseInt(usize, idx_str, 10) catch 0;
+            podcasts_svc.loadEpisodes(idx);
+        }
+        sendJson(stream, "{\"ok\":true,\"action\":\"load_episodes\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/podcasts/play")) {
+        if (getQueryParam(query, "idx")) |idx_str| {
+            const idx = std.fmt.parseInt(usize, idx_str, 10) catch 0;
+            podcasts_svc.playEpisode(idx);
+        }
+        sendJson(stream, "{\"ok\":true,\"action\":\"play_episode\"}");
+        return;
+    }
+    // GET /podcasts → results + episodes for the current show.
+    var json_buf: [32768]u8 = undefined;
+    var w = std.Io.Writer.fixed(&json_buf);
+    w.writeAll("{\"results\":[") catch return;
+    for (0..state.app.podcasts.result_count) |ri| {
+        const r = state.app.podcasts.results[ri];
+        if (r.name_len == 0) continue;
+        if (ri > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"name\":\"") catch return;
+        escJsonWrite(&w, r.name[0..r.name_len]);
+        w.writeAll("\"}") catch return;
+    }
+    w.writeAll("],\"episodes\":[") catch return;
+    for (0..state.app.podcasts.episode_count) |ei| {
+        const e = state.app.podcasts.episodes[ei];
+        if (e.title_len == 0) continue;
+        if (ei > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"title\":\"") catch return;
+        escJsonWrite(&w, e.title[0..e.title_len]);
+        w.writeAll("\",\"date\":\"") catch return;
+        escJsonWrite(&w, e.date[0..e.date_len]);
+        w.writeAll("\",\"duration\":\"") catch return;
+        escJsonWrite(&w, e.duration[0..e.duration_len]);
+        w.writeAll("\"}") catch return;
+    }
+    w.writeAll("],\"selected\":") catch return;
+    if (state.app.podcasts.selected_idx) |si| {
+        w.print("{d}", .{si}) catch return;
+    } else {
+        w.writeAll("null") catch return;
+    }
+    w.writeAll(",\"loading\":") catch return;
+    w.writeAll(if (state.app.podcasts.is_loading.load(.acquire)) "true" else "false") catch return;
+    w.writeAll(",\"episodes_loading\":") catch return;
+    w.writeAll(if (state.app.podcasts.episodes_loading.load(.acquire)) "true" else "false") catch return;
     w.writeAll("}") catch return;
     sendJson(stream, json_buf[0..w.end]);
 }

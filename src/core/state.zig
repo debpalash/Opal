@@ -6,6 +6,7 @@ const paths = @import("paths.zig");
 const MediaPlayer = player.MediaPlayer;
 const thumbnail = @import("../player/thumbnail.zig");
 const subtitles_mod = @import("../player/subtitles.zig");
+const podcasts_pure = @import("../services/podcasts_pure.zig");
 
 // ══════════════════════════════════════════════════════════
 // Type Definitions
@@ -14,7 +15,7 @@ const subtitles_mod = @import("../player/subtitles.zig");
 pub const GridMode = enum { auto, cols_1, cols_2, cols_3, cols_4 };
 pub const ContentProvider = enum { mpv, comic_viewer };
 pub const VideoFillMode = enum { fit, cover };
-pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web };
+pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web };
 pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, Scripts, AI, LangLearn, FileAssoc, About };
 pub const TmdbView = enum { Trending, Search, Favorites, Watchlist, Watching };
 pub const TmdbCategory = enum { trending, now_playing, top_rated, upcoming, popular };
@@ -678,6 +679,28 @@ pub const AppState = struct {
         continue_loaded: bool = false,
     } = .{},
 
+    // ── Podcasts (iTunes Search API → RSS episodes → audio via mpv) ──
+    // Structural sibling of `anime`: search → show → episode list → play. All
+    // parsing lives in services/podcasts_pure.zig; fetch workers publish here
+    // under podcasts.zig's parse_mutex. See services/podcasts.zig.
+    podcasts: struct {
+        search_buf: [256]u8 = std.mem.zeroes([256]u8),
+        // Atomic like the anime/jf loaders: read by the UI + remote API threads,
+        // written by detached fetch workers. A plain bool here is a data race.
+        is_loading: std.atomic.Value(bool) = .init(false),
+        episodes_loading: std.atomic.Value(bool) = .init(false),
+        fetch_error: bool = false,
+        results: [50]podcasts_pure.Podcast = std.mem.zeroes([50]podcasts_pure.Podcast),
+        result_count: usize = 0,
+        selected_idx: ?usize = null,
+        // Selected show's name, snapshot for the episode-view header (results[]
+        // may be reordered by a fresh search while episodes are open).
+        selected_name: [160]u8 = std.mem.zeroes([160]u8),
+        selected_name_len: usize = 0,
+        episodes: [200]podcasts_pure.Episode = std.mem.zeroes([200]podcasts_pure.Episode),
+        episode_count: usize = 0,
+    } = .{},
+
     // ── Browser (global singleton — the in-app web browser lives in the
     //     Browse › Web tab now, independent of any MediaPlayer) ──
     browser: struct {
@@ -982,6 +1005,10 @@ pub fn navigateToTabNow(tab: DrawerTab) void {
         },
         .Anime => {
             app.browse_source = .Anime;
+            app.router.navigate(.browse);
+        },
+        .Podcasts => {
+            app.browse_source = .Podcasts;
             app.router.navigate(.browse);
         },
         .Comics => {

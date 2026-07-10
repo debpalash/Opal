@@ -1270,6 +1270,37 @@ def test_anime_detach():
     return "fail", "an anime thread handle is discarded without detach"
 
 
+@test("Podcasts Tab Wired", "Page Shell")
+def test_podcasts_wired():
+    # New media class: search (iTunes) → show → RSS episodes → stream audio.
+    # Verify the tab is present end-to-end: enum + routing + service + parser +
+    # remote API + web tab, and that the enclosure URL reaches mpv.
+    st = _src("src/core/state.zig")
+    drawer = _src("src/ui/drawer.zig")
+    shell = _src("src/ui/shell.zig")
+    svc = _src("src/services/podcasts.zig")
+    pure = _src("src/services/podcasts_pure.zig")
+    rem = _src("src/services/remote.zig")
+    web = _src("web/index.html")
+    checks = {
+        "enum variant": "Podcasts," in st and "podcasts: struct" in st,
+        "drawer route": ".Podcasts =>" in drawer and "podcasts.zig" in drawer,
+        "shell label+icon": '.Podcasts => "Podcasts"' in shell and "lucide.podcast" in shell,
+        "service search→episodes→play": all(
+            f"pub fn {fn}" in svc for fn in ("searchPodcasts", "loadEpisodes", "playEpisode")
+        ),
+        "itunes endpoint": "itunes.apple.com/search?media=podcast" in svc,
+        "enclosure→mpv": "loadContentDirect" in svc,
+        "pure parsers": "pub fn parseItunes" in pure and "pub fn parseRssEpisodes" in pure,
+        "remote routes": '/podcasts/search' in rem and '/podcasts/play' in rem,
+        "web tab": 'id="page-podcasts"' in web and "loadPodcasts(" in web,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if not missing:
+        return "pass", "podcasts tab wired: enum→nav→service→pure→remote→web"
+    return "fail", "podcasts wiring incomplete: " + ", ".join(missing)
+
+
 # ══════════════════════════════════════════════════════════
 # Session features: single-media, browser, voice, Co-Watcher, Recall
 # (wiring/regression guards so the build+test gate exercises new code)

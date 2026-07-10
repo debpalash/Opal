@@ -229,18 +229,19 @@ pub fn renderDrawer() void {
         renderRailTab(.TMDB, shell.iconForTab(.TMDB), "TMDB", 4);
         renderRailTab(.YouTube, shell.iconForTab(.YouTube), "YouTube", 5);
         renderRailTab(.Anime, shell.iconForTab(.Anime), "Anime", 6);
-        renderRailTab(.Comics, shell.iconForTab(.Comics), "Comics", 7);
-        renderRailTab(.Web, shell.iconForTab(.Web), "Web", 8);
-        renderRailTab(.RSS, shell.iconForTab(.RSS), "RSS", 9);
-        renderRailTab(.Jellyfin, shell.iconForTab(.Jellyfin), "Jellyfin / Emby", 10);
-        renderRailTab(.Plex, shell.iconForTab(.Plex), "Plex", 11);
+        renderRailTab(.Podcasts, shell.iconForTab(.Podcasts), "Podcasts", 7);
+        renderRailTab(.Comics, shell.iconForTab(.Comics), "Comics", 8);
+        renderRailTab(.Web, shell.iconForTab(.Web), "Web", 9);
+        renderRailTab(.RSS, shell.iconForTab(.RSS), "RSS", 10);
+        renderRailTab(.Jellyfin, shell.iconForTab(.Jellyfin), "Jellyfin / Emby", 11);
+        renderRailTab(.Plex, shell.iconForTab(.Plex), "Plex", 12);
 
         railGroupGap(1);
 
         // ── Group 3: Configure ──
-        renderRailTab(.AI, shell.iconForTab(.AI), "AI", 12);
-        renderRailTab(.Plugins, shell.iconForTab(.Plugins), "Plugins", 13);
-        renderRailTab(.Settings, shell.iconForTab(.Settings), "Settings", 14);
+        renderRailTab(.AI, shell.iconForTab(.AI), "AI", 13);
+        renderRailTab(.Plugins, shell.iconForTab(.Plugins), "Plugins", 14);
+        renderRailTab(.Settings, shell.iconForTab(.Settings), "Settings", 15);
 
         // Spacer to push bottom controls to the bottom of the rail.
         {
@@ -297,6 +298,7 @@ pub fn renderTabContent(tab: state.DrawerTab) void {
         .Comics => comics.renderContent(),
         .Web => @import("../services/browser.zig").renderContent(),
         .Anime => anime.renderContent(),
+        .Podcasts => @import("../services/podcasts.zig").renderContent(),
         .History => renderHistoryContent(),
         .RSS => rss.renderContent(),
         .Jellyfin => jellyfin_ui.renderContent(),

@@ -341,6 +341,16 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_anilist_pure).step);
 
+    // Podcasts: iTunes JSON + podcast RSS episode parsing (malformed regressions).
+    const test_podcasts_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/podcasts_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_podcasts_pure).step);
+
     // Workspace name sanitization (path-traversal / separator neutralization).
     const test_workspace_pure = b.addTest(.{
         .root_module = b.createModule(.{
