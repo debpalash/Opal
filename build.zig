@@ -380,6 +380,18 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_tmdb_pure).step);
 
+    // Internet Archive JSON parsing: advancedsearch docs[] iteration
+    // (order-independent id/title/year) + metadata files[] best-video pick +
+    // a malformed-JSON regression case.
+    const test_archive_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/archive_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_archive_pure).step);
+
     // Wikipedia trivia lookup: disambiguated-title building + JSON extract
     // parsing (rejects disambiguation pages / too-short extracts).
     const test_wikipedia_pure = b.addTest(.{

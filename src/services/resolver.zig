@@ -68,6 +68,7 @@ pub var status_local = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_rss = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_comics = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_torznab = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_archive = std.atomic.Value(SourceStatus).init(.idle);
 
 // Explicit u8 backing so std.atomic.Value(SourceStatus) is byte-atomic.
 pub const SourceStatus = enum(u8) { idle, searching, done, failed };
@@ -312,6 +313,7 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     Pre.set(&status_rss, .rss);
     Pre.set(&status_comics, .comics);
     Pre.set(&status_torznab, .torrent); // generic Torznab/Prowlarr — a torrent source
+    Pre.set(&status_archive, .stremio); // Internet Archive — legal HTTP-direct streams (rides the Stremio pill)
 
 
 
@@ -347,6 +349,7 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     if (sourceOn(.youtube)) Spawn.go(resolveYouTube, &status_yt);
     if (sourceOn(.comics)) Spawn.go(resolveComics, &status_comics); // readallcomics.com HTML scrape
     if (sourceOn(.stremio)) Spawn.go(resolveStremio, &status_stremio); // needs IMDB id — TMDB then addons
+    if (sourceOn(.stremio)) Spawn.go(resolveArchive, &status_archive); // archive.org public-domain — legal, default-on
 
     // If filtering left nothing to spawn, close the resolve immediately —
     // no worker exists to call checkAllDone().
@@ -657,7 +660,7 @@ fn checkAllDone() void {
         status_yt.load(.acquire) != .searching and status_1337x.load(.acquire) != .searching and
         status_yts.load(.acquire) != .searching and status_local.load(.acquire) != .searching and
         status_rss.load(.acquire) != .searching and status_comics.load(.acquire) != .searching and
-        status_torznab.load(.acquire) != .searching)
+        status_torznab.load(.acquire) != .searching and status_archive.load(.acquire) != .searching)
     {
         is_resolving.store(false, .release);
     }
@@ -1390,6 +1393,152 @@ fn resolveTorznab(query_buf: [256]u8, qlen: usize) void {
     if (found > 0) {
         logs.pushLog("info", "resolver", "torznab results found", false);
     }
+}
+
+// ══════════════════════════════════════════════════════════
+// Backend: Internet Archive (archive.org public-domain / CC video)
+//
+// LEGAL, default-on direct-play source — no torrent, no source_config marker.
+// advancedsearch.php gives us matching movie items; for each we hit
+// metadata/{id} and pick the largest playable video file (archive_pure) so the
+// emitted URL is a real https stream mpv can open — NOT the guessed
+// "{id}.mp4" form (which 404s on most items). Results ride the .stremio source
+// variant (HTTP-direct, plays via mpv load_file in playItem) and the Stremio
+// filter pill. All JSON parsing is routed through the tested archive_pure.zig.
+// ══════════════════════════════════════════════════════════
+
+fn resolveArchive(query_buf: [256]u8, qlen: usize) void {
+    defer {
+        status_archive.store(.done, .release);
+        checkAllDone();
+    }
+    if (qlen == 0) return;
+
+    const ap = @import("archive_pure.zig");
+    const http = @import("../core/http.zig");
+    const query = query_buf[0..qlen];
+
+    // q = "<query> AND mediatype:(movies)" — percent-encode the whole value.
+    var q_raw: [384]u8 = undefined;
+    const q_val = std.fmt.bufPrint(&q_raw, "{s} AND mediatype:(movies)", .{query}) catch return;
+    var q_enc: [768]u8 = undefined;
+    const enc_q = http.urlEncode(q_val, &q_enc);
+
+    // fl[] param names carry literal brackets (IA expects them); only the q
+    // value is user data and is encoded above.
+    var url_buf: [1024]u8 = undefined;
+    const url = std.fmt.bufPrint(
+        &url_buf,
+        "https://archive.org/advancedsearch.php?q={s}&fl[]=identifier&fl[]=title&fl[]=year&rows=20&output=json",
+        .{enc_q},
+    ) catch return;
+
+    // Heap the response — keep it off this spawned worker's 512 KB stack.
+    const page = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(page);
+
+    @import("../core/rate_limit.zig").acquire("archive", 1.0);
+    const body = http.fetch(url, page, .{
+        .timeout_secs = 8,
+        .user_agent = "Opal/1.0",
+    }) orelse return;
+    if (body.len < 30) return;
+
+    // Reused heap buffer for the per-item metadata fetch (bounded work: we only
+    // resolve up to `max_hits` playable items, one extra fetch each).
+    const meta_buf = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(meta_buf);
+
+    const max_hits = 8;
+    var found: usize = 0;
+    var it = ap.iterateDocs(body);
+    while (it.next()) |doc| {
+        if (found >= max_hits) break;
+        if (doc.identifier.len == 0 or doc.identifier.len > 512) continue;
+
+        // Resolve the actual playable file via metadata/{id}.
+        var meta_url: [640]u8 = undefined;
+        var id_enc: [1024]u8 = undefined;
+        const enc_id = http.urlEncode(doc.identifier, &id_enc);
+        const murl = std.fmt.bufPrint(&meta_url, "https://archive.org/metadata/{s}", .{enc_id}) catch continue;
+
+        @import("../core/rate_limit.zig").acquire("archive", 1.0);
+        const meta = http.fetch(murl, meta_buf, .{
+            .timeout_secs = 8,
+            .user_agent = "Opal/1.0",
+        }) orelse continue;
+        if (meta.len < 20) continue;
+
+        const file_name = ap.pickBestVideoFile(meta) orelse continue;
+
+        // Build the direct-play URL: download/{id}/{file}. Percent-encode each
+        // path segment (space→%20, NOT '+', which is literal in a path).
+        var url_out: [2048]u8 = undefined;
+        var w: usize = 0;
+        const prefix = "https://archive.org/download/";
+        @memcpy(url_out[0..prefix.len], prefix);
+        w = prefix.len;
+        w += encPathSegment(doc.identifier, url_out[w..]);
+        if (w < url_out.len) {
+            url_out[w] = '/';
+            w += 1;
+        }
+        w += encPathSegment(file_name, url_out[w..]);
+        if (w < 8) continue;
+
+        // Title (fall back to identifier). JSON escapes are rare here; use raw.
+        const raw_title = if (doc.title.len > 0) doc.title else doc.identifier;
+
+        var item = std.mem.zeroes(ResolvedItem);
+        item.source = .stremio; // HTTP-direct stream — plays via mpv load_file
+
+        const nlen = @min(raw_title.len, 255);
+        @memcpy(item.name[0..nlen], raw_title[0..nlen]);
+        item.name_len = nlen;
+
+        const ulen = @min(w, 2047);
+        @memcpy(item.url[0..ulen], url_out[0..ulen]);
+        item.url_len = ulen;
+
+        item.quality = detectQuality(raw_title);
+
+        var det: [128]u8 = undefined;
+        const dstr = if (doc.year.len > 0)
+            std.fmt.bufPrint(&det, "Internet Archive · {s}", .{doc.year}) catch "Internet Archive"
+        else
+            std.fmt.bufPrint(&det, "Internet Archive", .{}) catch "Internet Archive";
+        const dlen = @min(dstr.len, 127);
+        @memcpy(item.detail[0..dlen], dstr[0..dlen]);
+        item.detail_len = dlen;
+
+        if (pushResult(item)) found += 1;
+    }
+
+    if (found > 0) {
+        logs.pushLog("info", "resolver", "archive.org results found", false);
+    }
+}
+
+/// Percent-encode a single URL path segment into `out`, returning bytes written.
+/// Unreserved chars pass through; space and everything else become %XX (space →
+/// %20, never '+' — '+' is a literal plus in a path segment). '/' is encoded so
+/// a stray slash in a name can't split the path.
+fn encPathSegment(seg: []const u8, out: []u8) usize {
+    const hex = "0123456789ABCDEF";
+    var w: usize = 0;
+    for (seg) |ch| {
+        if (w + 3 >= out.len) break;
+        if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.' or ch == '~') {
+            out[w] = ch;
+            w += 1;
+        } else {
+            out[w] = '%';
+            out[w + 1] = hex[ch >> 4];
+            out[w + 2] = hex[ch & 0x0F];
+            w += 3;
+        }
+    }
+    return w;
 }
 
 // ══════════════════════════════════════════════════════════
