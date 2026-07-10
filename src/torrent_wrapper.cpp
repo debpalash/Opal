@@ -18,6 +18,7 @@
 #include <thread>
 #include <chrono>
 #include <mutex>
+#include <map>
 
 struct TorrentNode {
     lt::torrent_handle handle;
@@ -33,24 +34,29 @@ struct TorrentNode {
 
 struct SessionContext {
     lt::session* ses;
-    std::vector<std::shared_ptr<TorrentNode>> torrents;
+    // STABLE-ID model: torrents are keyed by a monotonic id that is NEVER
+    // reused or renumbered. torrent_remove() ERASES the entry (freeing the dead
+    // node), but next_id only ever increases, so a freed id is never handed out
+    // again — external id holders (players, UI) stay valid across deletes.
+    std::map<int, std::shared_ptr<TorrentNode>> torrents;
+    int next_id = 0;
     // Guards session add/remove against concurrent reads in torrent_read_bytes.
     std::mutex mtx;
 };
 
 // ─── Helper: snapshot a torrent node under the lock ───
-// torrent_add_magnet() does ctx->torrents.push_back() under mtx, which can
-// REALLOCATE the vector and move every shared_ptr. Every reader entry point
-// therefore takes a locked snapshot of the shared_ptr here, then does all
+// The torrents map is mutated (insert/erase) under mtx. Every reader entry
+// point takes a locked snapshot of the shared_ptr here, then does all
 // libtorrent handle.status()/is_valid() work OUTSIDE the lock (libtorrent's
 // session/handle are internally synchronized; holding mtx across status()
 // would serialize it against add/remove). Returns nullptr if the context is
-// null or the id is out of range.
+// null or the id was never issued / has been erased (removed torrents thus
+// read as not-alive/-1/0, exactly as a dead slot did before).
 static std::shared_ptr<TorrentNode> get_node(SessionContext* ctx, int id) {
     if (!ctx) return nullptr;
     std::lock_guard<std::mutex> lk(ctx->mtx);
-    if (id < 0 || (size_t)id >= ctx->torrents.size()) return nullptr;
-    return ctx->torrents[id];
+    auto it = ctx->torrents.find(id);
+    return it == ctx->torrents.end() ? nullptr : it->second;
 }
 
 // ─── Helper: Get file piece range ───
@@ -216,19 +222,24 @@ extern "C" int torrent_add_magnet(TorrentSession session, const char* magnet_url
     
     if (ec) return -1;
 
-    // STABLE-SLOT model: ids are vector indices that are NEVER reused or
-    // renumbered. torrent_remove() marks a slot dead but keeps it in place,
-    // so external id holders (players, UI) stay valid across deletes.
+    // STABLE-ID model: assign a monotonic id that is NEVER reused or
+    // renumbered. torrent_remove() erases the entry, but next_id only ever
+    // increases, so external id holders (players, UI) stay valid across deletes.
     std::lock_guard<std::mutex> lk(ctx->mtx);
-    ctx->torrents.push_back(node);
-    return static_cast<int>(ctx->torrents.size()) - 1;
+    int id = ctx->next_id++;
+    ctx->torrents[id] = node;
+    return id;
 }
 
 extern "C" int torrent_count(TorrentSession session) {
     if (!session) return 0;
     SessionContext* ctx = static_cast<SessionContext*>(session);
     std::lock_guard<std::mutex> lk(ctx->mtx);
-    return static_cast<int>(ctx->torrents.size());
+    // Callers use this only as an UPPER BOUND for `for (i in 0..count) if
+    // (torrent_is_alive(i))` loops. Return next_id so every live id (id < next_id)
+    // is covered; erased/never-issued ids cheaply report not-alive via get_node's
+    // map miss, so dead-id iteration is bounded work, not an unbounded leak.
+    return ctx->next_id;
 }
 
 extern "C" void torrent_get_name(TorrentSession session, int torrent_id, char* out_name, int max_len) {
@@ -380,20 +391,24 @@ extern "C" long long torrent_get_file_size(TorrentSession session, int torrent_i
 extern "C" void torrent_remove(TorrentSession session, int torrent_id) {
     if (!session || torrent_id < 0) return;
     SessionContext* ctx = static_cast<SessionContext*>(session);
-    if ((size_t)torrent_id >= ctx->torrents.size()) return;
 
     try {
-        // STABLE-SLOT model: mark the slot dead and drop it from the session,
-        // but NEVER erase or renumber the vector. The id remains valid (and dead)
-        // forever, so other id holders are not corrupted.
+        // STABLE-ID model: drop the torrent from the session and ERASE its map
+        // entry (freeing the dead node). Erasing a key does NOT renumber other
+        // keys and next_id is never rewound, so the id is retired forever and
+        // other id holders are not corrupted — a later get_node(id) simply
+        // returns nullptr (reads as not-alive), same as the old dead slot.
         std::lock_guard<std::mutex> lk(ctx->mtx);
-        auto node = ctx->torrents[torrent_id];
+        auto it = ctx->torrents.find(torrent_id);
+        if (it == ctx->torrents.end()) return;
+        auto node = it->second;
         node->alive = false;
         if (node->read_stream.is_open()) node->read_stream.close();
         node->read_stream_file_idx = -1;
         if (node->handle.is_valid()) {
             ctx->ses->remove_torrent(node->handle);
         }
+        ctx->torrents.erase(it);
     } catch(...) {}
 }
 
