@@ -84,6 +84,11 @@ pub const ContinueItem = struct {
     total_episodes: u16 = 0,
     // Lazy poster (same pattern as AnimeResult).
     poster_fetching: bool = false,
+    // Failure-latch: a worker that ran but produced no pixels marks poster_failed
+    // so the renderer stops re-spawning a fetch every frame (thread/alloc storm).
+    // poster_attempted distinguishes "never tried" from "tried & failed".
+    poster_attempted: bool = false,
+    poster_failed: bool = false,
     poster_pixels: ?[]u8 = null,
     poster_w: u32 = 0,
     poster_h: u32 = 0,
@@ -234,6 +239,11 @@ pub const YtItem = struct {
     thumbnail_url: [512]u8 = std.mem.zeroes([512]u8),
     thumbnail_url_len: usize = 0,
     thumb_fetching: bool = false,
+    // Failure-latch: a thumb worker that ran but produced no pixels (404 /
+    // undecodable) marks thumb_failed so the grid stops re-spawning a full
+    // HTTP+DB worker every frame. thumb_attempted = "tried" vs "never tried".
+    thumb_attempted: bool = false,
+    thumb_failed: bool = false,
     thumb_pixels: ?[]u8 = null,
     thumb_w: u32 = 0,
     thumb_h: u32 = 0,

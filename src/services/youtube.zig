@@ -989,7 +989,16 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
                     .corner_radius = dvui.Rect.all(4),
                 });
             } else {
-                if (!item.thumb_fetching and item.thumbnail_url_len > 0) fetchThumb(item);
+                // Failure-latch (mirrors TmdbItem/JfItem): stop re-spawning a
+                // thumb worker every frame for a dead/undecodable URL.
+                if (item.thumb_fetching) {
+                    item.thumb_attempted = true;
+                } else if (item.thumb_attempted and item.thumb_pixels == null and item.thumb_tex == null) {
+                    item.thumb_failed = true;
+                } else if (!item.thumb_failed and item.thumb_pixels == null and item.thumbnail_url_len > 0) {
+                    fetchThumb(item);
+                    if (item.thumb_fetching) item.thumb_attempted = true;
+                }
                 dvui.icon(@src(), "ph", icons.tvg.lucide.image, .{}, .{
                     .id_extra = idx + 150,
                     .gravity_x = 0.5,

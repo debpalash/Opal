@@ -2174,8 +2174,16 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
                     .corner_radius = dvui.Rect.all(6),
                 });
             } else {
-                if (!item.poster_fetching and item.poster_url_len > 0)
+                // Failure-latch (mirrors TmdbItem/JfItem): stop re-spawning a
+                // poster worker every frame for a dead/undecodable URL.
+                if (item.poster_fetching) {
+                    item.poster_attempted = true;
+                } else if (item.poster_attempted and item.poster_pixels == null and item.poster_tex == null) {
+                    item.poster_failed = true;
+                } else if (!item.poster_failed and item.poster_pixels == null and item.poster_url_len > 0) {
                     poster.fetchAsync(item.poster_url[0..item.poster_url_len], &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
+                    if (item.poster_fetching) item.poster_attempted = true;
+                }
                 dvui.icon(@src(), "", icons.tvg.lucide.play, .{}, .{
                     .id_extra = idx + 30150,
                     .gravity_x = 0.5,

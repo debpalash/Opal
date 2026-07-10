@@ -276,8 +276,18 @@ fn renderComingUpRail(card_w: f32) bool {
                         .corner_radius = dvui.Rect.all(8),
                     });
                 }
-            } else if (it.poster_path_len > 0 and !it.poster_failed) {
-                @import("../services/tmdb_api.zig").fetchPoster(it);
+            } else {
+                // Failure-latch (mirrors the TMDB grid): the old code gated on
+                // !poster_failed but never SET it, so a dead poster re-spawned a
+                // fetch every frame. Run the full attempted->failed transition.
+                if (it.poster_fetching) {
+                    it.poster_attempted = true;
+                } else if (it.poster_attempted and it.poster_pixels == null and it.poster_tex == null) {
+                    it.poster_failed = true;
+                } else if (!it.poster_failed and it.poster_pixels == null and it.poster_path_len > 0) {
+                    @import("../services/tmdb_api.zig").fetchPoster(it);
+                    if (it.poster_fetching) it.poster_attempted = true;
+                }
             }
             bw.deinit();
         }
