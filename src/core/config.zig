@@ -190,7 +190,9 @@ pub fn load() void {
     // Signal the render loop that saved prefs (incl. ui_scale / ui_scale_auto)
     // are now in place, so the first frame can apply the device-aware scale
     // without racing this async load. See main.zig appFrame.
-    state.app.config_loaded = true;
+    // .release so every write above (esp. the tmdb_api_key bytes+len) is
+    // published to any thread that later loads config_loaded with .acquire.
+    state.app.config_loaded.store(true, .release);
 }
 
 fn setKey(key: []const u8, val: []const u8) void {

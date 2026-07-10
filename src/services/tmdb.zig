@@ -97,7 +97,10 @@ pub fn renderTmdbContent() void {
         return;
     }
 
-    if (!state.app.tmdb.loaded_once and !state.app.tmdb.is_loading.load(.acquire)) {
+    // Wait for the config worker to publish prefs (esp. the TMDB key) before the
+    // one-shot first fetch — else a cold first launch fires+latches before the
+    // key is ready and never re-fires (first-start "Nothing loaded" race).
+    if (state.app.config_loaded.load(.acquire) and !state.app.tmdb.loaded_once and !state.app.tmdb.is_loading.load(.acquire)) {
         state.app.tmdb.loaded_once = true;
         api.fetchCurrentView(false);
     } else if (state.app.tmdb.view == .Trending and !state.app.tmdb.is_loading.load(.acquire) and

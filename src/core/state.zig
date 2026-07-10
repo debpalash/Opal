@@ -284,7 +284,12 @@ pub const AppState = struct {
     // decide whether to apply the auto device scale (config load is async on
     // the init worker; without this the device scale could race the saved
     // ui_scale/ui_scale_auto values).
-    config_loaded: bool = false,
+    // Release/acquire atomic: the detached config worker stores `true` AFTER it
+    // has applied every saved pref (incl. tmdb.api_key bytes+len), so a UI/worker
+    // thread that loads `true` with .acquire is guaranteed to see the fully
+    // published key — fixes both the fire-before-ready race and the torn key read
+    // that left the first-launch Trending fetch permanently empty.
+    config_loaded: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     grid_mode: GridMode = .auto,
     seek_sync: bool = false,
     // Hardware video decoding (VideoToolbox/VAAPI/D3D11 via mpv "auto-safe").

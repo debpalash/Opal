@@ -184,12 +184,20 @@ pub fn render() void {
 /// genre-discover result set — those aren't trending.
 fn kickTrendingFetch() void {
     const t = &state.app.tmdb;
-    if (t.api_key_len == 0) return;
     if (t.view != .Trending or t.genre_idx != 0) return;
     const Once = struct {
         var kicked: bool = false;
     };
-    if (t.results.items.len == 0 and !Once.kicked and !t.is_loading.load(.acquire)) {
+    // Gate via the tested pure predicate so the fetch can't arm until the config
+    // worker has published the key (config_loaded, acquire) — fixes the
+    // first-start "Nothing loaded" race. No key -> returns false -> empty state.
+    if (@import("../services/tmdb_pure.zig").shouldKickTrending(
+        state.app.config_loaded.load(.acquire),
+        t.api_key_len,
+        t.results.items.len,
+        t.is_loading.load(.acquire),
+        Once.kicked,
+    )) {
         Once.kicked = true;
         t.loaded_once = true; // Browse must not immediately refetch over this
         @import("../services/tmdb_api.zig").fetchCurrentView(false);

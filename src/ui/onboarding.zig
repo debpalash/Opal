@@ -14,7 +14,7 @@ const components = @import("components.zig");
 var tmdb_key_buf: [300]u8 = std.mem.zeroes([300]u8);
 
 pub fn render() void {
-    if (state.app.onboarded or !state.app.config_loaded or state.app.is_headless) return;
+    if (state.app.onboarded or !state.app.config_loaded.load(.acquire) or state.app.is_headless) return;
 
     const source_config = @import("../core/source_config.zig");
     const plugin_repo = @import("../services/plugin_repo.zig");

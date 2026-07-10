@@ -587,7 +587,7 @@ fn appFrame() !dvui.App.Result {
     // DPI (natural_scale); this picks a compact-but-readable density on top,
     // biased denser on high-DPI panels. windowNaturalScale() is only valid
     // inside a frame, so this can't live in appInit.
-    if (!device_scale_applied and state.app.config_loaded) {
+    if (!device_scale_applied and state.app.config_loaded.load(.acquire)) {
         device_scale_applied = true;
         if (state.app.ui_scale_auto) {
             state.app.ui_scale = @import("core/scale_pure.zig").deviceScale(dvui.windowNaturalScale());

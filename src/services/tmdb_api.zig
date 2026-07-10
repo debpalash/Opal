@@ -314,7 +314,15 @@ fn httpGet(url: []const u8, bearer_token: []const u8) ?[]u8 {
     // JSON validation (rejects ISP block pages) + sticky-flag self-heal.
     const buf = alloc.alloc(u8, 256 * 1024) catch return null;
     defer alloc.free(buf);
-    const n = curlFallbackInto(url, auth, buf);
-    if (n == 0) return null;
-    return alloc.dupe(u8, buf[0..n]) catch null;
+    // Bounded retry (3x / 400ms) mirroring tmdbApiInto above: a single cold-start
+    // DNS/TLS blip used to permanently fail the one-shot browse/trending fetch
+    // (and latch it empty). Always on a detached worker thread (curl blocks), so
+    // the backoff never touches the UI thread.
+    var attempt: u8 = 0;
+    while (attempt < 3) : (attempt += 1) {
+        const n = curlFallbackInto(url, auth, buf);
+        if (n > 0) return alloc.dupe(u8, buf[0..n]) catch null;
+        if (attempt < 2) @import("../core/io_global.zig").sleep(400 * std.time.ns_per_ms);
+    }
+    return null;
 }

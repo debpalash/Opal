@@ -50,6 +50,10 @@ var fetched_once: bool = false;
 /// requires the eztv source plugin (neutral-ship gate).
 pub fn refreshOnce() void {
     if (fetched_once) return;
+    // Same first-start race as the trending fetch: don't latch fetched_once until
+    // the config worker has published the key (acquire), or a cold launch arms it
+    // before the key is ready and it never re-fires.
+    if (!state.app.config_loaded.load(.acquire)) return;
     if (state.app.tmdb.api_key_len == 0) return;
     fetched_once = true;
     loading.store(true, .release);

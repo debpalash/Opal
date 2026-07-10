@@ -447,3 +447,45 @@ test "tvWatchCommitDue: 2min threshold, NaN-safe" {
     try std.testing.expect(!tvWatchCommitDue(std.math.nan(f64)));
     try std.testing.expect(!tvWatchCommitDue(-5));
 }
+
+/// Gate for the one-shot "Trending tonight" / Movies&TV initial fetch.
+///
+/// Regression guard for the first-start race: the fetch used to fire (and latch
+/// its one-shot flags) the instant `api_key_len` flipped non-zero — which can be
+/// BEFORE the detached config worker has fully published the key (torn read) and
+/// before `config_loaded`. The single no-retry request then failed on the cold
+/// path, both latches stayed set, and nothing re-fired → permanent "Nothing
+/// loaded". Requiring `config_loaded` (loaded with .acquire, paired with the
+/// worker's .release store) means the key bytes are fully visible before we arm.
+/// Neutral-ship safe: with no key (`api_key_len == 0`) it returns false, so the
+/// caller falls through to the graceful empty/no-key state instead of spinning.
+pub fn shouldKickTrending(
+    config_loaded: bool,
+    api_key_len: usize,
+    results_len: usize,
+    is_loading: bool,
+    already_kicked: bool,
+) bool {
+    return config_loaded and api_key_len > 0 and results_len == 0 and !is_loading and !already_kicked;
+}
+
+test "shouldKickTrending waits for config_loaded (first-start race)" {
+    // The exact run-1 condition that must NOT fire early: key present but config
+    // not yet published.
+    try std.testing.expect(!shouldKickTrending(false, 32, 0, false, false));
+}
+
+test "shouldKickTrending neutral-ship: no key does not spin" {
+    try std.testing.expect(!shouldKickTrending(true, 0, 0, false, false));
+    try std.testing.expect(!shouldKickTrending(false, 0, 0, false, false));
+}
+
+test "shouldKickTrending fires once ready" {
+    try std.testing.expect(shouldKickTrending(true, 32, 0, false, false));
+}
+
+test "shouldKickTrending does not refire after arm or success" {
+    try std.testing.expect(!shouldKickTrending(true, 32, 0, false, true)); // already kicked
+    try std.testing.expect(!shouldKickTrending(true, 32, 5, false, false)); // has results
+    try std.testing.expect(!shouldKickTrending(true, 32, 0, true, false)); // already loading
+}
