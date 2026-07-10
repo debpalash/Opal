@@ -702,7 +702,7 @@ pub fn submitInput() void {
 
             if (state.app.active_player_idx < state.app.players.items.len) {
                 if (std.mem.startsWith(u8, null_term_uri[0..len], "magnet:?")) {
-                    const tid = c.mpv.torrent_add_magnet(state.app.torrent_ses, @ptrCast(&null_term_uri[0]), state.getSavePath());
+                    const tid = c.mpv.torrent_add_magnet(state.torrentSession(), @ptrCast(&null_term_uri[0]), state.getSavePath());
                     if (tid >= 0) {
                         state.app.pending_magnet_tid = tid;
                         state.app.pending_magnet_player_idx = state.app.active_player_idx;

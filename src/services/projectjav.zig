@@ -288,7 +288,7 @@ fn startProbing() void {
     if (probing_started) return;
     probing_started = true;
 
-    const ses = state.app.torrent_ses orelse return;
+    const ses = state.torrentSession() orelse return;
 
     for (0..torrent_count) |idx| {
         const t = &torrents[idx];
@@ -309,7 +309,7 @@ fn startProbing() void {
 
 /// Poll probed torrents for metadata arrival
 fn pollProbes() void {
-    const ses = state.app.torrent_ses orelse return;
+    const ses = state.torrentSession() orelse return;
 
     for (0..torrent_count) |idx| {
         const t = &torrents[idx];
@@ -732,7 +732,7 @@ pub fn renderModal() void {
 
 /// Remove all probe torrents from session when closing/playing
 fn cleanupProbes() void {
-    const ses = state.app.torrent_ses orelse return;
+    const ses = state.torrentSession() orelse return;
     for (0..torrent_count) |idx| {
         const t = &torrents[idx];
         if (t.probe_tid >= 0) {

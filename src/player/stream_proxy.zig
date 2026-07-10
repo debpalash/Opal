@@ -125,7 +125,7 @@ fn nextProbe(p: u16) u16 {
 }
 
 pub fn startProxy(torrent_id: i32, file_idx: i32) ?Handle {
-    const file_size = c.mpv.torrent_get_file_size(state.app.torrent_ses, torrent_id, file_idx);
+    const file_size = c.mpv.torrent_get_file_size(state.torrentSession(), torrent_id, file_idx);
     if (file_size <= 0) {
         logs.pushLog("error", "proxy", "Cannot start proxy: file size unknown", false);
         return null;
@@ -160,7 +160,7 @@ pub fn startProxy(torrent_id: i32, file_idx: i32) ?Handle {
     if (next_stream_id == 0) next_stream_id = 1; // never hand out id 0
     randomToken(&s.token);
 
-    c.mpv.torrent_get_file_name(state.app.torrent_ses, torrent_id, file_idx, &s.file_name, 256);
+    c.mpv.torrent_get_file_name(state.torrentSession(), torrent_id, file_idx, &s.file_name, 256);
     s.file_name_len = std.mem.indexOfScalar(u8, &s.file_name, 0) orelse 0;
 
     // Probe ports; start from the rotating cursor so concurrent slots spread out.
@@ -460,7 +460,7 @@ fn handleConnection(args: ConnArgs) !void {
         const remaining: usize = @intCast(range_end - offset + 1);
         const want = @min(remaining, CHUNK_SIZE);
         const read = c.mpv.torrent_read_bytes(
-            state.app.torrent_ses,
+            state.torrentSession(),
             torrent_id,
             file_idx,
             offset,

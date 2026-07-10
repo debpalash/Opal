@@ -52,7 +52,7 @@ fn renderControlBar() void {
 
     // ── Left: Files / Active / History tabs (content-sized so the speed
     // limit fits on the same row; a flexible spacer pushes it to the right). ──
-    const t_count = c.mpv.torrent_count(state.app.torrent_ses);
+    const t_count = c.mpv.torrent_count(state.torrentSession());
     const hist_count = state.app.dl_history_count;
 
     var b0: [24]u8 = undefined;
@@ -111,7 +111,7 @@ fn renderControlBar() void {
             .gravity_y = 0.5,
         })) {
             state.app.download_rate_limit = lim;
-            c.mpv.torrent_set_download_limit(state.app.torrent_ses, lim);
+            c.mpv.torrent_set_download_limit(state.torrentSession(), lim);
         }
     }
 }
@@ -362,7 +362,7 @@ fn renderFilesInline() void {
 // ══════════════════════════════════════════════════════════
 
 fn renderActiveInline() void {
-    const t_count = c.mpv.torrent_count(state.app.torrent_ses);
+    const t_count = c.mpv.torrent_count(state.torrentSession());
 
     if (t_count == 0) {
         _ = dvui.label(@src(), "No active downloads.", .{}, .{
@@ -394,19 +394,19 @@ fn renderActiveInline() void {
 
         // STABLE-SLOT model: removed torrents keep their id slot but report
         // dead — skip them so no ghost rows render.
-        if (c.mpv.torrent_is_alive(state.app.torrent_ses, i) == 0) continue;
+        if (c.mpv.torrent_is_alive(state.torrentSession(), i) == 0) continue;
 
         var t_name: [256]u8 = undefined;
-        c.mpv.torrent_get_name(state.app.torrent_ses, i, &t_name, 256);
+        c.mpv.torrent_get_name(state.torrentSession(), i, &t_name, 256);
         const name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse 255;
         const name = t_name[0..name_len];
 
         var progress: f32 = 0;
         var dl_rate: c_int = 0;
         var seeds: c_int = 0;
-        _ = c.mpv.torrent_poll(state.app.torrent_ses, i, -1, null, 0, &progress, &dl_rate, &seeds);
+        _ = c.mpv.torrent_poll(state.torrentSession(), i, -1, null, 0, &progress, &dl_rate, &seeds);
 
-        const is_paused = c.mpv.torrent_is_paused(state.app.torrent_ses, i) != 0;
+        const is_paused = c.mpv.torrent_is_paused(state.torrentSession(), i) != 0;
         const pct = @as(u8, @intFromFloat(std.math.clamp(progress * 100.0, 0.0, 100.0)));
 
         const row_bg = if (ui % 2 == 0)
@@ -524,7 +524,7 @@ fn renderActiveInline() void {
                 .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
                 .gravity_y = 0.5,
             })) {
-                if (is_paused) c.mpv.torrent_resume(state.app.torrent_ses, i) else c.mpv.torrent_pause(state.app.torrent_ses, i);
+                if (is_paused) c.mpv.torrent_resume(state.torrentSession(), i) else c.mpv.torrent_pause(state.torrentSession(), i);
             }
         }
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"trash-2", .{}, .{}, .{
@@ -535,7 +535,7 @@ fn renderActiveInline() void {
             .gravity_y = 0.5,
         })) {
             history.addDownloadHistory(name, "");
-            c.mpv.torrent_remove(state.app.torrent_ses, i);
+            c.mpv.torrent_remove(state.torrentSession(), i);
             // STABLE-SLOT model: torrent ids are never renumbered on remove, so
             // other handles stay valid — only clear the one that was deleted.
             for (state.app.players.items) |p| {
@@ -544,6 +544,13 @@ fn renderActiveInline() void {
                     p.torrent_is_ready = false;
                     p.has_metadata = false;
                     _ = c.mpv.mpv_command_string(p.mpv_ctx, "stop");
+                    // Also tear down the stream proxy — otherwise its accept-loop
+                    // thread + port linger after the torrent is deleted.
+                    const stream_proxy = @import("../player/stream_proxy.zig");
+                    if (p.proxy_handle.isValid()) {
+                        stream_proxy.stopProxy(p.proxy_handle);
+                        p.proxy_handle = stream_proxy.INVALID_HANDLE;
+                    }
                 }
             }
             if (expanded_torrent_id == i) expanded_torrent_id = -1;
@@ -560,7 +567,7 @@ fn renderActiveInline() void {
 
 fn renderExpandedFiles(torrent_id: i32) void {
     const ui: usize = @intCast(torrent_id);
-    const f_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, torrent_id);
+    const f_count = c.mpv.torrent_get_file_count(state.torrentSession(), torrent_id);
     if (f_count <= 0) return;
 
     // Header for expanded section
@@ -586,10 +593,10 @@ fn renderExpandedFiles(torrent_id: i32) void {
         const cid = fi + ui * 1000 + 31000;
 
         var f_name: [256]u8 = undefined;
-        c.mpv.torrent_get_file_name(state.app.torrent_ses, torrent_id, f_idx, &f_name, 256);
+        c.mpv.torrent_get_file_name(state.torrentSession(), torrent_id, f_idx, &f_name, 256);
         const f_len = std.mem.indexOfScalar(u8, &f_name, 0) orelse 255;
-        const f_prog = c.mpv.torrent_get_file_progress(state.app.torrent_ses, torrent_id, f_idx);
-        const f_size = c.mpv.torrent_get_file_size(state.app.torrent_ses, torrent_id, f_idx);
+        const f_prog = c.mpv.torrent_get_file_progress(state.torrentSession(), torrent_id, f_idx);
+        const f_size = c.mpv.torrent_get_file_size(state.torrentSession(), torrent_id, f_idx);
 
         var frow = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = cid,
@@ -670,7 +677,7 @@ fn renderExpandedFiles(torrent_id: i32) void {
             .margin = .{ .x = 4, .y = 0, .w = 2, .h = 0 },
             .gravity_y = 0.5,
         })) {
-            c.mpv.torrent_set_file_priority(state.app.torrent_ses, torrent_id, f_idx, 0);
+            c.mpv.torrent_set_file_priority(state.torrentSession(), torrent_id, f_idx, 0);
         }
 
         if (dvui.button(@src(), "High", .{}, .{
@@ -682,7 +689,7 @@ fn renderExpandedFiles(torrent_id: i32) void {
             .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
             .gravity_y = 0.5,
         })) {
-            c.mpv.torrent_set_file_priority(state.app.torrent_ses, torrent_id, f_idx, 7);
+            c.mpv.torrent_set_file_priority(state.torrentSession(), torrent_id, f_idx, 7);
         }
     }
 }

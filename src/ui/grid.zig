@@ -566,7 +566,7 @@ pub fn renderGrid() !void {
                         var loading_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .gravity_y = 0.5, .gravity_x = 0.5, .background = true, .color_fill = theme.colors.bg_elevated, .padding = theme.dims.pad_lg, .margin = dvui.Rect.all(theme.spacing.xl), .corner_radius = theme.dims.rad_lg, .min_size_content = .{ .w = 320, .h = 10 } });
 
                         var t_name: [256]u8 = undefined;
-                        c.mpv.torrent_get_name(state.app.torrent_ses, p.current_torrent_id, &t_name, 256);
+                        c.mpv.torrent_get_name(state.torrentSession(), p.current_torrent_id, &t_name, 256);
                         const name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse 255;
 
                         // Torrent name is untrusted metadata (non-UTF-8 / truncated
@@ -579,7 +579,7 @@ pub fn renderGrid() !void {
                         var buf_path: [512]u8 = undefined;
 
                         if (p.current_torrent_id >= 0) {
-                            _ = c.mpv.torrent_poll(state.app.torrent_ses, p.current_torrent_id, p.selected_file_idx, &buf_path, 512, &buf_pct, &dl_rate, &peers);
+                            _ = c.mpv.torrent_poll(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, &buf_path, 512, &buf_pct, &dl_rate, &peers);
                         }
 
                         const is_dead = p.metadata_start_time > 0 and @import("../core/io_global.zig").timestamp() - p.metadata_start_time > 15 and peers == 0 and !p.has_metadata;

@@ -1643,7 +1643,7 @@ fn renderNetworkTab() void {
         }
         if (components.segment(@src(), &limit_names, sel)) |clicked| {
             state.app.download_rate_limit = limits[clicked];
-            c.mpv.torrent_set_download_limit(state.app.torrent_ses, limits[clicked]);
+            c.mpv.torrent_set_download_limit(state.torrentSession(), limits[clicked]);
             state.markConfigDirty();
         }
     }

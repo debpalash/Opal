@@ -203,7 +203,7 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
 pub fn playlistDropdownMenu(p: *player.MediaPlayer) void {
     if (p.current_torrent_id < 0) return;
 
-    const file_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, p.current_torrent_id);
+    const file_count = c.mpv.torrent_get_file_count(state.torrentSession(), p.current_torrent_id);
     if (file_count <= 1) return;
 
     if (dvui.menuItemLabel(@src(), "Files", .{ .submenu = true }, .{ .id_extra = 99, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_secondary })) |r| {
@@ -214,9 +214,9 @@ pub fn playlistDropdownMenu(p: *player.MediaPlayer) void {
 
         for (0..@as(usize, @intCast(@max(@as(c_int, 0), file_count)))) |i| {
             var name_buf: [256]u8 = undefined;
-            c.mpv.torrent_get_file_name(state.app.torrent_ses, p.current_torrent_id, @intCast(i), &name_buf, 256);
+            c.mpv.torrent_get_file_name(state.torrentSession(), p.current_torrent_id, @intCast(i), &name_buf, 256);
 
-            const size = c.mpv.torrent_get_file_size(state.app.torrent_ses, p.current_torrent_id, @intCast(i));
+            const size = c.mpv.torrent_get_file_size(state.torrentSession(), p.current_torrent_id, @intCast(i));
             const size_mb = @as(f64, @floatFromInt(size)) / 1024.0 / 1024.0;
 
             var lbl_buf: [300]u8 = undefined;
@@ -234,10 +234,10 @@ pub fn playlistDropdownMenu(p: *player.MediaPlayer) void {
                     // Deprioritize old file, prioritize new one
                     const old_idx = p.selected_file_idx;
                     if (old_idx >= 0 and old_idx < file_count) {
-                        c.mpv.torrent_set_file_priority(state.app.torrent_ses, p.current_torrent_id, old_idx, 0);
+                        c.mpv.torrent_set_file_priority(state.torrentSession(), p.current_torrent_id, old_idx, 0);
                     }
                     p.selected_file_idx = @as(i32, @intCast(i));
-                    c.mpv.torrent_set_file_priority(state.app.torrent_ses, p.current_torrent_id, @intCast(i), 4);
+                    c.mpv.torrent_set_file_priority(state.torrentSession(), p.current_torrent_id, @intCast(i), 4);
                     p.torrent_is_ready = false; // Re-trigger load poll
                 }
             }
@@ -773,7 +773,7 @@ fn renderScrubber(
     // 2. Buffered fill (torrent download — single leading bar).
     if (active_p.current_torrent_id >= 0) {
         var map_buf: [2048]u8 = undefined;
-        const map_len = c.mpv.torrent_get_piece_map(state.app.torrent_ses, active_p.current_torrent_id, &map_buf, 2048);
+        const map_len = c.mpv.torrent_get_piece_map(state.torrentSession(), active_p.current_torrent_id, &map_buf, 2048);
         if (map_len > 0) {
             var downloaded_count: usize = 0;
             var i: usize = 0;
@@ -901,7 +901,7 @@ fn renderScrubber(
             } else |_| {}
 
             if (active_p.current_torrent_id >= 0 and now_ms - S.last_seek_ms > 500) {
-                c.mpv.torrent_seek_prioritize(state.app.torrent_ses, active_p.current_torrent_id, active_p.selected_file_idx, seek_pct);
+                c.mpv.torrent_seek_prioritize(state.torrentSession(), active_p.current_torrent_id, active_p.selected_file_idx, seek_pct);
             }
 
             S.last_seek_ms = now_ms;
@@ -1526,7 +1526,7 @@ pub fn renderLiquidGlassOverlay() void {
 
         // Files (torrent multi-file playlist).
         if (active_p.current_torrent_id >= 0) {
-            const file_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, active_p.current_torrent_id);
+            const file_count = c.mpv.torrent_get_file_count(state.torrentSession(), active_p.current_torrent_id);
             if (file_count > 1) {
                 var f_buf: [16]u8 = undefined;
                 const f_chip = std.fmt.bufPrint(&f_buf, "{d}", .{file_count}) catch "";
@@ -1577,11 +1577,11 @@ pub fn renderLiquidGlassOverlay() void {
         defer info_row.deinit();
 
         var t_name: [64]u8 = undefined;
-        c.mpv.torrent_get_name(state.app.torrent_ses, active_p.current_torrent_id, &t_name, 64);
+        c.mpv.torrent_get_name(state.torrentSession(), active_p.current_torrent_id, &t_name, 64);
         var pct: f32 = 0.0;
         var dl_rate: c_int = 0;
         var seeds: c_int = 0;
-        _ = c.mpv.torrent_poll(state.app.torrent_ses, active_p.current_torrent_id, active_p.selected_file_idx, null, 0, &pct, &dl_rate, &seeds);
+        _ = c.mpv.torrent_poll(state.torrentSession(), active_p.current_torrent_id, active_p.selected_file_idx, null, 0, &pct, &dl_rate, &seeds);
         const name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse t_name.len;
         const rate_mb = @as(f32, @floatFromInt(dl_rate)) / 1024.0 / 1024.0;
 
@@ -1633,7 +1633,7 @@ pub fn renderLiquidGlassOverlay() void {
                     }
                 }
                 state.app.download_rate_limit = limits[next_idx];
-                c.mpv.torrent_set_download_limit(state.app.torrent_ses, state.app.download_rate_limit);
+                c.mpv.torrent_set_download_limit(state.torrentSession(), state.app.download_rate_limit);
             }
         }
 
@@ -1645,7 +1645,7 @@ pub fn renderLiquidGlassOverlay() void {
             var del_pct: f32 = 0;
             var del_rate: c_int = 0;
             var del_peers: c_int = 0;
-            const del_status = c.mpv.torrent_poll(state.app.torrent_ses, active_p.current_torrent_id, active_p.selected_file_idx, &del_path, del_path.len, &del_pct, &del_rate, &del_peers);
+            const del_status = c.mpv.torrent_poll(state.torrentSession(), active_p.current_torrent_id, active_p.selected_file_idx, &del_path, del_path.len, &del_pct, &del_rate, &del_peers);
 
             if (components.confirmDangerButton(@src(), "Delete", 201)) {
                 const tid = active_p.current_torrent_id;
@@ -1655,7 +1655,7 @@ pub fn renderLiquidGlassOverlay() void {
                         @import("../core/logs.zig").pushLog("warn", "torrent", "Delete file failed", true);
                     };
                 }
-                c.mpv.torrent_remove(state.app.torrent_ses, tid);
+                c.mpv.torrent_remove(state.torrentSession(), tid);
                 // STABLE-SLOT model: torrent ids are never renumbered on remove,
                 // so other handles stay valid — only clear players on this one.
                 for (state.app.players.items) |p| {
@@ -1944,7 +1944,7 @@ fn renderTorrentActivityStrip() void {
             var dl_rate: i32 = 0;
             var peers: i32 = 0;
             var pct: f32 = 0;
-            _ = c.mpv.torrent_poll(state.app.torrent_ses, p.current_torrent_id, p.selected_file_idx, null, 0, &pct, &dl_rate, &peers);
+            _ = c.mpv.torrent_poll(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, null, 0, &pct, &dl_rate, &peers);
             total_dl += @as(f32, @floatFromInt(dl_rate));
             total_peers += peers;
             if (dl_rate > 0) total_active += 1;

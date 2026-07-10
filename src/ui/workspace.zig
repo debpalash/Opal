@@ -235,7 +235,7 @@ pub fn loadWorkspaceNamed(allocator: std.mem.Allocator, raw_name: []const u8) vo
                 p.source_url_len = wsp.source_url.len;
 
                 if (wsp.is_torrent) {
-                    const tid = c.mpv.torrent_add_magnet(state.app.torrent_ses, c_url, state.getSavePath());
+                    const tid = c.mpv.torrent_add_magnet(state.torrentSession(), c_url, state.getSavePath());
                     if (tid >= 0) {
                         p.current_torrent_id = tid;
                         p.torrent_is_ready = false;

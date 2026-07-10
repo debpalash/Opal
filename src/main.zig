@@ -109,10 +109,10 @@ pub fn coreInit() !void {
     search.search_results = .empty;
 
     // Init torrent session in background — DHT bootstrap takes 5-10s
-    state.app.torrent_ses = null;
+    state.setTorrentSession(null);
     if (std.Thread.spawn(.{}, struct {
         fn worker() void {
-            state.app.torrent_ses = c.mpv.torrent_init();
+            state.setTorrentSession(c.mpv.torrent_init());
             logs.pushLog("info", "torrent", "Torrent session ready", false);
         }
     }.worker, .{})) |t| t.detach() else |_| {}

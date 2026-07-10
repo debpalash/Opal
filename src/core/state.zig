@@ -422,7 +422,11 @@ pub const AppState = struct {
     sub_engine: subtitles_mod.SubtitleEngine = subtitles_mod.SubtitleEngine.init(),
 
     // ── Torrent / Downloads ──
-    torrent_ses: c.mpv.TorrentSession = null,
+    // Written once by the detached torrent_init() worker after a 5-10s DHT
+    // bootstrap, read every frame by the UI + remote threads. Atomic with
+    // acquire/release ordering — access via state.torrentSession() /
+    // state.setTorrentSession() (never touch the field directly).
+    torrent_ses: std.atomic.Value(c.mpv.TorrentSession) = std.atomic.Value(c.mpv.TorrentSession).init(null),
     pending_magnet_tid: i32 = -1,
     pending_magnet_player_idx: usize = 0,
     pending_source_url: [2048]u8 = std.mem.zeroes([2048]u8),
@@ -749,6 +753,16 @@ pub const AppState = struct {
 
 /// The single global application state instance.
 pub var app: AppState = .{};
+
+/// Atomic accessors for the torrent session pointer (see AppState.torrent_ses).
+/// The detached init worker publishes the session with setTorrentSession();
+/// every reader (UI + remote threads) loads it with torrentSession().
+pub fn torrentSession() c.mpv.TorrentSession {
+    return app.torrent_ses.load(.acquire);
+}
+pub fn setTorrentSession(s: c.mpv.TorrentSession) void {
+    app.torrent_ses.store(s, .release);
+}
 
 /// Serializes player teardown (UI thread frees players at frame top) against the
 /// remote API server thread, which captures a *MediaPlayer and drives mpv on it.

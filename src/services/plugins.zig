@@ -630,7 +630,7 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                 
                 // Check if it's a magnet link → torrent engine
                 if (std.mem.startsWith(u8, url, "magnet:?")) {
-                    if (state.app.torrent_ses == null) {
+                    if (state.torrentSession() == null) {
                         logs.pushLog("error", "plugin", "Torrent engine not ready", false);
                         return;
                     }
@@ -639,7 +639,7 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                     const clen = @min(url.len, 4095);
                     @memcpy(null_term[0..clen], url[0..clen]);
                     
-                    const tid = c.mpv.torrent_add_magnet(state.app.torrent_ses, @ptrCast(&null_term[0]), state.getSavePath());
+                    const tid = c.mpv.torrent_add_magnet(state.torrentSession(), @ptrCast(&null_term[0]), state.getSavePath());
                     if (tid >= 0) {
                         const pl = state.app.players.items[state.app.active_player_idx];
                         pl.current_torrent_id = tid;

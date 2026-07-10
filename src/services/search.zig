@@ -2019,7 +2019,7 @@ fn addMagnetToEngine(magnet_link: []const u8) void {
     const copy_len = @min(magnet_link.len, 4095);
     @memcpy(null_term_uri[0..copy_len], magnet_link[0..copy_len]);
 
-    const tid = c.mpv.torrent_add_magnet(state.app.torrent_ses, @ptrCast(&null_term_uri[0]), state.getSavePath());
+    const tid = c.mpv.torrent_add_magnet(state.torrentSession(), @ptrCast(&null_term_uri[0]), state.getSavePath());
     if (tid >= 0) {
         const p = state.app.players.items[state.app.active_player_idx];
         p.current_torrent_id = tid;

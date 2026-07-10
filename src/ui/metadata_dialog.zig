@@ -46,14 +46,14 @@ pub fn renderMetadataDialog() void {
         defer footer.deinit();
         // Ghost Cancel — text-only danger, no resting fill.
         if (dvui.button(@src(), "Cancel", .{}, .{ .color_fill = TRANSPARENT, .color_text = theme.colors.danger, .padding = theme.dims.pad_sm })) {
-            c.mpv.torrent_remove(state.app.torrent_ses, state.app.pending_magnet_tid);
+            c.mpv.torrent_remove(state.torrentSession(), state.app.pending_magnet_tid);
             state.app.pending_magnet_tid = -1;
         }
         return;
     }
 
     var t_name: [256]u8 = undefined;
-    c.mpv.torrent_get_name(state.app.torrent_ses, state.app.pending_magnet_tid, &t_name, 256);
+    c.mpv.torrent_get_name(state.torrentSession(), state.app.pending_magnet_tid, &t_name, 256);
     const name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse 255;
 
     _ = dvui.label(@src(), "Pre-Download Filter", .{}, .{ .color_text = theme.colors.text_primary });
@@ -63,7 +63,7 @@ pub fn renderMetadataDialog() void {
     
     var f_list = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = theme.dims.pad_sm });
     
-    const f_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, state.app.pending_magnet_tid);
+    const f_count = c.mpv.torrent_get_file_count(state.torrentSession(), state.app.pending_magnet_tid);
     // f_count is untrusted (.torrent metadata). Clamp to the fixed-size
     // pending_files_selection buffer so the index below can never go OOB.
     const shown = @min(f_count, @as(@TypeOf(f_count), @intCast(state.app.pending_files_selection.len)));
@@ -71,10 +71,10 @@ pub fn renderMetadataDialog() void {
     var i: i32 = 0;
     while (i < shown) : (i += 1) {
         var f_name: [256]u8 = undefined;
-        c.mpv.torrent_get_file_name(state.app.torrent_ses, state.app.pending_magnet_tid, i, &f_name, 256);
+        c.mpv.torrent_get_file_name(state.torrentSession(), state.app.pending_magnet_tid, i, &f_name, 256);
         const f_len = std.mem.indexOfScalar(u8, &f_name, 0) orelse 255;
         const safe_name = @import("../core/text.zig").safeUtf8(f_name[0..f_len]);
-        const sz = c.mpv.torrent_get_file_size(state.app.torrent_ses, state.app.pending_magnet_tid, i);
+        const sz = c.mpv.torrent_get_file_size(state.torrentSession(), state.app.pending_magnet_tid, i);
         const sz_mb = @as(f64, @floatFromInt(sz)) / (1024.0 * 1024.0);
 
         var f_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x=0, .y=0, .w=0, .h=4 }, .gravity_y = 0.5 });
@@ -101,7 +101,7 @@ pub fn renderMetadataDialog() void {
 
     // Ghost Cancel — text-only danger.
     if (dvui.button(@src(), "Cancel", .{}, .{ .color_fill = TRANSPARENT, .color_text = theme.colors.danger, .padding = theme.dims.pad_md })) {
-        c.mpv.torrent_remove(state.app.torrent_ses, state.app.pending_magnet_tid);
+        c.mpv.torrent_remove(state.torrentSession(), state.app.pending_magnet_tid);
         state.app.pending_magnet_tid = -1;
     }
 
@@ -111,9 +111,9 @@ pub fn renderMetadataDialog() void {
         const shown_dl = @min(f_count, @as(@TypeOf(f_count), @intCast(state.app.pending_files_selection.len)));
         while (fi < shown_dl) : (fi += 1) {
             if (!state.app.pending_files_selection[@as(usize, @intCast(fi))]) {
-                c.mpv.torrent_set_file_priority(state.app.torrent_ses, state.app.pending_magnet_tid, fi, 0); // Skip
+                c.mpv.torrent_set_file_priority(state.torrentSession(), state.app.pending_magnet_tid, fi, 0); // Skip
             } else {
-                c.mpv.torrent_set_file_priority(state.app.torrent_ses, state.app.pending_magnet_tid, fi, 4); // Normal
+                c.mpv.torrent_set_file_priority(state.torrentSession(), state.app.pending_magnet_tid, fi, 4); // Normal
             }
         }
         
@@ -131,7 +131,7 @@ pub fn renderMetadataDialog() void {
             p.is_torrent = true;
         } else {
             // Player vanished? Clean up leak.
-            c.mpv.torrent_remove(state.app.torrent_ses, state.app.pending_magnet_tid);
+            c.mpv.torrent_remove(state.torrentSession(), state.app.pending_magnet_tid);
         }
         
         state.app.pending_magnet_tid = -1; // Closes dialog

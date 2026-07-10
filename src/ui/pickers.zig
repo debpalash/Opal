@@ -320,7 +320,7 @@ pub fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
         footer.open_picker = .none;
         return;
     }
-    const file_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, active_p.current_torrent_id);
+    const file_count = c.mpv.torrent_get_file_count(state.torrentSession(), active_p.current_torrent_id);
     if (file_count <= 1) {
         footer.open_picker = .none;
         return;
@@ -346,8 +346,8 @@ pub fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
     var i: usize = 0;
     while (i < @as(usize, @intCast(@max(@as(c_int, 0), file_count)))) : (i += 1) {
         var name_buf: [256]u8 = undefined;
-        c.mpv.torrent_get_file_name(state.app.torrent_ses, active_p.current_torrent_id, @intCast(i), &name_buf, 256);
-        const size = c.mpv.torrent_get_file_size(state.app.torrent_ses, active_p.current_torrent_id, @intCast(i));
+        c.mpv.torrent_get_file_name(state.torrentSession(), active_p.current_torrent_id, @intCast(i), &name_buf, 256);
+        const size = c.mpv.torrent_get_file_size(state.torrentSession(), active_p.current_torrent_id, @intCast(i));
         const size_mb = @as(f64, @floatFromInt(size)) / 1024.0 / 1024.0;
         var lbl_buf: [320]u8 = undefined;
         const label = std.fmt.bufPrintZ(&lbl_buf, "{s}  ({d:.1} MB)", .{ std.mem.sliceTo(&name_buf, 0), size_mb }) catch "File";
@@ -365,10 +365,10 @@ pub fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "stop");
                 const old_idx = active_p.selected_file_idx;
                 if (old_idx >= 0 and old_idx < file_count) {
-                    c.mpv.torrent_set_file_priority(state.app.torrent_ses, active_p.current_torrent_id, old_idx, 0);
+                    c.mpv.torrent_set_file_priority(state.torrentSession(), active_p.current_torrent_id, old_idx, 0);
                 }
                 active_p.selected_file_idx = @as(i32, @intCast(i));
-                c.mpv.torrent_set_file_priority(state.app.torrent_ses, active_p.current_torrent_id, @intCast(i), 4);
+                c.mpv.torrent_set_file_priority(state.torrentSession(), active_p.current_torrent_id, @intCast(i), 4);
                 active_p.torrent_is_ready = false;
             }
             footer.open_picker = .none;

@@ -117,7 +117,7 @@ pub const MediaPlayer = struct {
         // 1. If torrent, get torrent name
         if (self.current_torrent_id >= 0) {
             var t_name: [256]u8 = undefined;
-            c.mpv.torrent_get_name(state.app.torrent_ses, self.current_torrent_id, &t_name, 256);
+            c.mpv.torrent_get_name(state.torrentSession(), self.current_torrent_id, &t_name, 256);
             const tn_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse 0;
             if (tn_len > 0) {
                 const limit = @min(tn_len, out_buf.len);
@@ -813,13 +813,13 @@ pub fn updateTorrentBackgroundTasks() void {
                 if (p.current_torrent_id >= 0 and p.torrent_is_ready) {
                     // Torrent streaming: check if download is complete
                     var pct: f32 = 0.0;
-                    _ = c.mpv.torrent_poll(state.app.torrent_ses, p.current_torrent_id, p.selected_file_idx, null, 0, &pct, null, null);
+                    _ = c.mpv.torrent_poll(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, null, 0, &pct, null, null);
 
                     if (pct >= 0.99) {
                         // File fully downloaded — genuine EOF.
                         // Auto-advance to next episode if enabled and multi-file torrent
                         if (state.app.auto_advance) {
-                            const file_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, p.current_torrent_id);
+                            const file_count = c.mpv.torrent_get_file_count(state.torrentSession(), p.current_torrent_id);
                             if (file_count > 1 and p.selected_file_idx >= 0 and p.selected_file_idx + 1 < file_count) {
                                 // Advance to the next PLAYABLE file (skip .nfo,
                                 // .txt, and — critically — .exe/.rar/.zip), via
@@ -828,7 +828,7 @@ pub fn updateTorrentBackgroundTasks() void {
                                 var next_idx = p.selected_file_idx + 1;
                                 while (next_idx < file_count) {
                                     var fname: [512]u8 = undefined;
-                                    c.mpv.torrent_get_file_name(state.app.torrent_ses, p.current_torrent_id, next_idx, &fname, 512);
+                                    c.mpv.torrent_get_file_name(state.torrentSession(), p.current_torrent_id, next_idx, &fname, 512);
                                     if (media_ext.isPlayable(std.mem.sliceTo(&fname, 0))) break;
                                     next_idx += 1;
                                 }
@@ -955,7 +955,7 @@ pub fn updateTorrentBackgroundTasks() void {
         if (p.current_torrent_id >= 0) {
             if (!p.torrent_is_ready) {
                 var buffering_path: [512]u8 = undefined;
-                const t_status = c.mpv.torrent_poll(state.app.torrent_ses, p.current_torrent_id, p.selected_file_idx, &buffering_path, @intCast(buffering_path.len), null, null, null);
+                const t_status = c.mpv.torrent_poll(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, &buffering_path, @intCast(buffering_path.len), null, null, null);
 
                 // Metadata check: torrent_poll returns >= 1 when has_metadata
                 // We also check has_metadata directly via file_count for file-selected case
@@ -964,7 +964,7 @@ pub fn updateTorrentBackgroundTasks() void {
                         p.has_metadata = true;
                     } else {
                         // Also check if file_count > 0 (metadata arrived between polls)
-                        const fc = c.mpv.torrent_get_file_count(state.app.torrent_ses, p.current_torrent_id);
+                        const fc = c.mpv.torrent_get_file_count(state.torrentSession(), p.current_torrent_id);
                         if (fc > 0) p.has_metadata = true;
                     }
                 }
@@ -977,19 +977,19 @@ pub fn updateTorrentBackgroundTasks() void {
                     // -2 is the terminal "no playable media, aborted" sentinel.
                     if (p.selected_file_idx == -1) {
                         const media_ext = @import("../core/media_ext.zig");
-                        const f_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, p.current_torrent_id);
+                        const f_count = c.mpv.torrent_get_file_count(state.torrentSession(), p.current_torrent_id);
                         var max_sz: i64 = 0;
                         var max_idx: i32 = -1;
                         var risky_count: i32 = 0;
                         var i: i32 = 0;
                         while (i < f_count) : (i += 1) {
-                            c.mpv.torrent_set_file_priority(state.app.torrent_ses, p.current_torrent_id, i, 0);
+                            c.mpv.torrent_set_file_priority(state.torrentSession(), p.current_torrent_id, i, 0);
                             var fname: [512]u8 = undefined;
-                            c.mpv.torrent_get_file_name(state.app.torrent_ses, p.current_torrent_id, i, &fname, 512);
+                            c.mpv.torrent_get_file_name(state.torrentSession(), p.current_torrent_id, i, &fname, 512);
                             const name = std.mem.sliceTo(&fname, 0);
                             if (media_ext.isExecutableOrArchive(name)) risky_count += 1;
                             if (!media_ext.isPlayable(name)) continue; // skip non-media
-                            const sz = c.mpv.torrent_get_file_size(state.app.torrent_ses, p.current_torrent_id, i);
+                            const sz = c.mpv.torrent_get_file_size(state.torrentSession(), p.current_torrent_id, i);
                             if (sz > max_sz) {
                                 max_sz = sz;
                                 max_idx = i;
@@ -1016,10 +1016,10 @@ pub fn updateTorrentBackgroundTasks() void {
                         }
 
                         p.selected_file_idx = max_idx;
-                        c.mpv.torrent_set_file_priority(state.app.torrent_ses, p.current_torrent_id, max_idx, 7);
+                        c.mpv.torrent_set_file_priority(state.torrentSession(), p.current_torrent_id, max_idx, 7);
 
                         // Re-poll to apply streaming window for selected file
-                        _ = c.mpv.torrent_poll(state.app.torrent_ses, p.current_torrent_id, p.selected_file_idx, &buffering_path, @intCast(buffering_path.len), null, null, null);
+                        _ = c.mpv.torrent_poll(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, &buffering_path, @intCast(buffering_path.len), null, null, null);
                     }
 
                     // Torrent had no playable media (-2, set above) — nothing
@@ -1033,7 +1033,7 @@ pub fn updateTorrentBackgroundTasks() void {
                     // This gives instant startup instead of waiting for first piece.
 
                     // Get file path from torrent_poll (even if pieces aren't ready yet)
-                    _ = c.mpv.torrent_poll(state.app.torrent_ses, p.current_torrent_id, p.selected_file_idx, &buffering_path, @intCast(buffering_path.len), null, null, null);
+                    _ = c.mpv.torrent_poll(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, &buffering_path, @intCast(buffering_path.len), null, null, null);
                     const path_len = std.mem.indexOfScalar(u8, &buffering_path, 0) orelse buffering_path.len;
                     const safe_len = @min(path_len, 511);
                     var null_term_path: [513]u8 = undefined;
@@ -1045,7 +1045,7 @@ pub fn updateTorrentBackgroundTasks() void {
 
                     // Ingest media to Vector DB AI Memory
                     var t_name_ai: [256]u8 = undefined;
-                    c.mpv.torrent_get_name(state.app.torrent_ses, p.current_torrent_id, &t_name_ai, 256);
+                    c.mpv.torrent_get_name(state.torrentSession(), p.current_torrent_id, &t_name_ai, 256);
                     const nai_len = std.mem.indexOfScalar(u8, &t_name_ai, 0) orelse 0;
                     if (nai_len > 0) {
                         const ai_memory = @import("../services/ai_memory.zig");
@@ -1056,7 +1056,7 @@ pub fn updateTorrentBackgroundTasks() void {
                     const watch = @import("watch_history.zig");
                     if (p.resume_percent <= 0.0) {
                         var t_name2: [256]u8 = undefined;
-                        c.mpv.torrent_get_name(state.app.torrent_ses, p.current_torrent_id, &t_name2, 256);
+                        c.mpv.torrent_get_name(state.torrentSession(), p.current_torrent_id, &t_name2, 256);
                         const n_len = std.mem.indexOfScalar(u8, &t_name2, 0) orelse 0;
                         if (n_len > 0) {
                             const saved_pct = watch.getPosition(t_name2[0..n_len]);
@@ -1115,7 +1115,7 @@ pub fn updateTorrentBackgroundTasks() void {
                         // Auto-search subtitles for this torrent
                         const subs = @import("subtitles.zig");
                         var t_name: [256]u8 = undefined;
-                        c.mpv.torrent_get_name(state.app.torrent_ses, p.current_torrent_id, &t_name, 256);
+                        c.mpv.torrent_get_name(state.torrentSession(), p.current_torrent_id, &t_name, 256);
                         const name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse 0;
                         if (name_len > 0) {
                             subs.startSearch(&state.app.sub_engine, t_name[0..name_len]);
@@ -1129,14 +1129,14 @@ pub fn updateTorrentBackgroundTasks() void {
                 // Update libtorrent's deadline window so it prioritizes pieces ahead of playback.
                 // The HTTP proxy handles back-pressure (blocking reads until pieces arrive),
                 // so we no longer need to pause/unpause mpv — it buffers naturally via HTTP.
-                _ = c.mpv.torrent_ensure_streaming_buffer(state.app.torrent_ses, p.current_torrent_id, p.selected_file_idx, percent_pos);
+                _ = c.mpv.torrent_ensure_streaming_buffer(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, percent_pos);
 
                 // Save position to watch history every ~300 frames (~5s at 60fps)
                 p.save_counter +%= 1;
                 if (percent_pos > 0.5 and p.save_counter % 300 == 0) {
                     const watch = @import("watch_history.zig");
                     var t_name3: [256]u8 = undefined;
-                    c.mpv.torrent_get_name(state.app.torrent_ses, p.current_torrent_id, &t_name3, 256);
+                    c.mpv.torrent_get_name(state.torrentSession(), p.current_torrent_id, &t_name3, 256);
                     const n3_len = std.mem.indexOfScalar(u8, &t_name3, 0) orelse 0;
                     if (n3_len > 0) {
                         // source_url is the magnet this torrent was added from
@@ -1184,7 +1184,7 @@ pub fn updateTorrentBackgroundTasks() void {
     }
 
     if (state.app.pending_magnet_tid >= 0 and !state.app.pending_has_metadata) {
-        const f_count = c.mpv.torrent_get_file_count(state.app.torrent_ses, state.app.pending_magnet_tid);
+        const f_count = c.mpv.torrent_get_file_count(state.torrentSession(), state.app.pending_magnet_tid);
         if (f_count > 0) {
             state.app.pending_has_metadata = true;
         }
