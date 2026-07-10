@@ -485,7 +485,19 @@ pub fn renderGrid() !void {
 
                 if (p.texture) |*tex| {
                     var cell_overlay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
-                    const img_wd = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .expand = .both, .gravity_x = 0.5, .gravity_y = 0.5 });
+                    // Aspect-preserving fit (letterbox), not stretch. The texture is
+                    // already rendered at the video's native display aspect, so feed
+                    // that ratio to dvui via .expand = .ratio. We pass the aspect via a
+                    // deliberately TINY min_size_content (aspect*10 × 10) so the widget
+                    // never reports a large min size to the parent layout — .ratio only
+                    // uses min_size's *shape*, then grows it to fill the cell keeping the
+                    // ratio. Without this, .expand = .both stretched the frame to the full
+                    // cell, visibly distorting video in full-height / fullscreen windows.
+                    const tex_ar: f32 = if (tex.height > 0)
+                        @as(f32, @floatFromInt(tex.width)) / @as(f32, @floatFromInt(tex.height))
+                    else
+                        16.0 / 9.0;
+                    const img_wd = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i, .min_size_content = .{ .w = tex_ar * 10.0, .h = 10.0 }, .expand = .ratio, .gravity_x = 0.5, .gravity_y = 0.5 });
 
                     // Raw click-on-video handling. Guards matter here:
                     //  • compare against the PHYSICAL screen rect — me.p is
