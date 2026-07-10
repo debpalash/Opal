@@ -389,10 +389,10 @@ pub fn renderSubPicker() void {
             const lang = if (state.app.sub_lang_len > 0) state.app.sub_lang_buf[0..state.app.sub_lang_len] else "en";
             if (q_len > 0) {
                 engine_mod.searchQuery(engine, state.app.sub_search_buf[0..q_len]);
-                if (has_key and !subs.is_searching) subs.searchByQuery(state.app.sub_search_buf[0..q_len], lang);
+                if (has_key and !subs.is_searching.load(.acquire)) subs.searchByQuery(state.app.sub_search_buf[0..q_len], lang);
             } else {
                 engine_mod.searchFromActivePlayer(engine);
-                if (has_key and !subs.is_searching) subs.autoSearchFromPlayer(false);
+                if (has_key and !subs.is_searching.load(.acquire)) subs.autoSearchFromPlayer(false);
             }
         }
 
@@ -407,12 +407,12 @@ pub fn renderSubPicker() void {
         })) {
             if (!engine_busy) {
                 engine_mod.searchFromActivePlayer(engine);
-                if (has_key and !subs.is_searching) subs.autoSearchFromPlayer(false);
+                if (has_key and !subs.is_searching.load(.acquire)) subs.autoSearchFromPlayer(false);
             }
         }
 
         // Whisper generation — last resort, quiet.
-        const gen_label = if (auto_subs.in_progress) "Generating…" else "Whisper";
+        const gen_label = if (auto_subs.in_progress.load(.acquire)) "Generating…" else "Whisper";
         var gen_wd: dvui.WidgetData = undefined;
         if (dvui.button(@src(), gen_label, .{}, .{
             .data_out = &gen_wd,
@@ -423,7 +423,7 @@ pub fn renderSubPicker() void {
             .gravity_y = 0.5,
             .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
         })) {
-            if (!auto_subs.in_progress) auto_subs.transcribeCurrent();
+            if (!auto_subs.in_progress.load(.acquire)) auto_subs.transcribeCurrent();
         }
         components.tip(@src(), gen_wd, "Transcribe the audio locally (whisper)");
     }
@@ -465,13 +465,13 @@ pub fn renderSubPicker() void {
         subStatusRow("Scouring OpenSubtitles and Addic7ed…", 57010);
     } else if (engine.state == .downloading) {
         subStatusRow("Downloading subtitle…", 57011);
-    } else if (subs.is_searching or subs.is_downloading) {
+    } else if (subs.is_searching.load(.acquire) or subs.is_downloading.load(.acquire)) {
         subStatusRow("Checking opensubtitles.com…", 57012);
-    } else if (auto_subs.in_progress) {
+    } else if (auto_subs.in_progress.load(.acquire)) {
         subStatusRow("Transcribing with whisper…", 57013);
     }
 
-    if (auto_subs.status_len > 0 and !auto_subs.in_progress) {
+    if (auto_subs.status_len > 0 and !auto_subs.in_progress.load(.acquire)) {
         _ = dvui.label(@src(), "{s}", .{auto_subs.status_buf[0..auto_subs.status_len]}, .{
             .color_text = theme.colors.text_secondary,
             .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xs },
@@ -479,7 +479,7 @@ pub fn renderSubPicker() void {
     }
 
     const keyed_count = if (has_key) subs.result_count else 0;
-    const any_busy = engine_busy or subs.is_searching or auto_subs.in_progress;
+    const any_busy = engine_busy or subs.is_searching.load(.acquire) or auto_subs.in_progress.load(.acquire);
 
     // ── Empty state ──
     if (engine.result_count == 0 and keyed_count == 0 and !any_busy) {
@@ -581,7 +581,7 @@ pub fn renderSubPicker() void {
         if (subs.result_count > 0 or subs.search_error_len > 0) {
             components.sectionHeader("OpenSubtitles.com");
         }
-        if (subs.search_error_len > 0 and subs.result_count == 0 and !subs.is_searching) {
+        if (subs.search_error_len > 0 and subs.result_count == 0 and !subs.is_searching.load(.acquire)) {
             var err_buf: [128]u8 = undefined;
             _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(subs.search_error[0..subs.search_error_len], &err_buf)}, .{
                 .id_extra = 57030,
@@ -644,7 +644,7 @@ pub fn renderSubPicker() void {
                 subChip(text_mod.safeUtf8Buf(r.language[0..r.lang_len], &fl_buf), ri + 59500);
             }
             subChip("OS.com", ri + 59600);
-            if (dvui.button(@src(), if (subs.is_downloading) "…" else "Download", .{}, .{
+            if (dvui.button(@src(), if (subs.is_downloading.load(.acquire)) "…" else "Download", .{}, .{
                 .id_extra = ri + 59700,
                 .color_fill = theme.colors.bg_surface,
                 .color_text = theme.colors.text_primary,
@@ -654,7 +654,7 @@ pub fn renderSubPicker() void {
                 .gravity_y = 0.5,
                 .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
             })) {
-                if (!subs.is_downloading and r.file_id > 0) {
+                if (!subs.is_downloading.load(.acquire) and r.file_id > 0) {
                     subs.downloadSubtitle(r.file_id);
                 }
             }
@@ -1520,7 +1520,7 @@ pub fn renderLiquidGlassOverlay() void {
             @import("../player/subtitles.zig").searchFromActivePlayer(&state.app.sub_engine);
             if (state.app.opensub_api_key_len > 0) {
                 const subs = @import("../services/subtitles.zig");
-                if (!subs.is_searching) subs.autoSearchFromPlayer(false);
+                if (!subs.is_searching.load(.acquire)) subs.autoSearchFromPlayer(false);
             }
         }
 

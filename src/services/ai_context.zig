@@ -537,8 +537,8 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
     if (std.mem.eql(u8, fl, "stop listening") or std.mem.eql(u8, fl, "be quiet") or
         std.mem.eql(u8, fl, "shut up") or std.mem.eql(u8, fl, "go away"))
     {
-        voice.conversation_active = false;
-        voice.is_recording = false;
+        voice.conversation_active.store(false, .release);
+        voice.is_recording.store(false, .release);
         voice.voice_mode = false;
         voice.setPhase(.idle);
         addInstantResponse(raw_input, "Conversation mode off. Click to restart.");
@@ -549,7 +549,7 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
     if (std.mem.eql(u8, fl, "start listening") or std.mem.eql(u8, fl, "listen") or
         std.mem.eql(u8, fl, "hey opal") or std.mem.eql(u8, fl, "hey zig zag"))
     {
-        if (!voice.conversation_active) {
+        if (!voice.conversation_active.load(.acquire)) {
             voice.toggleConversation();
         }
         addInstantResponse(raw_input, "I'm listening.");
@@ -996,7 +996,7 @@ pub fn generateResponse() void {
     // prompt ingest is felt (on-device model, ~1ms per ~2 prompt bytes). Skip
     // the RAG lookup + retrieval text and the long-tail tools — voice turns
     // are commands and short questions, not research.
-    const voice_lean = voice.conversation_active;
+    const voice_lean = voice.conversation_active.load(.acquire);
 
     // RAG: Build context from vector DB + watch history
     const user_text = chat.messages[assistant_idx - 1].text[0..chat.messages[assistant_idx - 1].text_len];
@@ -1567,7 +1567,7 @@ pub fn generateResponse() void {
                             // Sentence boundary detected — speak this chunk immediately
                             if ((decoded_char == '.' or decoded_char == '!' or decoded_char == '?') and tts_sentence_len > 8) {
                                 // Wait for previous TTS to finish before speaking next sentence
-                                while (voice.is_speaking) {
+                                while (voice.is_speaking.load(.acquire)) {
                                     @import("../core/io_global.zig").sleep(30 * std.time.ns_per_ms);
                                 }
                                 voice.speakResponse(tts_sentence_buf[0..tts_sentence_len]);
@@ -1700,7 +1700,7 @@ pub fn generateResponse() void {
         if (tts_sentences_spoken > 0) {
             if (tts_sentence_len > 3) {
                 // Wait for last sentence to finish
-                while (voice.is_speaking) {
+                while (voice.is_speaking.load(.acquire)) {
                     @import("../core/io_global.zig").sleep(30 * std.time.ns_per_ms);
                 }
                 voice.speakResponse(tts_sentence_buf[0..tts_sentence_len]);

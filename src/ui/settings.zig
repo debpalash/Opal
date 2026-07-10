@@ -1803,14 +1803,14 @@ fn renderSubtitlesTab() void {
             .corner_radius = theme.dims.rad_md,
         })) {
             engine_mod.searchFromActivePlayer(engine);
-            if (has_key and !subs.is_searching) subs.autoSearchFromPlayer(false);
+            if (has_key and !subs.is_searching.load(.acquire)) subs.autoSearchFromPlayer(false);
         }
 
         if ((search_clicked or enter) and !engine_busy) {
             const q_len = std.mem.indexOfScalar(u8, &state.app.sub_search_buf, 0) orelse 0;
             if (q_len > 0) {
                 engine_mod.searchQuery(engine, state.app.sub_search_buf[0..q_len]);
-                if (has_key and !subs.is_searching) {
+                if (has_key and !subs.is_searching.load(.acquire)) {
                     const lang = if (state.app.sub_lang_len > 0) state.app.sub_lang_buf[0..state.app.sub_lang_len] else "en";
                     subs.searchByQuery(state.app.sub_search_buf[0..q_len], lang);
                 }
@@ -1825,7 +1825,7 @@ fn renderSubtitlesTab() void {
 
         // Live status while a worker runs (worker states have no UI wake of
         // their own — the spinner keeps the tab repainting).
-        if (engine.state == .searching or engine.state == .downloading or subs.is_searching or subs.is_downloading) {
+        if (engine.state == .searching or engine.state == .downloading or subs.is_searching.load(.acquire) or subs.is_downloading.load(.acquire)) {
             var lrow = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = 4401,
                 .expand = .horizontal,
@@ -1943,7 +1943,7 @@ fn renderSubtitlesTab() void {
         }
 
         // Keyed section — only when a key is configured (no nagging without).
-        if (has_key and (subs.result_count > 0 or (subs.search_error_len > 0 and !subs.is_searching))) {
+        if (has_key and (subs.result_count > 0 or (subs.search_error_len > 0 and !subs.is_searching.load(.acquire)))) {
             components.sectionHeader("OpenSubtitles.com");
 
             if (subs.search_error_len > 0 and subs.result_count == 0) {
@@ -2021,7 +2021,7 @@ fn renderSubtitlesTab() void {
                 }
 
                 // Download button — accent, the single primary action per row.
-                if (dvui.button(@src(), if (subs.is_downloading) "..." else "Get", .{}, .{
+                if (dvui.button(@src(), if (subs.is_downloading.load(.acquire)) "..." else "Get", .{}, .{
                     .id_extra = ri + 6000,
                     .color_fill = theme.colors.accent,
                     .color_text = theme.colors.text_on_accent,
@@ -2030,7 +2030,7 @@ fn renderSubtitlesTab() void {
                     .corner_radius = theme.dims.rad_sm,
                     .gravity_y = 0.5,
                 })) {
-                    if (!subs.is_downloading and r.file_id > 0) {
+                    if (!subs.is_downloading.load(.acquire) and r.file_id > 0) {
                         subs.downloadSubtitle(r.file_id);
                     }
                 }

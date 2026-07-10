@@ -25,17 +25,18 @@ pub const SubResult = struct {
 pub const MAX_RESULTS = 25;
 pub var results: [MAX_RESULTS]SubResult = std.mem.zeroes([MAX_RESULTS]SubResult);
 pub var result_count: usize = 0;
-pub var is_searching: bool = false;
+pub var is_searching: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 pub var search_error: [128]u8 = std.mem.zeroes([128]u8);
 pub var search_error_len: usize = 0;
-pub var is_downloading: bool = false;
+pub var is_downloading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 // ── Search by query ──
 pub fn searchByQuery(query: []const u8, lang: []const u8) void {
-    if (is_searching) return;
     if (query.len == 0) return;
+    // Atomically claim the search slot — only proceed if we flipped false→true,
+    // closing the UI-thread check-then-spawn race.
+    if (is_searching.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
 
-    is_searching = true;
     result_count = 0;
     search_error_len = 0;
 
@@ -52,11 +53,11 @@ pub fn searchByQuery(query: []const u8, lang: []const u8) void {
 
     if (std.Thread.spawn(.{}, struct {
         fn work() void {
-            defer { is_searching = false; }
+            defer { is_searching.store(false, .release); }
             doSearch(S.q_buf[0..S.q_len], S.l_buf[0..S.l_len]);
         }
     }.work, .{})) |t| t.detach() else |_| {
-        is_searching = false;
+        is_searching.store(false, .release);
     }
 }
 
@@ -177,7 +178,7 @@ var last_auto_hash: u64 = 0;
 pub fn autoFetchForPlayer() void {
     if (!state.app.auto_download_subs) return;
     if (state.app.opensub_api_key_len == 0) return; // can't — silently skip
-    if (is_searching or is_downloading) return;
+    if (is_searching.load(.acquire) or is_downloading.load(.acquire)) return;
     if (state.app.active_player_idx >= state.app.players.items.len) return;
     const p = state.app.players.items[state.app.active_player_idx];
 
@@ -289,19 +290,20 @@ fn findJsonInt(json: []const u8, key: []const u8) ?i64 {
 
 // ── Download subtitle by file_id ──
 pub fn downloadSubtitle(file_id: i64) void {
-    if (is_downloading) return;
-    is_downloading = true;
+    // Atomically claim the download slot — only proceed if we flipped false→true,
+    // closing the UI-thread check-then-spawn race.
+    if (is_downloading.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
 
     const S = struct { var fid: i64 = 0; };
     S.fid = file_id;
 
     if (std.Thread.spawn(.{}, struct {
         fn work() void {
-            defer { is_downloading = false; }
+            defer { is_downloading.store(false, .release); }
             doDownload(S.fid);
         }
     }.work, .{})) |t| t.detach() else |_| {
-        is_downloading = false;
+        is_downloading.store(false, .release);
     }
 }
 

@@ -349,9 +349,9 @@ pub const ingestMemory = memory.ingestMemory;
 /// Emergency stop — kill TTS, abort LLM, stop recording
 pub fn stopAll() void {
     // Stop voice pipeline
-    voice.is_speaking = false;
-    voice.is_recording = false;
-    voice.is_transcribing = false;
+    voice.is_speaking.store(false, .release);
+    voice.is_recording.store(false, .release);
+    voice.is_transcribing.store(false, .release);
     // Abort the in-flight LLM stream for real (curl child gets killed in the
     // SSE loop), and silence any queued sentences of the superseded reply.
     voice.barge_in.store(true, .release);
@@ -422,7 +422,7 @@ pub fn renderChatBody() void {
     }
 
     // Auto-start conversation mode when server is ready
-    if (server.model_status == .online and !voice.conversation_active) {
+    if (server.model_status == .online and !voice.conversation_active.load(.acquire)) {
         voice.autoStartConversation();
     }
 
@@ -510,7 +510,7 @@ pub fn renderChatBody() void {
     // ── Live Feedback / Progress Indicator ──
     // Moved out of the input horizontal row to its own dedicated space above input
     var show_status_bar = false;
-    if (voice.conversation_active or is_generating.load(.acquire) or voice.is_speaking) {
+    if (voice.conversation_active.load(.acquire) or is_generating.load(.acquire) or voice.is_speaking.load(.acquire)) {
         show_status_bar = true;
     }
 
@@ -528,7 +528,7 @@ pub fn renderChatBody() void {
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
 
-        if (voice.conversation_active) {
+        if (voice.conversation_active.load(.acquire)) {
             if (voice.conv_phase == .listening) {
                 if (voice.partial_text_len > 0) {
                     _ = dvui.label(@src(), "Listening: {s}", .{voice.partial_text[0..voice.partial_text_len]}, .{
@@ -561,7 +561,7 @@ pub fn renderChatBody() void {
             _ = dvui.label(@src(), "{s}", .{phaseLabel(phase)}, .{
                 .color_text = theme.colors.text_secondary,
             });
-        } else if (voice.is_speaking) {
+        } else if (voice.is_speaking.load(.acquire)) {
             _ = dvui.label(@src(), "Speaking...", .{}, .{
                 .color_text = theme.colors.text_secondary,
             });
@@ -625,7 +625,7 @@ pub fn renderChatBody() void {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.mic, .{}, .{}, .{
                 .id_extra = 9007,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = if (voice.is_recording) theme.colors.danger else if (voice.is_transcribing) theme.colors.accent else theme.colors.text_secondary,
+                .color_text = if (voice.is_recording.load(.acquire)) theme.colors.danger else if (voice.is_transcribing.load(.acquire)) theme.colors.accent else theme.colors.text_secondary,
                 .corner_radius = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
                 .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
@@ -638,7 +638,7 @@ pub fn renderChatBody() void {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.headphones, .{}, .{}, .{
                 .id_extra = 9008,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = if (voice.conversation_active) theme.colors.accent else theme.colors.text_secondary,
+                .color_text = if (voice.conversation_active.load(.acquire)) theme.colors.accent else theme.colors.text_secondary,
                 .corner_radius = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
                 .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
@@ -648,7 +648,7 @@ pub fn renderChatBody() void {
             }
 
             // Stop button — danger token only when something is active.
-            const is_active = is_generating.load(.acquire) or voice.is_speaking or voice.is_recording or voice.is_transcribing;
+            const is_active = is_generating.load(.acquire) or voice.is_speaking.load(.acquire) or voice.is_recording.load(.acquire) or voice.is_transcribing.load(.acquire);
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.square, .{}, .{}, .{
                 .id_extra = 9009,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },

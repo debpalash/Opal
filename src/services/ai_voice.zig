@@ -15,12 +15,15 @@ const VOICE_SOCKET = "/tmp/opal-voice.sock";
 
 // ── Voice state (shared with ai_chat.zig) ──
 // Thread safety: conv_phase mutations must go through setPhase() which
-// holds state_mutex. Single-byte bools are naturally atomic on x86/ARM.
+// holds state_mutex. is_recording/is_transcribing/is_speaking/conversation_active
+// are atomic — set by both the UI thread and voice/TTS workers and read in worker
+// loops, so a cached read must never miss a stop request (see CLAUDE.md "Atomic
+// flags").
 pub var voice_mode: bool = false;
-pub var is_recording: bool = false;
-pub var is_transcribing: bool = false;
-pub var is_speaking: bool = false;
-pub var conversation_active: bool = false;
+pub var is_recording: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+pub var is_transcribing: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+pub var is_speaking: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+pub var conversation_active: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 /// Set true the instant a barge-in is detected (user spoke over the assistant).
 /// Silences every queued/in-flight TTS sentence until the next user turn resets
 /// it. Atomic because the voice worker thread sets it and the LLM-generation
@@ -105,7 +108,7 @@ pub fn pauseVoiceServer() void {
 /// stopping conversation mode. The old code only killed `say`, so interrupting
 /// a Kokoro/Piper reply (which uses afplay) did nothing on macOS.
 pub fn stopAllAudio() void {
-    is_speaking = false;
+    is_speaking.store(false, .release);
     const io = @import("../core/io_global.zig");
     const alloc = @import("../core/alloc.zig").allocator;
     const names: []const []const u8 = if (@import("builtin").os.tag == .macos)
@@ -308,16 +311,16 @@ pub fn ensureTtsServer() void {
 // ── Mic Recording with VAD ──
 
 pub fn toggleMicRecording() void {
-    if (is_recording) {
-        is_recording = false;
+    if (is_recording.load(.acquire)) {
+        is_recording.store(false, .release);
     } else {
-        if (is_transcribing) return;
+        if (is_transcribing.load(.acquire)) return;
         // Same callback wiring as conversation mode — one-shot dictation
         // dropped its transcript into a null callback otherwise.
         @import("ai_chat.zig").ensureInit();
-        is_recording = true;
+        is_recording.store(true, .release);
         mic_thread = std.Thread.spawn(.{}, micRecordWorker, .{}) catch {
-            is_recording = false;
+            is_recording.store(false, .release);
             setError("Failed to start mic recording");
             return;
         };
@@ -329,10 +332,10 @@ pub fn toggleMicRecording() void {
 // Continuous loop: listen → transcribe → LLM → TTS → listen again
 
 pub fn toggleConversation() void {
-    if (conversation_active) {
+    if (conversation_active.load(.acquire)) {
         // Stop conversation
-        conversation_active = false;
-        is_recording = false;
+        conversation_active.store(false, .release);
+        is_recording.store(false, .release);
         voice_mode = false;
         setPhase(.idle);
         // Tell voice server to pause (guarded — worker may be closing the socket)
@@ -376,7 +379,7 @@ pub fn toggleConversation() void {
         }
 
         // Start conversation
-        conversation_active = true;
+        conversation_active.store(true, .release);
         voice_mode = true;
         setPhase(.listening);
 
@@ -387,7 +390,7 @@ pub fn toggleConversation() void {
             std.Thread.spawn(.{}, conversationLoopSherpa, .{})
         else
             std.Thread.spawn(.{}, conversationLoopV2, .{})) catch {
-            conversation_active = false;
+            conversation_active.store(false, .release);
             setPhase(.idle);
             setError("Failed to start conversation mode");
             return;
@@ -404,7 +407,7 @@ var echo_guard_until_ms: i64 = 0;
 pub var auto_conversation: bool = false;
 
 pub fn autoStartConversation() void {
-    if (auto_conversation and !conversation_active) {
+    if (auto_conversation and !conversation_active.load(.acquire)) {
         toggleConversation();
     }
 }
@@ -428,8 +431,8 @@ pub fn notifyMediaState(media_playing: bool) void {
 fn conversationLoopSherpa() void {
     defer {
         setPhase(.idle);
-        conversation_active = false;
-        is_recording = false;
+        conversation_active.store(false, .release);
+        is_recording.store(false, .release);
     }
 
     const vb = @import("voice_backend.zig");
@@ -461,7 +464,7 @@ fn conversationLoopSherpa() void {
     var reader = stdout.reader(@import("../core/io_global.zig").io(), &reader_buf);
 
     setPhase(.listening);
-    while (conversation_active) {
+    while (conversation_active.load(.acquire)) {
         var line = reader.interface.takeDelimiter('\n') catch break orelse break;
         if (std.mem.lastIndexOfScalar(u8, line, '\r')) |rp| line = line[rp + 1 ..];
         const trimmed = std.mem.trim(u8, line, " \t\r");
@@ -501,7 +504,7 @@ fn conversationLoopSherpa() void {
         // barge-in is traded away for never talking to itself; the stop
         // button still cuts speech instantly.
         const echo_now = @import("../core/io_global.zig").milliTimestamp();
-        if (is_speaking or @import("ai_chat.zig").is_generating.load(.acquire)) {
+        if (is_speaking.load(.acquire) or @import("ai_chat.zig").is_generating.load(.acquire)) {
             echo_guard_until_ms = echo_now + 700;
             continue;
         }
@@ -516,7 +519,7 @@ fn conversationLoopSherpa() void {
         setPhase(.thinking);
         var wait: usize = 0;
         const chat = @import("ai_chat.zig");
-        while (chat.is_generating.load(.acquire) and conversation_active and wait < 300) : (wait += 1) {
+        while (chat.is_generating.load(.acquire) and conversation_active.load(.acquire) and wait < 300) : (wait += 1) {
             @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
         }
         // Response queued; TTS fires from ai_chat.setResponseText path.
@@ -558,20 +561,20 @@ fn conversationLoopV2() void {
         // race the close (use-after-close). clearVoiceSocket does both.
         clearVoiceSocket();
         setPhase(.idle);
-        conversation_active = false;
-        is_recording = false;
+        conversation_active.store(false, .release);
+        is_recording.store(false, .release);
     }
 
     // Tell voice server to start listening
     voiceSocketWrite("RESUME\n");
     setPhase(.listening);
-    is_recording = true;
+    is_recording.store(true, .release);
     logs.pushLog("info", "voice", "Connected to voice server v3 — listening", true);
 
     var line_buf: [4096]u8 = undefined;
     var line_pos: usize = 0;
 
-    while (conversation_active) {
+    while (conversation_active.load(.acquire)) {
         var byte: [1]u8 = undefined;
         const n = @import("../core/io_global.zig").streamReadAll(stream, &byte) catch break;
         if (n == 0) break;
@@ -594,7 +597,7 @@ fn conversationLoopV2() void {
 
             } else if (std.mem.startsWith(u8, line, "VAD:start")) {
                 setPhase(.listening);
-                is_recording = true;
+                is_recording.store(true, .release);
                 partial_text_len = 0; // Clear partial on new speech
                 // Duck media volume (save current level first)
                 const has_player = state.app.players.items.len > 0;
@@ -610,7 +613,7 @@ fn conversationLoopV2() void {
                 }
             } else if (std.mem.startsWith(u8, line, "VAD:end")) {
                 setPhase(.transcribing);
-                is_recording = false;
+                is_recording.store(false, .release);
                 // Restore media volume to saved level
                 const has_player = state.app.players.items.len > 0;
                 if (has_player) {
@@ -636,7 +639,7 @@ fn conversationLoopV2() void {
                     logs.pushLog("info", "voice", "V3 transcript", false);
                     // Tell server we're about to speak (enables barge-in detection)
                     voiceSocketWrite("SPEAKING\n");
-                    is_recording = false;
+                    is_recording.store(false, .release);
 
                     // New user turn — clear any prior barge-in so the reply to
                     // this utterance is allowed to speak.
@@ -652,22 +655,22 @@ fn conversationLoopV2() void {
                         fn waiter() void {
                             setPhase(.thinking);
                             var wait: usize = 0;
-                            while (@import("ai_chat.zig").is_generating.load(.acquire) and conversation_active and wait < 300) : (wait += 1) {
+                            while (@import("ai_chat.zig").is_generating.load(.acquire) and conversation_active.load(.acquire) and wait < 300) : (wait += 1) {
                                 @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
                             }
-                            if (conversation_active) {
+                            if (conversation_active.load(.acquire)) {
                                 setPhase(.speaking);
                             }
-                            while (is_speaking and conversation_active) {
+                            while (is_speaking.load(.acquire) and conversation_active.load(.acquire)) {
                                 @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
                             }
 
                             voiceSocketWrite("DONE_SPEAKING\n");
                             @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
 
-                            if (conversation_active) {
+                            if (conversation_active.load(.acquire)) {
                                 setPhase(.listening);
-                                is_recording = true;
+                                is_recording.store(true, .release);
                             }
                         }
                     };
@@ -699,14 +702,14 @@ fn conversationLoopV1() void {
     // Ensure old STT server is running for fallback
     ensureSttServer();
 
-    while (conversation_active) {
+    while (conversation_active.load(.acquire)) {
         setPhase(.speaking);
-        while ((is_speaking or chat.is_generating.load(.acquire)) and conversation_active) {
+        while ((is_speaking.load(.acquire) or chat.is_generating.load(.acquire)) and conversation_active.load(.acquire)) {
             @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
         }
-        if (!conversation_active) break;
+        if (!conversation_active.load(.acquire)) break;
         @import("../core/io_global.zig").sleep(80 * std.time.ns_per_ms);
-        if (!conversation_active) break;
+        if (!conversation_active.load(.acquire)) break;
 
         const has_player = state.app.players.items.len > 0;
         var saved_vol: f64 = 100.0;
@@ -723,7 +726,7 @@ fn conversationLoopV1() void {
         }
 
         setPhase(.listening);
-        is_recording = true;
+        is_recording.store(true, .release);
         // Use ffmpeg for mic capture (cross-platform; sox 'rec' is rarely installed)
         const is_macos = @import("builtin").os.tag == .macos;
         const input_fmt = if (is_macos) "avfoundation" else "pulse";
@@ -735,7 +738,7 @@ fn conversationLoopV1() void {
         record_child.stdout_behavior = .Ignore;
         record_child.stderr_behavior = .Ignore;
         record_child.spawn() catch {
-            is_recording = false;
+            is_recording.store(false, .release);
             if (has_player) {
                 state.players_mutex.lock();
                 defer state.players_mutex.unlock();
@@ -749,7 +752,7 @@ fn conversationLoopV1() void {
             continue;
         };
         _ = record_child.wait() catch {
-            is_recording = false;
+            is_recording.store(false, .release);
             if (has_player) {
                 state.players_mutex.lock();
                 defer state.players_mutex.unlock();
@@ -761,7 +764,7 @@ fn conversationLoopV1() void {
             }
             continue;
         };
-        is_recording = false;
+        is_recording.store(false, .release);
         // Re-check player still exists after recording (under the lock).
         if (has_player) {
             state.players_mutex.lock();
@@ -772,29 +775,29 @@ fn conversationLoopV1() void {
                 _ = c_pkg.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, rv_cmd.ptr);
             }
         }
-        if (!conversation_active) break;
+        if (!conversation_active.load(.acquire)) break;
 
         setPhase(.transcribing);
-        is_transcribing = true;
+        is_transcribing.store(true, .release);
         transcribeAndSend();
-        is_transcribing = false;
-        if (!conversation_active) break;
+        is_transcribing.store(false, .release);
+        if (!conversation_active.load(.acquire)) break;
 
         setPhase(.thinking);
         var wait_count: usize = 0;
-        while (chat.is_generating.load(.acquire) and conversation_active and wait_count < 300) : (wait_count += 1) {
+        while (chat.is_generating.load(.acquire) and conversation_active.load(.acquire) and wait_count < 300) : (wait_count += 1) {
             @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
         }
     }
 
     setPhase(.idle);
-    conversation_active = false;
-    is_recording = false;
+    conversation_active.store(false, .release);
+    is_recording.store(false, .release);
 }
 
 fn micRecordWorker() void {
     defer {
-        is_recording = false;
+        is_recording.store(false, .release);
     }
 
     // ffmpeg-primary mic capture. Platform-specific input:
@@ -822,7 +825,7 @@ fn micRecordWorker() void {
         return;
     };
 
-    while (is_recording) {
+    while (is_recording.load(.acquire)) {
         @import("../core/io_global.zig").sleep(100_000_000);
     }
 
@@ -831,9 +834,9 @@ fn micRecordWorker() void {
     logs.pushLog("info", "voice", "Mic: ffmpeg stopped, checking output", true);
 
     if (@import("../core/io_global.zig").cwdAccess(MIC_WAV_PATH, .{})) |_| {
-        is_transcribing = true;
+        is_transcribing.store(true, .release);
         defer {
-            is_transcribing = false;
+            is_transcribing.store(false, .release);
         }
         transcribeAndSend();
     } else |_| {
@@ -1005,15 +1008,15 @@ pub fn speakResponse(text: []const u8) void {
     // Centralizing the check here means every speak site (sentence-streaming,
     // trailing remainder, full-response, intent, comics) honors barge-in for free.
     if (barge_in.load(.acquire)) return;
-    if (is_speaking) return;
+    if (is_speaking.load(.acquire)) return;
 
     const slen = @min(text.len, tts_text_buf.len);
     @memcpy(tts_text_buf[0..slen], text[0..slen]);
     tts_text_len = slen;
 
-    is_speaking = true;
+    is_speaking.store(true, .release);
     tts_thread = std.Thread.spawn(.{}, ttsWorker, .{}) catch {
-        is_speaking = false;
+        is_speaking.store(false, .release);
         return;
     };
     tts_thread.?.detach();
@@ -1026,7 +1029,7 @@ fn ttsWorker() void {
     defer tts_mutex.unlock();
 
     defer {
-        is_speaking = false;
+        is_speaking.store(false, .release);
     }
 
     // A barge-in (or stop) may have fired between speakResponse() spawning us

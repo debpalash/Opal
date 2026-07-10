@@ -18,7 +18,7 @@ pub var whisper_lang_len: usize = 2;
 pub var whisper_model_size: [8]u8 = .{ 't', 'i', 'n', 'y', 0, 0, 0, 0 };
 pub var whisper_model_size_len: usize = 4;
 
-pub var in_progress: bool = false;
+pub var in_progress: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 pub var status_buf: [128]u8 = std.mem.zeroes([128]u8);
 pub var status_len: usize = 0;
 
@@ -75,9 +75,13 @@ fn resolveWhisperModel(buf: *[512]u8) ?[]const u8 {
 /// Kick off transcription of the currently playing media. Safe to call from
 /// UI thread — all heavy work happens inside the spawned thread.
 pub fn transcribeCurrent() void {
-    if (in_progress) return;
+    // Atomically claim the transcription slot — only proceed if we flipped
+    // false→true, closing the check-then-spawn double-spawn window. Every early
+    // return below must release the slot.
+    if (in_progress.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
     if (state.app.active_player_idx >= state.app.players.items.len) {
         state.showToast("No active player");
+        in_progress.store(false, .release);
         return;
     }
     const p = state.app.players.items[state.app.active_player_idx];
@@ -87,6 +91,7 @@ pub fn transcribeCurrent() void {
     const path_c = c.mpv.mpv_get_property_string(p.mpv_ctx, "path");
     if (path_c == null) {
         state.showToast("No media path available");
+        in_progress.store(false, .release);
         return;
     }
     const path_slice = std.mem.span(path_c);
@@ -94,6 +99,7 @@ pub fn transcribeCurrent() void {
     const alloc = @import("../core/alloc.zig").allocator;
     const media_path = alloc.dupe(u8, path_slice) catch {
         c.mpv.mpv_free(@ptrCast(path_c));
+        in_progress.store(false, .release);
         return;
     };
     c.mpv.mpv_free(@ptrCast(path_c));
@@ -105,15 +111,15 @@ pub fn transcribeCurrent() void {
     {
         state.showToast("Auto-subs need a local file");
         alloc.free(media_path);
+        in_progress.store(false, .release);
         return;
     }
 
-    in_progress = true;
     setStatus("Starting transcription...");
 
     const args = alloc.create(WorkerArgs) catch {
         alloc.free(media_path);
-        in_progress = false;
+        in_progress.store(false, .release);
         return;
     };
     args.* = .{ .path = media_path };
@@ -121,7 +127,7 @@ pub fn transcribeCurrent() void {
     if (std.Thread.spawn(.{}, worker, .{args})) |t| t.detach() else |_| {
         alloc.free(args.path);
         alloc.destroy(args);
-        in_progress = false;
+        in_progress.store(false, .release);
         setStatus("Failed to spawn thread");
     }
 }
@@ -133,7 +139,7 @@ fn worker(args: *WorkerArgs) void {
     defer {
         alloc.free(args.path);
         alloc.destroy(args);
-        in_progress = false;
+        in_progress.store(false, .release);
     }
 
     const whisper_bin = resolveWhisperBin() orelse {

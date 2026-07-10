@@ -251,7 +251,7 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
             @import("../player/subtitles.zig").searchFromActivePlayer(&state.app.sub_engine);
             if (state.app.opensub_api_key_len > 0) {
                 const subs = @import("../services/subtitles.zig");
-                if (!subs.is_searching) subs.autoSearchFromPlayer(false);
+                if (!subs.is_searching.load(.acquire)) subs.autoSearchFromPlayer(false);
             }
         }
     }

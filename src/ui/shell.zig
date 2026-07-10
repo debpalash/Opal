@@ -314,7 +314,7 @@ fn renderOverflowItems() void {
         state.app.incognito_mode = !state.app.incognito_mode;
         state.showToast(if (state.app.incognito_mode) "Incognito ON — no history saved" else "Incognito OFF");
     }
-    if (dvui.menuItemLabel(@src(), if (voice.conversation_active) "Voice conversation: on" else "Voice conversation…", .{}, item_opts) != null) {
+    if (dvui.menuItemLabel(@src(), if (voice.conversation_active.load(.acquire)) "Voice conversation: on" else "Voice conversation…", .{}, item_opts) != null) {
         voice.toggleConversation();
     }
     if (header.hasStreamToken()) {
@@ -410,11 +410,11 @@ fn omnibox() void {
         const voice = @import("../services/ai_voice.zig");
         const voice_icon = if (voice.conv_phase == .speaking)
             icons.tvg.lucide.@"volume-2"
-        else if (voice.conv_phase == .listening or voice.is_recording)
+        else if (voice.conv_phase == .listening or voice.is_recording.load(.acquire))
             icons.tvg.lucide.mic
         else
             icons.tvg.lucide.headphones;
-        if (components.iconButton(@src(), voice_icon, "Voice / conversation mode", voice.conversation_active)) {
+        if (components.iconButton(@src(), voice_icon, "Voice / conversation mode", voice.conversation_active.load(.acquire))) {
             voice.toggleConversation();
         }
     }

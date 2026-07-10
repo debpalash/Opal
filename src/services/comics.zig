@@ -2185,7 +2185,7 @@ fn narrationThread() void {
                 had_dialogue = true;
 
                 // Wait for any existing speech to finish
-                while (ai_voice.is_speaking and state.app.comic.narrating) {
+                while (ai_voice.is_speaking.load(.acquire) and state.app.comic.narrating) {
                     @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
                 }
                 if (!state.app.comic.narrating) break;
@@ -2194,7 +2194,7 @@ fn narrationThread() void {
                 ai_voice.speakResponse(dialogue_buf[0..dialogue_len]);
 
                 // Wait for TTS to finish
-                while (ai_voice.is_speaking and state.app.comic.narrating) {
+                while (ai_voice.is_speaking.load(.acquire) and state.app.comic.narrating) {
                     @import("../core/io_global.zig").sleep(50 * std.time.ns_per_ms);
                 }
                 if (!state.app.comic.narrating) break;

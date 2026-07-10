@@ -277,9 +277,9 @@ fn appInit(win: *dvui.Window) !void {
 pub fn appDeinit() void {
     // Stop conversation/voice mode
     const voice = @import("services/ai_voice.zig");
-    voice.conversation_active = false;
-    voice.is_recording = false;
-    voice.is_speaking = false;
+    voice.conversation_active.store(false, .release);
+    voice.is_recording.store(false, .release);
+    voice.is_speaking.store(false, .release);
 
     // Settle in-flight download/decode workers (comic pages, comic covers, yt
     // thumbnails) before we free the buffers they publish into — otherwise the

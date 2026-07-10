@@ -402,12 +402,12 @@ fn renderVoiceButton() void {
     const voice = @import("../services/ai_voice.zig");
     const voice_icon = if (voice.conv_phase == .speaking)
         icons.tvg.lucide.@"volume-2"
-    else if (voice.conv_phase == .listening or voice.is_recording)
+    else if (voice.conv_phase == .listening or voice.is_recording.load(.acquire))
         icons.tvg.lucide.mic
     else
         icons.tvg.lucide.headphones;
 
-    if (components.iconButton(@src(), voice_icon, "Voice / conversation mode", voice.conversation_active)) {
+    if (components.iconButton(@src(), voice_icon, "Voice / conversation mode", voice.conversation_active.load(.acquire))) {
         voice.toggleConversation();
     }
 }
@@ -596,7 +596,7 @@ pub fn renderUrlInput(is_large: bool) void {
     {
         const voice = @import("../services/ai_voice.zig");
         const ai_chat_mod = @import("../services/ai_chat.zig");
-        const mic_color: dvui.Color = if (voice.is_recording)
+        const mic_color: dvui.Color = if (voice.is_recording.load(.acquire))
             theme.colors.danger
         else
             theme.colors.text_tertiary;
@@ -616,7 +616,7 @@ pub fn renderUrlInput(is_large: bool) void {
         if (!is_large) components.tip(@src(), mic_wd, "Mic / push-to-talk");
 
         // Emergency stop when anything is active
-        const is_active = voice.conversation_active or voice.is_recording or voice.is_speaking or ai_chat_mod.is_generating.load(.acquire);
+        const is_active = voice.conversation_active.load(.acquire) or voice.is_recording.load(.acquire) or voice.is_speaking.load(.acquire) or ai_chat_mod.is_generating.load(.acquire);
         if (is_active) {
             var stop_wd: dvui.WidgetData = undefined;
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.square, .{}, .{}, .{

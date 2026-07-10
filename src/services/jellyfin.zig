@@ -93,20 +93,36 @@ pub fn authenticate() void {
                 state.app.jf.is_loading.store(false, .release);
             }
 
-            const server = state.app.jf.server_url[0..state.app.jf.server_url_len];
+            // Snapshot the server URL + credentials into worker-local buffers
+            // BEFORE the network call. is_loading only prevents a re-spawn — it
+            // does NOT stop the UI thread from editing server_url/login_user_buf/
+            // login_pass_buf (the user typing in the login fields) while this
+            // worker reads them mid-request. Reading them directly during the
+            // HTTP call is a torn read; copy the bytes up-front and use only the
+            // local copies for the rest of the request.
+            var server_buf: [256]u8 = undefined;
+            const server_len = @min(state.app.jf.server_url_len, server_buf.len);
+            @memcpy(server_buf[0..server_len], state.app.jf.server_url[0..server_len]);
+            const server = server_buf[0..server_len];
+
+            var user_buf_local: [128]u8 = undefined;
+            @memcpy(&user_buf_local, &state.app.jf.login_user_buf);
+            var pass_buf_local: [128]u8 = undefined;
+            @memcpy(&pass_buf_local, &state.app.jf.login_pass_buf);
+
             if (server.len == 0) {
                 setLoginError("Server URL is empty");
                 return;
             }
 
-            // Get username (null-terminated -> slice)
+            // Get username (null-terminated -> slice) from the local snapshot.
             const user = blk: {
-                const idx = std.mem.indexOfScalar(u8, &state.app.jf.login_user_buf, 0) orelse 128;
-                break :blk state.app.jf.login_user_buf[0..idx];
+                const idx = std.mem.indexOfScalar(u8, &user_buf_local, 0) orelse user_buf_local.len;
+                break :blk user_buf_local[0..idx];
             };
             const pass = blk: {
-                const idx = std.mem.indexOfScalar(u8, &state.app.jf.login_pass_buf, 0) orelse 128;
-                break :blk state.app.jf.login_pass_buf[0..idx];
+                const idx = std.mem.indexOfScalar(u8, &pass_buf_local, 0) orelse pass_buf_local.len;
+                break :blk pass_buf_local[0..idx];
             };
 
             if (user.len == 0) {

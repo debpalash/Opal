@@ -41,7 +41,7 @@ pub fn onPlaybackEvent(kind: EventKind) void {
     if (!(state.app.active_player_idx < state.app.players.items.len)) return;
 
     // Don't talk over ourselves, the user, or an in-flight generation.
-    if (@import("ai_voice.zig").is_speaking) return;
+    if (@import("ai_voice.zig").is_speaking.load(.acquire)) return;
     if (@import("ai_chat.zig").is_generating.load(.acquire)) return;
 
     // Single-flight: if a worker is already running, drop the event.
@@ -265,7 +265,7 @@ const S = struct {
         }
 
         // Re-check the talk guards right before speaking (state may have moved).
-        if (voice.is_speaking) return;
+        if (voice.is_speaking.load(.acquire)) return;
         if (chat.is_generating.load(.acquire)) return;
         if (voice.barge_in.load(.acquire)) return;
 

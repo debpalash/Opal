@@ -131,6 +131,21 @@ pub const PosterRequest = struct {
 
 /// Fetch a poster image from URL in a background thread.
 /// Sets fetching_flag while working, writes pixels/w/h on success.
+//
+// SAFETY (fetching_flag is a plain *bool, not *std.atomic.Value(bool)):
+// This flag is only ever a re-entry guard. The check-then-set below
+// (`if (fetching_flag.*) return; ... fetching_flag.* = true;`) and the worker's
+// `defer args.flag.* = false;` all run for a single card whose fetch is kicked
+// off exclusively from the UI (render) thread — the flag is written true on the
+// UI thread and cleared false on the one detached worker that owns it, never
+// concurrently set by two threads. The pointed-to field (poster_fetching /
+// still_fetching / loading_poster_fetching) is shared with several manual-worker
+// providers (plugins, jellyfin, anime's own fetchPoster) and is defined across 5
+// distinct state structs, so making it atomic would cascade to 60+ access sites
+// well beyond this daemon. What actually bounds concurrency here is the atomic
+// `in_flight` counter (acquire/release) — the real cross-thread invariant (the
+// MAX_CONCURRENT cap and slot accounting) is already atomic; the per-card bool is
+// not a cross-thread hand-off, so a plain bool is sufficient and correct.
 pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32, fetching_flag: *bool) void {
     if (fetching_flag.*) return;
     // Bound the URL and copy it by value into the worker args (CLAUDE.md:
