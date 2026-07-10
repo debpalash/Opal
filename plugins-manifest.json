@@ -432,6 +432,60 @@
         "base": "https://www.torrentfunk2.com"
       },
       "file": "plugins/torrentfunk.json"
+    },
+    {
+      "id": "peerflix",
+      "name": "Peerflix",
+      "type": "stremio",
+      "version": "1.0.0",
+      "endpoints": {
+        "stremio": "https://peerflix.mov/manifest.json"
+      }
+    },
+    {
+      "id": "aiostreams",
+      "name": "AIOStreams",
+      "type": "stremio",
+      "version": "1.0.0",
+      "endpoints": {
+        "stremio": "https://aiostreams.elfhosted.com/stremio/manifest.json"
+      }
+    },
+    {
+      "id": "easynews-plus",
+      "name": "Easynews+",
+      "type": "stremio",
+      "version": "1.0.0",
+      "endpoints": {
+        "stremio": "https://b89262c192b0-stremio-easynews-addon.baby-beamup.club/manifest.json"
+      }
+    },
+    {
+      "id": "plutotv",
+      "name": "Pluto TV",
+      "type": "stremio",
+      "version": "1.0.0",
+      "endpoints": {
+        "stremio": "https://dev.nebulawp.org/stremio/pluto-tv-addon/manifest.json"
+      }
+    },
+    {
+      "id": "trakt",
+      "name": "Trakt Lists",
+      "type": "stremio",
+      "version": "1.0.0",
+      "endpoints": {
+        "stremio": "https://2ecbbd610840-trakt.baby-beamup.club/manifest.json"
+      }
+    },
+    {
+      "id": "knaben",
+      "name": "Knaben",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://api.knaben.org/v1"
+      }
     }
   ]
 }

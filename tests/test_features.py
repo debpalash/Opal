@@ -2010,12 +2010,13 @@ def test_bundled_manifest():
 
 @test("Added Torrent Engines Wired", "Page Shell")
 def test_added_torrent_engines():
-    # The 10 ported nova2 torrent engines: each needs (a) an engine .py whose
+    # The 11 ported nova2 torrent engines: each needs (a) an engine .py whose
     # class name == module name == id (nova2 imports getattr(module, id)), and
     # (b) a matching torrent entry in the bundled manifest so it's installable.
     import json, os, re
     ids = ["therarbg", "torrentdownloads", "rutor", "glotorrents", "bitsearch",
-           "torrentgalaxy", "academictorrents", "ilcorsaronero", "tokyotoshokan", "torrentfunk"]
+           "torrentgalaxy", "academictorrents", "ilcorsaronero", "tokyotoshokan", "torrentfunk",
+           "knaben"]
     eng_dir = os.path.join(PROJECT_DIR, "engines", "engines")
     m = json.load(open(os.path.join(PROJECT_DIR, "plugins-manifest.json")))
     torrent_ids = {p["id"] for p in m["plugins"] if p.get("type") == "torrent"}

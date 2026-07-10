@@ -14,7 +14,11 @@ const source_config = @import("../core/source_config.zig");
 const logs = @import("../core/logs.zig");
 const state = @import("../core/state.zig");
 
-pub const MAX = 32;
+// Cap on parsed manifest entries. The bundled plugins-manifest.json already
+// exceeds 32 (47 entries), so a low cap silently drops sources past the limit
+// in both the bundled parse and the remote refresh (parseManifest :262). Keep
+// this comfortably above the manifest size; each Plugin is fixed-size buffers.
+pub const MAX = 128;
 
 pub const Plugin = struct {
     id: [32]u8 = std.mem.zeroes([32]u8),
