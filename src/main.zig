@@ -1070,19 +1070,23 @@ fn appFrame() !dvui.App.Result {
     }
 
     // Keep the on-screen scrubber/overlay ticking during playback — but only
-    // while the control chrome is actually visible. Video FRAMES already repaint
-    // on their own via mpv's render-update callback (player.mpvRenderUpdateCallback
-    // → thread-safe dvui.refresh), so once the chrome auto-hides (mouse idle
-    // > 2.5 s, same threshold as chrome_autohide) there is nothing that needs a
-    // between-frames repaint, and we let the loop fall back to callback-driven,
-    // video-fps updates instead of re-laying-out the whole tree at 60 Hz. This is
-    // the big immersive-playback smoothness/CPU win. `cached_paused` is observer-
-    // cached (no per-frame IPC).
+    // while the control chrome is actually visible, and THROTTLED to ~30fps.
+    // Video FRAMES already repaint on their own via mpv's render-update callback
+    // (player.mpvRenderUpdateCallback → thread-safe dvui.refresh); this tick just
+    // keeps the scrubber/hover animating between frames (and drives audio-only
+    // playback, which has no video frames). The old code called dvui.refresh
+    // EVERY frame, so on a 120Hz ProMotion display the whole UI tree was
+    // re-laid-out 120×/s while the mouse was active — ~1800 idle wake-ups and
+    // the bulk of the playback CPU. A 33ms re-arming timer caps it to 30fps
+    // (plenty smooth for chrome) and lets the loop idle between ticks. Once the
+    // chrome auto-hides (mouse idle > 2.5s) it stops entirely → pure video-fps.
+    // `cached_paused` is observer-cached (no per-frame IPC).
     const chrome_live = (@import("core/io_global.zig").milliTimestamp() - state.app.last_mouse_move_ms) < @import("ui/chrome_autohide.zig").DEFAULT_THRESHOLD_MS;
     if (chrome_live) {
         for (state.app.players.items) |p| {
             if (p.provider == .mpv and !p.cached_paused) {
-                dvui.refresh(null, @src(), null);
+                const tick_id = dvui.Id.extendId(null, @src(), 0);
+                if (dvui.timerDoneOrNone(tick_id)) dvui.timer(tick_id, 33_000);
                 break;
             }
         }
