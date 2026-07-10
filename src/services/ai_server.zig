@@ -263,6 +263,9 @@ pub fn resetDetection() void {
     llama_server_path_len = 0;
     model_path_len = 0;
     model_status = .unknown;
+    // Force the .env to be re-read on the next cloud-key lookup: a key added to
+    // .env while Opal runs was otherwise cached-empty until restart.
+    env_loaded = false;
     checkPaths();
 }
 

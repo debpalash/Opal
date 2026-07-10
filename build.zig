@@ -311,6 +311,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_resume).step);
 
+    // Audio EQ preset → af spec, video-filter clamp, download-limit sanitize —
+    // the persist-and-replay mapping shared by settings.zig + player.zig init.
+    const test_av_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/av_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_av_pure).step);
+
     // Keyless subtitle providers: media-name → query/show/season/episode parse.
     const test_subs_pure = b.addTest(.{
         .root_module = b.createModule(.{

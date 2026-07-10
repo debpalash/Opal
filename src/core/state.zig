@@ -421,6 +421,13 @@ pub const AppState = struct {
     resume_prompt_label_len: usize = 0,
     resume_prompt_pct: u8 = 0, // saved progress (0–100)
     eq_preset: usize = 0,
+    // Video color filters — persisted i32 in mpv's -100..100 range. Replayed at
+    // player init (player.zig) so they survive restart / apply to new files;
+    // written by the Settings ± buttons and clamped via av_pure.clampVideoFilter.
+    vf_brightness: i32 = 0,
+    vf_contrast: i32 = 0,
+    vf_saturation: i32 = 0,
+    vf_gamma: i32 = 0,
     playlist: ?*const @import("../player/m3u.zig").M3UPlaylist = null,
     thumb_state: thumbnail.ThumbnailState = thumbnail.ThumbnailState.init(),
     sub_engine: subtitles_mod.SubtitleEngine = subtitles_mod.SubtitleEngine.init(),
@@ -788,6 +795,21 @@ pub fn torrentSession() c.mpv.TorrentSession {
 }
 pub fn setTorrentSession(s: c.mpv.TorrentSession) void {
     app.torrent_ses.store(s, .release);
+}
+
+/// Re-apply the persisted download rate limit to the torrent session, but only
+/// once BOTH the session AND a positive saved limit are ready. The session
+/// (torrent_init worker) and the config (config load worker) come up on
+/// independent threads, so this is called idempotently from both edges —
+/// whichever finishes last actually applies the cap. A fresh torrent_init()
+/// session defaults to unlimited, so without this the saved limit stayed
+/// inactive until the user re-touched the control.
+pub fn applyDownloadLimitIfReady() void {
+    const lim = @import("../player/av_pure.zig").sanitizeDownloadLimit(app.download_rate_limit);
+    if (lim <= 0) return;
+    const ses = torrentSession();
+    if (ses == null) return;
+    c.mpv.torrent_set_download_limit(ses, lim);
 }
 
 /// Serializes player teardown (UI thread frees players at frame top) against the

@@ -1381,13 +1381,16 @@ fn renderPlaybackTab() void {
     // ── Audio Equalizer ──
     sectionHeader("Audio Equalizer", "Quick presets for different content types", 22, @src());
     {
+        const av_pure = @import("../player/av_pure.zig");
         const en = [_][]const u8{ "Flat", "Bass+", "Voice", "Cinema", "Loud" };
-        const ec = [_][]const u8{ "af set \"\"", "af set superequalizer=1b=6:2b=5:3b=4:4b=2", "af set superequalizer=3b=3:4b=4:5b=5:6b=4:7b=3", "af set superequalizer=1b=4:2b=3:6b=2:7b=3:8b=4", "af set loudnorm" };
         const sel: usize = @min(state.app.eq_preset, en.len - 1);
         if (components.segment(@src(), &en, sel)) |clicked| {
             state.app.eq_preset = clicked;
+            // Same spec that player.zig replays at init (shared av_pure mapping).
+            var eq_buf: [96]u8 = undefined;
+            const eq_cmd = std.fmt.bufPrintZ(&eq_buf, "af set \"{s}\"", .{av_pure.eqFilterSpec(clicked)}) catch "af set \"\"";
             for (state.app.players.items) |p| {
-                _ = c.mpv.mpv_command_string(p.mpv_ctx, @ptrCast(ec[clicked].ptr));
+                _ = c.mpv.mpv_command_string(p.mpv_ctx, eq_cmd.ptr);
             }
             state.markConfigDirty();
         }
@@ -1446,6 +1449,7 @@ fn renderPlaybackTab() void {
     // ── Video Filters ── (no card chrome)
     sectionHeader("Video Filters", "Brightness, contrast, saturation, gamma", 24, @src());
     {
+        const av_pure = @import("../player/av_pure.zig");
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
@@ -1458,6 +1462,20 @@ fn renderPlaybackTab() void {
             .{ .name = "Contrast", .prop = "contrast", .idx = 1 },
             .{ .name = "Saturation", .prop = "saturation", .idx = 2 },
             .{ .name = "Gamma", .prop = "gamma", .idx = 3 },
+        };
+
+        // The persisted state field backing each filter row, by idx. Written by
+        // the ± buttons and replayed at player init (player.zig), so filters now
+        // survive restart / apply to newly-opened files.
+        const VF = struct {
+            fn field(idx: usize) *i32 {
+                return switch (idx) {
+                    0 => &state.app.vf_brightness,
+                    1 => &state.app.vf_contrast,
+                    2 => &state.app.vf_saturation,
+                    else => &state.app.vf_gamma,
+                };
+            }
         };
 
         for (filters) |f| {
@@ -1485,12 +1503,15 @@ fn renderPlaybackTab() void {
                 .corner_radius = theme.dims.rad_sm,
                 .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 2, .h = 0 },
             })) {
+                const fld = VF.field(f.idx);
+                fld.* = av_pure.clampVideoFilter(fld.* - 5);
                 var cmd_buf: [64]u8 = undefined;
-                if (std.fmt.bufPrintZ(&cmd_buf, "add {s} -5", .{f.prop})) |cmd| {
+                if (std.fmt.bufPrintZ(&cmd_buf, "set {s} {d}", .{ f.prop, fld.* })) |cmd| {
                     if (state.app.active_player_idx < state.app.players.items.len) {
                         _ = c.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, cmd.ptr);
                     }
                 } else |_| {}
+                state.markConfigDirty();
             }
 
             // Current value — throttled: mpv property reads take the core lock
@@ -1534,12 +1555,15 @@ fn renderPlaybackTab() void {
                 .corner_radius = theme.dims.rad_sm,
                 .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
             })) {
+                const fld = VF.field(f.idx);
+                fld.* = av_pure.clampVideoFilter(fld.* + 5);
                 var cmd_buf: [64]u8 = undefined;
-                if (std.fmt.bufPrintZ(&cmd_buf, "add {s} 5", .{f.prop})) |cmd| {
+                if (std.fmt.bufPrintZ(&cmd_buf, "set {s} {d}", .{ f.prop, fld.* })) |cmd| {
                     if (state.app.active_player_idx < state.app.players.items.len) {
                         _ = c.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, cmd.ptr);
                     }
                 } else |_| {}
+                state.markConfigDirty();
             }
         }
 
@@ -1553,6 +1577,10 @@ fn renderPlaybackTab() void {
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
             .corner_radius = theme.dims.rad_md,
         })) {
+            state.app.vf_brightness = 0;
+            state.app.vf_contrast = 0;
+            state.app.vf_saturation = 0;
+            state.app.vf_gamma = 0;
             if (state.app.active_player_idx < state.app.players.items.len) {
                 const p = state.app.players.items[state.app.active_player_idx];
                 _ = c.mpv.mpv_command_string(p.mpv_ctx, "set brightness 0");
@@ -1560,6 +1588,7 @@ fn renderPlaybackTab() void {
                 _ = c.mpv.mpv_command_string(p.mpv_ctx, "set saturation 0");
                 _ = c.mpv.mpv_command_string(p.mpv_ctx, "set gamma 0");
             }
+            state.markConfigDirty();
         }
     }
 

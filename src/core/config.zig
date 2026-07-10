@@ -58,6 +58,12 @@ pub fn save() void {
     setKey("sponsorblock_enabled", if (state.app.sponsorblock_enabled) "1" else "0");
     setKey("deband_enabled", if (state.app.deband_enabled) "1" else "0");
     setKey("video_scaler", fmtInt(&fb, @as(usize, state.app.video_scaler)));
+    // Video color filters (signed −100..100) — replayed at player init.
+    setKey("vf_brightness", fmtI32(&fb, state.app.vf_brightness));
+    setKey("vf_contrast", fmtI32(&fb, state.app.vf_contrast));
+    setKey("vf_saturation", fmtI32(&fb, state.app.vf_saturation));
+    setKey("vf_gamma", fmtI32(&fb, state.app.vf_gamma));
+    setKey("cowatch_sensitivity", @tagName(@import("../services/co_watch.zig").sensitivity));
     setKey("jf_server_url", state.app.jf.server_url[0..state.app.jf.server_url_len]);
     setKey("jf_token", state.app.jf.token[0..state.app.jf.token_len]);
     setKey("jf_user_id", state.app.jf.user_id[0..state.app.jf.user_id_len]);
@@ -257,7 +263,10 @@ fn applyConfig(key: []const u8, val: []const u8) void {
     } else if (std.mem.eql(u8, key, "eq_preset")) {
         state.app.eq_preset = std.fmt.parseInt(usize, val, 10) catch 0;
     } else if (std.mem.eql(u8, key, "download_rate_limit")) {
-        state.app.download_rate_limit = std.fmt.parseInt(i32, val, 10) catch 0;
+        state.app.download_rate_limit = @import("../player/av_pure.zig").sanitizeDownloadLimit(std.fmt.parseInt(i32, val, 10) catch 0);
+        // Session may already be up (torrent_init worker) — apply now; if not,
+        // that worker calls this too once it publishes the session.
+        state.applyDownloadLimitIfReady();
     } else if (std.mem.eql(u8, key, "proxy_url")) {
         if (val.len > 0 and val.len < state.app.proxy_url.len) {
             @memcpy(state.app.proxy_url[0..val.len], val);
@@ -285,6 +294,17 @@ fn applyConfig(key: []const u8, val: []const u8) void {
     } else if (std.mem.eql(u8, key, "video_scaler")) {
         const v = std.fmt.parseInt(u8, val, 10) catch 0;
         state.app.video_scaler = if (v <= 2) v else 0;
+    } else if (std.mem.eql(u8, key, "vf_brightness")) {
+        state.app.vf_brightness = @import("../player/av_pure.zig").clampVideoFilter(std.fmt.parseInt(i32, val, 10) catch 0);
+    } else if (std.mem.eql(u8, key, "vf_contrast")) {
+        state.app.vf_contrast = @import("../player/av_pure.zig").clampVideoFilter(std.fmt.parseInt(i32, val, 10) catch 0);
+    } else if (std.mem.eql(u8, key, "vf_saturation")) {
+        state.app.vf_saturation = @import("../player/av_pure.zig").clampVideoFilter(std.fmt.parseInt(i32, val, 10) catch 0);
+    } else if (std.mem.eql(u8, key, "vf_gamma")) {
+        state.app.vf_gamma = @import("../player/av_pure.zig").clampVideoFilter(std.fmt.parseInt(i32, val, 10) catch 0);
+    } else if (std.mem.eql(u8, key, "cowatch_sensitivity")) {
+        const cw = @import("../services/co_watch.zig");
+        if (std.meta.stringToEnum(cw.Sensitivity, val)) |s| cw.sensitivity = s;
     } else if (std.mem.eql(u8, key, "jf_server_url")) {
         if (val.len > 0 and val.len < state.app.jf.server_url.len) {
             @memcpy(state.app.jf.server_url[0..val.len], val);
@@ -342,15 +362,18 @@ fn applyConfig(key: []const u8, val: []const u8) void {
             }
         }
     } else if (std.mem.eql(u8, key, "ai_backend")) {
-        // Apple Intelligence (apfel) is retired as a persisted default —
-        // ~5 tok/s generation and broken JSON-format compliance. Configs
-        // auto-persisted "apfel" on every save, so a stored value is NOT an
-        // explicit user choice: migrate those to the local llama brain.
-        // (Settings can still switch to apfel for the running session.)
-        // "cloud" IS an explicit choice (only ever written after the cloud
-        // backend existed) — honor it.
+        // "cloud" IS an explicit choice — honor it. Apple Intelligence (apfel)
+        // is now an explicit user segment in Settings (macOS only), so a stored
+        // "apfel" on macOS is a deliberate choice and must be honored too. Any
+        // other/legacy value (or non-macOS "apfel") falls back to the local
+        // llama brain.
         const ai_server = @import("../services/ai_server.zig");
-        ai_server.backend_kind = if (std.mem.eql(u8, val, "cloud")) .cloud else .gemma_llama;
+        ai_server.backend_kind = if (std.mem.eql(u8, val, "cloud"))
+            .cloud
+        else if (ai_server.is_macos and std.mem.eql(u8, val, "apfel"))
+            .apfel
+        else
+            .gemma_llama;
     } else if (std.mem.eql(u8, key, "ai_cloud_provider")) {
         @import("../services/ai_server.zig").selectCloudProviderById(val);
     } else if (std.mem.eql(u8, key, "onboarded")) {
@@ -418,5 +441,9 @@ fn fmtFloat(buf: *[64]u8, v: f32) []const u8 {
 }
 
 fn fmtInt(buf: *[64]u8, v: usize) []const u8 {
+    return std.fmt.bufPrint(buf, "{d}", .{v}) catch "0";
+}
+
+fn fmtI32(buf: *[64]u8, v: i32) []const u8 {
     return std.fmt.bufPrint(buf, "{d}", .{v}) catch "0";
 }

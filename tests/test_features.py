@@ -786,11 +786,13 @@ def test_local_llm_default():
         return "fail", "default model is not the qwen2.5-3b catalog entry"
     if "pub fn ensureReady" not in srv or "server.ensureReady()" not in chat:
         return "fail", "self-install path (ensureReady) not wired into send"
-    # Legacy 'apfel'/'llama' rows migrate to gemma_llama; an explicit "cloud"
-    # row (only ever written after the cloud backend existed) is honored.
-    if 'if (std.mem.eql(u8, val, "cloud")) .cloud else .gemma_llama' not in cfg:
-        return "fail", "config migration for legacy 'apfel' missing"
-    return "pass", "gemma_llama default + qwen2.5-3b + first-message self-install + config migration"
+    # "cloud" is honored; on macOS an explicit "apfel" segment choice is now
+    # honored too; any other/legacy value falls back to gemma_llama.
+    if ('std.mem.eql(u8, val, "cloud")' not in cfg
+            or 'is_macos and std.mem.eql(u8, val, "apfel")' not in cfg
+            or ".gemma_llama" not in cfg):
+        return "fail", "ai_backend load branch (cloud / macOS apfel / gemma_llama) missing"
+    return "pass", "gemma_llama default + qwen2.5-3b + first-message self-install + explicit cloud/apfel honored"
 
 
 @test("Parakeet conversational self-install wired", "Voice")
@@ -1067,6 +1069,47 @@ def test_model_persisted():
     if '"ai_model_id"' in c and "selectModelById" in c:
         return "pass", "ai_model_id saved + restored"
     return "fail", "model choice not persisted"
+
+
+@test("Settings Persist+Replay Round-Trip", "Settings")
+def test_settings_persist_replay():
+    # Regression for the Settings audit: EQ preset, video color filters,
+    # download rate limit and Co-Watcher sensitivity must each be BOTH saved
+    # (setKey) AND loaded (applyConfig branch) — and the AV filters replayed at
+    # player init so they survive restart / new files. Source-level check
+    # (matches the existing persistence-test pattern).
+    cfg = _src("src/core/config.zig")
+    st = _src("src/core/state.zig")
+    pl = _src("src/player/player.zig")
+    pure = _src("src/player/av_pure.zig")
+
+    # Video color filter fields + save + load + init replay.
+    vf_keys = ["vf_brightness", "vf_contrast", "vf_saturation", "vf_gamma"]
+    for k in vf_keys:
+        if f"{k}: i32 = 0" not in st:
+            return "fail", f"state field {k} missing"
+        if f'setKey("{k}"' not in cfg or f'"{k}"' not in cfg:
+            return "fail", f"{k} not save+load persisted in config"
+    # Replayed at player init via the shared av_pure mapping.
+    if "eqFilterSpec" not in pure or "clampVideoFilter" not in pure:
+        return "fail", "av_pure EQ/video-filter helpers missing"
+    if "av_pure" not in pl or 'mpv_set_option_string(self.mpv_ctx, "af"' not in pl:
+        return "fail", "player.zig does not replay EQ/video filters at init"
+
+    checks = {
+        "eq_preset save+load": 'setKey("eq_preset"' in cfg and '"eq_preset"' in cfg,
+        "download limit save+load": 'setKey("download_rate_limit"' in cfg
+            and '"download_rate_limit"' in cfg,
+        "download limit re-applied": "applyDownloadLimitIfReady" in cfg
+            and "applyDownloadLimitIfReady" in _src("src/main.zig"),
+        "cowatch sensitivity save": 'setKey("cowatch_sensitivity"' in cfg,
+        "cowatch sensitivity load": '"cowatch_sensitivity"' in cfg
+            and "stringToEnum" in cfg,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "missing: " + ", ".join(missing)
+    return "pass", "EQ + video filters + download limit + cowatch sensitivity persist & replay"
 
 
 @test("Unified Search: Local Files", "AI Models")

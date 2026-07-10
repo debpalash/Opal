@@ -122,27 +122,6 @@ pub fn saveScriptState(idx: usize) void {
     _ = db.step(stmt);
 }
 
-/// Get the list of enabled script paths (null-terminated) for mpv_set_option_string.
-/// Returns a comma-separated list of script paths.
-pub fn getEnabledScriptPaths(buf: []u8) []const u8 {
-    var pos: usize = 0;
-    var first: bool = true;
-
-    for (0..state.app.script_count) |i| {
-        if (!state.app.script_enabled[i]) continue;
-        const path = state.app.script_paths[i][0..state.app.script_path_lens[i]];
-
-        if (!first) {
-            if (pos < buf.len) { buf[pos] = ','; pos += 1; }
-        }
-        if (pos + path.len > buf.len) break;
-        @memcpy(buf[pos..pos + path.len], path);
-        pos += path.len;
-        first = false;
-    }
-    return buf[0..pos];
-}
-
 // ══════════════════════════════════════════════════════════
 // Recommended Scripts (download links)
 // ══════════════════════════════════════════════════════════

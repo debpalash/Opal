@@ -113,6 +113,10 @@ pub fn coreInit() !void {
     if (std.Thread.spawn(.{}, struct {
         fn worker() void {
             state.setTorrentSession(c.mpv.torrent_init());
+            // Fresh session defaults to unlimited — re-apply the persisted cap
+            // if config already loaded (idempotent; config load covers the
+            // reverse ordering).
+            state.applyDownloadLimitIfReady();
             logs.pushLog("info", "torrent", "Torrent session ready", false);
         }
     }.worker, .{})) |t| t.detach() else |_| {}

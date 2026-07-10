@@ -385,6 +385,29 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_request_log_messages(self.mpv_ctx, "warn");
         self.applyYtdlFormat();
 
+        // ── Replay persisted audio EQ + video color filters ──
+        // These were previously applied only when the user clicked in Settings,
+        // so they silently reset on restart / for newly-opened files. Set them
+        // as options here (same before-init replay site as deband/scaler above),
+        // routed through the shared av_pure mapping so they can't drift from the
+        // Settings click sites.
+        {
+            const av_pure = @import("av_pure.zig");
+            _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "af", av_pure.eqFilterSpec(state.app.eq_preset).ptr);
+            const vfs = [_]struct { prop: [*:0]const u8, val: i32 }{
+                .{ .prop = "brightness", .val = state.app.vf_brightness },
+                .{ .prop = "contrast", .val = state.app.vf_contrast },
+                .{ .prop = "saturation", .val = state.app.vf_saturation },
+                .{ .prop = "gamma", .val = state.app.vf_gamma },
+            };
+            var vf_buf: [16]u8 = undefined;
+            for (vfs) |vf| {
+                if (std.fmt.bufPrintZ(&vf_buf, "{d}", .{av_pure.clampVideoFilter(vf.val)})) |s| {
+                    _ = c.mpv.mpv_set_option_string(self.mpv_ctx, vf.prop, s.ptr);
+                } else |_| {}
+            }
+        }
+
         // Scan scripts before init (but loading happens after)
         const scripts_mgr = @import("../services/scripts.zig");
         if (!state.app.scripts_scanned) scripts_mgr.scanScripts();
