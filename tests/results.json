@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-07-10T06:25:22",
-  "total": 148,
-  "passed": 139,
+  "timestamp": "2026-07-11T00:31:42",
+  "total": 149,
+  "passed": 140,
   "failed": 0,
   "warnings": 2,
   "skipped": 7,
@@ -97,7 +97,7 @@
       "skip": 0
     },
     "Page Shell": {
-      "pass": 29,
+      "pass": 30,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -174,7 +174,7 @@
       "name": "Database Exists",
       "category": "Database",
       "status": "pass",
-      "detail": "Size: 17544.0 KB",
+      "detail": "Size: 21832.0 KB",
       "duration_ms": 0
     },
     {
@@ -182,13 +182,13 @@
       "category": "Database",
       "status": "pass",
       "detail": "47 config entries",
-      "duration_ms": 8
+      "duration_ms": 2
     },
     {
       "name": "Watch History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "9 watch entries",
+      "detail": "14 watch entries",
       "duration_ms": 0
     },
     {
@@ -202,7 +202,7 @@
       "name": "Download History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "1 downloads",
+      "detail": "9 downloads",
       "duration_ms": 0
     },
     {
@@ -230,8 +230,8 @@
       "name": "Poster Cache Table",
       "category": "Database",
       "status": "pass",
-      "detail": "671 cached posters",
-      "duration_ms": 48
+      "detail": "799 cached posters",
+      "duration_ms": 1
     },
     {
       "name": "Conversation Log Table",
@@ -244,7 +244,7 @@
       "name": "User Preferences Table",
       "category": "Memory",
       "status": "pass",
-      "detail": "active_hour=0:00 (w:15)",
+      "detail": "active_hour=9:00 (w:23)",
       "duration_ms": 0
     },
     {
@@ -293,7 +293,7 @@
       "name": "Window State Persistence",
       "category": "Config",
       "status": "pass",
-      "detail": "1244x771 at (0,61)",
+      "detail": "1280x803 at (0,29)",
       "duration_ms": 0
     },
     {
@@ -307,14 +307,14 @@
       "name": "Zig Build",
       "category": "Build",
       "status": "pass",
-      "detail": "Binary: 41.4 MB",
-      "duration_ms": 357
+      "detail": "Binary: 41.8 MB",
+      "duration_ms": 397
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "41.4 MB, built at 06:24:25",
+      "detail": "41.8 MB, built at 00:31:28",
       "duration_ms": 0
     },
     {
@@ -322,7 +322,7 @@
       "category": "Build",
       "status": "pass",
       "detail": "gemma-4-E2B-it-UD-Q4_K_XL.gguf, qwen2.5-3b-instruct-q4_k_m.gguf (4.9 GB)",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Voice Server Script",
@@ -335,7 +335,7 @@
       "name": "Libtorrent Wrapper",
       "category": "Build",
       "status": "pass",
-      "detail": "88 KB",
+      "detail": "87 KB",
       "duration_ms": 0
     },
     {
@@ -350,35 +350,35 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 1163
+      "duration_ms": 755
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "skip",
       "detail": "faster-whisper not installed (optional)",
-      "duration_ms": 20
+      "duration_ms": 21
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 18
+      "duration_ms": 19
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 23
+      "duration_ms": 25
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 23
+      "duration_ms": 22
     },
     {
       "name": "Embedding Server Health",
@@ -504,63 +504,63 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 24
+      "duration_ms": 25
     },
     {
       "name": "Compiles: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 23
+      "duration_ms": 25
     },
     {
       "name": "Compiles: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 25
+      "duration_ms": 26
     },
     {
       "name": "Compiles: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 24
+      "duration_ms": 26
     },
     {
       "name": "--check degrades: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 20
+      "duration_ms": 21
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 22
+      "duration_ms": 23
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 20
+      "duration_ms": 21
     },
     {
       "name": "Compiles: camoufox_bridge.py",
       "category": "Browser",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 26
+      "duration_ms": 27
     },
     {
       "name": "Bridge protocol selftest",
       "category": "Browser",
       "status": "pass",
       "detail": "framing + pump model OK",
-      "duration_ms": 26
+      "duration_ms": 27
     },
     {
       "name": "Poster cache SQL matches schema",
@@ -630,7 +630,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 1787
+      "duration_ms": 1911
     },
     {
       "name": "Sherpa Model Canonicalization",
@@ -693,14 +693,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 7297
+      "duration_ms": 7066
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 54
+      "duration_ms": 65
     },
     {
       "name": "Page Router",
@@ -721,7 +721,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 7
+      "duration_ms": 8
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -770,6 +770,13 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "all anime threads detached (no leaked handles)",
+      "duration_ms": 0
+    },
+    {
+      "name": "Podcasts Tab Wired",
+      "category": "Page Shell",
+      "status": "pass",
+      "detail": "podcasts tab wired: enum\u2192nav\u2192service\u2192pure\u2192remote\u2192web",
       "duration_ms": 0
     },
     {
@@ -1014,7 +1021,7 @@
       "name": "Bundled Plugin Manifest",
       "category": "Page Shell",
       "status": "pass",
-      "detail": "40 plugins, offline-loaded + bundled",
+      "detail": "41 plugins, offline-loaded + bundled",
       "duration_ms": 0
     },
     {
@@ -1022,7 +1029,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "10 engines placed, class==module, manifest-wired",
-      "duration_ms": 2
+      "duration_ms": 0
     },
     {
       "name": "Content Plugin Sandbox Hardened",
@@ -1078,7 +1085,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 91
+      "duration_ms": 98
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1134,7 +1141,7 @@
       "category": "Stability",
       "status": "pass",
       "detail": "no discarded std.Thread.spawn handles in src/",
-      "duration_ms": 11
+      "duration_ms": 12
     },
     {
       "name": "TMDB Fetch Stages Results Off-Thread",
@@ -1204,7 +1211,7 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 931
+      "duration_ms": 1004
     }
   ]
 }
