@@ -137,6 +137,23 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .cal .c .n{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cal .c .s{font-size:12px;color:var(--text-3);margin-top:2px}
 .cal .c .s.avail{color:var(--success)}
+/* ── Anime / Jellyfin / RSS shared ── */
+.ep-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(52px,1fr));gap:8px;margin-top:8px}
+.ep-btn{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--rad-sm);
+  color:var(--text-2);padding:9px 0;font-size:13px;text-align:center;font-variant-numeric:tabular-nums}
+.ep-btn:active{background:var(--bg-hover)}
+.chips{display:flex;gap:8px;overflow-x:auto;margin:6px 0 4px;padding-bottom:4px}
+.chips button{background:var(--bg-elevated);border:1px solid var(--border);border-radius:999px;
+  padding:6px 14px;color:var(--text-2);white-space:nowrap}
+.chips button.on{background:var(--accent);color:#0c0c11;border-color:var(--accent)}
+.form-field{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.form-field label{color:var(--text-3);font-size:12px}
+.form-field input{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--rad);
+  padding:11px 14px;outline:none}
+.form-field input:focus{border-color:var(--accent)}
+#jf-connect{background:var(--accent);color:#0c0c11;font-weight:600;border-radius:var(--rad);padding:11px 18px;width:100%}
+#jf-disconnect{color:var(--text-2);font-size:13px;margin-top:6px}
+
 /* player overlay */
 #player{position:fixed;inset:0;background:#000;z-index:60;display:none;flex-direction:column}
 #player.on{display:flex}
@@ -203,6 +220,45 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
     <div id="results"></div>
   </section>
 
+  <!-- Anime -->
+  <section class="page" id="page-anime">
+    <div class="search-row">
+      <input id="anime-q" placeholder="Search anime…" autocapitalize="off">
+      <button id="anime-go">Go</button>
+    </div>
+    <div class="hint" id="anime-hint">Search anime — tap a title for episodes.</div>
+    <div id="anime-results"></div>
+    <div id="anime-episodes"></div>
+  </section>
+
+  <!-- Jellyfin -->
+  <section class="page" id="page-jf">
+    <div id="jf-login">
+      <div class="hint">Connect to your Jellyfin server.</div>
+      <div class="form-field"><label>Server URL</label><input id="jf-server" placeholder="https://jellyfin.example.com" autocapitalize="off" inputmode="url"></div>
+      <div class="form-field"><label>Username</label><input id="jf-user" placeholder="username" autocapitalize="off"></div>
+      <div class="form-field"><label>Password</label><input id="jf-pass" type="password" placeholder="password"></div>
+      <button id="jf-connect">Connect</button>
+    </div>
+    <div id="jf-connected" style="display:none">
+      <div class="search-row">
+        <input id="jf-search" placeholder="Search your library…" autocapitalize="off">
+        <button id="jf-search-go">Go</button>
+      </div>
+      <div class="chips" id="jf-libs"></div>
+      <div id="jf-items"></div>
+      <button id="jf-disconnect">Disconnect</button>
+    </div>
+    <div class="hint" id="jf-hint"></div>
+  </section>
+
+  <!-- RSS -->
+  <section class="page" id="page-rss">
+    <div class="hint" id="rss-hint">Your torrent RSS feeds — tap a feed to refresh.</div>
+    <div class="chips" id="rss-feeds"></div>
+    <div id="rss-items"></div>
+  </section>
+
   <!-- Activity -->
   <section class="page" id="page-act">
     <div class="sect">Downloading</div>
@@ -230,6 +286,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   <button data-page="np" class="on"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg>Playing</button>
   <button data-page="browse"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Browse</button>
   <button data-page="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Search</button>
+  <button data-page="anime"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg>Anime</button>
+  <button data-page="jf"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>Jellyfin</button>
+  <button data-page="rss"><svg viewBox="0 0 24 24"><circle cx="5.5" cy="18.5" r="1.5"/><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/></svg>RSS</button>
   <button data-page="act"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 19h16"/></svg>Activity</button>
   <button data-page="setup"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 6.6 19l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 13.4H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 6.6l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10 4.6V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8v.1a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>Setup</button>
 </nav>
@@ -291,6 +350,9 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   if (b.dataset.page === 'act') loadActivity();
   if (b.dataset.page === 'browse') loadBrowse();
   if (b.dataset.page === 'setup') loadSetup();
+  if (b.dataset.page === 'anime') loadAnime();
+  if (b.dataset.page === 'jf') loadJellyfin();
+  if (b.dataset.page === 'rss') loadRss();
 });
 
 // ── Now Playing ──
@@ -581,6 +643,210 @@ $('setup-tmdb-save').onclick = async () => {
   try { await api('/setup/tmdb?key=' + encodeURIComponent(k)); $('setup-tmdb').textContent = 'TMDB key set ✓'; $('setup-tmdb-key').value=''; browseLoaded = false; }
   catch { $('setup-tmdb').textContent = 'Failed to save'; }
 };
+
+// ── Anime ──
+// Server routes are async: /anime/search & /anime/episodes trigger background
+// work and return {ok:true}; poll GET /anime for {results,episodes,selected,loading}.
+let animeWatch = null;
+async function loadAnime(){
+  try { renderAnime(await api('/anime')); } catch {}
+}
+function renderAnime(d){ renderAnimeResults(d.results || []); renderAnimeEpisodes(d.episodes || []); }
+$('anime-go').onclick = () => runAnime();
+$('anime-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runAnime(); $('anime-q').blur(); } });
+function runAnime(){
+  const q = $('anime-q').value.trim(); if (!q) return;
+  $('anime-hint').innerHTML = '<span class="spin"></span> Searching anime…';
+  $('anime-results').innerHTML = ''; $('anime-episodes').innerHTML = '';
+  api('/anime/search?q=' + encodeURIComponent(q)).catch(()=>{});
+  clearInterval(animeWatch);
+  let ticks = 0;
+  animeWatch = setInterval(async () => {
+    ticks++;
+    try {
+      const d = await api('/anime');
+      renderAnimeResults(d.results || []);
+      if ((!d.loading && ticks > 2) || ticks > 40) {
+        clearInterval(animeWatch);
+        $('anime-hint').textContent = (d.results || []).length + ' titles — tap one for episodes.';
+      }
+    } catch { clearInterval(animeWatch); }
+  }, 900);
+}
+function renderAnimeResults(rs){
+  $('anime-results').innerHTML = rs.map((r, i) => `
+    <div class="result">
+      <div class="t">${esc(r.name)}</div>
+      <div class="m"><span class="src">${r.episodes || 0} eps</span>
+        <button class="play" data-idx="${i}">Episodes ⭢</button></div>
+    </div>`).join('') || '<div class="empty">No results yet</div>';
+  $('anime-results').querySelectorAll('.play').forEach(b => b.onclick = () => loadAnimeEpisodes(+b.dataset.idx));
+}
+function loadAnimeEpisodes(idx){
+  $('anime-episodes').innerHTML = '<div class="empty"><span class="spin"></span></div>';
+  api('/anime/episodes?idx=' + idx).catch(()=>{});
+  let tries = 0;
+  const t = setInterval(async () => {
+    tries++;
+    try {
+      const d = await api('/anime');
+      if ((d.episodes || []).length || tries > 15) { clearInterval(t); renderAnimeEpisodes(d.episodes || []); }
+    } catch { clearInterval(t); }
+  }, 700);
+}
+function renderAnimeEpisodes(eps){
+  $('anime-episodes').innerHTML = eps.length
+    ? '<div class="sect">Episodes</div><div class="ep-grid">' +
+      eps.map(e => `<button class="ep-btn" data-ep="${esc(String(e))}">${esc(String(e))}</button>`).join('') + '</div>'
+    : '';
+  $('anime-episodes').querySelectorAll('.ep-btn').forEach(b => b.onclick = () => {
+    api('/anime/play?ep=' + encodeURIComponent(b.dataset.ep)).catch(()=>{});
+    b.textContent = '▶';
+  });
+}
+
+// ── Jellyfin ──
+// GET /jellyfin -> {connected,loading,error?,libraries:[{id,name,type}],items:[{id,name,type,year,folder,runtime}]}.
+// /jellyfin/{login,libraries,browse,search,play,play_audio,disconnect} trigger async work.
+let jfWatch = null;
+async function loadJellyfin(){
+  try { renderJellyfin(await api('/jellyfin')); } catch {}
+}
+function renderJellyfin(d){
+  const conn = !!d.connected;
+  $('jf-login').style.display = conn ? 'none' : 'block';
+  $('jf-connected').style.display = conn ? 'block' : 'none';
+  $('jf-hint').textContent = !conn && d.error ? d.error : '';
+  if (conn) {
+    renderJfLibraries(d.libraries || []);
+    renderJfItems(d.items || []);
+    if (!(d.libraries || []).length) { api('/jellyfin/libraries').catch(()=>{}); setTimeout(loadJellyfin, 900); }
+  }
+}
+function isJfAudio(t){ return t === 'Audio'; }
+function renderJfLibraries(libs){
+  $('jf-libs').innerHTML = libs.map(l => `<button data-id="${esc(l.id)}">${esc(l.name)}</button>`).join('');
+  $('jf-libs').querySelectorAll('button').forEach(b => b.onclick = () => jfBrowse(b.dataset.id));
+}
+function renderJfItems(items){
+  $('jf-items').innerHTML = items.map(it => {
+    const action = it.folder ? 'Open ⭢' : (isJfAudio(it.type) ? 'Play ♪' : 'Play ▶');
+    return `<div class="result" data-id="${esc(it.id)}" data-folder="${it.folder}" data-type="${esc(it.type || '')}">
+      <div class="t">${esc(it.name)}</div>
+      <div class="m"><span class="src">${esc(it.type || '')}</span>
+        ${it.year ? `<span>${it.year}</span>` : ''}${it.runtime ? `<span>${fmt(it.runtime)}</span>` : ''}
+        <button class="play">${action}</button></div></div>`;
+  }).join('') || '<div class="empty">Nothing here</div>';
+  $('jf-items').querySelectorAll('.result').forEach(el => el.querySelector('.play').onclick = () => {
+    const id = el.dataset.id;
+    if (el.dataset.folder === 'true') { jfBrowse(id); return; }
+    const ep = isJfAudio(el.dataset.type) ? '/jellyfin/play_audio?id=' : '/jellyfin/play?id=';
+    api(ep + encodeURIComponent(id)).catch(()=>{});
+    el.querySelector('.play').textContent = HOSTED ? 'Queued ✓' : 'Sent ✓';
+  });
+}
+function jfPollItems(){
+  clearInterval(jfWatch);
+  let tries = 0;
+  jfWatch = setInterval(async () => {
+    tries++;
+    try {
+      const d = await api('/jellyfin');
+      if (!d.loading || tries > 15) { clearInterval(jfWatch); renderJfItems(d.items || []); }
+    } catch { clearInterval(jfWatch); }
+  }, 700);
+}
+function jfBrowse(id){
+  $('jf-items').innerHTML = '<div class="empty"><span class="spin"></span></div>';
+  api('/jellyfin/browse?id=' + encodeURIComponent(id)).catch(()=>{});
+  jfPollItems();
+}
+$('jf-connect').onclick = () => {
+  const s = $('jf-server').value.trim(), u = $('jf-user').value.trim(), p = $('jf-pass').value;
+  if (!s || !u) { $('jf-hint').textContent = 'Enter server URL and username'; return; }
+  $('jf-hint').innerHTML = '<span class="spin"></span> Connecting…';
+  api('/jellyfin/login?server=' + encodeURIComponent(s) + '&user=' + encodeURIComponent(u) + '&pass=' + encodeURIComponent(p)).catch(()=>{});
+  clearInterval(jfWatch);
+  let tries = 0;
+  jfWatch = setInterval(async () => {
+    tries++;
+    try {
+      const d = await api('/jellyfin');
+      if (!d.loading && (d.connected || d.error || tries > 20)) {
+        clearInterval(jfWatch);
+        if (d.connected) { $('jf-pass').value = ''; }
+        else { $('jf-hint').textContent = d.error || 'Connection failed'; }
+        renderJellyfin(d);
+      }
+    } catch { clearInterval(jfWatch); }
+  }, 900);
+};
+$('jf-search-go').onclick = () => {
+  const q = $('jf-search').value.trim(); if (!q) return;
+  $('jf-items').innerHTML = '<div class="empty"><span class="spin"></span></div>';
+  api('/jellyfin/search?q=' + encodeURIComponent(q)).catch(()=>{});
+  jfPollItems();
+};
+$('jf-search').addEventListener('keydown', e => { if (e.key === 'Enter') { $('jf-search-go').click(); $('jf-search').blur(); } });
+$('jf-disconnect').onclick = async () => { try { await api('/jellyfin/disconnect'); } catch {} loadJellyfin(); };
+
+// ── RSS ──
+// GET /rss -> {feeds:[name], items:[{title,seeds,peers,size,magnet}], fetching}.
+// /rss/refresh?idx=N re-fetches feed N; items carry a magnet -> /load like Search.
+function fmtSize(b){
+  if (!b) return '';
+  const u = ['B','KB','MB','GB','TB']; let i = 0, n = b;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (n >= 10 || i === 0 ? Math.round(n) : n.toFixed(1)) + ' ' + u[i];
+}
+async function loadRss(){
+  $('rss-hint').innerHTML = '<span class="spin"></span> Loading feeds…';
+  try {
+    const d = await api('/rss');
+    renderRssFeeds(d.feeds || []);
+    renderRssItems(d.items || [], d.fetching);
+    $('rss-hint').textContent = (d.feeds || []).length
+      ? 'Tap a feed to refresh — tap Play to send to the desktop.'
+      : 'No RSS feeds configured on the desktop.';
+  } catch { $('rss-hint').textContent = '—'; }
+}
+function renderRssFeeds(feeds){
+  $('rss-feeds').innerHTML = feeds.map((f, i) => `<button data-idx="${i}">${esc(f)}</button>`).join('');
+  $('rss-feeds').querySelectorAll('button').forEach(b => b.onclick = () => refreshFeed(+b.dataset.idx, b));
+}
+function refreshFeed(idx, btn){
+  document.querySelectorAll('#rss-feeds button').forEach(x => x.classList.toggle('on', x === btn));
+  $('rss-hint').innerHTML = '<span class="spin"></span> Refreshing…';
+  api('/rss/refresh?idx=' + idx).catch(()=>{});
+  let tries = 0;
+  const t = setInterval(async () => {
+    tries++;
+    try {
+      const d = await api('/rss');
+      renderRssItems(d.items || [], d.fetching);
+      if (!d.fetching || tries > 15) {
+        clearInterval(t);
+        $('rss-hint').textContent = (d.items || []).length + ' items — tap Play to send to the desktop.';
+      }
+    } catch { clearInterval(t); }
+  }, 900);
+}
+function renderRssItems(items, fetching){
+  $('rss-items').innerHTML = items.slice(0, 80).map(it => `
+    <div class="result">
+      <div class="t">${esc(it.title)}</div>
+      <div class="m">
+        ${it.seeds ? `<span>▲ ${esc(String(it.seeds))}</span>` : ''}
+        ${it.size ? `<span>${fmtSize(it.size)}</span>` : ''}
+        <button class="play" data-url="${encodeURIComponent(it.magnet || '')}">Play</button>
+      </div>
+    </div>`).join('') || (fetching ? '<div class="empty"><span class="spin"></span></div>' : '<div class="empty">No items — refresh a feed</div>');
+  $('rss-items').querySelectorAll('.play').forEach(b => b.onclick = () => {
+    const u = b.dataset.url; if (!u) return;
+    b.textContent = 'Sent ✓';
+    api('/load?url=' + u).catch(()=>{});
+  });
+}
 
 // ── Boot ──
 if (TOKEN) paired(); else unpair();
