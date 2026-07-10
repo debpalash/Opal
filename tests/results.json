@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-07-10T05:48:59",
+  "timestamp": "2026-07-10T06:01:55",
   "total": 148,
   "passed": 139,
   "failed": 0,
@@ -202,7 +202,7 @@
       "name": "Download History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "9 downloads",
+      "detail": "0 downloads",
       "duration_ms": 0
     },
     {
@@ -230,8 +230,8 @@
       "name": "Poster Cache Table",
       "category": "Database",
       "status": "pass",
-      "detail": "658 cached posters",
-      "duration_ms": 49
+      "detail": "665 cached posters",
+      "duration_ms": 44
     },
     {
       "name": "Conversation Log Table",
@@ -308,13 +308,13 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 41.4 MB",
-      "duration_ms": 496
+      "duration_ms": 399
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "41.4 MB, built at 05:48:33",
+      "detail": "41.4 MB, built at 06:01:22",
       "duration_ms": 0
     },
     {
@@ -322,7 +322,7 @@
       "category": "Build",
       "status": "pass",
       "detail": "gemma-4-E2B-it-UD-Q4_K_XL.gguf, qwen2.5-3b-instruct-q4_k_m.gguf (4.9 GB)",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Voice Server Script",
@@ -350,21 +350,21 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 1431
+      "duration_ms": 1254
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "skip",
       "detail": "faster-whisper not installed (optional)",
-      "duration_ms": 25
+      "duration_ms": 21
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 23
+      "duration_ms": 19
     },
     {
       "name": "PulseAudio Echo Cancel",
@@ -378,7 +378,7 @@
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 27
+      "duration_ms": 23
     },
     {
       "name": "Embedding Server Health",
@@ -504,70 +504,70 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 31
+      "duration_ms": 25
     },
     {
       "name": "Compiles: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 27
+      "duration_ms": 24
     },
     {
       "name": "Compiles: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 29
+      "duration_ms": 24
     },
     {
       "name": "Compiles: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 36
+      "duration_ms": 25
     },
     {
       "name": "--check degrades: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 26
+      "duration_ms": 20
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 28
+      "duration_ms": 24
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 25
+      "duration_ms": 22
     },
     {
       "name": "Compiles: camoufox_bridge.py",
       "category": "Browser",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 29
+      "duration_ms": 26
     },
     {
       "name": "Bridge protocol selftest",
       "category": "Browser",
       "status": "pass",
       "detail": "framing + pump model OK",
-      "duration_ms": 29
+      "duration_ms": 28
     },
     {
       "name": "Poster cache SQL matches schema",
       "category": "Database",
       "status": "pass",
       "detail": "4 statements OK against schema",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "name": "Browser bookmarks SQL matches schema",
@@ -630,7 +630,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 2890
+      "duration_ms": 2388
     },
     {
       "name": "Sherpa Model Canonicalization",
@@ -693,14 +693,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 7428
+      "duration_ms": 7921
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 77
+      "duration_ms": 82
     },
     {
       "name": "Page Router",
@@ -910,7 +910,7 @@
       "category": "Remote",
       "status": "pass",
       "detail": "hosted streaming + docker gate + CPU fixes wired",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Torrent File Safety: skip executables/archives",
@@ -1015,7 +1015,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "40 plugins, offline-loaded + bundled",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Added Torrent Engines Wired",
@@ -1078,7 +1078,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 109
+      "duration_ms": 92
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1204,7 +1204,7 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 1107
+      "duration_ms": 864
     }
   ]
 }

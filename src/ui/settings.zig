@@ -179,6 +179,7 @@ fn renderLeftNav(compact: bool) void {
         .{ .tab = .AI, .label = "AI & Voice", .icon = icons.tvg.lucide.@"message-square-text" },
         .{ .tab = .LangLearn, .label = "Language", .icon = icons.tvg.lucide.languages },
         .{ .tab = .FileAssoc, .label = "File Types", .icon = icons.tvg.lucide.@"file-cog" },
+        .{ .tab = .About, .label = "About", .icon = icons.tvg.lucide.info },
     };
 
     var any_match = false;
@@ -221,7 +222,8 @@ fn sectionMatchesSearch(tab: state.SettingsTab) bool {
     if (search_len == 0) return true;
     const sections: []const []const u8 = switch (tab) {
         .General => &.{ "Interface", "Behavior", "TMDB", "Theme", "Scale", "Grid", "NSFW", "Seek Sync", "API Key" },
-        .Playback => &.{ "Video Processing", "Audio Equalizer", "Streaming", "About", "Shortcuts", "Filters", "Capture", "Hardware", "Decode", "Deband", "Interpolation", "Brightness", "Contrast", "Saturation", "Gamma", "Screenshot", "Auto-advance", "Resume" },
+        .Playback => &.{ "Video Processing", "Audio Equalizer", "Streaming", "Shortcuts", "Filters", "Capture", "Hardware", "Decode", "Deband", "Interpolation", "Brightness", "Contrast", "Saturation", "Gamma", "Screenshot", "Auto-advance", "Resume" },
+        .About => &.{ "About", "Version", "Update", "Credits", "License", "Donate", "Sponsors", "Links", "TMDB" },
         .Subtitles => &.{ "OpenSubtitles", "Language", "Search", "API Key", "Font", "Delay", "Whisper" },
         .Network => &.{ "Download", "Trackers", "Proxy", "Speed", "Limit", "Port" },
         .Storage => &.{ "Download Path", "Watch History", "Database", "Cache", "Clear" },
@@ -368,6 +370,7 @@ fn renderRightPane() void {
         .AI => "AI & Voice",
         .LangLearn => "Language Learning",
         .FileAssoc => "File Associations",
+        .About => "About Opal",
     });
 
     switch (state.app.settings_tab) {
@@ -380,6 +383,7 @@ fn renderRightPane() void {
         .AI => renderAIContentBody(),
         .LangLearn => renderLangLearnTab(),
         .FileAssoc => renderFileAssocTab(),
+        .About => renderAboutTab(),
     }
 
     // ── Footer: auto-save indicator ──
@@ -1151,118 +1155,12 @@ fn renderGeneralTab() void {
     }
 }
 
-fn renderPlaybackTab() void {
-    // One accent, token fills. `btn_*` kept for the few primary actions that
-    // remain in this tab (download / install). Inactive segments are handled
-    // by components.segment() now.
+fn renderAboutTab() void {
+    // Extracted from the Playback tab into its own page. btn_* mirror the
+    // Playback tab's local button tokens the block references.
     const btn_active = theme.colors.accent;
     const btn_inactive = theme.colors.bg_elevated;
     const btn_text_active = theme.colors.text_on_accent;
-
-    // ── Video Processing ──
-    sectionHeader("Video Processing", "GPU acceleration and image quality", 20, @src());
-
-    // HW Decode — neutral toggle row; applies mpv option on change.
-    {
-        const before = state.app.hwdec_enabled;
-        components.toggleRow(@src(), "Hardware Decoding", "GPU video decode (auto)", &state.app.hwdec_enabled);
-        if (state.app.hwdec_enabled != before) {
-            for (state.app.players.items) |p| {
-                _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "hwdec", if (state.app.hwdec_enabled) "auto" else "no");
-            }
-            state.markConfigDirty();
-        }
-    }
-
-    // Deband — neutral toggle row; applies mpv option on change.
-    {
-        const before = state.app.deband_enabled;
-        components.toggleRow(@src(), "Deband Filter", "Smooth color banding", &state.app.deband_enabled);
-        if (state.app.deband_enabled != before) {
-            for (state.app.players.items) |p| {
-                _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "deband", if (state.app.deband_enabled) "yes" else "no");
-            }
-            state.markConfigDirty();
-        }
-    }
-
-    // Auto-Advance toggle row — pure bool flip, no side effects.
-    {
-        const before = state.app.auto_advance;
-        components.toggleRow(@src(), "Auto-Advance", "Play next on end", &state.app.auto_advance);
-        if (state.app.auto_advance != before) state.markConfigDirty();
-    }
-
-    // Video Scaler — segment.
-    settingRow("Video Scaler", 250, @src());
-    {
-        const sn = [_][]const u8{ "EWA Lanczos (HQ)", "Bilinear (Fast)", "Spline36" };
-        const sv = [_][]const u8{ "ewa_lanczossharp", "bilinear", "spline36" };
-        const sel: usize = @intCast(@min(state.app.video_scaler, sn.len - 1));
-        if (components.segment(@src(), &sn, sel)) |clicked| {
-            state.app.video_scaler = @intCast(clicked);
-            for (state.app.players.items) |p| {
-                _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "scale", @ptrCast(sv[clicked].ptr));
-            }
-            state.markConfigDirty();
-        }
-    }
-
-    // ── Audio Equalizer ──
-    sectionHeader("Audio Equalizer", "Quick presets for different content types", 22, @src());
-    {
-        const en = [_][]const u8{ "Flat", "Bass+", "Voice", "Cinema", "Loud" };
-        const ec = [_][]const u8{ "af set \"\"", "af set superequalizer=1b=6:2b=5:3b=4:4b=2", "af set superequalizer=3b=3:4b=4:5b=5:6b=4:7b=3", "af set superequalizer=1b=4:2b=3:6b=2:7b=3:8b=4", "af set loudnorm" };
-        const sel: usize = @min(state.app.eq_preset, en.len - 1);
-        if (components.segment(@src(), &en, sel)) |clicked| {
-            state.app.eq_preset = clicked;
-            for (state.app.players.items) |p| {
-                _ = c.mpv.mpv_command_string(p.mpv_ctx, @ptrCast(ec[clicked].ptr));
-            }
-            state.markConfigDirty();
-        }
-    }
-
-    // ── Streaming ──
-    sectionHeader("Streaming", "yt-dlp backend for web streams", 23, @src());
-
-    settingRow("Stream Quality", 230, @src());
-    {
-        const qn = [_][]const u8{ "720p", "1080p", "4K", "Audio" };
-        const sel: usize = @min(state.app.ytdl_format_idx, qn.len - 1);
-        if (components.segment(@src(), &qn, sel)) |clicked| {
-            state.app.ytdl_format_idx = clicked;
-            for (state.app.players.items) |p| {
-                p.applyYtdlFormat();
-            }
-            state.markConfigDirty();
-        }
-    }
-    // yt-dlp status row
-    {
-        const ytdlp = @import("../services/ytdlp.zig");
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-        defer row.deinit();
-        _ = dvui.label(@src(), "yt-dlp", .{}, .{ .color_text = labelText(), .gravity_y = 0.5 });
-        {
-            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            spacer.deinit();
-        }
-        if (ytdlp.isDownloading()) {
-            components.statusPill("Downloading", .info);
-            dvui.refresh(null, @src(), null); // worker has no UI wake — poll while pending
-        } else if (ytdlp.getPath() != null) {
-            components.statusPill("Installed", .success);
-            if (dvui.button(@src(), "Update", .{}, .{ .id_extra = 2901, .color_fill = btn_inactive, .color_text = theme.colors.accent, .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md })) {
-                ytdlp.update();
-            }
-        } else {
-            components.statusPill("Not installed", .warn);
-            if (dvui.button(@src(), "Download", .{}, .{ .id_extra = 2902, .color_fill = btn_active, .color_text = btn_text_active, .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md })) {
-                ytdlp.ensureAvailable();
-            }
-        }
-    }
 
     // ── About / Updater ── (no card chrome; whitespace + the brand row)
     sectionHeader("About", "Version, updates, credits & support", 25, @src());
@@ -1419,6 +1317,120 @@ fn renderPlaybackTab() void {
 
         if (updater.last_error_len > 0) {
             _ = dvui.label(@src(), "  {s}", .{updater.lastError()}, .{ .id_extra = 2540, .color_text = theme.colors.warning, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
+        }
+    }
+}
+
+fn renderPlaybackTab() void {
+    // One accent, token fills. `btn_*` kept for the few primary actions that
+    // remain in this tab (download / install). Inactive segments are handled
+    // by components.segment() now.
+    const btn_active = theme.colors.accent;
+    const btn_inactive = theme.colors.bg_elevated;
+    const btn_text_active = theme.colors.text_on_accent;
+
+    // ── Video Processing ──
+    sectionHeader("Video Processing", "GPU acceleration and image quality", 20, @src());
+
+    // HW Decode — neutral toggle row; applies mpv option on change.
+    {
+        const before = state.app.hwdec_enabled;
+        components.toggleRow(@src(), "Hardware Decoding", "GPU video decode (auto)", &state.app.hwdec_enabled);
+        if (state.app.hwdec_enabled != before) {
+            for (state.app.players.items) |p| {
+                _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "hwdec", if (state.app.hwdec_enabled) "auto" else "no");
+            }
+            state.markConfigDirty();
+        }
+    }
+
+    // Deband — neutral toggle row; applies mpv option on change.
+    {
+        const before = state.app.deband_enabled;
+        components.toggleRow(@src(), "Deband Filter", "Smooth color banding", &state.app.deband_enabled);
+        if (state.app.deband_enabled != before) {
+            for (state.app.players.items) |p| {
+                _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "deband", if (state.app.deband_enabled) "yes" else "no");
+            }
+            state.markConfigDirty();
+        }
+    }
+
+    // Auto-Advance toggle row — pure bool flip, no side effects.
+    {
+        const before = state.app.auto_advance;
+        components.toggleRow(@src(), "Auto-Advance", "Play next on end", &state.app.auto_advance);
+        if (state.app.auto_advance != before) state.markConfigDirty();
+    }
+
+    // Video Scaler — segment.
+    settingRow("Video Scaler", 250, @src());
+    {
+        const sn = [_][]const u8{ "EWA Lanczos (HQ)", "Bilinear (Fast)", "Spline36" };
+        const sv = [_][]const u8{ "ewa_lanczossharp", "bilinear", "spline36" };
+        const sel: usize = @intCast(@min(state.app.video_scaler, sn.len - 1));
+        if (components.segment(@src(), &sn, sel)) |clicked| {
+            state.app.video_scaler = @intCast(clicked);
+            for (state.app.players.items) |p| {
+                _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "scale", @ptrCast(sv[clicked].ptr));
+            }
+            state.markConfigDirty();
+        }
+    }
+
+    // ── Audio Equalizer ──
+    sectionHeader("Audio Equalizer", "Quick presets for different content types", 22, @src());
+    {
+        const en = [_][]const u8{ "Flat", "Bass+", "Voice", "Cinema", "Loud" };
+        const ec = [_][]const u8{ "af set \"\"", "af set superequalizer=1b=6:2b=5:3b=4:4b=2", "af set superequalizer=3b=3:4b=4:5b=5:6b=4:7b=3", "af set superequalizer=1b=4:2b=3:6b=2:7b=3:8b=4", "af set loudnorm" };
+        const sel: usize = @min(state.app.eq_preset, en.len - 1);
+        if (components.segment(@src(), &en, sel)) |clicked| {
+            state.app.eq_preset = clicked;
+            for (state.app.players.items) |p| {
+                _ = c.mpv.mpv_command_string(p.mpv_ctx, @ptrCast(ec[clicked].ptr));
+            }
+            state.markConfigDirty();
+        }
+    }
+
+    // ── Streaming ──
+    sectionHeader("Streaming", "yt-dlp backend for web streams", 23, @src());
+
+    settingRow("Stream Quality", 230, @src());
+    {
+        const qn = [_][]const u8{ "720p", "1080p", "4K", "Audio" };
+        const sel: usize = @min(state.app.ytdl_format_idx, qn.len - 1);
+        if (components.segment(@src(), &qn, sel)) |clicked| {
+            state.app.ytdl_format_idx = clicked;
+            for (state.app.players.items) |p| {
+                p.applyYtdlFormat();
+            }
+            state.markConfigDirty();
+        }
+    }
+    // yt-dlp status row
+    {
+        const ytdlp = @import("../services/ytdlp.zig");
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        defer row.deinit();
+        _ = dvui.label(@src(), "yt-dlp", .{}, .{ .color_text = labelText(), .gravity_y = 0.5 });
+        {
+            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            spacer.deinit();
+        }
+        if (ytdlp.isDownloading()) {
+            components.statusPill("Downloading", .info);
+            dvui.refresh(null, @src(), null); // worker has no UI wake — poll while pending
+        } else if (ytdlp.getPath() != null) {
+            components.statusPill("Installed", .success);
+            if (dvui.button(@src(), "Update", .{}, .{ .id_extra = 2901, .color_fill = btn_inactive, .color_text = theme.colors.accent, .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md })) {
+                ytdlp.update();
+            }
+        } else {
+            components.statusPill("Not installed", .warn);
+            if (dvui.button(@src(), "Download", .{}, .{ .id_extra = 2902, .color_fill = btn_active, .color_text = btn_text_active, .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md })) {
+                ytdlp.ensureAvailable();
+            }
         }
     }
 
