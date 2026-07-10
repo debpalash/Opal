@@ -2,6 +2,9 @@ const std = @import("std");
 const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
 const c = @import("../core/c.zig");
+const alloc = @import("../core/alloc.zig").allocator;
+const io_g = @import("../core/io_global.zig");
+const sp = @import("subtitles_pure.zig");
 
 // ══════════════════════════════════════════════════════════
 // OpenSubtitles.com REST API v1 — Subtitle Search & Download
@@ -29,6 +32,28 @@ pub var is_searching: std.atomic.Value(bool) = std.atomic.Value(bool).init(false
 pub var search_error: [128]u8 = std.mem.zeroes([128]u8);
 pub var search_error_len: usize = 0;
 pub var is_downloading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+// ══════════════════════════════════════════════════════════
+// Subdl (api.subdl.com) — a second KEYED provider, parallel to the
+// OpenSubtitles.com vars above. Free per-user key (subdl.com → panel → API);
+// empty key ⇒ fully inert. Downloads arrive as ZIP archives, extracted
+// in-process via std.zip (handles store/deflate/zip64, no external unzip).
+// ══════════════════════════════════════════════════════════
+pub const SubdlResult = struct {
+    /// Download path under dl.subdl.com, e.g. "/subtitle/3098966-3116742.zip".
+    url: [512]u8 = std.mem.zeroes([512]u8),
+    url_len: usize = 0,
+    release: [200]u8 = std.mem.zeroes([200]u8),
+    release_len: usize = 0,
+    lang: [8]u8 = std.mem.zeroes([8]u8),
+    lang_len: usize = 0,
+};
+pub var subdl_results: [MAX_RESULTS]SubdlResult = std.mem.zeroes([MAX_RESULTS]SubdlResult);
+pub var subdl_result_count: usize = 0;
+pub var subdl_is_searching: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+pub var subdl_is_downloading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+pub var subdl_error: [128]u8 = std.mem.zeroes([128]u8);
+pub var subdl_error_len: usize = 0;
 
 // ── Search by query ──
 pub fn searchByQuery(query: []const u8, lang: []const u8) void {
@@ -442,4 +467,283 @@ pub fn autoSearchFromPlayer(auto: bool) void {
             searchByQuery(clean_buf[0..copy_len], lang);
         }
     }
+}
+
+// ══════════════════════════════════════════════════════════
+// Subdl provider — search + ZIP download
+// ══════════════════════════════════════════════════════════
+
+fn setSubdlError(msg: []const u8) void {
+    const len = @min(msg.len, subdl_error.len);
+    @memcpy(subdl_error[0..len], msg[0..len]);
+    subdl_error_len = len;
+}
+
+/// Search Subdl for `query` in `lang` (an app language code, e.g. "eng").
+/// No-ops without a key. Runs on a detached worker; results land in
+/// `subdl_results`. `lang` is snapshotted, then mapped to Subdl's 2-letter code.
+pub fn subdlSearch(query: []const u8, lang: []const u8) void {
+    if (query.len == 0) return;
+    // Atomically claim the search slot — only proceed if we flipped false→true.
+    if (subdl_is_searching.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
+
+    subdl_result_count = 0;
+    subdl_error_len = 0;
+
+    const S = struct {
+        var q_buf: [256]u8 = undefined;
+        var q_len: usize = 0;
+        var l_buf: [8]u8 = undefined;
+        var l_len: usize = 0;
+    };
+    S.q_len = @min(query.len, S.q_buf.len);
+    @memcpy(S.q_buf[0..S.q_len], query[0..S.q_len]);
+    S.l_len = @min(lang.len, S.l_buf.len);
+    @memcpy(S.l_buf[0..S.l_len], lang[0..S.l_len]);
+
+    if (std.Thread.spawn(.{}, struct {
+        fn work() void {
+            defer subdl_is_searching.store(false, .release);
+            doSubdlSearch(S.q_buf[0..S.q_len], S.l_buf[0..S.l_len]);
+        }
+    }.work, .{})) |t| t.detach() else |_| {
+        subdl_is_searching.store(false, .release);
+    }
+}
+
+fn doSubdlSearch(query: []const u8, lang: []const u8) void {
+    if (state.app.subdl_api_key_len == 0) {
+        setSubdlError("Set Subdl API key in Settings → Subtitles");
+        return;
+    }
+
+    const http = @import("../core/http.zig");
+    const api_key = state.app.subdl_api_key[0..state.app.subdl_api_key_len];
+    const subdl_lang = sp.subdlLangCode(lang);
+
+    var enc: [512]u8 = undefined;
+    const encoded = http.urlEncode(query, &enc);
+
+    // NB: Subdl takes the key in the query string (its API has no header form).
+    // Never log this URL — it carries the key.
+    var url_buf: [896]u8 = undefined;
+    const url = std.fmt.bufPrintZ(&url_buf, "https://api.subdl.com/api/v1/subtitles?api_key={s}&film_name={s}&languages={s}&subs_per_page=30", .{ api_key, encoded, subdl_lang }) catch {
+        setSubdlError("Query too long");
+        return;
+    };
+
+    var child = io_g.Child.init(
+        &.{ "curl", "-s", "--max-time", "15", "-A", USER_AGENT, url },
+        alloc,
+    );
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch {
+        setSubdlError("Failed to spawn curl");
+        return;
+    };
+
+    var response_buf: [64 * 1024]u8 = undefined;
+    var n: usize = 0;
+    if (child.stdout) |*stdout| {
+        n = io_g.readAll(stdout, &response_buf) catch 0;
+    }
+    _ = child.wait() catch {};
+
+    if (n == 0) {
+        setSubdlError("No response from Subdl");
+        return;
+    }
+
+    parseSubdl(response_buf[0..n], lang);
+
+    if (subdl_result_count > 0) {
+        logs.pushLog("info", "subs", "Subdl subtitles found", false);
+    }
+}
+
+/// Fill `subdl_results` from a Subdl response via the pure parser. `want_lang`
+/// is the app language code; when the row carries a short code we double-check
+/// it (the server already filtered by `&languages=`, so this only guards
+/// against surprises — full-name/empty langs are kept as-is).
+fn parseSubdl(json: []const u8, want_lang: []const u8) void {
+    subdl_result_count = 0;
+
+    var parsed: [MAX_RESULTS]sp.SubdlSub = undefined;
+    const pn = sp.subdlSubs(json, &parsed);
+
+    for (parsed[0..pn]) |ps| {
+        if (subdl_result_count >= MAX_RESULTS) break;
+        if (ps.url.len == 0) continue;
+        if (ps.lang.len >= 2 and ps.lang.len <= 3 and !sp.langMatches(want_lang, ps.lang)) continue;
+
+        var r = &subdl_results[subdl_result_count];
+        r.* = std.mem.zeroes(SubdlResult);
+
+        const ul = @min(ps.url.len, r.url.len);
+        @memcpy(r.url[0..ul], ps.url[0..ul]);
+        r.url_len = ul;
+
+        const rl = @min(ps.release.len, r.release.len);
+        @memcpy(r.release[0..rl], ps.release[0..rl]);
+        r.release_len = rl;
+
+        const ll = @min(ps.lang.len, r.lang.len);
+        @memcpy(r.lang[0..ll], ps.lang[0..ll]);
+        r.lang_len = ll;
+
+        subdl_result_count += 1;
+    }
+
+    if (subdl_result_count == 0) {
+        if (findJsonString(json, "\"error\":\"")) |msg| {
+            setSubdlError(msg);
+        } else {
+            setSubdlError("No Subdl subtitles found");
+        }
+    }
+}
+
+/// Download Subdl result `idx` (a ZIP), extract the first subtitle in-process,
+/// and sub-add it to the active player. Runs on a detached worker; the URL is
+/// snapshotted before spawn.
+pub fn subdlDownload(idx: usize) void {
+    // Atomically claim the download slot — only proceed if we flipped false→true.
+    if (subdl_is_downloading.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
+    if (idx >= subdl_result_count) {
+        subdl_is_downloading.store(false, .release);
+        return;
+    }
+
+    const S = struct {
+        var url: [512]u8 = undefined;
+        var url_len: usize = 0;
+    };
+    const r = &subdl_results[idx];
+    S.url_len = r.url_len;
+    @memcpy(S.url[0..S.url_len], r.url[0..S.url_len]);
+
+    if (std.Thread.spawn(.{}, struct {
+        fn work() void {
+            defer subdl_is_downloading.store(false, .release);
+            doSubdlDownload(S.url[0..S.url_len]);
+        }
+    }.work, .{})) |t| t.detach() else |_| {
+        subdl_is_downloading.store(false, .release);
+    }
+}
+
+fn doSubdlDownload(url_path: []const u8) void {
+    if (url_path.len == 0) {
+        state.showToast("Bad subtitle link");
+        return;
+    }
+
+    io_g.cwdMakePath("/tmp/opal_subs") catch {};
+
+    var url_buf: [640]u8 = undefined;
+    const url = std.fmt.bufPrintZ(&url_buf, "https://dl.subdl.com{s}", .{url_path}) catch {
+        state.showToast("Bad subtitle link");
+        return;
+    };
+
+    const zip_path = "/tmp/opal_subs/subdl.zip";
+    var dl = io_g.Child.init(
+        &.{ "curl", "-s", "-L", "--max-time", "25", "-A", USER_AGENT, "-o", zip_path, url },
+        alloc,
+    );
+    dl.stdout_behavior = .Ignore;
+    dl.stderr_behavior = .Ignore;
+    dl.spawn() catch {
+        state.showToast("Download failed (curl)");
+        return;
+    };
+    _ = dl.wait() catch {};
+
+    const st = io_g.cwdStatFile(zip_path) catch {
+        state.showToast("Subtitle download failed");
+        return;
+    };
+    if (st.size < 100) {
+        state.showToast("Subtitle archive empty");
+        return;
+    }
+
+    var path_buf: [1024]u8 = undefined;
+    const srt = extractFirstSubtitle(zip_path, "/tmp/opal_subs/subdl", &path_buf) orelse {
+        state.showToast("No subtitle in archive");
+        logs.pushLog("warn", "subs", "Subdl ZIP contained no subtitle file", true);
+        return;
+    };
+
+    if (state.app.active_player_idx < state.app.players.items.len) {
+        const p = state.app.players.items[state.app.active_player_idx];
+        var cmd_buf: [1152]u8 = undefined;
+        const cmd = std.fmt.bufPrintZ(&cmd_buf, "sub-add \"{s}\"", .{srt}) catch return;
+        _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
+    }
+
+    state.showToast("Subtitle loaded");
+    logs.pushLog("info", "subs", "Subdl subtitle downloaded and loaded", false);
+}
+
+/// Extract `zip_path` into a freshly-cleaned `extract_dir` and return the path
+/// of the first subtitle file inside (recursively), preferring `.srt`. Uses
+/// std.zip (store/deflate/zip64, backslash-tolerant). Returns null when the
+/// archive is unreadable or holds no subtitle. `out_buf` owns the returned slice.
+fn extractFirstSubtitle(zip_path: []const u8, extract_dir: []const u8, out_buf: []u8) ?[]const u8 {
+    const io = io_g.io();
+    const cwd = std.Io.Dir.cwd();
+
+    // Clean the target so std.zip's exclusive-create never collides with stale
+    // files from a previous download.
+    cwd.deleteTree(io, extract_dir) catch {};
+    cwd.createDirPath(io, extract_dir) catch return null;
+
+    // Extract everything. The 64KB reader buffer lives on the heap to keep the
+    // worker stack lean (std.zip's own extract already uses a large stack frame).
+    {
+        var zf = cwd.openFile(io, zip_path, .{}) catch return null;
+        defer zf.close(io);
+        const rbuf = alloc.alloc(u8, 64 * 1024) catch return null;
+        defer alloc.free(rbuf);
+        var fr = zf.reader(io, rbuf);
+        var dest = cwd.openDir(io, extract_dir, .{}) catch return null;
+        defer dest.close(io);
+        // A partial extraction can still yield the .srt — swallow errors and let
+        // the walk below decide success.
+        std.zip.extract(dest, &fr, .{ .allow_backslashes = true }) catch {};
+    }
+
+    // Recursive walk for the first subtitle, preferring .srt over other formats.
+    var wdir = cwd.openDir(io, extract_dir, .{ .iterate = true }) catch return null;
+    defer wdir.close(io);
+    var w = wdir.walk(alloc) catch return null;
+    defer w.deinit();
+
+    var fallback_buf: [1024]u8 = undefined;
+    var fallback: ?[]const u8 = null;
+    while (w.next(io) catch null) |entry| {
+        if (entry.kind != .file) continue;
+        const p = entry.path; // relative, sentinel-terminated
+        if (std.ascii.endsWithIgnoreCase(p, ".srt")) {
+            return std.fmt.bufPrint(out_buf, "{s}/{s}", .{ extract_dir, p }) catch null;
+        }
+        if (fallback == null and isSubtitleExt(p)) {
+            fallback = std.fmt.bufPrint(&fallback_buf, "{s}/{s}", .{ extract_dir, p }) catch null;
+        }
+    }
+    if (fallback) |fb| {
+        const n = @min(fb.len, out_buf.len);
+        @memcpy(out_buf[0..n], fb[0..n]);
+        return out_buf[0..n];
+    }
+    return null;
+}
+
+/// True for mpv-loadable subtitle extensions other than .srt.
+fn isSubtitleExt(name: []const u8) bool {
+    const exts = [_][]const u8{ ".ass", ".ssa", ".sub", ".vtt", ".smi" };
+    for (exts) |e| if (std.ascii.endsWithIgnoreCase(name, e)) return true;
+    return false;
 }

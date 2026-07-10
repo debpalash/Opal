@@ -2530,6 +2530,54 @@ def test_keyless_subtitle_providers():
     return "pass", "keyless chain: rest.opensubtitles.org + Gestdown merged (15 tagged results), fired on any playback"
 
 
+@test("Subdl Subtitle Provider Wired", "Page Shell")
+def test_subdl_provider():
+    # Subdl (api.subdl.com) is a KEYED wave-2 provider parallel to
+    # OpenSubtitles.com: free per-user key, ZIP downloads extracted in-process
+    # via std.zip. Ships inert — no key ⇒ no fetch. Verify the whole chain:
+    # state key + config persistence + pure parser (tested) + provider funcs +
+    # in-process ZIP extraction + Settings UI field.
+    state = open(os.path.join(PROJECT_DIR, "src/core/state.zig")).read()
+    cfg = open(os.path.join(PROJECT_DIR, "src/core/config.zig")).read()
+    pure = open(os.path.join(PROJECT_DIR, "src/services/subtitles_pure.zig")).read()
+    svc = open(os.path.join(PROJECT_DIR, "src/services/subtitles.zig")).read()
+    ui = open(os.path.join(PROJECT_DIR, "src/ui/settings.zig")).read()
+
+    # Key plumbing: fixed buffer in state, persisted both ways in config.
+    if "subdl_api_key" not in state or "subdl_api_key_len" not in state:
+        return "fail", "subdl_api_key not added to state.zig"
+    if 'setKey("subdl_api_key"' not in cfg or '"subdl_api_key"' not in cfg:
+        return "fail", "subdl_api_key not persisted/loaded in config.zig"
+
+    # Pure, unit-tested parser + language mapper; production routes through them.
+    if "pub fn subdlSubs" not in pure or "pub fn subdlLangCode" not in pure:
+        return "fail", "subdlSubs/subdlLangCode missing from subtitles_pure.zig"
+    if "sp.subdlSubs" not in svc or "sp.subdlLangCode" not in svc:
+        return "fail", "provider no longer routes parsing through subtitles_pure"
+
+    # Provider entry points + inert-without-key guard.
+    if "pub fn subdlSearch" not in svc or "pub fn subdlDownload" not in svc:
+        return "fail", "subdlSearch/subdlDownload entry points missing"
+    if "state.app.subdl_api_key_len == 0" not in svc:
+        return "fail", "Subdl search no longer no-ops without a key (not inert)"
+    if "api.subdl.com/api/v1/subtitles" not in svc:
+        return "fail", "Subdl search endpoint missing"
+    if "https://dl.subdl.com" not in svc:
+        return "fail", "Subdl download host missing"
+
+    # ZIP handling: in-process extraction via std.zip (no external unzip dep).
+    if "std.zip.extract" not in svc:
+        return "fail", "Subdl ZIP no longer extracted via std.zip"
+
+    # Settings UI: masked key field + free-key hint + results wiring.
+    if "subdl_api_key" not in ui or "subdl.com/panel/api" not in ui:
+        return "fail", "Settings → Subtitles missing Subdl key field / free-key hint"
+    if "subs.subdlSearch" not in ui or "subs.subdlDownload" not in ui:
+        return "fail", "Settings tab not wired to Subdl search/download"
+
+    return "pass", "keyed Subdl: state+config key, pure parser, api.subdl.com search, std.zip download, Settings UI — inert without key"
+
+
 @test("Auto-Download Subtitles On Play", "Page Shell")
 def test_auto_download_subs():
     # A video with no embedded/sidecar sub track should trigger an automatic

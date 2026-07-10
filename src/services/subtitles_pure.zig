@@ -368,6 +368,81 @@ pub fn imdbFromExternalIds(json: []const u8) ?[]const u8 {
     return v;
 }
 
+// ── Subdl (api.subdl.com — keyed, ZIP downloads) ──
+
+pub const SubdlSub = struct {
+    /// Download path under dl.subdl.com, e.g. "/subtitle/3098966-3116742.zip".
+    url: []const u8,
+    /// Release name (preferred) or the movie/show name fallback.
+    release: []const u8,
+    /// Language code the API tagged the row with, e.g. "EN" (or full "english").
+    lang: []const u8,
+};
+
+/// Parse a Subdl `/api/v1/subtitles` response:
+/// `{"status":true,"results":[…],"subtitles":[{"release_name":"..","url":"/subtitle/x.zip","language":"EN",…}]}`.
+/// Anchors on each `"url":"` (present only inside subtitle entries — the
+/// `results` objects carry imdb/tmdb ids, never a `url`), then scopes the
+/// release/lang lookups to the entry's enclosing `{ … }`. Returns how many of
+/// `out` were filled; slices point into `json`. Field order within an entry is
+/// not assumed. Malformed / truncated input yields as many well-formed entries
+/// as were parsed and never traps.
+pub fn subdlSubs(json: []const u8, out: []SubdlSub) usize {
+    var count: usize = 0;
+    var pos: usize = 0;
+    const url_key = "\"url\":\"";
+    while (count < out.len) {
+        const uk = std.mem.indexOfPos(u8, json, pos, url_key) orelse break;
+        const url_start = uk + url_key.len;
+        const url_end = jsonStringEnd(json, url_start) orelse break;
+        const url = json[url_start..url_end];
+
+        // Enclosing { .. } window for this entry — bound the field lookups to it
+        // so one entry never borrows a sibling's release/lang.
+        const obj_start = std.mem.lastIndexOfScalar(u8, json[0..uk], '{') orelse uk;
+        const obj_end = std.mem.indexOfScalarPos(u8, json, url_end + 1, '}') orelse (json.len - 1);
+        const obj = json[obj_start..@min(obj_end + 1, json.len)];
+
+        // Prefer the release tag; fall back to the plain name. (`"name":` never
+        // matches inside `"release_name":` — the byte before `name` is `_`.)
+        const release = jsonFieldValue(obj, "\"release_name\":") orelse
+            (jsonFieldValue(obj, "\"name\":") orelse "");
+        // Prefer the short code ("EN"); fall back to the full name ("english").
+        const lang = jsonFieldValue(obj, "\"language\":") orelse
+            (jsonFieldValue(obj, "\"lang\":") orelse "");
+
+        if (url.len >= 4) {
+            out[count] = .{ .url = url, .release = release, .lang = lang };
+            count += 1;
+        }
+        pos = url_end + 1;
+    }
+    return count;
+}
+
+/// Map an app language code (the 3-letter codes the Subtitles tab offers, plus
+/// their 2-letter forms) to the 2-letter uppercase code Subdl's `languages`
+/// query parameter expects. Falls back to "EN".
+pub fn subdlLangCode(code: []const u8) []const u8 {
+    const pairs = [_]struct { c: []const u8, s: []const u8 }{
+        .{ .c = "eng", .s = "EN" }, .{ .c = "en", .s = "EN" },
+        .{ .c = "spa", .s = "ES" }, .{ .c = "es", .s = "ES" },
+        .{ .c = "fre", .s = "FR" }, .{ .c = "fra", .s = "FR" }, .{ .c = "fr", .s = "FR" },
+        .{ .c = "ger", .s = "DE" }, .{ .c = "deu", .s = "DE" }, .{ .c = "de", .s = "DE" },
+        .{ .c = "por", .s = "PT" }, .{ .c = "pt", .s = "PT" },
+        .{ .c = "ita", .s = "IT" }, .{ .c = "it", .s = "IT" },
+        .{ .c = "rus", .s = "RU" }, .{ .c = "ru", .s = "RU" },
+        .{ .c = "chi", .s = "ZH" }, .{ .c = "zho", .s = "ZH" }, .{ .c = "zh", .s = "ZH" },
+        .{ .c = "jpn", .s = "JA" }, .{ .c = "ja", .s = "JA" },
+        .{ .c = "kor", .s = "KO" }, .{ .c = "ko", .s = "KO" },
+        .{ .c = "hin", .s = "HI" }, .{ .c = "hi", .s = "HI" },
+        .{ .c = "ara", .s = "AR" }, .{ .c = "ar", .s = "AR" },
+        .{ .c = "tur", .s = "TR" }, .{ .c = "tr", .s = "TR" },
+    };
+    for (pairs) |p| if (std.ascii.eqlIgnoreCase(p.c, code)) return p.s;
+    return "EN";
+}
+
 /// Map an ISO-ish language code to the full English name Gestdown expects.
 /// Falls back to "English" for anything unmapped.
 pub fn langFullName(code: []const u8) []const u8 {
@@ -563,6 +638,74 @@ test "imdbFromExternalIds keeps the tt prefix, rejects null/empty" {
     try std.testing.expect(imdbFromExternalIds("{\"imdb_id\":null}") == null);
     try std.testing.expect(imdbFromExternalIds("{\"imdb_id\":\"\"}") == null);
     try std.testing.expect(imdbFromExternalIds("{}") == null);
+}
+
+test "subdlSubs parses release/url/language, ignoring the results array" {
+    const json =
+        "{\"status\":true," ++
+        "\"results\":[{\"sd_id\":123,\"type\":\"movie\",\"name\":\"The Movie\",\"imdb_id\":\"tt1\",\"tmdb_id\":603}]," ++
+        "\"subtitles\":[" ++
+        "{\"release_name\":\"The.Movie.2020.1080p.BluRay.x264\",\"name\":\"The Movie\",\"lang\":\"english\",\"author\":\"a\",\"url\":\"/subtitle/1-2.zip\",\"language\":\"EN\"}," ++
+        "{\"release_name\":\"The.Movie.2020.720p.WEB\",\"lang\":\"spanish\",\"url\":\"/subtitle/3-4.zip\",\"language\":\"ES\"}]}";
+    var out: [8]SubdlSub = undefined;
+    const n = subdlSubs(json, &out);
+    try std.testing.expectEqual(@as(usize, 2), n);
+    try std.testing.expectEqualStrings("/subtitle/1-2.zip", out[0].url);
+    try std.testing.expectEqualStrings("The.Movie.2020.1080p.BluRay.x264", out[0].release);
+    try std.testing.expectEqualStrings("EN", out[0].lang);
+    try std.testing.expectEqualStrings("/subtitle/3-4.zip", out[1].url);
+    try std.testing.expectEqualStrings("The.Movie.2020.720p.WEB", out[1].release);
+    try std.testing.expectEqualStrings("ES", out[1].lang);
+}
+
+test "subdlSubs falls back to name when release_name absent; reordered fields" {
+    const json =
+        "{\"subtitles\":[{\"lang\":\"french\",\"language\":\"FR\",\"url\":\"/subtitle/9.zip\",\"name\":\"Amelie\"}]}";
+    var out: [2]SubdlSub = undefined;
+    const n = subdlSubs(json, &out);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqualStrings("/subtitle/9.zip", out[0].url);
+    try std.testing.expectEqualStrings("Amelie", out[0].release);
+    try std.testing.expectEqualStrings("FR", out[0].lang);
+}
+
+test "subdlSubs regression: malformed/truncated JSON never traps" {
+    var out: [4]SubdlSub = undefined;
+    // Truncated after url (no closing brace, no language): still yields the url.
+    const n1 = subdlSubs("{\"subtitles\":[{\"release_name\":\"R\",\"url\":\"/subtitle/a.zip\"", &out);
+    try std.testing.expectEqual(@as(usize, 1), n1);
+    try std.testing.expectEqualStrings("/subtitle/a.zip", out[0].url);
+    // No url key / empty / garbage → zero, no trap.
+    try std.testing.expectEqual(@as(usize, 0), subdlSubs("{\"subtitles\":[garbage", &out));
+    try std.testing.expectEqual(@as(usize, 0), subdlSubs("", &out));
+    try std.testing.expectEqual(@as(usize, 0), subdlSubs("{\"status\":false,\"error\":\"invalid api key\"}", &out));
+    // Unterminated url string → break, zero.
+    try std.testing.expectEqual(@as(usize, 0), subdlSubs("{\"url\":\"no-end", &out));
+    // Too-short url skipped.
+    try std.testing.expectEqual(@as(usize, 0), subdlSubs("{\"url\":\"x\",\"language\":\"EN\"}", &out));
+}
+
+test "subdlSubs respects out capacity" {
+    const json =
+        "{\"subtitles\":[" ++
+        "{\"url\":\"/subtitle/1.zip\",\"language\":\"EN\"}," ++
+        "{\"url\":\"/subtitle/2.zip\",\"language\":\"EN\"}," ++
+        "{\"url\":\"/subtitle/3.zip\",\"language\":\"EN\"}]}";
+    var out: [2]SubdlSub = undefined;
+    try std.testing.expectEqual(@as(usize, 2), subdlSubs(json, &out));
+}
+
+test "subdlLangCode maps 3- and 2-letter codes, defaults EN" {
+    try std.testing.expectEqualStrings("EN", subdlLangCode("eng"));
+    try std.testing.expectEqualStrings("EN", subdlLangCode("en"));
+    try std.testing.expectEqualStrings("ES", subdlLangCode("spa"));
+    try std.testing.expectEqualStrings("ZH", subdlLangCode("chi"));
+    try std.testing.expectEqualStrings("JA", subdlLangCode("jpn"));
+    try std.testing.expectEqualStrings("EN", subdlLangCode("xx"));
+    // The returned Subdl code must satisfy the app's langMatches against the
+    // original request (so client-side filtering keeps the row).
+    try std.testing.expect(langMatches("eng", subdlLangCode("eng")));
+    try std.testing.expect(langMatches("spa", subdlLangCode("spa")));
 }
 
 test "osRestResults survives escaped quotes in MovieName (backslash-title regression)" {

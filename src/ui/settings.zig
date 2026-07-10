@@ -224,7 +224,7 @@ fn sectionMatchesSearch(tab: state.SettingsTab) bool {
         .General => &.{ "Interface", "Behavior", "TMDB", "Theme", "Scale", "Grid", "NSFW", "Seek Sync", "API Key" },
         .Playback => &.{ "Video Processing", "Audio Equalizer", "Streaming", "Shortcuts", "Filters", "Capture", "Hardware", "Decode", "Deband", "Interpolation", "Brightness", "Contrast", "Saturation", "Gamma", "Screenshot", "Auto-advance", "Resume" },
         .About => &.{ "About", "Version", "Update", "Credits", "License", "Donate", "Sponsors", "Links", "TMDB" },
-        .Subtitles => &.{ "OpenSubtitles", "Language", "Search", "API Key", "Font", "Delay", "Whisper" },
+        .Subtitles => &.{ "OpenSubtitles", "Subdl", "Language", "Search", "API Key", "Font", "Delay", "Whisper" },
         .Network => &.{ "Download", "Trackers", "Proxy", "Speed", "Limit", "Port" },
         .Storage => &.{ "Download Path", "Watch History", "Database", "Cache", "Clear" },
         .Scripts => &.{ "SponsorBlock", "AI Backend", "Remote", "Watch Party", "Scripts", "Gemma", "Apple Intelligence", "Model", "Voice" },
@@ -1792,6 +1792,39 @@ fn renderSubtitlesTab() void {
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 8 },
     });
 
+    // ── Subdl API Key ── (optional, FREE per-user key; ZIP downloads)
+    const has_subdl = state.app.subdl_api_key_len > 0;
+    settingRow("Subdl API Key", 44, @src());
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 0, .h = 24 },
+        });
+        defer row.deinit();
+
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.subdl_api_key }, .placeholder = "Optional — free key from subdl.com/panel/api", .password_char = "•" }, .{
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 250, .h = 20 },
+            .color_fill = theme.colors.bg_elevated,
+            .color_border = theme.colors.border_subtle,
+            .color_text = theme.colors.text_primary,
+            .border = dvui.Rect.all(1),
+            .corner_radius = theme.dims.rad_sm,
+        });
+        const subdl_changed = te.text_changed;
+        te.deinit();
+        state.app.subdl_api_key_len = std.mem.indexOfScalar(u8, &state.app.subdl_api_key, 0) orelse 0;
+        if (subdl_changed) state.markConfigDirty();
+    }
+    _ = dvui.label(@src(), "{s}", .{if (has_subdl)
+        "Key set — Subdl results appear below when you search."
+    else
+        "Add a free Subdl key for a large legal DB (subdl.com → panel → API)."}, .{
+        .id_extra = 4210,
+        .color_text = theme.colors.text_tertiary,
+        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 8 },
+    });
+
     // ── Subtitle Language ── (short codes via segment)
     settingRow("Search Language", 40, @src());
     {
@@ -1870,9 +1903,13 @@ fn renderSubtitlesTab() void {
             const q_len = std.mem.indexOfScalar(u8, &state.app.sub_search_buf, 0) orelse 0;
             if (q_len > 0) {
                 engine_mod.searchQuery(engine, state.app.sub_search_buf[0..q_len]);
+                const lang = if (state.app.sub_lang_len > 0) state.app.sub_lang_buf[0..state.app.sub_lang_len] else "eng";
                 if (has_key and !subs.is_searching.load(.acquire)) {
-                    const lang = if (state.app.sub_lang_len > 0) state.app.sub_lang_buf[0..state.app.sub_lang_len] else "en";
                     subs.searchByQuery(state.app.sub_search_buf[0..q_len], lang);
+                }
+                // Subdl joins the keyed search when a Subdl key is configured.
+                if (has_subdl and !subs.subdl_is_searching.load(.acquire)) {
+                    subs.subdlSearch(state.app.sub_search_buf[0..q_len], lang);
                 }
             }
         }
@@ -1885,7 +1922,7 @@ fn renderSubtitlesTab() void {
 
         // Live status while a worker runs (worker states have no UI wake of
         // their own — the spinner keeps the tab repainting).
-        if (engine.state == .searching or engine.state == .downloading or subs.is_searching.load(.acquire) or subs.is_downloading.load(.acquire)) {
+        if (engine.state == .searching or engine.state == .downloading or subs.is_searching.load(.acquire) or subs.is_downloading.load(.acquire) or subs.subdl_is_searching.load(.acquire) or subs.subdl_is_downloading.load(.acquire)) {
             var lrow = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = 4401,
                 .expand = .horizontal,
@@ -2092,6 +2129,78 @@ fn renderSubtitlesTab() void {
                 })) {
                     if (!subs.is_downloading.load(.acquire) and r.file_id > 0) {
                         subs.downloadSubtitle(r.file_id);
+                    }
+                }
+            }
+        }
+
+        // Subdl section — only when a Subdl key is configured (no nag without).
+        if (has_subdl and (subs.subdl_result_count > 0 or (subs.subdl_error_len > 0 and !subs.subdl_is_searching.load(.acquire)))) {
+            components.sectionHeader("Subdl");
+
+            if (subs.subdl_error_len > 0 and subs.subdl_result_count == 0) {
+                var err_buf: [128]u8 = undefined;
+                const safe_err = text_mod.safeUtf8Buf(subs.subdl_error[0..subs.subdl_error_len], &err_buf);
+                _ = dvui.label(@src(), "{s}", .{safe_err}, .{
+                    .id_extra = 7100,
+                    .color_text = theme.colors.warning,
+                    .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 },
+                });
+            }
+
+            for (0..subs.subdl_result_count) |ri| {
+                const r = &subs.subdl_results[ri];
+                var res_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                    .id_extra = ri + 7200,
+                    .expand = .horizontal,
+                    .background = true,
+                    .color_fill = theme.colors.bg_surface,
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
+                    .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+                });
+                defer res_row.deinit();
+
+                // Language badge — quiet secondary text.
+                if (r.lang_len > 0) {
+                    var lb: [16]u8 = undefined;
+                    _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(r.lang[0..r.lang_len], &lb)}, .{
+                        .id_extra = ri + 7300,
+                        .color_text = theme.colors.text_secondary,
+                        .gravity_y = 0.5,
+                        .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+                    });
+                }
+
+                // Release name (truncated).
+                if (r.release_len > 0) {
+                    const show_len = @min(r.release_len, 70);
+                    var rel_buf: [96]u8 = undefined;
+                    _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(r.release[0..show_len], &rel_buf)}, .{
+                        .id_extra = ri + 7400,
+                        .color_text = theme.colors.text_primary,
+                        .gravity_y = 0.5,
+                        .expand = .horizontal,
+                    });
+                }
+
+                {
+                    var sp_box = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+                    sp_box.deinit();
+                }
+
+                // Download button — accent, the single primary action per row.
+                if (dvui.button(@src(), if (subs.subdl_is_downloading.load(.acquire)) "..." else "Get", .{}, .{
+                    .id_extra = ri + 7500,
+                    .color_fill = theme.colors.accent,
+                    .color_text = theme.colors.text_on_accent,
+                    .border = dvui.Rect.all(0),
+                    .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                    .corner_radius = theme.dims.rad_sm,
+                    .gravity_y = 0.5,
+                })) {
+                    if (!subs.subdl_is_downloading.load(.acquire)) {
+                        subs.subdlDownload(ri);
                     }
                 }
             }

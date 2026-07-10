@@ -56,6 +56,7 @@ pub fn save() void {
     setKey("tmdb_api_key", state.app.tmdb.api_key[0..state.app.tmdb.api_key_len]);
     setKey("opensub_api_key", state.app.opensub_api_key[0..state.app.opensub_api_key_len]);
     setKey("omdb_api_key", state.app.omdb_api_key[0..state.app.omdb_api_key_len]);
+    setKey("subdl_api_key", state.app.subdl_api_key[0..state.app.subdl_api_key_len]);
     setKey("sponsorblock_enabled", if (state.app.sponsorblock_enabled) "1" else "0");
     setKey("deband_enabled", if (state.app.deband_enabled) "1" else "0");
     setKey("video_scaler", fmtInt(&fb, @as(usize, state.app.video_scaler)));
@@ -292,6 +293,11 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         if (val.len > 0 and val.len <= 128) {
             @memcpy(state.app.omdb_api_key[0..val.len], val);
             state.app.omdb_api_key_len = val.len;
+        }
+    } else if (std.mem.eql(u8, key, "subdl_api_key")) {
+        if (val.len > 0 and val.len <= 128) {
+            @memcpy(state.app.subdl_api_key[0..val.len], val);
+            state.app.subdl_api_key_len = val.len;
         }
     } else if (std.mem.eql(u8, key, "sponsorblock_enabled")) {
         state.app.sponsorblock_enabled = std.mem.eql(u8, val, "1");

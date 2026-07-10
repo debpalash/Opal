@@ -570,6 +570,13 @@ pub const AppState = struct {
     // fully inert (no fetch). Persisted like tmdb/opensub keys; see config.zig.
     omdb_api_key: [128]u8 = std.mem.zeroes([128]u8),
     omdb_api_key_len: usize = 0,
+
+    // ── Subdl (api.subdl.com) subtitle provider ──
+    // User-supplied FREE per-user key (subdl.com → panel → API). Empty → the
+    // Subdl provider is fully inert (no fetch). Persisted like the other keys;
+    // see config.zig. Downloads arrive as ZIP archives (extracted in-process).
+    subdl_api_key: [128]u8 = std.mem.zeroes([128]u8),
+    subdl_api_key_len: usize = 0,
     // Auto-download subtitles when a video starts and none are present
     // (embedded or sidecar). Needs opensub_api_key; no-ops silently without it.
     auto_download_subs: bool = true,
