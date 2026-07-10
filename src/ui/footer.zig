@@ -770,30 +770,44 @@ fn renderScrubber(
         base.deinit();
     }
 
-    // 2. Buffered fill (torrent download — single leading bar).
+    // 2. Buffered fill (torrent download — single leading bar). The piece-map
+    // fetch + full have-count scan used to run every frame (~30fps); cache the
+    // computed fraction at ~2Hz keyed on the torrent id (same idiom as PipCache
+    // below — switching to a different torrent invalidates it immediately).
     if (active_p.current_torrent_id >= 0) {
-        var map_buf: [2048]u8 = undefined;
-        const map_len = c.mpv.torrent_get_piece_map(state.torrentSession(), active_p.current_torrent_id, &map_buf, 2048);
-        if (map_len > 0) {
-            var downloaded_count: usize = 0;
-            var i: usize = 0;
-            while (i < @as(usize, @intCast(@max(@as(c_int, 0), map_len)))) : (i += 1) {
-                if (map_buf[i] == '1') downloaded_count += 1;
+        const BufCache = struct {
+            var tid: i32 = -1;
+            var last_ms: i64 = 0;
+            var frac: f32 = 0.0;
+        };
+        if (BufCache.tid != active_p.current_torrent_id or now_ms - BufCache.last_ms > 500) {
+            BufCache.tid = active_p.current_torrent_id;
+            BufCache.last_ms = now_ms;
+            BufCache.frac = 0.0;
+            var map_buf: [2048]u8 = undefined;
+            const map_len = c.mpv.torrent_get_piece_map(state.torrentSession(), active_p.current_torrent_id, &map_buf, 2048);
+            if (map_len > 0) {
+                var downloaded_count: usize = 0;
+                var i: usize = 0;
+                while (i < @as(usize, @intCast(@max(@as(c_int, 0), map_len)))) : (i += 1) {
+                    if (map_buf[i] == '1') downloaded_count += 1;
+                }
+                BufCache.frac = @as(f32, @floatFromInt(downloaded_count)) / @as(f32, @floatFromInt(map_len));
             }
-            const buf_frac: f32 = @as(f32, @floatFromInt(downloaded_count)) / @as(f32, @floatFromInt(map_len));
-            if (buf_frac > 0.0) {
-                var buf_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .id_extra = 2,
-                    .background = true,
-                    .color_fill = theme.colors.accent_dim,
-                    .corner_radius = dvui.Rect.all(track_h * 0.5),
-                    .min_size_content = .{ .w = track_rect.w * buf_frac, .h = track_h },
-                    .max_size_content = .{ .w = track_rect.w * buf_frac, .h = track_h },
-                    .gravity_x = 0.0,
-                    .gravity_y = 0.5,
-                });
-                buf_box.deinit();
-            }
+        }
+        const buf_frac: f32 = BufCache.frac;
+        if (buf_frac > 0.0) {
+            var buf_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = 2,
+                .background = true,
+                .color_fill = theme.colors.accent_dim,
+                .corner_radius = dvui.Rect.all(track_h * 0.5),
+                .min_size_content = .{ .w = track_rect.w * buf_frac, .h = track_h },
+                .max_size_content = .{ .w = track_rect.w * buf_frac, .h = track_h },
+                .gravity_x = 0.0,
+                .gravity_y = 0.5,
+            });
+            buf_box.deinit();
         }
     }
 
@@ -1077,24 +1091,60 @@ fn currentTrackChipText(
 /// pub so pickers.zig's aspect popover can label the current mode; also used
 /// by the toolbar aspect chip in this file.
 pub fn currentAspectChipText(ctx: *c.mpv.mpv_handle) []const u8 {
-    const aspect_c = c.mpv.mpv_get_property_string(ctx, "video-aspect-override");
-    defer if (aspect_c != null) c.mpv.mpv_free(@ptrCast(aspect_c));
-    if (aspect_c == null) return "Auto";
-    const v = std.mem.span(aspect_c);
-    if (std.mem.eql(u8, v, "16:9") or std.mem.startsWith(u8, v, "1.77")) return "16:9";
-    if (std.mem.eql(u8, v, "4:3") or std.mem.startsWith(u8, v, "1.33")) return "4:3";
-    if (std.mem.eql(u8, v, "21:9") or std.mem.startsWith(u8, v, "2.33")) return "21:9";
-    return "Auto";
+    // The footer aspect chip polls this every frame, but the override only
+    // changes on user action — cache the mpv read at ~2Hz keyed on ctx (same
+    // 500ms gate as the audio/sub track chips). Returned values are string
+    // literals, so caching the slice is lifetime-safe.
+    const Cache = struct {
+        var key: usize = 0;
+        var last_ms: i64 = 0;
+        var text: []const u8 = "Auto";
+    };
+    const key = @intFromPtr(ctx);
+    const now = @import("../core/io_global.zig").milliTimestamp();
+    if (Cache.key == key and now - Cache.last_ms < 500) return Cache.text;
+
+    const result: []const u8 = blk: {
+        const aspect_c = c.mpv.mpv_get_property_string(ctx, "video-aspect-override");
+        defer if (aspect_c != null) c.mpv.mpv_free(@ptrCast(aspect_c));
+        if (aspect_c == null) break :blk "Auto";
+        const v = std.mem.span(aspect_c);
+        if (std.mem.eql(u8, v, "16:9") or std.mem.startsWith(u8, v, "1.77")) break :blk "16:9";
+        if (std.mem.eql(u8, v, "4:3") or std.mem.startsWith(u8, v, "1.33")) break :blk "4:3";
+        if (std.mem.eql(u8, v, "21:9") or std.mem.startsWith(u8, v, "2.33")) break :blk "21:9";
+        break :blk "Auto";
+    };
+    Cache.key = key;
+    Cache.last_ms = now;
+    Cache.text = result;
+    return result;
 }
 
 fn currentChapterChipText(ctx: *c.mpv.mpv_handle, out_buf: []u8) struct { text: []const u8, count: i64 } {
-    var ch_count: i64 = 0;
-    _ = c.mpv.mpv_get_property(ctx, "chapter-list/count", c.mpv.MPV_FORMAT_INT64, &ch_count);
-    if (ch_count <= 0) return .{ .text = "", .count = 0 };
-    var current_ch: i64 = -1;
-    _ = c.mpv.mpv_get_property(ctx, "chapter", c.mpv.MPV_FORMAT_INT64, &current_ch);
-    const s = std.fmt.bufPrint(out_buf, "{d}/{d}", .{ current_ch + 1, ch_count }) catch "";
-    return .{ .text = s, .count = ch_count };
+    // Polled every frame by the footer chapter chip; cache the two mpv reads at
+    // ~2Hz keyed on ctx (same 500ms gate as the track chips). The label is
+    // re-formatted from cached values each call (cheap; no IPC).
+    const Cache = struct {
+        var key: usize = 0;
+        var last_ms: i64 = 0;
+        var count: i64 = 0;
+        var current: i64 = -1;
+    };
+    const key = @intFromPtr(ctx);
+    const now = @import("../core/io_global.zig").milliTimestamp();
+    if (!(Cache.key == key and now - Cache.last_ms < 500)) {
+        var ch_count: i64 = 0;
+        _ = c.mpv.mpv_get_property(ctx, "chapter-list/count", c.mpv.MPV_FORMAT_INT64, &ch_count);
+        var current_ch: i64 = -1;
+        if (ch_count > 0) _ = c.mpv.mpv_get_property(ctx, "chapter", c.mpv.MPV_FORMAT_INT64, &current_ch);
+        Cache.key = key;
+        Cache.last_ms = now;
+        Cache.count = ch_count;
+        Cache.current = current_ch;
+    }
+    if (Cache.count <= 0) return .{ .text = "", .count = 0 };
+    const s = std.fmt.bufPrint(out_buf, "{d}/{d}", .{ Cache.current + 1, Cache.count }) catch "";
+    return .{ .text = s, .count = Cache.count };
 }
 
 pub fn renderLiquidGlassOverlay() void {
@@ -1110,8 +1160,9 @@ pub fn renderLiquidGlassOverlay() void {
     const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
     // ── Auto-hide if playing and idle for 2.5s. Stay visible while a popover is open. ──
-    var is_paused: c_int = 0;
-    _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "pause", c.mpv.MPV_FORMAT_FLAG, &is_paused);
+    // Pause state mirrors mpv "pause" via the player worker's event loop
+    // (cached_paused) — avoids a per-frame mpv IPC read at ~30fps.
+    const is_paused: bool = active_p.cached_paused;
     const now_ms = @import("../core/io_global.zig").milliTimestamp();
     // Smooth fade-out instead of a hard pop: hold full opacity until 2.5s idle,
     // then fade to 0 over ~220ms, then stop rendering. Held fully visible while
@@ -1120,7 +1171,7 @@ pub fn renderLiquidGlassOverlay() void {
     // uses). During video playback the mpv render callback keeps frames coming so
     // the fade advances; paused → chrome_held so no fade.
     const idle_ms = now_ms - state.app.last_mouse_move_ms;
-    const chrome_held = is_paused != 0 or open_picker != .none;
+    const chrome_held = is_paused or open_picker != .none;
     const FADE_START_MS: i64 = 2500;
     const FADE_LEN_MS: i64 = 220;
     if (!chrome_held and idle_ms > FADE_START_MS + FADE_LEN_MS) return; // fully hidden
@@ -1229,7 +1280,7 @@ pub fn renderLiquidGlassOverlay() void {
         _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "playlist-pos", c.mpv.MPV_FORMAT_INT64, &SlowProps.pl_pos);
     }
 
-    const toggle_icon = if (is_paused != 0) icons.tvg.lucide.play else icons.tvg.lucide.pause;
+    const toggle_icon = if (is_paused) icons.tvg.lucide.play else icons.tvg.lucide.pause;
 
     // ═══════════════════════════════════════════════════════════════
     // ROW 1 — Scrubber + chapter pips + hover time-at-cursor
@@ -1576,18 +1627,41 @@ pub fn renderLiquidGlassOverlay() void {
         });
         defer info_row.deinit();
 
-        var t_name: [64]u8 = undefined;
-        c.mpv.torrent_get_name(state.torrentSession(), active_p.current_torrent_id, &t_name, 64);
-        var pct: f32 = 0.0;
-        var dl_rate: c_int = 0;
-        var seeds: c_int = 0;
-        _ = c.mpv.torrent_poll(state.torrentSession(), active_p.current_torrent_id, active_p.selected_file_idx, null, 0, &pct, &dl_rate, &seeds);
-        const name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse t_name.len;
-        const rate_mb = @as(f32, @floatFromInt(dl_rate)) / 1024.0 / 1024.0;
+        // Name + stats were fetched every frame (torrent_get_name +
+        // torrent_poll IPC at ~30fps); cache at ~2Hz keyed on the torrent id
+        // (a torrent switch invalidates immediately).
+        const StatusCache = struct {
+            var tid: i32 = -1;
+            var last_ms: i64 = 0;
+            var name: [64]u8 = std.mem.zeroes([64]u8);
+            var name_len: usize = 0;
+            var pct: f32 = 0.0;
+            var dl_rate: c_int = 0;
+            var seeds: c_int = 0;
+        };
+        if (StatusCache.tid != active_p.current_torrent_id or now_ms - StatusCache.last_ms > 500) {
+            StatusCache.tid = active_p.current_torrent_id;
+            StatusCache.last_ms = now_ms;
+            var t_name: [64]u8 = undefined;
+            c.mpv.torrent_get_name(state.torrentSession(), active_p.current_torrent_id, &t_name, 64);
+            @memcpy(&StatusCache.name, &t_name);
+            StatusCache.name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse t_name.len;
+            var pct: f32 = 0.0;
+            var dl_rate: c_int = 0;
+            var seeds: c_int = 0;
+            _ = c.mpv.torrent_poll(state.torrentSession(), active_p.current_torrent_id, active_p.selected_file_idx, null, 0, &pct, &dl_rate, &seeds);
+            StatusCache.pct = pct;
+            StatusCache.dl_rate = dl_rate;
+            StatusCache.seeds = seeds;
+        }
+        const name_slice = StatusCache.name[0..StatusCache.name_len];
+        const pct = StatusCache.pct;
+        const seeds = StatusCache.seeds;
+        const rate_mb = @as(f32, @floatFromInt(StatusCache.dl_rate)) / 1024.0 / 1024.0;
 
         // Untrusted torrent metadata, truncated at the 64-byte buffer (possibly
         // mid-codepoint) — validate before dvui (matches grid.zig).
-        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(t_name[0..name_len])}, .{
+        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(name_slice)}, .{
             .color_text = theme.colors.text_tertiary,
             .gravity_y = 0.5,
         });
@@ -1638,17 +1712,18 @@ pub fn renderLiquidGlassOverlay() void {
         }
 
         // Stop + delete — two-step confirm (same component as other destructive
-        // actions in the app). Grab the playing file's path via torrent_poll
-        // BEFORE tearing anything down, since torrent_remove() invalidates it.
+        // actions in the app). The playing file's path is captured lazily INSIDE
+        // the confirm branch (torrent_poll) rather than every frame — it is only
+        // needed at teardown, and torrent_remove() invalidates it, so we grab it
+        // just before removing.
         {
-            var del_path: [512]u8 = undefined;
-            var del_pct: f32 = 0;
-            var del_rate: c_int = 0;
-            var del_peers: c_int = 0;
-            const del_status = c.mpv.torrent_poll(state.torrentSession(), active_p.current_torrent_id, active_p.selected_file_idx, &del_path, del_path.len, &del_pct, &del_rate, &del_peers);
-
             if (components.confirmDangerButton(@src(), "Delete", 201)) {
                 const tid = active_p.current_torrent_id;
+                var del_path: [512]u8 = undefined;
+                var del_pct: f32 = 0;
+                var del_rate: c_int = 0;
+                var del_peers: c_int = 0;
+                const del_status = c.mpv.torrent_poll(state.torrentSession(), tid, active_p.selected_file_idx, &del_path, del_path.len, &del_pct, &del_rate, &del_peers);
                 if (del_status >= 1) {
                     const plen = std.mem.indexOfScalar(u8, &del_path, 0) orelse del_path.len;
                     @import("../core/io_global.zig").deleteFileAbsolute(del_path[0..plen]) catch {
@@ -1716,8 +1791,9 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     const now_ms = @import("../core/io_global.zig").milliTimestamp();
 
     // ── Transport state (cheap, every frame) ──
-    var is_paused: c_int = 0;
-    _ = c.mpv.mpv_get_property(p.mpv_ctx, "pause", c.mpv.MPV_FORMAT_FLAG, &is_paused);
+    // Pause mirrors mpv "pause" via the player worker (cached_paused) — no
+    // per-frame mpv IPC read.
+    const is_paused: bool = p.cached_paused;
     var percent_pos: f64 = 0.0;
     _ = c.mpv.mpv_get_property(p.mpv_ctx, "percent-pos", c.mpv.MPV_FORMAT_DOUBLE, &percent_pos);
     var time_pos: f64 = 0.0;
@@ -1827,7 +1903,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         components.tip(@src(), wd, "Previous");
 
         // Play / Pause — the single accent affordance.
-        const toggle_icon = if (is_paused != 0) icons.tvg.lucide.play else icons.tvg.lucide.pause;
+        const toggle_icon = if (is_paused) icons.tvg.lucide.play else icons.tvg.lucide.pause;
         if (dvui.buttonIcon(@src(), "np-pp", toggle_icon, .{}, .{}, .{
             .data_out = &wd,
             .color_fill = theme.colors.accent,
@@ -1933,23 +2009,55 @@ fn renderTorrentActivityStrip() void {
 
     // Tally first — the strip only earns its space when a torrent is actually
     // present. Otherwise it sat at the bottom forever reading "0 Active / 0 Peers".
-    var total_dl: f32 = 0.0;
-    var total_peers: i32 = 0;
-    var total_active: i32 = 0;
-    var any_torrent = false;
-
+    //
+    // This ran a torrent_poll for EVERY player on EVERY non-player tab, every
+    // frame (~30fps). Cache the aggregate at ~2Hz. A cheap per-frame signature
+    // over the players' torrent ids (no IPC) forces an immediate refresh when a
+    // torrent is added / removed / switched; otherwise we serve the last tally.
+    const Cache = struct {
+        var last_ms: i64 = 0;
+        var sig: u64 = 0;
+        var total_dl: f32 = 0.0;
+        var total_peers: i32 = 0;
+        var total_active: i32 = 0;
+        var any_torrent: bool = false;
+    };
+    const now_ms = @import("../core/io_global.zig").milliTimestamp();
+    var sig: u64 = 0;
     for (state.app.players.items) |p| {
         if (p.is_torrent and p.current_torrent_id >= 0) {
-            any_torrent = true;
-            var dl_rate: i32 = 0;
-            var peers: i32 = 0;
-            var pct: f32 = 0;
-            _ = c.mpv.torrent_poll(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, null, 0, &pct, &dl_rate, &peers);
-            total_dl += @as(f32, @floatFromInt(dl_rate));
-            total_peers += peers;
-            if (dl_rate > 0) total_active += 1;
+            sig = sig *% 31 +% @as(u64, @intCast(p.current_torrent_id)) +% 1;
+            sig = sig *% 31 +% @as(u64, @bitCast(@as(i64, p.selected_file_idx)));
         }
     }
+    if (Cache.sig != sig or now_ms - Cache.last_ms > 500) {
+        Cache.sig = sig;
+        Cache.last_ms = now_ms;
+        var total_dl: f32 = 0.0;
+        var total_peers: i32 = 0;
+        var total_active: i32 = 0;
+        var any_torrent = false;
+        for (state.app.players.items) |p| {
+            if (p.is_torrent and p.current_torrent_id >= 0) {
+                any_torrent = true;
+                var dl_rate: i32 = 0;
+                var peers: i32 = 0;
+                var pct: f32 = 0;
+                _ = c.mpv.torrent_poll(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, null, 0, &pct, &dl_rate, &peers);
+                total_dl += @as(f32, @floatFromInt(dl_rate));
+                total_peers += peers;
+                if (dl_rate > 0) total_active += 1;
+            }
+        }
+        Cache.total_dl = total_dl;
+        Cache.total_peers = total_peers;
+        Cache.total_active = total_active;
+        Cache.any_torrent = any_torrent;
+    }
+    const total_dl = Cache.total_dl;
+    const total_peers = Cache.total_peers;
+    const total_active = Cache.total_active;
+    const any_torrent = Cache.any_torrent;
 
     if (!any_torrent) return; // no bottom bar when there's nothing to report
 
