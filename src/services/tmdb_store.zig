@@ -35,7 +35,7 @@ pub fn upsertItem(item: *const state.TmdbItem) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn isInList(list: *std.ArrayListUnmanaged(state.TmdbItem), id: i32) bool {
-    for (list.items) |entry| {
+    for (list.items) |*entry| {
         if (entry.id == id) return true;
     }
     return false;

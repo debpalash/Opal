@@ -875,14 +875,33 @@ pub fn renderSearchContent() void {
             .padding = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
         });
     } else if (search_results.items.len > 0) {
-        // Count visible results (after filters)
-        var visible_count: usize = 0;
-        for (search_results.items) |r| {
-            if (state.app.nsfw_filter_enabled and r.is_nsfw) continue;
-            const s_num_chk = std.fmt.parseInt(i64, r.seeds, 10) catch 0;
-            if (s_num_chk < min_seed_filter) continue;
-            visible_count += 1;
+        // Count visible results (after filters). Memoized on
+        // (results.len, min_seed_filter, nsfw_filter) — the parseInt-per-result
+        // scan is pointless to repeat every repaint when nothing changed.
+        // UI-thread-only statics; no atomics needed.
+        const Vc = struct {
+            var count: usize = 0;
+            var key_len: usize = std.math.maxInt(usize);
+            var key_seed: i64 = std.math.minInt(i64);
+            var key_nsfw: bool = false;
+        };
+        if (Vc.key_len != search_results.items.len or
+            Vc.key_seed != min_seed_filter or
+            Vc.key_nsfw != state.app.nsfw_filter_enabled)
+        {
+            var vc: usize = 0;
+            for (search_results.items) |r| {
+                if (state.app.nsfw_filter_enabled and r.is_nsfw) continue;
+                const s_num_chk = std.fmt.parseInt(i64, r.seeds, 10) catch 0;
+                if (s_num_chk < min_seed_filter) continue;
+                vc += 1;
+            }
+            Vc.count = vc;
+            Vc.key_len = search_results.items.len;
+            Vc.key_seed = min_seed_filter;
+            Vc.key_nsfw = state.app.nsfw_filter_enabled;
         }
+        const visible_count = Vc.count;
         var count_buf: [320]u8 = undefined;
         const count_lbl = std.fmt.bufPrintZ(&count_buf, "{d} results for “{s}” ({d} total)", .{ visible_count, cur_query, search_results.items.len }) catch "results";
         _ = dvui.label(@src(), "{s}", .{count_lbl}, .{
@@ -1557,15 +1576,24 @@ fn renderUniversalResults() void {
     // Quality / Seeds segment above) — no per-source sections. The source
     // shows as a colored chip on the RIGHT of each row; sources that finished
     // with nothing collapse into one muted summary line at the bottom.
+    // Record which sources produced at least one row while we're already
+    // walking the array, so the "No hits / Failed" summary below reads a
+    // bitset instead of re-scanning every result per repaint. Keyed by
+    // sourceBitOf (matches the summary's per-source classification, RSS split
+    // included); set before the nsfw/sourceOn filters so it mirrors the
+    // summary's prior full-scan semantics.
+    var source_has = std.EnumSet(resolver.SourceBit).initEmpty();
     for (0..snap_count) |idx| {
         const item = &resolver.results[idx];
         if (item.name_len == 0) continue;
+        const sbit = sourceBitOf(item);
+        source_has.insert(sbit);
         if (state.app.nsfw_filter_enabled and item.is_nsfw) continue;
-        if (!resolver.sourceOn(sourceBitOf(item))) continue;
+        if (!resolver.sourceOn(sbit)) continue;
         renderCompactRow(idx, item);
     }
 
-    renderSourceSummary(snap_count);
+    renderSourceSummary(source_has);
 }
 
 /// Toolbar filter pill governing a result (RSS magnets are pushed with
@@ -1585,8 +1613,10 @@ fn sourceBitOf(item: *const @import("resolver.zig").ResolvedItem) @import("resol
 
 /// One muted line summarizing sources that finished (or failed) with no
 /// matches — replaces the old full-height "No results from X" sections.
+/// `source_has` is the per-source hit bitset built during the result loop
+/// (renderUniversalResults) so this doesn't re-scan the array each repaint.
 /// Caller holds results_mutex.
-fn renderSourceSummary(snap_count: usize) void {
+fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit)) void {
     const resolver = @import("resolver.zig");
     const Entry = struct {
         name: []const u8,
@@ -1628,18 +1658,7 @@ fn renderSourceSummary(snap_count: usize) void {
     for (entries) |en| {
         if (!resolver.sourceOn(en.bit)) continue;
         if (en.st == .searching) continue;
-        var has = false;
-        for (0..snap_count) |idx| {
-            const it = &resolver.results[idx];
-            if (it.name_len == 0 or it.source != en.src) continue;
-            if (en.src == .torrent) {
-                const is_rss = std.mem.startsWith(u8, it.detail[0..it.detail_len], "RSS");
-                if (is_rss != en.rss) continue;
-            }
-            has = true;
-            break;
-        }
-        if (has) continue;
+        if (source_has.contains(en.bit)) continue;
         if (en.st == .failed) append(&failed_buf, &fw, en.name) else append(&quiet_buf, &qw, en.name);
     }
 

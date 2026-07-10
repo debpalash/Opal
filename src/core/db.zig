@@ -167,6 +167,9 @@ fn createTables() void {
         \\  cached_at INTEGER DEFAULT (strftime('%s','now'))
         \\)
     );
+    // Supports the periodic prune's `ORDER BY cached_at DESC LIMIT 5000`
+    // subquery (poster.zig cacheStore) — avoids a full-table sort under cache_lock.
+    exec("CREATE INDEX IF NOT EXISTS idx_poster_cached_at ON poster_cache(cached_at)");
 
     // In-app browser bookmarks (Browse › Web star button)
     exec(
