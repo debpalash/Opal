@@ -110,8 +110,14 @@ pub fn build(b: *std.Build) void {
     // Windows note: zig's windows-gnu -l search tries `torrent_wrapper.dll`
     // first and MinGW-flavored lld links directly against a DLL, so name the
     // artifact `torrent_wrapper.dll` (no `lib` prefix). MSYS2 has sh + g++.
+    // pkg-config supplies the TLS-backend defines the wrapper needs: since
+    // libtorrent-rasterbar 2.0.13, config.hpp enables TORRENT_USE_RTC (WebRTC)
+    // and hard-errors unless TORRENT_USE_OPENSSL/GNUTLS is also defined to match
+    // how libtorrent was built. pkg-config --cflags emits the right -D flags
+    // (and --libs the matching -lssl/-lcrypto); we keep -I{prefix}/include for
+    // boost and a trailing -ltorrent-rasterbar as an empty-pkg-config fallback.
     const compile_cmd = if (target.result.os.tag == .macos)
-        b.fmt("if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -I{s}/include -L{s}/lib src/torrent_wrapper.cpp -o libtorrent_wrapper.so -ltorrent-rasterbar; fi", .{ brew_prefix, brew_prefix })
+        b.fmt("if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -I{s}/include $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) -L{s}/lib src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar; fi", .{ brew_prefix, brew_prefix })
     else if (is_windows)
         b.fmt("if [ ! -f torrent_wrapper.dll ] || [ src/torrent_wrapper.cpp -nt torrent_wrapper.dll ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -I{s}/include -L{s}/lib src/torrent_wrapper.cpp -o torrent_wrapper.dll -ltorrent-rasterbar -lws2_32 -liphlpapi -lcrypt32; fi", .{ mingw_prefix, mingw_prefix })
     else
@@ -121,7 +127,7 @@ pub fn build(b: *std.Build) void {
         // anywhere but the build dir (the Docker runtime stage failed exactly
         // this way). With a SONAME the NEEDED is just the name, resolved via
         // rpath / ldconfig (/usr/local/lib) wherever it's installed.
-        "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -Wl,-soname,libtorrent_wrapper.so src/torrent_wrapper.cpp -o libtorrent_wrapper.so -ltorrent-rasterbar; fi";
+        "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -Wl,-soname,libtorrent_wrapper.so $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar; fi";
 
     // Only invoke the host g++ when it can actually produce a wrapper for the
     // target (native builds). Cross-compiling (e.g. windows from macOS for a
