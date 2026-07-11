@@ -341,7 +341,7 @@ extern "C" int torrent_poll(TorrentSession session, int torrent_id, int target_f
 
             // Only need the FIRST piece to start mpv — the HTTP streaming proxy
             // handles back-pressure for subsequent pieces, so mpv won't read holes.
-            bool first_piece_ready = st.pieces.get_bit(first_piece);
+            bool first_piece_ready = st.pieces.get_bit(lt::piece_index_t(first_piece));
             return first_piece_ready ? 1 : 0;
         }
 
@@ -545,7 +545,7 @@ extern "C" int torrent_get_piece_map(TorrentSession session, int torrent_id, cha
             int n_out = num_pieces < cap ? num_pieces : cap;
             long long have = 0;
             for (int p = 0; p < num_pieces; ++p) {
-                if (st.pieces.get_bit(p)) ++have;
+                if (st.pieces.get_bit(lt::piece_index_t(p))) ++have;
             }
             int ones = (int)(((long long)n_out * have + num_pieces / 2) / num_pieces); // rounded
             if (ones > n_out) ones = n_out;
@@ -587,7 +587,7 @@ extern "C" int torrent_ensure_streaming_buffer(TorrentSession session, int torre
         lt::torrent_status st = node->handle.status();
         bool needs_buffer = false;
         for (int i = 0; i < 3 && (current_piece + i) <= last_piece; ++i) {
-            if (!st.pieces.get_bit(current_piece + i)) {
+            if (!st.pieces.get_bit(lt::piece_index_t(current_piece + i))) {
                 needs_buffer = true;
                 break;
             }
@@ -789,7 +789,7 @@ extern "C" int torrent_read_bytes(TorrentSession session, int torrent_id, int fi
                 lt::torrent_status st = node->handle.status();
                 bool all_ready = true;
                 for (int p = first_piece; p <= last_piece; ++p) {
-                    if (!st.pieces.get_bit(p)) { all_ready = false; break; }
+                    if (!st.pieces.get_bit(lt::piece_index_t(p))) { all_ready = false; break; }
                 }
                 ready = all_ready;
             }
