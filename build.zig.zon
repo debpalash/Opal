@@ -1,6 +1,6 @@
 .{
     .name = .opal,
-    .version = "0.1.2",
+    .version = "0.2.0",
     .dependencies = .{
         .dvui = .{
             .url = "git+https://github.com/debpalash/dvui#c2424c15cbfacfe24d66fda4963055eb4c9ee200",
