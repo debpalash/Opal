@@ -25,8 +25,8 @@ pub fn render() void {
         .modal = true,
         .open_flag = &open,
     }, .{
-        .min_size_content = .{ .w = 520, .h = 0 },
-        .max_size_content = dvui.Options.MaxSize.width(560),
+        .min_size_content = .{ .w = 480, .h = 0 },
+        .max_size_content = dvui.Options.MaxSize.width(520),
         .color_fill = theme.colors.bg_surface,
         .border = dvui.Rect.all(1),
         .color_border = theme.colors.border_subtle,
@@ -42,84 +42,104 @@ pub fn render() void {
     });
     defer pad.deinit();
 
-    _ = dvui.label(@src(), "Welcome to Opal", .{}, .{
-        .color_text = theme.colors.text_primary,
-        .font = dvui.themeGet().font_title,
-    });
-    _ = dvui.label(@src(), "Three quick things and you're set. All of this can be changed later in Settings.", .{}, .{
-        .color_text = theme.colors.text_secondary,
-        .margin = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.md },
-    });
+    // ── Branded header: the Opal gem + wordmark ──
+    {
+        var head = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        defer head.deinit();
+        _ = dvui.image(@src(), .{
+            .source = .{ .imageFile = .{ .bytes = @embedFile("opal_logo_64.png"), .name = "opal-onboard" } },
+        }, .{
+            .min_size_content = .{ .w = 34, .h = 34 },
+            .max_size_content = .{ .w = 34, .h = 34 },
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        });
+        _ = dvui.label(@src(), "Welcome to Opal", .{}, .{
+            .color_text = theme.colors.text_primary,
+            .font = dvui.themeGet().font_title,
+            .gravity_y = 0.5,
+        });
+    }
+    descLabel(1, "Three quick things and you're set — all of it is changeable later in Settings.");
 
     // ── 1. Sources ──
-    stepHeader("1", "Search sources", 100);
-    if (source_config.anyInstalled()) {
-        doneRow("Sources installed — search will return streams.", 110);
-    } else {
-        _ = dvui.label(@src(), "Opal ships with no sources. Install the starter pack (14 curated providers) so search and episode playback work.", .{}, .{
-            .color_text = theme.colors.text_secondary,
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xs },
-        });
-        if (accentButton("Install starter sources", 120)) {
-            const n = plugin_repo.installStarterPack();
-            var tb: [64]u8 = undefined;
-            state.showToast(std.fmt.bufPrint(&tb, "{d} sources installed", .{n}) catch "Sources installed");
+    {
+        var card = stepCard(@src(), 1000);
+        defer card.deinit();
+        stepHeader(100, "Search sources");
+        if (source_config.anyInstalled()) {
+            doneRow(110, "Sources installed — search returns streams.");
+        } else {
+            descLabel(101, "Opal ships with no sources. Install the starter pack — 14 curated providers — so search and episode playback work.");
+            if (buttonRow(120, "Install starter sources")) {
+                const n = plugin_repo.installStarterPack();
+                var tb: [64]u8 = undefined;
+                state.showToast(std.fmt.bufPrint(&tb, "{d} sources installed", .{n}) catch "Sources installed");
+            }
         }
     }
 
     // ── 2. TMDB (posters, seasons, trending) ──
-    stepHeader("2", "TMDB catalog key", 200);
-    if (state.app.tmdb.api_key_len > 0) {
-        doneRow("TMDB key found — Movies & TV browsing is live.", 210);
-    } else {
-        _ = dvui.label(@src(), "Free key from themoviedb.org/settings/api — powers posters, seasons and trending.", .{}, .{
-            .color_text = theme.colors.text_secondary,
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xs },
-        });
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-        defer row.deinit();
-        var te = dvui.textEntry(@src(), .{
-            .text = .{ .buffer = &tmdb_key_buf },
-            .placeholder = "Paste API key / bearer token",
-        }, .{
-            .expand = .horizontal,
-            .color_fill = theme.colors.bg_elevated,
-            .color_border = theme.colors.border_subtle,
-            .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .gravity_y = 0.5,
-        });
-        const entered = te.enter_pressed;
-        te.deinit();
-        if (accentButton("Save", 220) or entered) {
-            const klen = std.mem.indexOfScalar(u8, &tmdb_key_buf, 0) orelse 0;
-            if (klen > 0) {
-                const n = @min(klen, state.app.tmdb.api_key.len);
-                @memcpy(state.app.tmdb.api_key[0..n], tmdb_key_buf[0..n]);
-                state.app.tmdb.api_key_len = n;
-                state.markConfigDirty();
-                state.showToast("TMDB key saved");
+    {
+        var card = stepCard(@src(), 2000);
+        defer card.deinit();
+        stepHeader(200, "TMDB catalog key");
+        if (state.app.tmdb.api_key_len > 0) {
+            doneRow(210, "TMDB key found — Movies & TV browsing is live.");
+        } else {
+            descLabel(201, "Free key from themoviedb.org/settings/api — powers posters, seasons and trending.");
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = 202,
+                .expand = .horizontal,
+                .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
+            });
+            defer row.deinit();
+            var te = dvui.textEntry(@src(), .{
+                .text = .{ .buffer = &tmdb_key_buf },
+                .placeholder = "Paste API key / bearer token",
+            }, .{
+                .expand = .horizontal,
+                .color_fill = theme.colors.bg_surface,
+                .color_border = theme.colors.border_subtle,
+                .border = dvui.Rect.all(1),
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+            });
+            const entered = te.enter_pressed;
+            te.deinit();
+            if (accentButton(220, "Save") or entered) {
+                const klen = std.mem.indexOfScalar(u8, &tmdb_key_buf, 0) orelse 0;
+                if (klen > 0) {
+                    const n = @min(klen, state.app.tmdb.api_key.len);
+                    @memcpy(state.app.tmdb.api_key[0..n], tmdb_key_buf[0..n]);
+                    state.app.tmdb.api_key_len = n;
+                    state.markConfigDirty();
+                    state.showToast("TMDB key saved");
+                }
             }
         }
     }
 
     // ── 3. AI brain ──
-    stepHeader("3", "AI assistant", 300);
-    if (ai_server.firstCloudProviderWithKey()) |pi| {
-        var lb: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(&lb, "Cloud key found ({s}) — chat works out of the box. A local model can be installed later in Settings › AI.", .{ai_server.CLOUD_PROVIDERS[pi].name}) catch "Cloud AI ready.";
-        doneRow(msg, 310);
-    } else {
-        _ = dvui.label(@src(), "Optional. Add a cloud API key to .env, or install a local model later — both in Settings › AI. Nothing downloads without you asking.", .{}, .{
-            .color_text = theme.colors.text_secondary,
-        });
+    {
+        var card = stepCard(@src(), 3000);
+        defer card.deinit();
+        stepHeader(300, "AI assistant (optional)");
+        if (ai_server.firstCloudProviderWithKey()) |pi| {
+            var lb: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&lb, "Cloud key found ({s}) — chat works out of the box.", .{ai_server.CLOUD_PROVIDERS[pi].name}) catch "Cloud AI ready.";
+            doneRow(310, msg);
+        } else {
+            descLabel(301, "Add a cloud key to .env, or install a local model later — both in Settings › AI. Nothing downloads without you asking.");
+        }
     }
 
     // ── Finish ──
     {
         var frow = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .margin = .{ .x = 0, .y = theme.spacing.lg, .w = 0, .h = 0 },
+            .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = 0 },
         });
         defer frow.deinit();
         var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
@@ -140,39 +160,62 @@ fn finish() void {
     state.markConfigDirty();
 }
 
-fn stepHeader(num: []const u8, title: []const u8, id: usize) void {
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+/// One step's container — a subtle elevated card so the three decisions read as
+/// distinct, scannable blocks instead of a wall of text. Caller `defer`s deinit.
+fn stepCard(src: std.builtin.SourceLocation, id: usize) *dvui.BoxWidget {
+    return dvui.box(src, .{ .dir = .vertical }, .{
         .id_extra = id,
         .expand = .horizontal,
-        .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = 2 },
-    });
-    defer row.deinit();
-    var badge = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .id_extra = id,
         .background = true,
         .color_fill = theme.colors.bg_elevated,
-        .corner_radius = dvui.Rect.all(theme.radius.pill),
-        .min_size_content = .{ .w = 20, .h = 20 },
-        .max_size_content = .{ .w = 20, .h = 20 },
-        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .padding = dvui.Rect.all(theme.spacing.md),
+        .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
     });
-    _ = dvui.label(@src(), "{s}", .{num}, .{
-        .id_extra = id,
-        .color_text = theme.colors.accent,
-        .gravity_x = 0.5,
-        .gravity_y = 0.5,
-        .expand = .both,
-    });
-    badge.deinit();
+}
+
+/// Section heading — bold. Inside a card, the card padding provides the spacing,
+/// so only a small gap below to the description.
+fn stepHeader(id: usize, title: []const u8) void {
     _ = dvui.label(@src(), "{s}", .{title}, .{
         .id_extra = id,
         .color_text = theme.colors.text_primary,
         .font = dvui.themeGet().font_heading,
-        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 3 },
     });
 }
 
-fn doneRow(msg: []const u8, id: usize) void {
+/// Wrapping body text — a plain single-line label truncates with "…" at the
+/// modal width; textLayout wraps to as many lines as needed.
+fn descLabel(id: usize, text: []const u8) void {
+    var tl = dvui.textLayout(@src(), .{}, .{
+        .id_extra = id,
+        .expand = .horizontal,
+        .background = false,
+        .padding = dvui.Rect.all(0),
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xs },
+    });
+    tl.addText(text, .{ .color_text = theme.colors.text_secondary });
+    tl.deinit();
+}
+
+/// A left-aligned accent action button in its own full-width row. Wrapping the
+/// button in a horizontal row (rather than dropping it straight into the
+/// vertical body with gravity_y) is what keeps it from overlapping the next
+/// element — main-axis gravity in a vertical parent mis-positions the widget.
+fn buttonRow(id: usize, label: []const u8) bool {
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = id,
+        .expand = .horizontal,
+    });
+    defer row.deinit();
+    const clicked = accentButton(id, label);
+    var sp = dvui.box(@src(), .{}, .{ .id_extra = id + 1, .expand = .horizontal });
+    sp.deinit();
+    return clicked;
+}
+
+fn doneRow(id: usize, msg: []const u8) void {
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = id, .expand = .horizontal });
     defer row.deinit();
     dvui.icon(@src(), "ob-done", @import("icons").tvg.lucide.@"circle-check-big", .{}, .{
@@ -189,14 +232,13 @@ fn doneRow(msg: []const u8, id: usize) void {
     });
 }
 
-fn accentButton(label: []const u8, id: usize) bool {
+fn accentButton(id: usize, label: []const u8) bool {
     return dvui.button(@src(), label, .{}, .{
         .id_extra = id,
         .color_fill = theme.colors.accent,
         .color_text = theme.colors.text_on_accent,
         .corner_radius = dvui.Rect.all(theme.radius.sm),
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-        .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
         .gravity_y = 0.5,
     });
 }
