@@ -186,10 +186,35 @@ pub fn playEpisode(idx: usize) void {
     if (idx >= state.app.podcasts.episode_count) return;
     const e = &state.app.podcasts.episodes[idx];
     if (e.audio_url_len == 0) return;
+
+    // Snapshot every field into locals BEFORE the play call — a concurrent
+    // re-search can reorder/overwrite results[] and episodes[] mid-frame, and
+    // the buffers we hand to loadContentDirectMeta must stay valid + stable.
     var url_buf: [512]u8 = undefined;
     const ulen = @min(e.audio_url_len, url_buf.len);
     @memcpy(url_buf[0..ulen], e.audio_url[0..ulen]);
-    @import("browser.zig").loadContentDirect(url_buf[0..ulen]);
+
+    // Episode title → now-playing title. Show name (selected_name, already a
+    // snapshot) → subtitle. Show artwork from the selected result row.
+    var title_buf: [200]u8 = undefined;
+    const tlen = @min(e.title_len, title_buf.len);
+    @memcpy(title_buf[0..tlen], e.title[0..tlen]);
+
+    var name_buf: [160]u8 = undefined;
+    const nlen = @min(state.app.podcasts.selected_name_len, name_buf.len);
+    @memcpy(name_buf[0..nlen], state.app.podcasts.selected_name[0..nlen]);
+
+    var art_buf: [300]u8 = undefined;
+    var alen: usize = 0;
+    if (state.app.podcasts.selected_idx) |si| {
+        if (si < state.app.podcasts.result_count) {
+            const show = &state.app.podcasts.results[si];
+            alen = @min(show.artwork_len, art_buf.len);
+            @memcpy(art_buf[0..alen], show.artwork[0..alen]);
+        }
+    }
+
+    @import("browser.zig").loadContentDirectMeta(url_buf[0..ulen], art_buf[0..alen], title_buf[0..tlen], name_buf[0..nlen]);
     logs.pushLog("info", "podcasts", "Streaming podcast episode", false);
 }
 

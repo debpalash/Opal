@@ -1838,8 +1838,21 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         });
         defer left.deinit();
 
-        // A small thumbnail when mpv exposed one, else a music/film glyph.
-        if (p.thumb_texture != null) {
+        // Advance now-playing audio cover art (podcast/radio) — idempotent, so
+        // the art still appears here even when the player grid isn't on screen.
+        p.tickNowPlayingArt();
+
+        // Thumbnail priority: now-playing audio cover, then any mpv-exposed
+        // thumbnail, else a music/film glyph.
+        if (p.np_art_tex) |np_tex| {
+            _ = dvui.image(@src(), .{ .source = .{ .texture = np_tex } }, .{
+                .min_size_content = .{ .w = 30, .h = 30 },
+                .max_size_content = .{ .w = 30, .h = 30 },
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+            });
+        } else if (p.thumb_texture != null) {
             _ = dvui.image(@src(), .{ .source = .{ .texture = p.thumb_texture.? } }, .{
                 .min_size_content = theme.iconSize(.xl),
                 .max_size_content = .{ .w = 32, .h = 32 },
@@ -1857,11 +1870,21 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             });
         }
 
-        // Title from the player's loading label (works for audio-only).
-        const raw_title = if (p.loading_label_len > 0) p.loading_label[0..p.loading_label_len] else "Now Playing";
-        // safeUtf8Buf (not plain safeUtf8): loading_label is mutated by the load
-        // worker, so validating a slice into the live buffer can still let dvui
-        // re-read mutated bytes mid-frame. Snapshot a stable copy first.
+        // Title + optional subtitle stacked vertically. Prefer the rich
+        // now-playing title (podcast episode / station); fall back to the load
+        // label (works for any audio-only stream), else a generic label.
+        var txt_col = dvui.box(@src(), .{ .dir = .vertical }, .{ .gravity_y = 0.5 });
+        defer txt_col.deinit();
+
+        const raw_title = if (p.np_title_len > 0)
+            p.np_title[0..p.np_title_len]
+        else if (p.loading_label_len > 0)
+            p.loading_label[0..p.loading_label_len]
+        else
+            "Now Playing";
+        // safeUtf8Buf (not plain safeUtf8): these buffers are mutated by workers,
+        // so validating a slice into the live buffer can still let dvui re-read
+        // mutated bytes mid-frame. Snapshot a stable copy first.
         var nt_buf: [128]u8 = undefined;
         var title = text.safeUtf8Buf(raw_title, &nt_buf);
         if (title.len > 42) title = text.safeUtf8(title[0..42]); // re-trim to a codepoint boundary (on the copy)
@@ -1869,6 +1892,19 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             .color_text = theme.colors.text_primary,
             .gravity_y = 0.5,
         });
+
+        // Subtitle (show name / station codec·bitrate·country) — secondary tone,
+        // only for now-playing audio, ellipsized to keep the left block bounded.
+        if (p.np_subtitle_len > 0) {
+            var st_buf: [192]u8 = undefined;
+            var sub = text.safeUtf8Buf(p.np_subtitle[0..p.np_subtitle_len], &st_buf);
+            if (sub.len > 46) sub = text.safeUtf8(sub[0..46]);
+            _ = dvui.label(@src(), "{s}", .{sub}, .{
+                .color_text = theme.colors.text_secondary,
+                .font = dvui.themeGet().font_body.withSize(11),
+                .gravity_y = 0.5,
+            });
+        }
     }
 
     // ── Center: transport (Previous | Play/Pause | Next) ──

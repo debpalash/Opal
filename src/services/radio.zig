@@ -123,7 +123,46 @@ pub fn playStation(idx: usize) void {
     var url_buf: [512]u8 = undefined;
     const ulen = @min(src.len, url_buf.len);
     @memcpy(url_buf[0..ulen], src[0..ulen]);
-    @import("browser.zig").loadContentDirect(url_buf[0..ulen]);
+
+    // Snapshot the now-playing fields into locals BEFORE playing — a concurrent
+    // re-search can overwrite results[] mid-frame, so nothing handed to
+    // loadContentDirectMeta may alias the live row.
+    var name_buf: [160]u8 = undefined;
+    const nlen = @min(s.name_len, name_buf.len);
+    @memcpy(name_buf[0..nlen], s.name[0..nlen]);
+
+    var fav_buf: [300]u8 = undefined;
+    const flen = @min(s.favicon_len, fav_buf.len);
+    @memcpy(fav_buf[0..flen], s.favicon[0..flen]);
+
+    // Subtitle: "CODEC · N kbps · COUNTRY · tags" — each part appended only when
+    // present, joined by " · " (e.g. "MP3 · 128 kbps · United States").
+    var sub_buf: [192]u8 = undefined;
+    var sw = std.Io.Writer.fixed(&sub_buf);
+    var wrote = false;
+    if (s.codec_len > 0) {
+        // Codec displays upper-cased (the API returns "mp3"/"aac" mixed-case).
+        for (s.codec[0..s.codec_len]) |ch| sw.writeByte(std.ascii.toUpper(ch)) catch {};
+        wrote = true;
+    }
+    if (s.bitrate > 0) {
+        if (wrote) sw.writeAll(" · ") catch {};
+        sw.print("{d} kbps", .{s.bitrate}) catch {};
+        wrote = true;
+    }
+    if (s.country_len > 0) {
+        if (wrote) sw.writeAll(" · ") catch {};
+        sw.writeAll(s.country[0..s.country_len]) catch {};
+        wrote = true;
+    }
+    if (s.tags_len > 0) {
+        if (wrote) sw.writeAll(" · ") catch {};
+        sw.writeAll(s.tags[0..@min(s.tags_len, 60)]) catch {};
+        wrote = true;
+    }
+    const sub = sub_buf[0..sw.end];
+
+    @import("browser.zig").loadContentDirectMeta(url_buf[0..ulen], fav_buf[0..flen], name_buf[0..nlen], sub);
     logs.pushLog("info", "radio", "Streaming internet radio station", false);
 
     // RadioBrowser click-counting politeness — best-effort, ignore the result.

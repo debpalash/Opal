@@ -1601,6 +1601,31 @@ pub fn loadContentDirect(url: []const u8) void {
     state.gotoPlayer();
 }
 
+/// Like `loadContentDirect`, but attaches now-playing metadata (cover art URL,
+/// title, subtitle) to the player so an audio stream — a podcast episode or a
+/// radio station, which have no video and would otherwise show a black pane +
+/// bare URL — renders its artwork + rich text on the player pane and in the
+/// bottom bar. load_file clears any prior metadata first; setNowPlaying re-sets
+/// it after, so the order is clear-then-populate.
+pub fn loadContentDirectMeta(url: []const u8, art_url: []const u8, title: []const u8, subtitle: []const u8) void {
+    if (state.app.players.items.len == 0) {
+        if (@import("../player/player.zig").MediaPlayer.init(alloc)) |np| {
+            state.app.players.append(alloc, np) catch { np.deinit(alloc); return; };
+            state.app.active_player_idx = 0;
+        } else |_| return;
+    }
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
+    const p = state.app.players.items[state.app.active_player_idx];
+    p.provider = .mpv;
+    var url_z: [2049]u8 = undefined;
+    const len = @min(url.len, 2048);
+    @memcpy(url_z[0..len], url[0..len]);
+    url_z[len] = 0;
+    p.load_file(@as([*c]const u8, @ptrCast(&url_z[0])));
+    p.setNowPlaying(art_url, title, subtitle);
+    state.gotoPlayer();
+}
+
 /// Load content with automatic provider routing
 pub fn loadContent(url: []const u8) void {
     const extractors = @import("extractors.zig");

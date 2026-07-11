@@ -113,6 +113,76 @@ pub const MediaPlayer = struct {
     loading_trivia_len: usize = 0,
     loading_trivia_fetching: bool = false,
 
+    // ── Now-playing audio metadata (podcast episode / radio station) ──
+    // Set via setNowPlaying on the meta play path (browser.loadContentDirectMeta)
+    // so the player pane + footer show cover art + a rich title/subtitle instead
+    // of a black pane + bare stream URL. Cleared on any plain load (load_file)
+    // so stale audio art never lingers over a later video. Fixed-size buffers,
+    // no allocation churn. The cover art mirrors the shared poster lifecycle:
+    // async fetch into np_art_pixels (c_allocator) → uploadIfReady → np_art_tex.
+    np_art_url: [512]u8 = std.mem.zeroes([512]u8),
+    np_art_url_len: usize = 0,
+    np_title: [256]u8 = std.mem.zeroes([256]u8),
+    np_title_len: usize = 0,
+    np_subtitle: [192]u8 = std.mem.zeroes([192]u8),
+    np_subtitle_len: usize = 0,
+    np_art_pixels: ?[]u8 = null,
+    np_art_w: u32 = 0,
+    np_art_h: u32 = 0,
+    np_art_tex: ?dvui.Texture = null,
+    np_art_fetching: bool = false,
+    // FNV-1a of the art URL currently owning np_art_tex/pixels. When a new item
+    // is set while a prior fetch is still in flight, the render path uses this to
+    // free the stale texture and re-fetch the correct art once the worker lands
+    // (same leak-free swap the podcasts cover slots use).
+    np_art_url_hash: u64 = 0,
+
+    /// Set (or clear, with empty args) the now-playing audio metadata + cover
+    /// art. UI-thread only. Copies the strings in (clamped) and releases any
+    /// prior art — but only when no fetch is mid-flight for this slot: freeing
+    /// while a detached poster worker still owns the slot would orphan the slice
+    /// it is about to write. When a fetch IS in flight the strings still update
+    /// and the render path's url-hash guard swaps to the new art once that worker
+    /// lands, so nothing leaks and the wrong art never sticks.
+    pub fn setNowPlaying(self: *MediaPlayer, art_url: []const u8, title: []const u8, subtitle: []const u8) void {
+        if (!self.np_art_fetching) {
+            @import("../core/poster.zig").deinitPoster(&self.np_art_pixels, &self.np_art_tex);
+            self.np_art_w = 0;
+            self.np_art_h = 0;
+        }
+        const ulen = @min(art_url.len, self.np_art_url.len);
+        @memcpy(self.np_art_url[0..ulen], art_url[0..ulen]);
+        self.np_art_url_len = ulen;
+        const tlen = @min(title.len, self.np_title.len);
+        @memcpy(self.np_title[0..tlen], title[0..tlen]);
+        self.np_title_len = tlen;
+        const slen = @min(subtitle.len, self.np_subtitle.len);
+        @memcpy(self.np_subtitle[0..slen], subtitle[0..slen]);
+        self.np_subtitle_len = slen;
+    }
+
+    /// Advance the now-playing cover-art fetch/upload state machine one frame.
+    /// Idempotent and UI-thread only, so every render site that shows the art
+    /// (the player pane AND the footer bar) can call it each frame — whichever
+    /// runs first arms the async fetch; the rest just observe. The URL-hash
+    /// guard gives a leak-free swap when the item changes while a prior fetch is
+    /// still in flight (mirrors the podcast cover slots). No-op when no art URL.
+    pub fn tickNowPlayingArt(self: *MediaPlayer) void {
+        if (self.np_art_url_len == 0) return;
+        const poster = @import("../core/poster.zig");
+        const art = self.np_art_url[0..self.np_art_url_len];
+        const h = std.hash.Fnv1a_64.hash(art);
+        if (self.np_art_url_hash != h and !self.np_art_fetching) {
+            poster.deinitPoster(&self.np_art_pixels, &self.np_art_tex);
+            self.np_art_w = 0;
+            self.np_art_h = 0;
+            self.np_art_url_hash = h;
+        }
+        _ = poster.uploadIfReady(&self.np_art_pixels, self.np_art_w, self.np_art_h, &self.np_art_tex);
+        if (self.np_art_tex == null and !self.np_art_fetching and self.np_art_pixels == null)
+            poster.fetchAsync(art, &self.np_art_pixels, &self.np_art_w, &self.np_art_h, &self.np_art_fetching);
+    }
+
     pub fn getMediaTitle(self: *MediaPlayer, out_buf: []u8) usize {
         // 1. If torrent, get torrent name
         if (self.current_torrent_id >= 0) {
@@ -280,6 +350,18 @@ pub const MediaPlayer = struct {
         self.loading_trivia_len = 0;
         @memset(&self.loading_trivia, 0);
         self.loading_trivia_fetching = false;
+        @memset(&self.np_art_url, 0);
+        self.np_art_url_len = 0;
+        @memset(&self.np_title, 0);
+        self.np_title_len = 0;
+        @memset(&self.np_subtitle, 0);
+        self.np_subtitle_len = 0;
+        self.np_art_pixels = null;
+        self.np_art_w = 0;
+        self.np_art_h = 0;
+        self.np_art_tex = null;
+        self.np_art_fetching = false;
+        self.np_art_url_hash = 0;
         @memset(std.mem.asBytes(&self.dialogue_lines), 0);
         @memset(&self.dialogue_line_lens, 0);
         @memset(&self.dialogue_line_ts, 0);
@@ -505,6 +587,12 @@ pub const MediaPlayer = struct {
         @memcpy(self.current_url[0..copy_len], path_span[0..copy_len]);
         self.current_url_len = copy_len;
         self.resume_seeked = false;
+
+        // Clear any prior now-playing audio art/metadata — a fresh load that
+        // isn't routed through the meta play path (video, torrent, resume) must
+        // not inherit the previous podcast/radio cover. loadContentDirectMeta
+        // calls setNowPlaying AGAIN right after this, re-populating it.
+        self.setNowPlaying("", "", "");
 
         // ── Streamlink: resolve live stream URLs asynchronously ──
         const streamlink = @import("../services/streamlink.zig");
@@ -749,6 +837,7 @@ pub const MediaPlayer = struct {
     pub fn deinit(self: *MediaPlayer, allocator: std.mem.Allocator) void {
         self.saveCurrentPosition();
         @import("../core/poster.zig").deinitPoster(&self.loading_poster_pixels, &self.loading_poster_tex);
+        @import("../core/poster.zig").deinitPoster(&self.np_art_pixels, &self.np_art_tex);
         if (self.proxy_handle.isValid()) {
             @import("stream_proxy.zig").stopProxy(self.proxy_handle);
             self.proxy_handle = @import("stream_proxy.zig").INVALID_HANDLE;

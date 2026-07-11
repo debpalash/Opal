@@ -323,6 +323,94 @@ pub fn muteBackgroundPlayers() void {
     }
 }
 
+/// The audio now-playing pane — cover art + title/subtitle over a black fill,
+/// shown for a podcast episode / radio station (no video frame, metadata set).
+/// The caller gates this on `p.np_title_len > 0 and p.texture == null`. The
+/// cover art rides the shared poster daemon (async fetch → uploadIfReady →
+/// texture), with a URL-hash guard for a leak-free swap when the item changes
+/// while a prior fetch is still in flight (same pattern as the podcast covers).
+/// UI-thread only.
+fn renderAudioNowPlaying(i: usize, p: *player.MediaPlayer) void {
+    const text_mod = @import("../core/text.zig");
+
+    // Advance the cover-art fetch/upload (leak-free, UI-thread only).
+    p.tickNowPlayingArt();
+
+    // Black cinematic fill + click-to-select/pause underneath the content.
+    var np_overlay = dvui.overlay(@src(), .{ .id_extra = i + 8800, .expand = .both });
+    defer np_overlay.deinit();
+
+    if (dvui.button(@src(), "", .{}, .{
+        .id_extra = i + 8801,
+        .expand = .both,
+        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 255 },
+        .color_text = theme.colors.text_primary,
+        .border = dvui.Rect.all(0),
+        .corner_radius = theme.dims.rad_sm,
+    })) {
+        state.app.active_player_idx = i;
+        p.togglePause();
+    }
+
+    var stack = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = i + 8802,
+        .gravity_x = 0.5,
+        .gravity_y = 0.5,
+        .expand = .both,
+    });
+    defer stack.deinit();
+
+    const COVER: f32 = 240;
+    if (p.np_art_tex) |*tex| {
+        _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+            .id_extra = i + 8803,
+            .min_size_content = .{ .w = COVER, .h = COVER },
+            .max_size_content = .{ .w = COVER, .h = COVER },
+            .corner_radius = theme.dims.rad_md,
+            .gravity_x = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 20 },
+        });
+    } else {
+        // No art yet (loading) or the item carries none → music-note glyph.
+        _ = dvui.icon(@src(), "np-art-fallback", icons.tvg.lucide.music, .{}, .{
+            .id_extra = i + 8803,
+            .color_text = theme.colors.text_tertiary,
+            .min_size_content = .{ .w = 96, .h = 96 },
+            .max_size_content = .{ .w = 96, .h = 96 },
+            .gravity_x = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 20 },
+        });
+    }
+
+    // Title — large, centered, one line (ellipsized by the width cap).
+    // safeUtf8Buf: fixed buffers may be cut mid-codepoint / hold odd bytes.
+    {
+        var title_wrap = dvui.box(@src(), .{}, .{
+            .id_extra = i + 8804,
+            .gravity_x = 0.5,
+            .max_size_content = .{ .w = 520, .h = std.math.floatMax(f32) },
+        });
+        defer title_wrap.deinit();
+        var tbuf: [256]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(p.np_title[0..p.np_title_len], &tbuf)}, .{
+            .id_extra = i + 8805,
+            .color_text = theme.colors.text_primary,
+            .font = dvui.themeGet().font_heading,
+            .gravity_x = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
+        });
+    }
+
+    if (p.np_subtitle_len > 0) {
+        var sbuf: [192]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(p.np_subtitle[0..p.np_subtitle_len], &sbuf)}, .{
+            .id_extra = i + 8806,
+            .color_text = theme.colors.text_secondary,
+            .gravity_x = 0.5,
+        });
+    }
+}
+
 pub fn renderGrid() !void {
     const grid_columns = computeGridColumns();
     muteBackgroundPlayers();
@@ -483,7 +571,14 @@ pub fn renderGrid() !void {
                     p.saveCurrentPosition();
                 }
 
-                if (p.texture) |*tex| {
+                if (p.np_title_len > 0 and p.texture == null) {
+                    // ── Audio now-playing pane (podcast / radio) ──
+                    // No video frame + rich metadata set → show cover art +
+                    // title/subtitle instead of the black/empty hero state.
+                    // Gated on texture == null so it never masks real video, and
+                    // on np_title_len > 0 so it never hijacks an idle player.
+                    renderAudioNowPlaying(i, p);
+                } else if (p.texture) |*tex| {
                     var cell_overlay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
                     // Aspect-preserving fit (letterbox), not stretch. The texture is
                     // already rendered at the video's native display aspect, so feed
