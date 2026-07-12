@@ -1696,6 +1696,44 @@ def test_watch_commit_smart_play_onboarding():
     return "fail", f"missing: {missing}"
 
 
+@test("Onboarding: paged feature tour + replay from Settings", "Browse")
+def test_onboarding_tour():
+    # The first-run wizard used to only *configure* the app (sources/TMDB/AI)
+    # and was a one-shot — nothing ever explained what Opal could do, and once
+    # dismissed it was unreachable. It's now a paged wizard: page 0 = setup,
+    # then a short feature tour, reopenable from Settings › About.
+    #
+    # Paging is GUI code (dvui immediate mode), so the pure Back/Next/clamp
+    # decisions live in onboarding_pure.zig and the modal routes through them —
+    # guard that the routing stays in place so the tested logic is the shipped
+    # logic (no drift back to inline arithmetic).
+    ob = _src("src/ui/onboarding.zig")
+    obp = _src("src/ui/onboarding_pure.zig")
+    se = _src("src/ui/settings.zig")
+    bz = _src("build.zig")
+    checks = {
+        # Pure nav module exists, is exercised, and is registered as a unit test.
+        "pure nav fns": all(f"pub fn {f}" in obp for f in ("isLast", "clamp", "next", "prev")),
+        "pure nav tested": obp.count('test "') >= 4,
+        "pure nav registered": "src/ui/onboarding_pure.zig" in bz,
+        # The modal routes paging through the pure module (not inline math).
+        "routes through pure": 'onboarding_pure.zig' in ob and "nav.isLast" in ob and "nav.next" in ob and "nav.prev" in ob,
+        # The tour itself: pages, per-page features, dots, and Back/Next nav.
+        "tour pages": "const TOUR" in ob and "TourPage" in ob and "PAGE_COUNT" in ob,
+        "tour renders": "fn tourPage" in ob and "fn pageDots" in ob and "fn navFooter" in ob,
+        "next/finish split": '"Get started"' in ob and '"Next"' in ob and '"Back"' in ob,
+        # Reopenable — replay() resets to page 0 and clears the onboarded flag.
+        "replay exported": "pub fn replay" in ob and "state.app.onboarded = false" in ob,
+        "replay wired in settings": "onboarding.zig" in se and "replay()" in se,
+        # finish() must reset the page or a replay resumes mid-tour.
+        "finish resets page": "page = 0;" in _between(ob, "fn finish", "\n}"),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if not missing:
+        return "pass", "paged tour + pure nav + replay from Settings › About"
+    return "fail", f"missing: {missing}"
+
+
 @test("TV Calendar: Coming-Up Rail + EZTV Availability + HW Decode", "Browse")
 def test_tv_calendar_and_hwdec():
     # Coming-up rail: TMDB next/last-episode-to-air parsing, countdown labels,

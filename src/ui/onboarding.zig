@@ -1,24 +1,78 @@
-//! First-run onboarding — one modal, three decisions, then out of the way.
+//! First-run onboarding — a tiny paged wizard: one setup page (three decisions)
+//! then a short feature tour, then out of the way.
 //! Opal ships neutral (no sources, no keys, no AI backend), which used to
 //! mean three separate "why is this empty" traps: an empty search page, an
-//! empty Movies & TV tab, and a dead chat. This wizard front-loads all
-//! three. Shown once: `state.app.onboarded` persists via config ("onboarded");
-//! existing installs are grandfathered on config load.
+//! empty Movies & TV tab, and a dead chat. Page 0 front-loads all three; the
+//! remaining pages orient the user on what Opal can actually do so they don't
+//! bounce off an app whose depth isn't obvious. Shown once:
+//! `state.app.onboarded` persists via config ("onboarded"); existing installs
+//! are grandfathered on config load. Reopenable from Settings › About via
+//! `replay()`.
 
 const std = @import("std");
 const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 const theme = @import("theme.zig");
 const components = @import("components.zig");
+const nav = @import("onboarding_pure.zig");
+const icons = @import("icons");
 
 var tmdb_key_buf: [300]u8 = std.mem.zeroes([300]u8);
 
+/// Current wizard page. Page 0 is setup; 1.. are the feature tour.
+var page: usize = 0;
+
+/// One highlighted capability inside a tour page.
+const Feature = struct { icon: []const u8, label: []const u8, desc: []const u8 };
+
+/// A feature-tour page: a heading, a one-line intro, and up to a few features.
+const TourPage = struct { title: []const u8, intro: []const u8, features: []const Feature };
+
+/// The tour pages shown after setup. Kept short and honest — every claim maps
+/// to a shipped tab. Icons are drawn from names verified present in the icon set.
+const TOUR = [_]TourPage{
+    .{
+        .title = "Find something to watch",
+        .intro = "Opal pulls from many places at once — you search, it plays.",
+        .features = &.{
+            .{ .icon = icons.tvg.lucide.search, .label = "Universal search", .desc = "One bar queries every installed source; play or download any result." },
+            .{ .icon = icons.tvg.lucide.clapperboard, .label = "Movies & TV", .desc = "Browse trending, posters, full seasons and episodes (uses your TMDB key)." },
+        },
+    },
+    .{
+        .title = "Not just video",
+        .intro = "An mpv-powered player at heart — audio is a first-class citizen.",
+        .features = &.{
+            .{ .icon = icons.tvg.lucide.@"audio-lines", .label = "Podcasts & radio", .desc = "Subscribe to feeds and stream live stations, with cover art and now-playing info." },
+            .{ .icon = icons.tvg.lucide.music, .label = "Playlists & queue", .desc = "Build a queue, resume where you left off — history is a SQLite file you own." },
+        },
+    },
+    .{
+        .title = "An assistant that stays on your machine",
+        .intro = "Optional, private, and off by default — nothing downloads without you.",
+        .features = &.{
+            .{ .icon = icons.tvg.lucide.@"wand-sparkles", .label = "Ask in plain language", .desc = "Find titles, get summaries and control playback by chatting." },
+            .{ .icon = icons.tvg.lucide.@"message-circle", .label = "Local or cloud", .desc = "Run a local model or bring your own cloud key — both live in Settings › AI." },
+        },
+    },
+};
+
+/// Total wizard pages: setup (1) + the tour.
+const PAGE_COUNT: usize = 1 + TOUR.len;
+
+/// Reopen the wizard from the start — wired to Settings › About. Clearing
+/// `onboarded` lets `render()` show again next frame; persisting keeps the
+/// choice if the app is closed mid-replay.
+pub fn replay() void {
+    page = 0;
+    state.app.onboarded = false;
+    state.markConfigDirty();
+}
+
 pub fn render() void {
     if (state.app.onboarded or !state.app.config_loaded.load(.acquire) or state.app.is_headless) return;
-
-    const source_config = @import("../core/source_config.zig");
-    const plugin_repo = @import("../services/plugin_repo.zig");
-    const ai_server = @import("../services/ai_server.zig");
+    // A stale/replayed index that outruns the current tour count can't dead-end.
+    page = nav.clamp(page, PAGE_COUNT);
 
     var open = true;
     var win = dvui.floatingWindow(@src(), .{
@@ -60,6 +114,19 @@ pub fn render() void {
             .gravity_y = 0.5,
         });
     }
+    pageDots();
+
+    if (page == 0) setupPage() else tourPage(TOUR[page - 1]);
+
+    navFooter();
+}
+
+/// Page 0 — the three decisions that make a neutral install actually work.
+fn setupPage() void {
+    const source_config = @import("../core/source_config.zig");
+    const plugin_repo = @import("../services/plugin_repo.zig");
+    const ai_server = @import("../services/ai_server.zig");
+
     descLabel(1, "Three quick things and you're set — all of it is changeable later in Settings.");
 
     // ── 1. Sources ──
@@ -135,28 +202,126 @@ pub fn render() void {
         }
     }
 
-    // ── Finish ──
-    {
-        var frow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+}
+
+/// A feature-tour page — heading, one-line intro, then one card per capability.
+/// This is the half that *teaches* the app; page 0 only configures it.
+fn tourPage(p: TourPage) void {
+    _ = dvui.label(@src(), "{s}", .{p.title}, .{
+        .color_text = theme.colors.text_primary,
+        .font = dvui.themeGet().font_heading,
+        .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 3 },
+    });
+    descLabel(801, p.intro);
+
+    for (p.features, 0..) |f, i| {
+        var card = stepCard(@src(), 4000 + i * 100);
+        defer card.deinit();
+
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = 810 + i,
             .expand = .horizontal,
-            .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = 0 },
         });
-        defer frow.deinit();
-        var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-        sp.deinit();
-        if (dvui.button(@src(), "Get started", .{}, .{
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
+        defer row.deinit();
+
+        dvui.icon(@src(), "ob-feat", f.icon, .{}, .{
+            .id_extra = 820 + i,
+            .color_text = theme.colors.accent,
+            .min_size_content = theme.iconSize(.md),
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        });
+
+        var col = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = 830 + i,
+            .expand = .horizontal,
+        });
+        defer col.deinit();
+
+        _ = dvui.label(@src(), "{s}", .{f.label}, .{
+            .id_extra = 840 + i,
+            .color_text = theme.colors.text_primary,
+            .font = dvui.themeGet().font_heading,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
+        });
+        // Wrapping body — a plain label truncates with "…" at the modal width.
+        var tl = dvui.textLayout(@src(), .{}, .{
+            .id_extra = 850 + i,
+            .expand = .horizontal,
+            .background = false,
+            .padding = dvui.Rect.all(0),
+            .margin = dvui.Rect.all(0),
+        });
+        tl.addText(f.desc, .{ .color_text = theme.colors.text_secondary });
+        tl.deinit();
+    }
+}
+
+/// Progress indicator — one dot per page, current one accented. Orientation
+/// only ("how much is left?"); not clickable, so it can't strand the user.
+fn pageDots() void {
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xs },
+    });
+    defer row.deinit();
+    for (0..PAGE_COUNT) |i| {
+        var dot = dvui.box(@src(), .{}, .{
+            .id_extra = 700 + i,
+            .background = true,
+            .color_fill = if (i == page) theme.colors.accent else theme.colors.border_subtle,
+            .min_size_content = .{ .w = 7, .h = 7 },
+            .max_size_content = .{ .w = 7, .h = 7 },
+            .corner_radius = dvui.Rect.all(theme.radius.pill),
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = 5, .h = 0 },
+        });
+        dot.deinit();
+    }
+}
+
+/// Back / Next / Get started. Page transitions route through onboarding_pure so
+/// the shipped nav *is* the unit-tested nav (saturating at both ends).
+fn navFooter() void {
+    var frow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = 0 },
+    });
+    defer frow.deinit();
+
+    if (page > 0) {
+        if (dvui.button(@src(), "Back", .{}, .{
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_primary,
+            .border = dvui.Rect.all(0),
             .corner_radius = dvui.Rect.all(theme.radius.md),
             .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.sm, .w = theme.spacing.lg, .h = theme.spacing.sm },
+            .gravity_y = 0.5,
         })) {
-            finish();
+            page = nav.prev(page);
+        }
+    }
+
+    var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+    sp.deinit();
+
+    const last = nav.isLast(page, PAGE_COUNT);
+    if (dvui.button(@src(), if (last) "Get started" else "Next", .{}, .{
+        .color_fill = theme.colors.accent,
+        .color_text = theme.colors.text_on_accent,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.sm, .w = theme.spacing.lg, .h = theme.spacing.sm },
+        .gravity_y = 0.5,
+    })) {
+        if (last) finish() else {
+            page = nav.next(page, PAGE_COUNT);
         }
     }
 }
 
 fn finish() void {
     state.app.onboarded = true;
+    page = 0; // a later replay() starts from the top, not mid-tour
     state.markConfigDirty();
 }
 

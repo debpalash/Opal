@@ -1273,6 +1273,29 @@ fn renderAboutTab() void {
             }
         }
 
+        // Welcome guide — the first-run wizard is the only place the app
+        // explains itself, so make it reopenable instead of a one-shot users
+        // can never get back after clicking through it.
+        {
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 2520, .expand = .horizontal });
+            defer row.deinit();
+            _ = dvui.label(@src(), "Welcome guide", .{}, .{ .id_extra = 2521, .color_text = labelText(), .gravity_y = 0.5 });
+            {
+                var spacer = dvui.box(@src(), .{}, .{ .id_extra = 2522, .expand = .horizontal });
+                spacer.deinit();
+            }
+            if (dvui.button(@src(), "Replay Guide", .{}, .{
+                .id_extra = 2523,
+                .color_fill = btn_inactive,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(0),
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                .corner_radius = theme.dims.rad_md,
+            })) {
+                @import("onboarding.zig").replay();
+            }
+        }
+
         // Credits line — who built it, under what terms.
         _ = dvui.label(@src(), "Crafted by Palash Deb (@debpalash) · free and open source, GPL-3.0", .{}, .{
             .id_extra = 2530,

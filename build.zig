@@ -390,6 +390,18 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_jellyfin_pure).step);
 
+    // Onboarding wizard paging — Back/Next saturate at both ends and a stale
+    // replayed index can't dead-end the tour (the modal is GUI-only; this is
+    // the pure decision logic it routes through).
+    const test_onboarding_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ui/onboarding_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_onboarding_pure).step);
+
     // Workspace name sanitization (path-traversal / separator neutralization).
     const test_workspace_pure = b.addTest(.{
         .root_module = b.createModule(.{
