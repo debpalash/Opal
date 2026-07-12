@@ -663,6 +663,31 @@ for _s in ("opal-stt-server.py", "opal-tts-server.py", "opal-voice-server.py"):
     globals()[f"test_check_{_s.replace('-', '_').replace('.', '_')}"] = _make_check_test(_s)
 
 
+@test("Tracked + compiles: tools/lang_server.py", "Voice Scripts")
+def test_lang_server_tracked_and_compiles():
+    # The language-learning TTS/ASR sidecar is spawned by
+    # src/services/lang_learn.zig at "tools/lang_server.py". It lives under the
+    # otherwise-ignored tools/ dir, so guard that it stays tracked source (a
+    # `git rm --cached` or a broadened ignore would silently drop it from every
+    # published platform, degrading the feature to "start manually").
+    path = os.path.join(PROJECT_DIR, "tools", "lang_server.py")
+    if not os.path.exists(path):
+        return "fail", "tools/lang_server.py missing"
+    tracked = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", "tools/lang_server.py"],
+        cwd=PROJECT_DIR, capture_output=True, text=True, timeout=15,
+    )
+    if tracked.returncode != 0:
+        return "fail", "tools/lang_server.py is not tracked by git"
+    r = subprocess.run(
+        [sys.executable, "-m", "py_compile", path],
+        capture_output=True, text=True, timeout=30,
+    )
+    if r.returncode != 0:
+        return "fail", r.stderr[:80]
+    return "pass", "tracked + py_compile OK"
+
+
 # ══════════════════════════════════════════════════════════
 # In-app Browser (Browse › Web — Camoufox bridge)
 # ══════════════════════════════════════════════════════════

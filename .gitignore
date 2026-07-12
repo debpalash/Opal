@@ -58,7 +58,11 @@ scripts/bubble_dataset/
 
 # === Research / scratch ===
 research/
-tools/
+# tools/ is scratch, EXCEPT lang_server.py — the language-learning TTS/ASR
+# sidecar spawned by src/services/lang_learn.zig. It's tracked source so the
+# feature ships on every platform (KittenTTS itself stays a vendored, ignored dep).
+tools/*
+!tools/lang_server.py
 
 # === Jellyfin config/data ===
 jellyfin/
