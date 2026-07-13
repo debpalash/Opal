@@ -703,9 +703,27 @@ pub fn renderGrid() !void {
                                 _ = dvui.label(@src(), "{s}", .{msg}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .y = theme.spacing.sm } });
                             } else |_| {}
 
+                            // Show readiness, NOT whole-torrent progress.
+                            //
+                            // The old bar read 11% while the bytes the demuxer was
+                            // actually blocked on (the container index at the END of
+                            // the file) were at 0% — so it counted up encouragingly
+                            // and playback never began. stream_gate reports progress
+                            // against the head + index windows that actually gate the
+                            // start, so 100% here means "it will now play".
+                            const gate = @import("../player/stream_gate.zig");
+                            const gated = p.current_torrent_id >= 0 and p.selected_file_idx >= 0 and
+                                gate.hasPlan(p.current_torrent_id, p.selected_file_idx);
+
+                            const shown: f32 = if (gated)
+                                @as(f32, @floatFromInt(gate.bufferPercent(p.current_torrent_id, p.selected_file_idx))) / 100.0
+                            else
+                                buf_pct;
+
                             var prog_lb: [64]u8 = undefined;
-                            if (std.fmt.bufPrintZ(&prog_lb, "Buffer: {d}%", .{@as(i32, @intFromFloat(buf_pct * 100.0))})) |msg| {
-                                components.ProgressBar(@src(), buf_pct, msg, i);
+                            const label: []const u8 = if (gated) "Buffering" else "Buffer";
+                            if (std.fmt.bufPrintZ(&prog_lb, "{s}: {d}%", .{ label, @as(i32, @intFromFloat(shown * 100.0)) })) |msg| {
+                                components.ProgressBar(@src(), shown, msg, i);
                             } else |_| {}
                         }
 

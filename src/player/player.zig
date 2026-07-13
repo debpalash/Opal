@@ -442,7 +442,15 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache-pause-initial", "yes");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache-pause-wait", "3");
         // Network timeouts — retry aggressively instead of giving up
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "network-timeout", "30");
+        // 0 = never time out a network read.
+        //
+        // This is load-bearing for torrent streaming. ffmpeg cannot distinguish a
+        // read ERROR from end-of-file (demux_lavf.c returns AVERROR_EOF for both),
+        // so a 30s timeout on a slow torrent read reached mpv as "the file ended" —
+        // it stopped cleanly, with no error, and no amount of further downloading
+        // brought it back. Blocking on a slow stream is fine and expected; timing
+        // out is fatal.
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "network-timeout", "0");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5,reconnect_on_network_error=1,reconnect_on_http_error=4xx,reconnect_on_http_error=5xx");
         // HLS-specific: tolerate errors and start further behind live edge to build a huge preload buffer
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "hls-bitrate", "max");
@@ -574,7 +582,19 @@ pub const MediaPlayer = struct {
 
         @memset(self.pixels, dvui.Color.PMA.black);
         if (self.texture) |*tex| {
-            _ = dvui.Texture.update(tex, self.pixels, .linear) catch {};
+            // Slice to the TEXTURE's size, not the whole pixel buffer.
+            //
+            // `pixels` is allocated once at video_w * video_h, but the texture is
+            // created in grid.zig at the current RENDER size (rw x rh), which is a
+            // different number. dvui's Texture.update hard-@panics on a length
+            // mismatch — it is not a catchable error, so the `catch {}` here was
+            // decoration. Loading a second file while a texture was alive (a
+            // playlist advance, or the buffering reload below) crashed the process:
+            //   "Texture size and supplied Content did not match"
+            const npix = @as(usize, tex.width) * @as(usize, tex.height);
+            if (npix > 0 and npix <= self.pixels.len) {
+                _ = dvui.Texture.update(tex, self.pixels[0..npix], .linear) catch {};
+            }
         }
         // Set loading state for UI feedback
         self.is_loading = true;
@@ -999,6 +1019,18 @@ pub fn updateTorrentBackgroundTasks() void {
                     const now = @import("../core/io_global.zig").milliTimestamp();
                     if (now - p.last_error_time > 3000) {
                         logs.pushLog("warn", "opal", "Buffering: waiting for torrent data...", true);
+
+                        // Reload from where we actually were, not from the start.
+                        // Without this the reload fell back to the coarse
+                        // watch-history percent (written every few hundred frames),
+                        // so a mid-stream stall visibly threw playback backwards.
+                        var cur_pct: f64 = 0;
+                        if (c.mpv.mpv_get_property(p.mpv_ctx, "percent-pos", c.mpv.MPV_FORMAT_DOUBLE, &cur_pct) >= 0) {
+                            if (cur_pct > 0.1 and cur_pct < 99.9 and !std.math.isNan(cur_pct)) {
+                                p.resume_percent = cur_pct;
+                            }
+                        }
+
                         p.torrent_is_ready = false;
                         p.has_metadata = true;
                         p.last_error_time = now;
@@ -1176,10 +1208,40 @@ pub fn updateTorrentBackgroundTasks() void {
                     // index.
                     if (p.selected_file_idx < 0) break;
 
-                    // ── START PLAYBACK IMMEDIATELY ──
-                    // Don't wait for any piece! The HTTP streaming proxy blocks reads
-                    // until pieces arrive, so mpv shows its native "Buffering..." state.
-                    // This gives instant startup instead of waiting for first piece.
+                    // ── READINESS GATE ──
+                    //
+                    // Playback used to start the instant ONE piece existed, on the
+                    // theory that "the proxy blocks, so mpv just buffers". It does
+                    // not work that way: mpv's Matroska demuxer SEEKS TO THE END of
+                    // the file during open, to read the Cues and Tags. So it blocked
+                    // inside demux_mkv_open() — before creating a single track —
+                    // waiting on bytes nothing had prioritized. That is the black
+                    // screen at 00:00 while the torrent sits at 11%: head progress
+                    // is irrelevant, because the demuxer never gets past that seek.
+                    //
+                    // stream_gate works out what THIS container actually needs (it
+                    // differs per format), pins those byte ranges at top priority,
+                    // and only lets us through once they are present.
+                    {
+                        const gate = @import("stream_gate.zig");
+                        var f_name: [512]u8 = undefined;
+                        c.mpv.torrent_get_file_name(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, &f_name, f_name.len);
+                        const fn_len = std.mem.indexOfScalar(u8, &f_name, 0) orelse 0;
+                        const f_size = c.mpv.torrent_get_file_size(state.torrentSession(), p.current_torrent_id, p.selected_file_idx);
+
+                        if (f_size > 0 and !gate.isReady(
+                            p.current_torrent_id,
+                            p.selected_file_idx,
+                            f_name[0..fn_len],
+                            @intCast(f_size),
+                        )) {
+                            // Keep polling so the deadline window keeps ticking, and
+                            // leave torrent_is_ready false so the buffering overlay
+                            // stays up (it now shows REAL head+index progress).
+                            _ = c.mpv.torrent_poll(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, &buffering_path, @intCast(buffering_path.len), null, null, null);
+                            break;
+                        }
+                    }
 
                     // Get file path from torrent_poll (even if pieces aren't ready yet)
                     _ = c.mpv.torrent_poll(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, &buffering_path, @intCast(buffering_path.len), null, null, null);

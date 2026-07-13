@@ -467,10 +467,30 @@ fn handleConnection(args: ConnArgs) !void {
             @ptrCast(&data_buf),
             @intCast(want),
         );
-        if (read <= 0) break;
+
+        // 0 is a legitimate end-of-file (the read ran past the file's last byte);
+        // ending the body there is correct and expected.
+        if (read == 0) break;
+
+        // A negative read is a FAILURE, and it used to `break` too — ending the
+        // body early after the headers had already promised a Content-Length.
+        // ffmpeg reads a truncated body as a clean end-of-file (it cannot tell an
+        // error from EOF), so mpv concluded the file had ended and stopped for
+        // good — which is why a stalled stream never recovered no matter how much
+        // more downloaded.
+        //
+        // torrent_read_bytes now blocks rather than timing out, so a negative
+        // return means the torrent is genuinely gone. Abort the connection WITHOUT
+        // completing the body, so ffmpeg sees a premature close (bytes sent <
+        // Content-Length) and takes its reconnect path instead of its EOF path.
+        // Never finish a body we could not fill.
+        if (read < 0) {
+            logs.pushLog("warn", "stream", "read failed mid-body - aborting so the player reconnects", true);
+            return;
+        }
 
         const read_u: usize = @intCast(read);
-        io_g.streamWriteAll(args.conn, data_buf[0..read_u]) catch break;
+        io_g.streamWriteAll(args.conn, data_buf[0..read_u]) catch return;
         offset += read;
     }
 }

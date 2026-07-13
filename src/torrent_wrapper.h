@@ -70,6 +70,26 @@ int torrent_get_piece_size(TorrentSession session, int torrent_id);
 int torrent_read_bytes(TorrentSession session, int torrent_id, int file_idx, long long offset, char* out_buf, int buf_len);
 long long torrent_get_file_offset(TorrentSession session, int torrent_id, int file_idx);
 
+// ─── Byte-range streaming primitives ───
+//
+// The readiness gate reasons in BYTES, not pieces. A container's index lives at a
+// byte offset (MKV Cues, MP4 moov), and "last 5 pieces" is 5 MB on a 1 MB-piece
+// torrent but 80 MB on a 16 MB-piece one — piece counts are the wrong unit.
+
+// 1 when every piece covering [offset, offset+len) of `file_idx` is downloaded.
+int torrent_range_ready(TorrentSession session, int torrent_id, int file_idx, long long offset, long long len);
+
+// Pin [offset, offset+len) at top priority with a near-immediate deadline, so
+// libtorrent fetches it from the FASTEST peers. Batched in one call on purpose:
+// the first deadline cancels outstanding non-critical requests, so dripping them
+// in one at a time from Zig would thrash the request pipeline.
+void torrent_prioritize_range(TorrentSession session, int torrent_id, int file_idx, long long offset, long long len, int deadline_ms);
+
+// Percent (0-100) of [offset, offset+len) that is downloaded. Drives a real
+// buffering bar, instead of the whole-torrent progress that says 11% while the
+// bytes the demuxer is actually blocked on are 0% there.
+int torrent_range_progress(TorrentSession session, int torrent_id, int file_idx, long long offset, long long len);
+
 #ifdef __cplusplus
 }
 #endif

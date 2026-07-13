@@ -141,7 +141,15 @@ extern "C" TorrentSession torrent_init() {
     pack.set_int(lt::settings_pack::request_timeout, 8);
     pack.set_int(lt::settings_pack::peer_timeout, 15);
     pack.set_int(lt::settings_pack::whole_pieces_threshold, 2);
-    pack.set_bool(lt::settings_pack::strict_end_game_mode, true);
+    // Strict end-game forbids the redundant requests that rescue a piece stalled
+    // on one slow peer. For bulk downloading that's the right trade; for streaming
+    // a single stuck piece at the play head is the whole failure, so pay the
+    // bandwidth and let other peers race it.
+    pack.set_bool(lt::settings_pack::strict_end_game_mode, false);
+    // A long request queue is why re-prioritization feels laggy: a new deadline
+    // can't take effect until the already-queued requests drain. Keep it short so
+    // the play head can actually preempt.
+    pack.set_int(lt::settings_pack::request_queue_time, 1);
     pack.set_bool(lt::settings_pack::announce_to_all_tiers, true);
     pack.set_bool(lt::settings_pack::announce_to_all_trackers, true);
     
@@ -801,25 +809,48 @@ extern "C" int torrent_read_bytes(TorrentSession session, int torrent_id, int fi
             node->handle.piece_priority(lt::piece_index_t(p), lt::download_priority_t(7));
         }
 
-        // Wait for all pieces to arrive (poll at 25ms intervals, timeout after 30s).
-        // status() and liveness are read under ctx->mtx so a concurrent
-        // torrent_remove() can't tear the handle down mid-access; the lock is
-        // released during the sleep so add/remove are not starved.
+        // Wait for the pieces. status()/liveness are read under ctx->mtx so a
+        // concurrent torrent_remove() can't tear the handle down mid-access; the
+        // lock is released during the sleep so add/remove aren't starved.
+        //
+        // The old timeout here was 30s, after which this returned -1 and the HTTP
+        // proxy simply STOPPED WRITING mid-body — having already promised a
+        // Content-Length. ffmpeg cannot distinguish a read error from end-of-file
+        // (demux_lavf.c collapses both to AVERROR_EOF), so mpv concluded the file
+        // had ended and gave up for good. That is why downloading more never
+        // rescued a stalled stream: the demuxer was already dead.
+        //
+        // Blocking is safe (mpv is designed to wait on a slow stream); truncating
+        // is fatal. So wait as long as the torrent is alive and could still make
+        // progress, and re-arm the deadline periodically — libtorrent converts a
+        // deadline to an ABSOLUTE time point, so a stale one stops being urgent.
+        const int POLL_MS = 25;
+        const int REARM_EVERY = 2000 / POLL_MS;          // re-assert the deadline every 2s
+        const int MAX_WAIT_MS = 10 * 60 * 1000;          // backstop against a truly wedged read
+        const int MAX_ATTEMPTS = MAX_WAIT_MS / POLL_MS;
+
         bool ready = false;
-        for (int attempt = 0; attempt < 1200 && !ready; ++attempt) {
+        for (int attempt = 0; attempt < MAX_ATTEMPTS && !ready; ++attempt) {
             {
                 std::lock_guard<std::mutex> lk(ctx->mtx);
                 if (!node->alive || !node->handle.is_valid()) return -1;
-                lt::torrent_status st = node->handle.status();
                 bool all_ready = true;
                 for (int p = first_piece; p <= last_piece; ++p) {
-                    if (!st.pieces.get_bit(lt::piece_index_t(p))) { all_ready = false; break; }
+                    // have_piece() instead of status().pieces: the latter allocates
+                    // the whole piece bitfield, 40x/sec, per connection.
+                    if (!node->handle.have_piece(lt::piece_index_t(p))) { all_ready = false; break; }
                 }
                 ready = all_ready;
+
+                if (!ready && attempt > 0 && (attempt % REARM_EVERY) == 0) {
+                    for (int p = first_piece; p <= last_piece; ++p) {
+                        node->handle.set_piece_deadline(lt::piece_index_t(p), 0);
+                    }
+                }
             }
-            if (!ready) std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            if (!ready) std::this_thread::sleep_for(std::chrono::milliseconds(POLL_MS));
         }
-        if (!ready) return -1; // Timeout — pieces not available
+        if (!ready) return -1; // wedged for 10 minutes — genuinely dead
 
         // Read from disk via a persistent stream kept on the node — opened once
         // per (node,file_index) and reused across chunks instead of reopening
@@ -848,3 +879,118 @@ extern "C" int torrent_read_bytes(TorrentSession session, int torrent_id, int fi
     return -1;
 }
 
+
+// ══════════════════════════════════════════════════════════
+// Byte-range streaming primitives
+//
+// These exist because the readiness gate has to reason in BYTES. A container's
+// index sits at a byte offset (MKV Cues, MP4 moov), and a piece count is the
+// wrong unit for it: "the last 5 pieces" is 5 MB on a 1 MB-piece torrent and
+// 80 MB on a 16 MB-piece one.
+// ══════════════════════════════════════════════════════════
+
+// Map a byte range within a file to the inclusive piece range covering it.
+// Returns false when the range is empty / out of bounds / metadata is missing.
+static bool map_range_to_pieces(const std::shared_ptr<TorrentNode>& node, int file_idx,
+                                long long offset, long long len,
+                                int& first_piece, int& last_piece) {
+    if (!node || !node->handle.is_valid() || file_idx < 0 || len <= 0 || offset < 0) return false;
+    auto ti = node->handle.torrent_file();
+    if (!ti) return false;
+
+    const lt::file_storage& files = ti->files();
+    if (file_idx >= files.num_files()) return false;
+
+    std::int64_t file_size = files.file_size(lt::file_index_t(file_idx));
+    if (file_size <= 0 || offset >= file_size) return false;
+
+    long long end = offset + len;
+    if (end > file_size) end = file_size;
+
+    first_piece = static_cast<int>(files.map_file(lt::file_index_t(file_idx), offset, 0).piece);
+    last_piece  = static_cast<int>(files.map_file(lt::file_index_t(file_idx), end - 1, 0).piece);
+    return last_piece >= first_piece;
+}
+
+extern "C" int torrent_range_ready(TorrentSession session, int torrent_id, int file_idx,
+                                   long long offset, long long len) {
+    if (!session) return 0;
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+    auto node = get_node(ctx, torrent_id);
+    if (!node) return 0;
+
+    try {
+        std::lock_guard<std::mutex> lk(ctx->mtx);
+        if (!node->alive || !node->handle.is_valid()) return 0;
+
+        int first_piece = 0, last_piece = 0;
+        if (!map_range_to_pieces(node, file_idx, offset, len, first_piece, last_piece)) return 0;
+
+        for (int p = first_piece; p <= last_piece; ++p) {
+            if (!node->handle.have_piece(lt::piece_index_t(p))) return 0;
+        }
+        return 1;
+    } catch (...) {}
+    return 0;
+}
+
+extern "C" int torrent_range_progress(TorrentSession session, int torrent_id, int file_idx,
+                                      long long offset, long long len) {
+    if (!session) return 0;
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+    auto node = get_node(ctx, torrent_id);
+    if (!node) return 0;
+
+    try {
+        std::lock_guard<std::mutex> lk(ctx->mtx);
+        if (!node->alive || !node->handle.is_valid()) return 0;
+
+        int first_piece = 0, last_piece = 0;
+        if (!map_range_to_pieces(node, file_idx, offset, len, first_piece, last_piece)) return 0;
+
+        int total = last_piece - first_piece + 1;
+        if (total <= 0) return 0;
+        int have = 0;
+        for (int p = first_piece; p <= last_piece; ++p) {
+            if (node->handle.have_piece(lt::piece_index_t(p))) ++have;
+        }
+        return static_cast<int>((static_cast<long long>(have) * 100) / total);
+    } catch (...) {}
+    return 0;
+}
+
+extern "C" void torrent_prioritize_range(TorrentSession session, int torrent_id, int file_idx,
+                                         long long offset, long long len, int deadline_ms) {
+    if (!session) return;
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+    auto node = get_node(ctx, torrent_id);
+    if (!node) return;
+
+    try {
+        std::lock_guard<std::mutex> lk(ctx->mtx);
+        if (!node->alive || !node->handle.is_valid()) return;
+
+        int first_piece = 0, last_piece = 0;
+        if (!map_range_to_pieces(node, file_idx, offset, len, first_piece, last_piece)) return;
+
+        // Priorities FIRST, then deadlines. libtorrent's prioritize_pieces() calls
+        // remove_time_critical_pieces(), so setting a priority AFTER a deadline
+        // silently drops that deadline. (Setting a deadline already forces the
+        // piece to top priority, so the explicit call is belt-and-braces for the
+        // case where the piece was previously priority 0.)
+        std::vector<std::pair<lt::piece_index_t, lt::download_priority_t>> prios;
+        prios.reserve(static_cast<size_t>(last_piece - first_piece + 1));
+        for (int p = first_piece; p <= last_piece; ++p) {
+            prios.emplace_back(lt::piece_index_t(p), lt::download_priority_t(7));
+        }
+        node->handle.prioritize_pieces(prios);
+
+        // Then the deadlines, in ONE turn: the first deadline cancels outstanding
+        // non-critical requests, so dripping these in from separate calls would
+        // thrash the request pipeline.
+        const int dl = deadline_ms < 0 ? 0 : deadline_ms;
+        for (int p = first_piece; p <= last_piece; ++p) {
+            node->handle.set_piece_deadline(lt::piece_index_t(p), dl);
+        }
+    } catch (...) {}
+}

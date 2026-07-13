@@ -453,6 +453,19 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_tv_pure).step);
 
+    // Torrent streaming readiness: WHAT each container makes the demuxer read
+    // before it can open a file. An MKV's Cues + Tags sit at EOF, so a 33%-
+    // downloaded file never starts unless the tail is fetched too — head progress
+    // is irrelevant. MP4 needs its moov (which +faststart puts at the front, so no
+    // tail at all); AVI needs idx1; MPEG-TS needs nothing.
+    const test_container_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/container_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_container_pure).step);
 
     // EZTV release calendar: feed-URL building + a STRING-AWARE parse of the
     // get-torrents payload (a '}' or an escaped '"' inside a release title must

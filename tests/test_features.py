@@ -3252,6 +3252,98 @@ def test_tv_tracking():
     return "pass", "TV+anime+movies in one library; aired-clamped next-up; user-set status"
 
 
+@test("Torrent streaming: readiness gate + per-container index", "Stability")
+def test_stream_readiness_gate():
+    # A 1080p MKV at 11% with 69 seeds sat black at 00:00 forever. Two bugs:
+    #
+    #  1. mpv was launched as soon as ONE piece existed. But mpv's Matroska
+    #     demuxer SEEKS TO EOF during open to read the Cues + Tags, so it blocked
+    #     inside demux_mkv_open() before creating a single track, waiting on bytes
+    #     nothing had prioritized. Head progress was irrelevant.
+    #  2. The proxy TRUNCATED the body on a read timeout after promising a
+    #     Content-Length. ffmpeg cannot tell a read error from EOF, so mpv decided
+    #     the file had ended and gave up -- which is why downloading more never
+    #     helped.
+    cp = _src("src/player/container_pure.zig")
+    gate = _src("src/player/stream_gate.zig")
+    pl = _src("src/player/player.zig")
+    px = _src("src/player/stream_proxy.zig")
+    cpp = _src("src/torrent_wrapper.cpp")
+    hdr = _src("src/torrent_wrapper.h")
+    gr = _src("src/ui/grid.zig")
+    bz = _src("build.zig")
+
+    checks = {
+        # Different containers demand different bytes -- that IS the feature.
+        "per-container plan": ("pub fn initialPlan(" in cp and "pub fn refine(" in cp
+                               and "pub fn needsTail(" in cp),
+        "mkv reads its own SeekHead": "fn mkvIndexOffset(" in cp,
+        "mp4 finds moov (faststart => no tail)": "fn mp4MoovOffset(" in cp,
+        "avi finds idx1": "fn aviIndexOffset(" in cp,
+        # Linear formats must NOT be made to wait for a tail that doesn't exist.
+        "ts/flv need no tail": ".ts, .flv => false" in cp,
+        # Byte-sized, never piece-sized: "last 5 pieces" is 5MB at 1MB pieces and
+        # 80MB at 16MB pieces.
+        "tail measured in bytes": "TAIL_FALLBACK_BYTES" in cp,
+        "pure registered": "container_pure.zig" in bz,
+
+        # The gate itself.
+        "gate exists": "pub fn isReady(" in gate and "container_pure.zig" in gate,
+        # It must wait on as LITTLE as possible. Waiting for the whole head + the
+        # index was correct but needlessly slow: an 8 MB/s torrent still showed
+        # "Buffering 87%". Playback now waits only for START_BYTES; the rest of the
+        # head and the index at EOF keep racing at top priority behind it, which is
+        # safe only because the tail is now prioritized and the proxy no longer
+        # truncates (the two things that caused the original black screen).
+        "starts on a small head, not the whole thing": ("START_BYTES" in cp
+                                                        and "cp.START_BYTES" in gate),
+        "index keeps racing after start": "index still racing" in gate,
+        "player waits on the gate": "stream_gate.zig" in pl and "gate.isReady(" in pl,
+        "no more instant start": "START PLAYBACK IMMEDIATELY" not in pl,
+
+        # C++ byte-range primitives the gate needs.
+        "range primitives": all(f in hdr and f in cpp for f in (
+            "torrent_range_ready", "torrent_prioritize_range", "torrent_range_progress")),
+        # Priorities BEFORE deadlines: prioritize_pieces() calls
+        # remove_time_critical_pieces(), so the reverse order silently drops them.
+        "priorities before deadlines": (cpp.index("prioritize_pieces(prios)")
+                                        < cpp.index("set_piece_deadline(lt::piece_index_t(p), dl)")),
+
+        # Never truncate a body we promised a Content-Length for.
+        "proxy never truncates": "aborting so the player reconnects" in px,
+        # A network timeout reaches ffmpeg as a fake EOF.
+        "no network timeout": '"network-timeout", "0"' in pl,
+
+        # The bar must report readiness, not whole-torrent progress.
+        "buffer bar shows readiness": "gate.bufferPercent(" in gr,
+
+        # CRASH REGRESSION: load_file blanks the video texture, but `pixels` is
+        # allocated at video_w*video_h while the texture is created in grid.zig at
+        # the current RENDER size. dvui's Texture.update hard-@panics on a length
+        # mismatch (it is not a catchable error, so the `catch {}` was decoration),
+        # so reloading a file while a texture was alive aborted the process with
+        # "Texture size and supplied Content did not match". Slice to the texture.
+        "texture update sliced to texture size": ("const npix = @as(usize, tex.width) * @as(usize, tex.height);" in pl
+                                                  and "self.pixels[0..npix]" in pl),
+        # A read of 0 is a legitimate EOF; only a NEGATIVE read is a failure that
+        # must abort the connection. Treating 0 as failure aborted every clean end.
+        "eof is not an error": "if (read == 0) break;" in px and "if (read < 0) {" in px,
+        # A mid-stream buffering reload must resume where it was, not fall back to
+        # the coarse watch-history percent (which visibly jumps playback backwards).
+        "buffering reload keeps position": '"percent-pos", c.mpv.MPV_FORMAT_DOUBLE, &cur_pct' in pl,
+        # REGRESSION: loadfile used to implicitly end the previous file. Now that we
+        # wait for a readable head before calling it, nothing stopped the old media
+        # -- picking a new episode left the PREVIOUS one playing, audio and all,
+        # behind the buffering overlay with its timeline still ticking.
+        "new torrent stops the old playback": ('mpv_command_string(p.mpv_ctx, "stop")'
+                                               in _src("src/services/search.zig")),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "missing: " + ", ".join(missing)
+    return "pass", "head+index gate, per-container tail (mkv/mp4/avi/ts), no truncation"
+
+
 @test("Player control bar: drop-ups + FF fullscreen", "Page Shell")
 def test_player_dropups():
     # The control-bar pickers (aspect / audio / subs / language / files) were

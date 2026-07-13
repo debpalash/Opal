@@ -2041,6 +2041,21 @@ fn addMagnetToEngine(magnet_link: []const u8) void {
     const tid = c.mpv.torrent_add_magnet(state.torrentSession(), @ptrCast(&null_term_uri[0]), state.getSavePath());
     if (tid >= 0) {
         const p = state.app.players.items[state.app.active_player_idx];
+
+        // Stop whatever is playing RIGHT NOW.
+        //
+        // Playback used to be handed to mpv the instant a torrent was added, and
+        // that loadfile is what implicitly ended the previous file. Now that we
+        // wait for a readable head before calling loadfile, nothing stops the old
+        // media — so picking a new episode left the PREVIOUS one playing (audio and
+        // all) behind the buffering overlay, with a timeline still ticking. Ending
+        // it here keeps "I clicked a new thing" and "the old thing stopped" in the
+        // same instant, which is what the user actually asked for.
+        if (p.current_url_len > 0) {
+            _ = c.mpv.mpv_command_string(p.mpv_ctx, "stop");
+            p.current_url_len = 0;
+        }
+
         p.current_torrent_id = tid;
         p.torrent_is_ready = false;
         p.has_metadata = false;
