@@ -1336,12 +1336,16 @@ pub fn renderLiquidGlassOverlay() void {
         }
         components.tip(@src(), wd, "Skip back 10s (\xE2\x86\x90)");
 
-        // Play / Pause — 44px square. The single accent affordance of the
-        // footer; carries the accent fill in BOTH play and pause states.
+        // Play / Pause — bare icon, no resting fill: it reads as part of the
+        // transport row rather than a stamped accent chip. Size (34px vs 30px)
+        // still marks it as the primary affordance. The icon must be
+        // text_primary, NOT text_on_accent — the latter is the dark ink meant to
+        // sit on the bright accent fill, and without that fill it would be
+        // near-invisible against the glass panel.
         if (dvui.buttonIcon(@src(), "toggle-pp", toggle_icon, .{}, .{}, .{
             .data_out = &wd,
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
+            .color_fill = transparent,
+            .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(0),
             .corner_radius = dvui.Rect.all(theme.radius.md),
             .gravity_y = 0.5,

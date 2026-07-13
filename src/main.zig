@@ -1096,12 +1096,20 @@ fn appFrame() !dvui.App.Result {
         }
     }
 
-    if (builtin.mode == .Debug) renderHudOverlay();
+    // Frame-time HUD: Debug builds AND opt-in (OPAL_HUD=1).
+    //
+    // It is opt-in because it has to overlay the chrome to be seen, and the only
+    // conventional spot (top-right) is where the header's search field lives — so
+    // an always-on HUD just parks a black box on the search bar. Nothing is lost
+    // by defaulting it off: it never actually rendered until now (it was laid out
+    // with zero height — see renderHudOverlay), so no workflow depends on it.
+    if (builtin.mode == .Debug and
+        @import("core/io_global.zig").getenv("OPAL_HUD") != null) renderHudOverlay();
 
     return .ok;
 }
 
-// v2: lightweight frame-time overlay. Debug builds only — ~30 LOC, no allocs.
+// v2: lightweight frame-time overlay. Debug + OPAL_HUD=1 — ~30 LOC, no allocs.
 fn renderHudOverlay() void {
     const io_g = @import("core/io_global.zig");
     const t = io_g.milliTimestamp();
@@ -1124,11 +1132,31 @@ fn renderHudOverlay() void {
     var buf: [64]u8 = undefined;
     const txt = std.fmt.bufPrint(&buf, "{d:.1} ms  avg {d:.1}  peak {d:.0}", .{ last, avg, peak }) catch return;
 
+    // Position EXPLICITLY via .rect — do not ask the parent for space.
+    //
+    // This runs at the end of appFrame, i.e. as a root-level child added AFTER
+    // the main UI's vertically-expanded child. dvui's BasicLayout gives such a
+    // child NO space (layout.zig rectFor: `seen_expanded`), so the HUD collapsed
+    // to height 0 — the frame-time readout has never actually been visible. dvui
+    // flags that layout mistake by setting debug.widget_id, which outlines the
+    // offending widget in RED; a zero-height outline is clamped to 1px, so the
+    // bug surfaced as a mysterious red 1px line under the player chrome (Debug
+    // builds only — hence never in release). The dvui complaint is a log.debug,
+    // which log_level=.warn filters out, so nothing ever said why.
+    //
+    // Setting options.rect makes WidgetData.init skip parent.rectFor() entirely
+    // (WidgetData.zig:37) — no space request, no red flag, and a real size.
+    // Right side, BELOW the header: y=4 parks it on the header's search field
+    // (that black box with green digits over "Ask, search, or paste a link"), and
+    // anchoring to wr.h puts it off-screen — the rect is in the ScaleWidget's
+    // coordinate space, not screen space. h=26 (not 20): at 20 the box was
+    // shorter than its own line height and sliced the digits in half.
+    const wr = dvui.windowRect();
+    const hud_w: f32 = 210;
+    const hud_h: f32 = 26;
     var box = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .gravity_x = 1.0,
-        .gravity_y = 0.0,
-        .margin = .{ .x = 0, .y = 4, .w = 8, .h = 0 },
-        .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
+        .rect = .{ .x = @max(0, wr.w - hud_w - 8), .y = 64, .w = hud_w, .h = hud_h },
+        .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
         .corner_radius = dvui.Rect.all(4),
         .background = true,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 },
