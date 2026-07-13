@@ -1120,8 +1120,10 @@ fn renderGeneralTab() void {
     {
         const vis = @import("../player/visualizer_pure.zig");
         const player = @import("../player/player.zig");
-        const styles = [_]vis.Style{ .off, .waves, .bars, .spectrum, .scope };
-        const names = [_][]const u8{ "Off", "Waveform", "Bars", "Spectrum", "Scope" };
+        const styles = [_]vis.Style{ .off, .bars, .waves, .spectrum, .scope };
+        // Same strings as Style.label() — config persists the label, so a rename
+        // here without one there would silently reset everyone to the default.
+        const names = [_][]const u8{ "Off", "Bars", "Waveform", "Spectrum", "Scope" };
         var sel: usize = 1;
         for (styles, 0..) |st, idx| {
             if (player.vis_style == st) {

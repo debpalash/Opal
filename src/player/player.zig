@@ -1421,7 +1421,7 @@ const vis = @import("visualizer_pure.zig");
 const vis_theme = @import("../ui/theme.zig");
 
 /// Current style. Persisted by its label (config.zig) and set from Settings.
-pub var vis_style: vis.Style = .waves;
+pub var vis_style: vis.Style = .bars;
 
 /// Give an audio-only file a picture, Winamp-style.
 ///
@@ -1436,18 +1436,16 @@ fn applyVisualizer(p: *MediaPlayer) void {
     if (p.vis_applied) return;
     if (vis_style == .off) return;
 
-    // The accent colour is spliced into an ffmpeg filter graph, so it goes through
-    // the validator in visualizer_pure (exactly 6 hex digits, else a constant) — a
-    // stray comma or bracket in a colour would rewrite the graph.
+    // The accent tints the gradient. It reaches ffmpeg as three DECIMAL NUMBERS,
+    // not a string — a u8 can only render as 0-255, so a theme colour has no way to
+    // inject filter syntax.
     const a = vis_theme.colors.accent;
-    var hex_buf: [8]u8 = undefined;
-    const hex = std.fmt.bufPrint(&hex_buf, "{x:0>2}{x:0>2}{x:0>2}", .{ a.r, a.g, a.b }) catch vis.DEFAULT_HEX;
 
-    var graph_buf: [256]u8 = undefined;
-    const graph = vis.lavfiComplex(vis_style, hex, &graph_buf);
+    var graph_buf: [1024]u8 = undefined;
+    const graph = vis.lavfiComplex(vis_style, a.r, a.g, a.b, &graph_buf);
     if (graph.len == 0) return; // .off, or it did not fit — leave mpv alone
 
-    var z: [257]u8 = undefined;
+    var z: [1025]u8 = undefined;
     const gz = std.fmt.bufPrintZ(&z, "{s}", .{graph}) catch return;
 
     p.vis_applied = true;

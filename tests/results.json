@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-07-14T00:58:15",
+  "timestamp": "2026-07-14T01:18:09",
   "total": 173,
   "passed": 165,
   "failed": 0,
@@ -198,21 +198,21 @@
       "name": "Database Exists",
       "category": "Database",
       "status": "pass",
-      "detail": "Size: 20816.0 KB",
+      "detail": "Size: 21324.0 KB",
       "duration_ms": 0
     },
     {
       "name": "Config Table",
       "category": "Database",
       "status": "pass",
-      "detail": "53 config entries",
+      "detail": "55 config entries",
       "duration_ms": 1
     },
     {
       "name": "Watch History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "3 watch entries",
+      "detail": "4 watch entries",
       "duration_ms": 0
     },
     {
@@ -226,7 +226,7 @@
       "name": "Download History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "0 downloads",
+      "detail": "1 downloads",
       "duration_ms": 0
     },
     {
@@ -254,7 +254,7 @@
       "name": "Poster Cache Table",
       "category": "Database",
       "status": "pass",
-      "detail": "770 cached posters",
+      "detail": "771 cached posters",
       "duration_ms": 0
     },
     {
@@ -268,7 +268,7 @@
       "name": "User Preferences Table",
       "category": "Memory",
       "status": "pass",
-      "detail": "active_hour=19:00 (w:64)",
+      "detail": "active_hour=19:00 (w:67)",
       "duration_ms": 0
     },
     {
@@ -332,13 +332,13 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 42.5 MB",
-      "duration_ms": 12788
+      "duration_ms": 410
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "42.5 MB, built at 00:58:04",
+      "detail": "42.5 MB, built at 01:16:49",
       "duration_ms": 0
     },
     {
@@ -374,35 +374,35 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 774
+      "duration_ms": 802
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "pass",
       "detail": "faster-whisper importable",
-      "duration_ms": 1062
+      "duration_ms": 1051
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 21
+      "duration_ms": 23
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 20
+      "duration_ms": 25
     },
     {
       "name": "Conversational: voice-server echo guard + live partials",
       "category": "Voice",
       "status": "pass",
       "detail": "echo guard drops self-echo; real interruption passes; PARTIAL streamed",
-      "duration_ms": 29
+      "duration_ms": 30
     },
     {
       "name": "Conversational: prefer full-duplex event loop + wiring",
@@ -416,7 +416,7 @@
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 24
+      "duration_ms": 23
     },
     {
       "name": "Embedding Server Health",
@@ -542,70 +542,70 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 27
+      "duration_ms": 29
     },
     {
       "name": "Compiles: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 28
+      "duration_ms": 29
     },
     {
       "name": "Compiles: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 25
+      "duration_ms": 29
     },
     {
       "name": "Compiles: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 29
+      "duration_ms": 27
     },
     {
       "name": "--check degrades: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 1035
+      "duration_ms": 1039
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 27
+      "duration_ms": 30
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 1045
+      "duration_ms": 1105
     },
     {
       "name": "Tracked + compiles: tools/lang_server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "tracked + py_compile OK",
-      "duration_ms": 40
+      "duration_ms": 45
     },
     {
       "name": "Compiles: camoufox_bridge.py",
       "category": "Browser",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 25
+      "duration_ms": 27
     },
     {
       "name": "Bridge protocol selftest",
       "category": "Browser",
       "status": "pass",
       "detail": "framing + pump model OK",
-      "duration_ms": 27
+      "duration_ms": 35
     },
     {
       "name": "Poster cache SQL matches schema",
@@ -675,7 +675,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 1496
+      "duration_ms": 1530
     },
     {
       "name": "Sherpa Model Canonicalization",
@@ -745,14 +745,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 3382
+      "duration_ms": 2755
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 62
+      "duration_ms": 50
     },
     {
       "name": "Page Router",
@@ -773,7 +773,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 8
+      "duration_ms": 15
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -1123,7 +1123,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "11 engines placed, class==module, manifest-wired",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "name": "Content Plugin Sandbox Hardened",
@@ -1179,7 +1179,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 109
+      "duration_ms": 116
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1312,7 +1312,7 @@
       "category": "Enrichment",
       "status": "pass",
       "detail": "OMDb enrichment wired (parser+worker+UI+persist); key set=False",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Unified Downloads List",
@@ -1389,14 +1389,14 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 1446
+      "duration_ms": 1724
     },
     {
       "name": "Installer Does Not Need Xcode",
       "category": "Packaging",
       "status": "pass",
       "detail": "install.sh installs the vendored .app; formula is a binary install at 0.3.0",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Audio Visualizer",

@@ -3731,8 +3731,24 @@ def test_audio_visualizer():
     # `lavfi-complex` runs the audio through an ffmpeg filter that EMITS a video
     # stream (showwaves / showfreqs / showspectrum / avectorscope). ffmpeg does the
     # FFT — no PCM is plumbed into dvui and no audio thread of our own.
+    # Strip comments before grepping for banned filters — the module comment
+    # EXPLAINS the `gradients`/`nullsrc` hazard by name, and a naive substring match
+    # flags the fixed code as broken. (Made this exact mistake once already.)
+    def _code(text):
+        out = []
+        for line in text.splitlines():
+            ls = line.lstrip()
+            if ls.startswith("//"):
+                continue
+            out.append(line.split("//")[0] if "//" in line else line)
+        return "\n".join(out)
+
     pl = _src("src/player/player.zig")
-    pure = _src("src/player/visualizer_pure.zig")
+    pure_all = _src("src/player/visualizer_pure.zig")
+    pure = pure_all
+    # ...and only the IMPLEMENTATION, not the test block below it — the Zig test
+    # asserts these filters are absent, so the literals legitimately appear there.
+    pure_code = _code(pure_all.split("// ── Tests ──")[0])
     st = _src("src/ui/settings.zig")
     cfg = _src("src/core/config.zig")
     bz = _src("build.zig")
@@ -3744,9 +3760,19 @@ def test_audio_visualizer():
         # A graph without `asplit [ao]` renders a lovely visualiser and plays NO
         # SOUND. Every style must keep the audio wired to the speakers.
         "audio still reaches the speakers": "asplit [ao]" in pure,
-        # The accent colour is spliced into an ffmpeg filter graph; a stray comma or
-        # bracket would rewrite it. Validated, not interpolated.
-        "colour cannot inject into the graph": "pub fn isSafeHex" in pure,
+        # The accent reaches ffmpeg as three DECIMAL NUMBERS (u8 -> 0-255), so a
+        # theme colour has no way to inject filter syntax. Safe by construction
+        # rather than by a validator being correct.
+        "colour cannot inject into the graph": "fn gradient(r: u8, g: u8, b: u8" in pure,
+        # REGRESSION — the pretty way to build the gradient (a `gradients` source
+        # plus a `nullsrc` stripe mask) HANGS mpv: infinite sources never EOF, so a
+        # 3s file plays forever, podcasts never end and the next track never starts.
+        # Everything must be derived from [aid1] alone.
+        "no source filters (they hang playback)": ("gradients" not in pure_code
+                                                   and "nullsrc" not in pure_code),
+        # Upscaling 48 bars to 576px sets a 12:1 sample aspect and mpv stretches the
+        # picture to 576x2640 unless the SAR is reset.
+        "square pixels (setsar)": "setsar=1" in pure,
         # The graph maps [aid1] to [ao] AND [vo] — left set, it would replace a real
         # video file's picture with a waveform.
         "cleared on every load": 'mpv_set_property_string(self.mpv_ctx, "lavfi-complex", "")' in pl,
