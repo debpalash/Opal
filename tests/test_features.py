@@ -3724,6 +3724,45 @@ def test_installer_no_xcode():
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "install.sh installs the vendored .app; formula is a binary install at " + f_ver
 
+
+@test("Audio Visualizer", "Player")
+def test_audio_visualizer():
+    # Radio / podcasts / music have no video track, so mpv synthesises one:
+    # `lavfi-complex` runs the audio through an ffmpeg filter that EMITS a video
+    # stream (showwaves / showfreqs / showspectrum / avectorscope). ffmpeg does the
+    # FFT — no PCM is plumbed into dvui and no audio thread of our own.
+    pl = _src("src/player/player.zig")
+    pure = _src("src/player/visualizer_pure.zig")
+    st = _src("src/ui/settings.zig")
+    cfg = _src("src/core/config.zig")
+    bz = _src("build.zig")
+
+    checks = {
+        "filter graph builder is pure": "pub fn lavfiComplex" in pure,
+        "styles: waves/bars/spectrum/scope": all(f in pure for f in
+                                                 ("showwaves", "showfreqs", "showspectrum", "avectorscope")),
+        # A graph without `asplit [ao]` renders a lovely visualiser and plays NO
+        # SOUND. Every style must keep the audio wired to the speakers.
+        "audio still reaches the speakers": "asplit [ao]" in pure,
+        # The accent colour is spliced into an ffmpeg filter graph; a stray comma or
+        # bracket would rewrite it. Validated, not interpolated.
+        "colour cannot inject into the graph": "pub fn isSafeHex" in pure,
+        # The graph maps [aid1] to [ao] AND [vo] — left set, it would replace a real
+        # video file's picture with a waveform.
+        "cleared on every load": 'mpv_set_property_string(self.mpv_ctx, "lavfi-complex", "")' in pl,
+        # Setting the graph GIVES mpv a video track, so the "vid" observer fires
+        # again — without the latch this re-sets the graph forever.
+        "applied once per file (latch)": "vis_applied" in pl,
+        "applied only when audio-only": "if (p.cached_vid_no) applyVisualizer(p)" in pl,
+        "selectable in Settings": "Audio visualizer" in st,
+        "persisted across restarts": '"audio_vis"' in cfg,
+        "pure module is unit-tested": "visualizer_pure.zig" in bz,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "mpv lavfi-complex visualizer: 4 styles, audio preserved, colour validated"
+
 def run_all():
     test_fns = [v for v in globals().values() if callable(v) and hasattr(v, '_test')]
     

@@ -82,6 +82,7 @@ pub fn save() void {
     setKey("win_h", fmtInt(&fb, @as(usize, @intCast(@max(100, state.app.win_h)))));
     // drawer_open intentionally not persisted — always start with sidebar closed
     setKey("theme_preset", theme.presetName(theme.active_preset));
+    setKey("audio_vis", @import("../player/player.zig").vis_style.label());
 
     // AI backend + selected Hugging Face model (the model picker).
     const ai_server = @import("../services/ai_server.zig");
@@ -359,6 +360,11 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         if (idx + 1 > state.app.session_restore_count) {
             state.app.session_restore_count = idx + 1;
         }
+    } else if (std.mem.eql(u8, key, "audio_vis")) {
+        // fromLabel falls back to the default on an unknown label, so a hand-edited
+        // or older config can't crash the player.
+        const vis = @import("../player/visualizer_pure.zig");
+        @import("../player/player.zig").vis_style = vis.Style.fromLabel(val);
     } else if (std.mem.eql(u8, key, "theme_preset")) {
         const presets = [_]struct { name: []const u8, preset: theme.ThemePreset }{
             .{ .name = "Midnight", .preset = .midnight },

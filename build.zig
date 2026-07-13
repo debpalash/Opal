@@ -340,6 +340,19 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_av_pure).step);
 
+    // Winamp-style audio visualisers: the mpv lavfi-complex filter graph. Pure
+    // because a theme colour is spliced into an ffmpeg graph — it must be
+    // validated, not interpolated — and because every style has to keep
+    // `asplit [ao]` or the visualiser silently costs you the audio.
+    const test_visualizer_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/visualizer_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_visualizer_pure).step);
+
     // Keyless subtitle providers: media-name → query/show/season/episode parse.
     const test_subs_pure = b.addTest(.{
         .root_module = b.createModule(.{

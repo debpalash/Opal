@@ -1112,6 +1112,30 @@ fn renderGeneralTab() void {
         }
     }
 
+    // Audio visualiser — radio, podcasts and music have no video track, so mpv
+    // synthesises one from the audio (see player/visualizer_pure.zig). Takes effect
+    // on the next audio file: the filter graph is applied when mpv reports the file
+    // has no video.
+    settingRow("Audio visualizer", 1501, @src());
+    {
+        const vis = @import("../player/visualizer_pure.zig");
+        const player = @import("../player/player.zig");
+        const styles = [_]vis.Style{ .off, .waves, .bars, .spectrum, .scope };
+        const names = [_][]const u8{ "Off", "Waveform", "Bars", "Spectrum", "Scope" };
+        var sel: usize = 1;
+        for (styles, 0..) |st, idx| {
+            if (player.vis_style == st) {
+                sel = idx;
+                break;
+            }
+        }
+        if (components.segment(@src(), &names, sel)) |clicked| {
+            player.vis_style = styles[clicked];
+            state.showToast(names[clicked]);
+            state.markConfigDirty();
+        }
+    }
+
     // ── Behavior ──
     sectionHeader("Behavior", "Toggles that control app behavior", 12, @src());
 

@@ -182,8 +182,13 @@ do_install() {
         Darwin) install_macos ;;
         Linux)  install_linux ;;
         MINGW*|MSYS*|CYGWIN*)
-            die "Windows isn't installed via this script — grab the .msi installer or portable .zip:
-  https://github.com/$REPO/releases" ;;
+            # A POSIX sh script is the wrong tool on Windows, but "go download it
+            # by hand" is not an install story. install.ps1 is the same installer
+            # in the shell Windows actually has.
+            die "run the PowerShell installer instead:
+  irm https://raw.githubusercontent.com/$REPO/main/scripts/install.ps1 | iex
+
+  (add -Portable for a no-admin install; both verify SHA256SUMS)" ;;
         *) die "unsupported OS: $(uname -s) — see https://github.com/$REPO#get-it" ;;
     esac
 }

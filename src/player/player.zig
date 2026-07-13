@@ -72,6 +72,9 @@ pub const MediaPlayer = struct {
     cached_paused: bool = true, // mirror of mpv "pause"
     last_seen_pos: f64 = 0, // last valid mpv time-pos seen in the event loop (co-watch rewind detect)
     cached_vid_no: bool = false, // mpv "vid" == "no" (audio-only)
+    /// The audio visualiser is applied once per loaded file. Without this latch the
+    /// graph would be re-set on every "vid" event it itself provokes.
+    vis_applied: bool = false,
     cached_sub_text: [1024]u8 = std.mem.zeroes([1024]u8),
     cached_sub_text_len: usize = 0,
 
@@ -331,6 +334,7 @@ pub const MediaPlayer = struct {
         self.cached_paused = true;
         self.last_seen_pos = 0;
         self.cached_vid_no = false;
+        self.vis_applied = false;
         @memset(&self.cached_sub_text, 0);
         self.cached_sub_text_len = 0;
         @memset(&self.loading_label, 0);
@@ -628,6 +632,13 @@ pub const MediaPlayer = struct {
             streamlink.resolveStreamUrlAsync(path_span, p_idx);
             return; // Don't call mpv loadfile directly — the async thread will do it
         }
+
+        // Clear any visualiser left over from the previous file BEFORE loading. The
+        // graph maps [aid1] to both [ao] and [vo], so if it survived into a VIDEO
+        // file it would replace the actual picture with a waveform. Re-armed by the
+        // "vid" observer once we know the new file is audio-only.
+        self.vis_applied = false;
+        _ = c.mpv.mpv_set_property_string(self.mpv_ctx, "lavfi-complex", "");
 
         var args = [_][*c]const u8{ "loadfile", path, null };
         _ = c.mpv.mpv_command(self.mpv_ctx, @ptrCast(&args));
@@ -1066,6 +1077,8 @@ pub fn updateTorrentBackgroundTasks() void {
                         const sptr = @as(*[*c]u8, @ptrCast(@alignCast(pc.*.data))).*;
                         const vid = if (sptr != null) std.mem.span(sptr) else "";
                         p.cached_vid_no = std.mem.eql(u8, vid, "no");
+                        // Audio-only (radio / podcast / music): synthesise a picture.
+                        if (p.cached_vid_no) applyVisualizer(p);
                     } else {
                         // Unavailable (no value) — treat as not audio-only.
                         p.cached_vid_no = false;
@@ -1400,4 +1413,43 @@ pub fn updateTorrentBackgroundTasks() void {
             state.app.pending_has_metadata = true;
         }
     }
+}
+
+// ── Audio visualiser ──
+
+const vis = @import("visualizer_pure.zig");
+const vis_theme = @import("../ui/theme.zig");
+
+/// Current style. Persisted by its label (config.zig) and set from Settings.
+pub var vis_style: vis.Style = .waves;
+
+/// Give an audio-only file a picture, Winamp-style.
+///
+/// mpv's `lavfi-complex` runs the audio through an ffmpeg filter that EMITS a video
+/// stream, so the player shows a live waveform/spectrum instead of a static card.
+/// ffmpeg does the FFT; we never touch PCM and spawn no audio thread of our own.
+///
+/// Called from the "vid" observer — the one place we know the file has no video.
+/// Setting the graph GIVES mpv a video track, so "vid" fires again with a real
+/// value; without the vis_applied latch this would re-set the graph forever.
+fn applyVisualizer(p: *MediaPlayer) void {
+    if (p.vis_applied) return;
+    if (vis_style == .off) return;
+
+    // The accent colour is spliced into an ffmpeg filter graph, so it goes through
+    // the validator in visualizer_pure (exactly 6 hex digits, else a constant) — a
+    // stray comma or bracket in a colour would rewrite the graph.
+    const a = vis_theme.colors.accent;
+    var hex_buf: [8]u8 = undefined;
+    const hex = std.fmt.bufPrint(&hex_buf, "{x:0>2}{x:0>2}{x:0>2}", .{ a.r, a.g, a.b }) catch vis.DEFAULT_HEX;
+
+    var graph_buf: [256]u8 = undefined;
+    const graph = vis.lavfiComplex(vis_style, hex, &graph_buf);
+    if (graph.len == 0) return; // .off, or it did not fit — leave mpv alone
+
+    var z: [257]u8 = undefined;
+    const gz = std.fmt.bufPrintZ(&z, "{s}", .{graph}) catch return;
+
+    p.vis_applied = true;
+    _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "lavfi-complex", gz.ptr);
 }
