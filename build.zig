@@ -390,6 +390,19 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_jellyfin_pure).step);
 
+    // Unified Downloads list: the merge/dedup identity ladder. A finished torrent
+    // exists in all three sources at once (seeding + on disk + in history), so the
+    // list must fold it into ONE row — while NEVER collapsing two different
+    // releases that share a title (a wrong merge mis-attributes pause/delete).
+    const test_transfers_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/transfers_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_transfers_pure).step);
+
     // Onboarding wizard paging — Back/Next saturate at both ends and a stale
     // replayed index can't dead-end the tour (the modal is GUI-only; this is
     // the pure decision logic it routes through).

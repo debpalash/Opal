@@ -40,6 +40,13 @@ long long torrent_get_file_size(TorrentSession session, int torrent_id, int file
 // Fast string queries for the Side-Panel
 void torrent_get_name(TorrentSession session, int torrent_id, char* out_name, int max_len);
 
+// Lowercase-hex infohash (40 chars, v1 btih — the same stringification used for
+// the .torrent metadata cache filename). Known from the magnet URI immediately,
+// i.e. BEFORE metadata arrives, which is what lets the Downloads list join a
+// still-fetching torrent to its history record. Returns 0 on success, -1 on
+// failure (out is always NUL-terminated).
+int torrent_get_infohash(TorrentSession session, int torrent_id, char* out, int out_len);
+
 // Destroy the session
 void torrent_destroy(TorrentSession session);
 

@@ -272,6 +272,30 @@ extern "C" void torrent_get_name(TorrentSession session, int torrent_id, char* o
     }
 }
 
+extern "C" int torrent_get_infohash(TorrentSession session, int torrent_id, char* out, int out_len) {
+    if (!session || torrent_id < 0 || !out || out_len <= 0) return -1;
+    out[0] = '\0';
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+    auto node = get_node(ctx, torrent_id);
+    if (!node) return -1;
+
+    try {
+        if (!node->alive || !node->handle.is_valid()) return -1;
+        // Same stringification as the .torrent cache filename in
+        // torrent_add_magnet (info_hashes.get_best() → 40 lowercase hex chars).
+        // Available straight from the magnet — no metadata required.
+        std::ostringstream ss;
+        ss << node->handle.info_hashes().get_best();
+        std::string hex = ss.str();
+        if (hex.empty() || static_cast<int>(hex.size()) >= out_len) return -1;
+        std::strncpy(out, hex.c_str(), out_len);
+        out[out_len - 1] = '\0';
+        return 0;
+    } catch(...) {
+        return -1;
+    }
+}
+
 extern "C" int torrent_poll(TorrentSession session, int torrent_id, int target_file_idx, char* out_path, int path_max_len, float* out_progress, int* out_dl_rate, int* out_seeds) {
     if (!session || torrent_id < 0) return -1;
     SessionContext* ctx = static_cast<SessionContext*>(session);

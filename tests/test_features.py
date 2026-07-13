@@ -2924,6 +2924,51 @@ def test_omdb_enrichment():
     return "pass", f"OMDb enrichment wired (parser+worker+UI+persist); key set={keyed}"
 
 
+@test("Unified Downloads List", "Page Shell")
+def test_unified_downloads():
+    # Downloads is ONE merged list (torrents + files + history) with filter
+    # chips — not three tabs. The merge/dedup/status/sort decisions must come
+    # from the unit-tested pure module, and the renderer must only execute them.
+    tr = _src("src/services/transfers.zig")
+    pure = _src("src/services/transfers_pure.zig")
+    hdr = _src("src/torrent_wrapper.h")
+    cpp = _src("src/torrent_wrapper.cpp")
+    checks = {
+        "pure merge engine": "pub fn buildRows(" in pure and "pub fn matchStrength(" in pure,
+        "renderer uses pure merge": "tp.buildRows(" in tr and "tp.sortOrder(" in tr,
+        "filter chips (not tabs)": "var filter: tp.Filter" in tr and "tab_idx" not in tr,
+        "old tab renderers gone": ("renderFilesInline" not in tr
+                                   and "renderActiveInline" not in tr
+                                   and "renderHistoryInline" not in tr),
+        "one unified list": "fn renderUnifiedList()" in tr and "tp.matchesFilter(" in tr,
+        "chip counts from pure": "tp.countsFor(" in tr,
+        # An index would be invalidated by every 2Hz rebuild — expansion is keyed
+        # by identity (infohash / disk entry / normalized name).
+        "expansion keyed by identity": ("expanded_key" in tr
+                                        and "expanded_torrent_id" not in tr),
+        # torrent_poll is side-effecting (streaming deadline window) but used to
+        # run every frame at ~60Hz; the snapshot throttles it to 2Hz.
+        "snapshot throttled to 2Hz": "last_build_ms" in tr and "rows_dirty" in tr,
+        "infohash getter (C++)": ("int torrent_get_infohash(" in hdr
+                                  and 'extern "C" int torrent_get_infohash(' in cpp
+                                  and "info_hashes().get_best()" in cpp),
+        "renderer reads the infohash": "torrent_get_infohash(" in tr,
+        # Names from libtorrent/disk are untrusted bytes; invalid UTF-8 panics dvui.
+        "untrusted names validated": "safeUtf8Buf(displayName(" in tr,
+        # "Remove" must never delete disk bytes; deleting files is a separate,
+        # explicitly confirmed action in the expanded panel.
+        "remove ≠ delete from disk": ("confirmDangerButton(@src(), \"Remove\"" in tr
+                                      and "Delete files from disk" in tr),
+        # Dropping the proxy teardown leaks an accept-loop thread + a port.
+        "proxy torn down on remove": "stream_proxy.stopProxy(p.proxy_handle)" in tr,
+        "folder drill-down kept": "browse_subdir_len" in tr and "← Up" in tr,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "missing: " + ", ".join(missing)
+    return "pass", "one merged list: pure dedup + chips + union actions + infohash join"
+
+
 # ══════════════════════════════════════════════════════════
 # Zig Unit Tests
 # ══════════════════════════════════════════════════════════
