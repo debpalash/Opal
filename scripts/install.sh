@@ -85,14 +85,25 @@ install_macos() {
     [ "$(uname -m)" = "arm64" ] || die \
         "no prebuilt Intel-mac binaries (GitHub retired Intel runners) — build from source:
   https://github.com/$REPO#get-it  (build.zig honors HOMEBREW_PREFIX=/usr/local)"
-    # Prefer the Homebrew tap when it's live and brew is present.
-    if have brew && brew tap-info debpalash/tap >/dev/null 2>&1; then
-        say "installing via Homebrew tap"
+    # The prebuilt .app is the default, NOT Homebrew.
+    #
+    # This used to prefer the tap whenever brew was present. That was the worst of
+    # the three paths: the formula built from source, so it demanded a full Xcode
+    # install ("Installing just the Command Line Tools is not sufficient") and died
+    # on most machines — while the self-contained .app sat one line below, unused.
+    #
+    # The .app vendors its own mpv/SDL/etc, so it needs no Homebrew, no toolchain
+    # and no compile. Homebrew is now opt-in for people who want the `opal` CLI on
+    # PATH: OPAL_USE_BREW=1.
+    if [ "${OPAL_USE_BREW:-0}" = "1" ]; then
+        have brew || die "OPAL_USE_BREW=1 but brew is not installed"
+        say "installing the CLI via Homebrew tap (OPAL_USE_BREW=1)"
         brew install debpalash/tap/opal
         receipt brew
-        say "done — launch with: open -a Opal (or \`opal\`)"
+        say "done — run: opal"
         return
     fi
+
     fetch "Opal-$VER-macos-arm64.app.zip" "$TMP/opal.app.zip"
     target="/Applications"
     [ -w "$target" ] || target="$HOME/Applications"

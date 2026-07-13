@@ -23,14 +23,6 @@ test "looksLikeHexHash flags bare content hashes only" {
     try std.testing.expect(!looksLikeHexHash(""));
 }
 
-/// Time-aware greeting eyebrow for the hero. Hour is local, 0-23.
-pub fn greetingForHour(hour: u8) []const u8 {
-    if (hour < 5) return "Late night session";
-    if (hour < 12) return "Good morning";
-    if (hour < 18) return "Good afternoon";
-    return "Good evening";
-}
-
 /// Hero headline: "tonight" after dark, "today" otherwise.
 pub fn headlineForHour(hour: u8) []const u8 {
     if (hour >= 18 or hour < 5) return "What are we watching tonight?";
@@ -52,12 +44,11 @@ pub fn clipLabel(out: []u8, name: []const u8, max_bytes: usize) []const u8 {
     return out[0 .. end + 3];
 }
 
-test "greeting + headline cover the day" {
-    try std.testing.expectEqualStrings("Late night session", greetingForHour(2));
-    try std.testing.expectEqualStrings("Good morning", greetingForHour(9));
-    try std.testing.expectEqualStrings("Good afternoon", greetingForHour(14));
-    try std.testing.expectEqualStrings("Good evening", greetingForHour(21));
+test "headline covers the day" {
+    // The hero greeting eyebrow ("Late night session" / "Good morning" …) was
+    // removed; the headline still swings on the hour.
     try std.testing.expectEqualStrings("What are we watching tonight?", headlineForHour(22));
+    try std.testing.expectEqualStrings("What are we watching tonight?", headlineForHour(2));
     try std.testing.expectEqualStrings("What are we watching today?", headlineForHour(10));
 }
 

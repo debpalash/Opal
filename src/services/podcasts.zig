@@ -255,7 +255,10 @@ pub fn loadEpisodes(idx: usize) void {
             defer state.app.podcasts.episodes_loading.store(false, .release);
             const url = @This().feed[0..@This().feed_len];
             if (url.len == 0) return;
-            const body = curl(url, 1024 * 1024) orelse {
+            // 4 MB, not 1 MB: episodes[] holds 200, and a long-running show's feed
+            // is huge (6.9 MB / 583 items for Raj Shamani). At 1 MB the parser only
+            // ever saw the newest 61 — the array was two-thirds empty by design.
+            const body = curl(url, 4 * 1024 * 1024) orelse {
                 state.app.podcasts.fetch_error = true;
                 return;
             };
@@ -363,6 +366,25 @@ fn curl(url: []const u8, cap: usize) ?[]u8 {
         return null;
     };
     const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
+
+    // Drain whatever curl still has queued, or wait() below never returns.
+    //
+    // readAll() stops the instant `buf` is full and leaves the rest sitting in the
+    // pipe. curl keeps writing, the pipe fills, and curl blocks inside write(2) —
+    // where it can no longer reach its own transfer loop, so `--max-time 15` never
+    // fires. wait() then blocks forever on a process that can never exit.
+    //
+    // Raj Shamani's Figuring Out is a 6.9 MB feed against a 1 MB cap: the worker
+    // thread hung permanently on "Loading…", and because loadEpisodes() early-
+    // returns while episodes_loading is set, EVERY later podcast click was a
+    // silent no-op for the rest of the session.
+    if (n == buf.len) {
+        if (child.stdout) |*so| {
+            var sink: [64 * 1024]u8 = undefined;
+            while ((io.read(so, &sink) catch 0) > 0) {}
+        }
+    }
+
     _ = child.wait() catch {};
     if (n == 0) {
         alloc.free(buf);

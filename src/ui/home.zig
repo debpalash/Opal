@@ -337,7 +337,7 @@ fn renderTrendingRail(card_w: f32) bool {
     return true;
 }
 
-// ── Hero (idle console) — greeting + big prompt + suggestion chips ──
+// ── Hero (idle console) — big prompt + suggestion chips ──
 
 fn renderHero() void {
     const home_pure = @import("home_pure.zig");
@@ -358,22 +358,6 @@ fn renderHero() void {
     defer hero.deinit();
 
     const hour = localHour();
-
-    // Eyebrow — quiet time-aware greeting with a spark.
-    {
-        var eyebrow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 0.5 });
-        defer eyebrow.deinit();
-        dvui.icon(@src(), "hero-spark", icons.tvg.lucide.sparkles, .{}, .{
-            .color_text = theme.colors.accent,
-            .min_size_content = .{ .w = 13, .h = 13 },
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
-        });
-        _ = dvui.label(@src(), "{s}", .{home_pure.greetingForHour(hour)}, .{
-            .color_text = theme.colors.accent,
-            .gravity_y = 0.5,
-        });
-    }
 
     // Headline — big when there's room, ramp-display when the shell is tight.
     _ = dvui.label(@src(), "{s}", .{home_pure.headlineForHour(hour)}, .{
