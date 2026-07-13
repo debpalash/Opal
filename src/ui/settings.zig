@@ -3033,7 +3033,7 @@ pub fn renderCheatSheet() void {
         .{ "Y", "Toggle Seek Sync" },
         .{ "I", "Toggle Incognito Mode" },
         .{ "B", "Switch Cell to Browser" },
-        .{ "C", "Switch Cell to Comic" },
+        .{ "C", "Toggle Subtitles On/Off" },
         .{ "Z", "Toggle Video Fill Mode" },
         .{ "Ctrl+Arrows", "Swap Cell Position" },
         .{ "1-9", "Select Player Cell" },

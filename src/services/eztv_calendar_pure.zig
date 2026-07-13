@@ -298,21 +298,6 @@ pub fn episodeTag(season: i32, episode: i32, buf: []u8) []const u8 {
     }) catch "";
 }
 
-/// Human size: "1.4 GB", "620 MB", "12 KB". "" when the feed omitted it.
-pub fn sizeLabel(bytes: u64, buf: []u8) []const u8 {
-    if (bytes == 0) return "";
-    const gb = 1024 * 1024 * 1024;
-    const mb = 1024 * 1024;
-    const kb = 1024;
-    if (bytes >= gb) {
-        const whole = bytes / gb;
-        const frac = (bytes % gb) * 10 / gb;
-        return std.fmt.bufPrint(buf, "{d}.{d} GB", .{ whole, frac }) catch "";
-    }
-    if (bytes >= mb) return std.fmt.bufPrint(buf, "{d} MB", .{bytes / mb}) catch "";
-    if (bytes >= kb) return std.fmt.bufPrint(buf, "{d} KB", .{bytes / kb}) catch "";
-    return std.fmt.bufPrint(buf, "{d} B", .{bytes}) catch "";
-}
 
 // ── Tests ──
 
@@ -459,16 +444,310 @@ test "releaseLabel is a pure function of (now, epoch) — it moves as now moves"
     try std.testing.expectEqualStrings("2h ago", c);
 }
 
-test "episodeTag and sizeLabel" {
+test "episodeTag" {
     var b: [24]u8 = undefined;
     try std.testing.expectEqualStrings("S03E04", episodeTag(3, 4, &b));
     try std.testing.expectEqualStrings("S28E03", episodeTag(28, 3, &b));
     try std.testing.expectEqualStrings("", episodeTag(0, 0, &b));
     try std.testing.expectEqualStrings("", episodeTag(1, 0, &b));
 
-    try std.testing.expectEqualStrings("2.7 GB", sizeLabel(2930308381, &b));
-    try std.testing.expectEqualStrings("1.0 GB", sizeLabel(1073741824, &b));
-    try std.testing.expectEqualStrings("620 MB", sizeLabel(620 * 1024 * 1024, &b));
-    try std.testing.expectEqualStrings("12 KB", sizeLabel(12 * 1024, &b));
-    try std.testing.expectEqualStrings("", sizeLabel(0, &b));
+}
+
+// ══════════════════════════════════════════════════════════
+// Grouping releases into SHOW cards
+//
+// The feed is a flat list of torrent releases; the rail wants one card per SHOW,
+// carrying its newest episode. Two releases of the same episode (different
+// groups/qualities) must collapse to one card, or the rail is three rows of the
+// same show.
+// ══════════════════════════════════════════════════════════
+
+pub const MAX_SHOW_CARDS = 20;
+
+pub const ShowCard = struct {
+    /// Show name parsed out of the release title ("Rick and Morty").
+    name: [96]u8 = std.mem.zeroes([96]u8),
+    name_len: usize = 0,
+    /// Newest episode seen for this show in the feed.
+    season: i32 = 0,
+    episode: i32 = 0,
+    released_epoch: i64 = 0,
+    seeds: u32 = 0,
+
+    pub fn nameSlice(self: *const ShowCard) []const u8 {
+        return self.name[0..@min(self.name_len, self.name.len)];
+    }
+};
+
+/// Case-insensitive show-name equality — "Rick and Morty" and "rick.and.morty"
+/// are the same show, and the feed is not consistent about either.
+fn sameShow(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (std.ascii.toLower(x) != std.ascii.toLower(y)) return false;
+    }
+    return true;
+}
+
+/// Collapse `releases` into one card per show, keeping each show's NEWEST episode
+/// (and the best seed count seen for it). Returns the number of cards written.
+///
+/// `showNameOf` is injected so this stays pure: the caller passes the tested
+/// `subtitles_pure.parse` show extractor rather than this file re-rolling one.
+pub fn groupShows(
+    releases: []const Release,
+    out: []ShowCard,
+    comptime showNameOf: fn (title: []const u8, buf: []u8) []const u8,
+) usize {
+    var n: usize = 0;
+
+    for (releases) |*r| {
+        const title = r.title[0..@min(r.title_len, r.title.len)];
+        if (title.len == 0) continue;
+
+        var nbuf: [96]u8 = undefined;
+        const show = showNameOf(title, &nbuf);
+        if (show.len == 0) continue;
+        // A release with no SxxEyy isn't an episode we can name — skip it rather
+        // than make a card titled after a raw torrent filename.
+        if (r.season <= 0 or r.episode <= 0) continue;
+
+        // Already have this show? Keep the NEWER episode.
+        var found = false;
+        for (out[0..n]) |*c| {
+            if (!sameShow(c.nameSlice(), show)) continue;
+            found = true;
+            const newer = r.season > c.season or
+                (r.season == c.season and r.episode > c.episode);
+            if (newer) {
+                c.season = r.season;
+                c.episode = r.episode;
+                c.released_epoch = r.released_epoch;
+            }
+            if (r.seeds > c.seeds) c.seeds = r.seeds;
+            break;
+        }
+        if (found) continue;
+
+        if (n >= out.len) break;
+        var c = &out[n];
+        c.* = .{};
+        const ln = @min(show.len, c.name.len);
+        @memcpy(c.name[0..ln], show[0..ln]);
+        c.name_len = ln;
+        c.season = r.season;
+        c.episode = r.episode;
+        c.released_epoch = r.released_epoch;
+        c.seeds = r.seeds;
+        n += 1;
+    }
+
+    return n;
+}
+
+// ── Tests ──
+
+/// Stand-in for subtitles_pure.parse's show extractor: take everything before the
+/// SxxEyy and turn separators into spaces. Good enough to exercise groupShows.
+fn testShowName(title: []const u8, buf: []u8) []const u8 {
+    const cut = std.mem.indexOf(u8, title, ".S0") orelse title.len;
+    var n: usize = 0;
+    for (title[0..cut]) |ch| {
+        if (n >= buf.len) break;
+        buf[n] = if (ch == '.' or ch == '_') ' ' else ch;
+        n += 1;
+    }
+    return std.mem.trim(u8, buf[0..n], " ");
+}
+
+fn mkRelease(title: []const u8, s: i32, e: i32, seeds: u32, epoch: i64) Release {
+    var r = Release{ .season = s, .episode = e, .seeds = seeds, .released_epoch = epoch };
+    const n = @min(title.len, r.title.len);
+    @memcpy(r.title[0..n], title[0..n]);
+    r.title_len = n;
+    return r;
+}
+
+test "groupShows: one card per show, keeping the newest episode" {
+    const rels = [_]Release{
+        mkRelease("Rick.and.Morty.S09E07.1080p.WEB.h264-EDITH.mkv", 9, 7, 50, 100),
+        // Same episode, different release group — must NOT become a second card.
+        mkRelease("Rick.and.Morty.S09E07.720p.WEB.x265-OTHER.mkv", 9, 7, 90, 90),
+        // Newer episode of the same show — must REPLACE, not append.
+        mkRelease("Rick.and.Morty.S09E08.1080p.WEB.h264-EDITH.mkv", 9, 8, 30, 200),
+        mkRelease("The.Boys.S04E01.1080p.WEB.mkv", 4, 1, 10, 50),
+    };
+    var out: [MAX_SHOW_CARDS]ShowCard = undefined;
+    const n = groupShows(&rels, &out, testShowName);
+
+    try std.testing.expectEqual(@as(usize, 2), n);
+    try std.testing.expectEqualStrings("Rick and Morty", out[0].nameSlice());
+    try std.testing.expectEqual(@as(i32, 9), out[0].season);
+    try std.testing.expectEqual(@as(i32, 8), out[0].episode); // the newer one won
+    try std.testing.expectEqual(@as(u32, 90), out[0].seeds); // best seeds seen
+    try std.testing.expectEqualStrings("The Boys", out[1].nameSlice());
+}
+
+test "groupShows: case-insensitive show matching" {
+    const rels = [_]Release{
+        mkRelease("Rick.and.Morty.S09E01.mkv", 9, 1, 5, 10),
+        mkRelease("rick.and.morty.S09E02.mkv", 9, 2, 5, 20),
+    };
+    var out: [MAX_SHOW_CARDS]ShowCard = undefined;
+    try std.testing.expectEqual(@as(usize, 1), groupShows(&rels, &out, testShowName));
+    try std.testing.expectEqual(@as(i32, 2), out[0].episode);
+}
+
+test "groupShows: a release with no SxxEyy is skipped, not titled after a filename" {
+    const rels = [_]Release{
+        mkRelease("Some.Random.Movie.2024.1080p.mkv", 0, 0, 100, 10),
+        mkRelease("The.Boys.S04E01.mkv", 4, 1, 10, 20),
+    };
+    var out: [MAX_SHOW_CARDS]ShowCard = undefined;
+    const n = groupShows(&rels, &out, testShowName);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqualStrings("The Boys", out[0].nameSlice());
+}
+
+test "groupShows: never overruns the output buffer" {
+    var rels: [40]Release = undefined;
+    for (&rels, 0..) |*r, i| {
+        var tb: [64]u8 = undefined;
+        const t = std.fmt.bufPrint(&tb, "Show{d}.S01E01.mkv", .{i}) catch unreachable;
+        r.* = mkRelease(t, 1, 1, 1, @intCast(i));
+    }
+    var out: [4]ShowCard = undefined;
+    try std.testing.expectEqual(@as(usize, 4), groupShows(&rels, &out, testShowName));
+}
+
+// ══════════════════════════════════════════════════════════
+// Resolving artwork
+//
+// The feed carries a torrent title and nothing else — no poster, no TMDB id. To
+// draw the same poster card the library uses, each show has to be looked up. These
+// two helpers are the pure half of that.
+// ══════════════════════════════════════════════════════════
+
+/// Percent-encode a search query. Encodes everything that isn't unreserved, which
+/// is stricter than necessary and therefore safe: a stray `&` or `#` in a show
+/// name would otherwise truncate the query or start a fragment.
+pub fn encodeQuery(s: []const u8, buf: []u8) []const u8 {
+    const hex = "0123456789ABCDEF";
+    var n: usize = 0;
+    for (s) |ch| {
+        const unreserved = std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.' or ch == '~';
+        if (unreserved) {
+            if (n + 1 > buf.len) break;
+            buf[n] = ch;
+            n += 1;
+        } else if (ch == ' ') {
+            if (n + 3 > buf.len) break;
+            buf[n] = '%';
+            buf[n + 1] = '2';
+            buf[n + 2] = '0';
+            n += 3;
+        } else {
+            if (n + 3 > buf.len) break;
+            buf[n] = '%';
+            buf[n + 1] = hex[ch >> 4];
+            buf[n + 2] = hex[ch & 0x0F];
+            n += 3;
+        }
+    }
+    return buf[0..n];
+}
+
+pub const TvHit = struct {
+    tmdb_id: i32 = 0,
+    poster_path: [64]u8 = std.mem.zeroes([64]u8),
+    poster_path_len: usize = 0,
+
+    pub fn posterSlice(self: *const TvHit) []const u8 {
+        return self.poster_path[0..@min(self.poster_path_len, self.poster_path.len)];
+    }
+};
+
+/// First result of a TMDB `/3/search/tv` response.
+///
+/// Scans the `"results":[` array specifically — `"id"` and `"poster_path"` also
+/// appear elsewhere in the document, and a naive global search would happily pull
+/// the id out of some other object.
+pub fn firstTvResult(json: []const u8) ?TvHit {
+    const key = "\"results\":";
+    const at = std.mem.indexOf(u8, json, key) orelse return null;
+    var i = at + key.len;
+    while (i < json.len and json[i] == ' ') i += 1;
+    if (i >= json.len or json[i] != '[') return null;
+    i += 1;
+    // Empty results array -> no hit, rather than a bogus one.
+    while (i < json.len and (json[i] == ' ' or json[i] == '\n')) i += 1;
+    if (i >= json.len or json[i] != '{') return null;
+
+    // Bound to the first object so we can't read fields out of the second.
+    const end = std.mem.indexOfScalarPos(u8, json, i, '}') orelse return null;
+    const obj = json[i .. end + 1];
+
+    var hit = TvHit{};
+
+    if (std.mem.indexOf(u8, obj, "\"id\":")) |idx| {
+        var j = idx + 5;
+        while (j < obj.len and obj[j] == ' ') j += 1;
+        var v: i64 = 0;
+        var any = false;
+        while (j < obj.len and std.ascii.isDigit(obj[j])) : (j += 1) {
+            v = v * 10 + @as(i64, obj[j] - '0');
+            any = true;
+        }
+        if (!any) return null;
+        hit.tmdb_id = @intCast(@min(v, std.math.maxInt(i32)));
+    } else return null;
+
+    if (std.mem.indexOf(u8, obj, "\"poster_path\":")) |pidx| {
+        var j = pidx + "\"poster_path\":".len;
+        while (j < obj.len and obj[j] == ' ') j += 1;
+        if (j < obj.len and obj[j] == '"') {
+            j += 1;
+            const start = j;
+            while (j < obj.len and obj[j] != '"') j += 1;
+            const p = obj[start..j];
+            const n = @min(p.len, hit.poster_path.len);
+            @memcpy(hit.poster_path[0..n], p[0..n]);
+            hit.poster_path_len = n;
+        }
+        // `"poster_path": null` -> leave empty; the card renders its empty frame.
+    }
+
+    return hit;
+}
+
+test "encodeQuery: a stray & or # can't truncate the query" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("Rick%20and%20Morty", encodeQuery("Rick and Morty", &buf));
+    try std.testing.expectEqualStrings("S.W.A.T.", encodeQuery("S.W.A.T.", &buf));
+    try std.testing.expectEqualStrings("Cheers%26Jeers", encodeQuery("Cheers&Jeers", &buf));
+    try std.testing.expectEqualStrings("A%23B", encodeQuery("A#B", &buf));
+}
+
+test "firstTvResult: reads the FIRST result, not fields from elsewhere" {
+    const json =
+        \\{"page":1,"results":[
+        \\{"id":60625,"name":"Rick and Morty","poster_path":"/abc.jpg"},
+        \\{"id":999,"name":"Other","poster_path":"/zzz.jpg"}
+        \\],"total_results":2}
+    ;
+    const hit = firstTvResult(json).?;
+    try std.testing.expectEqual(@as(i32, 60625), hit.tmdb_id);
+    try std.testing.expectEqualStrings("/abc.jpg", hit.posterSlice());
+}
+
+test "firstTvResult: no results / null poster / junk" {
+    try std.testing.expect(firstTvResult("{\"results\":[]}") == null);
+    try std.testing.expect(firstTvResult("{}") == null);
+    try std.testing.expect(firstTvResult("") == null);
+
+    // A show with no artwork still resolves an id — the card just draws an empty
+    // poster frame rather than being dropped.
+    const hit = firstTvResult("{\"results\":[{\"id\":42,\"poster_path\":null}]}").?;
+    try std.testing.expectEqual(@as(i32, 42), hit.tmdb_id);
+    try std.testing.expectEqual(@as(usize, 0), hit.poster_path_len);
 }

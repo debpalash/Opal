@@ -273,10 +273,28 @@ pub fn processGlobalInputs() void {
                         continue;
                     },
                     // C = Switch active cell to comic viewer
+                    // C = Toggle subtitles on/off.
+                    //
+                    // Distinct from V / J, which CYCLE the subtitle track: this
+                    // just hides or shows whatever track is selected, which is what
+                    // you actually want mid-scene.
+                    //
+                    // C used to force the player into the comic viewer. That was a
+                    // manual override of a decision the app already makes for
+                    // itself — browser.loadContent routes a comic/image URL to the
+                    // comic viewer automatically (browser_pure.routeContent, which
+                    // is unit-tested), and the Plugins page sets it too. So nothing
+                    // is orphaned by taking the key, and pressing C on a video no
+                    // longer blanks the picture.
                     .c => {
                         if (state.app.active_player_idx < state.app.players.items.len) {
-                            state.app.players.items[state.app.active_player_idx].provider = .comic_viewer;
-                            dvui.refresh(null, @src(), null);
+                            const ap = state.app.players.items[state.app.active_player_idx];
+                            _ = c.mpv.mpv_command_string(ap.mpv_ctx, "cycle sub-visibility");
+
+                            var vis: c_int = 0;
+                            const shown = c.mpv.mpv_get_property(ap.mpv_ctx, "sub-visibility", c.mpv.MPV_FORMAT_FLAG, &vis) >= 0 and vis != 0;
+                            _ = c.mpv.mpv_command_string(ap.mpv_ctx, "show-text \"Subtitles: ${sub-visibility}\" 1500");
+                            state.showToast(if (shown) "Subtitles on" else "Subtitles off");
                         }
                         continue;
                     },

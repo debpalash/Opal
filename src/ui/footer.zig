@@ -20,7 +20,11 @@ var time_show_remaining: bool = false;
 
 // Active toolbar dropdown — only one open at a time. We use stable id values
 // derived from the picker kind. -1 = none.
-pub const PickerKind = enum(i32) { none = -1, chapter = 0, aspect = 1, audio = 2, sub = 3, lang = 4, playlist = 5, ar = 6 };
+pub const PickerKind = enum(i32) { none = -1, chapter = 0, aspect = 1, audio = 2, sub = 3, lang = 4, playlist = 5, ar = 6, subs = 7 };
+// NOTE: `.subs` (the Find-Subtitles panel) is NOT driven by `open_picker` —
+// its open state is `state.app.sub_picker_open`, which auto-search and the
+// keyless engine also set. It has a PickerKind purely so its chip records an
+// anchor rect and the panel can drop up from it like every other control.
 /// pub so input.zig's staged-Escape chain can peel an open picker popover
 /// (audio/sub/chapter/aspect/lang/playlist) before touching bigger surfaces.
 pub var open_picker: PickerKind = .none;
@@ -347,19 +351,12 @@ pub fn renderSubPicker() void {
     const text_mod = @import("../core/text.zig");
     const has_key = state.app.opensub_api_key_len > 0;
 
-    var win = dvui.floatingWindow(@src(), .{
-        .modal = true,
-        .open_flag = &state.app.sub_picker_open,
-    }, .{
-        .min_size_content = .{ .w = 600, .h = 460 },
-        .color_fill = theme.colors.bg_surface,
-        .border = dvui.Rect.all(1),
-        .color_border = theme.colors.border_subtle,
-        .corner_radius = dvui.Rect.all(theme.radius.lg),
-    });
+    // Same backdrop-less drop-up as the controls to its left — anchored above its
+    // own chip, no scrim dimming the video you're picking subtitles FOR.
+    var win = pickers.beginDropUp(@src(), .subs, 600, 460, &state.app.sub_picker_open);
     defer win.deinit();
 
-    win.dragAreaSet(dvui.windowHeader("Find Subtitles", "", &state.app.sub_picker_open));
+    pickers.dropUpTitle(@src(), "Find subtitles");
 
     var pad = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
@@ -1652,12 +1649,20 @@ pub fn renderLiquidGlassOverlay() void {
         // Find Subtitles — direct shortcut. Opens the picker AND kicks the
         // keyless search immediately (debounced inside the engine); the keyed
         // opensubtitles.com search joins in only when a key is configured.
-        if (pickerIconChip(@src(), 705, icons.tvg.lucide.search, "Subs", false, "Find subtitles online", .none)) {
-            state.app.sub_picker_open = true;
-            @import("../player/subtitles.zig").searchFromActivePlayer(&state.app.sub_engine);
-            if (state.app.opensub_api_key_len > 0) {
-                const subs = @import("../services/subtitles.zig");
-                if (!subs.is_searching.load(.acquire)) subs.autoSearchFromPlayer(false);
+        if (pickerIconChip(@src(), 705, icons.tvg.lucide.search, "Subs", state.app.sub_picker_open, "Find subtitles online", .subs)) {
+            // Toggle, like every other chip — clicking an open panel's chip closes
+            // it. It used to only ever open, so the chip could not dismiss what it
+            // had opened (harmless with a modal scrim to click through; not with a
+            // backdrop-less drop-up).
+            state.app.sub_picker_open = !state.app.sub_picker_open;
+            if (state.app.sub_picker_open) {
+                // Only one panel at a time.
+                open_picker = .none;
+                @import("../player/subtitles.zig").searchFromActivePlayer(&state.app.sub_engine);
+                if (state.app.opensub_api_key_len > 0) {
+                    const subs = @import("../services/subtitles.zig");
+                    if (!subs.is_searching.load(.acquire)) subs.autoSearchFromPlayer(false);
+                }
             }
         }
 

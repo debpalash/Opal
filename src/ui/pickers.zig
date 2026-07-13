@@ -41,7 +41,7 @@ const dropup = @import("dropup_pure.zig");
 var dropup_rects: [8]dvui.Rect = [_]dvui.Rect{.{}} ** 8;
 
 /// Open a backdrop-less panel anchored above `kind`'s chip. Caller must deinit.
-fn beginDropUp(
+pub fn beginDropUp(
     src: std.builtin.SourceLocation,
     kind: footer.PickerKind,
     w: f32,
@@ -80,7 +80,7 @@ fn beginDropUp(
 
 /// Small caption at the top of a drop-up. Replaces the modal's title bar: it names
 /// the panel without giving it window chrome.
-fn dropUpTitle(src: std.builtin.SourceLocation, text: []const u8) void {
+pub fn dropUpTitle(src: std.builtin.SourceLocation, text: []const u8) void {
     _ = dvui.label(src, "{s}", .{text}, .{
         .color_text = theme.colors.text_tertiary,
         .padding = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 4 },
@@ -90,11 +90,15 @@ fn dropUpTitle(src: std.builtin.SourceLocation, text: []const u8) void {
 /// Esc closes whichever drop-up is open. With no backdrop there is nothing to
 /// swallow a stray click, so Esc and re-clicking the chip are the dismissal paths.
 pub fn handleDropUpKeys() void {
-    if (footer.open_picker == .none) return;
+    // The Find-Subtitles panel is a drop-up too, but its open state lives on
+    // state.app.sub_picker_open rather than footer.open_picker — Esc has to close
+    // whichever is up.
+    if (footer.open_picker == .none and !state.app.sub_picker_open) return;
     for (dvui.events()) |*e| {
         if (e.evt != .key) continue;
         if (e.evt.key.action == .down and e.evt.key.code == .escape) {
             footer.open_picker = .none;
+            state.app.sub_picker_open = false;
         }
     }
 }

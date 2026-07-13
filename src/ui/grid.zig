@@ -819,6 +819,17 @@ pub fn renderGrid() !void {
                             _ = dvui.image(@src(), .{ .source = .{ .texture = p.loading_poster_tex.? } }, .{
                                 .id_extra = i + 3010,
                                 .expand = .both,
+                                // Without an explicit minimum, dvui takes the
+                                // IMAGE'S NATURAL SIZE as this box's minimum — and
+                                // this is a TMDB w500 poster (~500x750). That made
+                                // the player cell demand more height than the window
+                                // had, which pushed the control bar off the bottom
+                                // edge and left it clipped to a sliver. It only
+                                // showed on a TMDB-linked play (an episode); a plain
+                                // magnet paste draws the small hourglass instead and
+                                // was always fine. `.expand = .both` already fills
+                                // the cell, so the natural size buys nothing.
+                                .min_size_content = .{ .w = 0, .h = 0 },
                             });
                             var scrim = dvui.box(@src(), .{}, .{ .id_extra = i + 3011, .expand = .both, .background = true, .color_fill = theme.colors.overlay });
                             scrim.deinit();

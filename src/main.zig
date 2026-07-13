@@ -168,6 +168,13 @@ pub fn coreInit() !void {
             // Load all persistent data from SQLite
             config.load();
 
+            // Resource meters in the title bar. Samples on its own thread at 1 Hz
+            // — every reading is a syscall, and a meter that costs more than the
+            // thing it measures would be a bad joke.
+            @import("core/sysmon.zig").start();
+
+
+
             // Page-shell preview opt-in (redesign, WIP). Enable with
             // OPAL_PAGE_SHELL=1 to render the new website-like layout.
             if (@import("core/io_global.zig").getenv("OPAL_PAGE_SHELL")) |v| {
@@ -835,11 +842,35 @@ fn appFrame() !dvui.App.Result {
                         name_len = active_p.getMediaTitle(&name_buf);
                     }
 
+                    // The resource meters go IN the title bar — as text, because
+                    // SDL2 gives us no drawable surface up there (see
+                    // sysmon_pure.titleMeters). The OS renders the title string in
+                    // that bar, so the meters ride along with it.
+                    var meter_buf: [160]u8 = undefined;
+                    var meters: []const u8 = "";
+                    {
+                        const sysmon = @import("core/sysmon.zig");
+                        const sp = @import("core/sysmon_pure.zig");
+                        const snap = sysmon.get();
+                        // Not until the first delta lands: a confident "CPU 0%" is
+                        // worse than no meter at all.
+                        if (snap.valid) {
+                            meters = sp.titleMeters(
+                                snap.app_cpu_pct,
+                                snap.app_mem_rss,
+                                snap.sys_mem_total,
+                                snap.app_threads,
+                                snap.app_energy,
+                                &meter_buf,
+                            );
+                        }
+                    }
+
                     var win_title: [300]u8 = undefined;
                     const wt: ?[:0]u8 = if (name_len > 0)
-                        std.fmt.bufPrintZ(&win_title, "{s} \xe2\x80\x94 Opal", .{name_buf[0..name_len]}) catch null
+                        std.fmt.bufPrintZ(&win_title, "{s} \xe2\x80\x94 Opal{s}", .{ name_buf[0..name_len], meters }) catch null
                     else
-                        std.fmt.bufPrintZ(&win_title, "Opal \xe2\x80\x94 Play everything", .{}) catch null;
+                        std.fmt.bufPrintZ(&win_title, "Opal \xe2\x80\x94 Play everything{s}", .{meters}) catch null;
                     if (wt) |t| {
                         if (!std.mem.eql(u8, t, TitleState.last_title[0..TitleState.last_len])) {
                             c.sdl.SDL_SetWindowTitle(sw, t.ptr);

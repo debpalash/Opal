@@ -453,6 +453,19 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_tv_pure).step);
 
+    // Resource meters: thresholds, clamping and formatting. A NaN reaching a bar's
+    // width draws a garbage rect; a divide-by-zero on a machine reporting 0 total
+    // RAM must not become an infinite bar; and a media player DECODING VIDEO must
+    // not light the meter red, or people learn to ignore it.
+    const test_sysmon_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/sysmon_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_sysmon_pure).step);
+
     // Torrent streaming readiness: WHAT each container makes the demuxer read
     // before it can open a file. An MKV's Cues + Tags sit at EOF, so a 33%-
     // downloaded file never starts unless the tail is fetched too — head progress

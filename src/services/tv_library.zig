@@ -650,143 +650,35 @@ fn renderGrid() void {
 
 fn renderCard(idx: usize, slot: usize) void {
     const r = &rows[idx];
-    const it = posterFor(r);
+    const media_card = @import("../ui/media_card.zig");
 
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = slot + 64000,
-        .min_size_content = .{ .w = CARD_W, .h = POSTER_H + CARD_CHROME },
-        .max_size_content = .{ .w = CARD_W, .h = POSTER_H + CARD_CHROME },
-        .margin = dvui.Rect.all(6),
-    });
-    defer card.deinit();
+    // Movies count in percent; episodes count in episodes. "42/100 episodes" is
+    // nonsense.
+    var cbuf: [16]u8 = undefined;
+    const prog_label: []const u8 = if (r.prog.total == 0)
+        ""
+    else if (r.kind == .movie)
+        (std.fmt.bufPrint(&cbuf, "{d:.0}%", .{r.pct}) catch "")
+    else
+        (std.fmt.bufPrint(&cbuf, "{d}/{d}", .{ r.prog.watched, r.prog.total }) catch "");
 
-    // -- Poster (click opens the item) --
-    {
-        var bw: dvui.ButtonWidget = undefined;
-        bw.init(@src(), .{}, .{
-            .id_extra = slot + 64100,
-            .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(8),
-            .min_size_content = .{ .w = CARD_W, .h = POSTER_H },
-            .max_size_content = .{ .w = CARD_W, .h = POSTER_H },
-            .padding = dvui.Rect.all(0),
-        });
-        bw.processEvents();
-        bw.drawBackground();
-        if (bw.clicked()) openRow(r);
+    var sbuf: [48]u8 = undefined;
 
-        if (poster.uploadIfReady(&it.poster_pixels, it.poster_w, it.poster_h, &it.poster_tex)) {
-            if (it.poster_tex) |*tex| {
-                _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                    .id_extra = slot + 64200,
-                    .expand = .both,
-                    .corner_radius = dvui.Rect.all(8),
-                });
-            }
-        } else {
-            // Full attempted -> failed transition. Gating on !failed without ever
-            // SETTING it is how the TMDB grid used to re-spawn a fetch for a dead
-            // poster on every single frame.
-            const url = r.posterUrlSlice();
-            if (it.poster_fetching) {
-                it.poster_attempted = true;
-            } else if (it.poster_attempted and it.poster_pixels == null and it.poster_tex == null) {
-                it.poster_failed = true;
-            } else if (!it.poster_failed and it.poster_pixels == null and url.len > 0) {
-                // fetchAsync by URL, not tmdb_api.fetchPoster: anime posters are
-                // absolute URLs, not TMDB paths. One code path for every kind.
-                poster.fetchAsync(url, &it.poster_pixels, &it.poster_w, &it.poster_h, &it.poster_fetching);
-                if (it.poster_fetching) it.poster_attempted = true;
-            }
-        }
-        bw.deinit();
-    }
-
-    // -- Title --
-    _ = dvui.label(@src(), "{s}", .{r.nameSlice()}, .{
-        .id_extra = slot + 64300,
-        .color_text = theme.colors.text_primary,
-        .expand = .horizontal,
-        .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
+    const click = media_card.render(@src(), slot + 64000, posterFor(r), .{
+        .poster_url = r.posterUrlSlice(),
+        .title = r.nameSlice(),
+        .subtitle = tp.statusLabel(r, &sbuf),
+        .subtitle_accent = r.has_next or
+            (r.kind == .movie and r.pct >= tp.MOVIE_START_PCT and r.pct < tp.MOVIE_DONE_PCT),
+        .progress = if (r.prog.total > 0) r.prog.fraction() else null,
+        .progress_label = prog_label,
+        .action_label = playLabel(r),
     });
 
-    // -- Status line --
-    {
-        var sbuf: [48]u8 = undefined;
-        const s_lbl = tp.statusLabel(r, &sbuf);
-        _ = dvui.label(@src(), "{s}", .{s_lbl}, .{
-            .id_extra = slot + 64400,
-            .color_text = if (r.has_next or (r.kind == .movie and r.pct >= tp.MOVIE_START_PCT and r.pct < tp.MOVIE_DONE_PCT))
-                theme.colors.accent
-            else
-                theme.colors.text_tertiary,
-            .expand = .horizontal,
-            .padding = .{ .x = 2, .y = 0, .w = 2, .h = 2 },
-        });
-    }
-
-    // -- Progress bar + count --
-    if (r.prog.total > 0) {
-        var pbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = slot + 64500,
-            .expand = .horizontal,
-            .padding = .{ .x = 2, .y = 0, .w = 2, .h = 2 },
-        });
-        defer pbox.deinit();
-
-        // Manual track + fill, not dvui.progress/slider: the slider is DRAGGABLE
-        // and takes the control-blue fill rather than the theme accent (that's the
-        // stray blue bar the TV detail's season header used to show).
-        {
-            var track = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = slot + 64510,
-                .expand = .horizontal,
-                .gravity_y = 0.5,
-                .background = true,
-                .color_fill = theme.colors.bg_elevated,
-                .min_size_content = .{ .w = 0, .h = 3 },
-                .max_size_content = .{ .w = std.math.floatMax(f32), .h = 3 },
-            });
-            const track_w = track.data().contentRectScale().r.w;
-            const frac = r.prog.fraction();
-            var fill = dvui.box(@src(), .{}, .{
-                .id_extra = slot + 64511,
-                .background = true,
-                .color_fill = theme.colors.accent,
-                .min_size_content = .{ .w = frac * track_w, .h = 3 },
-                .max_size_content = .{ .w = frac * track_w, .h = 3 },
-            });
-            fill.deinit();
-            track.deinit();
-        }
-
-        // Movies count in percent, not episodes -- "42/100 episodes" is nonsense.
-        var cbuf: [16]u8 = undefined;
-        const cl = if (r.kind == .movie)
-            (std.fmt.bufPrint(&cbuf, "{d:.0}%", .{r.pct}) catch "")
-        else
-            (std.fmt.bufPrint(&cbuf, "{d}/{d}", .{ r.prog.watched, r.prog.total }) catch "");
-        _ = dvui.label(@src(), "{s}", .{cl}, .{
-            .id_extra = slot + 64520,
-            .color_text = theme.colors.text_tertiary,
-            .gravity_y = 0.5,
-            .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
-        });
-    }
-
-    // -- Play (only when there is something to actually play) --
-    if (playLabel(r)) |lbl| {
-        if (dvui.button(@src(), lbl, .{}, .{
-            .id_extra = slot + 64600,
-            .expand = .horizontal,
-            .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-            .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-        })) playRow(r);
+    switch (click) {
+        .none => {},
+        .open => openRow(r),
+        .action => playRow(r),
     }
 }
 

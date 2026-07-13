@@ -157,6 +157,7 @@ fn anyHasMedia() bool {
 
 // ── Top navigation ──
 
+
 fn renderTopNav(compact: bool) void {
     // Transparent title bar — the nav floats over the app background (no solid
     // fill) for a lighter, content-focused feel; a hairline bottom border keeps

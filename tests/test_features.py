@@ -3407,6 +3407,125 @@ def test_episode_transport():
     return "pass", "prev/next episode in the transport, aired-clamped, TV-only"
 
 
+@test("Latest releases render as show cards", "Page Shell")
+def test_release_cards():
+    # "Latest releases" on Watching used to be a list of raw torrent rows next to a
+    # grid of poster cards -- two renderers for the same shows, which is how one
+    # page ends up looking like two apps. There is now ONE card (ui/media_card.zig)
+    # and both surfaces call it.
+    mc = _src("src/ui/media_card.zig")
+    ez = _src("src/services/eztv_calendar.zig")
+    ezp = _src("src/services/eztv_calendar_pure.zig")
+    lib = _src("src/services/tv_library.zig")
+    checks = {
+        "one shared card": "pub fn render(" in mc and "pub const Card = struct" in mc,
+        "library uses it": "media_card.render(" in lib,
+        "releases use it": "media_card.render(" in ez,
+        # One card per SHOW, not one per torrent: two releases of the same episode
+        # (different groups/qualities) must not become two cards.
+        "grouped by show": "pub fn groupShows(" in ezp and "pure.groupShows(" in ez,
+        # The feed carries no artwork and no tmdb id, so each show is resolved.
+        "artwork resolved": ("pub fn firstTvResult(" in ezp
+                            and "pure.firstTvResult(" in ez
+                            and "/3/search/tv?query=" in ez),
+        # A stray & or # in a show name would truncate the query.
+        "query encoded": "pub fn encodeQuery(" in ezp and "pure.encodeQuery(" in ez,
+        # Poster slots keyed by show, never by list position -- the card list is
+        # rebuilt every 15 min and a detached poster worker holds a slot pointer.
+        "poster slots keyed by show": "fn posterFor(show: []const u8)" in ez,
+        # The show-name parse reuses the tested SxxEyy filename parser.
+        "reuses the tested name parser": "subs.parse(title, &qbuf, buf)" in ez,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "missing: " + ", ".join(missing)
+    return "pass", "one shared poster card; releases grouped per show + artwork resolved"
+
+
+@test("C toggles subtitles (not the comic viewer)", "Page Shell")
+def test_c_toggles_subs():
+    # C used to force the active player into the comic viewer, which blanked the
+    # picture mid-video. That was a manual override of a decision the app already
+    # makes for itself: browser.loadContent routes comic/image URLs to the comic
+    # viewer via the unit-tested browser_pure.routeContent, and the Plugins page
+    # sets it too -- so nothing is orphaned by taking the key.
+    inp = _src("src/ui/input.zig")
+    st = _src("src/ui/settings.zig")
+    checks = {
+        "C toggles subtitle visibility": '"cycle sub-visibility"' in inp,
+        "C no longer hijacks the provider": "provider = .comic_viewer" not in inp,
+        # Distinct from V / J, which CYCLE the track. Toggling visibility and
+        # cycling tracks are different actions and both must survive.
+        "V/J still cycle the track": inp.count('"cycle sub"') >= 2,
+        # The Settings shortcut list must not lie about what the key does.
+        "help text updated": ('"Toggle Subtitles On/Off"' in st
+                              and '"Switch Cell to Comic"' not in st),
+        # The comic viewer is still reachable the way it actually should be.
+        "comic viewer still routed by URL": "comic_viewer" in _src("src/services/browser_pure.zig"),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "missing: " + ", ".join(missing)
+    return "pass", "C toggles sub-visibility; comic viewer still auto-routed by URL"
+
+
+@test("Title-bar resource meters", "Stability")
+def test_sysmeter():
+    # CPU / MEM / THR / NRG in the OS title bar, folded into the window title as
+    # text. There is no dvui widget: SDL2 gives no drawable surface up there.
+    mon = _src("src/core/sysmon.zig")
+    pur = _src("src/core/sysmon_pure.zig")
+    sh = _src("src/ui/shell.zig")
+    mn = _src("src/main.zig")
+    bz = _src("build.zig")
+    checks = {
+        "sampler exists": "pub fn start() void" in mon and "pub fn get() Snapshot" in mon,
+        "started at launch": 'core/sysmon.zig").start()' in mn,
+        # The meters are NOT a dvui widget any more — they're text in the window
+        # title, so there is no in-app strip to mount (and no duplicate row).
+        "no duplicate in-app strip": "renderTitleStrip" not in sh,
+        # Every reading is a syscall. Sampling per-frame on the UI thread would
+        # cost more than the thing it measures.
+        "sampled off-thread at 1Hz": ("std.Thread.spawn" in mon and ".detach()" in mon
+                                      and "io.sleep(1000 * std.time.ns_per_ms)" in mon),
+        # CPU is a RATE: it needs two samples. The first tick can only guess, so
+        # the meters hide rather than show a confident zero (or a 100% spike).
+        "no reading before a real delta": "valid" in mon and "snap.valid" in mn,
+        # Thresholds/clamping/formatting are decided in the tested pure module.
+        "decisions are pure + tested": all(f in pur for f in
+                                           ("pub fn frac(", "pub fn levelOf(", "pub fn energyImpact(",
+                                            "pub fn fmtBytes(")),
+        "title routes through pure": all(f in pur for f in ("cpuMetric(", "memMetric(", "titleMeters(")),
+        "pure registered": "sysmon_pure.zig" in bz,
+        # mach hands us VM-allocated arrays and thread ports. Leaking them every
+        # second inside the thing that MEASURES leaks would be quite the own goal.
+        "mach allocations freed": ("vm_deallocate" in mon and "mach_port_deallocate" in mon),
+        # Real syscalls, not a stub.
+        "real syscalls": all(f in mon for f in ("host_statistics64", "host_processor_info",
+                                                "task_threads", "TASK_POWER_INFO")),
+        # Energy has no public power API; deriving it from CPU alone would be a
+        # plausible-but-wrong number, so wakeups go in and it's labelled a score.
+        "energy is honest": "wakeups" in pur and "not watts" in pur,
+        "clock via io_global": "std.time.timestamp" not in mon,
+        # The meters render IN the OS title bar — as TEXT, folded into the window
+        # title. SDL2 gives no drawable surface up there: the content view can be
+        # extended under the title bar, but SDL keeps rendering into the old,
+        # shorter rect, so dvui's y=0 never moves (measured: SDL reported 1244x771
+        # before AND after). What the OS does render there is the title string.
+        "meters in the window title": "titleMeters" in _src("src/main.zig"),
+        "bar glyph per metric": "barGlyph" in pur,
+        # A partial run ("CPU ▃ 12%   MEM ▅ 1.2") would read as a bug, and the
+        # title must survive regardless — so a short buffer yields nothing.
+        "no truncated meter run": 'catch ""' in pur,
+        # No confident "CPU 0%" before the first delta lands.
+        "hidden until first sample": "snap.valid" in _src("src/main.zig"),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "missing: " + ", ".join(missing)
+    return "pass", "CPU/MEM/THR/NRG meters: 1Hz off-thread sampler, tested thresholds"
+
+
 @test("Nav Donate Button", "Page Shell")
 def test_nav_donate_button():
     # The button itself is dvui draw code (GUI-only, not unit-testable), so this
@@ -3480,8 +3599,13 @@ def test_eztv_calendar():
         "clock via io_global":         "io.milliTimestamp()" in svc,
         "no std.time":                 "std.time." not in svc,
         # A countdown baked at fetch time freezes on screen. It must be derived
-        # from the stored epoch at the render site.
-        "countdown per frame":         "pure.releaseLabel(now_s, r.released_epoch" in svc,
+        # from the stored epoch at the RENDER site, every frame. (Asserted on the
+        # behaviour -- `now_s` fed in at render, from a stored epoch -- not on the
+        # loop variable's name, which was `r` when releases were rows and is `cd`
+        # now that they're cards.)
+        "countdown per frame":         ("pure.releaseLabel(now_s," in svc
+                                        and "released_epoch" in svc
+                                        and "const now_s = io.timestamp();" in svc),
 
         # ── Threading / memory ──
         "busy guard":                  "loading.load(.acquire)" in svc and "loading.store(true, .release)" in svc,
@@ -3501,9 +3625,13 @@ def test_eztv_calendar():
                                         and "std.http.Client" not in svc),
 
         # ── Pure logic is tested and production routes through it ──
+        # sizeLabel was dropped with the row layout -- a poster card has no place
+        # for a file size, and a tested pure fn that nothing ships is dead weight.
+        # groupShows/firstTvResult/encodeQuery are what the card path needs.
         "pure fns used in prod":       all(f in svc for f in ("pure.buildFeedUrl", "pure.parseFeed",
                                                               "pure.releaseLabel", "pure.episodeTag",
-                                                              "pure.sizeLabel")),
+                                                              "pure.groupShows", "pure.firstTvResult",
+                                                              "pure.encodeQuery")),
         "pure module has tests":       pur.count('test "') >= 5,
         "registered in build.zig":     "src/services/eztv_calendar_pure.zig" in build,
     }

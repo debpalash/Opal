@@ -65,6 +65,46 @@ var bufs: [2][MAX_ENTRIES]pure.Release = std.mem.zeroes([2][MAX_ENTRIES]pure.Rel
 var counts: [2]usize = .{ 0, 0 };
 var front = std.atomic.Value(u8).init(0);
 
+// ── Show cards ──
+//
+// The rail draws one poster card per SHOW, not one row per torrent. The feed has
+// neither artwork nor a TMDB id, so the worker groups releases by show and looks
+// each one up. Double-buffered alongside the releases and published by the same
+// `front` flip.
+var card_bufs: [2][pure.MAX_SHOW_CARDS]pure.ShowCard = std.mem.zeroes([2][pure.MAX_SHOW_CARDS]pure.ShowCard);
+var card_hits: [2][pure.MAX_SHOW_CARDS]pure.TvHit = std.mem.zeroes([2][pure.MAX_SHOW_CARDS]pure.TvHit);
+var card_counts: [2]usize = .{ 0, 0 };
+
+/// Poster slots, keyed by show name and NEVER recycled. Emphatically not indexed
+/// by card position: the card list is rebuilt every 15 minutes and shows move
+/// around, and a detached poster worker holds a pointer into whichever slot it
+/// was given — reusing that slot would hand its pixel write to the wrong show.
+var poster_items: [pure.MAX_SHOW_CARDS]state.TmdbItem = std.mem.zeroes([pure.MAX_SHOW_CARDS]state.TmdbItem);
+
+fn posterFor(show: []const u8) *state.TmdbItem {
+    const key: i32 = @bitCast(@as(u32, @truncate(std.hash.Wyhash.hash(0xE2D7, show))) | 1);
+    for (&poster_items) |*it| {
+        if (it.id == key) return it;
+    }
+    for (&poster_items) |*it| {
+        if (it.id == 0) {
+            it.id = key;
+            return it;
+        }
+    }
+    return &poster_items[0];
+}
+
+/// Show name out of a release title, via the tested SxxEyy filename parser rather
+/// than a second hand-rolled one.
+fn showNameOf(title: []const u8, buf: []u8) []const u8 {
+    const subs = @import("subtitles_pure.zig");
+    var qbuf: [256]u8 = undefined;
+    const parsed = subs.parse(title, &qbuf, buf);
+    if (!parsed.is_tv) return "";
+    return parsed.show;
+}
+
 var loading = std.atomic.Value(bool).init(false);
 /// 0 = never fetched. Set BEFORE the spawn so a failing fetch backs off for a
 /// full interval instead of being retried every frame.
@@ -114,6 +154,28 @@ const Fetch = struct {
         const got = pure.parseFeed(body[0..n], &bufs[back]);
         if (got == 0) return; // keep whatever we already had on screen
 
+        // One card per show, newest episode each.
+        const cards = pure.groupShows(bufs[back][0..got], &card_bufs[back], showNameOf);
+
+        // Resolve artwork. The feed has none, so each show is looked up once. A
+        // failed lookup leaves the card with an empty poster frame rather than
+        // dropping it — a card with no picture beats no card.
+        const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
+        if (key.len > 0) {
+            const tmdb_api = @import("tmdb_api.zig");
+            for (card_bufs[back][0..cards], 0..) |*cd, i| {
+                card_hits[back][i] = .{};
+                var qbuf: [192]u8 = undefined;
+                const q = pure.encodeQuery(cd.nameSlice(), &qbuf);
+                var url_buf: [256]u8 = undefined;
+                const path = std.fmt.bufPrint(&url_buf, "/3/search/tv?query={s}", .{q}) catch continue;
+                const rn = tmdb_api.tmdbApiInto(path, key, body);
+                if (rn == 0) continue;
+                if (pure.firstTvResult(body[0..rn])) |hit| card_hits[back][i] = hit;
+            }
+        }
+        card_counts[back] = cards;
+
         counts[back] = got;
         front.store(back, .release); // publish LAST
 
@@ -156,9 +218,9 @@ pub fn renderSection() void {
     if (!source_config.has("eztv")) return;
 
     const f = front.load(.acquire);
-    const n = counts[f];
-    if (n == 0) return;
-    const list = bufs[f][0..n];
+    const cn = card_counts[f];
+    if (cn == 0) return; // nothing groupable yet — draw nothing rather than an empty rail
+    const cards = card_bufs[f][0..cn];
 
     var sec = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
@@ -204,85 +266,73 @@ pub fn renderSection() void {
         }
     }
 
-    // ── Rows ──
+    // ── Cards ──
     //
-    // The countdown is derived HERE, every frame, from the stored epoch — so it
-    // ticks on its own without a refetch.
+    // The SAME poster card the Watching library draws (ui/media_card.zig), so the
+    // two surfaces can't drift into looking like two different apps. The feed has
+    // no artwork, so the worker resolves each show against TMDB; a show it can't
+    // resolve still gets a card, with an empty poster frame.
+    //
+    // "2h ago" is derived HERE, every frame, from the stored epoch — so it ticks
+    // on its own without a refetch.
+    const media_card = @import("../ui/media_card.zig");
     const now_s = io.timestamp();
 
-    for (list, 0..) |*r, i| {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = ID_BASE + i,
-            .expand = .horizontal,
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .corner_radius = dvui.Rect.all(theme.radius.md),
-            .margin = .{ .x = theme.spacing.lg, .y = 0, .w = theme.spacing.lg, .h = theme.spacing.xs },
-            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
-        });
-        defer row.deinit();
+    var strip = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none, .horizontal_bar = .hide }, .{
+        .expand = .horizontal,
+        .background = false,
+        .min_size_content = .{ .w = 10, .h = media_card.POSTER_H + media_card.CHROME_H + 12 },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = media_card.POSTER_H + media_card.CHROME_H + 12 },
+        .padding = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = 0 },
+    });
+    defer strip.deinit();
 
-        // SxxEyy chip (blank for movies / season packs).
-        var tag_buf: [16]u8 = undefined;
-        const tag = pure.episodeTag(r.season, r.episode, &tag_buf);
-        if (tag.len > 0) {
-            _ = dvui.label(@src(), "{s}", .{tag}, .{
-                .id_extra = ID_BASE + 100 + i,
-                .color_text = theme.colors.accent,
-                .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
-                .gravity_y = 0.5,
-                .padding = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
-            });
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{});
+    defer row.deinit();
+
+    for (cards, 0..) |*cd, i| {
+        const hit = &card_hits[f][i];
+        const show = cd.nameSlice();
+
+        // TMDB poster path -> absolute URL, so the shared card has one image path
+        // for every source.
+        var url_buf: [160]u8 = undefined;
+        var poster_url: []const u8 = "";
+        if (hit.poster_path_len > 0) {
+            poster_url = std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w185{s}", .{hit.posterSlice()}) catch "";
         }
 
-        // Release title (UTF-8-sanitized: the feed is not always clean).
-        var title_buf: [pure.MAX_TITLE]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{text.safeUtf8Buf(r.title[0..r.title_len], &title_buf)}, .{
-            .id_extra = ID_BASE + 200 + i,
-            .color_text = theme.colors.text_primary,
-            .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
-            .gravity_y = 0.5,
+        // "S09E08 · 2h ago"
+        var tag_buf: [16]u8 = undefined;
+        const tag = pure.episodeTag(cd.season, cd.episode, &tag_buf);
+        var when_buf: [32]u8 = undefined;
+        const when = pure.releaseLabel(now_s, cd.released_epoch, &when_buf);
+        var sub_buf: [64]u8 = undefined;
+        const subtitle = std.fmt.bufPrint(&sub_buf, "{s} · {s}", .{ tag, when }) catch tag;
+
+        // The feed's titles are not always clean UTF-8, and dvui panics on invalid
+        // UTF-8 rather than rendering tofu.
+        const safe_name = text.safeUtf8(show);
+
+        const click = media_card.render(@src(), ID_BASE + i, posterFor(show), .{
+            .poster_url = poster_url,
+            .title = safe_name,
+            .subtitle = subtitle,
+            .subtitle_accent = true,
+            .action_label = "Watch",
         });
 
-        // Trailing: live countdown + seeds + size.
-        var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = ID_BASE + 300 + i,
-            .expand = .none,
-            .gravity_x = 1.0,
-            .gravity_y = 0.5,
-        });
-        defer meta.deinit();
-
-        var cd_buf: [32]u8 = undefined;
-        const cd = pure.releaseLabel(now_s, r.released_epoch, &cd_buf);
-        const imminent = r.released_epoch >= now_s or (now_s - r.released_epoch) <= 3600;
-        _ = dvui.label(@src(), "{s}", .{cd}, .{
-            .id_extra = ID_BASE + 400 + i,
-            .color_text = if (imminent) theme.colors.success else theme.colors.text_tertiary,
-            .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
-            .gravity_y = 0.5,
-            .padding = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
-        });
-
-        var seed_buf: [24]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{std.fmt.bufPrint(&seed_buf, "{d} seeds", .{r.seeds}) catch ""}, .{
-            .id_extra = ID_BASE + 500 + i,
-            .color_text = theme.colors.text_tertiary,
-            .font = dvui.themeGet().font_body.withSize(theme.font_size.micro),
-            .gravity_y = 0.5,
-            .padding = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
-        });
-
-        var size_buf: [24]u8 = undefined;
-        const size = pure.sizeLabel(r.size_bytes, &size_buf);
-        if (size.len > 0) {
-            _ = dvui.label(@src(), "{s}", .{size}, .{
-                .id_extra = ID_BASE + 600 + i,
-                .color_text = theme.colors.text_tertiary,
-                .font = dvui.themeGet().font_body.withSize(theme.font_size.micro),
-                .gravity_y = 0.5,
-                .padding = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
-            });
+        if (click != .none) {
+            // Resolved to a real show -> open its detail page, where Play/Track
+            // already live. Unresolved -> fall back to a search for the episode.
+            if (hit.tmdb_id != 0) {
+                @import("tmdb.zig").openTvDetailById(hit.tmdb_id, safe_name, hit.posterSlice());
+            } else {
+                var q_buf: [128]u8 = undefined;
+                const q = std.fmt.bufPrint(&q_buf, "{s} {s}", .{ safe_name, tag }) catch safe_name;
+                @import("search.zig").setUniversalQuery(q);
+                state.navigateToTab(.Search);
+            }
         }
     }
 }
