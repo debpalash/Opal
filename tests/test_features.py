@@ -395,6 +395,83 @@ def test_echo_cancel():
     except:
         return "skip", "pactl not available"
 
+
+@test("Conversational: voice-server echo guard + live partials", "Voice")
+def test_voice_server_echo_and_partials():
+    # The full-duplex event loop is the realtime conversational path. Its voice
+    # server must (a) stream live PARTIAL: interim transcripts and (b) apply a
+    # semantic echo guard so full-duplex barge-in fires on a real interruption
+    # but NOT on the assistant's own TTS heard back through open speakers.
+    server = os.path.join(PROJECT_DIR, "bin", "opal-voice-server.py")
+    if not os.path.exists(server):
+        return "fail", "opal-voice-server.py missing"
+    # Behavioral: import with heavy deps stubbed, drive the pure decision logic.
+    probe = (
+        "import importlib.util, types, sys\n"
+        "for m in ('numpy','sounddevice','webrtcvad','faster_whisper'):\n"
+        "    sys.modules.setdefault(m, types.ModuleType(m))\n"
+        "spec = importlib.util.spec_from_file_location('vs', %r)\n"
+        "vs = importlib.util.module_from_spec(spec); spec.loader.exec_module(vs)\n"
+        "assert vs._normalize('Here, THREE sci-fi!!') == 'here three sci fi'\n"
+        "srv = vs.VoiceServer(object(), object())\n"
+        "srv._handle_command('SPEAKING:here are three great comedies you might enjoy tonight')\n"
+        "assert srv.speaking and srv.speaking_text.startswith('here are three great comedies')\n"
+        # Regression: these are the ACTUAL garbled renderings the microphone
+        # produced of the assistant's own TTS during live E2E. Exact word-overlap
+        # scored them below threshold and the assistant interrupted ITSELF — hence
+        # the fuzzy match + whisper-hallucination filter. Keep them suppressed.
+        "for e in ['three comedies',\n"
+        "          'You are three great communists.',\n"
+        "          'You are a three-grade commie...',\n"
+        "          'I think you have three great comments.',\n"
+        "          'We will see you in the next video.',\n"   # whisper subtitle hallucination
+        "          'Thank you.', '']:\n"
+        "    assert srv._is_echo(e) is True, ('echo leaked -> false barge-in: %%r' %% e)\n"
+        # Genuine interruptions must still cut through — including bare stop words.
+        "for t in ['no i want horror instead', 'stop', 'no', 'wait go back',\n"
+        "          'actually show me documentaries about volcanoes']:\n"
+        "    assert srv._is_echo(t) is False, ('real interruption swallowed: %%r' %% t)\n"
+        "srv._handle_command('DONE_SPEAKING')\n"
+        "assert not srv.speaking and srv.speaking_text == ''\n"
+        "srv._handle_command('SPEAKING')\n"                        # bare → energy-only
+        "assert srv._is_echo('whatever words here') is False\n"
+        "print('ok')\n"
+    ) % server
+    r = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        last = (r.stderr.strip().splitlines() or ["import/assert failed"])[-1]
+        return "fail", last[:100]
+    # Structural: server streams partials + routes barge-in through the guard.
+    src = _src("bin/opal-voice-server.py")
+    if 'self.send("PARTIAL:"' not in src:
+        return "fail", "server no longer streams PARTIAL:"
+    if "_is_echo" not in src or "bargein_frames_buf" not in src:
+        return "fail", "barge-in echo guard missing from run loop"
+    return "pass", "echo guard drops self-echo; real interruption passes; PARTIAL streamed"
+
+
+@test("Conversational: prefer full-duplex event loop + wiring", "Voice")
+def test_conversational_wiring():
+    # Realtime conversational mode should prefer the full-duplex event loop (live
+    # partials + talk-over-it barge-in) over the finals-only sherpa loop, feed the
+    # spoken sentence to the echo guard, and render interim transcript in the UI.
+    av = _src("src/services/ai_voice.zig")
+    hz = _src("src/ui/home.zig")
+    checks = {
+        "readiness probe": "pub fn voiceServerReady" in av,
+        "auto dispatcher prefers event loop": (
+            "fn conversationLoopAuto" in av and "if (voiceServerReady())" in av),
+        "toggle spawns dispatcher off-UI-thread": "conversationLoopAuto, .{}" in av,
+        "sends SPEAKING:<text> as echo reference": (
+            '"SPEAKING:"' in av and "voiceSocketWrite(sp_buf" in av),
+        "UI renders live partials": (
+            "partial_text_len" in hz and "conv_phase == .listening" in hz),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if not missing:
+        return "pass", "event loop preferred; SPEAKING:<text> echo ref; live partials in UI"
+    return "fail", f"missing: {missing}"
+
 # ══════════════════════════════════════════════════════════
 # LLM Server Tests
 # ══════════════════════════════════════════════════════════

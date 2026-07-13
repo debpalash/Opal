@@ -908,6 +908,19 @@ fn renderChatMode() void {
                 });
             }
 
+            // Live interim transcript — words stream in as you speak (the
+            // realtime feel), greyed until the utterance is finalized. Only the
+            // full-duplex event loop populates partial_text.
+            if (voice.partial_text_len > 0 and
+                (voice.conv_phase == .listening or voice.conv_phase == .transcribing))
+            {
+                const partial = voice.partial_text[0..@min(voice.partial_text_len, voice.partial_text.len)];
+                _ = dvui.label(@src(), "  \"{s}\"", .{partial}, .{
+                    .color_text = theme.colors.text_tertiary,
+                    .gravity_y = 0.5,
+                });
+            }
+
             {
                 var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
                 sp.deinit();

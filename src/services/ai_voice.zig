@@ -206,6 +206,23 @@ pub fn preWarmServers() void {
 /// Python imports without loading any model and exits 0/non-zero. Lets the
 /// ensure* helpers skip the multi-second spawn-and-wait (and avoid leaving an
 /// idle python process) when the optional voice deps aren't installed.
+/// The bin/*.py helpers sit next to the project in dev, but inside
+/// Contents/Resources once installed as Opal.app — where a /Applications launch
+/// has CWD "/" and every bare "bin/…" path misses. Resolve existence against the
+/// bundled resource root; spawns pair this with `child.cwd = state.resourceRoot()`
+/// so the relative argv still resolves (same idiom as resolver.zig's nova2.py).
+fn scriptExists(rel: []const u8) bool {
+    const io = @import("../core/io_global.zig");
+    if (@import("../core/state.zig").resourceRoot()) |root| {
+        var buf: [1100]u8 = undefined;
+        const p = std.fmt.bufPrint(&buf, "{s}{s}", .{ root, rel }) catch return false;
+        io.cwdAccess(p, .{}) catch return false;
+        return true;
+    }
+    io.cwdAccess(rel, .{}) catch return false;
+    return true;
+}
+
 fn serverDepsReady(script: []const u8) bool {
     var check = @import("../core/io_global.zig").Child.init(
         &.{ "python3", script, "--check" },
@@ -213,11 +230,39 @@ fn serverDepsReady(script: []const u8) bool {
     );
     check.stdout_behavior = .Ignore;
     check.stderr_behavior = .Ignore;
+    check.cwd = @import("../core/state.zig").resourceRoot();
     const term = check.spawnAndWait() catch return false;
     return switch (term) {
         .exited => |code| code == 0,
         else => false,
     };
+}
+
+/// True when the full-duplex event loop can run: the Python voice-server is
+/// already up (socket present) or its script exists and its deps import cleanly.
+/// Runs a `--check` subprocess, so call it off the UI thread (the conversation
+/// worker), not from a frame. This is what promotes the barge-in + live-partials
+/// event loop ahead of the finals-only sherpa loop.
+pub fn voiceServerReady() bool {
+    const io = @import("../core/io_global.zig");
+    if (io.cwdAccess(VOICE_SOCKET, .{})) |_| return true else |_| {}
+    if (!scriptExists("bin/opal-voice-server.py")) return false;
+    return serverDepsReady("bin/opal-voice-server.py");
+}
+
+/// Realtime loop chooser — runs on the conversation worker thread (where the
+/// `--check` probe may block). Prefer the full-duplex event loop: it is the only
+/// path with live word-by-word partials AND talk-over-it barge-in. Fall back to
+/// the sherpa streaming loop (finals-only, half-duplex via echo-guard), which
+/// itself chains to V2 then the legacy record loop.
+fn conversationLoopAuto() void {
+    if (voiceServerReady()) {
+        logs.pushLog("info", "voice", "Conv mode: full-duplex event loop", true);
+        conversationLoopV2();
+    } else {
+        logs.pushLog("info", "voice", "Conv mode: sherpa streaming", true);
+        conversationLoopSherpa();
+    }
 }
 
 fn ensureVoiceServer() void {
@@ -228,10 +273,10 @@ fn ensureVoiceServer() void {
         voice_server_started = true;
         return;
     } else |_| {}
-    @import("../core/io_global.zig").cwdAccess("bin/opal-voice-server.py", .{}) catch {
+    if (!scriptExists("bin/opal-voice-server.py")) {
         logs.pushLog("warn", "voice", "voice-server.py not found — skipping", true);
         return;
-    };
+    }
     if (!serverDepsReady("bin/opal-voice-server.py")) {
         logs.pushLog("info", "voice", "voice-server deps missing — using fallback", true);
         return;
@@ -242,6 +287,7 @@ fn ensureVoiceServer() void {
     );
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
+    child.cwd = @import("../core/state.zig").resourceRoot();
     child.spawn() catch {
         return;
     };
@@ -260,9 +306,7 @@ pub fn ensureSttServer() void {
         stt_server_started = true;
         return;
     } else |_| {}
-    @import("../core/io_global.zig").cwdAccess("bin/opal-stt-server.py", .{}) catch {
-        return;
-    };
+    if (!scriptExists("bin/opal-stt-server.py")) return;
     if (!serverDepsReady("bin/opal-stt-server.py")) return;
     var child = @import("../core/io_global.zig").Child.init(
         &.{ "python3", "bin/opal-stt-server.py" },
@@ -270,6 +314,7 @@ pub fn ensureSttServer() void {
     );
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
+    child.cwd = @import("../core/state.zig").resourceRoot();
     child.spawn() catch {
         return;
     };
@@ -287,9 +332,7 @@ pub fn ensureTtsServer() void {
         tts_server_started = true;
         return;
     } else |_| {}
-    @import("../core/io_global.zig").cwdAccess("bin/opal-tts-server.py", .{}) catch {
-        return;
-    };
+    if (!scriptExists("bin/opal-tts-server.py")) return;
     if (!serverDepsReady("bin/opal-tts-server.py")) return;
     var child = @import("../core/io_global.zig").Child.init(
         &.{ "python3", "bin/opal-tts-server.py" },
@@ -297,6 +340,7 @@ pub fn ensureTtsServer() void {
     );
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
+    child.cwd = @import("../core/state.zig").resourceRoot();
     child.spawn() catch {
         return;
     };
@@ -383,20 +427,16 @@ pub fn toggleConversation() void {
         voice_mode = true;
         setPhase(.listening);
 
-        // Pick loop: streaming if a streaming pipeline is ready (Parakeet VAD
-        // or zipformer mic), else the legacy ffmpeg-record + STT path.
-        const use_streaming = has_streaming;
-        conv_thread = (if (use_streaming)
-            std.Thread.spawn(.{}, conversationLoopSherpa, .{})
-        else
-            std.Thread.spawn(.{}, conversationLoopV2, .{})) catch {
+        // Loop choice is made on the worker thread by conversationLoopAuto so
+        // the (blocking) voice-server deps probe never runs on the UI thread.
+        // It prefers the full-duplex event loop, then sherpa streaming, then V1.
+        conv_thread = std.Thread.spawn(.{}, conversationLoopAuto, .{}) catch {
             conversation_active.store(false, .release);
             setPhase(.idle);
             setError("Failed to start conversation mode");
             return;
         };
         conv_thread.?.detach();
-        logs.pushLog("info", "voice", if (use_streaming) "Conv mode: sherpa streaming" else "Conv mode: v2 (legacy)", true);
     }
 }
 
@@ -894,6 +934,7 @@ fn transcribeAndSend() void {
     );
     fw_child.stdout_behavior = .Pipe;
     fw_child.stderr_behavior = .Ignore;
+    fw_child.cwd = @import("../core/state.zig").resourceRoot();
 
     if (fw_child.spawn()) |_| {
         const fw_stdout = fw_child.stdout.?;
@@ -1009,6 +1050,25 @@ pub fn speakResponse(text: []const u8) void {
     // trailing remainder, full-response, intent, comics) honors barge-in for free.
     if (barge_in.load(.acquire)) return;
     if (is_speaking.load(.acquire)) return;
+
+    // Tell the voice server exactly what we're about to say, so its semantic
+    // echo guard can tell the assistant's own voice (heard back through open
+    // speakers) apart from a real barge-in. No-op unless the event loop's socket
+    // is connected. Protocol is newline-framed, so flatten any newlines.
+    {
+        var sp_buf: [640]u8 = undefined;
+        const prefix = "SPEAKING:";
+        @memcpy(sp_buf[0..prefix.len], prefix);
+        var w: usize = prefix.len;
+        for (text) |ch| {
+            if (w >= sp_buf.len - 1) break;
+            sp_buf[w] = if (ch == '\n' or ch == '\r') ' ' else ch;
+            w += 1;
+        }
+        sp_buf[w] = '\n';
+        w += 1;
+        voiceSocketWrite(sp_buf[0..w]);
+    }
 
     const slen = @min(text.len, tts_text_buf.len);
     @memcpy(tts_text_buf[0..slen], text[0..slen]);

@@ -40,6 +40,17 @@ if [ -d "$ROOT/engines" ]; then
     find "$APP_DIR/Contents/Resources/engines" -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null || true
 fi
 
+# Bundle the voice helper scripts. ai_voice spawns `python3 bin/opal-voice-server.py`
+# (hands-free conversation: VAD + live partials + full-duplex barge-in), plus the
+# STT/TTS sidecars. Without these in Resources, an installed .app finds no voice
+# server (CWD is "/") and conversation mode silently degrades to the finals-only
+# fallback loop — the full-duplex path would never run outside a dev checkout.
+echo "[build-app] Bundling voice helpers (bin/*.py)…"
+mkdir -p "$APP_DIR/Contents/Resources/bin"
+for f in "$ROOT"/bin/opal-*.py "$ROOT"/bin/requirements.txt; do
+    [ -f "$f" ] && cp "$f" "$APP_DIR/Contents/Resources/bin/"
+done
+
 # Bundle the source-plugin manifest so the Plugins page shows the full list
 # instantly + offline (plugin_repo.loadLocalManifest reads it from Resources).
 if [ -f "$ROOT/plugins-manifest.json" ]; then
