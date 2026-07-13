@@ -1292,6 +1292,44 @@ fn fetchSeasonsThread(tmdb_id: i32, my_gen: u32) void {
 
     parseSeasons(body);
 
+    // Persist the season map + aired frontier the moment a show is opened.
+    //
+    // Without this, a show you had never synced had NO season map, so next-up
+    // could not answer and the UI rendered that silence as "Caught up" — Silo
+    // read "Caught up" at 0/10 watched. Opening a show is exactly when we have
+    // the document in hand, so store it: "we don't know" stops being reachable
+    // for anything the user has actually looked at.
+    {
+        const tp = @import("tv_pure.zig");
+        var seasons: [tp.MAX_SEASONS]tp.Season = undefined;
+        const ns = tp.parseSeasonMap(body, &seasons);
+        if (ns > 0) db.tvUpsertSeasons(tmdb_id, seasons[0..ns]);
+
+        const cal_pure = @import("tv_calendar_pure.zig");
+        const last = cal_pure.parseEpisodeToAir(body, "\"last_episode_to_air\":");
+        const next = cal_pure.parseEpisodeToAir(body, "\"next_episode_to_air\":");
+        db.tvUpsertShow(
+            tmdb_id,
+            state.app.tmdb.tv_name[0..@min(state.app.tmdb.tv_name_len, state.app.tmdb.tv_name.len)],
+            state.app.tmdb.tv_poster_path[0..@min(state.app.tmdb.tv_poster_path_len, state.app.tmdb.tv_poster_path.len)],
+            if (tp.parseEnded(body)) "Ended" else "Returning Series",
+            .{
+                .season = if (last) |l| l.season else 0,
+                .episode = if (last) |l| l.episode else 0,
+            },
+            .{
+                .season = if (next) |x| x.season else 0,
+                .episode = if (next) |x| x.episode else 0,
+            },
+            if (next) |x| x.air_epoch else 0,
+            if (next) |*x| x.name[0..x.name_len] else "",
+        );
+        // NOTE: tvUpsertShow deliberately does NOT set `tracked`. Merely LOOKING
+        // at a show must not add it to the library — that's what the status
+        // buttons (and actually watching an episode) are for.
+        @import("tv_library.zig").markDirty();
+    }
+
     {
         var lb: [96]u8 = undefined;
         const lm = std.fmt.bufPrint(&lb, "TV id={d}: {d} seasons parsed ({d}b)", .{ tmdb_id, state.app.tmdb.tv_season_count, bytes }) catch "TV seasons parsed";
@@ -1599,8 +1637,90 @@ fn tvWatchedCount() usize {
     return n;
 }
 
-/// Lowest 1-based episode_number not yet watched (for Resume). Falls back to the
-/// first loaded episode's number, or 1.
+/// The library-status control: Plan / Watching / Completed / Dropped.
+///
+/// Rendered next to the show name so it's changeable at any moment, from the one
+/// place the user is already looking. Clicking the ACTIVE chip clears it, which
+/// returns the show to auto-derived status and untracks it.
+///
+/// Untracking flips flags and nothing else — it NEVER deletes tv_watched rows, so
+/// an accidental click cannot destroy watch history, and re-tracking restores
+/// progress exactly as it was.
+pub fn renderStatusChips() void {
+    const t = &state.app.tmdb;
+    if (t.tv_id == 0) return;
+
+    const tp = @import("tv_pure.zig");
+
+    // Cheap single-row lookups on the UI thread: sqlite is FULLMUTEX with an 8MB
+    // cache, and this is two indexed reads per frame.
+    var idbuf: [24]u8 = undefined;
+    const id_str = std.fmt.bufPrint(&idbuf, "{d}", .{t.tv_id}) catch return;
+    var sbuf: [16]u8 = undefined;
+    const cur = tp.userStatusFromStr(db.libraryGetStatus("tv", id_str, &sbuf));
+
+    const options = [_]tp.UserStatus{ .plan, .watching, .completed, .dropped };
+    for (options, 0..) |opt, i| {
+        const on = cur == opt;
+        if (dvui.button(@src(), tp.userStatusName(opt), .{}, .{
+            .id_extra = 7710 + i,
+            .background = true,
+            .color_fill = if (on) theme.colors.accent else theme.colors.bg_elevated,
+            .color_text = if (on) theme.colors.text_on_accent else theme.colors.text_secondary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            .gravity_y = 0.5,
+        })) {
+            setShowStatus(if (on) .none else opt);
+        }
+    }
+}
+
+fn setShowStatus(next: @import("tv_pure.zig").UserStatus) void {
+    const t = &state.app.tmdb;
+    const tp = @import("tv_pure.zig");
+    const lib = @import("tv_library.zig");
+
+    var idbuf: [24]u8 = undefined;
+    const id_str = std.fmt.bufPrint(&idbuf, "{d}", .{t.tv_id}) catch return;
+
+    const name = t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)];
+    const poster = t.tv_poster_path[0..@min(t.tv_poster_path_len, t.tv_poster_path.len)];
+
+    db.librarySetStatus("tv", id_str, tp.userStatusToStr(next));
+
+    if (next == .none) {
+        db.tvSetTracked(t.tv_id, false);
+        state.showToast("Removed from Watching — history kept");
+    } else {
+        // Create the show row if it was never watched, then track it.
+        db.tvTouchShow(t.tv_id, name, poster);
+        db.tvSetTracked(t.tv_id, true);
+        var tb: [64]u8 = undefined;
+        const msg = std.fmt.bufPrint(&tb, "Marked {s}", .{tp.userStatusName(next)}) catch "Updated";
+        state.showToast(msg);
+        // Pull the season map / aired frontier for a show we may never have synced.
+        lib.resync();
+    }
+    lib.markDirty();
+}
+
+/// The next episode to watch — across ALL seasons, clamped to what has aired.
+///
+/// Routed through `tv_library.nextUpFor` → `tv_pure.nextUp`, which is the single
+/// definition of "next" in the app. The old version scanned only the currently
+/// open season's 120-bool window, so finishing S01E10 left it with nothing to
+/// offer; it fell back to episode 1 of the same season and silently pointed the
+/// user at a rewatch.
+///
+/// Returns null when there is genuinely nothing to watch (caught up / completed).
+fn tvNextUp() ?@import("tv_pure.zig").Ep {
+    return @import("tv_library.zig").nextUpFor(state.app.tmdb.tv_id);
+}
+
+/// Next unwatched episode WITHIN the open season, for the in-list "Next" badge.
+/// Falls back to the first loaded episode, or 1.
 fn tvNextUnwatched() i32 {
     var i: usize = 0;
     while (i < state.app.tmdb.tv_episode_count and i < state.app.tmdb.tv_episode_watched.len) : (i += 1) {
@@ -1626,6 +1746,8 @@ fn tvToggleWatched(ep_idx: usize, ep: i32) void {
     state.app.tmdb.tv_episode_watched[ep_idx] = flag;
     const season = tvSelSeasonNumber();
     if (season >= 0) db.tvMarkWatched(state.app.tmdb.tv_id, @intCast(season), @intCast(ep), flag);
+    // Progress, next-up and the show's bucket all just changed.
+    @import("tv_library.zig").markDirty();
 }
 
 // ── Episode playback ──
@@ -1649,12 +1771,31 @@ fn playTvEpisode(episode: i32) void {
             break;
         }
     }
-    state.stashPendingPlay(
+    playEpisodeOf(
+        t.tv_id,
         safeUtf8(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)]),
         t.tv_poster_path[0..@min(t.tv_poster_path_len, t.tv_poster_path.len)],
+        season,
+        episode,
         ep_overview,
-        true,
     );
+}
+
+/// Play any episode of any show, from any surface — the TV detail list, the My
+/// Shows page, the Coming-up rail. Reads no open-detail state, so it works for a
+/// show that isn't on screen; that is what lets My Shows resume a season the
+/// detail page never had open.
+pub fn playEpisodeOf(
+    tmdb_id: i32,
+    name: []const u8,
+    poster_path: []const u8,
+    season: i32,
+    episode: i32,
+    ep_overview: []const u8,
+) void {
+    if (tmdb_id == 0 or episode < 1 or season < 0) return;
+
+    state.stashPendingPlay(name, poster_path, ep_overview, true);
 
     // Arm the deferred watch commit. The player's time-pos stream commits it
     // (DB + Trakt + Continue) once real playback passes ~2 minutes — clicking
@@ -1663,16 +1804,30 @@ fn playTvEpisode(episode: i32) void {
     {
         const pw = &state.app.pending_watch;
         pw.committed = false;
-        pw.tmdb_id = t.tv_id;
+        pw.tmdb_id = tmdb_id;
         pw.season = season;
         pw.episode = episode;
-        const nlen = @min(t.tv_name_len, pw.name.len);
-        @memcpy(pw.name[0..nlen], t.tv_name[0..nlen]);
+        const nlen = @min(name.len, pw.name.len);
+        @memcpy(pw.name[0..nlen], name[0..nlen]);
         pw.name_len = nlen;
-        const plen = @min(t.tv_poster_path_len, pw.poster_path.len);
-        @memcpy(pw.poster_path[0..plen], t.tv_poster_path[0..plen]);
+        const plen = @min(poster_path.len, pw.poster_path.len);
+        @memcpy(pw.poster_path[0..plen], poster_path[0..plen]);
         pw.poster_path_len = plen;
         pw.armed = true; // last — the event thread gates on this
+    }
+
+    // Arm the per-episode resume binding. The next file the player loads claims
+    // this arm and records its URL; from then on, save/resume only fire for THAT
+    // url (see state.playing_episode). pending_watch is consumed at the 2-minute
+    // commit and so cannot carry the binding for the whole playback.
+    {
+        const pe = &state.app.playing_episode;
+        pe.active = false;
+        pe.url_len = 0;
+        pe.tmdb_id = tmdb_id;
+        pe.season = season;
+        pe.episode = episode;
+        pe.armed = true; // last — the player thread gates on this
     }
 
     // Build the search query through the PURE, TESTED helper (normalized
@@ -1681,7 +1836,7 @@ fn playTvEpisode(episode: i32) void {
     // nothing on torrent indexes, and Zig 0.16 printing `{d:0>2}` on i32 as
     // "+2" ("x-men S+2E+2"). Both are regression-tested in tmdb_pure.zig.
     var tv_name_buf: [128]u8 = undefined;
-    const raw_name = safeUtf8Buf(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)], &tv_name_buf);
+    const raw_name = safeUtf8Buf(name[0..@min(name.len, tv_name_buf.len)], &tv_name_buf);
     var qbuf: [256]u8 = std.mem.zeroes([256]u8);
     const q = @import("tmdb_pure.zig").episodeQuery(raw_name, season, episode, &qbuf);
 
@@ -1787,7 +1942,14 @@ pub fn commitPendingWatch() void {
     const pw = &state.app.pending_watch;
     db.tvMarkWatched(pw.tmdb_id, @intCast(@max(0, pw.season)), @intCast(@max(1, pw.episode)), true);
     @import("trakt.zig").markWatchedEpisode(pw.tmdb_id, pw.season, pw.episode);
-    db.tvUpsertContinue(pw.tmdb_id, pw.name[0..pw.name_len], pw.poster_path[0..pw.poster_path_len], @intCast(@max(0, pw.season)), @intCast(@max(1, pw.episode)));
+
+    // Auto-track: watching an episode puts the show in My Shows. tvTouchShow
+    // creates the row if absent and bumps updated_at (which drives "most recently
+    // watched first"), but deliberately does NOT set `tracked` on an existing row
+    // — a show the user explicitly untracked must not resurrect itself just
+    // because an episode of it played.
+    db.tvTouchShow(pw.tmdb_id, pw.name[0..pw.name_len], pw.poster_path[0..pw.poster_path_len]);
+    @import("tv_library.zig").markDirty();
 
     // Reflect in the TV detail if it's open on the same show + season.
     const t = &state.app.tmdb;
@@ -1858,12 +2020,17 @@ fn renderTvDetail() void {
         }
 
         var tvn_buf: [128]u8 = undefined;
+        // The name expands, so it eats the slack and pushes the status chips to
+        // the right edge of the header.
         _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)], &tvn_buf)}, .{
             .color_text = theme.colors.text_primary,
             .expand = .horizontal,
             .font = dvui.themeGet().font_heading,
             .gravity_y = 0.5,
         });
+
+        // Plan / Watching / Completed / Dropped — changeable at any time.
+        renderStatusChips();
     }
 
     // ── TVmaze "Next episode" line (keyless; fills TMDB's gap). Only shown for
@@ -2008,8 +2175,14 @@ fn renderTvDetail() void {
     }
 
     // ── Resume row ──
+    //
+    // `tvNextUp` crosses season boundaries and is clamped to what has aired, so
+    // finishing a season's finale now offers the NEXT season's premiere instead
+    // of silently falling back to episode 1 of the season you just finished. A
+    // null means genuinely nothing to watch — show that honestly rather than
+    // offering a Resume that would go hunting for an episode that doesn't exist.
     if (t.tv_episode_count > 0) {
-        const next_ep = tvNextUnwatched();
+        const nxt = tvNextUp();
         var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
@@ -2021,7 +2194,7 @@ fn renderTvDetail() void {
         defer prow.deinit();
 
         // Resume — lucide play + label (the "▶" glyph rendered as tofu).
-        {
+        if (nxt) |next_ep| {
             var res = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .background = true,
                 .color_fill = theme.colors.accent,
@@ -2044,15 +2217,37 @@ fn renderTvDetail() void {
                 .color_text = theme.colors.text_on_accent,
                 .gravity_y = 0.5,
             });
-            if (res_clicked) playTvEpisode(next_ep);
+            if (res_clicked) {
+                playEpisodeOf(
+                    t.tv_id,
+                    safeUtf8(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)]),
+                    t.tv_poster_path[0..@min(t.tv_poster_path_len, t.tv_poster_path.len)],
+                    next_ep.season,
+                    next_ep.episode,
+                    "",
+                );
+            }
         }
 
-        var ep_lbl: [32]u8 = undefined;
-        const ep_str = std.fmt.bufPrint(&ep_lbl, "Episode {d}", .{next_ep}) catch "";
-        _ = dvui.label(@src(), "{s}", .{ep_str}, .{
-            .color_text = theme.colors.text_secondary,
-            .gravity_y = 0.5,
-        });
+        if (nxt) |next_ep| {
+            var ep_lbl: [32]u8 = undefined;
+            const ep_str = @import("tv_pure.zig").episodeLabel(next_ep, &ep_lbl);
+            _ = dvui.label(@src(), "{s}", .{ep_str}, .{
+                .color_text = theme.colors.text_secondary,
+                .gravity_y = 0.5,
+            });
+        } else {
+            // No next episode is NOT the same as "caught up" — with no season map
+            // yet we simply don't know, and saying "Caught up" hides the user's
+            // next episode (Silo read "Caught up" at 0/10 watched).
+            var smap: [@import("tv_pure.zig").MAX_SEASONS]@import("tv_pure.zig").Season = undefined;
+            const known = db.tvLoadSeasons(t.tv_id, &smap) > 0;
+            const lbl: []const u8 = if (known) "Caught up" else "Syncing…";
+            _ = dvui.label(@src(), "{s}", .{lbl}, .{
+                .color_text = theme.colors.text_secondary,
+                .gravity_y = 0.5,
+            });
+        }
     }
 
     // ── Episode list ──

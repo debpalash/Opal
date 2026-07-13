@@ -14,6 +14,9 @@ pub const Route = enum {
     home,
     search,
     browse,
+    /// Watching — the library of everything tracked (TV, anime, movies):
+    /// progress, what's next, and the user's hand-set status.
+    watching,
     downloads,
     queue,
     history,

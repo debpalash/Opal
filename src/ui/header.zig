@@ -61,6 +61,54 @@ const HeaderState = struct {
     var stream_key_open: bool = false;
 };
 
+/// Where the top-nav "Donate" button points. Single source of truth — retarget
+/// the button by editing this one constant.
+/// Points at the same Ko-fi page Settings › About already links to. A GitHub
+/// Sponsors URL was the obvious guess, but that page may not exist — and a nav
+/// button that opens a 404 is worse than no nav button.
+pub const DONATE_URL = "https://ko-fi.com/debpalash";
+
+/// Top-nav "Donate" chip: heart glyph + label, opens `DONATE_URL` in the system
+/// browser. Built like `shell.navLink` (whole-row click target, hover lifts the
+/// fill) so it sits flush with the rest of the nav, but it's an action, not a
+/// route — no active state. Lives here so the page shell keeps a one-line call
+/// site. Reuses `settings.openExternal` (the existing macOS `open` / Windows
+/// `start` / `xdg-open` launcher) rather than spawning its own child process.
+pub fn donateButton() void {
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .min_size_content = .{ .w = 0, .h = 24 },
+        .background = true,
+        .color_fill = theme.colors.bg_elevated,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .padding = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 2 },
+        .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+        // Cross-axis only: the nav is a horizontal box, so gravity_x here would
+        // fight the layout and overlap its neighbours.
+        .gravity_y = 0.5,
+    });
+    defer row.deinit();
+
+    var hovered = false;
+    const activated = dvui.clicked(row.data(), .{ .hovered = &hovered });
+    if (hovered) row.data().options.color_fill = theme.colors.bg_hover;
+    row.drawBackground();
+
+    dvui.icon(@src(), "Donate", icons.tvg.lucide.heart, .{}, .{
+        .color_text = theme.colors.danger,
+        .min_size_content = theme.iconSize(.sm),
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
+    });
+    _ = dvui.label(@src(), "Donate", .{}, .{
+        .color_text = theme.colors.text_primary,
+        .gravity_y = 0.5,
+    });
+
+    if (activated) {
+        @import("settings.zig").openExternal(DONATE_URL);
+    }
+}
+
 /// Shell-facing accessors — the stream-key chip/popover logic lives here, but
 /// the page shell (default UI) never renders the legacy header, so it needs a
 /// way to reach the popover from its overflow menu.

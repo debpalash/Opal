@@ -223,15 +223,21 @@ fn renderTopNav(compact: bool) void {
 
     // Primary nav links — hidden in compact (bottom tab bar takes over).
     if (!compact) {
-        navLink(.home, "Home", icons.tvg.lucide.house, 1);
-        navLink(.search, "Search", icons.tvg.lucide.search, 2);
-        navLink(.browse, "Browse", icons.tvg.lucide.compass, 3);
-        navLink(.downloads, "Downloads", icons.tvg.lucide.download, 4);
-        navLink(.queue, "Queue", icons.tvg.lucide.@"list-video", 5);
-        navLink(.history, "History", icons.tvg.lucide.history, 6);
+        // Home / Downloads / Queue / History are icon-only (tooltip on hover);
+        // the content destinations keep their labels.
+        navLink(.home, "Home", icons.tvg.lucide.house, 1, true);
+        navLink(.search, "Search", icons.tvg.lucide.search, 2, false);
+        navLink(.browse, "Browse", icons.tvg.lucide.compass, 3, false);
+        navLink(.watching, "Watching", icons.tvg.lucide.tv, 7, false);
+        navLink(.downloads, "Downloads", icons.tvg.lucide.download, 4, true);
+        navLink(.queue, "Queue", icons.tvg.lucide.@"list-video", 5, true);
+        navLink(.history, "History", icons.tvg.lucide.history, 6, true);
     }
 
     omnibox();
+
+    // Donate chip — the omnibox above is capped narrower to make room for it.
+    if (!compact) header.donateButton();
 
     // Right-side actions (icon-only). The former "Assistant" button opened the
     // AI/Voice SETTINGS page (renderAIContent) — that now lives in Settings ›
@@ -334,7 +340,10 @@ fn renderOverflowItems() void {
 /// A top-nav link: whole-row click target, icon + label, accent when active.
 /// Hover lifts the fill; the row takes a tab stop (Enter/Space activates) and
 /// draws dvui's focus ring when keyboard-focused.
-fn navLink(r: Route, label: []const u8, icon: []const u8, id_extra: usize) void {
+/// `icon_only` drops the text label. The label is still passed (and still names
+/// the icon), so it becomes a hover tooltip — an unlabelled glyph with no tooltip
+/// is a guessing game.
+fn navLink(r: Route, label: []const u8, icon: []const u8, id_extra: usize, icon_only: bool) void {
     const active = state.app.router.current == r;
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -359,8 +368,21 @@ fn navLink(r: Route, label: []const u8, icon: []const u8, id_extra: usize) void 
         .color_text = fg,
         .min_size_content = theme.iconSize(.sm),
         .gravity_y = 0.5,
-        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
+        // No label to separate from — the trailing gap would just off-center the
+        // glyph inside its pill.
+        .margin = if (icon_only)
+            dvui.Rect.all(0)
+        else
+            .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
     });
+
+    if (icon_only) {
+        // Every navLink shares this @src(), so the tooltip needs an explicit
+        // id_extra or all of them collide on one widget id.
+        components.tipId(@src(), row.data().*, label, id_extra);
+        return;
+    }
+
     _ = dvui.label(@src(), "{s}", .{label}, .{
         .id_extra = id_extra,
         .color_text = fg,
@@ -379,7 +401,8 @@ fn omnibox() void {
     }, .{
         .expand = .horizontal,
         .min_size_content = .{ .w = 120, .h = 26 },
-        .max_size_content = .{ .w = 1000, .h = 26 },
+        // Capped at 640 (was 1000) to free nav width for the Donate chip.
+        .max_size_content = .{ .w = 640, .h = 26 },
         .margin = .{ .x = theme.spacing.md, .y = 0, .w = 4, .h = 0 },
         .color_fill = theme.colors.bg_elevated,
         .color_border = theme.colors.border_subtle,
@@ -512,6 +535,7 @@ fn renderPage(r: Route) !void {
             subTabs(&.{ .TMDB, .YouTube, .Anime, .Podcasts, .Radio, .Comics, .Web, .RSS, .Jellyfin, .Plex }, &state.app.browse_source, 100);
             drawer.renderTabContent(state.app.browse_source);
         },
+        .watching => @import("../services/tv_library.zig").renderContent(),
         .downloads => drawer.renderTabContent(.Downloads),
         .queue => drawer.renderTabContent(.Queue),
         .history => drawer.renderTabContent(.History),

@@ -317,6 +317,18 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_resume).step);
 
+    // Control-bar drop-ups: anchored-above / right-aligned / clamp-to-window
+    // placement math + the click-outside hit test (ui/pickers.zig routes every
+    // popover through it).
+    const test_dropup_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ui/dropup_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_dropup_pure).step);
+
     // Audio EQ preset → af spec, video-filter clamp, download-limit sanitize —
     // the persist-and-replay mapping shared by settings.zig + player.zig init.
     const test_av_pure = b.addTest(.{
@@ -347,6 +359,16 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_anime_pure).step);
+
+    // `lists` anime source plugin: anime-airing.json → anime index rows.
+    const test_anime_lists_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/anime_lists_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_anime_lists_pure).step);
 
     // AniList metadata parsing (Page.media[] iterator + malformed-JSON regression).
     const test_anilist_pure = b.addTest(.{
@@ -402,6 +424,49 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_transfers_pure).step);
+
+    // Comics sources — MangaDex URL building + allocation-free JSON scanning.
+    // The ids land straight in a request path, so isValidId() is a security gate;
+    // the parsers must also survive a truncated body and must never confuse
+    // `"data"` with `"dataSaver"` (wrong image set) or an author relationship
+    // with `cover_art` (wrong cover).
+    const test_comics_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/comics_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_comics_pure).step);
+
+    // TV tracking engine — the single definition of "what do I watch next?".
+    // Next-up must cross season boundaries, return the GAP rather than the
+    // frontier, and clamp to what has actually aired (TMDB's episode_count
+    // counts announced episodes, so an unclamped search invents a phantom
+    // episode that Resume would then hunt for on an indexer).
+    const test_tv_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/tv_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_tv_pure).step);
+
+
+    // EZTV release calendar: feed-URL building + a STRING-AWARE parse of the
+    // get-torrents payload (a '}' or an escaped '"' inside a release title must
+    // not split the object and mis-pair fields across torrents — same class of
+    // bug as the FROM/HotD id corruption), plus the live relative-time label
+    // that the render site recomputes from the stored epoch every frame.
+    const test_eztv_calendar_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/eztv_calendar_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_eztv_calendar_pure).step);
 
     // Onboarding wizard paging — Back/Next saturate at both ends and a stale
     // replayed index can't dead-end the tour (the modal is GUI-only; this is

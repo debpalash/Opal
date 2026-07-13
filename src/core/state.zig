@@ -423,6 +423,39 @@ pub const AppState = struct {
         poster_path_len: usize = 0,
     } = .{},
 
+    /// Which episode the player is currently playing, for the whole playback.
+    ///
+    /// Distinct from `pending_watch`, which is *consumed* at the 2-minute watch
+    /// commit and so cannot carry this. The player needs the binding to persist
+    /// for the entire session in order to save a per-episode resume position into
+    /// tv_watched (keyed by tmdb_id+season+episode — real episode identity, unlike
+    /// watch_history, whose `name` PK holds a torrent display name or a URL
+    /// depending on which of its two writers got there first).
+    ///
+    /// The binding is to a specific stream URL, not just "an episode is playing".
+    /// `armed` is set when an episode is launched; the next file the player loads
+    /// claims it and copies its URL into `url`, at which point `active` is true.
+    /// Save/resume then only fire when the player's current URL MATCHES.
+    ///
+    /// Without that URL guard, playing an episode and then playing a movie would
+    /// write the movie's position into the episode's resume row and then resume
+    /// the movie at the episode's timestamp — the binding has to end when the
+    /// media does.
+    playing_episode: struct {
+        armed: bool = false,
+        active: bool = false,
+        tmdb_id: i32 = 0,
+        season: i32 = 0,
+        episode: i32 = 0,
+        url: [4096]u8 = std.mem.zeroes([4096]u8),
+        url_len: usize = 0,
+
+        pub fn matches(self: *const @This(), url: []const u8) bool {
+            return self.active and self.url_len > 0 and
+                std.mem.eql(u8, self.url[0..self.url_len], url);
+        }
+    } = .{},
+
     // First-run onboarding: false until the wizard finishes (or an existing
     // install is grandfathered — see config.zig load).
     onboarded: bool = false,
@@ -729,6 +762,10 @@ pub const AppState = struct {
         is_loading: std.atomic.Value(bool) = .init(false),
         episodes_loading: std.atomic.Value(bool) = .init(false),
         fetch_error: bool = false,
+        // True while results[] holds the once-per-session popular chart rather
+        // than a user search — drives the grid heading only. Plain bool like
+        // fetch_error (written by the UI/remote thread that starts the fetch).
+        showing_popular: bool = false,
         results: [50]podcasts_pure.Podcast = std.mem.zeroes([50]podcasts_pure.Podcast),
         result_count: usize = 0,
         selected_idx: ?usize = null,
@@ -750,6 +787,9 @@ pub const AppState = struct {
         // threads, written by the detached fetch worker. A plain bool is a race.
         is_loading: std.atomic.Value(bool) = .init(false),
         fetch_error: bool = false,
+        // True while results[] holds the once-per-session most-voted stations
+        // rather than a user search — drives the grid heading only.
+        showing_popular: bool = false,
         results: [30]radio_pure.Station = std.mem.zeroes([30]radio_pure.Station),
         result_count: usize = 0,
     } = .{},

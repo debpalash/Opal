@@ -41,7 +41,9 @@
       "version": "1.0.0",
       "endpoints": {
         "base": "https://eztvx.to",
-        "api": "https://eztvx.to/api/get-torrents"
+        "api": "https://eztvx.to/api/get-torrents",
+        "calendar": "https://eztvx.to/calendar/",
+        "countdown": "https://eztvx.to/countdown/"
       },
       "file": "plugins/eztv.json"
     },
@@ -165,6 +167,15 @@
         "base": "https://animepahe.pw"
       },
       "file": "plugins/animepahe.json"
+    },
+    {
+      "id": "lists",
+      "name": "Anime Lists (airing index)",
+      "type": "anime",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://raw.githubusercontent.com/debpalash/lists/main"
+      }
     },
     {
       "id": "torrentio",

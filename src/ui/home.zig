@@ -458,10 +458,10 @@ fn renderHero() void {
 /// Three quiet value-prop tiles — the agent pitch. Shown only when the hub
 /// has no content yet (informational, no hover/click: landing copy, not chrome).
 fn renderCapabilities() void {
-    const caps = [_]struct { icon: []const u8, title: []const u8, body: []const u8 }{
-        .{ .icon = icons.tvg.lucide.zap, .title = "Plays everything", .body = "Magnets, torrents, files, streams — paste it and it plays." },
-        .{ .icon = icons.tvg.lucide.brain, .title = "Learns your taste", .body = "Private, on-device recommendations from what you actually watch." },
-        .{ .icon = icons.tvg.lucide.@"audio-lines", .title = "Voice conversations", .body = "Talk hands-free with a fully local AI — nothing leaves the machine." },
+    const caps = [_]struct { icon: []const u8, title: []const u8 }{
+        .{ .icon = icons.tvg.lucide.zap, .title = "Plays everything" },
+        .{ .icon = icons.tvg.lucide.brain, .title = "Learns your taste" },
+        .{ .icon = icons.tvg.lucide.@"audio-lines", .title = "Voice conversations" },
     };
 
     var wrap = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -478,10 +478,9 @@ fn renderCapabilities() void {
     });
     defer row.deinit();
 
-    var small_font = dvui.themeGet().font_body;
-    small_font.size = theme.font_size.small;
-
     for (caps, 0..) |cap, i| {
+        // Single-line card: icon + title only. Height is content-driven (no
+        // min_size_content.h) so the three cards stay flush with each other.
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = i,
             .background = true,
@@ -491,37 +490,25 @@ fn renderCapabilities() void {
             .corner_radius = dvui.Rect.all(theme.radius.lg),
             .min_size_content = .{ .w = 208, .h = 0 },
             .max_size_content = .{ .w = 208, .h = std.math.floatMax(f32) },
-            .padding = dvui.Rect.all(theme.spacing.md),
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
             .margin = dvui.Rect.all(4),
         });
         defer card.deinit();
 
-        {
-            var hd = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i });
-            defer hd.deinit();
-            dvui.icon(@src(), "cap-icon", cap.icon, .{}, .{
-                .id_extra = i,
-                .color_text = theme.colors.accent,
-                .min_size_content = .{ .w = 14, .h = 14 },
-                .gravity_y = 0.5,
-                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
-            });
-            _ = dvui.label(@src(), "{s}", .{cap.title}, .{
-                .id_extra = i,
-                .color_text = theme.colors.text_primary,
-                .gravity_y = 0.5,
-            });
-        }
-        var tl = dvui.textLayout(@src(), .{}, .{
+        var hd = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .gravity_x = 0.5 });
+        defer hd.deinit();
+        dvui.icon(@src(), "cap-icon", cap.icon, .{}, .{
             .id_extra = i,
-            .expand = .horizontal,
-            .background = false,
-            .font = small_font,
-            .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
-            .padding = dvui.Rect.all(0),
+            .color_text = theme.colors.accent,
+            .min_size_content = .{ .w = 14, .h = 14 },
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
         });
-        tl.addText(cap.body, .{ .color_text = theme.colors.text_tertiary });
-        tl.deinit();
+        _ = dvui.label(@src(), "{s}", .{cap.title}, .{
+            .id_extra = i,
+            .color_text = theme.colors.text_primary,
+            .gravity_y = 0.5,
+        });
     }
 }
 

@@ -59,12 +59,16 @@ pub var has_loaded_trending: bool = false;
 
 // ── UI-control state (module-level, NOT in state.zig). ──
 
-/// Trending category chip — maps to Jikan top/anime `filter=` values.
+/// Trending category chip — maps to Jikan top/anime `filter=` values, plus
+/// `.lists`, which is NOT a Jikan filter at all: it swaps the whole fetch for
+/// the `lists` source plugin (see the "lists source plugin" section below). Its
+/// chip only renders when that plugin is installed.
 const TrendFilter = enum {
     airing,
     top,
     bypopularity,
     upcoming,
+    lists,
 
     /// Jikan query value. `.top` is the un-filtered top list (no filter param).
     fn jikan(self: TrendFilter) []const u8 {
@@ -73,10 +77,21 @@ const TrendFilter = enum {
             .top => "", // no filter → overall top
             .bypopularity => "bypopularity",
             .upcoming => "upcoming",
+            // Never reaches a Jikan URL: every call site checks usesLists() first
+            // (loadTrendingAnime routes to listsThread, buildGridUrl returns null).
+            .lists => "",
         };
     }
 };
 var trend_filter: TrendFilter = .airing;
+
+/// True when the grid should be served by the `lists` plugin instead of Jikan:
+/// Trending mode, the Lists chip active, and the plugin actually installed. The
+/// last clause means uninstalling mid-session silently falls back to Jikan
+/// rather than stranding the grid on a dead source.
+fn usesLists() bool {
+    return state.app.anime.mode == .trending and trend_filter == .lists and listsBase() != null;
+}
 
 /// User-cyclable card width (compact ↔ large), clamped 110–320 in the +/- wires.
 var card_w_pref: f32 = 150;
@@ -138,6 +153,9 @@ fn parsePagination(json: []const u8) bool {
 fn buildGridUrl(out: []u8, mode: state.AnimeMode, page: u32) ?[]const u8 {
     return switch (mode) {
         .trending => blk: {
+            // The lists plugin ships its whole catalogue in one payload — there
+            // is no page 2, so infinite-scroll has nothing to append.
+            if (trend_filter == .lists) break :blk null;
             const jikan_api = "https://api.jikan.moe/v4/top/anime";
             const fv = trend_filter.jikan();
             break :blk (if (fv.len == 0)
@@ -294,11 +312,244 @@ pub fn loadTrendingAnime() void {
     // worker won't overwrite freshly-loaded trending cards.
     _ = search_gen.fetchAdd(1, .acq_rel);
 
+    // The Lists chip swaps the source: same grid, same results[], different fetch.
+    if (usesLists()) {
+        state.app.anime.thread = std.Thread.spawn(.{}, listsThread, .{}) catch {
+            state.app.anime.is_loading.store(false, .release);
+            return;
+        };
+        if (state.app.anime.thread) |t| t.detach();
+        return;
+    }
+
     state.app.anime.thread = std.Thread.spawn(.{}, trendingThread, .{}) catch {
         state.app.anime.is_loading.store(false, .release);
         return;
     };
     if (state.app.anime.thread) |t| t.detach(); // never joined — detach to avoid leaking the handle
+}
+
+// ══════════════════════════════════════════════════════════
+// `lists` source plugin — anime index from debpalash/lists
+// ══════════════════════════════════════════════════════════
+//
+// ENDPOINT: this is a METADATA source, so it ships with a working default and an
+// installed `lists` plugin merely OVERRIDES it (mirroring how the plugin contract
+// in plugin_repo.zig / source_config.zig works elsewhere).
+//
+// It was originally gated behind a plugin install like a torrent index, which was
+// a misreading of the neutrality rule: that rule exists to keep INFRINGING
+// endpoints out of the binary, and the two other anime metadata APIs — Jikan
+// (api.jikan.moe, just above) and AniList (anilist.zig) — are both hardcoded for
+// exactly that reason. The airing index is the same class of thing: public
+// AniList/MAL/AniDB id mappings and cover URLs, nothing infringing. Gating it only
+// meant the chip silently rendered nothing, since no plugin ships installed.
+//
+// The repo serves `anime-airing.json`: ~316 currently-airing shows with AniList/
+// MAL/AniDB ids, titles, a cover URL and the next episode's number + air date.
+// Parsing lives in anime_lists_pure.zig (tested against the real bytes); this
+// file only fetches, caches and publishes into the same state.app.anime.results[]
+// the Jikan grid uses — so cards, posters, episode lists and watch tracking all
+// work unchanged (rows carry a MAL id, which is the index's primary key).
+//
+// Cache: the fetched JSON is stored as a blob in the shared poster_cache table
+// keyed by its URL (core/poster.zig cacheStoreForUrl — a generic url→bytes disk
+// cache), with the fetch time in the `config` kv table. On launch the cached copy
+// paints the grid with NO network call; the repo is only re-fetched once the
+// stamp is older than LISTS_TTL_S. Same stale-while-revalidate shape as
+// browse_cache.zig, just a longer TTL — the upstream repo regenerates daily.
+
+const lists_pure = @import("anime_lists_pure.zig");
+
+/// The airing feed is regenerated upstream about once a day; a 6h TTL keeps the
+/// next-episode dates honest without hammering raw.githubusercontent.
+const LISTS_TTL_S: i64 = 6 * 60 * 60;
+const LISTS_STAMP_KEY = "anime_lists_fetched_at";
+/// Hard cap on the download. The live file is ~102 KB; 4 MB is pure headroom and
+/// bounds a hostile/mistargeted endpoint. Heap-allocated — never on the worker's
+/// stack (CLAUDE.md: >64 KB stack buffers overflow a spawned thread).
+const LISTS_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+/// Built-in default. An installed `lists` plugin overrides it (see listsBase).
+const LISTS_DEFAULT_BASE = "https://raw.githubusercontent.com/debpalash/lists/main";
+
+/// The installed plugin's endpoint if there is one, else the built-in default.
+///
+/// Never null, so the Lists chip always renders and always has data. It used to
+/// return the raw source_config lookup, which is null on any machine without the
+/// plugin installed — i.e. every machine — so the chip was permanently hidden.
+fn listsBase() ?[]const u8 {
+    if (@import("../core/source_config.zig").get("lists", "base")) |b| {
+        if (b.len > 0) return b;
+    }
+    return LISTS_DEFAULT_BASE;
+}
+
+/// `<base>/anime-airing.json` for the installed endpoint, or null when inert.
+fn listsUrl(out: []u8) ?[]const u8 {
+    const base = listsBase() orelse return null;
+    const trimmed = std.mem.trimEnd(u8, base, "/");
+    return std.fmt.bufPrint(out, "{s}/anime-airing.json", .{trimmed}) catch null;
+}
+
+/// db.zig hands out raw sqlite statements; every other caller serializes its own
+/// access (see poster.zig's cache_lock). These two touch the `config` kv table
+/// from the fetch worker, so they need the same treatment.
+var lists_stamp_lock: @import("../core/sync.zig").Mutex = .{};
+
+fn listsStampGet() i64 {
+    const db = @import("../core/db.zig");
+    lists_stamp_lock.lock();
+    defer lists_stamp_lock.unlock();
+    const stmt = db.prepare("SELECT value FROM config WHERE key = ?1") orelse return 0;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, LISTS_STAMP_KEY);
+    if (db.step(stmt) == db.c.SQLITE_ROW) {
+        if (db.columnText(stmt, 0)) |v| return std.fmt.parseInt(i64, v, 10) catch 0;
+    }
+    return 0;
+}
+
+fn listsStampSet(ts: i64) void {
+    const db = @import("../core/db.zig");
+    lists_stamp_lock.lock();
+    defer lists_stamp_lock.unlock();
+    const stmt = db.prepare("INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)") orelse return;
+    defer db.finalize(stmt);
+    var vb: [24]u8 = undefined;
+    const v = std.fmt.bufPrint(&vb, "{d}", .{ts}) catch return;
+    db.bindText(stmt, 1, LISTS_STAMP_KEY);
+    db.bindText(stmt, 2, v);
+    _ = db.step(stmt);
+}
+
+/// Fetch worker for the Lists chip. Cache-first: a cached payload paints the grid
+/// before any network work, and the repo is only re-fetched when the stamp is
+/// stale (or there's no cache at all). A failed refresh leaves the cached grid up.
+fn listsThread() void {
+    defer state.app.anime.is_loading.store(false, .release);
+    // Generation this load was spawned under — see searchThread/parseJikanDataEx.
+    const my_gen = search_gen.load(.acquire);
+
+    var url_buf: [512]u8 = undefined;
+    const url = listsUrl(&url_buf) orelse return; // uninstalled mid-flight → inert
+
+    // ── 1. Cached payload → paint immediately, no network. ──
+    var have_cached = false;
+    if (poster.cacheLoadForUrl(url)) |cb| {
+        defer poster.cacheFreeEncoded(cb); // c_allocator-owned — never the global one
+        have_cached = true;
+        if (publishListsJson(cb, my_gen) > 0) {
+            logs.pushLog("info", "anime", "Lists loaded (cached)", false);
+        }
+    }
+
+    const stamp = listsStampGet();
+    const stale = stamp <= 0 or (@import("browse_cache.zig").now() - stamp) >= LISTS_TTL_S;
+    if (have_cached and !stale) return; // fresh cache — done, zero requests
+
+    // ── 2. Refresh from the plugin's endpoint. ──
+    const argv = [_][]const u8{ "curl", "-sL", "-A", agent, "--max-time", "20", url };
+    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    _ = child.spawn() catch {
+        if (!have_cached) logs.pushLog("error", "anime", "Lists: curl failed", true);
+        return;
+    };
+
+    const buf = alloc.alloc(u8, LISTS_MAX_BYTES) catch {
+        _ = child.wait() catch {};
+        return;
+    };
+    defer alloc.free(buf);
+    const bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
+    _ = child.wait() catch {};
+
+    // Empty / error page → keep whatever the cache already put on screen.
+    if (bytes < 32) {
+        if (!have_cached) logs.pushLog("error", "anime", "Lists: empty response", true);
+        return;
+    }
+    // Superseded by a newer fetch (mode switch, chip change) while we were in curl.
+    if (search_gen.load(.acquire) != my_gen) return;
+
+    const json = buf[0..bytes];
+    const n = publishListsJson(json, my_gen);
+    if (n == 0) {
+        if (!have_cached) logs.pushLog("error", "anime", "Lists: no usable entries", true);
+        return;
+    }
+
+    // Only cache a payload that actually parsed — never poison the cache with an
+    // error page. Store the bytes, then the stamp (a store failure just means the
+    // next launch refetches).
+    poster.cacheStoreForUrl(url, json, 0, 0);
+    listsStampSet(@import("browse_cache.zig").now());
+
+    var lb: [64]u8 = undefined;
+    logs.pushLog("info", "anime", std.fmt.bufPrintZ(&lb, "Lists loaded ({d} airing)", .{n}) catch "Lists loaded", false);
+}
+
+/// Parse a lists payload and publish it into the anime grid. Returns rows shown.
+///
+/// Shares state.app.anime.results[] with the Jikan parser, so it takes the SAME
+/// anime_parse_mutex and re-checks the generation under it: two workers must never
+/// both read-then-null the same poster_tex (double textureDestroyLater → SIGABRT,
+/// see parseJikanDataEx's header).
+fn publishListsJson(json: []const u8, my_gen: u32) usize {
+    if (search_gen.load(.acquire) != my_gen) return 0; // cheap pre-check, before the alloc
+
+    // 100 Items ≈ 34 KB — heap, not the worker's stack.
+    const items = alloc.alloc(lists_pure.Item, state.app.anime.results.len) catch return 0;
+    defer alloc.free(items);
+
+    const n = lists_pure.parseAiring(alloc, json, state.app.nsfw_filter_enabled, items);
+    if (n == 0) return 0;
+
+    anime_parse_mutex.lock();
+    defer anime_parse_mutex.unlock();
+    if (search_gen.load(.acquire) != my_gen) return 0; // re-check under the lock
+
+    // Fresh load: retire the old cards' poster textures (UI-thread work → queue).
+    for (0..state.app.anime.results.len) |i| {
+        state.app.anime.results[i].poster_fetching = false;
+        state.app.anime.results[i].expanded = false;
+        if (state.app.anime.results[i].poster_tex) |tex| {
+            queueTexFree(tex);
+            state.app.anime.results[i].poster_tex = null;
+        }
+    }
+    for (0..state.app.anime.broadcast_lens.len) |i| state.app.anime.broadcast_lens[i] = 0;
+
+    for (items[0..n], 0..) |src, i| {
+        const item = &state.app.anime.results[i];
+        @memcpy(item.id[0..src.mal_id_len], src.mal_id[0..src.mal_id_len]);
+        item.id_len = src.mal_id_len;
+        @memcpy(item.name[0..src.title_len], src.title[0..src.title_len]);
+        item.name_len = src.title_len;
+        @memcpy(item.poster_url[0..src.poster_url_len], src.poster_url[0..src.poster_url_len]);
+        item.poster_url_len = src.poster_url_len;
+        item.episodes = src.episodes;
+        // The source carries no score or synopsis — left empty on purpose so the
+        // AniList enrichment below (which only fills blanks) supplies both.
+        item.score = 0;
+        item.overview_len = 0;
+        item.poster_attempted = false;
+        item.poster_failed = false;
+
+        // Next-episode badge → the broadcast[] parallel array the cards already read.
+        if (i < state.app.anime.broadcast.len and src.badge_len > 0) {
+            const bl = @min(src.badge_len, state.app.anime.broadcast[i].len);
+            @memcpy(state.app.anime.broadcast[i][0..bl], src.badge[0..bl]);
+            state.app.anime.broadcast_lens[i] = bl;
+        }
+    }
+
+    state.app.anime.result_count = n;
+    more_available = false; // single payload — nothing to page
+    spawnAniListEnrich(my_gen); // fills score + synopsis (additive; never overwrites)
+    return n;
 }
 
 fn trendingThread() void {
@@ -1935,6 +2186,9 @@ fn renderModeToolbar(count: usize) void {
             renderTrendChip(1, .top, "Top");
             renderTrendChip(2, .bypopularity, "Popular");
             renderTrendChip(3, .upcoming, "Upcoming");
+            // Only offered when the `lists` source plugin is installed — with no
+            // endpoint the source is inert, so we don't advertise a dead chip.
+            if (listsBase() != null) renderTrendChip(4, .lists, "Lists");
         },
         .seasonal => {
             toolbarDivider(889);
@@ -2774,9 +3028,12 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
             } else |_| {}
         }
 
-        // Calendar mode: airtime badge (broadcast.string, e.g. "Mondays at 01:00
-        // (JST)") aligned to this result index. Only set in Calendar mode.
-        if (state.app.anime.mode == .calendar and idx < state.app.anime.broadcast_lens.len and
+        // Airtime badge aligned to this result index: Calendar fills it with
+        // Jikan's broadcast.string ("Mondays at 01:00 (JST)"), the Lists plugin
+        // with the next episode ("Ep 1170 · Jul 19"). Every other load path zeroes
+        // broadcast_lens[], so a non-zero length here always means "this card has
+        // a badge" — no mode check needed.
+        if (idx < state.app.anime.broadcast_lens.len and
             state.app.anime.broadcast_lens[idx] > 0)
         {
             const bcast = state.app.anime.broadcast[idx][0..state.app.anime.broadcast_lens[idx]];

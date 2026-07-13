@@ -5,6 +5,10 @@
 //! thread-safety, and dvui rendering.
 //!
 //! Flow:
+//!   loadPopularOnce() → curl …/json/stations/topvote/N (the same host's keyless
+//!                     most-voted endpoint, answering with the same station
+//!                     objects) → pure.parseStations → results[]. Fires once per
+//!                     session so the page opens populated.
 //!   searchRadio(q)  → curl all.api.radio-browser.info/json/stations/search?name=…
 //!                     → pure.parseStations → state.app.radio.results[]
 //!   playStation(i)  → browser.loadContentDirect(url_resolved | url) → mpv,
@@ -18,12 +22,38 @@ const theme = @import("../ui/theme.zig");
 const logs = @import("../core/logs.zig");
 const pure = @import("radio_pure.zig");
 const io = @import("../core/io_global.zig");
+const poster = @import("../core/poster.zig");
 const rate_limit = @import("../core/rate_limit.zig");
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 
 const alloc = @import("../core/alloc.zig").allocator;
 
 const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0";
+
+// ── Station artwork ──
+// Station favicons reuse the shared poster daemon (poster.zig: async fetch, the
+// global in-flight cap, disk cache, texture upload) — the exact path podcast
+// covers take. The Station record lives in radio_pure.zig, which must stay free
+// of dvui/atomics (std.mem.zeroes), so the GPU texture + pixel state lives HERE
+// in a module-static array parallel to state.app.radio.results[] by index. The
+// array is never reallocated, so the raw &slot.* pointers handed to
+// poster.fetchAsync stay valid for the detached worker. All slot access is
+// UI-thread only except that worker, which writes ONLY its own slot's
+// pixels/w/h/fetching. A slot's url_hash pins it to the station currently at
+// that index: when a re-search puts a different station there, the hash mismatch
+// frees the old texture/pixels and refetches, so a logo can never bleed across
+// searches. pixels are c_alloc'd inside poster.zig (NOT the tracked global
+// allocator) — never free them with `alloc`; deinitPoster/uploadIfReady use the
+// matching allocator.
+const StationPoster = struct {
+    pixels: ?[]u8 = null,
+    tex: ?dvui.Texture = null,
+    w: u32 = 0,
+    h: u32 = 0,
+    fetching: bool = false,
+    url_hash: u64 = 0,
+};
+var station_posters: [30]StationPoster = [_]StationPoster{.{}} ** 30;
 
 // ── Thread-safety ──
 // The detached search worker publishes into state.app.radio.* under
@@ -40,6 +70,86 @@ var query_buf: [256]u8 = undefined;
 var query_len: usize = 0;
 
 // ══════════════════════════════════════════════════════════
+// Popular — RadioBrowser most-voted stations
+//
+// So the page opens with content instead of an empty search box. /topvote/N is
+// the same keyless host as the search endpoint and answers with the identical
+// station objects, so it goes through the SAME curl helper and the SAME
+// pure.parseStations — a popular card is byte-for-byte a search card and its
+// click handler is the existing playStation(). One fetch per session.
+// ══════════════════════════════════════════════════════════
+
+const POPULAR_LIMIT: usize = 30; // == results[] capacity
+
+/// One-shot latch. renderContent() calls this every frame, so every call after
+/// the first is a single atomic load. Atomic (not a plain bool) because
+/// searchRadio — which also arms it, so the chart can't land on top of a user's
+/// results — is reachable from the remote-API thread.
+var popular_fetched: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+pub fn loadPopularOnce() void {
+    if (popular_fetched.load(.acquire)) return;
+    // Same first-start gate as the other one-shot loaders: don't latch until
+    // config has published (the poster daemon's disk cache needs the db open).
+    if (!state.app.config_loaded.load(.acquire)) return;
+    // A search already landed (remote API) — leave it be.
+    if (state.app.radio.result_count > 0) {
+        popular_fetched.store(true, .release);
+        return;
+    }
+    if (state.app.radio.is_loading.load(.acquire)) return;
+
+    popular_fetched.store(true, .release);
+    state.app.radio.showing_popular = true;
+    state.app.radio.fetch_error = false;
+    state.app.radio.is_loading.store(true, .release);
+
+    // Take a generation like a search does, so a user search fired while the
+    // popular fetch is in flight supersedes it instead of racing it into
+    // results[].
+    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+
+    if (std.Thread.spawn(.{}, popularWorker, .{my_gen})) |t| {
+        t.detach(); // never joined — detach to avoid leaking the handle
+    } else |_| {
+        state.app.radio.is_loading.store(false, .release);
+    }
+}
+
+fn popularWorker(my_gen: u32) void {
+    defer state.app.radio.is_loading.store(false, .release);
+
+    var url_buf: [128]u8 = undefined;
+    const url = pure.buildTopVoteUrl(POPULAR_LIMIT, &url_buf);
+    if (url.len == 0) return;
+
+    // Shared public directory — be a polite citizen (≤ 1 req/sec), same bucket
+    // as the search worker.
+    rate_limit.acquire("radiobrowser", 1.0);
+
+    const body = curl(url, 512 * 1024) orelse {
+        state.app.radio.fetch_error = true;
+        return;
+    };
+    defer alloc.free(body);
+
+    if (search_gen.load(.acquire) != my_gen) return; // superseded by a search
+
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (search_gen.load(.acquire) != my_gen) return; // re-check under lock
+
+    const count = pure.parseStations(body, &state.app.radio.results);
+    state.app.radio.result_count = count;
+    if (count == 0) {
+        state.app.radio.fetch_error = true;
+        logs.pushLog("info", "radio", "Top stations returned no rows", false);
+    } else {
+        logs.pushLog("info", "radio", "Popular stations loaded (RadioBrowser topvote)", false);
+    }
+}
+
+// ══════════════════════════════════════════════════════════
 // Search — RadioBrowser station search
 // ══════════════════════════════════════════════════════════
 
@@ -48,6 +158,10 @@ pub fn searchRadio(query: []const u8) void {
 
     state.app.radio.is_loading.store(true, .release);
     state.app.radio.fetch_error = false;
+    state.app.radio.showing_popular = false;
+    // A search satisfies the "page opens with content" job — never let the
+    // one-shot popular fetch land on top of the user's results afterwards.
+    popular_fetched.store(true, .release);
 
     const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
 
@@ -241,7 +355,15 @@ fn curl(url: []const u8, cap: usize) ?[]u8 {
         alloc.free(buf);
         return null;
     }
-    return buf[0..n];
+
+    // Shrink to what was actually read. The caller frees what we hand back, and
+    // the global DebugAllocator checks the free size against the allocation size
+    // — returning `buf[0..n]` out of a `cap`-sized allocation is an INVALID FREE
+    // and aborts the process (the podcasts twin of this helper did exactly that).
+    return alloc.realloc(buf, n) catch {
+        alloc.free(buf);
+        return null;
+    };
 }
 
 // ══════════════════════════════════════════════════════════
@@ -251,6 +373,9 @@ fn curl(url: []const u8, cap: usize) ?[]u8 {
 pub fn renderContent() void {
     var pageroot = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer pageroot.deinit();
+
+    // Populate the page on first open (no-op after the first fetch).
+    loadPopularOnce();
 
     renderSearchBar();
 
@@ -313,10 +438,147 @@ fn renderSearchBar() void {
     }
 }
 
+// ── Card grid ──
+// Popular stations and search results are the SAME record (parseStations fills
+// both), so they render through one grid: station logo + name + "codec · kbps ·
+// country", click → playStation(i), exactly what the old row's Play button did.
+const CARD_GAP: f32 = 6;
+const CARD_TARGET_W: f32 = 170; // desired card width; columns derive from it
+const CARD_FOOTER_H: f32 = 46; // name + meta lines under the logo
+
+/// Fill the card's logo area with the station's favicon, reusing the shared
+/// poster daemon. Falls back to the radio glyph while loading, when the station
+/// has no favicon, or when the image can't be decoded (many stations advertise
+/// webp/svg logos, which stb_image can't read — the glyph is the norm, not an
+/// error). UI-thread only.
+fn renderLogo(i: usize, s: *const pure.Station) void {
+    const slot = &station_posters[i];
+    const fav = s.favicon[0..s.favicon_len];
+
+    if (fav.len > 0) {
+        // Pin the slot to whatever station is at index i now — a re-search (or
+        // the popular list landing) can replace results[], so a URL-hash change
+        // means "different station here": free the stale texture/pixels and
+        // refetch. Only when not mid-fetch, so we never spawn a second worker
+        // onto the same slot.
+        const h = std.hash.Fnv1a_64.hash(fav);
+        if (slot.url_hash != h and !slot.fetching) {
+            poster.deinitPoster(&slot.pixels, &slot.tex);
+            slot.w = 0;
+            slot.h = 0;
+            slot.url_hash = h;
+        }
+        _ = poster.uploadIfReady(&slot.pixels, slot.w, slot.h, &slot.tex);
+        if (slot.tex == null and !slot.fetching and slot.pixels == null)
+            poster.fetchAsync(fav, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
+    }
+
+    if (slot.tex) |*tex| {
+        _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+            .id_extra = i + 1000,
+            .expand = .both,
+            .corner_radius = dvui.Rect.all(8),
+        });
+    } else {
+        _ = dvui.icon(@src(), "", icons.tvg.lucide.radio, .{}, .{
+            .id_extra = i + 1000,
+            .color_text = theme.colors.text_tertiary,
+            .gravity_x = 0.5,
+            .gravity_y = 0.5,
+            .expand = .both,
+        });
+    }
+}
+
+/// One station card: logo (clickable → play) + name + codec/bitrate/country.
+fn renderCard(i: usize, card_w: f32) void {
+    const s = &state.app.radio.results[i];
+
+    // Validate a STABLE COPY: a fetch worker can rewrite results[i] mid-frame
+    // and dvui panics on invalid UTF-8 it reads after we validated.
+    var name_buf: [160]u8 = undefined;
+    const name = safeUtf8Buf(s.name[0..@min(s.name_len, s.name.len)], &name_buf);
+
+    // min == max height → every card (and thus every row) has a uniform pitch.
+    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = i,
+        .min_size_content = .{ .w = card_w, .h = card_w + CARD_FOOTER_H },
+        .max_size_content = .{ .w = card_w, .h = card_w + CARD_FOOTER_H },
+        .margin = dvui.Rect.all(CARD_GAP),
+    });
+    defer card.deinit();
+
+    // Logo hosted INSIDE a single button widget — one clickable rectangle per
+    // card (a sibling button + box would draw two).
+    {
+        var bw: dvui.ButtonWidget = undefined;
+        bw.init(@src(), .{}, .{
+            .id_extra = i + 2000,
+            .background = true,
+            .color_fill = theme.colors.bg_elevated,
+            .corner_radius = dvui.Rect.all(8),
+            .min_size_content = .{ .w = card_w, .h = card_w },
+            .max_size_content = .{ .w = card_w, .h = card_w },
+            .padding = dvui.Rect.all(0),
+        });
+        bw.processEvents();
+        bw.drawBackground();
+
+        renderLogo(i, s);
+
+        const clicked = bw.clicked();
+        bw.drawFocus();
+        bw.deinit();
+        // Same click target as the old row's Play button.
+        if (clicked) playStation(i);
+    }
+
+    _ = dvui.label(@src(), "{s}", .{name}, .{
+        .id_extra = i + 3000,
+        .color_text = theme.colors.text_primary,
+        .expand = .horizontal,
+        .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
+    });
+
+    // Meta: codec · bitrate · country.
+    var meta_buf: [120]u8 = undefined;
+    var mw = std.Io.Writer.fixed(&meta_buf);
+    var wrote = false;
+    if (s.codec_len > 0) {
+        mw.writeAll(s.codec[0..@min(s.codec_len, s.codec.len)]) catch {};
+        wrote = true;
+    }
+    if (s.bitrate > 0) {
+        if (wrote) mw.writeAll(" · ") catch {};
+        mw.print("{d} kbps", .{s.bitrate}) catch {};
+        wrote = true;
+    }
+    if (s.country_len > 0) {
+        if (wrote) mw.writeAll(" · ") catch {};
+        mw.writeAll(s.country[0..@min(s.country_len, s.country.len)]) catch {};
+        wrote = true;
+    }
+    if (wrote) {
+        var safe_meta: [120]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(meta_buf[0..mw.end], &safe_meta)}, .{
+            .id_extra = i + 4000,
+            .color_text = theme.colors.text_tertiary,
+            .expand = .horizontal,
+            .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+        });
+    }
+}
+
 fn renderResults() void {
-    if (state.app.radio.result_count == 0) {
+    const count = @min(state.app.radio.result_count, state.app.radio.results.len);
+    if (count == 0) {
         if (!state.app.radio.is_loading.load(.acquire)) {
             _ = dvui.label(@src(), "Search for a station to get started", .{}, .{
+                .color_text = theme.colors.text_secondary,
+                .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
+            });
+        } else {
+            _ = dvui.label(@src(), "Loading popular stations…", .{}, .{
                 .color_text = theme.colors.text_secondary,
                 .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
             });
@@ -331,84 +593,31 @@ fn renderResults() void {
     });
     defer scroll.deinit();
 
-    for (0..state.app.radio.result_count) |i| {
-        const s = &state.app.radio.results[i];
-        var name_buf: [160]u8 = undefined;
-        const name = safeUtf8Buf(s.name[0..s.name_len], &name_buf);
+    _ = dvui.label(@src(), "{s}", .{
+        if (state.app.radio.showing_popular) "Most popular stations" else "Results",
+    }, .{
+        .color_text = theme.colors.text_secondary,
+        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 2 },
+    });
 
-        var rowbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = i,
+    // Responsive columns from the LIVE page width (one-frame lag; first paint
+    // falls back to a sane default) — same shape as the TMDB gallery. No
+    // virtualization: the grid is capped at results[]'s 30 cards.
+    const rect_w = scroll.data().rect.w;
+    const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
+    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
+    const cols_f: f32 = @floatFromInt(cols);
+    const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
+
+    var r: usize = 0;
+    while (r * cols < count) : (r += 1) {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = r + 50000,
             .expand = .horizontal,
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .color_border = theme.colors.border_subtle,
-            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-            .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
         });
-        defer rowbox.deinit();
+        defer row.deinit();
 
-        _ = dvui.icon(@src(), "", icons.tvg.lucide.radio, .{}, .{
-            .id_extra = i + 1000,
-            .color_text = theme.colors.text_tertiary,
-            .min_size_content = theme.iconSize(.sm),
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-        });
-
-        {
-            var col = dvui.box(@src(), .{ .dir = .vertical }, .{
-                .id_extra = i + 2000,
-                .expand = .horizontal,
-            });
-            defer col.deinit();
-
-            _ = dvui.label(@src(), "{s}", .{name}, .{
-                .id_extra = i + 3000,
-                .color_text = theme.colors.text_primary,
-                .expand = .horizontal,
-            });
-
-            // Meta: codec · bitrate · country · tags.
-            var meta_buf: [200]u8 = undefined;
-            var mw = std.Io.Writer.fixed(&meta_buf);
-            var wrote = false;
-            if (s.codec_len > 0) {
-                mw.writeAll(s.codec[0..s.codec_len]) catch {};
-                wrote = true;
-            }
-            if (s.bitrate > 0) {
-                if (wrote) mw.writeAll("  ·  ") catch {};
-                mw.print("{d} kbps", .{s.bitrate}) catch {};
-                wrote = true;
-            }
-            if (s.country_len > 0) {
-                if (wrote) mw.writeAll("  ·  ") catch {};
-                mw.writeAll(s.country[0..s.country_len]) catch {};
-                wrote = true;
-            }
-            if (s.tags_len > 0) {
-                if (wrote) mw.writeAll("  ·  ") catch {};
-                mw.writeAll(s.tags[0..@min(s.tags_len, 60)]) catch {};
-                wrote = true;
-            }
-            if (wrote) {
-                var safe_meta: [200]u8 = undefined;
-                _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(meta_buf[0..mw.end], &safe_meta)}, .{
-                    .id_extra = i + 4000,
-                    .color_text = theme.colors.text_tertiary,
-                    .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
-                });
-            }
-        }
-
-        if (dvui.buttonIcon(@src(), "Play", icons.tvg.lucide.play, .{}, .{}, .{
-            .id_extra = i + 5000,
-            .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
-            .corner_radius = theme.dims.rad_sm,
-            .gravity_y = 0.5,
-        })) {
-            playStation(i);
-        }
+        var c: usize = 0;
+        while (c < cols and r * cols + c < count) : (c += 1) renderCard(r * cols + c, card_w);
     }
 }

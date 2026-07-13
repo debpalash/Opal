@@ -1475,6 +1475,144 @@ def test_radio_wired():
     return "fail", "radio wiring incomplete: " + ", ".join(missing)
 
 
+@test("Podcasts/Radio Open Populated", "Page Shell")
+def test_podcasts_radio_default_content():
+    # Both pages used to open empty (search box only). They now fetch a default
+    # grid of popular content once per session, off the UI thread, through the
+    # SAME API + parser + click handler the search path uses. Verify: the pure
+    # URL builders/parsers exist and the service routes through them, the fetch
+    # is latched + backgrounded, and cards reuse the shared poster daemon.
+    pod = _src("src/services/podcasts.zig")
+    pod_pure = _src("src/services/podcasts_pure.zig")
+    rad = _src("src/services/radio.zig")
+    rad_pure = _src("src/services/radio_pure.zig")
+    st = _src("src/core/state.zig")
+    checks = {
+        # ── Podcasts: Apple top-shows chart → iTunes /lookup → parseItunes ──
+        "podcast pure builders": all(
+            f"pub fn {fn}" in pod_pure
+            for fn in ("buildTopChartUrl", "parseTopChartIds", "buildLookupUrl")
+        ),
+        "podcast routes through pure": all(
+            f"pure.{fn}(" in pod
+            for fn in ("buildTopChartUrl", "parseTopChartIds", "buildLookupUrl")
+        ),
+        # The chart supplies ids only; /lookup returns search's result objects,
+        # so the EXISTING parser must be what fills results[] (no 2nd parser).
+        "podcast reuses parseItunes": "pure.parseItunes(" in pod,
+        "podcast one-shot latch": "popular_fetched" in pod and "pub fn loadPopularOnce" in pod,
+        "podcast fetch is backgrounded": "std.Thread.spawn(.{}, popularWorker" in pod,
+        # ── Radio: RadioBrowser /topvote → the same parseStations ──
+        "radio pure builder": "pub fn buildTopVoteUrl" in rad_pure,
+        "radio topvote endpoint": "stations/topvote/" in rad_pure,
+        "radio routes through pure": "pure.buildTopVoteUrl(" in rad,
+        "radio reuses parseStations": "pure.parseStations(" in rad,
+        "radio one-shot latch": "popular_fetched" in rad and "pub fn loadPopularOnce" in rad,
+        "radio fetch is backgrounded": "std.Thread.spawn(.{}, popularWorker" in rad,
+        # Both curl helpers allocate `cap` bytes and hand back only what was read.
+        # Returning `buf[0..n]` is an INVALID FREE under the global DebugAllocator
+        # (it checks free size against alloc size) and aborts the process on launch
+        # — 49584 freed against 524288 allocated. The buffer must be shrunk to `n`.
+        "curl shrinks buffer to the read length": all(
+            "alloc.realloc(buf, n)" in s and "return buf[0..n];" not in s
+            for s in (pod, rad)
+        ),
+        # ── Cards: artwork via the shared poster daemon, existing click path ──
+        "podcast cards click loadEpisodes": "if (clicked) loadEpisodes(i)" in pod,
+        "radio cards click playStation": "if (clicked) playStation(i)" in rad,
+        "poster daemon reused": all(
+            "poster.fetchAsync(" in s and "poster.uploadIfReady(" in s for s in (pod, rad)
+        ),
+        # Pages kick the fetch from their own render root, not a shared shell.
+        "kicked from renderContent": all("loadPopularOnce();" in s for s in (pod, rad)),
+        "state flag": st.count("showing_popular: bool") == 2,
+        # Detached threads only — a discarded handle leaks the pthread.
+        "threads detached": all("_ = std.Thread.spawn(" not in s for s in (pod, rad)),
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if not missing:
+        return "pass", "podcasts+radio open populated (top charts, reused fetchers/parsers/click paths)"
+    return "fail", "default content incomplete: " + ", ".join(missing)
+
+
+@test("Comics MangaDex Source", "Page Shell")
+def test_comics_mangadex_source():
+    # The Comics tab shipped with ONE source (readallcomics) whose endpoint lives
+    # in source_config — so on a fresh install it is INERT and the tab is empty.
+    # MangaDex is a keyless, documented public API (api.mangadex.org): no key slot,
+    # no source_config entry, works out of the box.
+    #
+    # A MangaDex card can't be read by the generic curl+HTML scraper (its pages
+    # come from a 3-call JSON chain), so cards carry a `mangadex:<uuid>` route URL
+    # that fetchComicThread dispatches on BEFORE the scraper. Verify that seam, and
+    # that every URL/JSON decision routes through the unit-tested pure module.
+    svc = _src("src/services/comics.zig")
+    pure = _src("src/services/comics_pure.zig")
+    build = _src("build.zig")
+    checks = {
+        # ── Source registered in the selector ──
+        "source enum variant": "const Source = enum { all, readallcomics, mangadex }" in svc,
+        "source chip": 'renderSourceChip("MangaDex", 3, .mangadex)' in svc,
+        # ── Keyless: the endpoint is a constant, NOT a source_config lookup ──
+        "keyless api const": 'pub const MD_API = "https://api.mangadex.org"' in pure,
+        "no source_config gate": 'source_config.zig").get("mangadex"' not in svc,
+        # ── Pure module owns URL building + JSON parsing ──
+        "pure builders": all(
+            f"pub fn {fn}" in pure
+            for fn in (
+                "buildSearchUrl",
+                "buildFeedUrl",
+                "buildAtHomeUrl",
+                "buildCoverUrl",
+                "buildPageUrl",
+                "buildRouteUrl",
+                "mangaIdFromRoute",
+                "parseMangaEntry",
+                "parseAtHome",
+                "firstChapterId",
+            )
+        ),
+        # Production MUST call the pure fns (so the tested logic is the shipped logic).
+        "service routes through pure": all(
+            f"pure.{fn}(" in svc
+            for fn in (
+                "buildSearchUrl",
+                "buildFeedUrl",
+                "buildAtHomeUrl",
+                "buildCoverUrl",
+                "buildPageUrl",
+                "buildRouteUrl",
+                "mangaIdFromRoute",
+                "parseMangaEntry",
+                "parseAtHome",
+                "firstChapterId",
+            )
+        ),
+        # The existing percent-encoder now delegates to the tested one (no drift).
+        "encoder routes through pure": "return pure.percentEncodeQuery(input, out);" in svc,
+        # ── Reader seam: mangadex: route dispatched before the HTML scraper ──
+        "route scheme": 'pub const MD_SCHEME = "mangadex:"' in pure,
+        "reader dispatch": "if (pure.mangaIdFromRoute(url)) |manga_id|" in svc,
+        "reader stages pages": "fn loadMangadexPages(manga_id: []const u8) bool" in svc,
+        # Reuses the shared page-download pipeline rather than a second downloader.
+        "reuses downloadPages": "downloadPages(gen);" in svc,
+        # ── Security: ids are interpolated into a request path → must be validated ──
+        "id validation gate": "pub fn isValidId" in pure,
+        # ── Networking: curl only. std.http SEGVs on some ISP TLS resets, so the
+        #    client type must never be constructed (a *mention* in a comment
+        #    explaining why we avoid it is fine — match on real usage).
+        "curl not std.http": "std.http.Client" not in svc and '"curl"' in svc,
+        # Detached threads only — a discarded handle leaks the pthread.
+        "threads detached": "_ = std.Thread.spawn(" not in svc,
+        # ── Pure module registered in the `zig build test` step ──
+        "test registered": 'b.path("src/services/comics_pure.zig")' in build,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if not missing:
+        return "pass", "comics: MangaDex source wired (keyless API → route URL → JSON reader chain)"
+    return "fail", "mangadex wiring incomplete: " + ", ".join(missing)
+
+
 # ══════════════════════════════════════════════════════════
 # Session features: single-media, browser, voice, Co-Watcher, Recall
 # (wiring/regression guards so the build+test gate exercises new code)
@@ -1757,9 +1895,13 @@ def test_watch_commit_smart_play_onboarding():
         "no click-time mark": "tvMarkWatched" not in _between(tm, "fn playTvEpisode", "\nfn "),
         "pending watch state": "pending_watch" in st and "armed" in st,
         "commit on playback": "tvWatchCommitDue" in pl and "commitPendingWatch" in pl,
-        "commit does db+trakt+continue": ("tvMarkWatched" in _between(tm, "pub fn commitPendingWatch", "\nfn ")
-                                          and "markWatchedEpisode" in _between(tm, "pub fn commitPendingWatch", "\nfn ")
-                                          and "tvUpsertContinue" in _between(tm, "pub fn commitPendingWatch", "\nfn ")),
+        # The commit marks the episode watched, scrobbles to Trakt, and AUTO-TRACKS
+        # the show. It used to upsert tv_continue (which stored the LAST WATCHED
+        # episode); that table is superseded by tv_shows, and "what's next" is now
+        # derived by tv_pure rather than stored — see the TV Tracking test.
+        "commit does db+trakt+track": ("tvMarkWatched" in _between(tm, "pub fn commitPendingWatch", "\nfn ")
+                                       and "markWatchedEpisode" in _between(tm, "pub fn commitPendingWatch", "\nfn ")
+                                       and "tvTouchShow" in _between(tm, "pub fn commitPendingWatch", "\nfn ")),
         "smart pick pure": "pub fn pickBest" in rk and "PickCand" in rk,
         "smart play wired": "smartPlayEpisode" in tm and "pickBest" in tm and "setUniversalQuery" in tm,
         "wizard": "installStarterPack" in ob and "onboarded" in ob,
@@ -1827,7 +1969,11 @@ def test_tv_calendar_and_hwdec():
     checks = {
         "pure parsers": ("parseEpisodeToAir" in calp and "eztvEpisodeSeeds" in calp
                          and "countdownLabel" in calp and "imdbDigits" in calp),
-        "service wired": ("tvGetContinue" in cal and "next_episode_to_air" in cal
+        # The calendar no longer fetches /3/tv/{id} itself — tv_library's sync
+        # worker makes that call once for every tracked show and stages the rail
+        # from the same document, so the rail and My Shows cannot disagree about
+        # what is next.
+        "service wired": ("pub fn stage(" in cal and "next_episode_to_air" in cal
                           and 'has("eztv")' in cal),
         "home rail": "renderComingUpRail" in hm and "refreshOnce" in hm,
         "click-through": "openTvDetailById" in hm,
@@ -1950,6 +2096,53 @@ def test_anime_netflix_experience():
     missing = [k for k, v in checks.items() if not v]
     if not missing:
         return "pass", "modes + seasonal + calendar + relations + episode tracking wired"
+    return "fail", f"missing: {missing}"
+
+
+@test("Anime Lists Source Plugin", "Anime")
+def test_anime_lists_plugin():
+    # The debpalash/lists repo (AniList<->MAL id maps + a currently-airing feed)
+    # wired into the anime index. It is a METADATA source, so it ships with a
+    # working default endpoint and an installed `lists` plugin merely OVERRIDES
+    # it. It was originally gated behind a plugin install like a torrent index,
+    # which meant the chip rendered NOTHING on every machine (no plugin ships
+    # installed) -- the neutrality rule is about infringing endpoints, and Jikan
+    # and AniList, the other two anime metadata APIs, are both hardcoded.
+    import json as _json
+    an = _src("src/services/anime.zig")
+    pure = _src("src/services/anime_lists_pure.zig")
+    bz = _src("build.zig")
+    with open(os.path.join(PROJECT_DIR, "plugins-manifest.json")) as fh:
+        manifest = _json.load(fh)
+    entry = next((p for p in manifest["plugins"] if p["id"] == "lists"), None)
+
+    checks = {
+        # Registered through the EXISTING source-plugin contract (plugin_repo.zig
+        # reads this manifest; install writes ~/.config/opal/plugins/sources/<id>.json).
+        "manifest entry": entry is not None and entry.get("type") == "anime",
+        "manifest endpoint": bool(entry and "debpalash/lists" in entry["endpoints"]["base"]),
+        # Plugin can still override the endpoint...
+        "source_config override": 'get("lists", "base")' in an,
+        # ...but a machine with no plugin installed MUST still get data. A null
+        # listsBase() hides the chip entirely, which is the bug this pins.
+        "works with no plugin installed": ("LISTS_DEFAULT_BASE" in an
+                                           and "debpalash/lists" in an),
+        # Fetch: curl (never std.http), off the UI thread, into the shared grid.
+        "fetches airing feed": "anime-airing.json" in an,
+        "curl not std.http": "curl" in an and "std.http" not in an,
+        "detached worker": "listsThread" in an and "search_gen" in an,
+        # SWR disk cache so it isn't refetched every launch.
+        "cached": "cacheStoreForUrl" in an and "cacheLoadForUrl" in an,
+        "ttl": "LISTS_TTL_S" in an,
+        # Parsing lives in the tested pure sibling, registered in build.zig.
+        "pure parser": "pub fn parseAiring" in pure,
+        "prod routes through pure": "lists_pure.parseAiring" in an,
+        "pure real schema": '"idMal"' in pure and "nextEpisode" in pure,
+        "pure registered": "anime_lists_pure.zig" in bz,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if not missing:
+        return "pass", "lists plugin: manifest → source_config → cached airing grid (pure-parsed)"
     return "fail", f"missing: {missing}"
 
 
@@ -2967,6 +3160,265 @@ def test_unified_downloads():
     if missing:
         return "fail", "missing: " + ", ".join(missing)
     return "pass", "one merged list: pure dedup + chips + union actions + infohash join"
+
+
+@test("Watching library: all kinds, next-up, user status", "Page Shell")
+def test_tv_tracking():
+    # TV tracking used to be ~80% built and quietly wrong: next-up could not
+    # cross a season, tv_continue stored the LAST WATCHED episode (so every
+    # consumer re-derived "what's next" and none agreed), there was no
+    # per-episode resume, and nothing clamped next-up to what had actually aired.
+    pure = _src("src/services/tv_pure.zig")
+    lib = _src("src/services/tv_library.zig")
+    dbz = _src("src/core/db.zig")
+    tm = _src("src/services/tmdb.zig")
+    cal = _src("src/services/tv_calendar.zig")
+    pl = _src("src/player/player.zig")
+    st = _src("src/core/state.zig")
+    sh = _src("src/ui/shell.zig")
+    rt = _src("src/core/router.zig")
+    checks = {
+        # The engine, and the fact that production routes through it.
+        "pure engine": ("pub fn nextUp(" in pure
+                        and "pub fn progress(" in pure
+                        and "pub fn statusOf(" in pure),
+        "aired clamp exists": "last_aired" in pure and "fn airedInSeason(" in pure,
+        "specials excluded": "SPECIALS_SEASON" in pure,
+        "library routes through pure": "tp.nextUp(" in lib and "tp.progress(" in lib,
+        # Cross-season next-up needs every watched row + the season map, not the
+        # 120-bool window of whichever season happens to be open.
+        "season map persisted": "CREATE TABLE IF NOT EXISTS tv_seasons" in dbz,
+        "tracked shows table": "CREATE TABLE IF NOT EXISTS tv_shows" in dbz,
+        "watched loaded across seasons": "pub fn tvLoadWatchedAll(" in dbz,
+        "detail resume is cross-season": "fn tvNextUp()" in tm and "nextUpFor(" in tm,
+        # Per-episode resume, keyed by real episode identity.
+        "episode resume columns": ("ALTER TABLE tv_watched ADD COLUMN position_secs" in dbz
+                                   and "pub fn tvSavePosition(" in dbz
+                                   and "pub fn tvGetPosition(" in dbz),
+        "player binds the episode": "playing_episode" in pl and "tvSavePosition(" in pl,
+        "player resumes the episode": "tvGetPosition(" in pl,
+        # The binding is to a specific stream URL, not a bare "an episode is
+        # playing" flag. Without the URL guard, playing a movie after an episode
+        # writes the movie's position into the episode's row and then resumes the
+        # movie at the episode's timestamp. Both save and resume must be gated.
+        "episode binding is url-guarded": ("pub fn matches(" in st
+                                           and pl.count("pe.matches(") >= 2
+                                           and "pe.armed" in pl),
+        # 64-bit columns: updated_at is a ms timestamp (~1.75e12) and would
+        # silently truncate through columnInt's i32, wrecking the sort order.
+        "int64 column reader": "pub fn columnInt64(" in dbz,
+        # Untracking must never destroy watch history.
+        "untrack keeps history": ("pub fn tvSetTracked(" in dbz
+                                  and "DELETE FROM tv_watched" not in dbz),
+        # User-settable status, next to the show name, changeable at any time.
+        # It lives in a generic library_status table (not a tv_shows column)
+        # because anime keys off a MAL id and a movie off its name.
+        "status chips on detail": "pub fn renderStatusChips(" in tm,
+        "user status beats derived": "pub fn effectiveStatus(" in pure and "r.user = " in lib,
+        "generic status table": ("CREATE TABLE IF NOT EXISTS library_status" in dbz
+                                 and "pub fn librarySetStatus(" in dbz
+                                 and "pub fn libraryGetStatus(" in dbz),
+        "auto-track on watch": "tvTouchShow(" in tm,
+        # The Watching library is not TV-only.
+        "all kinds aggregated": ("fn addTvRows(" in lib and "fn addAnimeRows(" in lib
+                                 and "fn addMovieRows(" in lib),
+        "kind chips": "tp.kindCountsFor(" in lib and "kind_filter" in lib,
+        # A TV episode also lands in watch_history under its release name; listing
+        # it as a "movie" would duplicate the show under a worse identity.
+        "episodes excluded from movies": "subs.parse(name, &qbuf, &showbuf).is_tv" in lib,
+        # "No next episode" != "caught up". With no season map we don't KNOW, and
+        # saying "Caught up" hid the user's next episode (Silo: caught up at 0/10).
+        "unknown never reads as caught up": ('"Not synced yet"' in pure
+                                             and "if (r.prog.total == 0)" in pure),
+        # Opening a show persists its season map, so "unknown" stops being
+        # reachable for anything the user has actually looked at.
+        "detail open persists season map": "tvUpsertSeasons(tmdb_id" in tm,
+        # One fetch, one truth: the calendar no longer makes its own /3/tv/{id}
+        # call, and no longer derives its own idea of what is unseen.
+        "calendar consumes, not fetches": ("fn worker() void" not in cal
+                                           and "e.unseen = next_up != null" in cal),
+        "calendar fed by the sync": "cal.stage(" in lib,
+        # The page.
+        "watching route": "watching," in rt and ".watching =>" in sh,
+        # Both chip rows and the visibility rule come from the tested pure module.
+        "filter chips from pure": "tp.countsFor(" in lib and "tp.visible(" in lib,
+        # Each row costs 2 queries; polling 200 shows at 2Hz would be ~800 q/s.
+        "snapshot is dirty-driven, not polled": ("library_dirty" in lib
+                                                 and "last_build_ms" not in lib),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "missing: " + ", ".join(missing)
+    return "pass", "TV+anime+movies in one library; aired-clamped next-up; user-set status"
+
+
+@test("Player control bar: drop-ups + FF fullscreen", "Page Shell")
+def test_player_dropups():
+    # The control-bar pickers (aspect / audio / subs / language / files) were
+    # MODAL dialogs: a dimming backdrop over the video, a title bar, a close
+    # button. The scrim dimmed the very thing you were adjusting. They are now
+    # backdrop-less panels anchored ABOVE the chip that opened them.
+    pk = _src("src/ui/pickers.zig")
+    ft = _src("src/ui/footer.zig")
+    dp = _src("src/ui/dropup_pure.zig")
+    bz = _src("build.zig")
+    checks = {
+        # Placement is pure + unit-tested; the UI only executes it.
+        "pure placement": "pub fn place(" in dp and "pub fn contains(" in dp,
+        "pure registered": "dropup_pure.zig" in bz,
+        "pickers route through pure": "dropup.place(" in pk,
+        # The whole point: no backdrop, and no window chrome.
+        "no modals left": "modal = true" not in pk,
+        "explicitly non-modal": ".modal = false" in pk,
+        "no window title bars": "windowHeader" not in pk,
+        # Anchored to the chip that opened it, so it drops UP from that chip.
+        "chip anchor recorded": "picker_anchor" in ft and "recordAnchor(" in ft,
+        "panel anchors to the chip": "footer.anchorFor(" in pk,
+        # With no backdrop there is nothing to swallow a stray click, so Esc must work.
+        "esc dismisses": "pub fn handleDropUpKeys(" in pk and "pickers.handleDropUpKeys();" in ft,
+        # FF button now toggles fullscreen, reusing the same path the 'f' key drives.
+        "ff toggles fullscreen": ("fullscreen_player_idx" in ft
+                                  and 'components.tip(@src(), wd, if (is_fs) "Exit fullscreen (f)"' in ft),
+        "ff no longer seeks": '"seek 10"' not in ft,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "missing: " + ", ".join(missing)
+    return "pass", "backdrop-less drop-ups anchored above their chip; FF toggles fullscreen"
+
+
+@test("Player: prev/next episode buttons", "Page Shell")
+def test_episode_transport():
+    # When a tracked TV episode is playing, the control bar gets prev/next EPISODE
+    # buttons. Distinct from mpv's playlist-prev/next (a different thing, only
+    # shown when there is an mpv playlist) and absent entirely for movies, where
+    # "next episode" is meaningless.
+    ft = _src("src/ui/footer.zig")
+    lib = _src("src/services/tv_library.zig")
+    pure = _src("src/services/tv_pure.zig")
+    checks = {
+        "neighbour logic is pure": ("pub fn episodeAfter(" in pure
+                                    and "pub fn episodeBefore(" in pure),
+        "library exposes neighbours": ("pub fn neighborEpisode(" in lib
+                                       and "pub fn playNeighborEpisode(" in lib),
+        "buttons in the control bar": '"ep-prev"' in ft and '"ep-next"' in ft,
+        # Only for a tracked episode -- never for a movie / one-off file.
+        "gated on a tracked episode": "tv_lib.playingEpisode()" in ft,
+        "routes through the library": "tv_lib.playNeighborEpisode(" in ft,
+        # "Next" must never offer an episode that hasn't aired -- that sends the
+        # resolver hunting for a file that does not exist.
+        "next is aired-clamped": "last_aired" in _between(lib, "pub fn neighborEpisode", "pub fn playNeighborEpisode"),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "missing: " + ", ".join(missing)
+    return "pass", "prev/next episode in the transport, aired-clamped, TV-only"
+
+
+@test("Nav Donate Button", "Page Shell")
+def test_nav_donate_button():
+    # The button itself is dvui draw code (GUI-only, not unit-testable), so this
+    # pins the wiring instead: one URL constant, the chip lives in header.zig,
+    # the shell calls it, it reuses the existing openExternal launcher (no second
+    # process-spawn helper), and the omnibox gave up width to make room for it.
+    hdr = _src("src/ui/header.zig")
+    shell = _src("src/ui/shell.zig")
+    settings = _src("src/ui/settings.zig")
+    checks = {
+        "single URL constant": hdr.count("pub const DONATE_URL") == 1,
+        "chip in header": "pub fn donateButton()" in hdr and "lucide.heart" in hdr,
+        "shell call site": "header.donateButton();" in shell,
+        "reuses openExternal": ("pub fn openExternal" in settings
+                                and 'openExternal(DONATE_URL)' in hdr),
+        # A donate chip that spawns its own child process = duplicated launcher.
+        "no second launcher": "Child.init(" not in hdr,
+        # Room for the chip came from the omnibox cap, not from overlapping it.
+        "omnibox narrowed": ".max_size_content = .{ .w = 640, .h = 26 }" in shell,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "donate button wiring incomplete: " + ", ".join(missing)
+    return "pass", "donate chip: header.zig → openExternal, omnibox capped at 640"
+
+
+@test("EZTV Release Calendar (neutral + live)", "Page Shell")
+def test_eztv_calendar():
+    # The section is dvui draw code + a detached worker (GUI/thread-only), so
+    # this pins the two things that can silently rot: the NEUTRALITY contract
+    # (no endpoint may be hardcoded in the binary — it must come from the
+    # installed eztv source plugin, else the module stays inert) and the LIVE
+    # refresh contract (periodic re-fetch, countdown recomputed per frame).
+    svc = _src("src/services/eztv_calendar.zig")
+    pur = _src("src/services/eztv_calendar_pure.zig")
+    build = _src("build.zig")
+    if not svc or not pur:
+        return "fail", "eztv_calendar.zig / eztv_calendar_pure.zig missing"
+
+    manifest_path = os.path.join(PROJECT_DIR, "plugins-manifest.json")
+    eztv = {}
+    if os.path.exists(manifest_path):
+        with open(manifest_path) as f:
+            for p in json.load(f).get("plugins", []):
+                if p.get("id") == "eztv":
+                    eztv = p.get("endpoints", {})
+
+    # The endpoints live in the manifest, never in src/. Scan BOTH new files for
+    # any hardcoded eztv host (the whole point of source_config gating).
+    hardcoded = [h for h in ("eztvx.to", "eztv.re", "eztv.ag", "eztv.it")
+                 if h in svc or h in pur]
+
+    checks = {
+        # ── Neutrality ──
+        "manifest declares calendar":  eztv.get("calendar", "").startswith("http"),
+        "manifest declares countdown": eztv.get("countdown", "").startswith("http"),
+        "manifest declares api":       eztv.get("api", "").startswith("http"),
+        "no hardcoded eztv host in src": not hardcoded,
+        "gated on installed plugin":   'source_config.has("eztv")' in svc,
+        "endpoints read from plugin":  'source_config.get("eztv", field)' in svc,
+        # Inert = render nothing: renderSection bails before drawing anything.
+        "renders nothing when inert":  svc.count("if (!source_config.has(\"eztv\")) return;") >= 1,
+
+        # ── The two-call mount contract the Watching page uses ──
+        "pub fn refreshTick":          "pub fn refreshTick() void" in svc,
+        "pub fn renderSection":        "pub fn renderSection() void" in svc,
+
+        # ── Live, not once-per-session ──
+        "named refresh interval":      "pub const REFRESH_INTERVAL_MS" in svc,
+        "interval-gated refetch":      "REFRESH_INTERVAL_MS) return;" in svc,
+        "clock via io_global":         "io.milliTimestamp()" in svc,
+        "no std.time":                 "std.time." not in svc,
+        # A countdown baked at fetch time freezes on screen. It must be derived
+        # from the stored epoch at the render site.
+        "countdown per frame":         "pure.releaseLabel(now_s, r.released_epoch" in svc,
+
+        # ── Threading / memory ──
+        "busy guard":                  "loading.load(.acquire)" in svc and "loading.store(true, .release)" in svc,
+        "detached worker":             "std.Thread.spawn" in svc and ".detach()" in svc,
+        "big body on the heap":        "alloc.alloc(u8, BODY_CAP)" in svc and "defer alloc.free(body)" in svc,
+        "publish count last":          "front.store(back, .release); // publish LAST" in svc,
+        # The invalid-free trap: alloc(cap) then returning buf[0..n] is an
+        # invalid free under the global DebugAllocator. The parser sidesteps it
+        # entirely by writing into a caller-owned slice and touching no
+        # allocator at all (so there is no buffer to mis-size).
+        "parser allocates nothing":    not any(t in pur for t in
+                                               ("alloc.zig", "allocator", ".alloc(", "realloc")),
+        "parser fills caller buffer":  "pub fn parseFeed(body: []const u8, out: []Release) usize" in pur,
+        # std.http SEGVs on some ISP TLS resets (tmdb_api.zig:275) — the fetch
+        # must shell out to curl through the io_global child wrapper.
+        "curl, never std.http":        ('"curl"' in svc and "io.Child.init" in svc
+                                        and "std.http.Client" not in svc),
+
+        # ── Pure logic is tested and production routes through it ──
+        "pure fns used in prod":       all(f in svc for f in ("pure.buildFeedUrl", "pure.parseFeed",
+                                                              "pure.releaseLabel", "pure.episodeTag",
+                                                              "pure.sizeLabel")),
+        "pure module has tests":       pur.count('test "') >= 5,
+        "registered in build.zig":     "src/services/eztv_calendar_pure.zig" in build,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "eztv calendar contract broken: " + ", ".join(missing[:4])
+    return "pass", "neutral (source_config-gated), 15-min refresh, per-frame countdown"
 
 
 # ══════════════════════════════════════════════════════════

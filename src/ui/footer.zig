@@ -25,6 +25,24 @@ pub const PickerKind = enum(i32) { none = -1, chapter = 0, aspect = 1, audio = 2
 /// (audio/sub/chapter/aspect/lang/playlist) before touching bigger surfaces.
 pub var open_picker: PickerKind = .none;
 
+/// On-screen rect of each picker's chip, in dvui NATURAL units, recorded as the
+/// chip is laid out. The drop-up panels anchor to this: they float ABOVE their
+/// chip with no backdrop, so they need to know where the chip actually landed.
+/// Indexed by @intFromEnum(PickerKind); .none (-1) has no slot.
+pub var picker_anchor: [8]dvui.Rect.Natural = [_]dvui.Rect.Natural{.{}} ** 8;
+
+pub fn anchorFor(kind: PickerKind) dvui.Rect.Natural {
+    const i = @intFromEnum(kind);
+    if (i < 0 or i >= picker_anchor.len) return .{};
+    return picker_anchor[@intCast(i)];
+}
+
+fn recordAnchor(kind: PickerKind, r: dvui.Rect.Physical) void {
+    const i = @intFromEnum(kind);
+    if (i < 0 or i >= picker_anchor.len) return;
+    picker_anchor[@intCast(i)] = r.toNatural();
+}
+
 // Persist the close-button screen rect across frames so we can hover-test it
 // before the button is rendered (one frame of lag is acceptable for hover).
 var close_button_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
@@ -954,6 +972,7 @@ fn pickerIconChip(
     chip_text: []const u8,
     is_active: bool,
     tooltip: []const u8,
+    kind: PickerKind,
 ) bool {
     // We do hover detection by comparing the laid-out rect to the mouse pos.
     // The hover background relies on this — `dvui.clicked` runs *after* the
@@ -968,6 +987,8 @@ fn pickerIconChip(
     });
 
     const btn_rect = btn.data().borderRectScale().r;
+    // The drop-up panel floats above this chip, so remember where it landed.
+    recordAnchor(kind, btn_rect);
     const is_hovered = mouseOverRect(btn_rect);
     var hovered_signal: bool = false;
     const clicked = dvui.clicked(btn.data(), .{ .hovered = &hovered_signal });
@@ -1302,6 +1323,32 @@ pub fn renderLiquidGlassOverlay() void {
         var wd: dvui.WidgetData = undefined;
         const has_playlist = SlowProps.pl_count > 1;
 
+        // ── Previous episode ──
+        //
+        // Only for a tracked TV episode (state.playing_episode). A movie or a
+        // one-off file has no "previous episode", and mpv's playlist-prev is a
+        // different thing entirely — that's the button below, and it only appears
+        // when there IS an mpv playlist.
+        const tv_lib = @import("../services/tv_library.zig");
+        const on_episode = tv_lib.playingEpisode();
+        if (on_episode) {
+            const has_prev = tv_lib.neighborEpisode(-1) != null;
+            if (dvui.buttonIcon(@src(), "ep-prev", icons.tvg.lucide.@"chevron-first", .{}, .{}, .{
+                .data_out = &wd,
+                .color_fill = transparent,
+                .color_text = if (has_prev) theme.colors.text_primary else theme.colors.text_tertiary,
+                .border = dvui.Rect.all(0),
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .gravity_y = 0.5,
+                .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
+                .min_size_content = theme.iconSize(.xl),
+                .max_size_content = .{ .w = 32, .h = 32 },
+            })) {
+                if (has_prev) tv_lib.playNeighborEpisode(-1);
+            }
+            components.tip(@src(), wd, if (has_prev) "Previous episode" else "This is the first episode");
+        }
+
         // ── Transport: skip-back | rewind | play/pause | forward | skip-forward ──
         if (has_playlist) {
             if (dvui.buttonIcon(@src(), "skip-prev", icons.tvg.lucide.@"skip-back", .{}, .{}, .{
@@ -1358,21 +1405,35 @@ pub fn renderLiquidGlassOverlay() void {
         }
         components.tip(@src(), wd, "Play/Pause (Space)");
 
-        // Forward 10s.
-        if (dvui.buttonIcon(@src(), "ff10", icons.tvg.lucide.@"fast-forward", .{}, .{}, .{
-            .data_out = &wd,
-            .color_fill = transparent,
-            .color_text = theme.colors.text_primary,
-            .border = dvui.Rect.all(0),
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .gravity_y = 0.5,
-            .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
-            .min_size_content = .{ .w = 30, .h = 30 },
-            .max_size_content = .{ .w = 30, .h = 30 },
-        })) {
-            _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek 10");
+        // Fullscreen toggle. (This button used to seek +10s; seeking forward is
+        // still on the right-arrow key, which is where it always was.)
+        {
+            const is_fs = state.app.fullscreen_player_idx != null;
+            if (dvui.buttonIcon(@src(), "ff10", icons.tvg.lucide.@"fast-forward", .{}, .{}, .{
+                .data_out = &wd,
+                .color_fill = transparent,
+                .color_text = if (is_fs) theme.colors.accent else theme.colors.text_primary,
+                .border = dvui.Rect.all(0),
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .gravity_y = 0.5,
+                .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
+                .min_size_content = .{ .w = 30, .h = 30 },
+                .max_size_content = .{ .w = 30, .h = 30 },
+            })) {
+                // Same toggle the 'f' key drives (input.zig) — one fullscreen path,
+                // not two. The active-player index is only stored when there IS an
+                // active player, per the guard convention.
+                if (state.app.fullscreen_player_idx == null) {
+                    if (state.app.active_player_idx < state.app.players.items.len) {
+                        state.app.fullscreen_player_idx = state.app.active_player_idx;
+                    }
+                } else {
+                    state.app.fullscreen_player_idx = null;
+                }
+                dvui.refresh(null, @src(), null);
+            }
+            components.tip(@src(), wd, if (is_fs) "Exit fullscreen (f)" else "Fullscreen (f)");
         }
-        components.tip(@src(), wd, "Skip forward 10s (\xE2\x86\x92)");
 
         if (has_playlist) {
             if (dvui.buttonIcon(@src(), "skip-next", icons.tvg.lucide.@"skip-forward", .{}, .{}, .{
@@ -1389,6 +1450,27 @@ pub fn renderLiquidGlassOverlay() void {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-next");
             }
             components.tip(@src(), wd, "Next track");
+        }
+
+        // ── Next episode ──
+        if (on_episode) {
+            const has_next = tv_lib.neighborEpisode(1) != null;
+            if (dvui.buttonIcon(@src(), "ep-next", icons.tvg.lucide.@"chevron-last", .{}, .{}, .{
+                .data_out = &wd,
+                .color_fill = transparent,
+                .color_text = if (has_next) theme.colors.text_primary else theme.colors.text_tertiary,
+                .border = dvui.Rect.all(0),
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .gravity_y = 0.5,
+                .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
+                .min_size_content = theme.iconSize(.xl),
+                .max_size_content = .{ .w = 32, .h = 32 },
+            })) {
+                if (has_next) tv_lib.playNeighborEpisode(1);
+            }
+            // Greyed out rather than hidden when there's nothing next: a button
+            // that vanishes mid-show is more confusing than one that's dim.
+            components.tip(@src(), wd, if (has_next) "Next episode" else "No next episode yet");
         }
 
         // ── Status badges — times moved to the scrub row (IINA layout:
@@ -1524,7 +1606,7 @@ pub fn renderLiquidGlassOverlay() void {
         {
             const ar_text = currentAspectChipText(active_p.mpv_ctx);
             const ar_active = !std.mem.eql(u8, ar_text, "Auto");
-            if (pickerIconChip(@src(), 700, icons.tvg.lucide.ratio, ar_text, ar_active, "Aspect ratio")) {
+            if (pickerIconChip(@src(), 700, icons.tvg.lucide.ratio, ar_text, ar_active, "Aspect ratio", .aspect)) {
                 open_picker = if (open_picker == .aspect) .none else .aspect;
             }
         }
@@ -1534,7 +1616,7 @@ pub fn renderLiquidGlassOverlay() void {
             var chp_buf: [16]u8 = undefined;
             const chp = currentChapterChipText(active_p.mpv_ctx, &chp_buf);
             if (chp.count > 1) {
-                if (pickerIconChip(@src(), 701, icons.tvg.lucide.bookmark, chp.text, true, "Chapters")) {
+                if (pickerIconChip(@src(), 701, icons.tvg.lucide.bookmark, chp.text, true, "Chapters", .chapter)) {
                     open_picker = if (open_picker == .chapter) .none else .chapter;
                 }
             }
@@ -1544,7 +1626,7 @@ pub fn renderLiquidGlassOverlay() void {
         {
             var aud_buf: [32]u8 = undefined;
             const aud = currentTrackChipText(active_p.mpv_ctx, "audio", &aud_buf);
-            if (pickerIconChip(@src(), 702, icons.tvg.lucide.music, aud.text, aud.active, "Audio track")) {
+            if (pickerIconChip(@src(), 702, icons.tvg.lucide.music, aud.text, aud.active, "Audio track", .audio)) {
                 open_picker = if (open_picker == .audio) .none else .audio;
             }
         }
@@ -1553,7 +1635,7 @@ pub fn renderLiquidGlassOverlay() void {
         {
             var sub_buf: [32]u8 = undefined;
             const sub = currentTrackChipText(active_p.mpv_ctx, "sub", &sub_buf);
-            if (pickerIconChip(@src(), 703, icons.tvg.lucide.captions, sub.text, sub.active, "Subtitle track")) {
+            if (pickerIconChip(@src(), 703, icons.tvg.lucide.captions, sub.text, sub.active, "Subtitle track", .sub)) {
                 open_picker = if (open_picker == .sub) .none else .sub;
             }
         }
@@ -1562,7 +1644,7 @@ pub fn renderLiquidGlassOverlay() void {
         {
             const cur_lang = state.app.sub_lang_buf[0..state.app.sub_lang_len];
             const chip = if (cur_lang.len > 0) cur_lang else "eng";
-            if (pickerIconChip(@src(), 704, icons.tvg.lucide.globe, chip, cur_lang.len > 0, "Subtitle search language")) {
+            if (pickerIconChip(@src(), 704, icons.tvg.lucide.globe, chip, cur_lang.len > 0, "Subtitle search language", .lang)) {
                 open_picker = if (open_picker == .lang) .none else .lang;
             }
         }
@@ -1570,7 +1652,7 @@ pub fn renderLiquidGlassOverlay() void {
         // Find Subtitles — direct shortcut. Opens the picker AND kicks the
         // keyless search immediately (debounced inside the engine); the keyed
         // opensubtitles.com search joins in only when a key is configured.
-        if (pickerIconChip(@src(), 705, icons.tvg.lucide.search, "Subs", false, "Find subtitles online")) {
+        if (pickerIconChip(@src(), 705, icons.tvg.lucide.search, "Subs", false, "Find subtitles online", .none)) {
             state.app.sub_picker_open = true;
             @import("../player/subtitles.zig").searchFromActivePlayer(&state.app.sub_engine);
             if (state.app.opensub_api_key_len > 0) {
@@ -1585,7 +1667,7 @@ pub fn renderLiquidGlassOverlay() void {
             if (file_count > 1) {
                 var f_buf: [16]u8 = undefined;
                 const f_chip = std.fmt.bufPrint(&f_buf, "{d}", .{file_count}) catch "";
-                if (pickerIconChip(@src(), 706, icons.tvg.lucide.list, f_chip, true, "Files in torrent")) {
+                if (pickerIconChip(@src(), 706, icons.tvg.lucide.list, f_chip, true, "Files in torrent", .playlist)) {
                     open_picker = if (open_picker == .playlist) .none else .playlist;
                 }
             }
@@ -1751,6 +1833,8 @@ pub fn renderLiquidGlassOverlay() void {
     }
 
     // ── Floating popovers (rendered last — they're free-positioned) ──
+    // Esc dismisses whichever drop-up is open (there is no backdrop to catch it).
+    pickers.handleDropUpKeys();
     pickers.renderChapterPickerPopover(active_p);
     pickers.renderAspectPickerPopover(active_p);
     pickers.renderTrackPickerPopover(active_p, "audio", .audio);
@@ -2032,7 +2116,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         // is a multi-file torrent; also shows the queue count badge.
         var q_buf: [16]u8 = undefined;
         const q_label = std.fmt.bufPrint(&q_buf, "{d}", .{queue.queue_count}) catch "";
-        if (pickerIconChip(@src(), 720, icons.tvg.lucide.@"list-music", q_label, queue.queue_count > 0, "Queue / playlist")) {
+        if (pickerIconChip(@src(), 720, icons.tvg.lucide.@"list-music", q_label, queue.queue_count > 0, "Queue / playlist", .none)) {
             state.app.router.navigate(.player);
         }
         // Inline torrent-files dropdown (no-op when single file / no torrent).

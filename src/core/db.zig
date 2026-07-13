@@ -299,6 +299,12 @@ fn createTables() void {
     );
 
     // Continue-watching rail: one row per series, most-recent first.
+    //
+    // DEPRECATED — superseded by tv_shows. It stored the LAST WATCHED episode,
+    // which every consumer then had to turn into "what's next" on its own, and
+    // none of them agreed. Nothing reads or writes it any more; it is kept only
+    // so the one-time carry-over below can run, and because dropping a user's
+    // table is irreversible.
     exec(
         \\CREATE TABLE IF NOT EXISTS tv_continue (
         \\  tmdb_id INTEGER PRIMARY KEY,
@@ -310,6 +316,74 @@ fn createTables() void {
         \\)
     );
     exec("CREATE INDEX IF NOT EXISTS idx_tv_continue_at ON tv_continue(updated_at DESC)");
+
+    // Per-episode resume position. tv_watched's PK (tmdb_id, season, episode) IS
+    // episode identity, so this is the one place a mid-episode position can live
+    // without colliding with anything. (watch_history keys on a torrent display
+    // name OR a URL depending on which of its two writers got there first — the
+    // TV path deliberately does not depend on it.)
+    // Idempotent — exec() swallows the duplicate-column error on re-run.
+    exec("ALTER TABLE tv_watched ADD COLUMN position_secs REAL DEFAULT 0");
+    exec("ALTER TABLE tv_watched ADD COLUMN duration_secs REAL DEFAULT 0");
+
+    // One row per tracked show. `tracked` is the explicit Track/Untrack flag;
+    // untracking never deletes tv_watched rows, so re-tracking restores progress.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS tv_shows (
+        \\  tmdb_id INTEGER PRIMARY KEY,
+        \\  name TEXT,
+        \\  poster_path TEXT,
+        \\  tracked INTEGER DEFAULT 1,
+        \\  status TEXT DEFAULT '',
+        \\  last_aired_season INTEGER DEFAULT 0,
+        \\  last_aired_episode INTEGER DEFAULT 0,
+        \\  next_season INTEGER DEFAULT 0,
+        \\  next_episode INTEGER DEFAULT 0,
+        \\  next_air_epoch INTEGER DEFAULT 0,
+        \\  next_name TEXT DEFAULT '',
+        \\  added_at INTEGER,
+        \\  updated_at INTEGER
+        \\)
+    );
+    exec("CREATE INDEX IF NOT EXISTS idx_tv_shows_at ON tv_shows(updated_at DESC)");
+
+    // The season map — episode counts per season. Without this, "next up" cannot
+    // cross a season boundary, because nothing knows that S01 ends at episode 10.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS tv_seasons (
+        \\  tmdb_id INTEGER NOT NULL,
+        \\  season INTEGER NOT NULL,
+        \\  episode_count INTEGER DEFAULT 0,
+        \\  PRIMARY KEY (tmdb_id, season)
+        \\)
+    );
+
+    // User-set library status, for EVERY kind of trackable content (tv / anime /
+    // movie) rather than a column on tv_shows — anime keys off a MAL id and a
+    // movie off its name, so a TV-only column could never hold them.
+    //
+    // This is the status the USER chose by hand; it always beats the derived one.
+    // The two legitimately disagree: a show you abandoned still has a next
+    // episode, and one you've declared Completed shouldn't nag you forever
+    // because TMDB added a special.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS library_status (
+        \\  kind TEXT NOT NULL,
+        \\  item_id TEXT NOT NULL,
+        \\  status TEXT NOT NULL,
+        \\  updated_at INTEGER,
+        \\  PRIMARY KEY (kind, item_id)
+        \\)
+    );
+
+    // Carry existing continue-watching shows into tv_shows, once. OR IGNORE makes
+    // it idempotent and keeps a real tv_shows row from being clobbered by the
+    // stale tv_continue one. No data is at risk: watched history lives in
+    // tv_watched and is untouched by this.
+    exec(
+        \\INSERT OR IGNORE INTO tv_shows(tmdb_id, name, poster_path, tracked, added_at, updated_at)
+        \\SELECT tmdb_id, name, poster_path, 1, updated_at, updated_at FROM tv_continue
+    );
 }
 
 // ══════════════════════════════════════════════════════════
@@ -365,6 +439,13 @@ pub fn bindBlob(stmt: ?*Stmt, col: c_int, data: []const u8) void {
 
 pub fn columnInt(stmt: ?*Stmt, col: c_int) i32 {
     return c.sqlite3_column_int(stmt, col);
+}
+
+/// Read a 64-bit column. Required for anything written by `bindInt64` — notably
+/// millisecond timestamps, which are ~1.75e12 and would silently truncate to
+/// garbage through `columnInt`'s i32.
+pub fn columnInt64(stmt: ?*Stmt, col: c_int) i64 {
+    return c.sqlite3_column_int64(stmt, col);
 }
 
 pub fn columnDouble(stmt: ?*Stmt, col: c_int) f64 {
@@ -1137,4 +1218,361 @@ pub fn tvGetContinue(out: []@import("state.zig").TvContinueItem) usize {
         n += 1;
     }
     return n;
+}
+
+// ══════════════════════════════════════════════════════════
+// TV library — tracked shows, the season map, per-episode resume
+//
+// Typed in terms of `services/tv_pure.zig`, which is a zero-import leaf module
+// (std only). Depending on it from core creates no cycle, and the alternative —
+// redefining Season/Ep here — would give us two definitions of episode identity
+// that can drift apart. Drifting definitions of "next episode" are the precise
+// bug this whole subsystem exists to kill.
+// ══════════════════════════════════════════════════════════
+
+const tv_pure = @import("../services/tv_pure.zig");
+
+/// Upsert a show's metadata. Does NOT touch `tracked` — see tvSetTracked. A
+/// metadata refresh must never silently re-track a show the user untracked.
+pub fn tvUpsertShow(
+    tmdb_id: i32,
+    name: []const u8,
+    poster_path: []const u8,
+    status: []const u8,
+    last_aired: tv_pure.Ep,
+    next: tv_pure.Ep,
+    next_air_epoch: i64,
+    next_name: []const u8,
+) void {
+    _ = db_handle orelse return;
+
+    const sql =
+        \\INSERT INTO tv_shows(tmdb_id, name, poster_path, status,
+        \\  last_aired_season, last_aired_episode, next_season, next_episode,
+        \\  next_air_epoch, next_name, added_at, updated_at)
+        \\VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \\ON CONFLICT(tmdb_id) DO UPDATE SET
+        \\  name = excluded.name,
+        \\  poster_path = excluded.poster_path,
+        \\  status = excluded.status,
+        \\  last_aired_season = excluded.last_aired_season,
+        \\  last_aired_episode = excluded.last_aired_episode,
+        \\  next_season = excluded.next_season,
+        \\  next_episode = excluded.next_episode,
+        \\  next_air_epoch = excluded.next_air_epoch,
+        \\  next_name = excluded.next_name
+    ;
+    const stmt = prepare(sql) orelse {
+        logs.pushLog("error", "tv", "tvUpsertShow: prepare failed", true);
+        return;
+    };
+    defer finalize(stmt);
+
+    const now = io_global.milliTimestamp();
+    bindInt(stmt, 1, @intCast(@as(i64, tmdb_id)));
+    bindText(stmt, 2, name);
+    bindText(stmt, 3, poster_path);
+    bindText(stmt, 4, status);
+    bindInt(stmt, 5, @intCast(@as(i64, last_aired.season)));
+    bindInt(stmt, 6, @intCast(@as(i64, last_aired.episode)));
+    bindInt(stmt, 7, @intCast(@as(i64, next.season)));
+    bindInt(stmt, 8, @intCast(@as(i64, next.episode)));
+    bindInt64(stmt, 9, next_air_epoch);
+    bindText(stmt, 10, next_name);
+    bindInt64(stmt, 11, now);
+    bindInt64(stmt, 12, now);
+
+    if (step(stmt) != c.SQLITE_DONE) logs.pushLog("error", "tv", "tvUpsertShow: step failed", true);
+}
+
+/// Auto-track: called when an episode is actually watched. Creates the show row
+/// if absent and bumps `updated_at` (which drives "most recently watched first"),
+/// but does NOT resurrect `tracked` on an existing row — see tvSetTracked.
+pub fn tvTouchShow(tmdb_id: i32, name: []const u8, poster_path: []const u8) void {
+    _ = db_handle orelse return;
+
+    const sql =
+        \\INSERT INTO tv_shows(tmdb_id, name, poster_path, tracked, added_at, updated_at)
+        \\VALUES(?, ?, ?, 1, ?, ?)
+        \\ON CONFLICT(tmdb_id) DO UPDATE SET
+        \\  name = excluded.name,
+        \\  poster_path = excluded.poster_path,
+        \\  updated_at = excluded.updated_at
+    ;
+    const stmt = prepare(sql) orelse {
+        logs.pushLog("error", "tv", "tvTouchShow: prepare failed", true);
+        return;
+    };
+    defer finalize(stmt);
+
+    const now = io_global.milliTimestamp();
+    bindInt(stmt, 1, @intCast(@as(i64, tmdb_id)));
+    bindText(stmt, 2, name);
+    bindText(stmt, 3, poster_path);
+    bindInt64(stmt, 4, now);
+    bindInt64(stmt, 5, now);
+
+    if (step(stmt) != c.SQLITE_DONE) logs.pushLog("error", "tv", "tvTouchShow: step failed", true);
+}
+
+/// Explicit Track / Untrack.
+///
+/// Untracking flips a flag and NOTHING else. It must never delete tv_watched
+/// rows: an accidental untrack would otherwise silently destroy the user's watch
+/// history, and re-tracking has to restore progress exactly.
+pub fn tvSetTracked(tmdb_id: i32, tracked: bool) void {
+    _ = db_handle orelse return;
+
+    const stmt = prepare("UPDATE tv_shows SET tracked = ?, updated_at = ? WHERE tmdb_id = ?") orelse {
+        logs.pushLog("error", "tv", "tvSetTracked: prepare failed", true);
+        return;
+    };
+    defer finalize(stmt);
+
+    bindInt(stmt, 1, if (tracked) 1 else 0);
+    bindInt64(stmt, 2, io_global.milliTimestamp());
+    bindInt(stmt, 3, @intCast(@as(i64, tmdb_id)));
+
+    if (step(stmt) != c.SQLITE_DONE) logs.pushLog("error", "tv", "tvSetTracked: step failed", true);
+}
+
+pub fn tvIsTracked(tmdb_id: i32) bool {
+    _ = db_handle orelse return false;
+    const stmt = prepare("SELECT tracked FROM tv_shows WHERE tmdb_id = ?") orelse return false;
+    defer finalize(stmt);
+    bindInt(stmt, 1, @intCast(@as(i64, tmdb_id)));
+    if (step(stmt) != c.SQLITE_ROW) return false;
+    return columnInt(stmt, 0) != 0;
+}
+
+/// A tracked show as stored. The derived fields (next-up, progress, status) are
+/// NOT stored — they are computed by tv_pure from the season map + watched rows,
+/// so there is exactly one place that decides them.
+pub const TvShowRow = struct {
+    tmdb_id: i32 = 0,
+    name: [128]u8 = std.mem.zeroes([128]u8),
+    name_len: usize = 0,
+    poster_path: [64]u8 = std.mem.zeroes([64]u8),
+    poster_path_len: usize = 0,
+    ended: bool = false,
+    last_aired: tv_pure.Ep = .{},
+    next_air_epoch: i64 = 0,
+    updated_at: i64 = 0,
+};
+
+/// Fill `out` with tracked shows, most-recent activity first. Untracked shows are
+/// excluded but their rows (and their watched history) remain.
+pub fn tvGetShows(out: []TvShowRow) usize {
+    if (out.len == 0) return 0;
+    _ = db_handle orelse return 0;
+
+    const stmt = prepare(
+        \\SELECT tmdb_id, name, poster_path, status,
+        \\  last_aired_season, last_aired_episode, next_air_epoch, updated_at
+        \\FROM tv_shows WHERE tracked <> 0
+        \\ORDER BY updated_at DESC
+        \\LIMIT ?
+    ) orelse {
+        logs.pushLog("error", "tv", "tvGetShows: prepare failed", true);
+        return 0;
+    };
+    defer finalize(stmt);
+    bindInt(stmt, 1, @intCast(out.len));
+
+    var n: usize = 0;
+    while (n < out.len and step(stmt) == c.SQLITE_ROW) {
+        const row = &out[n];
+        row.* = .{};
+        row.tmdb_id = @intCast(columnInt(stmt, 0));
+        if (columnText(stmt, 1)) |s| {
+            const len = @min(s.len, row.name.len);
+            @memcpy(row.name[0..len], s[0..len]);
+            row.name_len = len;
+        }
+        if (columnText(stmt, 2)) |s| {
+            const len = @min(s.len, row.poster_path.len);
+            @memcpy(row.poster_path[0..len], s[0..len]);
+            row.poster_path_len = len;
+        }
+        // TMDB series status: "Ended" / "Canceled" both mean no more episodes,
+        // ever — the only way to tell "Completed" from "Caught up".
+        if (columnText(stmt, 3)) |s| {
+            row.ended = std.mem.eql(u8, s, "Ended") or std.mem.eql(u8, s, "Canceled");
+        }
+        row.last_aired = .{
+            .season = @intCast(columnInt(stmt, 4)),
+            .episode = @intCast(columnInt(stmt, 5)),
+        };
+        row.next_air_epoch = columnInt64(stmt, 6);
+        row.updated_at = columnInt64(stmt, 7);
+        n += 1;
+    }
+    return n;
+}
+
+/// Replace the season map for a show. Upsert rather than DELETE-then-INSERT: a
+/// season count only ever grows, and a failed mid-refresh delete would leave the
+/// show with no map at all (which reads as "0/0, nothing to watch").
+pub fn tvUpsertSeasons(tmdb_id: i32, seasons: []const tv_pure.Season) void {
+    _ = db_handle orelse return;
+
+    const sql =
+        \\INSERT INTO tv_seasons(tmdb_id, season, episode_count) VALUES(?, ?, ?)
+        \\ON CONFLICT(tmdb_id, season) DO UPDATE SET episode_count = excluded.episode_count
+    ;
+    for (seasons) |s| {
+        const stmt = prepare(sql) orelse continue;
+        defer finalize(stmt);
+        bindInt(stmt, 1, @intCast(@as(i64, tmdb_id)));
+        bindInt(stmt, 2, @intCast(@as(i64, s.number)));
+        bindInt(stmt, 3, @intCast(@as(i64, s.episode_count)));
+        _ = step(stmt);
+    }
+}
+
+pub fn tvLoadSeasons(tmdb_id: i32, out: []tv_pure.Season) usize {
+    if (out.len == 0) return 0;
+    _ = db_handle orelse return 0;
+
+    const stmt = prepare("SELECT season, episode_count FROM tv_seasons WHERE tmdb_id = ? ORDER BY season ASC LIMIT ?") orelse return 0;
+    defer finalize(stmt);
+    bindInt(stmt, 1, @intCast(@as(i64, tmdb_id)));
+    bindInt(stmt, 2, @intCast(out.len));
+
+    var n: usize = 0;
+    while (n < out.len and step(stmt) == c.SQLITE_ROW) {
+        out[n] = .{
+            .number = @intCast(columnInt(stmt, 0)),
+            .episode_count = @intCast(@max(0, columnInt(stmt, 1))),
+        };
+        n += 1;
+    }
+    return n;
+}
+
+/// Every watched episode of a show, across ALL seasons. This is what makes
+/// cross-season next-up possible — the old path only ever loaded the currently
+/// open season's flags, so it could not see past a season boundary.
+pub fn tvLoadWatchedAll(tmdb_id: i32, out: []tv_pure.Ep) usize {
+    if (out.len == 0) return 0;
+    _ = db_handle orelse return 0;
+
+    const stmt = prepare(
+        \\SELECT season, episode FROM tv_watched
+        \\WHERE tmdb_id = ? AND watched <> 0
+        \\ORDER BY season ASC, episode ASC LIMIT ?
+    ) orelse return 0;
+    defer finalize(stmt);
+    bindInt(stmt, 1, @intCast(@as(i64, tmdb_id)));
+    bindInt(stmt, 2, @intCast(out.len));
+
+    var n: usize = 0;
+    while (n < out.len and step(stmt) == c.SQLITE_ROW) {
+        out[n] = .{
+            .season = @intCast(columnInt(stmt, 0)),
+            .episode = @intCast(columnInt(stmt, 1)),
+        };
+        n += 1;
+    }
+    return n;
+}
+
+/// Save a mid-episode resume position. Creates the row with watched = 0 when the
+/// episode has not been marked watched yet — "in progress" is a real state, and
+/// it must not imply "watched".
+pub fn tvSavePosition(tmdb_id: i32, season: i32, episode: i32, position: f64, duration: f64) void {
+    _ = db_handle orelse return;
+    if (episode < 1 or season < 0) return;
+
+    const sql =
+        \\INSERT INTO tv_watched(tmdb_id, season, episode, watched, position_secs, duration_secs, updated_at)
+        \\VALUES(?, ?, ?, 0, ?, ?, ?)
+        \\ON CONFLICT(tmdb_id, season, episode) DO UPDATE SET
+        \\  position_secs = excluded.position_secs,
+        \\  duration_secs = excluded.duration_secs,
+        \\  updated_at = excluded.updated_at
+    ;
+    const stmt = prepare(sql) orelse return;
+    defer finalize(stmt);
+
+    bindInt(stmt, 1, @intCast(@as(i64, tmdb_id)));
+    bindInt(stmt, 2, @intCast(@as(i64, season)));
+    bindInt(stmt, 3, @intCast(@as(i64, episode)));
+    bindDouble(stmt, 4, position);
+    bindDouble(stmt, 5, duration);
+    bindInt64(stmt, 6, io_global.milliTimestamp());
+    _ = step(stmt);
+}
+
+// ── User-set library status (any kind) ──
+
+/// Set (or clear) the user's hand-picked status. An empty `status` DELETES the
+/// row, which returns the item to auto-derived — clearing must not leave a stale
+/// "" row behind that reads as a status.
+pub fn librarySetStatus(kind: []const u8, item_id: []const u8, status: []const u8) void {
+    _ = db_handle orelse return;
+    if (item_id.len == 0) return;
+
+    if (status.len == 0) {
+        const del = prepare("DELETE FROM library_status WHERE kind = ? AND item_id = ?") orelse return;
+        defer finalize(del);
+        bindText(del, 1, kind);
+        bindText(del, 2, item_id);
+        _ = step(del);
+        return;
+    }
+
+    const stmt = prepare(
+        \\INSERT INTO library_status(kind, item_id, status, updated_at)
+        \\VALUES(?, ?, ?, ?)
+        \\ON CONFLICT(kind, item_id) DO UPDATE SET
+        \\  status = excluded.status,
+        \\  updated_at = excluded.updated_at
+    ) orelse {
+        logs.pushLog("error", "tv", "librarySetStatus: prepare failed", true);
+        return;
+    };
+    defer finalize(stmt);
+    bindText(stmt, 1, kind);
+    bindText(stmt, 2, item_id);
+    bindText(stmt, 3, status);
+    bindInt64(stmt, 4, io_global.milliTimestamp());
+    _ = step(stmt);
+}
+
+/// Copy the user's status for one item into `buf`. Empty slice when unset.
+pub fn libraryGetStatus(kind: []const u8, item_id: []const u8, buf: []u8) []const u8 {
+    _ = db_handle orelse return "";
+    if (item_id.len == 0 or buf.len == 0) return "";
+
+    const stmt = prepare("SELECT status FROM library_status WHERE kind = ? AND item_id = ?") orelse return "";
+    defer finalize(stmt);
+    bindText(stmt, 1, kind);
+    bindText(stmt, 2, item_id);
+    if (step(stmt) != c.SQLITE_ROW) return "";
+    const s = columnText(stmt, 0) orelse return "";
+    const n = @min(s.len, buf.len);
+    @memcpy(buf[0..n], s[0..n]);
+    return buf[0..n];
+}
+
+/// Resume position (seconds) for one episode, 0 when there is none.
+///
+/// Returns 0 once the episode is essentially finished (>= 95% watched), matching
+/// the convention the rest of the app uses — otherwise finishing an episode would
+/// leave it "resumable" at the credits forever.
+pub fn tvGetPosition(tmdb_id: i32, season: i32, episode: i32) f64 {
+    _ = db_handle orelse return 0;
+
+    const stmt = prepare("SELECT position_secs, duration_secs FROM tv_watched WHERE tmdb_id = ? AND season = ? AND episode = ?") orelse return 0;
+    defer finalize(stmt);
+    bindInt(stmt, 1, @intCast(@as(i64, tmdb_id)));
+    bindInt(stmt, 2, @intCast(@as(i64, season)));
+    bindInt(stmt, 3, @intCast(@as(i64, episode)));
+
+    if (step(stmt) != c.SQLITE_ROW) return 0;
+    const pos = columnDouble(stmt, 0);
+    const dur = columnDouble(stmt, 1);
+    if (dur > 5 and pos / dur >= 0.95) return 0;
+    return pos;
 }

@@ -637,6 +637,18 @@ pub const MediaPlayer = struct {
         if (pos > 1 and dur > 5) {
             const history = @import("../services/history.zig");
             history.savePlaybackPosition(self.current_url[0..self.current_url_len], pos, dur);
+
+            // Per-episode resume, stored under real episode identity
+            // (tmdb_id, season, episode) rather than the URL — an episode's URL is
+            // a torrent/stream link that differs between sessions and sources.
+            //
+            // Only fires when THIS player's current URL is the one the episode
+            // binding claimed; otherwise a movie played after an episode would
+            // write its position into the episode's row.
+            const pe = &state.app.playing_episode;
+            if (pe.matches(self.current_url[0..self.current_url_len])) {
+                @import("../core/db.zig").tvSavePosition(pe.tmdb_id, pe.season, pe.episode, pos, dur);
+            }
         }
     }
 
@@ -645,7 +657,32 @@ pub const MediaPlayer = struct {
         if (self.resume_seeked or self.current_url_len == 0 or self.current_url_len > self.current_url.len) return;
         self.resume_seeked = true;
         const history = @import("../services/history.zig");
-        const saved_pos = history.getPlaybackPosition(self.current_url[0..self.current_url_len]);
+
+        const cur = self.current_url[0..self.current_url_len];
+
+        // Claim a pending episode arm: this load is the episode that was just
+        // launched, so bind the binding to THIS url. Everything afterwards
+        // (position saves, resumes) is gated on the url still matching, so the
+        // binding dies with the media rather than leaking onto the next thing
+        // that plays.
+        const pe = &state.app.playing_episode;
+        if (pe.armed) {
+            pe.armed = false;
+            const n = @min(cur.len, pe.url.len);
+            @memcpy(pe.url[0..n], cur[0..n]);
+            pe.url_len = n;
+            pe.active = true; // last
+        }
+
+        // Prefer the per-episode position for a tracked episode. The URL-keyed
+        // lookup can't help there: an episode's URL is a torrent/stream link that
+        // differs between sessions, so the same episode resumed from a different
+        // magnet would look brand new.
+        const saved_pos = if (pe.matches(cur))
+            @import("../core/db.zig").tvGetPosition(pe.tmdb_id, pe.season, pe.episode)
+        else
+            history.getPlaybackPosition(cur);
+
         if (saved_pos > 2) {
             var seek_buf: [64]u8 = undefined;
             const seek_cmd = std.fmt.bufPrintZ(&seek_buf, "seek {d:.1} absolute", .{saved_pos}) catch return;

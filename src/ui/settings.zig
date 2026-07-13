@@ -827,8 +827,9 @@ pub fn beginFrame() void {
 }
 
 /// Open a URL in the system browser (macOS `open`, Windows `cmd /c start`,
-/// elsewhere `xdg-open`).
-fn openExternal(url: []const u8) void {
+/// elsewhere `xdg-open`). Public so other UI modules (e.g. the top-nav Donate
+/// button in header.zig) reuse this one launcher instead of re-rolling it.
+pub fn openExternal(url: []const u8) void {
     const io = @import("../core/io_global.zig");
     // Named locals (not prong temporaries): Child.init stores the slice and
     // spawn() reads it later, so argv must outlive the switch expression.

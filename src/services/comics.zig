@@ -8,26 +8,12 @@ const logs = @import("../core/logs.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
 const workers = @import("../core/workers.zig");
+const pure = @import("comics_pure.zig");
 
+/// Percent-encode a search query (space → `+`). Delegates to the unit-tested
+/// pure helper so the shipped encoder IS the tested one.
 fn percentEncode(input: []const u8, out: []u8) usize {
-    const hex = "0123456789ABCDEF";
-    var o: usize = 0;
-    for (input) |ch| {
-        if (o + 3 > out.len) break;
-        if (ch == ' ') {
-            out[o] = '+';
-            o += 1;
-        } else if (ch == '&' or ch == '=' or ch == '#' or ch == '?' or ch == '%' or ch == '"' or ch == '<' or ch == '>') {
-            out[o] = '%';
-            out[o + 1] = hex[ch >> 4];
-            out[o + 2] = hex[ch & 0x0F];
-            o += 3;
-        } else {
-            out[o] = ch;
-            o += 1;
-        }
-    }
-    return o;
+    return pure.percentEncodeQuery(input, out);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -183,6 +169,23 @@ fn fetchComicThread(gen: u32) void {
     defer workers.leave();
     const url = state.app.comic.url_buf[0..state.app.comic.url_len];
 
+    // ── MangaDex cards carry a `mangadex:<uuid>` pseudo-URL ──
+    // Its pages come from a 3-call JSON chain (feed → at-home → image list), not
+    // from an HTML page, so it must be routed BEFORE the generic scraper — which
+    // would otherwise curl a non-URL and find no images. Once page_urls are
+    // staged the shared downloadPages() pipeline takes over unchanged.
+    if (pure.mangaIdFromRoute(url)) |manga_id| {
+        const ok = loadMangadexPages(manga_id);
+        state.app.comic.is_loading.store(false, .release);
+        if (!ok) {
+            logs.pushLog("error", "comics", "MangaDex chapter failed to load", true);
+            return;
+        }
+        logs.pushLog("info", "comics", "Comic loaded (MangaDex)", false);
+        downloadPages(gen);
+        return;
+    }
+
     // Try external plugins first
     if (tryPlugins(url)) {
         logs.pushLog("info", "comics", "Comic loaded via plugin", false);
@@ -233,6 +236,117 @@ fn fetchComicThread(gen: u32) void {
     logs.pushLog("info", "comics", "Comic loaded (native)", false);
     state.app.comic.is_loading.store(false, .release);
     downloadPages(gen);
+}
+
+/// curl a URL into `dst`; returns bytes read (0 on failure). Plain-slice URL
+/// (no sentinel needed) — shared by the MangaDex JSON chain and the search
+/// fetchers. std.http is deliberately avoided project-wide: it SEGVs on some
+/// ISP TLS resets (see tmdb_api.zig).
+fn fetchUrl(url: []const u8, dst: []u8) usize {
+    // Per-host UA: MangaDex 400s a spoofed browser UA (see pure.userAgentFor).
+    var ua_buf: [200]u8 = undefined;
+    const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url)}) catch return 0;
+    const argv = [_][]const u8{
+        "curl",       "-sL",
+        "-H",         ua,
+        "--max-time", "15",
+        url,
+    };
+    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    _ = child.spawn() catch return 0;
+    const n = if (child.stdout) |*so| @import("../core/io_global.zig").readAll(so, dst) catch 0 else 0;
+    _ = child.wait() catch {};
+    return n;
+}
+
+/// Resolve a MangaDex manga id into a readable page list, staging the image URLs
+/// into `state.app.comic.page_urls` for the shared downloadPages() pipeline.
+/// Returns false if the manga has no English chapter or the API errored.
+///
+/// Runs ON the fetchComicThread worker (never the UI thread). All JSON buffers
+/// are heap-allocated — a spawned thread's stack is only ~512KB (see CLAUDE.md).
+///
+/// Chain (all keyless):
+///   1. /manga/{id}/feed?…&order[chapter]=asc&limit=1   → the earliest chapter
+///   2. /at-home/server/{chapterId}                     → baseUrl + hash + files
+///   3. {baseUrl}/data/{hash}/{file}                    → one URL per page
+fn loadMangadexPages(manga_id: []const u8) bool {
+    // ── 1. Earliest English chapter ──
+    var feed_url_buf: [320]u8 = undefined;
+    const feed_url = pure.buildFeedUrl(&feed_url_buf, manga_id, 1, 0) orelse return false;
+
+    const feed_buf = alloc.alloc(u8, 128 * 1024) catch return false;
+    defer alloc.free(feed_buf);
+    const feed_n = fetchUrl(feed_url, feed_buf);
+    if (feed_n == 0 or workers.isQuitting()) return false;
+
+    const chapter_id = pure.firstChapterId(feed_buf[0..feed_n]) orelse {
+        logs.pushLog("warn", "comics", "MangaDex: no English chapter for this title", false);
+        return false;
+    };
+    // Copy out of feed_buf before it's reused/freed.
+    var chap_id_buf: [64]u8 = undefined;
+    if (chapter_id.len > chap_id_buf.len) return false;
+    @memcpy(chap_id_buf[0..chapter_id.len], chapter_id);
+    const chap_id = chap_id_buf[0..chapter_id.len];
+
+    var chap_no_buf: [24]u8 = undefined;
+    var chap_no_len: usize = 0;
+    if (pure.firstChapterNumber(feed_buf[0..feed_n])) |no| {
+        chap_no_len = @min(no.len, chap_no_buf.len);
+        @memcpy(chap_no_buf[0..chap_no_len], no[0..chap_no_len]);
+    }
+
+    // ── 2. The @Home node serving that chapter's images ──
+    var ah_url_buf: [160]u8 = undefined;
+    const ah_url = pure.buildAtHomeUrl(&ah_url_buf, chap_id) orelse return false;
+
+    const ah_buf = alloc.alloc(u8, 128 * 1024) catch return false;
+    defer alloc.free(ah_buf);
+    const ah_n = fetchUrl(ah_url, ah_buf);
+    if (ah_n == 0 or workers.isQuitting()) return false;
+
+    var base_buf: [256]u8 = undefined;
+    const at_home = pure.parseAtHome(ah_buf[0..ah_n], &base_buf) orelse return false;
+
+    // ── 3. Stage one page URL per image ──
+    const max_pages = state.app.comic.page_urls.len; // 128
+    var count: usize = 0;
+    var it = pure.StrIter{ .buf = at_home.files };
+    while (it.next()) |file| {
+        if (count >= max_pages) break;
+        var page_buf: [512]u8 = undefined;
+        const page_url = pure.buildPageUrl(&page_buf, at_home.base_url, at_home.hash, file) orelse continue;
+        if (page_url.len >= state.app.comic.page_urls[count].len) continue;
+        @memcpy(state.app.comic.page_urls[count][0..page_url.len], page_url);
+        state.app.comic.page_url_lens[count] = page_url.len;
+        count += 1;
+    }
+    if (count == 0) return false;
+    state.app.comic.page_count = count;
+
+    // Title: the card click already staged the series title; append the chapter
+    // number so the reader header reads "Berserk · Ch. 1". A load that didn't
+    // come from a card (URL paste / remote API) has no title — fall back.
+    if (chap_no_len > 0) {
+        var t_buf: [256]u8 = undefined;
+        const existing = state.app.comic.title[0..state.app.comic.title_len];
+        const base_title: []const u8 = if (existing.len > 0) existing else "MangaDex";
+        const t = std.fmt.bufPrint(&t_buf, "{s} · Ch. {s}", .{ base_title, chap_no_buf[0..chap_no_len] }) catch base_title;
+        const tl = @min(t.len, state.app.comic.title.len);
+        @memcpy(state.app.comic.title[0..tl], t[0..tl]);
+        state.app.comic.title_len = tl;
+    } else if (state.app.comic.title_len == 0) {
+        const t = "MangaDex";
+        @memcpy(state.app.comic.title[0..t.len], t);
+        state.app.comic.title_len = t.len;
+    }
+
+    // MangaDex's CDN serves images without a Referer requirement, so leave
+    // state.app.comic.referer empty — downloadSinglePage derives it per-origin.
+    return true;
 }
 
 /// Scan ~/.config/opal/plugins/comics/ for .lua/.py/.sh scripts,
@@ -478,9 +592,14 @@ fn downloadSinglePage(i: usize, gen: u32) void {
     const url = state.app.comic.page_urls[i][0..state.app.comic.page_url_lens[i]];
     if (url.len == 0) return;
 
+    // Per-host UA (pure.userAgentFor). The MangaDex page CDN accepts either UA,
+    // but routing through the one selector keeps every comics fetch consistent
+    // and means a future MangaDex host can't silently regress to a 400.
+    var ua_buf: [200]u8 = undefined;
+    const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url)}) catch return;
     const argv = [_][]const u8{
         "curl",       "-sL",
-        "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        "-H",         ua,
         "--max-time", "15",
         url,
     };
@@ -599,11 +718,24 @@ var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var more_available: bool = true;
 
 // ── Source selector ──
-// readallcomics is the only natively-readable source today (its issue pages
-// embed blogspot-CDN images the reader consumes). A clean enum + selector keeps
-// adding sources a one-arm change; plugin sources are surfaced dynamically.
-const Source = enum { all, readallcomics };
+// Two native sources today; plugin sources are surfaced dynamically as badges.
+//
+//   • readallcomics — HTML scrape. Its endpoint is NOT in the binary: it comes
+//     from source_config ("readallcomics"/"base"), written by the plugin manager
+//     when the user installs the source. Not installed → buildSearchUrl returns
+//     null → the source is INERT and contributes no rows.
+//   • mangadex     — keyless, documented public JSON API (api.mangadex.org), so
+//     it needs no source_config entry and works out of the box. This is what
+//     makes the tab non-empty on a fresh install.
+//
+// `all` queries every source that is actually live and concatenates the rows.
+const Source = enum { all, readallcomics, mangadex };
 var active_source: Source = .all;
+
+/// Does this source participate in the current selection?
+fn sourceActive(src: Source) bool {
+    return active_source == .all or active_source == src;
+}
 
 // ── Discovery grid sizing (user-cyclable card width) ──
 var card_w: f32 = 150;
@@ -700,27 +832,63 @@ fn fetchSearchHtml(url: [:0]const u8, dst: []u8) usize {
     return n;
 }
 
+/// Fetch + merge ONE readallcomics page, writing rows from slot `start`.
+/// Returns the number of new rows (0 if the source is not installed / errored).
+/// Worker-thread only.
+fn fetchReadAllComicsPage(query: []const u8, paged: u32, gen: u32, start: usize) usize {
+    var url_buf: [640]u8 = undefined;
+    const url = buildSearchUrl(&url_buf, query, paged) orelse return 0; // inert (not installed)
+
+    const html_buf = alloc.alloc(u8, 512 * 1024) catch return 0;
+    defer alloc.free(html_buf);
+    const n = fetchSearchHtml(url, html_buf);
+    if (n == 0) return 0;
+
+    // A newer search superseded us while curl was running — drop these results.
+    if (search_gen.load(.acquire) != gen) return 0;
+    return parseSearchResults(html_buf[0..n], gen, start);
+}
+
+/// Fetch + merge ONE MangaDex page (`offset` rows in), writing from slot `start`.
+/// Returns the number of new rows. Worker-thread only; the JSON buffer is heap
+/// allocated (a spawned thread's stack is ~512KB — see CLAUDE.md).
+fn fetchMangadexPage(query: []const u8, offset: u32, gen: u32, start: usize) usize {
+    var url_buf: [768]u8 = undefined;
+    const url = pure.buildSearchUrl(&url_buf, query, RESULTS_PER_PAGE, offset) orelse return 0;
+
+    const json_buf = alloc.alloc(u8, 512 * 1024) catch return 0;
+    defer alloc.free(json_buf);
+    const n = fetchUrl(url, json_buf);
+    if (n == 0) return 0;
+
+    if (search_gen.load(.acquire) != gen) return 0;
+    return parseMangadexResults(json_buf[0..n], gen, start);
+}
+
+/// Initial search: query every ACTIVE source and concatenate their rows.
+/// readallcomics goes first (when installed) so an existing user's listing is
+/// unchanged; MangaDex fills the rest — and is the whole listing on a fresh
+/// install, where readallcomics is inert.
 fn searchWorker(gen: u32) void {
     defer sr_searching = false;
     const query = sr_query_buf[0..sr_query_len];
 
-    var url_buf: [640]u8 = undefined;
-    const url = buildSearchUrl(&url_buf, query, 1) orelse return;
-
-    const html_buf = alloc.alloc(u8, 512 * 1024) catch return;
-    defer alloc.free(html_buf);
-    const n = fetchSearchHtml(url, html_buf);
-    if (n == 0) return;
-
-    // A newer search superseded us while curl was running — drop these results.
+    var filled: usize = 0;
+    if (sourceActive(.readallcomics)) {
+        filled += fetchReadAllComicsPage(query, 1, gen, filled);
+    }
+    // A newer search may have landed while the first source was in flight.
     if (search_gen.load(.acquire) != gen) {
         logs.pushLog("info", "comics", "Comic search superseded (stale dropped)", false);
         return;
     }
+    if (sourceActive(.mangadex)) {
+        filled += fetchMangadexPage(query, 0, gen, filled);
+    }
 
-    // Page 1 replaces the listing (start index 0).
-    const added = parseSearchResults(html_buf[0..n], gen, 0);
-    if (added < RESULTS_PER_PAGE) more_available = false;
+    // Only the LAST source's page size can tell us whether more rows exist; a
+    // short page from every active source means we've hit the end.
+    if (filled < RESULTS_PER_PAGE) more_available = false;
     logs.pushLog("info", "comics", "Comic search results parsed", false);
 }
 
@@ -743,22 +911,22 @@ fn loadMoreWorker(gen: u32) void {
     const query = sr_query_buf[0..sr_query_len];
     const next_page = sr_page + 1;
 
-    var url_buf: [640]u8 = undefined;
-    const url = buildSearchUrl(&url_buf, query, next_page) orelse return;
-
-    const html_buf = alloc.alloc(u8, 512 * 1024) catch return;
-    defer alloc.free(html_buf);
-    const n = fetchSearchHtml(url, html_buf);
-    if (n == 0) return;
-
-    // Bail if a fresh search started while we were fetching — its page 1 owns
-    // the listing now; appending our older page would corrupt/duplicate it.
+    // Each source appends at the CURRENT end of the listing — the parsers commit
+    // sr_count as they go, so reading it again between sources is what keeps the
+    // second source from overwriting the first one's freshly-appended rows.
+    var added: usize = 0;
+    if (sourceActive(.readallcomics)) {
+        added += fetchReadAllComicsPage(query, next_page, gen, sr_count);
+    }
+    // A fresh search may have landed mid-fetch — its page 1 owns the listing now;
+    // appending our older page would corrupt/duplicate it.
     if (search_gen.load(.acquire) != gen) return;
+    if (sourceActive(.mangadex)) {
+        // MangaDex paginates by row offset, not page number: page N starts at
+        // (N-1)*RESULTS_PER_PAGE.
+        added += fetchMangadexPage(query, (next_page - 1) * RESULTS_PER_PAGE, gen, sr_count);
+    }
 
-    // Append starting at the current end. parseSearchResults dedupes against the
-    // existing rows and re-checks `gen` before committing sr_count.
-    const start = sr_count;
-    const added = parseSearchResults(html_buf[0..n], gen, start);
     if (added == 0 or added < RESULTS_PER_PAGE) more_available = false;
     if (added > 0) sr_page = next_page;
 }
@@ -947,6 +1115,77 @@ fn parseSearchResults(html: []const u8, gen: u32, start: usize) usize {
     return count - start;
 }
 
+/// Parse a MangaDex `/manga` search response into sr_* from slot `start`.
+/// Returns the number of NEW rows appended. Mirrors parseSearchResults exactly:
+/// worker-thread only, it NEVER frees textures/pixels — it just stamps each slot
+/// with `gen` and writes the cover URL, leaving the render thread's
+/// reclaimStaleCovers() as the sole owner of GPU textures + pixel buffers.
+///
+/// Cards store a `mangadex:<uuid>` pseudo-URL; fetchComicThread routes on that
+/// prefix into the JSON reader chain (loadMangadexPages) instead of the scraper.
+fn parseMangadexResults(json: []const u8, gen: u32, start: usize) usize {
+    const data = pure.findJsonNode(json, "\"data\"") orelse return 0;
+
+    var count: usize = start;
+    var it = pure.ObjIter{ .buf = data };
+    while (it.next()) |obj| {
+        if (count >= MAX_SEARCH_RESULTS) break;
+        const entry = pure.parseMangaEntry(obj) orelse continue;
+
+        var url_buf: [64]u8 = undefined;
+        const route = pure.buildRouteUrl(&url_buf, entry.id) orelse continue;
+        if (route.len > sr_urls[count].len) continue;
+
+        // Titles arrive JSON-escaped (\uXXXX for non-ASCII) — decode, then clamp
+        // to a UTF-8 boundary so a truncated multi-byte char can't reach dvui.
+        var t_raw: [512]u8 = undefined;
+        const t_len = pure.jsonUnescape(entry.title, &t_raw);
+        var t_safe: [256]u8 = undefined;
+        const title = @import("../core/text.zig").safeUtf8Buf(t_raw[0..@min(t_len, 255)], &t_safe);
+        if (title.len == 0) continue;
+
+        // De-dupe against every row already collected (a paginated page can
+        // resurface a title, and `all` concatenates two sources).
+        {
+            var dup = false;
+            var d: usize = 0;
+            while (d < count) : (d += 1) {
+                if (std.mem.eql(u8, sr_urls[d][0..sr_url_lens[d]], route)) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) continue;
+        }
+
+        @memcpy(sr_urls[count][0..route.len], route);
+        sr_url_lens[count] = route.len;
+        const tlen = @min(title.len, sr_titles[count].len);
+        @memcpy(sr_titles[count][0..tlen], title[0..tlen]);
+        sr_title_lens[count] = tlen;
+
+        // Cover (may be absent — the card falls back to a gradient placeholder).
+        sr_cover_url_lens[count] = 0;
+        if (entry.cover_file.len > 0) {
+            var cov_buf: [320]u8 = undefined;
+            if (pure.buildCoverUrl(&cov_buf, entry.id, entry.cover_file)) |cov| {
+                if (cov.len < sr_cover_urls[count].len) {
+                    @memcpy(sr_cover_urls[count][0..cov.len], cov);
+                    sr_cover_url_lens[count] = cov.len;
+                }
+            }
+        }
+        sr_cover_gen[count] = gen;
+        sr_cover_failed[count] = false; // fresh URL → let the cover retry
+
+        count += 1;
+    }
+
+    if (search_gen.load(.acquire) != gen) return 0;
+    sr_count = count;
+    return count - start;
+}
+
 /// Lazily fetch one result's cover art on a detached thread:
 ///   curl -sL (512KB cap) → stbi decode → heap RGBA pixels (uploaded to a GPU
 /// texture on the render thread, which then frees the pixels).
@@ -1031,9 +1270,14 @@ fn coverWorker(idx: usize) void {
     var url_buf: [560]u8 = undefined;
     const url = thumbnailize(raw_url, &url_buf);
 
+    // Per-host UA: MangaDex cover art (uploads.mangadex.org) 400s a spoofed
+    // browser UA — every cover would render as a blank placeholder. The scrapers'
+    // blogspot CDN still gets the browser UA. See pure.userAgentFor.
+    var ua_buf: [200]u8 = undefined;
+    const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url)}) catch return;
     const argv = [_][]const u8{
         "curl",       "-sL",
-        "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "-H",         ua,
         "--max-time", "10",
         url,
     };
@@ -1188,6 +1432,7 @@ pub fn renderContent() void {
         });
         renderSourceChip("All", 1, .all);
         renderSourceChip("ReadAllComics", 2, .readallcomics);
+        renderSourceChip("MangaDex", 3, .mangadex);
         renderPluginSourceBadges();
 
         // Divider between the source group and the result/quick-link group.
@@ -1544,6 +1789,15 @@ fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
         bw.drawFocus();
         bw.deinit();
         if (clicked) {
+            // Stage the card's title so the reader header has a name immediately.
+            // The readallcomics path overwrites it from the issue page's <title>;
+            // the MangaDex path keeps it and appends the chapter number (its JSON
+            // reader chain never sees an HTML <title> to parse).
+            const t = sr_titles[idx][0..sr_title_lens[idx]];
+            const tl = @min(t.len, state.app.comic.title.len);
+            @memcpy(state.app.comic.title[0..tl], t[0..tl]);
+            state.app.comic.title_len = tl;
+
             loadComic(sr_urls[idx][0..sr_url_lens[idx]]);
         }
     }

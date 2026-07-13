@@ -162,6 +162,24 @@ fn jsonIntField(scope: []const u8, key: []const u8) u32 {
 }
 
 // ══════════════════════════════════════════════════════════
+// URL builders
+// ══════════════════════════════════════════════════════════
+
+/// Build the RadioBrowser "most voted stations" URL — the keyless popular-station
+/// endpoint on the same host as the search endpoint, answering with the identical
+/// station-object array, so parseStations below handles it verbatim.
+/// `limit` is clamped to 1..100 so a bad caller can't produce a rejected URL.
+/// Returns "" only if `dst` is too small (never a truncated, wrong URL).
+pub fn buildTopVoteUrl(limit: usize, dst: []u8) []const u8 {
+    const n = std.math.clamp(limit, 1, 100);
+    return std.fmt.bufPrint(
+        dst,
+        "https://all.api.radio-browser.info/json/stations/topvote/{d}?hidebroken=true",
+        .{n},
+    ) catch "";
+}
+
+// ══════════════════════════════════════════════════════════
 // RadioBrowser station search JSON → stations
 // ══════════════════════════════════════════════════════════
 
@@ -245,6 +263,38 @@ test "parseStations extracts fields + numeric votes/bitrate" {
     try std.testing.expectEqual(@as(usize, 0), out[1].url_resolved_len);
     try std.testing.expectEqualStrings("http://a/2", out[1].url[0..out[1].url_len]);
     try std.testing.expectEqualStrings("Rock & Roll", out[1].name[0..out[1].name_len]);
+}
+
+test "buildTopVoteUrl clamps the limit and bails on an undersized buffer" {
+    var buf: [128]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "https://all.api.radio-browser.info/json/stations/topvote/30?hidebroken=true",
+        buildTopVoteUrl(30, &buf),
+    );
+    try std.testing.expectEqualStrings(
+        "https://all.api.radio-browser.info/json/stations/topvote/1?hidebroken=true",
+        buildTopVoteUrl(0, &buf),
+    );
+    try std.testing.expectEqualStrings(
+        "https://all.api.radio-browser.info/json/stations/topvote/100?hidebroken=true",
+        buildTopVoteUrl(9999, &buf),
+    );
+    var tiny: [8]u8 = undefined;
+    try std.testing.expectEqualStrings("", buildTopVoteUrl(30, &tiny));
+}
+
+test "parseStations parses the topvote response with the search parser" {
+    // The topvote endpoint answers with the same station objects as search — a
+    // regression guard that the popular rail needs no second parser.
+    const json =
+        \\[{"changeuuid":"c","stationuuid":"78012206","serveruuid":null,"name":"MANGORADIO","url":"https:\/\/m\/s","url_resolved":"https:\/\/m\/s","favicon":"https:\/\/m\/l.png","tags":"music,variety","country":"Germany","votes":815268,"codec":"MP3","bitrate":128,"lastcheckok":1}]
+    ;
+    var out: [8]Station = undefined;
+    try std.testing.expectEqual(@as(usize, 1), parseStations(json, &out));
+    try std.testing.expectEqualStrings("MANGORADIO", out[0].name[0..out[0].name_len]);
+    try std.testing.expectEqualStrings("https://m/s", out[0].url_resolved[0..out[0].url_resolved_len]);
+    try std.testing.expectEqualStrings("https://m/l.png", out[0].favicon[0..out[0].favicon_len]);
+    try std.testing.expectEqual(@as(u32, 815268), out[0].votes);
 }
 
 test "parseStations skips a station with no playable url" {

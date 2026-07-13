@@ -19,6 +19,85 @@ const player = @import("../player/player.zig");
 const theme = @import("theme.zig");
 const components = @import("components.zig");
 const footer = @import("footer.zig");
+const dropup = @import("dropup_pure.zig");
+
+// ══════════════════════════════════════════════════════════
+// Drop-ups
+//
+// These were MODAL dialogs: a dimming backdrop over the video, a title bar, a
+// close button. That is a lot of ceremony for "switch the audio track", and the
+// scrim dims the very thing you are adjusting.
+//
+// They are now panels anchored directly ABOVE the chip that opened them, with NO
+// backdrop — the video stays fully visible behind. The placement rules
+// (right-align to the chip, grow upwards, clamp into the window, flip downwards
+// if there is no room above) are pure and unit-tested in dropup_pure.zig; this
+// file only executes them.
+// ══════════════════════════════════════════════════════════
+
+/// Per-picker rect, kept across frames because dvui's FloatingWindowWidget wants a
+/// mutable pointer. Recomputed from the chip anchor every frame, so a panel tracks
+/// its chip if the control bar moves (e.g. entering fullscreen).
+var dropup_rects: [8]dvui.Rect = [_]dvui.Rect{.{}} ** 8;
+
+/// Open a backdrop-less panel anchored above `kind`'s chip. Caller must deinit.
+fn beginDropUp(
+    src: std.builtin.SourceLocation,
+    kind: footer.PickerKind,
+    w: f32,
+    h: f32,
+    open: *bool,
+) *dvui.FloatingWindowWidget {
+    const a = footer.anchorFor(kind);
+    const win = dvui.windowRect();
+
+    const pt = dropup.place(
+        .{ .x = a.x, .y = a.y, .w = a.w, .h = a.h },
+        .{ .x = win.x, .y = win.y, .w = win.w, .h = win.h },
+        .{ .w = w, .h = h },
+        dropup.GAP,
+    );
+
+    const i: usize = @intCast(@max(0, @intFromEnum(kind)));
+    dropup_rects[i] = .{ .x = pt.x, .y = pt.y, .w = w, .h = h };
+
+    return dvui.floatingWindow(src, .{
+        .modal = false, // no backdrop — the video stays visible and undimmed
+        .rect = &dropup_rects[i],
+        .open_flag = open,
+        .resize = .none,
+    }, .{
+        .min_size_content = .{ .w = w, .h = h },
+        .max_size_content = .{ .w = w, .h = h },
+        .background = true,
+        .color_fill = theme.colors.bg_elevated,
+        .color_border = theme.colors.border_subtle,
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .padding = dvui.Rect.all(theme.spacing.xs),
+    });
+}
+
+/// Small caption at the top of a drop-up. Replaces the modal's title bar: it names
+/// the panel without giving it window chrome.
+fn dropUpTitle(src: std.builtin.SourceLocation, text: []const u8) void {
+    _ = dvui.label(src, "{s}", .{text}, .{
+        .color_text = theme.colors.text_tertiary,
+        .padding = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 4 },
+    });
+}
+
+/// Esc closes whichever drop-up is open. With no backdrop there is nothing to
+/// swallow a stray click, so Esc and re-clicking the chip are the dismissal paths.
+pub fn handleDropUpKeys() void {
+    if (footer.open_picker == .none) return;
+    for (dvui.events()) |*e| {
+        if (e.evt != .key) continue;
+        if (e.evt.key.action == .down and e.evt.key.code == .escape) {
+            footer.open_picker = .none;
+        }
+    }
+}
 
 pub fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
     if (footer.open_picker != .chapter) return;
@@ -33,13 +112,9 @@ pub fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
     _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "chapter", c.mpv.MPV_FORMAT_INT64, &current_ch);
 
     var open: bool = true;
-    var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
-        .min_size_content = .{ .w = 360, .h = 280 },
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
-    });
+    var fw = beginDropUp(@src(), .chapter, 360, 302, &open);
     defer fw.deinit();
-    fw.dragAreaSet(dvui.windowHeader("Chapters", "", &open));
+    dropUpTitle(@src(), "Chapters");
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
@@ -97,13 +172,9 @@ pub fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
 pub fn renderAspectPickerPopover(active_p: *player.MediaPlayer) void {
     if (footer.open_picker != .aspect) return;
     var open: bool = true;
-    var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
-        .min_size_content = .{ .w = 200, .h = 160 },
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
-    });
+    var fw = beginDropUp(@src(), .aspect, 200, 182, &open);
     defer fw.deinit();
-    fw.dragAreaSet(dvui.windowHeader("Aspect Ratio", "", &open));
+    dropUpTitle(@src(), "Aspect ratio");
 
     const cur = footer.currentAspectChipText(active_p.mpv_ctx);
     const modes = [_][]const u8{ "-1", "16:9", "4:3", "21:9" };
@@ -140,15 +211,9 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
     if (footer.open_picker != kind) return;
     var open: bool = true;
     const title = if (kind == .audio) "Audio Track" else "Subtitles";
-    var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
-        .min_size_content = .{ .w = 320, .h = 240 },
-        .color_fill = theme.colors.bg_surface,
-        .border = dvui.Rect.all(1),
-        .color_border = theme.colors.border_subtle,
-        .corner_radius = dvui.Rect.all(theme.radius.lg),
-    });
+    var fw = beginDropUp(@src(), kind, 320, 262, &open);
     defer fw.deinit();
-    fw.dragAreaSet(dvui.windowHeader(title, "", &open));
+    dropUpTitle(@src(), title);
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
@@ -262,15 +327,9 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
 pub fn renderLangPickerPopover() void {
     if (footer.open_picker != .lang) return;
     var open: bool = true;
-    var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
-        .min_size_content = .{ .w = 240, .h = 320 },
-        .color_fill = theme.colors.bg_surface,
-        .border = dvui.Rect.all(1),
-        .color_border = theme.colors.border_subtle,
-        .corner_radius = dvui.Rect.all(theme.radius.lg),
-    });
+    var fw = beginDropUp(@src(), .lang, 240, 342, &open);
     defer fw.deinit();
-    fw.dragAreaSet(dvui.windowHeader("Subtitle Language", "", &open));
+    dropUpTitle(@src(), "Subtitle language");
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
@@ -327,13 +386,9 @@ pub fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
     }
 
     var open: bool = true;
-    var fw = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open }, .{
-        .min_size_content = .{ .w = 460, .h = 320 },
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
-    });
+    var fw = beginDropUp(@src(), .playlist, 460, 342, &open);
     defer fw.deinit();
-    fw.dragAreaSet(dvui.windowHeader("Files", "", &open));
+    dropUpTitle(@src(), "Files");
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
