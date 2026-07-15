@@ -340,6 +340,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_av_pure).step);
 
+    // YouTube browse: suggestion-JSON parse, channel-URL validation, duration/
+    // view-count formatting — youtube.zig routes through these.
+    const test_youtube_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/youtube_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_youtube_pure).step);
+
     // Winamp-style audio visualisers: the mpv lavfi-complex filter graph. Pure
     // because a theme colour is spliced into an ffmpeg graph — it must be
     // validated, not interpolated — and because every style has to keep

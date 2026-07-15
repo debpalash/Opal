@@ -3815,6 +3815,45 @@ def test_audio_visualizer():
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "mpv lavfi-complex visualizer: 4 styles, audio preserved, colour validated"
 
+
+@test("YouTube browse: suggestions + channels + player nav", "Browse")
+def test_youtube_browse():
+    yt = _src("src/services/youtube.zig")
+    ytp = _src("src/services/youtube_pure.zig")
+    st = _src("src/core/state.zig")
+    bz = _src("build.zig")
+    checks = {
+        # Search suggestions: Google autocomplete parsed by a TESTED pure fn and
+        # rendered through dvui's SuggestionWidget (arrow keys / Enter / Esc).
+        "suggest parser is pure + routed": ("pub fn parseSuggestions" in ytp
+                                            and "yt_pure.parseSuggestions(" in yt),
+        "suggest endpoint built pure": "pub fn suggestUrl" in ytp and "yt_pure.suggestUrl(" in yt,
+        "dropdown wired": "dvui.suggestion(" in yt and "addChoiceLabel(" in yt,
+        # A stale suggestion list for an older query must never be shown/kept.
+        "suggestions generation-guarded": "sugg_gen" in yt and "sugg_mutex" in yt,
+        # Channels: id captured from both fetch paths, click opens the channel's
+        # uploads, back button restores the search, id validated before argv.
+        "channel id in state": "channel_id" in st and "%(channel_id)s" in yt,
+        "channel click opens uploads": "openChannel(" in yt and "labelClick" in yt,
+        "channel url validated pure": ("pub fn channelVideosUrl" in ytp
+                                       and "yt_pure.channelVideosUrl(" in yt),
+        "channel back button": "exitChannel" in yt,
+        # SWR refresh re-runs the SEARCH — inside channel view that would
+        # silently dump the user back to results.
+        "swr gated in channel view": "!channel_mode.load(.acquire) and" in yt,
+        # Play lands the user on the player, not just behind a closed drawer.
+        "play goes to player view": "state.gotoPlayer()" in yt,
+        # Durations: "1:15:03", not "75:03" — and no "+07" sign artifact (Zig
+        # zero-pads signed ints with a forced sign).
+        "hour-aware duration pure + routed": ("pub fn formatDuration" in ytp
+                                              and yt.count("yt_pure.formatDuration(") >= 2),
+        "pure module is unit-tested": "youtube_pure.zig" in bz,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "suggestions dropdown + clickable channels + play→player wired"
+
 def run_all():
     test_fns = [v for v in globals().values() if callable(v) and hasattr(v, '_test')]
     

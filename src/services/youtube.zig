@@ -6,6 +6,7 @@ const theme = @import("../ui/theme.zig");
 const io = @import("../core/io_global.zig");
 const workers = @import("../core/workers.zig");
 const tmdb_pure = @import("tmdb_pure.zig"); // unit-tested grid virtualization (visibleRows)
+const yt_pure = @import("youtube_pure.zig"); // unit-tested URL/format/suggestion helpers
 
 pub const alloc = @import("../core/alloc.zig").allocator;
 
@@ -103,6 +104,33 @@ var paged_query_len: usize = 0;
 // existing grid (yt-dlp re-sends the earlier page) and honours ITEM_CAP.
 var appending_more: bool = false;
 
+// ── Channel mode ──
+// Clicking a card's channel name swaps the grid to that channel's uploads
+// (yt-dlp flat-playlist on /channel/{id}/videos). The flag is atomic because
+// fetchYoutube (which exits channel mode) is also called from the remote-API
+// and AI-tool threads; the name/id bufs are only written on the UI thread
+// (openChannel) and workers get copies via their spawn statics.
+var channel_mode: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var channel_id_buf: [32]u8 = std.mem.zeroes([32]u8);
+var channel_id_len: usize = 0;
+var channel_name_buf: [64]u8 = std.mem.zeroes([64]u8);
+var channel_name_len: usize = 0;
+
+// ── Search suggestions (Google autocomplete, ds=yt) ──
+// A worker fills the fixed rows under sugg_mutex; the dropdown renders a
+// snapshot. sugg_for_* records which query the rows belong to, so a stale
+// list is never shown for a newer query. Generation guard mirrors search_gen.
+const SUGG_MAX = 8;
+var sugg_mutex: @import("../core/sync.zig").Mutex = .{};
+var sugg_rows: [SUGG_MAX][120]u8 = undefined;
+var sugg_lens: [SUGG_MAX]u8 = std.mem.zeroes([SUGG_MAX]u8);
+var sugg_count: usize = 0;
+var sugg_for: [256]u8 = std.mem.zeroes([256]u8);
+var sugg_for_len: usize = 0;
+var sugg_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+var sugg_busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+const SUGG_DEBOUNCE_MS: i64 = 150; // faster than the 400ms search debounce
+
 /// Append a result, clearing stale results lazily on the first new one.
 /// Caller must hold yt_mutex. Keeps the `dates` arrays index-aligned.
 fn appendYt(item: state.YtItem) void {
@@ -189,10 +217,11 @@ const piped_instances = [_][]const u8{
 
 pub fn fetchYoutube(query: []const u8) void {
     if (state.app.yt.is_loading.load(.acquire)) return;
+    channel_mode.store(false, .release); // a search always leaves channel view
     state.app.yt.is_loading.store(true, .release);
     state.app.yt.last_fetch_s = @import("browse_cache.zig").now(); // SWR stamp
 
-    const actual_query = if (query.len == 0) "trending music 2024" else query;
+    const actual_query = if (query.len == 0) "trending music" else query;
 
     // Bump the generation; this fetch owns `my_gen`. A later fetch will bump it
     // again, marking this one stale.
@@ -247,16 +276,75 @@ pub fn fetchYoutube(query: []const u8) void {
     if (state.app.yt.thread) |t| t.detach();
 }
 
+/// Enter channel mode: swap the grid to `channel_id`'s uploads (seamless —
+/// old results stay until the first channel row lands). UI THREAD ONLY (card
+/// click / context menu). A later fetchYoutube() exits channel mode.
+pub fn openChannel(channel_id: []const u8, name: []const u8) void {
+    if (state.app.yt.is_loading.load(.acquire)) return;
+    var url_check: [96]u8 = undefined;
+    if (yt_pure.channelVideosUrl(channel_id, &url_check) == null) return; // no/invalid id
+
+    channel_id_len = @min(channel_id.len, channel_id_buf.len);
+    @memcpy(channel_id_buf[0..channel_id_len], channel_id[0..channel_id_len]);
+    channel_name_len = @min(name.len, channel_name_buf.len);
+    @memcpy(channel_name_buf[0..channel_name_len], name[0..channel_name_len]);
+    channel_mode.store(true, .release);
+
+    state.app.yt.is_loading.store(true, .release);
+    state.app.yt.last_fetch_s = @import("browse_cache.zig").now();
+    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+
+    // Channel paging rides loaded_count/-I; the search query is not involved.
+    loaded_count.store(PAGE_SIZE, .release);
+    loading_more.store(false, .release);
+    paged_query_len = 0;
+
+    state.app.yt.results.ensureTotalCapacity(alloc, 256) catch {};
+
+    const S = struct {
+        var id_buf: [32]u8 = undefined;
+        var id_len: usize = 0;
+        var gen: u32 = 0;
+    };
+    S.id_len = channel_id_len;
+    @memcpy(S.id_buf[0..S.id_len], channel_id_buf[0..S.id_len]);
+    S.gen = my_gen;
+
+    const t = std.Thread.spawn(.{}, struct {
+        fn worker() void {
+            defer state.app.yt.is_loading.store(false, .release);
+            yt_mutex.lock();
+            pending_clear = true; // seamless swap, same as a re-search
+            yt_mutex.unlock();
+            fetchChannelViaYtdlp(S.id_buf[0..S.id_len], S.gen, PAGE_SIZE);
+        }
+    }.worker, .{}) catch {
+        state.app.yt.is_loading.store(false, .release);
+        return;
+    };
+    t.detach();
+}
+
+/// Leave channel mode and restore the last search (or the default feed).
+fn exitChannel() void {
+    const q = last_fired_query[0..last_fired_len];
+    setQuery(q);
+    recordFired(q);
+    fetchYoutube(q); // clears channel_mode itself
+}
+
 /// Load the next page and APPEND it. yt-dlp flat search has no cursor, so we
 /// re-run `ytsearch{loaded_count+PAGE_SIZE}:` and dedupe the overlap (the first
-/// `loaded_count` rows repeat). Guarded by `loading_more` + the main is_loading
-/// so a near-bottom scroll can't spam fetches; the generation guard makes a new
-/// search supersede an in-flight load-more.
+/// `loaded_count` rows repeat). Channel mode pages the same way via -I 1:{n}.
+/// Guarded by `loading_more` + the main is_loading so a near-bottom scroll
+/// can't spam fetches; the generation guard makes a new search supersede an
+/// in-flight load-more.
 pub fn fetchMore() void {
     if (state.app.yt.is_loading.load(.acquire)) return;
     if (loading_more.load(.acquire)) return;
     if (loaded_count.load(.acquire) >= ITEM_CAP) return;
-    if (paged_query_len == 0) return;
+    const in_channel = channel_mode.load(.acquire);
+    if (paged_query_len == 0 and !in_channel) return;
     loading_more.store(true, .release);
 
     // This load-more belongs to the current generation; a new search bumps the
@@ -269,11 +357,17 @@ pub fn fetchMore() void {
         var q_len: usize = 0;
         var gen: u32 = 0;
         var n: usize = 0;
+        var chan: bool = false;
+        var id_buf: [32]u8 = undefined;
+        var id_len: usize = 0;
     };
     S.q_len = paged_query_len;
     @memcpy(S.q_buf[0..S.q_len], paged_query[0..S.q_len]);
     S.gen = my_gen;
     S.n = want;
+    S.chan = in_channel;
+    S.id_len = channel_id_len;
+    @memcpy(S.id_buf[0..S.id_len], channel_id_buf[0..S.id_len]);
 
     const t = std.Thread.spawn(.{}, struct {
         fn worker() void {
@@ -288,7 +382,10 @@ pub fn fetchMore() void {
                 yt_mutex.unlock();
             }
 
-            fetchViaYtdlp(S.q_buf[0..S.q_len], S.gen, S.n);
+            if (S.chan)
+                fetchChannelViaYtdlp(S.id_buf[0..S.id_len], S.gen, S.n)
+            else
+                fetchViaYtdlp(S.q_buf[0..S.q_len], S.gen, S.n);
 
             // Only advance the cursor if this load-more is still current; a
             // superseding search has already reset loaded_count for its own page.
@@ -307,30 +404,9 @@ fn isCurrent(gen: u32) bool {
     return search_gen.load(.acquire) == gen;
 }
 
-fn urlEncode(input: []const u8, out: []u8) usize {
-    const hex = "0123456789ABCDEF";
-    var olen: usize = 0;
-    for (input) |ch| {
-        if (olen + 3 >= out.len) break;
-        if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.' or ch == '~') {
-            out[olen] = ch;
-            olen += 1;
-        } else if (ch == ' ') {
-            out[olen] = '+';
-            olen += 1;
-        } else {
-            out[olen] = '%';
-            out[olen + 1] = hex[ch >> 4];
-            out[olen + 2] = hex[ch & 0xf];
-            olen += 3;
-        }
-    }
-    return olen;
-}
-
 fn fetchViaPiped(query: []const u8, gen: u32) bool {
     var encoded: [512]u8 = undefined;
-    const elen = urlEncode(query, &encoded);
+    const elen = yt_pure.urlEncode(query, &encoded);
     if (elen == 0) return false;
 
     for (piped_instances) |host| {
@@ -409,6 +485,14 @@ fn parsePipedResults(json: []const u8, gen: u32) void {
             item.uploader_len = ulen;
         }
 
+        if (extractJsonStr(window, "\"uploaderUrl\":")) |uurl| {
+            if (yt_pure.channelIdFromUploaderUrl(uurl)) |cid| {
+                const clen = @min(cid.len, 32);
+                @memcpy(item.channel_id[0..clen], cid[0..clen]);
+                item.channel_id_len = clen;
+            }
+        }
+
         item.duration = extractJsonNum(window, "\"duration\":");
         item.views = extractJsonNum(window, "\"views\":");
 
@@ -435,25 +519,53 @@ fn parsePipedResults(json: []const u8, gen: u32) void {
 fn fetchViaYtdlp(query: []const u8, gen: u32, count: usize) void {
     var search_arg: [288]u8 = undefined;
     const search_str = std.fmt.bufPrintZ(&search_arg, "ytsearch{d}:{s}", .{ count, query }) catch return;
+    runYtdlp(search_str, null, gen);
+}
 
+/// Channel-uploads fetch: flat-playlist over /channel/{id}/videos, limited to
+/// the first `count` items via -I (the channel tab has no search-style count).
+fn fetchChannelViaYtdlp(channel_id: []const u8, gen: u32, count: usize) void {
+    var url_buf: [96]u8 = undefined;
+    const url = yt_pure.channelVideosUrl(channel_id, &url_buf) orelse return;
+    var range_buf: [24]u8 = undefined;
+    const range = std.fmt.bufPrintZ(&range_buf, "1:{d}", .{count}) catch return;
+    runYtdlp(url, range, gen);
+}
+
+fn runYtdlp(target: []const u8, item_range: ?[]const u8, gen: u32) void {
     // --print with a compact tab template instead of -j: full JSON lines carry
     // a huge `description` that overflows the reader buffer (takeDelimiter then
     // errors and we parse nothing). Tab rows are short, fast, and robust.
     // Use the app's bundled yt-dlp (~/.config/opal/bin) — bare "yt-dlp" isn't
     // on the GUI process PATH, so spawning it fails.
-    // Trailing field is %(upload_date)s (YYYYMMDD or NA on flat-playlist).
+    // %(upload_date)s is YYYYMMDD or NA on flat-playlist; %(channel_id)s feeds
+    // the clickable channel → channel-videos view.
     const ytdlp_bin = @import("ytdlp.zig").binary();
-    const argv = [_][]const u8{
+    var argv_buf: [11][]const u8 = undefined;
+    var argc: usize = 0;
+    for ([_][]const u8{
         ytdlp_bin,
         "--flat-playlist",
         "--print",
-        "%(id)s\t%(title)s\t%(channel)s\t%(duration)s\t%(view_count)s\t%(upload_date)s",
+        "%(id)s\t%(title)s\t%(channel)s\t%(duration)s\t%(view_count)s\t%(upload_date)s\t%(channel_id)s",
         "--no-warnings",
         "--socket-timeout",
         "10",
-        search_str,
-    };
-    var child = io.Child.init(&argv, alloc);
+    }) |a| {
+        argv_buf[argc] = a;
+        argc += 1;
+    }
+    if (item_range) |r| {
+        argv_buf[argc] = "-I";
+        argc += 1;
+        argv_buf[argc] = r;
+        argc += 1;
+    }
+    argv_buf[argc] = target;
+    argc += 1;
+    const argv = argv_buf[0..argc];
+
+    var child = io.Child.init(argv, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     child.spawn() catch return;
@@ -507,6 +619,19 @@ fn parseYtdlpLine(line: []const u8) void {
             staged_date_len = 8;
         }
     }
+    if (it.next()) |cid| {
+        if (!std.mem.eql(u8, cid, "NA") and cid.len <= 32) {
+            @memcpy(item.channel_id[0..cid.len], cid);
+            item.channel_id_len = cid.len;
+        }
+    }
+
+    // yt-dlp search results include CHANNEL rows (id == channel_id, "UC…").
+    // As a card that's a dead video: watch?v=UC… doesn't play and the vi/UC…
+    // thumbnail 404s — skip them. (Channels are reachable via the clickable
+    // channel name on any of their videos.)
+    if (item.channel_id_len > 0 and
+        std.mem.eql(u8, item.video_id[0..item.video_id_len], item.channel_id[0..item.channel_id_len])) return;
 
     var thumb_buf: [128]u8 = undefined;
     if (std.fmt.bufPrint(&thumb_buf, "https://i.ytimg.com/vi/{s}/mqdefault.jpg", .{item.video_id[0..item.video_id_len]})) |thumb| {
@@ -709,6 +834,7 @@ pub fn renderContent() void {
         recordFired(q);
         fetchYoutube(q);
     } else if (state.app.yt.results.items.len > 0 and !state.app.yt.is_loading.load(.acquire) and
+        !channel_mode.load(.acquire) and // an SWR refetch would silently exit channel view
         @import("browse_cache.zig").isStale(state.app.yt.last_fetch_s))
     {
         // SWR background refresh — keep showing current results meanwhile.
@@ -721,6 +847,8 @@ pub fn renderContent() void {
     // and differs from what we last fired. Enter/button paths fire immediately
     // (renderSearchInline), this just covers as-you-type.
     maybeFireLiveSearch();
+    // Suggestions ride a shorter debounce so the dropdown feels live.
+    maybeFireSuggest();
 
     // Only show the loading line on an INITIAL load (nothing yet) — a
     // stale-refresh keeps current results on screen and swaps in place.
@@ -799,7 +927,7 @@ pub fn renderContent() void {
     // fetchMore() only spawns a thread; the mutex we hold here is taken by that
     // worker asynchronously, so calling it under the lock is safe.
     const have = state.app.yt.results.items.len;
-    if (have > 0 and have < ITEM_CAP and paged_query_len > 0) {
+    if (have > 0 and have < ITEM_CAP and (paged_query_len > 0 or channel_mode.load(.acquire))) {
         const max_y = scroll.si.scrollMax(.vertical);
         const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
         if (near_bottom and !state.app.yt.is_loading.load(.acquire) and !loading_more.load(.acquire)) {
@@ -865,7 +993,7 @@ fn maybeFireLiveSearch() void {
 
 const CatChip = struct { label: []const u8, query: []const u8 };
 const cat_chips = [_]CatChip{
-    .{ .label = "Trending", .query = "trending 2024" },
+    .{ .label = "Trending", .query = "trending" },
     .{ .label = "Music", .query = "music" },
     .{ .label = "Gaming", .query = "gaming" },
     .{ .label = "Tech", .query = "tech" },
@@ -880,6 +1008,29 @@ fn renderToolbar() void {
     defer bar.deinit();
 
     dvui.icon(@src(), "yt-icon", icons.tvg.lucide.music, .{}, .{ .color_text = theme.colors.accent, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 } });
+
+    // Channel banner — back arrow + the channel whose uploads fill the grid.
+    if (channel_mode.load(.acquire)) {
+        if (dvui.buttonIcon(@src(), "chan-back", icons.tvg.lucide.@"arrow-left", .{}, .{}, .{
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = theme.colors.text_secondary,
+            .border = dvui.Rect.all(0),
+            .min_size_content = theme.iconSize(.sm),
+            .padding = dvui.Rect.all(3),
+            .gravity_y = 0.5,
+        })) {
+            exitChannel();
+        }
+        _ = dvui.label(@src(), "{s}", .{safeUtf8(channel_name_buf[0..channel_name_len])}, .{
+            .background = true,
+            .color_fill = theme.colors.accent,
+            .color_text = dvui.Color.white,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            .gravity_y = 0.5,
+        });
+    }
 
     renderSearchInline();
 
@@ -930,18 +1081,182 @@ fn toolbarDivider(id: usize) void {
     d.deinit();
 }
 
-/// Compact inline search box. Enter/Go fire immediately; typing is handled by
-/// the debounced live search in maybeFireLiveSearch().
+/// Compact inline search box with an autocomplete dropdown. Enter/Go fire
+/// immediately; typing is handled by the debounced live search in
+/// maybeFireLiveSearch() and the (faster) suggestion fetch in maybeFireSuggest().
+///
+/// Manual TextEntryWidget instead of components.toolbarSearch: dvui.suggestion
+/// must own the event pass so ↑/↓ move the highlight, Enter commits it, and
+/// Esc closes — so te.processEvents() must NOT run (suggestion forwards events).
 fn renderSearchInline() void {
     const components = @import("../ui/components.zig");
-    // Canonical compact toolbar input — same height/padding as Movies & TV.
-    const enter_pressed = components.toolbarSearch(@src(), &state.app.yt.search_buf, "Search YouTube…", 240);
+
+    var te = dvui.widgetAlloc(dvui.TextEntryWidget);
+    te.init(@src(), .{ .text = .{ .buffer = &state.app.yt.search_buf }, .placeholder = "Search YouTube…" }, .{
+        .min_size_content = .{ .w = 240, .h = components.TOOLBAR_INPUT_H },
+        .max_size_content = .{ .w = 240, .h = components.TOOLBAR_INPUT_H },
+        .color_fill = theme.colors.bg_elevated,
+        .color_border = theme.colors.border_subtle,
+        .color_text = theme.colors.text_primary,
+        .border = dvui.Rect.all(1),
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+        .gravity_y = 0.5,
+    });
+    var sug = dvui.suggestion(te, .{ .open_on_focus = false, .open_on_text_change = true });
+    te.draw();
+
+    // Snapshot the suggestion rows (worker fills them under sugg_mutex) — but
+    // only if they belong to the text currently in the box; a stale list for
+    // an older query stays hidden.
+    const q = currentQuery();
+    var rows: [SUGG_MAX][120]u8 = undefined;
+    var lens: [SUGG_MAX]u8 = undefined;
+    var count: usize = 0;
+    sugg_mutex.lock();
+    if (q.len == sugg_for_len and std.mem.eql(u8, q, sugg_for[0..sugg_for_len])) {
+        count = sugg_count;
+        for (0..count) |i| {
+            rows[i] = sugg_rows[i];
+            lens[i] = sugg_lens[i];
+        }
+    }
+    sugg_mutex.unlock();
+
+    if (count == 0) sug.close();
+    if (count > 0 and sug.dropped()) {
+        // Row 0 is the typed text itself — the default highlight — so plain
+        // Enter always searches exactly what was typed; ↓ reaches the fetched
+        // suggestions (mirrors YouTube's own dropdown).
+        if (sug.addChoiceLabel(q)) commitSearch(q);
+        for (0..count) |i| {
+            const s = safeUtf8(rows[i][0..lens[i]]);
+            if (sug.addChoiceLabel(s)) {
+                // s points into this frame's snapshot — commitSearch copies it
+                // into the search buffer before anything can invalidate it.
+                commitSearch(s);
+            }
+        }
+    }
+    sug.deinit();
+    const enter_pressed = te.enter_pressed;
+    te.deinit();
 
     if (components.toolbarGo(@src(), "Go") or enter_pressed) {
-        const q = currentQuery();
-        recordFired(q);
-        fetchYoutube(q);
+        commitSearch(currentQuery());
     }
+}
+
+/// Put `q` in the box, dismiss suggestions, and fire the search.
+fn commitSearch(q: []const u8) void {
+    var q_copy: [256]u8 = undefined;
+    const n = @min(q.len, q_copy.len);
+    @memcpy(q_copy[0..n], q[0..n]); // q may alias the search buffer setQuery rewrites
+    setQuery(q_copy[0..n]);
+    recordFired(q_copy[0..n]);
+    sugg_mutex.lock();
+    sugg_count = 0;
+    sugg_for_len = 0;
+    sugg_mutex.unlock();
+    fetchYoutube(q_copy[0..n]);
+}
+
+/// Debounced suggestion fetch (SUGG_DEBOUNCE_MS after the last keystroke —
+/// deliberately quicker than the search debounce so the dropdown feels live).
+/// Rides last_edit_ms, which maybeFireLiveSearch refreshes on every buffer
+/// change. Skips queries we already have rows for, the query that was just
+/// committed, and anything under 2 chars.
+fn maybeFireSuggest() void {
+    const q = currentQuery();
+    if (q.len < 2) {
+        if (sugg_count > 0 or sugg_for_len > 0) {
+            sugg_mutex.lock();
+            sugg_count = 0;
+            sugg_for_len = 0;
+            sugg_mutex.unlock();
+        }
+        return;
+    }
+    if (q.len == last_fired_len and std.mem.eql(u8, q, last_fired_query[0..last_fired_len])) return;
+    if (io.milliTimestamp() - last_edit_ms < SUGG_DEBOUNCE_MS) return;
+    if (sugg_busy.load(.acquire)) return;
+
+    sugg_mutex.lock();
+    const have = q.len == sugg_for_len and std.mem.eql(u8, q, sugg_for[0..sugg_for_len]);
+    sugg_mutex.unlock();
+    if (have) return;
+
+    fireSuggest(q);
+}
+
+fn fireSuggest(query: []const u8) void {
+    if (sugg_busy.load(.acquire)) return;
+    sugg_busy.store(true, .release);
+    const my_gen = sugg_gen.fetchAdd(1, .acq_rel) + 1;
+
+    const S = struct {
+        var q_buf: [256]u8 = undefined;
+        var q_len: usize = 0;
+        var gen: u32 = 0;
+    };
+    S.q_len = @min(query.len, 255);
+    @memcpy(S.q_buf[0..S.q_len], query[0..S.q_len]);
+    S.gen = my_gen;
+
+    const t = std.Thread.spawn(.{}, struct {
+        fn worker() void {
+            defer sugg_busy.store(false, .release);
+
+            var url_buf: [640]u8 = undefined;
+            const url = yt_pure.suggestUrl(S.q_buf[0..S.q_len], &url_buf) orelse return;
+
+            var client = std.http.Client{ .allocator = alloc, .io = io.io() };
+            defer client.deinit();
+
+            const uri = std.Uri.parse(url) catch return;
+            var req = client.request(.GET, uri, .{
+                .extra_headers = &.{
+                    .{ .name = "Accept", .value = "application/json" },
+                    .{ .name = "User-Agent", .value = "Mozilla/5.0 (X11; Linux x86_64) Opal/1.0" },
+                },
+            }) catch return;
+            defer req.deinit();
+            req.sendBodiless() catch return;
+
+            var redirect_buf: [8192]u8 = undefined;
+            var response = req.receiveHead(&redirect_buf) catch return;
+            if (response.head.status != .ok) return;
+
+            var transfer_buf: [4096]u8 = undefined;
+            var decompress: std.http.Decompress = undefined;
+            var rdr = response.readerDecompressing(&transfer_buf, &decompress, &.{});
+            const body = rdr.allocRemaining(alloc, std.Io.Limit.limited(64 * 1024)) catch return;
+            defer alloc.free(body);
+
+            // Parse into worker-local rows, then publish under the mutex only
+            // if no newer suggestion fetch has been fired since.
+            var local_rows: [SUGG_MAX][120]u8 = undefined;
+            var local_slices: [SUGG_MAX][]u8 = undefined;
+            for (&local_rows, 0..) |*r, i| local_slices[i] = r;
+            var local_lens: [SUGG_MAX]u8 = @splat(0);
+            const n = yt_pure.parseSuggestions(body, &local_slices, &local_lens);
+
+            if (sugg_gen.load(.acquire) != S.gen) return; // superseded
+            sugg_mutex.lock();
+            defer sugg_mutex.unlock();
+            sugg_count = n;
+            for (0..n) |i| {
+                sugg_rows[i] = local_rows[i];
+                sugg_lens[i] = local_lens[i];
+            }
+            sugg_for_len = S.q_len;
+            @memcpy(sugg_for[0..S.q_len], S.q_buf[0..S.q_len]);
+        }
+    }.worker, .{}) catch {
+        sugg_busy.store(false, .release);
+        return;
+    };
+    t.detach();
 }
 
 fn renderCatChip(idx: usize, chip: CatChip, current: []const u8) void {
@@ -1067,12 +1382,11 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
                 });
                 defer dur_box.deinit();
 
-                const dur_min = @divTrunc(item.duration, 60);
-                const dur_sec = @rem(item.duration, 60);
-                var dur_buf: [16]u8 = undefined;
-                if (std.fmt.bufPrintZ(&dur_buf, "{d}:{d:0>2}", .{ dur_min, dur_sec })) |dur_str| {
+                var dur_buf: [24]u8 = undefined;
+                const dur_str = yt_pure.formatDuration(item.duration, &dur_buf);
+                if (dur_str.len > 0) {
                     _ = dvui.labelNoFmt(@src(), dur_str, .{}, .{ .id_extra = idx + 162, .color_text = dvui.Color.white });
-                } else |_| {}
+                }
             }
 
             // Hover overlay: dimmed scrim + metadata + centered play affordance.
@@ -1120,11 +1434,23 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
             if (item.uploader_len > 0) {
                 var ch_buf: [80]u8 = undefined;
                 const ch = truncateUtf8(item.uploader[0..item.uploader_len], 28, &ch_buf);
-                _ = dvui.labelNoFmt(@src(), ch, .{}, .{
-                    .id_extra = idx + 410,
-                    .expand = .horizontal,
-                    .color_text = theme.colors.text_secondary,
-                });
+                if (item.channel_id_len > 0) {
+                    // Clickable channel → that channel's uploads take over the
+                    // grid (openChannel validates the id and no-ops if bad).
+                    if (dvui.labelClick(@src(), "{s}", .{ch}, .{}, .{
+                        .id_extra = idx + 410,
+                        .expand = .horizontal,
+                        .color_text = theme.colors.text_secondary,
+                    })) {
+                        openChannel(item.channel_id[0..item.channel_id_len], item.uploader[0..item.uploader_len]);
+                    }
+                } else {
+                    _ = dvui.labelNoFmt(@src(), ch, .{}, .{
+                        .id_extra = idx + 410,
+                        .expand = .horizontal,
+                        .color_text = theme.colors.text_secondary,
+                    });
+                }
             }
 
             const ymd = dateFor(idx);
@@ -1169,6 +1495,12 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
             });
             defer fw.deinit();
 
+            if (item.channel_id_len > 0 and item.uploader_len > 0) {
+                if ((dvui.menuItemLabel(@src(), "View Channel", .{}, .{ .expand = .horizontal, .id_extra = idx + 705 })) != null) {
+                    openChannel(item.channel_id[0..item.channel_id_len], item.uploader[0..item.uploader_len]);
+                    fw.close();
+                }
+            }
             if ((dvui.menuItemLabel(@src(), "Copy Title", .{}, .{ .expand = .horizontal, .id_extra = idx + 710 })) != null) {
                 dvui.clipboardTextSet(title);
                 state.showToast("Title copied");
@@ -1230,7 +1562,7 @@ fn twoLineTitle(title: []const u8, width: f32, out: []u8) []const u8 {
 /// the line) eats the date before it could ever cut a digit of the count.
 fn metaLine(views: i64, ago: []const u8, out: []u8) []const u8 {
     var vbuf: [32]u8 = undefined;
-    const vstr = viewsStr(views, &vbuf); // "1.5M views" or ""
+    const vstr = yt_pure.viewsStr(views, &vbuf); // "1.5M views" or ""
     if (vstr.len > 0 and ago.len > 0) return std.fmt.bufPrint(out, "{s}  \u{00b7}  {s}", .{ vstr, ago }) catch vstr;
     if (vstr.len > 0) return std.fmt.bufPrint(out, "{s}", .{vstr}) catch "";
     if (ago.len > 0) return std.fmt.bufPrint(out, "{s}", .{ago}) catch "";
@@ -1276,36 +1608,6 @@ fn truncateUtf8(s_in: []const u8, max: usize, out: []u8) []const u8 {
     return out[0..oi];
 }
 
-/// Compact view-count magnitude, e.g. 337000→"337K", 1491000→"1.5M",
-/// 114200000→"114M", 0→"". Drops the trailing ".0" so "2.0M" reads "2M". Never
-/// truncates mid-digit — the whole formatted token fits. Writes into `buf`.
-fn formatViews(views: i64, buf: []u8) []const u8 {
-    if (views <= 0) return "";
-    const f = @as(f64, @floatFromInt(views));
-    if (views < 1_000) return std.fmt.bufPrint(buf, "{d}", .{views}) catch "";
-    if (views < 1_000_000) return scaled(buf, f / 1_000.0, "K");
-    if (views < 1_000_000_000) return scaled(buf, f / 1_000_000.0, "M");
-    return scaled(buf, f / 1_000_000_000.0, "B");
-}
-
-/// Render `v` with one decimal place unless it's ≥100 (then no decimal — "337K"
-/// not "337.0K") or the decimal is zero ("2M" not "2.0M"), then the suffix.
-fn scaled(buf: []u8, v: f64, suffix: []const u8) []const u8 {
-    const tenths = @as(i64, @intFromFloat(@round(v * 10.0)));
-    const whole = @divTrunc(tenths, 10);
-    const frac = @rem(tenths, 10);
-    if (v >= 100.0 or frac == 0) return std.fmt.bufPrint(buf, "{d}{s}", .{ whole, suffix }) catch "";
-    return std.fmt.bufPrint(buf, "{d}.{d}{s}", .{ whole, frac, suffix }) catch "";
-}
-
-/// "1.5M views" / "" — the formatViews magnitude with the unit appended.
-fn viewsStr(views: i64, buf: []u8) []const u8 {
-    var nbuf: [16]u8 = undefined;
-    const n = formatViews(views, &nbuf);
-    if (n.len == 0) return "";
-    return std.fmt.bufPrint(buf, "{s} views", .{n}) catch "";
-}
-
 /// Dimmed scrim + full metadata + a centered ▶ play affordance, over a hovered
 /// thumbnail. Clicking the thumbnail (handled by the parent button) plays.
 fn renderHoverMeta(item: *state.YtItem, idx: usize) void {
@@ -1343,7 +1645,7 @@ fn renderHoverMeta(item: *state.YtItem, idx: usize) void {
 
         if (item.views > 0) {
             var vbuf: [32]u8 = undefined;
-            _ = dvui.label(@src(), "{s}", .{viewsStr(item.views, &vbuf)}, .{ .id_extra = idx + 604, .color_text = theme.colors.text_secondary });
+            _ = dvui.label(@src(), "{s}", .{yt_pure.viewsStr(item.views, &vbuf)}, .{ .id_extra = idx + 604, .color_text = theme.colors.text_secondary });
         }
         const ymd = dateFor(idx);
         if (ymd.len == 8) {
@@ -1358,12 +1660,11 @@ fn renderHoverMeta(item: *state.YtItem, idx: usize) void {
 
     // Duration.
     if (item.duration > 0) {
-        const dur_min = @divTrunc(item.duration, 60);
-        const dur_sec = @rem(item.duration, 60);
-        var dbuf: [16]u8 = undefined;
-        if (std.fmt.bufPrintZ(&dbuf, "{d}:{d:0>2}", .{ dur_min, dur_sec })) |ds| {
+        var dbuf: [24]u8 = undefined;
+        const ds = yt_pure.formatDuration(item.duration, &dbuf);
+        if (ds.len > 0) {
             _ = dvui.label(@src(), "{s}", .{ds}, .{ .id_extra = idx + 607, .color_text = theme.colors.text_secondary });
-        } else |_| {}
+        }
     }
 
     // Centered ▶ play affordance.
@@ -1397,6 +1698,6 @@ fn sendToPlayer(item: *state.YtItem, appendToPlaylist: bool) void {
         state.showToast("Track queued!");
     } else {
         ap.load_file(yt_url.ptr);
-        state.app.drawer_open = false;
+        state.gotoPlayer(); // player route + drawer closed — user lands on the video
     }
 }

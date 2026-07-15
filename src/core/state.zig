@@ -234,6 +234,9 @@ pub const YtItem = struct {
     title_len: usize = 0,
     uploader: [64]u8 = std.mem.zeroes([64]u8),
     uploader_len: usize = 0,
+    // "UC…" id — powers the clickable channel → channel-videos view.
+    channel_id: [32]u8 = std.mem.zeroes([32]u8),
+    channel_id_len: usize = 0,
     duration: i64 = 0,
     views: i64 = 0,
     thumbnail_url: [512]u8 = std.mem.zeroes([512]u8),
