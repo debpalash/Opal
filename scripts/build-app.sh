@@ -81,7 +81,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key>
     <string>$VERSION</string>
     <key>NSHumanReadableCopyright</key>
-    <string>© 2026 Opal contributors — GPL-3.0. Play everything.</string>
+    <string>© 2026 Palash Deb — GPL-3.0. Play everything.</string>
     <key>CFBundleExecutable</key>
     <string>Opal</string>
     <key>CFBundlePackageType</key>

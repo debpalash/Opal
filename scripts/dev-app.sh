@@ -44,7 +44,7 @@ if [ ! -f "$APP/Contents/Info.plist" ]; then
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>dev</string>
     <key>CFBundleVersion</key><string>dev</string>
-    <key>NSHumanReadableCopyright</key><string>© 2026 Opal contributors — GPL-3.0. Play everything.</string>
+    <key>NSHumanReadableCopyright</key><string>© 2026 Palash Deb — GPL-3.0. Play everything.</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
 </dict>

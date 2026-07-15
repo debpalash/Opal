@@ -325,6 +325,32 @@ def test_libtorrent():
         return "pass", f"{size:.0f} KB"
     return "warn", "libtorrent_wrapper.so not built"
 
+@test("Copyright Attribution", "Build")
+def test_copyright_attribution():
+    # The author's name must appear in the copyright/about surfaces and the
+    # generic "Opal contributors" placeholder must be gone. Guards a silent
+    # regression on the packaging scripts, which own the macOS About panel's
+    # NSHumanReadableCopyright line and the Windows installer Manufacturer.
+    surfaces = {
+        "scripts/build-app.sh": "NSHumanReadableCopyright",
+        "scripts/dev-app.sh": "NSHumanReadableCopyright",
+        "packaging/windows/opal.wxs": "Manufacturer",
+        "src/ui/settings.zig": "Settings › About",
+    }
+    missing = []
+    stale = []
+    for path in surfaces:
+        src = open(os.path.join(PROJECT_DIR, path)).read()
+        if "Palash Deb" not in src:
+            missing.append(path)
+        if "Opal contributors" in src:
+            stale.append(path)
+    if missing:
+        return "fail", f"name missing in: {', '.join(missing)}"
+    if stale:
+        return "fail", f"'Opal contributors' placeholder still in: {', '.join(stale)}"
+    return "pass", "author credited across about/copyright/packaging surfaces"
+
 # ══════════════════════════════════════════════════════════
 # Voice Pipeline Tests
 # ══════════════════════════════════════════════════════════

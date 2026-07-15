@@ -25,7 +25,7 @@
            Name="Opal"
            Language="1033"
            Version="$(var.ProductVersion)"
-           Manufacturer="Opal contributors"
+           Manufacturer="Palash Deb"
            UpgradeCode="0C799FF1-BA01-4B13-A888-A7D036460135">
 
     <Package InstallerVersion="500"
