@@ -996,6 +996,20 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_anime_schedule_pure).step);
 
+    // HeanCms/Iken manga source engine: API-host derivation (:// → ://api.),
+    // /query URL building (brackets encoded — curl glob-abort trap), series +
+    // chapter + page parsing (both new chapter_data.images and old data[] page
+    // shapes), paywall (price>0) skip, and the heancms:<slug> reader route —
+    // all against embedded HeanCms JSON samples. comics.zig routes through these.
+    const test_manga_heancms_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/manga_heancms_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_manga_heancms_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main

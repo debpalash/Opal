@@ -12,6 +12,9 @@ const pure = @import("comics_pure.zig");
 // OPDS-PSE page-URL substitution (tested) — used by loadPseBook so the shipped
 // page-URL build is the same code covered by opds_pure's unit tests.
 const opds_pure = @import("opds_pure.zig");
+// HeanCms/Iken JSON-API source engine (tested) — URL building + series/chapter/
+// page parsing routes through this so the shipped parse IS the tested parse.
+const heancms = @import("manga_heancms_pure.zig");
 
 /// Percent-encode a search query (space → `+`). Delegates to the unit-tested
 /// pure helper so the shipped encoder IS the tested one.
@@ -279,6 +282,22 @@ fn fetchComicThread(gen: u32) void {
         return;
     }
 
+    // ── HeanCms/Iken cards carry a `heancms:<series_slug>` pseudo-URL ──
+    // Pages come from a 3-call JSON chain (series detail → chapter list → page
+    // images), so route BEFORE the generic scraper, exactly like MangaDex. Once
+    // page_urls are staged, downloadPages() takes over unchanged.
+    if (heancms.slugFromRoute(url)) |slug| {
+        const ok = loadHeancmsPages(slug);
+        state.app.comic.is_loading.store(false, .release);
+        if (!ok) {
+            logs.pushLog("error", "comics", "HeanCms chapter failed to load", true);
+            return;
+        }
+        logs.pushLog("info", "comics", "Comic loaded (HeanCms)", false);
+        downloadPages(gen);
+        return;
+    }
+
     // Try external plugins first
     if (tryPlugins(url)) {
         logs.pushLog("info", "comics", "Comic loaded via plugin", false);
@@ -439,6 +458,157 @@ fn loadMangadexPages(manga_id: []const u8) bool {
 
     // MangaDex's CDN serves images without a Referer requirement, so leave
     // state.app.comic.referer empty — downloadSinglePage derives it per-origin.
+    return true;
+}
+
+// ── HeanCms/Iken source config → derived hosts ──
+
+/// The HeanCms API host derived from the installed site base (`https://x.com` →
+/// `https://api.x.com`). Null when the "heancms" source is not installed → the
+/// engine stays INERT. Routes through the tested heancms.apiHostFromBase.
+fn heancmsApiHost(out: []u8) ?[]const u8 {
+    const base = @import("../core/source_config.zig").get("heancms", "base") orelse return null;
+    return heancms.apiHostFromBase(base, out);
+}
+
+/// Optional cover/page CDN base for relative thumbnail/image paths. Returns "" when
+/// unconfigured — absolutizeCover then leaves absolute URLs alone (the common case
+/// for HeanCms, which usually stores absolute image URLs) and drops relatives.
+fn heancmsCdn(out: []u8) []const u8 {
+    if (@import("../core/source_config.zig").get("heancms", "cdn")) |c| {
+        if (c.len > 0 and c.len < out.len) {
+            @memcpy(out[0..c.len], c);
+            return out[0..c.len];
+        }
+    }
+    return "";
+}
+
+/// Resolve a HeanCms series slug into a readable page list, staging image URLs
+/// into `state.app.comic.page_urls` for the shared downloadPages() pipeline.
+/// Returns false if the series has no free chapter or the API errored.
+///
+/// Runs ON the fetchComicThread worker (never the UI thread). All JSON buffers
+/// are heap-allocated — a spawned thread's stack is only ~512KB (see CLAUDE.md).
+///
+/// Chain (all against the configured HeanCms API host):
+///   1. /series/{slug}                              → the numeric series id + title
+///   2. /chapter/query?series_id={id}&perPage=1000  → the first FREE chapter slug
+///   3. /series/{slug}/{chapterSlug}                → one image URL per page
+fn loadHeancmsPages(slug: []const u8) bool {
+    var api_buf: [256]u8 = undefined;
+    const api = heancmsApiHost(&api_buf) orelse {
+        logs.pushLog("warn", "comics", "HeanCms: source not installed (inert)", false);
+        return false;
+    };
+    var cdn_buf: [512]u8 = undefined;
+    const cdn = heancmsCdn(&cdn_buf);
+
+    // ── 1. Series detail → numeric id (+ title) ──
+    var detail_url_buf: [512]u8 = undefined;
+    const detail_url = heancms.buildDetailUrl(&detail_url_buf, api, slug) orelse return false;
+
+    const detail_buf = alloc.alloc(u8, 256 * 1024) catch return false;
+    defer alloc.free(detail_buf);
+    const detail_n = fetchUrl(detail_url, detail_buf);
+    if (detail_n == 0 or workers.isQuitting()) return false;
+
+    const series = heancms.parseSeriesDetail(detail_buf[0..detail_n]) orelse {
+        logs.pushLog("warn", "comics", "HeanCms: series detail unparseable", false);
+        return false;
+    };
+    if (series.id.len == 0) return false;
+    // Copy id + title out of detail_buf before it is reused/freed.
+    var id_buf: [24]u8 = undefined;
+    if (series.id.len > id_buf.len) return false;
+    @memcpy(id_buf[0..series.id.len], series.id);
+    const series_id = id_buf[0..series.id.len];
+
+    var series_title_buf: [256]u8 = undefined;
+    var series_title_len: usize = 0;
+    {
+        var raw: [256]u8 = undefined;
+        const rn = heancms.jsonUnescape(series.title, &raw);
+        series_title_len = @min(rn, series_title_buf.len);
+        @memcpy(series_title_buf[0..series_title_len], raw[0..series_title_len]);
+    }
+
+    // ── 2. Chapter list → first FREE chapter (paywalled ones skipped) ──
+    var chap_url_buf: [512]u8 = undefined;
+    const chap_url = heancms.buildChapterListUrl(&chap_url_buf, api, series_id, 1) orelse return false;
+
+    const chap_buf = alloc.alloc(u8, 512 * 1024) catch return false;
+    defer alloc.free(chap_buf);
+    const chap_n = fetchUrl(chap_url, chap_buf);
+    if (chap_n == 0 or workers.isQuitting()) return false;
+
+    const chapter = heancms.firstFreeChapter(chap_buf[0..chap_n]) orelse {
+        logs.pushLog("warn", "comics", "HeanCms: no free chapter (all paywalled?)", false);
+        return false;
+    };
+    var chap_slug_buf: [160]u8 = undefined;
+    if (chapter.slug.len > chap_slug_buf.len) return false;
+    @memcpy(chap_slug_buf[0..chapter.slug.len], chapter.slug);
+    const chap_slug = chap_slug_buf[0..chapter.slug.len];
+
+    var chap_name_buf: [64]u8 = undefined;
+    var chap_name_len: usize = 0;
+    if (chapter.name.len > 0) {
+        var raw: [64]u8 = undefined;
+        const rn = heancms.jsonUnescape(chapter.name, &raw);
+        chap_name_len = @min(rn, chap_name_buf.len);
+        @memcpy(chap_name_buf[0..chap_name_len], raw[0..chap_name_len]);
+    }
+
+    // ── 3. Page images (new chapter_data.images OR old data[] shape) ──
+    var pages_url_buf: [512]u8 = undefined;
+    const pages_url = heancms.buildPagesUrl(&pages_url_buf, api, slug, chap_slug) orelse return false;
+
+    const pages_buf = alloc.alloc(u8, 512 * 1024) catch return false;
+    defer alloc.free(pages_buf);
+    const pages_n = fetchUrl(pages_url, pages_buf);
+    if (pages_n == 0 or workers.isQuitting()) return false;
+
+    const images = heancms.pagesNode(pages_buf[0..pages_n]) orelse {
+        logs.pushLog("warn", "comics", "HeanCms: chapter has no readable pages", false);
+        return false;
+    };
+
+    const max_pages = state.app.comic.page_urls.len; // 128
+    var count: usize = 0;
+    var it = heancms.StrIter{ .buf = images };
+    while (it.next()) |raw_img| {
+        if (count >= max_pages) break;
+        // Images arrive JSON-escaped (\/ in URLs) — unescape, then absolutize.
+        var un_buf: [640]u8 = undefined;
+        const un = heancms.jsonUnescape(raw_img, &un_buf);
+        var page_buf: [640]u8 = undefined;
+        const page_url = heancms.absolutizeCover(cdn, un_buf[0..un], &page_buf) orelse continue;
+        if (page_url.len >= state.app.comic.page_urls[count].len) continue;
+        @memcpy(state.app.comic.page_urls[count][0..page_url.len], page_url);
+        state.app.comic.page_url_lens[count] = page_url.len;
+        count += 1;
+    }
+    if (count == 0) return false;
+    state.app.comic.page_count = count;
+
+    // Reader header: "Series · Chapter N". The card click already staged the
+    // series title; prefer it, else the detail title, else "HeanCms".
+    var t_buf: [320]u8 = undefined;
+    const existing = state.app.comic.title[0..state.app.comic.title_len];
+    const base_title: []const u8 = if (existing.len > 0)
+        existing
+    else if (series_title_len > 0)
+        series_title_buf[0..series_title_len]
+    else
+        "HeanCms";
+    const t = if (chap_name_len > 0)
+        std.fmt.bufPrint(&t_buf, "{s} · {s}", .{ base_title, chap_name_buf[0..chap_name_len] }) catch base_title
+    else
+        base_title;
+    const tl = @min(t.len, state.app.comic.title.len);
+    @memcpy(state.app.comic.title[0..tl], t[0..tl]);
+    state.app.comic.title_len = tl;
     return true;
 }
 
@@ -847,7 +1017,11 @@ var more_available: bool = true;
 //     makes the tab non-empty on a fresh install.
 //
 // `all` queries every source that is actually live and concatenates the rows.
-const Source = enum { all, readallcomics, mangadex };
+//   • heancms      — the HeanCms/Iken JSON-API family (modern Next.js manhwa
+//     sites). Its site base + optional cover CDN come from source_config
+//     ("heancms"/"base", "heancms"/"cdn"), written by the plugin manager. Not
+//     installed → buildQueryUrl gets no api host → the source is INERT.
+const Source = enum { all, readallcomics, mangadex, heancms };
 var active_source: Source = .all;
 
 /// Does this source participate in the current selection?
@@ -987,6 +1161,103 @@ fn fetchMangadexPage(query: []const u8, offset: u32, gen: u32, start: usize) usi
     return parseMangadexResults(json_buf[0..n], gen, start);
 }
 
+/// Fetch + merge ONE HeanCms `/query` page (1-based `page`), writing from slot
+/// `start`. Returns the number of new rows (0 when "heancms" is not installed /
+/// errored). Worker-thread only; the JSON buffer is heap-allocated (a spawned
+/// thread's stack is ~512KB — see CLAUDE.md).
+fn fetchHeancmsPage(query: []const u8, page: u32, gen: u32, start: usize) usize {
+    var api_buf: [256]u8 = undefined;
+    const api = heancmsApiHost(&api_buf) orelse return 0; // inert (not installed)
+
+    var url_buf: [1024]u8 = undefined;
+    const url = heancms.buildQueryUrl(&url_buf, api, query, page, heancms.ORDER_POPULAR) orelse return 0;
+
+    const json_buf = alloc.alloc(u8, 512 * 1024) catch return 0;
+    defer alloc.free(json_buf);
+    const n = fetchUrl(url, json_buf);
+    if (n == 0) return 0;
+
+    if (search_gen.load(.acquire) != gen) return 0;
+    return parseHeancmsResults(json_buf[0..n], gen, start);
+}
+
+/// Parse a HeanCms `/query` response into sr_* from slot `start`. Returns the
+/// number of NEW rows appended. Mirrors parseMangadexResults exactly: worker-
+/// thread only, it NEVER frees textures/pixels — it stamps each slot with `gen`
+/// and writes the cover URL, leaving reclaimStaleCovers() the sole texture owner.
+///
+/// Cards store a `heancms:<series_slug>` pseudo-URL; fetchComicThread routes on
+/// that prefix into the JSON reader chain (loadHeancmsPages) not the scraper.
+fn parseHeancmsResults(json: []const u8, gen: u32, start: usize) usize {
+    const data = heancms.findJsonNode(json, "\"data\"") orelse return 0;
+    if (data.len == 0 or data[0] != '[') return 0;
+
+    // Cover CDN resolved once for the whole page (absolute thumbnails ignore it).
+    var cdn_buf: [512]u8 = undefined;
+    const cdn = heancmsCdn(&cdn_buf);
+
+    var count: usize = start;
+    var it = heancms.ObjIter{ .buf = data };
+    while (it.next()) |obj| {
+        if (count >= MAX_SEARCH_RESULTS) break;
+        const entry = heancms.parseSeriesEntry(obj) orelse continue;
+
+        var url_buf: [160]u8 = undefined;
+        const route = heancms.buildRouteUrl(&url_buf, entry.slug) orelse continue;
+        if (route.len > sr_urls[count].len) continue;
+
+        // Titles arrive JSON-escaped (\uXXXX for non-ASCII) — decode, then clamp
+        // to a UTF-8 boundary so a truncated multi-byte char can't reach dvui.
+        var t_raw: [512]u8 = undefined;
+        const t_len = heancms.jsonUnescape(entry.title, &t_raw);
+        var t_safe: [256]u8 = undefined;
+        const title = @import("../core/text.zig").safeUtf8Buf(t_raw[0..@min(t_len, 255)], &t_safe);
+        if (title.len == 0) continue;
+
+        // De-dupe against every row already collected (`all` concatenates sources,
+        // and a paginated page can resurface a title).
+        {
+            var dup = false;
+            var d: usize = 0;
+            while (d < count) : (d += 1) {
+                if (std.mem.eql(u8, sr_urls[d][0..sr_url_lens[d]], route)) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) continue;
+        }
+
+        @memcpy(sr_urls[count][0..route.len], route);
+        sr_url_lens[count] = route.len;
+        const tlen = @min(title.len, sr_titles[count].len);
+        @memcpy(sr_titles[count][0..tlen], title[0..tlen]);
+        sr_title_lens[count] = tlen;
+
+        // Cover (thumbnail may be absolute or a CDN-relative path; may be absent).
+        sr_cover_url_lens[count] = 0;
+        if (entry.thumbnail.len > 0) {
+            var raw_thumb: [640]u8 = undefined;
+            const rn = heancms.jsonUnescape(entry.thumbnail, &raw_thumb);
+            var cov_buf: [640]u8 = undefined;
+            if (heancms.absolutizeCover(cdn, raw_thumb[0..rn], &cov_buf)) |cov| {
+                if (cov.len < sr_cover_urls[count].len) {
+                    @memcpy(sr_cover_urls[count][0..cov.len], cov);
+                    sr_cover_url_lens[count] = cov.len;
+                }
+            }
+        }
+        sr_cover_gen[count] = gen;
+        sr_cover_failed[count] = false; // fresh URL → let the cover retry
+
+        count += 1;
+    }
+
+    if (search_gen.load(.acquire) != gen) return 0;
+    sr_count = count;
+    return count - start;
+}
+
 /// Initial search: query every ACTIVE source and concatenate their rows.
 /// readallcomics goes first (when installed) so an existing user's listing is
 /// unchanged; MangaDex fills the rest — and is the whole listing on a fresh
@@ -1006,6 +1277,14 @@ fn searchWorker(gen: u32) void {
     }
     if (sourceActive(.mangadex)) {
         filled += fetchMangadexPage(query, 0, gen, filled);
+    }
+    // A newer search may have landed while MangaDex was in flight.
+    if (search_gen.load(.acquire) != gen) {
+        logs.pushLog("info", "comics", "Comic search superseded (stale dropped)", false);
+        return;
+    }
+    if (sourceActive(.heancms)) {
+        filled += fetchHeancmsPage(query, 1, gen, filled);
     }
 
     // Only the LAST source's page size can tell us whether more rows exist; a
@@ -1047,6 +1326,11 @@ fn loadMoreWorker(gen: u32) void {
         // MangaDex paginates by row offset, not page number: page N starts at
         // (N-1)*RESULTS_PER_PAGE.
         added += fetchMangadexPage(query, (next_page - 1) * RESULTS_PER_PAGE, gen, sr_count);
+    }
+    if (search_gen.load(.acquire) != gen) return;
+    if (sourceActive(.heancms)) {
+        // HeanCms paginates by 1-based page number (its /query perPage=12).
+        added += fetchHeancmsPage(query, next_page, gen, sr_count);
     }
 
     if (added == 0 or added < RESULTS_PER_PAGE) more_available = false;
