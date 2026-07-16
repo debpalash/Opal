@@ -321,6 +321,34 @@ fn renderControlBar() void {
         }
     }
 
+    // ── Paste-a-URL download: the HTTP downloader otherwise only has the
+    // remote API + browser interception as entry points. Reads the clipboard
+    // on click; accepts http(s) URLs (magnets go to the torrent path instead). ──
+    if (browse_subdir_len == 0) {
+        if (dvui.button(@src(), "＋ URL", .{}, .{
+            .id_extra = 90500,
+            .color_fill = dvui.Color{ .r = 24, .g = 30, .b = 44, .a = 255 },
+            .color_text = theme.colors.accent,
+            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+            .corner_radius = dvui.Rect.all(theme.radius.pill),
+            .gravity_y = 0.5,
+        })) {
+            const clip = std.mem.trim(u8, dvui.clipboardText(), " \t\r\n");
+            if (std.mem.startsWith(u8, clip, "http://") or std.mem.startsWith(u8, clip, "https://")) {
+                if (httpdl.startUrl(clip)) {
+                    state.showToast("Download started from clipboard URL");
+                } else {
+                    state.showToastTyped("Couldn't start that download", .err);
+                }
+            } else if (std.mem.startsWith(u8, clip, "magnet:")) {
+                search.loadTorrentToPlayer(clip);
+            } else {
+                state.showToastTyped("Clipboard isn't an http(s) URL", .warning);
+            }
+        }
+    }
+
     // Flexible spacer — pushes the speed limit to the right edge.
     {
         var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
