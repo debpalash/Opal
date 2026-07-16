@@ -320,6 +320,8 @@ pub fn appDeinit() void {
     state.app.tmdb.watching.deinit(@import("core/alloc.zig").allocator);
     // Frees per-item thumb_pixels + the index-aligned date arrays, then the list.
     @import("services/youtube.zig").deinit();
+    // Playlist drawer caches (filter match flags + shuffle order).
+    @import("player/playlist.zig").deinitModule();
 
     // Join search thread so its defers (free query, deinit argv) run cleanly
     search.search_abort.store(true, .release);

@@ -35,6 +35,8 @@ pub fn save() void {
     setKey("seek_sync", if (state.app.seek_sync) "1" else "0");
     setKey("hwdec2", if (state.app.hwdec_enabled) "1" else "0");
     setKey("auto_advance", if (state.app.auto_advance) "1" else "0");
+    setKey("playlist_repeat", @tagName(state.app.playlist_repeat));
+    setKey("playlist_shuffle", if (state.app.playlist_shuffle) "1" else "0");
     setKey("nsfw_filter", if (state.app.nsfw_filter_enabled) "1" else "0");
     setKey("auto_download_subs", if (state.app.auto_download_subs) "1" else "0");
     setKey("save_path", state.app.save_path_buf[0..state.app.save_path_len]);
@@ -224,6 +226,11 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         // hw-decode-on default (or an explicit hwdec2 row) win.
     } else if (std.mem.eql(u8, key, "auto_advance")) {
         state.app.auto_advance = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "playlist_repeat")) {
+        const RepeatMode = @import("../player/playlist_pure.zig").RepeatMode;
+        state.app.playlist_repeat = std.meta.stringToEnum(RepeatMode, val) orelse .off;
+    } else if (std.mem.eql(u8, key, "playlist_shuffle")) {
+        state.app.playlist_shuffle = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "nsfw_filter")) {
         state.app.nsfw_filter_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "auto_download_subs")) {

@@ -4,6 +4,12 @@ const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const icons = @import("icons");
 const alloc = @import("../core/alloc.zig").allocator;
+const pure = @import("playlist_pure.zig");
+const m3u = @import("m3u.zig");
+const io_global = @import("../core/io_global.zig");
+const logs = @import("../core/logs.zig");
+
+const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
 var filter_buf: [128]u8 = std.mem.zeroes([128]u8);
 
@@ -19,6 +25,13 @@ var filter_matches: std.ArrayListUnmanaged(bool) = .empty;
 
 const PlaylistTab = enum { playlist, queue };
 var active_tab: PlaylistTab = .queue;
+
+/// Free module-level caches (called from appDeinit — keeps the shutdown
+/// leak check clean).
+pub fn deinitModule() void {
+    filter_matches.deinit(alloc);
+    shuffle_order.deinit(alloc);
+}
 
 pub fn renderDrawer() void {
     if (!state.app.playlist_drawer_open) return;
@@ -94,6 +107,118 @@ fn renderQueueTab() void {
 }
 
 // ══════════════════════════════════════════════════════════
+// Playback control — shuffle / repeat / advance
+// (decision logic lives in playlist_pure.zig; this is the wiring)
+// ══════════════════════════════════════════════════════════
+
+// Shuffle permutation over the CURRENT playlist — rebuilt when the entry
+// count changes or shuffle is toggled on. UI-thread only (drawer + the
+// player event pump both run on the frame thread).
+var shuffle_order: std.ArrayListUnmanaged(u32) = .empty;
+
+fn rebuildShuffleOrder(count: usize) void {
+    shuffle_order.resize(alloc, count) catch return;
+    // Deterministic given a seed (tests seed playlist_pure directly);
+    // production seeds from the wall clock.
+    pure.buildShuffleOrder(shuffle_order.items, @bitCast(io_global.milliTimestamp()));
+}
+
+fn shuffleOrderSlice(count: usize) ?[]const u32 {
+    if (!state.app.playlist_shuffle or count == 0) return null;
+    if (shuffle_order.items.len != count) rebuildShuffleOrder(count);
+    if (shuffle_order.items.len != count) return null; // resize failed
+    return shuffle_order.items;
+}
+
+pub const AdvanceResult = enum { started, end_of_playlist, not_playlist };
+
+/// Advance the M3U playlist on player `p` (dir > 0 → next, < 0 → previous).
+/// The index decision routes through playlist_pure.nextIndex/prevIndex so
+/// repeat one/all/off and the seeded shuffle behave exactly as tested.
+/// `.not_playlist` means what's playing didn't come from the playlist —
+/// callers fall back to their old behavior (queue auto-advance).
+pub fn advance(p: anytype, dir: i32) AdvanceResult {
+    const pl = state.app.playlist orelse return .not_playlist;
+    const count = pl.entries.items.len;
+    if (count == 0) return .not_playlist;
+    const cur = findCurrent(p, pl) orelse return .not_playlist;
+    const order = shuffleOrderSlice(count);
+    const target = if (dir >= 0)
+        pure.nextIndex(cur, count, state.app.playlist_repeat, order)
+    else
+        pure.prevIndex(cur, count, state.app.playlist_repeat, order);
+    const idx = target orelse return .end_of_playlist;
+    playEntryOn(p, idx);
+    return .started;
+}
+
+fn findCurrent(p: anytype, pl: *const m3u.M3UPlaylist) ?usize {
+    const url = p.source_url[0..p.source_url_len];
+    if (url.len == 0) return null;
+    for (pl.entries.items, 0..) |e, i|
+        if (std.mem.eql(u8, e.url, url)) return i;
+    return null;
+}
+
+fn playEntryOn(p: anytype, idx: usize) void {
+    const pl = state.app.playlist orelse return;
+    if (idx >= pl.entries.items.len) return;
+    const entry = pl.entries.items[idx];
+    p.current_torrent_id = -1;
+    p.is_torrent = false;
+    const copy_len = @min(entry.url.len, p.source_url.len - 1);
+    @memcpy(p.source_url[0..copy_len], entry.url[0..copy_len]);
+    p.source_url[copy_len] = 0;
+    p.source_url_len = copy_len;
+    p.load_file(@ptrCast(p.source_url[0..copy_len].ptr));
+}
+
+/// Swap entry `idx` one slot up (dir < 0) or down (dir > 0). No-op at ends.
+fn moveEntry(idx: usize, dir: i32) void {
+    const pl = state.app.playlist orelse return;
+    const items = pl.entries.items;
+    if (idx >= items.len) return;
+    const j: usize = if (dir < 0)
+        (if (idx == 0) return else idx - 1)
+    else
+        (if (idx + 1 >= items.len) return else idx + 1);
+    std.mem.swap(m3u.M3UEntry, &items[idx], &items[j]);
+    filter_cache_valid = false; // cached match flags are per-index
+}
+
+/// Export the current playlist as M3U to ~/.config/opal/playlists/.
+fn savePlaylist() void {
+    const pl = state.app.playlist orelse return;
+    const text = pl.serialize(alloc) catch {
+        logs.pushLog("error", "m3u", "Playlist save failed: out of memory", true);
+        return;
+    };
+    defer alloc.free(text);
+
+    var cfg_buf: [512]u8 = undefined;
+    const cfg = @import("../core/paths.zig").configDir(&cfg_buf);
+    var dir_buf: [600]u8 = undefined;
+    const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/playlists", .{cfg}) catch return;
+    io_global.makeDirAbsolute(dir_path) catch {}; // already exists → fine
+    var path_buf: [700]u8 = undefined;
+    const file_path = std.fmt.bufPrint(&path_buf, "{s}/playlist-{d}.m3u", .{
+        dir_path, io_global.timestamp(),
+    }) catch return;
+
+    const f = io_global.createFileAbsolute(file_path, .{}) catch {
+        logs.pushLog("error", "m3u", "Playlist save failed: cannot create file", true);
+        return;
+    };
+    defer io_global.closeFile(f);
+    io_global.writeAll(f, text) catch {
+        logs.pushLog("error", "m3u", "Playlist save failed: write error", true);
+        return;
+    };
+    logs.pushLog("info", "m3u", file_path, false); // exact save location
+    state.showToast("Playlist saved (see Logs for path)");
+}
+
+// ══════════════════════════════════════════════════════════
 // Playlist Tab (M3U / IPTV channels)
 // ══════════════════════════════════════════════════════════
 
@@ -127,6 +252,60 @@ fn renderPlaylistTab() void {
             .corner_radius = theme.dims.rad_sm,
         });
         te.deinit();
+    }
+
+    // Toolbar: shuffle | repeat (off→all→one) | prev/next | save
+    {
+        var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = 12, .y = 0, .w = 12, .h = 4 },
+        });
+        defer bar.deinit();
+
+        if (dvui.buttonIcon(@src(), "pl-shuffle", icons.tvg.lucide.shuffle, .{}, .{}, .{
+            .color_text = if (state.app.playlist_shuffle) theme.colors.accent else theme.colors.text_secondary,
+            .color_fill = transparent,
+        })) {
+            state.app.playlist_shuffle = !state.app.playlist_shuffle;
+            // Fresh permutation each time shuffle turns on.
+            if (state.app.playlist_shuffle) rebuildShuffleOrder(pl.entries.items.len);
+            state.app.config_dirty = true;
+        }
+
+        const rep = state.app.playlist_repeat;
+        const rep_icon = if (rep == .one) icons.tvg.lucide.@"repeat-1" else icons.tvg.lucide.repeat;
+        if (dvui.buttonIcon(@src(), "pl-repeat", rep_icon, .{}, .{}, .{
+            .color_text = if (rep == .off) theme.colors.text_secondary else theme.colors.accent,
+            .color_fill = transparent,
+        })) {
+            state.app.playlist_repeat = rep.cycled();
+            state.app.config_dirty = true;
+        }
+
+        // Prev / Next — same pure advance path the auto-advance uses.
+        if (dvui.buttonIcon(@src(), "pl-prev", icons.tvg.lucide.@"skip-back", .{}, .{}, .{
+            .color_text = theme.colors.text_secondary,
+            .color_fill = transparent,
+        })) {
+            if (state.app.active_player_idx < state.app.players.items.len)
+                _ = advance(state.app.players.items[state.app.active_player_idx], -1);
+        }
+        if (dvui.buttonIcon(@src(), "pl-next", icons.tvg.lucide.@"skip-forward", .{}, .{}, .{
+            .color_text = theme.colors.text_secondary,
+            .color_fill = transparent,
+        })) {
+            if (state.app.active_player_idx < state.app.players.items.len)
+                _ = advance(state.app.players.items[state.app.active_player_idx], 1);
+        }
+
+        { var s = dvui.box(@src(), .{}, .{ .expand = .horizontal }); s.deinit(); }
+
+        if (dvui.buttonIcon(@src(), "pl-save", icons.tvg.lucide.save, .{}, .{}, .{
+            .color_text = theme.colors.text_secondary,
+            .color_fill = transparent,
+        })) {
+            savePlaylist();
+        }
     }
 
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .margin = dvui.Rect.all(12) });
@@ -190,7 +369,7 @@ fn renderPlaylistTab() void {
         }
         rendered += 1;
 
-        var row = dvui.box(@src(), .{ .dir = .vertical }, .{
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i,
             .expand = .horizontal,
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
@@ -230,16 +409,25 @@ fn renderPlaylistTab() void {
         });
 
         if (clicked and state.app.active_player_idx < state.app.players.items.len) {
-            const p = state.app.players.items[state.app.active_player_idx];
-            p.current_torrent_id = -1;
-            p.is_torrent = false;
-            
-            const copy_len = @min(entry.url.len, p.source_url.len - 1);
-            @memcpy(p.source_url[0..copy_len], entry.url[0..copy_len]);
-            p.source_url[copy_len] = 0;
-            p.source_url_len = copy_len;
-            
-            p.load_file(@ptrCast(p.source_url[0..copy_len].ptr));
+            playEntryOn(state.app.players.items[state.app.active_player_idx], i);
+        }
+
+        // Reorder: move up / move down (no-ops at the ends).
+        if (dvui.buttonIcon(@src(), "pl-move-up", icons.tvg.lucide.@"chevron-up", .{}, .{}, .{
+            .id_extra = i,
+            .color_text = if (i > 0) theme.colors.text_secondary else theme.colors.border_subtle,
+            .color_fill = transparent,
+            .gravity_y = 0.5,
+        })) {
+            moveEntry(i, -1);
+        }
+        if (dvui.buttonIcon(@src(), "pl-move-down", icons.tvg.lucide.@"chevron-down", .{}, .{}, .{
+            .id_extra = i,
+            .color_text = if (i + 1 < pl.entries.items.len) theme.colors.text_secondary else theme.colors.border_subtle,
+            .color_fill = transparent,
+            .gravity_y = 0.5,
+        })) {
+            moveEntry(i, 1);
         }
     }
 }

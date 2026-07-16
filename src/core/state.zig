@@ -395,6 +395,11 @@ pub const AppState = struct {
     fullscreen_player_idx: ?usize = null,
     pending_remove_player_idx: i32 = -1,
     auto_advance: bool = true,
+    // ── M3U playlist playback behavior (drawer Playlist tab) ──
+    // Advance decisions route through player/playlist_pure.zig
+    // (nextIndex/prevIndex). Persisted as config keys like auto_advance.
+    playlist_repeat: @import("../player/playlist_pure.zig").RepeatMode = .off,
+    playlist_shuffle: bool = false,
 
     // ── Recently closed players (Ctrl+Shift+T undo stack) ──
     closed_urls: [16][2048]u8 = std.mem.zeroes([16][2048]u8),
@@ -480,7 +485,8 @@ pub const AppState = struct {
     vf_contrast: i32 = 0,
     vf_saturation: i32 = 0,
     vf_gamma: i32 = 0,
-    playlist: ?*const @import("../player/m3u.zig").M3UPlaylist = null,
+    // Mutable: the drawer's move-up/move-down reorder swaps entries in place.
+    playlist: ?*@import("../player/m3u.zig").M3UPlaylist = null,
     thumb_state: thumbnail.ThumbnailState = thumbnail.ThumbnailState.init(),
     sub_engine: subtitles_mod.SubtitleEngine = subtitles_mod.SubtitleEngine.init(),
 

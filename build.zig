@@ -775,6 +775,19 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_torznab_pure).step);
 
+    // Playlist advance engine — nextIndex/prevIndex across repeat modes
+    // (off/all/one) plus the seeded deterministic shuffle permutation.
+    // player.zig's auto-advance and the drawer's prev/next buttons route
+    // through these via playlist.zig.
+    const test_playlist_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/playlist_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_playlist_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main

@@ -1047,9 +1047,20 @@ pub fn updateTorrentBackgroundTasks() void {
                         p.last_error_time = now;
                     }
                 } else if (p.current_torrent_id < 0 and state.app.auto_advance) {
-                    // Non-torrent content ended — auto-play next from queue
-                    const queue_svc = @import("../services/queue.zig");
-                    queue_svc.playNextUnplayed(p);
+                    // Non-torrent content ended. If it came from the M3U
+                    // playlist, advance there (repeat one/all/off + shuffle,
+                    // decided by playlist_pure.nextIndex via playlist.advance).
+                    // A finished playlist (repeat off) stops rather than
+                    // hopping into unrelated queue items; only content that
+                    // was never in the playlist falls back to the queue.
+                    const playlist_ui = @import("playlist.zig");
+                    switch (playlist_ui.advance(p, 1)) {
+                        .started, .end_of_playlist => {},
+                        .not_playlist => {
+                            const queue_svc = @import("../services/queue.zig");
+                            queue_svc.playNextUnplayed(p);
+                        },
+                    }
                 }
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_PROPERTY_CHANGE) {
                 // Update cached property mirrors so the render hot path avoids
