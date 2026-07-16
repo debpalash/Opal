@@ -583,6 +583,28 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         sendJson(stream, "{\"ok\":true}");
         return;
     }
+    // Single-instance forwarding: a second `opal <path>` launch posts its
+    // argument here and exits (main.zig forwardToRunningInstance). Deferred to
+    // the UI thread instead of driving mpv directly so the open runs through
+    // browser.loadContent exactly like a direct CLI launch (magnet/torrent/
+    // playlist dispatch included).
+    if (std.mem.eql(u8, api_path, "/open")) {
+        if (getQueryParam(query, "path")) |raw| {
+            var dec_buf: [2048]u8 = undefined;
+            const decoded = urlDecode(raw, &dec_buf) orelse raw;
+            if (decoded.len > 0) {
+                state.app.remote_open_lock.lock();
+                const n = @min(decoded.len, state.app.remote_open_path.len);
+                @memcpy(state.app.remote_open_path[0..n], decoded[0..n]);
+                state.app.remote_open_len = n;
+                state.app.remote_open_ready = true;
+                state.app.remote_open_lock.unlock();
+                state.wakeUi(); // idle UI loop won't run a frame otherwise
+            }
+        }
+        sendJson(stream, "{\"ok\":true,\"action\":\"open\"}");
+        return;
+    }
     if (std.mem.eql(u8, api_path, "/settings/open")) {
         state.app.settings_open = true;
         sendJson(stream, "{\"ok\":true,\"action\":\"settings_open\"}");

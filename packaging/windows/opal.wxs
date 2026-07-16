@@ -75,10 +75,77 @@
       </Component>
     </DirectoryRef>
 
+    <DirectoryRef Id="INSTALLFOLDER">
+      <!--
+        File associations, registered the Default Programs way (HKLM
+        RegisteredApplications + Capabilities\FileAssociations): Opal appears
+        in "Open with" / Settings > Default apps for every extension below but
+        does NOT hijack any existing default - the user (or SetUserFTA) picks
+        it. One shared ProgId; the exe path is written as a string because the
+        payload files are heat-harvested (no stable File/@Id to reference).
+      -->
+      <Component Id="FileAssociations" Guid="E3926C61-52C9-4486-BFCB-41CC8508164C">
+        <RegistryValue Root="HKLM" Key="Software\RegisteredApplications"
+                       Name="Opal" Type="string"
+                       Value="Software\Opal\Capabilities" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities"
+                       Name="ApplicationName" Type="string" Value="Opal" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities"
+                       Name="ApplicationDescription" Type="string"
+                       Value="Opal - play everything. The evolved media player." />
+
+        <!-- Shared ProgId with the open verb. -->
+        <RegistryValue Root="HKLM" Key="Software\Classes\Opal.MediaFile"
+                       Type="string" Value="Opal Media File" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Opal.MediaFile\DefaultIcon"
+                       Type="string" Value="&quot;[INSTALLFOLDER]opal.exe&quot;,0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Opal.MediaFile\shell\open\command"
+                       Type="string" Value="&quot;[INSTALLFOLDER]opal.exe&quot; &quot;%1&quot;" />
+
+        <!-- Capabilities map + per-extension OpenWithProgids (Open with menu). -->
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".mkv" Type="string" Value="Opal.MediaFile" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".mp4" Type="string" Value="Opal.MediaFile" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".m4v" Type="string" Value="Opal.MediaFile" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".avi" Type="string" Value="Opal.MediaFile" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".mov" Type="string" Value="Opal.MediaFile" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".webm" Type="string" Value="Opal.MediaFile" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".ts" Type="string" Value="Opal.MediaFile" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".mp3" Type="string" Value="Opal.MediaFile" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".flac" Type="string" Value="Opal.MediaFile" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".m4a" Type="string" Value="Opal.MediaFile" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".opus" Type="string" Value="Opal.MediaFile" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".ogg" Type="string" Value="Opal.MediaFile" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".wav" Type="string" Value="Opal.MediaFile" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".mka" Type="string" Value="Opal.MediaFile" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".m3u" Type="string" Value="Opal.MediaFile" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".m3u8" Type="string" Value="Opal.MediaFile" />
+        <RegistryValue Root="HKLM" Key="Software\Opal\Capabilities\FileAssociations" Name=".torrent" Type="string" Value="Opal.MediaFile" />
+
+        <RegistryValue Root="HKLM" Key="Software\Classes\.mkv\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.mp4\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.m4v\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.avi\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.mov\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.webm\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.ts\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.mp3\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.flac\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.m4a\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.opus\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.ogg\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.wav\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.mka\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.m3u\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.m3u8\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.torrent\OpenWithProgids" Name="Opal.MediaFile" Type="string" Value="" />
+      </Component>
+    </DirectoryRef>
+
     <Feature Id="MainFeature" Title="Opal" Level="1" AllowAdvertise="no">
       <!-- OpalFiles is emitted by heat.exe at build time. -->
       <ComponentGroupRef Id="OpalFiles" />
       <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="FileAssociations" />
     </Feature>
   </Product>
 </Wix>
