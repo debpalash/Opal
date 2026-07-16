@@ -57,7 +57,7 @@ pub fn refreshOnce() void {
 }
 
 fn curlInto(url: []const u8, buf: []u8) usize {
-    var child = io.Child.init(&.{ "curl", "-s", "--max-time", "12", url }, alloc);
+    var child = io.Child.init(&.{ "curl", "-s", "--connect-timeout", "3", "--max-time", "8", url }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     child.spawn() catch return 0;

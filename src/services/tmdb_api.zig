@@ -220,10 +220,14 @@ pub var tmdb_https_blocked: std.atomic.Value(bool) = std.atomic.Value(bool).init
 
 fn curlIntoOnce(url: []const u8, auth_header: []const u8, buf: []u8) usize {
     const io_g = @import("../core/io_global.zig");
+    // --connect-timeout bounds a dead/slow host to 3s on connect instead of
+    // burning the full --max-time; --max-time trimmed to 8s for interactive
+    // fetches. Without connect-timeout a black-holed host stalled the route
+    // for the whole 12s (× retries × http/https fallback).
     var child = if (auth_header.len > 0)
-        io_g.Child.init(&.{ "curl", "-s", "-H", auth_header, "--max-time", "12", url }, alloc)
+        io_g.Child.init(&.{ "curl", "-s", "--connect-timeout", "3", "-H", auth_header, "--max-time", "8", url }, alloc)
     else
-        io_g.Child.init(&.{ "curl", "-s", "--max-time", "12", url }, alloc);
+        io_g.Child.init(&.{ "curl", "-s", "--connect-timeout", "3", "--max-time", "8", url }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     child.spawn() catch return 0;
@@ -299,10 +303,10 @@ pub fn tmdbApiInto(path_query: []const u8, key: []const u8, buf: []u8) usize {
     // always called from a background worker (curl itself already blocks up
     // to 12s/attempt), never the UI thread.
     var attempt: u8 = 0;
-    while (attempt < 3) : (attempt += 1) {
+    while (attempt < 2) : (attempt += 1) {
         const n = curlFallbackInto(url, auth, buf);
         if (n > 0) return n;
-        if (attempt < 2) @import("../core/io_global.zig").sleep(400 * std.time.ns_per_ms);
+        if (attempt < 1) @import("../core/io_global.zig").sleep(250 * std.time.ns_per_ms);
     }
     return 0;
 }
@@ -319,10 +323,10 @@ fn httpGet(url: []const u8, bearer_token: []const u8) ?[]u8 {
     // (and latch it empty). Always on a detached worker thread (curl blocks), so
     // the backoff never touches the UI thread.
     var attempt: u8 = 0;
-    while (attempt < 3) : (attempt += 1) {
+    while (attempt < 2) : (attempt += 1) {
         const n = curlFallbackInto(url, auth, buf);
         if (n > 0) return alloc.dupe(u8, buf[0..n]) catch null;
-        if (attempt < 2) @import("../core/io_global.zig").sleep(400 * std.time.ns_per_ms);
+        if (attempt < 1) @import("../core/io_global.zig").sleep(250 * std.time.ns_per_ms);
     }
     return null;
 }

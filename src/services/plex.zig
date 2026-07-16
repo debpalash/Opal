@@ -113,6 +113,7 @@ fn httpGet(url: []const u8, post: bool, tok: []const u8, buf: []u8) usize {
     const th = std.fmt.bufPrint(&tok_hdr, "X-Plex-Token: {s}", .{tok}) catch return 0;
     var argv_storage = [_][]const u8{
         "curl",                                       "-s",
+        "--connect-timeout",                          "3",
         "-H",                                         "Accept: application/json",
         "-H",                                         "X-Plex-Product: Opal",
         "-H",                                         "X-Plex-Client-Identifier: " ++ CLIENT_ID,

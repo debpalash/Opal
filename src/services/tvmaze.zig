@@ -41,7 +41,7 @@ var busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 /// curl `url` into `buf`, returning bytes read (0 on failure). TVmaze is a
 /// plain keyless HTTPS JSON API — no auth, no SNI-block dance needed.
 fn curlInto(url: []const u8, buf: []u8) usize {
-    var child = io.Child.init(&.{ "curl", "-s", "--max-time", "12", url }, alloc);
+    var child = io.Child.init(&.{ "curl", "-s", "--connect-timeout", "3", "--max-time", "8", url }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     child.spawn() catch return 0;

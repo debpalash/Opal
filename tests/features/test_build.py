@@ -179,6 +179,24 @@ def test_zig_unit():
     return "fail", f"exit {r.returncode}"
 
 
+@test("Content fetchers bound connect time", "Network")
+def test_curl_connect_timeout():
+    # PERF/hang guard — a black-holed source used to stall a whole route for
+    # the full --max-time (× retries × http/https fallback ≈ 70s). Every curl
+    # content fetcher must pass --connect-timeout so a dead host fails fast.
+    checks = {
+        "tmdb": '"--connect-timeout"' in _src("src/services/tmdb_api.zig"),
+        "calendar": '"--connect-timeout"' in _src("src/services/tv_calendar.zig"),
+        "tvmaze": '"--connect-timeout"' in _src("src/services/tvmaze.zig"),
+        "plex": '"--connect-timeout"' in _src("src/services/plex.zig"),
+        "podcasts": '"--connect-timeout"' in _src("src/services/podcasts.zig"),
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing --connect-timeout in: " + ", ".join(bad)
+    return "pass", "curl content fetchers bound connect time (dead host fails in ~3s)"
+
+
 @test("HTTP client seeds Client.now for TLS", "Network")
 def test_http_client_now():
     # REGRESSION — the app aborted with "attempt to use null value" the instant

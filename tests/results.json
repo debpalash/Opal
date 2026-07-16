@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-07-16T21:02:31",
-  "total": 204,
-  "passed": 194,
+  "timestamp": "2026-07-16T21:25:18",
+  "total": 205,
+  "passed": 195,
   "failed": 0,
   "warnings": 2,
   "skipped": 8,
@@ -55,7 +55,7 @@
       "skip": 0
     },
     "Network": {
-      "pass": 3,
+      "pass": 4,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -228,7 +228,7 @@
       "name": "Database Exists",
       "category": "Database",
       "status": "pass",
-      "detail": "Size: 25056.0 KB",
+      "detail": "Size: 26876.0 KB",
       "duration_ms": 0
     },
     {
@@ -236,7 +236,7 @@
       "category": "Database",
       "status": "pass",
       "detail": "74 config entries",
-      "duration_ms": 67
+      "duration_ms": 2
     },
     {
       "name": "Watch History Table",
@@ -285,7 +285,7 @@
       "category": "Database",
       "status": "pass",
       "detail": "962 cached posters",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Conversation Log Table",
@@ -404,13 +404,13 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 44.5 MB",
-      "duration_ms": 950
+      "duration_ms": 402
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "44.5 MB, built at 20:48:28",
+      "detail": "44.5 MB, built at 21:24:16",
       "duration_ms": 0
     },
     {
@@ -439,14 +439,14 @@
       "category": "Build",
       "status": "pass",
       "detail": "author credited across about/copyright/packaging surfaces",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 38
+      "duration_ms": 34
     },
     {
       "name": "Embedding Server Health",
@@ -474,7 +474,14 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 2360
+      "duration_ms": 2303
+    },
+    {
+      "name": "Content fetchers bound connect time",
+      "category": "Network",
+      "status": "pass",
+      "detail": "curl content fetchers bound connect time (dead host fails in ~3s)",
+      "duration_ms": 0
     },
     {
       "name": "HTTP client seeds Client.now for TLS",
@@ -509,28 +516,28 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 1222
+      "duration_ms": 1118
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "pass",
       "detail": "faster-whisper importable",
-      "duration_ms": 1462
+      "duration_ms": 1424
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 22
+      "duration_ms": 21
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 23
+      "duration_ms": 22
     },
     {
       "name": "Conversational: voice-server echo guard + live partials",
@@ -551,35 +558,35 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 26
+      "duration_ms": 24
     },
     {
       "name": "Compiles: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 24
+      "duration_ms": 23
     },
     {
       "name": "Compiles: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 24
+      "duration_ms": 23
     },
     {
       "name": "Compiles: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 25
+      "duration_ms": 24
     },
     {
       "name": "--check degrades: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 935
+      "duration_ms": 912
     },
     {
       "name": "--check degrades: opal-tts-server.py",
@@ -593,14 +600,14 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 1056
+      "duration_ms": 1008
     },
     {
       "name": "Tracked + compiles: tools/lang_server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "tracked + py_compile OK",
-      "duration_ms": 41
+      "duration_ms": 40
     },
     {
       "name": "Parakeet conversational self-install wired",
@@ -803,28 +810,28 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 3966
+      "duration_ms": 4023
     },
     {
       "name": "Cloud LLM Backend + No Silent Local Installs",
       "category": "AI Features",
       "status": "pass",
       "detail": "cloud providers + bearer auth + on-demand-only local models wired",
-      "duration_ms": 0
+      "duration_ms": 3
     },
     {
       "name": "Parakeet TDT Voice Backend Wired",
       "category": "AI Features",
       "status": "pass",
       "detail": "parakeet v2/v3 backends + downloads + settings rows wired",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Incognito Chat Leaves No Trace",
       "category": "AI Features",
       "status": "pass",
       "detail": "sinks guarded + retrieval skipped + composer toggle present",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Chat Console: Wrapped Transcript + Agent Steps",
@@ -838,7 +845,7 @@
       "category": "Enrichment",
       "status": "pass",
       "detail": "OMDb enrichment wired (parser+worker+UI+persist); key set=False",
-      "duration_ms": 2
+      "duration_ms": 6
     },
     {
       "name": "Local taste engine: activity + vectors + For You",
@@ -887,21 +894,21 @@
       "category": "Browser",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 32
+      "duration_ms": 56
     },
     {
       "name": "Bridge protocol selftest",
       "category": "Browser",
       "status": "pass",
       "detail": "framing + pump model OK",
-      "duration_ms": 28
+      "duration_ms": 29
     },
     {
       "name": "Browser bookmarks SQL matches schema",
       "category": "Browser",
       "status": "pass",
       "detail": "3 statements OK against schema",
-      "duration_ms": 2
+      "duration_ms": 0
     },
     {
       "name": "browser_pure registered in zig tests",
@@ -915,14 +922,14 @@
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 80
+      "duration_ms": 61
     },
     {
       "name": "Browser: CloakBrowser engine + upgrades",
       "category": "Browser",
       "status": "pass",
       "detail": "engine picker + find/zoom/downloads/history/reader wired",
-      "duration_ms": 56
+      "duration_ms": 57
     },
     {
       "name": "Single-Media Mode",
@@ -1006,7 +1013,7 @@
       "category": "Remote",
       "status": "pass",
       "detail": "hosted streaming + docker gate + CPU fixes wired",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Anime Seasons/Calendar/Tracking",
@@ -1573,7 +1580,7 @@
       "category": "Transfers",
       "status": "pass",
       "detail": "gallery-dl backend wired: pure\u2192service\u2192dispatch\u2192history+config. gallery-dl not installed (backend inert \u2014 pure tests cover logic)",
-      "duration_ms": 28
+      "duration_ms": 26
     },
     {
       "name": "VNDB visual-novel catalog",
@@ -1622,7 +1629,7 @@
       "category": "Network",
       "status": "pass",
       "detail": "anti-block fetch wired: pure(isBlocked/needsBrowser, no false-pos) \u2192 scrape_fetch \u2192 bridge fetchhtml on dedicated page; selftest ok",
-      "duration_ms": 56
+      "duration_ms": 57
     },
     {
       "name": "Scrapers routed through anti-block fetch",

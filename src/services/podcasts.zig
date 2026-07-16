@@ -355,7 +355,7 @@ fn percentEncode(src: []const u8, dst: []u8) []const u8 {
 /// filled slice (caller frees) or null on failure/empty. Large buffers stay off
 /// the worker stack (macOS 512KB limit).
 fn curl(url: []const u8, cap: usize) ?[]u8 {
-    const argv = [_][]const u8{ "curl", "-sL", "-A", agent, "--max-time", "15", url };
+    const argv = [_][]const u8{ "curl", "-sL", "--connect-timeout", "3", "-A", agent, "--max-time", "10", url };
     var child = io.Child.init(&argv, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
