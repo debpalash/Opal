@@ -67,22 +67,208 @@ fn looksLikeHost(s: []const u8) bool {
 }
 
 // ══════════════════════════════════════════════════════════
+// Engine selection (camoufox = Firefox-based, cloakbrowser = Chromium-based)
+// ══════════════════════════════════════════════════════════
+
+pub const Engine = enum { camoufox, cloakbrowser };
+
+/// Parse a persisted engine name; unknown/legacy values fall back to camoufox
+/// (the historical default) so a hand-edited config can't break the browser.
+pub fn engineFromString(s: []const u8) Engine {
+    return std.meta.stringToEnum(Engine, s) orelse .camoufox;
+}
+
+/// The pip package name for an engine (also its site-packages dir name).
+pub fn enginePipPackage(e: Engine) []const u8 {
+    return switch (e) {
+        .camoufox => "camoufox",
+        .cloakbrowser => "cloakbrowser",
+    };
+}
+
+// ══════════════════════════════════════════════════════════
 // Bridge protocol — JSON line classification
 // ══════════════════════════════════════════════════════════
 
-/// The Camoufox bridge serializes with stable key order (documented contract
-/// in scripts/camoufox_bridge.py): nav pushes are `{"event": "nav", ...}`,
-/// navigate responses `{"ok": true, "title": ...}`, failures `{"error": ...}`.
+/// The bridge serializes with stable key order (documented contract in
+/// scripts/camoufox_bridge.py): nav pushes are `{"event": "nav", ...}`,
+/// navigate responses `{"ok": true, "title": ...}`, find results
+/// `{"ok": true, "found": ...}`, download events `{"event": "download", ...}`,
+/// reader text `{"event": "readtext", ...}`, failures `{"error": ...}`.
 /// Prefix matching (not substring search) keeps scrape/eval payloads that
 /// merely CONTAIN "title" from being mistaken for navigation updates.
-pub const BridgeMsg = enum { ready, nav, err, other };
+pub const BridgeMsg = enum { ready, nav, err, find, download, readtext, other };
 
 pub fn classifyBridgeMsg(line: []const u8) BridgeMsg {
     if (std.mem.startsWith(u8, line, "{\"ready\"")) return .ready;
     if (std.mem.startsWith(u8, line, "{\"event\": \"nav\"")) return .nav;
+    if (std.mem.startsWith(u8, line, "{\"event\": \"download\"")) return .download;
+    if (std.mem.startsWith(u8, line, "{\"event\": \"readtext\"")) return .readtext;
     if (std.mem.startsWith(u8, line, "{\"ok\": true, \"title\"")) return .nav;
+    if (std.mem.startsWith(u8, line, "{\"ok\": true, \"found\"")) return .find;
     if (std.mem.startsWith(u8, line, "{\"error\"")) return .err;
     return .other;
+}
+
+/// Extract an unsigned integer field from a flat JSON object: `"field": 123`.
+pub fn extractJsonUint(json: []const u8, field: []const u8) ?u64 {
+    var search_buf: [64]u8 = undefined;
+    const search = std.fmt.bufPrint(&search_buf, "\"{s}\"", .{field}) catch return null;
+    const field_pos = std.mem.indexOf(u8, json, search) orelse return null;
+    var pos = field_pos + search.len;
+    while (pos < json.len and (json[pos] == ':' or json[pos] == ' ')) pos += 1;
+    var end = pos;
+    while (end < json.len and json[end] >= '0' and json[end] <= '9') end += 1;
+    if (end == pos) return null;
+    return std.fmt.parseInt(u64, json[pos..end], 10) catch null;
+}
+
+/// Decode a JSON string body (the bytes BETWEEN the quotes) into `out`:
+/// \n \r \t \" \\ \/ \b \f become their characters; \uXXXX escapes decode to
+/// UTF-8 (surrogates and truncated escapes degrade to '?'). Truncates safely.
+pub fn jsonUnescape(input: []const u8, out: []u8) []const u8 {
+    var w: usize = 0;
+    var i: usize = 0;
+    while (i < input.len and w < out.len) {
+        const ch = input[i];
+        if (ch != '\\') {
+            out[w] = ch;
+            w += 1;
+            i += 1;
+            continue;
+        }
+        if (i + 1 >= input.len) break;
+        const esc = input[i + 1];
+        i += 2;
+        switch (esc) {
+            'n' => {
+                out[w] = '\n';
+                w += 1;
+            },
+            'r' => {
+                out[w] = '\r';
+                w += 1;
+            },
+            't' => {
+                out[w] = '\t';
+                w += 1;
+            },
+            'b', 'f' => {
+                out[w] = ' ';
+                w += 1;
+            },
+            'u' => {
+                if (i + 4 <= input.len) {
+                    const cp = std.fmt.parseInt(u21, input[i .. i + 4], 16) catch 0xFFFD;
+                    i += 4;
+                    var utf8: [4]u8 = undefined;
+                    const n = std.unicode.utf8Encode(cp, &utf8) catch blk: {
+                        utf8[0] = '?';
+                        break :blk 1;
+                    };
+                    if (w + n > out.len) break;
+                    @memcpy(out[w .. w + n], utf8[0..n]);
+                    w += n;
+                } else {
+                    out[w] = '?';
+                    w += 1;
+                    i = input.len;
+                }
+            },
+            else => {
+                out[w] = esc;
+                w += 1;
+            },
+        }
+    }
+    return out[0..w];
+}
+
+/// Find a string field in a flat JSON object and return its RAW (still
+/// escaped) body — unlike a naive quote scan, this honors backslash escapes,
+/// so bodies containing \" don't terminate early. Pair with jsonUnescape.
+pub fn extractJsonStringRaw(json: []const u8, field: []const u8) ?[]const u8 {
+    var search_buf: [64]u8 = undefined;
+    const search = std.fmt.bufPrint(&search_buf, "\"{s}\"", .{field}) catch return null;
+    const field_pos = std.mem.indexOf(u8, json, search) orelse return null;
+    var pos = field_pos + search.len;
+    while (pos < json.len and (json[pos] == ':' or json[pos] == ' ')) pos += 1;
+    if (pos >= json.len or json[pos] != '"') return null;
+    pos += 1;
+    var end = pos;
+    while (end < json.len) {
+        if (json[end] == '\\') {
+            end += 2;
+            continue;
+        }
+        if (json[end] == '"') return json[pos..end];
+        end += 1;
+    }
+    return null;
+}
+
+// ══════════════════════════════════════════════════════════
+// Per-site zoom + downloads — URL/filename helpers
+// ══════════════════════════════════════════════════════════
+
+/// Extract the host (with port, without "www.") from a URL — the per-site
+/// zoom key. "https://www.example.com:8080/x?y" → "example.com:8080".
+pub fn urlHost(url: []const u8) []const u8 {
+    var s = url;
+    if (std.mem.indexOf(u8, s, "://")) |p| s = s[p + 3 ..];
+    var end = s.len;
+    for (s, 0..) |ch, i| {
+        if (ch == '/' or ch == '?' or ch == '#') {
+            end = i;
+            break;
+        }
+    }
+    s = s[0..end];
+    if (std.mem.lastIndexOfScalar(u8, s, '@')) |a| s = s[a + 1 ..];
+    if (std.mem.startsWith(u8, s, "www.")) s = s[4..];
+    return s;
+}
+
+/// Make a downloaded filename safe to join onto the save dir: path
+/// separators and control chars become '_', leading dots are stripped
+/// (no dotfiles / traversal), empty input becomes "download".
+pub fn sanitizeFilename(name: []const u8, out: []u8) []const u8 {
+    var w: usize = 0;
+    for (name) |ch| {
+        if (w >= out.len) break;
+        const bad = ch == '/' or ch == '\\' or ch == ':' or ch < 0x20;
+        const c: u8 = if (bad) '_' else ch;
+        if (w == 0 and (c == '.' or bad)) continue; // no leading dots / separators
+        out[w] = c;
+        w += 1;
+    }
+    if (w == 0) {
+        const fallback = "download";
+        const n = @min(fallback.len, out.len);
+        @memcpy(out[0..n], fallback[0..n]);
+        return out[0..n];
+    }
+    return out[0..w];
+}
+
+// ══════════════════════════════════════════════════════════
+// History autocomplete ranking
+// ══════════════════════════════════════════════════════════
+
+/// Score a history row against what the user typed in the URL bar.
+/// 0 = no match. Host-prefix matches rank highest (typing "you" should
+/// surface youtube.com first), then URL prefix, URL substring, title
+/// substring. All comparisons ASCII case-insensitive.
+pub fn historyMatchScore(query: []const u8, url: []const u8, title: []const u8) u32 {
+    if (query.len == 0 or url.len == 0) return 0;
+    const host = urlHost(url);
+    if (std.ascii.startsWithIgnoreCase(host, query)) return 100;
+    var np = url;
+    if (std.mem.indexOf(u8, np, "://")) |p| np = np[p + 3 ..];
+    if (std.ascii.startsWithIgnoreCase(np, query)) return 90;
+    if (std.ascii.indexOfIgnoreCase(url, query) != null) return 50;
+    if (title.len > 0 and std.ascii.indexOfIgnoreCase(title, query) != null) return 40;
+    return 0;
 }
 
 /// Turn raw address-bar input into a navigable URL:
@@ -278,6 +464,74 @@ test "composeKeyCombo builds modifier chords" {
         "Control+Alt+Meta+Shift+ArrowUp",
         composeKeyCombo("ArrowUp", true, true, true, true, &buf),
     );
+}
+
+test "engineFromString parses names and falls back to camoufox" {
+    try std.testing.expectEqual(Engine.camoufox, engineFromString("camoufox"));
+    try std.testing.expectEqual(Engine.cloakbrowser, engineFromString("cloakbrowser"));
+    try std.testing.expectEqual(Engine.camoufox, engineFromString("lightpanda"));
+    try std.testing.expectEqual(Engine.camoufox, engineFromString(""));
+    try std.testing.expectEqualStrings("cloakbrowser", enginePipPackage(.cloakbrowser));
+    try std.testing.expectEqualStrings("camoufox", enginePipPackage(.camoufox));
+}
+
+test "classifyBridgeMsg recognizes find, download and readtext messages" {
+    try std.testing.expectEqual(BridgeMsg.find, classifyBridgeMsg("{\"ok\": true, \"found\": true, \"count\": 12}"));
+    try std.testing.expectEqual(BridgeMsg.download, classifyBridgeMsg("{\"event\": \"download\", \"url\": \"https://x/f.zip\", \"filename\": \"f.zip\"}"));
+    try std.testing.expectEqual(BridgeMsg.readtext, classifyBridgeMsg("{\"event\": \"readtext\", \"text\": \"body\"}"));
+    // Still classified as before:
+    try std.testing.expectEqual(BridgeMsg.nav, classifyBridgeMsg("{\"ok\": true, \"title\": \"T\", \"url\": \"https://x\"}"));
+}
+
+test "extractJsonUint parses numeric fields" {
+    try std.testing.expectEqual(@as(?u64, 12), extractJsonUint("{\"ok\": true, \"found\": true, \"count\": 12}", "count"));
+    try std.testing.expectEqual(@as(?u64, 0), extractJsonUint("{\"count\": 0}", "count"));
+    try std.testing.expectEqual(@as(?u64, null), extractJsonUint("{\"count\": \"x\"}", "count"));
+    try std.testing.expectEqual(@as(?u64, null), extractJsonUint("{\"ok\": true}", "count"));
+}
+
+test "extractJsonStringRaw honors escapes; jsonUnescape decodes" {
+    const json = "{\"event\": \"readtext\", \"text\": \"line1\\nsaid \\\"hi\\\"\\ttab\"}";
+    const raw = extractJsonStringRaw(json, "text").?;
+    try std.testing.expectEqualStrings("line1\\nsaid \\\"hi\\\"\\ttab", raw);
+    var buf: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("line1\nsaid \"hi\"\ttab", jsonUnescape(raw, &buf));
+    // \uXXXX decodes to UTF-8.
+    try std.testing.expectEqualStrings("a\u{00e9}b", jsonUnescape("a\\u00e9b", &buf));
+    // Missing field / unterminated string → null, never a slice overrun.
+    try std.testing.expectEqual(@as(?[]const u8, null), extractJsonStringRaw(json, "nope"));
+    try std.testing.expectEqual(@as(?[]const u8, null), extractJsonStringRaw("{\"text\": \"unterminated", "text"));
+}
+
+test "urlHost extracts host for per-site zoom keys" {
+    try std.testing.expectEqualStrings("example.com", urlHost("https://www.example.com/a/b?c=d"));
+    try std.testing.expectEqualStrings("example.com:8080", urlHost("http://example.com:8080/x"));
+    try std.testing.expectEqualStrings("localhost:3000", urlHost("http://localhost:3000"));
+    try std.testing.expectEqualStrings("host.io", urlHost("https://user:pw@host.io/p"));
+    try std.testing.expectEqualStrings("bare.host", urlHost("bare.host/path"));
+    try std.testing.expectEqualStrings("", urlHost("https://"));
+}
+
+test "sanitizeFilename blocks traversal and separators" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("etc_passwd", sanitizeFilename("../etc/passwd", &buf));
+    try std.testing.expectEqualStrings("a_b_c.txt", sanitizeFilename("a/b\\c.txt", &buf));
+    try std.testing.expectEqualStrings("download", sanitizeFilename("", &buf));
+    try std.testing.expectEqualStrings("download", sanitizeFilename("...", &buf));
+    try std.testing.expectEqualStrings("movie (2024).mkv", sanitizeFilename("movie (2024).mkv", &buf));
+}
+
+test "historyMatchScore ranks host prefix over substring over title" {
+    const yt_score = historyMatchScore("you", "https://www.youtube.com/watch", "Watch");
+    const sub_score = historyMatchScore("tube", "https://www.youtube.com/watch", "Watch");
+    const title_score = historyMatchScore("zig", "https://example.com/lang", "Zig language");
+    try std.testing.expect(yt_score > sub_score);
+    try std.testing.expect(sub_score > title_score);
+    try std.testing.expect(title_score > 0);
+    // Case-insensitive; no match → 0; empty query → 0.
+    try std.testing.expect(historyMatchScore("YOU", "https://youtube.com", "") == yt_score);
+    try std.testing.expectEqual(@as(u32, 0), historyMatchScore("xyz", "https://example.com", "title"));
+    try std.testing.expectEqual(@as(u32, 0), historyMatchScore("", "https://example.com", "t"));
 }
 
 test "classifyBridgeMsg keys off stable prefixes, not substrings" {

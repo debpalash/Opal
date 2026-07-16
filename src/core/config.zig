@@ -96,6 +96,9 @@ pub fn save() void {
     setKey("web_remote", if (state.app.web_remote_enabled) "1" else "0");
     setKey("onboarded", if (state.app.onboarded) "1" else "0");
 
+    // In-app browser engine (camoufox = Firefox, cloakbrowser = Chromium).
+    setKey("browser_engine", @tagName(@import("../services/browser.zig").active_engine));
+
     // Voice (STT/TTS) backend — the settings page said "Changes saved
     // automatically." while this selection silently reset on restart.
     const voice_backend = @import("../services/voice_backend.zig");
@@ -404,6 +407,10 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         if (state.app.web_remote_enabled) @import("../services/remote.zig").start();
     } else if (std.mem.eql(u8, key, "ai_model_id")) {
         @import("../services/ai_server.zig").selectModelById(val);
+    } else if (std.mem.eql(u8, key, "browser_engine")) {
+        // Unknown/legacy names fall back to camoufox (browser_pure logic).
+        const browser = @import("../services/browser.zig");
+        browser.active_engine = @import("../services/browser_pure.zig").engineFromString(val);
     } else if (std.mem.eql(u8, key, "voice_backend")) {
         const voice_backend = @import("../services/voice_backend.zig");
         if (std.meta.stringToEnum(voice_backend.Kind, val)) |k| {
