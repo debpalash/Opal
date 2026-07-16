@@ -1352,6 +1352,20 @@ pub fn renderSearchContent() void {
                         state.showToast("Size copied");
                         fw.close();
                     }
+                    // User-triggered VirusTotal lookup: deep link only, opened
+                    // in the SYSTEM browser — the app never contacts VT itself.
+                    if ((dvui.menuItemLabel(@src(), "Check on VirusTotal", .{}, .{ .expand = .horizontal, .id_extra = idx + 70000 })) != null) {
+                        const vt = @import("virustotal_pure.zig");
+                        var hash_buf: [40]u8 = undefined;
+                        if (vt.infoHashFromMagnet(r.link, &hash_buf)) |h| {
+                            var url_buf: [128]u8 = undefined;
+                            @import("../ui/settings.zig").openExternal(vt.searchUrl(h, &url_buf));
+                            state.showToast("Opened VirusTotal");
+                        } else {
+                            state.showToast("No info-hash in this result");
+                        }
+                        fw.close();
+                    }
                 }
             }
         } // End for

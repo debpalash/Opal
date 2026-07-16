@@ -4087,6 +4087,40 @@ def test_scam_torrent_flagging():
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "pure heuristics routed; badges + play/queue/drag blocks in both views"
 
+@test("VirusTotal hash lookup", "Security")
+def test_virustotal_lookup():
+    vtp = _src("src/services/virustotal_pure.zig")
+    se = _src("src/services/search.zig")
+    tr = _src("src/services/transfers.zig")
+    bz = _src("build.zig")
+    checks = {
+        # Pure module: btih extraction (hex + base32) + URL builders, unit-tested.
+        "pure module registered in build.zig": "virustotal_pure.zig" in bz,
+        "pure fns exported": ("pub fn infoHashFromMagnet" in vtp
+                              and "pub fn searchUrl" in vtp
+                              and "pub fn fileUrl" in vtp),
+        # Torrent search context menu routes through the TESTED pure extractor.
+        "search menu item": "Check on VirusTotal" in se,
+        "menu routes through pure fn": "infoHashFromMagnet(" in se and "searchUrl(" in se,
+        "no-hash fallback toast": "No info-hash in this result" in se,
+        # Downloads: user action streams the file through BOTH digests with a
+        # heap buffer (multi-GB files — never slurped, never stack-allocated).
+        "transfers action": "Verify on VirusTotal" in tr,
+        "streams sha256+md5": ("sha2.Sha256" in tr and "hash.Md5" in tr
+                               and "alloc.alloc(u8, 256 * 1024)" in tr),
+        "busy guard + hashing state": "VtHash.busy" in tr and "Hashing…" in tr,
+        "opens report via pure url": "fileUrl(" in tr and "openExternal(" in tr,
+        # STRICTLY user-triggered deep links: the app must never call the VT
+        # API itself — only virustotal.com/gui/... pages opened in the browser.
+        "deep links only, no VT API": ("virustotal.com/gui" in vtp
+                                       and "www.virustotal.com/api" not in vtp
+                                       and "www.virustotal.com/api" not in se
+                                       and "www.virustotal.com/api" not in tr),
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "user-triggered VT deep links: magnet btih + file sha256/md5"
 
 def run_all():
     test_fns = [v for v in globals().values() if callable(v) and hasattr(v, '_test')]

@@ -856,6 +856,18 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_torrent_risk_pure).step);
 
+    // VirusTotal deep links: magnet info-hash extraction (hex + base32 btih)
+    // and gui/search + gui/file URL building. Pure — the app never contacts
+    // the VT API; lookups are user-triggered browser deep links only.
+    const test_virustotal_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/virustotal_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_virustotal_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main

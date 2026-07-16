@@ -19,6 +19,7 @@ const search = @import("search.zig");
 const history = @import("history.zig");
 const io_global = @import("../core/io_global.zig");
 const tp = @import("transfers_pure.zig");
+const vt_pure = @import("virustotal_pure.zig");
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 
@@ -60,6 +61,8 @@ pub fn renderTransfersContent() void {
     // side-effecting: it drives the streaming deadline window, so it must keep
     // ticking regardless of which sub-view is on screen.
     buildSnapshot();
+
+    consumeVtHashResult();
 
     renderControlBar();
 
@@ -714,6 +717,27 @@ fn renderExpanded(r: *const tp.Row) bool {
             .gravity_y = 0.5,
         });
 
+        // User-triggered VirusTotal check (single files only — a folder has no
+        // one hash). Streams SHA-256/MD5 on a worker, then opens the report.
+        if (!r.is_dir) {
+            const hashing = VtHash.busy.load(.acquire);
+            if (dvui.button(@src(), if (hashing) "Hashing…" else "Verify on VirusTotal", .{}, .{
+                .id_extra = rowId(r),
+                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_text = if (hashing) theme.colors.text_tertiary else theme.colors.text_secondary,
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+                .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+                .gravity_y = 0.5,
+            }) and !hashing) {
+                const save_path = state.app.save_path_buf[0..state.app.save_path_len];
+                var vp: [1024]u8 = undefined;
+                if (std.fmt.bufPrint(&vp, "{s}/{s}", .{ save_path, r.diskSlice() })) |full| {
+                    startVtHash(full);
+                } else |_| {}
+            }
+        }
+
         if (components.confirmDangerButton(@src(), "Delete files from disk", rowId(r))) {
             const save_path = state.app.save_path_buf[0..state.app.save_path_len];
             var dp: [1024]u8 = undefined;
@@ -1109,6 +1133,114 @@ fn renderFolderBrowse() void {
 // ══════════════════════════════════════════════════════════
 // HELPERS
 // ══════════════════════════════════════════════════════════
+
+// ── VirusTotal verify (user-triggered, hash-only — nothing is uploaded) ──
+//
+// A worker thread streams the file through SHA-256 + MD5 (files can be many
+// GB, so never slurp), logs both digests to the in-app Logs tab, and hands the
+// SHA-256 back to the UI thread, which opens the virustotal.com report page in
+// the system browser. The app itself never contacts VirusTotal.
+const VtHash = struct {
+    var busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+    var done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+    var ok: bool = false; // written before done.release, read after done.acquire
+    var path_buf: [1024]u8 = undefined;
+    var path_len: usize = 0;
+    var sha_hex: [64]u8 = undefined;
+
+    fn worker() void {
+        const Self = @This();
+        const logs = @import("../core/logs.zig");
+        const alloc = @import("../core/alloc.zig").allocator;
+        Self.ok = false;
+        defer {
+            Self.done.store(true, .release);
+            Self.busy.store(false, .release);
+            dvui.refresh(null, @src(), null);
+        }
+
+        const path = Self.path_buf[0..Self.path_len];
+        // 256KB stream buffer — heap, never on a spawned thread's stack.
+        const buf = alloc.alloc(u8, 256 * 1024) catch return;
+        defer alloc.free(buf);
+
+        const file = io_global.openFileAbsolute(path, .{}) catch {
+            logs.pushLog("error", "virustotal", "Could not open file for hashing", true);
+            return;
+        };
+        defer io_global.closeFile(file);
+
+        var sha = std.crypto.hash.sha2.Sha256.init(.{});
+        var md5 = std.crypto.hash.Md5.init(.{});
+        while (true) {
+            const n = io_global.read(file, buf) catch {
+                logs.pushLog("error", "virustotal", "Read error while hashing", true);
+                return;
+            };
+            if (n == 0) break;
+            sha.update(buf[0..n]);
+            md5.update(buf[0..n]);
+        }
+
+        var sha_dig: [32]u8 = undefined;
+        var md5_dig: [16]u8 = undefined;
+        sha.final(&sha_dig);
+        md5.final(&md5_dig);
+        hexLower(&sha_dig, &Self.sha_hex);
+        var md5_hex: [32]u8 = undefined;
+        hexLower(&md5_dig, &md5_hex);
+
+        // Log both digests so the user can copy them from the Logs tab.
+        var line: [128]u8 = undefined;
+        if (std.fmt.bufPrint(&line, "SHA-256: {s}", .{Self.sha_hex})) |t| {
+            logs.pushLog("info", "virustotal", t, false);
+        } else |_| {}
+        if (std.fmt.bufPrint(&line, "MD5: {s}", .{md5_hex})) |t| {
+            logs.pushLog("info", "virustotal", t, false);
+        } else |_| {}
+
+        Self.ok = true;
+    }
+};
+
+fn hexLower(bytes: []const u8, out: []u8) void {
+    const hex = "0123456789abcdef";
+    for (bytes, 0..) |b, i| {
+        out[i * 2] = hex[b >> 4];
+        out[i * 2 + 1] = hex[b & 0xf];
+    }
+}
+
+/// Explicit user action only — never called automatically.
+fn startVtHash(path: []const u8) void {
+    if (VtHash.busy.swap(true, .acq_rel)) return; // already hashing
+    VtHash.done.store(false, .release);
+    // Copy the path into the struct static BEFORE spawning — never hand a
+    // detached thread a pointer into a frame-local buffer.
+    const plen = @min(path.len, VtHash.path_buf.len);
+    @memcpy(VtHash.path_buf[0..plen], path[0..plen]);
+    VtHash.path_len = plen;
+    const t = std.Thread.spawn(.{}, VtHash.worker, .{}) catch {
+        VtHash.busy.store(false, .release);
+        state.showToast("Could not start hashing");
+        return;
+    };
+    t.detach();
+    state.showToast("Hashing for VirusTotal…");
+}
+
+/// UI thread, once per frame: open the VT file report once the worker is done.
+fn consumeVtHashResult() void {
+    if (!VtHash.done.load(.acquire)) return;
+    VtHash.done.store(false, .release);
+    if (VtHash.ok) {
+        var url_buf: [128]u8 = undefined;
+        @import("../ui/settings.zig").openExternal(vt_pure.fileUrl(VtHash.sha_hex[0..], &url_buf));
+        state.showToast("Opened VirusTotal report");
+    } else {
+        state.showToast("Hashing failed — see Logs");
+    }
+}
 
 // Open a directory in the OS file manager (Finder / Explorer / xdg-open).
 fn openInFileManager(path: []const u8) void {
