@@ -10,6 +10,7 @@ const podcasts_pure = @import("../services/podcasts_pure.zig");
 const radio_pure = @import("../services/radio_pure.zig");
 const audiobookshelf_pure = @import("../services/audiobookshelf_pure.zig");
 const opds_pure = @import("../services/opds_pure.zig");
+const anime_schedule_pure = @import("../services/anime_schedule_pure.zig");
 
 // ══════════════════════════════════════════════════════════
 // Type Definitions
@@ -788,6 +789,20 @@ pub const AppState = struct {
         continue_items: [12]ContinueItem = std.mem.zeroes([12]ContinueItem),
         continue_count: usize = 0,
         continue_loaded: bool = false,
+
+        // ── Airing schedule ("Airing this week") — a VIEW inside the Anime tab,
+        // NOT a browse mode/DrawerTab. Toggled by the toolbar; populated off-
+        // thread from AniList's Page.airingSchedules by services/anime_schedule.zig
+        // (published under its parse_mutex). See anime_schedule_pure.zig.
+        sched_view: bool = false, // false = browse grid, true = airing schedule
+        sched_loading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        sched_loaded: bool = false,
+        sched: [60]anime_schedule_pure.Slot = std.mem.zeroes([60]anime_schedule_pure.Slot),
+        sched_count: usize = 0,
+        // Window start + local tz offset the render needs for day-bucketing and
+        // HH:MM formatting (both computed by the fetch worker).
+        sched_window_start: i64 = 0,
+        sched_tz_offset_s: i64 = 0,
     } = .{},
 
     // ── Podcasts (iTunes Search API → RSS episodes → audio via mpv) ──

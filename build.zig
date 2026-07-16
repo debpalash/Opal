@@ -944,6 +944,19 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_anime_skip_pure).step);
 
+    // Anime airing-schedule pure logic: AniList airingSchedules GraphQL body +
+    // week-window math, response parse into fixed Slot buffers, weekday
+    // bucketing (day boundaries), and airingAt→local HH:MM formatting (the Zig
+    // 0.16 signed-zero-pad workaround). anime_schedule.zig routes through these.
+    const test_anime_schedule_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/anime_schedule_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_anime_schedule_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main

@@ -37,6 +37,7 @@ from features import (  # noqa: F401
     test_audiobooks,
     test_reading,
     test_novels,
+    test_anime_schedule,
 )
 
 if __name__ == "__main__":
