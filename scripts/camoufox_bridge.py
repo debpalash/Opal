@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """
-Camoufox Bridge — persistent daemon for the Opal in-app browser.
+Browser Bridge — persistent daemon for the Opal in-app browser.
+
+Drives one of two Playwright-compatible engines, selected with
+`--engine camoufox|cloakbrowser` (default camoufox):
+  * camoufox     — Firefox-based anti-detect browser
+  * cloakbrowser — Chromium-based anti-detect browser (free tier; its ~200MB
+                   binary auto-downloads on the first launch and is cached)
+Both expose Playwright's page API, so everything below the launch branch is
+engine-agnostic. A missing engine package emits {"error": ...} and exits so
+the Zig side surfaces "install it in Settings" instead of hanging.
 
 Protocol (stdin → stdout, binary):
   Commands: JSON lines on stdin
@@ -288,17 +297,41 @@ def apply_command(page, pump, cmd, viewport):
 
         elif action == "find":
             # window.find(text, caseSensitive, backwards, wrapAround) —
-            # repeated calls continue from the last match.
+            # repeated calls continue from the last match. dir="prev" walks
+            # backwards; the total match count comes from a body-text scan.
             text = cmd.get("text", "")
+            backwards = cmd.get("dir", "next") == "prev"
             found = False
+            count = 0
             if text:
                 try:
                     found = bool(page.evaluate(
-                        "t => window.find(t, false, false, true)", text))
+                        "a => window.find(a[0], false, a[1], true)",
+                        [text, backwards]))
                 except Exception:
                     found = False
-            send_json({"ok": True, "found": found})
-            pump.poke()
+                try:
+                    count = int(page.evaluate(
+                        "t => { const b = (document.body && document.body.innerText) || '';"
+                        " const l = b.toLowerCase(); const q = t.toLowerCase();"
+                        " let n = 0, i = 0;"
+                        " while (q && (i = l.indexOf(q, i)) !== -1) { n++; i += q.length; }"
+                        " return n; }", text) or 0)
+                except Exception:
+                    count = 0
+            send_json({"ok": True, "found": found, "count": count})
+            pump.force_next()  # selection highlight moved — repaint
+
+        elif action == "readtext":
+            # Reader quick action: the page's visible text for the overlay.
+            # Capped so the escaped JSON line stays within the Zig reader's
+            # line buffer (see browser.zig bridgeReaderThread).
+            try:
+                text = page.evaluate(
+                    "() => (document.body && document.body.innerText) || ''") or ""
+            except Exception:
+                text = ""
+            send_json({"event": "readtext", "text": text[:3500]})
 
         elif action == "zoom":
             try:
@@ -352,107 +385,190 @@ def extensions_dir():
     return d if d.is_dir() else None
 
 
-def main():
-    from camoufox.sync_api import Camoufox
+def parse_engine(argv):
+    """Extract the --engine value from argv; unknown/missing → camoufox."""
+    engine = "camoufox"
+    if "--engine" in argv:
+        i = argv.index("--engine")
+        if i + 1 < len(argv):
+            engine = argv[i + 1]
+    return engine if engine in ("camoufox", "cloakbrowser") else "camoufox"
 
-    viewport = [1280, 720]
 
+def launch_engine(engine):
+    """Launch the selected engine. Returns (browser, close_fn).
+
+    Both engines are drop-in Playwright API providers, so run_session() is
+    engine-agnostic. An ImportError here means the package isn't installed —
+    surface it through the protocol (the Zig side shows it) and exit.
+    """
+    if engine == "cloakbrowser":
+        try:
+            from cloakbrowser import launch
+        except ImportError:
+            send_json({"error": "cloakbrowser not installed — install it in Settings"})
+            sys.exit(1)
+        # Free tier; first launch downloads the ~200MB Chromium binary (cached).
+        browser = launch(headless=True, humanize=True)
+
+        def close():
+            try:
+                browser.close()
+            except Exception:
+                pass
+
+        return browser, close
+
+    try:
+        from camoufox.sync_api import Camoufox
+    except ImportError:
+        send_json({"error": "camoufox not installed — install it in Settings"})
+        sys.exit(1)
     ext = extensions_dir()
     addons = [str(ext)] if ext else []
+    cm = Camoufox(headless=True, addons=addons)
+    browser = cm.__enter__()
 
-    sys.stderr.write(f"[camoufox-bridge] Starting Camoufox (addons={len(addons)})...\n")
-    sys.stderr.flush()
-
-    cmd_q = queue.Queue()
-
-    with Camoufox(headless=True, addons=addons) as browser:
-        page = browser.new_page()
-        page.set_viewport_size({"width": viewport[0], "height": viewport[1]})
-        page.set_default_timeout(30000)
-
-        # Popups (target=_blank, window.open) fold back into the single pane:
-        # the handler only records (popup, first_seen) — the main loop
-        # navigates, since Playwright sync objects must stay on this thread's
-        # control flow. Folding is DEFERRED until the popup's navigation
-        # commits (its url is "about:blank" for the first ticks) or 3s pass.
-        popups = []
+    def close():
         try:
-            page.context.on("page", lambda p: popups.append((p, time.monotonic())))
+            cm.__exit__(None, None, None)
         except Exception:
             pass
 
-        sys.stderr.write("[camoufox-bridge] Browser ready.\n")
-        sys.stderr.flush()
+    return browser, close
 
-        send_json({"ready": True})
 
-        t = threading.Thread(target=stdin_reader, args=(cmd_q,), daemon=True)
-        t.start()
+def main():
+    engine = parse_engine(sys.argv)
+    viewport = [1280, 720]
 
-        pump = Pump()
-        running = True
-        eof = False
+    sys.stderr.write(f"[browser-bridge] Starting {engine}...\n")
+    sys.stderr.flush()
 
-        while running and not eof:
-            timeout = pump.seconds_until_due()
-            try:
-                cmd = cmd_q.get(timeout=timeout) if timeout is not None else cmd_q.get()
-            except queue.Empty:
-                cmd = "tick"
+    browser, close = launch_engine(engine)
+    try:
+        run_session(browser, viewport)
+    finally:
+        close()
 
-            if cmd is None:
-                break  # stdin EOF, nothing pending
 
-            if cmd != "tick":
-                # Drain bursts (scroll storms) before capturing, coalescing
-                # consecutive scrolls into one wheel call. An EOF sentinel in
-                # the drain only STOPS further reads — commands already
-                # dequeued still execute (a final eval/quit written right
-                # before stdin closed must not be dropped).
-                batch = [cmd]
-                while True:
-                    try:
-                        nxt = cmd_q.get_nowait()
-                    except queue.Empty:
-                        break
-                    if nxt is None:
-                        eof = True
-                        break
-                    batch.append(nxt)
+def run_session(browser, viewport):
+    """The engine-agnostic protocol loop — one copy for both engines."""
+    cmd_q = queue.Queue()
 
-                i = 0
-                while i < len(batch) and running:
-                    c = batch[i]
-                    if c.get("cmd") == "scroll":
-                        dx, dy = c.get("dx", 0), c.get("dy", 0)
-                        while i + 1 < len(batch) and batch[i + 1].get("cmd") == "scroll":
-                            i += 1
-                            dx += batch[i].get("dx", 0)
-                            dy += batch[i].get("dy", 0)
-                        c = {"cmd": "scroll", "dx": dx, "dy": dy}
-                    if not apply_command(page, pump, c, viewport):
-                        running = False
-                    i += 1
+    page = browser.new_page()
+    page.set_viewport_size({"width": viewport[0], "height": viewport[1]})
+    page.set_default_timeout(30000)
 
-            # Fold popups whose navigation has committed; give up after 3s.
-            still_pending = []
-            for p, seen in popups:
+    # Popups (target=_blank, window.open) fold back into the single pane:
+    # the handler only records (popup, first_seen) — the main loop
+    # navigates, since Playwright sync objects must stay on this thread's
+    # control flow. Folding is DEFERRED until the popup's navigation
+    # commits (its url is "about:blank" for the first ticks) or 3s pass.
+    popups = []
+    try:
+        page.context.on("page", lambda p: popups.append((p, time.monotonic())))
+    except Exception:
+        pass
+
+    # Download interception: the handler only RECORDS the Download object —
+    # the main loop forwards {"event":"download",...} to Zig (which hands it
+    # to Opal's downloader) and cancels the in-browser transfer.
+    downloads = []
+    try:
+        page.on("download", lambda d: downloads.append(d))
+    except Exception:
+        pass
+
+    sys.stderr.write("[browser-bridge] Browser ready.\n")
+    sys.stderr.flush()
+
+    send_json({"ready": True})
+
+    t = threading.Thread(target=stdin_reader, args=(cmd_q,), daemon=True)
+    t.start()
+
+    pump = Pump()
+    running = True
+    eof = False
+
+    while running and not eof:
+        timeout = pump.seconds_until_due()
+        try:
+            cmd = cmd_q.get(timeout=timeout) if timeout is not None else cmd_q.get()
+        except queue.Empty:
+            cmd = "tick"
+
+        if cmd is None:
+            break  # stdin EOF, nothing pending
+
+        if cmd != "tick":
+            # Drain bursts (scroll storms) before capturing, coalescing
+            # consecutive scrolls into one wheel call. An EOF sentinel in
+            # the drain only STOPS further reads — commands already
+            # dequeued still execute (a final eval/quit written right
+            # before stdin closed must not be dropped).
+            batch = [cmd]
+            while True:
                 try:
-                    purl = p.url
-                    if purl and purl != "about:blank":
-                        p.close()
-                        page.goto(purl, wait_until="domcontentloaded", timeout=20000)
-                        pump.force_next()
-                    elif time.monotonic() - seen > 3.0:
-                        p.close()
-                    else:
-                        still_pending.append((p, seen))
-                except Exception:
-                    pass
-            popups[:] = still_pending
+                    nxt = cmd_q.get_nowait()
+                except queue.Empty:
+                    break
+                if nxt is None:
+                    eof = True
+                    break
+                batch.append(nxt)
 
-            pump.push_page_state(page)
-            pump.maybe_capture(page)
+            i = 0
+            while i < len(batch) and running:
+                c = batch[i]
+                if c.get("cmd") == "scroll":
+                    dx, dy = c.get("dx", 0), c.get("dy", 0)
+                    while i + 1 < len(batch) and batch[i + 1].get("cmd") == "scroll":
+                        i += 1
+                        dx += batch[i].get("dx", 0)
+                        dy += batch[i].get("dy", 0)
+                    c = {"cmd": "scroll", "dx": dx, "dy": dy}
+                if not apply_command(page, pump, c, viewport):
+                    running = False
+                i += 1
+
+        # Fold popups whose navigation has committed; give up after 3s.
+        still_pending = []
+        for p, seen in popups:
+            try:
+                purl = p.url
+                if purl and purl != "about:blank":
+                    p.close()
+                    page.goto(purl, wait_until="domcontentloaded", timeout=20000)
+                    pump.force_next()
+                elif time.monotonic() - seen > 3.0:
+                    p.close()
+                else:
+                    still_pending.append((p, seen))
+            except Exception:
+                pass
+        popups[:] = still_pending
+
+        # Forward intercepted downloads to Zig, then cancel them here —
+        # Opal's own downloader takes over from the URL.
+        for d in downloads:
+            try:
+                send_json({
+                    "event": "download",
+                    "url": d.url or "",
+                    "filename": d.suggested_filename or "",
+                })
+            except Exception:
+                pass
+            try:
+                d.cancel()
+            except Exception:
+                pass
+        downloads[:] = []
+
+        pump.push_page_state(page)
+        pump.maybe_capture(page)
 
 
 def selftest():
@@ -510,6 +626,18 @@ def selftest():
     if p.interval() != FPS_ACTIVE_INTERVAL:
         failures.append("pump reactivate")
 
+    # Engine argv parsing — unknown engines must fall back, never crash.
+    if parse_engine(["x"]) != "camoufox":
+        failures.append("engine default")
+    if parse_engine(["x", "--engine", "cloakbrowser"]) != "cloakbrowser":
+        failures.append("engine cloakbrowser")
+    if parse_engine(["x", "--engine", "camoufox"]) != "camoufox":
+        failures.append("engine camoufox")
+    if parse_engine(["x", "--engine", "netscape"]) != "camoufox":
+        failures.append("engine unknown fallback")
+    if parse_engine(["x", "--engine"]) != "camoufox":
+        failures.append("engine missing value")
+
     # Capture rate gate: fresh pump is due immediately; after an attempt the
     # next capture waits out the active interval.
     p2 = Pump()
@@ -540,5 +668,5 @@ if __name__ == "__main__":
     except (BrokenPipeError, KeyboardInterrupt):
         pass
     except Exception as e:
-        sys.stderr.write(f"[camoufox-bridge] Fatal: {e}\n")
+        sys.stderr.write(f"[browser-bridge] Fatal: {e}\n")
         sys.exit(1)

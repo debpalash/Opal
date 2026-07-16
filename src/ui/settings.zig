@@ -225,7 +225,7 @@ fn sectionMatchesSearch(tab: state.SettingsTab) bool {
         .Playback => &.{ "Video Processing", "Audio Equalizer", "Audio Output", "Device", "Streaming", "Shortcuts", "Filters", "Capture", "Hardware", "Decode", "Deband", "Interpolation", "Brightness", "Contrast", "Saturation", "Gamma", "Screenshot", "Auto-advance", "Resume" },
         .About => &.{ "About", "Version", "Update", "Credits", "License", "Donate", "Sponsors", "Links", "TMDB" },
         .Subtitles => &.{ "OpenSubtitles", "Subdl", "Language", "Search", "API Key", "Font", "Delay", "Whisper" },
-        .Network => &.{ "Download", "Trackers", "Proxy", "Speed", "Limit", "Port" },
+        .Network => &.{ "Download", "Trackers", "Proxy", "Speed", "Limit", "Port", "Browser", "Engine", "Camoufox", "CloakBrowser" },
         .Storage => &.{ "Download Path", "Watch History", "Database", "Cache", "Clear" },
         .Scripts => &.{ "SponsorBlock", "AI Backend", "Remote", "Watch Party", "Scripts", "Gemma", "Apple Intelligence", "Model", "Voice" },
         .AI => &.{ "Voice Backend", "STT", "TTS", "Whisper", "Kokoro", "MLX", "Sherpa", "Co-Watcher", "Models", "Dependencies" },
@@ -1862,6 +1862,65 @@ fn renderNetworkTab() void {
     _ = dvui.label(@src(), "opentrackr, stealth, torrent.eu, dler, exodus, demonii...", .{}, .{
         .color_text = theme.colors.text_tertiary,
     });
+
+    // In-app browser engine (Browse › Web)
+    settingRow("Browser Engine", 33, @src());
+    {
+        const browser = @import("../services/browser.zig");
+        const engines = [_]browser.Engine{ .camoufox, .cloakbrowser };
+        const engine_names = [_][]const u8{ "Camoufox", "CloakBrowser" };
+        var sel: usize = 0;
+        for (engines, 0..) |e, idx| {
+            if (browser.active_engine == e) {
+                sel = idx;
+                break;
+            }
+        }
+        if (components.segment(@src(), &engine_names, sel)) |clicked| {
+            if (browser.active_engine != engines[clicked]) {
+                browser.active_engine = engines[clicked];
+                state.markConfigDirty();
+                // Takes effect on the next browser open — stop any running
+                // bridge so it relaunches with the newly selected engine.
+                browser.killBridge();
+            }
+        }
+        _ = dvui.label(@src(), "{s}", .{switch (browser.active_engine) {
+            .camoufox => "Camoufox — Firefox-based anti-detect browser (fetches ~200 MB at install).",
+            .cloakbrowser => "CloakBrowser — Chromium-based anti-detect browser (free tier; first launch downloads ~200 MB, cached).",
+        }}, .{
+            .id_extra = 3300,
+            .color_text = theme.colors.text_tertiary,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+        });
+        // Per-engine install status + install action for the selected engine.
+        {
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 3301, .expand = .horizontal });
+            defer row.deinit();
+            var sbuf: [128]u8 = undefined;
+            const status = std.fmt.bufPrint(&sbuf, "Camoufox: {s} · CloakBrowser: {s}", .{
+                if (browser.engineReady(.camoufox)) "installed" else "not installed",
+                if (browser.engineReady(.cloakbrowser)) "installed" else "not installed",
+            }) catch "";
+            _ = dvui.label(@src(), "{s}", .{status}, .{
+                .id_extra = 3302,
+                .color_text = theme.colors.text_secondary,
+                .gravity_y = 0.5,
+            });
+            if (!browser.engineReady(browser.active_engine)) {
+                if (dvui.button(@src(), "Install selected engine", .{}, .{
+                    .id_extra = 3303,
+                    .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
+                    .color_fill = theme.colors.accent,
+                    .color_text = theme.colors.text_on_accent,
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
+                })) {
+                    browser.installEngine();
+                }
+            }
+        }
+    }
 
     // Proxy URL
     settingRow("Proxy (yt-dlp)", 32, @src());

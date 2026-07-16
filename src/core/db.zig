@@ -187,6 +187,25 @@ fn createTables() void {
         \\)
     );
 
+    // In-app browser visit history — feeds the URL-bar autocomplete.
+    // Never written in incognito mode (see browser.zig recordVisit).
+    exec(
+        \\CREATE TABLE IF NOT EXISTS browser_history (
+        \\  url TEXT PRIMARY KEY,
+        \\  title TEXT,
+        \\  visits INTEGER DEFAULT 1,
+        \\  last_visit INTEGER DEFAULT (strftime('%s','now'))
+        \\)
+    );
+
+    // Per-site zoom (Browse › Web Cmd/Ctrl +/-/0) — keyed by host.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS browser_zoom (
+        \\  host TEXT PRIMARY KEY,
+        \\  factor REAL NOT NULL
+        \\)
+    );
+
     // Vector DB extensions for RAG Memory
     exec(
         \\CREATE TABLE IF NOT EXISTS aimemory (

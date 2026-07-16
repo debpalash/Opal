@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-07-16T16:26:26",
-  "total": 184,
-  "passed": 176,
+  "timestamp": "2026-07-16T16:32:46",
+  "total": 185,
+  "passed": 177,
   "failed": 0,
   "warnings": 2,
   "skipped": 6,
@@ -79,7 +79,7 @@
       "skip": 0
     },
     "Browser": {
-      "pass": 4,
+      "pass": 5,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -238,7 +238,7 @@
       "category": "Database",
       "status": "pass",
       "detail": "v1\u2192v2 migration + path keying + formatDuration wiring OK",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Search History Table",
@@ -357,13 +357,13 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 43.0 MB",
-      "duration_ms": 447
+      "duration_ms": 363
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "43.0 MB, built at 16:26:06",
+      "detail": "43.0 MB, built at 16:32:27",
       "duration_ms": 0
     },
     {
@@ -413,35 +413,35 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 867
+      "duration_ms": 705
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "pass",
       "detail": "faster-whisper importable",
-      "duration_ms": 1101
+      "duration_ms": 949
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 27
+      "duration_ms": 21
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 22
+      "duration_ms": 23
     },
     {
       "name": "Conversational: voice-server echo guard + live partials",
       "category": "Voice",
       "status": "pass",
       "detail": "echo guard drops self-echo; real interruption passes; PARTIAL streamed",
-      "duration_ms": 34
+      "duration_ms": 27
     },
     {
       "name": "Conversational: prefer full-duplex event loop + wiring",
@@ -455,7 +455,7 @@
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 29
+      "duration_ms": 21
     },
     {
       "name": "Embedding Server Health",
@@ -588,70 +588,70 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 33
+      "duration_ms": 24
     },
     {
       "name": "Compiles: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 30
+      "duration_ms": 23
     },
     {
       "name": "Compiles: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 29
+      "duration_ms": 24
     },
     {
       "name": "Compiles: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 30
+      "duration_ms": 25
     },
     {
       "name": "--check degrades: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 1048
+      "duration_ms": 925
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 26
+      "duration_ms": 24
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 1090
+      "duration_ms": 991
     },
     {
       "name": "Tracked + compiles: tools/lang_server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "tracked + py_compile OK",
-      "duration_ms": 45
+      "duration_ms": 42
     },
     {
       "name": "Compiles: camoufox_bridge.py",
       "category": "Browser",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 29
+      "duration_ms": 26
     },
     {
       "name": "Bridge protocol selftest",
       "category": "Browser",
       "status": "pass",
       "detail": "framing + pump model OK",
-      "duration_ms": 29
+      "duration_ms": 28
     },
     {
       "name": "Poster cache SQL matches schema",
@@ -721,7 +721,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 1839
+      "duration_ms": 1791
     },
     {
       "name": "Sherpa Model Canonicalization",
@@ -791,14 +791,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 3523
+      "duration_ms": 3824
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 70
+      "duration_ms": 83
     },
     {
       "name": "Page Router",
@@ -819,7 +819,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 9
+      "duration_ms": 11
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -875,7 +875,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "podcasts tab wired: enum\u2192nav\u2192service\u2192pure\u2192remote\u2192web",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Radio Tab Wired",
@@ -1239,7 +1239,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 115
+      "duration_ms": 120
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1372,7 +1372,7 @@
       "category": "Enrichment",
       "status": "pass",
       "detail": "OMDb enrichment wired (parser+worker+UI+persist); key set=False",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "name": "Unified Downloads List",
@@ -1456,7 +1456,7 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 1739
+      "duration_ms": 1772
     },
     {
       "name": "Installer Does Not Need Xcode",
@@ -1492,6 +1492,13 @@
       "status": "pass",
       "detail": "pure heuristics routed; badges + play/queue/drag blocks in both views",
       "duration_ms": 0
+    },
+    {
+      "name": "Browser: CloakBrowser engine + upgrades",
+      "category": "Browser",
+      "status": "pass",
+      "detail": "engine picker + find/zoom/downloads/history/reader wired",
+      "duration_ms": 54
     },
     {
       "name": "VirusTotal hash lookup",

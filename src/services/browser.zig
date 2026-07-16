@@ -9,11 +9,27 @@ const pure = @import("browser_pure.zig");
 const io_g = @import("../core/io_global.zig");
 
 // ══════════════════════════════════════════════════════════
-// Camoufox Browser Engine — CDP screenshot streaming
-// Replaces LightPanda with real Firefox rendering + anti-bot
+// Browser Engine — Playwright bridge + JPEG frame streaming
+// Two engines, one protocol (scripts/camoufox_bridge.py):
+//   camoufox     — Firefox-based anti-detect (default)
+//   cloakbrowser — Chromium-based anti-detect (free tier)
 // ══════════════════════════════════════════════════════════
 
 const BRIDGE_SCRIPT = "camoufox_bridge.py";
+
+// Selected engine — persisted as config key "browser_engine" (config.zig).
+// UI thread writes it (settings picker); the bridge-start thread reads it.
+// A switch takes effect on the next bridge start (settings kills any running
+// bridge). Enum load/store is a single byte — benign to read cross-thread.
+pub const Engine = pure.Engine;
+pub var active_engine: Engine = .camoufox;
+
+pub fn engineDisplayName(e: Engine) []const u8 {
+    return switch (e) {
+        .camoufox => "Camoufox",
+        .cloakbrowser => "CloakBrowser",
+    };
+}
 
 // Resolve the venv python under the Opal config dir (~/.config/opal/venv/bin/python3).
 // Returns null if $HOME is unset. Falls back to bare "python3" handled by callers.
@@ -67,15 +83,19 @@ var pending_url: [2048]u8 = undefined;
 var pending_url_len: usize = 0;
 var pending_lock: @import("../core/sync.zig").Mutex = .{};
 
-// ── Engine installer (venv + pip camoufox + browser download) ──
+// ── Engine installer (venv + pip package [+ browser download]) ──
 // One idempotent worker: creates ~/.config/opal/venv if missing, pip-installs
-// camoufox into it, then `python -m camoufox fetch` downloads the browser.
-// Progress streams line-by-line into install_msg for the landing page.
+// the selected engine into it. Camoufox additionally runs `python -m camoufox
+// fetch` (~200 MB now); CloakBrowser downloads its ~200 MB binary on FIRST
+// LAUNCH instead (cached). Progress streams line-by-line into install_msg.
 pub const InstallState = enum(u8) { idle, running, failed, done };
 var install_state: std.atomic.Value(u8) = std.atomic.Value(u8).init(0);
 var install_msg: [256]u8 = undefined;
 var install_msg_len: usize = 0;
 var install_lock: @import("../core/sync.zig").Mutex = .{};
+// Engine the running/last install targets — copied from active_engine BEFORE
+// the worker spawns (struct{var}-style input snapshot).
+var install_engine_target: Engine = .camoufox;
 
 fn setInstallMsg(msg: []const u8) void {
     install_lock.lock();
@@ -88,6 +108,7 @@ fn setInstallMsg(msg: []const u8) void {
 
 pub fn installEngine() void {
     if (install_state.load(.acquire) == @intFromEnum(InstallState.running)) return;
+    install_engine_target = active_engine; // snapshot input before spawn
     install_state.store(@intFromEnum(InstallState.running), .release);
     setInstallMsg("Preparing…");
     if (std.Thread.spawn(.{}, installWorker, .{})) |t| t.detach() else |_| {
@@ -139,6 +160,9 @@ fn installWorker() void {
         }
     }.f;
 
+    const engine = install_engine_target;
+    const pkg = pure.enginePipPackage(engine);
+
     const home = io_g.getenv("HOME") orelse return fail("HOME not set");
     var venv_buf: [512]u8 = undefined;
     const venv = std.fmt.bufPrint(&venv_buf, "{s}/.config/opal/venv", .{home}) catch return fail("path too long");
@@ -152,48 +176,125 @@ fn installWorker() void {
             return fail("Failed to create the Python venv (is python3 installed?)");
     }
 
-    // 2) camoufox package
-    setInstallMsg("Installing camoufox (pip)…");
-    if (!runInstallStep(&.{ py, "-m", "pip", "install", "--upgrade", "camoufox" }))
-        return fail("pip install camoufox failed — see Logs");
+    // 2) the engine package
+    {
+        var msg_buf: [96]u8 = undefined;
+        setInstallMsg(std.fmt.bufPrint(&msg_buf, "Installing {s} (pip)…", .{pkg}) catch pkg);
+    }
+    if (!runInstallStep(&.{ py, "-m", "pip", "install", "--upgrade", pkg }))
+        return fail("pip install failed — see Logs");
 
-    // 3) the browser itself (~200 MB download)
-    setInstallMsg("Downloading the Camoufox browser (~200 MB)…");
-    if (!runInstallStep(&.{ py, "-m", "camoufox", "fetch" }))
-        return fail("Browser download failed — check network and retry");
+    // 3) the browser binary
+    switch (engine) {
+        .camoufox => {
+            setInstallMsg("Downloading the Camoufox browser (~200 MB)…");
+            if (!runInstallStep(&.{ py, "-m", "camoufox", "fetch" }))
+                return fail("Browser download failed — check network and retry");
+            setInstallMsg("Engine installed — starting…");
+        },
+        // CloakBrowser has no fetch step — its ~200 MB Chromium binary
+        // auto-downloads on the first launch and is cached after that.
+        .cloakbrowser => setInstallMsg("Installed — first launch downloads ~200 MB (cached)"),
+    }
 
+    engine_ready_state[@intFromEnum(engine)].store(2, .release);
     install_state.store(@intFromEnum(InstallState.done), .release);
-    setInstallMsg("Engine installed — starting…");
-    logs.pushLog("info", "browser", "Camoufox engine installed", true);
+    logs.pushLog("info", "browser", "Browser engine installed", true);
     ensureBridge();
 }
 
-/// Engine presence = the venv python exists (checked once per session; the
-/// installer resets it). pip-level breakage still surfaces via bridge logs +
-/// the Install button, which repairs idempotently.
-var engine_checked: bool = false;
-var engine_present: bool = false;
+/// Per-engine readiness: venv python present AND the engine's package dir
+/// exists in the venv's site-packages. 0 = unchecked, 1 = missing, 2 = ready;
+/// checked lazily once per session (a finished install stamps 2 directly).
+var engine_ready_state = [_]std.atomic.Value(u8){
+    std.atomic.Value(u8).init(0),
+    std.atomic.Value(u8).init(0),
+};
+
+pub fn engineReady(e: Engine) bool {
+    const idx = @intFromEnum(e);
+    const v = engine_ready_state[idx].load(.acquire);
+    if (v != 0) return v == 2;
+    const ok = checkVenvPackage(pure.enginePipPackage(e));
+    engine_ready_state[idx].store(if (ok) 2 else 1, .release);
+    return ok;
+}
+
+/// Does the Opal venv contain `pkg` in site-packages? Scans venv/lib for the
+/// python3.x dir (version varies across machines) — cheap, cached by caller.
+fn checkVenvPackage(pkg: []const u8) bool {
+    const home = io_g.getenv("HOME") orelse return false;
+    var py_buf: [512]u8 = undefined;
+    const py = std.fmt.bufPrint(&py_buf, "{s}/.config/opal/venv/bin/python3", .{home}) catch return false;
+    io_g.cwdAccess(py, .{}) catch return false;
+    var lib_buf: [512]u8 = undefined;
+    const lib = std.fmt.bufPrint(&lib_buf, "{s}/.config/opal/venv/lib", .{home}) catch return false;
+    var dir = io_g.cwdOpenDir(lib, .{ .iterate = true }) catch return false;
+    defer dir.close(io_g.io());
+    var iter = dir.iterate();
+    while (iter.next(io_g.io()) catch null) |entry| {
+        if (!std.mem.startsWith(u8, entry.name, "python")) continue;
+        var pkg_buf: [768]u8 = undefined;
+        const p = std.fmt.bufPrint(&pkg_buf, "{s}/{s}/site-packages/{s}", .{ lib, entry.name, pkg }) catch continue;
+        if (io_g.cwdAccess(p, .{})) |_| return true else |_| {}
+    }
+    return false;
+}
 
 fn engineInstalled() bool {
     if (install_state.load(.acquire) == @intFromEnum(InstallState.done)) return true;
-    if (!engine_checked) {
-        engine_checked = true;
-        if (getVenvPython()) |py| {
-            engine_present = if (io_g.cwdAccess(py, .{})) |_| true else |_| false;
-        }
-    }
-    return engine_present;
+    return engineReady(active_engine);
 }
 
-// ── Find-in-page / zoom / bookmarks (UI thread only) ──
+// ── Find-in-page / zoom / bookmarks (UI thread only unless noted) ──
 var find_open: bool = false;
 var find_buf: [256]u8 = std.mem.zeroes([256]u8);
+// Last find match count from the bridge — written by the reader thread.
+// -1 means "no result yet" (nothing searched / response pending).
+var find_count: std.atomic.Value(i64) = std.atomic.Value(i64).init(-1);
+
 var zoom_level: f32 = 1.0;
+// Host the current zoom_level belongs to (per-site zoom, browser_zoom table).
+var zoom_host: [256]u8 = undefined;
+var zoom_host_len: usize = 0;
+
+// ── Reader overlay (readtext event) ──
+// Stage written by the reader thread under reader_lock; the UI thread copies
+// it into reader_buf at frame start (same staging pattern as nav updates).
+var reader_open: bool = false; // UI thread only
+var reader_buf: [8192]u8 = undefined; // UI thread only
+var reader_len: usize = 0;
+var reader_stage: [8192]u8 = undefined;
+var reader_stage_len: usize = 0;
+var reader_stage_dirty: bool = false; // guarded by reader_lock
+var reader_lock: @import("../core/sync.zig").Mutex = .{};
+
+// ── Intercepted downloads (bridge "download" events) ──
+// Staged by the reader thread; the UI thread hands them to the downloader.
+var dl_stage_url: [2048]u8 = undefined;
+var dl_stage_url_len: usize = 0;
+var dl_stage_name: [256]u8 = undefined;
+var dl_stage_name_len: usize = 0;
+var dl_stage_dirty: bool = false; // guarded by dl_stage_lock
+var dl_stage_lock: @import("../core/sync.zig").Mutex = .{};
 
 const db = @import("../core/db.zig");
 var bookmarks: [64]state.BrowserLink = std.mem.zeroes([64]state.BrowserLink);
 var bookmark_count: usize = 0;
 var bookmarks_loaded: bool = false;
+
+// ── Visit history cache (browser_history table; URL-bar autocomplete) ──
+// UI thread only, like bookmarks. Reloaded lazily after each recorded visit.
+const HIST_MAX = 64;
+var hist_urls: [HIST_MAX][512]u8 = undefined;
+var hist_url_lens: [HIST_MAX]usize = std.mem.zeroes([HIST_MAX]usize);
+var hist_titles: [HIST_MAX][128]u8 = undefined;
+var hist_title_lens: [HIST_MAX]usize = std.mem.zeroes([HIST_MAX]usize);
+var hist_count: usize = 0;
+var hist_loaded: bool = false;
+// Last URL written to browser_history — dedups the staged-nav replay.
+var last_visit_url: [2048]u8 = undefined;
+var last_visit_url_len: usize = 0;
 
 // ── Bridge lifecycle ──
 
@@ -250,16 +351,21 @@ fn startBridgeThread() void {
         return;
     };
 
-    logs.pushLog("info", "browser", "Starting Camoufox browser...", true);
+    const engine = active_engine;
+    {
+        var lb: [96]u8 = undefined;
+        const lmsg = std.fmt.bufPrint(&lb, "Starting {s} browser...", .{engineDisplayName(engine)}) catch "Starting browser...";
+        logs.pushLog("info", "browser", lmsg, true);
+    }
 
-    const argv = [_][]const u8{ venv_python, script_path };
+    const argv = [_][]const u8{ venv_python, script_path, "--engine", @tagName(engine) };
     var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
 
     _ = child.spawn() catch {
-        logs.pushLog("error", "browser", "Failed to spawn Camoufox bridge", false);
+        logs.pushLog("error", "browser", "Failed to spawn browser bridge", false);
         return;
     };
 
@@ -272,7 +378,7 @@ fn startBridgeThread() void {
     var waited: usize = 0;
     while (waited < 150) : (waited += 1) {
         if (bridge_ready.load(.acquire)) {
-            logs.pushLog("info", "browser", "Camoufox ready", true);
+            logs.pushLog("info", "browser", "Browser engine ready", true);
 
             // Send any pending navigate command (snapshot under lock — the UI
             // thread may be queueing a newer URL concurrently).
@@ -293,7 +399,7 @@ fn startBridgeThread() void {
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
     }
 
-    logs.pushLog("error", "browser", "Camoufox startup timeout", false);
+    logs.pushLog("error", "browser", "Browser engine startup timeout", false);
 }
 
 fn bridgeReaderThread() void {
@@ -311,7 +417,9 @@ fn bridgeReaderThread() void {
             // JSON response — read until newline. Oversized lines (scrape/eval
             // payloads) are drained to the newline so the framing never
             // desyncs into interpreting mid-JSON bytes as the next tag.
-            var buf: [8192]u8 = undefined;
+            // 24K: the readtext event carries up to 3500 chars of page text,
+            // ~21K worst-case once JSON-escaped.
+            var buf: [24576]u8 = undefined;
             var pos: usize = 0;
             while (true) {
                 var ch: [1]u8 = undefined;
@@ -357,8 +465,55 @@ fn bridgeReaderThread() void {
                         state.app.browser.is_loading.store(false, .release);
                         var msg_buf: [256]u8 = undefined;
                         const detail = extractJsonField(buf[0..pos], "error") orelse "unknown error";
-                        const msg = std.fmt.bufPrint(&msg_buf, "Navigation failed: {s}", .{detail[0..@min(detail.len, 180)]}) catch "Navigation failed";
-                        logs.pushLog("error", "browser", msg, false);
+                        if (!bridge_ready.load(.acquire)) {
+                            // Startup failure (engine import failed — e.g.
+                            // "cloakbrowser not installed — install it in
+                            // Settings"): surface it on the landing page via
+                            // the installer's failed state, not a silent hang.
+                            install_state.store(@intFromEnum(InstallState.failed), .release);
+                            setInstallMsg(detail[0..@min(detail.len, 200)]);
+                            // Force a fresh package presence check next frame.
+                            engine_ready_state[@intFromEnum(active_engine)].store(0, .release);
+                            logs.pushLog("error", "browser", detail[0..@min(detail.len, 200)], false);
+                        } else {
+                            const msg = std.fmt.bufPrint(&msg_buf, "Navigation failed: {s}", .{detail[0..@min(detail.len, 180)]}) catch "Navigation failed";
+                            logs.pushLog("error", "browser", msg, false);
+                        }
+                    },
+                    .find => {
+                        // {"ok": true, "found": bool, "count": N} — shown in
+                        // the find bar ("N matches" / "No matches").
+                        const cnt = pure.extractJsonUint(buf[0..pos], "count") orelse 0;
+                        find_count.store(@intCast(@min(cnt, 999_999)), .release);
+                    },
+                    .download => {
+                        // Intercepted page download → stage for the UI thread,
+                        // which hands it to Opal's downloader.
+                        var url_tmp: [2048]u8 = undefined;
+                        var name_tmp: [256]u8 = undefined;
+                        const url_raw = pure.extractJsonStringRaw(buf[0..pos], "url") orelse "";
+                        const name_raw = pure.extractJsonStringRaw(buf[0..pos], "filename") orelse "";
+                        const url_dec = pure.jsonUnescape(url_raw, &url_tmp);
+                        const name_dec = pure.jsonUnescape(name_raw, &name_tmp);
+                        if (url_dec.len > 0) {
+                            dl_stage_lock.lock();
+                            @memcpy(dl_stage_url[0..url_dec.len], url_dec);
+                            dl_stage_url_len = url_dec.len;
+                            const nn = @min(name_dec.len, dl_stage_name.len);
+                            @memcpy(dl_stage_name[0..nn], name_dec[0..nn]);
+                            dl_stage_name_len = nn;
+                            dl_stage_dirty = true;
+                            dl_stage_lock.unlock();
+                        }
+                    },
+                    .readtext => {
+                        // Reader overlay text — stage for the UI thread.
+                        const raw = pure.extractJsonStringRaw(buf[0..pos], "text") orelse "";
+                        reader_lock.lock();
+                        const dec = pure.jsonUnescape(raw, &reader_stage);
+                        reader_stage_len = dec.len;
+                        reader_stage_dirty = true;
+                        reader_lock.unlock();
                     },
                     .other => {},
                 }
@@ -425,7 +580,7 @@ fn bridgeReaderThread() void {
     }
 
     bridge_ready.store(false, .release);
-    logs.pushLog("info", "browser", "Camoufox bridge disconnected", false);
+    logs.pushLog("info", "browser", "Browser bridge disconnected", false);
 }
 
 fn sendCommand(cmd: []const u8) void {
@@ -573,11 +728,11 @@ pub fn navigate(url: []const u8) void {
     }
 }
 
-pub fn sendFind(text: []const u8) void {
+pub fn sendFind(text: []const u8, backwards: bool) void {
     if (!bridge_ready.load(.acquire)) return;
     var esc_buf: [4096]u8 = undefined;
     const esc = escapeJsonString(text, &esc_buf);
-    sendCommandFmt("{{\"cmd\":\"find\",\"text\":\"{s}\"}}", .{esc});
+    sendCommandFmt("{{\"cmd\":\"find\",\"text\":\"{s}\",\"dir\":\"{s}\"}}", .{ esc, if (backwards) "prev" else "next" });
 }
 
 pub fn sendZoom(factor: f32) void {
@@ -585,14 +740,52 @@ pub fn sendZoom(factor: f32) void {
     sendCommandFmt("{{\"cmd\":\"zoom\",\"factor\":{d:.2}}}", .{factor});
 }
 
-/// Clamp + apply + announce a zoom change (Cmd/Ctrl +/-/0 or the toolbar).
+/// Request the page's visible text for the reader overlay.
+pub fn requestReadText() void {
+    if (!bridge_ready.load(.acquire)) return;
+    sendCommand("{\"cmd\":\"readtext\"}");
+}
+
+/// Clamp + apply + announce a zoom change (Cmd/Ctrl +/-/0 or the toolbar),
+/// and persist it for the current site (browser_zoom table).
 fn setZoom(z: f32) void {
     zoom_level = std.math.clamp(z, 0.25, 4.0);
     sendZoom(zoom_level);
+    if (zoom_host_len > 0) saveZoomFor(zoom_host[0..zoom_host_len], zoom_level);
     var tb: [32]u8 = undefined;
     if (std.fmt.bufPrint(&tb, "Zoom {d}%", .{@as(i32, @intFromFloat(zoom_level * 100))})) |msg| {
         state.showToast(msg);
     } else |_| {}
+}
+
+// ── Per-site zoom persistence (browser_zoom table; UI thread only) ──
+
+fn loadZoomFor(host: []const u8) ?f32 {
+    if (host.len == 0) return null;
+    const stmt = db.prepare("SELECT factor FROM browser_zoom WHERE host = ?1") orelse return null;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, host);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return null;
+    const f: f32 = @floatCast(db.columnDouble(stmt, 0));
+    if (!(f >= 0.25 and f <= 4.0)) return null; // NaN/garbage guard
+    return f;
+}
+
+fn saveZoomFor(host: []const u8, factor: f32) void {
+    if (host.len == 0) return;
+    if (factor == 1.0) {
+        // Default zoom — drop the row instead of storing a no-op.
+        const stmt = db.prepare("DELETE FROM browser_zoom WHERE host = ?1") orelse return;
+        defer db.finalize(stmt);
+        db.bindText(stmt, 1, host);
+        _ = db.step(stmt);
+        return;
+    }
+    const stmt = db.prepare("INSERT OR REPLACE INTO browser_zoom (host, factor) VALUES (?1, ?2)") orelse return;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, host);
+    db.bindDouble(stmt, 2, factor);
+    _ = db.step(stmt);
 }
 
 // ── Bookmarks (browser_bookmarks table; newest first, capped at 64) ──
@@ -650,6 +843,151 @@ fn toggleBookmark() void {
             bookmark_count += 1;
         }
         state.showToast("Bookmarked");
+    }
+}
+
+// ── Visit history (browser_history table; URL-bar autocomplete) ──
+
+/// Upsert one visit. Only http(s) pages count; incognito never records.
+fn recordVisit(url: []const u8, title: []const u8) void {
+    if (state.app.incognito_mode) return;
+    if (!std.mem.startsWith(u8, url, "http")) return;
+    const stmt = db.prepare(
+        \\INSERT INTO browser_history (url, title) VALUES (?1, ?2)
+        \\ON CONFLICT(url) DO UPDATE SET
+        \\  visits = visits + 1,
+        \\  last_visit = strftime('%s','now'),
+        \\  title = CASE WHEN excluded.title != '' THEN excluded.title ELSE title END
+    ) orelse return;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, url);
+    db.bindText(stmt, 2, title);
+    _ = db.step(stmt);
+    hist_loaded = false; // autocomplete cache refreshes lazily
+}
+
+/// (Re)load the top history rows for autocomplete — most-visited first, so
+/// the pure ranking only has to break ties within this working set.
+fn loadHistoryRows() void {
+    if (hist_loaded) return;
+    hist_loaded = true;
+    hist_count = 0;
+    const stmt = db.prepare("SELECT url, title FROM browser_history ORDER BY visits DESC, last_visit DESC LIMIT 64") orelse return;
+    defer db.finalize(stmt);
+    while (db.step(stmt) == db.c.SQLITE_ROW and hist_count < HIST_MAX) {
+        db.copyColumn(stmt, 0, &hist_urls[hist_count], &hist_url_lens[hist_count]);
+        db.copyColumn(stmt, 1, &hist_titles[hist_count], &hist_title_lens[hist_count]);
+        if (hist_url_lens[hist_count] > 0) hist_count += 1;
+    }
+}
+
+// ── Download handoff ──
+
+/// Single, minimal handoff point from an intercepted page download into
+/// Opal's downloads: record it in download_history (the Transfers › History
+/// list) and fetch the file into the save dir on a worker thread. Kept as
+/// ONE function so a future transfers-service enqueue API can slot in
+/// without touching the bridge/reader plumbing.
+fn enqueueBrowserDownload(url: []const u8, filename: []const u8) void {
+    const S = struct {
+        var busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+        var url_buf: [2048]u8 = undefined;
+        var url_len: usize = 0;
+        var path_buf: [1024]u8 = undefined;
+        var path_len: usize = 0;
+        var name_buf: [256]u8 = undefined;
+        var name_len: usize = 0;
+
+        fn worker() void {
+            const Z = @This();
+            defer Z.busy.store(false, .release);
+            var child = io_g.Child.init(&.{
+                "curl",       "-L",  "--fail", "--silent",                "--show-error",
+                "--max-time", "600", "-o",     Z.path_buf[0..Z.path_len], Z.url_buf[0..Z.url_len],
+            }, alloc);
+            child.stdin_behavior = .Ignore;
+            child.stdout_behavior = .Ignore;
+            child.stderr_behavior = .Ignore;
+            _ = child.spawn() catch {
+                logs.pushLog("error", "browser", "Download failed to start (curl missing?)", false);
+                return;
+            };
+            const term = child.wait() catch {
+                logs.pushLog("error", "browser", "Download failed", false);
+                return;
+            };
+            const ok = switch (term) {
+                .exited => |code| code == 0,
+                else => false,
+            };
+            var mb: [320]u8 = undefined;
+            const msg = std.fmt.bufPrint(&mb, "{s}: {s}", .{
+                if (ok) "Download finished" else "Download failed",
+                Z.name_buf[0..Z.name_len],
+            }) catch "Download finished";
+            logs.pushLog(if (ok) "info" else "error", "browser", msg, ok);
+            state.wakeUi();
+        }
+    };
+
+    if (url.len == 0 or url.len > S.url_buf.len) return;
+    if (S.busy.load(.acquire)) {
+        state.showToast("A browser download is already running");
+        return;
+    }
+
+    var name_tmp: [256]u8 = undefined;
+    const safe_name = pure.sanitizeFilename(filename, &name_tmp);
+
+    const paths = @import("../core/paths.zig");
+    var dir_buf: [512]u8 = undefined;
+    const save_dir = if (state.app.save_path_len > 0)
+        state.app.save_path_buf[0..state.app.save_path_len]
+    else
+        paths.defaultSavePath(&dir_buf);
+
+    // Copy ALL inputs into the struct statics BEFORE spawning (CLAUDE.md).
+    @memcpy(S.url_buf[0..url.len], url);
+    S.url_len = url.len;
+    const nn = @min(safe_name.len, S.name_buf.len);
+    @memcpy(S.name_buf[0..nn], safe_name[0..nn]);
+    S.name_len = nn;
+    const full = std.fmt.bufPrint(&S.path_buf, "{s}/{s}", .{ save_dir, safe_name }) catch return;
+    S.path_len = full.len;
+
+    S.busy.store(true, .release);
+    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {
+        S.busy.store(false, .release);
+        logs.pushLog("error", "browser", "Could not start the download thread", false);
+        return;
+    }
+
+    @import("history.zig").addDownloadHistory(safe_name, url);
+    var tb: [300]u8 = undefined;
+    if (std.fmt.bufPrint(&tb, "Downloading {s}", .{safe_name})) |msg| {
+        state.showToast(msg);
+    } else |_| {}
+}
+
+/// Apply a staged download event (reader thread → UI thread).
+fn applyStagedDownload() void {
+    var url_tmp: [2048]u8 = undefined;
+    var name_tmp: [256]u8 = undefined;
+    var url_len: usize = 0;
+    var name_len: usize = 0;
+    dl_stage_lock.lock();
+    if (dl_stage_dirty) {
+        dl_stage_dirty = false;
+        url_len = dl_stage_url_len;
+        @memcpy(url_tmp[0..url_len], dl_stage_url[0..url_len]);
+        name_len = dl_stage_name_len;
+        @memcpy(name_tmp[0..name_len], dl_stage_name[0..name_len]);
+    }
+    dl_stage_lock.unlock();
+    if (url_len > 0) {
+        // The aborted download also aborted the page's loading state.
+        state.app.browser.is_loading.store(false, .release);
+        enqueueBrowserDownload(url_tmp[0..url_len], name_tmp[0..name_len]);
     }
 }
 
@@ -716,7 +1054,7 @@ pub fn killBridge() void {
     if (bridge_process) |*proc| {
         // Send quit command gracefully
         if (proc.stdin) |*stdin| {
-            _ = stdin.write("{\"cmd\":\"quit\"}\n") catch {};
+            @import("../core/io_global.zig").writeAll(stdin, "{\"cmd\":\"quit\"}\n") catch {};
         }
         @import("../core/io_global.zig").sleep(500 * std.time.ns_per_ms);
         _ = proc.kill() catch {};
@@ -863,6 +1201,31 @@ fn applyStagedNav(b: *@TypeOf(state.app.browser)) void {
     // user leaves the field without submitting.
     nav_stage_dirty = url_bar_focused and nav_stage_url_len > 0;
 
+    if (nav_stage_url_len > 0) {
+        const staged = nav_stage_url[0..nav_stage_url_len];
+
+        // Record the visit ONCE per navigation (the stage can stay dirty for
+        // many frames while the URL bar is focused — dedup by last URL).
+        if (!std.mem.eql(u8, staged, last_visit_url[0..last_visit_url_len])) {
+            const vn = @min(staged.len, last_visit_url.len);
+            @memcpy(last_visit_url[0..vn], staged[0..vn]);
+            last_visit_url_len = vn;
+            recordVisit(staged, nav_stage_title[0..nav_stage_title_len]);
+
+            // Per-site zoom: entering a different site swaps in its persisted
+            // factor (default 1.0).
+            const host = pure.urlHost(staged);
+            if (!std.mem.eql(u8, host, zoom_host[0..zoom_host_len])) {
+                const hn = @min(host.len, zoom_host.len);
+                @memcpy(zoom_host[0..hn], host[0..hn]);
+                zoom_host_len = hn;
+                zoom_level = loadZoomFor(zoom_host[0..zoom_host_len]) orelse 1.0;
+                // The page just loaded at zoom 1.0 — a site stored at 1.0
+                // needs no command; a zoomed site gets it re-applied below.
+            }
+        }
+    }
+
     // CSS zoom is per-document — re-apply after every navigation.
     if (zoom_level != 1.0) sendZoom(zoom_level);
 }
@@ -886,6 +1249,20 @@ pub fn renderContent() void {
 
     // Apply reader-thread nav updates (URL bar text + title) on the UI thread.
     applyStagedNav(b);
+
+    // Intercepted downloads → Opal's downloader (staged by the reader thread).
+    applyStagedDownload();
+
+    // Reader-overlay text staged by the reader thread → UI copy.
+    {
+        reader_lock.lock();
+        if (reader_stage_dirty) {
+            reader_stage_dirty = false;
+            reader_len = @min(reader_stage_len, reader_buf.len);
+            @memcpy(reader_buf[0..reader_len], reader_stage[0..reader_len]);
+        }
+        reader_lock.unlock();
+    }
 
     // Loading watchdog: if the bridge never answers (missing camoufox, crashed
     // worker), stop the loading indicator instead of animating it — and its
@@ -962,8 +1339,11 @@ pub fn renderContent() void {
             }
         }
 
-        // URL input
-        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &b.url_buf } }, .{
+        // URL input — manual TextEntryWidget so dvui.suggestion can own the
+        // event pass (↑/↓ move the dropdown highlight, Enter commits, Esc
+        // closes); te.processEvents must NOT run (see youtube.zig's search).
+        var te = dvui.widgetAlloc(dvui.TextEntryWidget);
+        te.init(@src(), .{ .text = .{ .buffer = &b.url_buf } }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 200, .h = 18 },
             .color_fill = dvui.Color{ .r = 28, .g = 28, .b = 34, .a = 255 },
@@ -974,11 +1354,63 @@ pub fn renderContent() void {
             .margin = .{ .x = 3, .y = 0, .w = 3, .h = 0 },
             .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
         });
+        var sug = dvui.suggestion(te, .{ .open_on_focus = false, .open_on_text_change = true });
+        te.draw();
+
+        // History autocomplete: rank the cached top-visited rows against the
+        // typed text (browser_pure.historyMatchScore) and offer the best 5.
+        var nav_pick: ?usize = null;
+        {
+            const q = std.mem.sliceTo(&b.url_buf, 0);
+            var picks: [5]usize = undefined;
+            var scores: [5]u32 = .{ 0, 0, 0, 0, 0 };
+            var npicks: usize = 0;
+            if (q.len >= 2 and url_bar_focused) {
+                loadHistoryRows();
+                for (0..hist_count) |hi| {
+                    const hurl = hist_urls[hi][0..hist_url_lens[hi]];
+                    // The page the user is already on is not a suggestion.
+                    if (std.mem.eql(u8, hurl, q)) continue;
+                    const sc = pure.historyMatchScore(q, hurl, hist_titles[hi][0..hist_title_lens[hi]]);
+                    if (sc == 0) continue;
+                    // Insertion sort into the top-5 (rows arrive most-visited
+                    // first, so equal scores keep the more-visited row).
+                    var ins: usize = npicks;
+                    while (ins > 0 and scores[ins - 1] < sc) : (ins -= 1) {}
+                    if (ins >= picks.len) continue;
+                    var mv: usize = @min(npicks, picks.len - 1);
+                    while (mv > ins) : (mv -= 1) {
+                        picks[mv] = picks[mv - 1];
+                        scores[mv] = scores[mv - 1];
+                    }
+                    picks[ins] = hi;
+                    scores[ins] = sc;
+                    if (npicks < picks.len) npicks += 1;
+                }
+            }
+            if (npicks == 0) sug.close();
+            if (npicks > 0 and sug.dropped()) {
+                for (picks[0..npicks]) |hi| {
+                    var disp_buf: [96]u8 = undefined;
+                    var disp: []const u8 = hist_urls[hi][0..hist_url_lens[hi]];
+                    if (std.mem.indexOf(u8, disp, "://")) |sp| disp = disp[sp + 3 ..];
+                    const safe_disp = safeUtf8Buf(disp[0..@min(disp.len, 88)], &disp_buf);
+                    if (sug.addChoiceLabel(safe_disp)) nav_pick = hi;
+                }
+            }
+        }
+        sug.deinit();
         const enter_pressed = te.enter_pressed;
         // While the user is editing the address, staged nav updates must not
         // overwrite their typing (applyStagedNav checks this each frame).
         url_bar_focused = dvui.focusedWidgetId() == te.data().id;
         te.deinit();
+        if (nav_pick) |hi| {
+            var nav_buf: [512]u8 = undefined;
+            const n = hist_url_lens[hi];
+            @memcpy(nav_buf[0..n], hist_urls[hi][0..n]);
+            navigate(nav_buf[0..n]);
+        }
 
         // Go (play icon)
         const clicked_go = dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
@@ -1055,6 +1487,25 @@ pub fn renderContent() void {
                 setZoom(zoom_level + 0.1);
             }
         }
+
+        // Reader — extract the page's text into a scrollable overlay.
+        if (b.url_len > 0) {
+            var rd_wd: dvui.WidgetData = undefined;
+            var rd_style = icon_btn_style;
+            rd_style.id_extra = 125;
+            rd_style.data_out = &rd_wd;
+            if (reader_open) rd_style.color_text = theme.colors.accent;
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"book-open", .{}, .{}, rd_style)) {
+                if (reader_open) {
+                    reader_open = false;
+                } else {
+                    reader_open = true;
+                    reader_len = 0; // stale text from the previous page hides
+                    requestReadText();
+                }
+            }
+            @import("../ui/components.zig").tipId(@src(), rd_wd, "Reader: extract page text", 125);
+        }
     }
 
     // ── Find-in-page bar (Cmd/Ctrl+F; Enter = next match; Esc closes) ──
@@ -1085,28 +1536,52 @@ pub fn renderContent() void {
             .gravity_y = 0.5,
         });
         const find_enter = fte.enter_pressed;
+        // New text → the old result is stale; hide the count until the bridge
+        // answers the next search.
+        if (fte.text_changed) find_count.store(-1, .release);
         fte.deinit();
 
-        const next_clicked = dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-right", .{}, .{}, .{
-            .id_extra = 130,
+        const nav_btn_style = dvui.Options{
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 3, .y = 2, .w = 3, .h = 2 },
             .gravity_y = 0.5,
-        });
-        if (next_clicked or find_enter) {
+        };
+        var prev_style = nav_btn_style;
+        prev_style.id_extra = 129;
+        const prev_clicked = dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-left", .{}, .{}, prev_style);
+        var next_style = nav_btn_style;
+        next_style.id_extra = 130;
+        const next_clicked = dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-right", .{}, .{}, next_style);
+        if (next_clicked or prev_clicked or find_enter) {
             const t = std.mem.sliceTo(&find_buf, 0);
-            if (t.len > 0) sendFind(t);
+            if (t.len > 0) sendFind(t, prev_clicked);
         }
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
-            .id_extra = 131,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 3, .y = 2, .w = 3, .h = 2 },
-            .gravity_y = 0.5,
-        })) {
+
+        // Match count from the last bridge response ("N matches" / "No matches").
+        {
+            const cnt = find_count.load(.acquire);
+            if (cnt == 0) {
+                _ = dvui.label(@src(), "No matches", .{}, .{
+                    .id_extra = 132,
+                    .color_text = theme.colors.text_tertiary,
+                    .gravity_y = 0.5,
+                    .padding = .{ .x = 6, .y = 0, .w = 6, .h = 0 },
+                });
+            } else if (cnt > 0) {
+                _ = dvui.label(@src(), "{d} match{s}", .{ cnt, if (cnt == 1) "" else "es" }, .{
+                    .id_extra = 133,
+                    .color_text = theme.colors.text_secondary,
+                    .gravity_y = 0.5,
+                    .padding = .{ .x = 6, .y = 0, .w = 6, .h = 0 },
+                });
+            }
+        }
+
+        var close_style = nav_btn_style;
+        close_style.id_extra = 131;
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, close_style)) {
             find_open = false;
         }
     }
@@ -1138,7 +1613,9 @@ pub fn renderContent() void {
     // Update texture from latest frame
     updateFrameTexture();
 
-    if (frame_texture) |tex| {
+    if (reader_open) {
+        renderReaderOverlay();
+    } else if (frame_texture) |tex| {
         // Render the browser frame as a full-pane image
         var img_box = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .both,
@@ -1217,6 +1694,7 @@ pub fn renderContent() void {
                     // Local browser shortcuts — handled here, never forwarded.
                     if (chord and key.code == .f) {
                         find_open = true;
+                        find_count.store(-1, .release);
                         e.handled = true;
                         continue;
                     }
@@ -1285,7 +1763,10 @@ pub fn renderContent() void {
         });
 
         if (bridge_ready.load(.acquire)) {
-            _ = dvui.label(@src(), "Powered by Camoufox — Anti-detect Firefox", .{}, .{
+            _ = dvui.label(@src(), "Powered by {s} — {s}", .{ engineDisplayName(active_engine), switch (active_engine) {
+                .camoufox => "Anti-detect Firefox",
+                .cloakbrowser => "Anti-detect Chromium",
+            } }, .{
                 .id_extra = 3,
                 .color_text = theme.colors.accent,
                 .gravity_x = 0.5,
@@ -1298,7 +1779,7 @@ pub fn renderContent() void {
                 .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
             });
         } else if (bridge_starting.load(.acquire)) {
-            _ = dvui.label(@src(), "Starting Camoufox browser engine...", .{}, .{
+            _ = dvui.label(@src(), "Starting the {s} browser engine...", .{engineDisplayName(active_engine)}, .{
                 .id_extra = 3,
                 .color_text = theme.colors.text_secondary,
                 .gravity_x = 0.5,
@@ -1385,7 +1866,10 @@ fn renderEngineStatus() void {
         })) {
             installEngine();
         }
-        _ = dvui.label(@src(), "Headless Firefox (Camoufox) rendered inside this pane — anti-bot, full JS", .{}, .{
+        _ = dvui.label(@src(), "{s}", .{switch (active_engine) {
+            .camoufox => "Headless Firefox (Camoufox) rendered inside this pane — anti-bot, full JS",
+            .cloakbrowser => "Headless Chromium (CloakBrowser) rendered inside this pane — anti-bot, full JS",
+        }}, .{
             .id_extra = 14,
             .color_text = theme.colors.text_tertiary,
             .gravity_x = 0.5,
@@ -1400,7 +1884,7 @@ fn renderEngineStatus() void {
         .gravity_x = 0.5,
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
     });
-    _ = dvui.label(@src(), "Enter a URL above to launch Camoufox", .{}, .{
+    _ = dvui.label(@src(), "Enter a URL above to launch {s}", .{engineDisplayName(active_engine)}, .{
         .id_extra = 6,
         .color_text = theme.colors.text_tertiary,
         .gravity_x = 0.5,
@@ -1509,6 +1993,83 @@ fn renderQuickLaunch(b: *@TypeOf(state.app.browser)) void {
     }
 }
 
+/// Reader overlay — the page's extracted text (bridge "readtext" event) in a
+/// scrollable pane, in place of the streamed frame. Esc or the X closes it.
+fn renderReaderOverlay() void {
+    const icons = @import("icons");
+
+    for (dvui.events()) |*e| {
+        if (e.handled) continue;
+        switch (e.evt) {
+            .key => |key| {
+                if (key.action == .down and key.code == .escape) {
+                    reader_open = false;
+                    e.handled = true;
+                }
+            },
+            else => {},
+        }
+    }
+
+    var box = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .both,
+        .background = true,
+        .color_fill = dvui.Color{ .r = 14, .g = 14, .b = 18, .a = 255 },
+    });
+    defer box.deinit();
+
+    {
+        var hrow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+        });
+        defer hrow.deinit();
+        _ = dvui.label(@src(), "Reader", .{}, .{
+            .color_text = theme.colors.text_primary,
+            .gravity_y = 0.5,
+        });
+        var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+        spacer.deinit();
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
+            .id_extra = 140,
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = theme.colors.text_secondary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 3, .y = 2, .w = 3, .h = 2 },
+            .gravity_y = 0.5,
+        })) {
+            reader_open = false;
+        }
+    }
+
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
+    defer scroll.deinit();
+
+    if (reader_len == 0) {
+        _ = dvui.label(@src(), "Extracting page text…", .{}, .{
+            .id_extra = 141,
+            .color_text = theme.colors.text_secondary,
+            .gravity_x = 0.5,
+            .padding = .{ .x = 0, .y = 20, .w = 0, .h = 0 },
+        });
+        dvui.refresh(null, @src(), null);
+        return;
+    }
+
+    const S = struct {
+        var safe_buf: [8192]u8 = undefined;
+    };
+    var tl = dvui.textLayout(@src(), .{}, .{
+        .expand = .horizontal,
+        .background = false,
+        .padding = .{ .x = 16, .y = 10, .w = 16, .h = 16 },
+    });
+    tl.addText(safeUtf8Buf(reader_buf[0..reader_len], &S.safe_buf), .{
+        .color_text = theme.colors.text_primary,
+    });
+    tl.deinit();
+}
+
 /// Indeterminate 3px sweep — rendered under the URL bar while navigating.
 fn renderLoadingBar() void {
     var track = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -1586,7 +2147,10 @@ pub const routeContent = pure.routeContent;
 pub fn loadContentDirect(url: []const u8) void {
     if (state.app.players.items.len == 0) {
         if (@import("../player/player.zig").MediaPlayer.init(alloc)) |np| {
-            state.app.players.append(alloc, np) catch { np.deinit(alloc); return; };
+            state.app.players.append(alloc, np) catch {
+                np.deinit(alloc);
+                return;
+            };
             state.app.active_player_idx = 0;
         } else |_| return;
     }
@@ -1610,7 +2174,10 @@ pub fn loadContentDirect(url: []const u8) void {
 pub fn loadContentDirectMeta(url: []const u8, art_url: []const u8, title: []const u8, subtitle: []const u8) void {
     if (state.app.players.items.len == 0) {
         if (@import("../player/player.zig").MediaPlayer.init(alloc)) |np| {
-            state.app.players.append(alloc, np) catch { np.deinit(alloc); return; };
+            state.app.players.append(alloc, np) catch {
+                np.deinit(alloc);
+                return;
+            };
             state.app.active_player_idx = 0;
         } else |_| return;
     }

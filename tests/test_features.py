@@ -4205,6 +4205,81 @@ def test_scam_torrent_flagging():
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "pure heuristics routed; badges + play/queue/drag blocks in both views"
 
+
+@test("Browser: CloakBrowser engine + upgrades", "Browser")
+def test_browser_cloak_engine():
+    br = _src("src/services/browser.zig")
+    bp = _src("src/services/browser_pure.zig")
+    py = _src("scripts/camoufox_bridge.py")
+    cfg = _src("src/core/config.zig")
+    st = _src("src/ui/settings.zig")
+    dbz = _src("src/core/db.zig")
+
+    # The bridge must compile and its protocol selftest (incl. --engine
+    # parsing) must pass — no browser launch involved.
+    bridge_path = os.path.join(PROJECT_DIR, "scripts", "camoufox_bridge.py")
+    r = subprocess.run([sys.executable, "-m", "py_compile", bridge_path],
+                       capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        return "fail", "bridge py_compile: " + r.stderr[:60]
+    r = subprocess.run([sys.executable, bridge_path, "--selftest"],
+                       capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        return "fail", "bridge selftest: " + (r.stderr or r.stdout)[:60]
+
+    checks = {
+        # ── Part 1: engine option ──
+        "engine enum is pure + parsed": ("pub const Engine = enum { camoufox, cloakbrowser }" in bp
+                                         and "pub fn engineFromString" in bp
+                                         and "pure.Engine" in br),
+        "config key round-trips": cfg.count('"browser_engine"') >= 2,
+        "settings picker + per-engine status": ('"Browser Engine"' in st
+                                                and "CloakBrowser" in st
+                                                and "engineReady" in st
+                                                and "killBridge" in st),
+        "installer branches per engine": ('"--upgrade", pkg' in br
+                                          and '"camoufox", "fetch"' in br
+                                          and "first launch downloads ~200 MB" in br),
+        "bridge handles both engines": ("from cloakbrowser import launch" in py
+                                        and "from camoufox.sync_api import Camoufox" in py
+                                        and "def parse_engine" in py
+                                        and "humanize=True" in py),
+        "zig passes engine argv": '"--engine", @tagName(engine)' in br,
+        "missing engine surfaces, no hang": ("not installed — install it in Settings" in py
+                                             and "if (!bridge_ready.load(.acquire))" in br
+                                             and "InstallState.failed" in br),
+        # ── Part 2: feature upgrades ──
+        "find: prev/next + match count": ('\\"dir\\":\\"{s}\\"' in br
+                                          and 'cmd.get("dir", "next")' in py
+                                          and '"count": count' in py
+                                          and "find_count" in br
+                                          and '"No matches"' in br),
+        "zoom: per-site persistence": ("browser_zoom" in dbz
+                                       and "loadZoomFor" in br
+                                       and "saveZoomFor" in br
+                                       and "pub fn urlHost" in bp),
+        "downloads: intercepted + handed off": ('page.on("download"' in py
+                                                and '"event": "download"' in py
+                                                and "enqueueBrowserDownload" in br
+                                                and "addDownloadHistory" in br
+                                                and "pub fn sanitizeFilename" in bp),
+        "history: recorded + autocomplete": ("browser_history" in dbz
+                                             and "recordVisit" in br
+                                             and "pub fn historyMatchScore" in bp
+                                             and "pure.historyMatchScore" in br
+                                             and "dvui.suggestion(" in br),
+        "reader: text overlay": ('"readtext"' in py
+                                 and "renderReaderOverlay" in br
+                                 and "requestReadText" in br
+                                 and "pub fn jsonUnescape" in bp),
+        "pure module unit-tested": "browser_pure.zig" in _src("build.zig"),
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "engine picker + find/zoom/downloads/history/reader wired"
+
+
 @test("VirusTotal hash lookup", "Security")
 def test_virustotal_lookup():
     vtp = _src("src/services/virustotal_pure.zig")
@@ -4239,6 +4314,7 @@ def test_virustotal_lookup():
     if bad:
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "user-triggered VT deep links: magnet btih + file sha256/md5"
+
 
 def run_all():
     test_fns = [v for v in globals().values() if callable(v) and hasattr(v, '_test')]
