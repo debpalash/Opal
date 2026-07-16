@@ -179,6 +179,24 @@ def test_zig_unit():
     return "fail", f"exit {r.returncode}"
 
 
+@test("YouTube bypasses bot wall via tv client", "Network")
+def test_youtube_player_client():
+    # REGRESSION — YouTube served "Sign in to confirm you're not a bot" + HTTP
+    # 429 to the default web client (it now wants a PO token), so playback,
+    # search, and extraction all failed. The TVHTML5 ("tv") player client is
+    # not gated that way and needs no cookies — verified returning a live
+    # stream URL. Must be set on every yt-dlp/mpv YouTube path.
+    checks = {
+        "playback (mpv ytdl-raw-options)": "youtube:player_client=tv" in _src("src/player/player.zig"),
+        "search/browse (youtube.zig)": "youtube:player_client=tv" in _src("src/services/youtube.zig"),
+        "extraction (extractors.zig)": "youtube:player_client=tv" in _src("src/services/extractors.zig"),
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "player_client=tv missing on: " + ", ".join(bad)
+    return "pass", "tv player client on playback + search + extraction (no bot wall / 429)"
+
+
 @test("Anime data loads despite Jikan flakiness", "Network")
 def test_anime_jikan_resilience():
     # REGRESSION — every anime view was blank by default: Jikan 504s on the

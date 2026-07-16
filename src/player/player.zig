@@ -827,14 +827,21 @@ pub const MediaPlayer = struct {
         // no-check-certificates: bypass SSL issues
         // no-playlist: prevent ytdl_hook from expanding model/channel pages
         const cookies_prefix: []const u8 = if (firefoxProfileExists()) "cookies-from-browser=firefox," else "";
-        var raw_buf: [320]u8 = undefined;
+        // YouTube now serves "Sign in to confirm you're not a bot" + HTTP 429 to
+        // the default web client (it wants a PO token / visitor data). The TVHTML5
+        // ("tv") player client is NOT gated that way and returns a direct stream
+        // URL with no cookies — verified against the live API. Route YouTube
+        // extraction through it for uninterrupted playback. Single client → no
+        // comma in the value, so it's safe in mpv's comma-separated raw options.
+        const yt_args = "extractor-args=youtube:player_client=tv,";
+        var raw_buf: [400]u8 = undefined;
         if (state.app.proxy_url_len > 0) {
             const proxy_str = state.app.proxy_url[0..state.app.proxy_url_len];
-            if (std.fmt.bufPrintZ(&raw_buf, "{s}no-check-certificates=,no-playlist=,proxy={s}", .{ cookies_prefix, proxy_str })) |raw| {
+            if (std.fmt.bufPrintZ(&raw_buf, "{s}{s}no-check-certificates=,no-playlist=,proxy={s}", .{ yt_args, cookies_prefix, proxy_str })) |raw| {
                 _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-raw-options", raw.ptr);
             } else |_| {}
         } else {
-            if (std.fmt.bufPrintZ(&raw_buf, "{s}no-check-certificates=,no-playlist=", .{cookies_prefix})) |raw| {
+            if (std.fmt.bufPrintZ(&raw_buf, "{s}{s}no-check-certificates=,no-playlist=", .{ yt_args, cookies_prefix })) |raw| {
                 _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-raw-options", raw.ptr);
             } else |_| {}
         }

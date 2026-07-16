@@ -541,7 +541,7 @@ fn runYtdlp(target: []const u8, item_range: ?[]const u8, gen: u32) void {
     // %(upload_date)s is YYYYMMDD or NA on flat-playlist; %(channel_id)s feeds
     // the clickable channel → channel-videos view.
     const ytdlp_bin = @import("ytdlp.zig").binary();
-    var argv_buf: [11][]const u8 = undefined;
+    var argv_buf: [13][]const u8 = undefined;
     var argc: usize = 0;
     for ([_][]const u8{
         ytdlp_bin,
@@ -551,6 +551,10 @@ fn runYtdlp(target: []const u8, item_range: ?[]const u8, gen: u32) void {
         "--no-warnings",
         "--socket-timeout",
         "10",
+        // TVHTML5 client dodges YouTube's bot wall + 429 (the default web client
+        // now demands a PO token). Same fix as the mpv playback path.
+        "--extractor-args",
+        "youtube:player_client=tv",
     }) |a| {
         argv_buf[argc] = a;
         argc += 1;
