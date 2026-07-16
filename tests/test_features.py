@@ -45,6 +45,7 @@ from features import (  # noqa: F401
     test_anime_schedule,
     test_manga_heancms,
     test_manga_themesia,
+    test_manga_catalog,
     test_scrape_fetch,
     test_extension,
     test_anime_extractors,

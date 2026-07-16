@@ -57,6 +57,14 @@ if [ -f "$ROOT/plugins-manifest.json" ]; then
     cp "$ROOT/plugins-manifest.json" "$APP_DIR/Contents/Resources/plugins-manifest.json"
 fi
 
+# Bundle the opt-in SFW manga source catalog (Madara/MangaThemesia/HeanCms sites
+# classified from the keiyoushi index). Browsed/installed via the Plugins tab or
+# the /api/source/catalog endpoint — never auto-loaded, no scraper URL hardcoded
+# in the binary. (plugin_repo.loadMangaCatalog reads it from Resources.)
+if [ -f "$ROOT/manga-sources-sfw.json" ]; then
+    cp "$ROOT/manga-sources-sfw.json" "$APP_DIR/Contents/Resources/manga-sources-sfw.json"
+fi
+
 # Bundle the web companion (single self-contained page) — remote.zig serves
 # it at / from Resources/web when Web Remote is enabled.
 if [ -f "$ROOT/web/index.html" ]; then

@@ -649,6 +649,20 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         sendJson(stream, "{\"ok\":true,\"action\":\"open\"}");
         return;
     }
+    // Opt-in SFW manga source catalog — a curated array of
+    // {name,base,framework,lang} for Madara/MangaThemesia/HeanCms sites the user
+    // can browse and install. NOT auto-loaded: install an entry by POSTing its
+    // base+framework to /source/add below (that writes source_config). Empty
+    // array when the catalog file isn't bundled.
+    if (std.mem.eql(u8, api_path, "/source/catalog")) {
+        if (@import("plugin_repo.zig").readMangaCatalog()) |body| {
+            defer @import("../core/alloc.zig").allocator.free(body);
+            sendJson(stream, body);
+        } else {
+            sendJson(stream, "[]");
+        }
+        return;
+    }
     // "Add this site as an Opal source" — the extension detects the manga/novel
     // framework a page uses and installs it as a source in one click. framework
     // ∈ {madara,mangathemesia,heancms,madara_novel,lightnovelwp,readwn} maps 1:1

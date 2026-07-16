@@ -439,3 +439,61 @@ pub fn installStarterPack() usize {
     }
     return installed;
 }
+
+// ── Opt-in SFW manga source catalog ──────────────────────────────────────────
+//
+// `manga-sources-sfw.json` is a CATALOG, not a live source list: a curated array
+// of `{ name, base, framework, lang }` for SFW manga sites classified (by the
+// keiyoushi index) as one of Opal's framework engines — Madara, MangaThemesia,
+// HeanCms. It is browsed/installed by the user (Plugins tab or the remote
+// `/api/source/catalog` + `/api/source/add` endpoints); NOTHING here is active
+// until the user picks an entry. Consistent with Opal's source-neutral design:
+// the binary ships no scraper URL; installing just writes `source_config`.
+//
+// NOTE: the current source_config model keys by framework id, so only ONE base
+// per framework is active at a time — this catalog is a PICKER. Installing an
+// entry sets that framework's active base (a multi-site-per-framework upgrade is
+// a separate task).
+
+/// True for the three framework engines the catalog can drive. `iken` sites are
+/// pre-mapped to `heancms` at catalog-build time, so only these three appear.
+pub fn isMangaFramework(fw: []const u8) bool {
+    return std.mem.eql(u8, fw, "madara") or
+        std.mem.eql(u8, fw, "mangathemesia") or
+        std.mem.eql(u8, fw, "heancms");
+}
+
+/// Install a catalog entry: set `framework`'s active base to `base`. Routes
+/// through `source_config.install(framework, {"base":"<base>"})` exactly like
+/// the browser extension's /api/source/add. Returns false on a bad framework,
+/// a non-http(s) base, or a write error. This is the single opt-in install path
+/// for the SFW manga catalog (Plugins tab + remote endpoint call into it).
+pub fn installMangaSource(base: []const u8, framework: []const u8) bool {
+    if (!isMangaFramework(framework)) return false;
+    if (!(std.mem.startsWith(u8, base, "https://") or std.mem.startsWith(u8, base, "http://"))) return false;
+    if (base.len > 512) return false;
+    // Flat JSON body {"base":"<base>"}; escape so the origin can't break JSON.
+    var body_buf: [640]u8 = undefined;
+    var bw = std.Io.Writer.fixed(&body_buf);
+    bw.writeAll("{\"base\":\"") catch return false;
+    for (base) |c| {
+        switch (c) {
+            '"', '\\' => bw.writeAll(&.{ '\\', c }) catch return false,
+            else => bw.writeByte(c) catch return false,
+        }
+    }
+    bw.writeAll("\"}") catch return false;
+    return source_config.install(framework, body_buf[0..bw.end]);
+}
+
+/// Read the raw SFW manga catalog JSON (caller owns/frees). Bundled into the .app
+/// (Resources/manga-sources-sfw.json); in dev it's read from the project root.
+/// Returns null when the file is absent (feature simply isn't offered).
+pub fn readMangaCatalog() ?[]u8 {
+    var path_buf: [700]u8 = undefined;
+    const path: []const u8 = if (state.resourceRoot()) |r|
+        (std.fmt.bufPrint(&path_buf, "{s}/manga-sources-sfw.json", .{r}) catch return null)
+    else
+        "manga-sources-sfw.json";
+    return io.cwdReadFileAlloc(path, alloc, 512 * 1024) catch return null;
+}
