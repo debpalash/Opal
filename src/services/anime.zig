@@ -515,6 +515,9 @@ fn publishListsJson(json: []const u8, my_gen: u32) usize {
     defer anime_parse_mutex.unlock();
     if (search_gen.load(.acquire) != my_gen) return 0; // re-check under the lock
 
+    // Lists cards are not scraper cards.
+    results_are_scraper = false;
+
     // Fresh load: retire the old cards' poster textures (UI-thread work → queue).
     for (0..state.app.anime.results.len) |i| {
         state.app.anime.results[i].poster_fetching = false;
@@ -613,6 +616,16 @@ pub fn searchAnime(query: []const u8) void {
     const safe_len = @min(query.len, search_query_buf.len);
     @memcpy(search_query_buf[0..safe_len], query[0..safe_len]);
     search_query_len = safe_len;
+
+    // Site-framework source installed → search the site's own catalog instead of
+    // Jikan (source_config-gated; INERT by default). See the DooPlay/AnimeStream
+    // section below.
+    if (activeScraper() != .none) {
+        if (std.Thread.spawn(.{}, scraperSearchThread, .{my_gen})) |t| {
+            t.detach();
+        } else |_| state.app.anime.is_loading.store(false, .release);
+        return;
+    }
 
     if (std.Thread.spawn(.{}, searchThread, .{my_gen})) |t| {
         t.detach(); // never joined — detach to avoid leaking the handle
@@ -930,6 +943,8 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
         // Clear broadcast badges (only Calendar repopulates them; other modes
         // leave them zeroed so no stale airtime shows on a Trending card).
         for (0..state.app.anime.broadcast_lens.len) |i| state.app.anime.broadcast_lens[i] = 0;
+        // Jikan cards are not scraper cards → route episodes/play to the Jikan path.
+        results_are_scraper = false;
     }
 
     while (pos < json.len and count < state.app.anime.results.len) {
@@ -1201,6 +1216,11 @@ fn anilistEnrichThread(my_gen: u32) void {
 
 pub fn loadEpisodes(idx: usize) void {
     if (idx >= state.app.anime.result_count) return;
+    // Scraper cards resolve episodes from the site's detail page, not Jikan.
+    if (results_are_scraper) {
+        loadEpisodesScraper(idx);
+        return;
+    }
     state.app.anime.selected_idx = idx;
 
     // Instantly populate numbered episode slots so UI is responsive
@@ -1658,6 +1678,15 @@ pub fn playEpisode(ep_no: []const u8) void {
     const ep_len = @min(ep_no.len, 7);
     @memcpy(ep_copy[0..ep_len], ep_no[0..ep_len]);
 
+    // Scraper cards resolve the episode's EMBED URL from the site and hand it to
+    // playEmbed (→ the shared extractor stack), instead of the torrent/AnimePahe path.
+    if (results_are_scraper) {
+        if (std.Thread.spawn(.{}, scraperPlayThread, .{ ep_copy, ep_len })) |t| {
+            t.detach();
+        } else |_| state.app.anime.stream_loading = false;
+        return;
+    }
+
     if (std.Thread.spawn(.{}, fetchStreamThread, .{ ep_copy, ep_len })) |t| {
         t.detach(); // never joined — detach so the handle isn't leaked
     } else |_| {
@@ -1797,6 +1826,478 @@ fn tryAnimePaheDDL(name: []const u8, ep_no: []const u8) bool {
     }
 
     return false;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// SITE-FRAMEWORK ENGINES — DooPlay (~25 sites) + AnimeStream (~20 sites)
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Two WordPress anime-theme scrapers wired as source_config-gated alternatives to
+// the built-in Jikan-metadata + torrent/AnimePahe play path. Both are INERT until
+// a plugin writes their base URL (`dooplay`/`animestream` → source_config), so the
+// default build is 100% unchanged. When a base IS configured, Search-mode routes
+// the search → detail → episode → play flow through the site's own pages:
+//
+//   1. searchAnime(query)      → scraperSearchThread → grid parse → results[]
+//   2. loadEpisodes(idx)       → loadEpisodesScraper → episode-list parse
+//   3. playEpisode(ep)         → scraperPlayThread → EMBED URL → playEmbed()
+//
+// The EMBED URL each framework produces is fed to the SAME extractor stack
+// (anime_extractors.resolveEmbed via playEmbed) already on main:
+//   • DooPlay:     episode page → #playeroptionsul (data-post/nume/type) → POST
+//                  wp-admin/admin-ajax.php (doo_player_ajax) → {embed_url} JSON.
+//   • AnimeStream: episode page → server <option value="base64 iframe"> decode
+//                  (or first raw <iframe src>) → embed URL.
+//
+// ALL HTML/JSON/URL parsing is routed through the tested pure modules
+// (anime_dooplay_pure / anime_animestream_pure) so the shipped logic IS the
+// tested logic. Fetches use scrapeFetch (anti-block, Cloudflare-fronted sites);
+// the DooPlay AJAX POST uses curl with a Referer + X-Requested-With header.
+
+const dooplay = @import("anime_dooplay_pure.zig");
+const animestream = @import("anime_animestream_pure.zig");
+const mt_pure = @import("manga_themesia_pure.zig");
+const source_config = @import("../core/source_config.zig");
+const scrape = @import("scrape_fetch.zig");
+
+const AnimeScraper = enum { none, dooplay, animestream };
+
+/// Which site-framework source is installed (dooplay wins if both are). `.none`
+/// keeps the entire built-in Jikan path unchanged.
+fn activeScraper() AnimeScraper {
+    if (source_config.get("dooplay", "base") != null) return .dooplay;
+    if (source_config.get("animestream", "base") != null) return .animestream;
+    return .none;
+}
+
+fn scraperId(src: AnimeScraper) []const u8 {
+    return switch (src) {
+        .dooplay => "dooplay",
+        .animestream => "animestream",
+        .none => "",
+    };
+}
+
+/// Copy the configured base URL for `src` into `out` (the source_config slice
+/// points into a table that reload() can move, so snapshot it). Null when inert.
+fn scraperBase(src: AnimeScraper, out: []u8) ?[]const u8 {
+    const id = scraperId(src);
+    if (id.len == 0) return null;
+    const b = source_config.get(id, "base") orelse return null;
+    if (b.len == 0 or b.len > out.len) return null;
+    @memcpy(out[0..b.len], b);
+    return out[0..b.len];
+}
+
+// Parallel to state.app.anime.results[] / episode_list[] — the scraper detail-page
+// URL per card and the episode-page URL per episode. Kept module-level (not in the
+// state struct) because the AnimeResult.id field is only [64]u8 and detail URLs
+// exceed that. Written under anime_parse_mutex during publish; the UI thread reads
+// them when a card / episode is opened.
+var scraper_detail_url: [100][256]u8 = undefined;
+var scraper_detail_len: [100]usize = std.mem.zeroes([100]usize);
+var scraper_ep_url: [200][256]u8 = undefined;
+var scraper_ep_len: [200]usize = std.mem.zeroes([200]usize);
+/// True when results[] currently holds scraper cards (set at publish, cleared by
+/// the Jikan/lists publishers). Routes loadEpisodes/playEpisode to the scraper.
+var results_are_scraper: bool = false;
+/// Which framework produced the current results[]/episodes.
+var scraper_kind: AnimeScraper = .none;
+
+/// Last path segment of a detail URL (a stable-ish per-title key for watch
+/// tracking; AnimeResult.id is only [64]u8 so we can't store the full URL).
+fn slugOf(url: []const u8) []const u8 {
+    var u = std.mem.trimEnd(u8, url, "/");
+    if (std.mem.lastIndexOfScalar(u8, u, '/')) |s| u = u[s + 1 ..];
+    if (u.len > 63) u = u[0..63];
+    return u;
+}
+
+/// Kick a scraper search (query in search_query_buf; empty ⇒ popular/latest grid).
+/// Mirrors searchAnime's generation/loading bookkeeping.
+pub fn loadScraperPopular() void {
+    if (activeScraper() == .none) return;
+    state.app.anime.is_loading.store(true, .release);
+    state.app.anime.selected_idx = null;
+    state.app.anime.episode_count = 0;
+    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    grid_page = 1;
+    more_available = false;
+    search_query_len = 0; // empty query → popular
+    if (std.Thread.spawn(.{}, scraperSearchThread, .{my_gen})) |t| {
+        t.detach();
+    } else |_| state.app.anime.is_loading.store(false, .release);
+}
+
+/// GET a page through the anti-block scrape layer into a fresh heap buffer.
+/// Returns the body length (0 on failure); caller owns/free via the passed buf.
+fn scraperGet(url: []const u8, buf: []u8) usize {
+    const body = scrape.scrapeFetch(url, buf) orelse return 0;
+    return body.len;
+}
+
+/// POST `body` to the DooPlay admin-ajax endpoint with the Referer + AJAX marker
+/// the WordPress handler requires. Returns bytes read into `dst` (0 on failure).
+fn scraperPost(url: []const u8, referer: []const u8, body: []const u8, dst: []u8) usize {
+    const io_g = @import("../core/io_global.zig");
+    var ref_buf: [320]u8 = undefined;
+    const ref_hdr = std.fmt.bufPrint(&ref_buf, "Referer: {s}", .{referer}) catch return 0;
+    const argv = [_][]const u8{
+        "curl",       "-sL",           "-A",   agent,
+        "-H",         "X-Requested-With: XMLHttpRequest",
+        "-H",         ref_hdr,         "--data", body,
+        "--max-time", "15",            url,
+    };
+    var child = io_g.Child.init(&argv, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    _ = child.spawn() catch return 0;
+    const n = if (child.stdout) |*so| io_g.readAll(so, dst) catch 0 else 0;
+    _ = child.wait() catch {};
+    return n;
+}
+
+/// Fetch + parse a scraper search (or popular) grid and publish into results[].
+/// Shares results[]/generation with the Jikan parser → takes anime_parse_mutex and
+/// re-checks the generation, exactly like publishListsJson.
+fn scraperSearchThread(my_gen: u32) void {
+    defer state.app.anime.is_loading.store(false, .release);
+    const src = activeScraper();
+    if (src == .none) return;
+
+    var base_buf: [256]u8 = undefined;
+    const base = scraperBase(src, &base_buf) orelse return;
+
+    // Snapshot the query (a newer search may overwrite the static buffer).
+    var q_buf: [256]u8 = undefined;
+    const qlen = @min(search_query_len, q_buf.len);
+    @memcpy(q_buf[0..qlen], search_query_buf[0..qlen]);
+    const query = q_buf[0..qlen];
+
+    var url_buf: [640]u8 = undefined;
+    const url = blk: {
+        if (query.len >= 2) {
+            break :blk (switch (src) {
+                .dooplay => dooplay.buildSearchUrl(base, query, &url_buf),
+                .animestream => animestream.buildSearchUrl(base, query, &url_buf),
+                .none => null,
+            }) orelse return;
+        }
+        break :blk (switch (src) {
+            .dooplay => dooplay.buildPopularUrl(base, &url_buf),
+            .animestream => animestream.buildPopularUrl(base, &url_buf),
+            .none => null,
+        }) orelse return;
+    };
+
+    const html_buf = alloc.alloc(u8, 1024 * 1024) catch return;
+    defer alloc.free(html_buf);
+    const n = scraperGet(url, html_buf);
+    if (n == 0 or workers_isQuitting()) return;
+    if (search_gen.load(.acquire) != my_gen) return; // superseded mid-fetch
+
+    const shown = publishScraperGrid(html_buf[0..n], base, src, my_gen);
+    var lb: [96]u8 = undefined;
+    logs.pushLog("info", "anime", std.fmt.bufPrintZ(&lb, "{s} grid loaded ({d})", .{ scraperId(src), shown }) catch "Scraper grid loaded", false);
+}
+
+fn workers_isQuitting() bool {
+    return @import("../core/workers.zig").isQuitting();
+}
+
+/// Publish parsed scraper grid items into state.app.anime.results[]. Returns rows
+/// shown. Retires old poster textures (UI-thread work → queued) under the mutex.
+fn publishScraperGrid(html: []const u8, base: []const u8, src: AnimeScraper, my_gen: u32) usize {
+    anime_parse_mutex.lock();
+    defer anime_parse_mutex.unlock();
+    if (search_gen.load(.acquire) != my_gen) return 0;
+
+    // Fresh load: retire the old cards' poster textures + reset flags.
+    for (0..state.app.anime.results.len) |i| {
+        state.app.anime.results[i].poster_fetching = false;
+        state.app.anime.results[i].expanded = false;
+        if (state.app.anime.results[i].poster_tex) |tex| {
+            queueTexFree(tex);
+            state.app.anime.results[i].poster_tex = null;
+        }
+    }
+    for (0..state.app.anime.broadcast_lens.len) |i| state.app.anime.broadcast_lens[i] = 0;
+
+    var count: usize = 0;
+    const max = state.app.anime.results.len;
+
+    const Emit = struct {
+        fn one(url_raw: []const u8, title_raw: []const u8, img_tag: []const u8, bse: []const u8, idx: usize) bool {
+            const item = &state.app.anime.results[idx];
+            var abs_buf: [256]u8 = undefined;
+            const detail = mt_pure.resolveUrl(bse, url_raw, &abs_buf);
+            if (detail.len == 0 or detail.len >= scraper_detail_url[idx].len) return false;
+            const title = std.mem.trim(u8, title_raw, " \t\r\n");
+            if (title.len == 0 or title.len > item.name.len) return false;
+
+            @memcpy(state.app.anime.results[idx].name[0..title.len], title);
+            item.name_len = title.len;
+
+            const slug = slugOf(detail);
+            const idl = @min(slug.len, item.id.len);
+            @memcpy(item.id[0..idl], slug[0..idl]);
+            item.id_len = idl;
+
+            @memcpy(scraper_detail_url[idx][0..detail.len], detail);
+            scraper_detail_len[idx] = detail.len;
+
+            // Cover (image-attr rule → absolute) — only if it fits the [128] field.
+            item.poster_url_len = 0;
+            if (img_tag.len > 0) {
+                var cov_buf: [256]u8 = undefined;
+                if (mt_pure.pickImageAttr(img_tag, bse, &cov_buf)) |cov| {
+                    if (cov.len > 0 and cov.len <= item.poster_url.len) {
+                        @memcpy(item.poster_url[0..cov.len], cov);
+                        item.poster_url_len = cov.len;
+                    }
+                }
+            }
+            item.episodes = 0; // unknown until the detail page is opened
+            item.score = 0;
+            item.overview_len = 0;
+            item.poster_fetching = false;
+            item.poster_attempted = false;
+            item.poster_failed = false;
+            if (item.poster_tex) |tx| {
+                queueTexFree(tx);
+                item.poster_tex = null;
+            }
+            item.expanded = false;
+            return true;
+        }
+    };
+
+    switch (src) {
+        .dooplay => {
+            var it = dooplay.gridIter(html);
+            while (it.next()) |g| {
+                if (count >= max) break;
+                if (Emit.one(g.url, g.title, g.img_tag, base, count)) count += 1;
+            }
+        },
+        .animestream => {
+            var it = animestream.searchIter(html);
+            while (it.next()) |g| {
+                if (count >= max) break;
+                if (Emit.one(g.url, g.title, g.img_tag, base, count)) count += 1;
+            }
+        },
+        .none => {},
+    }
+
+    if (search_gen.load(.acquire) != my_gen) return 0;
+    results_are_scraper = true;
+    scraper_kind = src;
+    state.app.anime.result_count = count;
+    more_available = false;
+    return count;
+}
+
+/// Fetch the selected card's detail page, parse its episode list, and publish the
+/// episodes (oldest-first). Routed to from loadEpisodes when results are scraper
+/// cards. Sets up the same episode_list/titles/aired arrays the UI already renders.
+fn loadEpisodesScraper(idx: usize) void {
+    if (idx >= state.app.anime.result_count) return;
+    state.app.anime.selected_idx = idx;
+    state.app.anime.episode_count = 0;
+    state.app.anime.is_loading.store(true, .release);
+    if (std.Thread.spawn(.{}, episodesScraperThread, .{idx})) |t| {
+        t.detach();
+    } else |_| state.app.anime.is_loading.store(false, .release);
+}
+
+fn episodesScraperThread(idx: usize) void {
+    defer state.app.anime.is_loading.store(false, .release);
+    const src = scraper_kind;
+    if (src == .none or idx >= state.app.anime.results.len) return;
+    const durl = scraper_detail_url[idx][0..scraper_detail_len[idx]];
+    if (durl.len == 0) return;
+
+    var base_buf: [256]u8 = undefined;
+    const base = scraperBase(src, &base_buf) orelse durl; // fall back to detail origin
+
+    var detail_copy: [256]u8 = undefined;
+    @memcpy(detail_copy[0..durl.len], durl);
+    const detail_url = detail_copy[0..durl.len];
+
+    const html_buf = alloc.alloc(u8, 1024 * 1024) catch return;
+    defer alloc.free(html_buf);
+    const n = scraperGet(detail_url, html_buf);
+    if (n == 0 or workers_isQuitting()) return;
+    const html = html_buf[0..n];
+
+    // Collect episodes in document order, then reverse to oldest-first. Heap-
+    // allocated (≈74 KB) — never on the worker's ~512 KB stack (CLAUDE.md).
+    const EpTmp = struct {
+        url: [256]u8 = undefined,
+        url_len: usize = 0,
+        label: [80]u8 = undefined,
+        label_len: usize = 0,
+        date: [12]u8 = undefined,
+        date_len: usize = 0,
+    };
+    const tmp = alloc.alloc(EpTmp, 200) catch return;
+    defer alloc.free(tmp);
+    var found: usize = 0;
+
+    const addEp = struct {
+        fn run(ep_url: []const u8, label: []const u8, date: []const u8, bse: []const u8, buf: []EpTmp, cnt: *usize) void {
+            if (cnt.* >= buf.len) return;
+            var abs_buf: [256]u8 = undefined;
+            const abs = mt_pure.resolveUrl(bse, ep_url, &abs_buf);
+            if (abs.len == 0 or abs.len >= 256) return;
+            var e = &buf[cnt.*];
+            @memcpy(e.url[0..abs.len], abs);
+            e.url_len = abs.len;
+            e.label_len = @min(label.len, e.label.len);
+            @memcpy(e.label[0..e.label_len], label[0..e.label_len]);
+            e.date_len = @min(date.len, e.date.len);
+            @memcpy(e.date[0..e.date_len], date[0..e.date_len]);
+            cnt.* += 1;
+        }
+    }.run;
+
+    switch (src) {
+        .dooplay => {
+            var it = dooplay.episodeIter(html);
+            while (it.next()) |e| addEp(e.url, e.label, e.date, base, tmp, &found);
+            // Movie (no episode list) → single "Movie" episode = the detail page.
+            if (found == 0) addEp(detail_url, "Movie", "", base, tmp, &found);
+        },
+        .animestream => {
+            var it = animestream.episodeIter(html);
+            while (it.next()) |e| {
+                const lbl = if (e.title.len > 0) e.title else e.num;
+                addEp(e.url, lbl, e.date, base, tmp, &found);
+            }
+        },
+        .none => {},
+    }
+    if (found == 0 or workers_isQuitting()) return;
+    if (state.app.anime.selected_idx != idx) return; // user navigated away
+
+    // Publish reversed (oldest-first) into the shared episode arrays. Episode
+    // NUMBERS are 1..N (what the UI plays by); the site's own label becomes the
+    // episode title. scraper_ep_url[i] is the episode page to resolve on play.
+    anime_parse_mutex.lock();
+    defer anime_parse_mutex.unlock();
+    const ep_n = @min(found, state.app.anime.episode_list.len);
+    for (0..ep_n) |i| {
+        const e = &tmp[found - 1 - i]; // reverse
+        var nb: [8]u8 = undefined;
+        const num = std.fmt.bufPrint(&nb, "{d}", .{i + 1}) catch "1";
+        @memcpy(state.app.anime.episode_list[i][0..num.len], num);
+        state.app.anime.episode_list_lens[i] = num.len;
+
+        const ll = @min(e.label_len, state.app.anime.episode_titles[i].len);
+        @memcpy(state.app.anime.episode_titles[i][0..ll], e.label[0..ll]);
+        state.app.anime.episode_title_lens[i] = ll;
+
+        const dl2 = @min(e.date_len, state.app.anime.episode_aired[i].len);
+        @memcpy(state.app.anime.episode_aired[i][0..dl2], e.date[0..dl2]);
+        state.app.anime.episode_aired_lens[i] = dl2;
+        state.app.anime.episode_scores[i] = 0;
+        state.app.anime.episode_filler[i] = false;
+
+        @memcpy(scraper_ep_url[i][0..e.url_len], e.url[0..e.url_len]);
+        scraper_ep_len[i] = e.url_len;
+    }
+    state.app.anime.episode_count = ep_n;
+    state.app.anime.results[idx].episodes = @intCast(ep_n);
+
+    // Hydrate watched flags from the DB (keyed by the card slug id).
+    for (0..@min(ep_n, state.app.anime.episode_watched.len)) |i| state.app.anime.episode_watched[i] = false;
+    const card_id = state.app.anime.results[idx].id[0..state.app.anime.results[idx].id_len];
+    if (card_id.len > 0) @import("../core/db.zig").animeLoadWatched(card_id, state.app.anime.episode_watched[0..ep_n]);
+}
+
+/// Resolve the selected episode's EMBED URL (per framework) and hand it to
+/// playEmbed. Runs on a worker thread (blocking HTTP).
+fn scraperPlayThread(ep_buf: [8]u8, ep_len: usize) void {
+    defer state.app.anime.stream_loading = false;
+    const src = scraper_kind;
+    if (src == .none) return;
+    const ep_no = ep_buf[0..ep_len];
+
+    // Map episode number → the parallel scraper_ep_url index (episode_list is 1..N,
+    // so index = number-1; fall back to a label scan for robustness).
+    var ep_idx: usize = blk: {
+        if (std.fmt.parseInt(usize, ep_no, 10)) |n| {
+            if (n >= 1 and n <= state.app.anime.episode_count) break :blk n - 1;
+        } else |_| {}
+        var i: usize = 0;
+        while (i < state.app.anime.episode_count) : (i += 1) {
+            if (std.mem.eql(u8, state.app.anime.episode_list[i][0..state.app.anime.episode_list_lens[i]], ep_no)) break :blk i;
+        }
+        break :blk 0;
+    };
+    if (ep_idx >= scraper_ep_url.len) ep_idx = 0;
+    const eurl = scraper_ep_url[ep_idx][0..scraper_ep_len[ep_idx]];
+    if (eurl.len == 0) {
+        logs.pushLog("error", "anime", "Scraper: no episode URL for this episode", true);
+        return;
+    }
+    var ep_copy: [256]u8 = undefined;
+    @memcpy(ep_copy[0..eurl.len], eurl);
+    const ep_url = ep_copy[0..eurl.len];
+
+    var base_buf: [256]u8 = undefined;
+    const base = scraperBase(src, &base_buf) orelse "";
+
+    const html_buf = alloc.alloc(u8, 1024 * 1024) catch return;
+    defer alloc.free(html_buf);
+    const n = scraperGet(ep_url, html_buf);
+    if (n == 0 or workers_isQuitting()) {
+        logs.pushLog("error", "anime", "Scraper: episode page fetch failed", true);
+        return;
+    }
+    const html = html_buf[0..n];
+
+    var embed_buf: [1024]u8 = undefined;
+    const embed: ?[]const u8 = switch (src) {
+        .animestream => animestream.firstEmbed(html, &embed_buf),
+        .dooplay => resolveDooplayEmbed(html, base, ep_url, &embed_buf),
+        .none => null,
+    };
+    const e = embed orelse {
+        logs.pushLog("error", "anime", "Scraper: no embed found on episode page", true);
+        return;
+    };
+    logs.pushLog("info", "anime", "Scraper: embed resolved → playing", false);
+    playEmbed(e);
+}
+
+/// DooPlay embed chain: walk #playeroptionsul, POST doo_player_ajax for each
+/// server option until one returns an `embed_url`. Referer for the POST is the
+/// site base (+ X-Requested-With), matching WordPress's AJAX contract.
+fn resolveDooplayEmbed(html: []const u8, base: []const u8, ep_url: []const u8, out: []u8) ?[]const u8 {
+    if (base.len == 0) return null;
+    var ajax_url_buf: [320]u8 = undefined;
+    const ajax_url = dooplay.buildAjaxUrl(base, &ajax_url_buf) orelse return null;
+    const referer = if (ep_url.len > 0) ep_url else base;
+
+    const resp_buf = alloc.alloc(u8, 128 * 1024) catch return null;
+    defer alloc.free(resp_buf);
+
+    var it = dooplay.playerOptionIter(html);
+    var tried: usize = 0;
+    while (it.next()) |opt| {
+        if (tried >= 6) break; // bound the number of AJAX round-trips
+        tried += 1;
+        var body_buf: [160]u8 = undefined;
+        const body = dooplay.buildAjaxBody(opt.post, opt.nume, opt.type_, &body_buf) orelse continue;
+        const rn = scraperPost(ajax_url, referer, body, resp_buf);
+        if (rn == 0 or workers_isQuitting()) continue;
+        if (dooplay.parseEmbedUrl(resp_buf[0..rn], out)) |embed| {
+            if (embed.len > 0) return embed;
+        }
+    }
+    return null;
 }
 
 /// Resolve a streaming-host EMBED URL to a real playable stream and play it.
@@ -2372,7 +2873,9 @@ fn dispatchModeFetch() void {
                     recordFired(buf);
                     searchAnime(buf);
                 } else if (state.app.anime.result_count == 0) {
-                    loadTrendingAnime();
+                    // Site-framework source installed → show its popular/latest
+                    // catalog; otherwise the Jikan trending grid.
+                    if (activeScraper() != .none) loadScraperPopular() else loadTrendingAnime();
                 }
             }
         },

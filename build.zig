@@ -1087,4 +1087,32 @@ pub fn build(b: *std.Build) void {
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main
     // exe builds + runs.
+
+    // DooPlay anime engine (one base-URL-driven scraper → ~25 WordPress "DooPlay"
+    // video sites): search/popular grid, div.sheader details, ul.episodios episode
+    // list, and the doo_player_ajax EMBED chain (#playeroptionsul data-post/nume/
+    // type → admin-ajax POST body → {"embed_url"} JSON parse). anime.zig routes all
+    // DooPlay parsing through here so the tested logic is the shipped logic.
+    const test_anime_dooplay_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/anime_dooplay_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_anime_dooplay_pure).step);
+
+    // AnimeStream anime engine (one base-URL-driven scraper → ~20 WordPress
+    // "AnimeStream" sites): REUSES manga_themesia_pure's SearchIter/details (shared
+    // Themesia DOM) + adds the .eplister episode list and the server-option EMBED
+    // extraction (base64 <iframe> decode, first-iframe fallback). anime.zig routes
+    // all AnimeStream parsing through here so the tested logic is the shipped logic.
+    const test_anime_animestream_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/anime_animestream_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_anime_animestream_pure).step);
 }
