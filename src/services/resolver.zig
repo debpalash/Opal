@@ -2255,6 +2255,17 @@ pub fn playItem(idx: usize) void {
             state.gotoPlayer();
         },
         .torrent => {
+            // Central chokepoint for torrent playback from universal results —
+            // row clicks and play buttons all land here, so a scam-flagged
+            // name (exe/scr "movie", archive bait, …) is refused in one place.
+            const risk = @import("torrent_risk_pure.zig").assess(item.name[0..item.name_len], 0);
+            if (risk.risk == .block) {
+                var tb: [160]u8 = undefined;
+                const msg = std.fmt.bufPrint(&tb, "Blocked scam torrent: {s}", .{risk.reason}) catch "Blocked scam torrent";
+                state.showToastTyped(msg, .err);
+                @import("../core/logs.zig").pushLog("warn", "search", msg, false);
+                return;
+            }
             // URL is a 1337x detail page — need to resolve magnet
             // For now, load directly (the search.zig loadTorrentToPlayer handles magnets)
             const url = item.url[0..item.url_len];

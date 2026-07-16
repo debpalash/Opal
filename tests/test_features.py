@@ -4054,6 +4054,40 @@ def test_youtube_browse():
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "suggestions dropdown + clickable channels + play→player wired"
 
+
+@test("Scam torrent flagging + block", "Search")
+def test_scam_torrent_flagging():
+    # Heuristics live in a TESTED pure module; both result views badge risky
+    # rows and every load path (play, double-click, queue, drag) is guarded.
+    rp = _src("src/services/torrent_risk_pure.zig")
+    sz = _src("src/services/search.zig")
+    rz = _src("src/services/resolver.zig")
+    bz = _src("build.zig")
+    checks = {
+        "pure module unit-tested": "torrent_risk_pure.zig" in bz,
+        "assess is pure + routed": ("pub fn assess" in rp
+                                    and sz.count("torrent_risk_pure.zig") >= 2
+                                    and sz.count(".assess(") >= 2),
+        # exe/scr/archive bait, password bait, implausible-size all present.
+        "exe heuristic": '"exe"' in rp and '"scr"' in rp,
+        "archive heuristic": '"rar"' in rp and '"zip"' in rp,
+        "password bait": "password" in rp,
+        "size heuristic": "5 * 1024 * 1024" in rp,
+        # Central guard: universal row clicks/play all funnel through playItem.
+        "playItem central guard": "Blocked scam torrent" in rz,
+        # Torrent-tab card: play, double-click, queue, and drag all guarded.
+        "torrent tab guards": sz.count("Blocked scam torrent") >= 4,
+        "drag guarded": "risk.risk != .block" in sz,
+        # Visible flags in both views, with the reason spelled out on cards.
+        "universal flag chip": '"Scam?"' in sz,
+        "card reason label": "playback disabled" in sz,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "pure heuristics routed; badges + play/queue/drag blocks in both views"
+
+
 def run_all():
     test_fns = [v for v in globals().values() if callable(v) and hasattr(v, '_test')]
     

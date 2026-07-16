@@ -1074,13 +1074,21 @@ pub fn renderSearchContent() void {
             const s_num_filter = std.fmt.parseInt(i64, r.seeds, 10) catch 0;
             if (s_num_filter < min_seed_filter) continue;
 
+            // Scam heuristics — the torrent tab has real byte sizes, so the
+            // implausible-size checks engage here too. Block disables
+            // play/queue on this card (copy actions stay available).
+            const risk = @import("torrent_risk_pure.zig").assess(
+                r.name,
+                std.fmt.parseFloat(f64, r.size) catch 0.0,
+            );
+
             // ── Card container ──
             var row = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = idx,
                 .expand = .horizontal,
                 .background = true,
                 .color_fill = theme.colors.bg_surface,
-                .color_border = if (r.is_nsfw) theme.colors.danger else theme.colors.border_subtle,
+                .color_border = if (r.is_nsfw or risk.risk == .block) theme.colors.danger else theme.colors.border_subtle,
                 .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
                 .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
             });
@@ -1092,6 +1100,20 @@ pub fn renderSearchContent() void {
                 .expand = .horizontal,
                 .color_text = if (r.is_nsfw) theme.colors.warning else theme.colors.text_primary,
             });
+
+            // ── Row 1a: Scam/caution flag with the reason spelled out ──
+            if (risk.risk != .ok) {
+                var risk_buf: [200]u8 = undefined;
+                const risk_lbl = std.fmt.bufPrint(&risk_buf, "{s} — {s}", .{
+                    if (risk.risk == .block) "Scam risk, playback disabled" else "Caution",
+                    risk.reason,
+                }) catch "Scam risk";
+                _ = dvui.label(@src(), "{s}", .{risk_lbl}, .{
+                    .id_extra = idx + 85000,
+                    .color_text = if (risk.risk == .block) theme.colors.danger else theme.colors.warning,
+                    .margin = .{ .x = 0, .y = 1, .w = 0, .h = 2 },
+                });
+            }
 
             // ── Row 1b: Quality badge (if detected) ──
             {
@@ -1230,19 +1252,29 @@ pub fn renderSearchContent() void {
                     .min_size_content = .{ .w = 13, .h = 13 },
                     .gravity_y = 0.5,
                 })) {
-                    const queue = @import("queue.zig");
-                    queue.addToQueue(r.link, r.name, r.engine);
-                    state.showToast("Added to queue");
+                    if (risk.risk == .block) {
+                        var tb: [160]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&tb, "Blocked scam torrent: {s}", .{risk.reason}) catch "Blocked scam torrent";
+                        state.showToastTyped(msg, .err);
+                    } else {
+                        const queue = @import("queue.zig");
+                        queue.addToQueue(r.link, r.name, r.engine);
+                        state.showToast("Added to queue");
+                    }
                 }
 
-                // Play button
+                // Play button — dimmed and refused on scam-flagged cards.
                 if (dvui.button(@src(), "Play", .{}, .{
                     .id_extra = idx,
-                    .color_fill = theme.colors.accent,
-                    .color_text = dvui.Color{ .r = 15, .g = 15, .b = 20, .a = 255 },
+                    .color_fill = if (risk.risk == .block) theme.colors.bg_elevated else theme.colors.accent,
+                    .color_text = if (risk.risk == .block) theme.colors.text_tertiary else dvui.Color{ .r = 15, .g = 15, .b = 20, .a = 255 },
                     .corner_radius = theme.dims.rad_sm,
                 })) {
-                    if (r.is_nsfw) {
+                    if (risk.risk == .block) {
+                        var tb: [160]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&tb, "Blocked scam torrent: {s}", .{risk.reason}) catch "Blocked scam torrent";
+                        state.showToastTyped(msg, .err);
+                    } else if (r.is_nsfw) {
                         const nl = @min(r.link.len, 4095);
                         @memcpy(state.app.nsfw_confirm_link_buf[0..nl], r.link[0..nl]);
                         state.app.nsfw_confirm_link_len = nl;
@@ -1259,14 +1291,21 @@ pub fn renderSearchContent() void {
                 for (dvui.events()) |*e| {
                     if (dvui.eventMatch(e, .{ .id = row.data().id, .r = row.data().borderRectScale().r })) {
                         if (e.evt == .mouse and e.evt.mouse.action == .motion and dvui.dragging(e.evt.mouse.p, null) != null) {
-                            const max_len = @min(r.link.len, 4095);
-                            @memcpy(state.app.dragging_magnet_buf[0..max_len], r.link[0..max_len]);
-                            state.app.dragging_magnet_len = max_len;
+                            // Scam-flagged rows can't be drag-loaded either.
+                            if (risk.risk != .block) {
+                                const max_len = @min(r.link.len, 4095);
+                                @memcpy(state.app.dragging_magnet_buf[0..max_len], r.link[0..max_len]);
+                                state.app.dragging_magnet_len = max_len;
+                            }
                         }
                         if (e.evt == .mouse and e.evt.mouse.action == .release and e.evt.mouse.button == .left) {
                             const now = @import("../core/io_global.zig").milliTimestamp();
                             if (state.app.last_clicked_search_idx == idx and (now - state.app.last_clicked_time) < 400) {
-                                if (r.is_nsfw) {
+                                if (risk.risk == .block) {
+                                    var tb: [160]u8 = undefined;
+                                    const msg = std.fmt.bufPrint(&tb, "Blocked scam torrent: {s}", .{risk.reason}) catch "Blocked scam torrent";
+                                    state.showToastTyped(msg, .err);
+                                } else if (r.is_nsfw) {
                                     const nl2 = @min(r.link.len, 4095);
                                     @memcpy(state.app.nsfw_confirm_link_buf[0..nl2], r.link[0..nl2]);
                                     state.app.nsfw_confirm_link_len = nl2;
@@ -1713,6 +1752,14 @@ fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit
 fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedItem) void {
     const resolver = @import("resolver.zig");
 
+    // Scam heuristics only apply to torrent listings (universal results carry
+    // no size, so name-only assessment). Block = play/queue refuse the row.
+    const risk_pure = @import("torrent_risk_pure.zig");
+    const risk = if (item.source == .torrent)
+        risk_pure.assess(item.name[0..item.name_len], 0)
+    else
+        risk_pure.Assessment{};
+
     const chip_color = switch (item.source) {
         .jellyfin => dvui.Color{ .r = 100, .g = 180, .b = 255, .a = 255 },
         .stremio => dvui.Color{ .r = 100, .g = 220, .b = 100, .a = 255 },
@@ -1789,6 +1836,22 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         }
     }
 
+    // Risk flag — red "Scam?" for blocked rows, amber "Caution" for warns.
+    // Hovering the row still shows the full reason via the play/queue toast.
+    if (risk.risk != .ok) {
+        const flag_color = if (risk.risk == .block) theme.colors.danger else theme.colors.warning;
+        _ = dvui.label(@src(), "{s}", .{if (risk.risk == .block) "Scam?" else "Caution"}, .{
+            .id_extra = idx + 9900,
+            .color_text = flag_color,
+            .color_border = flag_color,
+            .border = dvui.Rect.all(1),
+            .corner_radius = dvui.Rect.all(theme.radius.pill),
+            .padding = .{ .x = 8, .y = 1, .w = 8, .h = 1 },
+            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            .gravity_y = 0.5,
+        });
+    }
+
     // Source chip — the category, fixed on the right before the actions.
     _ = dvui.label(@src(), "{s}", .{chip_text}, .{
         .id_extra = idx + 9300,
@@ -1802,11 +1865,12 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         .min_size_content = .{ .w = 58, .h = 0 },
     });
 
-    // Explicit Play affordance.
+    // Explicit Play affordance — dimmed on blocked rows; the click still
+    // routes to playItem, whose central risk guard toasts the reason.
     if (dvui.buttonIcon(@src(), "play", icons.tvg.lucide.play, .{}, .{}, .{
         .id_extra = idx + 9700,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_text = theme.colors.accent,
+        .color_text = if (risk.risk == .block) theme.colors.text_tertiary else theme.colors.accent,
         .border = dvui.Rect.all(0),
         .gravity_y = 0.5,
         .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
@@ -1819,13 +1883,19 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         if (dvui.buttonIcon(@src(), "queue", icons.tvg.lucide.plus, .{}, .{}, .{
             .id_extra = idx + 9800,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = theme.colors.text_secondary,
+            .color_text = if (risk.risk == .block) theme.colors.text_tertiary else theme.colors.text_secondary,
             .border = dvui.Rect.all(0),
             .gravity_y = 0.5,
             .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
         })) {
-            @import("queue.zig").addToQueue(item.url[0..item.url_len], item.name[0..item.name_len], "torrent");
-            state.showToast("Added to queue");
+            if (risk.risk == .block) {
+                var tb: [160]u8 = undefined;
+                const msg = std.fmt.bufPrint(&tb, "Blocked scam torrent: {s}", .{risk.reason}) catch "Blocked scam torrent";
+                state.showToastTyped(msg, .err);
+            } else {
+                @import("queue.zig").addToQueue(item.url[0..item.url_len], item.name[0..item.name_len], "torrent");
+                state.showToast("Added to queue");
+            }
         }
     }
 }

@@ -844,6 +844,18 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_playlist_pure).step);
 
+    // Scam/malware torrent heuristics (exe/scr/archive "movies", password
+    // bait, implausible sizes). search.zig rows and resolver.playItem route
+    // through assess() to badge and block risky results.
+    const test_torrent_risk_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/torrent_risk_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_torrent_risk_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main
