@@ -223,7 +223,10 @@ pub fn freeComicPages() void {
     for (0..128) |i| {
         page_decode_failed[i] = false; // fresh page set — clear the decode-failure latch
         if (state.app.comic.page_textures[i]) |tex| {
-            dvui.textureDestroyLater(tex);
+            // Skip the deferred GPU destroy when no dvui window is live (appDeinit
+            // runs after the frame loop ends) — it would panic; the backend
+            // reclaims the textures on teardown. See freeCoverSlot.
+            if (dvui.current_window != null) dvui.textureDestroyLater(tex);
         }
         state.app.comic.page_textures[i] = null;
         if (state.app.comic.page_pixels[i]) |px| {
@@ -865,7 +868,11 @@ const CARD_FOOTER_H: f32 = 40;
 /// is the sole owner of textures/pixels, so this never races a worker free.
 fn freeCoverSlot(i: usize) void {
     if (sr_cover_tex[i]) |tex| {
-        dvui.textureDestroyLater(tex);
+        // textureDestroyLater needs a live dvui window. During appDeinit the
+        // frame loop has already ended (current_window == null), so calling it
+        // panics; the GPU textures are reclaimed on backend teardown anyway, so
+        // skip the deferred destroy at shutdown and just drop our handle.
+        if (dvui.current_window != null) dvui.textureDestroyLater(tex);
         sr_cover_tex[i] = null;
     }
     if (sr_cover_pixels[i]) |px| {
