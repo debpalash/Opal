@@ -3198,6 +3198,56 @@ def test_unified_downloads():
     return "pass", "one merged list: pure dedup + chips + union actions + infohash join"
 
 
+@test("Downloader: segments/resume/limit/queue", "Transfers")
+def test_http_downloader():
+    # IDM-class HTTP downloader: segmented Range downloads, sidecar resume,
+    # retry/backoff, a global token-bucket speed limit and a FIFO scheduler.
+    # The engine must ROUTE through the unit-tested pure module (no drift).
+    pure = _src("src/services/download_pure.zig")
+    eng = _src("src/services/download_engine.zig")
+    glue = _src("src/services/downloads.zig")
+    tr = _src("src/services/transfers.zig")
+    st = _src("src/core/state.zig")
+    cfg = _src("src/core/config.zig")
+    bz = _src("build.zig")
+    checks = {
+        # Pure module registered + engine routes through it.
+        "pure module unit-tested": "download_pure.zig" in bz,
+        "segment plan routed": "planSegments(" in pure and "dp.planSegments(" in eng,
+        "segment count heuristic routed": "pickSegmentCount(" in pure and "dp.pickSegmentCount(" in eng,
+        "token bucket routed": "pub fn take(" in pure and "dp.take(" in eng,
+        "backoff routed": "pub fn backoffMs(" in pure and "dp.backoffMs(" in eng,
+        "rolling speed window routed": "SpeedWindow" in pure and "speed.rate(" in eng,
+        # Transport: real Range + If-Range validation strings.
+        "range requests": '"Range"' in eng and "bytes={d}-{d}" in eng,
+        "if-range validation": '"If-Range"' in eng,
+        "range probe": "bytes=0-0" in eng and "partial_content" in eng,
+        # Persistence: sidecar written during download, parsed on restart.
+        "sidecar persistence": ".opal-part.json" in eng and "writePartMeta" in pure,
+        "sidecar restore on launch": "restoreSidecar" in glue and "parsePartMeta" in glue,
+        # Retry + stall detection.
+        "per-segment retry budget": "MAX_RETRIES" in eng and "retryWait" in eng,
+        "stalled segment reconnect": "STALL_MS" in eng and "seg_kick" in eng,
+        # Config keys: segment count / max concurrent / shared speed limit.
+        "config keys": ("http_dl_segments" in st and "http_dl_max_concurrent" in st
+                        and 'setKey("http_dl_segments"' in cfg
+                        and 'setKey("http_dl_max_concurrent"' in cfg),
+        "speed limit wired": "cfg_rate_bps" in eng and "download_rate_limit" in glue,
+        # Scheduler: capped concurrency, FIFO queue with a visible Queued state.
+        "fifo scheduler": "cfg_max_concurrent" in eng and "fn schedule(" in eng,
+        "queued state visible": '"Queued"' in tr and ".queued" in eng,
+        # UI: rows in the transfers view with segment mini-bars, pause/resume.
+        "transfer rows render": "renderHttpRows" in tr and "seg_frac" in tr,
+        "pause/resume buttons": "engine.pause(" in tr and "engine.resumeDl(" in tr,
+        # Positional (pwrite-style) writes into a preallocated part file.
+        "positional writes": "writePositionalAll" in eng and "setLength" in eng,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "missing: " + ", ".join(missing)
+    return "pass", "segmented Range engine + sidecar resume + token bucket + FIFO queue"
+
+
 @test("Watching library: all kinds, next-up, user status", "Page Shell")
 def test_tv_tracking():
     # TV tracking used to be ~80% built and quietly wrong: next-up could not

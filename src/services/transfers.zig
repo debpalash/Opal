@@ -19,6 +19,7 @@ const search = @import("search.zig");
 const history = @import("history.zig");
 const io_global = @import("../core/io_global.zig");
 const tp = @import("transfers_pure.zig");
+const httpdl = @import("downloads.zig");
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 
@@ -60,6 +61,9 @@ pub fn renderTransfersContent() void {
     // side-effecting: it drives the streaming deadline window, so it must keep
     // ticking regardless of which sub-view is on screen.
     buildSnapshot();
+
+    // HTTP downloader housekeeping: config sync + completed→history hand-off.
+    httpdl.tick();
 
     renderControlBar();
 
@@ -321,6 +325,23 @@ fn renderControlBar() void {
         spacer.deinit();
     }
 
+    // ── HTTP downloader totals (only when something is moving/waiting) ──
+    {
+        const agg = httpdl.engine.activeAndQueued();
+        if (agg.active + agg.queued > 0) {
+            var tb: [64]u8 = undefined;
+            var rb: [24]u8 = undefined;
+            const txt = std.fmt.bufPrintZ(&tb, "↓{s} · {d} active · {d} queued", .{
+                httpdl.dp.fmtSpeed(agg.rate, &rb), agg.active, agg.queued,
+            }) catch "";
+            _ = dvui.label(@src(), "{s}", .{txt}, .{
+                .gravity_y = 0.5,
+                .color_text = theme.colors.accent,
+                .margin = .{ .x = 0, .y = 0, .w = 12, .h = 0 },
+            });
+        }
+    }
+
     // ── Right: download speed limit. ──
     _ = dvui.label(@src(), "Limit:", .{}, .{
         .gravity_y = 0.5,
@@ -356,6 +377,9 @@ fn renderControlBar() void {
 // ══════════════════════════════════════════════════════════
 
 fn renderUnifiedList() void {
+    // Direct HTTP downloads first — they're what the user just started.
+    const http_shown = renderHttpRows();
+
     var shown: usize = 0;
     for (order[0..row_count]) |oi| {
         const r = &rows[oi];
@@ -371,7 +395,7 @@ fn renderUnifiedList() void {
         }
     }
 
-    if (shown == 0) {
+    if (shown == 0 and http_shown == 0) {
         const msg: []const u8 = switch (filter) {
             .all => "Nothing here yet. Downloads, files and history all show up in this list.",
             .downloading => "No active downloads.",
@@ -768,6 +792,221 @@ fn fmtRate(bytes_per_sec: u32, buf: []u8) []const u8 {
     const b = @as(f64, @floatFromInt(bytes_per_sec));
     if (b >= 1048576.0) return std.fmt.bufPrint(buf, "{d:.1} MB/s", .{b / 1048576.0}) catch "?";
     return std.fmt.bufPrint(buf, "{d:.0} KB/s", .{b / 1024.0}) catch "?";
+}
+
+// ══════════════════════════════════════════════════════════
+// HTTP DOWNLOAD ROWS (segmented downloader — services/download_engine.zig)
+// ══════════════════════════════════════════════════════════
+
+fn httpStatusColor(st: httpdl.engine.Status) dvui.Color {
+    return switch (st) {
+        .probing, .running => theme.colors.accent,
+        .queued, .paused => theme.colors.text_tertiary,
+        .failed => theme.colors.danger,
+        .done => theme.colors.success,
+        .empty, .canceling => theme.colors.text_tertiary,
+    };
+}
+
+/// Draws the active HTTP downloads above the unified list. Returns how many
+/// rows were shown (feeds the shared empty-state check). Snapshot is copied
+/// out under the engine's mutex — no shared buffers are aliased during draw.
+fn renderHttpRows() usize {
+    // HTTP rows are "active transfers": show them on All and Downloading.
+    if (filter != .all and filter != .downloading) return 0;
+
+    // Snap array at module scope would be wasteful; it's small (~16 × ~700B)
+    // but still too big for comfort on the UI stack alongside dvui's frames —
+    // keep it static like the stage_* arrays above.
+    const S = struct {
+        var snaps: [httpdl.engine.MAX_DOWNLOADS]httpdl.engine.Snap = undefined;
+    };
+    const n = httpdl.engine.snapshot(&S.snaps);
+    for (S.snaps[0..n], 0..) |*s, i| renderHttpRow(s, i);
+    return n;
+}
+
+fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
+    const rid: usize = 46000 + s.idx * 32;
+    const st = s.status;
+    const active = st == .running or st == .probing;
+
+    const row_bg = if (i % 2 == 0)
+        dvui.Color{ .r = 18, .g = 18, .b = 26, .a = 255 }
+    else
+        dvui.Color{ .r = 21, .g = 21, .b = 30, .a = 255 };
+
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = rid,
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = row_bg,
+        .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
+        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+        .color_border = dvui.Color{ .r = 30, .g = 30, .b = 45, .a = 140 },
+    });
+    defer row.deinit();
+
+    // Status bar (colored left edge) — same visual language as torrent rows.
+    {
+        var bar = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = rid,
+            .min_size_content = .{ .w = 3, .h = 0 },
+            .expand = .vertical,
+            .background = true,
+            .color_fill = httpStatusColor(st),
+            .corner_radius = dvui.Rect.all(2),
+            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+            .gravity_y = 0.5,
+        });
+        bar.deinit();
+    }
+
+    _ = dvui.icon(@src(), "", icons.tvg.lucide.download, .{}, .{
+        .id_extra = rid,
+        .color_text = httpStatusColor(st),
+        .min_size_content = .{ .w = 14, .h = 14 },
+        .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+        .gravity_y = 0.5,
+    });
+
+    // Name + progress + segment strip + meta
+    {
+        var blk = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = rid,
+            .expand = .horizontal,
+            .gravity_y = 0.5,
+        });
+        defer blk.deinit();
+
+        var nm_buf: [256]u8 = undefined;
+        const shown_name = safeUtf8Buf(s.nameSlice(), &nm_buf);
+        _ = dvui.label(@src(), "{s}", .{if (shown_name.len > 0) shown_name else "(download)"}, .{
+            .id_extra = rid,
+            .gravity_x = 0.0,
+            .color_text = if (st == .paused or st == .queued) theme.colors.text_secondary else theme.colors.text_primary,
+        });
+
+        const frac_total: f32 = if (s.total > 0)
+            @min(@as(f32, @floatFromInt(s.done)) / @as(f32, @floatFromInt(s.total)), 1.0)
+        else
+            0;
+
+        if (active or st == .paused or st == .failed) {
+            var frac = frac_total;
+            _ = dvui.slider(@src(), .{ .fraction = &frac }, .{
+                .id_extra = rid,
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 10, .h = 4 },
+                .color_fill = dvui.Color{ .r = 35, .g = 35, .b = 50, .a = 255 },
+                .color_text = httpStatusColor(st),
+                .corner_radius = dvui.Rect.all(2),
+                .margin = .{ .x = 0, .y = 3, .w = 0, .h = 0 },
+            });
+
+            // Segment mini-bars: one small fill per connection.
+            if (s.seg_count > 1) {
+                var segrow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                    .id_extra = rid + 1,
+                    .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+                });
+                defer segrow.deinit();
+                for (0..s.seg_count) |k| {
+                    var cell = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                        .id_extra = rid + 2 + k,
+                        .min_size_content = .{ .w = 26, .h = 3 },
+                        .background = true,
+                        .color_fill = dvui.Color{ .r = 35, .g = 35, .b = 50, .a = 255 },
+                        .corner_radius = dvui.Rect.all(1),
+                        .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
+                    });
+                    const w: f32 = 26.0 * @min(s.seg_frac[k], 1.0);
+                    if (w > 0.5) {
+                        var fill = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                            .id_extra = rid + 2 + k,
+                            .min_size_content = .{ .w = w, .h = 3 },
+                            .background = true,
+                            .color_fill = httpStatusColor(st),
+                            .corner_radius = dvui.Rect.all(1),
+                        });
+                        fill.deinit();
+                    }
+                    cell.deinit();
+                }
+            }
+        }
+
+        // Meta line: speed · % · ETA · connections (or state text).
+        var meta_buf: [128]u8 = undefined;
+        const pct: u8 = @intFromFloat(std.math.clamp(frac_total * 100.0, 0.0, 100.0));
+        var sp: [24]u8 = undefined;
+        var eb: [24]u8 = undefined;
+        var szb: [24]u8 = undefined;
+        const meta: []const u8 = switch (st) {
+            .queued => "Queued",
+            .probing => "Connecting…",
+            .running => blk2: {
+                const eta_txt: []const u8 = if (s.etaSecs()) |secs| httpdl.dp.fmtEta(secs, &eb) else "—";
+                break :blk2 std.fmt.bufPrint(&meta_buf, "↓{s} · {d}% · ETA {s} · {d}× conn", .{
+                    httpdl.dp.fmtSpeed(s.rate, &sp), pct, eta_txt, s.seg_count,
+                }) catch "Downloading";
+            },
+            .paused => std.fmt.bufPrint(&meta_buf, "Paused · {d}%", .{pct}) catch "Paused",
+            .failed => std.fmt.bufPrint(&meta_buf, "Failed: {s}", .{s.errSlice()}) catch "Failed",
+            .done => if (s.total > 0)
+                std.fmt.bufPrint(&meta_buf, "Complete · {s}", .{httpdl.dp.fmtBytes(s.total, &szb)}) catch "Complete"
+            else
+                "Complete",
+            .empty, .canceling => "",
+        };
+        _ = dvui.label(@src(), "{s}", .{meta}, .{
+            .id_extra = rid,
+            .expand = .horizontal,
+            .color_text = if (st == .failed) theme.colors.danger else theme.colors.text_tertiary,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+        });
+    }
+
+    // ── Actions ──
+    var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = rid,
+        .min_size_content = .{ .w = 190, .h = 0 },
+        .gravity_y = 0.5,
+    });
+    defer acts.deinit();
+
+    // Pause / resume.
+    if (active or st == .queued) {
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.pause, .{}, .{}, .{
+            .id_extra = rid,
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = theme.colors.text_secondary,
+            .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
+            .gravity_y = 0.5,
+        })) {
+            httpdl.engine.pause(s.idx, s.token);
+        }
+    } else if (st == .paused or st == .failed) {
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
+            .id_extra = rid,
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = theme.colors.accent,
+            .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
+            .gravity_y = 0.5,
+        })) {
+            httpdl.engine.resumeDl(s.idx, s.token);
+        }
+    }
+
+    // Remove: cancel (active — deletes partial) or dismiss (finished rows;
+    // keeps the completed file on disk, drops partials of paused/failed).
+    if (components.confirmDangerButton(@src(), "Remove", rid)) {
+        if (active or st == .queued)
+            httpdl.engine.cancel(s.idx, s.token)
+        else
+            httpdl.engine.dismiss(s.idx, s.token);
+        rows_dirty.store(true, .release);
+    }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1237,6 +1476,10 @@ fn bgRefreshFiles(_: void) void {
         if (entry.name.len == 0 or entry.name[0] == '.') continue;
         if (std.mem.endsWith(u8, entry.name, ".torrent")) continue;
         if (std.mem.endsWith(u8, entry.name, ".parts")) continue;
+        // In-flight HTTP downloads (data + resume sidecar) — the downloader
+        // shows these as live rows; listing them as files would double them.
+        if (std.mem.endsWith(u8, entry.name, ".opal-part")) continue;
+        if (std.mem.endsWith(u8, entry.name, ".opal-part.json")) continue;
         const nlen = @min(entry.name.len, MAX_NAME_LEN);
         @memcpy(tmp_names[cnt][0..nlen], entry.name[0..nlen]);
         tmp_lens[cnt] = nlen;

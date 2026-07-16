@@ -501,6 +501,11 @@ pub const AppState = struct {
     pending_has_metadata: bool = false,
     pending_files_selection: [2048]bool = std.mem.zeroes([2048]bool),
     download_rate_limit: i32 = 0,
+    // ── HTTP downloader (services/download_engine.zig) ──
+    /// Connections per HTTP download (segmented Range requests). Clamped 1..8.
+    http_dl_segments: u32 = 4,
+    /// Simultaneous HTTP downloads; the rest queue FIFO. Clamped 1..8.
+    http_dl_max_concurrent: u32 = 3,
     save_path_buf: [256]u8 = std.mem.zeroes([256]u8),
     save_path_len: usize = 0,
 

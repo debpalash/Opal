@@ -775,6 +775,18 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_torznab_pure).step);
 
+    // Segmented HTTP downloader math: planSegments exact-coverage property,
+    // resume-range merge, token-bucket refill, backoff schedule, rolling speed
+    // window, sidecar JSON round-trip (download_engine.zig routes through it).
+    const test_download_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/download_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_download_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main
