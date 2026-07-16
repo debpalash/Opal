@@ -179,6 +179,18 @@ def test_zig_unit():
     return "fail", f"exit {r.returncode}"
 
 
+@test("HTTP client seeds Client.now for TLS", "Network")
+def test_http_client_now():
+    # REGRESSION — the app aborted with "attempt to use null value" the instant
+    # any std.http fetch negotiated TLS (e.g. a poster fetch redirecting to
+    # https), because Zig 0.16's Client.now is null by default and the TLS path
+    # dereferences `client.now.?` for cert-validity. Must be seeded.
+    h = _src("src/core/http.zig")
+    if "client.now = std.Io.Timestamp.now(" in h:
+        return "pass", "Client.now seeded with the realtime clock before TLS use"
+    return "fail", "http.Client.now not seeded — TLS fetches will panic"
+
+
 @test("Installer Does Not Need Xcode", "Packaging")
 def test_installer_no_xcode():
     # REGRESSION — `curl … install.sh | sh` failed for everyone on macOS:

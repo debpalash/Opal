@@ -74,6 +74,10 @@ pub fn fetch(url: []const u8, buf: []u8, opts: HttpOptions) ?[]const u8 {
     }
     
     var client = std.http.Client{ .allocator = alloc.allocator , .io = @import("io_global.zig").io() };
+    // Zig 0.16's TLS path reads `client.now.?` for cert-validity checks; it is
+    // null by default and panics the moment a request negotiates TLS (e.g. an
+    // http→https redirect on a poster fetch). Seed it with the realtime clock.
+    client.now = std.Io.Timestamp.now(client.io, .real);
     defer client.deinit();
     
     const uri = std.Uri.parse(url) catch {
