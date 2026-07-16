@@ -707,6 +707,74 @@ def test_conversation_persistence():
         return "pass", "Conversations saved to conversation_log table"
     return "fail", "No conversation persistence"
 
+@test("Local taste engine: activity + vectors + For You", "AI")
+def test_local_taste_engine():
+    def read(rel):
+        with open(os.path.join(PROJECT_DIR, rel)) as f:
+            return f.read()
+
+    db_src = read("src/core/db.zig")
+    activity = read("src/services/activity.zig")
+    taste_pure = read("src/services/taste_pure.zig")
+    problems = []
+
+    # 1) DB layer: activity table + vec0 vector table at the featurizer dim.
+    if "activity_log" not in db_src or "percent_watched" not in db_src:
+        problems.append("activity_log table missing from db.zig")
+    if "vec_taste USING vec0" not in db_src or "float[128]" not in db_src:
+        problems.append("vec_taste vec0 table missing from db.zig")
+    # Regression: sqlite3_auto_extension is a silent no-op on Apple's
+    # libsqlite3, so vec0 must ALSO be registered per-connection (with
+    # sqlite-vec compiled as -DSQLITE_CORE) or every vec0 CREATE TABLE
+    # fails quietly and both vec_aimemory and vec_taste never exist.
+    if "sqlite3_vec_init(db_handle" not in db_src:
+        problems.append("per-connection sqlite3_vec_init missing (vec0 dead on macOS)")
+    if "-DSQLITE_CORE" not in read("build.zig"):
+        problems.append("sqlite-vec not compiled with SQLITE_CORE")
+
+    # 2) record()/onPlay()/onProgress() wired at the agreed chokepoints only.
+    if "pub fn record" not in activity:
+        problems.append("activity.record missing")
+    if 'activity.zig").onPlay' not in read("src/player/player.zig"):
+        problems.append("player.load_file not recording plays")
+    if 'activity.zig").onProgress' not in read("src/services/history.zig"):
+        problems.append("history.savePlaybackPosition not feeding progress")
+    if 'activity.zig").onProgress' not in read("src/player/watch_history.zig"):
+        problems.append("watch_history.savePosition not feeding progress")
+    if 'activity.zig").record(.queue_add' not in read("src/services/queue.zig"):
+        problems.append("queue add not recorded")
+    if 'activity.zig").record(.search' not in read("src/services/search.zig"):
+        problems.append("submitQuery not recorded")
+
+    # 3) taste_pure registered in the unit-test step AND routed (the shipped
+    #    profile/score path goes through the tested pure functions).
+    if "taste_pure.zig" not in read("build.zig"):
+        problems.append("taste_pure not in build.zig test step")
+    for fn in ("featurize", "eventWeight", "decayWeight", "finishProfile", "scoreCandidate"):
+        if f"taste_pure.{fn}" not in activity:
+            problems.append(f"activity.zig does not route through taste_pure.{fn}")
+
+    # 4) Surfaced on Home + gated by the settings toggle/config key.
+    if "computeSuggestions" not in read("src/services/recommendations.zig"):
+        problems.append("suggestions not feeding the For You rail")
+    if "taste_enabled" not in read("src/ui/home.zig"):
+        problems.append("For You rail not gated on the toggle")
+    settings_src = read("src/ui/settings.zig")
+    if "taste_enabled" not in settings_src or "clearTasteData" not in settings_src:
+        problems.append("settings toggle / Clear taste data missing")
+    if "taste_suggestions" not in read("src/core/config.zig"):
+        problems.append("taste_suggestions config key not persisted")
+
+    # 5) Local-only: no network reach from the engine files.
+    for name, src in (("activity.zig", activity), ("taste_pure.zig", taste_pure)):
+        for needle in ("https://", "http://", "std.http", "fetchUrl", "curl", "api."):
+            if needle in src:
+                problems.append(f"network-ish string '{needle}' in {name}")
+
+    if problems:
+        return "fail", "; ".join(problems[:4])
+    return "pass", "activity log + vec_taste vectors + gated For You tier wired"
+
 # ══════════════════════════════════════════════════════════
 # Voice Helper Scripts (bin/)
 # ══════════════════════════════════════════════════════════

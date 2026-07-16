@@ -36,6 +36,7 @@ pub fn save() void {
     setKey("hwdec2", if (state.app.hwdec_enabled) "1" else "0");
     setKey("auto_advance", if (state.app.auto_advance) "1" else "0");
     setKey("nsfw_filter", if (state.app.nsfw_filter_enabled) "1" else "0");
+    setKey("taste_suggestions", if (state.app.taste_enabled) "1" else "0");
     setKey("auto_download_subs", if (state.app.auto_download_subs) "1" else "0");
     setKey("save_path", state.app.save_path_buf[0..state.app.save_path_len]);
     setKey("sub_lang", state.app.sub_lang_buf[0..state.app.sub_lang_len]);
@@ -226,6 +227,8 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.auto_advance = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "nsfw_filter")) {
         state.app.nsfw_filter_enabled = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "taste_suggestions")) {
+        state.app.taste_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "auto_download_subs")) {
         state.app.auto_download_subs = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "save_path")) {

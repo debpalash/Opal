@@ -95,7 +95,10 @@ pub fn render() void {
         const Once = struct {
             var done: bool = false;
         };
-        if (!Once.done and state.app.init_history_loaded) {
+        // Gated on "Personalized suggestions (local-only)": OFF means no
+        // recording and no For You row — don't even generate. (Turning it
+        // ON later this session arms the generation then.)
+        if (state.app.taste_enabled and !Once.done and state.app.init_history_loaded) {
             Once.done = true;
             recs.generateRecommendations();
         }
@@ -155,7 +158,7 @@ pub fn render() void {
     // "Coming up" — poster cards (like Trending) with next-episode countdowns
     // + EZTV availability for the shows the user watches.
     if (budget >= rail_h and renderComingUpRail(card_w)) budget -= rail_h;
-    if (budget >= foryou_h and @import("../services/recommendations.zig").rec_count > 0) {
+    if (state.app.taste_enabled and budget >= foryou_h and @import("../services/recommendations.zig").rec_count > 0) {
         @import("discovery_ui.zig").renderForYouRail();
         budget -= foryou_h;
     }

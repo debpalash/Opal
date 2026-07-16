@@ -645,6 +645,10 @@ pub const MediaPlayer = struct {
 
         // ── Memory hooks: record playback for cross-session intelligence ──
         {
+            // Local taste engine: settles the previous item (abandon
+            // detection) and logs the .play event (buffered, off-thread).
+            @import("../services/activity.zig").onPlay(path_span);
+
             const ai_memory = @import("../services/ai_memory.zig");
             const title = path_span;
             // Ingest into vector memory

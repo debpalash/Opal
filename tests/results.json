@@ -1,10 +1,10 @@
 {
-  "timestamp": "2026-07-16T02:34:35",
-  "total": 175,
-  "passed": 168,
+  "timestamp": "2026-07-16T16:20:02",
+  "total": 176,
+  "passed": 165,
   "failed": 0,
-  "warnings": 1,
-  "skipped": 6,
+  "warnings": 3,
+  "skipped": 8,
   "categories": {
     "Database": {
       "pass": 9,
@@ -13,9 +13,9 @@
       "skip": 0
     },
     "Memory": {
-      "pass": 5,
+      "pass": 4,
       "fail": 0,
-      "warn": 0,
+      "warn": 1,
       "skip": 0
     },
     "Config": {
@@ -25,9 +25,9 @@
       "skip": 0
     },
     "Build": {
-      "pass": 6,
+      "pass": 5,
       "fail": 0,
-      "warn": 0,
+      "warn": 1,
       "skip": 0
     },
     "Voice": {
@@ -60,11 +60,17 @@
       "warn": 0,
       "skip": 0
     },
-    "Voice Scripts": {
-      "pass": 10,
+    "AI": {
+      "pass": 1,
       "fail": 0,
       "warn": 0,
       "skip": 0
+    },
+    "Voice Scripts": {
+      "pass": 8,
+      "fail": 0,
+      "warn": 0,
+      "skip": 2
     },
     "Browser": {
       "pass": 4,
@@ -198,22 +204,22 @@
       "name": "Database Exists",
       "category": "Database",
       "status": "pass",
-      "detail": "Size: 23300.0 KB",
+      "detail": "Size: 24192.0 KB",
       "duration_ms": 0
     },
     {
       "name": "Config Table",
       "category": "Database",
       "status": "pass",
-      "detail": "54 config entries",
-      "duration_ms": 1
+      "detail": "56 config entries",
+      "duration_ms": 19
     },
     {
       "name": "Watch History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "16 watch entries",
-      "duration_ms": 0
+      "detail": "1 watch entries",
+      "duration_ms": 1
     },
     {
       "name": "Search History Table",
@@ -226,7 +232,7 @@
       "name": "Download History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "6 downloads",
+      "detail": "7 downloads",
       "duration_ms": 0
     },
     {
@@ -254,7 +260,7 @@
       "name": "Poster Cache Table",
       "category": "Database",
       "status": "pass",
-      "detail": "883 cached posters",
+      "detail": "916 cached posters",
       "duration_ms": 0
     },
     {
@@ -268,7 +274,7 @@
       "name": "User Preferences Table",
       "category": "Memory",
       "status": "pass",
-      "detail": "active_hour=20:00 (w:84)",
+      "detail": "active_hour=10:00 (w:91)",
       "duration_ms": 0
     },
     {
@@ -281,8 +287,8 @@
     {
       "name": "Proactive Suggestion Query",
       "category": "Memory",
-      "status": "pass",
-      "detail": "\"8b5e0858591b8907\" at 37%",
+      "status": "warn",
+      "detail": "No unfinished content to suggest",
       "duration_ms": 0
     },
     {
@@ -317,7 +323,7 @@
       "name": "Window State Persistence",
       "category": "Config",
       "status": "pass",
-      "detail": "1280x803 at (0,29)",
+      "detail": "1244x775 at (0,57)",
       "duration_ms": 0
     },
     {
@@ -331,21 +337,21 @@
       "name": "Zig Build",
       "category": "Build",
       "status": "pass",
-      "detail": "Binary: 42.5 MB",
-      "duration_ms": 498
+      "detail": "Binary: 42.6 MB",
+      "duration_ms": 448
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "42.5 MB, built at 02:33:35",
+      "detail": "42.6 MB, built at 16:17:32",
       "duration_ms": 0
     },
     {
       "name": "LLM Model File",
       "category": "Build",
-      "status": "pass",
-      "detail": "gemma-4-E2B-it-UD-Q4_K_XL.gguf, qwen2.5-3b-instruct-q4_k_m.gguf (4.9 GB)",
+      "status": "warn",
+      "detail": "No GGUF model found",
       "duration_ms": 0
     },
     {
@@ -367,7 +373,7 @@
       "category": "Build",
       "status": "pass",
       "detail": "author credited across about/copyright/packaging surfaces",
-      "duration_ms": 2
+      "duration_ms": 0
     },
     {
       "name": "Voice Server Socket",
@@ -381,28 +387,28 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 1229
+      "duration_ms": 976
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "pass",
       "detail": "faster-whisper importable",
-      "duration_ms": 1227
+      "duration_ms": 1305
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 25
+      "duration_ms": 26
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 21
+      "duration_ms": 24
     },
     {
       "name": "Conversational: voice-server echo guard + live partials",
@@ -423,7 +429,7 @@
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 27
+      "duration_ms": 29
     },
     {
       "name": "Embedding Server Health",
@@ -545,6 +551,13 @@
       "duration_ms": 0
     },
     {
+      "name": "Local taste engine: activity + vectors + For You",
+      "category": "AI",
+      "status": "pass",
+      "detail": "activity log + vec_taste vectors + gated For You tier wired",
+      "duration_ms": 0
+    },
+    {
       "name": "Compiles: opal-stt.py",
       "category": "Voice Scripts",
       "status": "pass",
@@ -556,77 +569,77 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 32
+      "duration_ms": 30
     },
     {
       "name": "Compiles: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 28
+      "duration_ms": 30
     },
     {
       "name": "Compiles: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 30
+      "duration_ms": 32
     },
     {
       "name": "--check degrades: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 1095
+      "duration_ms": 1474
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 29
+      "duration_ms": 39
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 1166
+      "duration_ms": 2412
     },
     {
       "name": "Tracked + compiles: tools/lang_server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "tracked + py_compile OK",
-      "duration_ms": 47
+      "duration_ms": 126
     },
     {
       "name": "Compiles: camoufox_bridge.py",
       "category": "Browser",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 31
+      "duration_ms": 142
     },
     {
       "name": "Bridge protocol selftest",
       "category": "Browser",
       "status": "pass",
       "detail": "framing + pump model OK",
-      "duration_ms": 32
+      "duration_ms": 94
     },
     {
       "name": "Poster cache SQL matches schema",
       "category": "Database",
       "status": "pass",
       "detail": "4 statements OK against schema",
-      "duration_ms": 1
+      "duration_ms": 3
     },
     {
       "name": "Browser bookmarks SQL matches schema",
       "category": "Browser",
       "status": "pass",
       "detail": "3 statements OK against schema",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "name": "Local LLM is the default brain (apfel retired)",
@@ -640,7 +653,7 @@
       "category": "Voice",
       "status": "pass",
       "detail": "installer + VAD convo pipeline + startup promotion all wired",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Tool results are exact-sized allocations",
@@ -661,7 +674,7 @@
       "category": "Memory",
       "status": "pass",
       "detail": "sidebar SELECT + restore + tagged INSERT OK against schema",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "name": "browser_pure registered in zig tests",
@@ -673,16 +686,16 @@
     {
       "name": "Whisper Model Present",
       "category": "Voice Scripts",
-      "status": "pass",
-      "detail": "ggml-base.en.bin (141 MB)",
+      "status": "skip",
+      "detail": "No ggml model (run brew whisper-cpp + download a model)",
       "duration_ms": 0
     },
     {
       "name": "STT End-to-End (say\u2192whisper)",
       "category": "Voice Scripts",
-      "status": "pass",
-      "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 1864
+      "status": "skip",
+      "detail": "no ggml model",
+      "duration_ms": 0
     },
     {
       "name": "Sherpa Model Canonicalization",
@@ -731,7 +744,7 @@
       "category": "Settings",
       "status": "pass",
       "detail": "EQ + video filters + download limit + cowatch sensitivity persist & replay",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Unified Search: Local Files",
@@ -752,14 +765,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 3044
+      "duration_ms": 3515
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 90
+      "duration_ms": 57
     },
     {
       "name": "Page Router",
@@ -780,7 +793,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 9
+      "duration_ms": 10
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -920,7 +933,7 @@
       "category": "Recall",
       "status": "pass",
       "detail": "position_secs migration applied",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "name": "Taste Receipts Wired",
@@ -1004,7 +1017,7 @@
       "category": "Remote",
       "status": "pass",
       "detail": "hosted streaming + docker gate + CPU fixes wired",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Torrent File Safety: skip executables/archives",
@@ -1130,7 +1143,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "11 engines placed, class==module, manifest-wired",
-      "duration_ms": 3
+      "duration_ms": 2
     },
     {
       "name": "Content Plugin Sandbox Hardened",
@@ -1186,7 +1199,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 129
+      "duration_ms": 135
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1242,7 +1255,7 @@
       "category": "Stability",
       "status": "pass",
       "detail": "no discarded std.Thread.spawn handles in src/",
-      "duration_ms": 15
+      "duration_ms": 18
     },
     {
       "name": "TMDB Fetch Stages Results Off-Thread",
@@ -1340,21 +1353,21 @@
       "category": "Stability",
       "status": "pass",
       "detail": "head+index gate, per-container tail (mkv/mp4/avi/ts), no truncation",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Player control bar: drop-ups + FF fullscreen",
       "category": "Page Shell",
       "status": "pass",
       "detail": "backdrop-less drop-ups anchored above their chip; FF toggles fullscreen",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Player: prev/next episode buttons",
       "category": "Page Shell",
       "status": "pass",
       "detail": "prev/next episode in the transport, aired-clamped, TV-only",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Latest releases render as show cards",
@@ -1368,7 +1381,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "C toggles sub-visibility; comic viewer still auto-routed by URL",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Title-bar resource meters",
@@ -1389,21 +1402,21 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "neutral (source_config-gated), 15-min refresh, per-frame countdown",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Zig Unit Tests",
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 1641
+      "duration_ms": 3125
     },
     {
       "name": "Installer Does Not Need Xcode",
       "category": "Packaging",
       "status": "pass",
       "detail": "install.sh installs the vendored .app; formula is a binary install at 0.3.0",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Audio Visualizer",

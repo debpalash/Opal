@@ -67,6 +67,9 @@ pub fn savePlaybackPosition(url: []const u8, position: f64, duration: f64) void 
     if (url.len == 0 or url.len >= 2048 or duration < 5) return;
     
     const percent = if (duration > 0) (position / duration) * 100.0 else 0;
+    // Local taste engine: feed watch depth (finish/abandon detection). Must
+    // run BEFORE the >95% early-return or finishes would never be seen.
+    @import("activity.zig").onProgress(url, percent);
     // Don't save if nearly finished (>95%) — treat as "watched"
     if (percent > 95) return;
     // Don't save very early positions (<2%)

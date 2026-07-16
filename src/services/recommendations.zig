@@ -59,6 +59,29 @@ pub fn generateRecommendations() void {
                 is_loading.store(false, .release);
             }
 
+            // ── Tier 0: local taste engine (activity_log + vec_taste) ──
+            // Deterministic on-device profile over the user's own activity
+            // (finished/abandoned/queued items). No embeddings server needed;
+            // gated on the "Personalized suggestions (local-only)" toggle
+            // inside computeSuggestions itself. Falls through when there is
+            // no activity signal yet.
+            {
+                const activity = @import("activity.zig");
+                var sugg: [10]activity.Suggestion = undefined;
+                const ns = activity.computeSuggestions(sugg[0..]);
+                if (ns > 0) {
+                    for (sugg[0..ns]) |*s| {
+                        addRec(
+                            s.title[0..@min(s.title_len, s.title.len)],
+                            s.reason[0..@min(s.reason_len, s.reason.len)],
+                            0,
+                            s.score,
+                        );
+                    }
+                    return;
+                }
+            }
+
             // ── Primary: Taste Receipts (taste vector over vec_aimemory) ──
             var taste: [ai_memory.EMBED_DIM]f32 = undefined;
             if (taste_vector.computeTaste(&taste)) {

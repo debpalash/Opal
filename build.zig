@@ -99,10 +99,15 @@ pub fn build(b: *std.Build) void {
         exe.root_module.linkSystemLibrary("sqlite3", .{});
     }
 
-    // SQLite Vector DB
+    // SQLite Vector DB. -DSQLITE_CORE makes sqlite-vec call the linked
+    // sqlite3 directly instead of going through the extension API pointer —
+    // required because db.zig registers it per-connection via a direct
+    // sqlite3_vec_init() call (Apple's libsqlite3 does not support
+    // process-global sqlite3_auto_extension, which used to fail silently
+    // and left every vec0 CREATE TABLE a no-op on macOS).
     exe.root_module.addCSourceFile(.{
         .file = b.path("src/core/sqlite/sqlite-vec.c"),
-        .flags = &[_][]const u8{ "-O3", "-fomit-frame-pointer" },
+        .flags = &[_][]const u8{ "-O3", "-fomit-frame-pointer", "-DSQLITE_CORE" },
     });
 
     // Libtorrent & C++ Linkage (Dynamic Shared Object isolating GCC C++ ABIs)
@@ -774,6 +779,17 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_torznab_pure).step);
+
+    // Local taste engine pure logic: deterministic token-hash featurizer,
+    // recency decay, negative abandon weighting, cosine scoring.
+    const test_taste_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/taste_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_taste_pure).step);
 
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
