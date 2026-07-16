@@ -88,6 +88,70 @@ def test_watch_history():
     db.close()
     return "pass", f"{count} watch entries"
 
+@test("Exact resume: schema v2 + path keying", "Database")
+def test_exact_resume_schema_v2():
+    # Replays the shipped v1→v2 migration (player/watch_history.zig
+    # migrateSchema) against a scratch sqlite seeded with the LEGACY schema:
+    # existing percent-keyed rows must survive, gain position_secs /
+    # duration_secs / file_key, get local paths backfilled into file_key, and
+    # the DB must be stamped user_version=2. Also pins the wiring: the pure
+    # module is registered in build.zig and the resume UIs reuse the tested
+    # yt_pure.formatDuration (no hand-rolled zero-padded-signed formatter).
+    import re
+    wh_src = open(os.path.join(PROJECT_DIR, "src/player/watch_history.zig")).read()
+
+    m = re.search(r"pub fn migrateSchema\(\) void \{(.*?)\n\}", wh_src, re.S)
+    if not m:
+        return "fail", "migrateSchema() not found in watch_history.zig"
+    stmts = re.findall(r'db\.exec\("([^"]+)"\)', m.group(1))
+    if not any("position_secs" in s for s in stmts): return "fail", "migration lacks position_secs"
+    if not any("duration_secs" in s for s in stmts): return "fail", "migration lacks duration_secs"
+    if not any("file_key" in s for s in stmts): return "fail", "migration lacks file_key"
+    if not any("user_version" in s for s in stmts): return "fail", "migration not stamped via user_version"
+
+    conn = sqlite3.connect(":memory:")
+    # Legacy v1 schema — pre-seconds, pre-file_key.
+    conn.execute("CREATE TABLE watch_history (name TEXT PRIMARY KEY, percent REAL DEFAULT 0, "
+                 "link TEXT DEFAULT '', updated_at INTEGER DEFAULT (strftime('%s','now')))")
+    conn.execute("INSERT INTO watch_history (name, percent, link) VALUES ('/Users/x/Movies/Foo.mkv', 42.0, '')")
+    conn.execute("INSERT INTO watch_history (name, percent, link) VALUES ('file:///Users/x/Bar.mkv', 10.0, '')")
+    conn.execute("INSERT INTO watch_history (name, percent, link) VALUES ('Some.Torrent.1080p', 55.0, 'magnet:?xt=abc')")
+    for s in stmts:
+        conn.execute(s)  # shipped statements must run verbatim on a v1 DB
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(watch_history)")]
+    for col in ("position_secs", "duration_secs", "file_key"):
+        if col not in cols:
+            return "fail", f"column {col} missing after migration"
+    rows = dict(conn.execute("SELECT name, file_key FROM watch_history"))
+    if rows["/Users/x/Movies/Foo.mkv"] != "/Users/x/Movies/Foo.mkv":
+        return "fail", "absolute-path row not backfilled into file_key"
+    if rows["file:///Users/x/Bar.mkv"] != "/Users/x/Bar.mkv":
+        return "fail", "file:// row not stripped into file_key"
+    if rows["Some.Torrent.1080p"] != "":
+        return "fail", "torrent row must keep the legacy name key (empty file_key)"
+    if conn.execute("SELECT COUNT(*) FROM watch_history").fetchone()[0] != 3:
+        return "fail", "migration lost rows"
+    if conn.execute("PRAGMA user_version").fetchone()[0] != 2:
+        return "fail", "user_version not stamped to 2"
+    conn.close()
+
+    # Wiring: pure module registered + routed; resume UIs reuse formatDuration.
+    build_src = open(os.path.join(PROJECT_DIR, "build.zig")).read()
+    if "src/player/watch_history_pure.zig" not in build_src:
+        return "fail", "watch_history_pure.zig not registered in build.zig test step"
+    if "watch_history_pure.zig" not in wh_src:
+        return "fail", "watch_history.zig not routed through watch_history_pure"
+    footer_src = open(os.path.join(PROJECT_DIR, "src/ui/footer.zig")).read()
+    if "formatDuration" not in footer_src:
+        return "fail", "resume prompt (footer.zig) does not use yt_pure.formatDuration"
+    player_src = open(os.path.join(PROJECT_DIR, "src/player/player.zig")).read()
+    if "formatDuration" not in player_src or "savePositionFull" not in player_src:
+        return "fail", "player.zig missing formatDuration toast or savePositionFull save"
+    hist_src = open(os.path.join(PROJECT_DIR, "src/services/history.zig")).read()
+    if "resolveFileKey" not in hist_src or "pickPosition" not in hist_src:
+        return "fail", "history.zig missing path keying / legacy fallback routing"
+    return "pass", "v1→v2 migration + path keying + formatDuration wiring OK"
+
 @test("Search History Table", "Database")
 def test_search_history():
     db = get_db()

@@ -2306,7 +2306,15 @@ pub fn renderResumePrompt() void {
     var lb: [128]u8 = undefined;
     const label = @import("../core/text.zig").safeUtf8Buf(state.app.resume_prompt_label[0..state.app.resume_prompt_label_len], &lb);
     var msg_buf: [200]u8 = undefined;
-    const msg = std.fmt.bufPrint(&msg_buf, "Resume \u{201c}{s}\u{201d} \u{b7} {d}%", .{ label, state.app.resume_prompt_pct }) catch label;
+    // Seconds-accurate rows show the exact timestamp ("Resume … at 43:12?");
+    // legacy percent-only rows keep the percent form. formatDuration casts to
+    // unsigned before {d:0>2} — zero-padded SIGNED ints print a forced "+".
+    var ts_buf: [16]u8 = undefined;
+    const ts = @import("../services/youtube_pure.zig").formatDuration(@intFromFloat(@max(state.app.resume_prompt_pos_secs, 0)), &ts_buf);
+    const msg = if (ts.len > 0)
+        std.fmt.bufPrint(&msg_buf, "Resume \u{201c}{s}\u{201d} at {s}?", .{ label, ts }) catch label
+    else
+        std.fmt.bufPrint(&msg_buf, "Resume \u{201c}{s}\u{201d} \u{b7} {d}%", .{ label, state.app.resume_prompt_pct }) catch label;
     _ = dvui.label(@src(), "{s}", .{msg}, .{
         .color_text = theme.colors.text_primary,
         .gravity_y = 0.5,

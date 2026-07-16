@@ -62,48 +62,89 @@ pub fn saveSearchHistory() void {
 // ══════════════════════════════════════════════════════════
 
 /// Save current playback position for a URL/file. Called periodically.
+/// Local files are keyed by their absolute path (file identity — survives a
+/// relative-path or file:// re-open); streams keep the URL as key.
 pub fn savePlaybackPosition(url: []const u8, position: f64, duration: f64) void {
     if (state.app.incognito_mode) return;
     if (url.len == 0 or url.len >= 2048 or duration < 5) return;
-    
+
+    const wh = @import("../player/watch_history.zig");
+    const whp = @import("../player/watch_history_pure.zig");
+
     const percent = if (duration > 0) (position / duration) * 100.0 else 0;
-    // Don't save if nearly finished (>95%) — treat as "watched"
-    if (percent > 95) return;
+    // Don't save if nearly finished — treat as "watched"
+    if (percent > whp.FINISHED_FRACTION * 100.0) return;
     // Don't save very early positions (<2%)
     if (percent < 2 and position < 5) return;
 
-    const sql = "INSERT INTO watch_history (name, percent, position_secs, duration_secs) VALUES (?1, ?2, ?3, ?4) " ++
-        "ON CONFLICT(name) DO UPDATE SET percent=?2, position_secs=?3, duration_secs=?4, updated_at=strftime('%s','now')";
+    var key_buf: [2048]u8 = undefined;
+    const file_key = wh.resolveFileKey(url, &key_buf);
+    // For local files the row is keyed by the absolute path; storing it as
+    // `link` too lets the launch resume prompt reopen the file directly.
+    const name = if (file_key.len > 0 and file_key.len < 2048) file_key else url;
+
+    const sql = "INSERT INTO watch_history (name, percent, position_secs, duration_secs, file_key, link) VALUES (?1, ?2, ?3, ?4, ?5, ?6) " ++
+        "ON CONFLICT(name) DO UPDATE SET percent=?2, position_secs=?3, duration_secs=?4, file_key=?5, link=?6, updated_at=strftime('%s','now')";
     const stmt = db.prepare(sql) orelse return;
     defer db.finalize(stmt);
-    db.bindText(stmt, 1, url);
+    db.bindText(stmt, 1, name);
     db.bindDouble(stmt, 2, percent);
     db.bindDouble(stmt, 3, position);
     db.bindDouble(stmt, 4, duration);
+    db.bindText(stmt, 5, file_key);
+    db.bindText(stmt, 6, name);
     _ = db.step(stmt);
 }
 
-/// Get saved playback position for a URL. Returns position in seconds, 0 if not found.
+/// Get saved playback position for a URL. Returns position in seconds, 0 if
+/// not found. Local files are looked up by file identity (absolute path)
+/// first, then by the legacy name key so pre-v2 entries still resume once.
 pub fn getPlaybackPosition(url: []const u8) f64 {
     if (state.app.incognito_mode) return 0;
     if (url.len == 0) return 0;
 
-    const sql = "SELECT position_secs FROM watch_history WHERE name = ?1";
-    const stmt = db.prepare(sql) orelse return 0;
-    defer db.finalize(stmt);
-    db.bindText(stmt, 1, url);
-    if (db.step(stmt) == db.c.SQLITE_ROW) {
-        return db.columnDouble(stmt, 0);
+    const wh = @import("../player/watch_history.zig");
+    const whp = @import("../player/watch_history_pure.zig");
+
+    var key_buf: [2048]u8 = undefined;
+    const file_key = wh.resolveFileKey(url, &key_buf);
+
+    var path_pos: f64 = 0;
+    if (file_key.len > 0) {
+        const sql = "SELECT position_secs FROM watch_history WHERE file_key = ?1 ORDER BY updated_at DESC LIMIT 1";
+        const stmt = db.prepare(sql) orelse return 0;
+        defer db.finalize(stmt);
+        db.bindText(stmt, 1, file_key);
+        if (db.step(stmt) == db.c.SQLITE_ROW) {
+            path_pos = db.columnDouble(stmt, 0);
+        }
     }
-    return 0;
+
+    var legacy_pos: f64 = 0;
+    if (path_pos <= 0) {
+        const sql = "SELECT position_secs FROM watch_history WHERE name = ?1";
+        const stmt = db.prepare(sql) orelse return 0;
+        defer db.finalize(stmt);
+        db.bindText(stmt, 1, url);
+        if (db.step(stmt) == db.c.SQLITE_ROW) {
+            legacy_pos = db.columnDouble(stmt, 0);
+        }
+    }
+
+    return whp.pickPosition(path_pos, legacy_pos);
 }
 
 /// Clear resume position after a video is fully watched
 pub fn clearPlaybackPosition(url: []const u8) void {
-    const sql = "DELETE FROM watch_history WHERE name = ?1";
+    const wh = @import("../player/watch_history.zig");
+    var key_buf: [2048]u8 = undefined;
+    const file_key = wh.resolveFileKey(url, &key_buf);
+
+    const sql = "DELETE FROM watch_history WHERE name = ?1 OR (?2 <> '' AND file_key = ?2)";
     const stmt = db.prepare(sql) orelse return;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, url);
+    db.bindText(stmt, 2, file_key);
     _ = db.step(stmt);
 }
 

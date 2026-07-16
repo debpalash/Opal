@@ -2,6 +2,7 @@ const std = @import("std");
 const state = @import("../core/state.zig");
 const paths = @import("../core/paths.zig");
 const db = @import("../core/db.zig");
+const pure = @import("watch_history_pure.zig");
 
 /// Watch history: remembers playback position for each torrent.
 /// SQLite-backed with in-memory cache for fast lookups during playback.
@@ -16,7 +17,53 @@ pub const WatchEntry = struct {
     link: [MAX_LINK_LEN]u8 = std.mem.zeroes([MAX_LINK_LEN]u8),
     link_len: usize = 0,
     percent: f64 = 0.0,
+    position_secs: f64 = 0.0,
+    duration_secs: f64 = 0.0,
 };
+
+// ══════════════════════════════════════════════════════════
+// Schema v2 — seconds-accurate positions + file-identity key
+// ══════════════════════════════════════════════════════════
+
+/// v1 (implicit, user_version 0): name/percent/link — percent keyed by title.
+/// v2: + position_secs, duration_secs, file_key (absolute filesystem path for
+/// local files; '' for streams/torrents, which keep the legacy name key).
+pub const SCHEMA_VERSION: i64 = 2;
+
+/// Upgrade an existing DB in place. Versioned via PRAGMA user_version; the
+/// ALTERs are additionally idempotent (db.exec swallows duplicate-column
+/// errors) so a fresh DB whose CREATE TABLE already has the v2 columns just
+/// gets stamped. Called from db.createTables on every open.
+pub fn migrateSchema() void {
+    var version: i64 = 0;
+    if (db.prepare("PRAGMA user_version")) |stmt| {
+        defer db.finalize(stmt);
+        if (db.step(stmt) == db.c.SQLITE_ROW) version = db.columnInt64(stmt, 0);
+    }
+    if (version >= SCHEMA_VERSION) return;
+
+    db.exec("ALTER TABLE watch_history ADD COLUMN position_secs REAL DEFAULT 0");
+    db.exec("ALTER TABLE watch_history ADD COLUMN duration_secs REAL DEFAULT 0");
+    db.exec("ALTER TABLE watch_history ADD COLUMN file_key TEXT DEFAULT ''");
+    // Backfill file identity for rows whose legacy name key was already a
+    // local path — those resume path-keyed immediately, no data loss.
+    db.exec("UPDATE watch_history SET file_key = name WHERE file_key = '' AND name LIKE '/%'");
+    db.exec("UPDATE watch_history SET file_key = substr(name, 8) WHERE file_key = '' AND name LIKE 'file:///%'");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_watch_file_key ON watch_history(file_key)");
+    db.exec("PRAGMA user_version = 2");
+}
+
+/// Resolve the file-identity key for a playback link: absolute filesystem path
+/// for local files (relative paths resolved via io_global), "" for
+/// streams/torrents (they keep the legacy name key). Returns a slice of `buf`
+/// or of `link` itself.
+pub fn resolveFileKey(link: []const u8, buf: []u8) []const u8 {
+    switch (pure.classifyLink(link)) {
+        .local_abs => return pure.localFsPath(link) orelse "",
+        .local_rel => return @import("../core/io_global.zig").cwdRealPathFile(link, buf) catch "",
+        .remote => return "",
+    }
+}
 
 pub var entries: [MAX_WATCH_HISTORY]WatchEntry = undefined;
 pub var count: usize = 0;
@@ -28,7 +75,8 @@ pub fn init() void {
     }
 }
 
-/// Save or update a watch position.
+/// Save or update a watch position (percent only — keeps any previously
+/// stored seconds intact). Prefer savePositionFull when seconds are known.
 /// Thread-safety: only called from the UI/render thread (player.zig frame
 /// callback and importJson user action), so no internal locking is needed.
 pub fn savePosition(name: []const u8, percent: f64, link: []const u8) void {
@@ -36,9 +84,14 @@ pub fn savePosition(name: []const u8, percent: f64, link: []const u8) void {
     if (name.len == 0 or name.len >= MAX_NAME_LEN) return;
     if (percent < 0.5) return;
 
-    // Upsert into SQLite
-    const sql = "INSERT INTO watch_history (name, percent, link, updated_at) VALUES (?1, ?2, ?3, strftime('%s','now')) " ++
-        "ON CONFLICT(name) DO UPDATE SET percent=excluded.percent, link=excluded.link, updated_at=strftime('%s','now')";
+    var key_buf: [MAX_LINK_LEN]u8 = undefined;
+    const file_key = resolveFileKey(link, &key_buf);
+
+    // Upsert into SQLite — position_secs/duration_secs untouched so a
+    // percent-only writer never clobbers a seconds-accurate position.
+    const sql = "INSERT INTO watch_history (name, percent, link, file_key, updated_at) VALUES (?1, ?2, ?3, ?4, strftime('%s','now')) " ++
+        "ON CONFLICT(name) DO UPDATE SET percent=excluded.percent, link=excluded.link, " ++
+        "file_key=CASE WHEN excluded.file_key <> '' THEN excluded.file_key ELSE file_key END, updated_at=strftime('%s','now')";
     const stmt = db.prepare(sql) orelse return;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, name);
@@ -48,13 +101,53 @@ pub fn savePosition(name: []const u8, percent: f64, link: []const u8) void {
     } else {
         db.bindText(stmt, 3, "");
     }
+    db.bindText(stmt, 4, file_key);
     _ = db.step(stmt);
 
-    // Update in-memory cache
+    updateCache(name, percent, null, null, link);
+}
+
+/// Save a seconds-accurate watch position (plus percent for UI that reads it).
+/// Same keying and cadence as savePosition, just richer data.
+pub fn savePositionFull(name: []const u8, percent: f64, position_secs: f64, duration_secs: f64, link: []const u8) void {
+    if (state.app.incognito_mode) return;
+    if (name.len == 0 or name.len >= MAX_NAME_LEN) return;
+    if (percent < 0.5) return;
+
+    var key_buf: [MAX_LINK_LEN]u8 = undefined;
+    const file_key = resolveFileKey(link, &key_buf);
+
+    const sql = "INSERT INTO watch_history (name, percent, position_secs, duration_secs, link, file_key, updated_at) " ++
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%s','now')) " ++
+        "ON CONFLICT(name) DO UPDATE SET percent=excluded.percent, position_secs=excluded.position_secs, " ++
+        "duration_secs=excluded.duration_secs, link=excluded.link, " ++
+        "file_key=CASE WHEN excluded.file_key <> '' THEN excluded.file_key ELSE file_key END, updated_at=strftime('%s','now')";
+    const stmt = db.prepare(sql) orelse return;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, name);
+    db.bindDouble(stmt, 2, percent);
+    db.bindDouble(stmt, 3, position_secs);
+    db.bindDouble(stmt, 4, duration_secs);
+    if (link.len > 0 and link.len < MAX_LINK_LEN) {
+        db.bindText(stmt, 5, link);
+    } else {
+        db.bindText(stmt, 5, "");
+    }
+    db.bindText(stmt, 6, file_key);
+    _ = db.step(stmt);
+
+    updateCache(name, percent, position_secs, duration_secs, link);
+}
+
+/// Update (or insert at front of) the in-memory cache. Null seconds leave the
+/// cached seconds untouched, mirroring the percent-only SQL above.
+fn updateCache(name: []const u8, percent: f64, position_secs: ?f64, duration_secs: ?f64, link: []const u8) void {
     for (0..count) |i| {
         const existing = entries[i].name[0..entries[i].name_len];
         if (std.mem.eql(u8, existing, name)) {
             entries[i].percent = percent;
+            if (position_secs) |p| entries[i].position_secs = p;
+            if (duration_secs) |d| entries[i].duration_secs = d;
             if (link.len > 0 and link.len < MAX_LINK_LEN) {
                 @memcpy(entries[i].link[0..link.len], link);
                 entries[i].link_len = link.len;
@@ -73,6 +166,8 @@ pub fn savePosition(name: []const u8, percent: f64, link: []const u8) void {
     @memcpy(entries[0].name[0..name.len], name);
     entries[0].name_len = name.len;
     entries[0].percent = percent;
+    entries[0].position_secs = position_secs orelse 0;
+    entries[0].duration_secs = duration_secs orelse 0;
     if (link.len > 0 and link.len < MAX_LINK_LEN) {
         @memcpy(entries[0].link[0..link.len], link);
         entries[0].link_len = link.len;
@@ -89,6 +184,15 @@ pub fn getPosition(name: []const u8) f64 {
         }
     }
     return 0.0;
+}
+
+/// Full cached entry (seconds included) for `name`, or null.
+pub fn getEntry(name: []const u8) ?*const WatchEntry {
+    for (0..count) |i| {
+        const existing = entries[i].name[0..entries[i].name_len];
+        if (std.mem.eql(u8, existing, name)) return &entries[i];
+    }
+    return null;
 }
 
 /// Remove an entry.
@@ -155,7 +259,7 @@ pub fn restoreBackup() void {
 pub fn load() void {
     init();
 
-    const sql = "SELECT name, percent, link FROM watch_history WHERE percent >= 0.5 ORDER BY updated_at DESC LIMIT 200";
+    const sql = "SELECT name, percent, link, position_secs, duration_secs FROM watch_history WHERE percent >= 0.5 ORDER BY updated_at DESC LIMIT 200";
     const stmt = db.prepare(sql) orelse return;
     defer db.finalize(stmt);
 
@@ -178,6 +282,9 @@ pub fn load() void {
                 entries[idx].link_len = link.len;
             }
         }
+
+        entries[idx].position_secs = db.columnDouble(stmt, 3);
+        entries[idx].duration_secs = db.columnDouble(stmt, 4);
 
         count += 1;
     }
