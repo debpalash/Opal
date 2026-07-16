@@ -32,6 +32,10 @@ def test_audiobookshelf():
         "pure builds stream url": "pub fn streamUrl(" in pure,
         "pure builds bearer header": "pub fn bearerHeader(" in pure,
         "pure parses progress": "pub fn parseProgressSeconds(" in pure,
+        # Server-side resume: eligibility decision (position/duration/isFinished →
+        # seek target or start-at-0) is a tested pure fn the service routes through.
+        "pure decides resume target": "pub fn resumeTarget(" in pure
+            and "pub fn resumeTargetFromJson(" in pure,
         "pure gates item id (injection)": "pub fn validItemId(" in pure,
         # Production routes through the tested pure fns (no drift).
         "service routes through pure": all(f in svc for f in (
@@ -63,6 +67,14 @@ def test_audiobookshelf():
         # loadContentDirectMeta is the shared audio path that load_file's the URL,
         # sets now-playing metadata, and calls state.gotoPlayer().
         "shared audio path calls gotoPlayer": "state.gotoPlayer();" in _src("src/services/browser.zig"),
+
+        # ── Server-side resume: fetch progress, route through pure, seek once loaded ──
+        "resume fetches progress endpoint": "/api/me/progress/" in svc,
+        "resume routes through pure decision": "pure.resumeTargetFromJson(" in svc,
+        "resume issues absolute seek": "seek {d:.1} absolute" in svc,
+        "resume tick wired into frame loop": (
+            "pub fn tick() void" in svc
+            and "audiobookshelf.zig\").tick()" in _src("src/main.zig")),
 
         # ── Threading: atomic loading flag + detached worker + mutex publish ──
         "atomic loading flag": "is_loading.load(.acquire)" in svc and "is_loading.store(true, .release)" in svc,

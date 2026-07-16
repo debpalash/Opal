@@ -268,6 +268,67 @@ pub fn parseProgressSeconds(json: []const u8) ?f64 {
     return ct;
 }
 
+// ── Server-side resume decision ─────────────────────────────────────────────
+
+/// Below this many seconds of saved progress we start at 0 — resuming a handful
+/// of seconds in is noise, not a bookmark.
+pub const RESUME_MIN_SECS: f64 = 15.0;
+/// Within this many seconds of the end (or `isFinished`) counts as finished →
+/// start over from 0 rather than seek to the last breath of the book.
+pub const FINISH_MARGIN_SECS: f64 = 5.0;
+
+/// The fields of an Audiobookshelf progress record the resume decision needs.
+pub const ProgressInfo = struct {
+    /// Saved playback position in seconds (`currentTime`). Null when absent.
+    current_time: ?f64 = null,
+    /// The item's whole duration in seconds (`duration`). Null when absent.
+    duration: ?f64 = null,
+    /// Server's own finished flag (`isFinished`). Defaults false.
+    is_finished: bool = false,
+};
+
+/// Extract a JSON boolean value following `key`. Null when the key is absent or
+/// the value is neither `true` nor `false`.
+fn extractBool(json: []const u8, key: []const u8) ?bool {
+    const idx = std.mem.indexOf(u8, json, key) orelse return null;
+    var start = idx + key.len;
+    while (start < json.len and (json[start] == ' ' or json[start] == '\t')) : (start += 1) {}
+    if (std.mem.startsWith(u8, json[start..], "true")) return true;
+    if (std.mem.startsWith(u8, json[start..], "false")) return false;
+    return null;
+}
+
+/// Parse the `/api/me/progress/{id}` record into the fields the resume decision
+/// consumes (`currentTime`, `duration`, `isFinished`). Missing fields default —
+/// the whole record is optional, so a 404/empty body yields an all-defaults info
+/// that `resumeTarget` reads as "start at 0".
+pub fn parseProgress(json: []const u8) ProgressInfo {
+    return .{
+        .current_time = parseProgressSeconds(json),
+        .duration = extractFloat(json, "\"duration\":"),
+        .is_finished = extractBool(json, "\"isFinished\":") orelse false,
+    };
+}
+
+/// Decide the second to seek to when a book (re)opens, or null to start from the
+/// beginning. Starts from 0 when: no saved position, the position is under
+/// `RESUME_MIN_SECS`, the server marked the item finished, or the position sits
+/// within `FINISH_MARGIN_SECS` of the end (finished but the flag lagged).
+pub fn resumeTarget(position_secs: ?f64, duration_secs: f64, is_finished: bool) ?f64 {
+    const pos = position_secs orelse return null;
+    if (is_finished) return null;
+    if (pos <= RESUME_MIN_SECS) return null;
+    if (duration_secs > 0 and pos >= duration_secs - FINISH_MARGIN_SECS) return null;
+    return pos;
+}
+
+/// Compose `parseProgress` + `resumeTarget`: the single entry point the service
+/// routes a progress-response body through. Null → start from the beginning.
+pub fn resumeTargetFromJson(json: []const u8) ?f64 {
+    const info = parseProgress(json);
+    return resumeTarget(info.current_time, info.duration orelse 0, info.is_finished);
+}
+
 // ══════════════════════════════════════════════════════════
 // Tests — captured sample JSON (live server verification is manual).
 // ══════════════════════════════════════════════════════════
@@ -378,6 +439,49 @@ test "parseProgressSeconds reads currentTime, null when absent" {
     try std.testing.expectApproxEqAbs(@as(f64, 24449.3), parseProgressSeconds(sample_progress).?, 0.01);
     try std.testing.expect(parseProgressSeconds("{}") == null);
     try std.testing.expect(parseProgressSeconds("") == null);
+}
+
+const sample_progress_finished =
+    \\{"id":"li_book2","libraryItemId":"li_book2","duration":75600,"progress":1,"currentTime":75600,"isFinished":true,"lastUpdate":1700000000000}
+;
+
+test "parseProgress reads currentTime, duration, isFinished" {
+    const info = parseProgress(sample_progress);
+    try std.testing.expectApproxEqAbs(@as(f64, 24449.3), info.current_time.?, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f64, 58212.5), info.duration.?, 0.01);
+    try std.testing.expect(info.is_finished == false);
+
+    const fin = parseProgress(sample_progress_finished);
+    try std.testing.expect(fin.is_finished == true);
+
+    // Empty/absent → all defaults (start at 0 downstream).
+    const empty = parseProgress("{}");
+    try std.testing.expect(empty.current_time == null);
+    try std.testing.expect(empty.is_finished == false);
+}
+
+test "resumeTarget: mid-book seeks, finished/near-end/too-early start at 0" {
+    // Mid-book → seek to the saved second.
+    try std.testing.expectApproxEqAbs(@as(f64, 24449.3), resumeTarget(24449.3, 58212.5, false).?, 0.01);
+    // isFinished flag → start over.
+    try std.testing.expect(resumeTarget(24449.3, 58212.5, true) == null);
+    // Within FINISH_MARGIN of the end (flag lagged) → start over.
+    try std.testing.expect(resumeTarget(58210, 58212.5, false) == null);
+    // Under RESUME_MIN_SECS → noise, start at 0.
+    try std.testing.expect(resumeTarget(9, 58212.5, false) == null);
+    try std.testing.expect(resumeTarget(RESUME_MIN_SECS, 58212.5, false) == null);
+    // No saved position → start at 0.
+    try std.testing.expect(resumeTarget(null, 58212.5, false) == null);
+    // Unknown duration (0) still resumes a healthy position.
+    try std.testing.expectApproxEqAbs(@as(f64, 1200), resumeTarget(1200, 0, false).?, 0.01);
+}
+
+test "resumeTargetFromJson: mid-book book seeks, finished book starts at 0" {
+    try std.testing.expectApproxEqAbs(@as(f64, 24449.3), resumeTargetFromJson(sample_progress).?, 0.01);
+    try std.testing.expect(resumeTargetFromJson(sample_progress_finished) == null);
+    // No progress record at all → start at 0, no crash.
+    try std.testing.expect(resumeTargetFromJson("{}") == null);
+    try std.testing.expect(resumeTargetFromJson("") == null);
 }
 
 test "validItemId accepts ABS ids, rejects injection" {

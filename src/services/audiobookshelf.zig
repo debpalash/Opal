@@ -21,6 +21,8 @@ const theme = @import("../ui/theme.zig");
 const logs = @import("../core/logs.zig");
 const pure = @import("audiobookshelf_pure.zig");
 const http = @import("../core/http.zig");
+const c = @import("../core/c.zig");
+const yt_pure = @import("youtube_pure.zig");
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 
 const alloc = @import("../core/alloc.zig").allocator;
@@ -28,6 +30,18 @@ const alloc = @import("../core/alloc.zig").allocator;
 // Detached workers publish into state.app.abs.* under this mutex; the UI thread
 // reads it each frame. is_loading (atomic) only gates re-spawns.
 var parse_mutex: @import("../core/sync.zig").Mutex = .{};
+
+// ── Server-side resume state ────────────────────────────────────────────────
+// playBook() streams a book immediately, then a detached worker fetches the
+// server's saved position; tick() (frame loop, UI thread) issues the seek once
+// mpv actually has the file open — mirrors anime_skip.zig's seek timing. All
+// three fields are guarded by resume_mutex; the atomics gate the frame check.
+var resume_mutex: @import("../core/sync.zig").Mutex = .{};
+var resume_pending = std.atomic.Value(bool).init(false); // a book is awaiting its resume seek
+var resume_decided = std.atomic.Value(bool).init(false); // the fetch worker finished (target is final)
+var resume_target_secs: f64 = 0; // seek target; <= 0 means start from the beginning
+var resume_item_id: [64]u8 = undefined; // the book tick() must see loaded before it seeks
+var resume_item_id_len: usize = 0;
 
 fn setLoginError(msg: []const u8) void {
     const len = @min(msg.len, state.app.abs.login_error.len);
@@ -249,8 +263,123 @@ pub fn playBook(idx: usize) void {
     var cover_buf: [1024]u8 = undefined;
     const cover = pure.coverUrl(server, id_buf[0..idlen], token, &cover_buf) orelse "";
 
+    // ── Arm server-side resume BEFORE the load ──
+    // Record which book tick() should recognise as loaded, reset the target, and
+    // kick the async progress fetch. tick() applies the seek once mpv reports a
+    // duration (file open) — seeking earlier is a no-op. Order matters: the book
+    // id must be published before loadContentDirectMeta so the id-match gate in
+    // tick() (and the fetch worker's publish guard) sees this play, not a stale one.
+    resume_mutex.lock();
+    resume_target_secs = 0;
+    const rlen = @min(idlen, resume_item_id.len);
+    @memcpy(resume_item_id[0..rlen], id_buf[0..rlen]);
+    resume_item_id_len = rlen;
+    resume_mutex.unlock();
+    resume_decided.store(false, .release);
+    resume_pending.store(true, .release);
+    ResumeFetch.spawn();
+
     @import("browser.zig").loadContentDirectMeta(url, cover, title_buf[0..tlen], author_buf[0..alen]);
     logs.pushLog("info", "audiobookshelf", "Streaming audiobook", false);
+}
+
+// ── Resume fetch worker (struct{var}: copies inputs before spawn) ───────────
+// GET /api/me/progress/{id}, route the body through pure.resumeTargetFromJson,
+// and publish the seek target (guarded so a rapid second play can't land an old
+// book's position on the new one). Always resolves `resume_decided` so tick()
+// never waits forever — a failed/empty fetch just leaves target 0 (start at 0).
+const ResumeFetch = struct {
+    var busy: bool = false;
+
+    fn spawn() void {
+        if (@This().busy) return; // a fetch is in flight; it already reads the latest id
+        @This().busy = true;
+        if (std.Thread.spawn(.{}, @This().run, .{})) |t| {
+            t.detach();
+        } else |_| {
+            @This().busy = false;
+            resume_decided.store(true, .release); // nothing else will resolve it
+        }
+    }
+
+    fn run() void {
+        defer resume_decided.store(true, .release);
+        defer @This().busy = false;
+
+        // Snapshot the book id this fetch is for; publish only if it's still current.
+        resume_mutex.lock();
+        const idl = @min(resume_item_id_len, resume_item_id.len);
+        var id_local: [64]u8 = undefined;
+        @memcpy(id_local[0..idl], resume_item_id[0..idl]);
+        resume_mutex.unlock();
+        if (idl == 0 or !pure.validItemId(id_local[0..idl])) return;
+
+        const server = state.app.abs.server_url[0..state.app.abs.server_url_len];
+        if (server.len == 0) return;
+
+        var url_buf: [640]u8 = undefined;
+        const url = std.fmt.bufPrint(&url_buf, "{s}/api/me/progress/{s}", .{ server, id_local[0..idl] }) catch return;
+
+        // 404/empty (unstarted item) → absGet null → start at 0, silently.
+        const body = absGet(url) orelse {
+            logs.pushLog("info", "audiobookshelf", "No saved progress — starting at 0", false);
+            return;
+        };
+        defer alloc.free(body);
+
+        const target = pure.resumeTargetFromJson(body) orelse return; // null → leave target 0
+
+        resume_mutex.lock();
+        if (resume_item_id_len == idl and std.mem.eql(u8, resume_item_id[0..idl], id_local[0..idl]))
+            resume_target_secs = target;
+        resume_mutex.unlock();
+    }
+};
+
+/// Frame-loop hook (UI thread): once the fetch worker has decided AND mpv has the
+/// resumed book open, seek to the server-saved second exactly once. Cheap no-op
+/// unless a resume is pending. Mirrors anime_skip.tick()'s seek timing + path.
+pub fn tick() void {
+    if (!resume_pending.load(.acquire)) return;
+    if (!resume_decided.load(.acquire)) return; // fetch still running
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
+    const p = state.app.players.items[state.app.active_player_idx];
+
+    resume_mutex.lock();
+    const idl = @min(resume_item_id_len, resume_item_id.len);
+    var id_local: [64]u8 = undefined;
+    @memcpy(id_local[0..idl], resume_item_id[0..idl]);
+    const target = resume_target_secs;
+    resume_mutex.unlock();
+
+    // Only act once the active player has actually loaded THIS book — a play of
+    // something else in the meantime abandons the pending resume.
+    const cur = p.current_url[0..p.current_url_len];
+    if (idl == 0 or std.mem.indexOf(u8, cur, id_local[0..idl]) == null) {
+        resume_pending.store(false, .release);
+        return;
+    }
+
+    // Wait until mpv reports a duration (file open); seeking before that is a no-op.
+    var dur: f64 = 0;
+    _ = c.mpv.mpv_get_property(p.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur);
+    if (dur <= 1) return; // not open yet — try next frame
+
+    resume_pending.store(false, .release); // one-shot
+
+    if (target > 1) {
+        var seek_buf: [64]u8 = undefined;
+        const cmd = std.fmt.bufPrintZ(&seek_buf, "seek {d:.1} absolute", .{target}) catch return;
+        _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
+        var ts_buf: [16]u8 = undefined;
+        const ts = yt_pure.formatDuration(@intFromFloat(target), &ts_buf);
+        var toast_buf: [64]u8 = undefined;
+        const toast = std.fmt.bufPrint(&toast_buf, "Resumed at {s}", .{ts}) catch return;
+        state.showToast(toast);
+        logs.pushLog("info", "audiobookshelf", "Resumed at server-saved position", false);
+    } else {
+        logs.pushLog("info", "audiobookshelf", "Starting from the beginning", false);
+    }
 }
 
 /// Disconnect + clear session (keeps the server URL so reconnect is one field).
