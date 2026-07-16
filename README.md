@@ -242,6 +242,7 @@ src/
 ├── services/    # search, AI, torrents, jellyfin, remote API, ...
 └── ui/          # dvui widgets — theme tokens, shell, grid, player chrome
 web/             # companion web UI (its own Zig project)
+extension/       # Opal Connector — cross-browser MV3 extension (play/read/download/scrape → Opal); see extension/README.md
 ```
 
 The parts we're quietly proud of: the whole system — player, search, torrent

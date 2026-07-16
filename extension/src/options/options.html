@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Opal Connector — Settings</title>
+    <link rel="stylesheet" href="./options.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <span class="logo">◆</span>
+        <h1>Opal Connector — Settings</h1>
+      </header>
+
+      <p class="lead">
+        Point the extension at your locally-running Opal. Everything stays on
+        your machine — requests go straight to Opal over localhost.
+      </p>
+
+      <form id="form">
+        <label>
+          <span>Host</span>
+          <input id="host" type="text" placeholder="127.0.0.1" autocomplete="off" />
+        </label>
+
+        <label>
+          <span>Port</span>
+          <input id="port" type="number" placeholder="41595" min="1" max="65535" />
+        </label>
+
+        <label>
+          <span>API token</span>
+          <input id="token" type="password" placeholder="paste your token" autocomplete="off" />
+          <small class="hint">
+            Find it in <code>~/.config/opal/api.token</code> (macOS/Linux) or
+            <code>%APPDATA%\opal\api.token</code> (Windows). Enable
+            <em>Settings → Web Remote</em> in Opal first.
+          </small>
+        </label>
+
+        <div class="row">
+          <button type="submit" class="primary">Save</button>
+          <button type="button" id="test">Test connection</button>
+          <button type="button" id="reveal" class="ghost">Show token</button>
+        </div>
+      </form>
+
+      <div id="result" class="result" hidden></div>
+    </main>
+
+    <script type="module" src="./options.ts"></script>
+  </body>
+</html>
