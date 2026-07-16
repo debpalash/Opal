@@ -664,6 +664,15 @@ pub const AppState = struct {
         last_fetch_s: i64 = 0, // SWR cache timestamp
     } = .{},
     sponsorblock_enabled: bool = true,
+    // ── Anime-Skip (crowdsourced anime intro/recap/credits timestamps) ──
+    // Master + per-type toggles. Credits/preview default OFF: users often
+    // want to see the ED/next-episode preview. Segments themselves live in
+    // services/anime_skip.zig (module-level, mutex-guarded).
+    anime_skip_enabled: bool = true,
+    anime_skip_intro: bool = true,
+    anime_skip_recap: bool = true,
+    anime_skip_credits: bool = false,
+    anime_skip_preview: bool = false,
     deband_enabled: bool = true,
     video_scaler: u8 = 0, // 0=ewa_lanczossharp, 1=bilinear, 2=spline36
     // Web Remote JSON API (:41595). OFF by default — nothing should listen on

@@ -1629,6 +1629,27 @@ pub fn playEpisode(ep_no: []const u8) void {
 
     state.app.anime.stream_loading = true;
 
+    // ── Anime-Skip: arm crowdsourced intro/recap/credits auto-skip for the
+    //    episode we're about to load. anime-skip matches on episode NAME, so
+    //    prefer the Jikan-enriched episode title when we have one; otherwise
+    //    fall back to "<show> Episode N". Best-effort — title spelling can
+    //    differ from anime-skip's DB, in which case no markers come back.
+    {
+        const ep_num = std.fmt.parseInt(u16, ep_no, 10) catch 0;
+        var name_buf: [160]u8 = undefined;
+        var name_slice: []const u8 = "";
+        if (ep_num >= 1 and ep_num <= state.app.anime.episode_title_lens.len and
+            state.app.anime.episode_title_lens[ep_num - 1] > 0)
+        {
+            const tl = state.app.anime.episode_title_lens[ep_num - 1];
+            name_slice = state.app.anime.episode_titles[ep_num - 1][0..tl];
+        } else {
+            const r = &state.app.anime.results[idx];
+            name_slice = std.fmt.bufPrint(&name_buf, "{s} Episode {s}", .{ r.name[0..r.name_len], ep_no }) catch "";
+        }
+        @import("anime_skip.zig").onEpisodeLoad(name_slice);
+    }
+
     var ep_copy: [8]u8 = std.mem.zeroes([8]u8);
     const ep_len = @min(ep_no.len, 7);
     @memcpy(ep_copy[0..ep_len], ep_no[0..ep_len]);

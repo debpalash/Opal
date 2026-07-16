@@ -63,6 +63,11 @@ pub fn save() void {
     setKey("omdb_api_key", state.app.omdb_api_key[0..state.app.omdb_api_key_len]);
     setKey("subdl_api_key", state.app.subdl_api_key[0..state.app.subdl_api_key_len]);
     setKey("sponsorblock_enabled", if (state.app.sponsorblock_enabled) "1" else "0");
+    setKey("anime_skip_enabled", if (state.app.anime_skip_enabled) "1" else "0");
+    setKey("anime_skip_intro", if (state.app.anime_skip_intro) "1" else "0");
+    setKey("anime_skip_recap", if (state.app.anime_skip_recap) "1" else "0");
+    setKey("anime_skip_credits", if (state.app.anime_skip_credits) "1" else "0");
+    setKey("anime_skip_preview", if (state.app.anime_skip_preview) "1" else "0");
     setKey("deband_enabled", if (state.app.deband_enabled) "1" else "0");
     setKey("video_scaler", fmtInt(&fb, @as(usize, state.app.video_scaler)));
     // Video color filters (signed −100..100) — replayed at player init.
@@ -323,6 +328,16 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         }
     } else if (std.mem.eql(u8, key, "sponsorblock_enabled")) {
         state.app.sponsorblock_enabled = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "anime_skip_enabled")) {
+        state.app.anime_skip_enabled = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "anime_skip_intro")) {
+        state.app.anime_skip_intro = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "anime_skip_recap")) {
+        state.app.anime_skip_recap = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "anime_skip_credits")) {
+        state.app.anime_skip_credits = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "anime_skip_preview")) {
+        state.app.anime_skip_preview = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "deband_enabled")) {
         state.app.deband_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "video_scaler")) {

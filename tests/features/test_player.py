@@ -744,3 +744,61 @@ def test_virustotal_lookup():
     if bad:
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "user-triggered VT deep links: magnet btih + file sha256/md5"
+
+
+@test("Anime-Skip auto-skip", "Player")
+def test_anime_skip():
+    pure = _src("src/services/anime_skip_pure.zig")
+    svc = _src("src/services/anime_skip.zig")
+    bz = _src("build.zig")
+    st = _src("src/core/state.zig")
+    cfg = _src("src/core/config.zig")
+    setg = _src("src/ui/settings.zig")
+    mn = _src("src/main.zig")
+    pl = _src("src/player/player.zig")
+    an = _src("src/services/anime.zig")
+    checks = {
+        # Pure module registered + routed (tested logic IS shipped logic).
+        "pure module in build.zig": "anime_skip_pure.zig" in bz,
+        "pure exports builders/decision": ("pub fn buildRequestBody" in pure
+                                           and "pub fn parseResponse" in pure
+                                           and "pub fn buildSkipSegments" in pure
+                                           and "pub fn shouldSkip" in pure),
+        "point->range conversion routed": "buildSkipSegments(" in svc,
+        "parse routed": "parseResponse(" in svc,
+        "shouldSkip routed": "shouldSkip(" in svc,
+        # Service hits the exact API contract.
+        "graphql endpoint": "api.anime-skip.com/graphql" in svc,
+        "X-Client-ID header": "X-Client-ID" in svc,
+        "findEpisodeByName query": "findEpisodeByName" in pure,
+        # Seek reuses the player's absolute-seek path + shows a toast.
+        "seek absolute path": "absolute" in svc and "mpv_command_string" in svc,
+        "skip toast": "Skipped" in svc,
+        # Config keys persisted (save + load) — mirrors sponsorblock.
+        "state master + per-type bools": ("anime_skip_enabled" in st
+                                          and "anime_skip_intro" in st
+                                          and "anime_skip_recap" in st
+                                          and "anime_skip_credits" in st
+                                          and "anime_skip_preview" in st),
+        "config save keys": "setKey(\"anime_skip_enabled\"" in cfg,
+        "config load keys": "\"anime_skip_intro\"" in cfg,
+        # Defaults: intro/recap ON, credits/preview OFF.
+        "defaults intro+recap on": ("anime_skip_intro: bool = true" in st
+                                    and "anime_skip_recap: bool = true" in st),
+        "defaults credits+preview off": ("anime_skip_credits: bool = false" in st
+                                        and "anime_skip_preview: bool = false" in st),
+        # Settings UI section with master + per-type toggles.
+        "settings section": "Anime Skip" in setg and "anime-skip.com" in setg,
+        "settings toggles": ("&state.app.anime_skip_enabled" in setg
+                            and "&state.app.anime_skip_intro" in setg),
+        # tick() wired into the frame loop.
+        "tick wired in main loop": "anime_skip.zig\").tick()" in mn,
+        # Anime-only gating: per-player arm consumed on file load, set by anime.
+        "per-player gating flag": "anime_skip_active" in pl,
+        "arm consumed on load": "onFileLoad(self)" in pl,
+        "anime load triggers fetch": "onEpisodeLoad(" in an,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "anime-skip: findEpisodeByName → point→range → gated auto-seek"
