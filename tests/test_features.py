@@ -44,6 +44,7 @@ from features import (  # noqa: F401
     test_drama,
     test_anime_schedule,
     test_anime_detail,
+    test_anime_posters,
     test_manga_heancms,
     test_manga_themesia,
     test_manga_catalog,

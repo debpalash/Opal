@@ -1237,6 +1237,16 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
             item.airing = meta.airing;
 
             item.poster_fetching = false;
+            // This row is being repurposed for a different anime, so its poster
+            // lifecycle resets with it (as the Lists and scraper parsers already
+            // do). Retiring the texture WITHOUT clearing attempted/failed leaves
+            // the row reading as "tried and failed" to posterAction, which then
+            // blanks the card permanently — that is what emptied the grid on
+            // every SWR revalidate: the cache seed's posters loaded, then this
+            // reparse retired their textures and latched them dead. See the
+            // regression test in anime_pure.zig.
+            item.poster_attempted = false;
+            item.poster_failed = false;
             if (item.poster_tex) |tx| {
                 queueTexFree(tx); // worker thread — defer the dvui destroy to the UI thread
             }
@@ -2655,13 +2665,23 @@ pub fn renderContent() void {
                     } else {
                         // Same failure-latch/fetch dance as the grid so we never
                         // re-spawn a worker every frame for a dead URL.
-                        if (item.poster_fetching) {
-                            item.poster_attempted = true;
-                        } else if (item.poster_attempted and item.poster_pixels == null and item.poster_tex == null) {
-                            item.poster_failed = true;
-                        } else if (!item.poster_failed and item.poster_pixels == null and item.poster_url_len > 0) {
-                            poster.fetchAsync(item.poster_url[0..item.poster_url_len], &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
-                            if (item.poster_fetching) item.poster_attempted = true;
+                        // Routed through anime_pure.posterAction so the shipped decision is the
+                        // tested one (see its regression test: a retired texture must not latch).
+                        switch (anime_pure.posterAction(.{
+                            .fetching = item.poster_fetching,
+                            .attempted = item.poster_attempted,
+                            .failed = item.poster_failed,
+                            .has_pixels = item.poster_pixels != null,
+                            .has_tex = item.poster_tex != null,
+                            .has_url = item.poster_url_len > 0,
+                        })) {
+                            .mark_attempted => item.poster_attempted = true,
+                            .latch_failed => item.poster_failed = true,
+                            .fetch => {
+                                poster.fetchAsync(item.poster_url[0..item.poster_url_len], &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
+                                if (item.poster_fetching) item.poster_attempted = true;
+                            },
+                            .none => {},
                         }
                         dvui.icon(@src(), "det-poster-ph", icons.tvg.lucide.film, .{}, .{
                             .id_extra = 73,
@@ -3550,13 +3570,23 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
             } else {
                 // Failure-latch (mirrors TmdbItem/JfItem): stop re-spawning a
                 // poster worker every frame for a dead/undecodable URL.
-                if (item.poster_fetching) {
-                    item.poster_attempted = true;
-                } else if (item.poster_attempted and item.poster_pixels == null and item.poster_tex == null) {
-                    item.poster_failed = true;
-                } else if (!item.poster_failed and item.poster_pixels == null and item.poster_url_len > 0) {
-                    poster.fetchAsync(item.poster_url[0..item.poster_url_len], &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
-                    if (item.poster_fetching) item.poster_attempted = true;
+                // Routed through anime_pure.posterAction so the shipped decision is the
+                // tested one (see its regression test: a retired texture must not latch).
+                switch (anime_pure.posterAction(.{
+                    .fetching = item.poster_fetching,
+                    .attempted = item.poster_attempted,
+                    .failed = item.poster_failed,
+                    .has_pixels = item.poster_pixels != null,
+                    .has_tex = item.poster_tex != null,
+                    .has_url = item.poster_url_len > 0,
+                })) {
+                    .mark_attempted => item.poster_attempted = true,
+                    .latch_failed => item.poster_failed = true,
+                    .fetch => {
+                        poster.fetchAsync(item.poster_url[0..item.poster_url_len], &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
+                        if (item.poster_fetching) item.poster_attempted = true;
+                    },
+                    .none => {},
                 }
                 dvui.icon(@src(), "", icons.tvg.lucide.play, .{}, .{
                     .id_extra = idx + 30150,
@@ -4075,13 +4105,23 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
                 // (http.fetchImage — the proven path TMDB/Jellyfin use; the old
                 // bespoke curl fetch left anime cards on placeholders). Latch
                 // permanent failure so we stop re-spawning a worker every frame.
-                if (item.poster_fetching) {
-                    item.poster_attempted = true;
-                } else if (item.poster_attempted and item.poster_pixels == null and item.poster_tex == null) {
-                    item.poster_failed = true;
-                } else if (!item.poster_failed and item.poster_pixels == null and item.poster_url_len > 0) {
-                    poster.fetchAsync(item.poster_url[0..item.poster_url_len], &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
-                    if (item.poster_fetching) item.poster_attempted = true;
+                // Routed through anime_pure.posterAction so the shipped decision is the
+                // tested one (see its regression test: a retired texture must not latch).
+                switch (anime_pure.posterAction(.{
+                    .fetching = item.poster_fetching,
+                    .attempted = item.poster_attempted,
+                    .failed = item.poster_failed,
+                    .has_pixels = item.poster_pixels != null,
+                    .has_tex = item.poster_tex != null,
+                    .has_url = item.poster_url_len > 0,
+                })) {
+                    .mark_attempted => item.poster_attempted = true,
+                    .latch_failed => item.poster_failed = true,
+                    .fetch => {
+                        poster.fetchAsync(item.poster_url[0..item.poster_url_len], &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
+                        if (item.poster_fetching) item.poster_attempted = true;
+                    },
+                    .none => {},
                 }
                 dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
                     .id_extra = idx + 150,

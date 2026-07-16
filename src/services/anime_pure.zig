@@ -129,3 +129,97 @@ test "sfwSuffix" {
     try std.testing.expectEqualStrings("", sfwSuffix(true));
     try std.testing.expectEqualStrings("", sfwSuffix(false));
 }
+
+// ── Poster lifecycle ──────────────────────────────────────────────────
+// A card's poster moves through: no URL → fetch → pixels decoded → texture
+// uploaded (pixels freed). The grid re-evaluates this every frame from the
+// row's flags alone, so those flags ARE the state machine — modelled here so
+// the shipped decision is the tested one — the three render sites route
+// through posterAction.
+
+/// A card's poster flags, as the render loop observes them.
+pub const PosterRow = struct {
+    /// A fetch worker is in flight for this row.
+    fetching: bool = false,
+    /// A fetch was started for this row at some point.
+    attempted: bool = false,
+    /// Latched dead — a fetch ran and produced nothing renderable.
+    failed: bool = false,
+    /// Decoded pixels are waiting to be uploaded (freed once uploaded).
+    has_pixels: bool = false,
+    /// An uploaded GPU texture exists — the poster renders.
+    has_tex: bool = false,
+    /// The row has a poster URL to fetch.
+    has_url: bool = false,
+};
+
+pub const PosterAction = enum {
+    /// Nothing to do (already rendering, pixels pending upload, or latched).
+    none,
+    /// A worker is running — record that we tried.
+    mark_attempted,
+    /// A fetch ran and produced nothing: give up so we don't respawn forever.
+    latch_failed,
+    /// Kick off a fetch.
+    fetch,
+};
+
+/// The grid's per-frame decision for one card's poster.
+pub fn posterAction(r: PosterRow) PosterAction {
+    if (r.has_tex) return .none;
+    if (r.fetching) return .mark_attempted;
+    // "Tried, not fetching, nothing to show" == the fetch failed. This is only
+    // sound while `attempted` is cleared whenever the row's texture/pixels are
+    // deliberately dropped by a parser — otherwise a row that loaded
+    // fine and then had its texture retired by a reparse reads as failed here
+    // and stays blank forever.
+    if (r.attempted and !r.has_pixels and !r.has_tex) return .latch_failed;
+    if (!r.failed and !r.has_pixels and r.has_url) return .fetch;
+    return .none;
+}
+
+test "posterAction: normal lifecycle" {
+    // Nothing yet → fetch.
+    try std.testing.expectEqual(PosterAction.fetch, posterAction(.{ .has_url = true }));
+    // No URL → nothing to fetch.
+    try std.testing.expectEqual(PosterAction.none, posterAction(.{}));
+    // Worker running → just record the attempt.
+    try std.testing.expectEqual(PosterAction.mark_attempted, posterAction(.{ .fetching = true, .has_url = true }));
+    // Pixels decoded, awaiting upload → don't refetch.
+    try std.testing.expectEqual(PosterAction.none, posterAction(.{ .attempted = true, .has_pixels = true, .has_url = true }));
+    // Uploaded → rendering.
+    try std.testing.expectEqual(PosterAction.none, posterAction(.{ .attempted = true, .has_tex = true, .has_url = true }));
+    // Latched dead → never respawn.
+    try std.testing.expectEqual(PosterAction.none, posterAction(.{ .failed = true, .has_url = true }));
+}
+
+test "posterAction: a real failure still latches" {
+    // Fetch ran, produced no pixels and no texture → give up (this is the
+    // latch's reason to exist: don't respawn a worker every frame on a dead URL).
+    try std.testing.expectEqual(
+        PosterAction.latch_failed,
+        posterAction(.{ .attempted = true, .has_url = true }),
+    );
+}
+
+test "regression: retiring a loaded poster's texture must not latch it dead" {
+    // The anime grid blanked on every SWR revalidate: the disk-cache seed's
+    // posters loaded (texture uploaded, pixels freed), then the network reparse
+    // retired those textures and reused the rows — but parseJikan cleared only
+    // the texture, not attempted/failed.
+    const loaded = PosterRow{ .attempted = true, .has_tex = true, .has_url = true };
+    try std.testing.expectEqual(PosterAction.none, posterAction(loaded));
+
+    // The bug: texture dropped, latch flags left set. The row is now
+    // indistinguishable from a dead URL → latched blank forever, no refetch.
+    var stale = loaded;
+    stale.has_tex = false;
+    try std.testing.expectEqual(PosterAction.latch_failed, posterAction(stale));
+
+    // The fix: a parser retiring the texture clears attempted/failed with it,
+    // so the row is back to "never loaded" and fetches again.
+    var reset = stale;
+    reset.attempted = false;
+    reset.failed = false;
+    try std.testing.expectEqual(PosterAction.fetch, posterAction(reset));
+}
