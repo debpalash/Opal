@@ -38,6 +38,7 @@ from features import (  # noqa: F401
     test_reading,
     test_manga_madara,
     test_novels,
+    test_novel_sources,
     test_gallerydl,
     test_vndb,
     test_drama,

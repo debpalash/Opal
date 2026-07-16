@@ -1053,6 +1053,20 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_scrape_fetch_pure).step);
 
+    // Light-novel source engines — the chapter-TEXT container extraction per
+    // engine (.text-left / epcontent / .chapter-content / #chr-content), the
+    // readwn standalone list/detail/chapter parse + browse/search URL builders,
+    // and the REUSE of manga_madara_pure / manga_themesia_pure for the shared
+    // Madara-novel / lightnovelwp frameworks. novels.zig routes through this.
+    const test_novel_sources_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/novel_sources_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_novel_sources_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main

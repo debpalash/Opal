@@ -26,9 +26,30 @@ const logs = @import("../core/logs.zig");
 const io = @import("../core/io_global.zig");
 const db = @import("../core/db.zig");
 const pure = @import("novels_pure.zig");
+const nsp = @import("novel_sources_pure.zig");
+const source_config = @import("../core/source_config.zig");
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 
 const alloc = @import("../core/alloc.zig").allocator;
+
+const NovelSource = nsp.NovelSource;
+
+// ── Source config gates ──
+// Wikisource (keyless, guaranteed-legal public-domain classics) is ALWAYS on.
+// The scraper engines are base-URL-driven and INERT until a plugin supplies the
+// base via source_config — nothing infringing is hardcoded (mirrors comics.zig).
+fn madaraNovelBase() ?[]const u8 {
+    return source_config.get("madara_novel", "base");
+}
+fn lightnovelwpBase() ?[]const u8 {
+    return source_config.get("lightnovelwp", "base");
+}
+fn lightnovelwpDir() []const u8 {
+    return source_config.get("lightnovelwp", "dir") orelse "/series";
+}
+fn readwnBase() ?[]const u8 {
+    return source_config.get("readwn", "base");
+}
 
 const agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -45,13 +66,27 @@ const RESUME_KIND = "novel_resume";
 const MAX_RESULTS: usize = 40;
 var nr_titles: [MAX_RESULTS][256]u8 = undefined;
 var nr_title_lens: [MAX_RESULTS]usize = std.mem.zeroes([MAX_RESULTS]usize);
+// Per-result source + novel URL. Wikisource identifies a work by its title
+// (`nr_urls` empty); the scraper engines identify it by an absolute URL.
+var nr_urls: [MAX_RESULTS][512]u8 = undefined;
+var nr_url_lens: [MAX_RESULTS]usize = std.mem.zeroes([MAX_RESULTS]usize);
+var nr_source: [MAX_RESULTS]NovelSource = undefined;
 var nr_count: usize = 0;
 
 const MAX_CHAPTERS: usize = 400;
-// Full page title ("Frankenstein/Chapter 1") — the fetch key for action=parse.
+// For Wikisource: the full page title ("Frankenstein/Chapter 1") — the fetch key
+// for action=parse. For the scraper engines: the chapter's display name.
 var ch_titles: [MAX_CHAPTERS][256]u8 = undefined;
 var ch_title_lens: [MAX_CHAPTERS]usize = std.mem.zeroes([MAX_CHAPTERS]usize);
+// Absolute chapter URL (scraper engines only; empty for Wikisource).
+var ch_urls: [MAX_CHAPTERS][512]u8 = undefined;
+var ch_url_lens: [MAX_CHAPTERS]usize = std.mem.zeroes([MAX_CHAPTERS]usize);
 var ch_count: usize = 0;
+
+// The engine of the currently-open novel — set by openNovel BEFORE spawning the
+// chapters/text workers, which dispatch on it (chapter-list markup + chapter-text
+// container differ per source). Snapshot-before-spawn, like work_snap.
+var open_source: NovelSource = .wikisource;
 
 // ── Thread-safety ──
 // Detached workers publish under `parse_mutex`; monotonic generations drop stale
@@ -67,8 +102,14 @@ var query_snap: [256]u8 = undefined;
 var query_snap_len: usize = 0;
 var work_snap: [256]u8 = undefined;
 var work_snap_len: usize = 0;
+// Selected novel's absolute URL (scraper engines) — the details/chapter-list key.
+var work_url_snap: [512]u8 = undefined;
+var work_url_snap_len: usize = 0;
 var chapter_snap: [256]u8 = undefined;
 var chapter_snap_len: usize = 0;
+// Selected chapter's absolute URL (scraper engines) — the chapter-text fetch key.
+var chapter_url_snap: [512]u8 = undefined;
+var chapter_url_snap_len: usize = 0;
 
 // Reader text framing cap — matches state.app.novels.text_buf. Anything longer
 // is truncated and flagged (text_truncated) so the UI can say so.
@@ -97,55 +138,201 @@ pub fn searchNovels(query: []const u8) void {
     }
 }
 
+/// Query every ACTIVE source and concatenate their rows. Wikisource first (the
+/// always-on legal default), then each scraper engine that a plugin has supplied
+/// a base for. Mirrors comics.zig's searchWorker aggregation.
 fn searchWorker(my_gen: u32) void {
     defer state.app.novels.is_loading.store(false, .release);
 
     var local: [256]u8 = undefined;
     const qlen = @min(query_snap_len, local.len);
     @memcpy(local[0..qlen], query_snap[0..qlen]);
-
-    var url_buf: [1024]u8 = undefined;
-    const url = pure.buildSearchUrl(&url_buf, local[0..qlen], MAX_RESULTS) orelse return;
-
-    const body = curl(url, 512 * 1024) orelse {
-        state.app.novels.fetch_error = true;
-        return;
-    };
-    defer alloc.free(body);
-
-    if (search_gen.load(.acquire) != my_gen) return; // superseded
+    const query = local[0..qlen];
 
     parse_mutex.lock();
-    defer parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return; // re-check under lock
+    nr_count = 0;
+    parse_mutex.unlock();
 
-    const count = parseSearch(body);
-    nr_count = count;
-    if (count == 0) {
+    var filled: usize = 0;
+    filled += fetchWikisource(query, my_gen, filled);
+    if (search_gen.load(.acquire) != my_gen) return;
+
+    if (madaraNovelBase() != null) {
+        filled += fetchMadaraNovel(query, my_gen, filled);
+        if (search_gen.load(.acquire) != my_gen) return;
+    }
+    if (lightnovelwpBase() != null) {
+        filled += fetchLightnovelwp(query, my_gen, filled);
+        if (search_gen.load(.acquire) != my_gen) return;
+    }
+    if (readwnBase() != null) {
+        filled += fetchReadwn(query, my_gen, filled);
+    }
+
+    if (filled == 0) {
         logs.pushLog("info", "novels", "Novel search returned no works", false);
     } else {
-        logs.pushLog("info", "novels", "Novel search done (Wikisource)", false);
+        logs.pushLog("info", "novels", "Novel search done", false);
     }
 }
 
-/// Fill nr_* from a Wikisource `list=search` response. Returns the row count.
+/// Publish one search row (title + optional URL + source) into the nr_* arrays.
 /// Runs under parse_mutex on the search worker.
-fn parseSearch(json: []const u8) usize {
-    const arr = pure.searchArray(json) orelse return 0;
+fn addResult(idx: usize, src: NovelSource, title: []const u8, url: []const u8) void {
+    if (idx >= MAX_RESULTS) return;
+    const tlen = @min(title.len, nr_titles[idx].len);
+    @memcpy(nr_titles[idx][0..tlen], title[0..tlen]);
+    nr_title_lens[idx] = tlen;
+    const ulen = @min(url.len, nr_urls[idx].len);
+    @memcpy(nr_urls[idx][0..ulen], url[0..ulen]);
+    nr_url_lens[idx] = ulen;
+    nr_source[idx] = src;
+}
+
+/// Decode HTML entities out of a scraped title (it carries no block tags, so
+/// htmlToText just entity-decodes + collapses whitespace). Into `out`.
+fn cleanTitle(raw: []const u8, out: []u8) []const u8 {
+    const n = pure.htmlToText(raw, out);
+    return out[0..n];
+}
+
+/// Copy a source_config base out of its static table (it can be reloaded).
+fn copyBase(raw: []const u8, out: []u8) []const u8 {
+    const n = @min(raw.len, out.len);
+    @memcpy(out[0..n], raw[0..n]);
+    return out[0..n];
+}
+
+/// Wikisource `list=search` → nr_* rows (the always-on default source).
+fn fetchWikisource(query: []const u8, my_gen: u32, start: usize) usize {
+    var url_buf: [1024]u8 = undefined;
+    const url = pure.buildSearchUrl(&url_buf, query, MAX_RESULTS) orelse return 0;
+    const body = curl(url, 512 * 1024) orelse {
+        state.app.novels.fetch_error = true;
+        return 0;
+    };
+    defer alloc.free(body);
+    if (search_gen.load(.acquire) != my_gen) return 0;
+
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (search_gen.load(.acquire) != my_gen) return 0;
+
+    const arr = pure.searchArray(body) orelse return 0;
     var it = pure.cj.ObjIter{ .buf = arr };
-    var count: usize = 0;
+    var n: usize = 0;
     while (it.next()) |obj| {
-        if (count >= MAX_RESULTS) break;
+        if (start + n >= MAX_RESULTS) break;
         const raw = pure.titleField(obj) orelse continue;
         var dec: [256]u8 = undefined;
         const dn = pure.cj.jsonUnescape(raw, &dec);
         if (dn == 0) continue;
-        const tlen = @min(dn, nr_titles[count].len);
-        @memcpy(nr_titles[count][0..tlen], dec[0..tlen]);
-        nr_title_lens[count] = tlen;
-        count += 1;
+        addResult(start + n, .wikisource, dec[0..dn], "");
+        n += 1;
     }
-    return count;
+    nr_count = start + n;
+    return n;
+}
+
+/// Madara-novel search — REUSES the manga Madara `SearchIter` (identical DOM);
+/// only the chapter body later differs. Rows carry the absolute novel URL.
+fn fetchMadaraNovel(query: []const u8, my_gen: u32, start: usize) usize {
+    const base_raw = madaraNovelBase() orelse return 0;
+    var base_buf: [256]u8 = undefined;
+    const base = copyBase(base_raw, &base_buf);
+
+    var url_buf: [768]u8 = undefined;
+    const url = nsp.madara.buildSearchUrl(&url_buf, base, query, 1) orelse return 0;
+    const body = curl(url, 512 * 1024) orelse return 0;
+    defer alloc.free(body);
+    if (search_gen.load(.acquire) != my_gen) return 0;
+
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (search_gen.load(.acquire) != my_gen) return 0;
+
+    var it = nsp.madara.SearchIter{ .html = body };
+    var n: usize = 0;
+    while (it.next()) |item| {
+        if (start + n >= MAX_RESULTS) break;
+        var abs_buf: [512]u8 = undefined;
+        const abs = nsp.madara.resolveUrl(base, item.url, &abs_buf);
+        if (abs.len == 0 or !std.mem.startsWith(u8, abs, "http")) continue;
+        var t_buf: [256]u8 = undefined;
+        addResult(start + n, .madara_novel, cleanTitle(item.title, &t_buf), abs);
+        n += 1;
+    }
+    nr_count = start + n;
+    return n;
+}
+
+/// lightnovelwp search — REUSES the MangaThemesia browse endpoint + `SearchIter`.
+fn fetchLightnovelwp(query: []const u8, my_gen: u32, start: usize) usize {
+    const base_raw = lightnovelwpBase() orelse return 0;
+    var base_buf: [256]u8 = undefined;
+    const base = copyBase(base_raw, &base_buf);
+
+    var url_buf: [768]u8 = undefined;
+    const url = nsp.themesia.buildBrowseUrl(base, lightnovelwpDir(), query, 1, "", &url_buf) orelse return 0;
+    const body = curl(url, 512 * 1024) orelse return 0;
+    defer alloc.free(body);
+    if (search_gen.load(.acquire) != my_gen) return 0;
+
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (search_gen.load(.acquire) != my_gen) return 0;
+
+    var it = nsp.themesia.SearchIter{ .html = body };
+    var n: usize = 0;
+    while (it.next()) |item| {
+        if (start + n >= MAX_RESULTS) break;
+        if (item.title.len == 0) continue;
+        var abs_buf: [512]u8 = undefined;
+        const abs = nsp.themesia.resolveUrl(base, item.url, &abs_buf);
+        if (abs.len == 0 or !std.mem.startsWith(u8, abs, "http")) continue;
+        var t_buf: [256]u8 = undefined;
+        addResult(start + n, .lightnovelwp, cleanTitle(item.title, &t_buf), abs);
+        n += 1;
+    }
+    nr_count = start + n;
+    return n;
+}
+
+/// readwn search — POST form to `/e/search/index.php`, parsed by the standalone
+/// `ReadwnIter`. Rows carry the absolute novel URL.
+fn fetchReadwn(query: []const u8, my_gen: u32, start: usize) usize {
+    const base_raw = readwnBase() orelse return 0;
+    var base_buf: [256]u8 = undefined;
+    const base = copyBase(base_raw, &base_buf);
+
+    var url_buf: [320]u8 = undefined;
+    const url = nsp.readwnSearchUrl(&url_buf, base) orelse return 0;
+    var body_buf: [640]u8 = undefined;
+    const post = nsp.readwnSearchBody(&body_buf, query) orelse return 0;
+    var ref_buf: [320]u8 = undefined;
+    const referer = nsp.readwnReferer(&ref_buf, base);
+
+    const body = curlPost(url, post, referer, 512 * 1024) orelse return 0;
+    defer alloc.free(body);
+    if (search_gen.load(.acquire) != my_gen) return 0;
+
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (search_gen.load(.acquire) != my_gen) return 0;
+
+    var it = nsp.ReadwnIter{ .html = body };
+    var n: usize = 0;
+    while (it.next()) |item| {
+        if (start + n >= MAX_RESULTS) break;
+        var abs_buf: [512]u8 = undefined;
+        const abs = nsp.themesia.resolveUrl(base, item.url, &abs_buf);
+        if (abs.len == 0 or !std.mem.startsWith(u8, abs, "http")) continue;
+        var t_buf: [256]u8 = undefined;
+        addResult(start + n, .readwn, cleanTitle(item.title, &t_buf), abs);
+        n += 1;
+    }
+    nr_count = start + n;
+    return n;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -155,13 +342,19 @@ fn parseSearch(json: []const u8) usize {
 pub fn openNovel(idx: usize) void {
     if (idx >= nr_count) return;
 
-    // Snapshot the selected work title into AppState (the reader header + resume
-    // key) and into the worker snapshot BEFORE spawning.
+    // Snapshot the selected work (source + title + URL) BEFORE spawning — the
+    // search grid can be reordered by a fresh search while chapters load.
+    open_source = nr_source[idx];
+
     const tlen = @min(nr_title_lens[idx], state.app.novels.work_title.len);
     @memcpy(state.app.novels.work_title[0..tlen], nr_titles[idx][0..tlen]);
     state.app.novels.work_title_len = tlen;
     @memcpy(work_snap[0..tlen], nr_titles[idx][0..tlen]);
     work_snap_len = tlen;
+
+    const ulen = @min(nr_url_lens[idx], work_url_snap.len);
+    @memcpy(work_url_snap[0..ulen], nr_urls[idx][0..ulen]);
+    work_url_snap_len = ulen;
 
     state.app.novels.view = .chapters;
     state.app.novels.chapters_loading.store(true, .release);
@@ -179,9 +372,46 @@ pub fn openNovel(idx: usize) void {
     }
 }
 
+/// Dispatch the chapter-list fetch to the open novel's engine.
 fn chaptersWorker(my_gen: u32) void {
     defer state.app.novels.chapters_loading.store(false, .release);
+    switch (open_source) {
+        .wikisource => chaptersWikisource(my_gen),
+        .madara_novel => chaptersMadara(my_gen),
+        .lightnovelwp => chaptersLightnovelwp(my_gen),
+        .readwn => chaptersReadwn(my_gen),
+        .readnovelfull => {}, // not shipped in v1
+    }
+}
 
+/// Publish one chapter (display name + optional absolute URL) into the ch_* arrays.
+fn addChapter(idx: usize, name: []const u8, url: []const u8) void {
+    if (idx >= MAX_CHAPTERS) return;
+    const nlen = @min(name.len, ch_titles[idx].len);
+    @memcpy(ch_titles[idx][0..nlen], name[0..nlen]);
+    ch_title_lens[idx] = nlen;
+    const ulen = @min(url.len, ch_urls[idx].len);
+    @memcpy(ch_urls[idx][0..ulen], url[0..ulen]);
+    ch_url_lens[idx] = ulen;
+}
+
+/// Reverse the first `count` chapters in place. The scraper engines list chapters
+/// newest→oldest; reading order is oldest→newest, so chapter 0 becomes chapter 1.
+fn reverseChapters(count: usize) void {
+    if (count < 2) return;
+    var i: usize = 0;
+    while (i < count / 2) : (i += 1) {
+        const j = count - 1 - i;
+        std.mem.swap([256]u8, &ch_titles[i], &ch_titles[j]);
+        std.mem.swap(usize, &ch_title_lens[i], &ch_title_lens[j]);
+        std.mem.swap([512]u8, &ch_urls[i], &ch_urls[j]);
+        std.mem.swap(usize, &ch_url_lens[i], &ch_url_lens[j]);
+    }
+}
+
+/// Wikisource: `list=allpages` subpages. When a work has none (single-page work),
+/// synthesize one chapter = the work page so the reader still opens.
+fn chaptersWikisource(my_gen: u32) void {
     var work: [256]u8 = undefined;
     const wlen = @min(work_snap_len, work.len);
     @memcpy(work[0..wlen], work_snap[0..wlen]);
@@ -194,24 +424,14 @@ fn chaptersWorker(my_gen: u32) void {
         return;
     };
     defer alloc.free(body);
-
     if (chapters_gen.load(.acquire) != my_gen) return;
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
     if (chapters_gen.load(.acquire) != my_gen) return;
 
-    const count = parseChapters(body, work[0..wlen]);
-    ch_count = count;
-    logs.pushLog("info", "novels", "Novel chapter list loaded (Wikisource)", false);
-}
-
-/// Fill ch_* from a `list=allpages` response. When the work has NO subpages
-/// (single-page work), synthesize one chapter = the work page itself so the
-/// reader still opens. Runs under parse_mutex on the chapters worker.
-fn parseChapters(json: []const u8, work_title: []const u8) usize {
     var count: usize = 0;
-    if (pure.allpagesArray(json)) |arr| {
+    if (pure.allpagesArray(body)) |arr| {
         var it = pure.cj.ObjIter{ .buf = arr };
         while (it.next()) |obj| {
             if (count >= MAX_CHAPTERS) break;
@@ -219,20 +439,172 @@ fn parseChapters(json: []const u8, work_title: []const u8) usize {
             var dec: [256]u8 = undefined;
             const dn = pure.cj.jsonUnescape(raw, &dec);
             if (dn == 0) continue;
-            const clen = @min(dn, ch_titles[count].len);
-            @memcpy(ch_titles[count][0..clen], dec[0..clen]);
-            ch_title_lens[count] = clen;
+            addChapter(count, dec[0..dn], "");
             count += 1;
         }
     }
     if (count == 0) {
-        // Single-page work: read the work page directly as chapter 0.
-        const clen = @min(work_title.len, ch_titles[0].len);
-        @memcpy(ch_titles[0][0..clen], work_title[0..clen]);
-        ch_title_lens[0] = clen;
+        addChapter(0, work[0..wlen], "");
         count = 1;
     }
-    return count;
+    ch_count = count;
+    logs.pushLog("info", "novels", "Novel chapter list loaded (Wikisource)", false);
+}
+
+/// Madara-novel: REUSES the manga Madara `ChapterIter` over the details HTML, with
+/// the same admin-ajax.php / `{url}ajax/chapters` fallbacks the comics reader uses.
+fn chaptersMadara(my_gen: u32) void {
+    const base_raw = madaraNovelBase() orelse return;
+    var base_buf: [256]u8 = undefined;
+    const base = copyBase(base_raw, &base_buf);
+
+    var murl_buf: [512]u8 = undefined;
+    const mn = @min(work_url_snap_len, murl_buf.len);
+    @memcpy(murl_buf[0..mn], work_url_snap[0..mn]);
+    const murl = murl_buf[0..mn];
+    if (murl.len == 0) return;
+
+    const body = curl(murl, 1024 * 1024) orelse {
+        state.app.novels.fetch_error = true;
+        return;
+    };
+    defer alloc.free(body);
+    if (chapters_gen.load(.acquire) != my_gen) return;
+
+    // Inline `li.wp-manga-chapter` first; else the AJAX fallbacks (heap bodies).
+    var ajax_body: ?[]u8 = null;
+    defer if (ajax_body) |ab| alloc.free(ab);
+    var list_html: []const u8 = body;
+    {
+        var probe = nsp.madara.ChapterIter{ .html = body };
+        if (probe.next() == null) {
+            // Fallback A: admin-ajax.php?action=manga_get_chapters&manga=<data-id>.
+            if (nsp.madara.dataIdFromHolder(body)) |data_id| {
+                var au_buf: [320]u8 = undefined;
+                var form_buf: [128]u8 = undefined;
+                if (nsp.madara.buildAjaxUrl(&au_buf, base)) |ajax_url| {
+                    if (nsp.madara.buildAjaxBody(&form_buf, data_id)) |form| {
+                        if (curlPost(ajax_url, form, murl, 512 * 1024)) |ab| {
+                            ajax_body = ab;
+                            list_html = ab;
+                        }
+                    }
+                }
+            }
+            // Fallback B: {novelUrl}ajax/chapters (empty POST body).
+            if (ajax_body == null) {
+                var au_buf: [560]u8 = undefined;
+                const dir = std.mem.trimEnd(u8, murl, "/");
+                if (std.fmt.bufPrint(&au_buf, "{s}/ajax/chapters", .{dir})) |ajax2| {
+                    if (curlPost(ajax2, "", murl, 512 * 1024)) |ab| {
+                        ajax_body = ab;
+                        list_html = ab;
+                    }
+                } else |_| {}
+            }
+        }
+    }
+
+    if (chapters_gen.load(.acquire) != my_gen) return;
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (chapters_gen.load(.acquire) != my_gen) return;
+
+    var it = nsp.madara.ChapterIter{ .html = list_html };
+    var n: usize = 0;
+    while (it.next()) |ch| {
+        if (n >= MAX_CHAPTERS) break;
+        if (ch.url.len == 0) continue;
+        var abs_buf: [512]u8 = undefined;
+        const abs = nsp.madara.resolveUrl(base, ch.url, &abs_buf);
+        if (abs.len == 0 or !std.mem.startsWith(u8, abs, "http")) continue;
+        var name_buf: [256]u8 = undefined;
+        addChapter(n, cleanTitle(ch.name, &name_buf), abs);
+        n += 1;
+    }
+    reverseChapters(n);
+    ch_count = n;
+    logs.pushLog("info", "novels", "Novel chapter list loaded (madara)", false);
+}
+
+/// lightnovelwp: REUSES the MangaThemesia `chapterIter` over the series HTML.
+fn chaptersLightnovelwp(my_gen: u32) void {
+    const base_raw = lightnovelwpBase() orelse return;
+    var base_buf: [256]u8 = undefined;
+    const base = copyBase(base_raw, &base_buf);
+
+    var murl_buf: [512]u8 = undefined;
+    const mn = @min(work_url_snap_len, murl_buf.len);
+    @memcpy(murl_buf[0..mn], work_url_snap[0..mn]);
+    const murl = murl_buf[0..mn];
+    if (murl.len == 0) return;
+
+    const body = curl(murl, 1024 * 1024) orelse {
+        state.app.novels.fetch_error = true;
+        return;
+    };
+    defer alloc.free(body);
+    if (chapters_gen.load(.acquire) != my_gen) return;
+
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (chapters_gen.load(.acquire) != my_gen) return;
+
+    var it = nsp.themesia.chapterIter(body);
+    var n: usize = 0;
+    while (it.next()) |ch| {
+        if (n >= MAX_CHAPTERS) break;
+        if (ch.url.len == 0) continue;
+        var abs_buf: [512]u8 = undefined;
+        const abs = nsp.themesia.resolveUrl(base, ch.url, &abs_buf);
+        if (abs.len == 0 or !std.mem.startsWith(u8, abs, "http")) continue;
+        var name_buf: [256]u8 = undefined;
+        addChapter(n, cleanTitle(ch.name, &name_buf), abs);
+        n += 1;
+    }
+    reverseChapters(n);
+    ch_count = n;
+    logs.pushLog("info", "novels", "Novel chapter list loaded (lightnovelwp)", false);
+}
+
+/// readwn: the standalone `.chapter-list` iterator. readwn lists chapters
+/// ascending already, so no reversal.
+fn chaptersReadwn(my_gen: u32) void {
+    const base_raw = readwnBase() orelse return;
+    var base_buf: [256]u8 = undefined;
+    const base = copyBase(base_raw, &base_buf);
+
+    var murl_buf: [512]u8 = undefined;
+    const mn = @min(work_url_snap_len, murl_buf.len);
+    @memcpy(murl_buf[0..mn], work_url_snap[0..mn]);
+    const murl = murl_buf[0..mn];
+    if (murl.len == 0) return;
+
+    const body = curl(murl, 1024 * 1024) orelse {
+        state.app.novels.fetch_error = true;
+        return;
+    };
+    defer alloc.free(body);
+    if (chapters_gen.load(.acquire) != my_gen) return;
+
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (chapters_gen.load(.acquire) != my_gen) return;
+
+    var it = nsp.readwnChapters(body);
+    var n: usize = 0;
+    while (it.next()) |ch| {
+        if (n >= MAX_CHAPTERS) break;
+        if (ch.url.len == 0) continue;
+        var abs_buf: [512]u8 = undefined;
+        const abs = nsp.themesia.resolveUrl(base, ch.url, &abs_buf);
+        if (abs.len == 0 or !std.mem.startsWith(u8, abs, "http")) continue;
+        var name_buf: [256]u8 = undefined;
+        addChapter(n, cleanTitle(ch.name, &name_buf), abs);
+        n += 1;
+    }
+    ch_count = n;
+    logs.pushLog("info", "novels", "Novel chapter list loaded (readwn)", false);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -249,10 +621,15 @@ pub fn openChapter(idx: usize) void {
     state.app.novels.text_truncated = false;
     state.app.novels.fetch_error = false;
 
-    // Snapshot the chapter's full page title + display label BEFORE spawning.
+    // Snapshot the chapter's page title (Wikisource key) + absolute URL (scraper
+    // engines) + display label BEFORE spawning.
     const flen = @min(ch_title_lens[idx], chapter_snap.len);
     @memcpy(chapter_snap[0..flen], ch_titles[idx][0..flen]);
     chapter_snap_len = flen;
+
+    const culen = @min(ch_url_lens[idx], chapter_url_snap.len);
+    @memcpy(chapter_url_snap[0..culen], ch_urls[idx][0..culen]);
+    chapter_url_snap_len = culen;
 
     const label = pure.chapterLabel(ch_titles[idx][0..ch_title_lens[idx]]);
     const llen = @min(label.len, state.app.novels.chapter_label.len);
@@ -280,9 +657,18 @@ pub fn prevChapter() void {
     if (cur > 0) openChapter(cur - 1);
 }
 
+/// Dispatch the chapter-text fetch to the open novel's engine.
 fn textWorker(my_gen: u32) void {
     defer state.app.novels.text_loading.store(false, .release);
+    if (open_source == .wikisource) {
+        textWikisource(my_gen);
+    } else {
+        textSourced(my_gen);
+    }
+}
 
+/// Wikisource: `action=parse&prop=text` → JSON `parse.text` HTML → reading text.
+fn textWikisource(my_gen: u32) void {
     var page: [256]u8 = undefined;
     const plen = @min(chapter_snap_len, page.len);
     @memcpy(page[0..plen], chapter_snap[0..plen]);
@@ -295,7 +681,6 @@ fn textWorker(my_gen: u32) void {
         return;
     };
     defer alloc.free(body);
-
     if (text_gen.load(.acquire) != my_gen) return;
 
     // Two-stage, both heap/state (never a big buffer on the worker stack):
@@ -319,6 +704,42 @@ fn textWorker(my_gen: u32) void {
     const n = pure.htmlToText(html[0..html_len], state.app.novels.text_buf[0..TEXT_CAP]);
     state.app.novels.text_len = n;
     // htmlToText stops exactly at the buffer end when the prose overran it.
+    state.app.novels.text_truncated = (n >= TEXT_CAP);
+    logs.pushLog("info", "novels", "Chapter text extracted", false);
+}
+
+/// Scraper engines: GET the chapter URL, extract the source's prose container
+/// (via novel_sources_pure), then HTML→clean text. The container selector is the
+/// ONLY per-engine difference; everything else is the shared reader pipeline.
+fn textSourced(my_gen: u32) void {
+    var url_buf: [512]u8 = undefined;
+    const un = @min(chapter_url_snap_len, url_buf.len);
+    @memcpy(url_buf[0..un], chapter_url_snap[0..un]);
+    const chapter_url = url_buf[0..un];
+    if (chapter_url.len == 0 or !std.mem.startsWith(u8, chapter_url, "http")) {
+        state.app.novels.fetch_error = true;
+        return;
+    }
+
+    const body = curl(chapter_url, 2 * 1024 * 1024) orelse {
+        state.app.novels.fetch_error = true;
+        return;
+    };
+    defer alloc.free(body);
+    if (text_gen.load(.acquire) != my_gen) return;
+
+    const content = nsp.chapterContentHtml(body, open_source) orelse {
+        state.app.novels.fetch_error = true;
+        logs.pushLog("info", "novels", "Chapter had no extractable text", false);
+        return;
+    };
+
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (text_gen.load(.acquire) != my_gen) return;
+
+    const n = pure.htmlToText(content, state.app.novels.text_buf[0..TEXT_CAP]);
+    state.app.novels.text_len = n;
     state.app.novels.text_truncated = (n >= TEXT_CAP);
     logs.pushLog("info", "novels", "Chapter text extracted", false);
 }
@@ -375,6 +796,33 @@ fn curl(url: []const u8, cap: usize) ?[]u8 {
     // Shrink to the read length — the global DebugAllocator checks free size
     // against alloc size, so freeing buf[0..n] out of a cap-sized allocation
     // would abort (see radio.zig / podcasts.zig).
+    return alloc.realloc(buf, n) catch {
+        alloc.free(buf);
+        return null;
+    };
+}
+
+/// POST `body` to `url` with a `Referer` header (readwn search + Madara AJAX
+/// chapter lists need both). Same heap-buffer discipline as `curl`.
+fn curlPost(url: []const u8, body: []const u8, referer: []const u8, cap: usize) ?[]u8 {
+    var ref_hdr: [640]u8 = undefined;
+    const rh = std.fmt.bufPrint(&ref_hdr, "Referer: {s}", .{referer}) catch return null;
+    const argv = [_][]const u8{ "curl", "-sL", "-A", agent, "-H", rh, "--data", body, "--max-time", "20", url };
+    var child = io.Child.init(&argv, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    _ = child.spawn() catch return null;
+
+    const buf = alloc.alloc(u8, cap) catch {
+        _ = child.wait() catch {};
+        return null;
+    };
+    const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
+    _ = child.wait() catch {};
+    if (n == 0) {
+        alloc.free(buf);
+        return null;
+    }
     return alloc.realloc(buf, n) catch {
         alloc.free(buf);
         return null;
