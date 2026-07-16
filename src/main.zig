@@ -979,6 +979,10 @@ fn appFrame() !dvui.App.Result {
     // + the active player is anime-sourced).
     @import("services/anime_skip.zig").tick();
 
+    // Audiobookshelf: seek a freshly-opened book to its server-saved position
+    // (no-op unless a resume is pending + the fetch resolved + mpv has the file).
+    @import("services/audiobookshelf.zig").tick();
+
     // Screensaver inhibit: mpv's stop-screensaver requires a VO; we use SW render,
     // so SDL handles it. Toggle when any player is actively playing (not paused).
     {
