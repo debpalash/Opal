@@ -996,6 +996,20 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_anime_schedule_pure).step);
 
+    // Madara manga engine (one base-URL-driven scraper → ~332 WordPress "Madara"
+    // sites): URL builders (popular/latest/search) + AJAX chapter body, the shared
+    // image-attr rule (data-src → … → srcset-highest → src) + relative→absolute
+    // resolve, and the search-grid / chapter-list / page-image scanners. comics.zig
+    // routes all Madara parsing through here, against embedded real-ish HTML.
+    const test_manga_madara_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/manga_madara_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_manga_madara_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main

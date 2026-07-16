@@ -280,7 +280,9 @@ def test_comics_mangadex_source():
     build = _src("build.zig")
     checks = {
         # ── Source registered in the selector ──
-        "source enum variant": "const Source = enum { all, readallcomics, mangadex }" in svc,
+        # `.mangadex` stays in the enum; the Madara engine appended `.madara` at
+        # the end (a new source is added at the END so ordinals never shift).
+        "source enum variant": "const Source = enum { all, readallcomics, mangadex, madara }" in svc,
         "source chip": 'renderSourceChip("MangaDex", 3, .mangadex)' in svc,
         # ── Keyless: the endpoint is a constant, NOT a source_config lookup ──
         "keyless api const": 'pub const MD_API = "https://api.mangadex.org"' in pure,
