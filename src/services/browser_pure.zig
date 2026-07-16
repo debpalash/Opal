@@ -97,13 +97,18 @@ pub fn enginePipPackage(e: Engine) []const u8 {
 /// reader text `{"event": "readtext", ...}`, failures `{"error": ...}`.
 /// Prefix matching (not substring search) keeps scrape/eval payloads that
 /// merely CONTAIN "title" from being mistaken for navigation updates.
-pub const BridgeMsg = enum { ready, nav, err, find, download, readtext, other };
+pub const BridgeMsg = enum { ready, nav, err, find, download, readtext, fetchhtml_err, other };
 
 pub fn classifyBridgeMsg(line: []const u8) BridgeMsg {
     if (std.mem.startsWith(u8, line, "{\"ready\"")) return .ready;
     if (std.mem.startsWith(u8, line, "{\"event\": \"nav\"")) return .nav;
     if (std.mem.startsWith(u8, line, "{\"event\": \"download\"")) return .download;
     if (std.mem.startsWith(u8, line, "{\"event\": \"readtext\"")) return .readtext;
+    // Anti-block scrape fetch FAILURE (the success path returns an 'H' binary
+    // frame, not a JSON line — see browser.zig). Keep this before the generic
+    // `{"error"...}` check; a fetchhtml error carries the "event" key so the
+    // scrape-await path can distinguish it from an interactive-nav failure.
+    if (std.mem.startsWith(u8, line, "{\"event\": \"fetchhtml\"")) return .fetchhtml_err;
     if (std.mem.startsWith(u8, line, "{\"ok\": true, \"title\"")) return .nav;
     if (std.mem.startsWith(u8, line, "{\"ok\": true, \"found\"")) return .find;
     if (std.mem.startsWith(u8, line, "{\"error\"")) return .err;
@@ -479,6 +484,7 @@ test "classifyBridgeMsg recognizes find, download and readtext messages" {
     try std.testing.expectEqual(BridgeMsg.find, classifyBridgeMsg("{\"ok\": true, \"found\": true, \"count\": 12}"));
     try std.testing.expectEqual(BridgeMsg.download, classifyBridgeMsg("{\"event\": \"download\", \"url\": \"https://x/f.zip\", \"filename\": \"f.zip\"}"));
     try std.testing.expectEqual(BridgeMsg.readtext, classifyBridgeMsg("{\"event\": \"readtext\", \"text\": \"body\"}"));
+    try std.testing.expectEqual(BridgeMsg.fetchhtml_err, classifyBridgeMsg("{\"event\": \"fetchhtml\", \"error\": \"net::ERR\"}"));
     // Still classified as before:
     try std.testing.expectEqual(BridgeMsg.nav, classifyBridgeMsg("{\"ok\": true, \"title\": \"T\", \"url\": \"https://x\"}"));
 }

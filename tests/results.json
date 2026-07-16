@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-07-16T18:39:16",
-  "total": 193,
-  "passed": 182,
+  "timestamp": "2026-07-16T19:17:51",
+  "total": 194,
+  "passed": 183,
   "failed": 0,
   "warnings": 3,
   "skipped": 8,
@@ -215,6 +215,12 @@
       "fail": 0,
       "warn": 0,
       "skip": 0
+    },
+    "Network": {
+      "pass": 1,
+      "fail": 0,
+      "warn": 0,
+      "skip": 0
     }
   },
   "tests": [
@@ -222,7 +228,7 @@
       "name": "Database Exists",
       "category": "Database",
       "status": "pass",
-      "detail": "Size: 24300.0 KB",
+      "detail": "Size: 25056.0 KB",
       "duration_ms": 0
     },
     {
@@ -230,7 +236,7 @@
       "category": "Database",
       "status": "pass",
       "detail": "73 config entries",
-      "duration_ms": 3
+      "duration_ms": 2
     },
     {
       "name": "Watch History Table",
@@ -258,7 +264,7 @@
       "category": "Database",
       "status": "pass",
       "detail": "0 TMDB items",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "AI Memory Table",
@@ -278,8 +284,8 @@
       "name": "Poster Cache Table",
       "category": "Database",
       "status": "pass",
-      "detail": "917 cached posters",
-      "duration_ms": 0
+      "detail": "923 cached posters",
+      "duration_ms": 2
     },
     {
       "name": "Conversation Log Table",
@@ -293,7 +299,7 @@
       "category": "Memory",
       "status": "pass",
       "detail": "active_hour=12:00 (w:92)",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Watch Sessions Table",
@@ -356,14 +362,14 @@
       "category": "Database",
       "status": "pass",
       "detail": "4 statements OK against schema",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Chat session SQL matches schema",
       "category": "Memory",
       "status": "pass",
       "detail": "sidebar SELECT + restore + tagged INSERT OK against schema",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "name": "Total Recall Wired",
@@ -397,14 +403,14 @@
       "name": "Zig Build",
       "category": "Build",
       "status": "pass",
-      "detail": "Binary: 44.1 MB",
-      "duration_ms": 512
+      "detail": "Binary: 44.2 MB",
+      "duration_ms": 473
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "44.1 MB, built at 18:37:02",
+      "detail": "44.2 MB, built at 19:17:30",
       "duration_ms": 0
     },
     {
@@ -433,14 +439,14 @@
       "category": "Build",
       "status": "pass",
       "detail": "author credited across about/copyright/packaging surfaces",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 37
+      "duration_ms": 32
     },
     {
       "name": "Embedding Server Health",
@@ -454,28 +460,28 @@
       "category": "Server",
       "status": "pass",
       "detail": "compile-time headless entry + coreInit/headlessMain + 0.0.0.0 bind + -Dheadless",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "name": "Headless Render Guards",
       "category": "Server",
       "status": "pass",
       "detail": "render-context/pixels gated; grid guards mpv_gl; theme defers off-UI-thread",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Zig Unit Tests",
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 3544
+      "duration_ms": 2212
     },
     {
       "name": "Installer Does Not Need Xcode",
       "category": "Packaging",
       "status": "pass",
       "detail": "install.sh installs the vendored .app; formula is a binary install at 0.3.0",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "name": "File associations + single instance",
@@ -496,28 +502,28 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 1052
+      "duration_ms": 1066
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "pass",
       "detail": "faster-whisper importable",
-      "duration_ms": 1199
+      "duration_ms": 1077
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 26
+      "duration_ms": 22
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 26
+      "duration_ms": 23
     },
     {
       "name": "Conversational: voice-server echo guard + live partials",
@@ -538,56 +544,56 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 30
+      "duration_ms": 26
     },
     {
       "name": "Compiles: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 28
+      "duration_ms": 25
     },
     {
       "name": "Compiles: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 28
+      "duration_ms": 26
     },
     {
       "name": "Compiles: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 28
+      "duration_ms": 27
     },
     {
       "name": "--check degrades: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 1219
+      "duration_ms": 987
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 33
+      "duration_ms": 26
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 1309
+      "duration_ms": 1065
     },
     {
       "name": "Tracked + compiles: tools/lang_server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "tracked + py_compile OK",
-      "duration_ms": 49
+      "duration_ms": 43
     },
     {
       "name": "Parakeet conversational self-install wired",
@@ -790,14 +796,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 3253
+      "duration_ms": 3800
     },
     {
       "name": "Cloud LLM Backend + No Silent Local Installs",
       "category": "AI Features",
       "status": "pass",
       "detail": "cloud providers + bearer auth + on-demand-only local models wired",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Parakeet TDT Voice Backend Wired",
@@ -818,21 +824,21 @@
       "category": "AI Features",
       "status": "pass",
       "detail": "console transcript + hero + follow-scroll + agent steps wired",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "OMDb Ratings Enrichment",
       "category": "Enrichment",
       "status": "pass",
       "detail": "OMDb enrichment wired (parser+worker+UI+persist); key set=False",
-      "duration_ms": 3
+      "duration_ms": 2
     },
     {
       "name": "Local taste engine: activity + vectors + For You",
       "category": "AI",
       "status": "pass",
       "detail": "activity log + vec_taste vectors + gated For You tier wired",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "name": "Theme Presets Defined",
@@ -874,7 +880,7 @@
       "category": "Browser",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 43
+      "duration_ms": 34
     },
     {
       "name": "Bridge protocol selftest",
@@ -902,14 +908,14 @@
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 72
+      "duration_ms": 78
     },
     {
       "name": "Browser: CloakBrowser engine + upgrades",
       "category": "Browser",
       "status": "pass",
       "detail": "engine picker + find/zoom/downloads/history/reader wired",
-      "duration_ms": 59
+      "duration_ms": 64
     },
     {
       "name": "Single-Media Mode",
@@ -993,7 +999,7 @@
       "category": "Remote",
       "status": "pass",
       "detail": "hosted streaming + docker gate + CPU fixes wired",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Anime Seasons/Calendar/Tracking",
@@ -1357,7 +1363,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "11 engines placed, class==module, manifest-wired",
-      "duration_ms": 2
+      "duration_ms": 3
     },
     {
       "name": "Polish Tokens Adopted",
@@ -1392,7 +1398,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 127
+      "duration_ms": 130
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1546,7 +1552,7 @@
       "category": "Transfers",
       "status": "pass",
       "detail": "gallery-dl backend wired: pure\u2192service\u2192dispatch\u2192history+config. gallery-dl not installed (backend inert \u2014 pure tests cover logic)",
-      "duration_ms": 30
+      "duration_ms": 28
     },
     {
       "name": "VNDB visual-novel catalog",
@@ -1568,6 +1574,13 @@
       "status": "pass",
       "detail": "airing schedule (AniList airingSchedules \u2192 weekday grid \u2192 submitQuery) + ANN feed wired",
       "duration_ms": 0
+    },
+    {
+      "name": "Anti-block scrape fetch",
+      "category": "Network",
+      "status": "pass",
+      "detail": "anti-block fetch wired: pure(isBlocked/needsBrowser, no false-pos) \u2192 scrape_fetch \u2192 bridge fetchhtml on dedicated page; selftest ok",
+      "duration_ms": 57
     }
   ]
 }

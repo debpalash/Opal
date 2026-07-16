@@ -41,6 +41,7 @@ from features import (  # noqa: F401
     test_vndb,
     test_drama,
     test_anime_schedule,
+    test_scrape_fetch,
 )
 
 if __name__ == "__main__":

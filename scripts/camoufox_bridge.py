@@ -71,6 +71,45 @@ def send_frame(data: bytes, out=None):
         (out or stdout_bin).flush()
 
 
+# ── Anti-block scrape fetch ──
+# fetchhtml / fetchapi run on a DEDICATED page in a SEPARATE browser context so
+# they never disturb the user's interactive browsing page. The unblocked bytes
+# come back as an 'H' frame ('H' + 4-byte BE length + raw UTF-8) — a binary
+# frame rather than a JSON line so a multi-hundred-KB page needs no JSON
+# escaping and the Zig reader can bulk-read it (see browser.zig 'H' handling).
+# Failures come back as {"event": "fetchhtml", "error": ...} (a JSON line).
+MAX_SCRAPE_BYTES = 2_000_000  # cap outerHTML / api text (matches Zig scrape_buf)
+
+# Cloudflare / challenge interstitial markers — while ANY of these is present in
+# the title or body head, the challenge is still running; we keep polling.
+CHALLENGE_MARKERS = (
+    "just a moment",
+    "checking your browser",
+    "attention required",
+    "cf-browser-verification",
+    "challenge-running",
+    "cf_chl_opt",
+    "verifying you are human",
+    "please verify you are a human",
+    "enable javascript and cookies to continue",
+    "ddos-guard",
+)
+
+
+def send_html_frame(data: bytes, out=None):
+    """Send an unblocked scrape payload: 'H' + 4-byte big-endian length + bytes."""
+    header = b"H" + struct.pack(">I", len(data))
+    with stdout_lock:
+        (out or stdout_bin).write(header + data)
+        (out or stdout_bin).flush()
+
+
+def looks_like_challenge(title, body_head):
+    """True while a Cloudflare/DDoS-Guard interstitial is still on screen."""
+    hay = ((title or "") + " " + (body_head or "")).lower()
+    return any(m in hay for m in CHALLENGE_MARKERS)
+
+
 def clamp_viewport(w, h):
     """Clamp a requested viewport to sane bounds (bad input → defaults)."""
     try:
@@ -199,8 +238,56 @@ class Pump:
         self.force_next()
 
 
-def apply_command(page, pump, cmd, viewport):
+def get_scrape_page(page, scrape):
+    """Lazily create (and reuse) a dedicated page in a SEPARATE context so the
+    anti-block fetch never touches the user's interactive page/session."""
+    sp = scrape.get("page")
+    if sp is not None:
+        return sp
+    ctx = page.context.browser.new_context()
+    sp = ctx.new_page()
+    sp.set_default_timeout(30000)
+    scrape["ctx"] = ctx
+    scrape["page"] = sp
+    return sp
+
+
+def wait_for_challenge_clear(sp, wait_ms):
+    """Poll up to wait_ms for a Cloudflare/DDoS-Guard challenge to auto-clear,
+    then return the page's outerHTML (capped). Camoufox/CloakBrowser pass the
+    challenge on their own; we just wait it out."""
+    try:
+        budget = max(1000, min(30000, int(wait_ms)))
+    except (TypeError, ValueError):
+        budget = 15000
+    deadline = time.monotonic() + budget / 1000.0
+    while True:
+        try:
+            title = sp.title() or ""
+        except Exception:
+            title = ""
+        try:
+            body_head = sp.evaluate(
+                "() => (document.body ? document.body.innerText : '').slice(0, 400)"
+            ) or ""
+        except Exception:
+            body_head = ""
+        if not looks_like_challenge(title, body_head):
+            break
+        if time.monotonic() >= deadline:
+            break
+        sp.wait_for_timeout(500)
+    try:
+        html = sp.evaluate("() => document.documentElement.outerHTML") or ""
+    except Exception:
+        html = ""
+    return html[:MAX_SCRAPE_BYTES]
+
+
+def apply_command(page, pump, cmd, viewport, scrape=None):
     """Execute one command. Returns False when the bridge should exit."""
+    if scrape is None:
+        scrape = {}
     action = cmd.get("cmd", "")
 
     try:
@@ -365,6 +452,43 @@ def apply_command(page, pump, cmd, viewport):
             result = page.evaluate(expr) if expr else None
             send_json({"ok": True, "result": result})
 
+        elif action == "fetchhtml":
+            # Anti-block fetch: load the URL on the dedicated scrape page, wait
+            # out any Cloudflare/DDoS-Guard challenge, return the unblocked HTML
+            # as an 'H' frame. The interactive page is never touched.
+            url = cmd.get("url", "")
+            wait_ms = cmd.get("wait", 15000)
+            if not url:
+                send_json({"event": "fetchhtml", "error": "no url"})
+                return True
+            try:
+                sp = get_scrape_page(page, scrape)
+                sp.goto(url, wait_until="domcontentloaded", timeout=25000)
+            except Exception as e:
+                send_json({"event": "fetchhtml", "error": str(e)[:180]})
+                return True
+            html = wait_for_challenge_clear(sp, wait_ms)
+            send_html_frame(html.encode("utf-8", "replace"))
+
+        elif action == "fetchapi":
+            # Read a JSON/text API from the trusted (cookie-bearing) scrape page
+            # context — so an API behind the same Cloudflare zone succeeds once
+            # the site's challenge has been cleared. Result returns as an 'H'
+            # frame too (same await path on the Zig side).
+            url = cmd.get("url", "")
+            if not url:
+                send_json({"event": "fetchhtml", "error": "no url"})
+                return True
+            try:
+                sp = get_scrape_page(page, scrape)
+                text = sp.evaluate(
+                    "u => fetch(u, {credentials: 'include'}).then(r => r.text())", url
+                ) or ""
+            except Exception as e:
+                send_json({"event": "fetchhtml", "error": str(e)[:180]})
+                return True
+            send_html_frame(text[:MAX_SCRAPE_BYTES].encode("utf-8", "replace"))
+
         elif action == "quit":
             send_json({"ok": True, "bye": True})
             return False
@@ -489,6 +613,9 @@ def run_session(browser, viewport):
     t.start()
 
     pump = Pump()
+    # Dedicated anti-block scrape context/page (created lazily on first
+    # fetchhtml/fetchapi) — isolated from the interactive `page` above.
+    scrape = {}
     running = True
     eof = False
 
@@ -529,7 +656,7 @@ def run_session(browser, viewport):
                         dx += batch[i].get("dx", 0)
                         dy += batch[i].get("dy", 0)
                     c = {"cmd": "scroll", "dx": dx, "dy": dy}
-                if not apply_command(page, pump, c, viewport):
+                if not apply_command(page, pump, c, viewport, scrape):
                     running = False
                 i += 1
 
@@ -599,6 +726,34 @@ def selftest():
     send_frame(payload, out=s)
     if s.data[:1] != b"F" or struct.unpack(">I", s.data[1:5])[0] != len(payload) or s.data[5:] != payload:
         failures.append("send_frame framing")
+
+    # H-frame (anti-block scrape payload): marker + 4-byte BE length + bytes
+    s = Sink()
+    html = "<html><body>ok</body></html>".encode("utf-8")
+    send_html_frame(html, out=s)
+    if s.data[:1] != b"H" or struct.unpack(">I", s.data[1:5])[0] != len(html) or s.data[5:] != html:
+        failures.append("send_html_frame framing")
+
+    # Challenge detection: interstitials flagged, real content passes through.
+    if not looks_like_challenge("Just a moment...", ""):
+        failures.append("challenge detect title")
+    if not looks_like_challenge("", "Checking your browser before accessing"):
+        failures.append("challenge detect body")
+    if looks_like_challenge("My Comic — Chapter 12", "Page 1 of 20"):
+        failures.append("challenge false positive")
+    if looks_like_challenge("", ""):
+        failures.append("challenge empty")
+
+    # fetchhtml/fetchapi arg parsing: url + wait defaulting, no-url error path.
+    fc = {"cmd": "fetchhtml", "url": "https://x/y", "wait": 8000}
+    if fc.get("cmd") != "fetchhtml" or fc.get("url") != "https://x/y" or fc.get("wait", 15000) != 8000:
+        failures.append("fetchhtml arg parse")
+    if {"cmd": "fetchhtml"}.get("wait", 15000) != 15000:
+        failures.append("fetchhtml wait default")
+    if {"cmd": "fetchapi", "url": ""}.get("url", "") != "":
+        failures.append("fetchapi no-url")
+    if MAX_SCRAPE_BYTES < 1_000_000:
+        failures.append("scrape cap too small")
 
     # Viewport clamping
     if clamp_viewport(0, 0) != (MIN_VIEW_W, MIN_VIEW_H):
