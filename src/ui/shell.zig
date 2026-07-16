@@ -533,7 +533,7 @@ fn renderPage(r: Route) !void {
         .search => drawer.renderTabContent(.Search),
         .home => @import("home.zig").render(), // personal hub: metrics + lists
         .browse => {
-            subTabs(&.{ .TMDB, .YouTube, .Anime, .Podcasts, .Radio, .Comics, .Web, .RSS, .Jellyfin, .Plex, .Audiobooks, .Opds }, &state.app.browse_source, 100);
+            subTabs(&.{ .TMDB, .YouTube, .Anime, .Podcasts, .Radio, .Comics, .Web, .RSS, .Jellyfin, .Plex, .Audiobooks, .Opds, .Novels }, &state.app.browse_source, 100);
             drawer.renderTabContent(state.app.browse_source);
         },
         .watching => @import("../services/tv_library.zig").renderContent(),
@@ -555,6 +555,7 @@ fn tabLabel(t: state.DrawerTab) []const u8 {
         .YouTube => "YouTube",
         .Queue => "Queue",
         .Comics => "Comics",
+        .Novels => "Novels",
         .Web => "Web",
         .Anime => "Anime",
         .Podcasts => "Podcasts",
@@ -582,6 +583,7 @@ pub fn iconForTab(t: state.DrawerTab) []const u8 {
         .YouTube => icons.tvg.lucide.youtube,
         .Queue => icons.tvg.lucide.@"list-video",
         .Comics => icons.tvg.lucide.@"book-open",
+        .Novels => icons.tvg.lucide.@"book-marked",
         .Web => icons.tvg.lucide.globe,
         .Anime => icons.tvg.lucide.tv,
         .Podcasts => icons.tvg.lucide.podcast,

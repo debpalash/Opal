@@ -18,7 +18,7 @@ const opds_pure = @import("../services/opds_pure.zig");
 pub const GridMode = enum { auto, cols_1, cols_2, cols_3, cols_4 };
 pub const ContentProvider = enum { mpv, comic_viewer };
 pub const VideoFillMode = enum { fit, cover };
-pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Audiobooks, Opds };
+pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Audiobooks, Opds, Novels };
 pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, Scripts, AI, LangLearn, FileAssoc, About };
 pub const TmdbView = enum { Trending, Search, Favorites, Watchlist, Watching };
 pub const TmdbCategory = enum { trending, now_playing, top_rated, upcoming, popular };
@@ -824,6 +824,40 @@ pub const AppState = struct {
         result_count: usize = 0,
     } = .{},
 
+    // ── Novels (light-novel / web-novel reader) ──
+    // Drill: search → novel → chapter list → paged text reader. Structural
+    // sibling of `comic`, but renders TEXT, not page images. Search results and
+    // the chapter list live as module statics in services/novels.zig (guarded by
+    // its parse_mutex, like comics' sr_* arrays); this struct holds the selected
+    // work, the reader's chapter text, and the view-mode machine. All parsing is
+    // in services/novels_pure.zig. See services/novels.zig.
+    novels: struct {
+        search_buf: [256]u8 = std.mem.zeroes([256]u8),
+        // Atomic like the comics/anime loaders: read by the UI + remote threads,
+        // written by detached fetch workers. A plain bool here is a data race.
+        is_loading: std.atomic.Value(bool) = .init(false), // search
+        chapters_loading: std.atomic.Value(bool) = .init(false),
+        text_loading: std.atomic.Value(bool) = .init(false),
+        fetch_error: bool = false,
+        // Selected work (snapshotted from the search grid on open — results[] can
+        // be reordered by a fresh search while the chapter list / reader is open).
+        work_title: [256]u8 = std.mem.zeroes([256]u8),
+        work_title_len: usize = 0,
+        // Reader: one chapter's extracted plain text. Capped for framing; the
+        // fetch worker sets `text_truncated` when a chapter overran the buffer.
+        current_chapter: usize = 0,
+        chapter_label: [160]u8 = std.mem.zeroes([160]u8),
+        chapter_label_len: usize = 0,
+        text_buf: [131072]u8 = undefined, // 128 KiB — guarded by text_len
+        text_len: usize = 0,
+        text_truncated: bool = false,
+        // View machine: which pane the tab shows. `reader` overlays the chapter
+        // text; `chapters` the chapter list; `search` the discovery grid.
+        view: enum { search, chapters, reader } = .search,
+        // Reader typography — comfortable line width + user-adjustable font size.
+        font_scale: f32 = 1.0,
+    } = .{},
+
     // ── Browser (global singleton — the in-app web browser lives in the
     //     Browse › Web tab now, independent of any MediaPlayer) ──
     browser: struct {
@@ -1229,6 +1263,10 @@ pub fn navigateToTabNow(tab: DrawerTab) void {
         },
         .Web => {
             app.browse_source = .Web;
+            app.router.navigate(.browse);
+        },
+        .Novels => {
+            app.browse_source = .Novels;
             app.router.navigate(.browse);
         },
         .RSS => {

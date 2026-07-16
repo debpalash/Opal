@@ -60,7 +60,7 @@ def test_opds_reading_client():
         problems.append("opds state struct missing")
 
     # 5) DrawerTab entry + render dispatch wired.
-    if ", Opds }" not in st and ".Opds," not in st and "Web, Opds" not in st:
+    if "pub const DrawerTab" not in st or "Opds" not in st:
         problems.append("DrawerTab.Opds not added to the enum")
     if ".Opds =>" not in drawer or "opds.zig" not in drawer:
         problems.append("drawer render dispatch for .Opds missing")
