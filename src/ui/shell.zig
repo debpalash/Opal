@@ -533,7 +533,7 @@ fn renderPage(r: Route) !void {
         .search => drawer.renderTabContent(.Search),
         .home => @import("home.zig").render(), // personal hub: metrics + lists
         .browse => {
-            subTabs(&.{ .TMDB, .YouTube, .Anime, .Podcasts, .Radio, .Comics, .Web, .RSS, .Jellyfin, .Plex, .Audiobooks }, &state.app.browse_source, 100);
+            subTabs(&.{ .TMDB, .YouTube, .Anime, .Podcasts, .Radio, .Comics, .Web, .RSS, .Jellyfin, .Plex, .Audiobooks, .Opds }, &state.app.browse_source, 100);
             drawer.renderTabContent(state.app.browse_source);
         },
         .watching => @import("../services/tv_library.zig").renderContent(),
@@ -564,6 +564,7 @@ fn tabLabel(t: state.DrawerTab) []const u8 {
         .Jellyfin => "Jellyfin",
         .Plex => "Plex",
         .Audiobooks => "Audiobooks",
+        .Opds => "Reading",
         .Plugins => "Plugins",
         .Logs => "Logs",
         .Settings => "Settings",
@@ -590,6 +591,7 @@ pub fn iconForTab(t: state.DrawerTab) []const u8 {
         .Jellyfin => icons.tvg.lucide.server,
         .Plex => icons.tvg.lucide.server,
         .Audiobooks => icons.tvg.lucide.@"book-audio",
+        .Opds => icons.tvg.lucide.@"library-big",
         .Plugins => icons.tvg.lucide.puzzle,
         .Logs => icons.tvg.lucide.@"scroll-text",
         .Settings => icons.tvg.lucide.settings,

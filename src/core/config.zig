@@ -85,6 +85,17 @@ pub fn save() void {
     setKey("abs_server_url", state.app.abs.server_url[0..state.app.abs.server_url_len]);
     setKey("abs_token", state.app.abs.token[0..state.app.abs.token_len]);
     setKey("abs_connected", if (state.app.abs.token_len > 0) "1" else "0");
+    // OPDS reading server (Komga/Kavita/Calibre-Web/LANraragi). Basic-auth
+    // creds persist like the jf token — plaintext in the local config db. The
+    // user/pass buffers are null-terminated by the text-entry widget.
+    {
+        const u_len = std.mem.indexOfScalar(u8, &state.app.opds.user_buf, 0) orelse state.app.opds.user_buf.len;
+        const p_len = std.mem.indexOfScalar(u8, &state.app.opds.pass_buf, 0) orelse state.app.opds.pass_buf.len;
+        setKey("opds_url", state.app.opds.server_url[0..state.app.opds.server_url_len]);
+        setKey("opds_user", state.app.opds.user_buf[0..u_len]);
+        setKey("opds_pass", state.app.opds.pass_buf[0..p_len]);
+        setKey("opds_connected", if (state.app.opds.connected) "1" else "0");
+    }
 
     // Window state
     setKey("win_x", fmtInt(&fb, @as(usize, @intCast(@max(0, state.app.win_x)))));
@@ -375,6 +386,22 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         }
     } else if (std.mem.eql(u8, key, "abs_connected")) {
         state.app.abs.connected = std.mem.eql(u8, val, "1") and state.app.abs.token_len > 0;
+    } else if (std.mem.eql(u8, key, "opds_url")) {
+        if (val.len > 0 and val.len < state.app.opds.server_url.len) {
+            @memcpy(state.app.opds.server_url[0..val.len], val);
+            state.app.opds.server_url_len = val.len;
+        }
+    } else if (std.mem.eql(u8, key, "opds_user")) {
+        if (val.len > 0 and val.len < state.app.opds.user_buf.len) {
+            @memcpy(state.app.opds.user_buf[0..val.len], val);
+        }
+    } else if (std.mem.eql(u8, key, "opds_pass")) {
+        if (val.len > 0 and val.len < state.app.opds.pass_buf.len) {
+            @memcpy(state.app.opds.pass_buf[0..val.len], val);
+        }
+    } else if (std.mem.eql(u8, key, "opds_connected")) {
+        // Connected only if a catalog URL was also restored.
+        state.app.opds.connected = std.mem.eql(u8, val, "1") and state.app.opds.server_url_len > 0;
     } else if (std.mem.eql(u8, key, "win_x")) {
         state.app.win_x = std.fmt.parseInt(i32, val, 10) catch 0;
         state.app.win_restore_pending = true;

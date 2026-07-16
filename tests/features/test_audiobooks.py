@@ -39,7 +39,7 @@ def test_audiobookshelf():
             "pure.streamUrl", "pure.bearerHeader")),
 
         # ── State: DrawerTab + per-tab struct ──
-        "DrawerTab.Audiobooks (at end)": ", Audiobooks }" in st,
+        "DrawerTab.Audiobooks present": "Audiobooks" in st and "pub const DrawerTab" in st,
         "per-tab state struct": "abs: struct {" in st,
         "state uses pure records": "audiobookshelf_pure.Library" in st and "audiobookshelf_pure.Book" in st,
 
@@ -54,7 +54,7 @@ def test_audiobookshelf():
 
         # ── Shell: label + icon + browse sub-tab ──
         "shell label + icon": '.Audiobooks => "Audiobooks"' in shell and ".Audiobooks => icons" in shell,
-        "browse sub-tab": ".Audiobooks }" in shell,
+        "browse sub-tab": ".Audiobooks," in shell or ".Audiobooks }" in shell,
 
         # ── Playback: stream URL → load_file → gotoPlayer (Now Playing card) ──
         "play routes through load_file/gotoPlayer": (

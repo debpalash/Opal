@@ -908,6 +908,20 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_audiobookshelf_pure).step);
 
+    // OPDS reading-server client: Atom feed entry parsing (nav vs acquisition,
+    // cover thumbnail-vs-full preference, XML-entity decode), relative→absolute
+    // href resolution, Basic-auth header base64, content-type → reader-route
+    // (EPUB-before-zip ordering so an ebook never mis-routes to the comics
+    // reader), and truncated/garbage-XML must-not-crash cases.
+    const test_opds_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/opds_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_opds_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main
