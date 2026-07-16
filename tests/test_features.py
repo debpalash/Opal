@@ -2377,6 +2377,40 @@ def test_macos_now_playing():
     return "fail", f"now-playing wiring missing: {missing}"
 
 
+@test("Playlist: shuffle/repeat/reorder/save", "Player")
+def test_playlist_roundtrip():
+    # Pure advance engine registered in the unit-test step.
+    if "src/player/playlist_pure.zig" not in _src("build.zig"):
+        return "fail", "playlist_pure.zig not registered in build.zig test step"
+    # player.zig routes end-of-file through the playlist advance path...
+    if "playlist_ui.advance(p" not in _src("src/player/player.zig"):
+        return "fail", "player.zig auto-advance does not route through playlist.advance"
+    # ...and that path decides indices via the tested pure functions.
+    pl = _src("src/player/playlist.zig")
+    if "pure.nextIndex(" not in pl or "pure.prevIndex(" not in pl:
+        return "fail", "playlist.zig does not route through playlist_pure nextIndex/prevIndex"
+    if "buildShuffleOrder(" not in pl:
+        return "fail", "shuffle order not built via playlist_pure.buildShuffleOrder"
+    # Drawer UI: shuffle toggle, repeat cycle, reorder, save.
+    for marker, what in (("playlist_shuffle", "shuffle toggle"),
+                         ("playlist_repeat", "repeat cycle"),
+                         ("moveEntry(", "reorder buttons"),
+                         ("savePlaylist()", "save button")):
+        if marker not in pl:
+            return "fail", f"playlist.zig missing {what} ({marker})"
+    # M3U writer exists and the save path routes through it.
+    m = _src("src/player/m3u.zig")
+    if "pub fn serialize" not in m or "appendEntryLines(" not in m:
+        return "fail", "m3u.zig writer (serialize/appendEntryLines) missing"
+    if "serialize(alloc)" not in pl:
+        return "fail", "playlist save does not route through m3u serialize()"
+    # Repeat/shuffle persisted like auto_advance.
+    c = _src("src/core/config.zig")
+    if "playlist_repeat" not in c or "playlist_shuffle" not in c:
+        return "fail", "playlist repeat/shuffle not persisted in config"
+    return "pass", "pure advance engine wired into player + drawer UI + m3u save"
+
+
 @test("Multi-Source Search Wired", "Search")
 def test_multi_source_search():
     s = _src("src/services/search.zig")
