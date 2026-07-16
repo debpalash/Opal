@@ -80,6 +80,12 @@ pub fn save() void {
         setKey("jf_connected", "0");
     }
 
+    // Audiobookshelf — persist server + token (the Bearer token is enough to
+    // resume the session; the password is never stored).
+    setKey("abs_server_url", state.app.abs.server_url[0..state.app.abs.server_url_len]);
+    setKey("abs_token", state.app.abs.token[0..state.app.abs.token_len]);
+    setKey("abs_connected", if (state.app.abs.token_len > 0) "1" else "0");
+
     // Window state
     setKey("win_x", fmtInt(&fb, @as(usize, @intCast(@max(0, state.app.win_x)))));
     setKey("win_y", fmtInt(&fb, @as(usize, @intCast(@max(0, state.app.win_y)))));
@@ -357,6 +363,18 @@ fn applyConfig(key: []const u8, val: []const u8) void {
     } else if (std.mem.eql(u8, key, "jf_connected")) {
         // Only mark as connected if we also have a token
         state.app.jf.connected = std.mem.eql(u8, val, "1") and state.app.jf.token_len > 0;
+    } else if (std.mem.eql(u8, key, "abs_server_url")) {
+        if (val.len > 0 and val.len < state.app.abs.server_url.len) {
+            @memcpy(state.app.abs.server_url[0..val.len], val);
+            state.app.abs.server_url_len = val.len;
+        }
+    } else if (std.mem.eql(u8, key, "abs_token")) {
+        if (val.len > 0 and val.len < state.app.abs.token.len) {
+            @memcpy(state.app.abs.token[0..val.len], val);
+            state.app.abs.token_len = val.len;
+        }
+    } else if (std.mem.eql(u8, key, "abs_connected")) {
+        state.app.abs.connected = std.mem.eql(u8, val, "1") and state.app.abs.token_len > 0;
     } else if (std.mem.eql(u8, key, "win_x")) {
         state.app.win_x = std.fmt.parseInt(i32, val, 10) catch 0;
         state.app.win_restore_pending = true;

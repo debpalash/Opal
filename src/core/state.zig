@@ -8,6 +8,7 @@ const thumbnail = @import("../player/thumbnail.zig");
 const subtitles_mod = @import("../player/subtitles.zig");
 const podcasts_pure = @import("../services/podcasts_pure.zig");
 const radio_pure = @import("../services/radio_pure.zig");
+const audiobookshelf_pure = @import("../services/audiobookshelf_pure.zig");
 
 // ══════════════════════════════════════════════════════════
 // Type Definitions
@@ -16,7 +17,7 @@ const radio_pure = @import("../services/radio_pure.zig");
 pub const GridMode = enum { auto, cols_1, cols_2, cols_3, cols_4 };
 pub const ContentProvider = enum { mpv, comic_viewer };
 pub const VideoFillMode = enum { fit, cover };
-pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web };
+pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Audiobooks };
 pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, Scripts, AI, LangLearn, FileAssoc, About };
 pub const TmdbView = enum { Trending, Search, Favorites, Watchlist, Watching };
 pub const TmdbCategory = enum { trending, now_playing, top_rated, upcoming, popular };
@@ -179,6 +180,9 @@ pub const TmdbItem = struct {
 };
 
 pub const JfView = enum { Libraries, Browse, Search, Resume };
+
+/// Audiobookshelf client view: pick a library, then browse its books.
+pub const AbsView = enum { Libraries, Books };
 
 pub const JfItem = struct {
     id: [64]u8 = std.mem.zeroes([64]u8),
@@ -889,6 +893,36 @@ pub const AppState = struct {
         nav_stack: [8]JfNavEntry = std.mem.zeroes([8]JfNavEntry),
         nav_depth: usize = 0,
     } = .{},
+
+    // ── Audiobookshelf (self-hosted audiobooks/podcasts) ──
+    // Audio-first sibling of the jf client above. Parsing lives in
+    // services/audiobookshelf_pure.zig; detached workers in audiobookshelf.zig
+    // publish here under the module mutex. is_loading is atomic (UI + remote
+    // threads read it, workers write). See services/audiobookshelf.zig.
+    abs: struct {
+        server_url: [256]u8 = std.mem.zeroes([256]u8),
+        server_url_len: usize = 0,
+        token: [256]u8 = std.mem.zeroes([256]u8),
+        token_len: usize = 0,
+        connected: bool = false,
+        is_loading: std.atomic.Value(bool) = .init(false),
+        thread: ?std.Thread = null,
+        view: AbsView = .Libraries,
+        libraries: [16]audiobookshelf_pure.Library = std.mem.zeroes([16]audiobookshelf_pure.Library),
+        library_count: usize = 0,
+        books: [64]audiobookshelf_pure.Book = std.mem.zeroes([64]audiobookshelf_pure.Book),
+        book_count: usize = 0,
+        // Selected library's id (fetch worker input) + name (Books-view header).
+        selected_lib_id: [64]u8 = std.mem.zeroes([64]u8),
+        selected_lib_id_len: usize = 0,
+        selected_lib_name: [96]u8 = std.mem.zeroes([96]u8),
+        selected_lib_name_len: usize = 0,
+        // Transient login form fields (never persisted; token is what we save).
+        login_user_buf: [128]u8 = std.mem.zeroes([128]u8),
+        login_pass_buf: [128]u8 = std.mem.zeroes([128]u8),
+        login_error: [128]u8 = std.mem.zeroes([128]u8),
+        login_error_len: usize = 0,
+    } = .{},
     dub_last_hash: u64 = 0,
 };
 
@@ -1169,6 +1203,10 @@ pub fn navigateToTabNow(tab: DrawerTab) void {
         },
         .Plex => {
             app.browse_source = .Plex;
+            app.router.navigate(.browse);
+        },
+        .Audiobooks => {
+            app.browse_source = .Audiobooks;
             app.router.navigate(.browse);
         },
         .Plugins => {
