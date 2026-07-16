@@ -1,36 +1,25 @@
-//! Pure logic for the live-action Asian drama + tokusatsu browse module — no
+//! Pure logic for the live-action Asian drama browse module — no
 //! app-state / io imports, so the logic ships tested (build.zig test step).
 //!
 //! CATALOG SOURCE (STABLE): TMDB `/discover/tv` + `/search/tv` — the same public
-//! API Opal already speaks in tmdb*.zig, filtered to Asian origin countries for
-//! dramas and to the tokusatsu keyword for toku. Discovery is metadata only
-//! (titles, posters, overviews) — no infringing endpoint is compiled in.
+//! API Opal already speaks in tmdb*.zig, filtered to Asian origin countries.
+//! Discovery is metadata only (titles, posters, overviews) — no infringing
+//! endpoint is compiled in.
 //!
 //! PLAY (BEST-EFFORT): the resolved title is handed to the universal resolver
 //! (services/resolver.zig), which routes a torrent / stremio stream into mpv —
-//! the exact handoff services/anime.zig `playEpisode` uses. Tokusatsu also links
-//! the OFFICIAL franchise YouTube channels (played via youtube/ytdl, legal).
+//! the exact handoff services/anime.zig `playEpisode` uses.
 //! In-binary drama stream scrapers (Kisskh / Asiaflix / GoPlay / Cineby from the
 //! wotaku wiki) are deliberately NOT hardcoded (source neutrality) — a scraper
 //! can later be slotted behind the same seam; document as best-effort/manual.
 
 const std = @import("std");
 
-/// The two content lanes the module segments on. `tokusatsu` (Kamen Rider,
-/// Super Sentai / Power Rangers, Ultraman, Metal Hero …) is folded in as content
-/// WITHIN the drama module rather than a separate tab.
-pub const Segment = enum { drama, tokusatsu };
-
-/// Origin-country classification for the drama-vs-toku split + the card badge.
+/// Origin-country classification for the region badge on each card.
 pub const Origin = enum { korean, chinese, japanese, thai, taiwanese, other };
 
 /// TMDB image CDN base for the poster grid (w342 renditions).
 pub const POSTER_BASE = "https://image.tmdb.org/t/p/w342";
-
-/// TMDB keyword id for "tokusatsu". Best-effort: if the keyword yields nothing
-/// the connector falls back to `tokusatsuFallbackPath` (a title search that
-/// always returns real toku), so the segment is never empty.
-pub const TOKU_KEYWORD = "210024";
 
 /// Asian origin countries for the drama lane (OR-joined; '|' percent-encoded as
 /// %7C for the query string). Excludes animation so anime never leaks in here.
@@ -73,64 +62,15 @@ fn eqIC(a: []const u8, b: []const u8) bool {
     return std.ascii.eqlIgnoreCase(a, b);
 }
 
-/// True when a title looks like a tokusatsu (live-action superhero/kaiju) work.
-/// Drives the drama-vs-toku split: the drama lane DROPS matches, the toku lane
-/// keeps them. Matching is a case-insensitive franchise-token scan.
-pub fn isTokusatsu(name: []const u8) bool {
-    const tokens = [_][]const u8{
-        "kamen rider",  "super sentai", "power rangers", "ultraman",
-        "ultra galaxy", "ultra seven",  "metal hero",    "tokusatsu",
-        "kikaider",     "garo",         "kaiju",         "gridman",
-        "sentai",       "ryusoulger",
-    };
-    for (tokens) |t| if (containsIC(name, t)) return true;
-    return false;
-}
-
-fn containsIC(haystack: []const u8, needle: []const u8) bool {
-    if (needle.len == 0 or needle.len > haystack.len) return false;
-    var i: usize = 0;
-    while (i + needle.len <= haystack.len) : (i += 1) {
-        if (std.ascii.eqlIgnoreCase(haystack[i .. i + needle.len], needle)) return true;
-    }
-    return false;
-}
-
-/// Build the TMDB path+query (auth-free — for tmdb_api.tmdbApiInto) for a
-/// segment's grid page. Returns null on a bufPrint overflow.
-pub fn discoverPath(seg: Segment, page: u32, buf: []u8) ?[]const u8 {
-    return switch (seg) {
-        .drama => std.fmt.bufPrint(
-            buf,
-            "/3/discover/tv?with_origin_country={s}&without_genres=16&sort_by=popularity.desc&page={d}",
-            .{ DRAMA_ORIGINS, page },
-        ) catch null,
-        .tokusatsu => std.fmt.bufPrint(
-            buf,
-            "/3/discover/tv?with_keywords={s}&sort_by=popularity.desc&page={d}",
-            .{ TOKU_KEYWORD, page },
-        ) catch null,
-    };
-}
-
-/// Fallback when the tokusatsu keyword returns an empty grid — a title search
-/// that always resolves to real toku on TMDB, so the lane is never blank.
-pub fn tokusatsuFallbackPath(buf: []u8) ?[]const u8 {
-    return std.fmt.bufPrint(buf, "/3/search/tv?query=Kamen%20Rider&page=1", .{}) catch null;
-}
-
-/// Official tokusatsu YouTube channels (full episodes, legal). Surfaced as
-/// "watch on the official channel" links; played via mpv/ytdl. Best-effort.
-pub const TokuChannel = struct { name: []const u8, url: []const u8 };
-pub fn tokusatsuChannels() []const TokuChannel {
-    const S = struct {
-        const list = [_]TokuChannel{
-            .{ .name = "TOEI Tokusatsu World Official", .url = "https://www.youtube.com/@TOEITokusatsu" },
-            .{ .name = "ULTRAMAN OFFICIAL", .url = "https://www.youtube.com/@ultraman_official" },
-            .{ .name = "Power Rangers Official", .url = "https://www.youtube.com/@PowerRangersOfficial" },
-        };
-    };
-    return &S.list;
+/// Build the TMDB path+query (auth-free — for tmdb_api.tmdbApiInto) for a grid
+/// page of the Asian-drama lane (KR/CN/JP/TW/HK/TH origin-country TV discover,
+/// animation excluded so anime never leaks in). Returns null on bufPrint overflow.
+pub fn discoverPath(page: u32, buf: []u8) ?[]const u8 {
+    return std.fmt.bufPrint(
+        buf,
+        "/3/discover/tv?with_origin_country={s}&without_genres=16&sort_by=popularity.desc&page={d}",
+        .{ DRAMA_ORIGINS, page },
+    ) catch null;
 }
 
 /// A query for the universal resolver (services/resolver.zig) — trims the title
@@ -166,14 +106,12 @@ pub const Item = struct {
     year_len: usize = 0,
     vote: f32 = 0,
     origin: Origin = .other,
-    is_toku: bool = false,
 };
 
 /// Parse a TMDB `/discover/tv` or `/search/tv` response into `out`. Returns the
-/// number of items written. `drop_toku` removes tokusatsu-classified titles (the
-/// drama lane); pass false for the toku lane. Allocation-free, string-aware, and
-/// panic-safe on truncated/garbage input (fields clamp to their buffers).
-pub fn parseDiscover(json: []const u8, drop_toku: bool, out: []Item) usize {
+/// number of items written. Allocation-free, string-aware, and panic-safe on
+/// truncated/garbage input (fields clamp to their buffers).
+pub fn parseDiscover(json: []const u8, out: []Item) usize {
     var count: usize = 0;
     var pos: usize = 0;
 
@@ -218,9 +156,6 @@ pub fn parseDiscover(json: []const u8, drop_toku: bool, out: []Item) usize {
 
         // origin: origin_country[0], fallback original_language.
         item.origin = extractOrigin(obj);
-        item.is_toku = isTokusatsu(item.name[0..item.name_len]);
-
-        if (drop_toku and item.is_toku) continue;
 
         out[count] = item;
         count += 1;
@@ -343,33 +278,17 @@ test "classifyLang fallback" {
     try std.testing.expectEqual(Origin.other, classifyLang("en"));
 }
 
-test "isTokusatsu franchise detection (drama-vs-toku split)" {
-    try std.testing.expect(isTokusatsu("Kamen Rider Gavv"));
-    try std.testing.expect(isTokusatsu("Ultraman Blazar"));
-    try std.testing.expect(isTokusatsu("Mighty Morphin Power Rangers"));
-    try std.testing.expect(isTokusatsu("Super Sentai"));
-    try std.testing.expect(isTokusatsu("SSSS.GRIDMAN"));
-    try std.testing.expect(!isTokusatsu("Crash Landing on You"));
-    try std.testing.expect(!isTokusatsu("The Untamed"));
-    try std.testing.expect(!isTokusatsu(""));
-}
-
-test "discoverPath builds drama + tokusatsu queries" {
+test "discoverPath builds the Asian-drama discover query" {
     var buf: [256]u8 = undefined;
-    const dr = discoverPath(.drama, 1, &buf).?;
+    const dr = discoverPath(1, &buf).?;
     try std.testing.expect(std.mem.indexOf(u8, dr, "/3/discover/tv") != null);
     try std.testing.expect(std.mem.indexOf(u8, dr, "with_origin_country=KR%7C") != null);
     try std.testing.expect(std.mem.indexOf(u8, dr, "without_genres=16") != null);
     try std.testing.expect(std.mem.indexOf(u8, dr, "page=1") != null);
 
     var buf2: [256]u8 = undefined;
-    const tk = discoverPath(.tokusatsu, 3, &buf2).?;
-    try std.testing.expect(std.mem.indexOf(u8, tk, "with_keywords=210024") != null);
-    try std.testing.expect(std.mem.indexOf(u8, tk, "page=3") != null);
-
-    var buf3: [128]u8 = undefined;
-    const fb = tokusatsuFallbackPath(&buf3).?;
-    try std.testing.expect(std.mem.indexOf(u8, fb, "/3/search/tv?query=Kamen") != null);
+    const p3 = discoverPath(3, &buf2).?;
+    try std.testing.expect(std.mem.indexOf(u8, p3, "page=3") != null);
 }
 
 test "buildResolverQuery strips noise + trims" {
@@ -378,40 +297,34 @@ test "buildResolverQuery strips noise + trims" {
     try std.testing.expectEqualStrings("Reply 1988", buildResolverQuery("Reply (1988)", &out));
 }
 
-test "parseDiscover extracts fields + origin + splits toku" {
+test "parseDiscover extracts fields + origin" {
     const json =
         \\{"page":1,"results":[
         \\{"adult":false,"genre_ids":[18],"id":83097,"origin_country":["KR"],"original_language":"ko","original_name":"슬기로운 감빵생활","overview":"A guard.","poster_path":"/abc.jpg","first_air_date":"2017-11-22","name":"Prison Playbook","vote_average":8.6},
-        \\{"id":12345,"origin_country":["JP"],"original_language":"ja","overview":"Henshin!","poster_path":"/toku.jpg","first_air_date":"2024-09-01","name":"Kamen Rider Gavv","vote_average":7.1}
+        \\{"id":12345,"origin_country":["JP"],"original_language":"ja","overview":"A detective.","poster_path":"/xyz.jpg","first_air_date":"2024-09-01","name":"Tokyo Case Files","vote_average":7.1}
         \\],"total_pages":50}
     ;
     var items: [8]Item = undefined;
-    // Drama lane: drop toku → only the K-drama survives.
-    const nd = parseDiscover(json, true, &items);
-    try std.testing.expectEqual(@as(usize, 1), nd);
+    const n = parseDiscover(json, &items);
+    try std.testing.expectEqual(@as(usize, 2), n);
     try std.testing.expectEqualStrings("83097", items[0].id[0..items[0].id_len]);
     try std.testing.expectEqualStrings("Prison Playbook", items[0].name[0..items[0].name_len]);
     try std.testing.expectEqualStrings("/abc.jpg", items[0].poster_path[0..items[0].poster_path_len]);
     try std.testing.expectEqualStrings("2017", items[0].year[0..items[0].year_len]);
     try std.testing.expectEqual(Origin.korean, items[0].origin);
     try std.testing.expect(items[0].vote > 8.5 and items[0].vote < 8.7);
-
-    // Toku lane: keep everything → both, and the toku flag is set.
-    const nt = parseDiscover(json, false, &items);
-    try std.testing.expectEqual(@as(usize, 2), nt);
-    try std.testing.expect(items[1].is_toku);
     try std.testing.expectEqual(Origin.japanese, items[1].origin);
 }
 
 test "parseDiscover survives malformed / truncated input (no crash)" {
     var items: [8]Item = undefined;
-    try std.testing.expectEqual(@as(usize, 0), parseDiscover("", true, &items));
-    try std.testing.expectEqual(@as(usize, 0), parseDiscover("not json at all", true, &items));
+    try std.testing.expectEqual(@as(usize, 0), parseDiscover("", &items));
+    try std.testing.expectEqual(@as(usize, 0), parseDiscover("not json at all", &items));
     // Truncated mid-object: id present, name string unterminated.
-    _ = parseDiscover("{\"id\":99,\"name\":\"unterminated", true, &items);
+    _ = parseDiscover("{\"id\":99,\"name\":\"unterminated", &items);
     // id with no digits, then a valid one.
     const j2 = "{\"id\":,\"name\":\"x\"}{\"id\":7,\"name\":\"Ok\"}";
-    const n2 = parseDiscover(j2, true, &items);
+    const n2 = parseDiscover(j2, &items);
     try std.testing.expect(n2 >= 1);
     try std.testing.expectEqualStrings("Ok", items[n2 - 1].name[0..items[n2 - 1].name_len]);
 }

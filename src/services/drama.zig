@@ -1,8 +1,8 @@
-//! Live-action Asian drama + tokusatsu browse module.
+//! Live-action Asian drama browse module.
 //!
 //! Structural sibling of services/anime.zig: a card GRID → DETAIL → PLAY drill.
 //! The catalog comes from TMDB (the stable, public API Opal already speaks in
-//! tmdb*.zig); all parsing + origin/tokusatsu classification lives in the tested
+//! tmdb*.zig); all parsing + origin classification lives in the tested
 //! drama_pure.zig, so the shipped logic is the tested logic. Playback hands the
 //! title to the universal resolver (services/resolver.zig), which routes a
 //! torrent / stremio stream into mpv — the same handoff anime.playEpisode uses.
@@ -10,7 +10,6 @@
 //! SOURCES (documented):
 //!   • TMDB /discover/tv + /search/tv  — STABLE. Discovery/metadata only.
 //!   • Universal resolver              — BEST-EFFORT. Whatever indexers are live.
-//!   • Official tokusatsu YouTube      — BEST-EFFORT. Legal full-episode channels.
 //! Dedicated drama stream scrapers (Kisskh / Asiaflix / GoPlay / Cineby) are NOT
 //! compiled in (source neutrality); a scraper can be slotted behind the same seam.
 
@@ -44,16 +43,9 @@ var pending_count: usize = 0;
 var pending_ready: bool = false;
 var pending_mutex: sync.Mutex = .{};
 
-/// Monotonic fetch generation — a segment switch bumps it so a slow in-flight
-/// worker's results are dropped rather than shown over the newer segment.
+/// Monotonic fetch generation — bumped on each fetch so a slow in-flight worker's
+/// results are dropped rather than shown if a newer fetch superseded it.
 var fetch_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
-
-/// The segment we last issued a fetch for (renderContent refetches on change).
-var fetched_segment: ?u8 = null;
-
-fn currentSegment() drama_pure.Segment {
-    return @enumFromInt(@min(state.app.drama.segment, 1));
-}
 
 // ══════════════════════════════════════════════════════════
 // Fetch (TMDB discover/search → drama_pure.parseDiscover → pending)
@@ -68,45 +60,33 @@ pub fn loadCatalog() void {
     state.app.drama.loaded_once = true;
     const my_gen = fetch_gen.fetchAdd(1, .acq_rel) + 1;
 
-    const seg = currentSegment();
-    if (std.Thread.spawn(.{}, fetchWorker, .{ seg, my_gen })) |t| {
+    if (std.Thread.spawn(.{}, fetchWorker, .{my_gen})) |t| {
         t.detach(); // never joined — detach to avoid leaking the handle
     } else |_| {
         state.app.drama.is_loading.store(false, .release);
     }
 }
 
-fn fetchWorker(seg: drama_pure.Segment, my_gen: u32) void {
+fn fetchWorker(my_gen: u32) void {
     defer state.app.drama.is_loading.store(false, .release);
 
     const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
 
     var path_buf: [256]u8 = undefined;
-    const path = drama_pure.discoverPath(seg, 1, &path_buf) orelse return;
+    const path = drama_pure.discoverPath(1, &path_buf) orelse return;
 
     // Heap buffer — never a big stack buffer on a spawned thread (CLAUDE.md).
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
 
-    var bytes = @import("tmdb_api.zig").tmdbApiInto(path, key, buf);
-    const drop_toku = seg == .drama;
+    const bytes = @import("tmdb_api.zig").tmdbApiInto(path, key, buf);
 
     // Parse into a local staging array (heap) before publishing.
     const items = alloc.alloc(drama_pure.Item, pending.len) catch return;
     defer alloc.free(items);
-    var n = if (bytes > 0) drama_pure.parseDiscover(buf[0..bytes], drop_toku, items) else 0;
+    const n = if (bytes > 0) drama_pure.parseDiscover(buf[0..bytes], items) else 0;
 
-    // Tokusatsu keyword can come back empty on some TMDB snapshots — fall back to
-    // a title search so the lane is never blank (best-effort, documented).
-    if (seg == .tokusatsu and n == 0) {
-        var fb_buf: [128]u8 = undefined;
-        if (drama_pure.tokusatsuFallbackPath(&fb_buf)) |fb| {
-            bytes = @import("tmdb_api.zig").tmdbApiInto(fb, key, buf);
-            if (bytes > 0) n = drama_pure.parseDiscover(buf[0..bytes], false, items);
-        }
-    }
-
-    if (fetch_gen.load(.acquire) != my_gen) return; // superseded by a newer segment
+    if (fetch_gen.load(.acquire) != my_gen) return; // superseded by a newer fetch
 
     pending_mutex.lock();
     defer pending_mutex.unlock();
@@ -150,20 +130,9 @@ fn applyPending() void {
         r.year_len = src.year_len;
         r.vote = src.vote;
         r.origin = @intFromEnum(src.origin);
-        r.is_toku = src.is_toku;
     }
     state.app.drama.result_count = n;
     dvui.refresh(null, @src(), null);
-}
-
-/// Switch content lane (Drama ↔ Tokusatsu). Bumps the generation + refetches.
-fn setSegment(seg: drama_pure.Segment) void {
-    const v: u8 = @intFromEnum(seg);
-    if (state.app.drama.segment == v) return;
-    state.app.drama.segment = v;
-    state.app.drama.selected_idx = null;
-    state.app.drama.last_fetch_s = 0; // bypass SWR on an explicit switch
-    fetched_segment = null; // force renderContent to re-dispatch
 }
 
 // ══════════════════════════════════════════════════════════
@@ -250,8 +219,8 @@ pub fn playSelected() void {
 
 /// Load a direct stream/URL into the active player and reveal it. Creates a
 /// player if none exists; guarded by `active_player_idx < players.items.len`
-/// (CLAUDE.md). Used for resolver HTTP streams AND official tokusatsu YouTube
-/// channels (mpv + ytdl handles the extraction). UI-thread-safe entry too.
+/// (CLAUDE.md). Used for resolver HTTP streams (mpv + ytdl handles the
+/// extraction). UI-thread-safe entry too.
 pub fn playUrlDirect(url: []const u8) void {
     if (url.len == 0) return;
     if (state.app.players.items.len == 0) {
@@ -281,11 +250,10 @@ pub fn playUrlDirect(url: []const u8) void {
 pub fn renderContent() void {
     applyPending(); // drain worker-staged results (UI thread)
 
-    // Fire the fetch once per (segment) change, plus SWR refresh on revisit.
-    if (fetched_segment == null or fetched_segment.? != state.app.drama.segment) {
-        fetched_segment = state.app.drama.segment;
+    // Fetch once on first visit, plus SWR refresh when the cache goes stale.
+    if (!state.app.drama.is_loading.load(.acquire)) {
         const stale = (@import("browse_cache.zig").now() - state.app.drama.last_fetch_s) >= CATALOG_TTL_S;
-        if (!state.app.drama.loaded_once or stale or state.app.drama.result_count == 0) loadCatalog();
+        if (!state.app.drama.loaded_once or stale) loadCatalog();
     }
 
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
@@ -301,14 +269,12 @@ pub fn renderContent() void {
         return;
     }
 
-    renderSegmentBar();
-
     if (state.app.drama.is_loading.load(.acquire) and state.app.drama.result_count == 0) {
         components.emptyState(icons.tvg.lucide.@"clapperboard", "Loading…", "Fetching the catalog from TMDB.");
         return;
     }
     if (state.app.drama.result_count == 0) {
-        components.emptyState(icons.tvg.lucide.@"clapperboard", "Nothing here yet", "Try the other lane or check back later.");
+        components.emptyState(icons.tvg.lucide.@"clapperboard", "Nothing here yet", "Check back later.");
         return;
     }
 
@@ -322,31 +288,6 @@ pub fn renderContent() void {
     defer grid.deinit();
 
     for (0..state.app.drama.result_count) |i| renderCard(&state.app.drama.results[i], i);
-}
-
-fn renderSegmentBar() void {
-    var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.xs },
-    });
-    defer bar.deinit();
-
-    segChip("Drama", .drama, 0);
-    segChip("Tokusatsu", .tokusatsu, 1);
-}
-
-fn segChip(label: []const u8, seg: drama_pure.Segment, id: usize) void {
-    const active = state.app.drama.segment == @intFromEnum(seg);
-    if (dvui.button(@src(), label, .{}, .{
-        .id_extra = id,
-        .color_text = if (active) theme.colors.accent else theme.colors.text_secondary,
-        .color_fill = if (active) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .corner_radius = dvui.Rect.all(theme.radius.pill),
-        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
-        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-    })) {
-        setSegment(seg);
-    }
 }
 
 const CARD_W: f32 = 150;
@@ -484,7 +425,6 @@ fn renderDetail(idx: usize) void {
             var vb: [16]u8 = undefined;
             _ = dvui.label(@src(), "  ·  {s} / 10", .{std.fmt.bufPrint(&vb, "{d:.1}", .{item.vote}) catch ""}, .{ .color_text = theme.colors.text_tertiary });
         }
-        if (item.is_toku) _ = dvui.label(@src(), "  ·  Tokusatsu", .{}, .{ .color_text = theme.colors.text_secondary });
     }
 
     // Play button → universal resolver.
@@ -509,23 +449,5 @@ fn renderDetail(idx: usize) void {
             .expand = .horizontal,
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.md },
         });
-    }
-
-    // Tokusatsu: official YouTube channels (legal full episodes).
-    if (item.is_toku) {
-        _ = dvui.label(@src(), "Official channels", .{}, .{ .color_text = theme.colors.text_tertiary, .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xs } });
-        for (drama_pure.tokusatsuChannels(), 0..) |ch, i| {
-            if (dvui.button(@src(), ch.name, .{}, .{
-                .id_extra = i + 700,
-                .expand = .horizontal,
-                .color_text = theme.colors.text_primary,
-                .color_fill = theme.colors.bg_elevated,
-                .corner_radius = dvui.Rect.all(theme.radius.sm),
-                .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xs },
-                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
-            })) {
-                playUrlDirect(ch.url);
-            }
-        }
     }
 }

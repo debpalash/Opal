@@ -1,4 +1,4 @@
-"""Reading — live-action Asian drama + tokusatsu browse module tests.
+"""Reading — live-action Asian drama browse module tests.
 See tests/features/harness.py for the shared @test decorator, helpers, and
 run_all()."""
 from .harness import *  # noqa: F401,F403
@@ -7,12 +7,13 @@ from .harness import *  # noqa: F401,F403
 @test("Asian drama + tokusatsu", "Reading")
 def test_drama_module():
     # End-to-end wiring of the Drama tab: TMDB catalog grid → detail → play (via
-    # the universal resolver), with tokusatsu folded in as a second content lane.
+    # the universal resolver). The tab is drama-only (the tokusatsu lane was
+    # removed).
     #
     # Verify: the pure module is registered + routed (tested logic == shipped
     # logic), the drill-down UI is wired (enum → nav → render dispatch → subtab),
-    # play routes through load_file/gotoPlayer, the drama/toku split exists, and
-    # at least one working source (TMDB discover/search) is wired.
+    # play routes through load_file/gotoPlayer, and at least one working source
+    # (TMDB discover/search) is wired.
     svc = _src("src/services/drama.zig")
     pure = _src("src/services/drama_pure.zig")
     st = _src("src/core/state.zig")
@@ -20,27 +21,27 @@ def test_drama_module():
     drawer = _src("src/ui/drawer.zig")
     build = _src("build.zig")
 
+    # The tokusatsu lane was removed entirely — no residue may remain.
+    no_toku = not any(
+        "toku" in blob.lower() for blob in (svc, pure, st)
+    )
+
     checks = {
         # ── Pure module: parsing, classification, query building ──
         "pure module present": bool(pure),
         "pure discover parser": "pub fn parseDiscover" in pure,
-        "pure origin classify (split)": "pub fn classifyOrigin" in pure and "pub fn classifyLang" in pure,
-        "pure tokusatsu classify (split)": "pub fn isTokusatsu" in pure,
+        "pure origin classify": "pub fn classifyOrigin" in pure and "pub fn classifyLang" in pure,
         "pure discover path builder": "pub fn discoverPath" in pure,
         "pure resolver query": "pub fn buildResolverQuery" in pure,
-        "pure segment enum": "pub const Segment = enum { drama, tokusatsu }" in pure,
         # Production routes through the pure fns.
         "service routes through pure": all(
             f"drama_pure.{fn}(" in svc
             for fn in ("parseDiscover", "discoverPath", "buildResolverQuery")
         ),
-        "service uses classification": "originLabel" in svc and "is_toku" in svc,
+        "service uses classification": "originLabel" in svc,
         # ── At least one working source: TMDB discover/search (stable) ──
         "tmdb discover source": "/3/discover/tv" in pure,
-        "tmdb search fallback": "/3/search/tv" in pure,
         "tmdb api reused": "tmdbApiInto" in svc,
-        # Tokusatsu best-effort surface (official YouTube channels).
-        "tokusatsu channels": "pub fn tokusatsuChannels" in pure and "youtube.com" in pure,
         # ── Drill-down UI: enum → nav → render dispatch → subtab ──
         "enum variant present": "Drama" in st and "pub const DrawerTab" in st,
         "state struct": "drama: struct {" in st,
@@ -51,10 +52,8 @@ def test_drama_module():
         "shell label": '.Drama => "Asian Drama"' in shell,
         "shell icon (exists in pack)": ".Drama => icons.tvg.lucide." in shell and "clapperboard" in shell,
         "browse subtab": ".Drama" in shell and "subTabs(&.{" in shell,
-        # ── Drama vs Tokusatsu split present (segment lane) ──
-        "segment state": "segment: u8" in st,
-        "segment switch UI": "fn setSegment" in svc and "segChip" in svc,
-        "drop-toku split in fetch": "drop_toku" in svc,
+        # ── Tokusatsu lane fully removed (drama-only tab) ──
+        "no tokusatsu residue": no_toku,
         # ── Play routes through load_file + gotoPlayer (guarded) ──
         "play worker": "pub fn playSelected" in svc,
         "play via resolver": "resolver.resolve(" in svc,
@@ -72,5 +71,5 @@ def test_drama_module():
     }
     missing = [k for k, ok in checks.items() if not ok]
     if not missing:
-        return "pass", "drama+toku wired: pure(parse/classify/split) → enum→nav→service (TMDB), play→resolver→load_file/gotoPlayer"
+        return "pass", "drama wired: pure(parse/classify) → enum→nav→service (TMDB), play→resolver→load_file/gotoPlayer; tokusatsu lane removed"
     return "fail", "drama wiring incomplete: " + ", ".join(missing)

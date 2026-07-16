@@ -68,7 +68,7 @@ pub const AnimeResult = struct {
     poster_tex: ?dvui.Texture = null,
 };
 
-/// One live-action Asian drama / tokusatsu catalog card (TMDB discover/search).
+/// One live-action Asian drama catalog card (TMDB discover/search).
 /// Mirrors AnimeResult's lazy-poster shape so the grid reuses poster.uploadIfReady.
 pub const DramaResult = struct {
     id: [12]u8 = std.mem.zeroes([12]u8), // TMDB tv id
@@ -83,7 +83,6 @@ pub const DramaResult = struct {
     year_len: usize = 0,
     vote: f32 = 0,
     origin: u8 = 0, // @intFromEnum(drama_pure.Origin)
-    is_toku: bool = false,
 
     // Lazy poster (same pattern as AnimeResult).
     poster_fetching: bool = false,
@@ -874,7 +873,7 @@ pub const AppState = struct {
         sched_tz_offset_s: i64 = 0,
     } = .{},
 
-    // ── Live-action Asian drama + tokusatsu (TMDB discover/search catalog) ──
+    // ── Live-action Asian drama (TMDB discover/search catalog) ──
     // Structural sibling of `anime`: grid → detail → play (via universal
     // resolver). Parsing/classification lives in services/drama_pure.zig; the
     // fetch worker publishes here under drama.zig's parse_mutex. See drama.zig.
@@ -886,9 +885,6 @@ pub const AppState = struct {
         results: [80]DramaResult = std.mem.zeroes([80]DramaResult),
         result_count: usize = 0,
         selected_idx: ?usize = null,
-        // Which content lane the grid is showing: 0 = drama, 1 = tokusatsu
-        // (@intFromEnum(drama_pure.Segment)). Plain u8 written by the UI thread.
-        segment: u8 = 0,
         last_fetch_s: i64 = 0, // SWR cache timestamp
         loaded_once: bool = false,
     } = .{},
