@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-07-16T15:36:28",
+  "timestamp": "2026-07-16T15:37:04",
   "total": 176,
   "passed": 166,
   "failed": 0,
@@ -28,6 +28,12 @@
       "pass": 5,
       "fail": 0,
       "warn": 1,
+      "skip": 0
+    },
+    "Packaging": {
+      "pass": 2,
+      "fail": 0,
+      "warn": 0,
       "skip": 0
     },
     "Voice": {
@@ -109,7 +115,7 @@
       "skip": 0
     },
     "Player": {
-      "pass": 6,
+      "pass": 5,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -181,12 +187,6 @@
       "skip": 0
     },
     "Unit Tests": {
-      "pass": 1,
-      "fail": 0,
-      "warn": 0,
-      "skip": 0
-    },
-    "Packaging": {
       "pass": 1,
       "fail": 0,
       "warn": 0,
@@ -332,13 +332,13 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 42.6 MB",
-      "duration_ms": 498
+      "duration_ms": 419
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "42.6 MB, built at 15:34:24",
+      "detail": "42.6 MB, built at 15:36:00",
       "duration_ms": 0
     },
     {
@@ -370,6 +370,13 @@
       "duration_ms": 1
     },
     {
+      "name": "File associations + single instance",
+      "category": "Packaging",
+      "status": "pass",
+      "detail": "LSHandlerRank Default, .desktop MimeType, wxs ProgId, /api/open forwarding all present",
+      "duration_ms": 1
+    },
+    {
       "name": "Voice Server Socket",
       "category": "Voice",
       "status": "skip",
@@ -381,21 +388,21 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 820
+      "duration_ms": 919
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "pass",
       "detail": "faster-whisper importable",
-      "duration_ms": 989
+      "duration_ms": 1222
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 21
+      "duration_ms": 22
     },
     {
       "name": "PulseAudio Echo Cancel",
@@ -409,7 +416,7 @@
       "category": "Voice",
       "status": "pass",
       "detail": "echo guard drops self-echo; real interruption passes; PARTIAL streamed",
-      "duration_ms": 30
+      "duration_ms": 29
     },
     {
       "name": "Conversational: prefer full-duplex event loop + wiring",
@@ -423,7 +430,7 @@
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 22
+      "duration_ms": 21
     },
     {
       "name": "Embedding Server Health",
@@ -556,49 +563,49 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 26
+      "duration_ms": 24
     },
     {
       "name": "Compiles: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 28
+      "duration_ms": 26
     },
     {
       "name": "Compiles: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 28
+      "duration_ms": 27
     },
     {
       "name": "--check degrades: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 1311
+      "duration_ms": 934
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 27
+      "duration_ms": 25
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 1226
+      "duration_ms": 1082
     },
     {
       "name": "Tracked + compiles: tools/lang_server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "tracked + py_compile OK",
-      "duration_ms": 43
+      "duration_ms": 44
     },
     {
       "name": "Compiles: camoufox_bridge.py",
@@ -612,7 +619,7 @@
       "category": "Browser",
       "status": "pass",
       "detail": "framing + pump model OK",
-      "duration_ms": 28
+      "duration_ms": 26
     },
     {
       "name": "Poster cache SQL matches schema",
@@ -752,14 +759,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 3017
+      "duration_ms": 3397
     },
     {
       "name": "No Emojis in UI",
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 78
+      "duration_ms": 90
     },
     {
       "name": "Page Router",
@@ -780,7 +787,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 8
+      "duration_ms": 9
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -1004,7 +1011,7 @@
       "category": "Remote",
       "status": "pass",
       "detail": "hosted streaming + docker gate + CPU fixes wired",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Torrent File Safety: skip executables/archives",
@@ -1186,7 +1193,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 113
+      "duration_ms": 110
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1396,27 +1403,20 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 2182
+      "duration_ms": 1695
     },
     {
       "name": "Installer Does Not Need Xcode",
       "category": "Packaging",
       "status": "pass",
       "detail": "install.sh installs the vendored .app; formula is a binary install at 0.3.0",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Audio Visualizer",
       "category": "Player",
       "status": "pass",
       "detail": "mpv lavfi-complex visualizer: 4 styles, audio preserved, colour validated",
-      "duration_ms": 0
-    },
-    {
-      "name": "Audio delay + device picker",
-      "category": "Player",
-      "status": "pass",
-      "detail": "audio-delay keys + cheat sheet + device picker via pure JSON parser",
       "duration_ms": 0
     },
     {

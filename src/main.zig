@@ -235,6 +235,34 @@ fn detectResourceRoot() void {
 }
 
 fn appInit(win: *dvui.Window) !void {
+    // ── CLI argument handling (before anything heavy starts) ──
+    // `opal /path/to/file.mp4` or `opal https://example.com/stream`
+    // Deferred: store in buffer, appFrame loads after player is ready.
+    if (dvui.App.main_init) |init_data| {
+        // Windows requires the allocating iterator (argv arrives as one
+        // WTF-16 command line that must be split); POSIX iterates in place.
+        var args_iter = if (builtin.os.tag == .windows)
+            init_data.minimal.args.iterateAllocator(@import("core/alloc.zig").allocator) catch return
+        else
+            init_data.minimal.args.iterate();
+        defer args_iter.deinit(); // no-op on POSIX
+        _ = args_iter.next(); // skip argv[0] (binary name)
+        if (args_iter.next()) |arg| {
+            const len = @min(arg.len, cli_open_buf.len - 1);
+            @memcpy(cli_open_buf[0..len], arg[0..len]);
+            cli_open_len = len;
+            std.debug.print("[CLI] Will open: {s}\n", .{cli_open_buf[0..len]});
+        }
+    }
+
+    // Single-instance: if another Opal already serves the local JSON API, hand
+    // it our argument and quit instead of opening a second window. Connection
+    // failure (no instance, or Web Remote off) → normal startup below.
+    if (cli_open_len > 0 and forwardToRunningInstance(cli_open_buf[0..cli_open_len])) {
+        std.debug.print("[CLI] Forwarded to running instance, exiting.\n", .{});
+        std.process.exit(0);
+    }
+
     // Record THIS (UI/render) thread so theme.applyToDvui can tell UI-thread
     // calls from background-worker calls (config.load → setPreset). Must run
     // before coreInit spawns the DB/library worker that applies the saved theme.
@@ -263,26 +291,50 @@ fn appInit(win: *dvui.Window) !void {
     // Locate bundled resources (engines/ etc.) so streaming works when launched
     // from /Applications (CWD "/"), not just from the project dir in dev.
     detectResourceRoot();
+}
 
-    // ── CLI argument handling ──
-    // `opal /path/to/file.mp4` or `opal https://example.com/stream`
-    // Deferred: store in buffer, appFrame loads after player is ready.
-    if (dvui.App.main_init) |init_data| {
-        // Windows requires the allocating iterator (argv arrives as one
-        // WTF-16 command line that must be split); POSIX iterates in place.
-        var args_iter = if (builtin.os.tag == .windows)
-            init_data.minimal.args.iterateAllocator(@import("core/alloc.zig").allocator) catch return
-        else
-            init_data.minimal.args.iterate();
-        defer args_iter.deinit(); // no-op on POSIX
-        _ = args_iter.next(); // skip argv[0] (binary name)
-        if (args_iter.next()) |arg| {
-            const len = @min(arg.len, cli_open_buf.len - 1);
-            @memcpy(cli_open_buf[0..len], arg[0..len]);
-            cli_open_len = len;
-            std.debug.print("[CLI] Will open: {s}\n", .{cli_open_buf[0..len]});
-        }
-    }
+/// Second-instance forwarding: POST our file/URL argument to an already-
+/// running Opal's JSON API (remote.zig /api/open) and return true so the
+/// caller exits instead of starting a second UI. Authenticates with the same
+/// bearer token the running instance persists to <configDir>/api.token —
+/// readable here because both instances run as the same user. Any failure
+/// (nothing listening, no token, non-2xx) → false → normal startup. A
+/// 127.0.0.1 connect succeeds or is refused immediately, so no explicit
+/// timeout plumbing is needed.
+fn forwardToRunningInstance(arg: []const u8) bool {
+    const io_g = @import("core/io_global.zig");
+    const sip = @import("services/single_instance_pure.zig");
+
+    var dir_buf: [512]u8 = undefined;
+    var tok_path_buf: [768]u8 = undefined;
+    const tok_path = std.fmt.bufPrint(&tok_path_buf, "{s}/api.token", .{
+        @import("core/paths.zig").configDir(&dir_buf),
+    }) catch return false;
+    var tok_file = io_g.openFileAbsolute(tok_path, .{}) catch return false;
+    var tok_buf: [32]u8 = undefined; // TOKEN_HEX_LEN in remote.zig
+    const tok_n = io_g.readAll(tok_file, &tok_buf) catch 0;
+    tok_file.close(io_g.io());
+    if (tok_n != tok_buf.len) return false;
+
+    var url_buf: [6300]u8 = undefined; // worst case: 2048 arg bytes ×3 encoded
+    const url = sip.buildOpenUrl(@import("services/remote.zig").port, arg, &url_buf) orelse return false;
+    var auth_buf: [48]u8 = undefined;
+    const auth = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{tok_buf[0..tok_n]}) catch return false;
+
+    var client = std.http.Client{ .allocator = @import("core/alloc.zig").allocator, .io = io_g.io() };
+    defer client.deinit();
+    const uri = std.Uri.parse(url) catch return false;
+    var req = client.request(.POST, uri, .{ .extra_headers = &.{
+        .{ .name = "Authorization", .value = auth },
+    } }) catch return false;
+    defer req.deinit();
+    // POST requires a body path in 0.16's client (sendBodiless asserts) —
+    // send an explicit empty body / Content-Length: 0.
+    var empty_body: [0]u8 = .{};
+    req.sendBodyComplete(&empty_body) catch return false;
+    var redirect_buf: [4096]u8 = undefined;
+    var response = req.receiveHead(&redirect_buf) catch return false;
+    return response.head.status.class() == .success;
 }
 
 pub fn appDeinit() void {
@@ -736,6 +788,26 @@ fn appFrame() !dvui.App.Result {
             browser.loadContent(fpath);
             logs.pushLog("info", "open", "Loaded file from CLI", false);
             state.showToast("Playing from CLI");
+        }
+    }
+
+    // Process a path forwarded by a second `opal <file>` launch (remote
+    // /api/open). Snapshot under the lock, release, then do the UI-thread work.
+    {
+        var fwd_buf: [2048]u8 = undefined;
+        var fwd_len: usize = 0;
+        state.app.remote_open_lock.lock();
+        if (state.app.remote_open_ready) {
+            state.app.remote_open_ready = false;
+            fwd_len = state.app.remote_open_len;
+            @memcpy(fwd_buf[0..fwd_len], state.app.remote_open_path[0..fwd_len]);
+        }
+        state.app.remote_open_lock.unlock();
+        if (fwd_len > 0 and state.app.active_player_idx < state.app.players.items.len) {
+            const browser = @import("services/browser.zig");
+            browser.loadContent(fwd_buf[0..fwd_len]);
+            logs.pushLog("info", "open", "Opened from second instance", false);
+            state.showToast("Playing forwarded file");
         }
     }
 

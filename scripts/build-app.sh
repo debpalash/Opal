@@ -110,7 +110,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
             <key>LSHandlerRank</key>
-            <string>Alternate</string>
+            <string>Default</string>
             <key>LSItemContentTypes</key>
             <array>
                 <string>public.movie</string>
@@ -150,7 +150,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
             <key>LSHandlerRank</key>
-            <string>Alternate</string>
+            <string>Default</string>
             <key>LSItemContentTypes</key>
             <array>
                 <string>public.audio</string>
@@ -179,7 +179,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
             <key>LSHandlerRank</key>
-            <string>Alternate</string>
+            <string>Default</string>
             <key>CFBundleTypeExtensions</key>
             <array>
                 <string>srt</string>
@@ -195,7 +195,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
             <key>LSHandlerRank</key>
-            <string>Alternate</string>
+            <string>Default</string>
             <key>CFBundleTypeExtensions</key>
             <array>
                 <string>m3u</string>
@@ -209,7 +209,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
             <key>LSHandlerRank</key>
-            <string>Alternate</string>
+            <string>Default</string>
             <key>CFBundleTypeExtensions</key>
             <array>
                 <string>torrent</string>
@@ -221,7 +221,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
             <key>LSHandlerRank</key>
-            <string>Alternate</string>
+            <string>Default</string>
             <key>CFBundleTypeExtensions</key>
             <array>
                 <string>cbz</string>

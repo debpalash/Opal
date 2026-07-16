@@ -351,6 +351,35 @@ def test_copyright_attribution():
         return "fail", f"'Opal contributors' placeholder still in: {', '.join(stale)}"
     return "pass", "author credited across about/copyright/packaging surfaces"
 
+@test("File associations + single instance", "Packaging")
+def test_file_associations_single_instance():
+    # OS default-player registration (macOS/Linux/Windows) + second-instance
+    # forwarding must all stay wired: each check names the surface it guards.
+    checks = {
+        "scripts/build-app.sh": lambda s: "<string>Default</string>" in s
+            and "<string>Alternate</string>" not in s,
+        "scripts/dev-app.sh": lambda s: "CFBundleDocumentTypes" in s
+            and "<string>Default</string>" in s,
+        "packaging/opal.desktop": lambda s: "MimeType=" in s
+            and ("%U" in s or "%f" in s),
+        "packaging/windows/opal.wxs": lambda s: "Opal.MediaFile" in s
+            and "RegisteredApplications" in s
+            and "shell\\open\\command" in s,
+        "src/main.zig": lambda s: "forwardToRunningInstance" in s,
+        "src/services/remote.zig": lambda s: '"/open"' in s
+            and "remote_open_ready" in s,
+        "src/services/single_instance_pure.zig": lambda s: "buildOpenUrl" in s,
+        "build.zig": lambda s: "single_instance_pure.zig" in s,
+    }
+    bad = []
+    for path, ok in checks.items():
+        full = os.path.join(PROJECT_DIR, path)
+        if not os.path.exists(full) or not ok(open(full).read()):
+            bad.append(path)
+    if bad:
+        return "fail", f"association/forwarding wiring missing in: {', '.join(bad)}"
+    return "pass", "LSHandlerRank Default, .desktop MimeType, wxs ProgId, /api/open forwarding all present"
+
 # ══════════════════════════════════════════════════════════
 # Voice Pipeline Tests
 # ══════════════════════════════════════════════════════════

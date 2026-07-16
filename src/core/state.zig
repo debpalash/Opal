@@ -498,6 +498,13 @@ pub const AppState = struct {
     dropped_file_len: usize = 0,
     dropped_file_ready: bool = false,
     dropped_file_lock: @import("sync.zig").Mutex = .{},
+    // Path/URL forwarded by a second `opal <file>` launch (remote /api/open,
+    // written on an API connection thread). appFrame consumes it on the UI
+    // thread via browser.loadContent — the same route a direct CLI open takes.
+    remote_open_path: [2048]u8 = std.mem.zeroes([2048]u8),
+    remote_open_len: usize = 0,
+    remote_open_ready: bool = false,
+    remote_open_lock: @import("sync.zig").Mutex = .{},
     pending_has_metadata: bool = false,
     pending_files_selection: [2048]bool = std.mem.zeroes([2048]bool),
     download_rate_limit: i32 = 0,

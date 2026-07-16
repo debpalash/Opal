@@ -47,6 +47,46 @@ if [ ! -f "$APP/Contents/Info.plist" ]; then
     <key>NSHumanReadableCopyright</key><string>© 2026 Palash Deb — GPL-3.0. Play everything.</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key><string>Video</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSHandlerRank</key><string>Default</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>mp4</string><string>m4v</string><string>mov</string>
+                <string>avi</string><string>mkv</string><string>webm</string>
+                <string>mpg</string><string>mpeg</string><string>ts</string>
+                <string>mts</string><string>m2ts</string><string>ogv</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>Audio</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSHandlerRank</key><string>Default</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>mp3</string><string>m4a</string><string>aac</string>
+                <string>flac</string><string>ogg</string><string>opus</string>
+                <string>wav</string><string>mka</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>Playlist</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSHandlerRank</key><string>Default</string>
+            <key>CFBundleTypeExtensions</key>
+            <array><string>m3u</string><string>m3u8</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>Torrent</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSHandlerRank</key><string>Default</string>
+            <key>CFBundleTypeExtensions</key>
+            <array><string>torrent</string></array>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST
