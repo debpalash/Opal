@@ -996,6 +996,21 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_anime_schedule_pure).step);
 
+    // MangaThemesia manga engine — the generic base-URL-driven scraper for the
+    // ~143 sites on the WPMangaThemesia WordPress theme. Pure HTML extraction:
+    // the browse/search URL (one endpoint, `order`-switched), the IMAGE-ATTR rule
+    // (data-src → data-lazy-src → srcset → src, relative→absolute), search-grid /
+    // details / chapter parse, and page images from BOTH `div#readerarea img` and
+    // the JS-embedded `"images":[…]` fallback. comics.zig routes through these.
+    const test_manga_themesia_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/manga_themesia_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_manga_themesia_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main

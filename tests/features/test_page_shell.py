@@ -280,7 +280,10 @@ def test_comics_mangadex_source():
     build = _src("build.zig")
     checks = {
         # ── Source registered in the selector ──
-        "source enum variant": "const Source = enum { all, readallcomics, mangadex }" in svc,
+        # (Tolerant of additional source variants appended after mangadex — e.g.
+        # mangathemesia — which the conflict-avoidance rule places at the END.)
+        "source enum variant": ("const Source = enum { all, readallcomics, mangadex" in svc
+                                and ".mangadex" in svc),
         "source chip": 'renderSourceChip("MangaDex", 3, .mangadex)' in svc,
         # ── Keyless: the endpoint is a constant, NOT a source_config lookup ──
         "keyless api const": 'pub const MD_API = "https://api.mangadex.org"' in pure,

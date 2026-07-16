@@ -9,6 +9,10 @@ const alloc = @import("../core/alloc.zig").allocator;
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
 const workers = @import("../core/workers.zig");
 const pure = @import("comics_pure.zig");
+// MangaThemesia (WPMangaThemesia) engine — pure, base-URL-driven HTML extraction
+// for the ~143 sites on that WordPress theme. comics.zig routes all its parsing
+// through this so the shipped logic IS the tested logic (see manga_themesia_pure).
+const mt = @import("manga_themesia_pure.zig");
 // OPDS-PSE page-URL substitution (tested) — used by loadPseBook so the shipped
 // page-URL build is the same code covered by opds_pure's unit tests.
 const opds_pure = @import("opds_pure.zig");
@@ -84,6 +88,9 @@ pub fn loadComic(url: []const u8) void {
     // Scraper / MangaDex sources are unauthenticated — drop any Basic-auth left
     // over from a previous OPDS-PSE book so we never leak it to another host.
     state.app.comic.auth_header_len = 0;
+    // Likewise drop any per-chapter Referer left over from a previous
+    // MangaThemesia read; loadThemesiaPages re-sets it for its own pages.
+    state.app.comic.referer_len = 0;
     state.app.comic.is_loading.store(true, .release);
     state.app.comic.page_count = 0;
     state.app.comic.dl_progress.store(0, .release);
@@ -279,6 +286,24 @@ fn fetchComicThread(gen: u32) void {
         return;
     }
 
+    // ── MangaThemesia cards carry a `themesia:<manga-detail-url>` pseudo-URL ──
+    // Its pages come from a details→chapters→pages chain, not one HTML issue page,
+    // so it is routed BEFORE the generic scraper (which would parse the details
+    // page's cover thumbnails as "pages"). Once page_urls are staged the shared
+    // downloadPages() pipeline takes over unchanged.
+    if (std.mem.startsWith(u8, url, mt.SCHEME)) {
+        const detail_url = url[mt.SCHEME.len..];
+        const ok = loadThemesiaPages(detail_url);
+        state.app.comic.is_loading.store(false, .release);
+        if (!ok) {
+            logs.pushLog("error", "comics", "MangaThemesia chapter failed to load", true);
+            return;
+        }
+        logs.pushLog("info", "comics", "Comic loaded (MangaThemesia)", false);
+        downloadPages(gen);
+        return;
+    }
+
     // Try external plugins first
     if (tryPlugins(url)) {
         logs.pushLog("info", "comics", "Comic loaded via plugin", false);
@@ -439,6 +464,114 @@ fn loadMangadexPages(manga_id: []const u8) bool {
 
     // MangaDex's CDN serves images without a Referer requirement, so leave
     // state.app.comic.referer empty — downloadSinglePage derives it per-origin.
+    return true;
+}
+
+/// The MangaThemesia base URL for a site, or null when the source is not
+/// installed (→ inert). Read fresh each call; the slice points into the
+/// source_config static table so it must be copied before the next reload().
+fn themesiaBase() ?[]const u8 {
+    return @import("../core/source_config.zig").get("mangathemesia", "base");
+}
+
+/// The site's `mangaUrlDirectory` (default "/manga" when the plugin omits it).
+fn themesiaDir() []const u8 {
+    return @import("../core/source_config.zig").get("mangathemesia", "dir") orelse mt.DEFAULT_DIR;
+}
+
+/// Resolve a MangaThemesia manga-detail URL into a readable page list, staging
+/// the image URLs into `state.app.comic.page_urls` for the shared downloadPages()
+/// pipeline. Returns false when the manga has no chapters or the fetch errored.
+///
+/// Runs ON the fetchComicThread worker (never the UI thread). All HTML buffers
+/// are heap-allocated — a spawned thread's stack is only ~512KB (see CLAUDE.md).
+///
+/// Chain:
+///   1. GET {detail_url}                → parse chapter list (earliest = last)
+///   2. GET {earliest chapter url}      → parse page images
+///   3. stage page URLs + set Referer   → downloadPages() fetches each page
+fn loadThemesiaPages(detail_url: []const u8) bool {
+    if (detail_url.len == 0 or detail_url.len > 1024) return false;
+    if (!std.mem.startsWith(u8, detail_url, "http")) return false;
+
+    // Base for resolving relative page/chapter URLs. Prefer the installed base;
+    // fall back to the detail URL's own origin so a paste still resolves.
+    var base_buf: [256]u8 = undefined;
+    const base = blk: {
+        if (themesiaBase()) |b| {
+            const n = @min(b.len, base_buf.len);
+            @memcpy(base_buf[0..n], b[0..n]);
+            break :blk base_buf[0..n];
+        }
+        break :blk detail_url;
+    };
+
+    // ── 1. Details HTML → chapter list ──
+    const detail_html = alloc.alloc(u8, 512 * 1024) catch return false;
+    defer alloc.free(detail_html);
+    const dn = fetchUrl(detail_url, detail_html);
+    if (dn == 0 or workers.isQuitting()) return false;
+
+    // Walk the chapter list; it is newest-first, so the LAST entry is chapter 1.
+    // Keep that one (mirrors the MangaDex path, which opens the earliest chapter).
+    var chap_url_buf: [512]u8 = undefined;
+    var chap_url_len: usize = 0;
+    var chap_name_buf: [128]u8 = undefined;
+    var chap_name_len: usize = 0;
+    {
+        var it = mt.chapterIter(detail_html[0..dn]);
+        while (it.next()) |ch| {
+            var abs_buf: [512]u8 = undefined;
+            const abs = mt.resolveUrl(base, ch.url, &abs_buf);
+            if (abs.len == 0 or abs.len > chap_url_buf.len) continue;
+            @memcpy(chap_url_buf[0..abs.len], abs);
+            chap_url_len = abs.len;
+            const nl = @min(ch.name.len, chap_name_buf.len);
+            @memcpy(chap_name_buf[0..nl], ch.name[0..nl]);
+            chap_name_len = nl;
+        }
+    }
+    if (chap_url_len == 0) {
+        logs.pushLog("warn", "comics", "MangaThemesia: no chapters found for this title", false);
+        return false;
+    }
+    const chap_url = chap_url_buf[0..chap_url_len];
+
+    // ── 2. Chapter HTML → page images ──
+    const chap_html = alloc.alloc(u8, 512 * 1024) catch return false;
+    defer alloc.free(chap_html);
+    const cn = fetchUrl(chap_url, chap_html);
+    if (cn == 0 or workers.isQuitting()) return false;
+
+    const count = mt.parsePages(
+        chap_html[0..cn],
+        base,
+        &state.app.comic.page_urls,
+        &state.app.comic.page_url_lens,
+    );
+    if (count == 0) return false;
+    state.app.comic.page_count = count;
+
+    // Title: the card click staged the series title; append the chapter name so
+    // the reader header reads "One Piece · Chapter 1". A load with no prior title
+    // (URL paste / remote API) falls back to the chapter name alone.
+    if (chap_name_len > 0) {
+        var t_buf: [256]u8 = undefined;
+        const existing = state.app.comic.title[0..state.app.comic.title_len];
+        const t = if (existing.len > 0)
+            (std.fmt.bufPrint(&t_buf, "{s} · {s}", .{ existing, chap_name_buf[0..chap_name_len] }) catch existing)
+        else
+            chap_name_buf[0..chap_name_len];
+        const tl = @min(t.len, state.app.comic.title.len);
+        @memcpy(state.app.comic.title[0..tl], t[0..tl]);
+        state.app.comic.title_len = tl;
+    }
+
+    // MangaThemesia image CDNs 403 without the chapter URL as Referer — stash it
+    // so downloadSinglePage adds `Referer:` + a browser-style `Accept:` header.
+    const rl = @min(chap_url.len, state.app.comic.referer.len);
+    @memcpy(state.app.comic.referer[0..rl], chap_url[0..rl]);
+    state.app.comic.referer_len = rl;
     return true;
 }
 
@@ -697,8 +830,21 @@ fn downloadSinglePage(i: usize, gen: u32) void {
     // and is empty for scraper/MangaDex sources (which append no extra header).
     const auth = state.app.comic.auth_header[0..state.app.comic.auth_header_len];
 
-    // Build argv dynamically so the auth header is appended only when present.
-    var argv_buf: [10][]const u8 = undefined;
+    // MangaThemesia image CDNs 403 without a matching Referer (the chapter URL)
+    // and expect a browser-style Accept. loadThemesiaPages stashes the chapter URL
+    // in `referer`; it is empty for scraper / MangaDex / OPDS sources (which need
+    // no Referer), so this whole block is inert for them.
+    const referer = state.app.comic.referer[0..state.app.comic.referer_len];
+    var ref_buf: [560]u8 = undefined;
+    const referer_hdr: []const u8 = if (referer.len > 0)
+        (std.fmt.bufPrint(&ref_buf, "Referer: {s}", .{referer}) catch "")
+    else
+        "";
+
+    // Build argv dynamically so the auth / referer headers are appended only when
+    // present. Worst case: curl -sL -H ua [-H auth] [-H referer -H accept]
+    // --max-time 15 url → 14 slots.
+    var argv_buf: [14][]const u8 = undefined;
     var ac: usize = 0;
     argv_buf[ac] = "curl";
     ac += 1;
@@ -712,6 +858,16 @@ fn downloadSinglePage(i: usize, gen: u32) void {
         argv_buf[ac] = "-H";
         ac += 1;
         argv_buf[ac] = auth;
+        ac += 1;
+    }
+    if (referer_hdr.len > 0) {
+        argv_buf[ac] = "-H";
+        ac += 1;
+        argv_buf[ac] = referer_hdr;
+        ac += 1;
+        argv_buf[ac] = "-H";
+        ac += 1;
+        argv_buf[ac] = "Accept: image/avif,image/webp,image/png,image/jpeg,*/*";
         ac += 1;
     }
     argv_buf[ac] = "--max-time";
@@ -847,7 +1003,7 @@ var more_available: bool = true;
 //     makes the tab non-empty on a fresh install.
 //
 // `all` queries every source that is actually live and concatenates the rows.
-const Source = enum { all, readallcomics, mangadex };
+const Source = enum { all, readallcomics, mangadex, mangathemesia };
 var active_source: Source = .all;
 
 /// Does this source participate in the current selection?
@@ -987,6 +1143,32 @@ fn fetchMangadexPage(query: []const u8, offset: u32, gen: u32, start: usize) usi
     return parseMangadexResults(json_buf[0..n], gen, start);
 }
 
+/// Fetch + merge ONE MangaThemesia browse page, writing rows from slot `start`.
+/// Returns the number of new rows (0 if the source is not installed / errored).
+/// Worker-thread only; the HTML buffer is heap allocated (a spawned thread's
+/// stack is ~512KB — see CLAUDE.md).
+fn fetchThemesiaPage(query: []const u8, page: u32, gen: u32, start: usize) usize {
+    // INERT until a plugin supplies the base — mirrors readallcomics.
+    var base_buf: [256]u8 = undefined;
+    const base_raw = themesiaBase() orelse return 0;
+    const bn = @min(base_raw.len, base_buf.len);
+    @memcpy(base_buf[0..bn], base_raw[0..bn]);
+    const base = base_buf[0..bn];
+
+    // Popular/latest/A-Z all share this endpoint; text search uses the default
+    // order so the `title` filter applies.
+    var url_buf: [768]u8 = undefined;
+    const url = mt.buildBrowseUrl(base, themesiaDir(), query, page, "", &url_buf) orelse return 0;
+
+    const html_buf = alloc.alloc(u8, 512 * 1024) catch return 0;
+    defer alloc.free(html_buf);
+    const n = fetchUrl(url, html_buf);
+    if (n == 0) return 0;
+
+    if (search_gen.load(.acquire) != gen) return 0;
+    return parseThemesiaResults(html_buf[0..n], base, gen, start);
+}
+
 /// Initial search: query every ACTIVE source and concatenate their rows.
 /// readallcomics goes first (when installed) so an existing user's listing is
 /// unchanged; MangaDex fills the rest — and is the whole listing on a fresh
@@ -1006,6 +1188,14 @@ fn searchWorker(gen: u32) void {
     }
     if (sourceActive(.mangadex)) {
         filled += fetchMangadexPage(query, 0, gen, filled);
+    }
+    // A newer search may have landed while MangaDex was in flight.
+    if (search_gen.load(.acquire) != gen) {
+        logs.pushLog("info", "comics", "Comic search superseded (stale dropped)", false);
+        return;
+    }
+    if (sourceActive(.mangathemesia)) {
+        filled += fetchThemesiaPage(query, 1, gen, filled);
     }
 
     // Only the LAST source's page size can tell us whether more rows exist; a
@@ -1047,6 +1237,11 @@ fn loadMoreWorker(gen: u32) void {
         // MangaDex paginates by row offset, not page number: page N starts at
         // (N-1)*RESULTS_PER_PAGE.
         added += fetchMangadexPage(query, (next_page - 1) * RESULTS_PER_PAGE, gen, sr_count);
+    }
+    if (search_gen.load(.acquire) != gen) return;
+    if (sourceActive(.mangathemesia)) {
+        // MangaThemesia paginates by page number (1-based), like readallcomics.
+        added += fetchThemesiaPage(query, next_page, gen, sr_count);
     }
 
     if (added == 0 or added < RESULTS_PER_PAGE) more_available = false;
@@ -1291,6 +1486,89 @@ fn parseMangadexResults(json: []const u8, gen: u32, start: usize) usize {
         if (entry.cover_file.len > 0) {
             var cov_buf: [320]u8 = undefined;
             if (pure.buildCoverUrl(&cov_buf, entry.id, entry.cover_file)) |cov| {
+                if (cov.len < sr_cover_urls[count].len) {
+                    @memcpy(sr_cover_urls[count][0..cov.len], cov);
+                    sr_cover_url_lens[count] = cov.len;
+                }
+            }
+        }
+        sr_cover_gen[count] = gen;
+        sr_cover_failed[count] = false; // fresh URL → let the cover retry
+
+        count += 1;
+    }
+
+    if (search_gen.load(.acquire) != gen) return 0;
+    sr_count = count;
+    return count - start;
+}
+
+/// Parse a MangaThemesia browse/search page into sr_* from slot `start`.
+/// Returns the number of NEW rows appended. Mirrors parseMangadexResults exactly:
+/// worker-thread only, it NEVER frees textures/pixels — it just stamps each slot
+/// with `gen` and writes the cover URL, leaving the render thread's
+/// reclaimStaleCovers() as the sole owner of GPU textures + pixel buffers.
+///
+/// Cards store a `themesia:<manga-detail-url>` pseudo-URL; fetchComicThread routes
+/// on that prefix into loadThemesiaPages (details→chapters→pages) instead of the
+/// generic scraper. All parsing goes through the tested manga_themesia_pure.
+fn parseThemesiaResults(html: []const u8, base: []const u8, gen: u32, start: usize) usize {
+    var count: usize = start;
+    var it = mt.SearchIter{ .html = html };
+    while (it.next()) |item| {
+        if (count >= MAX_SEARCH_RESULTS) break;
+
+        // Absolute manga-detail URL, wrapped in the `themesia:` scheme so the card
+        // routes to loadThemesiaPages rather than the generic HTML scraper.
+        var abs_buf: [512]u8 = undefined;
+        const abs = mt.resolveUrl(base, item.url, &abs_buf);
+        if (abs.len == 0) continue;
+        var route_buf: [560]u8 = undefined;
+        const route = std.fmt.bufPrint(&route_buf, "{s}{s}", .{ mt.SCHEME, abs }) catch continue;
+        if (route.len > sr_urls[count].len) continue;
+
+        // Title: the `title="…"` attr, else derive from the URL slug.
+        var title_buf: [256]u8 = undefined;
+        var title: []const u8 = "";
+        if (item.title.len > 0) {
+            const raw = decodeEntities(item.title, title_buf[0..]);
+            title = std.mem.trim(u8, title_buf[0..raw], " \t\r\n");
+        }
+        if (title.len == 0) {
+            // Slug fallback: the last non-empty path segment of the detail URL.
+            const trimmed = std.mem.trimEnd(u8, abs, "/");
+            const slug = if (std.mem.lastIndexOfScalar(u8, trimmed, '/')) |s| trimmed[s + 1 ..] else trimmed;
+            title = slug;
+        }
+        var t_safe: [256]u8 = undefined;
+        title = @import("../core/text.zig").safeUtf8Buf(title[0..@min(title.len, 255)], &t_safe);
+        if (title.len == 0) continue;
+
+        // De-dupe against every row already collected (paginated pages can
+        // resurface a title, and `all` concatenates the sources).
+        {
+            var dup = false;
+            var d: usize = 0;
+            while (d < count) : (d += 1) {
+                if (std.mem.eql(u8, sr_urls[d][0..sr_url_lens[d]], route)) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) continue;
+        }
+
+        @memcpy(sr_urls[count][0..route.len], route);
+        sr_url_lens[count] = route.len;
+        const tlen = @min(title.len, sr_titles[count].len);
+        @memcpy(sr_titles[count][0..tlen], title[0..tlen]);
+        sr_title_lens[count] = tlen;
+
+        // Cover (may be absent — the card falls back to a gradient placeholder).
+        sr_cover_url_lens[count] = 0;
+        if (item.img_tag.len > 0) {
+            var cov_buf: [512]u8 = undefined;
+            if (mt.pickImageAttr(item.img_tag, base, &cov_buf)) |cov| {
                 if (cov.len < sr_cover_urls[count].len) {
                     @memcpy(sr_cover_urls[count][0..cov.len], cov);
                     sr_cover_url_lens[count] = cov.len;
@@ -1555,6 +1833,7 @@ pub fn renderContent() void {
         renderSourceChip("All", 1, .all);
         renderSourceChip("ReadAllComics", 2, .readallcomics);
         renderSourceChip("MangaDex", 3, .mangadex);
+        renderSourceChip("MangaThemesia", 4, .mangathemesia);
         renderPluginSourceBadges();
 
         // Divider between the source group and the result/quick-link group.
