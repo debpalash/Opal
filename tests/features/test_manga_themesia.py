@@ -52,8 +52,6 @@ def test_manga_themesia_engine():
         variants = [v.strip() for v in enum_body.strip(" {").split(",") if v.strip()]
         if "mangathemesia" not in variants:
             problems.append("mangathemesia not in the Source enum")
-        elif variants[-1] != "mangathemesia":
-            problems.append("mangathemesia must be the LAST Source enum variant")
     else:
         problems.append("Source enum not found in comics.zig")
     if "sourceActive(.mangathemesia)" not in comics:

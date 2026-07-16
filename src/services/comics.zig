@@ -13,6 +13,9 @@ const pure = @import("comics_pure.zig");
 // for the ~143 sites on that WordPress theme. comics.zig routes all its parsing
 // through this so the shipped logic IS the tested logic (see manga_themesia_pure).
 const mt = @import("manga_themesia_pure.zig");
+// Madara manga engine (~332 WordPress "Madara" sites): all HTML/URL parsing is
+// routed through this tested pure module so the shipped logic IS the tested logic.
+const madara = @import("manga_madara_pure.zig");
 // OPDS-PSE page-URL substitution (tested) — used by loadPseBook so the shipped
 // page-URL build is the same code covered by opds_pure's unit tests.
 const opds_pure = @import("opds_pure.zig");
@@ -93,6 +96,8 @@ pub fn loadComic(url: []const u8) void {
     state.app.comic.auth_header_len = 0;
     // Likewise drop any per-chapter Referer left over from a previous
     // MangaThemesia read; loadThemesiaPages re-sets it for its own pages.
+    // Drop any per-chapter Referer from a previous load (a Madara load sets its
+    // own before staging pages); prevents leaking one site's Referer to another.
     state.app.comic.referer_len = 0;
     state.app.comic.is_loading.store(true, .release);
     state.app.comic.page_count = 0;
@@ -318,6 +323,21 @@ fn fetchComicThread(gen: u32) void {
             return;
         }
         logs.pushLog("info", "comics", "Comic loaded (MangaThemesia)", false);
+        downloadPages(gen);
+        return;
+    }
+    // ── Madara cards carry a `madara:<mangaUrl>` pseudo-URL ──
+    // Their pages come from a details → chapter-list → chapter-page chain (HTML,
+    // not a single image page), so route BEFORE the generic scraper. Once
+    // page_urls are staged the shared downloadPages() pipeline takes over.
+    if (madara.mangaUrlFromRoute(url)) |manga_url| {
+        const ok = loadMadaraPages(manga_url);
+        state.app.comic.is_loading.store(false, .release);
+        if (!ok) {
+            logs.pushLog("error", "comics", "Madara chapter failed to load", true);
+            return;
+        }
+        logs.pushLog("info", "comics", "Comic loaded (Madara)", false);
         downloadPages(gen);
         return;
     }
@@ -743,6 +763,168 @@ fn loadThemesiaPages(detail_url: []const u8) bool {
     return true;
 }
 
+/// POST `body` to `url` with the AJAX marker header, reading the response into
+/// `dst`; returns bytes read (0 on failure). Used by the Madara chapter-list
+/// fallbacks (admin-ajax.php + the newer `{mangaUrl}ajax/chapters`), both of
+/// which WordPress only answers to an `X-Requested-With: XMLHttpRequest` POST.
+fn fetchPost(url: []const u8, body: []const u8, dst: []u8) usize {
+    var ua_buf: [200]u8 = undefined;
+    const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url)}) catch return 0;
+    const argv = [_][]const u8{
+        "curl",              "-sL",
+        "-H",                ua,
+        "-H",                "X-Requested-With: XMLHttpRequest",
+        "--data",            body,
+        "--max-time",        "15",
+        url,
+    };
+    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    _ = child.spawn() catch return 0;
+    const n = if (child.stdout) |*so| @import("../core/io_global.zig").readAll(so, dst) catch 0 else 0;
+    _ = child.wait() catch {};
+    return n;
+}
+
+/// Resolve a Madara `madara:<mangaUrl>` route into a readable page list, staging
+/// the image URLs into `state.app.comic.page_urls` for the shared downloadPages()
+/// pipeline. Returns false when the source isn't installed, the manga has no
+/// chapter, or the chapter is AES-protected (v1 skips those).
+///
+/// Runs ON the fetchComicThread worker (never the UI thread). All HTML buffers
+/// are heap-allocated — a spawned thread's stack is only ~512KB (see CLAUDE.md).
+/// ALL parsing goes through the tested `manga_madara_pure` module.
+///
+/// Chain:
+///   1. GET  {mangaUrl}                         → details (title + chapter list)
+///   2. (if no inline chapters) POST admin-ajax → chapter list; else POST
+///      {mangaUrl}ajax/chapters                 → chapter list
+///   3. GET  {chapterUrl}                        → page images (Referer required)
+fn loadMadaraPages(manga_url: []const u8) bool {
+    const base = madaraBase() orelse return false;
+    // Copy the base out of the source_config static table (it can be reloaded).
+    var base_buf: [256]u8 = undefined;
+    if (base.len > base_buf.len) return false;
+    @memcpy(base_buf[0..base.len], base);
+    const b = base_buf[0..base.len];
+
+    // ── 1. Details page ──
+    const details_buf = alloc.alloc(u8, 512 * 1024) catch return false;
+    defer alloc.free(details_buf);
+    const dn = fetchUrl(manga_url, details_buf);
+    if (dn == 0 or workers.isQuitting()) return false;
+    const details_html = details_buf[0..dn];
+
+    const details = madara.parseDetails(details_html);
+
+    // Title (copy out before the buffer is reused/freed).
+    if (details.title.len > 0) {
+        const tl = @min(details.title.len, state.app.comic.title.len);
+        @memcpy(state.app.comic.title[0..tl], details.title[0..tl]);
+        state.app.comic.title_len = tl;
+    } else if (state.app.comic.title_len == 0) {
+        const t = "Manga";
+        @memcpy(state.app.comic.title[0..t.len], t);
+        state.app.comic.title_len = t.len;
+    }
+
+    // ── 2. Chapter list — pick the OLDEST chapter (document order is
+    //       newest→oldest, so the last entry is chapter 1: "read from start"). ──
+    var chosen_buf: [512]u8 = undefined;
+    var chosen_len: usize = 0;
+    const pickOldest = struct {
+        fn run(html: []const u8, out: []u8) usize {
+            var it = madara.ChapterIter{ .html = html };
+            var len: usize = 0;
+            while (it.next()) |ch| {
+                if (ch.url.len == 0 or ch.url.len > out.len) continue;
+                @memcpy(out[0..ch.url.len], ch.url);
+                len = ch.url.len; // keep overwriting → ends on the last (oldest)
+            }
+            return len;
+        }
+    }.run;
+
+    chosen_len = pickOldest(details_html, &chosen_buf);
+
+    // Fallback A: the WordPress admin-ajax.php chapter endpoint (data-id form).
+    var ajax_buf: ?[]u8 = null;
+    defer if (ajax_buf) |ab| alloc.free(ab);
+    if (chosen_len == 0) {
+        if (madara.dataIdFromHolder(details_html)) |data_id| {
+            var url_buf: [320]u8 = undefined;
+            var body_buf: [128]u8 = undefined;
+            if (madara.buildAjaxUrl(&url_buf, b)) |ajax_url| {
+                if (madara.buildAjaxBody(&body_buf, data_id)) |body| {
+                    const ab = alloc.alloc(u8, 256 * 1024) catch return false;
+                    ajax_buf = ab;
+                    const an = fetchPost(ajax_url, body, ab);
+                    if (an > 0 and !workers.isQuitting()) chosen_len = pickOldest(ab[0..an], &chosen_buf);
+                }
+            }
+        }
+    }
+    // Fallback B: the newer `{mangaUrl}ajax/chapters` endpoint (empty body).
+    if (chosen_len == 0) {
+        var url_buf: [320]u8 = undefined;
+        const dir = std.mem.trimEnd(u8, manga_url, "/");
+        if (std.fmt.bufPrint(&url_buf, "{s}/ajax/chapters", .{dir})) |ajax2_url| {
+            if (ajax_buf == null) ajax_buf = alloc.alloc(u8, 256 * 1024) catch return false;
+            const ab = ajax_buf.?;
+            const an = fetchPost(ajax2_url, "", ab);
+            if (an > 0 and !workers.isQuitting()) chosen_len = pickOldest(ab[0..an], &chosen_buf);
+        } else |_| {}
+    }
+    if (chosen_len == 0) {
+        logs.pushLog("warn", "comics", "Madara: no chapters found for this title", false);
+        return false;
+    }
+
+    // Resolve the chosen chapter URL to absolute, and stash it as the Referer the
+    // page-image fetches will send (many Madara CDNs 403 without it).
+    var chap_abs_buf: [640]u8 = undefined;
+    const chapter_url = madara.resolveUrl(b, chosen_buf[0..chosen_len], &chap_abs_buf);
+    if (chapter_url.len == 0 or !std.mem.startsWith(u8, chapter_url, "http")) return false;
+    const rl = @min(chapter_url.len, state.app.comic.referer.len);
+    @memcpy(state.app.comic.referer[0..rl], chapter_url[0..rl]);
+    state.app.comic.referer_len = rl;
+
+    // ── 3. Chapter page images ──
+    const chap_buf = alloc.alloc(u8, 512 * 1024) catch return false;
+    defer alloc.free(chap_buf);
+    const cn = fetchUrl(chapter_url, chap_buf);
+    if (cn == 0 or workers.isQuitting()) return false;
+    const chapter_html = chap_buf[0..cn];
+
+    // v1 skip: AES "chapter-protector" encrypted images (rare) — surface a toast
+    // instead of implementing OpenSSL AES now.
+    if (madara.isProtected(chapter_html)) {
+        logs.pushLog("warn", "comics", "Madara: chapter is AES-protected (skipped)", false);
+        state.showToastTyped("This chapter is protected and can't be read yet", .warning);
+        return false;
+    }
+
+    const max_pages = state.app.comic.page_urls.len; // 128
+    var count: usize = 0;
+    var pit = madara.PageIter.init(chapter_html);
+    while (pit.next()) |raw| {
+        if (count >= max_pages) break;
+        var pbuf: [700]u8 = undefined;
+        const abs = madara.resolveUrl(b, raw, &pbuf);
+        if (abs.len == 0 or abs.len >= state.app.comic.page_urls[count].len) continue;
+        @memcpy(state.app.comic.page_urls[count][0..abs.len], abs);
+        state.app.comic.page_url_lens[count] = abs.len;
+        count += 1;
+    }
+    if (count == 0) {
+        logs.pushLog("warn", "comics", "Madara: chapter had no readable pages", false);
+        return false;
+    }
+    state.app.comic.page_count = count;
+    return true;
+}
+
 /// Scan ~/.config/opal/plugins/comics/ for .lua/.py/.sh scripts,
 /// execute each with url as arg1, parse JSON stdout.
 fn tryPlugins(url: []const u8) bool {
@@ -1011,7 +1193,9 @@ fn downloadSinglePage(i: usize, gen: u32) void {
 
     // Build argv dynamically so the auth / referer headers are appended only when
     // present. Worst case: curl -sL -H ua [-H auth] [-H referer -H accept]
-    // --max-time 15 url → 14 slots.
+    // --max-time 15 url → 14 slots. The Referer (chapter URL) is stashed by the
+    // Madara/MangaThemesia loaders; empty for scraper/MangaDex/OPDS sources, so
+    // the block below is inert for them.
     var argv_buf: [14][]const u8 = undefined;
     var ac: usize = 0;
     argv_buf[ac] = "curl";
@@ -1175,12 +1359,26 @@ var more_available: bool = true;
 //     sites). Its site base + optional cover CDN come from source_config
 //     ("heancms"/"base", "heancms"/"cdn"), written by the plugin manager. Not
 //     installed → buildQueryUrl gets no api host → the source is INERT.
-const Source = enum { all, readallcomics, mangadex, heancms, mangathemesia };
+//   • madara       — the generic WordPress "Madara" theme engine (~332 sites).
+//     Base-URL-driven like readallcomics: its endpoint comes from source_config
+//     ("madara"/"base"), so it is INERT until the user installs a Madara source.
+//     Cards carry a `madara:<mangaUrl>` pseudo-URL routed by fetchComicThread.
+const Source = enum { all, readallcomics, mangadex, heancms, mangathemesia, madara };
 var active_source: Source = .all;
 
 /// Does this source participate in the current selection?
 fn sourceActive(src: Source) bool {
     return active_source == .all or active_source == src;
+}
+
+/// The configured Madara base URL, or null when no Madara source is installed
+/// (→ the engine stays inert, exactly like readallcomics). Optional
+/// `mangaSubString` defaults to "manga".
+fn madaraBase() ?[]const u8 {
+    return @import("../core/source_config.zig").get("madara", "base");
+}
+fn madaraSub() []const u8 {
+    return @import("../core/source_config.zig").get("madara", "mangaSubString") orelse "manga";
 }
 
 // ── Discovery grid sizing (user-cyclable card width) ──
@@ -1432,9 +1630,27 @@ fn fetchThemesiaPage(query: []const u8, page: u32, gen: u32, start: usize) usize
     defer alloc.free(html_buf);
     const n = fetchUrl(url, html_buf);
     if (n == 0) return 0;
-
     if (search_gen.load(.acquire) != gen) return 0;
     return parseThemesiaResults(html_buf[0..n], base, gen, start);
+}
+
+/// Fetch + merge ONE Madara search page, writing rows from slot `start`. Returns
+/// the number of new rows (0 if no Madara source is installed / errored). The
+/// HTML buffer is heap allocated (worker-thread only — see CLAUDE.md). Routes all
+/// parsing through the tested `manga_madara_pure` module.
+fn fetchMadaraPage(query: []const u8, page: u32, gen: u32, start: usize) usize {
+    const base = madaraBase() orelse return 0; // inert (not installed)
+    var url_buf: [768]u8 = undefined;
+    const url = madara.buildSearchUrl(&url_buf, base, query, page) orelse return 0;
+
+    const html_buf = alloc.alloc(u8, 512 * 1024) catch return 0;
+    defer alloc.free(html_buf);
+    // buildSearchUrl returns a plain slice; fetchUrl takes one too.
+    const n = fetchUrl(url, html_buf);
+    if (n == 0) return 0;
+
+    if (search_gen.load(.acquire) != gen) return 0;
+    return parseMadaraResults(html_buf[0..n], gen, start);
 }
 
 /// Initial search: query every ACTIVE source and concatenate their rows.
@@ -1467,6 +1683,11 @@ fn searchWorker(gen: u32) void {
     }
     if (sourceActive(.mangathemesia)) {
         filled += fetchThemesiaPage(query, 1, gen, filled);
+    }
+    if (search_gen.load(.acquire) != gen) return;
+    // Madara (~332 WordPress sites) — inert until a "madara" source is installed.
+    if (sourceActive(.madara) and madaraBase() != null) {
+        filled += fetchMadaraPage(query, 1, gen, filled);
     }
 
     // Only the LAST source's page size can tell us whether more rows exist; a
@@ -1517,6 +1738,10 @@ fn loadMoreWorker(gen: u32) void {
     if (sourceActive(.mangathemesia)) {
         // MangaThemesia paginates by page number (1-based), like readallcomics.
         added += fetchThemesiaPage(query, next_page, gen, sr_count);
+    }
+    if (sourceActive(.madara) and madaraBase() != null) {
+        // Madara paginates by WordPress page number (1-based) like readallcomics.
+        added += fetchMadaraPage(query, next_page, gen, sr_count);
     }
 
     if (added == 0 or added < RESULTS_PER_PAGE) more_available = false;
@@ -1861,6 +2086,83 @@ fn parseThemesiaResults(html: []const u8, base: []const u8, gen: u32, start: usi
     return count - start;
 }
 
+/// Parse a Madara search-grid HTML page into sr_* from slot `start`. Returns the
+/// number of NEW rows appended. Mirrors the other parsers exactly: worker-thread
+/// only, it NEVER frees textures/pixels — it stamps each slot with `gen` and
+/// writes the cover URL, leaving the render thread's reclaimStaleCovers() the sole
+/// owner of GPU textures + pixel buffers.
+///
+/// Cards store a `madara:<absolute mangaUrl>` pseudo-URL; fetchComicThread routes
+/// on that prefix into the Madara reader chain (loadMadaraPages) instead of the
+/// generic scraper. ALL parsing goes through the tested `manga_madara_pure`.
+fn parseMadaraResults(html: []const u8, gen: u32, start: usize) usize {
+    const base = madaraBase() orelse return 0;
+    var base_buf: [256]u8 = undefined;
+    if (base.len > base_buf.len) return 0;
+    @memcpy(base_buf[0..base.len], base);
+    const b = base_buf[0..base.len];
+
+    var count: usize = start;
+    var it = madara.SearchIter{ .html = html };
+    while (it.next()) |item| {
+        if (count >= MAX_SEARCH_RESULTS) break;
+
+        // Resolve the manga URL to absolute, then wrap it in the madara: route.
+        var murl_buf: [512]u8 = undefined;
+        const manga_url = madara.resolveUrl(b, item.url, &murl_buf);
+        if (manga_url.len == 0) continue;
+        var route_buf: [520]u8 = undefined;
+        const route = madara.buildRouteUrl(&route_buf, manga_url) orelse continue;
+        if (route.len > sr_urls[count].len) continue;
+
+        // Title: decode the handful of HTML entities Madara emits, then clamp to a
+        // UTF-8 boundary so a truncated multi-byte char can't reach dvui.
+        var t_dec: [320]u8 = undefined;
+        const t_len = decodeEntities(item.title, &t_dec);
+        var t_safe: [256]u8 = undefined;
+        const title = @import("../core/text.zig").safeUtf8Buf(t_dec[0..@min(t_len, 255)], &t_safe);
+        if (title.len == 0) continue;
+
+        // De-dupe against every row already collected (paginated pages / `all`).
+        {
+            var dup = false;
+            var d: usize = 0;
+            while (d < count) : (d += 1) {
+                if (std.mem.eql(u8, sr_urls[d][0..sr_url_lens[d]], route)) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) continue;
+        }
+
+        @memcpy(sr_urls[count][0..route.len], route);
+        sr_url_lens[count] = route.len;
+        const tlen = @min(title.len, sr_titles[count].len);
+        @memcpy(sr_titles[count][0..tlen], title[0..tlen]);
+        sr_title_lens[count] = tlen;
+
+        // Cover: resolve the raw image-attr url to absolute (may be absent).
+        sr_cover_url_lens[count] = 0;
+        if (item.cover.len > 0) {
+            var cov_buf: [512]u8 = undefined;
+            const cov = madara.resolveUrl(b, item.cover, &cov_buf);
+            if (cov.len > 16 and cov.len < sr_cover_urls[count].len and std.mem.startsWith(u8, cov, "http")) {
+                @memcpy(sr_cover_urls[count][0..cov.len], cov);
+                sr_cover_url_lens[count] = cov.len;
+            }
+        }
+        sr_cover_gen[count] = gen;
+        sr_cover_failed[count] = false; // fresh URL → let the cover retry
+
+        count += 1;
+    }
+
+    if (search_gen.load(.acquire) != gen) return 0;
+    sr_count = count;
+    return count - start;
+}
+
 /// Lazily fetch one result's cover art on a detached thread:
 ///   curl -sL (512KB cap) → stbi decode → heap RGBA pixels (uploaded to a GPU
 /// texture on the render thread, which then frees the pixels).
@@ -2109,6 +2411,9 @@ pub fn renderContent() void {
         renderSourceChip("ReadAllComics", 2, .readallcomics);
         renderSourceChip("MangaDex", 3, .mangadex);
         renderSourceChip("MangaThemesia", 4, .mangathemesia);
+        // Madara engine (~332 WordPress sites) — inert until a "madara" source is
+        // installed, exactly like ReadAllComics.
+        renderSourceChip("Madara", 5, .madara);
         renderPluginSourceBadges();
 
         // Divider between the source group and the result/quick-link group.

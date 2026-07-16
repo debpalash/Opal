@@ -36,6 +36,7 @@ from features import (  # noqa: F401
     test_page_shell3,
     test_audiobooks,
     test_reading,
+    test_manga_madara,
     test_novels,
     test_gallerydl,
     test_vndb,
