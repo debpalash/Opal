@@ -944,6 +944,19 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_anime_skip_pure).step);
 
+    // VNDB catalog pure logic: request-body builders (JSON-escaped search query),
+    // response parse into fixed buffers, and the SFW filter (isSfw) that drops
+    // sexual/violence-flagged covers at parse time. services/vndb.zig routes
+    // through parseVns, so the tested filter IS the shipped filter.
+    const test_vndb_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/vndb_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_vndb_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main

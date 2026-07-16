@@ -18,7 +18,7 @@ const opds_pure = @import("../services/opds_pure.zig");
 pub const GridMode = enum { auto, cols_1, cols_2, cols_3, cols_4 };
 pub const ContentProvider = enum { mpv, comic_viewer };
 pub const VideoFillMode = enum { fit, cover };
-pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Audiobooks, Opds, Novels };
+pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Audiobooks, Opds, Novels, Vndb };
 pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, Scripts, AI, LangLearn, FileAssoc, About };
 pub const TmdbView = enum { Trending, Search, Favorites, Watchlist, Watching };
 pub const TmdbCategory = enum { trending, now_playing, top_rated, upcoming, popular };
@@ -867,6 +867,27 @@ pub const AppState = struct {
         font_scale: f32 = 1.0,
     } = .{},
 
+    // ── Visual Novels (VNDB catalog — browse/info surface, SFW-only) ──
+    // Structural sibling of `radio`: popular/search grid → detail overlay. VNs
+    // are NOT played in-app; this is a catalog like TMDB. All parsing + the SFW
+    // filter live in services/vndb_pure.zig; the detached POST worker in
+    // services/vndb.zig publishes here under its parse_mutex. is_loading is atomic
+    // (UI + remote threads read it, the worker writes). See services/vndb.zig.
+    vndb: struct {
+        search_buf: [256]u8 = std.mem.zeroes([256]u8),
+        // Atomic like the radio/podcasts loaders: read by the UI + remote threads,
+        // written by the detached fetch worker. A plain bool is a data race.
+        is_loading: std.atomic.Value(bool) = .init(false),
+        fetch_error: bool = false,
+        // True while results[] holds the once-per-session most-voted chart rather
+        // than a user search — drives the grid heading only.
+        showing_popular: bool = false,
+        results: [30]@import("../services/vndb_pure.zig").Vn = std.mem.zeroes([30]@import("../services/vndb_pure.zig").Vn),
+        result_count: usize = 0,
+        // Detail overlay: index into results[] when non-null (else the grid shows).
+        selected_idx: ?usize = null,
+    } = .{},
+
     // ── Browser (global singleton — the in-app web browser lives in the
     //     Browse › Web tab now, independent of any MediaPlayer) ──
     browser: struct {
@@ -1276,6 +1297,10 @@ pub fn navigateToTabNow(tab: DrawerTab) void {
         },
         .Novels => {
             app.browse_source = .Novels;
+            app.router.navigate(.browse);
+        },
+        .Vndb => {
+            app.browse_source = .Vndb;
             app.router.navigate(.browse);
         },
         .RSS => {
