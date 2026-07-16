@@ -675,6 +675,27 @@ pub const MediaPlayer = struct {
         }
     }
 
+    /// Load a direct network stream (m3u8/mp4) with an HTTP Referer header.
+    ///
+    /// Many anime hosts (StreamWish, DoodStream, MegaCloud…) 403 the CDN request
+    /// unless the embed-page Referer is sent. `http-header-fields` is honored by
+    /// mpv's http/hls stream layer, so we set it BEFORE loadfile. It persists on
+    /// this ctx; an empty referer clears it so a later unrelated load isn't
+    /// tagged with a stale Referer.
+    pub fn loadStreamWithHeaders(self: *MediaPlayer, url: []const u8, referer: []const u8) void {
+        if (referer.len > 0) {
+            var hdr_buf: [640]u8 = undefined;
+            if (std.fmt.bufPrintZ(&hdr_buf, "Referer: {s}", .{referer})) |hdr| {
+                _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "http-header-fields", hdr.ptr);
+            } else |_| {}
+        } else {
+            _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "http-header-fields", "");
+        }
+        var url_buf: [2048]u8 = undefined;
+        const url_z = std.fmt.bufPrintZ(&url_buf, "{s}", .{url}) catch return;
+        self.load_file(url_z.ptr);
+    }
+
     /// Save current playback position to DB (called periodically from render loop)
     pub fn saveCurrentPosition(self: *MediaPlayer) void {
         if (self.current_url_len == 0 or self.current_url_len > self.current_url.len) return;

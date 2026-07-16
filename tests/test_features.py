@@ -47,6 +47,7 @@ from features import (  # noqa: F401
     test_manga_themesia,
     test_scrape_fetch,
     test_extension,
+    test_anime_extractors,
 )
 
 if __name__ == "__main__":
