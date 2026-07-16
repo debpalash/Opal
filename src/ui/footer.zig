@@ -20,7 +20,7 @@ var time_show_remaining: bool = false;
 
 // Active toolbar dropdown — only one open at a time. We use stable id values
 // derived from the picker kind. -1 = none.
-pub const PickerKind = enum(i32) { none = -1, chapter = 0, aspect = 1, audio = 2, sub = 3, lang = 4, playlist = 5, ar = 6, subs = 7 };
+pub const PickerKind = enum(i32) { none = -1, chapter = 0, aspect = 1, audio = 2, sub = 3, lang = 4, playlist = 5, ar = 6, subs = 7, audio_device = 8 };
 // NOTE: `.subs` (the Find-Subtitles panel) is NOT driven by `open_picker` —
 // its open state is `state.app.sub_picker_open`, which auto-search and the
 // keyless engine also set. It has a PickerKind purely so its chip records an
@@ -33,7 +33,7 @@ pub var open_picker: PickerKind = .none;
 /// chip is laid out. The drop-up panels anchor to this: they float ABOVE their
 /// chip with no backdrop, so they need to know where the chip actually landed.
 /// Indexed by @intFromEnum(PickerKind); .none (-1) has no slot.
-pub var picker_anchor: [8]dvui.Rect.Natural = [_]dvui.Rect.Natural{.{}} ** 8;
+pub var picker_anchor: [9]dvui.Rect.Natural = [_]dvui.Rect.Natural{.{}} ** 9;
 
 pub fn anchorFor(kind: PickerKind) dvui.Rect.Natural {
     const i = @intFromEnum(kind);
@@ -1106,6 +1106,33 @@ fn currentTrackChipText(
     return .{ .text = out_buf[0..n], .active = C.active[slot] };
 }
 
+// Audio-output-device chip state: "active" (highlighted) when a specific
+// device is pinned (audio-device != "auto"). Cached like the track chips —
+// the property read is a blocking mpv call and this renders every frame.
+const device_chip_cache = struct {
+    var last_ms: i64 = 0;
+    var ctx_key: usize = 0;
+    var active: bool = false;
+};
+
+fn currentAudioDevicePinned(ctx: *c.mpv.mpv_handle) bool {
+    const C = device_chip_cache;
+    const key = @intFromPtr(ctx);
+    const now = @import("../core/io_global.zig").milliTimestamp();
+    if (!(C.ctx_key == key and now - C.last_ms < 500)) {
+        var pinned = false;
+        const dc = c.mpv.mpv_get_property_string(ctx, "audio-device");
+        if (dc != null) {
+            pinned = !std.mem.eql(u8, std.mem.span(dc), "auto");
+            c.mpv.mpv_free(@ptrCast(dc));
+        }
+        C.active = pinned;
+        C.ctx_key = key;
+        C.last_ms = now;
+    }
+    return C.active;
+}
+
 /// pub so pickers.zig's aspect popover can label the current mode; also used
 /// by the toolbar aspect chip in this file.
 pub fn currentAspectChipText(ctx: *c.mpv.mpv_handle) []const u8 {
@@ -1628,6 +1655,15 @@ pub fn renderLiquidGlassOverlay() void {
             }
         }
 
+        // Audio output device (speaker chip — highlighted when a device is
+        // pinned instead of "auto").
+        {
+            const dev_pinned = currentAudioDevicePinned(active_p.mpv_ctx);
+            if (pickerIconChip(@src(), 708, icons.tvg.lucide.speaker, "", dev_pinned, "Audio output device", .audio_device)) {
+                open_picker = if (open_picker == .audio_device) .none else .audio_device;
+            }
+        }
+
         // Subs.
         {
             var sub_buf: [32]u8 = undefined;
@@ -1844,6 +1880,7 @@ pub fn renderLiquidGlassOverlay() void {
     pickers.renderAspectPickerPopover(active_p);
     pickers.renderTrackPickerPopover(active_p, "audio", .audio);
     pickers.renderTrackPickerPopover(active_p, "sub", .sub);
+    pickers.renderAudioDevicePickerPopover(active_p);
     pickers.renderLangPickerPopover();
     pickers.renderPlaylistPickerPopover(active_p);
 }

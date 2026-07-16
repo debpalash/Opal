@@ -38,7 +38,7 @@ const dropup = @import("dropup_pure.zig");
 /// Per-picker rect, kept across frames because dvui's FloatingWindowWidget wants a
 /// mutable pointer. Recomputed from the chip anchor every frame, so a panel tracks
 /// its chip if the control bar moves (e.g. entering fullscreen).
-var dropup_rects: [8]dvui.Rect = [_]dvui.Rect{.{}} ** 8;
+var dropup_rects: [9]dvui.Rect = [_]dvui.Rect{.{}} ** 9;
 
 /// Open a backdrop-less panel anchored above `kind`'s chip. Caller must deinit.
 pub fn beginDropUp(
@@ -323,6 +323,83 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
                 if (!subs.is_searching.load(.acquire)) subs.autoSearchFromPlayer(false);
             }
         }
+    }
+
+    if (!open) footer.open_picker = .none;
+}
+
+pub fn renderAudioDevicePickerPopover(active_p: *player.MediaPlayer) void {
+    if (footer.open_picker != .audio_device) return;
+    const av_device = @import("../player/av_device_pure.zig");
+
+    var open: bool = true;
+    var fw = beginDropUp(@src(), .audio_device, 340, 302, &open);
+    defer fw.deinit();
+    dropUpTitle(@src(), "Audio Output");
+
+    var scroll = dvui.scrollArea(@src(), .{}, .{
+        .expand = .both,
+        // Transparent — show the popup's themed bg, not dvui's default white fill.
+        .background = false,
+        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
+    });
+    defer scroll.deinit();
+
+    // mpv hands the device list back as JSON; the parsing (escapes, truncation,
+    // capacity clamps) is pure and unit-tested in av_device_pure.zig.
+    var devices: [av_device.max_devices]av_device.AudioDevice = undefined;
+    var dev_count: usize = 0;
+    const list_c = c.mpv.mpv_get_property_string(active_p.mpv_ctx, "audio-device-list");
+    if (list_c != null) {
+        dev_count = av_device.parseAudioDevices(std.mem.span(list_c), &devices);
+        c.mpv.mpv_free(@ptrCast(list_c));
+    }
+
+    // Active device — mpv defaults to "auto" when nothing is pinned.
+    var cur_buf: [av_device.name_cap]u8 = undefined;
+    var cur: []const u8 = "auto";
+    const cur_c = c.mpv.mpv_get_property_string(active_p.mpv_ctx, "audio-device");
+    if (cur_c != null) {
+        const span = std.mem.span(cur_c);
+        const n = @min(span.len, cur_buf.len);
+        @memcpy(cur_buf[0..n], span[0..n]);
+        cur = cur_buf[0..n];
+        c.mpv.mpv_free(@ptrCast(cur_c));
+    }
+
+    var i: usize = 0;
+    while (i < dev_count) : (i += 1) {
+        const d = &devices[i];
+        const is_selected = std.mem.eql(u8, cur, d.nameSlice());
+        if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(d.label()), .{}, .{
+            .id_extra = i,
+            .expand = .horizontal,
+            .color_fill = if (is_selected) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = if (is_selected) theme.colors.accent else theme.colors.text_primary,
+            // Transparent fills kill dvui's derived hover — set it explicitly.
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+        })) {
+            var name_z: [av_device.name_cap + 1]u8 = undefined;
+            @memcpy(name_z[0..d.name_len], d.name[0..d.name_len]);
+            name_z[d.name_len] = 0;
+            _ = c.mpv.mpv_set_property_string(active_p.mpv_ctx, "audio-device", @ptrCast(&name_z));
+            var toast_buf: [192]u8 = undefined;
+            const msg = std.fmt.bufPrint(&toast_buf, "Audio output: {s}", .{d.label()}) catch "Audio output changed";
+            state.showToast(msg);
+            footer.open_picker = .none;
+        }
+    }
+
+    if (dev_count == 0) {
+        _ = dvui.label(@src(), "No output devices reported yet.", .{}, .{
+            .color_text = theme.colors.text_tertiary,
+            .gravity_x = 0.5,
+            .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = theme.spacing.xs },
+        });
     }
 
     if (!open) footer.open_picker = .none;
