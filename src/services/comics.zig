@@ -1338,6 +1338,84 @@ var last_fetch_s: i64 = 0; // SWR cache timestamp
 var sr_query_buf: [256]u8 = undefined;
 var sr_query_len: usize = 0;
 
+// ══════════════════════════════════════════════════════════
+// Encrypted on-disk content cache — default-feed stale-while-revalidate.
+//
+// The tab opens on a default popular feed (DEFAULT_FEED_QUERY on the `all`
+// source). We serialize that fresh listing's TEXT rows (title + novel URL)
+// through the tested content_cache_pure Writer/Reader and persist them, so the
+// next cold start paints the grid INSTANTLY instead of a blank box + spinner.
+//
+// Covers are deliberately NOT seeded: they ride the generation-gated,
+// render-thread-owned reclaim (sr_cover_gen / reclaimStaleCovers), and driving a
+// coverWorker for a soon-to-be-replaced seeded row would race the fetch worker's
+// URL rewrite. Seeded rows carry cover_url_len==0 (→ fetchCover no-ops); the
+// revalidating fetch — kicked the SAME frame via the existing SWR branch — fills
+// covers from live data. sr_* are FIXED module-static arrays (never realloc'd).
+// Gated on content_cache_enabled; TTL is the shared SWR window.
+// ══════════════════════════════════════════════════════════
+const content_cache = @import("../core/content_cache.zig");
+const ccp = @import("../core/content_cache_pure.zig");
+const COMICS_CACHE_TTL_S: i64 = @import("browse_cache.zig").TTL_S;
+const COMICS_CACHE_KEY = "comics:browse:all"; // default feed = DEFAULT_FEED_QUERY on `all`
+const COMICS_BLOB_CAP: usize = 96 * 1024;
+const DEFAULT_FEED_QUERY = "spider-man";
+
+/// SWR write — persist the default feed's text rows. Called from searchWorker
+/// (same thread that wrote sr_*, so they're stable) only for the default feed.
+fn putDefaultCache() void {
+    if (!state.app.content_cache_enabled) return;
+    if (sr_count == 0) return;
+    const buf = alloc.alloc(u8, COMICS_BLOB_CAP) catch return;
+    defer alloc.free(buf);
+    var w = ccp.Writer.init(buf);
+    const n: u16 = @intCast(@min(sr_count, MAX_SEARCH_RESULTS));
+    w.u16v(n);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        w.blob(sr_titles[i][0..@min(sr_title_lens[i], sr_titles[i].len)]);
+        w.blob(sr_urls[i][0..@min(sr_url_lens[i], sr_urls[i].len)]);
+    }
+    const blob = w.done() orelse return;
+    content_cache.put(COMICS_CACHE_KEY, blob, COMICS_CACHE_TTL_S);
+}
+
+/// SWR read — seed the default grid from disk so it paints instantly on cold
+/// start. UI-thread only (from renderContent), ONLY before the default feed has
+/// loaded and while the grid is empty. Seeds TEXT rows only (see the section
+/// header); marks the feed loaded + stale so the existing SWR branch fires the
+/// revalidating fetch this same frame.
+fn seedDefaultFromCache() void {
+    if (!state.app.content_cache_enabled) return;
+    if (loaded_default or sr_count != 0 or sr_searching) return;
+    if (state.app.comic.search_buf[0] != 0 or state.app.comic.title_len != 0) return;
+    const buf = alloc.alloc(u8, COMICS_BLOB_CAP) catch return;
+    defer alloc.free(buf);
+    const hit = content_cache.get(COMICS_CACHE_KEY, buf) orelse return;
+    var r = ccp.Reader.init(hit.bytes);
+    const n = r.u16v() orelse return;
+    var i: usize = 0;
+    while (i < n and i < MAX_SEARCH_RESULTS) : (i += 1) {
+        const title = r.blob() orelse break;
+        const url = r.blob() orelse break;
+        const tl = @min(title.len, sr_titles[i].len);
+        @memcpy(sr_titles[i][0..tl], title[0..tl]);
+        sr_title_lens[i] = tl;
+        const ul = @min(url.len, sr_urls[i].len);
+        @memcpy(sr_urls[i][0..ul], url[0..ul]);
+        sr_url_lens[i] = ul;
+        sr_cover_url_lens[i] = 0; // covers ride the fresh revalidation, not the seed
+    }
+    if (i == 0) return;
+    sr_count = i;
+    // Adopt the default query + a STALE stamp so renderContent's SWR branch fires
+    // the revalidating fetch (which also re-stores the cache) this frame.
+    @memcpy(sr_query_buf[0..DEFAULT_FEED_QUERY.len], DEFAULT_FEED_QUERY);
+    sr_query_len = DEFAULT_FEED_QUERY.len;
+    loaded_default = true;
+    last_fetch_s = 0;
+}
+
 // ── Live / incremental (debounced) search ──
 // generation guards against stale workers overwriting fresher results.
 var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
@@ -1704,6 +1782,11 @@ fn searchWorker(gen: u32) void {
     // Only the LAST source's page size can tell us whether more rows exist; a
     // short page from every active source means we've hit the end.
     if (filled < RESULTS_PER_PAGE) more_available = false;
+    // SWR write: persist ONLY the default landing feed (default query on the
+    // `all` source) so the next cold start seeds instantly. User searches and
+    // source-filtered feeds are not cached. Skip if a newer search superseded us.
+    if (search_gen.load(.acquire) == gen and active_source == .all and
+        std.mem.eql(u8, query, DEFAULT_FEED_QUERY)) putDefaultCache();
     logs.pushLog("info", "comics", "Comic search results parsed", false);
 }
 
@@ -2335,11 +2418,15 @@ pub fn renderContent() void {
         return;
     }
 
+    // SWR seed: paint the last default feed from disk NOW (empty grid only), then
+    // let the branch below fire the revalidating fetch (seed marks it stale).
+    seedDefaultFromCache();
+
     // First open shows a default popular feed so the tab isn't blank (the
     // search box stays free for anything else).
     if (!loaded_default and sr_count == 0 and !sr_searching and state.app.comic.search_buf[0] == 0 and state.app.comic.title_len == 0) {
         loaded_default = true;
-        searchComics("spider-man");
+        searchComics(DEFAULT_FEED_QUERY);
     } else if (sr_count > 0 and !sr_searching and sr_query_len > 0 and state.app.comic.title_len == 0 and
         @import("browse_cache.zig").isStale(last_fetch_s))
     {

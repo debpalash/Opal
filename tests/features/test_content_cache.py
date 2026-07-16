@@ -67,3 +67,42 @@ def test_content_cache():
     if bad:
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "pure+driver+SWR wiring (search/tmdb) + config/settings/startup wired"
+
+
+@test("Cache SWR on browse listings", "Storage")
+def test_content_cache_browse_listings():
+    """Comics / anime / podcasts / radio browse grids must seed (get) + store
+    (put) through the encrypted content cache, route serialization through the
+    tested content_cache_pure Writer/Reader, and gate on content_cache_enabled —
+    so each paints INSTANTLY from disk on cold start instead of a blank grid."""
+    podcasts = _src("src/services/podcasts.zig")
+    radio = _src("src/services/radio.zig")
+    anime = _src("src/services/anime.zig")
+    comics = _src("src/services/comics.zig")
+
+    def wired(src, key):
+        return {
+            "imports content_cache": 'content_cache = @import("../core/content_cache.zig")' in src,
+            "routes through pure Writer/Reader": ("ccp.Writer.init" in src and "ccp.Reader.init" in src),
+            "seeds from cache (get)": "content_cache.get(" in src,
+            "stores to cache (put)": "content_cache.put(" in src,
+            "gated on content_cache_enabled": "state.app.content_cache_enabled" in src,
+            "reuses browse TTL": 'browse_cache.zig").TTL_S' in src,
+            "stable browse key": key in src,
+        }
+
+    services = {
+        "podcasts": wired(podcasts, '"podcasts:popular"'),
+        "radio": wired(radio, '"radio:popular"'),
+        "anime": wired(anime, '"anime:trending'),  # key carries the trend_filter selector
+        "comics": wired(comics, '"comics:browse'),
+    }
+
+    bad = []
+    for svc, checks in services.items():
+        for k, v in checks.items():
+            if not v:
+                bad.append(f"{svc}: {k}")
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "comics/anime/podcasts/radio browse grids seed+store via content_cache (pure-serialized, gated)"

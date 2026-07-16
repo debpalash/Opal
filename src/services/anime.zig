@@ -300,6 +300,104 @@ var last_buf_snapshot_len: usize = 0;
 /// typing can't show stale / out-of-order results.
 var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
+// ══════════════════════════════════════════════════════════
+// Encrypted on-disk content cache — Trending-grid stale-while-revalidate.
+//
+// Mirrors tmdb_api.zig: the fresh page-1 Trending grid (Jikan path only — the
+// `lists` chip has its own poster-cache disk blob) is serialized through the
+// tested content_cache_pure Writer/Reader and persisted, so the next cold start
+// paints the grid INSTANTLY instead of a blank box + spinner. results[] is a
+// FIXED [100]AnimeResult array (poster pixels/textures live inline per row);
+// unlike the TMDB ArrayList it is never reallocated, so the *AnimeResult
+// pointers the poster daemon holds can never dangle — and on a cold start seed
+// there are no in-flight poster workers at all (result_count==0). Seeding writes
+// rows under anime_parse_mutex — the same lock the Jikan parser publishes under.
+// The key carries the trend_filter selector so switching chips can't show the
+// wrong cached set. Gated on content_cache_enabled; TTL is the shared SWR window.
+// ══════════════════════════════════════════════════════════
+const content_cache = @import("../core/content_cache.zig");
+const ccp = @import("../core/content_cache_pure.zig");
+const ANIME_CACHE_TTL_S: i64 = @import("browse_cache.zig").TTL_S;
+const ANIME_BLOB_CAP: usize = 128 * 1024;
+
+fn animeCacheKey(buf: []u8) []const u8 {
+    return std.fmt.bufPrint(buf, "anime:trending:{d}", .{@intFromEnum(trend_filter)}) catch "anime:trending";
+}
+
+fn serializeAnime(w: *ccp.Writer, it: state.AnimeResult) void {
+    w.blob(it.id[0..@min(it.id_len, it.id.len)]);
+    w.blob(it.name[0..@min(it.name_len, it.name.len)]);
+    w.u16v(it.episodes);
+    w.f32v(it.score);
+    w.blob(it.overview[0..@min(it.overview_len, it.overview.len)]);
+    w.blob(it.poster_url[0..@min(it.poster_url_len, it.poster_url.len)]);
+}
+
+fn animeCopyField(dst: []u8, len: *usize, src: []const u8) void {
+    const n = @min(src.len, dst.len);
+    @memcpy(dst[0..n], src[0..n]);
+    len.* = n;
+}
+
+/// Reads one card from `r`; null when the blob is truncated. Only the data
+/// fields are restored — poster pixels/textures stay null so the grid fetches
+/// covers lazily exactly like a fresh row.
+fn deserializeAnime(r: *ccp.Reader) ?state.AnimeResult {
+    var it = state.AnimeResult{};
+    animeCopyField(&it.id, &it.id_len, r.blob() orelse return null);
+    animeCopyField(&it.name, &it.name_len, r.blob() orelse return null);
+    it.episodes = r.u16v() orelse return null;
+    it.score = r.f32v() orelse return null;
+    animeCopyField(&it.overview, &it.overview_len, r.blob() orelse return null);
+    animeCopyField(&it.poster_url, &it.poster_url_len, r.blob() orelse return null);
+    return it;
+}
+
+/// SWR write — persist the fresh Trending grid (page 1). Called from
+/// trendingThread; takes anime_parse_mutex to snapshot results[] consistently.
+fn putTrendingCache() void {
+    if (!state.app.content_cache_enabled) return;
+    if (trend_filter == .lists) return; // lists has its own disk cache
+    const buf = alloc.alloc(u8, ANIME_BLOB_CAP) catch return;
+    defer alloc.free(buf);
+    anime_parse_mutex.lock();
+    const count = state.app.anime.result_count;
+    var w = ccp.Writer.init(buf);
+    const n: u16 = @intCast(@min(count, state.app.anime.results.len));
+    w.u16v(n);
+    var i: usize = 0;
+    while (i < n) : (i += 1) serializeAnime(&w, state.app.anime.results[i]);
+    anime_parse_mutex.unlock();
+    if (n == 0) return;
+    const blob = w.done() orelse return;
+    var key_buf: [48]u8 = undefined;
+    content_cache.put(animeCacheKey(&key_buf), blob, ANIME_CACHE_TTL_S);
+}
+
+/// SWR read — seed the Trending grid from disk so it paints instantly on cold
+/// start. UI-thread only (from renderContent's dispatch), ONLY in Trending mode
+/// on the non-lists Jikan path and ONLY when results[] is empty. results[] is a
+/// fixed array, so no capacity reservation is needed.
+fn seedTrendingFromCache() void {
+    if (!state.app.content_cache_enabled) return;
+    if (state.app.anime.mode != .trending or trend_filter == .lists) return;
+    if (state.app.anime.result_count != 0) return;
+    const buf = alloc.alloc(u8, ANIME_BLOB_CAP) catch return;
+    defer alloc.free(buf);
+    var key_buf: [48]u8 = undefined;
+    const hit = content_cache.get(animeCacheKey(&key_buf), buf) orelse return;
+    var r = ccp.Reader.init(hit.bytes);
+    const n = r.u16v() orelse return;
+    anime_parse_mutex.lock();
+    defer anime_parse_mutex.unlock();
+    if (state.app.anime.result_count != 0) return; // a fetch beat us under the lock
+    var i: usize = 0;
+    while (i < n and i < state.app.anime.results.len) : (i += 1) {
+        state.app.anime.results[i] = deserializeAnime(&r) orelse break;
+    }
+    state.app.anime.result_count = i;
+}
+
 pub fn loadTrendingAnime() void {
     if (state.app.anime.is_loading.load(.acquire)) return;
 
@@ -589,7 +687,13 @@ fn trendingThread() void {
     if (bytes == 0) return;
 
     _ = parseJikanData(buf[0..bytes], my_gen);
-    if (search_gen.load(.acquire) == my_gen) more_available = parsePagination(buf[0..bytes]);
+    if (search_gen.load(.acquire) == my_gen) {
+        more_available = parsePagination(buf[0..bytes]);
+        // SWR write: persist the fresh page-1 Trending grid so the next cold
+        // start seeds instantly. Only the latest generation (still current)
+        // persists — a superseded worker never poisons the cache.
+        if (grid_page == 1) putTrendingCache();
+    }
     logs.pushLog("info", "anime", "Trending loaded (Jikan API)", false);
 }
 
@@ -2385,6 +2489,9 @@ pub fn renderContent() void {
     if (state.app.anime.sched_view) {
         anime_schedule.loadSchedule();
     } else if (state.app.anime.selected_idx == null) {
+        // SWR seed: paint the last Trending grid from disk NOW (empty grid only)
+        // so the tab isn't blank while dispatchModeFetch's revalidating fetch runs.
+        seedTrendingFromCache();
         dispatchModeFetch();
     }
 

@@ -70,6 +70,95 @@ var query_buf: [256]u8 = undefined;
 var query_len: usize = 0;
 
 // ══════════════════════════════════════════════════════════
+// Encrypted on-disk content cache — most-voted stations SWR (mirrors
+// podcasts.zig / tmdb_api.zig). Serialize the fresh popular list through the
+// tested content_cache_pure Writer/Reader and persist it, so the next cold start
+// paints the grid INSTANTLY instead of a blank box + spinner. results[] is a
+// FIXED [30]Station array with cover state in the parallel fixed station_posters[]
+// (never reallocated) — no *Item pointers to dangle, so seeding just fills rows
+// under parse_mutex. Gated on content_cache_enabled; TTL is the shared SWR window.
+// ══════════════════════════════════════════════════════════
+const content_cache = @import("../core/content_cache.zig");
+const ccp = @import("../core/content_cache_pure.zig");
+const RADIO_CACHE_TTL_S: i64 = @import("browse_cache.zig").TTL_S;
+const RADIO_CACHE_KEY = "radio:popular";
+const RADIO_BLOB_CAP: usize = 64 * 1024;
+
+fn serializeStation(w: *ccp.Writer, s: pure.Station) void {
+    w.blob(s.stationuuid[0..@min(s.stationuuid_len, s.stationuuid.len)]);
+    w.blob(s.name[0..@min(s.name_len, s.name.len)]);
+    w.blob(s.url_resolved[0..@min(s.url_resolved_len, s.url_resolved.len)]);
+    w.blob(s.url[0..@min(s.url_len, s.url.len)]);
+    w.blob(s.favicon[0..@min(s.favicon_len, s.favicon.len)]);
+    w.blob(s.tags[0..@min(s.tags_len, s.tags.len)]);
+    w.blob(s.country[0..@min(s.country_len, s.country.len)]);
+    w.blob(s.codec[0..@min(s.codec_len, s.codec.len)]);
+    w.u32v(s.votes);
+    w.u32v(s.bitrate);
+}
+
+fn copyField(dst: []u8, len: *usize, src: []const u8) void {
+    const n = @min(src.len, dst.len);
+    @memcpy(dst[0..n], src[0..n]);
+    len.* = n;
+}
+
+/// Reads one station from `r`; null when the blob is truncated.
+fn deserializeStation(r: *ccp.Reader) ?pure.Station {
+    var s = pure.Station{};
+    copyField(&s.stationuuid, &s.stationuuid_len, r.blob() orelse return null);
+    copyField(&s.name, &s.name_len, r.blob() orelse return null);
+    copyField(&s.url_resolved, &s.url_resolved_len, r.blob() orelse return null);
+    copyField(&s.url, &s.url_len, r.blob() orelse return null);
+    copyField(&s.favicon, &s.favicon_len, r.blob() orelse return null);
+    copyField(&s.tags, &s.tags_len, r.blob() orelse return null);
+    copyField(&s.country, &s.country_len, r.blob() orelse return null);
+    copyField(&s.codec, &s.codec_len, r.blob() orelse return null);
+    s.votes = r.u32v() orelse return null;
+    s.bitrate = r.u32v() orelse return null;
+    return s;
+}
+
+/// SWR write — persist the fresh most-voted list. Called from popularWorker
+/// while it already holds parse_mutex, so results[]/result_count are stable.
+fn putPopularCache() void {
+    if (!state.app.content_cache_enabled) return;
+    const count = state.app.radio.result_count;
+    if (count == 0) return;
+    const buf = alloc.alloc(u8, RADIO_BLOB_CAP) catch return;
+    defer alloc.free(buf);
+    var w = ccp.Writer.init(buf);
+    const n: u16 = @intCast(@min(count, state.app.radio.results.len));
+    w.u16v(n);
+    var i: usize = 0;
+    while (i < n) : (i += 1) serializeStation(&w, state.app.radio.results[i]);
+    const blob = w.done() orelse return;
+    content_cache.put(RADIO_CACHE_KEY, blob, RADIO_CACHE_TTL_S);
+}
+
+/// SWR read — seed the popular grid from disk so it paints instantly on cold
+/// start. UI-thread only (from loadPopularOnce), ONLY when results[] is empty.
+/// results[] is a fixed array, so no capacity reservation is needed.
+fn seedPopularFromCache() void {
+    if (!state.app.content_cache_enabled) return;
+    if (state.app.radio.result_count != 0) return;
+    const buf = alloc.alloc(u8, RADIO_BLOB_CAP) catch return;
+    defer alloc.free(buf);
+    const hit = content_cache.get(RADIO_CACHE_KEY, buf) orelse return;
+    var r = ccp.Reader.init(hit.bytes);
+    const n = r.u16v() orelse return;
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (state.app.radio.result_count != 0) return; // a fetch beat us under the lock
+    var i: usize = 0;
+    while (i < n and i < state.app.radio.results.len) : (i += 1) {
+        state.app.radio.results[i] = deserializeStation(&r) orelse break;
+    }
+    state.app.radio.result_count = i;
+    if (i > 0) state.app.radio.showing_popular = true;
+}
+
+// ══════════════════════════════════════════════════════════
 // Popular — RadioBrowser most-voted stations
 //
 // So the page opens with content instead of an empty search box. /topvote/N is
@@ -98,6 +187,10 @@ pub fn loadPopularOnce() void {
         return;
     }
     if (state.app.radio.is_loading.load(.acquire)) return;
+
+    // SWR seed: paint the last most-voted list from disk NOW (empty grid only)
+    // so the tab isn't blank while the revalidating fetch below runs.
+    seedPopularFromCache();
 
     popular_fetched.store(true, .release);
     state.app.radio.showing_popular = true;
@@ -145,6 +238,9 @@ fn popularWorker(my_gen: u32) void {
         state.app.radio.fetch_error = true;
         logs.pushLog("info", "radio", "Top stations returned no rows", false);
     } else {
+        // SWR write: persist the fresh list (still under parse_mutex) so the
+        // next cold start seeds instantly.
+        putPopularCache();
         logs.pushLog("info", "radio", "Popular stations loaded (RadioBrowser topvote)", false);
     }
 }

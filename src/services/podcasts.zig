@@ -68,6 +68,86 @@ var query_buf: [256]u8 = undefined;
 var query_len: usize = 0;
 
 // ══════════════════════════════════════════════════════════
+// Encrypted on-disk content cache — Popular-chart stale-while-revalidate.
+//
+// Mirrors tmdb_api.zig's browse-grid wiring: the fresh popular chart is
+// serialized (through the tested content_cache_pure Writer/Reader) and stored to
+// disk so the next cold start paints the Popular grid INSTANTLY instead of a
+// blank box + spinner. results[] is a FIXED [50]Podcast array and the cover
+// pixel/texture state lives in the parallel fixed pod_posters[] (never
+// reallocated), so — unlike the TMDB ArrayList — there are no *Item pointers to
+// dangle: seeding just fills rows under parse_mutex. Gated on
+// content_cache_enabled; TTL reuses the shared browse SWR window.
+// ══════════════════════════════════════════════════════════
+const content_cache = @import("../core/content_cache.zig");
+const ccp = @import("../core/content_cache_pure.zig");
+const PODCASTS_CACHE_TTL_S: i64 = @import("browse_cache.zig").TTL_S;
+const PODCASTS_CACHE_KEY = "podcasts:popular";
+const PODCASTS_BLOB_CAP: usize = 64 * 1024;
+
+fn serializePodcast(w: *ccp.Writer, p: pure.Podcast) void {
+    w.blob(p.name[0..@min(p.name_len, p.name.len)]);
+    w.blob(p.feed_url[0..@min(p.feed_url_len, p.feed_url.len)]);
+    w.blob(p.artwork[0..@min(p.artwork_len, p.artwork.len)]);
+    w.blob(p.artist[0..@min(p.artist_len, p.artist.len)]);
+}
+
+fn copyField(dst: []u8, len: *usize, src: []const u8) void {
+    const n = @min(src.len, dst.len);
+    @memcpy(dst[0..n], src[0..n]);
+    len.* = n;
+}
+
+/// Reads one show from `r`; null when the blob is truncated.
+fn deserializePodcast(r: *ccp.Reader) ?pure.Podcast {
+    var p = pure.Podcast{};
+    copyField(&p.name, &p.name_len, r.blob() orelse return null);
+    copyField(&p.feed_url, &p.feed_url_len, r.blob() orelse return null);
+    copyField(&p.artwork, &p.artwork_len, r.blob() orelse return null);
+    copyField(&p.artist, &p.artist_len, r.blob() orelse return null);
+    return p;
+}
+
+/// SWR write — persist the fresh Popular chart. Called from popularWorker while
+/// it already holds parse_mutex, so results[]/result_count are stable.
+fn putPopularCache() void {
+    if (!state.app.content_cache_enabled) return;
+    const count = state.app.podcasts.result_count;
+    if (count == 0) return;
+    const buf = alloc.alloc(u8, PODCASTS_BLOB_CAP) catch return;
+    defer alloc.free(buf);
+    var w = ccp.Writer.init(buf);
+    const n: u16 = @intCast(@min(count, state.app.podcasts.results.len));
+    w.u16v(n);
+    var i: usize = 0;
+    while (i < n) : (i += 1) serializePodcast(&w, state.app.podcasts.results[i]);
+    const blob = w.done() orelse return;
+    content_cache.put(PODCASTS_CACHE_KEY, blob, PODCASTS_CACHE_TTL_S);
+}
+
+/// SWR read — seed the Popular grid from disk so it paints instantly on cold
+/// start. UI-thread only (from loadPopularOnce), and ONLY when results[] is
+/// empty. results[] is a fixed array, so no capacity reservation is needed.
+fn seedPopularFromCache() void {
+    if (!state.app.content_cache_enabled) return;
+    if (state.app.podcasts.result_count != 0) return;
+    const buf = alloc.alloc(u8, PODCASTS_BLOB_CAP) catch return;
+    defer alloc.free(buf);
+    const hit = content_cache.get(PODCASTS_CACHE_KEY, buf) orelse return;
+    var r = ccp.Reader.init(hit.bytes);
+    const n = r.u16v() orelse return;
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (state.app.podcasts.result_count != 0) return; // a fetch beat us under the lock
+    var i: usize = 0;
+    while (i < n and i < state.app.podcasts.results.len) : (i += 1) {
+        state.app.podcasts.results[i] = deserializePodcast(&r) orelse break;
+    }
+    state.app.podcasts.result_count = i;
+    if (i > 0) state.app.podcasts.showing_popular = true;
+}
+
+// ══════════════════════════════════════════════════════════
 // Popular — Apple top-shows chart → iTunes lookup
 //
 // So the page opens with content instead of an empty search box. Both hops are
@@ -97,6 +177,10 @@ pub fn loadPopularOnce() void {
         return;
     }
     if (state.app.podcasts.is_loading.load(.acquire)) return;
+
+    // SWR seed: paint the last Popular chart from disk NOW (empty grid only) so
+    // the tab isn't blank while the revalidating fetch below runs.
+    seedPopularFromCache();
 
     popular_fetched.store(true, .release);
     state.app.podcasts.showing_popular = true;
@@ -158,6 +242,9 @@ fn popularWorker(my_gen: u32) void {
         state.app.podcasts.fetch_error = true;
         logs.pushLog("info", "podcasts", "Top shows returned no rows", false);
     } else {
+        // SWR write: persist the fresh chart (still under parse_mutex) so the
+        // next cold start seeds instantly.
+        putPopularCache();
         logs.pushLog("info", "podcasts", "Popular podcasts loaded (Apple top shows)", false);
     }
 }
