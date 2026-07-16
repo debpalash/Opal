@@ -34,6 +34,7 @@ from features import (  # noqa: F401
     test_page_shell,
     test_page_shell2,
     test_page_shell3,
+    test_novels,
 )
 
 if __name__ == "__main__":

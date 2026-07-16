@@ -232,6 +232,10 @@ pub fn renderDrawer() void {
         renderRailTab(.Podcasts, shell.iconForTab(.Podcasts), "Podcasts", 7);
         renderRailTab(.Radio, shell.iconForTab(.Radio), "Radio", 8);
         renderRailTab(.Comics, shell.iconForTab(.Comics), "Comics", 9);
+        // id 20 (not 10) so Novels never shares a widget id with the Web tab —
+        // inserted without renumbering the rest so concurrent tab additions merge
+        // cleanly. Keyboard order puts it after the sources group, which is fine.
+        renderRailTab(.Novels, shell.iconForTab(.Novels), "Novels", 20);
         renderRailTab(.Web, shell.iconForTab(.Web), "Web", 10);
         renderRailTab(.RSS, shell.iconForTab(.RSS), "RSS", 11);
         renderRailTab(.Jellyfin, shell.iconForTab(.Jellyfin), "Jellyfin / Emby", 12);
@@ -297,6 +301,7 @@ pub fn renderTabContent(tab: state.DrawerTab) void {
         .YouTube => youtube.renderContent(),
         .Queue => queue.renderContent(),
         .Comics => comics.renderContent(),
+        .Novels => @import("../services/novels.zig").renderContent(),
         .Web => @import("../services/browser.zig").renderContent(),
         .Anime => anime.renderContent(),
         .Podcasts => @import("../services/podcasts.zig").renderContent(),
