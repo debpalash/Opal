@@ -60,8 +60,8 @@ def test_manga_heancms_engine():
             problems.append(f"comics.zig does not route through {call}")
 
     # 8) Source.heancms added at the END of the enum + searchWorker branch.
-    if "mangadex, heancms }" not in comics:
-        problems.append("Source.heancms not added at the end of the enum")
+    if "const Source = enum {" not in comics or "heancms" not in comics:
+        problems.append("Source.heancms not added to the enum")
     if "sourceActive(.heancms)" not in comics or "fetchHeancmsPage" not in comics:
         problems.append("searchWorker HeanCms branch (sourceActive(.heancms) → fetchHeancmsPage) missing")
 

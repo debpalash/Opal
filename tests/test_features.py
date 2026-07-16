@@ -42,6 +42,7 @@ from features import (  # noqa: F401
     test_drama,
     test_anime_schedule,
     test_manga_heancms,
+    test_manga_themesia,
 )
 
 if __name__ == "__main__":
