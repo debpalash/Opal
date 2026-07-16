@@ -222,7 +222,7 @@ fn sectionMatchesSearch(tab: state.SettingsTab) bool {
     if (search_len == 0) return true;
     const sections: []const []const u8 = switch (tab) {
         .General => &.{ "Interface", "Behavior", "TMDB", "Theme", "Scale", "Grid", "NSFW", "Seek Sync", "API Key" },
-        .Playback => &.{ "Video Processing", "Audio Equalizer", "Streaming", "Shortcuts", "Filters", "Capture", "Hardware", "Decode", "Deband", "Interpolation", "Brightness", "Contrast", "Saturation", "Gamma", "Screenshot", "Auto-advance", "Resume" },
+        .Playback => &.{ "Video Processing", "Audio Equalizer", "Audio Output", "Device", "Streaming", "Shortcuts", "Filters", "Capture", "Hardware", "Decode", "Deband", "Interpolation", "Brightness", "Contrast", "Saturation", "Gamma", "Screenshot", "Auto-advance", "Resume" },
         .About => &.{ "About", "Version", "Update", "Credits", "License", "Donate", "Sponsors", "Links", "TMDB" },
         .Subtitles => &.{ "OpenSubtitles", "Subdl", "Language", "Search", "API Key", "Font", "Delay", "Whisper" },
         .Network => &.{ "Download", "Trackers", "Proxy", "Speed", "Limit", "Port" },
@@ -1477,6 +1477,82 @@ fn renderPlaybackTab() void {
         }
     }
 
+    // ── Audio Output ──
+    sectionHeader("Audio Output", "Route sound to a specific output device", 26, @src());
+    {
+        const av_device = @import("../player/av_device_pure.zig");
+        // Device list + active device, cached: `audio-device-list` is a
+        // blocking mpv query and this tab renders every frame while open.
+        // JSON parsing is pure and unit-tested (av_device_pure.zig).
+        const Cache = struct {
+            var last_ms: i64 = 0;
+            var ctx_key: usize = 0;
+            var devices: [av_device.max_devices]av_device.AudioDevice = undefined;
+            var count: usize = 0;
+            var cur_buf: [av_device.name_cap]u8 = undefined;
+            var cur_len: usize = 0;
+        };
+        if (state.app.active_player_idx < state.app.players.items.len) {
+            const ap = state.app.players.items[state.app.active_player_idx];
+            const now = @import("../core/io_global.zig").milliTimestamp();
+            const key = @intFromPtr(ap.mpv_ctx);
+            if (!(Cache.ctx_key == key and now - Cache.last_ms < 1000)) {
+                Cache.ctx_key = key;
+                Cache.last_ms = now;
+                Cache.count = 0;
+                const list_c = c.mpv.mpv_get_property_string(ap.mpv_ctx, "audio-device-list");
+                if (list_c != null) {
+                    Cache.count = av_device.parseAudioDevices(std.mem.span(list_c), &Cache.devices);
+                    c.mpv.mpv_free(@ptrCast(list_c));
+                }
+                Cache.cur_len = 0;
+                const cur_c = c.mpv.mpv_get_property_string(ap.mpv_ctx, "audio-device");
+                if (cur_c != null) {
+                    const span = std.mem.span(cur_c);
+                    const n = @min(span.len, Cache.cur_buf.len);
+                    @memcpy(Cache.cur_buf[0..n], span[0..n]);
+                    Cache.cur_len = n;
+                    c.mpv.mpv_free(@ptrCast(cur_c));
+                }
+            }
+            const cur: []const u8 = if (Cache.cur_len > 0) Cache.cur_buf[0..Cache.cur_len] else "auto";
+            var di: usize = 0;
+            while (di < Cache.count) : (di += 1) {
+                const d = &Cache.devices[di];
+                const is_cur = std.mem.eql(u8, cur, d.nameSlice());
+                if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(d.label()), .{}, .{
+                    .id_extra = di + 3300,
+                    .expand = .horizontal,
+                    .color_fill = if (is_cur) btn_inactive else theme.transparent,
+                    .color_text = if (is_cur) theme.colors.accent else labelText(),
+                    .color_fill_hover = theme.colors.bg_hover,
+                    .color_fill_press = theme.colors.bg_elevated,
+                    .border = dvui.Rect.all(0),
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                    .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+                })) {
+                    var name_z: [av_device.name_cap + 1]u8 = undefined;
+                    @memcpy(name_z[0..d.name_len], d.name[0..d.name_len]);
+                    name_z[d.name_len] = 0;
+                    for (state.app.players.items) |p| {
+                        _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "audio-device", @ptrCast(&name_z));
+                    }
+                    @memcpy(Cache.cur_buf[0..d.name_len], d.name[0..d.name_len]);
+                    Cache.cur_len = d.name_len;
+                    var toast_buf: [192]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&toast_buf, "Audio output: {s}", .{d.label()}) catch "Audio output changed";
+                    state.showToast(msg);
+                }
+            }
+            if (Cache.count == 0) {
+                _ = dvui.label(@src(), "No output devices reported yet.", .{}, .{ .id_extra = 3390, .color_text = mutedText() });
+            }
+        } else {
+            _ = dvui.label(@src(), "Open a player to pick an output device.", .{}, .{ .id_extra = 3391, .color_text = mutedText() });
+        }
+    }
+
     // ── Streaming ──
     sectionHeader("Streaming", "yt-dlp backend for web streams", 23, @src());
 
@@ -1523,7 +1599,7 @@ fn renderPlaybackTab() void {
     {
         _ = dvui.label(@src(), "Space=Pause  Arrows=Seek  Up/Down=Vol  M=Mute", .{}, .{ .id_extra = 2100, .color_text = mutedText() });
         _ = dvui.label(@src(), "+/-=Zoom  0=Reset  Shift+Arrows=Pan", .{}, .{ .id_extra = 2101, .color_text = mutedText() });
-        _ = dvui.label(@src(), "V=Subs  K=SubDelay  []=Speed  L=Loop  R=Rotate  T=Flip", .{}, .{ .id_extra = 2102, .color_text = mutedText() });
+        _ = dvui.label(@src(), "V=Subs  K=SubDelay  Ctrl+=/-=AudioDelay  []=Speed  L=Loop  R=Rotate  T=Flip", .{}, .{ .id_extra = 2102, .color_text = mutedText() });
         _ = dvui.label(@src(), "A=AI  D=Drawer/Library  Shift+I=Shortcuts  Ctrl+I=Info  Ctrl+O=Open  Ctrl+Q=Quit", .{}, .{ .id_extra = 2103, .color_text = mutedText() });
     }
 
@@ -3037,6 +3113,8 @@ pub fn renderCheatSheet() void {
         .{ "U", "Cycle Audio Track" },
         .{ "V", "Cycle Subtitle Track" },
         .{ "K / Shift+K", "Sub Delay +100ms / -100ms" },
+        .{ "Ctrl+= / Ctrl+-", "Audio Delay +100ms / -100ms" },
+        .{ "Ctrl+0", "Reset Audio Delay" },
         .{ "N / Shift+N", "Next / Prev Episode" },
         .{ "[ / ]", "Decrease / Increase Speed" },
         .{ "Backspace", "Reset Speed to 1.0x" },

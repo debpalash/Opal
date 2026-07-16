@@ -384,6 +384,38 @@ pub fn processGlobalInputs() void {
                     } else |_| {}
                 }
 
+                // Audio delay: Ctrl+= / Ctrl+- ±100ms (mpv's Ctrl+plus/minus
+                // convention — plus is the = key unshifted), Ctrl+0 resets.
+                // These keys are free under Ctrl: unmodified =/-/0 are zoom,
+                // and the Ctrl blocks above only take comma/o/q/i/w/l/s/t and
+                // arrows. Feedback mirrors the speed keys ([ / ]): compute the
+                // resulting value and toast it (a post-command property read
+                // can still return the stale value, so we don't trust it).
+                if (ctrl_or_cmd and !mod.shift() and !mod.alt() and (key == .equal or key == .minus or key == .zero)) {
+                    var cur_delay: f64 = 0;
+                    _ = c.mpv.mpv_get_property(p.mpv_ctx, "audio-delay", c.mpv.MPV_FORMAT_DOUBLE, &cur_delay);
+                    var new_delay: f64 = 0;
+                    switch (key) {
+                        .equal => {
+                            _ = c.mpv.mpv_command_string(p.mpv_ctx, "add audio-delay 0.1");
+                            new_delay = cur_delay + 0.1;
+                        },
+                        .minus => {
+                            _ = c.mpv.mpv_command_string(p.mpv_ctx, "add audio-delay -0.1");
+                            new_delay = cur_delay - 0.1;
+                        },
+                        else => {
+                            _ = c.mpv.mpv_command_string(p.mpv_ctx, "set audio-delay 0");
+                            new_delay = 0;
+                        },
+                    }
+                    var ad_buf: [48]u8 = undefined;
+                    const ad_str = std.fmt.bufPrint(&ad_buf, "Audio delay: {d:.0}ms", .{new_delay * 1000.0}) catch "Audio delay changed";
+                    state.showToast(ad_str);
+                    dvui.refresh(null, @src(), null);
+                    continue;
+                }
+
                 if (!mod.control() and !mod.alt() and !mod.command()) {
                     switch (key) {
                         .space => {

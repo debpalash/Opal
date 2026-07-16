@@ -3851,6 +3851,44 @@ def test_audio_visualizer():
     return "pass", "mpv lavfi-complex visualizer: 4 styles, audio preserved, colour validated"
 
 
+@test("Audio delay + device picker", "Player")
+def test_audio_delay_device_picker():
+    inp = _src("src/ui/input.zig")
+    st = _src("src/ui/settings.zig")
+    pk = _src("src/ui/pickers.zig")
+    ft = _src("src/ui/footer.zig")
+    pure = _src("src/player/av_device_pure.zig")
+    bz = _src("build.zig")
+    checks = {
+        # Ctrl+= / Ctrl+- nudge lip-sync by ±100ms, Ctrl+0 resets — with a
+        # toast showing the resulting value (mirrors the speed keys).
+        "audio-delay keys wired": ("add audio-delay 0.1" in inp
+                                   and "add audio-delay -0.1" in inp
+                                   and "set audio-delay 0" in inp),
+        "cheat sheet documents it": ("Audio Delay +100ms / -100ms" in st
+                                     and "Reset Audio Delay" in st),
+        # Output device picker: drop-up reads mpv's audio-device-list and sets
+        # audio-device; active device highlighted ("auto" default).
+        "picker reads device list": ("audio-device-list" in pk
+                                     and '"audio-device"' in pk),
+        "picker chip + popover in footer": ("audio_device" in ft
+                                            and "renderAudioDevicePickerPopover" in ft),
+        "settings Playback entry point": ("Audio Output" in st
+                                          and "audio-device-list" in st),
+        # JSON parsing is pure (escaped quotes, truncation, capacity clamps)
+        # and BOTH call sites route through it — no drift.
+        "pure parser exists + tested": ("pub fn parseAudioDevices" in pure
+                                        and "truncated JSON must not crash" in pure),
+        "call sites route through parser": ("parseAudioDevices(" in pk
+                                            and "parseAudioDevices(" in st),
+        "registered in zig build test": "av_device_pure.zig" in bz,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "audio-delay keys + cheat sheet + device picker via pure JSON parser"
+
+
 @test("YouTube browse: suggestions + channels + player nav", "Browse")
 def test_youtube_browse():
     yt = _src("src/services/youtube.zig")
