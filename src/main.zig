@@ -974,6 +974,11 @@ fn appFrame() !dvui.App.Result {
     // Compiles to a no-op on non-macOS.
     @import("player/media_remote.zig").frameTick();
 
+    // Anime-Skip: auto-skip crowdsourced intro/recap/credits segments on the
+    // active anime player (no-op unless anime-skip is enabled + markers loaded
+    // + the active player is anime-sourced).
+    @import("services/anime_skip.zig").tick();
+
     // Screensaver inhibit: mpv's stop-screensaver requires a VO; we use SW render,
     // so SDL handles it. Toggle when any player is actively playing (not paused).
     {

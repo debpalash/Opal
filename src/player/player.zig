@@ -72,6 +72,10 @@ pub const MediaPlayer = struct {
     // path doesn't issue synchronous IPC (or per-frame allocations) for these.
     cached_paused: bool = true, // mirror of mpv "pause"
     last_seen_pos: f64 = 0, // last valid mpv time-pos seen in the event loop (co-watch rewind detect)
+    // True only when this player is playing ANIME-sourced media (armed by the
+    // anime play flow via services/anime_skip.zig). Gates auto-skip so we
+    // don't apply crowdsourced anime timestamps to arbitrary files.
+    anime_skip_active: bool = false,
     cached_vid_no: bool = false, // mpv "vid" == "no" (audio-only)
     /// The audio visualiser is applied once per loaded file. Without this latch the
     /// graph would be re-set on every "vid" event it itself provokes.
@@ -335,6 +339,7 @@ pub const MediaPlayer = struct {
         // when the sub-text mirror is drawn. Initialize them to their defaults.
         self.cached_paused = true;
         self.last_seen_pos = 0;
+        self.anime_skip_active = false;
         self.cached_vid_no = false;
         self.vis_applied = false;
         @memset(&self.cached_sub_text, 0);
@@ -613,6 +618,12 @@ pub const MediaPlayer = struct {
         @memcpy(self.current_url[0..copy_len], path_span[0..copy_len]);
         self.current_url_len = copy_len;
         self.resume_seeked = false;
+
+        // Anime-Skip: consume a one-shot arm from the anime play flow. Every
+        // load starts non-anime; the anime episode load flow arms just before
+        // this runs, so THIS load claims it. Non-anime loads clear stale
+        // segments so a prior episode's markers can't leak onto other media.
+        @import("../services/anime_skip.zig").onFileLoad(self);
 
         // Clear any prior now-playing audio art/metadata — a fresh load that
         // isn't routed through the meta play path (video, torrent, resume) must

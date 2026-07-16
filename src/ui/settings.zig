@@ -1464,6 +1464,36 @@ fn renderPlaybackTab() void {
         if (state.app.auto_advance != before) state.markConfigDirty();
     }
 
+    // ── Anime Skip ── (SponsorBlock-for-anime; crowdsourced markers)
+    sectionHeader("Anime Skip", "Crowdsourced timestamps from anime-skip.com", 24, @src());
+    {
+        const before = state.app.anime_skip_enabled;
+        components.toggleRow(@src(), "Auto-Skip (Anime)", "Skip intros, recaps & credits automatically", &state.app.anime_skip_enabled);
+        if (state.app.anime_skip_enabled != before) state.markConfigDirty();
+    }
+    if (state.app.anime_skip_enabled) {
+        {
+            const before = state.app.anime_skip_intro;
+            components.toggleRow(@src(), "Skip Intro", "Opening / OP", &state.app.anime_skip_intro);
+            if (state.app.anime_skip_intro != before) state.markConfigDirty();
+        }
+        {
+            const before = state.app.anime_skip_recap;
+            components.toggleRow(@src(), "Skip Recap", "\"Previously on…\" segments", &state.app.anime_skip_recap);
+            if (state.app.anime_skip_recap != before) state.markConfigDirty();
+        }
+        {
+            const before = state.app.anime_skip_credits;
+            components.toggleRow(@src(), "Skip Credits", "Ending / ED", &state.app.anime_skip_credits);
+            if (state.app.anime_skip_credits != before) state.markConfigDirty();
+        }
+        {
+            const before = state.app.anime_skip_preview;
+            components.toggleRow(@src(), "Skip Preview", "Next-episode preview", &state.app.anime_skip_preview);
+            if (state.app.anime_skip_preview != before) state.markConfigDirty();
+        }
+    }
+
     // Video Scaler — segment.
     settingRow("Video Scaler", 250, @src());
     {

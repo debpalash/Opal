@@ -931,6 +931,19 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_novels_pure).step);
 
+    // Anime-Skip pure logic: GraphQL body build + JSON escape, response parse
+    // (best-episode pick + ascending sort), point-marker → [start,end) range
+    // conversion, and the shouldSkip boundary/latch decision. anime_skip.zig
+    // routes through these.
+    const test_anime_skip_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/anime_skip_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_anime_skip_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main
