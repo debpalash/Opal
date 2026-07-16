@@ -751,6 +751,13 @@ pub const AppState = struct {
         // a hardcoded coffeemanga.io referer that broke every other source.
         referer: [512]u8 = std.mem.zeroes([512]u8),
         referer_len: usize = 0,
+        // Per-session HTTP header the page-download worker adds to every page
+        // fetch, as a full "Name: value" line (e.g. "Authorization: Basic …").
+        // Set when the reader is driven by an authenticated source (OPDS-PSE
+        // page streaming from Komga/Kavita); CLEARED by loadComic() so a
+        // subsequent scraper/MangaDex comic never sends stale credentials.
+        auth_header: [512]u8 = std.mem.zeroes([512]u8),
+        auth_header_len: usize = 0,
         view_mode: enum { scroll, single_page } = .scroll,
         current_page: usize = 0,
         dl_progress: std.atomic.Value(usize) = std.atomic.Value(usize).init(0), // images downloaded (atomic: written by ≤8 concurrent workers)

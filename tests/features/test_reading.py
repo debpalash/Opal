@@ -7,7 +7,8 @@ from .harness import *  # noqa: F401,F403
 # (test_opds_pure). Kept here as the documented sample; live-server connection
 # still needs manual verification (no live OPDS server in CI).
 SAMPLE_OPDS_FEED = """<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom">
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:pse="http://vaemendis.net/opds-pse/ns">
   <title>Komga OPDS</title>
   <entry>
     <title>All series</title>
@@ -19,6 +20,10 @@ SAMPLE_OPDS_FEED = """<?xml version="1.0" encoding="UTF-8"?>
     <link rel="http://opds-spec.org/image/thumbnail" href="/covers/1/thumb.jpg" type="image/jpeg"/>
     <link rel="http://opds-spec.org/acquisition" href="/books/1/file"
           type="application/vnd.comicbook+zip"/>
+    <!-- OPDS-PSE page stream: per-page images, Basic-auth on each fetch. -->
+    <link rel="http://vaemendis.net/opds-pse/stream"
+          href="/api/v1/books/1/pages/{pageNumber}?zero_based=true"
+          type="image/jpeg" pse:count="24"/>
   </entry>
 </feed>"""
 
@@ -75,6 +80,33 @@ def test_opds_reading_client():
     if "Reading server (OPDS)" not in settings or "Test Connection" not in settings:
         problems.append("Settings OPDS connection section missing")
 
+    # 8) OPDS-PSE (Komga/Kavita) page streaming: the pure module parses the PSE
+    #    link + count and builds per-page URLs; the sample feed carries one.
+    if not ("pub fn parsePseCount" in pure and "pub fn pageUrl" in pure
+            and "pub fn isPseStreamable" in pure and "opds-pse/stream" in pure):
+        problems.append("opds_pure missing PSE parse/pageUrl/isPseStreamable helpers")
+    if "opds-pse/stream" not in SAMPLE_OPDS_FEED or "{pageNumber}" not in SAMPLE_OPDS_FEED:
+        problems.append("sample feed lost its OPDS-PSE stream link")
+
+    # 9) opds.zig drives the PSE reader path THROUGH the pure fns, forwarding a
+    #    Basic-auth header built via opds_pure.basicAuthHeader.
+    if not ("isPseStreamable()" in svc and "loadPseBook" in svc
+            and "opdsAuthHeader" in svc and "pure.basicAuthHeader" in svc):
+        problems.append("opds.zig PSE route (isPseStreamable → loadPseBook + auth) not wired")
+
+    # 10) comics.zig gained the localized auth hook + builds page URLs via the
+    #     tested opds_pure.pageUrl, and forwards the header on the page fetch.
+    comics = _src("src/services/comics.zig")
+    if not ("pub fn loadPseBook" in comics and "opds_pure.pageUrl" in comics
+            and "auth_header" in comics):
+        problems.append("comics.zig missing loadPseBook / opds_pure.pageUrl / auth_header hook")
+    # The page-fetch worker must actually add the auth header to its curl argv.
+    if "state.app.comic.auth_header[0..state.app.comic.auth_header_len]" not in comics:
+        problems.append("comics page fetch does not read the per-session auth header")
+    if "auth_header" not in st:
+        problems.append("comic state struct missing auth_header field")
+
     if problems:
         return "fail", "; ".join(problems)
-    return "pass", "OPDS client wired: pure parser routed, config keys, tab + dispatch, comics reuse, settings section"
+    return ("pass", "OPDS client wired: pure parser routed, config keys, tab + dispatch, "
+            "comics reuse, settings section, OPDS-PSE page streaming (parse + pageUrl + Basic-auth forwarded)")
