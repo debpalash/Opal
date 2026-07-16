@@ -3,8 +3,18 @@ const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 const http = @import("../core/http.zig");
 const parse = @import("tmdb_parse.zig");
+const content_cache = @import("../core/content_cache.zig");
+const ccp = @import("../core/content_cache_pure.zig");
 
 const alloc = parse.alloc;
+
+// Encrypted-content-cache SWR for the default browse grid: cache page-1 browse
+// rows to disk so the Home/Browse grid is not blank on cold start. Serialization
+// routes through content_cache_pure.Writer/Reader (tested). Cap the cached set
+// so one page's worth of rows stays well under the entry size bound.
+const TMDB_BROWSE_TTL_S: i64 = @import("browse_cache.zig").TTL_S;
+const TMDB_BLOB_CAP: usize = 128 * 1024;
+const TMDB_MAX_CACHED_ITEMS: usize = 100;
 
 // ══════════════════════════════════════════════════════════
 // Unified Fetch Logic
@@ -33,6 +43,100 @@ pub fn fetchCurrentView(append: bool) void {
         }
     } else {
         fetchTmdb(.browse, "", append);
+    }
+}
+
+// ══════════════════════════════════════════════════════════
+// Encrypted on-disk content cache — browse-grid stale-while-revalidate.
+// ══════════════════════════════════════════════════════════
+
+fn browseCacheKey(buf: []u8) []const u8 {
+    const t = &state.app.tmdb;
+    return std.fmt.bufPrint(buf, "tmdb:browse:{d}:{d}:{d}:{d}:{d}", .{
+        @intFromEnum(t.category),
+        @intFromEnum(t.media_filter),
+        @intFromEnum(t.time_window),
+        t.genre_idx,
+        t.discover_sort,
+    }) catch "tmdb:browse:default";
+}
+
+fn serializeItem(w: *ccp.Writer, it: state.TmdbItem) void {
+    w.i32v(it.id);
+    w.blob(it.title[0..@min(it.title_len, it.title.len)]);
+    w.blob(it.year[0..@min(it.year_len, it.year.len)]);
+    w.blob(it.release_date[0..@min(it.release_date_len, it.release_date.len)]);
+    w.f32v(it.rating);
+    w.blob(it.overview[0..@min(it.overview_len, it.overview.len)]);
+    w.blob(it.media_type[0..@min(it.media_type_len, it.media_type.len)]);
+    w.blob(it.genre_text[0..@min(it.genre_text_len, it.genre_text.len)]);
+    w.blob(it.poster_path[0..@min(it.poster_path_len, it.poster_path.len)]);
+}
+
+fn copyField(dst: []u8, len: *usize, src: []const u8) void {
+    const n = @min(src.len, dst.len);
+    @memcpy(dst[0..n], src[0..n]);
+    len.* = n;
+}
+
+/// Reads one item from `r`. Returns null when the blob is truncated.
+fn deserializeItem(r: *ccp.Reader) ?state.TmdbItem {
+    var it = state.TmdbItem{};
+    it.id = r.i32v() orelse return null;
+    copyField(&it.title, &it.title_len, r.blob() orelse return null);
+    copyField(&it.year, &it.year_len, r.blob() orelse return null);
+    copyField(&it.release_date, &it.release_date_len, r.blob() orelse return null);
+    it.rating = r.f32v() orelse return null;
+    copyField(&it.overview, &it.overview_len, r.blob() orelse return null);
+    copyField(&it.media_type, &it.media_type_len, r.blob() orelse return null);
+    copyField(&it.genre_text, &it.genre_text_len, r.blob() orelse return null);
+    copyField(&it.poster_path, &it.poster_path_len, r.blob() orelse return null);
+    return it;
+}
+
+/// SWR write — persist a fresh page-1 browse set (called from the fetch worker).
+fn putBrowseCache(items: []const state.TmdbItem) void {
+    if (!state.app.content_cache_enabled) return;
+    if (items.len == 0) return;
+    const buf = alloc.alloc(u8, TMDB_BLOB_CAP) catch return;
+    defer alloc.free(buf);
+    var w = ccp.Writer.init(buf);
+    const n: u16 = @intCast(@min(items.len, TMDB_MAX_CACHED_ITEMS));
+    w.u16v(n);
+    var i: usize = 0;
+    while (i < n) : (i += 1) serializeItem(&w, items[i]);
+    const blob = w.done() orelse return;
+    var key_buf: [96]u8 = undefined;
+    const key = browseCacheKey(&key_buf);
+    content_cache.put(key, blob, TMDB_BROWSE_TTL_S);
+}
+
+/// SWR read — seed the browse grid from disk so it paints INSTANTLY on cold
+/// start instead of showing a blank gallery while the first fetch runs. Called
+/// on the UI thread from renderTmdbContent before the initial fetch; only seeds
+/// the default Trending browse grid when it is currently empty.
+pub fn seedBrowseFromCache() void {
+    if (!state.app.content_cache_enabled) return;
+    const t = &state.app.tmdb;
+    if (t.view != .Trending) return;
+    if (t.results.items.len != 0) return;
+    const buf = alloc.alloc(u8, TMDB_BLOB_CAP) catch return;
+    defer alloc.free(buf);
+    var key_buf: [96]u8 = undefined;
+    const key = browseCacheKey(&key_buf);
+    const hit = content_cache.get(key, buf) orelse return;
+
+    var r = ccp.Reader.init(hit.bytes);
+    const n = r.u16v() orelse return;
+    t.results_mutex.lock();
+    defer t.results_mutex.unlock();
+    // Match fetchCurrentView's stable reservation so the imminent fetch's
+    // ensureTotalCapacity(2048) never reallocates under poster workers.
+    t.results.ensureTotalCapacity(alloc, 2048) catch {};
+    var i: usize = 0;
+    while (i < n and t.results.items.len < TMDB_MAX_CACHED_ITEMS) : (i += 1) {
+        const it = deserializeItem(&r) orelse break;
+        t.results.append(alloc, it) catch break;
     }
 }
 
@@ -92,6 +196,12 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
             var staged: std.ArrayListUnmanaged(state.TmdbItem) = .empty;
             const total_pages: u32 = @intCast(@max(1, parse.extractJsonInt(body, "\"total_pages\":")));
             parse.parseTmdbResponse(body, &staged);
+
+            // SWR write: persist the fresh default browse grid (page 1 only) so
+            // the next cold start paints instantly. Search + infinite-scroll
+            // pages are not cached.
+            if (S.fetch_mode == .browse and !S.do_append and S.page == 1)
+                putBrowseCache(staged.items);
 
             state.app.tmdb.results_mutex.lock();
             defer state.app.tmdb.results_mutex.unlock();

@@ -7,6 +7,8 @@ const c = @import("../core/c.zig");
 const logs = @import("../core/logs.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
+const content_cache = @import("../core/content_cache.zig");
+const ccp = @import("../core/content_cache_pure.zig");
 
 // ══════════════════════════════════════════════════════════
 // Universal Resolver — one query, every source, ranked
@@ -48,6 +50,15 @@ pub const ResolvedItem = struct {
 pub var results: [64]ResolvedItem = std.mem.zeroes([64]ResolvedItem);
 pub var result_count: usize = 0;
 pub var results_mutex = @import("../core/sync.zig").Mutex{};
+
+// Encrypted-content-cache SWR state. When a query's results are seeded from
+// the on-disk cache (instant, no empty view), `results_from_cache` is true; the
+// first live result of the fresh wave then replaces the placeholder (see
+// pushResult). Guarded by results_mutex. Serialized blobs cap at ~160 KB
+// (64 rows × fixed buffers), so 256 KB is a safe scratch size.
+var results_from_cache: bool = false;
+const SEARCH_BLOB_CAP: usize = 256 * 1024;
+const SEARCH_TTL_S: i64 = @import("browse_cache.zig").TTL_S;
 
 // Search state — shared across 7 worker threads + UI; access via atomics.
 pub var is_resolving = std.atomic.Value(bool).init(false);
@@ -291,7 +302,13 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     // Clear results
     results_mutex.lock();
     result_count = 0;
+    results_from_cache = false;
     results_mutex.unlock();
+
+    // SWR: seed from the encrypted on-disk cache so the view paints INSTANTLY
+    // (never blank) while the workers below revalidate. The first live result
+    // replaces this placeholder (see pushResult).
+    populateFromCache(normalized);
 
     is_resolving.store(true, .release);
     // IMPORTANT: Set ALL to their final pre-spawn state BEFORE spawning any
@@ -388,6 +405,13 @@ fn pushResult(item: ResolvedItem) bool {
     const score = match_info.score;
     scored_item.score = score; // cache so re-inserts don't recompute (S45)
     scored_item.is_nsfw = @import("search.zig").isNsfwName(name); // S16
+
+    // SWR: the first live result of a fresh wave replaces the cache-seeded
+    // placeholder, so stale cached rows never mix with the revalidated set.
+    if (results_from_cache) {
+        result_count = 0;
+        results_from_cache = false;
+    }
 
     // Insert sorted by score (lower = better) — compare cached scores, O(n)
     var insert_at: usize = result_count;
@@ -660,6 +684,119 @@ fn attrValue(html: []const u8, name: []const u8, limit: usize) ?[]const u8 {
     return html[p .. p + end];
 }
 
+// ══════════════════════════════════════════════════════════
+// Encrypted on-disk content cache — stale-while-revalidate wiring.
+// Serialization routes through content_cache_pure.Writer/Reader (tested).
+// ══════════════════════════════════════════════════════════
+
+fn cacheKey(buf: []u8, query: []const u8) []const u8 {
+    return std.fmt.bufPrint(buf, "search:{s}", .{query}) catch "search:";
+}
+
+/// Serialize the current `results` (under caller's lock) into `out`.
+fn serializeResults(out: []u8) ?[]u8 {
+    var w = ccp.Writer.init(out);
+    const n: u16 = @intCast(@min(result_count, 64));
+    w.u16v(n);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const it = results[i];
+        w.blob(it.name[0..@min(it.name_len, it.name.len)]);
+        w.blob(it.detail[0..@min(it.detail_len, it.detail.len)]);
+        w.blob(it.url[0..@min(it.url_len, it.url.len)]);
+        w.u8v(@intFromEnum(it.source));
+        w.u8v(it.quality);
+        w.u16v(it.seeds);
+        w.u8v(it.match_pct);
+        w.u32v(it.score);
+        w.boolv(it.is_nsfw);
+        w.blob(it.jf_item_id[0..@min(it.jf_item_id_len, it.jf_item_id.len)]);
+    }
+    return w.done();
+}
+
+fn copyField(dst: []u8, len: *usize, src: []const u8) void {
+    const n = @min(src.len, dst.len);
+    @memcpy(dst[0..n], src[0..n]);
+    len.* = n;
+}
+
+/// Reconstruct rows from a cached blob straight into `results` (under lock).
+/// Returns how many rows were populated.
+fn deserializeInto(bytes: []const u8) usize {
+    var r = ccp.Reader.init(bytes);
+    const n = r.u16v() orelse return 0;
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < n and count < 64) : (i += 1) {
+        var it = ResolvedItem{};
+        const name = r.blob() orelse break;
+        copyField(&it.name, &it.name_len, name);
+        const detail = r.blob() orelse break;
+        copyField(&it.detail, &it.detail_len, detail);
+        const url = r.blob() orelse break;
+        copyField(&it.url, &it.url_len, url);
+        const src_tag = r.u8v() orelse break;
+        const src_fields = @typeInfo(SourceType).@"enum".fields.len;
+        it.source = if (src_tag < src_fields) @enumFromInt(src_tag) else .torrent;
+        it.quality = r.u8v() orelse break;
+        it.seeds = r.u16v() orelse break;
+        it.match_pct = r.u8v() orelse break;
+        it.score = r.u32v() orelse break;
+        it.is_nsfw = r.boolv() orelse break;
+        const jf = r.blob() orelse break;
+        copyField(&it.jf_item_id, &it.jf_item_id_len, jf);
+        results[count] = it;
+        count += 1;
+    }
+    return count;
+}
+
+/// SWR read: seed `results` from the on-disk cache so the search view paints
+/// instantly instead of showing an empty list while the workers fan out.
+fn populateFromCache(query: []const u8) void {
+    if (!state.app.content_cache_enabled) return;
+    const buf = alloc.alloc(u8, SEARCH_BLOB_CAP) catch return;
+    defer alloc.free(buf);
+    var key_buf: [288]u8 = undefined;
+    const key = cacheKey(&key_buf, query);
+    const hit = content_cache.get(key, buf) orelse return;
+    results_mutex.lock();
+    defer results_mutex.unlock();
+    const n = deserializeInto(hit.bytes);
+    if (n > 0) {
+        result_count = n;
+        results_from_cache = true;
+    }
+}
+
+/// SWR write: persist the freshly-fetched results so the next cold start (or a
+/// repeat query) is instant. Only stores real live results — never re-stores a
+/// cache-seeded placeholder (that would reset the TTL without a network fetch).
+fn storeToCache() void {
+    if (!state.app.content_cache_enabled) return;
+    results_mutex.lock();
+    if (result_count == 0 or results_from_cache) {
+        results_mutex.unlock();
+        return;
+    }
+    const buf = alloc.alloc(u8, SEARCH_BLOB_CAP) catch {
+        results_mutex.unlock();
+        return;
+    };
+    defer alloc.free(buf);
+    var qbuf: [256]u8 = undefined;
+    const qn = @min(resolver_query_len, resolver_query.len);
+    @memcpy(qbuf[0..qn], resolver_query[0..qn]);
+    const blob = serializeResults(buf);
+    results_mutex.unlock();
+    if (blob) |b| {
+        var key_buf: [288]u8 = undefined;
+        const key = cacheKey(&key_buf, qbuf[0..qn]);
+        content_cache.put(key, b, SEARCH_TTL_S);
+    }
+}
+
 fn checkAllDone() void {
     if (status_jf.load(.acquire) != .searching and status_stremio.load(.acquire) != .searching and
         status_torrent.load(.acquire) != .searching and status_anime.load(.acquire) != .searching and
@@ -669,7 +806,10 @@ fn checkAllDone() void {
         status_torznab.load(.acquire) != .searching and status_archive.load(.acquire) != .searching and
         status_nasa.load(.acquire) != .searching and status_commons.load(.acquire) != .searching)
     {
-        is_resolving.store(false, .release);
+        // Swap so the resolving→done transition fires exactly once even if two
+        // finishing workers observe "all done" concurrently — only the winner
+        // persists the revalidated results for the next cold start (SWR write).
+        if (is_resolving.swap(false, .acq_rel)) storeToCache();
     }
 }
 
