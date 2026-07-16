@@ -517,6 +517,8 @@ fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator, my_gen: u64) vo
 /// the resolver fan-out. Mirrors the in-page universal submit at renderSearchContent.
 pub fn submitQuery(query_text: []const u8) void {
     if (query_text.len == 0) return;
+    // Local taste engine: log the intent (buffered, flushed off-thread).
+    @import("activity.zig").record(.search, query_text, .{});
     const resolver = @import("resolver.zig");
     const n = @min(query_text.len, search_buf.len - 1);
     @memset(&search_buf, 0);

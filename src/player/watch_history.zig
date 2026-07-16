@@ -84,6 +84,10 @@ pub fn savePosition(name: []const u8, percent: f64, link: []const u8) void {
     if (name.len == 0 or name.len >= MAX_NAME_LEN) return;
     if (percent < 0.5) return;
 
+    // Local taste engine: torrent playback progress arrives here under the
+    // torrent's real name (the proxy URL seen by load_file carries none).
+    @import("../services/activity.zig").onProgress(name, percent);
+
     var key_buf: [MAX_LINK_LEN]u8 = undefined;
     const file_key = resolveFileKey(link, &key_buf);
 

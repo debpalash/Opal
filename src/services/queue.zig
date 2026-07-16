@@ -156,6 +156,9 @@ pub fn addToQueueWithThumb(url: []const u8, title: []const u8, source: []const u
     initDb();
     if (db == null) return;
 
+    // Local taste engine: queueing something is a positive taste signal.
+    @import("activity.zig").record(.queue_add, title, .{ .key = url });
+
     const sql = "INSERT INTO queue (url, title, source, thumb_url, added_at) VALUES (?1, ?2, ?3, ?4, ?5);";
     var stmt: ?*c.sqlite.sqlite3_stmt = null;
     if (c.sqlite.sqlite3_prepare_v2(db.?, sql, -1, &stmt, null) != c.sqlite.SQLITE_OK) return;

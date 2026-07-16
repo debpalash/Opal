@@ -1155,6 +1155,26 @@ fn renderGeneralTab() void {
         if (state.app.nsfw_filter_enabled != before) state.markConfigDirty();
     }
 
+    // Personalized suggestions (local-only) — gates the taste engine
+    // (services/activity.zig): activity recording AND the Home "For You" row.
+    // Everything stays on-device; "Clear taste data" drops the logged rows.
+    {
+        const before = state.app.taste_enabled;
+        components.toggleRow(@src(), "Personalized suggestions (local-only)", "Learn from your activity on this device to improve the For You row", &state.app.taste_enabled);
+        if (state.app.taste_enabled != before) state.markConfigDirty();
+        if (dvui.button(@src(), "Clear taste data", .{}, .{
+            .color_fill = theme.transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_text = theme.colors.accent,
+            .border = dvui.Rect.all(0),
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+        })) {
+            @import("../services/activity.zig").clearTasteData();
+            state.showToast("Taste data cleared");
+        }
+    }
+
     // ── TMDB Integration ──
     sectionHeader("TMDB Integration", "Connect to The Movie Database for rich metadata", 14, @src());
 

@@ -72,6 +72,9 @@ pub fn savePlaybackPosition(url: []const u8, position: f64, duration: f64) void 
     const whp = @import("../player/watch_history_pure.zig");
 
     const percent = if (duration > 0) (position / duration) * 100.0 else 0;
+    // Local taste engine: feed watch depth (finish/abandon detection). Must
+    // run BEFORE the nearly-finished early-return or finishes would never be seen.
+    @import("activity.zig").onProgress(url, percent);
     // Don't save if nearly finished — treat as "watched"
     if (percent > whp.FINISHED_FRACTION * 100.0) return;
     // Don't save very early positions (<2%)

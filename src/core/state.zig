@@ -353,6 +353,9 @@ pub const AppState = struct {
     last_clicked_search_idx: usize = 99999,
     last_clicked_time: i64 = 0,
     nsfw_filter_enabled: bool = true,
+    // "Personalized suggestions (local-only)" — gates the activity/taste
+    // engine (services/activity.zig): recording AND the Home "For You" row.
+    taste_enabled: bool = true,
     universal_search: bool = true, // Default to universal mode (the king feature)
     nsfw_confirm_pending: bool = false,
     nsfw_confirm_link_buf: [4096]u8 = std.mem.zeroes([4096]u8),

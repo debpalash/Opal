@@ -53,6 +53,13 @@ pub fn init() void {
         return;
     }
 
+    // Register sqlite-vec on THIS connection too. The auto_extension above is
+    // a silent no-op on Apple's libsqlite3 ("process-global auto extensions
+    // are not supported on Apple platforms"), which left every vec0 CREATE
+    // TABLE failing quietly — no vec_aimemory, no vec_taste. sqlite-vec is
+    // compiled with -DSQLITE_CORE (build.zig) so the direct call is safe.
+    _ = c.sqlite3_vec_init(db_handle, null, null);
+
     // Performance tuning
     exec("PRAGMA journal_mode=WAL");
     exec("PRAGMA synchronous=NORMAL");
@@ -196,6 +203,42 @@ fn createTables() void {
         \\CREATE VIRTUAL TABLE IF NOT EXISTS vec_aimemory USING vec0(
         \\  id INTEGER PRIMARY KEY,
         \\  embedding float[768]
+        \\)
+    );
+
+    // ── Local taste engine (services/activity.zig) ──
+    // Event log: what the user played/finished/abandoned/searched/queued.
+    // Local-only; rows are droppable via Settings "Clear taste data".
+    exec(
+        \\CREATE TABLE IF NOT EXISTS activity_log (
+        \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+        \\  ts INTEGER DEFAULT (strftime('%s','now')),
+        \\  kind TEXT NOT NULL,
+        \\  title TEXT NOT NULL DEFAULT '',
+        \\  key TEXT DEFAULT '',
+        \\  genre TEXT DEFAULT '',
+        \\  season_hint INTEGER DEFAULT 0,
+        \\  percent_watched REAL DEFAULT 0
+        \\)
+    );
+    exec("CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity_log(ts DESC)");
+
+    // Item identity for the taste vectors — vec_taste shares its rowid
+    // (the aimemory/vec_aimemory pattern above), keyed by the activity key.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS taste_items (
+        \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+        \\  key TEXT UNIQUE NOT NULL,
+        \\  title TEXT DEFAULT '',
+        \\  genre TEXT DEFAULT ''
+        \\)
+    );
+
+    // 128 must match taste_pure.DIM (deterministic token-hash featurizer).
+    exec(
+        \\CREATE VIRTUAL TABLE IF NOT EXISTS vec_taste USING vec0(
+        \\  id INTEGER PRIMARY KEY,
+        \\  embedding float[128]
         \\)
     );
 
