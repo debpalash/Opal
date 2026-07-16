@@ -1,0 +1,20 @@
+{
+  "name": "opal-connector",
+  "version": "0.1.0",
+  "description": "Opal Connector — send any website's media, articles, downloads and scraped page data to a locally-running Opal desktop app.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "extension dev",
+    "start": "extension start",
+    "build": "extension build",
+    "preview": "extension preview"
+  },
+  "devDependencies": {
+    "extension": "^3.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

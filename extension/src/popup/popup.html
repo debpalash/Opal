@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Opal Connector</title>
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <header>
+      <span class="logo">◆</span>
+      <h1>Opal Connector</h1>
+    </header>
+
+    <div id="status" class="status probing">
+      <span class="dot"></span>
+      <span id="status-text">Checking Opal…</span>
+    </div>
+
+    <div class="actions">
+      <button id="send" class="primary">▶ Send current tab to Opal</button>
+      <button id="download">⬇ Download current tab</button>
+    </div>
+
+    <footer>
+      <a id="options" href="#">Settings</a>
+      <span class="hint">Requires Opal running locally</span>
+    </footer>
+
+    <script type="module" src="./popup.ts"></script>
+  </body>
+</html>

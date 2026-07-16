@@ -602,7 +602,10 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     // browser.loadContent exactly like a direct CLI launch (magnet/torrent/
     // playlist dispatch included).
     if (std.mem.eql(u8, api_path, "/open")) {
-        if (getQueryParam(query, "path")) |raw| {
+        // Accept `url` as an alias for `path`: the browser extension (and this
+        // endpoint's documented shape) POST /api/open?url=<enc>, while the web
+        // UI uses ?path=. Both route through the same UI-thread hand-off.
+        if (getQueryParam(query, "path") orelse getQueryParam(query, "url")) |raw| {
             var dec_buf: [2048]u8 = undefined;
             const decoded = urlDecode(raw, &dec_buf) orelse raw;
             if (decoded.len > 0) {
@@ -616,6 +619,37 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
             }
         }
         sendJson(stream, "{\"ok\":true,\"action\":\"open\"}");
+        return;
+    }
+    // Scrape/ingest from the browser extension: route a page's media/article/
+    // chapter data into Opal. Body fields arrive as query params (the server
+    // reads the request line + headers, not a JSON body) — see /api/open. The
+    // URL (page/media URL, or the first chapter) is dispatched through the same
+    // UI-thread hand-off as /open so it runs the full browser.loadContent path.
+    if (std.mem.eql(u8, api_path, "/ingest")) {
+        var type_buf: [32]u8 = undefined;
+        const raw_type = if (getQueryParam(query, "type")) |t| (urlDecode(t, &type_buf) orelse "media") else "media";
+        // Clamp to the known set so the echoed value can't inject into the JSON.
+        const ingest_type = if (std.mem.eql(u8, raw_type, "article") or std.mem.eql(u8, raw_type, "chapters"))
+            raw_type
+        else
+            "media";
+        if (getQueryParam(query, "url")) |raw| {
+            var dec_buf: [2048]u8 = undefined;
+            const decoded = urlDecode(raw, &dec_buf) orelse raw;
+            if (decoded.len > 0) {
+                state.app.remote_open_lock.lock();
+                const n = @min(decoded.len, state.app.remote_open_path.len);
+                @memcpy(state.app.remote_open_path[0..n], decoded[0..n]);
+                state.app.remote_open_len = n;
+                state.app.remote_open_ready = true;
+                state.app.remote_open_lock.unlock();
+                state.wakeUi();
+            }
+        }
+        var jb: [96]u8 = undefined;
+        const j = std.fmt.bufPrint(&jb, "{{\"ok\":true,\"action\":\"ingest\",\"type\":\"{s}\"}}", .{ingest_type}) catch "{\"ok\":true,\"action\":\"ingest\"}";
+        sendJson(stream, j);
         return;
     }
     if (std.mem.eql(u8, api_path, "/settings/open")) {
