@@ -49,7 +49,8 @@ def test_novels_reader():
         "wikisource source wired": 'WIKI_API = "https://en.wikisource.org/w/api.php"' in pure,
         "wikisource used in service": "Wikisource" in svc,
         # ── Drill-down UI: enum → nav → render dispatch ──
-        "enum variant present": "Novels }" in st and "pub const DrawerTab" in st,
+        # Membership, not position — the enum grows as tabs are appended at the END.
+        "enum variant present": "Novels" in st and "pub const DrawerTab" in st,
         "state struct": "novels: struct {" in st,
         "reader text buffer": "text_buf: [131072]u8" in st,
         "view machine": "view: enum { search, chapters, reader }" in st,

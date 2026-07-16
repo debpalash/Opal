@@ -38,6 +38,7 @@ from features import (  # noqa: F401
     test_reading,
     test_novels,
     test_gallerydl,
+    test_vndb,
 )
 
 if __name__ == "__main__":

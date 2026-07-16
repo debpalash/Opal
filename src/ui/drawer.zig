@@ -236,6 +236,8 @@ pub fn renderDrawer() void {
         // inserted without renumbering the rest so concurrent tab additions merge
         // cleanly. Keyboard order puts it after the sources group, which is fine.
         renderRailTab(.Novels, shell.iconForTab(.Novels), "Novels", 20);
+        // id 21 (not renumbering the rest) so concurrent tab additions merge cleanly.
+        renderRailTab(.Vndb, shell.iconForTab(.Vndb), "Visual Novels", 21);
         renderRailTab(.Web, shell.iconForTab(.Web), "Web", 10);
         renderRailTab(.RSS, shell.iconForTab(.RSS), "RSS", 11);
         renderRailTab(.Jellyfin, shell.iconForTab(.Jellyfin), "Jellyfin / Emby", 12);
@@ -304,6 +306,7 @@ pub fn renderTabContent(tab: state.DrawerTab) void {
         .Queue => queue.renderContent(),
         .Comics => comics.renderContent(),
         .Novels => @import("../services/novels.zig").renderContent(),
+        .Vndb => @import("../services/vndb.zig").renderContent(),
         .Web => @import("../services/browser.zig").renderContent(),
         .Anime => anime.renderContent(),
         .Podcasts => @import("../services/podcasts.zig").renderContent(),

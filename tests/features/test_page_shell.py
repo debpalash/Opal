@@ -252,7 +252,9 @@ def test_podcasts_radio_default_content():
         ),
         # Pages kick the fetch from their own render root, not a shared shell.
         "kicked from renderContent": all("loadPopularOnce();" in s for s in (pod, rad)),
-        "state flag": st.count("showing_popular: bool") == 2,
+        # Both podcasts + radio declare the popular-chart flag (>= 2 — other
+        # catalog tabs, e.g. VNDB, legitimately declare their own sibling flag).
+        "state flag": st.count("showing_popular: bool") >= 2,
         # Detached threads only — a discarded handle leaks the pthread.
         "threads detached": all("_ = std.Thread.spawn(" not in s for s in (pod, rad)),
     }
