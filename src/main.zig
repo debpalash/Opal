@@ -691,15 +691,20 @@ fn appFrame() !dvui.App.Result {
         state.app.session_restore_done = true;
         const wh = @import("player/watch_history.zig");
         const rp = @import("player/resume_pure.zig");
-        if (state.app.players.items.len == 0 and wh.count > 0 and
-            rp.isResumable(wh.entries[0].link_len, wh.entries[0].percent))
-        {
+        const whp = @import("player/watch_history_pure.zig");
+        // Seconds-accurate rows gate on the exact position (>=30s in, <95% of
+        // duration); legacy percent-only rows keep the old percent predicate.
+        const offer = state.app.players.items.len == 0 and wh.count > 0 and blk: {
+            const e0 = &wh.entries[0];
+            if (e0.link_len == 0) break :blk false;
+            if (e0.position_secs > 0) break :blk whp.resumeEligible(e0.position_secs, e0.duration_secs);
+            break :blk rp.isResumable(e0.link_len, e0.percent);
+        };
+        if (offer) {
             const e = &wh.entries[0]; // load() orders by updated_at DESC → most recent
             const link = e.link[0..e.link_len];
             // Don't offer a dead resume for a local file deleted between sessions.
-            const is_local = link.len > 0 and (link[0] == '/' or std.mem.startsWith(u8, link, "file://"));
-            const exists = if (is_local) blk: {
-                const fs_path = if (std.mem.startsWith(u8, link, "file://")) link[7..] else link;
+            const exists = if (whp.localFsPath(link)) |fs_path| blk: {
                 const io_g = @import("core/io_global.zig");
                 if (io_g.openFileAbsolute(fs_path, .{})) |f| {
                     f.close(io_g.io());
@@ -710,8 +715,9 @@ fn appFrame() !dvui.App.Result {
                 const ll = @min(link.len, state.app.resume_prompt_link.len);
                 @memcpy(state.app.resume_prompt_link[0..ll], link[0..ll]);
                 state.app.resume_prompt_link_len = ll;
-                state.app.resume_prompt_label_len = rp.cleanTitle(e.name[0..e.name_len], &state.app.resume_prompt_label);
+                state.app.resume_prompt_label_len = rp.cleanTitle(whp.displayName(e.name[0..e.name_len]), &state.app.resume_prompt_label);
                 state.app.resume_prompt_pct = @intFromFloat(std.math.clamp(e.percent, 0, 100));
+                state.app.resume_prompt_pos_secs = e.position_secs;
                 state.app.resume_prompt_active = true;
             }
         }

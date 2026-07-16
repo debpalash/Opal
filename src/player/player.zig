@@ -59,6 +59,7 @@ pub const MediaPlayer = struct {
     is_torrent: bool,
     metadata_start_time: i64,
     resume_percent: f64 = 0.0,
+    resume_position_secs: f64 = 0.0, // exact-second resume (wins over percent)
     current_url: [2048]u8 = std.mem.zeroes([2048]u8),
     current_url_len: usize = 0,
     resume_seeked: bool = false,
@@ -312,6 +313,7 @@ pub const MediaPlayer = struct {
         self.is_torrent = false;
         self.metadata_start_time = 0;
         self.resume_percent = 0.0;
+        self.resume_position_secs = 0.0;
         @memset(&self.source_url, 0);
         @memset(&self.current_url, 0);
         self.current_url_len = 0;
@@ -714,14 +716,18 @@ pub const MediaPlayer = struct {
         else
             history.getPlaybackPosition(cur);
 
-        if (saved_pos > 2) {
+        // Only resume a position worth resuming: >= ~30s in and not
+        // effectively finished (see watch_history_pure thresholds).
+        var dur: f64 = 0;
+        _ = c.mpv.mpv_get_property(self.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur);
+        if (@import("watch_history_pure.zig").resumeEligible(saved_pos, dur)) {
             var seek_buf: [64]u8 = undefined;
             const seek_cmd = std.fmt.bufPrintZ(&seek_buf, "seek {d:.1} absolute", .{saved_pos}) catch return;
             _ = c.mpv.mpv_command_string(self.mpv_ctx, seek_cmd.ptr);
-            const mins: u32 = @intFromFloat(saved_pos / 60);
-            const secs: u32 = @intFromFloat(@mod(saved_pos, 60));
+            var ts_buf: [16]u8 = undefined;
+            const ts = @import("../services/youtube_pure.zig").formatDuration(@intFromFloat(saved_pos), &ts_buf);
             var toast_buf: [64]u8 = undefined;
-            const toast = std.fmt.bufPrint(&toast_buf, "Resumed at {d}:{d:0>2}", .{ mins, secs }) catch return;
+            const toast = std.fmt.bufPrint(&toast_buf, "Resumed at {s}", .{ts}) catch return;
             state.showToast(toast);
         }
     }
@@ -1276,21 +1282,33 @@ pub fn updateTorrentBackgroundTasks() void {
                         ai_memory.ingestMemory("system", "User started playing media", "media", t_name_ai[0..nai_len]);
                     }
 
-                    // Check watch history for resume position
+                    // Check watch history for resume position — prefer the
+                    // exact saved second; fall back to legacy percent rows.
                     const watch = @import("watch_history.zig");
-                    if (p.resume_percent <= 0.0) {
+                    if (p.resume_percent <= 0.0 and p.resume_position_secs <= 0.0) {
                         var t_name2: [256]u8 = undefined;
                         c.mpv.torrent_get_name(state.torrentSession(), p.current_torrent_id, &t_name2, 256);
                         const n_len = std.mem.indexOfScalar(u8, &t_name2, 0) orelse 0;
                         if (n_len > 0) {
-                            const saved_pct = watch.getPosition(t_name2[0..n_len]);
-                            if (saved_pct > 1.0 and saved_pct < 95.0) {
-                                p.resume_percent = saved_pct;
+                            if (watch.getEntry(t_name2[0..n_len])) |we| {
+                                const whp = @import("watch_history_pure.zig");
+                                if (whp.resumeEligible(we.position_secs, we.duration_secs)) {
+                                    p.resume_position_secs = we.position_secs;
+                                } else if (we.position_secs <= 0.0 and we.percent > 1.0 and we.percent < 95.0) {
+                                    p.resume_percent = we.percent;
+                                }
                             }
                         }
                     }
 
-                    if (p.resume_percent > 0.0) {
+                    if (p.resume_position_secs > 0.0) {
+                        // mpv "start" takes plain seconds — exact-second resume.
+                        var start_opt: [32]u8 = undefined;
+                        if (std.fmt.bufPrintZ(&start_opt, "{d:.2}", .{p.resume_position_secs})) |so| {
+                            _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "start", so.ptr);
+                        } else |_| {}
+                        p.resume_position_secs = 0.0;
+                    } else if (p.resume_percent > 0.0) {
                         var start_opt: [32]u8 = undefined;
                         if (std.fmt.bufPrintZ(&start_opt, "{d:.2}%", .{p.resume_percent})) |so| {
                             _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "start", so.ptr);
@@ -1368,7 +1386,11 @@ pub fn updateTorrentBackgroundTasks() void {
                         // this row can never be resumed into the right player
                         // later (Jump back in / History fall back to guessing
                         // from the bare name, which routes to the web browser).
-                        watch.savePosition(t_name3[0..n3_len], percent_pos, p.source_url[0..p.source_url_len]);
+                        var pos_s: f64 = 0;
+                        var dur_s: f64 = 0;
+                        _ = c.mpv.mpv_get_property(p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &pos_s);
+                        _ = c.mpv.mpv_get_property(p.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur_s);
+                        watch.savePositionFull(t_name3[0..n3_len], percent_pos, pos_s, dur_s, p.source_url[0..p.source_url_len]);
                     }
                 }
             }

@@ -144,6 +144,13 @@ pub fn cwdStatFile(path: []const u8) !std.Io.File.Stat {
     return std.Io.Dir.cwd().statFile(io(), path, .{});
 }
 
+/// Resolve `sub_path` (relative to cwd) to an absolute, symlink-free path.
+/// Returns the slice of `buf` holding the result.
+pub fn cwdRealPathFile(sub_path: []const u8, buf: []u8) ![]const u8 {
+    const n = try std.Io.Dir.cwd().realPathFile(io(), sub_path, buf);
+    return buf[0..n];
+}
+
 pub fn createFileAbsolute(path: []const u8, opts: std.Io.Dir.CreateFileOptions) !std.Io.File {
     return std.Io.Dir.createFileAbsolute(io(), path, opts);
 }

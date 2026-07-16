@@ -110,25 +110,25 @@ fn createTables() void {
         \\)
     );
 
-    // Watch history (playback resume positions)
+    // Watch history (playback resume positions). file_key is the absolute
+    // filesystem path for local files ('' for streams/torrents) — see
+    // player/watch_history.zig migrateSchema() for the v1→v2 upgrade, which
+    // runs at the end of createTables (versioned via PRAGMA user_version).
     exec(
         \\CREATE TABLE IF NOT EXISTS watch_history (
         \\  name TEXT PRIMARY KEY,
         \\  percent REAL DEFAULT 0,
         \\  position_secs REAL DEFAULT 0,
         \\  duration_secs REAL DEFAULT 0,
+        \\  file_key TEXT DEFAULT '',
         \\  link TEXT DEFAULT '',
         \\  updated_at INTEGER DEFAULT (strftime('%s','now'))
         \\)
     );
 
-    // Migration: add position_secs if missing
-    exec("ALTER TABLE watch_history ADD COLUMN position_secs REAL DEFAULT 0");
-    exec("ALTER TABLE watch_history ADD COLUMN duration_secs REAL DEFAULT 0");
-
     // Total Recall: scene memories store a playback position alongside the
     // aimemory row. Idempotent — exec() swallows the duplicate-column error
-    // just like the watch_history migrations above.
+    // just like the watch_history migration.
     exec("ALTER TABLE aimemory ADD COLUMN position_secs REAL DEFAULT 0");
 
     // TMDB items
@@ -384,6 +384,9 @@ fn createTables() void {
         \\INSERT OR IGNORE INTO tv_shows(tmdb_id, name, poster_path, tracked, added_at, updated_at)
         \\SELECT tmdb_id, name, poster_path, 1, updated_at, updated_at FROM tv_continue
     );
+
+    // Watch-history v1→v2 (seconds + file-identity key), gated on user_version.
+    @import("../player/watch_history.zig").migrateSchema();
 }
 
 // ══════════════════════════════════════════════════════════

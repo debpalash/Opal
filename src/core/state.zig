@@ -472,6 +472,7 @@ pub const AppState = struct {
     resume_prompt_label: [128]u8 = std.mem.zeroes([128]u8), // cleaned title for the banner
     resume_prompt_label_len: usize = 0,
     resume_prompt_pct: u8 = 0, // saved progress (0–100)
+    resume_prompt_pos_secs: f64 = 0, // exact saved position; 0 = percent-only legacy row
     eq_preset: usize = 0,
     // Video color filters — persisted i32 in mpv's -100..100 range. Replayed at
     // player init (player.zig) so they survive restart / apply to new files;
