@@ -1,16 +1,29 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const logs = @import("logs.zig");
 const alloc = @import("alloc.zig");
+const io_global = @import("io_global.zig");
+const sync = @import("sync.zig");
 
 // ══════════════════════════════════════════════════════════
 // Opal v3 — Native HTTP Client (no curl)
 //
 // Replaces curl child process with std.http.Client.
 // Benefits:
-// - Connection reuse (no fork + TCP+TLS per request)
+// - Connection reuse: one process-global keep-alive client, so warm hosts
+//   skip the TCP+TLS handshake (previously a fresh Client was built AND
+//   destroyed on EVERY call — the "reuse" was a lie).
 // - ~100x less overhead for small requests
 // - Proxy support via std.http.Client config
-// - Retry logic built in
+//
+// The shared client is safe to use CONCURRENTLY from many worker threads:
+// std.http.Client owns an internal ConnectionPool guarded by its own Io.Mutex,
+// so requests are pooled without being serialized. Do NOT wrap it in an
+// external mutex — that would serialize the parallel resolver/poster fetches.
+//
+// Every fetch is bounded by a stall watchdog (see Watchdog) so a source that
+// accepts TCP then goes silent can't hang a worker forever (which used to leave
+// the caller's in-flight latch stuck and the route permanently empty).
 // ══════════════════════════════════════════════════════════
 
 pub const HttpOptions = struct {
@@ -33,6 +46,88 @@ pub const HttpResponse = struct {
     pub fn deinit(self: *HttpResponse) void {
         _ = self;
         // body points into caller's buffer, no-op
+    }
+};
+
+// ── Shared keep-alive client ──────────────────────────────
+// A single process-global std.http.Client, created lazily on first fetch. It
+// is NEVER deinit()'d during runtime — connections stay pooled for the process
+// lifetime (that's the whole point of keep-alive). Concurrent `request()` calls
+// from many threads are safe: the client's internal ConnectionPool has its own
+// Io.Mutex. Freed once at shutdown via `deinit()` to keep the DebugAllocator's
+// "0 memory leaks" gate clean.
+var g_client: std.http.Client = undefined;
+var client_ready = std.atomic.Value(bool).init(false);
+var client_init_lock: sync.Mutex = .{};
+
+fn sharedClient() *std.http.Client {
+    if (client_ready.load(.acquire)) return &g_client;
+    // Slow path: build it once. The init-once mutex only guards CONSTRUCTION,
+    // not requests, so two first-callers can't both build a client, but warm
+    // callers never touch the lock.
+    client_init_lock.lock();
+    defer client_init_lock.unlock();
+    if (client_ready.load(.acquire)) return &g_client; // lost the race — already built
+    const io = io_global.io();
+    g_client = .{ .allocator = alloc.allocator, .io = io };
+    // Zig 0.16's TLS path reads `client.now.?` for cert-validity checks; it is
+    // null by default and panics the moment a request negotiates TLS (e.g. an
+    // http→https redirect on a poster fetch). Seed it with the realtime clock.
+    // One seed suffices: cert-validity windows are months/years, and the std
+    // TLS path re-rescans the CA bundle on demand. (Refreshing it per-fetch on
+    // a SHARED client would be a data race on `client.now`.)
+    g_client.now = std.Io.Timestamp.now(io, .real);
+    client_ready.store(true, .release);
+    return &g_client;
+}
+
+/// Release the shared client at process shutdown (frees pooled connections so
+/// the Debug leak report stays at 0). Call once from appDeinit, after workers
+/// have stopped. Idempotent.
+pub fn deinit() void {
+    if (client_ready.swap(false, .acq_rel)) g_client.deinit();
+}
+
+/// Clamp the caller's requested read timeout into a sane bound: at least 1s so
+/// a slow-but-alive server isn't cut off, at most 20s so no fetch can hang
+/// unboundedly even when the caller passed 0 or a huge value. Pure — routed
+/// through by fetch() so the shipped clamp is the tested clamp.
+pub fn effectiveTimeoutSecs(requested: u8) u8 {
+    return std.math.clamp(requested, @as(u8, 1), @as(u8, 20));
+}
+
+const is_windows = builtin.os.tag == .windows;
+
+// ── Stall watchdog ────────────────────────────────────────
+// Bounds a single request. std.http's request()/receiveHead()/reader expose NO
+// per-request deadline in 0.16, and the Threaded Io backend does BLOCKING
+// readv() syscalls where EAGAIN (SO_RCVTIMEO) and EBADF (closing the fd) are
+// both `errnoBug` → panic. The one safe way to unblock a stalled read is
+// shutdown(): it makes the blocked readv return 0 (EOF) via the SUCCESS path.
+// So a small watchdog thread, armed with this request's socket fd, calls
+// shutdown() once the deadline passes and the fetch hasn't signalled done.
+// POSIX only (the shutdown/fd plumbing is libc); on Windows the shared client
+// still applies but the per-request timeout is a no-op (documented follow-up).
+const Watchdog = struct {
+    done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    fd: std.atomic.Value(c_int) = std.atomic.Value(c_int).init(-1),
+    timeout_ms: i64,
+
+    fn run(self: *Watchdog) void {
+        const deadline = io_global.milliTimestamp() + self.timeout_ms;
+        while (!self.done.load(.acquire)) {
+            const now = io_global.milliTimestamp();
+            if (now >= deadline) break;
+            // Poll in short steps so the happy path (fetch sets done, then
+            // joins) waits at most ~5ms; over a full stall this is a few
+            // thousand cheap wakeups — negligible CPU.
+            const remaining = deadline - now;
+            const step_ms: u64 = @intCast(@min(remaining, @as(i64, 5)));
+            io_global.sleep(step_ms * 1_000_000);
+        }
+        if (self.done.load(.acquire)) return; // fetch finished — nothing to unblock
+        const fd = self.fd.load(.acquire);
+        if (fd >= 0) _ = std.c.shutdown(fd, @as(c_int, std.c.SHUT.RDWR));
     }
 };
 
@@ -73,18 +168,28 @@ pub fn fetch(url: []const u8, buf: []u8, opts: HttpOptions) ?[]const u8 {
         }
     }
     
-    var client = std.http.Client{ .allocator = alloc.allocator , .io = @import("io_global.zig").io() };
-    // Zig 0.16's TLS path reads `client.now.?` for cert-validity checks; it is
-    // null by default and panics the moment a request negotiates TLS (e.g. an
-    // http→https redirect on a poster fetch). Seed it with the realtime clock.
-    client.now = std.Io.Timestamp.now(client.io, .real);
-    defer client.deinit();
-    
+    // Shared, keep-alive client (see sharedClient). Never deinit'd here.
+    const client = sharedClient();
+
     const uri = std.Uri.parse(url) catch {
         logs.pushLog("warn", "http", "Invalid URL", true);
         return null;
     };
-    
+
+    // Arm the stall watchdog BEFORE connecting so it bounds the whole request.
+    // It gets this request's socket fd right after connect (below) and, if the
+    // deadline passes with the fetch still stuck, shutdown()s the socket so the
+    // blocked read returns EOF instead of hanging the worker forever.
+    var wd = Watchdog{ .timeout_ms = @as(i64, effectiveTimeoutSecs(opts.timeout_secs)) * 1000 };
+    var wd_thread: ?std.Thread = null;
+    if (comptime !is_windows) {
+        wd_thread = std.Thread.spawn(.{}, Watchdog.run, .{&wd}) catch null;
+    }
+    defer {
+        wd.done.store(true, .release);
+        if (wd_thread) |t| t.join();
+    }
+
     var req = client.request(opts.method, uri, .{
         .redirect_behavior = @enumFromInt(5), // Follow up to 5 redirects
         .extra_headers = headers_buf[0..header_count],
@@ -93,7 +198,18 @@ pub fn fetch(url: []const u8, buf: []u8, opts: HttpOptions) ?[]const u8 {
         return null;
     };
     defer req.deinit();
-    
+
+    // Hand the watchdog this request's socket so it can unblock a stalled read.
+    // (Covers the send + receiveHead + body read of the initial connection —
+    // i.e. the direct source fetches that were hanging. A stall on a *new*
+    // connection opened while std follows a redirect uses a different fd and is
+    // not covered; the initial hop and pooled reuse are.)
+    if (comptime !is_windows) {
+        if (req.connection) |conn| {
+            wd.fd.store(@intCast(conn.stream_reader.stream.socket.handle), .release);
+        }
+    }
+
     if (opts.payload) |payload| {
         req.sendBodyComplete(@constCast(payload)) catch return null;
     } else {

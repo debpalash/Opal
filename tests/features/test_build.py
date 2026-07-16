@@ -223,6 +223,39 @@ def test_http_client_now():
     return "fail", "http.Client.now not seeded — TLS fetches will panic"
 
 
+@test("HTTP shared keep-alive client + enforced timeout", "Network")
+def test_http_shared_client_and_timeout():
+    # PERF/CORRECTNESS — fetch() used to build AND destroy a std.http.Client on
+    # every call (a fresh TCP+TLS handshake per request, despite the file's
+    # "connection reuse" claim), and HttpOptions.timeout_secs was defined but
+    # never read — so a source that accepted TCP then stalled hung the worker
+    # thread forever and the caller's in-flight latch never cleared, leaving that
+    # route permanently empty. Fix: one process-global keep-alive client (safe to
+    # share — std.http.Client's ConnectionPool has its own mutex), and
+    # timeout_secs enforced via a socket watchdog that unblocks a stalled read.
+    h = _src("src/core/http.zig")
+    mn = _src("src/main.zig")
+    checks = {
+        # No per-call Client construction remains inside the file.
+        "no per-call client": "std.http.Client{" not in h,
+        # A module-global shared client + lazy getter.
+        "global shared client": "var g_client: std.http.Client" in h and "fn sharedClient(" in h,
+        # timeout_secs is actually consumed, not merely defined.
+        "timeout_secs consumed": "opts.timeout_secs" in h,
+        # …through a clamped pure helper (bounds the hang even for 0/huge values).
+        "timeout clamped": "effectiveTimeoutSecs(" in h and "std.math.clamp" in h,
+        # The stalled-socket unblock mechanism (shutdown, not close — close would
+        # EBADF-panic the Threaded backend's blocking readv).
+        "watchdog unblocks stall": "std.c.shutdown(" in h,
+        # Freed at shutdown so the DebugAllocator's 0-leak gate stays clean.
+        "freed at shutdown": "pub fn deinit(" in h and 'core/http.zig").deinit()' in mn,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "http.zig regression: " + ", ".join(bad)
+    return "pass", "shared keep-alive client; timeout_secs enforced (clamped) via socket watchdog"
+
+
 @test("Installer Does Not Need Xcode", "Packaging")
 def test_installer_no_xcode():
     # REGRESSION — `curl … install.sh | sh` failed for everyone on macOS:
