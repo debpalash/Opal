@@ -298,6 +298,9 @@ pub fn appDeinit() void {
     // in their read loops, so this drains in well under the timeout.
     @import("core/workers.zig").beginShutdownAndDrain(800);
 
+    // Drop the macOS Now Playing card before the players go away (no-op elsewhere).
+    @import("player/media_remote.zig").clear();
+
     // Clean up players natively to prevent memory leaks
     for (state.app.players.items) |p| {
         p.deinit(@import("core/alloc.zig").allocator);
@@ -884,6 +887,12 @@ fn appFrame() !dvui.App.Result {
     }
 
     player.updateTorrentBackgroundTasks();
+
+    // Native macOS Now Playing + hardware media keys: drain pending remote
+    // commands (play/pause/seek from media keys, AirPods, Control Center)
+    // onto the active player and refresh the system Now Playing card.
+    // Compiles to a no-op on non-macOS.
+    @import("player/media_remote.zig").frameTick();
 
     // Screensaver inhibit: mpv's stop-screensaver requires a VO; we use SW render,
     // so SDL handles it. Toggle when any player is actively playing (not paused).

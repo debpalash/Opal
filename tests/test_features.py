@@ -2249,6 +2249,41 @@ def test_player_resume():
     return "fail", "player load/resume not wired"
 
 
+@test("macOS Now Playing media keys", "Player")
+def test_macos_now_playing():
+    # Native MPNowPlayingInfoCenter + MPRemoteCommandCenter bridge: the ObjC
+    # file, build wiring (compile .m + link MediaPlayer, macOS-guarded), Zig
+    # externs matching the .m symbols, and the frame-loop poll/update + exit
+    # clear in main.zig. Real media-key presses need a manual check.
+    m = _src("src/macos/media_remote.m")
+    z = _src("src/player/media_remote.zig")
+    zp = _src("src/player/media_remote_pure.zig")
+    bz = _src("build.zig")
+    mn = _src("src/main.zig")
+    externs = ("opal_media_remote_init", "opal_media_remote_poll",
+               "opal_nowplaying_update", "opal_nowplaying_clear")
+    checks = {
+        "objc centers": "MPNowPlayingInfoCenter" in m and "MPRemoteCommandCenter" in m,
+        "objc handlers ack": "MPRemoteCommandHandlerStatusSuccess" in m,
+        "objc commands": all(s in m for s in
+            ("playCommand", "pauseCommand", "togglePlayPauseCommand",
+             "changePlaybackPositionCommand", "skipForwardCommand", "skipBackwardCommand")),
+        "build compiles .m": "src/macos/media_remote.m" in bz,
+        "build links framework": 'linkFramework("MediaPlayer"' in bz,
+        "externs match .m": all(s in m and s in z for s in externs),
+        "zig macos guard": "builtin.os.tag != .macos" in z,
+        "zig player guard": "active_player_idx >= state.app.players.items.len" in z,
+        "pure decode/clamp routed": "clampSeekTarget" in zp and "clampSeekTarget" in z
+            and "pure.decode" in z,
+        "frame poll wired": 'media_remote.zig").frameTick()' in mn,
+        "exit clear wired": 'media_remote.zig").clear()' in mn,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if not missing:
+        return "pass", "ObjC bridge + MediaPlayer link + frame poll/update + exit clear wired"
+    return "fail", f"now-playing wiring missing: {missing}"
+
+
 @test("Multi-Source Search Wired", "Search")
 def test_multi_source_search():
     s = _src("src/services/search.zig")

@@ -46,6 +46,14 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag == .macos) {
         exe.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{brew_prefix}) });
         exe.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{brew_prefix}) });
+        // Native Now Playing card + hardware media keys (MPNowPlayingInfoCenter
+        // / MPRemoteCommandCenter) — see src/macos/media_remote.m and its Zig
+        // side src/player/media_remote.zig.
+        exe.root_module.addCSourceFile(.{
+            .file = b.path("src/macos/media_remote.m"),
+            .flags = &[_][]const u8{ "-fobjc-arc", "-O2" },
+        });
+        exe.root_module.linkFramework("MediaPlayer", .{});
     } else if (is_windows) {
         // Windows (MinGW/MSYS2): headers + import libs from the MINGW64 prefix.
         // dvui's bundled SDL2 supplies the SDL symbols (like macOS), so only
@@ -774,6 +782,18 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_torznab_pure).step);
+
+    // macOS media-key bridge: remote-command decode + Control Center seek
+    // clamp + Now Playing playback rate (media_remote.zig routes the polled
+    // commands through these).
+    const test_media_remote_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/media_remote_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_media_remote_pure).step);
 
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
