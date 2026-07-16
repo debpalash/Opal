@@ -53,6 +53,8 @@ pub fn save() void {
     setKey("dubbing_enabled", if (state.app.dubbing_enabled) "1" else "0");
     setKey("eq_preset", fmtInt(&fb, state.app.eq_preset));
     setKey("download_rate_limit", fmtInt(&fb, @as(usize, @intCast(state.app.download_rate_limit))));
+    setKey("http_dl_segments", fmtInt(&fb, @as(usize, state.app.http_dl_segments)));
+    setKey("http_dl_max_concurrent", fmtInt(&fb, @as(usize, state.app.http_dl_max_concurrent)));
     setKey("proxy_url", state.app.proxy_url[0..state.app.proxy_url_len]);
     setKey("ytdl_format_idx", fmtInt(&fb, state.app.ytdl_format_idx));
     setKey("drawer_width_px", fmtFloat(&fb, state.app.drawer_width_px));
@@ -282,6 +284,10 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         // Session may already be up (torrent_init worker) — apply now; if not,
         // that worker calls this too once it publishes the session.
         state.applyDownloadLimitIfReady();
+    } else if (std.mem.eql(u8, key, "http_dl_segments")) {
+        state.app.http_dl_segments = std.math.clamp(std.fmt.parseInt(u32, val, 10) catch 4, 1, 8);
+    } else if (std.mem.eql(u8, key, "http_dl_max_concurrent")) {
+        state.app.http_dl_max_concurrent = std.math.clamp(std.fmt.parseInt(u32, val, 10) catch 3, 1, 8);
     } else if (std.mem.eql(u8, key, "proxy_url")) {
         if (val.len > 0 and val.len < state.app.proxy_url.len) {
             @memcpy(state.app.proxy_url[0..val.len], val);

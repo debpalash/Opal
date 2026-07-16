@@ -517,6 +517,19 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         apiDownloadsPlay(stream, query);
         return;
     }
+    if (std.mem.eql(u8, api_path, "/download/url")) {
+        // Direct HTTP download into the download dir via the segmented
+        // downloader (services/download_engine.zig).
+        if (getQueryParam(query, "url")) |raw| {
+            var dec: [2048]u8 = undefined;
+            const u = urlDecode(raw, &dec) orelse raw;
+            const ok = @import("downloads.zig").startUrl(u);
+            sendJson(stream, if (ok) "{\"ok\":true}" else "{\"ok\":false}");
+        } else {
+            sendJson(stream, "{\"ok\":false,\"error\":\"missing url\"}");
+        }
+        return;
+    }
     if (std.mem.eql(u8, api_path, "/settings")) {
         apiSettingsGet(stream);
         return;
