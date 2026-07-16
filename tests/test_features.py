@@ -40,6 +40,7 @@ from features import (  # noqa: F401
     test_gallerydl,
     test_vndb,
     test_drama,
+    test_anime_schedule,
 )
 
 if __name__ == "__main__":

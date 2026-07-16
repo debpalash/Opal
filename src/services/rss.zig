@@ -54,6 +54,9 @@ var add_name_len: usize = 0;
 pub fn init() void {
     // Pre-populate with EZTV
     addFeed("EZTV", "https://myrss.org/eztv");
+    // Anime News Network — anime/manga industry news (keyless public RSS). Same
+    // class as EZTV above: a built-in default feed the user can remove.
+    addFeed("Anime News Network", "https://www.animenewsnetwork.com/all/rss.xml");
 }
 
 pub fn addFeed(name: []const u8, url: []const u8) void {

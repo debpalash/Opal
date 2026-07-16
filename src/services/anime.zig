@@ -11,6 +11,8 @@ const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 const poster = @import("../core/poster.zig");
 const anilist = @import("anilist.zig");
 const anilist_pure = @import("anilist_pure.zig");
+const anime_schedule = @import("anime_schedule.zig");
+const anime_schedule_pure = @import("anime_schedule_pure.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -121,6 +123,8 @@ var fetched_cal_day: u8 = 255;
 /// clears the selection so we land on the grid. The actual fetch is kicked by
 /// renderContent's dispatch (keeps a single fire-point).
 fn setMode(m: state.AnimeMode) void {
+    // Picking any browse mode leaves the "Airing this week" schedule view.
+    state.app.anime.sched_view = false;
     if (state.app.anime.mode == m) return;
     state.app.anime.mode = m;
     state.app.anime.selected_idx = null;
@@ -1808,7 +1812,14 @@ pub fn renderContent() void {
     //    plus SWR auto-refresh on Trending only (other modes don't cross-
     //    contaminate trending's last_fetch_s). Skipped while an anime detail is
     //    open (selected_idx != null) so the detail view stays stable. ──
-    if (state.app.anime.selected_idx == null) dispatchModeFetch();
+    // "Airing this week" is a VIEW, not a browse mode: it has its own fetch
+    // (AniList airingSchedules) and content path, so it bypasses the grid-mode
+    // dispatch entirely.
+    if (state.app.anime.sched_view) {
+        anime_schedule.loadSchedule();
+    } else if (state.app.anime.selected_idx == null) {
+        dispatchModeFetch();
+    }
 
     // Full-page root so loading/empty branches fill width/height.
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
@@ -1817,10 +1828,18 @@ pub fn renderContent() void {
     // Mode toolbar + per-mode sub-toolbar + count/card-size controls. Hidden
     // while an anime is selected (episode-list view has its own header).
     if (state.app.anime.selected_idx == null) {
-        // Single unified toolbar row: mode tabs + per-mode chips + count + zoom.
+        // Single unified toolbar row: mode tabs + the Airing toggle + per-mode
+        // chips + count + zoom.
         renderModeToolbar(state.app.anime.result_count);
         // Search mode keeps the live search-as-you-type box (its own row).
-        if (state.app.anime.mode == .search) renderSearchBar();
+        if (!state.app.anime.sched_view and state.app.anime.mode == .search) renderSearchBar();
+    }
+
+    // Airing-this-week: day-grouped schedule grid instead of the browse grid /
+    // episode drill-down.
+    if (state.app.anime.sched_view) {
+        renderScheduleView();
+        return;
     }
 
     // Only show the spinner on an INITIAL load (nothing to show yet). During a
@@ -2119,6 +2138,126 @@ pub fn renderContent() void {
     }
 }
 
+// ══════════════════════════════════════════════════════════
+// "Airing this week" view — AniList airingSchedules, grouped by weekday
+// ══════════════════════════════════════════════════════════
+
+/// Render the day-grouped airing schedule. Slots arrive pre-sorted by air time
+/// (AniList `sort: TIME`); we walk the 7 window days in order, printing a
+/// weekday header before its episodes. All weekday / time math routes through
+/// anime_schedule_pure (tested). Clicking a row kicks a universal search.
+fn renderScheduleView() void {
+    const asp = anime_schedule_pure;
+    const loading = state.app.anime.sched_loading.load(.acquire);
+    const count = state.app.anime.sched_count;
+
+    if (loading and count == 0) {
+        _ = dvui.label(@src(), "Loading airing schedule…", .{}, .{
+            .color_text = theme.colors.accent,
+            .gravity_x = 0.5,
+            .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
+        });
+        return;
+    }
+    if (count == 0) {
+        _ = dvui.label(@src(), "No airing schedule available right now. Try Refresh.", .{}, .{
+            .color_text = theme.colors.text_secondary,
+            .gravity_x = 0.5,
+            .margin = dvui.Rect.all(24),
+        });
+        return;
+    }
+
+    const win_start = state.app.anime.sched_window_start;
+    const tz = state.app.anime.sched_tz_offset_s;
+
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
+    defer scroll.deinit();
+
+    // One pass per window day (0 = window.start's day … 6). Skip days with no
+    // episodes so the list stays tight.
+    var day: u8 = 0;
+    while (day < 7) : (day += 1) {
+        // Is anything airing this day?
+        var has_any = false;
+        var s: usize = 0;
+        while (s < count) : (s += 1) {
+            if (asp.dayIndexOf(state.app.anime.sched[s].airing_at, win_start)) |di| {
+                if (di == day) {
+                    has_any = true;
+                    break;
+                }
+            }
+        }
+        if (!has_any) continue;
+
+        // Day header: weekday name for this window day (local frame).
+        const day_local = win_start + @as(i64, @intCast(day)) * 86400 + tz;
+        _ = dvui.label(@src(), "{s}", .{asp.weekdayName(asp.weekdayMon0(day_local))}, .{
+            .id_extra = @as(usize, day) + 90000,
+            .expand = .horizontal,
+            .color_text = theme.colors.accent,
+            .background = true,
+            .color_fill = theme.colors.bg_app,
+            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
+        });
+
+        // Rows for this day (already in air-time order).
+        var i: usize = 0;
+        while (i < count) : (i += 1) {
+            const slot = &state.app.anime.sched[i];
+            const di = asp.dayIndexOf(slot.airing_at, win_start) orelse continue;
+            if (di != day) continue;
+
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = i + 91000,
+                .expand = .horizontal,
+                .background = true,
+                .color_fill = theme.colors.bg_surface,
+                .color_border = theme.colors.border_subtle,
+                .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+                .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
+            });
+            defer row.deinit();
+
+            // Air time (local HH:MM).
+            var tbuf: [8]u8 = undefined;
+            _ = dvui.label(@src(), "{s}", .{asp.fmtTime(slot.airing_at + tz, &tbuf)}, .{
+                .id_extra = i + 92000,
+                .color_text = theme.colors.text_secondary,
+                .gravity_y = 0.5,
+                .min_size_content = .{ .w = 48, .h = 0 },
+            });
+
+            // Title → click kicks a universal search for a stream.
+            var nbuf: [160]u8 = undefined;
+            const title = safeUtf8Buf(slot.title[0..slot.title_len], &nbuf);
+            if (dvui.button(@src(), title, .{}, .{
+                .id_extra = i + 93000,
+                .expand = .horizontal,
+                .color_text = theme.colors.text_primary,
+                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
+                .gravity_y = 0.5,
+            })) {
+                anime_schedule.clickSlot(i);
+            }
+
+            // Episode badge.
+            if (slot.episode > 0) {
+                var eb: [16]u8 = undefined;
+                const es = std.fmt.bufPrintZ(&eb, "Ep {d}", .{@as(u32, @intCast(slot.episode))}) catch "";
+                _ = dvui.label(@src(), "{s}", .{es}, .{
+                    .id_extra = i + 94000,
+                    .color_text = theme.colors.accent,
+                    .gravity_y = 0.5,
+                    .padding = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+                });
+            }
+        }
+    }
+}
+
 /// Fire the right fetch for the active mode, exactly once per change. Trending
 /// also keeps its SWR auto-refresh; the other modes only refetch when their
 /// sub-selector (season/day/filter) changes or on an explicit mode switch.
@@ -2198,6 +2337,46 @@ fn renderModeToolbar(count: usize) void {
     renderModeTab(2, .calendar, "Calendar");
     renderModeTab(3, .search, "Search");
     renderModeTab(4, .mylist, "My List");
+
+    // ── "Airing this week" view toggle (AniList schedule) — a VIEW, not a mode,
+    //    so it's a separate toggle rather than another mode tab. ──
+    toolbarDivider(888);
+    {
+        const airing = state.app.anime.sched_view;
+        if (dvui.button(@src(), "Airing this week", .{}, .{
+            .id_extra = 20099,
+            .background = true,
+            .color_fill = if (airing) theme.colors.accent else theme.colors.bg_surface,
+            .color_text = if (airing) dvui.Color.white else theme.colors.text_secondary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
+        })) {
+            state.app.anime.sched_view = !airing;
+        }
+    }
+    // While the schedule view is active the per-mode browse chips are irrelevant.
+    if (state.app.anime.sched_view) {
+        // Airing view: show a refresh + a live episode count instead of the
+        // browse chips / results counter.
+        toolbarDivider(951);
+        if (dvui.button(@src(), "Refresh", .{}, .{
+            .id_extra = 20098,
+            .background = true,
+            .color_fill = theme.colors.bg_surface,
+            .color_text = theme.colors.text_primary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+        })) {
+            anime_schedule.refresh();
+        }
+        _ = dvui.label(@src(), "{d} episodes", .{state.app.anime.sched_count}, .{
+            .color_text = theme.colors.text_secondary,
+            .gravity_y = 0.5,
+            .padding = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+        });
+        return;
+    }
 
     // Per-mode chips, inline on the same row.
     switch (state.app.anime.mode) {
