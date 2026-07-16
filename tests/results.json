@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-07-16T17:45:04",
-  "total": 186,
-  "passed": 175,
+  "timestamp": "2026-07-16T18:13:13",
+  "total": 190,
+  "passed": 179,
   "failed": 0,
   "warnings": 3,
   "skipped": 8,
@@ -209,6 +209,12 @@
       "fail": 0,
       "warn": 0,
       "skip": 0
+    },
+    "Reading": {
+      "pass": 4,
+      "fail": 0,
+      "warn": 0,
+      "skip": 0
     }
   },
   "tests": [
@@ -216,7 +222,7 @@
       "name": "Database Exists",
       "category": "Database",
       "status": "pass",
-      "detail": "Size: 24276.0 KB",
+      "detail": "Size: 24300.0 KB",
       "duration_ms": 0
     },
     {
@@ -272,8 +278,8 @@
       "name": "Poster Cache Table",
       "category": "Database",
       "status": "pass",
-      "detail": "916 cached posters",
-      "duration_ms": 2
+      "detail": "917 cached posters",
+      "duration_ms": 0
     },
     {
       "name": "Conversation Log Table",
@@ -391,14 +397,14 @@
       "name": "Zig Build",
       "category": "Build",
       "status": "pass",
-      "detail": "Binary: 43.2 MB",
-      "duration_ms": 393
+      "detail": "Binary: 43.9 MB",
+      "duration_ms": 382
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "43.2 MB, built at 17:44:50",
+      "detail": "43.9 MB, built at 18:12:45",
       "duration_ms": 0
     },
     {
@@ -434,7 +440,7 @@
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 26
+      "duration_ms": 25
     },
     {
       "name": "Embedding Server Health",
@@ -462,7 +468,7 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 1850
+      "duration_ms": 1955
     },
     {
       "name": "Installer Does Not Need Xcode",
@@ -490,35 +496,35 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 745
+      "duration_ms": 766
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "pass",
       "detail": "faster-whisper importable",
-      "duration_ms": 981
+      "duration_ms": 990
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 24
+      "duration_ms": 22
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 23
+      "duration_ms": 22
     },
     {
       "name": "Conversational: voice-server echo guard + live partials",
       "category": "Voice",
       "status": "pass",
       "detail": "echo guard drops self-echo; real interruption passes; PARTIAL streamed",
-      "duration_ms": 30
+      "duration_ms": 27
     },
     {
       "name": "Conversational: prefer full-duplex event loop + wiring",
@@ -532,56 +538,56 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 28
+      "duration_ms": 25
     },
     {
       "name": "Compiles: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 27
+      "duration_ms": 25
     },
     {
       "name": "Compiles: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 27
+      "duration_ms": 25
     },
     {
       "name": "Compiles: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 28
+      "duration_ms": 26
     },
     {
       "name": "--check degrades: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 1040
+      "duration_ms": 984
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 26
+      "duration_ms": 27
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 1059
+      "duration_ms": 1042
     },
     {
       "name": "Tracked + compiles: tools/lang_server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "tracked + py_compile OK",
-      "duration_ms": 40
+      "duration_ms": 39
     },
     {
       "name": "Parakeet conversational self-install wired",
@@ -784,7 +790,7 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 3424
+      "duration_ms": 3287
     },
     {
       "name": "Cloud LLM Backend + No Silent Local Installs",
@@ -868,14 +874,14 @@
       "category": "Browser",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 28
+      "duration_ms": 29
     },
     {
       "name": "Bridge protocol selftest",
       "category": "Browser",
       "status": "pass",
       "detail": "framing + pump model OK",
-      "duration_ms": 28
+      "duration_ms": 30
     },
     {
       "name": "Browser bookmarks SQL matches schema",
@@ -896,14 +902,14 @@
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 53
+      "duration_ms": 55
     },
     {
       "name": "Browser: CloakBrowser engine + upgrades",
       "category": "Browser",
       "status": "pass",
       "detail": "engine picker + find/zoom/downloads/history/reader wired",
-      "duration_ms": 67
+      "duration_ms": 58
     },
     {
       "name": "Single-Media Mode",
@@ -959,7 +965,7 @@
       "category": "Browse",
       "status": "pass",
       "detail": "deferred watch commit + confident auto-play + first-run wizard wired",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Onboarding: paged feature tour + replay from Settings",
@@ -1176,7 +1182,7 @@
       "category": "Stability",
       "status": "pass",
       "detail": "no discarded std.Thread.spawn handles in src/",
-      "duration_ms": 17
+      "duration_ms": 16
     },
     {
       "name": "TMDB Fetch Stages Results Off-Thread",
@@ -1351,7 +1357,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "11 engines placed, class==module, manifest-wired",
-      "duration_ms": 2
+      "duration_ms": 0
     },
     {
       "name": "Polish Tokens Adopted",
@@ -1386,7 +1392,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 130
+      "duration_ms": 157
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1470,7 +1476,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "TV+anime+movies in one library; aired-clamped next-up; user-set status",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Player control bar: drop-ups + FF fullscreen",
@@ -1512,6 +1518,34 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "neutral (source_config-gated), 15-min refresh, per-frame countdown",
+      "duration_ms": 0
+    },
+    {
+      "name": "Audiobookshelf client",
+      "category": "Reading",
+      "status": "pass",
+      "detail": "ABS client: tested pure parsers, DrawerTab wired, streams via mpv + Now Playing",
+      "duration_ms": 0
+    },
+    {
+      "name": "OPDS reading server client",
+      "category": "Reading",
+      "status": "pass",
+      "detail": "OPDS client wired: pure parser routed, config keys, tab + dispatch, comics reuse, settings section",
+      "duration_ms": 0
+    },
+    {
+      "name": "Light-novel reader",
+      "category": "Reading",
+      "status": "pass",
+      "detail": "novels reader wired: pure(html\u2192text/url/paginate/resume) \u2192 enum\u2192nav\u2192service (Wikisource)",
+      "duration_ms": 0
+    },
+    {
+      "name": "Asian drama + tokusatsu",
+      "category": "Reading",
+      "status": "pass",
+      "detail": "drama+toku wired: pure(parse/classify/split) \u2192 enum\u2192nav\u2192service (TMDB), play\u2192resolver\u2192load_file/gotoPlayer",
       "duration_ms": 0
     }
   ]

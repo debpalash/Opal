@@ -944,6 +944,19 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_anime_skip_pure).step);
 
+    // Live-action Asian drama + tokusatsu: TMDB discover/search parsing (origin
+    // extraction + drama-vs-toku split), origin-country classification, discover
+    // path building, resolver-query sanitization, and malformed-JSON no-crash.
+    // services/drama.zig routes production parsing/classification through these.
+    const test_drama_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/drama_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_drama_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main

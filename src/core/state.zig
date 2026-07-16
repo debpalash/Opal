@@ -18,7 +18,7 @@ const opds_pure = @import("../services/opds_pure.zig");
 pub const GridMode = enum { auto, cols_1, cols_2, cols_3, cols_4 };
 pub const ContentProvider = enum { mpv, comic_viewer };
 pub const VideoFillMode = enum { fit, cover };
-pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Audiobooks, Opds, Novels };
+pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Audiobooks, Opds, Novels, Drama };
 pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, Scripts, AI, LangLearn, FileAssoc, About };
 pub const TmdbView = enum { Trending, Search, Favorites, Watchlist, Watching };
 pub const TmdbCategory = enum { trending, now_playing, top_rated, upcoming, popular };
@@ -50,6 +50,33 @@ pub const AnimeResult = struct {
     // Failure latch (mirrors TmdbItem): a completed fetch that produced no
     // pixels marks poster_failed so the grid stops re-spawning a worker every
     // frame. poster_attempted distinguishes "never tried" from "tried & failed".
+    poster_attempted: bool = false,
+    poster_failed: bool = false,
+    poster_pixels: ?[]u8 = null,
+    poster_w: u32 = 0,
+    poster_h: u32 = 0,
+    poster_tex: ?dvui.Texture = null,
+};
+
+/// One live-action Asian drama / tokusatsu catalog card (TMDB discover/search).
+/// Mirrors AnimeResult's lazy-poster shape so the grid reuses poster.uploadIfReady.
+pub const DramaResult = struct {
+    id: [12]u8 = std.mem.zeroes([12]u8), // TMDB tv id
+    id_len: usize = 0,
+    name: [160]u8 = std.mem.zeroes([160]u8),
+    name_len: usize = 0,
+    overview: [512]u8 = std.mem.zeroes([512]u8),
+    overview_len: usize = 0,
+    poster_path: [80]u8 = std.mem.zeroes([80]u8), // TMDB path ("/abc.jpg")
+    poster_path_len: usize = 0,
+    year: [8]u8 = std.mem.zeroes([8]u8),
+    year_len: usize = 0,
+    vote: f32 = 0,
+    origin: u8 = 0, // @intFromEnum(drama_pure.Origin)
+    is_toku: bool = false,
+
+    // Lazy poster (same pattern as AnimeResult).
+    poster_fetching: bool = false,
     poster_attempted: bool = false,
     poster_failed: bool = false,
     poster_pixels: ?[]u8 = null,
@@ -790,6 +817,25 @@ pub const AppState = struct {
         continue_loaded: bool = false,
     } = .{},
 
+    // ── Live-action Asian drama + tokusatsu (TMDB discover/search catalog) ──
+    // Structural sibling of `anime`: grid → detail → play (via universal
+    // resolver). Parsing/classification lives in services/drama_pure.zig; the
+    // fetch worker publishes here under drama.zig's parse_mutex. See drama.zig.
+    drama: struct {
+        // Atomic like the anime/tmdb loaders (UI + remote threads read; a
+        // detached worker writes). A plain bool would be a data race.
+        is_loading: std.atomic.Value(bool) = .init(false),
+        stream_loading: std.atomic.Value(bool) = .init(false),
+        results: [80]DramaResult = std.mem.zeroes([80]DramaResult),
+        result_count: usize = 0,
+        selected_idx: ?usize = null,
+        // Which content lane the grid is showing: 0 = drama, 1 = tokusatsu
+        // (@intFromEnum(drama_pure.Segment)). Plain u8 written by the UI thread.
+        segment: u8 = 0,
+        last_fetch_s: i64 = 0, // SWR cache timestamp
+        loaded_once: bool = false,
+    } = .{},
+
     // ── Podcasts (iTunes Search API → RSS episodes → audio via mpv) ──
     // Structural sibling of `anime`: search → show → episode list → play. All
     // parsing lives in services/podcasts_pure.zig; fetch workers publish here
@@ -1276,6 +1322,10 @@ pub fn navigateToTabNow(tab: DrawerTab) void {
         },
         .Novels => {
             app.browse_source = .Novels;
+            app.router.navigate(.browse);
+        },
+        .Drama => {
+            app.browse_source = .Drama;
             app.router.navigate(.browse);
         },
         .RSS => {

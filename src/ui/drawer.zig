@@ -229,6 +229,9 @@ pub fn renderDrawer() void {
         renderRailTab(.TMDB, shell.iconForTab(.TMDB), "TMDB", 4);
         renderRailTab(.YouTube, shell.iconForTab(.YouTube), "YouTube", 5);
         renderRailTab(.Anime, shell.iconForTab(.Anime), "Anime", 6);
+        // id 21 — distinct high id so concurrent tab additions merge cleanly
+        // (keyboard order lands it after the sources group, which is fine).
+        renderRailTab(.Drama, shell.iconForTab(.Drama), "Asian Drama", 21);
         renderRailTab(.Podcasts, shell.iconForTab(.Podcasts), "Podcasts", 7);
         renderRailTab(.Radio, shell.iconForTab(.Radio), "Radio", 8);
         renderRailTab(.Comics, shell.iconForTab(.Comics), "Comics", 9);
@@ -306,6 +309,7 @@ pub fn renderTabContent(tab: state.DrawerTab) void {
         .Novels => @import("../services/novels.zig").renderContent(),
         .Web => @import("../services/browser.zig").renderContent(),
         .Anime => anime.renderContent(),
+        .Drama => @import("../services/drama.zig").renderContent(),
         .Podcasts => @import("../services/podcasts.zig").renderContent(),
         .Radio => @import("../services/radio.zig").renderContent(),
         .History => renderHistoryContent(),
