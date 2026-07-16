@@ -557,6 +557,18 @@ pub const AppState = struct {
     remote_open_len: usize = 0,
     remote_open_ready: bool = false,
     remote_open_lock: @import("sync.zig").Mutex = .{},
+    // Typed routing + rich metadata for a remote open/ingest (browser extension).
+    // Populated under remote_open_lock alongside remote_open_path; consumed once
+    // on the UI thread. `type` selects play vs queue; the meta strings feed
+    // browser.loadContentDirectMeta so an extension send shows a proper card.
+    remote_open_type: [16]u8 = std.mem.zeroes([16]u8),
+    remote_open_type_len: usize = 0,
+    remote_open_art: [1024]u8 = std.mem.zeroes([1024]u8),
+    remote_open_art_len: usize = 0,
+    remote_open_title: [512]u8 = std.mem.zeroes([512]u8),
+    remote_open_title_len: usize = 0,
+    remote_open_subtitle: [256]u8 = std.mem.zeroes([256]u8),
+    remote_open_subtitle_len: usize = 0,
     pending_has_metadata: bool = false,
     pending_files_selection: [2048]bool = std.mem.zeroes([2048]bool),
     download_rate_limit: i32 = 0,

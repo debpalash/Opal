@@ -7,47 +7,93 @@
     <link rel="stylesheet" href="./options.css" />
   </head>
   <body>
-    <main>
-      <header>
-        <span class="logo">◆</span>
-        <h1>Opal Connector — Settings</h1>
+    <div class="page">
+      <header class="masthead">
+        <div class="brand">
+          <span class="logo">◆</span>
+          <div>
+            <h1>Opal Connector</h1>
+            <p class="tagline">Send the web to your local Opal — media, articles, downloads, and manga/novel sources.</p>
+          </div>
+        </div>
+        <div id="conn-pill" class="pill probing"><span class="dot"></span><span id="conn-label">Checking…</span></div>
       </header>
 
-      <p class="lead">
-        Point the extension at your locally-running Opal. Everything stays on
-        your machine — requests go straight to Opal over localhost.
-      </p>
-
       <form id="form">
-        <label>
-          <span>Host</span>
-          <input id="host" type="text" placeholder="127.0.0.1" autocomplete="off" />
-        </label>
+        <!-- Connection -->
+        <section class="group">
+          <div class="group-head">
+            <h2>Connection</h2>
+            <p>Everything stays on your machine — requests go straight to Opal over localhost.</p>
+          </div>
+          <div class="fields">
+            <label class="field">
+              <span class="field-label">Host</span>
+              <input id="host" type="text" placeholder="127.0.0.1" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span class="field-label">Port</span>
+              <input id="port" type="number" placeholder="41595" min="1" max="65535" />
+            </label>
+            <label class="field wide">
+              <span class="field-label">API token</span>
+              <div class="input-with-btn">
+                <input id="token" type="password" placeholder="paste your token" autocomplete="off" />
+                <button type="button" id="reveal" class="btn ghost small">Show</button>
+              </div>
+              <small class="help">
+                Find it in <code>~/.config/opal/api.token</code> (macOS/Linux) or
+                <code>%APPDATA%\opal\api.token</code> (Windows). Enable
+                <em>Settings → Web Remote</em> in Opal first.
+              </small>
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit" class="btn primary">Save</button>
+            <button type="button" id="test" class="btn">Test connection</button>
+          </div>
+          <div id="result" class="result" hidden></div>
+        </section>
 
-        <label>
-          <span>Port</span>
-          <input id="port" type="number" placeholder="41595" min="1" max="65535" />
-        </label>
+        <!-- Behavior -->
+        <section class="group">
+          <div class="group-head">
+            <h2>Behavior</h2>
+            <p>How the toolbar panel and the floating button send by default.</p>
+          </div>
+          <div class="fields">
+            <label class="field wide">
+              <span class="field-label">Default send action</span>
+              <select id="default-action">
+                <option value="play">Play in Opal</option>
+                <option value="queue">Add to queue</option>
+                <option value="download">Download</option>
+              </select>
+              <small class="help">
+                Per-site source defaults are detected automatically — visiting a Madara,
+                MangaThemesia, HeanCMS, LightNovel-WP or ReadWN site surfaces a one-click
+                <em>“Add as Opal source”</em> in the side panel.
+              </small>
+            </label>
+          </div>
+        </section>
 
-        <label>
-          <span>API token</span>
-          <input id="token" type="password" placeholder="paste your token" autocomplete="off" />
-          <small class="hint">
-            Find it in <code>~/.config/opal/api.token</code> (macOS/Linux) or
-            <code>%APPDATA%\opal\api.token</code> (Windows). Enable
-            <em>Settings → Web Remote</em> in Opal first.
-          </small>
-        </label>
-
-        <div class="row">
-          <button type="submit" class="primary">Save</button>
-          <button type="button" id="test">Test connection</button>
-          <button type="button" id="reveal" class="ghost">Show token</button>
-        </div>
+        <!-- About -->
+        <section class="group">
+          <div class="group-head">
+            <h2>About</h2>
+          </div>
+          <div class="about">
+            <p><strong>Opal Connector</strong> <span id="version" class="ver">v0.2.0</span></p>
+            <p class="muted">
+              The extension talks only to your locally-running Opal desktop app. It opens as
+              a side panel (Chrome/Edge) or sidebar (Firefox). Right-click any page or link to
+              play, queue, download, read, or add a site as a source.
+            </p>
+          </div>
+        </section>
       </form>
-
-      <div id="result" class="result" hidden></div>
-    </main>
+    </div>
 
     <script type="module" src="./options.ts"></script>
   </body>

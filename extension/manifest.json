@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Opal Connector",
-  "version": "0.1.0",
-  "description": "Send any website's media, articles, downloads and scraped page data to a locally-running Opal.",
+  "version": "0.2.0",
+  "description": "Send any website's media, articles, downloads and scraped page data to a locally-running Opal — and turn manga/novel sites into Opal sources in one click.",
   "icons": {
     "16": "images/icon-16.png",
     "48": "images/icon-48.png",
@@ -13,7 +13,8 @@
     "activeTab",
     "storage",
     "scripting",
-    "notifications"
+    "notifications",
+    "sidePanel"
   ],
   "host_permissions": [
     "http://127.0.0.1/*",
@@ -31,8 +32,14 @@
     }
   ],
   "action": {
-    "default_title": "Opal Connector",
-    "default_popup": "src/popup/popup.html",
+    "default_title": "Open Opal panel"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  },
+  "sidebar_action": {
+    "default_panel": "src/sidepanel/index.html",
+    "default_title": "Opal",
     "default_icon": {
       "16": "images/icon-16.png",
       "48": "images/icon-48.png",
