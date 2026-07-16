@@ -432,6 +432,10 @@ pub fn appDeinit() void {
     const server = @import("services/ai_server.zig");
     server.stopServer();
 
+    // Release the process-global keep-alive HTTP client (pooled connections)
+    // so the leak report below stays at 0. Workers are already stopped here.
+    @import("core/http.zig").deinit();
+
     // Free log entries to prevent GPA leak reports
     logs.deinit();
 
