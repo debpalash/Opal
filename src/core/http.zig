@@ -259,12 +259,30 @@ pub fn fetchAlloc(url: []const u8, opts: HttpOptions) ?[]u8 {
     return result;
 }
 
-/// Fetch image data (larger buffer, returns raw bytes for stbi).
+/// Fetch image data via curl (raw bytes for stbi). std.http (used by fetch())
+/// silently returns NULL for some image CDNs — notably `cdn.myanimelist.net`
+/// (every anime poster), which curl fetches fine (verified: 200, image/jpeg).
+/// The rest of the codebase already prefers curl over the fragile 0.16 std.http
+/// for exactly this reason, so poster/image fetching does too. Reads the raw
+/// bytes straight into `buf` (binary-safe), bounded by --connect-timeout /
+/// --max-time so a dead CDN host can't stall a poster-daemon slot.
 pub fn fetchImage(url: []const u8, buf: []u8) ?[]const u8 {
-    return fetch(url, buf, .{
-        .timeout_secs = 15,
-        .max_response = 512 * 1024,
-    });
+    if (url.len == 0 or url.len > 2048) return null;
+    var child = io_global.Child.init(&.{
+        "curl",              "-s",
+        "-L",                "--connect-timeout",
+        "3",                 "--max-time",
+        "15",                "-A",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        url,
+    }, alloc.allocator);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return null;
+    const n = if (child.stdout) |*so| io_global.readAll(so, buf) catch 0 else 0;
+    _ = child.wait() catch {};
+    if (n < 2) return null;
+    return buf[0..n];
 }
 
 /// Simple JSON field extraction (replaces copy-pasted patterns).

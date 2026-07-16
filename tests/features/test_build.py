@@ -179,6 +179,18 @@ def test_zig_unit():
     return "fail", f"exit {r.returncode}"
 
 
+@test("Poster/image fetch uses curl not std.http", "Network")
+def test_fetchimage_curl():
+    # REGRESSION — std.http (fetch()) silently returns NULL for some image CDNs,
+    # notably cdn.myanimelist.net (every anime poster), so anime covers never
+    # loaded. fetchImage must shell out to curl (which fetches them fine).
+    h = _src("src/core/http.zig")
+    fn = _between(h, "pub fn fetchImage", "\n}")
+    if '"curl"' in fn and "io_global.Child" in fn:
+        return "pass", "fetchImage fetches images via curl (MAL CDN + TMDB both work)"
+    return "fail", "fetchImage still routes images through std.http (anime posters return NULL)"
+
+
 @test("YouTube bypasses bot wall via tv client", "Network")
 def test_youtube_player_client():
     # REGRESSION — YouTube served "Sign in to confirm you're not a bot" + HTTP
