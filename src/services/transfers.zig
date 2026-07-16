@@ -21,6 +21,8 @@ const io_global = @import("../core/io_global.zig");
 const tp = @import("transfers_pure.zig");
 const vt_pure = @import("virustotal_pure.zig");
 const httpdl = @import("downloads.zig");
+const gallerydl = @import("gallerydl.zig");
+const gdl_pure = @import("gallerydl_pure.zig");
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 
@@ -336,7 +338,12 @@ fn renderControlBar() void {
         })) {
             const clip = std.mem.trim(u8, dvui.clipboardText(), " \t\r\n");
             if (std.mem.startsWith(u8, clip, "http://") or std.mem.startsWith(u8, clip, "https://")) {
-                if (httpdl.startUrl(clip)) {
+                // Image-gallery / art / booru URLs go to gallery-dl (hundreds of
+                // sites the HTTP downloader / yt-dlp don't cover); everything
+                // else falls through to the existing HTTP download path.
+                if (gallerydl.enabled() and gdl_pure.shouldUseGalleryDl(clip)) {
+                    _ = gallerydl.fetch(clip);
+                } else if (httpdl.startUrl(clip)) {
                     state.showToast("Download started from clipboard URL");
                 } else {
                     state.showToastTyped("Couldn't start that download", .err);

@@ -944,6 +944,19 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_anime_skip_pure).step);
 
+    // gallery-dl backend pure logic: URL→backend classification (gallery/art/
+    // booru hosts vs video hosts), the argv builder (discrete args, `--` guard,
+    // no shell injection), and stdout parsing (downloaded/skipped/ignore).
+    // services/gallerydl.zig routes production through these.
+    const test_gallerydl_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/gallerydl_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_gallerydl_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main

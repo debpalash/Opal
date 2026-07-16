@@ -358,6 +358,10 @@ pub const AppState = struct {
     last_clicked_search_idx: usize = 99999,
     last_clicked_time: i64 = 0,
     nsfw_filter_enabled: bool = true,
+    // Route image-gallery / art / booru URLs to gallery-dl instead of the HTTP
+    // downloader. Effective only when a gallery-dl binary is installed (see
+    // services/gallerydl.zig enabled()); default ON.
+    gallerydl_enabled: bool = true,
     // "Personalized suggestions (local-only)" — gates the activity/taste
     // engine (services/activity.zig): recording AND the Home "For You" row.
     taste_enabled: bool = true,
