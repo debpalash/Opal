@@ -8,6 +8,7 @@ const thumbnail = @import("../player/thumbnail.zig");
 const subtitles_mod = @import("../player/subtitles.zig");
 const podcasts_pure = @import("../services/podcasts_pure.zig");
 const radio_pure = @import("../services/radio_pure.zig");
+const opds_pure = @import("../services/opds_pure.zig");
 
 // ══════════════════════════════════════════════════════════
 // Type Definitions
@@ -16,7 +17,7 @@ const radio_pure = @import("../services/radio_pure.zig");
 pub const GridMode = enum { auto, cols_1, cols_2, cols_3, cols_4 };
 pub const ContentProvider = enum { mpv, comic_viewer };
 pub const VideoFillMode = enum { fit, cover };
-pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web };
+pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Opds };
 pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, Scripts, AI, LangLearn, FileAssoc, About };
 pub const TmdbView = enum { Trending, Search, Favorites, Watchlist, Watching };
 pub const TmdbCategory = enum { trending, now_playing, top_rated, upcoming, popular };
@@ -890,6 +891,46 @@ pub const AppState = struct {
         nav_depth: usize = 0,
     } = .{},
     dub_last_hash: u64 = 0,
+
+    // ── OPDS reading server (Komga / Kavita / Calibre-Web / LANraragi) ──
+    // One OPDS 1.2 (Atom/XML) client covers every self-hosted comic/manga/ebook
+    // server. server_url is the catalog root URL; HTTP Basic auth (user/pass) is
+    // sent on every request (OPDS has no token exchange). Feed parsing lives in
+    // services/opds_pure.zig; the fetch worker publishes here under opds.zig's
+    // parse_mutex. Structural sibling of `jf`: connect → browse feed → drill into
+    // subsections → open acquisition. See services/opds.zig.
+    opds: struct {
+        // Catalog root URL + Basic-auth credentials. The text-entry buffers are
+        // edited in place by the login/settings form (like jf.server_url).
+        server_url: [256]u8 = std.mem.zeroes([256]u8),
+        server_url_len: usize = 0,
+        user_buf: [128]u8 = std.mem.zeroes([128]u8),
+        pass_buf: [128]u8 = std.mem.zeroes([128]u8),
+        connected: bool = false,
+        // Atomic like the jf/podcasts loaders: written by the detached fetch
+        // worker, read by the UI + remote threads. A plain bool is a data race.
+        is_loading: std.atomic.Value(bool) = .init(false),
+        fetch_error: bool = false,
+        error_msg: [160]u8 = std.mem.zeroes([160]u8),
+        error_msg_len: usize = 0,
+        // Current feed: title heading + parsed entries.
+        feed_title: [160]u8 = std.mem.zeroes([160]u8),
+        feed_title_len: usize = 0,
+        entries: [64]opds_pure.OpdsEntry = std.mem.zeroes([64]opds_pure.OpdsEntry),
+        entry_count: usize = 0,
+        // The URL of the feed currently shown (base for relative hrefs).
+        current_url: [512]u8 = std.mem.zeroes([512]u8),
+        current_url_len: usize = 0,
+        // Feed-URL navigation stack (drill into subsections, back out).
+        nav_urls: [8][512]u8 = std.mem.zeroes([8][512]u8),
+        nav_url_lens: [8]usize = std.mem.zeroes([8]usize),
+        nav_titles: [8][160]u8 = std.mem.zeroes([8][160]u8),
+        nav_title_lens: [8]usize = std.mem.zeroes([8]usize),
+        nav_depth: usize = 0,
+        // Deferred feed-open request from a non-UI thread (remote API): the URL
+        // to fetch; the worker reads it. thread handle for detach.
+        thread: ?std.Thread = null,
+    } = .{},
 };
 
 /// The single global application state instance.
@@ -1169,6 +1210,10 @@ pub fn navigateToTabNow(tab: DrawerTab) void {
         },
         .Plex => {
             app.browse_source = .Plex;
+            app.router.navigate(.browse);
+        },
+        .Opds => {
+            app.browse_source = .Opds;
             app.router.navigate(.browse);
         },
         .Plugins => {

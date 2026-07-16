@@ -236,6 +236,7 @@ pub fn renderDrawer() void {
         renderRailTab(.RSS, shell.iconForTab(.RSS), "RSS", 11);
         renderRailTab(.Jellyfin, shell.iconForTab(.Jellyfin), "Jellyfin / Emby", 12);
         renderRailTab(.Plex, shell.iconForTab(.Plex), "Plex", 13);
+        renderRailTab(.Opds, shell.iconForTab(.Opds), "Reading (OPDS)", 17);
 
         railGroupGap(1);
 
@@ -305,6 +306,7 @@ pub fn renderTabContent(tab: state.DrawerTab) void {
         .RSS => rss.renderContent(),
         .Jellyfin => jellyfin_ui.renderContent(),
         .Plex => @import("../services/plex.zig").renderContent(),
+        .Opds => @import("../services/opds.zig").renderContent(),
         .Plugins => plugin_mod.renderContent(),
         .Logs => renderLogsContent(),
         .Settings => settings_mod.renderSettingsContent(),

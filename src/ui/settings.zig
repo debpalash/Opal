@@ -225,7 +225,7 @@ fn sectionMatchesSearch(tab: state.SettingsTab) bool {
         .Playback => &.{ "Video Processing", "Audio Equalizer", "Audio Output", "Device", "Streaming", "Shortcuts", "Filters", "Capture", "Hardware", "Decode", "Deband", "Interpolation", "Brightness", "Contrast", "Saturation", "Gamma", "Screenshot", "Auto-advance", "Resume" },
         .About => &.{ "About", "Version", "Update", "Credits", "License", "Donate", "Sponsors", "Links", "TMDB" },
         .Subtitles => &.{ "OpenSubtitles", "Subdl", "Language", "Search", "API Key", "Font", "Delay", "Whisper" },
-        .Network => &.{ "Download", "Trackers", "Proxy", "Speed", "Limit", "Port", "Browser", "Engine", "Camoufox", "CloakBrowser" },
+        .Network => &.{ "Download", "Trackers", "Proxy", "Speed", "Limit", "Port", "Browser", "Engine", "Camoufox", "CloakBrowser", "OPDS", "Reading", "Komga", "Kavita", "Calibre" },
         .Storage => &.{ "Download Path", "Watch History", "Database", "Cache", "Clear" },
         .Scripts => &.{ "SponsorBlock", "AI Backend", "Remote", "Watch Party", "Scripts", "Gemma", "Apple Intelligence", "Model", "Voice" },
         .AI => &.{ "Voice Backend", "STT", "TTS", "Whisper", "Kokoro", "MLX", "Sherpa", "Co-Watcher", "Models", "Dependencies" },
@@ -1950,6 +1950,95 @@ fn renderNetworkTab() void {
     _ = dvui.label(@src(), "e.g. socks5://127.0.0.1:1080 — used for yt-dlp and playlist extraction", .{}, .{
         .color_text = theme.colors.text_tertiary,
     });
+
+    // ── Reading server (OPDS) — Komga / Kavita / Calibre-Web / LANraragi ──
+    // Mirrors the Jellyfin connection surface: catalog URL + Basic-auth creds +
+    // a Test Connection button (opds.connect fetches the root feed).
+    settingRow("Reading server (OPDS)", 34, @src());
+    _ = dvui.label(@src(), "Komga · Kavita · Calibre-Web · LANraragi — manga, comics & ebooks", .{}, .{
+        .id_extra = 3400,
+        .color_text = theme.colors.text_tertiary,
+    });
+    {
+        const opds = @import("../services/opds.zig");
+        // Catalog URL
+        _ = dvui.label(@src(), "Catalog URL", .{}, .{ .id_extra = 3401, .color_text = theme.colors.text_secondary });
+        {
+            var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.opds.server_url } }, .{
+                .id_extra = 3402,
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 250, .h = 20 },
+                .color_fill = theme.colors.bg_elevated,
+                .color_border = theme.colors.border_subtle,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(1),
+                .corner_radius = theme.dims.rad_sm,
+            });
+            const changed = te.text_changed;
+            te.deinit();
+            state.app.opds.server_url_len = std.mem.indexOfScalar(u8, &state.app.opds.server_url, 0) orelse state.app.opds.server_url.len;
+            if (changed) state.markConfigDirty();
+        }
+        // Username / Password
+        {
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 3403, .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 26 } });
+            defer row.deinit();
+            var ute = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.opds.user_buf } }, .{
+                .id_extra = 3404,
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 120, .h = 20 },
+                .color_fill = theme.colors.bg_elevated,
+                .color_border = theme.colors.border_subtle,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(1),
+                .corner_radius = theme.dims.rad_sm,
+            });
+            const uchanged = ute.text_changed;
+            ute.deinit();
+            var pte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.opds.pass_buf }, .password_char = "•" }, .{
+                .id_extra = 3405,
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 120, .h = 20 },
+                .color_fill = theme.colors.bg_elevated,
+                .color_border = theme.colors.border_subtle,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(1),
+                .corner_radius = theme.dims.rad_sm,
+                .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+            });
+            const pchanged = pte.text_changed;
+            pte.deinit();
+            if (uchanged or pchanged) state.markConfigDirty();
+        }
+        // Test Connection + status
+        {
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 3406, .expand = .horizontal });
+            defer row.deinit();
+            const busy = state.app.opds.is_loading.load(.acquire);
+            if (dvui.button(@src(), if (busy) "Connecting…" else "Test Connection", .{}, .{
+                .id_extra = 3407,
+                .color_fill = theme.colors.accent,
+                .color_text = theme.colors.text_on_accent,
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            }) and !busy) {
+                state.markConfigDirty();
+                opds.testConnection();
+            }
+            const status: []const u8 = if (state.app.opds.fetch_error and state.app.opds.error_msg_len > 0)
+                state.app.opds.error_msg[0..state.app.opds.error_msg_len]
+            else if (state.app.opds.connected)
+                "Connected"
+            else
+                "Not connected";
+            _ = dvui.label(@src(), "{s}", .{status}, .{
+                .id_extra = 3408,
+                .color_text = if (state.app.opds.fetch_error) theme.colors.danger else theme.colors.text_secondary,
+                .gravity_y = 0.5,
+                .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
+            });
+        }
+    }
 }
 
 fn renderSubtitlesTab() void {
