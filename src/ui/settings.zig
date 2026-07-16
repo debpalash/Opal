@@ -2701,11 +2701,52 @@ fn renderStorageTab() void {
         }
     }
 
+    // Encrypted content cache — instant cold-start views + SWR refresh.
+    renderCacheSection();
+
     // Database info
     settingRow("Database", 52, @src());
     _ = dvui.label(@src(), "SQLite: ~/.config/opal/opal.db", .{}, .{
         .color_text = theme.colors.text_tertiary,
     });
+}
+
+/// Storage → Cache section: the enable toggle, an on-disk size label, and a
+/// "Clear cache" action. Encrypted content cache lives in
+/// core/content_cache.zig; entries are AES/XChaCha-encrypted under a local key.
+fn renderCacheSection() void {
+    const content_cache = @import("../core/content_cache.zig");
+    settingRow("Content Cache", 53, @src());
+
+    // Enable toggle — persisted like every other config bool.
+    {
+        const before = state.app.content_cache_enabled;
+        components.toggleRow(
+            @src(),
+            "Cache content on disk (encrypted)",
+            "Instant search & browse on cold start; refreshes in the background when stale",
+            &state.app.content_cache_enabled,
+        );
+        if (state.app.content_cache_enabled != before) state.markConfigDirty();
+    }
+
+    // On-disk size label.
+    {
+        const bytes = content_cache.sizeBytes();
+        var size_buf: [64]u8 = undefined;
+        const mb = @as(f64, @floatFromInt(bytes)) / (1024.0 * 1024.0);
+        const size_str = std.fmt.bufPrint(&size_buf, "{d:.1} MB cached on disk", .{mb}) catch "?";
+        _ = dvui.label(@src(), "{s}", .{size_str}, .{
+            .color_text = theme.colors.text_secondary,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
+        });
+    }
+
+    // Clear cache — two-step confirm (destructive; drops all cached entries).
+    if (components.confirmDangerButton(@src(), "Clear cache", 1)) {
+        content_cache.clearAll();
+        state.showToast("Content cache cleared");
+    }
 }
 
 fn renderLangLearnTab() void {

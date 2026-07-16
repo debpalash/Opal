@@ -398,6 +398,10 @@ pub const AppState = struct {
     // "Personalized suggestions (local-only)" — gates the activity/taste
     // engine (services/activity.zig): recording AND the Home "For You" row.
     taste_enabled: bool = true,
+    // Encrypted persistent content cache (core/content_cache.zig): cache search
+    // results / browse listings to disk so cold-start views paint instantly,
+    // refreshing in the background when stale (SWR). Default ON.
+    content_cache_enabled: bool = true,
     universal_search: bool = true, // Default to universal mode (the king feature)
     nsfw_confirm_pending: bool = false,
     nsfw_confirm_link_buf: [4096]u8 = std.mem.zeroes([4096]u8),

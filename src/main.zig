@@ -168,6 +168,11 @@ pub fn coreInit() !void {
             // Load all persistent data from SQLite
             config.load();
 
+            // Encrypted persistent content cache: load (or generate) the local
+            // key and sweep expired/oversized entries. Runs here on the bg init
+            // thread so cold-start views can read cached copies immediately.
+            @import("core/content_cache.zig").init();
+
             // Resource meters in the title bar. Samples on its own thread at 1 Hz
             // — every reading is a syscall, and a meter that costs more than the
             // thing it measures would be a bad joke.

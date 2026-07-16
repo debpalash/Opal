@@ -41,6 +41,7 @@ pub fn save() void {
     setKey("gallerydl_enabled", if (state.app.gallerydl_enabled) "1" else "0");
     setKey("scrape_use_browser", if (state.app.scrape_use_browser) "1" else "0");
     setKey("taste_suggestions", if (state.app.taste_enabled) "1" else "0");
+    setKey("content_cache_enabled", if (state.app.content_cache_enabled) "1" else "0");
     setKey("auto_download_subs", if (state.app.auto_download_subs) "1" else "0");
     setKey("save_path", state.app.save_path_buf[0..state.app.save_path_len]);
     setKey("sub_lang", state.app.sub_lang_buf[0..state.app.sub_lang_len]);
@@ -269,6 +270,8 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.scrape_use_browser = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "taste_suggestions")) {
         state.app.taste_enabled = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "content_cache_enabled")) {
+        state.app.content_cache_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "auto_download_subs")) {
         state.app.auto_download_subs = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "save_path")) {

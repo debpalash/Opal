@@ -50,6 +50,7 @@ from features import (  # noqa: F401
     test_extension,
     test_anime_extractors,
     test_anime_sites,
+    test_content_cache,
 )
 
 if __name__ == "__main__":

@@ -102,6 +102,9 @@ pub fn renderTmdbContent() void {
     // key is ready and never re-fires (first-start "Nothing loaded" race).
     if (state.app.config_loaded.load(.acquire) and !state.app.tmdb.loaded_once and !state.app.tmdb.is_loading.load(.acquire)) {
         state.app.tmdb.loaded_once = true;
+        // SWR: paint the last-known browse grid from the encrypted disk cache
+        // NOW (never blank), then revalidate over the network below.
+        api.seedBrowseFromCache();
         api.fetchCurrentView(false);
     } else if (state.app.tmdb.view == .Trending and !state.app.tmdb.is_loading.load(.acquire) and
         state.app.tmdb.results.items.len > 0 and state.app.tmdb.page == 1 and

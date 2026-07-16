@@ -1115,4 +1115,17 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_anime_animestream_pure).step);
+
+    // Encrypted persistent content cache: the io-free format + policy — header
+    // codec, key→filename hashing, staleness classification (fresh/stale/expired
+    // boundaries + hard-max purge), and the size-cap eviction planner.
+    // content_cache.zig routes every byte-level decision through this module.
+    const test_content_cache_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/content_cache_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_content_cache_pure).step);
 }
