@@ -2,9 +2,13 @@
 
 Validates the cross-browser MV3 extension under extension/ is wired correctly:
 a valid MV3 manifest with the right permissions + localhost host_permissions, a
-background service worker / content script / popup / options declared, the
-background worker targeting the real Opal endpoints with a Bearer header, and
-the Zig side carrying the /api/ingest handler it scrapes into.
+background service worker / content script / side panel / options declared, the
+extension surfaced as a persistent SIDE PANEL (Chrome) / SIDEBAR (Firefox) rather
+than a popup, the background worker targeting the real Opal endpoints (including
+the new /api/source/add + /api/playpause) with a Bearer header, the content
+script's manga/novel framework-detection heuristics, and the Zig side carrying
+the /api/ingest + /api/source/add + /api/playpause handlers and source_config
+install path it drives.
 
 See tests/features/harness.py for the shared @test decorator + helpers."""
 import json
@@ -32,7 +36,7 @@ def test_opal_browser_extension():
         problems.append("manifest_version is not 3 (MV3 required)")
 
     perms = set(manifest.get("permissions", []))
-    for need in ("contextMenus", "activeTab", "storage", "scripting", "notifications"):
+    for need in ("contextMenus", "activeTab", "storage", "scripting", "notifications", "sidePanel"):
         if need not in perms:
             problems.append(f"permission '{need}' missing")
 
@@ -46,12 +50,20 @@ def test_opal_browser_extension():
     if not bg.get("service_worker"):
         problems.append("background.service_worker not declared")
 
-    # Content script + popup + options declared.
+    # Content script declared.
     if not manifest.get("content_scripts"):
         problems.append("content_scripts not declared")
+
+    # ── Surface: side panel (Chrome) + sidebar (Firefox), NOT a popup ──
     action = manifest.get("action", {})
-    if not action.get("default_popup"):
-        problems.append("action.default_popup (popup) not declared")
+    if action.get("default_popup"):
+        problems.append("action.default_popup must be removed (side panel now)")
+    side_panel = manifest.get("side_panel", {})
+    if not side_panel.get("default_path"):
+        problems.append("side_panel.default_path (Chrome side panel) not declared")
+    sidebar = manifest.get("sidebar_action", {})
+    if not sidebar.get("default_panel"):
+        problems.append("sidebar_action.default_panel (Firefox sidebar) not declared")
     if not (manifest.get("options_ui") or manifest.get("options_page")):
         problems.append("options page not declared")
 
@@ -59,7 +71,8 @@ def test_opal_browser_extension():
     for rel in (
         "src/background.ts",
         "src/content.ts",
-        "src/popup/popup.html",
+        "src/sidepanel/index.html",
+        "src/sidepanel/sidepanel.ts",
         "src/options/options.html",
     ):
         if not os.path.exists(os.path.join(ext_dir, rel)):
@@ -68,25 +81,46 @@ def test_opal_browser_extension():
     # ── background worker targets the real endpoints + Bearer auth ──
     bg_path = os.path.join(ext_dir, "src/background.ts")
     bg_src = open(bg_path).read() if os.path.exists(bg_path) else ""
-    if "/api/open" not in bg_src:
-        problems.append("background.ts does not reference /api/open")
-    if "/api/download/url" not in bg_src:
-        problems.append("background.ts does not reference /api/download/url")
-    if "/api/ingest" not in bg_src:
-        problems.append("background.ts does not reference /api/ingest")
+    for ep in ("/api/open", "/api/download/url", "/api/ingest", "/api/source/add", "/api/playpause"):
+        if ep not in bg_src:
+            problems.append(f"background.ts does not reference {ep}")
     if "Bearer" not in bg_src or "Authorization" not in bg_src:
         problems.append("background.ts missing Authorization: Bearer header")
+    if "setPanelBehavior" not in bg_src:
+        problems.append("background.ts does not open the side panel on action click")
 
-    # ── Zig side: /api/ingest handler exists in remote.zig ──
+    # ── content script: manga/novel framework-detection heuristics ──
+    ct_path = os.path.join(ext_dir, "src/content.ts")
+    ct_src = open(ct_path).read() if os.path.exists(ct_path) else ""
+    if "detectFramework" not in ct_src:
+        problems.append("content.ts missing detectFramework()")
+    for marker in ("wp-manga", "readerarea", "series_slug", "epcontent", "chapter-content"):
+        if marker not in ct_src:
+            problems.append(f"content.ts missing framework marker '{marker}'")
+
+    # ── Zig side: new endpoints + source_config install path ──
     remote = _src("src/services/remote.zig")
     if '"/ingest"' not in remote:
         problems.append("remote.zig missing the /api/ingest handler")
+    if '"/source/add"' not in remote:
+        problems.append("remote.zig missing the /api/source/add handler")
+    if '"/playpause"' not in remote:
+        problems.append("remote.zig missing the /api/playpause handler")
+    # ingest routes the typed hint (queue vs play).
+    if '"queue"' not in remote or '"manga"' not in remote:
+        problems.append("remote.zig /api/ingest does not route the typed hints")
+
+    src_cfg = _src("src/core/source_config.zig")
+    if "pub fn install(" not in src_cfg:
+        problems.append("source_config.zig missing an install() write path")
 
     if problems:
         return "fail", "; ".join(problems)
     return (
         "pass",
-        "MV3 manifest valid (perms + localhost host_permissions, SW + content "
-        "+ popup + options); background.ts hits /api/open, /api/download/url, "
-        "/api/ingest with Bearer auth; remote.zig has /api/ingest",
+        "MV3 manifest valid (perms + sidePanel + localhost hosts; side_panel + "
+        "sidebar_action, no popup); background.ts hits /api/open, /api/ingest, "
+        "/api/source/add, /api/playpause with Bearer + opens the side panel; "
+        "content.ts detects Madara/MangaThemesia/HeanCMS/LightNovelWP/ReadWN; "
+        "remote.zig has /source/add + /playpause + typed ingest; source_config.install",
     )

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Opal</title>
+    <link rel="stylesheet" href="./sidepanel.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <span class="logo">◆</span>
+      <div class="app-title">
+        <h1>Opal</h1>
+        <span id="status-text" class="status-line">Checking…</span>
+      </div>
+      <span id="status-dot" class="dot probing"></span>
+    </header>
+
+    <!-- Add-this-site-as-a-source (shown only on recognised manga/novel sites) -->
+    <section id="source-card" class="card accent" hidden>
+      <div class="card-head">
+        <span class="card-icon">＋</span>
+        <div>
+          <div class="card-title" id="source-site">This site</div>
+          <div class="card-sub" id="source-fw">framework</div>
+        </div>
+      </div>
+      <p class="card-body">
+        Add it as an Opal source — it becomes searchable in Comics / Novels.
+      </p>
+      <button id="add-source" class="btn primary full">Add as Opal source</button>
+    </section>
+
+    <!-- Send the current tab -->
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title" id="tab-type">Current tab</div>
+          <div class="card-sub" id="tab-title">—</div>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button id="send" class="btn primary">▶ Send to Opal</button>
+        <button id="queue" class="btn">＋ Queue</button>
+      </div>
+      <div class="btn-row">
+        <button id="download" class="btn ghost">⬇ Download</button>
+        <button id="read" class="btn ghost">📖 Read</button>
+      </div>
+    </section>
+
+    <!-- Now-playing mini remote -->
+    <section id="remote" class="card">
+      <div class="np-title" id="np-title">Nothing playing</div>
+      <input id="seek" class="range" type="range" min="0" max="100" value="0" step="1" />
+      <div class="np-times">
+        <span id="np-pos">0:00</span>
+        <span id="np-dur">0:00</span>
+      </div>
+      <div class="transport">
+        <button id="back" class="icon-btn" title="Back 10s">⏪</button>
+        <button id="playpause" class="icon-btn big" title="Play / Pause">⏯</button>
+        <button id="fwd" class="icon-btn" title="Forward 10s">⏩</button>
+        <button id="next-audio" class="icon-btn" title="Next audio track">🔊</button>
+        <button id="next-sub" class="icon-btn" title="Next subtitle">💬</button>
+      </div>
+      <div class="vol-row">
+        <span class="vol-ico">🔈</span>
+        <input id="vol" class="range" type="range" min="0" max="150" value="100" step="1" />
+      </div>
+    </section>
+
+    <!-- Recent actions -->
+    <section class="card">
+      <div class="card-title small">Recent</div>
+      <ul id="recent" class="recent"><li class="recent-empty">No actions yet.</li></ul>
+    </section>
+
+    <footer class="app-footer">
+      <a id="options" href="#">Settings</a>
+      <span class="hint">Opal must be running locally</span>
+    </footer>
+
+    <script type="module" src="./sidepanel.ts"></script>
+  </body>
+</html>

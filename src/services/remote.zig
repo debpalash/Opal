@@ -486,6 +486,34 @@ fn getQueryParam(query: []const u8, key: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Stash a URL + optional type/metadata for the UI thread to open. Backs both
+/// /api/open and /api/ingest (browser extension): the UI thread consumes this
+/// once, routing by `kind` (queue vs play) and, when meta is present, showing a
+/// proper now-playing card via browser.loadContentDirectMeta. All strings must
+/// already be percent-decoded. Empty `url` is a no-op. Wakes the idle UI loop.
+fn stashRemoteOpen(url: []const u8, kind: []const u8, title: []const u8, art: []const u8, subtitle: []const u8) void {
+    if (url.len == 0) return;
+    state.app.remote_open_lock.lock();
+    defer state.app.remote_open_lock.unlock();
+    const n = @min(url.len, state.app.remote_open_path.len);
+    @memcpy(state.app.remote_open_path[0..n], url[0..n]);
+    state.app.remote_open_len = n;
+    const kn = @min(kind.len, state.app.remote_open_type.len);
+    @memcpy(state.app.remote_open_type[0..kn], kind[0..kn]);
+    state.app.remote_open_type_len = kn;
+    const tn = @min(title.len, state.app.remote_open_title.len);
+    @memcpy(state.app.remote_open_title[0..tn], title[0..tn]);
+    state.app.remote_open_title_len = tn;
+    const an = @min(art.len, state.app.remote_open_art.len);
+    @memcpy(state.app.remote_open_art[0..an], art[0..an]);
+    state.app.remote_open_art_len = an;
+    const sn = @min(subtitle.len, state.app.remote_open_subtitle.len);
+    @memcpy(state.app.remote_open_subtitle[0..sn], subtitle[0..sn]);
+    state.app.remote_open_subtitle_len = sn;
+    state.app.remote_open_ready = true;
+    state.wakeUi(); // idle UI loop won't run a frame otherwise
+}
+
 fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
     // ── Non-player endpoints checked first ──
     // Search
@@ -605,20 +633,53 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         // Accept `url` as an alias for `path`: the browser extension (and this
         // endpoint's documented shape) POST /api/open?url=<enc>, while the web
         // UI uses ?path=. Both route through the same UI-thread hand-off.
+        // Optional `title`/`art`/`subtitle` (browser extension rich-metadata
+        // send) render a proper now-playing card instead of a bare URL.
         if (getQueryParam(query, "path") orelse getQueryParam(query, "url")) |raw| {
             var dec_buf: [2048]u8 = undefined;
             const decoded = urlDecode(raw, &dec_buf) orelse raw;
-            if (decoded.len > 0) {
-                state.app.remote_open_lock.lock();
-                const n = @min(decoded.len, state.app.remote_open_path.len);
-                @memcpy(state.app.remote_open_path[0..n], decoded[0..n]);
-                state.app.remote_open_len = n;
-                state.app.remote_open_ready = true;
-                state.app.remote_open_lock.unlock();
-                state.wakeUi(); // idle UI loop won't run a frame otherwise
-            }
+            var title_buf: [512]u8 = undefined;
+            const title = if (getQueryParam(query, "title")) |t| (urlDecode(t, &title_buf) orelse "") else "";
+            var art_buf: [1024]u8 = undefined;
+            const art = if (getQueryParam(query, "art")) |a| (urlDecode(a, &art_buf) orelse "") else "";
+            var sub_buf: [256]u8 = undefined;
+            const subtitle = if (getQueryParam(query, "subtitle")) |s| (urlDecode(s, &sub_buf) orelse "") else "";
+            stashRemoteOpen(decoded, "media", title, art, subtitle);
         }
         sendJson(stream, "{\"ok\":true,\"action\":\"open\"}");
+        return;
+    }
+    // "Add this site as an Opal source" — the extension detects the manga/novel
+    // framework a page uses and installs it as a source in one click. framework
+    // ∈ {madara,mangathemesia,heancms,madara_novel,lightnovelwp,readwn} maps 1:1
+    // to the source_config id each engine reads; base is the site origin.
+    if (std.mem.eql(u8, api_path, "/source/add")) {
+        var fw_buf: [32]u8 = undefined;
+        const framework = if (getQueryParam(query, "framework")) |f| (urlDecode(f, &fw_buf) orelse "") else "";
+        const valid_fw = std.mem.eql(u8, framework, "madara") or
+            std.mem.eql(u8, framework, "mangathemesia") or
+            std.mem.eql(u8, framework, "heancms") or
+            std.mem.eql(u8, framework, "madara_novel") or
+            std.mem.eql(u8, framework, "lightnovelwp") or
+            std.mem.eql(u8, framework, "readwn");
+        var base_buf: [512]u8 = undefined;
+        const base = if (getQueryParam(query, "base")) |b| (urlDecode(b, &base_buf) orelse "") else "";
+        const valid_base = std.mem.startsWith(u8, base, "http://") or std.mem.startsWith(u8, base, "https://");
+        if (!valid_fw or !valid_base) {
+            sendJson(stream, "{\"ok\":false,\"error\":\"need framework∈{madara,mangathemesia,heancms,madara_novel,lightnovelwp,readwn} and an http(s) base\"}");
+            return;
+        }
+        // Flat JSON body {"base":"<origin>"}, origin escaped so it can't break JSON.
+        var body_buf: [640]u8 = undefined;
+        var bw = std.Io.Writer.fixed(&body_buf);
+        bw.writeAll("{\"base\":\"") catch return;
+        escJsonWrite(&bw, base);
+        bw.writeAll("\"}") catch return;
+        const ok = @import("../core/source_config.zig").install(framework, body_buf[0..bw.end]);
+        var jb: [96]u8 = undefined;
+        // framework is from the fixed whitelist above → safe to echo verbatim.
+        const j = std.fmt.bufPrint(&jb, "{{\"ok\":{s},\"framework\":\"{s}\"}}", .{ if (ok) "true" else "false", framework }) catch "{\"ok\":false}";
+        sendJson(stream, j);
         return;
     }
     // Scrape/ingest from the browser extension: route a page's media/article/
@@ -629,23 +690,32 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     if (std.mem.eql(u8, api_path, "/ingest")) {
         var type_buf: [32]u8 = undefined;
         const raw_type = if (getQueryParam(query, "type")) |t| (urlDecode(t, &type_buf) orelse "media") else "media";
-        // Clamp to the known set so the echoed value can't inject into the JSON.
-        const ingest_type = if (std.mem.eql(u8, raw_type, "article") or std.mem.eql(u8, raw_type, "chapters"))
+        // Clamp to the known set so the echoed value can't inject into the JSON,
+        // and so the UI-thread router only sees types it knows. The extension
+        // classifies the page (content.ts) and sends the hint here.
+        const ingest_type = if (std.mem.eql(u8, raw_type, "article") or
+            std.mem.eql(u8, raw_type, "chapters") or
+            std.mem.eql(u8, raw_type, "manga") or
+            std.mem.eql(u8, raw_type, "novel") or
+            std.mem.eql(u8, raw_type, "anime") or
+            std.mem.eql(u8, raw_type, "video") or
+            std.mem.eql(u8, raw_type, "magnet") or
+            std.mem.eql(u8, raw_type, "queue"))
             raw_type
         else
             "media";
         if (getQueryParam(query, "url")) |raw| {
             var dec_buf: [2048]u8 = undefined;
             const decoded = urlDecode(raw, &dec_buf) orelse raw;
-            if (decoded.len > 0) {
-                state.app.remote_open_lock.lock();
-                const n = @min(decoded.len, state.app.remote_open_path.len);
-                @memcpy(state.app.remote_open_path[0..n], decoded[0..n]);
-                state.app.remote_open_len = n;
-                state.app.remote_open_ready = true;
-                state.app.remote_open_lock.unlock();
-                state.wakeUi();
-            }
+            var title_buf: [512]u8 = undefined;
+            const title = if (getQueryParam(query, "title")) |t| (urlDecode(t, &title_buf) orelse "") else "";
+            var art_buf: [1024]u8 = undefined;
+            const art = if (getQueryParam(query, "art")) |a| (urlDecode(a, &art_buf) orelse "") else "";
+            var sub_buf: [256]u8 = undefined;
+            const subtitle = if (getQueryParam(query, "subtitle")) |s| (urlDecode(s, &sub_buf) orelse "") else "";
+            // queue → the UI thread adds to the watch queue instead of playing;
+            // every other type routes through loadContent (with meta if given).
+            stashRemoteOpen(decoded, ingest_type, title, art, subtitle);
         }
         var jb: [96]u8 = undefined;
         const j = std.fmt.bufPrint(&jb, "{{\"ok\":true,\"action\":\"ingest\",\"type\":\"{s}\"}}", .{ingest_type}) catch "{\"ok\":true,\"action\":\"ingest\"}";
@@ -719,6 +789,12 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     if (std.mem.eql(u8, api_path, "/toggle")) {
         _ = c.mpv.mpv_command_string(ap.mpv_ctx, "cycle pause");
         sendJson(stream, "{\"ok\":true,\"action\":\"toggle\"}");
+    } else if (std.mem.eql(u8, api_path, "/playpause")) {
+        // Browser-extension side-panel remote: toggle the active player's pause.
+        // Held under players_mutex (this whole tail section) so the UI thread
+        // can't free the player mid-call.
+        _ = c.mpv.mpv_command_string(ap.mpv_ctx, "cycle pause");
+        sendJson(stream, "{\"ok\":true,\"action\":\"playpause\"}");
     } else if (std.mem.eql(u8, api_path, "/fwd")) {
         _ = c.mpv.mpv_command_string(ap.mpv_ctx, "seek 10");
         sendJson(stream, "{\"ok\":true,\"action\":\"fwd\"}");

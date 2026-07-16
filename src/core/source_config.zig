@@ -89,6 +89,30 @@ pub fn reload() void {
     }
 }
 
+/// Install (or overwrite) a source by writing its flat JSON string map to
+/// `~/.config/opal/plugins/sources/<id>.json`, then reload() so its endpoint is
+/// live immediately. `json_fields` must be a complete JSON object body, e.g.
+/// `{"base":"https://example.org"}`. Returns false on a bad id or a write error.
+/// Used by the browser extension's /api/source/add ("Add this site as an Opal
+/// source"): the site the user is browsing becomes a real, searchable source in
+/// one click — matching Opal's source-neutral, source_config-driven design.
+pub fn install(id: []const u8, json_fields: []const u8) bool {
+    if (id.len == 0 or id.len > 32) return false;
+    // Reject path separators / traversal in the id — it's used as a filename.
+    for (id) |ch| {
+        if (ch == '/' or ch == '\\' or ch == '.' or ch == 0) return false;
+    }
+    var dir_buf: [600]u8 = undefined;
+    const dir_path = sourcesDir(&dir_buf);
+    io.cwdMakePath(dir_path) catch {};
+
+    var fp_buf: [700]u8 = undefined;
+    const fp = std.fmt.bufPrint(&fp_buf, "{s}/{s}.json", .{ dir_path, id }) catch return false;
+    io.cwdWriteFile(.{ .sub_path = fp, .data = json_fields }) catch return false;
+    reload();
+    return true;
+}
+
 /// Endpoint URL / credential for `id`.`field`, or null when no plugin has supplied
 /// it (→ the source stays inert). The returned slice points into a static table;
 /// copy it (e.g. into a bufPrint) before the next reload().
