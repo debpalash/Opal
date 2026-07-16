@@ -103,3 +103,66 @@ def test_scrape_fetch():
         return "fail", "bridge selftest failed: " + (r.stderr or r.stdout).strip()[:200]
 
     return "pass", "anti-block fetch wired: pure(isBlocked/needsBrowser, no false-pos) → scrape_fetch → bridge fetchhtml on dedicated page; selftest ok"
+
+
+@test("Scrapers routed through anti-block fetch", "Network")
+def test_scrapers_routed_through_scrapefetch():
+    # The HTML-scraper source engines fetch their pages through the anti-block
+    # scrapeFetch layer (fast plain GET, browser fallback on a Cloudflare/DDoS-
+    # Guard/captcha challenge) instead of a bare curl. Verify the wiring per
+    # call-site AND the deliberate exceptions:
+    #   - comics.zig: Madara + MangaThemesia framework fetches + the generic
+    #     scraper route through the `fetchMaybeUnblocked` → scrapeFetch wrapper;
+    #     MangaDex's api.mangadex.org JSON chain stays on `fetchUrl` with its
+    #     per-host UA (a browser UA 400s MangaDex), and HeanCms JSON likewise.
+    #   - anime_extractors.zig: the embed-page fetches route through scrapeFetch.
+    #   - novels.zig: the scraper engines' HTML GETs route through the
+    #     `scrapeHtml` → scrapeFetch wrapper; Wikisource's keyless JSON API stays
+    #     on plain curl and the POST paths stay on curlPost (scrapeFetch is GET-only).
+    comics = _src("src/services/comics.zig")
+    anime = _src("src/services/anime_extractors.zig")
+    novels = _src("src/services/novels.zig")
+
+    checks = {
+        # ── comics.zig: framework fetches routed; MangaDex/HeanCms JSON left ──
+        "comics imports scrape_fetch": 'const scrape = @import("scrape_fetch.zig")' in comics,
+        "comics wrapper present": "fn fetchMaybeUnblocked(" in comics,
+        "comics wrapper calls scrapeFetch": "scrape.scrapeFetch(" in comics,
+        "themesia detail routed": "fetchMaybeUnblocked(detail_url, detail_html)" in comics,
+        "themesia chapter routed": "fetchMaybeUnblocked(chap_url, chap_html)" in comics,
+        "madara details routed": "fetchMaybeUnblocked(manga_url, details_buf)" in comics,
+        "madara chapter routed": "fetchMaybeUnblocked(chapter_url, chap_buf)" in comics,
+        "generic scraper routed": "fetchMaybeUnblocked(url, html_buf)" in comics,
+        # MangaDex's api.mangadex.org chain is NOT routed through the browser — it
+        # keeps its per-host UA fetchUrl (a browser UA 400s MangaDex).
+        "mangadex feed on fetchUrl": "fetchUrl(feed_url, feed_buf)" in comics,
+        "mangadex at-home on fetchUrl": "fetchUrl(ah_url, ah_buf)" in comics,
+        "mangadex not browser-routed": "fetchMaybeUnblocked(feed_url" not in comics
+            and "fetchMaybeUnblocked(ah_url" not in comics,
+        "per-host UA preserved": "pure.userAgentFor(url)" in comics,
+        # HeanCms JSON API likewise stays on fetchUrl.
+        "heancms detail on fetchUrl": "fetchUrl(detail_url, detail_buf)" in comics,
+
+        # ── anime_extractors.zig: embed fetches routed through scrapeFetch ──
+        "anime imports scrape_fetch": 'const scrape = @import("scrape_fetch.zig")' in anime,
+        "anime embed routed": "scrape.scrapeFetch(embed_url, html_buf)" in anime,
+
+        # ── novels.zig: scraper HTML GETs routed; Wikisource/POST left ──
+        "novels imports scrape_fetch": 'const scrape = @import("scrape_fetch.zig")' in novels,
+        "novels wrapper present": "fn scrapeHtml(" in novels,
+        "novels wrapper calls scrapeFetch": "scrape.scrapeFetch(" in novels,
+        "novels search routed": "scrapeHtml(url, 512 * 1024)" in novels,
+        "novels chapters routed": "scrapeHtml(murl, 1024 * 1024)" in novels,
+        "novels text routed": "scrapeHtml(chapter_url, 2 * 1024 * 1024)" in novels,
+        # Wikisource stays on plain curl (keyless JSON, never challenged); the
+        # POST paths stay on curlPost (scrapeFetch is GET-only).
+        "wikisource stays on curl": "curl(url, 512 * 1024)" in novels,
+        "post paths stay on curlPost": "curlPost(" in novels,
+    }
+
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "scraper routing incomplete: " + ", ".join(missing)
+    return "pass", ("comics(Madara/MangaThemesia/generic)→fetchMaybeUnblocked, "
+                    "anime embeds→scrapeFetch, novels(scraper engines)→scrapeHtml; "
+                    "MangaDex/HeanCms JSON + Wikisource + POST paths left on curl")

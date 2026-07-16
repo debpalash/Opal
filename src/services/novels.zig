@@ -28,6 +28,10 @@ const db = @import("../core/db.zig");
 const pure = @import("novels_pure.zig");
 const nsp = @import("novel_sources_pure.zig");
 const source_config = @import("../core/source_config.zig");
+// Anti-block fetch layer — used by the HTML-scraper engines' GETs so a
+// Cloudflare/DDoS-Guard/captcha-fronted source resolves through the anti-detect
+// browser. Wikisource's JSON API + the POST paths stay on plain curl. See scrapeHtml.
+const scrape = @import("scrape_fetch.zig");
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 
 const alloc = @import("../core/alloc.zig").allocator;
@@ -243,7 +247,7 @@ fn fetchMadaraNovel(query: []const u8, my_gen: u32, start: usize) usize {
 
     var url_buf: [768]u8 = undefined;
     const url = nsp.madara.buildSearchUrl(&url_buf, base, query, 1) orelse return 0;
-    const body = curl(url, 512 * 1024) orelse return 0;
+    const body = scrapeHtml(url, 512 * 1024) orelse return 0;
     defer alloc.free(body);
     if (search_gen.load(.acquire) != my_gen) return 0;
 
@@ -274,7 +278,7 @@ fn fetchLightnovelwp(query: []const u8, my_gen: u32, start: usize) usize {
 
     var url_buf: [768]u8 = undefined;
     const url = nsp.themesia.buildBrowseUrl(base, lightnovelwpDir(), query, 1, "", &url_buf) orelse return 0;
-    const body = curl(url, 512 * 1024) orelse return 0;
+    const body = scrapeHtml(url, 512 * 1024) orelse return 0;
     defer alloc.free(body);
     if (search_gen.load(.acquire) != my_gen) return 0;
 
@@ -464,7 +468,7 @@ fn chaptersMadara(my_gen: u32) void {
     const murl = murl_buf[0..mn];
     if (murl.len == 0) return;
 
-    const body = curl(murl, 1024 * 1024) orelse {
+    const body = scrapeHtml(murl, 1024 * 1024) orelse {
         state.app.novels.fetch_error = true;
         return;
     };
@@ -539,7 +543,7 @@ fn chaptersLightnovelwp(my_gen: u32) void {
     const murl = murl_buf[0..mn];
     if (murl.len == 0) return;
 
-    const body = curl(murl, 1024 * 1024) orelse {
+    const body = scrapeHtml(murl, 1024 * 1024) orelse {
         state.app.novels.fetch_error = true;
         return;
     };
@@ -580,7 +584,7 @@ fn chaptersReadwn(my_gen: u32) void {
     const murl = murl_buf[0..mn];
     if (murl.len == 0) return;
 
-    const body = curl(murl, 1024 * 1024) orelse {
+    const body = scrapeHtml(murl, 1024 * 1024) orelse {
         state.app.novels.fetch_error = true;
         return;
     };
@@ -721,7 +725,7 @@ fn textSourced(my_gen: u32) void {
         return;
     }
 
-    const body = curl(chapter_url, 2 * 1024 * 1024) orelse {
+    const body = scrapeHtml(chapter_url, 2 * 1024 * 1024) orelse {
         state.app.novels.fetch_error = true;
         return;
     };
@@ -797,6 +801,36 @@ fn curl(url: []const u8, cap: usize) ?[]u8 {
     // against alloc size, so freeing buf[0..n] out of a cap-sized allocation
     // would abort (see radio.zig / podcasts.zig).
     return alloc.realloc(buf, n) catch {
+        alloc.free(buf);
+        return null;
+    };
+}
+
+/// Anti-block HTML fetch — same owned-heap-buffer contract as `curl` (returns a
+/// freshly-allocated, right-sized slice the caller frees; null on empty/failure),
+/// but routes the GET through scrapeFetch so a Cloudflare/DDoS-Guard/captcha-
+/// fronted scraper source (Madara-novel / lightnovelwp / readwn) resolves via the
+/// anti-detect browser when the plain fetch is challenged. Gated internally by the
+/// `scrape_use_browser` config toggle — OFF ⇒ plain HTTP, identical to `curl`.
+///
+/// Used for the HTML-scraper engines' search / chapter-list / chapter-text GETs.
+/// Wikisource's keyless JSON API stays on `curl` (never challenged, and a browser-
+/// rendered response would not be the raw JSON it parses); the POST paths (readwn
+/// search, Madara AJAX chapter lists) stay on `curlPost` — scrapeFetch is GET-only.
+fn scrapeHtml(url: []const u8, cap: usize) ?[]u8 {
+    const buf = alloc.alloc(u8, cap) catch return null;
+    const body = scrape.scrapeFetch(url, buf) orelse {
+        alloc.free(buf);
+        return null;
+    };
+    // scrapeFetch fills `buf` from index 0 and returns buf[0..n] (plain and
+    // browser-fallback paths both do), so realloc-to-n keeps the right bytes and
+    // gives the DebugAllocator a size-matched free (mirrors `curl`).
+    if (body.len == 0) {
+        alloc.free(buf);
+        return null;
+    }
+    return alloc.realloc(buf, body.len) catch {
         alloc.free(buf);
         return null;
     };

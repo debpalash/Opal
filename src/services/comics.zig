@@ -22,6 +22,12 @@ const opds_pure = @import("opds_pure.zig");
 // HeanCms/Iken JSON-API source engine (tested) — URL building + series/chapter/
 // page parsing routes through this so the shipped parse IS the tested parse.
 const heancms = @import("manga_heancms_pure.zig");
+// Anti-block fetch layer — a fast plain GET, transparently re-fetched through
+// the anti-detect browser when the response is a Cloudflare/DDoS-Guard/captcha
+// interstitial. The HTML-scraper framework fetches (Madara / MangaThemesia base
+// sites + the generic readallcomics scraper) route through it; MangaDex/HeanCms
+// JSON stay on the per-host-UA `fetchUrl`. See fetchMaybeUnblocked below.
+const scrape = @import("scrape_fetch.zig");
 
 /// Percent-encode a search query (space → `+`). Delegates to the unit-tested
 /// pure helper so the shipped encoder IS the tested one.
@@ -350,27 +356,15 @@ fn fetchComicThread(gen: u32) void {
         return;
     }
 
-    // Fallback: native curl + HTML parsing
-    const argv = [_][]const u8{
-        "curl",       "-sL",
-        "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "--max-time", "15",
-        url,
-    };
-
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch {
-        logs.pushLog("error", "comics", "Failed to spawn curl", true);
+    // Fallback: native HTML scrape (readallcomics et al.), routed through the
+    // anti-block fetch layer so a Cloudflare/DDoS-Guard-fronted source resolves
+    // via the anti-detect browser instead of handing back a challenge page.
+    const html_buf = alloc.alloc(u8, 512 * 1024) catch {
         state.app.comic.is_loading.store(false, .release);
         return;
     };
-
-    const html_buf = alloc.alloc(u8, 512 * 1024) catch return;
     defer alloc.free(html_buf);
-    const html_bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, html_buf) catch 0 else 0;
-    _ = child.wait() catch {};
+    const html_bytes = fetchMaybeUnblocked(url, html_buf);
 
     if (workers.isQuitting()) {
         state.app.comic.is_loading.store(false, .release);
@@ -378,7 +372,7 @@ fn fetchComicThread(gen: u32) void {
     }
 
     if (html_bytes == 0) {
-        logs.pushLog("error", "comics", "Empty response from curl", true);
+        logs.pushLog("error", "comics", "Empty response from scrape fetch", true);
         state.app.comic.is_loading.store(false, .release);
         return;
     }
@@ -415,6 +409,23 @@ fn fetchUrl(url: []const u8, dst: []u8) usize {
     const n = if (child.stdout) |*so| @import("../core/io_global.zig").readAll(so, dst) catch 0 else 0;
     _ = child.wait() catch {};
     return n;
+}
+
+/// HTML-scraper framework fetch that transparently defeats Cloudflare / DDoS-Guard
+/// / captcha blocks: a fast plain GET, and on a detected challenge a re-fetch
+/// through Opal's anti-detect browser. Gated internally by the `scrape_use_browser`
+/// config toggle (scrapeFetch checks it) — OFF ⇒ plain HTTP, i.e. the prior
+/// behavior. Drop-in for the plain-GET `fetchUrl`, used by the Madara /
+/// MangaThemesia base-site page fetches and the generic readallcomics scraper.
+/// Returns bytes written into `dst` (0 on total failure).
+///
+/// NOT used for the MangaDex / HeanCms JSON APIs — those need a per-host UA
+/// (pure.userAgentFor) and their own JSON contract and aren't Cloudflare-
+/// challenged, so they stay on `fetchUrl`. POST endpoints (Madara admin-ajax)
+/// stay on `fetchPost` — scrapeFetch is GET-only.
+fn fetchMaybeUnblocked(url: []const u8, dst: []u8) usize {
+    const body = scrape.scrapeFetch(url, dst) orelse return 0;
+    return body.len;
 }
 
 /// Resolve a MangaDex manga id into a readable page list, staging the image URLs
@@ -697,7 +708,7 @@ fn loadThemesiaPages(detail_url: []const u8) bool {
     // ── 1. Details HTML → chapter list ──
     const detail_html = alloc.alloc(u8, 512 * 1024) catch return false;
     defer alloc.free(detail_html);
-    const dn = fetchUrl(detail_url, detail_html);
+    const dn = fetchMaybeUnblocked(detail_url, detail_html);
     if (dn == 0 or workers.isQuitting()) return false;
 
     // Walk the chapter list; it is newest-first, so the LAST entry is chapter 1.
@@ -728,7 +739,7 @@ fn loadThemesiaPages(detail_url: []const u8) bool {
     // ── 2. Chapter HTML → page images ──
     const chap_html = alloc.alloc(u8, 512 * 1024) catch return false;
     defer alloc.free(chap_html);
-    const cn = fetchUrl(chap_url, chap_html);
+    const cn = fetchMaybeUnblocked(chap_url, chap_html);
     if (cn == 0 or workers.isQuitting()) return false;
 
     const count = mt.parsePages(
@@ -812,7 +823,7 @@ fn loadMadaraPages(manga_url: []const u8) bool {
     // ── 1. Details page ──
     const details_buf = alloc.alloc(u8, 512 * 1024) catch return false;
     defer alloc.free(details_buf);
-    const dn = fetchUrl(manga_url, details_buf);
+    const dn = fetchMaybeUnblocked(manga_url, details_buf);
     if (dn == 0 or workers.isQuitting()) return false;
     const details_html = details_buf[0..dn];
 
@@ -893,7 +904,7 @@ fn loadMadaraPages(manga_url: []const u8) bool {
     // ── 3. Chapter page images ──
     const chap_buf = alloc.alloc(u8, 512 * 1024) catch return false;
     defer alloc.free(chap_buf);
-    const cn = fetchUrl(chapter_url, chap_buf);
+    const cn = fetchMaybeUnblocked(chapter_url, chap_buf);
     if (cn == 0 or workers.isQuitting()) return false;
     const chapter_html = chap_buf[0..cn];
 
