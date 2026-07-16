@@ -1053,6 +1053,22 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_scrape_fetch_pure).step);
 
+    // Anime video extractors — the pure "lib/" layer that turns a streaming-host
+    // EMBED page into a real playable stream URL. Covers the Dean-Edwards
+    // P.A.C.K.E.R unpacker (StreamWish/Filemoon/VidHide/Mp4Upload), the StreamTape
+    // two-part token join, the DoodStream pass_md5 assembly, and the MegaCloud /
+    // HiAnime getSources chain (sourceId + `_k` nonce scrape + URL build + JSON
+    // parse). anime_extractors.zig routes every string/JSON decision through here
+    // so the tested logic is the shipped logic.
+    const test_anime_extractors_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/anime_extractors_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_anime_extractors_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main

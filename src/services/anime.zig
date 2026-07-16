@@ -1799,6 +1799,72 @@ fn tryAnimePaheDDL(name: []const u8, ep_no: []const u8) bool {
     return false;
 }
 
+/// Resolve a streaming-host EMBED URL to a real playable stream and play it.
+///
+/// The Aniyomi "lib/" extractor entry point: given an embed like
+/// `https://megacloud.blog/embed-2/e-1/<id>?k=1` or a StreamWish/Dood/StreamTape
+/// page, resolve it (off the UI thread — the resolve blocks on HTTP), set mpv's
+/// Referer via `http-header-fields`, loadfile the stream, attach subtitle tracks,
+/// and reveal the player. Hosts yt-dlp already handles are passed through
+/// untouched (see anime_extractors.resolveEmbed).
+pub fn playEmbed(embed_url: []const u8) void {
+    const S = struct {
+        var busy: bool = false;
+        var url_buf: [2048]u8 = undefined;
+        var url_len: usize = 0;
+
+        fn worker() void {
+            defer @This().busy = false;
+            const extractors = @import("anime_extractors.zig");
+            const embed = @This().url_buf[0..@This().url_len];
+
+            const resolved = extractors.resolveEmbed(embed) orelse {
+                logs.pushLog("error", "anime", "Embed resolve failed — no playable stream", true);
+                return;
+            };
+
+            const c = @import("../core/c.zig");
+            // Player-access guard (CLAUDE convention): never index players by a
+            // stale active_player_idx.
+            if (!(state.app.active_player_idx < state.app.players.items.len)) {
+                logs.pushLog("warn", "anime", "No active player to load the embed into", false);
+                return;
+            }
+            const p = state.app.players.items[state.app.active_player_idx];
+
+            if (resolved.delegate) {
+                // yt-dlp handles this host — hand the embed to mpv's ytdl-hook,
+                // no Referer of ours.
+                p.loadStreamWithHeaders(resolved.streamUrl(), "");
+            } else {
+                p.loadStreamWithHeaders(resolved.streamUrl(), resolved.refererStr());
+                // Attach subtitle tracks (e.g. MegaCloud caption tracks).
+                for (resolved.subs[0..resolved.sub_count]) |sub| {
+                    var cmd_buf: [640]u8 = undefined;
+                    if (std.fmt.bufPrintZ(&cmd_buf, "sub-add \"{s}\"", .{sub.url[0..sub.url_len]})) |cmd| {
+                        _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
+                    } else |_| {}
+                }
+                logs.pushLog("info", "anime", "Embed resolved → streaming", false);
+            }
+
+            state.gotoPlayer();
+        }
+    };
+
+    if (S.busy) return;
+    if (embed_url.len == 0 or embed_url.len > S.url_buf.len) return;
+    S.busy = true;
+    @memcpy(S.url_buf[0..embed_url.len], embed_url);
+    S.url_len = embed_url.len;
+
+    if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
+        t.detach();
+    } else |_| {
+        S.busy = false;
+    }
+}
+
 // ══════════════════════════════════════════════════════════
 // UI Rendering (Drawer)
 // ══════════════════════════════════════════════════════════
