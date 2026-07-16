@@ -179,6 +179,20 @@ def test_zig_unit():
     return "fail", f"exit {r.returncode}"
 
 
+@test("Startup route warm-up prefetch", "Network")
+def test_startup_prefetch():
+    # PERF — routes used to be cold on first open (empty grid + spinner) because
+    # nothing was fetched until the user navigated there. coreInit now warms the
+    # most-visited browse routes in the background at launch.
+    m = _src("src/main.zig")
+    warmed = ("fetchCurrentView(false)" in m
+              and "loadTrendingAnime()" in m
+              and 'tv_calendar.zig").refreshOnce()' in m)
+    if warmed:
+        return "pass", "coreInit warms TMDB browse + anime trending + calendar at startup"
+    return "fail", "startup route warm-up not wired in coreInit"
+
+
 @test("Content fetchers bound connect time", "Network")
 def test_curl_connect_timeout():
     # PERF/hang guard — a black-holed source used to stall a whole route for

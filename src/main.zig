@@ -200,6 +200,22 @@ pub fn coreInit() !void {
             state.app.init_history_loaded = true;
             tmdb_store.loadLists();
 
+            // Route warm-up — kick the most-visited browse fetches from this bg
+            // init thread so Home/Browse/Anime are already populated before the
+            // user navigates there, instead of a cold network wait on first open.
+            // Each warm fn spawns its own worker and is idempotent via the render
+            // latches (tmdb.loaded_once / anime.has_loaded_trending /
+            // is_loading / SWR stamp), so a later navigation reuses the result
+            // rather than refetching; results also seed the encrypted content
+            // cache for the next cold start. Best-effort: no key → fetchCurrentView
+            // no-ops and the normal on-navigation fetch takes over.
+            if (state.app.tmdb.api_key_len > 0 and !state.app.tmdb.loaded_once) {
+                state.app.tmdb.loaded_once = true; // Home/Browse must not refetch over this
+                @import("services/tmdb_api.zig").fetchCurrentView(false);
+            }
+            @import("services/anime.zig").loadTrendingAnime();
+            @import("services/tv_calendar.zig").refreshOnce();
+
             // Ensure yt-dlp binary is available
             const ytdlp = @import("services/ytdlp.zig");
             ytdlp.ensureAvailable();
