@@ -235,7 +235,7 @@ fn loadMoreGridWorker(my_gen: u32, mode: state.AnimeMode) void {
     var url_buf: [512]u8 = undefined;
     const url = buildGridUrl(&url_buf, mode, next_page) orelse return;
 
-    const argv = [_][]const u8{ "curl", "-s", "-A", agent, "--max-time", "12", url };
+    const argv = [_][]const u8{ "curl", "-s", "--connect-timeout", "3", "-A", agent, "--max-time", "10", url };
 
     var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
     child.stdout_behavior = .Pipe;
@@ -657,42 +657,63 @@ fn publishListsJson(json: []const u8, my_gen: u32) usize {
     return n;
 }
 
+/// GET `url` with curl into `buf`; returns bytes read (0 on failure). Bounded:
+/// --connect-timeout so a dead/flaky Jikan can't stall the worker, --max-time
+/// as a hard ceiling (the argv previously had NEITHER — a hung Jikan hung the
+/// whole anime tab).
+fn jikanGet(url: []const u8, buf: []u8) usize {
+    const argv = [_][]const u8{ "curl", "-s", "--connect-timeout", "3", "--max-time", "10", "-A", agent, url };
+    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    _ = child.spawn() catch return 0;
+    const n = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
+    _ = child.wait() catch {};
+    return n;
+}
+
 fn trendingThread() void {
     defer state.app.anime.is_loading.store(false, .release);
     // Capture the generation this load was spawned under (see searchThread).
     const my_gen = search_gen.load(.acquire);
 
     const jikan_api = "https://api.jikan.moe/v4/top/anime";
-    var arg1_buf: [256]u8 = undefined;
     const fv = trend_filter.jikan();
+    var arg1_buf: [256]u8 = undefined;
     const arg1 = (if (fv.len == 0)
         std.fmt.bufPrint(&arg1_buf, "{s}?limit=25&page={d}{s}", .{ jikan_api, grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) })
     else
         std.fmt.bufPrint(&arg1_buf, "{s}?filter={s}&limit=25&page={d}{s}", .{ jikan_api, fv, grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) })) catch return;
 
-    const argv = [_][]const u8{
-        "curl", "-s", "-A", agent, arg1,
-    };
-
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return;
-
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
-    const bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
-    _ = child.wait() catch {};
+
+    var bytes = jikanGet(arg1, buf);
+    var added = if (bytes > 0) parseJikanData(buf[0..bytes], my_gen) else 0;
+
+    // Jikan's /top/anime?filter=… frequently 504s ("failed to connect to
+    // MyAnimeList") while the UNFILTERED /top/anime and /seasons stay up — which
+    // left the DEFAULT (airing) trending view permanently blank. When a filtered
+    // fetch yields nothing, fall back to the unfiltered top list so the grid is
+    // never empty. Only fires when a filter was actually used and we're still current.
+    if (added == 0 and fv.len > 0 and search_gen.load(.acquire) == my_gen) {
+        var fb_buf: [256]u8 = undefined;
+        const fb = std.fmt.bufPrint(&fb_buf, "{s}?limit=25&page={d}{s}", .{ jikan_api, grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }) catch return;
+        const fb_bytes = jikanGet(fb, buf);
+        if (fb_bytes > 0) {
+            added = parseJikanData(buf[0..fb_bytes], my_gen);
+            bytes = fb_bytes;
+            logs.pushLog("warn", "anime", "Jikan filtered top unavailable — showing overall top", false);
+        }
+    }
 
     if (bytes == 0) return;
-
-    _ = parseJikanData(buf[0..bytes], my_gen);
     if (search_gen.load(.acquire) == my_gen) {
         more_available = parsePagination(buf[0..bytes]);
         // SWR write: persist the fresh page-1 Trending grid so the next cold
         // start seeds instantly. Only the latest generation (still current)
         // persists — a superseded worker never poisons the cache.
-        if (grid_page == 1) putTrendingCache();
+        if (grid_page == 1 and added > 0) putTrendingCache();
     }
     logs.pushLog("info", "anime", "Trending loaded (Jikan API)", false);
 }
@@ -837,7 +858,7 @@ fn seasonalThread(my_gen: u32) void {
         else => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/{d}/{s}?limit=25&page={d}{s}", .{ year, seasonStr(sel), grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }),
     } catch return;
 
-    const argv = [_][]const u8{ "curl", "-s", "-A", agent, "--max-time", "12", url };
+    const argv = [_][]const u8{ "curl", "-s", "--connect-timeout", "3", "-A", agent, "--max-time", "10", url };
 
     var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
     child.stdout_behavior = .Pipe;
@@ -886,7 +907,7 @@ fn calendarThread(my_gen: u32) void {
     else
         std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/schedules?filter={s}&limit=25&page={d}{s}", .{ day, grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) })) catch return;
 
-    const argv = [_][]const u8{ "curl", "-s", "-A", agent, "--max-time", "12", url };
+    const argv = [_][]const u8{ "curl", "-s", "--connect-timeout", "3", "-A", agent, "--max-time", "10", url };
 
     var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
     child.stdout_behavior = .Pipe;

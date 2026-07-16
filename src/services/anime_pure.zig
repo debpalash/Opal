@@ -18,12 +18,17 @@ pub fn jikanRatingIsAdult(obj_json: []const u8) bool {
     return false;
 }
 
-/// Query-string suffix for Jikan endpoints: `&sfw=true` asks the API itself
-/// to drop Rx entries (the rating check above still guards R+ and any cached
-/// or malformed responses). Every call site already has a `?…` query, so the
-/// suffix always joins with '&'.
+/// Query-string suffix for Jikan endpoints. Historically `&sfw=true` asked the API itself
+/// Jikan currently 504s ("failed to connect to MyAnimeList") on ANY request
+/// carrying the `sfw` query param — which, since the NSFW filter is ON by
+/// default, broke every anime view (trending/seasonal/search/calendar). The
+/// param is redundant anyway: parseJikanDataEx already drops adult entries
+/// client-side via `jikanRatingIsAdult` when the filter is on. So send NO sfw
+/// param and rely on that client-side filter. Kept as a function (not inlined)
+/// so re-enabling a server-side param later is a one-line change.
 pub fn sfwSuffix(filter_enabled: bool) []const u8 {
-    return if (filter_enabled) "&sfw=true" else "";
+    _ = filter_enabled;
+    return "";
 }
 
 test "jikanRatingIsAdult flags Rx and R+, keeps R and below" {
@@ -41,6 +46,8 @@ test "jikanRatingIsAdult tolerates missing/null rating" {
 }
 
 test "sfwSuffix" {
-    try std.testing.expectEqualStrings("&sfw=true", sfwSuffix(true));
+    // Jikan 504s on the `sfw` param, so we send none and filter adult entries
+    // client-side (jikanRatingIsAdult) instead — suffix is empty regardless.
+    try std.testing.expectEqualStrings("", sfwSuffix(true));
     try std.testing.expectEqualStrings("", sfwSuffix(false));
 }

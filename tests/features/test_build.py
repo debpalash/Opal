@@ -179,6 +179,27 @@ def test_zig_unit():
     return "fail", f"exit {r.returncode}"
 
 
+@test("Anime data loads despite Jikan flakiness", "Network")
+def test_anime_jikan_resilience():
+    # REGRESSION — every anime view was blank by default: Jikan 504s on the
+    # `sfw` param (NSFW filter is ON by default so every URL carried it) AND on
+    # filtered /top/anime. Fix: send no sfw param (filter adult client-side),
+    # fall back to the unfiltered top list when a filtered fetch is empty, and
+    # bound the anime curls so a flaky Jikan can't hang the tab.
+    ap = _src("src/services/anime_pure.zig")
+    an = _src("src/services/anime.zig")
+    checks = {
+        "no sfw param sent": 'return "";' in ap and "504s on the `sfw`" in ap,
+        "trending falls back to unfiltered": "filtered top unavailable" in an
+            and "added == 0 and fv.len > 0" in an,
+        "anime curls bound connect time": an.count('"--connect-timeout"') >= 1,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "no sfw param + unfiltered fallback + bounded curl → anime loads when Jikan filters/search 504"
+
+
 @test("Startup route warm-up prefetch", "Network")
 def test_startup_prefetch():
     # PERF — routes used to be cold on first open (empty grid + spinner) because
