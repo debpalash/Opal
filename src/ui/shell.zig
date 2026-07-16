@@ -533,7 +533,7 @@ fn renderPage(r: Route) !void {
         .search => drawer.renderTabContent(.Search),
         .home => @import("home.zig").render(), // personal hub: metrics + lists
         .browse => {
-            subTabs(&.{ .TMDB, .YouTube, .Anime, .Podcasts, .Radio, .Comics, .Web, .RSS, .Jellyfin, .Plex, .Audiobooks, .Opds, .Novels, .Vndb }, &state.app.browse_source, 100);
+            subTabs(&.{ .TMDB, .YouTube, .Anime, .Podcasts, .Radio, .Comics, .Web, .RSS, .Jellyfin, .Plex, .Audiobooks, .Opds, .Novels, .Vndb, .Drama }, &state.app.browse_source, 100);
             drawer.renderTabContent(state.app.browse_source);
         },
         .watching => @import("../services/tv_library.zig").renderContent(),
@@ -559,6 +559,7 @@ fn tabLabel(t: state.DrawerTab) []const u8 {
         .Vndb => "Visual Novels",
         .Web => "Web",
         .Anime => "Anime",
+        .Drama => "Asian Drama",
         .Podcasts => "Podcasts",
         .Radio => "Radio",
         .History => "History",
@@ -588,6 +589,7 @@ pub fn iconForTab(t: state.DrawerTab) []const u8 {
         .Vndb => icons.tvg.lucide.@"gamepad-2",
         .Web => icons.tvg.lucide.globe,
         .Anime => icons.tvg.lucide.tv,
+        .Drama => icons.tvg.lucide.@"clapperboard",
         .Podcasts => icons.tvg.lucide.podcast,
         .Radio => icons.tvg.lucide.radio,
         .History => icons.tvg.lucide.history,
