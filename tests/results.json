@@ -1,10 +1,10 @@
 {
-  "timestamp": "2026-07-16T18:15:21",
-  "total": 192,
-  "passed": 183,
-  "failed": 1,
-  "warnings": 2,
-  "skipped": 6,
+  "timestamp": "2026-07-16T18:33:51",
+  "total": 193,
+  "passed": 182,
+  "failed": 0,
+  "warnings": 3,
+  "skipped": 8,
   "categories": {
     "Database": {
       "pass": 10,
@@ -32,8 +32,8 @@
     },
     "Build": {
       "pass": 5,
-      "fail": 1,
-      "warn": 0,
+      "fail": 0,
+      "warn": 1,
       "skip": 0
     },
     "LLM": {
@@ -67,10 +67,10 @@
       "skip": 4
     },
     "Voice Scripts": {
-      "pass": 10,
+      "pass": 8,
       "fail": 0,
       "warn": 0,
-      "skip": 0
+      "skip": 2
     },
     "ASR Streaming": {
       "pass": 2,
@@ -151,7 +151,7 @@
       "skip": 0
     },
     "Browse": {
-      "pass": 7,
+      "pass": 8,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -229,8 +229,8 @@
       "name": "Config Table",
       "category": "Database",
       "status": "pass",
-      "detail": "56 config entries",
-      "duration_ms": 2
+      "detail": "73 config entries",
+      "duration_ms": 40
     },
     {
       "name": "Watch History Table",
@@ -251,7 +251,7 @@
       "category": "Database",
       "status": "pass",
       "detail": "7 downloads",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "TMDB Items Table",
@@ -265,7 +265,7 @@
       "category": "Database",
       "status": "pass",
       "detail": "0 memories",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Vector Memory Table",
@@ -292,7 +292,7 @@
       "name": "User Preferences Table",
       "category": "Memory",
       "status": "pass",
-      "detail": "active_hour=10:00 (w:91)",
+      "detail": "active_hour=12:00 (w:92)",
       "duration_ms": 0
     },
     {
@@ -314,7 +314,7 @@
       "category": "Config",
       "status": "pass",
       "detail": "Theme: Phantom",
-      "duration_ms": 0
+      "duration_ms": 14
     },
     {
       "name": "UI Scale Config",
@@ -328,7 +328,7 @@
       "category": "Config",
       "status": "pass",
       "detail": "Voice: Luna",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "name": "TTS Speed Config",
@@ -342,14 +342,14 @@
       "category": "Config",
       "status": "pass",
       "detail": "1244x775 at (0,57)",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Jellyfin Integration Config",
       "category": "Config",
       "status": "pass",
       "detail": "Server: http://localhost:8096",
-      "duration_ms": 0
+      "duration_ms": 5
     },
     {
       "name": "Poster cache SQL matches schema",
@@ -396,22 +396,22 @@
     {
       "name": "Zig Build",
       "category": "Build",
-      "status": "fail",
-      "detail": "install\n+- install opal\n   +- compile exe opal Debug native 1 errors\nsrc/core/state.zig:1354:16: error: expected ';' after statement\n        .Drama => {\n               ^~\nerror: 1 compilation errors\nf",
-      "duration_ms": 452
+      "status": "pass",
+      "detail": "Binary: 44.1 MB",
+      "duration_ms": 14250
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "43.8 MB, built at 18:09:55",
+      "detail": "44.1 MB, built at 18:33:39",
       "duration_ms": 0
     },
     {
       "name": "LLM Model File",
       "category": "Build",
-      "status": "pass",
-      "detail": "gemma-4-E2B-it-UD-Q4_K_XL.gguf, qwen2.5-3b-instruct-q4_k_m.gguf (4.9 GB)",
+      "status": "warn",
+      "detail": "No GGUF model found",
       "duration_ms": 0
     },
     {
@@ -433,14 +433,14 @@
       "category": "Build",
       "status": "pass",
       "detail": "author credited across about/copyright/packaging surfaces",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 22
+      "duration_ms": 46
     },
     {
       "name": "Embedding Server Health",
@@ -468,14 +468,14 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 1991
+      "duration_ms": 3885
     },
     {
       "name": "Installer Does Not Need Xcode",
       "category": "Packaging",
       "status": "pass",
       "detail": "install.sh installs the vendored .app; formula is a binary install at 0.3.0",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "File associations + single instance",
@@ -496,14 +496,14 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 724
+      "duration_ms": 842
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "pass",
       "detail": "faster-whisper importable",
-      "duration_ms": 944
+      "duration_ms": 1042
     },
     {
       "name": "KittenTTS Available",
@@ -538,56 +538,56 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 24
+      "duration_ms": 27
     },
     {
       "name": "Compiles: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 24
+      "duration_ms": 27
     },
     {
       "name": "Compiles: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 23
+      "duration_ms": 26
     },
     {
       "name": "Compiles: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 24
+      "duration_ms": 29
     },
     {
       "name": "--check degrades: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 929
+      "duration_ms": 1043
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 24
+      "duration_ms": 27
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 983
+      "duration_ms": 1114
     },
     {
       "name": "Tracked + compiles: tools/lang_server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "tracked + py_compile OK",
-      "duration_ms": 40
+      "duration_ms": 43
     },
     {
       "name": "Parakeet conversational self-install wired",
@@ -606,16 +606,16 @@
     {
       "name": "Whisper Model Present",
       "category": "Voice Scripts",
-      "status": "pass",
-      "detail": "ggml-base.en.bin (141 MB)",
+      "status": "skip",
+      "detail": "No ggml model (run brew whisper-cpp + download a model)",
       "duration_ms": 0
     },
     {
       "name": "STT End-to-End (say\u2192whisper)",
       "category": "Voice Scripts",
-      "status": "pass",
-      "detail": "transcribed: \"the next episode.\"",
-      "duration_ms": 1800
+      "status": "skip",
+      "detail": "no ggml model",
+      "duration_ms": 0
     },
     {
       "name": "Sherpa Model Canonicalization",
@@ -790,7 +790,7 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 3562
+      "duration_ms": 3703
     },
     {
       "name": "Cloud LLM Backend + No Silent Local Installs",
@@ -825,14 +825,14 @@
       "category": "Enrichment",
       "status": "pass",
       "detail": "OMDb enrichment wired (parser+worker+UI+persist); key set=False",
-      "duration_ms": 4
+      "duration_ms": 3
     },
     {
       "name": "Local taste engine: activity + vectors + For You",
       "category": "AI",
       "status": "pass",
       "detail": "activity log + vec_taste vectors + gated For You tier wired",
-      "duration_ms": 2
+      "duration_ms": 0
     },
     {
       "name": "Theme Presets Defined",
@@ -874,7 +874,7 @@
       "category": "Browser",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 46
+      "duration_ms": 30
     },
     {
       "name": "Bridge protocol selftest",
@@ -888,7 +888,7 @@
       "category": "Browser",
       "status": "pass",
       "detail": "3 statements OK against schema",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "browser_pure registered in zig tests",
@@ -902,14 +902,14 @@
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 56
+      "duration_ms": 60
     },
     {
       "name": "Browser: CloakBrowser engine + upgrades",
       "category": "Browser",
       "status": "pass",
       "detail": "engine picker + find/zoom/downloads/history/reader wired",
-      "duration_ms": 54
+      "duration_ms": 62
     },
     {
       "name": "Single-Media Mode",
@@ -1182,7 +1182,7 @@
       "category": "Stability",
       "status": "pass",
       "detail": "no discarded std.Thread.spawn handles in src/",
-      "duration_ms": 16
+      "duration_ms": 18
     },
     {
       "name": "TMDB Fetch Stages Results Off-Thread",
@@ -1245,7 +1245,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 10
+      "duration_ms": 11
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -1357,7 +1357,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "11 engines placed, class==module, manifest-wired",
-      "duration_ms": 3
+      "duration_ms": 1
     },
     {
       "name": "Polish Tokens Adopted",
@@ -1392,7 +1392,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 125
+      "duration_ms": 135
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1476,7 +1476,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "TV+anime+movies in one library; aired-clamped next-up; user-set status",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Player control bar: drop-ups + FF fullscreen",
@@ -1546,7 +1546,7 @@
       "category": "Transfers",
       "status": "pass",
       "detail": "gallery-dl backend wired: pure\u2192service\u2192dispatch\u2192history+config. gallery-dl not installed (backend inert \u2014 pure tests cover logic)",
-      "duration_ms": 30
+      "duration_ms": 28
     },
     {
       "name": "VNDB visual-novel catalog",
@@ -1560,6 +1560,13 @@
       "category": "Reading",
       "status": "pass",
       "detail": "drama+toku wired: pure(parse/classify/split) \u2192 enum\u2192nav\u2192service (TMDB), play\u2192resolver\u2192load_file/gotoPlayer",
+      "duration_ms": 0
+    },
+    {
+      "name": "Anime airing schedule + ANN feed",
+      "category": "Browse",
+      "status": "pass",
+      "detail": "airing schedule (AniList airingSchedules \u2192 weekday grid \u2192 submitQuery) + ANN feed wired",
       "duration_ms": 0
     }
   ]

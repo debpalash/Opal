@@ -7,6 +7,8 @@ const player = @import("../player/player.zig");
 const logs = @import("../core/logs.zig");
 const search = @import("../services/search.zig");
 const transfers = @import("../services/transfers.zig");
+const anime_skip = @import("../services/anime_skip.zig");
+const anime_skip_pure = @import("../services/anime_skip_pure.zig");
 const theme = @import("theme.zig");
 const metadata_dialog = @import("metadata_dialog.zig");
 const components = @import("components.zig");
@@ -1495,6 +1497,29 @@ pub fn renderLiquidGlassOverlay() void {
             // Greyed out rather than hidden when there's nothing next: a button
             // that vanishes mid-show is more confusing than one that's dim.
             components.tip(@src(), wd, if (has_next) "Next episode" else "No next episode yet");
+        }
+
+        // ── Manual Anime-Skip affordance ──
+        // Appears ONLY while the play head sits inside a known skippable
+        // segment (intro/recap/credits/preview) — driven each frame by
+        // currentSkippable(), so it enters/leaves as the segment does. Lets the
+        // user skip a type they've DISABLED auto-skip for, or skip early. Purely
+        // additive: auto-skip logic and defaults are untouched. The overlay
+        // already early-returns when there's no media / no active player, and
+        // currentSkippable() re-guards active_player_idx < players.items.len.
+        if (anime_skip.currentSkippable()) |skp| {
+            if (dvui.button(@src(), anime_skip_pure.skipButtonLabel(skp.category), .{}, .{
+                .data_out = &wd,
+                .color_fill = theme.colors.accent,
+                .color_text = theme.colors.text_on_accent,
+                .corner_radius = dvui.Rect.all(theme.radius.pill),
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+                .gravity_y = 0.5,
+                .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
+            })) {
+                anime_skip.skipNow();
+            }
+            components.tip(@src(), wd, "Skip this segment");
         }
 
         // ── Status badges — times moved to the scrub row (IINA layout:

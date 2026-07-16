@@ -761,6 +761,7 @@ def test_anime_skip():
     mn = _src("src/main.zig")
     pl = _src("src/player/player.zig")
     an = _src("src/services/anime.zig")
+    ft = _src("src/ui/footer.zig")
     checks = {
         # Pure module registered + routed (tested logic IS shipped logic).
         "pure module in build.zig": "anime_skip_pure.zig" in bz,
@@ -801,6 +802,13 @@ def test_anime_skip():
         "per-player gating flag": "anime_skip_active" in pl,
         "arm consumed on load": "onFileLoad(self)" in pl,
         "anime load triggers fetch": "onEpisodeLoad(" in an,
+        # Manual "Skip" affordance in the control bar — appears only inside a
+        # known segment (currentSkippable) and seeks past it (skipNow), routed
+        # through the pure type->label mapping.
+        "pure exports skip button label": "pub fn skipButtonLabel" in pure,
+        "footer offers manual skip": ("anime_skip.currentSkippable()" in ft
+                                      and "anime_skip.skipNow()" in ft),
+        "footer label routed through pure": "skipButtonLabel(" in ft,
     }
     bad = [k for k, v in checks.items() if not v]
     if bad:

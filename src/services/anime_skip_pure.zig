@@ -105,6 +105,21 @@ pub fn enabled(cat: Category, prefs: Prefs) bool {
     };
 }
 
+/// Full label for the manual "Skip" affordance in the player control bar
+/// (e.g. "Skip Intro", prefixed with a U+23ED skip-forward glyph). Only the
+/// four toggle-able categories get a specific noun; anything else (never
+/// offered by currentSkippable) falls back to a generic "Skip". Routed through
+/// from footer.zig so the tested label IS the shipped label.
+pub fn skipButtonLabel(cat: Category) []const u8 {
+    return switch (cat) {
+        .intro => "\xE2\x8F\xAD Skip Intro",
+        .recap => "\xE2\x8F\xAD Skip Recap",
+        .credits => "\xE2\x8F\xAD Skip Credits",
+        .preview => "\xE2\x8F\xAD Skip Preview",
+        else => "\xE2\x8F\xAD Skip",
+    };
+}
+
 /// Short human label for a category (used in the "Skipped X" toast).
 pub fn label(cat: Category) []const u8 {
     return switch (cat) {
@@ -313,6 +328,16 @@ test "categorize maps all known type names" {
     try testing.expectEqual(Category.other, categorize("Something Else"));
     // case-insensitive
     try testing.expectEqual(Category.intro, categorize("intro"));
+}
+
+test "skipButtonLabel names the four toggle categories, else generic" {
+    try testing.expectEqualStrings("\xE2\x8F\xAD Skip Intro", skipButtonLabel(.intro));
+    try testing.expectEqualStrings("\xE2\x8F\xAD Skip Recap", skipButtonLabel(.recap));
+    try testing.expectEqualStrings("\xE2\x8F\xAD Skip Credits", skipButtonLabel(.credits));
+    try testing.expectEqualStrings("\xE2\x8F\xAD Skip Preview", skipButtonLabel(.preview));
+    // Non-offered categories fall back to a generic label.
+    try testing.expectEqualStrings("\xE2\x8F\xAD Skip", skipButtonLabel(.filler));
+    try testing.expectEqualStrings("\xE2\x8F\xAD Skip", skipButtonLabel(.other));
 }
 
 test "enabled respects prefs; non-toggle categories never enabled" {
