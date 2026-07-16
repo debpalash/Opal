@@ -74,7 +74,7 @@ pub const Resolved = struct {
 /// body slice, or null. Worker-thread only.
 fn curlGet(url: []const u8, referer: ?[]const u8, xrw: bool, out: []u8) ?[]const u8 {
     var refbuf: [640]u8 = undefined;
-    var argv = std.ArrayListUnmanaged([]const u8){};
+    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
     defer argv.deinit(alloc);
     argv.appendSlice(alloc, &.{ "curl", "-sL", "--compressed", "--max-time", "20", "-A", UA }) catch return null;
     if (referer) |r| {
