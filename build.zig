@@ -1039,6 +1039,20 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_manga_madara_pure).step);
 
+    // Anti-block scrape fetch — pure block detection (Cloudflare / DDoS-Guard /
+    // captcha interstitial recognition). Keyed on challenge-only markers so a
+    // normal page with a "Cloudflare" footer badge is NOT flagged; a 503+cf-ray
+    // or a "Just a moment…" body IS. scrape_fetch.zig routes needsBrowser() /
+    // parseStatus() through this so the tested logic is the shipped logic.
+    const test_scrape_fetch_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/scrape_fetch_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_scrape_fetch_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main

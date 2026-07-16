@@ -39,6 +39,7 @@ pub fn save() void {
     setKey("playlist_shuffle", if (state.app.playlist_shuffle) "1" else "0");
     setKey("nsfw_filter", if (state.app.nsfw_filter_enabled) "1" else "0");
     setKey("gallerydl_enabled", if (state.app.gallerydl_enabled) "1" else "0");
+    setKey("scrape_use_browser", if (state.app.scrape_use_browser) "1" else "0");
     setKey("taste_suggestions", if (state.app.taste_enabled) "1" else "0");
     setKey("auto_download_subs", if (state.app.auto_download_subs) "1" else "0");
     setKey("save_path", state.app.save_path_buf[0..state.app.save_path_len]);
@@ -264,6 +265,8 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.nsfw_filter_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "gallerydl_enabled")) {
         state.app.gallerydl_enabled = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "scrape_use_browser")) {
+        state.app.scrape_use_browser = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "taste_suggestions")) {
         state.app.taste_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "auto_download_subs")) {

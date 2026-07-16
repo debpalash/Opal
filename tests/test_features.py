@@ -44,6 +44,7 @@ from features import (  # noqa: F401
     test_anime_schedule,
     test_manga_heancms,
     test_manga_themesia,
+    test_scrape_fetch,
 )
 
 if __name__ == "__main__":

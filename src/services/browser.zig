@@ -8,6 +8,13 @@ const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 const pure = @import("browser_pure.zig");
 const io_g = @import("../core/io_global.zig");
 
+// Keep the anti-block scrape-fetch layer (services/scrape_fetch.zig) in the
+// build graph and compile-checked even before any scraper is wired through it
+// (that wiring is a deliberate follow-up). It calls fetchHtmlBlocking() below.
+comptime {
+    _ = @import("scrape_fetch.zig").scrapeFetch;
+}
+
 // ══════════════════════════════════════════════════════════
 // Browser Engine — Playwright bridge + JPEG frame streaming
 // Two engines, one protocol (scripts/camoufox_bridge.py):
@@ -82,6 +89,23 @@ const LOADING_TIMEOUT_MS: i64 = 25_000; // just beyond the bridge's 20s goto tim
 var pending_url: [2048]u8 = undefined;
 var pending_url_len: usize = 0;
 var pending_lock: @import("../core/sync.zig").Mutex = .{};
+
+// ── Anti-block scrape fetch (fetchhtml / fetchapi) ──
+// scrape_fetch.zig calls fetchHtmlBlocking() from a scraper WORKER thread when
+// a plain HTTP fetch came back blocked (Cloudflare / DDoS-Guard interstitial).
+// The bridge loads the URL on a DEDICATED page in a separate context, waits
+// out the challenge, and returns the unblocked bytes as an 'H' binary frame.
+// The reader thread parks them in scrape_buf and flips scrape_ready; the worker
+// polls scrape_ready (bounded) — the same publish/poll style as bridge startup.
+// scrape_req_mutex serializes requests (one scrape page). 2MB matches the
+// bridge's MAX_SCRAPE_BYTES cap.
+const SCRAPE_BUF_CAP = 2 * 1024 * 1024;
+var scrape_buf: [SCRAPE_BUF_CAP]u8 = undefined; // reader writes, worker copies out
+var scrape_len: usize = 0; // guarded by scrape_lock
+var scrape_err: bool = false; // guarded by scrape_lock — fetchhtml failed
+var scrape_lock: @import("../core/sync.zig").Mutex = .{};
+var scrape_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var scrape_req_mutex: @import("../core/sync.zig").Mutex = .{}; // one request at a time
 
 // ── Engine installer (venv + pip package [+ browser download]) ──
 // One idempotent worker: creates ~/.config/opal/venv if missing, pip-installs
@@ -515,10 +539,65 @@ fn bridgeReaderThread() void {
                         reader_stage_dirty = true;
                         reader_lock.unlock();
                     },
+                    .fetchhtml_err => {
+                        // Anti-block fetch failed (goto error / no scrape page).
+                        // Publish an empty, error-flagged result so the waiting
+                        // worker stops polling and falls back to the plain body.
+                        const detail = extractJsonField(buf[0..pos], "error") orelse "unknown error";
+                        scrape_lock.lock();
+                        scrape_len = 0;
+                        scrape_err = true;
+                        scrape_lock.unlock();
+                        scrape_ready.store(true, .release);
+                        var mb: [256]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&mb, "Anti-block fetch failed: {s}", .{detail[0..@min(detail.len, 180)]}) catch "Anti-block fetch failed";
+                        logs.pushLog("warn", "scrape", msg, false);
+                    },
                     .other => {},
                 }
                 state.wakeUi();
             }
+        } else if (tag[0] == 'H') {
+            // Anti-block scrape payload: 4-byte big-endian length + raw UTF-8.
+            // Bulk-read into scrape_buf (capped at SCRAPE_BUF_CAP; any overflow
+            // is drained so the tag framing never desyncs), then flip
+            // scrape_ready for the waiting scrapeFetch worker.
+            var len_buf: [4]u8 = undefined;
+            var len_read: usize = 0;
+            while (len_read < 4) {
+                const lr = @import("../core/io_global.zig").read(stdout, len_buf[len_read..4]) catch break;
+                if (lr == 0) break;
+                len_read += lr;
+            }
+            if (len_read < 4) break;
+            const payload_size = @as(usize, len_buf[0]) << 24 |
+                @as(usize, len_buf[1]) << 16 |
+                @as(usize, len_buf[2]) << 8 |
+                @as(usize, len_buf[3]);
+
+            scrape_lock.lock();
+            var got: usize = 0;
+            const want = @min(payload_size, scrape_buf.len);
+            while (got < want) {
+                const r = @import("../core/io_global.zig").read(stdout, scrape_buf[got..want]) catch break;
+                if (r == 0) break;
+                got += r;
+            }
+            scrape_len = got;
+            scrape_err = false;
+            scrape_lock.unlock();
+
+            // Drain any bytes past our cap so framing stays aligned.
+            var drained = got;
+            var junk: [4096]u8 = undefined;
+            while (drained < payload_size) {
+                const chunk = @min(payload_size - drained, junk.len);
+                const r = @import("../core/io_global.zig").read(stdout, junk[0..chunk]) catch break;
+                if (r == 0) break;
+                drained += r;
+            }
+            scrape_ready.store(true, .release);
+            state.wakeUi();
         } else if (tag[0] == 'F') {
             // Frame: 4-byte big-endian length + JPEG data
             var len_buf: [4]u8 = undefined;
@@ -999,6 +1078,58 @@ fn sendNavigate(url: []const u8) void {
     var cmd_buf: [4200]u8 = undefined;
     const cmd = std.fmt.bufPrint(&cmd_buf, "{{\"cmd\":\"navigate\",\"url\":\"{s}\"}}", .{esc_url}) catch return;
     sendCommand(cmd);
+}
+
+/// Anti-block fetch: load `url` through the anti-detect browser on a dedicated
+/// scrape page, wait out any Cloudflare / DDoS-Guard challenge, and copy the
+/// unblocked HTML (or fetchapi text) into `out_buf`. Returns the slice, or null
+/// on failure / timeout. SYNCHRONOUS — call ONLY from a scraper worker thread
+/// (like curl today), never the UI thread; it blocks up to ~45s. One scrape
+/// runs at a time (scrape_req_mutex). Starts the bridge if it isn't running.
+pub fn fetchHtmlBlocking(url: []const u8, out_buf: []u8) ?[]const u8 {
+    if (url.len == 0 or url.len >= 2048) return null;
+
+    // Bring the bridge up if needed and wait (bounded ~20s) for it to be ready.
+    if (!bridge_ready.load(.acquire)) {
+        ensureBridge();
+        var w: usize = 0;
+        while (w < 200 and !bridge_ready.load(.acquire)) : (w += 1) {
+            io_g.sleep(100 * std.time.ns_per_ms);
+        }
+        if (!bridge_ready.load(.acquire)) return null;
+    }
+
+    // Serialize scrape requests — a single dedicated scrape page on the bridge.
+    scrape_req_mutex.lock();
+    defer scrape_req_mutex.unlock();
+
+    scrape_ready.store(false, .release);
+    scrape_lock.lock();
+    scrape_len = 0;
+    scrape_err = false;
+    scrape_lock.unlock();
+
+    var esc_buf: [4096]u8 = undefined;
+    const esc_url = escapeJsonString(url, &esc_buf);
+    var cmd_buf: [4200]u8 = undefined;
+    const cmd = std.fmt.bufPrint(&cmd_buf, "{{\"cmd\":\"fetchhtml\",\"url\":\"{s}\",\"wait\":15000}}", .{esc_url}) catch return null;
+    sendCommand(cmd);
+
+    // Poll for the 'H' frame / fetchhtml error (bounded: goto 25s + challenge
+    // wait 15s + slack). Same publish/poll style as the bridge-startup wait.
+    var waited: usize = 0;
+    while (waited < 450) : (waited += 1) { // 450 * 100ms = 45s ceiling
+        if (scrape_ready.load(.acquire)) break;
+        io_g.sleep(100 * std.time.ns_per_ms);
+    }
+    if (!scrape_ready.load(.acquire)) return null;
+
+    scrape_lock.lock();
+    defer scrape_lock.unlock();
+    if (scrape_err or scrape_len == 0) return null;
+    const n = @min(scrape_len, out_buf.len);
+    @memcpy(out_buf[0..n], scrape_buf[0..n]);
+    return out_buf[0..n];
 }
 
 pub fn sendClickButton(x: f32, y: f32, button: []const u8) void {

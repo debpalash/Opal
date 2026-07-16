@@ -390,6 +390,11 @@ pub const AppState = struct {
     // downloader. Effective only when a gallery-dl binary is installed (see
     // services/gallerydl.zig enabled()); default ON.
     gallerydl_enabled: bool = true,
+    // Anti-block scrape fetch: when a scraper's plain HTTP fetch comes back as
+    // a Cloudflare / DDoS-Guard / captcha challenge, transparently re-fetch
+    // through the anti-detect browser (services/scrape_fetch.zig). Effective
+    // only when a browser engine is installed; default ON.
+    scrape_use_browser: bool = true,
     // "Personalized suggestions (local-only)" — gates the activity/taste
     // engine (services/activity.zig): recording AND the Home "For You" row.
     taste_enabled: bool = true,
