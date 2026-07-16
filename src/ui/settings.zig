@@ -1950,6 +1950,87 @@ fn renderNetworkTab() void {
     _ = dvui.label(@src(), "e.g. socks5://127.0.0.1:1080 — used for yt-dlp and playlist extraction", .{}, .{
         .color_text = theme.colors.text_tertiary,
     });
+
+    renderAudiobookshelfSection();
+}
+
+/// Audiobookshelf connection section (URL / user / pass + Test Connection).
+/// Mirrors the Jellyfin login form but lives in Network settings; the actual
+/// login worker + persistence live in services/audiobookshelf.zig.
+fn renderAudiobookshelfSection() void {
+    const abs = @import("../services/audiobookshelf.zig");
+
+    settingRow("Audiobookshelf Server", 40, @src());
+    _ = dvui.label(@src(), "Self-hosted audiobooks/podcasts — streams straight into the player.", .{}, .{
+        .id_extra = 4000,
+        .color_text = theme.colors.text_tertiary,
+    });
+
+    if (state.app.abs.connected) {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 4001, .expand = .horizontal });
+        defer row.deinit();
+        _ = dvui.label(@src(), "Connected: {s}", .{state.app.abs.server_url[0..state.app.abs.server_url_len]}, .{
+            .id_extra = 4002,
+            .color_text = theme.colors.text_secondary,
+            .gravity_y = 0.5,
+        });
+        if (dvui.button(@src(), "Disconnect", .{}, .{
+            .id_extra = 4003,
+            .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_primary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
+        })) abs.disconnect();
+        return;
+    }
+
+    absField("Server URL", &state.app.abs.server_url, false, 4010);
+    absField("Username", &state.app.abs.login_user_buf, false, 4011);
+    absField("Password", &state.app.abs.login_pass_buf, true, 4012);
+    state.app.abs.server_url_len = std.mem.indexOfScalar(u8, &state.app.abs.server_url, 0) orelse state.app.abs.server_url_len;
+
+    if (state.app.abs.login_error_len > 0) {
+        _ = dvui.label(@src(), "{s}", .{state.app.abs.login_error[0..state.app.abs.login_error_len]}, .{
+            .id_extra = 4013,
+            .color_text = theme.colors.danger,
+        });
+    }
+
+    if (state.app.abs.is_loading.load(.acquire)) {
+        _ = dvui.label(@src(), "Connecting…", .{}, .{ .id_extra = 4014, .color_text = theme.colors.text_secondary });
+    } else if (dvui.button(@src(), "Test Connection", .{}, .{
+        .id_extra = 4015,
+        .color_fill = theme.colors.accent,
+        .color_text = theme.colors.text_on_accent,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+        .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
+    })) {
+        abs.authenticate();
+    }
+}
+
+fn absField(label: []const u8, buf: []u8, password: bool, id: usize) void {
+    _ = dvui.label(@src(), "{s}", .{label}, .{
+        .id_extra = id,
+        .color_text = theme.colors.text_secondary,
+        .padding = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
+    });
+    var te = dvui.textEntry(@src(), .{
+        .text = .{ .buffer = buf },
+        .password_char = if (password) "•" else null,
+    }, .{
+        .id_extra = id,
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 250, .h = 20 },
+        .color_fill = theme.colors.bg_elevated,
+        .color_border = theme.colors.border_subtle,
+        .color_text = theme.colors.text_primary,
+        .border = dvui.Rect.all(1),
+        .corner_radius = theme.dims.rad_sm,
+    });
+    te.deinit();
 }
 
 fn renderSubtitlesTab() void {

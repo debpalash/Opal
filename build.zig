@@ -896,6 +896,18 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_download_pure).step);
 
+    // Audiobookshelf client: login-token extraction, libraries/items JSON parse,
+    // stream/cover URL building (item-id injection gate), Bearer header, and
+    // saved-progress parse — all against captured ABS sample payloads.
+    const test_audiobookshelf_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/audiobookshelf_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_audiobookshelf_pure).step);
+
     // voice_backend.zig imports ../core/io_global which crosses the
     // src/ module boundary — skip its standalone test for now. The
     // interface/dispatch logic is covered indirectly when the main
