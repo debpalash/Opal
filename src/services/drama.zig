@@ -47,6 +47,25 @@ var pending_mutex: sync.Mutex = .{};
 /// results are dropped rather than shown if a newer fetch superseded it.
 var fetch_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
+// ── Infinite-scroll pagination ──
+// `current_page` is the highest TMDB discover page merged into results[];
+// `more_available` clears when a page returns short or the fixed buffer fills.
+// `loading_more` serializes append fetches so a single near-bottom scroll can't
+// spawn a burst (mirrors comics/youtube). All read on the UI thread; the append
+// worker runs under the same fetch_gen guard so a fresh search drops it.
+var current_page: u32 = 1;
+var more_available: bool = true;
+var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+/// Set by the worker under pending_mutex: true → applyPending() APPENDS onto
+/// results[] (load-more); false → replaces from index 0 (fresh fetch).
+var pending_append: bool = false;
+/// The TMDB page the staged `pending` items came from (UI thread reads it in
+/// applyPending to advance `current_page`).
+var pending_page: u32 = 1;
+
+/// TMDB `/discover/tv` returns 20 rows per page; a short page means the end.
+const TMDB_PAGE_SIZE: usize = 20;
+
 // ══════════════════════════════════════════════════════════
 // Fetch (TMDB discover/search → drama_pure.parseDiscover → pending)
 // ══════════════════════════════════════════════════════════
@@ -58,6 +77,10 @@ pub fn loadCatalog() void {
     state.app.drama.selected_idx = null;
     state.app.drama.last_fetch_s = @import("browse_cache.zig").now();
     state.app.drama.loaded_once = true;
+    // Fresh landing feed resets pagination; applyPending() re-derives
+    // more_available once page 1 lands.
+    current_page = 1;
+    more_available = true;
     const my_gen = fetch_gen.fetchAdd(1, .acq_rel) + 1;
 
     if (std.Thread.spawn(.{}, fetchWorker, .{my_gen})) |t| {
@@ -67,13 +90,48 @@ pub fn loadCatalog() void {
     }
 }
 
+/// Infinite-scroll appender: fetch the NEXT TMDB discover page and merge it onto
+/// the existing grid. Guarded by `loading_more` + the main `is_loading` so a
+/// near-bottom scroll can't spawn a burst; runs under the current fetch_gen so a
+/// fresh landing feed supersedes it. No-op once `more_available` clears (short
+/// page or the fixed buffer filled). Mirrors comics.loadMoreResults.
+pub fn loadMore() void {
+    if (!more_available) return;
+    if (state.app.tmdb.api_key_len == 0) return;
+    if (state.app.drama.is_loading.load(.acquire)) return;
+    if (loading_more.load(.acquire)) return;
+    if (state.app.drama.result_count == 0) return;
+    if (state.app.drama.result_count >= state.app.drama.results.len) {
+        more_available = false;
+        return;
+    }
+    if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
+    const my_gen = fetch_gen.load(.acquire); // stay within the current generation
+    const next = current_page + 1;
+    if (std.Thread.spawn(.{}, loadMoreWorker, .{ my_gen, next })) |t| {
+        t.detach();
+    } else |_| {
+        loading_more.store(false, .release);
+    }
+}
+
 fn fetchWorker(my_gen: u32) void {
     defer state.app.drama.is_loading.store(false, .release);
+    fetchPage(my_gen, 1, false);
+}
 
+fn loadMoreWorker(my_gen: u32, page: u32) void {
+    defer loading_more.store(false, .release);
+    fetchPage(my_gen, page, true);
+}
+
+/// Fetch one TMDB discover page and stage it into `pending` for the UI thread.
+/// `append` decides whether applyPending() merges onto the grid or replaces it.
+fn fetchPage(my_gen: u32, page: u32, append: bool) void {
     const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
 
     var path_buf: [256]u8 = undefined;
-    const path = drama_pure.discoverPath(1, &path_buf) orelse return;
+    const path = drama_pure.discoverPath(page, &path_buf) orelse return;
 
     // Heap buffer — never a big stack buffer on a spawned thread (CLAUDE.md).
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
@@ -93,10 +151,12 @@ fn fetchWorker(my_gen: u32) void {
     if (fetch_gen.load(.acquire) != my_gen) return; // re-check under the lock
     @memcpy(pending[0..n], items[0..n]);
     pending_count = n;
+    pending_page = page;
+    pending_append = append;
     pending_ready = true;
 
     var lb: [64]u8 = undefined;
-    logs.pushLog("info", "drama", std.fmt.bufPrint(&lb, "Loaded {d} titles (TMDB)", .{n}) catch "Loaded", false);
+    logs.pushLog("info", "drama", std.fmt.bufPrint(&lb, "Loaded {d} titles (TMDB p{d})", .{ n, page }) catch "Loaded", false);
 }
 
 /// UI-THREAD ONLY — swap staged results into the live grid, freeing the old
@@ -107,16 +167,23 @@ fn applyPending() void {
     if (!pending_ready) return;
     pending_ready = false;
 
-    // Retire old poster textures/pixels (UI thread — safe).
-    for (0..state.app.drama.result_count) |i| {
-        const r = &state.app.drama.results[i];
-        poster.deinitPoster(&r.poster_pixels, &r.poster_tex);
+    const append = pending_append;
+    const cap = state.app.drama.results.len;
+    // Append merges from the current end; a fresh fetch retires old textures and
+    // rewrites from index 0.
+    const base = if (append) state.app.drama.result_count else 0;
+    if (!append) {
+        // Retire old poster textures/pixels (UI thread — safe).
+        for (0..state.app.drama.result_count) |i| {
+            const r = &state.app.drama.results[i];
+            poster.deinitPoster(&r.poster_pixels, &r.poster_tex);
+        }
     }
 
-    const n = @min(pending_count, state.app.drama.results.len);
-    for (0..n) |i| {
-        const src = &pending[i];
-        var r = &state.app.drama.results[i];
+    var written: usize = 0;
+    while (written < pending_count and base + written < cap) : (written += 1) {
+        const src = &pending[written];
+        var r = &state.app.drama.results[base + written];
         r.* = .{}; // reset all lazy-poster fields
         @memcpy(r.id[0..src.id_len], src.id[0..src.id_len]);
         r.id_len = src.id_len;
@@ -131,7 +198,16 @@ fn applyPending() void {
         r.vote = src.vote;
         r.origin = @intFromEnum(src.origin);
     }
-    state.app.drama.result_count = n;
+    state.app.drama.result_count = base + written;
+
+    // Pagination bookkeeping: a short page (< a full TMDB page) or a filled
+    // buffer means there's nothing more to pull.
+    current_page = pending_page;
+    if (pending_count < TMDB_PAGE_SIZE or state.app.drama.result_count >= cap) {
+        more_available = false;
+    } else if (!append) {
+        more_available = true;
+    }
     dvui.refresh(null, @src(), null);
 }
 
@@ -281,13 +357,38 @@ pub fn renderContent() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
 
-    var grid = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.md },
-    });
-    defer grid.deinit();
+    {
+        var grid = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.md },
+        });
+        defer grid.deinit();
 
-    for (0..state.app.drama.result_count) |i| renderCard(&state.app.drama.results[i], i);
+        for (0..state.app.drama.result_count) |i| renderCard(&state.app.drama.results[i], i);
+    }
+
+    // Infinite scroll: fetch + append the next TMDB page as the user nears the
+    // bottom. Bounded by more_available + loading_more so one scroll can't spawn
+    // a burst; `underfilled` keeps paging when the first page is shorter than the
+    // viewport. Mirrors services/tmdb.zig.
+    if (more_available) {
+        const loading = loading_more.load(.acquire);
+        const max_y = scroll.si.scrollMax(.vertical);
+        const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
+        const underfilled = max_y <= 0 and state.app.drama.result_count > 0;
+        if ((near_bottom or underfilled) and !loading and !state.app.drama.is_loading.load(.acquire)) {
+            loadMore();
+        }
+        if (loading or underfilled) {
+            dvui.spinner(@src(), .{
+                .color_text = theme.colors.accent,
+                .min_size_content = theme.iconSize(.lg),
+                .gravity_x = 0.5,
+                .margin = dvui.Rect.all(12),
+            });
+            dvui.refresh(null, @src(), null); // wake until the worker's items land
+        }
+    }
 }
 
 const CARD_W: f32 = 150;

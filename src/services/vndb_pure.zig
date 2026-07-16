@@ -91,25 +91,28 @@ pub fn jsonEscape(src: []const u8, dst: []u8) []const u8 {
     return dst[0..out];
 }
 
-/// Build the POST body for a title search. Returns "" only if `dst` is too small
+/// Build the POST body for a title search. `page` is the VNDB `page` field
+/// (1-based) — infinite scroll bumps it to pull the next 30 rows into the same
+/// query without re-requesting page 1. Returns "" only if `dst` is too small
 /// (never a truncated, malformed body).
-pub fn buildSearchBody(query: []const u8, dst: []u8) []const u8 {
+pub fn buildSearchBody(query: []const u8, page: u32, dst: []u8) []const u8 {
     var esc_buf: [512]u8 = undefined;
     const esc = jsonEscape(query, &esc_buf);
     return std.fmt.bufPrint(
         dst,
-        "{{\"filters\":[\"search\",\"=\",\"{s}\"],\"fields\":\"{s}\",\"results\":30}}",
-        .{ esc, FIELDS },
+        "{{\"filters\":[\"search\",\"=\",\"{s}\"],\"fields\":\"{s}\",\"results\":30,\"page\":{d}}}",
+        .{ esc, FIELDS, page },
     ) catch "";
 }
 
 /// Build the POST body for the default "popular" browse view (most-voted VNs).
 /// Sorted by votecount desc so the tab opens populated with well-known titles.
-pub fn buildPopularBody(dst: []u8) []const u8 {
+/// `page` is the VNDB `page` field (1-based) — see buildSearchBody.
+pub fn buildPopularBody(page: u32, dst: []u8) []const u8 {
     return std.fmt.bufPrint(
         dst,
-        "{{\"filters\":[],\"fields\":\"{s}\",\"sort\":\"votecount\",\"reverse\":true,\"results\":30}}",
-        .{FIELDS},
+        "{{\"filters\":[],\"fields\":\"{s}\",\"sort\":\"votecount\",\"reverse\":true,\"results\":30,\"page\":{d}}}",
+        .{ FIELDS, page },
     ) catch "";
 }
 
@@ -328,6 +331,18 @@ pub fn parseVns(json: []const u8, out: []Vn) usize {
     return count;
 }
 
+/// Whether a VNDB `/vn` response's top-level `"more"` boolean says another page
+/// exists beyond the one just fetched. This is the ONLY reliable end-of-results
+/// signal for infinite scroll: the SFW filter in parseVns can legitimately drop
+/// entries from an otherwise-full raw page (e.g. 30 returned, half NSFW-flagged
+/// and dropped), so comparing the FILTERED count against the page size would
+/// stop paging early even though VNDB has more rows to give. Defaults to false
+/// on a missing/malformed field so a parse failure can't spin the scroll loop
+/// forever.
+pub fn responseHasMore(json: []const u8) bool {
+    return std.mem.indexOf(u8, json, "\"more\":true") != null;
+}
+
 /// Human label for the coarse length bucket (1..5), or "" for unknown.
 pub fn lengthLabel(length: u8) []const u8 {
     return switch (length) {
@@ -359,25 +374,40 @@ test "jsonEscape escapes quotes/backslashes, drops control chars" {
     try std.testing.expectEqualStrings("ef", jsonEscape("e\nf", &buf)); // \n dropped
 }
 
-test "buildSearchBody embeds an escaped query + fields" {
+test "buildSearchBody embeds an escaped query + fields + page" {
     var buf: [512]u8 = undefined;
-    const body = buildSearchBody("Fate/stay", &buf);
+    const body = buildSearchBody("Fate/stay", 1, &buf);
     try std.testing.expect(std.mem.indexOf(u8, body, "\"filters\":[\"search\",\"=\",\"Fate/stay\"]") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "image.sexual") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "image.violence") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"page\":1") != null);
+    // Infinite-scroll appends bump the page field, not the query/filters.
+    const p3 = buildSearchBody("Fate/stay", 3, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, p3, "\"page\":3") != null);
     // A quote in the query is escaped, keeping the body valid JSON.
-    const q = buildSearchBody("say \"hi\"", &buf);
+    const q = buildSearchBody("say \"hi\"", 1, &buf);
     try std.testing.expect(std.mem.indexOf(u8, q, "say \\\"hi\\\"") != null);
     // Undersized buffer → "" (never a truncated body).
     var tiny: [8]u8 = undefined;
-    try std.testing.expectEqualStrings("", buildSearchBody("x", &tiny));
+    try std.testing.expectEqualStrings("", buildSearchBody("x", 1, &tiny));
 }
 
-test "buildPopularBody requests the flag fields" {
+test "buildPopularBody requests the flag fields + page" {
     var buf: [512]u8 = undefined;
-    const body = buildPopularBody(&buf);
+    const body = buildPopularBody(1, &buf);
     try std.testing.expect(std.mem.indexOf(u8, body, "\"sort\":\"votecount\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "image.sexual") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"page\":1") != null);
+    const p2 = buildPopularBody(2, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, p2, "\"page\":2") != null);
+}
+
+test "responseHasMore reads the top-level more flag" {
+    try std.testing.expect(responseHasMore("{\"results\":[],\"more\":true}"));
+    try std.testing.expect(!responseHasMore("{\"results\":[],\"more\":false}"));
+    // Missing/malformed → false, never true (can't spin infinite scroll forever).
+    try std.testing.expect(!responseHasMore("{\"results\":[]}"));
+    try std.testing.expect(!responseHasMore(""));
 }
 
 test "parseVns extracts fields and DROPS a sexual-flagged entry" {

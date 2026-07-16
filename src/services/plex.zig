@@ -53,6 +53,22 @@ pub var items: [300]Item = undefined;
 pub var item_count: usize = 0;
 pub var is_loading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
+// ── Infinite-scroll pagination ──
+// Plex paginates a section's /all listing via X-Plex-Container-Start/Size query
+// params. `current_start` is the offset the NEXT window should ask for (equal to
+// the server-reported count already merged into items[]); `more_available`
+// clears once a window returns fewer than PLEX_PAGE_SIZE rows or the fixed
+// buffer fills. `loading_more` serializes append fetches so a single
+// near-bottom scroll can't spawn a burst (mirrors services/drama.zig).
+// `active_section` (declared above) doubles as "which section is currently
+// open" — loadMore's worker captures it before fetching and re-checks it after
+// the network round-trip so a mid-fetch tab switch drops the stale window
+// instead of corrupting the newly-selected section's list.
+const PLEX_PAGE_SIZE: usize = 50;
+var current_start: usize = 0;
+var more_available: bool = true;
+var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
 fn setStatus(comptime fmt: []const u8, args: anytype) void {
     const s = std.fmt.bufPrint(&status_msg, fmt, args) catch status_msg[0..0];
     status_msg_len = s.len;
@@ -103,6 +119,8 @@ pub fn disconnect() void {
     server_token_len = 0;
     section_count = 0;
     item_count = 0;
+    current_start = 0;
+    more_available = true;
     conn_state.store(.disconnected, .release);
     save();
 }
@@ -317,23 +335,56 @@ fn fetchItemsSync(section_idx: usize) void {
     if (section_idx >= section_count) return;
     is_loading.store(true, .release);
     defer is_loading.store(false, .release);
+    // Fresh section open — reset the grid + pagination before pulling window 0.
+    // (active_section is set by the caller, fetchItems(), before this thread
+    // spawns, so fetchWindow's post-fetch section check passes.)
+    item_count = 0;
+    current_start = 0;
+    more_available = true;
+    fetchWindow(section_idx, 0);
+}
+
+/// Fetch one X-Plex-Container-Start/Size window for `section_idx` and append
+/// the parsed rows onto items[] starting at the current item_count. Shared by
+/// the initial section load (start=0) and loadMore() (start=current_start).
+/// Never clears item_count itself — the caller decides fresh-vs-append.
+/// Advances `current_start` by the server-reported row count (not just the
+/// rows we managed to store) and clears `more_available` once a window comes
+/// back short or the fixed items[] buffer fills.
+fn fetchWindow(section_idx: usize, start: usize) void {
+    if (section_idx >= section_count) return;
     const sec = &sections[section_idx];
-    var url: [400]u8 = undefined;
-    const u = std.fmt.bufPrint(&url, "{s}/library/sections/{s}/all", .{ server_uri[0..server_uri_len], sec.key[0..sec.key_len] }) catch return;
-    var buf: [524288]u8 = undefined;
-    const n = httpGet(u, false, serverTok(), &buf);
+    var url: [460]u8 = undefined;
+    const u = std.fmt.bufPrint(&url, "{s}/library/sections/{s}/all?X-Plex-Container-Start={d}&X-Plex-Container-Size={d}", .{ server_uri[0..server_uri_len], sec.key[0..sec.key_len], start, PLEX_PAGE_SIZE }) catch return;
+    // Heap buffer — never a big stack buffer on a spawned thread (CLAUDE.md).
+    const buf = alloc.alloc(u8, 524288) catch return;
+    defer alloc.free(buf);
+    const n = httpGet(u, false, serverTok(), buf);
     if (n == 0) return;
     var parsed = std.json.parseFromSlice(Json, alloc, buf[0..n], .{}) catch return;
     defer parsed.deinit();
+
+    // The user may have switched library sections while this window was in
+    // flight — bail before touching ANY shared pagination state (item_count,
+    // current_start, more_available all belong to whichever section is
+    // currently open; a stale response — even an error/empty one — must not
+    // clobber the newly-selected section's state).
+    if (section_idx != active_section) return;
+
     const mc = parsed.value.object.get("MediaContainer") orelse return;
     const meta = mc.object.get("Metadata") orelse {
-        item_count = 0;
+        more_available = false;
         return;
     };
-    if (meta != .array) return;
-    item_count = 0;
+    if (meta != .array) {
+        more_available = false;
+        return;
+    }
+
+    const returned = meta.array.items.len;
     for (meta.array.items) |m| {
-        if (item_count >= items.len or m != .object) continue;
+        if (item_count >= items.len) break;
+        if (m != .object) continue;
         const title = jstr(m, "title") orelse continue;
         var it = &items[item_count];
         it.* = .{};
@@ -356,6 +407,44 @@ fn fetchItemsSync(section_idx: usize) void {
             };
         };
         item_count += 1;
+    }
+    current_start = start + returned;
+    if (returned < PLEX_PAGE_SIZE or item_count >= items.len) more_available = false;
+}
+
+/// Infinite-scroll appender: fetch the NEXT Container-Start/Size window for the
+/// currently-open section and append it onto items[]. Guarded by `loading_more`
+/// + the main `is_loading` atomic so a near-bottom scroll can't spawn a burst.
+/// No-op once `more_available` clears (short window or the fixed buffer
+/// filled). Captures `active_section` before spawning; fetchWindow() re-checks
+/// it after the network round-trip so a mid-fetch section switch is dropped
+/// rather than corrupting the newly-selected section's list.
+pub fn loadMore() void {
+    if (!more_available) return;
+    if (!isConnected()) return;
+    if (is_loading.load(.acquire)) return;
+    if (loading_more.load(.acquire)) return;
+    if (item_count == 0) return;
+    if (item_count >= items.len) {
+        more_available = false;
+        return;
+    }
+    if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
+
+    const S = struct {
+        var section_idx: usize = 0;
+        var start: usize = 0;
+        fn run() void {
+            defer loading_more.store(false, .release);
+            fetchWindow(@This().section_idx, @This().start);
+        }
+    };
+    S.section_idx = active_section;
+    S.start = current_start;
+    if (std.Thread.spawn(.{}, S.run, .{})) |t| {
+        t.detach();
+    } else |_| {
+        loading_more.store(false, .release);
     }
 }
 
@@ -444,6 +533,29 @@ pub fn renderContent() void {
         }
         if (it.part_len > 0 and dvui.button(@src(), "Play", .{}, .{ .id_extra = i + 91400, .color_fill = theme.colors.accent, .color_text = dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 }, .gravity_y = 0.5 })) {
             play(i);
+        }
+    }
+
+    // Infinite scroll: fetch + append the next Container-Start/Size window as
+    // the user nears the bottom. Bounded by more_available + loading_more so a
+    // single scroll can't spawn a burst; `underfilled` keeps paging when the
+    // first window is shorter than the viewport. Mirrors services/drama.zig.
+    if (more_available) {
+        const loading = loading_more.load(.acquire);
+        const max_y = sc.si.scrollMax(.vertical);
+        const near_bottom = max_y > 0 and sc.si.viewport.y >= max_y - 800;
+        const underfilled = max_y <= 0 and item_count > 0;
+        if ((near_bottom or underfilled) and !loading and !is_loading.load(.acquire)) {
+            loadMore();
+        }
+        if (loading or underfilled) {
+            dvui.spinner(@src(), .{
+                .color_text = theme.colors.accent,
+                .min_size_content = theme.iconSize(.lg),
+                .gravity_x = 0.5,
+                .margin = dvui.Rect.all(12),
+            });
+            dvui.refresh(null, @src(), null); // wake until the worker's items land
         }
     }
 }

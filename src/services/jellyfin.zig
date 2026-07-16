@@ -286,14 +286,25 @@ pub fn fetchItems(parent_id: []const u8) void {
     @memcpy(state.app.jf.parent_id[0..plen], parent_id[0..plen]);
     state.app.jf.parent_id_len = plen;
 
+    // New browse context: snapshot the ParentId loadMore() will re-issue at
+    // the next StartIndex, reset infinite-scroll pagination, and bump
+    // paging_gen so an append in flight for the PREVIOUS library/search is
+    // dropped rather than landing in this grid.
+    current_source = .browse;
+    const qlen = @min(plen, current_query.len);
+    @memcpy(current_query[0..qlen], parent_id[0..qlen]);
+    current_query_len = qlen;
+    more_available = true;
+    const my_gen = paging_gen.fetchAdd(1, .acq_rel) + 1;
+
     state.app.jf.thread = std.Thread.spawn(.{}, struct {
-        fn worker() void {
+        fn worker(gen: u32) void {
             defer {
                 state.app.jf.is_loading.store(false, .release);
             }
-            fetchItemsSync(state.app.jf.parent_id[0..state.app.jf.parent_id_len], false);
+            fetchItemsSync(state.app.jf.parent_id[0..state.app.jf.parent_id_len], false, gen, false);
         }
-    }.worker, .{}) catch blk: {
+    }.worker, .{my_gen}) catch blk: {
         state.app.jf.is_loading.store(false, .release);
         break :blk null;
     };
@@ -310,30 +321,25 @@ pub fn searchItems() void {
 
     state.app.jf.is_loading.store(true, .release);
 
+    // New search context: snapshot the query (search_buf is the live
+    // textEntry the user can keep typing into) and reset pagination +
+    // generation so an append in flight for the PREVIOUS search/library is
+    // dropped.
+    current_source = .search;
+    const cqlen = @min(qlen, current_query.len);
+    @memcpy(current_query[0..cqlen], state.app.jf.search_buf[0..cqlen]);
+    current_query_len = cqlen;
+    more_available = true;
+    const my_gen = paging_gen.fetchAdd(1, .acq_rel) + 1;
+
     state.app.jf.thread = std.Thread.spawn(.{}, struct {
-        fn worker() void {
+        fn worker(gen: u32) void {
             defer {
                 state.app.jf.is_loading.store(false, .release);
             }
-            const qlen2 = std.mem.indexOfScalar(u8, &state.app.jf.search_buf, 0) orelse 0;
-            if (qlen2 == 0) return;
-
-            const server = state.app.jf.server_url[0..state.app.jf.server_url_len];
-            const uid = state.app.jf.user_id[0..state.app.jf.user_id_len];
-            const query = state.app.jf.search_buf[0..qlen2];
-
-            var enc_buf: [256]u8 = undefined;
-            const enc = urlEncode(query, &enc_buf);
-
-            var url_buf: [1024]u8 = undefined;
-            const url = std.fmt.bufPrint(&url_buf, "{s}/Users/{s}/Items?SearchTerm={s}&Recursive=true&Limit=50&Fields=Overview,Path&IncludeItemTypes=Movie,Series,Episode,Audio,MusicAlbum", .{ server, uid, enc }) catch return;
-
-            const body = jfGet(url) orelse return;
-            defer alloc.free(body);
-
-            parseItemsResponse(body);
+            searchItemsSync(current_query[0..current_query_len], gen, false);
         }
-    }.worker, .{}) catch blk: {
+    }.worker, .{my_gen}) catch blk: {
         state.app.jf.is_loading.store(false, .release);
         break :blk null;
     };
@@ -342,28 +348,80 @@ pub fn searchItems() void {
     if (state.app.jf.thread) |t| t.detach();
 }
 
-fn fetchItemsSync(parent_id: []const u8, recursive: bool) void {
+/// One StartIndex/Limit window of a Jellyfin Search fetch. `append=false`
+/// (fresh search) rewrites items[] from 0; `append=true` (loadMore) writes
+/// starting at the current item_count. `my_gen` is checked against
+/// `paging_gen` right before touching shared state so a search superseded by
+/// a newer search/browse is dropped instead of corrupting the current grid.
+fn searchItemsSync(query: []const u8, my_gen: u32, append: bool) void {
+    const server = state.app.jf.server_url[0..state.app.jf.server_url_len];
+    const uid = state.app.jf.user_id[0..state.app.jf.user_id_len];
+
+    var enc_buf: [256]u8 = undefined;
+    const enc = urlEncode(query, &enc_buf);
+
+    const start_index: usize = if (append) state.app.jf.item_count else 0;
+    var url_buf: [1024]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/Users/{s}/Items?SearchTerm={s}&Recursive=true&Limit={d}&StartIndex={d}&Fields=Overview,Path&IncludeItemTypes=Movie,Series,Episode,Audio,MusicAlbum", .{ server, uid, enc, JF_SEARCH_LIMIT, start_index }) catch return;
+
+    const body = jfGet(url) orelse return;
+    defer alloc.free(body);
+
+    if (paging_gen.load(.acquire) != my_gen) return; // superseded by a newer search/browse
+
+    const landed = parseItemsResponse(body, append);
+    more_available = landed >= JF_SEARCH_LIMIT and state.app.jf.item_count < state.app.jf.items.len;
+}
+
+/// One StartIndex/Limit window of a Jellyfin library Browse fetch.
+/// `append=false` (fresh ParentId open) rewrites items[] from 0;
+/// `append=true` (loadMore) writes starting at the current item_count.
+/// `my_gen` is checked against `paging_gen` right before touching shared
+/// state so a fetch superseded by a newer browse/search is dropped instead
+/// of corrupting the current grid.
+fn fetchItemsSync(parent_id: []const u8, recursive: bool, my_gen: u32, append: bool) void {
     const server = state.app.jf.server_url[0..state.app.jf.server_url_len];
     const uid = state.app.jf.user_id[0..state.app.jf.user_id_len];
 
     var url_buf: [1024]u8 = undefined;
     const rec_str: []const u8 = if (recursive) "&Recursive=true" else "";
-    const url = std.fmt.bufPrint(&url_buf, "{s}/Users/{s}/Items?ParentId={s}&Fields=Overview,Path&Limit=64{s}", .{ server, uid, parent_id, rec_str }) catch return;
+    const start_index: usize = if (append) state.app.jf.item_count else 0;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/Users/{s}/Items?ParentId={s}&Fields=Overview,Path&Limit={d}&StartIndex={d}{s}", .{ server, uid, parent_id, JF_PAGE_LIMIT, start_index, rec_str }) catch return;
 
     const body = jfGet(url) orelse return;
     defer alloc.free(body);
 
-    parseItemsResponse(body);
+    if (paging_gen.load(.acquire) != my_gen) return; // superseded by a newer browse/search
+
+    const landed = parseItemsResponse(body, append);
+    more_available = landed >= JF_PAGE_LIMIT and state.app.jf.item_count < state.app.jf.items.len;
 }
 
-fn parseItemsResponse(body: []const u8) void {
-    // Free the prior result set's poster textures/pixels before reusing the
-    // slots — resetting item_count alone leaks them on every refetch.
-    for (state.app.jf.items[0..state.app.jf.item_count]) |*old| freeItemPoster(old);
-    state.app.jf.item_count = 0;
+/// Parse one Jellyfin /Items response window into state.app.jf.items[].
+/// `append=false`: frees the OLD result set's poster textures/pixels first
+/// (resetting item_count alone would leak them) and writes from index 0.
+/// `append=true` (infinite-scroll loadMore): writes starting at the current
+/// item_count and never clears — items[] is a fixed [320]JfItem (state.zig),
+/// so already-rendered cards' poster_tex/poster_pixels pointers stay valid
+/// across the append (no realloc). item_count is only published once, at the
+/// end, rather than incrementally per item — narrows the (pre-existing,
+/// unsynchronized) window where the UI thread could read a count ahead of a
+/// still-being-filled item. Returns the number of items landed in THIS
+/// window: the caller compares it against the request Limit to decide
+/// whether `more_available` should clear.
+fn parseItemsResponse(body: []const u8, append: bool) usize {
+    const cap = state.app.jf.items.len;
+    var count: usize = 0;
+    if (append) {
+        count = state.app.jf.item_count;
+    } else {
+        for (state.app.jf.items[0..state.app.jf.item_count]) |*old| freeItemPoster(old);
+        count = 0;
+    }
+    const base = count;
     var pos: usize = 0;
 
-    while (pos < body.len and state.app.jf.item_count < 64) {
+    while (pos < body.len and count < cap) {
         // Find next item object by looking for "Id":"
         const id_key = "\"Id\":\"";
         const next_id = std.mem.indexOf(u8, body[pos..], id_key) orelse break;
@@ -382,7 +440,7 @@ fn parseItemsResponse(body: []const u8) void {
         const obj_end = findObjEnd(body, obj_start);
 
         const obj = body[obj_start..obj_end];
-        const item = &state.app.jf.items[state.app.jf.item_count];
+        const item = &state.app.jf.items[count];
         item.* = std.mem.zeroes(state.JfItem);
 
         // Id
@@ -440,9 +498,11 @@ fn parseItemsResponse(body: []const u8) void {
             item.has_image = std.mem.indexOf(u8, obj[it_start..it_end], "\"Primary\"") != null;
         }
 
-        state.app.jf.item_count += 1;
+        count += 1;
         pos = obj_end;
     }
+    state.app.jf.item_count = count;
+    return count - base;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -498,6 +558,13 @@ pub fn disconnect() void {
     state.app.jf.item_count = 0;
     state.app.jf.library_count = 0;
     state.app.jf.view = .Libraries;
+    // Retire the infinite-scroll context too — a stray loadMore() after
+    // disconnect (already blocked by the `connected` guard) shouldn't also
+    // find a stale browse/search query lying around.
+    current_source = .none;
+    current_query_len = 0;
+    more_available = false;
+    _ = paging_gen.fetchAdd(1, .acq_rel); // drop any append still in flight
     state.markConfigDirty();
 }
 
@@ -785,6 +852,100 @@ fn urlEncode(input: []const u8, buf: *[256]u8) []const u8 {
         }
     }
     return buf[0..out];
+}
+
+// ══════════════════════════════════════════════════════════
+// Infinite scroll (StartIndex/Limit paging)
+// ══════════════════════════════════════════════════════════
+//
+// Jellyfin's /Users/{uid}/Items paginates via StartIndex+Limit. `items[]` is
+// a fixed [320]JfItem (see state.zig) specifically so an append never
+// reallocates — lazy-poster pointers/textures handed to already-rendered
+// cards stay valid across a loadMore() append.
+//
+// `current_source` + `current_query` remember whether the grid on screen is
+// a library Browse (ParentId) or a Search (SearchTerm), and the exact
+// id/term, so loadMore() can re-issue the SAME query at the next StartIndex.
+// The query is snapshotted here rather than read live off
+// state.app.jf.search_buf, because that buffer is the live textEntry the
+// user can keep typing into after a search lands.
+//
+// `paging_gen` is bumped every time fetchItems()/searchItems() starts a NEW
+// context; loadMore()'s worker checks it before writing so a stale in-flight
+// append for a library/search the user has since navigated away from is
+// dropped instead of corrupting the current grid.
+//
+// `more_available` clears once a window returns fewer than its request Limit
+// or items[] fills. `loading_more` serializes append fetches so a single
+// near-bottom scroll can't spawn a burst (mirrors services/drama.zig).
+const JfPageSource = enum { none, browse, search };
+var current_source: JfPageSource = .none;
+var current_query: [256]u8 = undefined;
+var current_query_len: usize = 0;
+pub var more_available: bool = true;
+pub var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var paging_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
+/// Per-window item cap for a library Browse fetch (unchanged from the
+/// original single-page Limit).
+const JF_PAGE_LIMIT: usize = 64;
+/// Per-window item cap for a Search fetch (unchanged from the original
+/// single-page Limit).
+const JF_SEARCH_LIMIT: usize = 50;
+
+/// Infinite-scroll appender: fetch the NEXT StartIndex window for whichever
+/// context (library ParentId or search SearchTerm) is currently on screen,
+/// and append it onto items[] starting at item_count. Guarded by
+/// loading_more + the main is_loading so a near-bottom scroll can't spawn a
+/// burst; runs under the current paging_gen so switching library or issuing
+/// a new search drops a stale in-flight append. No-op once more_available
+/// clears (short window or items[] full). Mirrors services/drama.zig's
+/// loadMore.
+pub fn loadMore() void {
+    if (!more_available) return;
+    if (!state.app.jf.connected) return;
+    if (state.app.jf.is_loading.load(.acquire)) return;
+    if (loading_more.load(.acquire)) return;
+    if (state.app.jf.item_count == 0) return;
+    if (state.app.jf.item_count >= state.app.jf.items.len) {
+        more_available = false;
+        return;
+    }
+    if (current_source == .none) return;
+    if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
+
+    const my_gen = paging_gen.load(.acquire); // stay within the current browse/search context
+    const src = current_source;
+
+    // struct{var} pattern (CLAUDE.md): copy the query + context into statics
+    // BEFORE spawning — current_query could otherwise be rewritten by a
+    // concurrent fetchItems()/searchItems() call starting a new context.
+    const S = struct {
+        var query_buf: [256]u8 = undefined;
+        var query_len: usize = 0;
+        var gen: u32 = 0;
+        var source: JfPageSource = .none;
+
+        fn worker() void {
+            defer loading_more.store(false, .release);
+            const q = @This().query_buf[0..@This().query_len];
+            switch (@This().source) {
+                .browse => fetchItemsSync(q, false, @This().gen, true),
+                .search => searchItemsSync(q, @This().gen, true),
+                .none => {},
+            }
+        }
+    };
+    S.query_len = @min(current_query_len, S.query_buf.len);
+    @memcpy(S.query_buf[0..S.query_len], current_query[0..S.query_len]);
+    S.gen = my_gen;
+    S.source = src;
+
+    if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
+        t.detach();
+    } else |_| {
+        loading_more.store(false, .release);
+    }
 }
 
 fn setLoginError(msg: []const u8) void {

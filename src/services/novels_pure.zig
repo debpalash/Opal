@@ -41,15 +41,27 @@ pub const WIKI_API = "https://en.wikisource.org/w/api.php";
 
 /// Search for works. `formatversion=2` gives the flat `{"query":{"search":[…]}}`
 /// shape parsed below. namespace 0 = main content (skips Author:/Portal: pages).
-pub fn buildSearchUrl(out: []u8, query: []const u8, limit: u32) ?[]const u8 {
+///
+/// `offset` drives infinite-scroll pagination: MediaWiki's `list=search` continues
+/// via `sroffset` (the number of already-consumed results). `offset==0` is the
+/// first page and emits no `sroffset` (clean landing URL); a later page requests
+/// `srlimit` more rows starting at `sroffset=offset`.
+pub fn buildSearchUrl(out: []u8, query: []const u8, limit: u32, offset: u32) ?[]const u8 {
     if (query.len == 0) return null;
     var enc: [512]u8 = undefined;
     const n = cj.percentEncodeStrict(query, &enc);
     if (n == 0) return null;
+    if (offset == 0) {
+        return std.fmt.bufPrint(
+            out,
+            "{s}?action=query&list=search&srsearch={s}&srlimit={d}&srnamespace=0&format=json&formatversion=2",
+            .{ WIKI_API, enc[0..n], limit },
+        ) catch null;
+    }
     return std.fmt.bufPrint(
         out,
-        "{s}?action=query&list=search&srsearch={s}&srlimit={d}&srnamespace=0&format=json&formatversion=2",
-        .{ WIKI_API, enc[0..n], limit },
+        "{s}?action=query&list=search&srsearch={s}&srlimit={d}&sroffset={d}&srnamespace=0&format=json&formatversion=2",
+        .{ WIKI_API, enc[0..n], limit, offset },
     ) catch null;
 }
 
@@ -382,17 +394,28 @@ pub fn resumeKey(work_title: []const u8, out: []u8) []const u8 {
 
 test "buildSearchUrl: encodes query + namespace 0" {
     var buf: [512]u8 = undefined;
-    const url = buildSearchUrl(&buf, "pride and prejudice", 20).?;
+    const url = buildSearchUrl(&buf, "pride and prejudice", 20, 0).?;
     try std.testing.expect(std.mem.startsWith(u8, url, "https://en.wikisource.org/w/api.php?action=query&list=search"));
     try std.testing.expect(std.mem.indexOf(u8, url, "srsearch=pride%20and%20prejudice") != null);
     try std.testing.expect(std.mem.indexOf(u8, url, "srlimit=20") != null);
     try std.testing.expect(std.mem.indexOf(u8, url, "srnamespace=0") != null);
     try std.testing.expect(std.mem.indexOf(u8, url, "formatversion=2") != null);
+    // First page (offset 0) emits no sroffset continuation param.
+    try std.testing.expect(std.mem.indexOf(u8, url, "sroffset=") == null);
+}
+
+test "buildSearchUrl: offset embeds sroffset for infinite-scroll pagination" {
+    var buf: [512]u8 = undefined;
+    const url = buildSearchUrl(&buf, "pride and prejudice", 20, 40).?;
+    try std.testing.expect(std.mem.indexOf(u8, url, "srsearch=pride%20and%20prejudice") != null);
+    try std.testing.expect(std.mem.indexOf(u8, url, "srlimit=20") != null);
+    // The next page continues from the number of already-consumed results.
+    try std.testing.expect(std.mem.indexOf(u8, url, "sroffset=40") != null);
 }
 
 test "buildSearchUrl: empty query yields no request" {
     var buf: [512]u8 = undefined;
-    try std.testing.expect(buildSearchUrl(&buf, "", 20) == null);
+    try std.testing.expect(buildSearchUrl(&buf, "", 20, 0) == null);
 }
 
 test "buildSubpagesUrl: prefix = <Work>/ (slash encoded)" {

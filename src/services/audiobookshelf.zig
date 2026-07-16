@@ -43,6 +43,26 @@ var resume_target_secs: f64 = 0; // seek target; <= 0 means start from the begin
 var resume_item_id: [64]u8 = undefined; // the book tick() must see loaded before it seeks
 var resume_item_id_len: usize = 0;
 
+// ── Infinite-scroll pagination (Books view) ──
+// ABS `/api/libraries/{id}/items` pages are 0-based; `current_page` is the
+// highest page merged into state.app.abs.books[]. `more_available` clears
+// once a page returns fewer than ABS_PAGE_LIMIT items or the fixed 320-entry
+// buffer fills. `loading_more` serializes append fetches so a single
+// near-bottom scroll can't spawn a burst (mirrors drama.zig / comics.zig).
+// Both plain vars are only ever mutated under `parse_mutex` (openLibrary's
+// reset happens on the UI thread before its worker spawns, same as
+// book_count=0 above it), so readers under the mutex — and the UI thread's
+// render-time reads, which tolerate one frame of staleness like book_count —
+// stay consistent.
+var current_page: u32 = 0;
+var more_available: bool = true;
+var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+/// Items per page for both the initial library-open fetch and every
+/// subsequent loadMore() page — must match so a short page reliably signals
+/// "no more results" (see audiobookshelf_pure.libraryItemsUrl).
+const ABS_PAGE_LIMIT: u32 = 64;
+
 fn setLoginError(msg: []const u8) void {
     const len = @min(msg.len, state.app.abs.login_error.len);
     @memcpy(state.app.abs.login_error[0..len], msg[0..len]);
@@ -197,6 +217,10 @@ pub fn openLibrary(idx: usize) void {
     state.app.abs.book_count = 0;
     state.app.abs.view = .Books;
     state.app.abs.is_loading.store(true, .release);
+    // Fresh library open resets pagination; the worker below re-derives
+    // more_available once page 0 lands (short page / full buffer).
+    current_page = 0;
+    more_available = true;
 
     state.app.abs.thread = std.Thread.spawn(.{}, struct {
         fn worker() void {
@@ -205,14 +229,16 @@ pub fn openLibrary(idx: usize) void {
             const lib_id = state.app.abs.selected_lib_id[0..state.app.abs.selected_lib_id_len];
 
             var url_buf: [640]u8 = undefined;
-            const url = std.fmt.bufPrint(&url_buf, "{s}/api/libraries/{s}/items?limit=64", .{ server, lib_id }) catch return;
+            const url = pure.libraryItemsUrl(server, lib_id, ABS_PAGE_LIMIT, 0, &url_buf) orelse return;
 
             const body = absGet(url) orelse return;
             defer alloc.free(body);
 
             parse_mutex.lock();
             defer parse_mutex.unlock();
-            state.app.abs.book_count = pure.parseItems(body, &state.app.abs.books);
+            const n = pure.parseItems(body, &state.app.abs.books);
+            state.app.abs.book_count = n;
+            if (n < ABS_PAGE_LIMIT or n >= state.app.abs.books.len) more_available = false;
             logs.pushLog("info", "audiobookshelf", "Books loaded", false);
         }
     }.worker, .{}) catch blk: {
@@ -225,6 +251,92 @@ pub fn openLibrary(idx: usize) void {
 pub fn goToLibraries() void {
     state.app.abs.view = .Libraries;
     state.app.abs.book_count = 0;
+}
+
+/// Infinite-scroll appender: fetch the NEXT ABS library-items page and merge
+/// it onto the existing Books grid. Guarded by `loading_more` + the main
+/// is_loading so a near-bottom scroll can't spawn a burst; no-op once
+/// `more_available` clears (short page or the fixed 320-entry buffer filled).
+/// Mirrors drama.zig's loadMore / comics.loadMoreResults.
+pub fn loadMore() void {
+    if (!more_available) return;
+    if (state.app.abs.is_loading.load(.acquire)) return;
+    if (loading_more.load(.acquire)) return;
+    if (state.app.abs.book_count == 0) return;
+    if (state.app.abs.book_count >= state.app.abs.books.len) {
+        more_available = false;
+        return;
+    }
+    if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
+
+    // Capture the OPEN library's id now — loading_more just flipped true, so
+    // this call has exclusive claim on the capture. Passing it (plus the next
+    // page number) as spawn args means the worker never re-reads
+    // selected_lib_id mid-fetch, so a library switch mid-flight can't hand the
+    // worker a torn/mismatched id.
+    var lib_id_buf: [64]u8 = undefined;
+    const lib_id_len = @min(state.app.abs.selected_lib_id_len, lib_id_buf.len);
+    @memcpy(lib_id_buf[0..lib_id_len], state.app.abs.selected_lib_id[0..lib_id_len]);
+    const next_page = current_page + 1;
+
+    if (std.Thread.spawn(.{}, loadMoreWorker, .{ lib_id_buf, lib_id_len, next_page })) |t| {
+        t.detach();
+    } else |_| {
+        loading_more.store(false, .release);
+    }
+}
+
+fn loadMoreWorker(lib_id_buf: [64]u8, lib_id_len: usize, page: u32) void {
+    defer loading_more.store(false, .release);
+
+    const lib_id = lib_id_buf[0..lib_id_len];
+    if (lib_id.len == 0) return;
+
+    var server_buf: [256]u8 = undefined;
+    const slen = @min(state.app.abs.server_url_len, server_buf.len);
+    @memcpy(server_buf[0..slen], state.app.abs.server_url[0..slen]);
+    const server = server_buf[0..slen];
+    if (server.len == 0) return;
+
+    var url_buf: [640]u8 = undefined;
+    const url = pure.libraryItemsUrl(server, lib_id, ABS_PAGE_LIMIT, page, &url_buf) orelse return;
+
+    const body = absGet(url) orelse return;
+    defer alloc.free(body);
+
+    // Parse into a heap staging buffer — never a big stack buffer on a
+    // spawned thread (CLAUDE.md) — before publishing under the lock.
+    const items = alloc.alloc(pure.Book, ABS_PAGE_LIMIT) catch return;
+    defer alloc.free(items);
+    const n = pure.parseItems(body, items);
+
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+
+    // The user may have switched (or left) the library while this page was in
+    // flight — drop it rather than append a stale library's books onto
+    // whatever is now shown.
+    if (state.app.abs.selected_lib_id_len != lib_id_len or
+        !std.mem.eql(u8, state.app.abs.selected_lib_id[0..lib_id_len], lib_id))
+    {
+        return;
+    }
+
+    const cap = state.app.abs.books.len;
+    const base = state.app.abs.book_count;
+    var written: usize = 0;
+    while (written < n and base + written < cap) : (written += 1) {
+        state.app.abs.books[base + written] = items[written];
+    }
+    state.app.abs.book_count = base + written;
+    current_page = page;
+    if (n < ABS_PAGE_LIMIT or state.app.abs.book_count >= cap) {
+        more_available = false;
+    }
+
+    var lb: [48]u8 = undefined;
+    logs.pushLog("info", "audiobookshelf", std.fmt.bufPrint(&lb, "Loaded {d} more books (p{d})", .{ n, page }) catch "Loaded more books", false);
+    dvui.refresh(null, @src(), null);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -671,5 +783,28 @@ fn renderBooks() void {
             .corner_radius = theme.dims.rad_sm,
             .gravity_y = 0.5,
         })) playBook(i);
+    }
+
+    // Infinite scroll: fetch + append the next ABS library-items page as the
+    // user nears the bottom. Bounded by more_available + loading_more so one
+    // scroll can't spawn a burst; `underfilled` keeps paging when the first
+    // page is shorter than the viewport. Mirrors services/drama.zig.
+    if (more_available) {
+        const loading = loading_more.load(.acquire);
+        const max_y = scroll.si.scrollMax(.vertical);
+        const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
+        const underfilled = max_y <= 0 and state.app.abs.book_count > 0;
+        if ((near_bottom or underfilled) and !loading and !state.app.abs.is_loading.load(.acquire)) {
+            loadMore();
+        }
+        if (loading or underfilled) {
+            dvui.spinner(@src(), .{
+                .color_text = theme.colors.accent,
+                .min_size_content = theme.iconSize(.lg),
+                .gravity_x = 0.5,
+                .margin = dvui.Rect.all(12),
+            });
+            dvui.refresh(null, @src(), null); // wake until the worker's items land
+        }
     }
 }

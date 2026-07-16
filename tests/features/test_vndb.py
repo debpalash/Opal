@@ -63,7 +63,10 @@ def test_vndb_catalog():
         # Assert MEMBERSHIP, not position (concurrent tab additions).
         "enum variant present": "Vndb" in st and "pub const DrawerTab" in st,
         "state struct": "vndb: struct {" in st,
-        "results buffer (SFW-only)": "results: [30]@import(\"../services/vndb_pure.zig\").Vn" in st,
+        # Size-agnostic: the buffer holds several infinite-scroll pages and grows
+        # when the page count changes — the SFW guarantee is asserted above, at
+        # the parseVns gate, not by this declaration's length.
+        "results buffer (SFW-only)": "]@import(\"../services/vndb_pure.zig\").Vn" in st,
         "detail selection state": "selected_idx: ?usize" in st,
         "nav host page": ".Vndb => {" in st and "app.browse_source = .Vndb;" in st,
         "render dispatch": '.Vndb => @import("../services/vndb.zig").renderContent()' in drawer,

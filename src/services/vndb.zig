@@ -51,6 +51,13 @@ const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/2010010
 // a cover can never bleed across searches. pixels are c_alloc'd inside poster.zig
 // — never free them with `alloc`; deinitPoster/uploadIfReady use the matching
 // allocator.
+//
+// Sized to match state.app.vndb.results.len (180), NOT the old 30-card cap:
+// infinite scroll can grow result_count past 30, and renderCard/renderCover
+// index this array by the SAME `i` as results[i], so a smaller array would be
+// an out-of-bounds index the moment a scroll-triggered append lands. Still a
+// fixed array (no realloc), so pointer-safety for the detached poster.fetchAsync
+// worker is unchanged.
 const CoverSlot = struct {
     pixels: ?[]u8 = null,
     tex: ?dvui.Texture = null,
@@ -59,7 +66,7 @@ const CoverSlot = struct {
     fetching: bool = false,
     url_hash: u64 = 0,
 };
-var cover_slots: [30]CoverSlot = [_]CoverSlot{.{}} ** 30;
+var cover_slots: [180]CoverSlot = [_]CoverSlot{.{}} ** 180;
 
 // ── Thread-safety ──
 // The detached fetch worker publishes into state.app.vndb.* under `parse_mutex`,
@@ -73,6 +80,22 @@ var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 // search_buf from the thread). `is_popular` selects which request body is built.
 var query_buf: [256]u8 = undefined;
 var query_len: usize = 0;
+
+// ── Infinite-scroll pagination ──
+// `current_page` is the highest VNDB `page` merged into state.app.vndb.results;
+// `more_available` clears once VNDB's own "more" flag says the query is
+// exhausted or the fixed 180-card buffer fills. `loading_more` serializes
+// append fetches so a single near-bottom scroll can't spawn a burst (mirrors
+// drama.zig/comics.zig). The append worker runs under the current `search_gen`
+// so a fresh search/popular re-fetch drops a stale in-flight append.
+var current_page: u32 = 1;
+var more_available: bool = true;
+var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+/// Which request-body path a load-more append must reuse — has to match
+/// whatever produced the CURRENT grid (popular chart vs. search query), else a
+/// scroll-triggered page 2 could silently switch feeds. Set right before the
+/// initial fetch spawns in loadPopularOnce()/searchVndb().
+var current_is_popular: bool = true;
 
 // ══════════════════════════════════════════════════════════
 // Popular — most-voted VNs (one fetch per session)
@@ -99,6 +122,11 @@ pub fn loadPopularOnce() void {
     state.app.vndb.showing_popular = true;
     state.app.vndb.fetch_error = false;
     state.app.vndb.is_loading.store(true, .release);
+    // Fresh landing chart resets pagination; fetchPage() re-derives
+    // more_available from VNDB's own "more" flag once page 1 lands.
+    current_page = 1;
+    more_available = true;
+    current_is_popular = true;
 
     const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
     query_len = 0; // empty query → popular body
@@ -124,6 +152,11 @@ pub fn searchVndb(query: []const u8) void {
     // A search satisfies the "page opens with content" job — never let the
     // one-shot popular fetch land on top of the user's results afterwards.
     popular_fetched.store(true, .release);
+    // Fresh search resets pagination; fetchPage() re-derives more_available
+    // from VNDB's own "more" flag once page 1 lands.
+    current_page = 1;
+    more_available = true;
+    current_is_popular = false;
 
     const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
 
@@ -139,22 +172,66 @@ pub fn searchVndb(query: []const u8) void {
     }
 }
 
+/// Infinite-scroll appender: fetch the NEXT VNDB page for whichever request
+/// path produced the current grid (popular chart or search query) and merge it
+/// onto the existing grid. Guarded in order: `more_available` (VNDB said no
+/// more, or the buffer's full) → the main `is_loading` fetch flag (never
+/// append mid-fresh-fetch) → `loading_more` (serializes so one near-bottom
+/// scroll can't spawn a burst) → an empty grid or a full buffer. Runs under the
+/// CURRENT search_gen so a fresh search/popular re-fetch supersedes a slow
+/// in-flight append. Mirrors services/drama.zig loadMore.
+pub fn loadMore() void {
+    if (!more_available) return;
+    if (state.app.vndb.is_loading.load(.acquire)) return;
+    if (loading_more.load(.acquire)) return;
+    if (state.app.vndb.result_count == 0) return;
+    if (state.app.vndb.result_count >= state.app.vndb.results.len) {
+        more_available = false;
+        return;
+    }
+    if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
+
+    const my_gen = search_gen.load(.acquire); // stay within the current generation
+    const is_popular = current_is_popular;
+    const next = current_page + 1;
+    if (std.Thread.spawn(.{}, loadMoreWorker, .{ my_gen, is_popular, next })) |t| {
+        t.detach();
+    } else |_| {
+        loading_more.store(false, .release);
+    }
+}
+
 fn fetchWorker(my_gen: u32, is_popular: bool) void {
     defer state.app.vndb.is_loading.store(false, .release);
+    fetchPage(my_gen, is_popular, 1, false);
+}
 
+fn loadMoreWorker(my_gen: u32, is_popular: bool, page: u32) void {
+    defer loading_more.store(false, .release);
+    fetchPage(my_gen, is_popular, page, true);
+}
+
+/// Fetch one VNDB page and publish it into state.app.vndb.results. `append`
+/// selects the write path: false (fresh fetch, page 1) overwrites from index 0;
+/// true (infinite-scroll load-more) writes starting at the CURRENT
+/// result_count, never resetting it, so earlier cards/cover_slots never move.
+/// Same fetch path (buildSearchBody/buildPopularBody) and the same SFW filter
+/// (isSfw, applied inside pure.parseVns) as page 1 — appended pages are
+/// filtered identically, never loosened.
+fn fetchPage(my_gen: u32, is_popular: bool, page: u32, append: bool) void {
     // Build the POST body from a re-snapshot of the query (a newer search may
     // overwrite query_buf mid-flight).
     var body_buf: [1024]u8 = undefined;
     const body = if (is_popular)
-        pure.buildPopularBody(&body_buf)
+        pure.buildPopularBody(page, &body_buf)
     else blk: {
         var local: [256]u8 = undefined;
         const qlen = @min(query_len, local.len);
         @memcpy(local[0..qlen], query_buf[0..qlen]);
-        break :blk pure.buildSearchBody(local[0..qlen], &body_buf);
+        break :blk pure.buildSearchBody(local[0..qlen], page, &body_buf);
     };
     if (body.len == 0) {
-        state.app.vndb.fetch_error = true;
+        if (!append) state.app.vndb.fetch_error = true;
         return;
     }
 
@@ -162,7 +239,7 @@ fn fetchWorker(my_gen: u32, is_popular: bool) void {
     rate_limit.acquire("vndb", 1.0);
 
     const resp = curlPost(API_URL, body, 512 * 1024) orelse {
-        state.app.vndb.fetch_error = true;
+        if (!append) state.app.vndb.fetch_error = true;
         return;
     };
     defer alloc.free(resp);
@@ -173,15 +250,38 @@ fn fetchWorker(my_gen: u32, is_popular: bool) void {
     defer parse_mutex.unlock();
     if (search_gen.load(.acquire) != my_gen) return; // re-check under lock
 
-    // parseVns applies the SFW filter internally (isSfw) — flagged entries are
-    // dropped before they reach results[].
-    const count = pure.parseVns(resp, &state.app.vndb.results);
-    state.app.vndb.result_count = count;
-    if (count == 0) {
-        logs.pushLog("info", "vndb", "No visual novels returned", false);
-    } else {
-        logs.pushLog("info", "vndb", "Visual novels loaded (VNDB, SFW-filtered)", false);
+    const cap = state.app.vndb.results.len;
+    const base = if (append) state.app.vndb.result_count else 0;
+    if (base >= cap) {
+        more_available = false;
+        return;
     }
+
+    // parseVns applies the SFW filter internally (isSfw) — flagged entries are
+    // dropped before they reach results[]. Handing it results[base..] makes it
+    // write starting at `base`: index 0 for a fresh fetch, the current
+    // result_count for an append — the array is never cleared on append.
+    const count = pure.parseVns(resp, state.app.vndb.results[base..cap]);
+    state.app.vndb.result_count = base + count;
+    current_page = page;
+
+    // End-of-results signal: VNDB's own top-level "more" boolean — NOT a
+    // filtered-count-vs-page-size comparison. The SFW filter can legitimately
+    // drop entries from an otherwise-full raw page, so a count-based check
+    // would stop paging early. See responseHasMore's doc comment.
+    more_available = pure.responseHasMore(resp) and state.app.vndb.result_count < cap;
+
+    if (!append) {
+        if (count == 0) {
+            logs.pushLog("info", "vndb", "No visual novels returned", false);
+        } else {
+            logs.pushLog("info", "vndb", "Visual novels loaded (VNDB, SFW-filtered)", false);
+        }
+    } else {
+        var lb: [64]u8 = undefined;
+        logs.pushLog("info", "vndb", std.fmt.bufPrint(&lb, "Loaded {d} more VNs (VNDB p{d})", .{ count, page }) catch "Loaded more VNs", false);
+    }
+    dvui.refresh(null, @src(), null); // wake the frame so the new cards paint
 }
 
 // ══════════════════════════════════════════════════════════
@@ -500,7 +600,8 @@ fn renderResults() void {
 
     // Responsive columns from the LIVE page width (one-frame lag; first paint
     // falls back to a sane default) — same shape as the TMDB/radio grid. No
-    // virtualization: the grid is capped at results[]'s 30 cards.
+    // virtualization: the grid is capped at results[]'s 180-card buffer (infinite
+    // scroll fills it page by page via loadMore(), below).
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
     const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
@@ -517,6 +618,28 @@ fn renderResults() void {
 
         var c: usize = 0;
         while (c < cols and r * cols + c < count) : (c += 1) renderCard(r * cols + c, card_w);
+    }
+
+    // Infinite scroll: fetch + append the next VNDB page as the user nears the
+    // bottom. Bounded by more_available + loading_more so one scroll can't spawn
+    // a burst; `underfilled` keeps paging when the current grid is shorter than
+    // the viewport (e.g. right after the popular chart's first page lands on a
+    // tall window). Mirrors services/drama.zig.
+    if (more_available) {
+        const loading = loading_more.load(.acquire);
+        const max_y = scroll.si.scrollMax(.vertical);
+        const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
+        const underfilled = max_y <= 0 and state.app.vndb.result_count > 0;
+        if ((near_bottom or underfilled) and !loading and !state.app.vndb.is_loading.load(.acquire)) loadMore();
+        if (loading or underfilled) {
+            dvui.spinner(@src(), .{
+                .color_text = theme.colors.accent,
+                .min_size_content = theme.iconSize(.lg),
+                .gravity_x = 0.5,
+                .margin = dvui.Rect.all(12),
+            });
+            dvui.refresh(null, @src(), null); // wake until the worker's items land
+        }
     }
 }
 

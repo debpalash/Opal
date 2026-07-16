@@ -334,6 +334,47 @@ fn decodeXmlEntities(in: []const u8, out: []u8) usize {
     return o;
 }
 
+/// Extract the feed-level `<link rel="next" href="…"/>` (Atom/OPDS pagination
+/// — RFC 5005 style paging that Komga/Kavita/Calibre-Web emit) and resolve it
+/// against `base_url` into `buf`. Returns null when the feed has no next page
+/// (the terminal page of a paginated catalog), the href overflows `buf`, or
+/// the base URL can't be resolved against.
+///
+/// Feed-level `<link>`s (self/next/prev/last) are declared as direct children
+/// of `<feed>`, either before the first `<entry>` or after the last one —
+/// never interspersed among entries. Rather than a full XML tree, this scans
+/// once for the first/last entry boundary and skips any `<link>` that falls
+/// inside it, so a per-entry link that happens to carry `rel="next"` (not a
+/// real OPDS convention, but not disallowed either) can never be mistaken for
+/// feed-level pagination.
+pub fn feedNextHref(xml: []const u8, base_url: []const u8, buf: []u8) ?[]const u8 {
+    const first_entry = std.mem.indexOf(u8, xml, "<entry");
+    var last_entry_end: usize = 0;
+    if (first_entry != null) {
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, xml, pos, "<entry")) |e_at| {
+            const e_end = std.mem.indexOfPos(u8, xml, e_at, "</entry>") orelse xml.len;
+            last_entry_end = if (e_end < xml.len) e_end + "</entry>".len else xml.len;
+            pos = last_entry_end;
+        }
+    }
+
+    var lp: usize = 0;
+    while (std.mem.indexOfPos(u8, xml, lp, "<link")) |l_at| {
+        const l_close = std.mem.indexOfScalarPos(u8, xml, l_at, '>') orelse break;
+        lp = l_close + 1;
+        if (first_entry) |fe| {
+            if (l_at >= fe and l_at < last_entry_end) continue; // entry-scoped, not feed-level
+        }
+        const tag = xml[l_at .. l_close + 1];
+        const rel = attr(tag, "rel") orelse continue;
+        if (!std.mem.eql(u8, rel, "next")) continue;
+        const href = attr(tag, "href") orelse continue;
+        return resolveHref(base_url, href, buf);
+    }
+    return null;
+}
+
 /// Parse an Atom OPDS feed into `out`, resolving every href against `base_url`.
 /// Returns the number of entries written (bounded by out.len). Allocation-free
 /// and truncation-safe: a malformed / cut-off feed yields the entries parsed so
@@ -711,6 +752,66 @@ test "parseFeed: entry with multiple acquisition links keeps the first, missing 
     try testing.expectEqualStrings("https://s.example/a.cbz", entries[0].hrefSlice());
     try testing.expectEqualStrings("application/vnd.comicbook+zip", entries[0].contentTypeSlice());
     try testing.expectEqual(@as(usize, 0), entries[0].cover_len); // no image link
+}
+
+test "feedNextHref finds a feed-level rel=next link declared before entries" {
+    const xml =
+        \\<?xml version="1.0"?>
+        \\<feed xmlns="http://www.w3.org/2005/Atom">
+        \\  <title>Series</title>
+        \\  <link rel="self" href="/opds/v1.2/series?page=2"/>
+        \\  <link rel="next" href="/opds/v1.2/series?page=3"/>
+        \\  <link rel="prev" href="/opds/v1.2/series?page=1"/>
+        \\  <entry>
+        \\    <title>Vol 1</title>
+        \\    <link rel="http://opds-spec.org/acquisition" href="/books/1/file" type="application/vnd.comicbook+zip"/>
+        \\  </entry>
+        \\</feed>
+    ;
+    var buf: [256]u8 = undefined;
+    const next = feedNextHref(xml, "https://komga.example/opds/v1.2/series?page=2", &buf).?;
+    try testing.expectEqualStrings("https://komga.example/opds/v1.2/series?page=3", next);
+}
+
+test "feedNextHref finds a feed-level rel=next link declared after entries" {
+    const xml =
+        \\<feed>
+        \\  <entry>
+        \\    <title>Vol 1</title>
+        \\    <link rel="http://opds-spec.org/acquisition" href="/books/1/file" type="application/vnd.comicbook+zip"/>
+        \\  </entry>
+        \\  <link rel="next" href="page3.xml"/>
+        \\</feed>
+    ;
+    var buf: [256]u8 = undefined;
+    const next = feedNextHref(xml, "https://s.example/opds/page2.xml", &buf).?;
+    try testing.expectEqualStrings("https://s.example/opds/page3.xml", next);
+}
+
+test "feedNextHref returns null on the terminal page (no rel=next)" {
+    const xml =
+        \\<feed>
+        \\  <link rel="self" href="/opds/v1.2/series?page=3"/>
+        \\  <link rel="prev" href="/opds/v1.2/series?page=2"/>
+        \\  <entry><title>Last</title><link rel="http://opds-spec.org/acquisition" href="/books/9/file" type="application/vnd.comicbook+zip"/></entry>
+        \\</feed>
+    ;
+    var buf: [256]u8 = undefined;
+    try testing.expect(feedNextHref(xml, "https://s.example/opds/v1.2/series?page=3", &buf) == null);
+}
+
+test "feedNextHref ignores a stray rel=next-like link scoped inside an entry" {
+    const xml =
+        \\<feed>
+        \\  <entry>
+        \\    <title>X</title>
+        \\    <link rel="next" href="/should/not/count"/>
+        \\    <link rel="http://opds-spec.org/acquisition" href="/books/1/file" type="application/vnd.comicbook+zip"/>
+        \\  </entry>
+        \\</feed>
+    ;
+    var buf: [256]u8 = undefined;
+    try testing.expect(feedNextHref(xml, "https://s.example/opds", &buf) == null);
 }
 
 test "parseFeed: truncated / malformed XML does not crash and yields partial" {

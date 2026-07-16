@@ -9,7 +9,11 @@
 //!
 //! ALL feed parsing / href resolution / auth-header building lives in the
 //! unit-tested services/opds_pure.zig — this file only does I/O, threading and
-//! dvui. Opening an item routes on content type (opds_pure.readerRoute):
+//! dvui. The feed browser also supports infinite scroll: a feed's rel="next"
+//! Atom link (opds_pure.feedNextHref) is fetched + appended onto the entry
+//! list as the user nears the bottom of renderFeed's scroll area — see
+//! loadMore()/fetchMoreSync() below. Opening an item routes on content type
+//! (opds_pure.readerRoute):
 //!   • CBZ/CBR/image → the existing in-app comics reader (services/comics.zig)
 //!   • EPUB/PDF      → the OS (settings.openExternal — no in-app ebook renderer)
 //!   • anything else → a "not previewable" toast
@@ -39,6 +43,24 @@ const alloc = @import("../core/alloc.zig").allocator;
 // state.app.opds.* under this mutex. The UI reads entry_count then entries —
 // entry_count is written last so a torn read shows fewer rows, never garbage.
 var parse_mutex: @import("../core/sync.zig").Mutex = .{};
+
+// ── Infinite-scroll pagination ──
+// OPDS/Atom feeds carry a `<link rel="next" href="…"/>` at the feed level
+// (opds_pure.feedNextHref extracts + resolves it). `more_available` and
+// `next_href_buf` are published by the SAME worker + mutex as entries/
+// entry_count above, so a UI read under parse_mutex always sees a consistent
+// triple. `loading_more` serializes append fetches so a single near-bottom
+// scroll can't spawn a burst (mirrors comics/drama/youtube). `fetch_gen` is
+// bumped by every fresh (replace) feed load — a load-more worker checks it
+// before publishing so a stale append can never land on top of a feed the
+// user has since navigated away from.
+var more_available: bool = true;
+var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+/// Absolute URL of the CURRENT feed's rel="next" continuation link. Empty
+/// when the current feed has no next page. Guarded by parse_mutex.
+var next_href_buf: [512]u8 = undefined;
+var next_href_len: usize = 0;
+var fetch_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
 // ══════════════════════════════════════════════════════════
 // HTTP
@@ -91,8 +113,12 @@ fn setError(msg: []const u8) void {
 
 /// Snapshot the current feed URL + credentials, fetch, parse, publish. Runs ONLY
 /// on the detached worker (never the UI thread). `mark_connected` flips the
-/// connected flag + persists on the first successful connect.
-fn fetchFeedSync(mark_connected: bool) void {
+/// connected flag + persists on the first successful connect. `my_gen` is this
+/// fetch's generation (from spawnFetch) — always published here since this is
+/// a REPLACE fetch (fresh navigation always wins), but the gen is bumped so
+/// any in-flight load-more append from the PREVIOUS feed drops its stale
+/// publish instead of corrupting this one.
+fn fetchFeedSync(mark_connected: bool, my_gen: u32) void {
     // Snapshot everything the UI thread might edit mid-request into worker locals.
     var url_buf: [512]u8 = undefined;
     const url_len = @min(state.app.opds.current_url_len, url_buf.len);
@@ -119,15 +145,34 @@ fn fetchFeedSync(mark_connected: bool) void {
     };
     defer alloc.free(body);
 
+    // A newer navigation (another connect/openFeed/goBack) superseded this
+    // in-flight request — drop the stale result rather than clobber the feed
+    // the user has since moved to (mirrors drama.zig's fetch_gen guard).
+    if (fetch_gen.load(.acquire) != my_gen) return;
+
     // Publish under the mutex: title first, entries, then entry_count LAST so a
     // concurrent UI read never sees a count ahead of the data.
     parse_mutex.lock();
+    if (fetch_gen.load(.acquire) != my_gen) {
+        parse_mutex.unlock();
+        return;
+    } // re-check under the lock
     const title = safeUtf8(pure.feedTitle(body));
     const tl = @min(title.len, state.app.opds.feed_title.len);
     @memcpy(state.app.opds.feed_title[0..tl], title[0..tl]);
     state.app.opds.feed_title_len = tl;
     const n = pure.parseFeed(body, url, &state.app.opds.entries);
     state.app.opds.entry_count = n;
+    // A fresh (replace) feed load ALWAYS resets the append cursor: capture
+    // this feed's own rel="next" link, or clear more_available when it has
+    // none — loadMore() becomes a no-op for feeds with no pagination.
+    if (pure.feedNextHref(body, url, &next_href_buf)) |next| {
+        next_href_len = next.len;
+        more_available = true;
+    } else {
+        next_href_len = 0;
+        more_available = false;
+    }
     parse_mutex.unlock();
 
     state.app.opds.fetch_error = false;
@@ -144,18 +189,132 @@ fn spawnFetch(mark_connected: bool) void {
     if (state.app.opds.is_loading.load(.acquire)) return;
     state.app.opds.is_loading.store(true, .release);
     state.app.opds.fetch_error = false;
+    // A fresh replace-fetch (connect/openFeed/goBack) is a new generation — an
+    // in-flight load-more append from the feed being navigated away from will
+    // see its generation is stale and drop its publish (see fetchMoreSync).
+    const my_gen = fetch_gen.fetchAdd(1, .acq_rel) + 1;
 
     state.app.opds.thread = std.Thread.spawn(.{}, struct {
-        fn worker(mc: bool) void {
+        fn worker(mc: bool, gen: u32) void {
             defer state.app.opds.is_loading.store(false, .release);
-            fetchFeedSync(mc);
+            fetchFeedSync(mc, gen);
         }
-    }.worker, .{mark_connected}) catch blk: {
+    }.worker, .{ mark_connected, my_gen }) catch blk: {
         state.app.opds.is_loading.store(false, .release);
         break :blk null;
     };
     // Detach: the result is observed via state.app.opds, never joined.
     if (state.app.opds.thread) |t| t.detach();
+}
+
+// ══════════════════════════════════════════════════════════
+// Infinite scroll — fetch + append the feed's rel="next" page
+// ══════════════════════════════════════════════════════════
+
+/// Infinite-scroll appender: fetch the current feed's rel="next" page and
+/// merge its entries onto the existing list. Guarded by `loading_more` + the
+/// main `is_loading` atomic so a near-bottom scroll can't spawn a burst;
+/// no-op once `more_available` clears — which happens the moment a feed has
+/// no rel="next" link (set by fetchFeedSync/fetchMoreSync), a load-more fetch
+/// fails, or the fixed 300-entry buffer fills. Runs under the current
+/// fetch_gen so a fresh feed navigation (connect/openFeed/goBack) supersedes
+/// it. Mirrors services/drama.zig's loadMore.
+pub fn loadMore() void {
+    if (!more_available) return;
+    if (state.app.opds.is_loading.load(.acquire)) return;
+    if (loading_more.load(.acquire)) return;
+    if (state.app.opds.entry_count == 0) return;
+    if (state.app.opds.entry_count >= state.app.opds.entries.len) {
+        parse_mutex.lock();
+        more_available = false;
+        parse_mutex.unlock();
+        return;
+    }
+    if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
+
+    const my_gen = fetch_gen.load(.acquire); // stay within the current generation
+
+    if (std.Thread.spawn(.{}, loadMoreWorker, .{my_gen})) |t| {
+        t.detach();
+    } else |_| {
+        loading_more.store(false, .release);
+    }
+}
+
+fn loadMoreWorker(my_gen: u32) void {
+    defer loading_more.store(false, .release);
+    fetchMoreSync(my_gen);
+}
+
+/// Fetch the feed's rel="next" continuation page and APPEND its entries onto
+/// state.app.opds.entries starting at the current entry_count (never clears —
+/// only fetchFeedSync's replace path does that). Uses the SAME Basic-auth
+/// header + fetch path (opdsGet) as the main feed fetch. Runs ONLY on the
+/// detached load-more worker (never the UI thread).
+fn fetchMoreSync(my_gen: u32) void {
+    var url_buf: [512]u8 = undefined;
+    parse_mutex.lock();
+    const url_len = @min(next_href_len, url_buf.len);
+    @memcpy(url_buf[0..url_len], next_href_buf[0..url_len]);
+    parse_mutex.unlock();
+    const url = url_buf[0..url_len];
+    if (url.len == 0) {
+        parse_mutex.lock();
+        more_available = false;
+        parse_mutex.unlock();
+        return;
+    }
+
+    // Same credential snapshot as fetchFeedSync — the UI thread may edit these
+    // buffers mid-request, so copy them out before the blocking fetch.
+    var user_buf: [128]u8 = undefined;
+    @memcpy(&user_buf, &state.app.opds.user_buf);
+    var pass_buf: [128]u8 = undefined;
+    @memcpy(&pass_buf, &state.app.opds.pass_buf);
+    const user = user_buf[0 .. std.mem.indexOfScalar(u8, &user_buf, 0) orelse user_buf.len];
+    const pass = pass_buf[0 .. std.mem.indexOfScalar(u8, &pass_buf, 0) orelse pass_buf.len];
+
+    const body = opdsGet(url, user, pass) orelse {
+        // Fail closed (mirrors drama.zig treating a short/failed page as "no
+        // more") rather than retry-spamming the server on every near-bottom
+        // frame after a transient failure.
+        logs.pushLog("error", "opds", "Load-more fetch failed", true);
+        if (fetch_gen.load(.acquire) == my_gen) {
+            parse_mutex.lock();
+            more_available = false;
+            parse_mutex.unlock();
+        }
+        return;
+    };
+    defer alloc.free(body);
+
+    // A fresh feed navigation superseded this append — drop it rather than
+    // append the old feed's continuation onto the new feed's entries.
+    if (fetch_gen.load(.acquire) != my_gen) return;
+
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (fetch_gen.load(.acquire) != my_gen) return; // re-check under the lock
+
+    const base = state.app.opds.entry_count;
+    const cap = state.app.opds.entries.len;
+    if (base >= cap) {
+        more_available = false;
+        return;
+    }
+    const n = pure.parseFeed(body, url, state.app.opds.entries[base..]);
+    state.app.opds.entry_count = base + n;
+
+    if (pure.feedNextHref(body, url, &next_href_buf)) |next| {
+        next_href_len = next.len;
+        more_available = state.app.opds.entry_count < cap;
+    } else {
+        next_href_len = 0;
+        more_available = false;
+    }
+
+    logs.pushLog("info", "opds", "Loaded more entries", false);
+    state.wakeUi();
 }
 
 // ══════════════════════════════════════════════════════════
@@ -263,8 +422,11 @@ pub fn openEntry(idx: usize) void {
 
 /// Disconnect: forget the connection + clear the loaded feed. UI-thread only.
 pub fn disconnect() void {
+    _ = fetch_gen.fetchAdd(1, .acq_rel); // supersede any in-flight fetch/append
     parse_mutex.lock();
     state.app.opds.entry_count = 0;
+    more_available = true;
+    next_href_len = 0;
     parse_mutex.unlock();
     state.app.opds.connected = false;
     state.app.opds.nav_depth = 0;
@@ -430,9 +592,11 @@ fn renderFeed() void {
     });
     defer scroll.deinit();
 
-    // Snapshot the entry count under the publish lock (cheap — a single usize).
+    // Snapshot the entry count + pagination flag under the publish lock (cheap
+    // — a usize + a bool) so this frame sees a consistent triple with entries.
     parse_mutex.lock();
     const count = state.app.opds.entry_count;
+    const has_more = more_available;
     parse_mutex.unlock();
 
     if (count == 0 and !state.app.opds.is_loading.load(.acquire)) {
@@ -446,6 +610,29 @@ fn renderFeed() void {
     var i: usize = 0;
     while (i < count and i < state.app.opds.entries.len) : (i += 1) {
         renderEntryRow(i);
+    }
+
+    // Infinite scroll: fetch + append the feed's rel="next" page as the user
+    // nears the bottom. Bounded by more_available + loading_more so one
+    // scroll can't spawn a burst; `underfilled` keeps paging when the first
+    // page is shorter than the viewport. Mirrors services/drama.zig.
+    if (has_more) {
+        const loading = loading_more.load(.acquire);
+        const max_y = scroll.si.scrollMax(.vertical);
+        const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
+        const underfilled = max_y <= 0 and count > 0;
+        if ((near_bottom or underfilled) and !loading and !state.app.opds.is_loading.load(.acquire)) {
+            loadMore();
+        }
+        if (loading or underfilled) {
+            dvui.spinner(@src(), .{
+                .color_text = theme.colors.accent,
+                .min_size_content = theme.iconSize(.lg),
+                .gravity_x = 0.5,
+                .margin = dvui.Rect.all(12),
+            });
+            dvui.refresh(null, @src(), null); // wake until the worker's items land
+        }
     }
 }
 

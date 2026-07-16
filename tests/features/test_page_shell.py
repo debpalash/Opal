@@ -229,10 +229,13 @@ def test_podcasts_radio_default_content():
         "podcast reuses parseItunes": "pure.parseItunes(" in pod,
         "podcast one-shot latch": "popular_fetched" in pod and "pub fn loadPopularOnce" in pod,
         "podcast fetch is backgrounded": "std.Thread.spawn(.{}, popularWorker" in pod,
-        # ── Radio: RadioBrowser /topvote → the same parseStations ──
-        "radio pure builder": "pub fn buildTopVoteUrl" in rad_pure,
-        "radio topvote endpoint": "stations/topvote/" in rad_pure,
-        "radio routes through pure": "pure.buildTopVoteUrl(" in rad,
+        # ── Radio: RadioBrowser votes-descending window → the same parseStations.
+        # The legacy /topvote/{N} path form has no offset slot, so infinite
+        # scroll uses the /stations/search query form ordered by votes instead —
+        # same ranking, same station objects, but pageable.
+        "radio pure builder": "pub fn buildPopularUrl" in rad_pure,
+        "radio votes-ordered endpoint": "order=votes&reverse=true" in rad_pure,
+        "radio routes through pure": "pure.buildPopularUrl(" in rad,
         "radio reuses parseStations": "pure.parseStations(" in rad,
         "radio one-shot latch": "popular_fetched" in rad and "pub fn loadPopularOnce" in rad,
         "radio fetch is backgrounded": "std.Thread.spawn(.{}, popularWorker" in rad,

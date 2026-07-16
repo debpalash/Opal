@@ -67,7 +67,14 @@ const RESUME_KIND = "novel_resume";
 // Kept out of AppState (which only holds the selected work + reader text): the
 // search grid and chapter list are transient, published by the fetch workers
 // under `parse_mutex`. Never reallocated, so the UI thread reads them directly.
-const MAX_RESULTS: usize = 40;
+// Bumped from 40 to hold several appended pages of infinite-scroll results (the
+// arrays are fixed-size — never reallocated — so the UI thread reads them without
+// a pointer-stability worry as the append workers grow nr_count).
+const MAX_RESULTS: usize = 200;
+// Per-source rows requested per page. Keeps each source's first page small enough
+// that the aggregated landing feed leaves room for the other sources, and makes
+// Wikisource's `sroffset` pagination pull real additional rows on scroll.
+const PAGE_SIZE: u32 = 20;
 var nr_titles: [MAX_RESULTS][256]u8 = undefined;
 var nr_title_lens: [MAX_RESULTS]usize = std.mem.zeroes([MAX_RESULTS]usize);
 // Per-result source + novel URL. Wikisource identifies a work by its title
@@ -99,6 +106,24 @@ var parse_mutex: @import("../core/sync.zig").Mutex = .{};
 var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 var chapters_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 var text_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
+// ── Infinite-scroll pagination (search grid) ──
+// `current_page` is the highest scraper-source page merged into nr_* (Wikisource
+// paginates by offset instead — see loadMoreWorker). `loading_more` serializes
+// append fetches so one near-bottom scroll can't spawn a burst. `more_available`
+// gates the render trigger; the per-source `*_more` flags let an exhausted source
+// (a short/duplicate page, or a source that genuinely can't page) drop out while
+// the others keep loading. All shared between the UI thread and the append worker,
+// so every flag is atomic (CLAUDE.md). The worker runs under the same `search_gen`
+// as the initial search, so a fresh query supersedes an in-flight append.
+var current_page: u32 = 1;
+var more_available: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
+var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var wiki_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
+var madara_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
+var lnwp_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
+// readwn's search POST has no page parameter — it returns one fixed set, so it is
+// never re-fetched by loadMore (implicitly exhausted after page 1).
 
 // Snapshots handed to detached workers (never read the mutable UI buffers from a
 // worker — copy by value before spawning; see CLAUDE.md thread rules).
@@ -135,6 +160,13 @@ pub fn searchNovels(query: []const u8) void {
     @memcpy(query_snap[0..n], query[0..n]);
     query_snap_len = n;
 
+    // Fresh query resets infinite-scroll pagination: page 1, every source eligible.
+    current_page = 1;
+    more_available.store(true, .release);
+    wiki_more.store(true, .release);
+    madara_more.store(true, .release);
+    lnwp_more.store(true, .release);
+
     if (std.Thread.spawn(.{}, searchWorker, .{my_gen})) |t| {
         t.detach();
     } else |_| {
@@ -158,15 +190,15 @@ fn searchWorker(my_gen: u32) void {
     parse_mutex.unlock();
 
     var filled: usize = 0;
-    filled += fetchWikisource(query, my_gen, filled);
+    filled += fetchWikisource(query, my_gen, filled, 0);
     if (search_gen.load(.acquire) != my_gen) return;
 
     if (madaraNovelBase() != null) {
-        filled += fetchMadaraNovel(query, my_gen, filled);
+        filled += fetchMadaraNovel(query, my_gen, filled, 1);
         if (search_gen.load(.acquire) != my_gen) return;
     }
     if (lightnovelwpBase() != null) {
-        filled += fetchLightnovelwp(query, my_gen, filled);
+        filled += fetchLightnovelwp(query, my_gen, filled, 1);
         if (search_gen.load(.acquire) != my_gen) return;
     }
     if (readwnBase() != null) {
@@ -193,6 +225,36 @@ fn addResult(idx: usize, src: NovelSource, title: []const u8, url: []const u8) v
     nr_source[idx] = src;
 }
 
+/// True when a row already present in nr_*[0..upto) matches the candidate — the
+/// infinite-scroll dedup so an appended page never repeats a row. Scraper rows are
+/// keyed by their absolute URL; Wikisource rows (empty URL) by source + title.
+/// Caller must hold `parse_mutex`.
+fn rowExists(src: NovelSource, title: []const u8, url: []const u8, upto: usize) bool {
+    const cap = @min(upto, MAX_RESULTS);
+    var i: usize = 0;
+    while (i < cap) : (i += 1) {
+        if (url.len > 0) {
+            if (nr_url_lens[i] == url.len and std.mem.eql(u8, nr_urls[i][0..nr_url_lens[i]], url)) return true;
+        } else if (nr_source[i] == src) {
+            if (nr_title_lens[i] == title.len and std.mem.eql(u8, nr_titles[i][0..nr_title_lens[i]], title)) return true;
+        }
+    }
+    return false;
+}
+
+/// Count the Wikisource rows currently in nr_*[0..nr_count) — the `sroffset` for
+/// the next Wikisource page (how many of its results we've already consumed).
+/// Caller must hold `parse_mutex`.
+fn wikiCountLocked() u32 {
+    var c: u32 = 0;
+    var i: usize = 0;
+    const cap = @min(nr_count, MAX_RESULTS);
+    while (i < cap) : (i += 1) {
+        if (nr_source[i] == .wikisource) c += 1;
+    }
+    return c;
+}
+
 /// Decode HTML entities out of a scraped title (it carries no block tags, so
 /// htmlToText just entity-decodes + collapses whitespace). Into `out`.
 fn cleanTitle(raw: []const u8, out: []u8) []const u8 {
@@ -207,10 +269,12 @@ fn copyBase(raw: []const u8, out: []u8) []const u8 {
     return out[0..n];
 }
 
-/// Wikisource `list=search` → nr_* rows (the always-on default source).
-fn fetchWikisource(query: []const u8, my_gen: u32, start: usize) usize {
+/// Wikisource `list=search` → nr_* rows (the always-on default source). `offset`
+/// is the `sroffset` continuation (0 for the first page); rows are appended at
+/// `start` and deduped by title so infinite-scroll pages never repeat a work.
+fn fetchWikisource(query: []const u8, my_gen: u32, start: usize, offset: u32) usize {
     var url_buf: [1024]u8 = undefined;
-    const url = pure.buildSearchUrl(&url_buf, query, MAX_RESULTS) orelse return 0;
+    const url = pure.buildSearchUrl(&url_buf, query, PAGE_SIZE, offset) orelse return 0;
     const body = curl(url, 512 * 1024) orelse {
         state.app.novels.fetch_error = true;
         return 0;
@@ -231,6 +295,7 @@ fn fetchWikisource(query: []const u8, my_gen: u32, start: usize) usize {
         var dec: [256]u8 = undefined;
         const dn = pure.cj.jsonUnescape(raw, &dec);
         if (dn == 0) continue;
+        if (rowExists(.wikisource, dec[0..dn], "", start + n)) continue;
         addResult(start + n, .wikisource, dec[0..dn], "");
         n += 1;
     }
@@ -240,13 +305,13 @@ fn fetchWikisource(query: []const u8, my_gen: u32, start: usize) usize {
 
 /// Madara-novel search — REUSES the manga Madara `SearchIter` (identical DOM);
 /// only the chapter body later differs. Rows carry the absolute novel URL.
-fn fetchMadaraNovel(query: []const u8, my_gen: u32, start: usize) usize {
+fn fetchMadaraNovel(query: []const u8, my_gen: u32, start: usize, page: u32) usize {
     const base_raw = madaraNovelBase() orelse return 0;
     var base_buf: [256]u8 = undefined;
     const base = copyBase(base_raw, &base_buf);
 
     var url_buf: [768]u8 = undefined;
-    const url = nsp.madara.buildSearchUrl(&url_buf, base, query, 1) orelse return 0;
+    const url = nsp.madara.buildSearchUrl(&url_buf, base, query, page) orelse return 0;
     const body = scrapeHtml(url, 512 * 1024) orelse return 0;
     defer alloc.free(body);
     if (search_gen.load(.acquire) != my_gen) return 0;
@@ -263,7 +328,9 @@ fn fetchMadaraNovel(query: []const u8, my_gen: u32, start: usize) usize {
         const abs = nsp.madara.resolveUrl(base, item.url, &abs_buf);
         if (abs.len == 0 or !std.mem.startsWith(u8, abs, "http")) continue;
         var t_buf: [256]u8 = undefined;
-        addResult(start + n, .madara_novel, cleanTitle(item.title, &t_buf), abs);
+        const title = cleanTitle(item.title, &t_buf);
+        if (rowExists(.madara_novel, title, abs, start + n)) continue;
+        addResult(start + n, .madara_novel, title, abs);
         n += 1;
     }
     nr_count = start + n;
@@ -271,13 +338,13 @@ fn fetchMadaraNovel(query: []const u8, my_gen: u32, start: usize) usize {
 }
 
 /// lightnovelwp search — REUSES the MangaThemesia browse endpoint + `SearchIter`.
-fn fetchLightnovelwp(query: []const u8, my_gen: u32, start: usize) usize {
+fn fetchLightnovelwp(query: []const u8, my_gen: u32, start: usize, page: u32) usize {
     const base_raw = lightnovelwpBase() orelse return 0;
     var base_buf: [256]u8 = undefined;
     const base = copyBase(base_raw, &base_buf);
 
     var url_buf: [768]u8 = undefined;
-    const url = nsp.themesia.buildBrowseUrl(base, lightnovelwpDir(), query, 1, "", &url_buf) orelse return 0;
+    const url = nsp.themesia.buildBrowseUrl(base, lightnovelwpDir(), query, page, "", &url_buf) orelse return 0;
     const body = scrapeHtml(url, 512 * 1024) orelse return 0;
     defer alloc.free(body);
     if (search_gen.load(.acquire) != my_gen) return 0;
@@ -295,7 +362,9 @@ fn fetchLightnovelwp(query: []const u8, my_gen: u32, start: usize) usize {
         const abs = nsp.themesia.resolveUrl(base, item.url, &abs_buf);
         if (abs.len == 0 or !std.mem.startsWith(u8, abs, "http")) continue;
         var t_buf: [256]u8 = undefined;
-        addResult(start + n, .lightnovelwp, cleanTitle(item.title, &t_buf), abs);
+        const title = cleanTitle(item.title, &t_buf);
+        if (rowExists(.lightnovelwp, title, abs, start + n)) continue;
+        addResult(start + n, .lightnovelwp, title, abs);
         n += 1;
     }
     nr_count = start + n;
@@ -332,11 +401,96 @@ fn fetchReadwn(query: []const u8, my_gen: u32, start: usize) usize {
         const abs = nsp.themesia.resolveUrl(base, item.url, &abs_buf);
         if (abs.len == 0 or !std.mem.startsWith(u8, abs, "http")) continue;
         var t_buf: [256]u8 = undefined;
-        addResult(start + n, .readwn, cleanTitle(item.title, &t_buf), abs);
+        const title = cleanTitle(item.title, &t_buf);
+        if (rowExists(.readwn, title, abs, start + n)) continue;
+        addResult(start + n, .readwn, title, abs);
         n += 1;
     }
     nr_count = start + n;
     return n;
+}
+
+// ══════════════════════════════════════════════════════════
+// Infinite scroll — append the next page of the current query
+// ══════════════════════════════════════════════════════════
+
+/// Fetch + append the NEXT page of the current search when the user nears the
+/// bottom. Guarded like drama.loadMore: no-op once `more_available` clears, while
+/// the initial search is loading, or while an append is already in flight; a
+/// single scroll can't spawn a burst. Runs under the current `search_gen`, so a
+/// fresh query supersedes it. Wikisource continues by `sroffset`; the scraper
+/// engines by page number (`current_page + 1`); readwn's search can't page and is
+/// never re-fetched here.
+pub fn loadMore() void {
+    if (!more_available.load(.acquire)) return;
+    if (state.app.novels.is_loading.load(.acquire)) return;
+    if (loading_more.load(.acquire)) return;
+
+    parse_mutex.lock();
+    const count = nr_count;
+    parse_mutex.unlock();
+    if (count == 0) return;
+    if (count >= MAX_RESULTS) {
+        more_available.store(false, .release);
+        return;
+    }
+
+    if (loading_more.swap(true, .acq_rel)) return; // lost the race — append already running
+    const my_gen = search_gen.load(.acquire);
+    const next = current_page + 1;
+    if (std.Thread.spawn(.{}, loadMoreWorker, .{ my_gen, next })) |t| {
+        t.detach();
+        current_page = next; // UI-thread-only write; the worker got `next` by value
+    } else |_| {
+        loading_more.store(false, .release);
+    }
+}
+
+/// Append worker: pull the next page from each still-eligible active source and
+/// merge it onto nr_* (never clears nr_count). A source that appends 0 new rows is
+/// marked exhausted so it isn't re-queried on the next scroll; `more_available`
+/// clears once every source is exhausted. Uses the SAME fetch paths (and thus the
+/// same parse + dedup) as the initial search.
+fn loadMoreWorker(my_gen: u32, next_page: u32) void {
+    defer loading_more.store(false, .release);
+
+    var local: [256]u8 = undefined;
+    const qlen = @min(query_snap_len, local.len);
+    @memcpy(local[0..qlen], query_snap[0..qlen]);
+    const query = local[0..qlen];
+    if (qlen == 0) return;
+
+    parse_mutex.lock();
+    var start = nr_count;
+    parse_mutex.unlock();
+
+    if (wiki_more.load(.acquire)) {
+        parse_mutex.lock();
+        const offset = wikiCountLocked();
+        parse_mutex.unlock();
+        const n = fetchWikisource(query, my_gen, start, offset);
+        if (search_gen.load(.acquire) != my_gen) return;
+        start += n;
+        if (n == 0) wiki_more.store(false, .release);
+    }
+    if (madara_more.load(.acquire) and madaraNovelBase() != null and start < MAX_RESULTS) {
+        const n = fetchMadaraNovel(query, my_gen, start, next_page);
+        if (search_gen.load(.acquire) != my_gen) return;
+        start += n;
+        if (n == 0) madara_more.store(false, .release);
+    }
+    if (lnwp_more.load(.acquire) and lightnovelwpBase() != null and start < MAX_RESULTS) {
+        const n = fetchLightnovelwp(query, my_gen, start, next_page);
+        if (search_gen.load(.acquire) != my_gen) return;
+        start += n;
+        if (n == 0) lnwp_more.store(false, .release);
+    }
+
+    const any = wiki_more.load(.acquire) or
+        (madara_more.load(.acquire) and madaraNovelBase() != null) or
+        (lnwp_more.load(.acquire) and lightnovelwpBase() != null);
+    more_available.store(any and start < MAX_RESULTS, .release);
+    logs.pushLog("info", "novels", "Novel search page appended", false);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -931,6 +1085,29 @@ fn renderSearchView() void {
             .gravity_x = 0,
         })) {
             openNovel(i);
+        }
+    }
+
+    // Infinite scroll: append the next page of the current query as the user nears
+    // the bottom. Bounded by more_available + loading_more so one scroll can't
+    // spawn a burst; `underfilled` keeps paging when the first page is shorter than
+    // the viewport. Mirrors services/drama.zig.
+    if (more_available.load(.acquire)) {
+        const loading = loading_more.load(.acquire);
+        const max_y = scroll.si.scrollMax(.vertical);
+        const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
+        const underfilled = max_y <= 0 and count > 0;
+        if ((near_bottom or underfilled) and !loading and !state.app.novels.is_loading.load(.acquire)) {
+            loadMore();
+        }
+        if (loading or underfilled) {
+            dvui.spinner(@src(), .{
+                .color_text = theme.colors.accent,
+                .min_size_content = theme.iconSize(.lg),
+                .gravity_x = 0.5,
+                .margin = dvui.Rect.all(12),
+            });
+            dvui.refresh(null, @src(), null); // wake until the appended rows land
         }
     }
 }

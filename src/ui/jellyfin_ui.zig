@@ -427,6 +427,33 @@ fn renderItems() void {
         });
         sp.deinit();
     }
+
+    // Infinite scroll: fetch + append the next Jellyfin StartIndex window (for
+    // whichever context — library Browse or Search — is on screen) as the
+    // user nears the bottom. Bounded by more_available + loading_more
+    // (services/jellyfin.zig) so one scroll can't spawn a burst; `underfilled`
+    // keeps paging when the first window is shorter than the viewport.
+    // Mirrors services/drama.zig's renderContent. Shared by both the Browse
+    // view (calls renderItems() directly) and Search (renderSearch() calls
+    // renderItems() too), since both page the same items[]/item_count.
+    if (jf.more_available) {
+        const loading = jf.loading_more.load(.acquire);
+        const max_y = scroll.si.scrollMax(.vertical);
+        const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
+        const underfilled = max_y <= 0 and state.app.jf.item_count > 0;
+        if ((near_bottom or underfilled) and !loading and !state.app.jf.is_loading.load(.acquire)) {
+            jf.loadMore();
+        }
+        if (loading or underfilled) {
+            dvui.spinner(@src(), .{
+                .color_text = theme.colors.accent,
+                .min_size_content = theme.iconSize(.lg),
+                .gravity_x = 0.5,
+                .margin = dvui.Rect.all(12),
+            });
+            dvui.refresh(null, @src(), null); // wake until the worker's items land
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════════

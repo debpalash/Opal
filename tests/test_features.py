@@ -52,6 +52,7 @@ from features import (  # noqa: F401
     test_anime_extractors,
     test_anime_sites,
     test_content_cache,
+    test_browse_infinite_scroll,
 )
 
 if __name__ == "__main__":

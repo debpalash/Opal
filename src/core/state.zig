@@ -882,7 +882,10 @@ pub const AppState = struct {
         // detached worker writes). A plain bool would be a data race.
         is_loading: std.atomic.Value(bool) = .init(false),
         stream_loading: std.atomic.Value(bool) = .init(false),
-        results: [80]DramaResult = std.mem.zeroes([80]DramaResult),
+        // Sized for infinite scroll: TMDB discover returns 20/page, so 300 holds
+        // ~15 pages. Fixed array (not an ArrayList) → append never reallocates,
+        // so lazy-poster pointers into results[] stay valid (CLAUDE.md).
+        results: [300]DramaResult = std.mem.zeroes([300]DramaResult),
         result_count: usize = 0,
         selected_idx: ?usize = null,
         last_fetch_s: i64 = 0, // SWR cache timestamp
@@ -928,7 +931,9 @@ pub const AppState = struct {
         // True while results[] holds the once-per-session most-voted stations
         // rather than a user search — drives the grid heading only.
         showing_popular: bool = false,
-        results: [30]radio_pure.Station = std.mem.zeroes([30]radio_pure.Station),
+        // Sized for infinite scroll (radio-browser offset paging). Fixed array →
+        // append never reallocates, so lazy-logo pointers into results[] hold.
+        results: [180]radio_pure.Station = std.mem.zeroes([180]radio_pure.Station),
         result_count: usize = 0,
     } = .{},
 
@@ -981,7 +986,9 @@ pub const AppState = struct {
         // True while results[] holds the once-per-session most-voted chart rather
         // than a user search — drives the grid heading only.
         showing_popular: bool = false,
-        results: [30]@import("../services/vndb_pure.zig").Vn = std.mem.zeroes([30]@import("../services/vndb_pure.zig").Vn),
+        // Sized for infinite scroll (VNDB /kana/vn `page` field). Fixed array →
+        // append never reallocates, so lazy-cover pointers into results[] hold.
+        results: [180]@import("../services/vndb_pure.zig").Vn = std.mem.zeroes([180]@import("../services/vndb_pure.zig").Vn),
         result_count: usize = 0,
         // Detail overlay: index into results[] when non-null (else the grid shows).
         selected_idx: ?usize = null,
@@ -1038,7 +1045,9 @@ pub const AppState = struct {
         is_loading: std.atomic.Value(bool) = .init(false),
         thread: ?std.Thread = null,
         view: JfView = .Libraries,
-        items: [64]JfItem = std.mem.zeroes([64]JfItem),
+        // Sized for infinite scroll (Jellyfin StartIndex+Limit paging). Fixed
+        // array → append never reallocates, so poster pointers into items[] hold.
+        items: [320]JfItem = std.mem.zeroes([320]JfItem),
         item_count: usize = 0,
         libraries: [16]JfLibrary = std.mem.zeroes([16]JfLibrary),
         library_count: usize = 0,
@@ -1074,7 +1083,9 @@ pub const AppState = struct {
         view: AbsView = .Libraries,
         libraries: [16]audiobookshelf_pure.Library = std.mem.zeroes([16]audiobookshelf_pure.Library),
         library_count: usize = 0,
-        books: [64]audiobookshelf_pure.Book = std.mem.zeroes([64]audiobookshelf_pure.Book),
+        // Sized for infinite scroll (Audiobookshelf page/limit paging). Fixed
+        // array → append never reallocates, so cover pointers into books[] hold.
+        books: [320]audiobookshelf_pure.Book = std.mem.zeroes([320]audiobookshelf_pure.Book),
         book_count: usize = 0,
         // Selected library's id (fetch worker input) + name (Books-view header).
         selected_lib_id: [64]u8 = std.mem.zeroes([64]u8),
@@ -1113,7 +1124,9 @@ pub const AppState = struct {
         // Current feed: title heading + parsed entries.
         feed_title: [160]u8 = std.mem.zeroes([160]u8),
         feed_title_len: usize = 0,
-        entries: [64]opds_pure.OpdsEntry = std.mem.zeroes([64]opds_pure.OpdsEntry),
+        // Sized for infinite scroll (OPDS rel="next" feed paging). Fixed array →
+        // append never reallocates, so any entry pointers stay valid.
+        entries: [300]opds_pure.OpdsEntry = std.mem.zeroes([300]opds_pure.OpdsEntry),
         entry_count: usize = 0,
         // The URL of the feed currently shown (base for relative hrefs).
         current_url: [512]u8 = std.mem.zeroes([512]u8),

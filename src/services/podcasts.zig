@@ -202,6 +202,8 @@ fn popularWorker(my_gen: u32) void {
     defer state.app.podcasts.is_loading.store(false, .release);
 
     // 1. Chart → the top shows' numeric ids (no feedUrl in this payload).
+    // Same story as the search endpoint: this is a fixed top-N chart snapshot
+    // with no offset/page param, so it's a one-shot bounded fetch too.
     var chart_url_buf: [128]u8 = undefined;
     const chart_url = pure.buildTopChartUrl(POPULAR_LIMIT, &chart_url_buf);
     if (chart_url.len == 0) return;
@@ -290,6 +292,9 @@ fn searchWorker(my_gen: u32) void {
     var enc: [768]u8 = undefined;
     const encoded = percentEncode(local[0..qlen], &enc);
 
+    // No infinite scroll here: the classic iTunes Search API takes a `limit`
+    // (max 200) but has no offset/page cursor — it always returns the same
+    // single bounded result set, so a "load more" would just refetch page one.
     var url_buf: [900]u8 = undefined;
     const url = std.fmt.bufPrint(
         &url_buf,

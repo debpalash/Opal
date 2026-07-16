@@ -165,17 +165,36 @@ fn jsonIntField(scope: []const u8, key: []const u8) u32 {
 // URL builders
 // ══════════════════════════════════════════════════════════
 
-/// Build the RadioBrowser "most voted stations" URL — the keyless popular-station
-/// endpoint on the same host as the search endpoint, answering with the identical
+/// Build the RadioBrowser "most-voted stations, paginated" URL — the same
+/// `/stations/search` endpoint the text search uses, ordered by votes
+/// descending, with BOTH `limit` and `offset`, answering with the identical
 /// station-object array, so parseStations below handles it verbatim.
-/// `limit` is clamped to 1..100 so a bad caller can't produce a rejected URL.
-/// Returns "" only if `dst` is too small (never a truncated, wrong URL).
-pub fn buildTopVoteUrl(limit: usize, dst: []u8) []const u8 {
+/// This replaced the legacy path-param form (`/topvote/{rowcount}`), which has
+/// no offset slot and so could only ever answer page one; `order=votes&
+/// reverse=true` reproduces topvote's ranking, so the first window is
+/// equivalent in content while loadMore() can walk forward from it.
+/// `limit`/`offset` are clamped/saturated so a bad caller can't produce a
+/// rejected URL. Returns "" only if `dst` is too small.
+pub fn buildPopularUrl(limit: usize, offset: usize, dst: []u8) []const u8 {
     const n = std.math.clamp(limit, 1, 100);
     return std.fmt.bufPrint(
         dst,
-        "https://all.api.radio-browser.info/json/stations/topvote/{d}?hidebroken=true",
-        .{n},
+        "https://all.api.radio-browser.info/json/stations/search?order=votes&reverse=true&limit={d}&offset={d}&hidebroken=true",
+        .{ n, offset },
+    ) catch "";
+}
+
+/// Build the RadioBrowser station-search URL with `limit`+`offset`, so
+/// infinite scroll can walk forward through the same search term. `encoded`
+/// must already be percent-encoded (percentEncode in radio.zig) — this
+/// function does no escaping of its own. Returns "" only if `dst` is too
+/// small.
+pub fn buildSearchUrl(encoded: []const u8, limit: usize, offset: usize, dst: []u8) []const u8 {
+    const n = std.math.clamp(limit, 1, 100);
+    return std.fmt.bufPrint(
+        dst,
+        "https://all.api.radio-browser.info/json/stations/search?name={s}&limit={d}&offset={d}&hidebroken=true&order=votes&reverse=true",
+        .{ encoded, n, offset },
     ) catch "";
 }
 
@@ -265,22 +284,44 @@ test "parseStations extracts fields + numeric votes/bitrate" {
     try std.testing.expectEqualStrings("Rock & Roll", out[1].name[0..out[1].name_len]);
 }
 
-test "buildTopVoteUrl clamps the limit and bails on an undersized buffer" {
-    var buf: [128]u8 = undefined;
+test "buildPopularUrl embeds limit and offset for infinite-scroll paging" {
+    var buf: [160]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "https://all.api.radio-browser.info/json/stations/topvote/30?hidebroken=true",
-        buildTopVoteUrl(30, &buf),
+        "https://all.api.radio-browser.info/json/stations/search?order=votes&reverse=true&limit=30&offset=0&hidebroken=true",
+        buildPopularUrl(30, 0, &buf),
+    );
+    // A load-more call for the second window — offset advances by the page size.
+    try std.testing.expectEqualStrings(
+        "https://all.api.radio-browser.info/json/stations/search?order=votes&reverse=true&limit=30&offset=30&hidebroken=true",
+        buildPopularUrl(30, 30, &buf),
+    );
+    // limit still clamps to 1..100; offset is passed through unclamped (a plain
+    // cumulative count, never attacker-controlled).
+    try std.testing.expectEqualStrings(
+        "https://all.api.radio-browser.info/json/stations/search?order=votes&reverse=true&limit=100&offset=150&hidebroken=true",
+        buildPopularUrl(9999, 150, &buf),
     );
     try std.testing.expectEqualStrings(
-        "https://all.api.radio-browser.info/json/stations/topvote/1?hidebroken=true",
-        buildTopVoteUrl(0, &buf),
-    );
-    try std.testing.expectEqualStrings(
-        "https://all.api.radio-browser.info/json/stations/topvote/100?hidebroken=true",
-        buildTopVoteUrl(9999, &buf),
+        "https://all.api.radio-browser.info/json/stations/search?order=votes&reverse=true&limit=1&offset=0&hidebroken=true",
+        buildPopularUrl(0, 0, &buf),
     );
     var tiny: [8]u8 = undefined;
-    try std.testing.expectEqualStrings("", buildTopVoteUrl(30, &tiny));
+    try std.testing.expectEqualStrings("", buildPopularUrl(30, 30, &tiny));
+}
+
+test "buildSearchUrl embeds the encoded term, limit, and offset" {
+    var buf: [160]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "https://all.api.radio-browser.info/json/stations/search?name=jazz&limit=30&offset=0&hidebroken=true&order=votes&reverse=true",
+        buildSearchUrl("jazz", 30, 0, &buf),
+    );
+    // loadMore's second window for the same term — only offset changes.
+    try std.testing.expectEqualStrings(
+        "https://all.api.radio-browser.info/json/stations/search?name=jazz&limit=30&offset=30&hidebroken=true&order=votes&reverse=true",
+        buildSearchUrl("jazz", 30, 30, &buf),
+    );
+    var tiny: [8]u8 = undefined;
+    try std.testing.expectEqualStrings("", buildSearchUrl("jazz", 30, 30, &tiny));
 }
 
 test "parseStations parses the topvote response with the search parser" {

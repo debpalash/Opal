@@ -5,10 +5,11 @@
 //! thread-safety, and dvui rendering.
 //!
 //! Flow:
-//!   loadPopularOnce() → curl …/json/stations/topvote/N (the same host's keyless
-//!                     most-voted endpoint, answering with the same station
-//!                     objects) → pure.parseStations → results[]. Fires once per
-//!                     session so the page opens populated.
+//!   loadPopularOnce() → curl …/json/stations/search?order=votes&reverse=true
+//!                     (the same host's keyless votes-descending window,
+//!                     answering with the same station objects) →
+//!                     pure.parseStations → results[]. Fires once per session
+//!                     so the page opens populated.
 //!   searchRadio(q)  → curl all.api.radio-browser.info/json/stations/search?name=…
 //!                     → pure.parseStations → state.app.radio.results[]
 //!   playStation(i)  → browser.loadContentDirect(url_resolved | url) → mpv,
@@ -53,7 +54,10 @@ const StationPoster = struct {
     fetching: bool = false,
     url_hash: u64 = 0,
 };
-var station_posters: [30]StationPoster = [_]StationPoster{.{}} ** 30;
+// Sized to match state.app.radio.results[]'s capacity (180) — infinite scroll
+// appends past the first 30-station window, and every appended row needs a
+// slot here too or renderCard's station_posters[i] indexes out of bounds.
+var station_posters: [180]StationPoster = [_]StationPoster{.{}} ** 180;
 
 // ── Thread-safety ──
 // The detached search worker publishes into state.app.radio.* under
@@ -74,9 +78,12 @@ var query_len: usize = 0;
 // podcasts.zig / tmdb_api.zig). Serialize the fresh popular list through the
 // tested content_cache_pure Writer/Reader and persist it, so the next cold start
 // paints the grid INSTANTLY instead of a blank box + spinner. results[] is a
-// FIXED [30]Station array with cover state in the parallel fixed station_posters[]
+// FIXED [180]Station array with cover state in the parallel fixed station_posters[]
 // (never reallocated) — no *Item pointers to dangle, so seeding just fills rows
-// under parse_mutex. Gated on content_cache_enabled; TTL is the shared SWR window.
+// under parse_mutex. Only the first fetched window is ever persisted (infinite
+// scroll's appended pages are not written back), so RADIO_BLOB_CAP only needs to
+// cover one window's worth of stations. Gated on content_cache_enabled; TTL is
+// the shared SWR window.
 // ══════════════════════════════════════════════════════════
 const content_cache = @import("../core/content_cache.zig");
 const ccp = @import("../core/content_cache_pure.zig");
@@ -168,7 +175,29 @@ fn seedPopularFromCache() void {
 // click handler is the existing playStation(). One fetch per session.
 // ══════════════════════════════════════════════════════════
 
-const POPULAR_LIMIT: usize = 30; // == results[] capacity
+// Per-fetch station window — used for the initial popular/search fetch AND
+// every infinite-scroll append (results[]'s real capacity is 180; this is just
+// how many rows one request pulls, mirrored by RADIO_PAGE_SIZE below).
+const POPULAR_LIMIT: usize = 30;
+
+// ── Infinite-scroll pagination ──
+// `current_offset` is the RadioBrowser `offset` last fetched (bookkeeping,
+// mirrors drama.zig's current_page); the next loadMore() window starts at the
+// current (deduped) result_count. `more_available` clears when a window comes
+// back shorter than RADIO_PAGE_SIZE or the fixed results[] buffer fills.
+// `loading_more` serializes append fetches so a single near-bottom scroll
+// can't spawn a burst (mirrors comics/drama/youtube). All three are read on
+// the UI thread; the append worker runs under the same `search_gen` guard
+// searchWorker/popularWorker already use, so a fresh search/popular reload
+// drops a stale append instead of racing it into results[].
+var current_offset: usize = 0;
+var more_available: bool = true;
+var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+/// Same window size for the initial fetch and every append — radio-browser's
+/// `/stations/search` endpoint (used by both buildPopularUrl and
+/// buildSearchUrl) answers `limit`+`offset`; a window shorter than this means
+/// there's nothing left to page.
+const RADIO_PAGE_SIZE: usize = POPULAR_LIMIT;
 
 /// One-shot latch. renderContent() calls this every frame, so every call after
 /// the first is a single atomic load. Atomic (not a plain bool) because
@@ -196,6 +225,10 @@ pub fn loadPopularOnce() void {
     state.app.radio.showing_popular = true;
     state.app.radio.fetch_error = false;
     state.app.radio.is_loading.store(true, .release);
+    // Fresh popular session — infinite scroll starts over (any pagination
+    // state left over from a prior search/popular load is stale).
+    current_offset = 0;
+    more_available = true;
 
     // Take a generation like a search does, so a user search fired while the
     // popular fetch is in flight supersedes it instead of racing it into
@@ -212,8 +245,12 @@ pub fn loadPopularOnce() void {
 fn popularWorker(my_gen: u32) void {
     defer state.app.radio.is_loading.store(false, .release);
 
-    var url_buf: [128]u8 = undefined;
-    const url = pure.buildTopVoteUrl(POPULAR_LIMIT, &url_buf);
+    // buildPopularUrl (not buildTopVoteUrl) — the votes-descending search form
+    // that loadMore's append windows also use, so the popular rail's paging is
+    // one consistent ordering/offset sequence rather than switching endpoint
+    // shapes between the landing fetch and appends.
+    var url_buf: [160]u8 = undefined;
+    const url = pure.buildPopularUrl(RADIO_PAGE_SIZE, 0, &url_buf);
     if (url.len == 0) return;
 
     // Shared public directory — be a polite citizen (≤ 1 req/sec), same bucket
@@ -258,6 +295,9 @@ pub fn searchRadio(query: []const u8) void {
     // A search satisfies the "page opens with content" job — never let the
     // one-shot popular fetch land on top of the user's results afterwards.
     popular_fetched.store(true, .release);
+    // Fresh search — infinite scroll starts over.
+    current_offset = 0;
+    more_available = true;
 
     const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
 
@@ -286,11 +326,8 @@ fn searchWorker(my_gen: u32) void {
     const encoded = percentEncode(local[0..qlen], &enc);
 
     var url_buf: [1024]u8 = undefined;
-    const url = std.fmt.bufPrint(
-        &url_buf,
-        "https://all.api.radio-browser.info/json/stations/search?name={s}&limit=30&hidebroken=true&order=votes&reverse=true",
-        .{encoded},
-    ) catch return;
+    const url = pure.buildSearchUrl(encoded, RADIO_PAGE_SIZE, 0, &url_buf);
+    if (url.len == 0) return;
 
     // Shared public directory — be a polite citizen (≤ 1 req/sec).
     rate_limit.acquire("radiobrowser", 1.0);
@@ -311,6 +348,117 @@ fn searchWorker(my_gen: u32) void {
     const count = pure.parseStations(body, &state.app.radio.results);
     state.app.radio.result_count = count;
     if (count == 0) logs.pushLog("info", "radio", "Search returned no stations", false) else logs.pushLog("info", "radio", "Radio search done (RadioBrowser)", false);
+}
+
+// ══════════════════════════════════════════════════════════
+// Infinite scroll — fetch + append the NEXT window (same query/popular mode)
+// ══════════════════════════════════════════════════════════
+
+/// Fetch the next window of stations (offset = the current, already-deduped
+/// result_count) and append it onto the existing grid. Guarded by
+/// `loading_more` + the main `is_loading` so a near-bottom scroll can't spawn
+/// a burst; runs under the current `search_gen` so a fresh search/popular
+/// reload supersedes it. No-op once `more_available` clears (a short window or
+/// the fixed results[] buffer filled). Mirrors drama.zig's loadMore().
+pub fn loadMore() void {
+    if (!more_available) return;
+    if (state.app.radio.is_loading.load(.acquire)) return;
+    if (loading_more.load(.acquire)) return;
+    if (state.app.radio.result_count == 0) return;
+    if (state.app.radio.result_count >= state.app.radio.results.len) {
+        more_available = false;
+        return;
+    }
+    if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
+
+    const my_gen = search_gen.load(.acquire); // stay within the current generation
+    const offset = state.app.radio.result_count;
+    const popular = state.app.radio.showing_popular;
+
+    if (std.Thread.spawn(.{}, loadMoreWorker, .{ my_gen, offset, popular })) |t| {
+        t.detach();
+    } else |_| {
+        loading_more.store(false, .release);
+    }
+}
+
+/// Worker for one infinite-scroll append. `popular` picks buildPopularUrl vs
+/// buildSearchUrl for the SAME mode the visible grid is in; for a search, the
+/// term is re-read from query_buf (like searchWorker does) — if a newer search
+/// landed in the meantime it already bumped search_gen, so the generation
+/// check below drops this append before it can publish under a stale term.
+fn loadMoreWorker(my_gen: u32, offset: usize, popular: bool) void {
+    defer loading_more.store(false, .release);
+
+    var url_buf: [1024]u8 = undefined;
+    const url = if (popular)
+        pure.buildPopularUrl(RADIO_PAGE_SIZE, offset, &url_buf)
+    else blk: {
+        var local: [256]u8 = undefined;
+        const qlen = @min(query_len, local.len);
+        @memcpy(local[0..qlen], query_buf[0..qlen]);
+        var enc: [768]u8 = undefined;
+        const encoded = percentEncode(local[0..qlen], &enc);
+        break :blk pure.buildSearchUrl(encoded, RADIO_PAGE_SIZE, offset, &url_buf);
+    };
+    if (url.len == 0) return;
+
+    // Shared public directory — be a polite citizen (≤ 1 req/sec), same bucket
+    // as the initial fetches.
+    rate_limit.acquire("radiobrowser", 1.0);
+
+    // Best-effort: a failed append just leaves more_available as-is (retried on
+    // the next near-bottom scroll) rather than surfacing the page-level
+    // fetch_error banner over an already-populated grid.
+    const body = curl(url, 512 * 1024) orelse return;
+    defer alloc.free(body);
+
+    if (search_gen.load(.acquire) != my_gen) return; // superseded by a fresh search/popular reload
+
+    // Parse into a heap staging buffer — never a big stack array on a spawned
+    // thread (CLAUDE.md).
+    const staged = alloc.alloc(pure.Station, RADIO_PAGE_SIZE) catch return;
+    defer alloc.free(staged);
+    const n = pure.parseStations(body, staged);
+
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (search_gen.load(.acquire) != my_gen) return; // re-check under lock
+
+    current_offset = offset;
+    // A window shorter than the page size means RadioBrowser has nothing left
+    // to page (parseStations already drops unplayable rows, so this is a
+    // conservative approximation — a window that was all-filtered would also
+    // read as "short" here, which just ends paging a little early rather than
+    // ever looping forever).
+    if (n < RADIO_PAGE_SIZE) more_available = false;
+
+    const base = state.app.radio.result_count;
+    var appended: usize = 0;
+    stations: for (staged[0..n]) |st| {
+        if (base + appended >= state.app.radio.results.len) {
+            more_available = false;
+            break;
+        }
+        // Dedup by stationuuid (fallback: resolved/raw url) against every row
+        // already in the grid, including ones this same window just appended.
+        const st_url = if (st.url_resolved_len > 0) st.url_resolved[0..st.url_resolved_len] else st.url[0..st.url_len];
+        var i: usize = 0;
+        while (i < base + appended) : (i += 1) {
+            const ex = &state.app.radio.results[i];
+            if (st.stationuuid_len > 0 and ex.stationuuid_len > 0 and
+                std.mem.eql(u8, ex.stationuuid[0..ex.stationuuid_len], st.stationuuid[0..st.stationuuid_len]))
+                continue :stations;
+            const ex_url = if (ex.url_resolved_len > 0) ex.url_resolved[0..ex.url_resolved_len] else ex.url[0..ex.url_len];
+            if (st_url.len > 0 and ex_url.len > 0 and std.mem.eql(u8, ex_url, st_url)) continue :stations;
+        }
+        state.app.radio.results[base + appended] = st;
+        appended += 1;
+    }
+    state.app.radio.result_count = base + appended;
+
+    var lb: [64]u8 = undefined;
+    logs.pushLog("info", "radio", std.fmt.bufPrint(&lb, "Loaded {d} more stations (offset {d})", .{ appended, offset }) catch "Loaded more stations", false);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -698,7 +846,8 @@ fn renderResults() void {
 
     // Responsive columns from the LIVE page width (one-frame lag; first paint
     // falls back to a sane default) — same shape as the TMDB gallery. No
-    // virtualization: the grid is capped at results[]'s 30 cards.
+    // virtualization: the grid is capped at results[]'s 180 cards, grown
+    // incrementally by infinite scroll below.
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
     const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
@@ -715,5 +864,22 @@ fn renderResults() void {
 
         var c: usize = 0;
         while (c < cols and r * cols + c < count) : (c += 1) renderCard(r * cols + c, card_w);
+    }
+
+    // Infinite scroll: fetch + append the next window (same query/popular
+    // mode) as the user nears the bottom. Bounded by more_available +
+    // loading_more so one scroll can't spawn a burst; `underfilled` keeps
+    // paging when the first window is shorter than the viewport. Mirrors
+    // services/drama.zig.
+    if (more_available) {
+        const loading = loading_more.load(.acquire);
+        const max_y = scroll.si.scrollMax(.vertical);
+        const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
+        const underfilled = max_y <= 0 and state.app.radio.result_count > 0;
+        if ((near_bottom or underfilled) and !loading and !state.app.radio.is_loading.load(.acquire)) loadMore();
+        if (loading or underfilled) {
+            dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.lg), .gravity_x = 0.5, .margin = dvui.Rect.all(12) });
+            dvui.refresh(null, @src(), null);
+        }
     }
 }

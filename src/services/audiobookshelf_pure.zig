@@ -78,6 +78,17 @@ pub fn coverUrl(server: []const u8, id: []const u8, token: []const u8, buf: []u8
     return std.fmt.bufPrint(buf, "{s}/api/items/{s}/cover?token={s}", .{ server, id, token }) catch null;
 }
 
+/// Build the `GET /api/libraries/{id}/items?limit=&page=` URL for one page of a
+/// library's books. `page` is 0-based (ABS convention). Used both for the
+/// initial library-open fetch (page 0) and every infinite-scroll loadMore()
+/// page (same `limit` each time, so a short page reliably signals the end) —
+/// see audiobookshelf.zig's `ABS_PAGE_LIMIT` / `loadMore`. Library ids are the
+/// same UUID-ish token shape as item ids, so `validItemId` gates this one too.
+pub fn libraryItemsUrl(server: []const u8, lib_id: []const u8, limit: u32, page: u32, buf: []u8) ?[]const u8 {
+    if (!validItemId(lib_id)) return null;
+    return std.fmt.bufPrint(buf, "{s}/api/libraries/{s}/items?limit={d}&page={d}", .{ server, lib_id, limit, page }) catch null;
+}
+
 /// Cache key EXCLUDES the token so a token rotation can't orphan cached covers.
 pub fn coverCacheKey(server: []const u8, id: []const u8, buf: []u8) ?[]const u8 {
     if (!validItemId(id)) return null;
@@ -428,6 +439,21 @@ test "streamUrl + coverUrl embed token, cache key omits it, id is gated" {
     try std.testing.expect(streamUrl("https://abs.example", "../etc", "TOK", &buf) == null);
     try std.testing.expect(streamUrl("https://abs.example", "id&x=1", "TOK", &buf) == null);
     try std.testing.expect(coverUrl("https://abs.example", "id?q", "TOK", &cbuf) == null);
+}
+
+test "libraryItemsUrl embeds limit + 0-based page, rejects a bad library id" {
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "https://abs.example/api/libraries/lib_books/items?limit=64&page=0",
+        libraryItemsUrl("https://abs.example", "lib_books", 64, 0, &buf).?,
+    );
+    try std.testing.expectEqualStrings(
+        "https://abs.example/api/libraries/lib_books/items?limit=64&page=3",
+        libraryItemsUrl("https://abs.example", "lib_books", 64, 3, &buf).?,
+    );
+    // Injection / traversal ids are rejected before any URL is built.
+    try std.testing.expect(libraryItemsUrl("https://abs.example", "../etc", 64, 0, &buf) == null);
+    try std.testing.expect(libraryItemsUrl("https://abs.example", "id&x=1", 64, 0, &buf) == null);
 }
 
 test "bearerHeader builds Authorization" {
