@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-07-16T22:49:34",
-  "total": 210,
-  "passed": 200,
+  "timestamp": "2026-07-17T00:10:22",
+  "total": 212,
+  "passed": 201,
   "failed": 0,
-  "warnings": 2,
+  "warnings": 3,
   "skipped": 8,
   "categories": {
     "Database": {
@@ -31,9 +31,9 @@
       "skip": 0
     },
     "Build": {
-      "pass": 6,
+      "pass": 5,
       "fail": 0,
-      "warn": 0,
+      "warn": 1,
       "skip": 0
     },
     "LLM": {
@@ -55,7 +55,7 @@
       "skip": 0
     },
     "Network": {
-      "pass": 7,
+      "pass": 8,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -157,7 +157,7 @@
       "skip": 0
     },
     "Browse": {
-      "pass": 8,
+      "pass": 9,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -234,7 +234,7 @@
       "name": "Database Exists",
       "category": "Database",
       "status": "pass",
-      "detail": "Size: 26876.0 KB",
+      "detail": "Size: 27408.0 KB",
       "duration_ms": 0
     },
     {
@@ -242,13 +242,13 @@
       "category": "Database",
       "status": "pass",
       "detail": "75 config entries",
-      "duration_ms": 1
+      "duration_ms": 3
     },
     {
       "name": "Watch History Table",
       "category": "Database",
       "status": "pass",
-      "detail": "1 watch entries",
+      "detail": "7 watch entries",
       "duration_ms": 0
     },
     {
@@ -290,7 +290,7 @@
       "name": "Poster Cache Table",
       "category": "Database",
       "status": "pass",
-      "detail": "962 cached posters",
+      "detail": "98 cached posters",
       "duration_ms": 0
     },
     {
@@ -304,7 +304,7 @@
       "name": "User Preferences Table",
       "category": "Memory",
       "status": "pass",
-      "detail": "active_hour=12:00 (w:92)",
+      "detail": "active_hour=18:00 (w:104)",
       "duration_ms": 0
     },
     {
@@ -353,7 +353,7 @@
       "name": "Window State Persistence",
       "category": "Config",
       "status": "pass",
-      "detail": "1280x803 at (0,29)",
+      "detail": "1244x771 at (0,61)",
       "duration_ms": 0
     },
     {
@@ -396,34 +396,34 @@
       "category": "Recall",
       "status": "pass",
       "detail": "taste vector + For-You rail + ?-memory-search wired",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Exact resume: schema v2 + path keying",
       "category": "Database",
       "status": "pass",
       "detail": "v1\u2192v2 migration + path keying + formatDuration wiring OK",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Zig Build",
       "category": "Build",
       "status": "pass",
-      "detail": "Binary: 44.7 MB",
-      "duration_ms": 658
+      "detail": "Binary: 44.8 MB",
+      "duration_ms": 409
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "44.7 MB, built at 22:47:04",
+      "detail": "44.8 MB, built at 00:09:05",
       "duration_ms": 0
     },
     {
       "name": "LLM Model File",
       "category": "Build",
-      "status": "pass",
-      "detail": "gemma-4-E2B-it-UD-Q4_K_XL.gguf (3.0 GB)",
+      "status": "warn",
+      "detail": "No GGUF model found",
       "duration_ms": 0
     },
     {
@@ -445,14 +445,14 @@
       "category": "Build",
       "status": "pass",
       "detail": "author credited across about/copyright/packaging surfaces",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "LLM Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 28
+      "duration_ms": 36
     },
     {
       "name": "Embedding Server Health",
@@ -466,7 +466,7 @@
       "category": "Server",
       "status": "pass",
       "detail": "compile-time headless entry + coreInit/headlessMain + 0.0.0.0 bind + -Dheadless",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Headless Render Guards",
@@ -480,7 +480,14 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 2435
+      "duration_ms": 2313
+    },
+    {
+      "name": "YouTube bypasses bot wall via tv client",
+      "category": "Network",
+      "status": "pass",
+      "detail": "tv player client on playback + search + extraction (no bot wall / 429)",
+      "duration_ms": 0
     },
     {
       "name": "Anime data loads despite Jikan flakiness",
@@ -543,35 +550,35 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 863
+      "duration_ms": 1375
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "pass",
       "detail": "faster-whisper importable",
-      "duration_ms": 1063
+      "duration_ms": 1567
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 21
+      "duration_ms": 22
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 22
+      "duration_ms": 24
     },
     {
       "name": "Conversational: voice-server echo guard + live partials",
       "category": "Voice",
       "status": "pass",
       "detail": "echo guard drops self-echo; real interruption passes; PARTIAL streamed",
-      "duration_ms": 26
+      "duration_ms": 29
     },
     {
       "name": "Conversational: prefer full-duplex event loop + wiring",
@@ -613,28 +620,28 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 944
+      "duration_ms": 1032
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 27
+      "duration_ms": 30
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 989
+      "duration_ms": 1210
     },
     {
       "name": "Tracked + compiles: tools/lang_server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "tracked + py_compile OK",
-      "duration_ms": 42
+      "duration_ms": 54
     },
     {
       "name": "Parakeet conversational self-install wired",
@@ -662,7 +669,7 @@
       "category": "Voice Scripts",
       "status": "skip",
       "detail": "no ggml model",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "name": "Sherpa Model Canonicalization",
@@ -837,7 +844,7 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 3655
+      "duration_ms": 3754
     },
     {
       "name": "Cloud LLM Backend + No Silent Local Installs",
@@ -858,14 +865,14 @@
       "category": "AI Features",
       "status": "pass",
       "detail": "sinks guarded + retrieval skipped + composer toggle present",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "name": "Chat Console: Wrapped Transcript + Agent Steps",
       "category": "AI Features",
       "status": "pass",
       "detail": "console transcript + hero + follow-scroll + agent steps wired",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "name": "OMDb Ratings Enrichment",
@@ -879,7 +886,7 @@
       "category": "AI",
       "status": "pass",
       "detail": "activity log + vec_taste vectors + gated For You tier wired",
-      "duration_ms": 2
+      "duration_ms": 4
     },
     {
       "name": "Theme Presets Defined",
@@ -921,21 +928,21 @@
       "category": "Browser",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 57
+      "duration_ms": 51
     },
     {
       "name": "Bridge protocol selftest",
       "category": "Browser",
       "status": "pass",
       "detail": "framing + pump model OK",
-      "duration_ms": 31
+      "duration_ms": 29
     },
     {
       "name": "Browser bookmarks SQL matches schema",
       "category": "Browser",
       "status": "pass",
       "detail": "3 statements OK against schema",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "browser_pure registered in zig tests",
@@ -949,14 +956,14 @@
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 62
+      "duration_ms": 85
     },
     {
       "name": "Browser: CloakBrowser engine + upgrades",
       "category": "Browser",
       "status": "pass",
       "detail": "engine picker + find/zoom/downloads/history/reader wired",
-      "duration_ms": 56
+      "duration_ms": 57
     },
     {
       "name": "Single-Media Mode",
@@ -1229,7 +1236,7 @@
       "category": "Stability",
       "status": "pass",
       "detail": "no discarded std.Thread.spawn handles in src/",
-      "duration_ms": 18
+      "duration_ms": 19
     },
     {
       "name": "TMDB Fetch Stages Results Off-Thread",
@@ -1264,7 +1271,7 @@
       "category": "Stability",
       "status": "pass",
       "detail": "head+index gate, per-container tail (mkv/mp4/avi/ts), no truncation",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Title-bar resource meters",
@@ -1292,7 +1299,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 11
+      "duration_ms": 12
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -1404,7 +1411,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "11 engines placed, class==module, manifest-wired",
-      "duration_ms": 3
+      "duration_ms": 2
     },
     {
       "name": "Polish Tokens Adopted",
@@ -1439,7 +1446,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 138
+      "duration_ms": 140
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1631,6 +1638,13 @@
       "duration_ms": 0
     },
     {
+      "name": "Anime detail view parity",
+      "category": "Browse",
+      "status": "pass",
+      "detail": "anime detail view at TV parity: rich header + horizontal episode rows + type/year/airing",
+      "duration_ms": 0
+    },
+    {
       "name": "HeanCms manga engine",
       "category": "Reading",
       "status": "pass",
@@ -1656,7 +1670,7 @@
       "category": "Network",
       "status": "pass",
       "detail": "anti-block fetch wired: pure(isBlocked/needsBrowser, no false-pos) \u2192 scrape_fetch \u2192 bridge fetchhtml on dedicated page; selftest ok",
-      "duration_ms": 55
+      "duration_ms": 56
     },
     {
       "name": "Scrapers routed through anti-block fetch",

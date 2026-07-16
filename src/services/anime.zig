@@ -331,6 +331,11 @@ fn serializeAnime(w: *ccp.Writer, it: state.AnimeResult) void {
     w.f32v(it.score);
     w.blob(it.overview[0..@min(it.overview_len, it.overview.len)]);
     w.blob(it.poster_url[0..@min(it.poster_url_len, it.poster_url.len)]);
+    // Detail-header metadata — SAME field order in deserializeAnime. Old blobs
+    // truncate here and deserialize-miss (→ refetch), which is fine.
+    w.blob(it.atype[0..@min(it.atype_len, it.atype.len)]);
+    w.u16v(it.year);
+    w.boolv(it.airing);
 }
 
 fn animeCopyField(dst: []u8, len: *usize, src: []const u8) void {
@@ -350,6 +355,10 @@ fn deserializeAnime(r: *ccp.Reader) ?state.AnimeResult {
     it.score = r.f32v() orelse return null;
     animeCopyField(&it.overview, &it.overview_len, r.blob() orelse return null);
     animeCopyField(&it.poster_url, &it.poster_url_len, r.blob() orelse return null);
+    // Detail-header metadata — SAME field order as serializeAnime.
+    animeCopyField(&it.atype, &it.atype_len, r.blob() orelse return null);
+    it.year = r.u16v() orelse return null;
+    it.airing = r.boolv() orelse return null;
     return it;
 }
 
@@ -1185,6 +1194,10 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
             }
         }
 
+        // Detail-header metadata (type / year / airing) via the tested pure
+        // helper so the shipped extraction IS the tested extraction.
+        const meta = anime_pure.parseJikanMeta(obj_slice);
+
         // Dedupe by mal_id against rows already committed [0..count). Jikan can
         // repeat entries across pages (and the broadcast schedule list groups by
         // day), so without this the same card could appear twice on append.
@@ -1217,6 +1230,11 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
 
             // Decode JSON escapes in synopsis (\" \\ \/ \n \t \uXXXX, etc.)
             item.overview_len = decodeJsonEscapes(synopsis, &item.overview);
+
+            // Detail-header metadata (routed through anime_pure.parseJikanMeta).
+            animeCopyField(&item.atype, &item.atype_len, meta.atype);
+            item.year = meta.year;
+            item.airing = meta.airing;
 
             item.poster_fetching = false;
             if (item.poster_tex) |tx| {
@@ -2598,6 +2616,154 @@ pub fn renderContent() void {
                 }
             }
 
+            // ── Rich detail header: poster (left) + title / meta / synopsis
+            //    (right) — mirrors renderTvDetail's header. Poster reuses the
+            //    grid's lazy poster on results[sel_idx] (same fields → no second
+            //    fetch for the same URL). ──
+            {
+                const item = &state.app.anime.results[sel_idx];
+                var head = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                    .id_extra = 70,
+                    .expand = .horizontal,
+                    .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
+                    .background = true,
+                    .color_fill = theme.colors.bg_surface,
+                    .color_border = theme.colors.border_subtle,
+                    .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+                });
+                defer head.deinit();
+
+                // Poster tile (100×150). Lazy-load exactly like the grid card.
+                {
+                    var pbox = dvui.box(@src(), .{ .dir = .vertical }, .{
+                        .id_extra = 71,
+                        .background = true,
+                        .color_fill = dvui.Color{ .r = 20, .g = 24, .b = 34, .a = 255 },
+                        .corner_radius = dvui.Rect.all(6),
+                        .min_size_content = .{ .w = 100, .h = 150 },
+                        .max_size_content = .{ .w = 100, .h = 150 },
+                    });
+                    defer pbox.deinit();
+
+                    _ = poster.uploadIfReady(&item.poster_pixels, item.poster_w, item.poster_h, &item.poster_tex);
+                    if (item.poster_tex) |*tex| {
+                        _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+                            .id_extra = 72,
+                            .expand = .both,
+                            .corner_radius = dvui.Rect.all(6),
+                        });
+                    } else {
+                        // Same failure-latch/fetch dance as the grid so we never
+                        // re-spawn a worker every frame for a dead URL.
+                        if (item.poster_fetching) {
+                            item.poster_attempted = true;
+                        } else if (item.poster_attempted and item.poster_pixels == null and item.poster_tex == null) {
+                            item.poster_failed = true;
+                        } else if (!item.poster_failed and item.poster_pixels == null and item.poster_url_len > 0) {
+                            poster.fetchAsync(item.poster_url[0..item.poster_url_len], &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
+                            if (item.poster_fetching) item.poster_attempted = true;
+                        }
+                        dvui.icon(@src(), "det-poster-ph", icons.tvg.lucide.film, .{}, .{
+                            .id_extra = 73,
+                            .gravity_x = 0.5,
+                            .gravity_y = 0.5,
+                            .color_text = dvui.Color{ .r = 90, .g = 100, .b = 130, .a = 120 },
+                            .expand = .both,
+                        });
+                    }
+                }
+
+                // Info column: title · meta row · synopsis.
+                {
+                    var info = dvui.box(@src(), .{ .dir = .vertical }, .{
+                        .id_extra = 74,
+                        .expand = .horizontal,
+                        .padding = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
+                    });
+                    defer info.deinit();
+
+                    // Title (heading font, wraps).
+                    var tn_buf: [160]u8 = undefined;
+                    _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(r.name[0..r.name_len], &tn_buf)}, .{
+                        .id_extra = 75,
+                        .expand = .horizontal,
+                        .color_text = theme.colors.text_primary,
+                        .font = dvui.themeGet().font_heading,
+                    });
+
+                    // Meta row: "TV · 2024 · 24 eps" + score% + Airing chip.
+                    {
+                        var mrow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                            .id_extra = 76,
+                            .expand = .horizontal,
+                            .padding = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
+                        });
+                        defer mrow.deinit();
+
+                        // Compose the "type · year · N eps" line, skipping empties.
+                        var meta_buf: [64]u8 = undefined;
+                        var ml: usize = 0;
+                        const sep: []const u8 = " · ";
+                        if (r.atype_len > 0) {
+                            if (std.fmt.bufPrint(meta_buf[ml..], "{s}", .{r.atype[0..@min(r.atype_len, r.atype.len)]})) |wr| ml += wr.len else |_| {}
+                        }
+                        if (r.year > 0) {
+                            if (std.fmt.bufPrint(meta_buf[ml..], "{s}{d}", .{ if (ml > 0) sep else "", r.year })) |wr| ml += wr.len else |_| {}
+                        }
+                        if (r.episodes > 0) {
+                            if (std.fmt.bufPrint(meta_buf[ml..], "{s}{d} eps", .{ if (ml > 0) sep else "", r.episodes })) |wr| ml += wr.len else |_| {}
+                        }
+                        if (ml > 0) {
+                            _ = dvui.label(@src(), "{s}", .{meta_buf[0..ml]}, .{
+                                .id_extra = 77,
+                                .color_text = theme.colors.text_secondary,
+                                .gravity_y = 0.5,
+                            });
+                        }
+
+                        // Score %.
+                        if (r.score > 0) {
+                            const pct = @as(u8, @intFromFloat(std.math.clamp(r.score * 10.0, 0.0, 100.0)));
+                            const sc = if (pct >= 70) theme.colors.success else if (pct >= 50) theme.colors.warning else theme.colors.danger;
+                            var pb: [8]u8 = undefined;
+                            if (std.fmt.bufPrint(&pb, "{d}%", .{pct})) |ps| {
+                                _ = dvui.label(@src(), "{s}", .{ps}, .{
+                                    .id_extra = 78,
+                                    .color_text = sc,
+                                    .gravity_y = 0.5,
+                                    .padding = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
+                                });
+                            } else |_| {}
+                        }
+
+                        // "Airing" chip for currently-broadcasting shows.
+                        if (r.airing) {
+                            _ = dvui.label(@src(), "Airing", .{}, .{
+                                .id_extra = 79,
+                                .background = true,
+                                .color_fill = theme.colors.accent,
+                                .color_text = dvui.Color.white,
+                                .corner_radius = theme.dims.rad_sm,
+                                .padding = .{ .x = 6, .y = 1, .w = 6, .h = 1 },
+                                .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
+                                .gravity_y = 0.5,
+                            });
+                        }
+                    }
+
+                    // Synopsis (wrapped via expand; safeUtf8 trims mid-codepoint).
+                    if (r.overview_len > 0) {
+                        var ov_buf: [512]u8 = undefined;
+                        _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(r.overview[0..@min(r.overview_len, r.overview.len)], &ov_buf)}, .{
+                            .id_extra = 80,
+                            .expand = .horizontal,
+                            .color_text = theme.colors.text_secondary,
+                            .padding = .{ .x = 0, .y = 6, .w = 0, .h = 0 },
+                        });
+                    }
+                }
+            }
+
             // ── Tracking header: progress bar + "{watched}/{total}" + Resume ──
             if (state.app.anime.episode_count > 0) {
                 const total = state.app.anime.episode_count;
@@ -2703,115 +2869,172 @@ pub fn renderContent() void {
                     const is_filler = state.app.anime.episode_filler[ep_i];
                     const is_watched = ep_i < state.app.anime.episode_watched.len and state.app.anime.episode_watched[ep_i];
 
-                    // Episode card container — watched rows get a subtle dim.
+                    // Episode card container — horizontal (numbered tile · info),
+                    // mirroring renderTvDetail's episode row. Watched rows dim.
                     const fill_color = if (is_filler)
                         dvui.Color{ .r = 60, .g = 40, .b = 40, .a = 255 }
                     else if (is_watched)
-                        dvui.Color{ .r = 18, .g = 22, .b = 30, .a = 255 }
+                        dvui.Color{ .r = 16, .g = 18, .b = 24, .a = 255 }
                     else
                         theme.colors.bg_surface;
 
-                    var ep_card = dvui.box(@src(), .{ .dir = .vertical }, .{
+                    var ep_card = dvui.box(@src(), .{ .dir = .horizontal }, .{
                         .id_extra = ep_i + 2000,
                         .expand = .horizontal,
                         .background = true,
                         .color_fill = fill_color,
                         .color_border = theme.colors.border_subtle,
                         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-                        .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
+                        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
                     });
                     defer ep_card.deinit();
 
-                    // Top row: Ep number + play button
+                    // ── Left: numbered tile (Jikan gives no per-episode still). ──
                     {
-                        var top = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                            .id_extra = ep_i + 3000,
-                            .expand = .horizontal,
-                        });
-                        defer top.deinit();
-
-                        // Watched toggle — click flips the flag + persists to DB.
-                        // Filled check (✓) when watched, hollow circle when not.
-                        const chk_label: []const u8 = if (is_watched) "\xe2\x9c\x93" else "\xe2\x97\x8b"; // ✓ / ○
-                        if (dvui.button(@src(), chk_label, .{}, .{
-                            .id_extra = ep_i + 3050,
+                        const tile_fill = if (is_watched)
+                            dvui.Color{ .r = 22, .g = 26, .b = 34, .a = 255 }
+                        else
+                            dvui.Color{ .r = 24, .g = 30, .b = 44, .a = 255 };
+                        var tile = dvui.box(@src(), .{ .dir = .vertical }, .{
+                            .id_extra = ep_i + 2100,
                             .background = true,
-                            .color_fill = if (is_watched) theme.colors.success else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                            .color_text = if (is_watched) dvui.Color.white else theme.colors.text_secondary,
-                            .corner_radius = theme.dims.rad_xl,
-                            .padding = .{ .x = 5, .y = 1, .w = 5, .h = 1 },
-                            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+                            .color_fill = tile_fill,
+                            .min_size_content = .{ .w = 72, .h = 54 },
+                            .max_size_content = .{ .w = 72, .h = 54 },
                             .gravity_y = 0.5,
-                        })) {
-                            const ep_num = std.fmt.parseInt(usize, ep_str, 10) catch 0;
-                            if (ep_num > 0) toggleWatched(sel_idx, ep_num);
-                        }
-
-                        // Episode number badge
-                        var ep_badge: [16]u8 = undefined;
-                        const badge = std.fmt.bufPrintZ(&ep_badge, "Ep {s}", .{ep_str}) catch "?";
-                        _ = dvui.label(@src(), "{s}", .{badge}, .{
-                            .id_extra = ep_i + 3100,
+                        });
+                        defer tile.deinit();
+                        var tnum_buf: [12]u8 = undefined;
+                        const tnum = std.fmt.bufPrint(&tnum_buf, "{s}", .{ep_str}) catch "";
+                        _ = dvui.label(@src(), "{s}", .{tnum}, .{
+                            .id_extra = ep_i + 2110,
                             .color_text = if (is_watched) theme.colors.text_secondary else theme.colors.accent,
+                            .gravity_x = 0.5,
+                            .gravity_y = 0.5,
+                            .expand = .both,
+                            .font = dvui.themeGet().font_heading,
                         });
+                    }
 
-                        // Filler badge
-                        if (is_filler) {
-                            _ = dvui.label(@src(), " FILLER", .{}, .{
-                                .id_extra = ep_i + 3200,
-                                .color_text = dvui.Color{ .r = 255, .g = 100, .b = 100, .a = 200 },
+                    // ── Right: info column. ──
+                    {
+                        var info = dvui.box(@src(), .{ .dir = .vertical }, .{
+                            .id_extra = ep_i + 2200,
+                            .expand = .both,
+                            .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
+                        });
+                        defer info.deinit();
+
+                        // Title row: "Ep N" chip · FILLER · title (clickable) · toggle.
+                        {
+                            var top = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                                .id_extra = ep_i + 3000,
+                                .expand = .horizontal,
                             });
-                        }
+                            defer top.deinit();
 
-                        // Score on the right
-                        const sc = state.app.anime.episode_scores[ep_i];
-                        if (sc > 0) {
-                            var sc_buf: [8]u8 = undefined;
-                            const sc_pct = @as(u8, @intFromFloat(std.math.clamp(sc * 20.0, 0.0, 100.0)));
-                            const sc_color = if (sc_pct >= 70) theme.colors.success else if (sc_pct >= 50) theme.colors.warning else theme.colors.danger;
-                            if (std.fmt.bufPrintZ(&sc_buf, " {d}%", .{sc_pct})) |scs| {
-                                _ = dvui.label(@src(), "{s}", .{scs}, .{
-                                    .id_extra = ep_i + 3300,
-                                    .color_text = sc_color,
+                            // Episode number chip.
+                            var ep_badge: [16]u8 = undefined;
+                            const badge = std.fmt.bufPrintZ(&ep_badge, "Ep {s}", .{ep_str}) catch "?";
+                            _ = dvui.label(@src(), "{s}", .{badge}, .{
+                                .id_extra = ep_i + 3100,
+                                .color_text = if (is_watched) theme.colors.text_secondary else theme.colors.accent,
+                                .gravity_y = 0.5,
+                                .padding = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+                            });
+
+                            // Filler badge.
+                            if (is_filler) {
+                                _ = dvui.label(@src(), "FILLER", .{}, .{
+                                    .id_extra = ep_i + 3200,
+                                    .background = true,
+                                    .color_fill = dvui.Color{ .r = 90, .g = 40, .b = 40, .a = 255 },
+                                    .color_text = dvui.Color{ .r = 255, .g = 150, .b = 150, .a = 255 },
+                                    .corner_radius = theme.dims.rad_sm,
+                                    .padding = .{ .x = 5, .y = 1, .w = 5, .h = 1 },
+                                    .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+                                    .gravity_y = 0.5,
                                 });
-                            } else |_| {}
-                        }
-                    }
+                            }
 
-                    // Title row (if enriched)
-                    if (has_title) {
-                        // Jikan-sourced + worker-written: validate a copy so a
-                        // malformed title can't panic dvui (whole-app abort).
-                        var et_buf: [256]u8 = undefined;
-                        const title = @import("../core/text.zig").safeUtf8Buf(state.app.anime.episode_titles[ep_i][0..state.app.anime.episode_title_lens[ep_i]], &et_buf);
-                        if (dvui.button(@src(), title, .{}, .{
-                            .id_extra = ep_i + 4000,
-                            .expand = .horizontal,
-                            .color_text = theme.colors.text_primary,
-                            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                            .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
-                        })) {
-                            playEpisode(ep_str);
-                        }
-                    } else {
-                        // Fallback: plain play button
-                        if (dvui.button(@src(), "▶ Play", .{}, .{
-                            .id_extra = ep_i + 4000,
-                            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                            .color_text = theme.colors.text_primary,
-                            .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
-                        })) {
-                            playEpisode(ep_str);
-                        }
-                    }
+                            // Title (clickable → play), or fallback play button.
+                            if (has_title) {
+                                // Jikan-sourced + worker-written: validate a copy so a
+                                // malformed title can't panic dvui (whole-app abort).
+                                var et_buf: [256]u8 = undefined;
+                                const title = safeUtf8Buf(state.app.anime.episode_titles[ep_i][0..state.app.anime.episode_title_lens[ep_i]], &et_buf);
+                                if (dvui.button(@src(), title, .{}, .{
+                                    .id_extra = ep_i + 4000,
+                                    .expand = .horizontal,
+                                    .color_text = if (is_watched) theme.colors.text_secondary else theme.colors.text_primary,
+                                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                                    .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+                                    .gravity_y = 0.5,
+                                })) {
+                                    playEpisode(ep_str);
+                                }
+                            } else {
+                                if (dvui.buttonIcon(@src(), "ep-play", icons.tvg.lucide.play, .{}, .{}, .{
+                                    .id_extra = ep_i + 4000,
+                                    .expand = .horizontal,
+                                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                                    .color_text = theme.colors.text_primary,
+                                    .min_size_content = .{ .w = 14, .h = 14 },
+                                    .gravity_x = 0.0,
+                                    .gravity_y = 0.5,
+                                })) {
+                                    playEpisode(ep_str);
+                                }
+                            }
 
-                    // Aired date
-                    const aired_len = state.app.anime.episode_aired_lens[ep_i];
-                    if (aired_len > 0) {
-                        _ = dvui.label(@src(), "{s}", .{state.app.anime.episode_aired[ep_i][0..aired_len]}, .{
-                            .id_extra = ep_i + 5000,
-                            .color_text = theme.colors.text_secondary,
-                        });
+                            // Watched toggle (right-most) — flips flag + DB persist.
+                            if (dvui.buttonIcon(@src(), "ep-watched", if (is_watched) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, .{}, .{}, .{
+                                .id_extra = ep_i + 3050,
+                                .color_fill = if (is_watched) theme.colors.success else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                                .color_text = if (is_watched) dvui.Color.white else theme.colors.text_secondary,
+                                .corner_radius = dvui.Rect.all(theme.radius.pill),
+                                .padding = .{ .x = 5, .y = 5, .w = 5, .h = 5 },
+                                .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
+                                .min_size_content = .{ .w = 14, .h = 14 },
+                                .gravity_y = 0.5,
+                            })) {
+                                const ep_num = std.fmt.parseInt(usize, ep_str, 10) catch 0;
+                                if (ep_num > 0) toggleWatched(sel_idx, ep_num);
+                            }
+                        }
+
+                        // Meta row: aired date · score %.
+                        {
+                            var mrow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                                .id_extra = ep_i + 5000,
+                            });
+                            defer mrow.deinit();
+
+                            const aired_len = state.app.anime.episode_aired_lens[ep_i];
+                            if (aired_len > 0) {
+                                _ = dvui.label(@src(), "{s}", .{state.app.anime.episode_aired[ep_i][0..aired_len]}, .{
+                                    .id_extra = ep_i + 5100,
+                                    .color_text = theme.colors.text_secondary,
+                                    .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+                                    .gravity_y = 0.5,
+                                });
+                            }
+
+                            const sc = state.app.anime.episode_scores[ep_i];
+                            if (sc > 0) {
+                                var sc_buf: [12]u8 = undefined;
+                                const sc_pct = @as(u8, @intFromFloat(std.math.clamp(sc * 20.0, 0.0, 100.0)));
+                                const sc_color = if (sc_pct >= 70) theme.colors.success else if (sc_pct >= 50) theme.colors.warning else theme.colors.danger;
+                                if (std.fmt.bufPrintZ(&sc_buf, "{d}%", .{sc_pct})) |scs| {
+                                    _ = dvui.label(@src(), "{s}", .{scs}, .{
+                                        .id_extra = ep_i + 5200,
+                                        .color_text = sc_color,
+                                        .padding = .{ .x = if (aired_len > 0) 10 else 0, .y = 2, .w = 0, .h = 0 },
+                                        .gravity_y = 0.5,
+                                    });
+                                } else |_| {}
+                            }
+                        }
                     }
                 }
             } else {

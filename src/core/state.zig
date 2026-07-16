@@ -42,8 +42,17 @@ pub const AnimeResult = struct {
     score: f32 = 0.0,
     overview: [512]u8 = std.mem.zeroes([512]u8),
     overview_len: usize = 0,
-    poster_url: [128]u8 = std.mem.zeroes([128]u8),
+    // Widened to [256] so scraper sources (dooplay/animestream) with long cover
+    // URLs aren't truncated → broken cover. Jikan's ~57-char CDN URLs are
+    // unaffected. All copy sites bound with @min against .len, so this is safe.
+    poster_url: [256]u8 = std.mem.zeroes([256]u8),
     poster_url_len: usize = 0,
+
+    // Jikan metadata for the detail header (parsed via anime_pure.parseJikanMeta).
+    atype: [16]u8 = std.mem.zeroes([16]u8), // "TV"/"Movie"/"OVA"/"ONA"/"Special"/"Music"
+    atype_len: usize = 0,
+    year: u16 = 0, // release year (aired.prop.from.year / top-level "year")
+    airing: bool = false, // currently airing
 
     // UI state
     expanded: bool = false,
@@ -108,7 +117,8 @@ pub const ContinueItem = struct {
     mal_id_len: usize = 0,
     title: [128]u8 = std.mem.zeroes([128]u8),
     title_len: usize = 0,
-    poster_url: [128]u8 = std.mem.zeroes([128]u8),
+    // [256] mirrors AnimeResult.poster_url so long scraper cover URLs survive.
+    poster_url: [256]u8 = std.mem.zeroes([256]u8),
     poster_url_len: usize = 0,
     last_episode: u16 = 0,
     total_episodes: u16 = 0,
