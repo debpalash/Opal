@@ -17,17 +17,20 @@ const std = @import("std");
 // Link classification
 // ══════════════════════════════════════════════════════════
 
-pub const Rel = enum { navigation, acquisition, image, thumbnail, other };
+pub const Rel = enum { navigation, acquisition, image, thumbnail, pse, other };
 
 /// Classify an OPDS `<link rel="…">` value.
 ///   • rel="subsection"                              → navigation (drill in)
+///   • rel="http://vaemendis.net/opds-pse/stream"    → pse (page-streaming)
 ///   • rel="http://opds-spec.org/acquisition[/*]"    → acquisition (downloadable)
 ///   • rel="http://opds-spec.org/image/thumbnail"    → thumbnail (small cover)
 ///   • rel="http://opds-spec.org/image"              → image (full cover)
-/// Order matters: "thumbnail" must be tested before the bare "image" substring
+/// Order matters: PSE is tested first (documents intent — its rel contains none
+/// of the words below); then "thumbnail" before the bare "image" substring
 /// (thumbnail rel contains "/image/").
 pub fn classifyRel(rel: []const u8) Rel {
     if (rel.len == 0) return .other;
+    if (std.mem.indexOf(u8, rel, "opds-pse/stream") != null) return .pse;
     if (std.mem.indexOf(u8, rel, "subsection") != null) return .navigation;
     if (std.mem.indexOf(u8, rel, "acquisition") != null) return .acquisition;
     if (std.mem.indexOf(u8, rel, "image/thumbnail") != null) return .thumbnail;
@@ -35,6 +38,40 @@ pub fn classifyRel(rel: []const u8) Rel {
     // Some feeds use rel="thumbnail" alone.
     if (std.mem.eql(u8, rel, "thumbnail")) return .thumbnail;
     return .other;
+}
+
+// ══════════════════════════════════════════════════════════
+// OPDS-PSE (Page Streaming Extension) — http://vaemendis.net/opds-pse/
+// ══════════════════════════════════════════════════════════
+//
+// Komga / Kavita expose CBZ/CBR books as a per-page image stream: the entry
+// carries an extra acquisition link with rel="http://vaemendis.net/opds-pse/
+// stream", a `pse:count="N"` total-page attribute, and a templated href holding
+// the `{pageNumber}` placeholder. Each page is fetched as an image (JPEG/PNG) at
+// the substituted URL under the same HTTP Basic-auth. Unlike a plain page-image
+// server (which we scrape for <img> tags), these pages require auth on EVERY
+// fetch, so the page URLs are enumerated here and driven through the comics
+// reader with the auth header attached.
+
+/// Placeholder the PSE href template carries; substituted with the page index.
+pub const PSE_MARKER = "{pageNumber}";
+
+/// Read the `pse:count` (total pages) attribute from a PSE `<link>` tag. Tolerant
+/// of namespace-prefix variance: tries the canonical `pse:count` first, then a
+/// bare `count` (some servers drop the prefix). Returns null when absent/unparsable.
+pub fn parsePseCount(tag: []const u8) ?u32 {
+    const raw = attr(tag, "pse:count") orelse attr(tag, "count") orelse return null;
+    return std.fmt.parseInt(u32, std.mem.trim(u8, raw, " \t"), 10) catch null;
+}
+
+/// Substitute the `{pageNumber}` placeholder in a PSE href `template` with a
+/// 0-indexed page `index`, writing the concrete page-image URL into `out`.
+/// Returns null when the template has no placeholder or the result overflows.
+pub fn pageUrl(template: []const u8, index: usize, out: []u8) ?[]const u8 {
+    const at = std.mem.indexOf(u8, template, PSE_MARKER) orelse return null;
+    const head = template[0..at];
+    const tail = template[at + PSE_MARKER.len ..];
+    return std.fmt.bufPrint(out, "{s}{d}{s}", .{ head, index, tail }) catch null;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -187,6 +224,12 @@ pub const OpdsEntry = struct {
     /// Cover image URL (absolute), or empty when the entry has no image link.
     cover: [512]u8 = std.mem.zeroes([512]u8),
     cover_len: usize = 0,
+    /// OPDS-PSE page-stream href TEMPLATE (absolute, `{pageNumber}` preserved),
+    /// or empty when the entry is not page-streamable. See the PSE section above.
+    pse_url: [512]u8 = std.mem.zeroes([512]u8),
+    pse_url_len: usize = 0,
+    /// Total page count advertised by the PSE link (`pse:count`); 0 when absent.
+    pse_count: u32 = 0,
 
     pub fn titleSlice(self: *const OpdsEntry) []const u8 {
         return self.title[0..self.title_len];
@@ -199,6 +242,17 @@ pub const OpdsEntry = struct {
     }
     pub fn coverSlice(self: *const OpdsEntry) []const u8 {
         return self.cover[0..self.cover_len];
+    }
+    pub fn pseUrlSlice(self: *const OpdsEntry) []const u8 {
+        return self.pse_url[0..self.pse_url_len];
+    }
+    /// True when the entry carries a usable PSE page stream (a template with a
+    /// `{pageNumber}` placeholder AND a positive page count) — i.e. it should be
+    /// read via authenticated per-page streaming rather than the <img> scraper.
+    pub fn isPseStreamable(self: *const OpdsEntry) bool {
+        return self.pse_count > 0 and
+            self.pse_url_len > 0 and
+            std.mem.indexOf(u8, self.pse_url[0..self.pse_url_len], PSE_MARKER) != null;
     }
 };
 
@@ -353,6 +407,29 @@ pub fn parseFeed(xml: []const u8, base_url: []const u8, out: []OpdsEntry) usize 
                         if (resolveHref(base_url, href, &ent.cover)) |abs| ent.cover_len = abs.len;
                     }
                 },
+                .pse => {
+                    // Page-streaming link: keep the templated href verbatim
+                    // ({pageNumber} preserved — resolveHref copies it through) plus
+                    // its total-page count. The plain acquisition link normally
+                    // stays the primary download/route seam; but some servers hang
+                    // the PSE rel on the ONLY link, so if we have no primary yet
+                    // seed one here (a comic content-type from the link's own
+                    // `type`) so the entry survives and routes to the reader.
+                    if (resolveHref(base_url, href, &ent.pse_url)) |abs| {
+                        ent.pse_url_len = abs.len;
+                        ent.pse_count = parsePseCount(tag) orelse 0;
+                        if (!have_primary) {
+                            @memcpy(ent.href[0..abs.len], abs);
+                            ent.href_len = abs.len;
+                            ent.is_navigation = false;
+                            have_primary = true;
+                            const ty = attr(tag, "type") orelse "image/jpeg";
+                            const n = @min(ty.len, ent.content_type.len);
+                            @memcpy(ent.content_type[0..n], ty[0..n]);
+                            ent.content_type_len = n;
+                        }
+                    }
+                },
                 .other => {},
             }
         }
@@ -372,15 +449,143 @@ pub fn parseFeed(xml: []const u8, base_url: []const u8, out: []OpdsEntry) usize 
 
 const testing = std.testing;
 
-test "classifyRel distinguishes nav / acquisition / image / thumbnail" {
+test "classifyRel distinguishes nav / acquisition / image / thumbnail / pse" {
     try testing.expectEqual(Rel.navigation, classifyRel("subsection"));
     try testing.expectEqual(Rel.acquisition, classifyRel("http://opds-spec.org/acquisition"));
     try testing.expectEqual(Rel.acquisition, classifyRel("http://opds-spec.org/acquisition/open-access"));
     try testing.expectEqual(Rel.thumbnail, classifyRel("http://opds-spec.org/image/thumbnail"));
     try testing.expectEqual(Rel.image, classifyRel("http://opds-spec.org/image"));
     try testing.expectEqual(Rel.thumbnail, classifyRel("thumbnail"));
+    try testing.expectEqual(Rel.pse, classifyRel("http://vaemendis.net/opds-pse/stream"));
     try testing.expectEqual(Rel.other, classifyRel("self"));
     try testing.expectEqual(Rel.other, classifyRel(""));
+}
+
+test "pageUrl substitutes {pageNumber} 0-indexed" {
+    var buf: [256]u8 = undefined;
+    // 0-indexed: page 0 is the first page.
+    try testing.expectEqualStrings(
+        "/opds/v1.2/books/42/pages/0?zero_based=true",
+        pageUrl("/opds/v1.2/books/42/pages/{pageNumber}?zero_based=true", 0, &buf).?,
+    );
+    try testing.expectEqualStrings(
+        "https://komga.example/api/v1/books/9/pages/17",
+        pageUrl("https://komga.example/api/v1/books/9/pages/{pageNumber}", 17, &buf).?,
+    );
+    // A template with no placeholder yields null (not a silent wrong URL).
+    try testing.expect(pageUrl("/books/9/pages/first", 0, &buf) == null);
+    // Overflow is reported, not clobbered.
+    var tiny: [4]u8 = undefined;
+    try testing.expect(pageUrl("/a/{pageNumber}/b", 3, &tiny) == null);
+}
+
+test "parsePseCount reads pse:count (and bare count fallback), tolerates missing" {
+    try testing.expectEqual(@as(u32, 20), parsePseCount("<link pse:count=\"20\" href=\"x\"/>").?);
+    // Namespace-less fallback.
+    try testing.expectEqual(@as(u32, 7), parsePseCount("<link count=\"7\" href=\"x\"/>").?);
+    // Absent / unparsable → null (no crash).
+    try testing.expect(parsePseCount("<link href=\"x\"/>") == null);
+    try testing.expect(parsePseCount("<link pse:count=\"\" href=\"x\"/>") == null);
+    try testing.expect(parsePseCount("<link pse:count=\"NaN\"/>") == null);
+}
+
+test "parseFeed: Komga OPDS-PSE entry (separate stream link + acquisition)" {
+    // A live-shaped Komga entry: cover thumbnail, a plain CBZ acquisition, and the
+    // OPDS-PSE page-streaming link carrying pse:count + a {pageNumber} template.
+    const xml =
+        \\<feed xmlns="http://www.w3.org/2005/Atom" xmlns:pse="http://vaemendis.net/opds-pse/ns">
+        \\  <title>Berserk</title>
+        \\  <entry>
+        \\    <title>Volume 1</title>
+        \\    <link rel="http://opds-spec.org/image/thumbnail" href="/api/v1/books/42/thumbnail" type="image/jpeg"/>
+        \\    <link rel="http://opds-spec.org/acquisition" href="/api/v1/books/42/file" type="application/vnd.comicbook+zip"/>
+        \\    <link rel="http://vaemendis.net/opds-pse/stream" href="/api/v1/books/42/pages/{pageNumber}?zero_based=true" type="image/jpeg" pse:count="24"/>
+        \\  </entry>
+        \\</feed>
+    ;
+    var entries: [4]OpdsEntry = undefined;
+    const n = parseFeed(xml, "https://komga.example/opds/v1.2/series/1", &entries);
+    try testing.expectEqual(@as(usize, 1), n);
+    const e = entries[0];
+    // Plain acquisition remains the primary route target + content type.
+    try testing.expect(!e.is_navigation);
+    try testing.expectEqualStrings("https://komga.example/api/v1/books/42/file", e.hrefSlice());
+    try testing.expectEqual(ReaderRoute.comics, readerRoute(e.contentTypeSlice()));
+    // PSE stream parsed: absolute template with {pageNumber} preserved + count.
+    try testing.expect(e.isPseStreamable());
+    try testing.expectEqual(@as(u32, 24), e.pse_count);
+    try testing.expectEqualStrings(
+        "https://komga.example/api/v1/books/42/pages/{pageNumber}?zero_based=true",
+        e.pseUrlSlice(),
+    );
+    // …and the page-URL builder rides that template (0-indexed).
+    var pbuf: [256]u8 = undefined;
+    try testing.expectEqualStrings(
+        "https://komga.example/api/v1/books/42/pages/0?zero_based=true",
+        pageUrl(e.pseUrlSlice(), 0, &pbuf).?,
+    );
+}
+
+test "parseFeed: PSE-only entry survives (rel hung on the sole link)" {
+    // Some servers expose ONLY the streaming link — no plain acquisition. The
+    // entry must still route to the reader (comic content-type seeded from the
+    // link's own type) rather than being dropped for having no primary href.
+    const xml =
+        \\<feed xmlns:pse="http://vaemendis.net/opds-pse/ns">
+        \\  <entry>
+        \\    <title>Solo</title>
+        \\    <link rel="http://vaemendis.net/opds-pse/stream" href="/books/9/pages/{pageNumber}" type="image/png" pse:count="3"/>
+        \\  </entry>
+        \\</feed>
+    ;
+    var entries: [2]OpdsEntry = undefined;
+    const n = parseFeed(xml, "https://kavita.example/opds", &entries);
+    try testing.expectEqual(@as(usize, 1), n);
+    const e = entries[0];
+    try testing.expect(e.isPseStreamable());
+    try testing.expectEqual(@as(u32, 3), e.pse_count);
+    try testing.expectEqual(ReaderRoute.comics, readerRoute(e.contentTypeSlice()));
+    try testing.expectEqualStrings("https://kavita.example/books/9/pages/{pageNumber}", e.pseUrlSlice());
+}
+
+test "parseFeed: non-PSE comic entry is NOT streamable (scraper fallback)" {
+    // A plain image/CBZ acquisition without a PSE link keeps the existing route:
+    // isPseStreamable() is false, so opds hands the raw URL to the <img> scraper.
+    const xml =
+        \\<feed>
+        \\  <entry>
+        \\    <title>Plain</title>
+        \\    <link rel="http://opds-spec.org/acquisition" href="/a.cbz" type="application/vnd.comicbook+zip"/>
+        \\  </entry>
+        \\</feed>
+    ;
+    var entries: [2]OpdsEntry = undefined;
+    const n = parseFeed(xml, "https://s.example/opds/root", &entries);
+    try testing.expectEqual(@as(usize, 1), n);
+    try testing.expect(!entries[0].isPseStreamable());
+    try testing.expectEqual(@as(u32, 0), entries[0].pse_count);
+}
+
+test "parseFeed: malformed PSE (missing count / truncated) does not crash" {
+    // PSE link present but no count → not streamable (pse_count stays 0), yet the
+    // entry still parses via its acquisition link. And a truncated stream link
+    // must never read out of bounds.
+    const xml =
+        \\<feed xmlns:pse="http://vaemendis.net/opds-pse/ns">
+        \\  <entry>
+        \\    <title>NoCount</title>
+        \\    <link rel="http://opds-spec.org/acquisition" href="/a.cbz" type="application/vnd.comicbook+zip"/>
+        \\    <link rel="http://vaemendis.net/opds-pse/stream" href="/books/1/pages/{pageNumber}" type="image/jpeg"/>
+        \\  </entry>
+        \\  <entry><title>Cut</title><link rel="http://vaemendis.net/opds-pse/stream" href="/books/2/pages/{pageNum
+    ;
+    var entries: [4]OpdsEntry = undefined;
+    const n = parseFeed(xml, "https://s.example/opds", &entries);
+    try testing.expect(n >= 1);
+    // First entry: PSE href captured but count 0 → NOT streamable.
+    try testing.expect(!entries[0].isPseStreamable());
+    try testing.expectEqual(@as(u32, 0), entries[0].pse_count);
+    try testing.expectEqualStrings("https://s.example/a.cbz", entries[0].hrefSlice());
 }
 
 test "readerRoute routes comics vs ebooks vs unsupported" {

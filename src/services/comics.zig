@@ -9,6 +9,9 @@ const alloc = @import("../core/alloc.zig").allocator;
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
 const workers = @import("../core/workers.zig");
 const pure = @import("comics_pure.zig");
+// OPDS-PSE page-URL substitution (tested) — used by loadPseBook so the shipped
+// page-URL build is the same code covered by opds_pure's unit tests.
+const opds_pure = @import("opds_pure.zig");
 
 /// Percent-encode a search query (space → `+`). Delegates to the unit-tested
 /// pure helper so the shipped encoder IS the tested one.
@@ -78,6 +81,9 @@ pub fn loadComic(url: []const u8) void {
         @memcpy(state.app.comic.url_buf[0..url.len], url);
     }
     state.app.comic.url_len = url.len;
+    // Scraper / MangaDex sources are unauthenticated — drop any Basic-auth left
+    // over from a previous OPDS-PSE book so we never leak it to another host.
+    state.app.comic.auth_header_len = 0;
     state.app.comic.is_loading.store(true, .release);
     state.app.comic.page_count = 0;
     state.app.comic.dl_progress.store(0, .release);
@@ -94,6 +100,90 @@ pub fn loadComic(url: []const u8) void {
     // Comics read inside the Browse › Comics tab now (the player route is for
     // playback only) — no player pane is claimed here.
     state.app.comic.thread = std.Thread.spawn(.{}, fetchComicThread, .{my_gen}) catch null;
+}
+
+/// Drive the reader from a pre-enumerated OPDS-PSE (Page Streaming Extension)
+/// page stream: Komga/Kavita serve each page as a separate authenticated image
+/// at `template` with `{pageNumber}` substituted (0-indexed). We stage every
+/// page URL up front (no per-page enumeration request needed) and attach `auth`
+/// (a full "Authorization: Basic …" header line) so the shared download pipeline
+/// fetches each page under HTTP Basic auth. UI-THREAD ONLY (frees textures).
+///
+/// `template` / `count` / `auth` come straight from the tested opds_pure parse;
+/// page URLs are built via the tested opds_pure.pageUrl so the shipped substitution
+/// IS the tested one. Robustness: count 0 or a template with no `{pageNumber}`
+/// placeholder → no-op with a warning toast (never spins/crashes).
+pub fn loadPseBook(title: []const u8, template: []const u8, count: u32, auth: []const u8) void {
+    if (state.app.comic.is_loading.load(.acquire)) return;
+    if (count == 0 or template.len == 0 or template.len >= 512) {
+        logs.pushLog("error", "opds", "PSE book has no readable pages", true);
+        state.showToastTyped("This book has no readable pages", .warning);
+        return;
+    }
+
+    state.app.comic.narrating = false;
+    state.app.comic.show_ocr_overlay = false;
+    state.app.comic.url_len = 0; // not a scraper URL — reader header uses the title
+    state.app.comic.next_url_len = 0;
+    state.app.comic.prev_url_len = 0;
+    state.app.comic.referer_len = 0;
+    state.app.comic.is_loading.store(true, .release);
+    state.app.comic.page_count = 0;
+    state.app.comic.dl_progress.store(0, .release);
+    state.app.comic.current_page = 0;
+
+    freeComicPages();
+    const my_gen = state.app.comic.dl_gen.load(.acquire);
+
+    // Basic-auth header applied to every page fetch (empty for an anonymous server).
+    const al = @min(auth.len, state.app.comic.auth_header.len);
+    @memcpy(state.app.comic.auth_header[0..al], auth[0..al]);
+    state.app.comic.auth_header_len = al;
+
+    const tl = @min(title.len, state.app.comic.title.len);
+    @memcpy(state.app.comic.title[0..tl], title[0..tl]);
+    state.app.comic.title_len = tl;
+
+    // Stage page URLs 0-indexed, bounded by the page_urls array (128).
+    const max_pages = state.app.comic.page_urls.len;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < count and n < max_pages) : (i += 1) {
+        var pb: [512]u8 = undefined;
+        const pu = opds_pure.pageUrl(template, i, &pb) orelse continue;
+        if (pu.len == 0 or pu.len >= state.app.comic.page_urls[n].len) continue;
+        @memcpy(state.app.comic.page_urls[n][0..pu.len], pu);
+        state.app.comic.page_url_lens[n] = pu.len;
+        n += 1;
+    }
+    if (n == 0) {
+        state.app.comic.is_loading.store(false, .release);
+        logs.pushLog("error", "opds", "PSE page-URL build produced no pages", true);
+        state.showToastTyped("Could not build page URLs for this book", .warning);
+        return;
+    }
+    state.app.comic.page_count = n;
+    state.app.comic.is_loading.store(false, .release);
+    logs.pushLog("info", "opds", "OPDS-PSE page stream staged", false);
+
+    // downloadPages() joins its worker batches, so run it OFF the UI thread.
+    state.app.comic.thread = std.Thread.spawn(.{}, psePageDownloadThread, .{my_gen}) catch null;
+}
+
+/// Worker wrapper: drive the shared page-download pipeline for an OPDS-PSE load,
+/// then surface a clear error if every page failed (bad auth / non-image / 404)
+/// so the reader doesn't sit blank with no explanation.
+fn psePageDownloadThread(gen: u32) void {
+    workers.enter();
+    defer workers.leave();
+    downloadPages(gen);
+    // Superseded by a newer load → say nothing (that load owns the UI now).
+    if (state.app.comic.dl_gen.load(.acquire) != gen) return;
+    if (state.app.comic.dl_progress.load(.acquire) == 0) {
+        logs.pushLog("error", "opds", "PSE stream: no pages downloaded (auth failed / not images?)", true);
+        state.showToastTyped("Could not load pages — check the server login", .warning);
+        state.wakeUi();
+    }
 }
 
 /// Free all downloaded page textures/pixels and the OCR cache.
@@ -597,14 +687,39 @@ fn downloadSinglePage(i: usize, gen: u32) void {
     // and means a future MangaDex host can't silently regress to a 400.
     var ua_buf: [200]u8 = undefined;
     const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url)}) catch return;
-    const argv = [_][]const u8{
-        "curl",       "-sL",
-        "-H",         ua,
-        "--max-time", "15",
-        url,
-    };
 
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
+    // OPDS-PSE page streams (Komga/Kavita) require HTTP Basic auth on EVERY page
+    // fetch. loadPseBook stashes the full "Authorization: Basic …" line here; it
+    // is set once before the download workers spawn and never mutated mid-load,
+    // and is empty for scraper/MangaDex sources (which append no extra header).
+    const auth = state.app.comic.auth_header[0..state.app.comic.auth_header_len];
+
+    // Build argv dynamically so the auth header is appended only when present.
+    var argv_buf: [10][]const u8 = undefined;
+    var ac: usize = 0;
+    argv_buf[ac] = "curl";
+    ac += 1;
+    argv_buf[ac] = "-sL";
+    ac += 1;
+    argv_buf[ac] = "-H";
+    ac += 1;
+    argv_buf[ac] = ua;
+    ac += 1;
+    if (auth.len > 0) {
+        argv_buf[ac] = "-H";
+        ac += 1;
+        argv_buf[ac] = auth;
+        ac += 1;
+    }
+    argv_buf[ac] = "--max-time";
+    ac += 1;
+    argv_buf[ac] = "15";
+    ac += 1;
+    argv_buf[ac] = url;
+    ac += 1;
+    const argv = argv_buf[0..ac];
+
+    var child = @import("../core/io_global.zig").Child.init(argv, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     _ = child.spawn() catch return;

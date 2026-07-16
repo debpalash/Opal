@@ -14,11 +14,15 @@
 //!   • EPUB/PDF      → the OS (settings.openExternal — no in-app ebook renderer)
 //!   • anything else → a "not previewable" toast
 //!
-//! Reader-routing caveat: handing a raw acquisition URL to the comics reader
-//! works for servers that expose browsable page images; full CBZ/CBR archive
-//! unpacking and the Komga OPDS-PSE page-streaming extension (per-page image
-//! URLs, and Basic-auth on the page fetch) are a documented follow-up. See the
-//! task caveats — live-server behaviour needs manual verification.
+//! Reader-routing detail: an entry that advertises the OPDS-PSE page-streaming
+//! extension (opds_pure.OpdsEntry.isPseStreamable — Komga/Kavita) is read via
+//! authenticated per-page image streaming: opds hands the {pageNumber} template
+//! + page count + a Basic-auth header to comics.loadPseBook, which drives the
+//! existing page pipeline with the auth header attached to every fetch. Plain
+//! page-image servers still fall back to the <img> scraper (requestLoad). Full
+//! CBZ/CBR *archive unpacking* remains a follow-up. Live page streaming against a
+//! real Komga/Kavita server needs manual verification (the PSE parse + page-URL
+//! build are covered by opds_pure unit tests against a sample entry).
 
 const std = @import("std");
 const dvui = @import("dvui");
@@ -39,6 +43,17 @@ var parse_mutex: @import("../core/sync.zig").Mutex = .{};
 // ══════════════════════════════════════════════════════════
 // HTTP
 // ══════════════════════════════════════════════════════════
+
+/// Build the "Authorization: Basic …" header line for the configured credentials
+/// into `buf` (via the tested opds_pure.basicAuthHeader). Returns "" when no
+/// credentials are set (an anonymous server) or on overflow. UI-thread only —
+/// reads the credential buffers the login form owns.
+fn opdsAuthHeader(buf: []u8) []const u8 {
+    const user = state.app.opds.user_buf[0 .. std.mem.indexOfScalar(u8, &state.app.opds.user_buf, 0) orelse state.app.opds.user_buf.len];
+    const pass = state.app.opds.pass_buf[0 .. std.mem.indexOfScalar(u8, &state.app.opds.pass_buf, 0) orelse state.app.opds.pass_buf.len];
+    if (user.len == 0 and pass.len == 0) return "";
+    return pure.basicAuthHeader(user, pass, buf) orelse "";
+}
 
 /// GET an OPDS feed with HTTP Basic auth into a fresh heap buffer (caller frees).
 /// Returns null on connect/parse failure or an empty body.
@@ -219,10 +234,22 @@ pub fn openEntry(idx: usize) void {
 
     switch (pure.readerRoute(e.contentTypeSlice())) {
         .comics => {
-            // Reuse the existing comics/manga page reader surface.
-            @import("comics.zig").requestLoad(href);
-            state.navigateToTab(.Comics);
-            state.showToast("Opening in reader");
+            if (e.isPseStreamable()) {
+                // Komga/Kavita OPDS-PSE: stream per-page images under Basic auth
+                // rather than scraping <img> tags. Build the auth header from the
+                // stored credentials and drive the comics reader with the tested
+                // page-URL template + count.
+                var auth_buf: [512]u8 = undefined;
+                const auth = opdsAuthHeader(&auth_buf);
+                @import("comics.zig").loadPseBook(e.titleSlice(), e.pseUrlSlice(), e.pse_count, auth);
+                state.navigateToTab(.Comics);
+                state.showToast("Streaming pages…");
+            } else {
+                // Plain page-image / archive server → the existing <img> scraper.
+                @import("comics.zig").requestLoad(href);
+                state.navigateToTab(.Comics);
+                state.showToast("Opening in reader");
+            }
         },
         .external => {
             @import("../ui/settings.zig").openExternal(href);
