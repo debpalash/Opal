@@ -814,3 +814,36 @@ def test_anime_skip():
     if bad:
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "anime-skip: findEpisodeByName → point→range → gated auto-seek"
+
+
+@test("Torrent file loading", "Player")
+def test_torrent_file_loading():
+    # Bug: opening a .torrent FILE dead-ended. Two-part root cause — (1) the
+    # router had no torrent route so a .torrent fell through to the catch-all
+    # `.web` and was handed to the in-app web browser, and (2) the C++ wrapper
+    # only exposed torrent_add_magnet, with no add-from-file API at all.
+    cpp = _src("src/torrent_wrapper.cpp")
+    hdr = _src("src/torrent_wrapper.h")
+    pure = _src("src/services/browser_pure.zig")
+    br = _src("src/services/browser.zig")
+    se = _src("src/services/search.zig")
+    checks = {
+        "C API in .cpp": 'extern "C" int torrent_add_file(' in cpp,
+        "C API in .h": "int torrent_add_file(TorrentSession" in hdr,
+        "torrent route exists": "torrent }" in pure and "return .torrent" in pure,
+        "loadContent dispatches torrent": "route == .torrent" in br
+            and "addTorrentFileToEngine" in br,
+        "engine entry point": "pub fn addTorrentFileToEngine" in se
+            and "c.mpv.torrent_add_file(" in se,
+        # Both add paths must share the player setup — no duplicated ~70 lines.
+        # The one-and-only `p.is_torrent = true` is the load-bearing assertion:
+        # a second copy means the setup drifted back apart.
+        "shared attachTorrentToPlayer": "fn attachTorrentToPlayer(" in se
+            and "attachTorrentToPlayer(tid, magnet_link)" in se
+            and "attachTorrentToPlayer(tid, path)" in se
+            and se.count("p.is_torrent = true") == 1,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "torrent_add_file C API + .torrent route + shared player attach"

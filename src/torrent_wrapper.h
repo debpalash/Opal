@@ -12,6 +12,12 @@ TorrentSession torrent_init();
 // Add a torrent magnet link and start downloading. Returns a Torrent ID.
 int torrent_add_magnet(TorrentSession session, const char* magnet_url, const char* save_path);
 
+// Add a torrent from a local .torrent FILE and start downloading. Returns a
+// Torrent ID (same stable-id space as torrent_add_magnet), or -1 if the file
+// can't be parsed / the add fails. Metadata is available immediately, so the
+// torrent is marked ready without a metadata-fetch phase.
+int torrent_add_file(TorrentSession session, const char* torrent_path, const char* save_path);
+
 // Get the total number of registered torrents
 int torrent_count(TorrentSession session);
 

@@ -797,6 +797,14 @@ fn appFrame() !dvui.App.Result {
                         logs.pushLog("warn", "folder", "No media files found", false);
                     }
                 }
+            } else if (@import("services/browser_pure.zig").routeContent(fpath) == .torrent) {
+                // A dropped .torrent is metadata, not media — handing it to mpv
+                // just errors out. Only the torrent route is taken from the
+                // (unit-tested) router here; every other shape keeps the existing
+                // straight-to-mpv drop behavior below.
+                @import("services/search.zig").addTorrentFileToEngine(fpath);
+                logs.pushLog("info", "open", "Loaded dropped .torrent", false);
+                state.showToast("Adding torrent...");
             } else {
                 // Clear resume position so dropped file starts fresh
                 _ = c.mpv.mpv_set_option_string(

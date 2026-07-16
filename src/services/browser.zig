@@ -2341,6 +2341,28 @@ pub fn loadContent(url: []const u8) void {
         return;
     }
 
+    // Torrents → the torrent engine, which streams into the player pane. Both a
+    // magnet and a .torrent file used to fall through to the catch-all `.web`
+    // route below and get handed to the in-app WEB BROWSER — a silent dead end.
+    if (route == .torrent) {
+        const search = @import("search.zig");
+        if (std.mem.startsWith(u8, norm_url, "magnet:")) {
+            search.loadTorrentToPlayer(norm_url); // handles player reveal
+            return;
+        }
+        // A remote .torrent URL has to be fetched before libtorrent can parse it.
+        // loadTorrentToPlayer is the existing HTTP entry point (it resolves the
+        // link in the background), so remote torrents reuse it rather than growing
+        // a second download path here.
+        if (std.mem.startsWith(u8, norm_url, "http://") or std.mem.startsWith(u8, norm_url, "https://")) {
+            search.loadTorrentToPlayer(norm_url);
+            return;
+        }
+        // Local .torrent file → straight into the engine.
+        search.addTorrentFileToEngine(norm_url);
+        return;
+    }
+
     // Comics open inside the Browse › Comics tab (the player route is for
     // playback only) — load + reveal that tab, no player pane involved.
     if (route == .comic_viewer) {

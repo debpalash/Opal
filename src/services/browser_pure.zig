@@ -346,10 +346,29 @@ pub fn composeKeyCombo(base: []const u8, ctrl: bool, cmd: bool, alt: bool, shift
 // (moved verbatim from browser.zig so it's testable; browser.zig re-exports)
 // ══════════════════════════════════════════════════════════
 
-pub const ContentRoute = enum { mpv, comic_viewer, web };
+pub const ContentRoute = enum { mpv, comic_viewer, web, torrent };
+
+/// Case-insensitive suffix test. `.torrent` has to match `.TORRENT` too — the
+/// extension comes from whatever the user's filesystem / a web server wrote.
+fn endsWithIgnoreCase(haystack: []const u8, suffix: []const u8) bool {
+    if (haystack.len < suffix.len) return false;
+    const tail = haystack[haystack.len - suffix.len ..];
+    for (tail, suffix) |a, b| {
+        if (std.ascii.toLower(a) != std.ascii.toLower(b)) return false;
+    }
+    return true;
+}
 
 /// Determine the correct pane provider for a given URL
 pub fn routeContent(url: []const u8) ContentRoute {
+    // Torrents → the torrent engine. This MUST come before the domain-substring
+    // loops below: a .torrent hosted on, say, a video domain would otherwise be
+    // swallowed by the `indexOf(domain)` scan and handed to mpv. Magnets are here
+    // for the same reason a .torrent is — nothing else in the router recognized
+    // them, so a CLI/drag-dropped magnet fell through to the catch-all `.web`.
+    if (std.mem.startsWith(u8, url, "magnet:")) return .torrent;
+    if (endsWithIgnoreCase(url, ".torrent")) return .torrent;
+
     // Video/audio extensions → mpv
     const mpv_exts = [_][]const u8{
         ".mp4", ".mkv",  ".avi", ".webm", ".flv", ".mov", ".m4v",
@@ -562,4 +581,29 @@ test "routeContent classifies media, comics and web" {
     // Regression guard: extensionless stream-ish URL stays .web — known
     // playback must use resumePlayback/loadContentDirect, not routing.
     try std.testing.expectEqual(ContentRoute.web, routeContent("https://cdn.example.com/stream/98765"));
+}
+
+test "routeContent sends torrents and magnets to the torrent engine" {
+    // Local .torrent file — the `opal foo.torrent` / drag-drop case.
+    try std.testing.expectEqual(ContentRoute.torrent, routeContent("/tmp/x.torrent"));
+    // Remote .torrent URL.
+    try std.testing.expectEqual(ContentRoute.torrent, routeContent("https://x/y.torrent"));
+    // Extension case must not matter.
+    try std.testing.expectEqual(ContentRoute.torrent, routeContent("/tmp/X.TORRENT"));
+    try std.testing.expectEqual(ContentRoute.torrent, routeContent("/tmp/x.Torrent"));
+    // Magnets hit the same router gap — nothing else recognized them either.
+    try std.testing.expectEqual(ContentRoute.torrent, routeContent("magnet:?xt=urn:btih:dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c"));
+}
+
+test "routeContent regression: a .torrent must never route to the web browser" {
+    // The bug: ContentRoute had no torrent variant and routeContent had zero
+    // torrent awareness, so a .torrent path matched no mpv extension, no video
+    // domain and no image extension, then fell through to the catch-all
+    // `return .web` — loadContent handed the local file to the in-app WEB
+    // browser and the open silently dead-ended.
+    try std.testing.expect(routeContent("/tmp/bbb.torrent") != .web);
+    try std.testing.expect(routeContent("magnet:?xt=urn:btih:abc") != .web);
+    // A .torrent whose path happens to contain a video-hosting domain string
+    // must still be a torrent — the torrent test runs BEFORE the domain loops.
+    try std.testing.expectEqual(ContentRoute.torrent, routeContent("/dl/youtube.com-rip.torrent"));
 }

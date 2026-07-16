@@ -2101,7 +2101,6 @@ fn hexVal(ch: u8) ?u4 {
 }
 
 fn addMagnetToEngine(magnet_link: []const u8) void {
-    const logs = @import("../core/logs.zig");
     const playermod = @import("../player/player.zig");
 
     // Auto-create a player if none exists
@@ -2125,6 +2124,22 @@ fn addMagnetToEngine(magnet_link: []const u8) void {
     @memcpy(null_term_uri[0..copy_len], magnet_link[0..copy_len]);
 
     const tid = c.mpv.torrent_add_magnet(state.torrentSession(), @ptrCast(&null_term_uri[0]), state.getSavePath());
+    attachTorrentToPlayer(tid, magnet_link);
+}
+
+/// Wire a freshly-added torrent (magnet OR .torrent file) into the active player.
+///
+/// Shared by addMagnetToEngine and addTorrentFileToEngine: both add to the same
+/// engine and need identical player setup, so this lives in ONE place rather than
+/// being copied — the two entry points differ only in which C add_* call produced
+/// `tid` and what `source` string gets persisted.
+///
+/// Callers must have already ensured a valid active player exists.
+fn attachTorrentToPlayer(tid: c_int, source: []const u8) void {
+    const logs = @import("../core/logs.zig");
+
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
+
     if (tid >= 0) {
         const p = state.app.players.items[state.app.active_player_idx];
 
@@ -2182,10 +2197,10 @@ fn addMagnetToEngine(magnet_link: []const u8) void {
         state.app.pending_play_is_tv = false;
 
         // Store URL for workspace persistence
-        const url_len = @min(magnet_link.len, 2048);
-        @memcpy(p.source_url[0..url_len], magnet_link[0..url_len]);
+        const url_len = @min(source.len, 2048);
+        @memcpy(p.source_url[0..url_len], source[0..url_len]);
         p.source_url_len = url_len;
-        @memcpy(p.current_url[0..url_len], magnet_link[0..url_len]);
+        @memcpy(p.current_url[0..url_len], source[0..url_len]);
         p.current_url_len = url_len;
 
         logs.pushLog("info", "search", "Torrent added, waiting for metadata...", false);
@@ -2195,11 +2210,59 @@ fn addMagnetToEngine(magnet_link: []const u8) void {
 
         // Save magnet to download history for library persistence
         const hist = @import("history.zig");
-        hist.addDownloadHistory(magnet_link[0..@min(magnet_link.len, 64)], magnet_link);
+        hist.addDownloadHistory(source[0..@min(source.len, 64)], source);
     } else {
         logs.pushLog("error", "search", "Failed to add torrent - invalid magnet or already added", true);
         state.showToast("Couldn't add torrent (invalid or duplicate magnet)");
     }
+}
+
+/// Add a local .torrent FILE to the engine and stream it in the player.
+///
+/// The file-path sibling of addMagnetToEngine: same engine, same player setup
+/// (via attachTorrentToPlayer), only the C entry point differs. Reached from
+/// browser.loadContent's .torrent route — i.e. `opal foo.torrent`, drag-drop,
+/// and the Open dialog.
+pub fn addTorrentFileToEngine(path: []const u8) void {
+    const logs = @import("../core/logs.zig");
+    const playermod = @import("../player/player.zig");
+
+    if (path.len == 0) {
+        logs.pushLog("error", "search", "Empty torrent file path", true);
+        return;
+    }
+
+    // Auto-create a player if none exists (cold-start `opal foo.torrent`).
+    if (state.app.players.items.len == 0) {
+        if (playermod.MediaPlayer.init(@import("../core/alloc.zig").allocator)) |new_p| {
+            state.app.players.append(@import("../core/alloc.zig").allocator, new_p) catch {
+                new_p.deinit(@import("../core/alloc.zig").allocator);
+                logs.pushLog("error", "search", "Failed to create player", true);
+                return;
+            };
+            state.app.active_player_idx = 0;
+        } else |_| {
+            logs.pushLog("error", "search", "Failed to init player", true);
+            return;
+        }
+    }
+
+    if (state.app.active_player_idx >= state.app.players.items.len) {
+        state.app.active_player_idx = state.app.players.items.len - 1;
+    }
+
+    var null_term_path: [4096]u8 = undefined;
+    @memset(&null_term_path, 0);
+    const copy_len = @min(path.len, 4095);
+    @memcpy(null_term_path[0..copy_len], path[0..copy_len]);
+
+    const tid = c.mpv.torrent_add_file(state.torrentSession(), @ptrCast(&null_term_path[0]), state.getSavePath());
+    if (tid < 0) {
+        logs.pushLog("error", "search", "Failed to add torrent — invalid .torrent file or already added", true);
+        state.showToast("Couldn't add torrent (invalid .torrent file or duplicate)");
+        return;
+    }
+    attachTorrentToPlayer(tid, path);
 }
 
 // ── NSFW Confirmation Modal ──

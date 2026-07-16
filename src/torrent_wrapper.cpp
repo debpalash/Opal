@@ -249,6 +249,72 @@ extern "C" int torrent_add_magnet(TorrentSession session, const char* magnet_url
     return id;
 }
 
+extern "C" int torrent_add_file(TorrentSession session, const char* torrent_path, const char* save_path) {
+    if (!session || !torrent_path || !save_path) return -1;
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+
+    lt::error_code ec;
+    lt::add_torrent_params atp;
+
+    // Unlike a magnet, a .torrent file carries the metadata inline — parse it
+    // straight into atp.ti (the same idiom the magnet path uses for its cached
+    // metadata fast-lane). A parse failure means a corrupt/non-torrent file.
+    lt::error_code ec_parse;
+    auto ti = std::make_shared<lt::torrent_info>(torrent_path, ec_parse);
+    if (ec_parse) {
+#ifdef TORRENT_WRAPPER_DEBUG
+        std::cerr << "Failed to parse .torrent: " << ec_parse.message() << std::endl;
+#endif
+        return -1;
+    }
+    atp.ti = ti;
+    atp.save_path = save_path;
+
+    // Same metadata cache location the magnet path uses, keyed by infohash, so a
+    // later magnet add for this same torrent hits the fast-lane.
+    std::ostringstream ss;
+    ss << ti->info_hashes().get_best();
+    std::string cached_path = std::string(save_path) + "/" + ss.str() + ".torrent";
+
+    auto node = std::make_shared<TorrentNode>();
+    {
+        std::lock_guard<std::mutex> lk(ctx->mtx);
+        node->handle = ctx->ses->add_torrent(atp, ec);
+    }
+    node->cached_path = cached_path;
+    // Metadata is present from the first instant — no fetch phase to wait on.
+    node->ready_flag = true;
+    node->alive = true;
+    node->last_deadline_piece = -1;
+
+    if (!ec && node->handle.is_valid()) {
+        // Add popular public trackers for better peer discovery (mirrors the
+        // magnet path — a .torrent's own tracker list is often stale/dead).
+        static const char* extra_trackers[] = {
+            "udp://tracker.opentrackr.org:1337/announce",
+            "udp://open.stealth.si:80/announce",
+            "udp://tracker.torrent.eu.org:451/announce",
+            "udp://tracker.bittor.pw:1337/announce",
+            "udp://public.popcorn-tracker.org:6969/announce",
+            "udp://tracker.dler.org:6969/announce",
+            "udp://exodus.desync.com:6969/announce",
+            "udp://open.demonii.com:1337/announce",
+        };
+        for (const char* t : extra_trackers) {
+            lt::announce_entry ae(t);
+            node->handle.add_tracker(ae);
+        }
+    }
+
+    if (ec) return -1;
+
+    // STABLE-ID model: same monotonic, never-reused id space as torrent_add_magnet.
+    std::lock_guard<std::mutex> lk(ctx->mtx);
+    int id = ctx->next_id++;
+    ctx->torrents[id] = node;
+    return id;
+}
+
 extern "C" int torrent_count(TorrentSession session) {
     if (!session) return 0;
     SessionContext* ctx = static_cast<SessionContext*>(session);
