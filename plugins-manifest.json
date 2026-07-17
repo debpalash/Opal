@@ -174,7 +174,7 @@
       "type": "anime",
       "version": "1.0.0",
       "endpoints": {
-        "base": "https://raw.githubusercontent.com/debpalash/lists/main"
+        "base": "https://raw.githubusercontent.com/debpalash/opal-plugins/main/lists"
       }
     },
     {
@@ -202,7 +202,7 @@
     },
     {
       "id": "comet",
-      "name": "Comet \u00b7 debrid (Stremio)",
+      "name": "Comet · debrid (Stremio)",
       "type": "stremio",
       "version": "1.0.0",
       "endpoints": {

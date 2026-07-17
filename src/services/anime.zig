@@ -441,7 +441,7 @@ pub fn loadTrendingAnime() void {
 }
 
 // ══════════════════════════════════════════════════════════
-// `lists` source plugin — anime index from debpalash/lists
+// `lists` source plugin — anime index from debpalash/opal-plugins (lists/)
 // ══════════════════════════════════════════════════════════
 //
 // ENDPOINT: this is a METADATA source, so it ships with a working default and an
@@ -482,7 +482,9 @@ const LISTS_STAMP_KEY = "anime_lists_fetched_at";
 const LISTS_MAX_BYTES: usize = 4 * 1024 * 1024;
 
 /// Built-in default. An installed `lists` plugin overrides it (see listsBase).
-const LISTS_DEFAULT_BASE = "https://raw.githubusercontent.com/debpalash/lists/main";
+// The id-mapping data was consolidated from debpalash/lists into the
+// opal-plugins repo (lists/ subdir); the old repo is an archived mirror.
+const LISTS_DEFAULT_BASE = "https://raw.githubusercontent.com/debpalash/opal-plugins/main/lists";
 
 /// The installed plugin's endpoint if there is one, else the built-in default.
 ///
