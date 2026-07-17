@@ -55,6 +55,7 @@ from features import (  # noqa: F401
     test_content_cache,
     test_browse_infinite_scroll,
     test_plex_restore,
+    test_allanime_gated,
 )
 
 if __name__ == "__main__":
