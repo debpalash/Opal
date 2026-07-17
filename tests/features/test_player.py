@@ -311,13 +311,15 @@ def test_anime_netflix_experience():
 
 @test("Anime Lists Source Plugin", "Anime")
 def test_anime_lists_plugin():
-    # The debpalash/lists repo (AniList<->MAL id maps + a currently-airing feed)
-    # wired into the anime index. It is a METADATA source, so it ships with a
-    # working default endpoint and an installed `lists` plugin merely OVERRIDES
-    # it. It was originally gated behind a plugin install like a torrent index,
-    # which meant the chip rendered NOTHING on every machine (no plugin ships
-    # installed) -- the neutrality rule is about infringing endpoints, and Jikan
-    # and AniList, the other two anime metadata APIs, are both hardcoded.
+    # AniList<->MAL id maps + a currently-airing feed wired into the anime index.
+    # It is a METADATA source, so it ships with a working default endpoint and an
+    # installed `lists` plugin merely OVERRIDES it. It was originally gated behind
+    # a plugin install like a torrent index, which meant the chip rendered NOTHING
+    # on every machine (no plugin ships installed) -- the neutrality rule is about
+    # infringing endpoints, and Jikan and AniList, the other two anime metadata
+    # APIs, are both hardcoded.
+    # The data was consolidated from the former debpalash/lists repo into
+    # debpalash/opal-plugins (lists/ subdir); the base URL points there now.
     import json as _json
     an = _src("src/services/anime.zig")
     pure = _src("src/services/anime_lists_pure.zig")
@@ -330,13 +332,13 @@ def test_anime_lists_plugin():
         # Registered through the EXISTING source-plugin contract (plugin_repo.zig
         # reads this manifest; install writes ~/.config/opal/plugins/sources/<id>.json).
         "manifest entry": entry is not None and entry.get("type") == "anime",
-        "manifest endpoint": bool(entry and "debpalash/lists" in entry["endpoints"]["base"]),
+        "manifest endpoint": bool(entry and "opal-plugins/main/lists" in entry["endpoints"]["base"]),
         # Plugin can still override the endpoint...
         "source_config override": 'get("lists", "base")' in an,
         # ...but a machine with no plugin installed MUST still get data. A null
         # listsBase() hides the chip entirely, which is the bug this pins.
         "works with no plugin installed": ("LISTS_DEFAULT_BASE" in an
-                                           and "debpalash/lists" in an),
+                                           and "opal-plugins/main/lists" in an),
         # Fetch: curl (never std.http), off the UI thread, into the shared grid.
         "fetches airing feed": "anime-airing.json" in an,
         "curl not std.http": "curl" in an and "std.http" not in an,
