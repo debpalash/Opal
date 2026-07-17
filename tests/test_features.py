@@ -54,6 +54,7 @@ from features import (  # noqa: F401
     test_anime_sites,
     test_content_cache,
     test_browse_infinite_scroll,
+    test_plex_restore,
 )
 
 if __name__ == "__main__":
