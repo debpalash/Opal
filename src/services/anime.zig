@@ -45,13 +45,12 @@ fn drainPendingTexFrees() void {
 }
 
 // ══════════════════════════════════════════════════════════
-// Anime Tab — allanime.day API integration (built-in, no ani-cli)
-// Trending -> Search → Select → Pick Episode → Stream to MPV
+// Anime Tab — Jikan/AniList metadata + Trending → Search → Select → Pick Episode.
+// Stream resolution runs through resolver.zig (torrents → AllAnime → AnimePahe);
+// AllAnime's endpoint now lives in opal-plugins (id "allanime"), inert until
+// installed, so no source host is hardcoded here.
 // ══════════════════════════════════════════════════════════
 
-const allanime_api = "https://api.allanime.day";
-
-const allanime_refr = "https://allmanga.to";
 const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0";
 
 // NOTE: state.app.anime.is_loading.load(.acquire) / stream_loading / episodes_loading are plain

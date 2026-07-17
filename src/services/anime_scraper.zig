@@ -1,6 +1,10 @@
 const std = @import("std");
 
-pub fn decodeSourceURL(allocator: std.mem.Allocator, encoded: []const u8) ![]u8 {
+/// Decode AllAnime's obfuscated source hash into a playable URL. `base` is the
+/// installed "allanime" endpoint (from source_config) — passed in rather than
+/// hardcoded so no source host lives in the binary; a relative "/..." decode is
+/// joined onto it.
+pub fn decodeSourceURL(allocator: std.mem.Allocator, encoded: []const u8, base: []const u8) ![]u8 {
     var out = std.ArrayListUnmanaged(u8).empty;
     defer out.deinit(allocator);
 
@@ -69,7 +73,7 @@ pub fn decodeSourceURL(allocator: std.mem.Allocator, encoded: []const u8) ![]u8 
     defer allocator.free(res_str);
 
     if (std.mem.startsWith(u8, res_str, "/")) {
-        const full_url = try std.fmt.allocPrint(allocator, "https://api.allanime.day{s}", .{res_str});
+        const full_url = try std.fmt.allocPrint(allocator, "{s}{s}", .{ std.mem.trimEnd(u8, base, "/"), res_str });
         return full_url;
     }
 
@@ -79,7 +83,15 @@ pub fn decodeSourceURL(allocator: std.mem.Allocator, encoded: []const u8) ![]u8 
 test "decoding allanime hash" {
     const alloc = std.testing.allocator;
     const hash = "e2bb4a8d42d3cbb42137d579b28b9c7b2c93b3z52a92a3bbab4fc0d71ba3f07a2w4803z20fa94bf551381274955c42bc8ccdb990a82bcefc62";
-    const decoded = try decodeSourceURL(alloc, hash);
+    const decoded = try decodeSourceURL(alloc, hash, "https://example.test");
     defer alloc.free(decoded);
     try std.testing.expect(decoded.len > 0);
+}
+
+test "decodeSourceURL joins a relative decode onto the passed-in base (no hardcoded host)" {
+    const alloc = std.testing.allocator;
+    // "17" decodes to '/', so this encodes a leading-slash path → joined onto base.
+    const decoded = try decodeSourceURL(alloc, "17", "https://example.test");
+    defer alloc.free(decoded);
+    try std.testing.expect(std.mem.startsWith(u8, decoded, "https://example.test/"));
 }

@@ -1936,6 +1936,14 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
 
     const query = query_buf[0..qlen];
 
+    // Endpoint migrated to opal-plugins — inert until the user installs "allanime".
+    // AllAnime is a scrape-class streaming source, the same class as AnimePahe and
+    // the torrent engines, so it ships gated rather than hardcoded in the binary
+    // (unlike the Jikan/AniList metadata APIs). No install → no allanime results.
+    const sc = @import("../core/source_config.zig");
+    const aa_base = sc.get("allanime", "base") orelse return;
+    const aa_referer = sc.get("allanime", "referer") orelse aa_base;
+
     // Escape quotes and backslashes for JSON safety
     var safe_q: [256]u8 = undefined;
     var si: usize = 0;
@@ -1975,13 +1983,13 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
     const query_enc = @import("../core/http.zig").urlEncode(search_gql, &query_enc_buf);
 
     var final_url_buf: [2048]u8 = undefined;
-    const url = std.fmt.bufPrint(&final_url_buf, "https://api.allanime.day/api?variables={s}&query={s}", .{ vars_enc, query_enc }) catch return;
+    const url = std.fmt.bufPrint(&final_url_buf, "{s}/api?variables={s}&query={s}", .{ std.mem.trimEnd(u8, aa_base, "/"), vars_enc, query_enc }) catch return;
 
     var buf: [64 * 1024]u8 = undefined;
     @import("../core/rate_limit.zig").acquire("allanime", 1.0); // scrape-class — be gentle
     const body = @import("../core/http.zig").fetch(url, &buf, .{
         .timeout_secs = 8,
-        .referer = "https://allmanga.to",
+        .referer = aa_referer,
         .user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
     }) orelse return;
     const n = body.len;
