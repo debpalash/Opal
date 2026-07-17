@@ -283,6 +283,16 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_plugins_pure).step);
 
+    // Logs view: level-tag normalization + consecutive-duplicate collapsing.
+    const test_logs_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/logs_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_logs_pure).step);
+
     const test_deps = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/deps_test.zig"),

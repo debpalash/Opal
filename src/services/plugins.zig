@@ -102,6 +102,11 @@ pub var is_loading: bool = false;
 pub var results_mutex = sync.Mutex{};
 pub var search_buf: [256]u8 = std.mem.zeroes([256]u8);
 
+// Source-catalog filter state (the "so many sources" upgrade). Grouped by
+// category with a name/kind search + installed-only toggle — see plugins_pure.
+var src_filter_buf: [64]u8 = std.mem.zeroes([64]u8);
+var src_installed_only: bool = false;
+
 /// Atomically claim the loading slot. Returns true if the caller now owns
 /// it (was idle), false if a worker is already running. Caller must release
 /// via `endLoading()` when done.
@@ -923,14 +928,23 @@ fn renderSourcePlugins() void {
         pr.refresh();
     }
 
+    const pp = @import("plugins_pure.zig");
+
     var card = cardBegin(@src(), 0);
     defer card.deinit();
 
-    // Header row: title + a small Refresh.
+    // Installed count for the summary line (also used by the installed-only filter).
+    var installed_total: usize = 0;
+    for (0..pr.plugin_count) |i| {
+        if (pr.isInstalled(pr.plugins[i].idSlice())) installed_total += 1;
+    }
+
+    // Header row: title + count summary + a small Refresh.
     {
         var hrow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer hrow.deinit();
         _ = dvui.label(@src(), "Available plugins", .{}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_title, .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "  {d} sources · {d} installed", .{ pr.plugin_count, installed_total }, .{ .color_text = theme.colors.text_tertiary, .gravity_y = 0.5 });
         {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
@@ -948,23 +962,76 @@ fn renderSourcePlugins() void {
         return;
     }
 
-    // Available sources — one tidy row each.
-    var list = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
+    // Filter row: name/kind search + an installed-only toggle. With 45+ sources
+    // a flat list is unusable, so we group + filter (see plugins_pure).
+    {
+        var frow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.sm } });
+        defer frow.deinit();
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &src_filter_buf }, .placeholder = "Filter sources…" }, .{
+            .expand = .horizontal, .min_size_content = .{ .w = 160, .h = 18 },
+            .color_fill = theme.colors.bg_elevated, .color_border = theme.colors.border_subtle,
+            .color_text = theme.colors.text_primary, .border = dvui.Rect.all(1), .corner_radius = theme.dims.rad_sm,
+            .gravity_y = 0.5,
+        });
+        te.deinit();
+        if (dvui.button(@src(), "Installed only", .{}, .{
+            .color_fill = if (src_installed_only) theme.colors.accent else theme.colors.bg_elevated,
+            .color_text = if (src_installed_only) dvui.Color.white else theme.colors.text_secondary,
+            .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+            .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 }, .gravity_y = 0.5,
+        })) {
+            src_installed_only = !src_installed_only;
+        }
+    }
+
+    const query = std.mem.sliceTo(&src_filter_buf, 0);
+
+    // Grouped list: iterate categories in display order; within each, render only
+    // the plugins that pass the filter. A category with no matches is skipped
+    // (no empty header). id_extra bases keep dvui widget ids stable per plugin.
+    var list = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
     defer list.deinit();
-    for (0..pr.plugin_count) |i| {
-        const p = &pr.plugins[i];
-        var rowb = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 81000, .expand = .horizontal, .padding = .{ .x = 0, .y = 5, .w = 0, .h = 5 } });
-        defer rowb.deinit();
-        _ = dvui.label(@src(), "{s}", .{p.nameSlice()}, .{ .id_extra = i + 81100, .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
-        _ = dvui.label(@src(), "  {s}", .{p.kindSlice()}, .{ .id_extra = i + 81200, .color_text = theme.colors.text_tertiary, .gravity_y = 0.5 });
-        {
-            var sp = dvui.box(@src(), .{}, .{ .id_extra = i + 81300, .expand = .horizontal });
-            sp.deinit();
+    var shown_total: usize = 0;
+    for (pp.ordered_categories) |cat| {
+        // First pass: count matches in this category so we can skip empty groups.
+        var cat_matches: usize = 0;
+        for (0..pr.plugin_count) |i| {
+            const p = &pr.plugins[i];
+            if (pp.categoryOf(p.kindSlice()) != cat) continue;
+            if (pp.matches(p.nameSlice(), p.kindSlice(), query, src_installed_only, pr.isInstalled(p.idSlice()))) cat_matches += 1;
         }
-        const installed = pr.isInstalled(p.idSlice());
-        if (dvui.button(@src(), if (installed) "Uninstall" else "Install", .{}, .{ .id_extra = i + 81400, .color_fill = if (installed) theme.colors.bg_elevated else theme.colors.accent, .color_text = if (installed) theme.colors.text_secondary else dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 }, .gravity_y = 0.5 })) {
-            if (installed) pr.uninstall(i) else pr.install(i);
+        if (cat_matches == 0) continue;
+
+        // Category header with its match count.
+        _ = dvui.label(@src(), "{s}  ({d})", .{ cat.label(), cat_matches }, .{
+            .id_extra = @as(usize, @intFromEnum(cat)) + 82000,
+            .color_text = theme.colors.text_secondary, .font = dvui.themeGet().font_heading,
+            .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 2 },
+        });
+
+        for (0..pr.plugin_count) |i| {
+            const p = &pr.plugins[i];
+            if (pp.categoryOf(p.kindSlice()) != cat) continue;
+            const installed = pr.isInstalled(p.idSlice());
+            if (!pp.matches(p.nameSlice(), p.kindSlice(), query, src_installed_only, installed)) continue;
+
+            var rowb = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 81000, .expand = .horizontal, .padding = .{ .x = theme.spacing.sm, .y = 4, .w = 0, .h = 4 } });
+            defer rowb.deinit();
+            _ = dvui.label(@src(), "{s}", .{p.nameSlice()}, .{ .id_extra = i + 81100, .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
+            {
+                var sp = dvui.box(@src(), .{}, .{ .id_extra = i + 81300, .expand = .horizontal });
+                sp.deinit();
+            }
+            if (dvui.button(@src(), if (installed) "Uninstall" else "Install", .{}, .{ .id_extra = i + 81400, .color_fill = if (installed) theme.colors.bg_elevated else theme.colors.accent, .color_text = if (installed) theme.colors.text_secondary else dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 }, .gravity_y = 0.5 })) {
+                if (installed) pr.uninstall(i) else pr.install(i);
+            }
+            shown_total += 1;
         }
+    }
+
+    // A non-empty catalog filtered down to nothing → tell the user why.
+    if (shown_total == 0) {
+        _ = dvui.label(@src(), "No sources match the filter.", .{}, .{ .color_text = theme.colors.text_tertiary, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
     }
 }
 
