@@ -387,6 +387,16 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_subs_pure).step);
 
+    // Plex: restored-session section load trigger + stale-worker publish guard.
+    const test_plex_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/plex_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_plex_pure).step);
+
     // Anime NSFW filter: Jikan rating classification + sfw query param.
     const test_anime_pure = b.addTest(.{
         .root_module = b.createModule(.{

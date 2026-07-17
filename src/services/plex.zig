@@ -11,6 +11,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 const paths = @import("../core/paths.zig");
 const logs = @import("../core/logs.zig");
 const state = @import("../core/state.zig");
+const plex_pure = @import("plex_pure.zig");
 
 const CLIENT_ID = "opal-media-9a3f"; // X-Plex-Client-Identifier (stable per build)
 const Json = std.json.Value;
@@ -69,6 +70,20 @@ var current_start: usize = 0;
 var more_available: bool = true;
 var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
+// A section index alone can't tell "still the same fetch" from "the same section
+// was re-opened mid-fetch" (see plex_pure.workerMayPublish). `view_gen` is bumped
+// on every section switch/reload; workers capture it before spawning and re-check
+// it after the round-trip, so an A→B→A switch can't land a stale page.
+var view_gen: std.atomic.Value(u64) = std.atomic.Value(u64).init(1);
+// Section-load state for the restored-session trigger in renderContent().
+// `sections_loaded_once` latches only once a fetch actually PARSES — an empty
+// library is a successful load, so this can't be `section_count > 0` (that would
+// poll a zero-library server forever), and it must not be set before the fetch
+// or one transient failure would blank the tab for the whole run.
+var sections_loading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var sections_loaded_once: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var sections_last_attempt_s: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+
 fn setStatus(comptime fmt: []const u8, args: anytype) void {
     const s = std.fmt.bufPrint(&status_msg, fmt, args) catch status_msg[0..0];
     status_msg_len = s.len;
@@ -121,6 +136,11 @@ pub fn disconnect() void {
     item_count = 0;
     current_start = 0;
     more_available = true;
+    // Clear the load latch too — otherwise signing into a DIFFERENT account
+    // would skip the section fetch and land on a permanently blank library.
+    sections_loaded_once.store(false, .release);
+    sections_last_attempt_s.store(0, .release);
+    _ = view_gen.fetchAdd(1, .acq_rel); // supersede any in-flight worker
     conn_state.store(.disconnected, .release);
     save();
 }
@@ -275,6 +295,11 @@ fn discoverServers() void {
         setStatus("Connected: {s}", .{server_name[0..server_name_len]});
         save();
         state.showToastTyped("Connected to Plex", .success);
+        // Claim the in-flight flag so the renderContent() trigger can't stack a
+        // second worker on top of this inline load (and so its defer clears a
+        // flag we actually own).
+        _ = sections_loading.swap(true, .acq_rel);
+        sections_last_attempt_s.store(io.timestamp(), .release);
         fetchSectionsSync();
         return;
     }
@@ -285,19 +310,37 @@ fn discoverServers() void {
 // ── libraries + items ────────────────────────────────────────────────────────
 pub fn fetchSections() void {
     if (!isConnected()) return;
-    (std.Thread.spawn(.{}, fetchSectionsSync, .{}) catch return).detach();
+    if (sections_loading.swap(true, .acq_rel)) return; // a worker is already in flight
+    sections_last_attempt_s.store(io.timestamp(), .release);
+    (std.Thread.spawn(.{}, fetchSectionsSync, .{}) catch {
+        sections_loading.store(false, .release);
+        return;
+    }).detach();
 }
 fn fetchSectionsSync() void {
+    defer sections_loading.store(false, .release);
     var url: [320]u8 = undefined;
     const u = std.fmt.bufPrint(&url, "{s}/library/sections", .{server_uri[0..server_uri_len]}) catch return;
     var buf: [65536]u8 = undefined;
     const n = httpGet(u, false, serverTok(), &buf);
-    if (n == 0) return;
+    if (n == 0) {
+        logs.pushLog("warn", "plex", "Library list failed — retrying shortly", true);
+        return;
+    }
     var parsed = std.json.parseFromSlice(Json, alloc, buf[0..n], .{}) catch return;
     defer parsed.deinit();
+    if (parsed.value != .object) return;
     const mc = parsed.value.object.get("MediaContainer") orelse return;
-    const dirs = mc.object.get("Directory") orelse return;
+    if (mc != .object) return;
+    const dirs = mc.object.get("Directory") orelse {
+        // A server with no libraries answers without a Directory array. That's a
+        // successful (empty) load, not a failure — latch so we stop re-fetching.
+        sections_loaded_once.store(true, .release);
+        return;
+    };
     if (dirs != .array) return;
+    // Past parsing — whatever the count, this fetch succeeded.
+    sections_loaded_once.store(true, .release);
     section_count = 0;
     for (dirs.array.items) |d| {
         if (section_count >= sections.len or d != .object) continue;
@@ -315,33 +358,60 @@ fn fetchSectionsSync() void {
     }
     if (section_count > 0) {
         active_section = 0;
-        fetchItemsSync(0);
+        fetchItemsSync(0, view_gen.fetchAdd(1, .acq_rel) + 1);
     }
+}
+
+/// Reset the grid + pagination for a fresh section load, and claim `is_loading`.
+/// Callers MUST do this before the fetch worker spawns, never inside it — see
+/// fetchItems().
+fn beginSectionLoad() void {
+    is_loading.store(true, .release);
+    item_count = 0;
+    current_start = 0;
+    more_available = true;
 }
 
 pub fn fetchItems(section_idx: usize) void {
     if (!isConnected() or section_idx >= section_count) return;
     active_section = section_idx;
+    // Supersede every in-flight worker: re-opening the SAME section still yields
+    // a new generation, which is what an index compare alone can't express.
+    const new_gen = view_gen.fetchAdd(1, .acq_rel) + 1;
+    // Reset on THIS (UI) thread, before the spawn. Doing it inside the worker
+    // leaves a window where renderContent's infinite-scroll block — which runs
+    // later in this SAME frame, since the tab click doesn't return — sees the
+    // NEW active_section beside the OLD section's current_start, with is_loading
+    // still false because the worker hasn't been scheduled yet. loadMore() then
+    // appends the new section at the old section's offset (e.g. TV Shows rows
+    // 0-49 followed by 100-149, 50 titles silently missing, current_start
+    // stranded at 150). The generation guard can't catch that: loadMore reads
+    // view_gen after this bump, so its stale append carries the CURRENT gen.
+    beginSectionLoad();
     const S = struct {
         var idx: usize = 0;
+        var gen: u64 = 0;
         fn run() void {
-            fetchItemsSync(idx);
+            defer is_loading.store(false, .release);
+            fetchWindow(@This().idx, 0, @This().gen);
         }
     };
     S.idx = section_idx;
-    (std.Thread.spawn(.{}, S.run, .{}) catch return).detach();
+    S.gen = new_gen;
+    if (std.Thread.spawn(.{}, S.run, .{})) |t| {
+        t.detach();
+    } else |_| {
+        is_loading.store(false, .release); // never strand the tab "loading"
+    }
 }
-fn fetchItemsSync(section_idx: usize) void {
+/// Initial load driven by the section-list worker. Unlike fetchItems() this
+/// already runs off the UI thread, and item_count == 0 makes loadMore() bail, so
+/// there's no same-frame append to race with.
+fn fetchItemsSync(section_idx: usize, gen: u64) void {
     if (section_idx >= section_count) return;
-    is_loading.store(true, .release);
+    beginSectionLoad();
     defer is_loading.store(false, .release);
-    // Fresh section open — reset the grid + pagination before pulling window 0.
-    // (active_section is set by the caller, fetchItems(), before this thread
-    // spawns, so fetchWindow's post-fetch section check passes.)
-    item_count = 0;
-    current_start = 0;
-    more_available = true;
-    fetchWindow(section_idx, 0);
+    fetchWindow(section_idx, 0, gen);
 }
 
 /// Fetch one X-Plex-Container-Start/Size window for `section_idx` and append
@@ -351,7 +421,7 @@ fn fetchItemsSync(section_idx: usize) void {
 /// Advances `current_start` by the server-reported row count (not just the
 /// rows we managed to store) and clears `more_available` once a window comes
 /// back short or the fixed items[] buffer fills.
-fn fetchWindow(section_idx: usize, start: usize) void {
+fn fetchWindow(section_idx: usize, start: usize, gen: u64) void {
     if (section_idx >= section_count) return;
     const sec = &sections[section_idx];
     var url: [460]u8 = undefined;
@@ -364,12 +434,13 @@ fn fetchWindow(section_idx: usize, start: usize) void {
     var parsed = std.json.parseFromSlice(Json, alloc, buf[0..n], .{}) catch return;
     defer parsed.deinit();
 
-    // The user may have switched library sections while this window was in
-    // flight — bail before touching ANY shared pagination state (item_count,
-    // current_start, more_available all belong to whichever section is
-    // currently open; a stale response — even an error/empty one — must not
-    // clobber the newly-selected section's state).
-    if (section_idx != active_section) return;
+    // The user may have switched sections — or re-opened THIS one, which resets
+    // item_count/current_start — while this window was in flight. Bail before
+    // touching ANY shared pagination state (item_count, current_start,
+    // more_available all belong to whichever load is currently live; a stale
+    // response — even an error/empty one — must not clobber it). The generation
+    // is what catches the A→B→A case the index compare passes.
+    if (!plex_pure.workerMayPublish(section_idx, gen, active_section, view_gen.load(.acquire))) return;
 
     const mc = parsed.value.object.get("MediaContainer") orelse return;
     const meta = mc.object.get("Metadata") orelse {
@@ -434,13 +505,16 @@ pub fn loadMore() void {
     const S = struct {
         var section_idx: usize = 0;
         var start: usize = 0;
+        var gen: u64 = 0;
         fn run() void {
             defer loading_more.store(false, .release);
-            fetchWindow(@This().section_idx, @This().start);
+            fetchWindow(@This().section_idx, @This().start, @This().gen);
         }
     };
     S.section_idx = active_section;
     S.start = current_start;
+    // Capture (not bump) — an append belongs to the load that's already live.
+    S.gen = view_gen.load(.acquire);
     if (std.Thread.spawn(.{}, S.run, .{})) |t| {
         t.detach();
     } else |_| {
@@ -484,6 +558,18 @@ pub fn renderContent() void {
         }
         return;
     }
+
+    // A restored token (init() → conn_state = .connected) skips the sign-in panel
+    // above, but nothing else ever loaded the library: fetchSections() had zero
+    // callers, so every relaunch drew this header over an empty tab. Kick the
+    // load here, backed off so a failure retries instead of latching blank.
+    if (plex_pure.shouldFetchSections(
+        isConnected(),
+        sections_loaded_once.load(.acquire),
+        sections_loading.load(.acquire),
+        sections_last_attempt_s.load(.acquire),
+        io.timestamp(),
+    )) fetchSections();
 
     // Header: server + section tabs + disconnect.
     {
