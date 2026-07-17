@@ -16,7 +16,14 @@ const jellyfin_ui = @import("jellyfin_ui.zig");
 const ai_chat = @import("../services/ai_chat.zig");
 const plugin_mod = @import("../services/plugins.zig");
 const logs = @import("../core/logs.zig");
+const logs_pure = @import("../core/logs_pure.zig");
 const components = @import("components.zig");
+
+// Compacted Logs view: consecutive identical lines collapse into one ×N row.
+// File-scope, UI-thread-only scratch (sized to the log ring cap) so the per-frame
+// run-building pass doesn't churn the stack. See renderLogsContent + logs_pure.
+const LogRun = struct { idx: usize, count: usize };
+var log_runs: [1024]LogRun = undefined;
 const settings_mod = @import("settings.zig");
 
 var drawer_last_mouse_x: f32 = -1;
@@ -709,39 +716,75 @@ fn renderLogsContent() void {
     defer logs.unlockRead();
     const snap = logs.logCount();
 
-    // Apply the errors-only filter BEFORE the render window, so toggling the
-    // filter shows the last 200 MATCHING entries — windowing first could show
-    // an empty list while older errors still sat in the ring.
-    var matching: usize = 0;
+    // Compact the FILTERED stream: collapse CONSECUTIVE identical lines (same
+    // level+prefix+text) into one ×N row (see logs_pure.sameLine). Filter first
+    // so an errors-only view collapses errors that were adjacent once the info
+    // lines between them are hidden. Runs are built oldest→newest into a
+    // file-scope buffer; the last MAX_RENDER runs render (newest are kept).
+    const txt = @import("../core/text.zig");
+    var nruns: usize = 0;
+    var have_prev = false;
+    var p_level: []const u8 = "";
+    var p_prefix: []const u8 = "";
+    var p_text: []const u8 = "";
     {
         var ci: usize = 0;
         while (ci < snap) : (ci += 1) {
-            if (logs.show_only_errors and !logs.getLog(ci).is_error) continue;
-            matching += 1;
+            const l = logs.getLog(ci);
+            if (logs.show_only_errors and !l.is_error) continue;
+            if (have_prev and nruns > 0 and logs_pure.sameLine(p_level, p_prefix, p_text, l.level, l.prefix, l.text)) {
+                log_runs[nruns - 1].count += 1;
+            } else if (nruns < log_runs.len) {
+                log_runs[nruns] = .{ .idx = ci, .count = 1 };
+                nruns += 1;
+            }
+            have_prev = true;
+            p_level = l.level;
+            p_prefix = l.prefix;
+            p_text = l.text;
         }
     }
-    if (matching > MAX_RENDER) {
-        var note_buf: [64]u8 = undefined;
-        const note = std.fmt.bufPrint(&note_buf, "Showing the last {d} of {d} entries", .{ MAX_RENDER, matching }) catch "";
+
+    if (nruns > MAX_RENDER) {
+        var note_buf: [80]u8 = undefined;
+        const note = std.fmt.bufPrint(&note_buf, "Showing the last {d} of {d} lines", .{ MAX_RENDER, nruns }) catch "";
         _ = dvui.label(@src(), "{s}", .{note}, .{
             .color_text = theme.colors.text_tertiary,
             .margin = .{ .x = 0, .y = 1, .w = 0, .h = theme.spacing.xs },
         });
     }
-    var to_skip = matching -| MAX_RENDER;
-    var li: usize = 0;
-    while (li < snap) : (li += 1) {
-        const l = logs.getLog(li);
-        if (logs.show_only_errors and !l.is_error) continue;
-        if (to_skip > 0) {
-            to_skip -= 1;
-            continue;
+
+    const first_run = if (nruns > MAX_RENDER) nruns - MAX_RENDER else 0;
+    var ri: usize = first_run;
+    while (ri < nruns) : (ri += 1) {
+        const r = log_runs[ri];
+        const l = logs.getLog(r.idx);
+        const tag = logs_pure.levelTag(l.level);
+        const tag_col = if (l.is_error)
+            theme.colors.danger
+        else if (std.mem.eql(u8, tag, "WRN"))
+            theme.colors.warning
+        else
+            theme.colors.text_tertiary;
+        const text_col = if (l.is_error) theme.colors.danger else theme.colors.text_secondary;
+
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = ri + 70000, .expand = .horizontal, .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 } });
+        defer row.deinit();
+        // Level tag gutter (ERR/WRN/INF/…).
+        _ = dvui.labelNoFmt(@src(), tag, .{}, .{ .id_extra = ri + 70100, .color_text = tag_col, .gravity_y = 0.5 });
+        // Source prefix, dimmed — so a line's origin is visible with many sources.
+        if (l.prefix.len > 0) {
+            _ = dvui.label(@src(), " {s}", .{txt.safeUtf8(l.prefix)}, .{ .id_extra = ri + 70200, .color_text = theme.colors.text_tertiary, .gravity_y = 0.5 });
         }
-        const col = if (l.is_error) theme.colors.danger else theme.colors.text_tertiary;
-        _ = dvui.labelNoFmt(@src(), @import("../core/text.zig").safeUtf8(l.text), .{}, .{
-            .id_extra = li,
-            .color_text = col,
-            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
-        });
+        // Message.
+        _ = dvui.label(@src(), "  {s}", .{txt.safeUtf8(l.text)}, .{ .id_extra = ri + 70300, .color_text = text_col, .gravity_y = 0.5 });
+        // ×N collapse badge, right-aligned.
+        if (r.count > 1) {
+            {
+                var sp = dvui.box(@src(), .{}, .{ .id_extra = ri + 70400, .expand = .horizontal });
+                sp.deinit();
+            }
+            _ = dvui.label(@src(), "×{d}", .{r.count}, .{ .id_extra = ri + 70500, .color_text = theme.colors.text_tertiary, .gravity_y = 0.5 });
+        }
     }
 }
