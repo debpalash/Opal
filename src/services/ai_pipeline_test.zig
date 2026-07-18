@@ -184,23 +184,35 @@ test "pipeline: every case — classify + normalize + rank + play decision" {
         // Stage 3: rank against library (only meaningful for specific_title / search)
         const ranked = rank.rankAll(&library, got_norm, c.search_intent_tag, &rbuf);
 
-        // Stage 4: emit trace
-        dumpTrace(c, got_intent, got_norm, ranked);
-
-        // Assertions — tally don't abort, so trace for ALL cases prints
-        if (got_intent != c.expected_intent) failures += 1;
-        if (!std.mem.eql(u8, got_norm, c.expected_norm)) failures += 1;
+        // Stage 4: tally this case first, so the trace can be limited to the
+        // cases that actually failed (tally, don't abort — one bad case still
+        // reports every other one).
+        var case_failures: u32 = 0;
+        if (got_intent != c.expected_intent) case_failures += 1;
+        if (!std.mem.eql(u8, got_norm, c.expected_norm)) case_failures += 1;
 
         if (c.expected_top_name) |want| {
             if (ranked.len == 0) {
-                failures += 1;
+                case_failures += 1;
             } else if (!std.mem.eql(u8, library[ranked[0].index].name, want)) {
-                failures += 1;
+                case_failures += 1;
             }
         }
+
+        // Stage 5: trace ONLY failing cases. Dumping all 8 traces on a passing
+        // run flooded the test binary's stderr; under `zig build test`
+        // (--listen=-) the build runner doesn't drain that pipe while it waits
+        // for the protocol reply, so on Windows (small default pipe buffer) the
+        // test blocked on write and the runner gave up with "test runner failed
+        // to respond". A green run is now silent; a red one still prints the
+        // full reasoning for the cases that broke.
+        if (case_failures > 0) dumpTrace(c, got_intent, got_norm, ranked);
+        failures += case_failures;
     }
 
-    std.debug.print("\n── pipeline summary: {d} assertion failure(s) across {d} cases ──\n", .{ failures, cases.len });
+    if (failures > 0) {
+        std.debug.print("\n── pipeline summary: {d} assertion failure(s) across {d} cases ──\n", .{ failures, cases.len });
+    }
     try std.testing.expectEqual(@as(u32, 0), failures);
 }
 
