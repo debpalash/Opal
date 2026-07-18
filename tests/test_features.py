@@ -58,6 +58,7 @@ from features import (  # noqa: F401
     test_allanime_gated,
     test_plugins_logs_ui,
     test_dpi_bypass,
+    test_browse_rail_groups,
 )
 
 if __name__ == "__main__":
