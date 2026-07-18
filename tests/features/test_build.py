@@ -9,7 +9,9 @@ def test_zig_build():
     try:
         result = subprocess.run(
             ["zig", "build"], cwd=PROJECT_DIR,
-            capture_output=True, text=True, timeout=120
+            # Cold CI builds link the C++ torrent wrapper + the whole app; 120s
+            # was right at the edge and flaked. 300s leaves headroom.
+            capture_output=True, text=True, timeout=300
         )
         if result.returncode == 0:
             binary = os.path.join(PROJECT_DIR, "zig-out/bin/opal")

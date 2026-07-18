@@ -84,7 +84,7 @@ def test_shell_immersive_navbar():
     sh = _src("src/ui/shell.zig")
     ok = (
         "shouldHideChrome" in sh
-        and "renderTopNav(compact)" in sh
+        and "renderTopNav(compact" in sh   # now takes a responsive `narrow` arg too
         and "if (!immersive)" in sh
         and "nav_alpha" in sh                          # phase 4: nav fades instead of popping
         and "router.current == .player" in sh          # scoped so browsing keeps the nav

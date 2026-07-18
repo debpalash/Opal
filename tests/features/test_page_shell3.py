@@ -237,12 +237,14 @@ def test_nav_donate_button():
         # A donate chip that spawns its own child process = duplicated launcher.
         "no second launcher": "Child.init(" not in hdr,
         # Room for the chip came from the omnibox cap, not from overlapping it.
-        "omnibox narrowed": ".max_size_content = .{ .w = 640, .h = 26 }" in shell,
+        # The omnibox is now a fixed, responsive width (no .expand), tighter than
+        # the old 640 so the nav row fits the chip + right-side actions.
+        "omnibox narrowed": ".max_size_content = .{ .w = if (narrow)" in shell,
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
         return "fail", "donate button wiring incomplete: " + ", ".join(missing)
-    return "pass", "donate chip: header.zig → openExternal, omnibox capped at 640"
+    return "pass", "donate chip: header.zig → openExternal, omnibox width-capped"
 
 
 @test("EZTV Release Calendar (neutral + live)", "Page Shell")
