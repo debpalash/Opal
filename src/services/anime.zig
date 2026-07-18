@@ -671,16 +671,52 @@ fn publishListsJson(json: []const u8, my_gen: u32) usize {
 /// --connect-timeout so a dead/flaky Jikan can't stall the worker, --max-time
 /// as a hard ceiling (the argv previously had NEITHER — a hung Jikan hung the
 /// whole anime tab).
+/// Curl `url` into `buf`, staging through a temp FILE rather than a pipe.
+///
+/// WINDOWS DEADLOCK THIS AVOIDS: a piped child blocks in write() once its
+/// output fills the OS pipe buffer (~64KB). Jikan's top-anime page is ~94KB, so
+/// curl stalled mid-write while the app sat in readAll() — neither side moved,
+/// the child never exited (observed: curl alive 56s at 0.1s CPU despite
+/// --max-time 10), and the anime grid stayed empty forever. Small responses
+/// (podcasts, radio) fit the buffer, so they always worked — which is exactly
+/// the split that made this look source-specific. A regular file has no such
+/// bound: curl writes it all, exits, and we read it back with no interleaving.
 fn jikanGet(url: []const u8, buf: []u8) usize {
-    const argv = [_][]const u8{ "curl", "-s", "--connect-timeout", "3", "--max-time", "10", "-A", agent, url };
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
+    const io_g = @import("../core/io_global.zig");
+
+    // Unique per call — concurrent workers must not share a staging path.
+    const seq = tmp_seq.fetchAdd(1, .monotonic);
+    var cfg_buf: [512]u8 = undefined;
+    const cfg = @import("../core/paths.zig").configDir(&cfg_buf);
+    var dir_buf: [600]u8 = undefined;
+    const dir = std.fmt.bufPrint(&dir_buf, "{s}/tmp", .{cfg}) catch return 0;
+    io_g.cwdMakePath(dir) catch {};
+    var path_buf: [700]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "{s}/jikan_{d}.json", .{ dir, seq }) catch return 0;
+
+    const argv = [_][]const u8{
+        "curl", "-s", "--connect-timeout", "3", "--max-time", "10", "-A", agent, "-o", path, url,
+    };
+    var child = io_g.Child.init(&argv, alloc);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
     _ = child.spawn() catch return 0;
-    const n = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
-    _ = child.wait() catch {};
+    _ = child.wait() catch return 0;
+
+    const body = io_g.cwdReadFileAlloc(path, alloc, buf.len) catch {
+        io_g.cwdDeleteFile(path) catch {};
+        return 0;
+    };
+    defer alloc.free(body);
+    io_g.cwdDeleteFile(path) catch {};
+    const n = @min(body.len, buf.len);
+    @memcpy(buf[0..n], body[0..n]);
     return n;
 }
+
+/// Serial number for jikanGet's staging files (see above).
+var tmp_seq = std.atomic.Value(u32).init(0);
 
 fn trendingThread() void {
     defer state.app.anime.is_loading.store(false, .release);

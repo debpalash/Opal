@@ -230,7 +230,17 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
 
     var argv = std.ArrayListUnmanaged([]const u8).empty;
     defer argv.deinit(allocator);
-    argv.append(allocator, "python3") catch return;
+    // Resolve a real interpreter rather than hardcoding "python3": on Windows
+    // that name is usually the Microsoft Store alias stub, which prints an
+    // install prompt and exits — nova2 then produced no output and torrent
+    // search silently returned nothing. pybin probes candidates and caches.
+    const py = @import("../core/pybin.zig").python() orelse {
+        state.showToast("Torrent search needs Python — see Settings › AI & Voice");
+        @import("../core/logs.zig").pushLog("warn", "search", @import("../core/pybin.zig").missingHint(), true);
+        is_searching.store(false, .release);
+        return;
+    };
+    argv.append(allocator, py) catch return;
     argv.append(allocator, "engines/nova2.py") catch return;
     argv.append(allocator, engine_filter.pyName()) catch return;
     argv.append(allocator, "all") catch return;

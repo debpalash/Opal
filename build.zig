@@ -28,6 +28,9 @@ pub fn build(b: *std.Build) void {
     // report). Also flips on longPathAware. No-op on macOS/Linux.
     if (target.result.os.tag == .windows) {
         exe.win32_manifest = b.path("packaging/windows/opal.manifest");
+        // Embed the app icon (resource ID 1) so Explorer, the taskbar and
+        // Alt-Tab show the Opal gem instead of the generic default exe icon.
+        exe.root_module.addWin32ResourceFile(.{ .file = b.path("packaging/windows/opal.rc") });
         // GUI subsystem for the desktop build so launching the app does NOT pop
         // a console window alongside it. The headless server build keeps the
         // console subsystem (it's a CLI that logs to stdout). Child processes
@@ -115,11 +118,19 @@ pub fn build(b: *std.Build) void {
     // Built as its own exe here and installed alongside `opal`; the app spawns it
     // as a managed subprocess when the Settings toggle is on (see
     // services/dpi_bypass.zig), and build-app.sh bundles it into Resources.
-    const bypassdpi_dep = b.dependency("bypassdpi", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    b.installArtifact(bypassdpi_dep.artifact("zig-bypassdpi"));
+    // Windows: the upstream sidecar does not compile there yet — its main.zig
+    // calls std.process.Args.init(), which zig 0.16 makes a hard @compileError
+    // on Windows ("In Windows, use initAllocator instead"). Skip building it so
+    // `zig build` still produces a working opal.exe; dpi_bypass.zig already
+    // no-ops when the binary is absent (isRunning() stays false). Drop this gate
+    // once zig-bypassdpi is fixed upstream.
+    if (!is_windows) {
+        const bypassdpi_dep = b.dependency("bypassdpi", .{
+            .target = target,
+            .optimize = optimize,
+        });
+        b.installArtifact(bypassdpi_dep.artifact("zig-bypassdpi"));
+    }
 
     // Link MPV and SQLite.
     // Windows: zig's -l search for windows-gnu only tries `{name}.dll`,

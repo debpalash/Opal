@@ -27,7 +27,24 @@ pub fn io() std.Io {
         if (constructing.cmpxchgStrong(false, true, .acq_rel, .acquire) == null) {
             // We won the race — construct, then publish readiness.
             const alloc = @import("alloc.zig").allocator;
-            threaded = std.Io.Threaded.init(alloc, .{});
+            // `Threaded.environ` is what processSpawn hands each child. On Windows
+            // it defaulted to an empty block, so spawned curl had no SystemRoot,
+            // WinSock's resolver never initialized, and every fetch died with
+            // "curl: (6) Could not resolve host" — silently emptying every
+            // network-backed feature (browse tabs, search, posters, plugins).
+            // Hand children the real process environment. The `.global` block
+            // only exists on Windows's GlobalBlock (POSIX's PosixBlock has no
+            // such member), and POSIX already inherits a working env under the
+            // default, so this override is Windows-only and comptime-pruned
+            // elsewhere. `.async_limit = .unlimited` applies everywhere: blocking
+            // child-stdout reads hold an async slot for as long as curl runs, and
+            // startup fires several fetches at once (tmdb + anime + calendar +
+            // yt-dlp + posters); the default (cpu_count - 1) limit could be
+            // exhausted so later reads never dispatched and readAll() hung.
+            threaded = if (builtin.os.tag == .windows)
+                std.Io.Threaded.init(alloc, .{ .environ = .{ .block = .global }, .async_limit = .unlimited })
+            else
+                std.Io.Threaded.init(alloc, .{ .async_limit = .unlimited });
             ready.store(true, .release);
         } else {
             // Another thread is constructing — wait for it to publish.
@@ -36,6 +53,7 @@ pub fn io() std.Io {
     }
     return threaded.io();
 }
+
 
 /// Replacement for removed std.posix.getenv.
 pub fn getenv(name: [*:0]const u8) ?[]const u8 {
@@ -323,6 +341,10 @@ pub const Child = struct {
             // etc.) to inherit, so without this each spawn would flash its own
             // console window. CREATE_NO_WINDOW suppresses that. No-op elsewhere.
             .create_no_window = is_windows,
+            // The process environment comes from `Threaded.environ` (set in
+            // io()), which is what processSpawn actually uses; only override it
+            // here when a caller supplied an explicit map.
+            .environ_map = self.env_map,
         });
         self.stdin = real.stdin;
         self.stdout = real.stdout;

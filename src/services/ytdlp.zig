@@ -32,7 +32,11 @@ var resolved_done: bool = false;
 pub fn binary() []const u8 {
     if (resolved_done) return resolved_buf[0..resolved_len];
     const io = @import("../core/io_global.zig");
-    const candidates = [_][]const u8{
+    // Absolute system installs, per platform. The POSIX brew/usr prefixes can
+    // never exist on Windows, where a system yt-dlp is on PATH (scoop/winget/
+    // pip) — probing them there just wasted three syscalls before falling
+    // through to the bundled copy.
+    const candidates = if (@import("builtin").os.tag == .windows) [_][]const u8{} else [_][]const u8{
         "/opt/homebrew/bin/yt-dlp",
         "/usr/local/bin/yt-dlp",
         "/usr/bin/yt-dlp",
@@ -60,9 +64,18 @@ pub fn isDownloading() bool {
 pub fn ensureAvailable() void {
     if (is_downloading or is_ready) return;
 
-    // Build path: ~/.config/opal/bin/yt-dlp
-    const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
-    const path = std.fmt.bufPrintZ(&bin_path_buf, "{s}/.config/opal/bin/yt-dlp", .{home}) catch return;
+    // Install under the app's REAL config dir (paths.configDir), not a
+    // hand-rolled HOME + "/.config/opal".
+    //
+    // WINDOWS BUG THIS FIXES: getenv("HOME") is null on Windows (it's
+    // USERPROFILE), so this function returned on the very first line — yt-dlp
+    // was NEVER downloaded and YouTube silently never worked. Windows also
+    // needs the .exe extension or the file can't be executed, and its config
+    // lives in %APPDATA%\opal rather than ~/.config/opal.
+    var cfg_buf: [512]u8 = undefined;
+    const cfg = @import("../core/paths.zig").configDir(&cfg_buf);
+    const exe_name = if (@import("builtin").os.tag == .windows) "yt-dlp.exe" else "yt-dlp";
+    const path = std.fmt.bufPrintZ(&bin_path_buf, "{s}/bin/{s}", .{ cfg, exe_name }) catch return;
     bin_path_len = path.len;
 
     // Check if binary already exists
@@ -105,10 +118,13 @@ fn downloadWorker() void {
 
     const path = bin_path_buf[0..bin_path_len];
 
-    // Ensure directory exists
-    const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
+    // Ensure directory exists — same configDir() the install path above uses.
+    // (This had the identical HOME bug: null on Windows meant an early return,
+    // so the download never even started.)
     var dir_buf: [512]u8 = undefined;
-    const dir_path = std.fmt.bufPrintZ(&dir_buf, "{s}/.config/opal/bin", .{home}) catch return;
+    var cfg_buf2: [512]u8 = undefined;
+    const cfg2 = @import("../core/paths.zig").configDir(&cfg_buf2);
+    const dir_path = std.fmt.bufPrintZ(&dir_buf, "{s}/bin", .{cfg2}) catch return;
     @import("../core/io_global.zig").cwdMakePath(dir_path) catch {};
 
     const builtin = @import("builtin");

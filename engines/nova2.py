@@ -132,10 +132,17 @@ def installed_engines() -> set[str]:
     """Engine ids the user has explicitly installed via Opal's plugin manager
     (a `sources/<id>.json` marker). Opal ships NEUTRAL — with nothing installed
     this is empty and no engine runs, so no search source is live by default."""
-    sources_dir = path.join(
-        os.environ.get('XDG_CONFIG_HOME') or path.join(path.expanduser('~'), '.config'),
-        'opal', 'plugins', 'sources',
-    )
+    # Must mirror core/paths.zig configDir(), or every engine looks uninstalled.
+    # Windows keeps config under %APPDATA%\opal (winConfigBase), NOT ~/.config —
+    # looking in the POSIX spot there found nothing, so every engine stayed gated
+    # off and torrent search silently returned zero results.
+    if sys.platform == 'win32':
+        config_base = os.environ.get('APPDATA') or path.join(
+            path.expanduser('~'), 'AppData', 'Roaming')
+    else:
+        config_base = os.environ.get('XDG_CONFIG_HOME') or path.join(
+            path.expanduser('~'), '.config')
+    sources_dir = path.join(config_base, 'opal', 'plugins', 'sources')
     try:
         return {f[:-5] for f in os.listdir(sources_dir) if f.endswith('.json')}
     except OSError:
