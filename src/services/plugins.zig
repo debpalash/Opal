@@ -950,7 +950,14 @@ fn renderSourcePlugins() void {
             sp.deinit();
         }
         if (dvui.button(@src(), "Refresh", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 }, .gravity_y = 0.5 })) {
-            pr.plugin_count = 0;
+            // Do NOT zero plugin_count here: refresh() fetches on a background
+            // thread and parseManifest swaps the list in atomically on success.
+            // Wiping it up front made a slow/failed/rate-limited refresh (GitHub
+            // allows only 60 unauthenticated req/hr) leave the page permanently
+            // empty — the "all plugins vanish after Refresh" bug. Leaving the
+            // current list in place degrades gracefully: it stays until a
+            // successful fetch replaces it. The spinner state below still shows
+            // "Loading sources…" only when the list is genuinely empty.
             pr.refresh();
         }
     }

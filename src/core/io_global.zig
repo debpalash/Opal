@@ -319,6 +319,10 @@ pub const Child = struct {
             .stdout = mapBehavior(self.stdout_behavior),
             .stderr = mapBehavior(self.stderr_behavior),
             .cwd = cwd_val,
+            // Windows GUI build has no console for a spawned console app (curl,
+            // etc.) to inherit, so without this each spawn would flash its own
+            // console window. CREATE_NO_WINDOW suppresses that. No-op elsewhere.
+            .create_no_window = is_windows,
         });
         self.stdin = real.stdin;
         self.stdout = real.stdout;

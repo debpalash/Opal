@@ -21,6 +21,21 @@ pub fn build(b: *std.Build) void {
     });
     exe.use_llvm = true;
 
+    // Windows: embed an application manifest declaring Per-Monitor-V2 DPI
+    // awareness. Windows reads this at process creation (before SDL_Init), so
+    // the whole app renders at native pixel density instead of being bitmap-
+    // stretched from a virtualized low resolution (the "looks low-res / blurry"
+    // report). Also flips on longPathAware. No-op on macOS/Linux.
+    if (target.result.os.tag == .windows) {
+        exe.win32_manifest = b.path("packaging/windows/opal.manifest");
+        // GUI subsystem for the desktop build so launching the app does NOT pop
+        // a console window alongside it. The headless server build keeps the
+        // console subsystem (it's a CLI that logs to stdout). Child processes
+        // are spawned with CREATE_NO_WINDOW (io_global) so they don't flash
+        // their own consoles now that we have none to inherit.
+        if (!headless) exe.subsystem = .Windows;
+    }
+
     // System SDL2 integration. On Wayland compositors (COSMIC DE, etc.) the bundled SDL2
     // only has X11 support (runs under XWayland) and window title updates are ignored.
     // Build with: zig build -fsys=sdl2
@@ -132,7 +147,14 @@ pub fn build(b: *std.Build) void {
     const compile_cmd = if (target.result.os.tag == .macos)
         b.fmt("if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -I{s}/include $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) -L{s}/lib src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar; fi", .{ brew_prefix, brew_prefix })
     else if (is_windows)
-        b.fmt("if [ ! -f torrent_wrapper.dll ] || [ src/torrent_wrapper.cpp -nt torrent_wrapper.dll ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -I{s}/include -L{s}/lib src/torrent_wrapper.cpp -o torrent_wrapper.dll -ltorrent-rasterbar -lws2_32 -liphlpapi -lcrypt32; fi", .{ mingw_prefix, mingw_prefix })
+        // pkg-config --cflags is REQUIRED here, same as the POSIX branches:
+        // MSYS2's libtorrent-rasterbar (≥2.0.13) enables TORRENT_USE_RTC in
+        // config.hpp, which hard-#errors unless the matching TLS backend define
+        // (TORRENT_USE_OPENSSL/GNUTLS) is also passed. pkg-config emits it (plus
+        // -lssl/-lcrypto/-lbcrypt/-lmswsock in --libs); the trailing
+        // -ltorrent-rasterbar -lws2_32 -liphlpapi -lcrypt32 stay as a fallback
+        // for an empty pkg-config.
+        b.fmt("if [ ! -f torrent_wrapper.dll ] || [ src/torrent_wrapper.cpp -nt torrent_wrapper.dll ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -I{s}/include $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) -L{s}/lib src/torrent_wrapper.cpp -o torrent_wrapper.dll $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar -lws2_32 -liphlpapi -lcrypt32; fi", .{ mingw_prefix, mingw_prefix })
     else
         // -Wl,-soname is REQUIRED: without it the .so has no SONAME, so the
         // linker records the ABSOLUTE build path (/src/libtorrent_wrapper.so)

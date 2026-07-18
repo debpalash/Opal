@@ -124,6 +124,7 @@ pub fn save() void {
     setKey("ai_model_id", ai_server.activeModelId());
     setKey("ai_cloud_provider", ai_server.cloudProvider().id);
     setKey("web_remote", if (state.app.web_remote_enabled) "1" else "0");
+    setKey("custom_titlebar", if (state.app.custom_titlebar) "1" else "0");
     setKey("onboarded", if (state.app.onboarded) "1" else "0");
 
     // In-app browser engine (camoufox = Firefox, cloakbrowser = Chromium).
@@ -490,6 +491,8 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.web_remote_enabled = std.mem.eql(u8, val, "1");
         // Config loads AFTER appInit — honor a persisted enable now.
         if (state.app.web_remote_enabled) @import("../services/remote.zig").start();
+    } else if (std.mem.eql(u8, key, "custom_titlebar")) {
+        state.app.custom_titlebar = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "ai_model_id")) {
         @import("../services/ai_server.zig").selectModelById(val);
     } else if (std.mem.eql(u8, key, "browser_engine")) {

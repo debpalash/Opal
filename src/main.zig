@@ -661,6 +661,25 @@ fn renderSlashMenu() void {
     }
 }
 
+/// One-shot: open the window centered and at a comfortable, non-fullscreen size
+/// (~72%×82% of the display work area). The dvui default (a fixed 1400×820) is
+/// nearly full-width on a HiDPI panel whose logical desktop is small, so it read
+/// as "fullscreen". Runs once, on the first frame the SDL window is available.
+var window_centered = false;
+fn centerWindowOnce(sdl_win: ?*c.sdl.SDL_Window) void {
+    if (window_centered) return;
+    const sw = sdl_win orelse return;
+    window_centered = true;
+    c.sdl.SDL_RestoreWindow(sw); // never start maximized
+    const di = c.sdl.SDL_GetWindowDisplayIndex(sw);
+    var b: c.sdl.SDL_Rect = undefined;
+    if (c.sdl.SDL_GetDisplayUsableBounds(di, &b) != 0) return;
+    const tw: c_int = @intFromFloat(@as(f32, @floatFromInt(b.w)) * 0.72);
+    const th: c_int = @intFromFloat(@as(f32, @floatFromInt(b.h)) * 0.82);
+    c.sdl.SDL_SetWindowSize(sw, tw, th);
+    c.sdl.SDL_SetWindowPosition(sw, b.x + @divTrunc(b.w - tw, 2), b.y + @divTrunc(b.h - th, 2));
+}
+
 fn appFrame() !dvui.App.Result {
     // Suppress dvui's debug widget outline (red 1px rect) — shows when
     // debug.widget_id matches a rendered widget. Can get stuck if user
@@ -1092,6 +1111,12 @@ fn appFrame() !dvui.App.Result {
         }
     }
 
+    // Custom title bar's close button (set during last frame's render).
+    if (@import("ui/titlebar.zig").close_requested) {
+        @import("core/config.zig").save();
+        return .close;
+    }
+
     input.processGlobalInputs();
 
     // Track mouse motion — feeds the shared chrome idle clock.
@@ -1146,6 +1171,19 @@ fn appFrame() !dvui.App.Result {
     }
     var app_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .color_fill = theme.colors.bg_app });
     defer app_box.deinit();
+
+    // Custom (borderless) window title bar — drawn at the very top, at native
+    // scale (outside the ui_scale wrapper below), before all other chrome.
+    // No-op unless active (Windows + state.app.custom_titlebar).
+    {
+        const titlebar = @import("ui/titlebar.zig");
+        if (dvui_win) |win| {
+            const sdl_win: ?*c.sdl.SDL_Window = @ptrCast(win.backend.impl.window);
+            centerWindowOnce(sdl_win);
+            titlebar.ensureEnabled(sdl_win);
+        }
+        titlebar.render();
+    }
 
     var scale_w = dvui.scale(@src(), .{ .scale = &state.app.ui_scale }, .{ .expand = .both });
     defer scale_w.deinit();
@@ -1242,14 +1280,10 @@ fn appFrame() !dvui.App.Result {
     settings.renderDepsModal();
     @import("ui/footer.zig").renderSubPicker();
 
-    // First-run deps check — open setup modal once if something is missing.
-    if (!state.app.deps_modal_checked) {
-        state.app.deps_modal_checked = true;
-        const d = @import("core/deps.zig").check();
-        if (!(d.apfel and d.ffmpeg and d.whisper)) {
-            state.app.deps_modal_open = true;
-        }
-    }
+    // The optional-deps "Setup" modal is NO LONGER auto-opened at first run:
+    // its checklist is macOS/brew-centric (apfel/ffmpeg/whisper) and just nagged
+    // on Windows, where those aren't present. It's now opened on demand from
+    // Settings › AI & Voice (the "Optional dependencies" button → deps_modal_open).
 
     ui.renderWorkspaceModals();
     @import("ui/footer.zig").renderResumePrompt();

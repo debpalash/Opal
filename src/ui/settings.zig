@@ -665,6 +665,17 @@ fn renderAIContentBody() void {
 
     // ── Models Management ──
     aiSectionWithIcon(icons.tvg.lucide.@"hard-drive", "Models & Dependencies", "Install, update, or remove AI models", 80, @src());
+    // Opens the "Setup" checklist modal on demand. This used to auto-pop at
+    // first run; it now lives here so it never nags at startup.
+    if (dvui.button(@src(), "Open setup checklist…", .{}, .{
+        .color_fill = theme.colors.bg_elevated,
+        .color_text = theme.colors.text_secondary,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 },
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
+    })) {
+        state.app.deps_modal_open = true;
+    }
     {
         const deps = @import("../core/deps.zig");
         const ds = deps.check();

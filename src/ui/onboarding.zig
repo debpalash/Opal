@@ -22,6 +22,14 @@ var tmdb_key_buf: [300]u8 = std.mem.zeroes([300]u8);
 /// Current wizard page. Page 0 is setup; 1.. are the feature tour.
 var page: usize = 0;
 
+/// The wizard is shown ONLY when explicitly reopened from Settings › About
+/// (replay), never automatically at startup. It used to auto-appear on first
+/// run to front-load the LLM/voice-deps setup, but that checklist is
+/// macOS/brew-centric and just nagged on Windows. Decoupled from the persisted
+/// `onboarded` flag so a stale `onboarded=0` (e.g. an autosave from a prior
+/// session) can't resurrect the startup nag.
+var replay_active: bool = false;
+
 /// One highlighted capability inside a tour page.
 const Feature = struct { icon: []const u8, label: []const u8, desc: []const u8 };
 
@@ -65,12 +73,14 @@ const PAGE_COUNT: usize = 1 + TOUR.len;
 /// choice if the app is closed mid-replay.
 pub fn replay() void {
     page = 0;
+    replay_active = true;
     state.app.onboarded = false;
     state.markConfigDirty();
 }
 
 pub fn render() void {
-    if (state.app.onboarded or !state.app.config_loaded.load(.acquire) or state.app.is_headless) return;
+    // Only when reopened from Settings (replay_active) — never at startup.
+    if (!replay_active or !state.app.config_loaded.load(.acquire) or state.app.is_headless) return;
     // A stale/replayed index that outruns the current tour count can't dead-end.
     page = nav.clamp(page, PAGE_COUNT);
 
@@ -320,6 +330,7 @@ fn navFooter() void {
 }
 
 fn finish() void {
+    replay_active = false;
     state.app.onboarded = true;
     page = 0; // a later replay() starts from the top, not mid-tour
     state.markConfigDirty();
