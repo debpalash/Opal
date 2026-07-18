@@ -334,17 +334,43 @@ fn curlIntoOnce(url: []const u8, auth_header: []const u8, buf: []u8) usize {
     // burning the full --max-time; --max-time trimmed to 8s for interactive
     // fetches. Without connect-timeout a black-holed host stalled the route
     // for the whole 12s (× retries × http/https fallback).
+    // Stage through a temp FILE, not a pipe. A piped child blocks in write()
+    // once its output fills the OS pipe buffer (~64KB) and the reader hasn't
+    // drained it; that deadlocked fetches on Windows (curl left alive for
+    // minutes at ~0 CPU despite --max-time, grid permanently empty). Files have
+    // no such bound: curl writes everything, exits, then we read it back.
+    const seq = tmp_seq.fetchAdd(1, .monotonic);
+    var cfg_buf: [512]u8 = undefined;
+    const cfg = @import("../core/paths.zig").configDir(&cfg_buf);
+    var dir_buf: [600]u8 = undefined;
+    const dir = std.fmt.bufPrint(&dir_buf, "{s}/tmp", .{cfg}) catch return 0;
+    io_g.cwdMakePath(dir) catch {};
+    var path_buf: [700]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "{s}/tmdb_{d}.json", .{ dir, seq }) catch return 0;
+
     var child = if (auth_header.len > 0)
-        io_g.Child.init(&.{ "curl", "-s", "--connect-timeout", "3", "-H", auth_header, "--max-time", "8", url }, alloc)
+        io_g.Child.init(&.{ "curl", "-s", "--connect-timeout", "3", "-H", auth_header, "--max-time", "8", "-o", path, url }, alloc)
     else
-        io_g.Child.init(&.{ "curl", "-s", "--connect-timeout", "3", "--max-time", "8", url }, alloc);
-    child.stdout_behavior = .Pipe;
+        io_g.Child.init(&.{ "curl", "-s", "--connect-timeout", "3", "--max-time", "8", "-o", path, url }, alloc);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
     child.spawn() catch return 0;
-    const n = if (child.stdout) |*so| io_g.readAll(so, buf) catch 0 else 0;
     _ = child.wait() catch {};
+
+    const body = io_g.cwdReadFileAlloc(path, alloc, buf.len) catch {
+        io_g.cwdDeleteFile(path) catch {};
+        return 0;
+    };
+    defer alloc.free(body);
+    io_g.cwdDeleteFile(path) catch {};
+    const n = @min(body.len, buf.len);
+    @memcpy(buf[0..n], body[0..n]);
     return n;
 }
+
+/// Serial number for curlIntoOnce's staging files (see above).
+var tmp_seq = std.atomic.Value(u32).init(0);
 
 /// curl `url` (HTTPS) into `buf`, with an HTTPS→HTTP fallback for SNI-blocked
 /// networks. CRITICAL: a response is only accepted if it looks like JSON — some

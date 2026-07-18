@@ -1,0 +1,8 @@
+// Win32 resource script — embeds the app icon into opal.exe.
+//
+// Resource ID 1 is the lowest-numbered ICON, which is what Windows Explorer,
+// the taskbar, and Alt-Tab use to represent the executable. Without this the
+// exe shipped with no icon resource at all, so the taskbar fell back to the
+// generic default. Compiled by zig's resinator via build.zig
+// (exe.addWin32ResourceFile) on Windows targets only.
+1 ICON "opal.ico"
