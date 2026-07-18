@@ -11,8 +11,8 @@
             .hash = "icons-0.1.0-iJxA-VrGMwAVIStBxqDPFeC3wdnANtYyDrNfYXNz95OW",
         },
         .bypassdpi = .{
-            .url = "git+https://github.com/debpalash/zig-bypassdpi#91618501a08f487655e2ac08074f2ccf99db1867",
-            .hash = "zig_bypassdpi-0.1.0-B1zpWKG2AAA86E-OyWtOjBE-zvSvzx2rGMWy3yIA-lEX",
+            .url = "git+https://github.com/debpalash/zig-bypassdpi#4fad7f6b340c89ffdcee4845850e39d04766b628",
+            .hash = "zig_bypassdpi-0.1.0-B1zpWLK3AAB8dEz0DqoVx8yGkR2IwlRsk2WD-wyrqcbF",
         },
     },
     .minimum_zig_version = "0.15.2",
