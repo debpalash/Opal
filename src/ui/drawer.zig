@@ -56,6 +56,131 @@ const TRANSPARENT: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
 var drawer_open_seq: usize = 0;
 var drawer_was_open: bool = false;
 
+// ── Source groups (collapsible accordion) ───────────────────────────────────
+// The Sources section grew to ~15 stacked icons. Fold them into media-type
+// groups so the rail stays short: each group is a header icon that expands to
+// reveal its sources inline. The group holding the active tab is always shown.
+const RailGroup = enum { movies_tv, video, anime, reading, audio, web };
+const rail_group_count = @typeInfo(RailGroup).@"enum".fields.len;
+var group_expanded = [_]bool{false} ** rail_group_count;
+
+/// Which group a source tab belongs to (null = not a grouped source, e.g. a
+/// Find-&-Manage or Configure tab that stays top-level). This switch is the
+/// single source of truth the feature test asserts every source is covered by.
+fn groupOf(tab: state.DrawerTab) ?RailGroup {
+    return switch (tab) {
+        .TMDB, .Drama, .Jellyfin, .Plex => .movies_tv,
+        .YouTube => .video,
+        .Anime, .Comics => .anime,
+        .Novels, .Vndb, .Opds => .reading,
+        .Podcasts, .Radio, .Audiobooks => .audio,
+        .Web, .RSS => .web,
+        else => null,
+    };
+}
+
+fn groupLabel(g: RailGroup) []const u8 {
+    return switch (g) {
+        .movies_tv => "Movies & TV",
+        .video => "Video",
+        .anime => "Anime",
+        .reading => "Reading",
+        .audio => "Audio",
+        .web => "Web",
+    };
+}
+
+fn groupIcon(g: RailGroup) []const u8 {
+    const l = icons.tvg.lucide;
+    return switch (g) {
+        .movies_tv => l.film,
+        .video => l.youtube,
+        .anime => l.tv,
+        .reading => l.@"library-big",
+        .audio => l.podcast,
+        .web => l.globe,
+    };
+}
+
+/// Render one collapsible group: a header icon that toggles expansion, then its
+/// source tabs when open. The group containing the active tab is force-expanded
+/// so the current source is always reachable without a click.
+fn renderGroup(g: RailGroup, gi: usize) void {
+    const shell = @import("shell.zig");
+    const contains_active = if (groupOf(state.app.drawer_tab)) |ag| ag == g else false;
+    if (contains_active) group_expanded[gi] = true;
+    const open = group_expanded[gi];
+
+    // Header row: group icon (accent-tinted when it holds the active tab) + a
+    // chevron cue. Clicking toggles the group.
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = 4200 + gi,
+            .expand = .horizontal,
+            .min_size_content = .{ .w = RAIL_W - 2 * RAIL_SIDE_PAD, .h = BTN_SIZE },
+            .margin = .{ .x = RAIL_SIDE_PAD, .y = ICON_GAP / 2, .w = RAIL_SIDE_PAD, .h = ICON_GAP / 2 },
+        });
+        defer row.deinit();
+        var wd: dvui.WidgetData = undefined;
+        if (dvui.buttonIcon(@src(), "", groupIcon(g), .{}, .{}, .{
+            .data_out = &wd,
+            .id_extra = 4200 + gi,
+            .color_fill = TRANSPARENT,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_text = if (contains_active) theme.colors.accent else theme.colors.text_secondary,
+            .border = dvui.Rect.all(0),
+            .corner_radius = RADIUS_SM,
+            .padding = dvui.Rect.all((BTN_SIZE - ICON_GLYPH) / 2),
+            .min_size_content = .{ .w = BTN_SIZE, .h = BTN_SIZE },
+            .max_size_content = .{ .w = BTN_SIZE, .h = BTN_SIZE },
+            .gravity_x = 0.5,
+            .gravity_y = 0.5,
+        })) {
+            group_expanded[gi] = !group_expanded[gi];
+        }
+        // Chevron cue (down = open, right = closed), dim + small at the edge.
+        _ = dvui.icon(@src(), "chev", if (open) icons.tvg.lucide.@"chevron-down" else icons.tvg.lucide.@"chevron-right", .{}, .{
+            .id_extra = 4200 + gi,
+            .min_size_content = .{ .w = 10, .h = 10 },
+            .color_text = theme.colors.text_tertiary,
+            .gravity_y = 0.5,
+        });
+        components.tipId(@src(), wd, groupLabel(g), 4200 + gi);
+    }
+
+    if (!open) return;
+    // Sources for this group (compact labels; ids kept distinct per tab).
+    switch (g) {
+        .movies_tv => {
+            renderRailTab(.TMDB, shell.iconForTab(.TMDB), "Movies & TV", 4);
+            renderRailTab(.Drama, shell.iconForTab(.Drama), "Drama", 21);
+            renderRailTab(.Jellyfin, shell.iconForTab(.Jellyfin), "Jellyfin", 12);
+            renderRailTab(.Plex, shell.iconForTab(.Plex), "Plex", 13);
+        },
+        .video => {
+            renderRailTab(.YouTube, shell.iconForTab(.YouTube), "YouTube", 5);
+        },
+        .anime => {
+            renderRailTab(.Anime, shell.iconForTab(.Anime), "Anime", 6);
+            renderRailTab(.Comics, shell.iconForTab(.Comics), "Comics", 9);
+        },
+        .reading => {
+            renderRailTab(.Novels, shell.iconForTab(.Novels), "Novels", 20);
+            renderRailTab(.Vndb, shell.iconForTab(.Vndb), "Visual Novels", 22);
+            renderRailTab(.Opds, shell.iconForTab(.Opds), "Books", 17);
+        },
+        .audio => {
+            renderRailTab(.Podcasts, shell.iconForTab(.Podcasts), "Podcasts", 7);
+            renderRailTab(.Radio, shell.iconForTab(.Radio), "Radio", 8);
+            renderRailTab(.Audiobooks, shell.iconForTab(.Audiobooks), "Audiobooks", 18);
+        },
+        .web => {
+            renderRailTab(.Web, shell.iconForTab(.Web), "Web", 10);
+            renderRailTab(.RSS, shell.iconForTab(.RSS), "RSS", 11);
+        },
+    }
+}
+
 pub fn renderDrawer() void {
     if (!state.app.drawer_open) {
         drawer_was_open = false;
@@ -232,28 +357,10 @@ pub fn renderDrawer() void {
 
         railGroupGap(0);
 
-        // ── Group 2: Sources ──
-        renderRailTab(.TMDB, shell.iconForTab(.TMDB), "TMDB", 4);
-        renderRailTab(.YouTube, shell.iconForTab(.YouTube), "YouTube", 5);
-        renderRailTab(.Anime, shell.iconForTab(.Anime), "Anime", 6);
-        // id 21 — distinct high id so concurrent tab additions merge cleanly
-        // (keyboard order lands it after the sources group, which is fine).
-        renderRailTab(.Drama, shell.iconForTab(.Drama), "Asian Drama", 21);
-        renderRailTab(.Podcasts, shell.iconForTab(.Podcasts), "Podcasts", 7);
-        renderRailTab(.Radio, shell.iconForTab(.Radio), "Radio", 8);
-        renderRailTab(.Comics, shell.iconForTab(.Comics), "Comics", 9);
-        // id 20 (not 10) so Novels never shares a widget id with the Web tab —
-        // inserted without renumbering the rest so concurrent tab additions merge
-        // cleanly. Keyboard order puts it after the sources group, which is fine.
-        renderRailTab(.Novels, shell.iconForTab(.Novels), "Novels", 20);
-        // id 21 (not renumbering the rest) so concurrent tab additions merge cleanly.
-        renderRailTab(.Vndb, shell.iconForTab(.Vndb), "Visual Novels", 21);
-        renderRailTab(.Web, shell.iconForTab(.Web), "Web", 10);
-        renderRailTab(.RSS, shell.iconForTab(.RSS), "RSS", 11);
-        renderRailTab(.Jellyfin, shell.iconForTab(.Jellyfin), "Jellyfin / Emby", 12);
-        renderRailTab(.Plex, shell.iconForTab(.Plex), "Plex", 13);
-        renderRailTab(.Audiobooks, shell.iconForTab(.Audiobooks), "Audiobookshelf", 17);
-        renderRailTab(.Opds, shell.iconForTab(.Opds), "Reading (OPDS)", 17);
+        // ── Group 2: Sources (collapsible media-type groups) ──
+        inline for (.{ RailGroup.movies_tv, .video, .anime, .reading, .audio, .web }, 0..) |g, gi| {
+            renderGroup(g, gi);
+        }
 
         railGroupGap(1);
 
