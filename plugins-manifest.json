@@ -508,6 +508,16 @@
         "referer": "https://allmanga.to"
       },
       "file": "plugins/allanime.json"
+    },
+    {
+      "id": "iptv-org",
+      "name": "IPTV (iptv-org)",
+      "type": "iptv",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://iptv-org.github.io/api"
+      },
+      "file": "plugins/iptv-org.json"
     }
   ]
 }

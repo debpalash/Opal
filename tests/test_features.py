@@ -59,6 +59,7 @@ from features import (  # noqa: F401
     test_plugins_logs_ui,
     test_dpi_bypass,
     test_browse_rail_groups,
+    test_iptv,
 )
 
 if __name__ == "__main__":
