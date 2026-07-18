@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.1
+
+### Windows
+- **Builds from source on Windows** (MSYS2 MINGW64 + Zig 0.16): the torrent-wrapper build now passes `pkg-config` flags for libtorrent's TLS backend.
+- **Sharp rendering** via an embedded Per-Monitor-V2 DPI manifest (was blurry/upscaled), and **no console window** on launch (GUI subsystem + `CREATE_NO_WINDOW` child spawns).
+- **Custom window title bar**: borderless, in-app min/max/close, native drag / Aero Snap / edge-resize.
+- Opens **centered and non-fullscreen**.
+
+### Fixes & UX
+- Plugins: **Refresh** no longer empties the list, and **install** works for all sources (uses inline endpoints instead of a rate-limited per-plugin fetch).
+- Subtitles: cross-platform cache path + in-process gzip (no `gunzip` dependency).
+- First-run optional-deps "Setup" wizard no longer auto-pops; it's now in Settings › AI & Voice.
+- Responsive top nav (labels collapse to icons, tighter search box as the window narrows).
+- Player: one-click **universal-language** button (audio + subtitle track + subtitle search language together).
+
 ## 0.2.0
 
 ### New sources & media classes
