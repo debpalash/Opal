@@ -4,6 +4,15 @@ shared @test decorator, helpers, and run_all()."""
 from .harness import *  # noqa: F401,F403
 import os, sys, subprocess, sqlite3, socket, time, json  # noqa: F401
 
+def _built_binary():
+    # zig names the exe `opal` on POSIX and `opal.exe` on Windows.
+    for name in ("zig-out/bin/opal", "zig-out/bin/opal.exe"):
+        p = os.path.join(PROJECT_DIR, name)
+        if os.path.exists(p):
+            return p
+    return None
+
+
 @test("Zig Build", "Build")
 def test_zig_build():
     try:
@@ -14,20 +23,20 @@ def test_zig_build():
             capture_output=True, text=True, timeout=300
         )
         if result.returncode == 0:
-            binary = os.path.join(PROJECT_DIR, "zig-out/bin/opal")
-            if os.path.exists(binary):
+            binary = _built_binary()
+            if binary:
                 size = os.path.getsize(binary) / (1024*1024)
                 return "pass", f"Binary: {size:.1f} MB"
             return "pass", "Build succeeded"
         return "fail", result.stderr[:200]
     except subprocess.TimeoutExpired:
-        return "fail", "Build timed out (>120s)"
+        return "fail", "Build timed out (>300s)"
 
 
 @test("Binary Exists", "Build")
 def test_binary_exists():
-    binary = os.path.join(PROJECT_DIR, "zig-out/bin/opal")
-    if os.path.exists(binary):
+    binary = _built_binary()
+    if binary:
         size = os.path.getsize(binary) / (1024*1024)
         mtime = time.strftime("%H:%M:%S", time.localtime(os.path.getmtime(binary)))
         return "pass", f"{size:.1f} MB, built at {mtime}"

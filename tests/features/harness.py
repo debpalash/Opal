@@ -24,6 +24,15 @@ import socket
 import sys
 import re as _re
 
+# Windows consoles default to cp1252, which can't encode the ✅/❌ status glyphs
+# this harness prints (UnicodeEncodeError mid-run). Force UTF-8 output so the
+# suite runs on Windows too; CI's Linux/macOS already default to UTF-8.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 # harness.py lives at tests/features/harness.py → three dirnames to the repo root.
 DB_PATH = os.path.expanduser("~/.config/opal/opal.db")
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
