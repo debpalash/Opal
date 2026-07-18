@@ -35,9 +35,13 @@ pub fn render() !void {
     });
     defer root.deinit();
 
-    // Responsive breakpoint (one-frame lag acceptable; 0 on first paint → wide).
+    // Responsive breakpoints (one-frame lag acceptable; 0 on first paint → wide).
+    //   compact (< 760): mobile layout — top nav links move to a bottom tab bar.
+    //   narrow  (< 1180): still a top nav, but nav-link text collapses to
+    //     icons-only and the omnibox tightens so everything fits as you resize.
     const w = root.data().rect.w;
     const compact = w > 1 and w < 760;
+    const narrow = w > 1 and w < 950;
 
     // Immersive playback: on the Player route, give the video the whole window by
     // hiding the top nav (and compact bottom tabs) once the viewer goes idle or
@@ -84,7 +88,7 @@ pub fn render() !void {
             dvui.refresh(null, @src(), null);
         }
         const prev_alpha = dvui.alpha(nav_alpha);
-        renderTopNav(compact);
+        renderTopNav(compact, narrow);
         dvui.alphaSet(prev_alpha);
     }
 
@@ -158,7 +162,7 @@ fn anyHasMedia() bool {
 // ── Top navigation ──
 
 
-fn renderTopNav(compact: bool) void {
+fn renderTopNav(compact: bool, narrow: bool) void {
     // Transparent title bar — the nav floats over the app background (no solid
     // fill) for a lighter, content-focused feel; a hairline bottom border keeps
     // it separated from the page.
@@ -175,8 +179,10 @@ fn renderTopNav(compact: bool) void {
 
     // Brand — clickable: always returns to the Home overview (even out of
     // the chat transcript, which otherwise owns the Home route while a
-    // conversation exists).
-    {
+    // conversation exists). Suppressed when the custom title bar is active
+    // (Windows) — it already shows the Opal gem + wordmark, so a second copy in
+    // the nav row would be a duplicate.
+    if (!@import("titlebar.zig").active()) {
         var brand = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .background = true,
             .color_fill = transparent,
@@ -226,19 +232,28 @@ fn renderTopNav(compact: bool) void {
     if (!compact) {
         // Home / Downloads / Queue / History are icon-only (tooltip on hover);
         // the content destinations keep their labels.
+        // Search/Browse/Watching keep their labels when wide, collapse to
+        // icon-only when narrow so the row fits without wrapping/clipping.
         navLink(.home, "Home", icons.tvg.lucide.house, 1, true);
-        navLink(.search, "Search", icons.tvg.lucide.search, 2, false);
-        navLink(.browse, "Browse", icons.tvg.lucide.compass, 3, false);
-        navLink(.watching, "Watching", icons.tvg.lucide.tv, 7, false);
+        navLink(.search, "Search", icons.tvg.lucide.search, 2, narrow);
+        navLink(.browse, "Browse", icons.tvg.lucide.compass, 3, narrow);
+        navLink(.watching, "Watching", icons.tvg.lucide.tv, 7, narrow);
         navLink(.downloads, "Downloads", icons.tvg.lucide.download, 4, true);
         navLink(.queue, "Queue", icons.tvg.lucide.@"list-video", 5, true);
         navLink(.history, "History", icons.tvg.lucide.history, 6, true);
     }
 
-    omnibox();
+    omnibox(narrow);
 
-    // Donate chip — the omnibox above is capped narrower to make room for it.
-    if (!compact) header.donateButton();
+    // Flexible spacer — absorbs the leftover nav width so the omnibox stays a
+    // fixed size and the right-side actions sit at the window edge.
+    {
+        var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+        sp.deinit();
+    }
+
+    // Donate chip — dropped at narrow so the tighter row doesn't clip.
+    if (!narrow) header.donateButton();
 
     // Right-side actions (icon-only). The former "Assistant" button opened the
     // AI/Voice SETTINGS page (renderAIContent) — that now lives in Settings ›
@@ -395,15 +410,18 @@ fn navLink(r: Route, label: []const u8, icon: []const u8, id_extra: usize, icon_
 ///   • media (magnet/url/path)        → load into player, go to Player
 ///   • leading '>' or trailing '?'    → AI assistant (chat)
 ///   • anything else                  → UNIFIED search across all sources
-fn omnibox() void {
+fn omnibox(narrow: bool) void {
     var te = dvui.textEntry(@src(), .{
         .text = .{ .buffer = &state.app.magnet_buf },
-        .placeholder = "Ask, search, or paste a link…",
+        .placeholder = if (narrow) "Search…" else "Ask, search, or paste a link…",
     }, .{
-        .expand = .horizontal,
-        .min_size_content = .{ .w = 120, .h = 26 },
-        // Capped at 640 (was 1000) to free nav width for the Donate chip.
-        .max_size_content = .{ .w = 640, .h = 26 },
+        // Fixed width (no .expand): dvui's horizontal expand ignores
+        // max_size_content, so the box used to stretch to fill the whole nav
+        // gap and read as an oversized bar. A fixed, proportionate width + a
+        // flexible spacer after it (in renderTopNav) keeps it a tidy search
+        // field and pushes the right-side actions to the edge.
+        .min_size_content = .{ .w = if (narrow) 200 else 340, .h = 26 },
+        .max_size_content = .{ .w = if (narrow) 200 else 340, .h = 26 },
         .margin = .{ .x = theme.spacing.md, .y = 0, .w = 4, .h = 0 },
         .color_fill = theme.colors.bg_elevated,
         .color_border = theme.colors.border_subtle,

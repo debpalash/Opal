@@ -522,9 +522,12 @@ pub const AppState = struct {
         }
     } = .{},
 
-    // First-run onboarding: false until the wizard finishes (or an existing
-    // install is grandfathered — see config.zig load).
-    onboarded: bool = false,
+    // First-run onboarding: default true so the setup wizard (LLM/voice deps
+    // checklist, etc.) does NOT pop up at startup — it was a macOS/brew-centric
+    // nag that added no value on Windows. Still reachable on demand from
+    // Settings › About (onboarding.replay). config.zig load() honors a persisted
+    // value if present.
+    onboarded: bool = true,
 
     // ── "Resume last played?" launch prompt (replaces silent session restore) ──
     init_history_loaded: bool = false, // set on the init worker after watch.load()
@@ -748,6 +751,13 @@ pub const AppState = struct {
     // OpalMenubar helper and web/ UI need this on to reach the app.
     web_remote_enabled: bool = false,
     party_host_ip_buf: [46]u8 = std.mem.zeroes([46]u8),
+
+    // Custom (client-side) window title bar. On Windows the OS-native title bar
+    // is replaced by an in-app one (see ui/titlebar.zig): the window goes
+    // borderless and Opal draws its own bar + min/max/close. Default on for
+    // Windows; persisted so it can be toggled off (Settings › General) to fall
+    // back to native decorations. Ignored on macOS/Linux.
+    custom_titlebar: bool = true,
 
     // ── Comics ──
     comic: struct {

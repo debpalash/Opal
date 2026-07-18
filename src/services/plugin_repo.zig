@@ -345,8 +345,13 @@ pub fn install(idx: usize) void {
     if (idx >= plugin_count) return;
     const pl = &plugins[idx];
 
-    // Per-plugin file in the repo → fetch it on install (worker, network).
-    if (pl.file_len > 0) {
+    // Prefer the manifest's INLINE endpoints (already in memory) over a network
+    // fetch. Every bundled/remote entry inlines its endpoints, so fetching the
+    // per-plugin repo file for each install was pure waste — and worse, it
+    // burned GitHub's 60-req/hour unauthenticated limit, so after a handful of
+    // clicks every further install 403'd ("a few install, most don't"). Only
+    // fall back to the network file when the manifest didn't inline endpoints.
+    if (pl.endpoints_len == 0 and pl.file_len > 0) {
         const S = struct {
             var busy: bool = false;
             var id: [32]u8 = undefined;

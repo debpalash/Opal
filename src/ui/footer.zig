@@ -964,6 +964,75 @@ fn renderScrubber(
 // separated only by spacing. Hover paints a faint fill; the active (selected)
 // value reads in text_primary while idle values stay text_tertiary. No accent
 // here — accent is reserved for the single primary affordance (play/pause).
+/// True when an mpv track language code loosely matches the wanted 2/3-letter
+/// code (case-insensitive prefix either way, plus eng/en/english aliases).
+fn langMatches(track_lang: []const u8, want: []const u8) bool {
+    if (track_lang.len == 0 or want.len == 0) return false;
+    var a: [24]u8 = undefined;
+    var b: [24]u8 = undefined;
+    const tl = std.ascii.lowerString(a[0..@min(track_lang.len, a.len)], track_lang[0..@min(track_lang.len, a.len)]);
+    const wl = std.ascii.lowerString(b[0..@min(want.len, b.len)], want[0..@min(want.len, b.len)]);
+    if (std.mem.startsWith(u8, tl, wl) or std.mem.startsWith(u8, wl, tl)) return true;
+    if (std.mem.startsWith(u8, wl, "en") and
+        (std.mem.startsWith(u8, tl, "en") or std.mem.indexOf(u8, tl, "english") != null)) return true;
+    return false;
+}
+
+/// One-click universal language: select the audio + subtitle tracks whose
+/// language matches `lang`, turn subtitles on, and set the online/AI subtitle
+/// search language — everything to one language from a single button instead of
+/// visiting each picker.
+fn applyUniversalLanguage(ctx: ?*c.mpv.mpv_handle, lang: []const u8) void {
+    if (ctx == null) return;
+    var count: i64 = 0;
+    _ = c.mpv.mpv_get_property(ctx, "track-list/count", c.mpv.MPV_FORMAT_INT64, &count);
+    var best_aid: i64 = -1;
+    var best_sid: i64 = -1;
+    var i: i64 = 0;
+    while (i < count) : (i += 1) {
+        var tq: [64]u8 = undefined;
+        const tqz = std.fmt.bufPrintZ(&tq, "track-list/{d}/type", .{i}) catch continue;
+        const tc = c.mpv.mpv_get_property_string(ctx, tqz.ptr) orelse continue;
+        const is_audio = std.mem.eql(u8, std.mem.span(tc), "audio");
+        const is_sub = std.mem.eql(u8, std.mem.span(tc), "sub");
+        c.mpv.mpv_free(@ptrCast(tc));
+        if (!is_audio and !is_sub) continue;
+        var lq: [64]u8 = undefined;
+        const lqz = std.fmt.bufPrintZ(&lq, "track-list/{d}/lang", .{i}) catch continue;
+        const lc = c.mpv.mpv_get_property_string(ctx, lqz.ptr) orelse continue;
+        const match = langMatches(std.mem.span(lc), lang);
+        c.mpv.mpv_free(@ptrCast(lc));
+        if (!match) continue;
+        var idq: [64]u8 = undefined;
+        const idqz = std.fmt.bufPrintZ(&idq, "track-list/{d}/id", .{i}) catch continue;
+        var t_id: i64 = 0;
+        _ = c.mpv.mpv_get_property(ctx, idqz.ptr, c.mpv.MPV_FORMAT_INT64, &t_id);
+        if (is_audio and best_aid < 0) best_aid = t_id;
+        if (is_sub and best_sid < 0) best_sid = t_id;
+    }
+    var cmd: [64]u8 = undefined;
+    if (best_aid >= 0) {
+        if (std.fmt.bufPrintZ(&cmd, "set aid {d}", .{best_aid})) |s| {
+            _ = c.mpv.mpv_command_string(ctx, s.ptr);
+        } else |_| {}
+    }
+    if (best_sid >= 0) {
+        if (std.fmt.bufPrintZ(&cmd, "set sid {d}", .{best_sid})) |s| {
+            _ = c.mpv.mpv_command_string(ctx, s.ptr);
+        } else |_| {}
+        _ = c.mpv.mpv_command_string(ctx, "set sub-visibility yes");
+    }
+    // Drive the online / AI subtitle search language too.
+    if (lang.len > 0 and lang.len <= state.app.sub_lang_buf.len) {
+        @memcpy(state.app.sub_lang_buf[0..lang.len], lang);
+        state.app.sub_lang_len = lang.len;
+    }
+    state.showToast(if (best_aid >= 0 or best_sid >= 0)
+        "Language applied to audio & subtitles"
+    else
+        "No embedded track in that language — try Find subtitles");
+}
+
 fn pickerIconChip(
     src: std.builtin.SourceLocation,
     id_extra: usize,
@@ -1704,6 +1773,17 @@ pub fn renderLiquidGlassOverlay() void {
             const chip = if (cur_lang.len > 0) cur_lang else "eng";
             if (pickerIconChip(@src(), 704, icons.tvg.lucide.globe, chip, cur_lang.len > 0, "Subtitle search language", .lang)) {
                 open_picker = if (open_picker == .lang) .none else .lang;
+            }
+        }
+
+        // Universal language — one click sets the audio track, subtitle track,
+        // and the online/AI subtitle search language all to the chosen language
+        // (defaults to English / the globe-chip selection), instead of visiting
+        // each picker. Not a drop-up (kind .none) — it acts immediately.
+        {
+            const uni_lang = if (state.app.sub_lang_len > 0) state.app.sub_lang_buf[0..state.app.sub_lang_len] else "eng";
+            if (pickerIconChip(@src(), 709, icons.tvg.lucide.languages, uni_lang, false, "Set audio + subtitles to this language", .none)) {
+                applyUniversalLanguage(active_p.mpv_ctx, uni_lang);
             }
         }
 

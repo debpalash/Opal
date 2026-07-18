@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!-- Per-Monitor-V2 DPI awareness. Without this, Windows treats Opal as a
+       legacy DPI-unaware app: it renders the SDL framebuffer at a virtualized
+       low resolution and bitmap-stretches it to the real display, which is why
+       the UI looked soft/"low-res" on HiDPI panels. Declaring awareness makes
+       the process render at native pixel density (windowNaturalScale then
+       reports the true DPI and dvui draws crisp). PerMonitorV2 is preferred;
+       PerMonitor and true/pm are fallbacks for older Windows. -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+  <!-- Modern common-controls + UTF-8 active code page (matches Opal's UTF-8
+       path handling). -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 and 11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+</assembly>
