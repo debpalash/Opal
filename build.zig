@@ -118,19 +118,14 @@ pub fn build(b: *std.Build) void {
     // Built as its own exe here and installed alongside `opal`; the app spawns it
     // as a managed subprocess when the Settings toggle is on (see
     // services/dpi_bypass.zig), and build-app.sh bundles it into Resources.
-    // Windows: the upstream sidecar does not compile there yet — its main.zig
-    // calls std.process.Args.init(), which zig 0.16 makes a hard @compileError
-    // on Windows ("In Windows, use initAllocator instead"). Skip building it so
-    // `zig build` still produces a working opal.exe; dpi_bypass.zig already
-    // no-ops when the binary is absent (isRunning() stays false). Drop this gate
-    // once zig-bypassdpi is fixed upstream.
-    if (!is_windows) {
-        const bypassdpi_dep = b.dependency("bypassdpi", .{
-            .target = target,
-            .optimize = optimize,
-        });
-        b.installArtifact(bypassdpi_dep.artifact("zig-bypassdpi"));
-    }
+    // Built for every target now — the sidecar compiles on Windows since
+    // zig-bypassdpi switched argv parsing to iterateAllocator (the old
+    // std.process.Args.iterate() was a hard @compileError on Windows).
+    const bypassdpi_dep = b.dependency("bypassdpi", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(bypassdpi_dep.artifact("zig-bypassdpi"));
 
     // Link MPV and SQLite.
     // Windows: zig's -l search for windows-gnu only tries `{name}.dll`,
