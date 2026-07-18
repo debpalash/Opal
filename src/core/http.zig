@@ -60,6 +60,13 @@ var g_client: std.http.Client = undefined;
 var client_ready = std.atomic.Value(bool).init(false);
 var client_init_lock: sync.Mutex = .{};
 
+// When the DPI-bypass sidecar is enabled+running, the shared std.http client
+// tunnels every request through the local proxy via HTTP CONNECT (the proxy
+// fragments the ClientHello). Set once at client construction; a runtime toggle
+// takes effect on the next process launch for the std.http path (the curl path,
+// fetchImage, picks it up immediately via proxyArgs). Loopback-only target.
+var g_dpi_proxy: std.http.Client.Proxy = undefined;
+
 fn sharedClient() *std.http.Client {
     if (client_ready.load(.acquire)) return &g_client;
     // Slow path: build it once. The init-once mutex only guards CONSTRUCTION,
@@ -77,6 +84,24 @@ fn sharedClient() *std.http.Client {
     // TLS path re-rescans the CA bundle on demand. (Refreshing it per-fetch on
     // a SHARED client would be a data race on `client.now`.)
     g_client.now = std.Io.Timestamp.now(io, .real);
+
+    // Route through the DPI-bypass sidecar when the user enabled it and the
+    // proxy is up. `.plain` is the transport to reach the LOCAL proxy (plain TCP
+    // on loopback); supports_connect=true makes std.http open an HTTP CONNECT
+    // tunnel through it, and the proxy fragments the tunneled TLS ClientHello.
+    const dpi = @import("../services/dpi_bypass.zig");
+    if (dpi.enabled() and dpi.isRunning()) {
+        g_dpi_proxy = .{
+            .protocol = .plain,
+            .host = .{ .bytes = "127.0.0.1" },
+            .authorization = null,
+            .port = dpi.port(),
+            .supports_connect = true,
+        };
+        g_client.http_proxy = &g_dpi_proxy;
+        g_client.https_proxy = &g_dpi_proxy;
+    }
+
     client_ready.store(true, .release);
     return &g_client;
 }
@@ -268,14 +293,30 @@ pub fn fetchAlloc(url: []const u8, opts: HttpOptions) ?[]u8 {
 /// --max-time so a dead CDN host can't stall a poster-daemon slot.
 pub fn fetchImage(url: []const u8, buf: []u8) ?[]const u8 {
     if (url.len == 0 or url.len > 2048) return null;
-    var child = io_global.Child.init(&.{
+    // Route through the DPI-bypass proxy (--socks5-hostname 127.0.0.1:<port>)
+    // when enabled+running, so image/poster CDNs blocked by SNI still load.
+    const base = [_][]const u8{
         "curl",              "-s",
         "-L",                "--connect-timeout",
         "3",                 "--max-time",
         "15",                "-A",
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        url,
-    }, alloc.allocator);
+    };
+    var argv: [16][]const u8 = undefined;
+    var argc: usize = 0;
+    inline for (base) |a| {
+        argv[argc] = a;
+        argc += 1;
+    }
+    if (@import("../services/dpi_bypass.zig").proxyArgs()) |pa| {
+        for (pa) |a| {
+            argv[argc] = a;
+            argc += 1;
+        }
+    }
+    argv[argc] = url;
+    argc += 1;
+    var child = io_global.Child.init(argv[0..argc], alloc.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     child.spawn() catch return null;

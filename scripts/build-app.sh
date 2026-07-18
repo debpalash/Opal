@@ -65,6 +65,16 @@ if [ -f "$ROOT/manga-sources-sfw.json" ]; then
     cp "$ROOT/manga-sources-sfw.json" "$APP_DIR/Contents/Resources/manga-sources-sfw.json"
 fi
 
+# Bundle the DPI-bypass proxy sidecar (debpalash/zig-bypassdpi). Opal spawns it
+# from Contents/Resources/zig-bypassdpi (services/dpi_bypass.zig resolves the
+# path via the resource root, matching plugins-manifest). `zig build` above
+# produced it in zig-out/bin alongside the app binary.
+if [ -f "$ROOT/zig-out/bin/zig-bypassdpi" ]; then
+    echo "[build-app] Bundling DPI-bypass sidecar (zig-bypassdpi)…"
+    cp "$ROOT/zig-out/bin/zig-bypassdpi" "$APP_DIR/Contents/Resources/zig-bypassdpi"
+    chmod +x "$APP_DIR/Contents/Resources/zig-bypassdpi"
+fi
+
 # Bundle the web companion (single self-contained page) — remote.zig serves
 # it at / from Resources/web when Web Remote is enabled.
 if [ -f "$ROOT/web/index.html" ]; then

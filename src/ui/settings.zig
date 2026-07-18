@@ -1992,6 +1992,62 @@ fn renderNetworkTab() void {
         .color_text = theme.colors.text_tertiary,
     });
 
+    // ── Bypass ISP blocking (DPI) ──────────────────────────────────────────
+    // Toggles a loopback proxy sidecar (zig-bypassdpi) that fragments the TLS
+    // ClientHello so an ISP can't block a source by its SNI hostname.
+    settingRow("Bypass ISP blocking (DPI)", 34, @src());
+    {
+        const dpi = @import("../services/dpi_bypass.zig");
+
+        const before = state.app.dpi_bypass_enabled;
+        components.toggleRow(@src(), "Bypass ISP blocking (DPI)", "Fragment the TLS handshake to defeat SNI-based blocking", &state.app.dpi_bypass_enabled);
+        if (state.app.dpi_bypass_enabled != before) {
+            if (state.app.dpi_bypass_enabled) dpi.start() else dpi.stop();
+            state.markConfigDirty();
+        }
+
+        // Mode selector — maps to the sidecar's --mode (sni | split:1).
+        const modes = [_][]const u8{ "sni", "split:1" };
+        const mode_names = [_][]const u8{ "SNI", "Split" };
+        const cur_mode = if (state.app.dpi_bypass_mode_len > 0)
+            state.app.dpi_bypass_mode[0..state.app.dpi_bypass_mode_len]
+        else
+            "sni";
+        var mode_sel: usize = 0;
+        for (modes, 0..) |m, idx| {
+            if (std.mem.eql(u8, m, cur_mode)) {
+                mode_sel = idx;
+                break;
+            }
+        }
+        if (components.segment(@src(), &mode_names, mode_sel)) |clicked| {
+            const nm = modes[clicked];
+            @memcpy(state.app.dpi_bypass_mode[0..nm.len], nm);
+            state.app.dpi_bypass_mode_len = nm.len;
+            state.markConfigDirty();
+            // Restart so the new mode takes effect immediately.
+            if (state.app.dpi_bypass_enabled) {
+                dpi.stop();
+                dpi.start();
+            }
+        }
+
+        // Status line.
+        var sbuf: [64]u8 = undefined;
+        const status = if (dpi.isRunning())
+            std.fmt.bufPrint(&sbuf, "Running on 127.0.0.1:{d}", .{dpi.port()}) catch "Running"
+        else
+            "Stopped";
+        _ = dvui.label(@src(), "{s}", .{status}, .{
+            .id_extra = 3400,
+            .color_text = theme.colors.text_secondary,
+        });
+        _ = dvui.label(@src(), "Efficacy depends on your ISP's DPI. If one mode does not unblock a site, try the other.", .{}, .{
+            .id_extra = 3401,
+            .color_text = theme.colors.text_tertiary,
+        });
+    }
+
         // ── Reading server (OPDS) — Komga / Kavita / Calibre-Web / LANraragi ──
         // Mirrors the Jellyfin connection surface: catalog URL + Basic-auth creds +
         // a Test Connection button (opds.connect fetches the root feed).

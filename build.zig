@@ -110,6 +110,17 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("icons", icons_dep.module("icons"));
 
+    // DPI-bypass sidecar (debpalash/zig-bypassdpi): a cross-platform userspace
+    // proxy that fragments the TLS ClientHello so ISP DPI can't read the SNI.
+    // Built as its own exe here and installed alongside `opal`; the app spawns it
+    // as a managed subprocess when the Settings toggle is on (see
+    // services/dpi_bypass.zig), and build-app.sh bundles it into Resources.
+    const bypassdpi_dep = b.dependency("bypassdpi", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(bypassdpi_dep.artifact("zig-bypassdpi"));
+
     // Link MPV and SQLite.
     // Windows: zig's -l search for windows-gnu only tries `{name}.dll`,
     // `{name}.lib` and `lib{name}.a` — it never finds MinGW `lib{name}.dll.a`
@@ -479,6 +490,17 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_radio_pure).step);
+
+    // DPI-bypass sidecar: mode validation, the "127.0.0.1:<port>" builder, and
+    // the enabled&&running proxy gate. dpi_bypass.zig routes through these.
+    const test_dpi_bypass_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/dpi_bypass_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_dpi_bypass_pure).step);
 
     // Jellyfin image-proxy URL building + item-id validation (SSRF/injection
     // gate for the web /api/jellyfin/poster proxy).

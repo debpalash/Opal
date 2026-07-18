@@ -10,6 +10,10 @@
             .url = "git+https://github.com/nat3github/zig-lib-icons#b7299b19fa11caa5be93ef49743d8fc31a4bf9a0",
             .hash = "icons-0.1.0-iJxA-VrGMwAVIStBxqDPFeC3wdnANtYyDrNfYXNz95OW",
         },
+        .bypassdpi = .{
+            .url = "git+https://github.com/debpalash/zig-bypassdpi#91618501a08f487655e2ac08074f2ccf99db1867",
+            .hash = "zig_bypassdpi-0.1.0-B1zpWKG2AAA86E-OyWtOjBE-zvSvzx2rGMWy3yIA-lEX",
+        },
     },
     .minimum_zig_version = "0.15.2",
     .paths = .{""},
