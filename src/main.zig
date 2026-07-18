@@ -195,6 +195,9 @@ pub fn coreInit() !void {
             @import("services/plugin_repo.zig").init(); // load saved GitHub token
             @import("services/trakt.zig").init(); // load saved Trakt credentials/token
             @import("services/plex.zig").init(); // load saved Plex token/server
+            // DPI-bypass proxy sidecar: config.load() above restored the flag +
+            // mode, so start the loopback proxy now if the user enabled it.
+            if (state.app.dpi_bypass_enabled) @import("services/dpi_bypass.zig").start();
             // Signal the UI thread that watch history is ready so the "resume
             // last played?" launch prompt can arm (monotonic one-way flag).
             state.app.init_history_loaded = true;
@@ -406,6 +409,9 @@ pub fn appDeinit() void {
 
     search.clearResults();
     search.search_results.deinit(@import("core/alloc.zig").allocator);
+
+    // Tear down the DPI-bypass proxy sidecar (no-op if it was never started).
+    @import("services/dpi_bypass.zig").stop();
 
     // Kill any spawned child processes that may still be running
     const kill_targets = [_][]const u8{

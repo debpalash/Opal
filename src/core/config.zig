@@ -59,6 +59,8 @@ pub fn save() void {
     setKey("http_dl_segments", fmtInt(&fb, @as(usize, state.app.http_dl_segments)));
     setKey("http_dl_max_concurrent", fmtInt(&fb, @as(usize, state.app.http_dl_max_concurrent)));
     setKey("proxy_url", state.app.proxy_url[0..state.app.proxy_url_len]);
+    setKey("dpi_bypass_enabled", if (state.app.dpi_bypass_enabled) "1" else "0");
+    setKey("dpi_bypass_mode", if (state.app.dpi_bypass_mode_len > 0) state.app.dpi_bypass_mode[0..state.app.dpi_bypass_mode_len] else "sni");
     setKey("ytdl_format_idx", fmtInt(&fb, state.app.ytdl_format_idx));
     setKey("drawer_width_px", fmtFloat(&fb, state.app.drawer_width_px));
     setKey("tmdb_api_key", state.app.tmdb.api_key[0..state.app.tmdb.api_key_len]);
@@ -327,6 +329,17 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         if (val.len > 0 and val.len < state.app.proxy_url.len) {
             @memcpy(state.app.proxy_url[0..val.len], val);
             state.app.proxy_url_len = val.len;
+        }
+    } else if (std.mem.eql(u8, key, "dpi_bypass_enabled")) {
+        // The sidecar itself is started/stopped in main.coreInit (after this
+        // load completes, so the mode row is already applied) and from the
+        // Settings toggle — here we only restore the flag.
+        state.app.dpi_bypass_enabled = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "dpi_bypass_mode")) {
+        const dpi_pure = @import("../services/dpi_bypass_pure.zig");
+        if (dpi_pure.validMode(val) and val.len <= state.app.dpi_bypass_mode.len) {
+            @memcpy(state.app.dpi_bypass_mode[0..val.len], val);
+            state.app.dpi_bypass_mode_len = val.len;
         }
     } else if (std.mem.eql(u8, key, "ytdl_format_idx")) {
         const idx = std.fmt.parseInt(usize, val, 10) catch 1;

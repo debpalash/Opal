@@ -438,6 +438,12 @@ pub const AppState = struct {
     session_start_s: i64 = 0, // this session's launch timestamp (in-memory)
     proxy_url: [128]u8 = std.mem.zeroes([128]u8), // e.g. "socks5://127.0.0.1:1080"
     proxy_url_len: usize = 0,
+    // DPI-bypass sidecar (services/dpi_bypass.zig): a loopback proxy that
+    // fragments the TLS ClientHello to defeat SNI-based ISP blocking. Off by
+    // default; mode is one of the CLI's "sni" / "split:1".
+    dpi_bypass_enabled: bool = false,
+    dpi_bypass_mode: [16]u8 = std.mem.zeroes([16]u8),
+    dpi_bypass_mode_len: usize = 0,
 
     // ── Workspace UI ──
     ws_save_open: bool = false,

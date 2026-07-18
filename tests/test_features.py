@@ -57,6 +57,7 @@ from features import (  # noqa: F401
     test_plex_restore,
     test_allanime_gated,
     test_plugins_logs_ui,
+    test_dpi_bypass,
 )
 
 if __name__ == "__main__":
