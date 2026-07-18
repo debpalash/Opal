@@ -14,7 +14,7 @@ import re
 
 # Every source tab that must live inside exactly one rail group.
 SOURCE_TABS = [
-    "TMDB", "Drama", "Jellyfin", "Plex", "YouTube", "Anime", "Comics",
+    "TMDB", "Drama", "Jellyfin", "Plex", "YouTube", "Iptv", "Anime", "Comics",
     "Novels", "Vndb", "Opds", "Podcasts", "Radio", "Audiobooks", "Web", "RSS",
 ]
 

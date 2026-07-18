@@ -70,7 +70,7 @@ var group_expanded = [_]bool{false} ** rail_group_count;
 fn groupOf(tab: state.DrawerTab) ?RailGroup {
     return switch (tab) {
         .TMDB, .Drama, .Jellyfin, .Plex => .movies_tv,
-        .YouTube => .video,
+        .YouTube, .Iptv => .video,
         .Anime, .Comics => .anime,
         .Novels, .Vndb, .Opds => .reading,
         .Podcasts, .Radio, .Audiobooks => .audio,
@@ -159,6 +159,7 @@ fn renderGroup(g: RailGroup, gi: usize) void {
         },
         .video => {
             renderRailTab(.YouTube, shell.iconForTab(.YouTube), "YouTube", 5);
+            renderRailTab(.Iptv, shell.iconForTab(.Iptv), "Live TV", 23);
         },
         .anime => {
             renderRailTab(.Anime, shell.iconForTab(.Anime), "Anime", 6);
@@ -429,6 +430,7 @@ pub fn renderTabContent(tab: state.DrawerTab) void {
         .Drama => @import("../services/drama.zig").renderContent(),
         .Podcasts => @import("../services/podcasts.zig").renderContent(),
         .Radio => @import("../services/radio.zig").renderContent(),
+        .Iptv => @import("../services/iptv.zig").renderContent(),
         .History => renderHistoryContent(),
         .RSS => rss.renderContent(),
         .Jellyfin => jellyfin_ui.renderContent(),

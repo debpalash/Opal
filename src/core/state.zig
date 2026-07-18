@@ -8,6 +8,7 @@ const thumbnail = @import("../player/thumbnail.zig");
 const subtitles_mod = @import("../player/subtitles.zig");
 const podcasts_pure = @import("../services/podcasts_pure.zig");
 const radio_pure = @import("../services/radio_pure.zig");
+const iptv_pure = @import("../services/iptv_pure.zig");
 const audiobookshelf_pure = @import("../services/audiobookshelf_pure.zig");
 const opds_pure = @import("../services/opds_pure.zig");
 const anime_schedule_pure = @import("../services/anime_schedule_pure.zig");
@@ -19,7 +20,7 @@ const anime_schedule_pure = @import("../services/anime_schedule_pure.zig");
 pub const GridMode = enum { auto, cols_1, cols_2, cols_3, cols_4 };
 pub const ContentProvider = enum { mpv, comic_viewer };
 pub const VideoFillMode = enum { fit, cover };
-pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Audiobooks, Opds, Novels, Vndb, Drama };
+pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Audiobooks, Opds, Novels, Vndb, Drama, Iptv };
 pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, Scripts, AI, LangLearn, FileAssoc, About };
 pub const TmdbView = enum { Trending, Search, Favorites, Watchlist, Watching };
 pub const TmdbCategory = enum { trending, now_playing, top_rated, upcoming, popular };
@@ -953,6 +954,29 @@ pub const AppState = struct {
         result_count: usize = 0,
     } = .{},
 
+    // ── Live TV / IPTV (iptv-org streams.json → HLS/m3u8 stream via mpv) ──
+    // The VIDEO twin of `radio`: search → channel list → play. streams.json is a
+    // single static array, so the worker parses ALL accepted channels up front
+    // into this fixed buffer (capped at 300) and infinite scroll reveals them
+    // progressively. Parsing + the NSFW/accept gate live in
+    // services/iptv_pure.zig; the fetch worker publishes here under iptv.zig's
+    // parse_mutex. Opt-in via the source_config-gated "iptv-org" plugin. See
+    // services/iptv.zig.
+    iptv: struct {
+        search_buf: [256]u8 = std.mem.zeroes([256]u8),
+        // Atomic like the radio/podcasts loaders: read by the UI + remote API
+        // threads, written by the detached fetch worker. A plain bool is a race.
+        is_loading: std.atomic.Value(bool) = .init(false),
+        fetch_error: bool = false,
+        // True while results[] holds the full popular directory rather than a
+        // user search — drives the grid heading only.
+        showing_popular: bool = false,
+        // Fixed array (never reallocated) — the channel cap. 300 keeps the parse
+        // bounded so we never hold the ~4 MB feed as parsed objects.
+        results: [300]iptv_pure.IptvChannel = std.mem.zeroes([300]iptv_pure.IptvChannel),
+        result_count: usize = 0,
+    } = .{},
+
     // ── Novels (light-novel / web-novel reader) ──
     // Drill: search → novel → chapter list → paged text reader. Structural
     // sibling of `comic`, but renders TEXT, not page images. Search results and
@@ -1413,6 +1437,10 @@ pub fn navigateToTabNow(tab: DrawerTab) void {
         },
         .Radio => {
             app.browse_source = .Radio;
+            app.router.navigate(.browse);
+        },
+        .Iptv => {
+            app.browse_source = .Iptv;
             app.router.navigate(.browse);
         },
         .Comics => {

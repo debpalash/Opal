@@ -497,6 +497,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_radio_pure).step);
 
+    // Live TV / IPTV: iptv-org streams.json parsing, m3u8 recognition, the
+    // NSFW/accept gate, the query filter, and the <base>/streams.json builder.
+    const test_iptv_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/iptv_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_iptv_pure).step);
+
     // DPI-bypass sidecar: mode validation, the "127.0.0.1:<port>" builder, and
     // the enabled&&running proxy gate. dpi_bypass.zig routes through these.
     const test_dpi_bypass_pure = b.addTest(.{
