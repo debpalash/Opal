@@ -55,12 +55,37 @@ fn plainFetch(url: []const u8, out_buf: []u8, hdr_buf: []u8, hdr_len: *usize, st
     hdr_len.* = 0;
     status.* = 0;
 
-    var child = io_g.Child.init(&.{
-        "curl", "-s",           "-L",           "--compressed",
-        "-A",   BROWSER_UA,     "--max-time",   "20",
-        "-D",   "/dev/stderr",  "-o",           "-",
-        url,
-    }, alloc);
+    // Route through the reliable-fetch backend: curl-impersonate (browser
+    // JA3/JA4) when installed, else plain curl, PLUS the DPI-bypass proxy when
+    // enabled — this scrape path previously had neither (a real gap). We build
+    // the argv here (not reliable_fetch.fetch) because we also need curl's
+    // response headers on stderr (`-D /dev/stderr`) for the block detector.
+    const be = @import("reliable_fetch.zig").backend();
+    var argv: [24][]const u8 = undefined;
+    var an: usize = 0;
+    argv[an] = be.bin;
+    an += 1;
+    if (be.token.len > 0) {
+        argv[an] = "--impersonate";
+        an += 1;
+        argv[an] = be.token;
+        an += 1;
+    }
+    for ([_][]const u8{ "-s", "-L", "--compressed", "-A", BROWSER_UA, "--max-time", "20", "-D", "/dev/stderr", "-o", "-" }) |a| {
+        argv[an] = a;
+        an += 1;
+    }
+    if (@import("dpi_bypass.zig").proxyArgs()) |pa| {
+        for (pa) |a| {
+            if (an >= argv.len - 1) break;
+            argv[an] = a;
+            an += 1;
+        }
+    }
+    argv[an] = url;
+    an += 1;
+
+    var child = io_g.Child.init(argv[0..an], alloc);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;

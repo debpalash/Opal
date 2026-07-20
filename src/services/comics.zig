@@ -22,12 +22,19 @@ const opds_pure = @import("opds_pure.zig");
 // HeanCms/Iken JSON-API source engine (tested) — URL building + series/chapter/
 // page parsing routes through this so the shipped parse IS the tested parse.
 const heancms = @import("manga_heancms_pure.zig");
+// Suwayomi-Server (Tachidesk) source engine (tested) — Opal talks to a user-run
+// Suwayomi over its REST API, so it reaches EVERY installed Mihon/Aniyomi
+// extension without reimplementing each engine. URL/JSON logic is all in
+// manga_suwayomi_pure so the shipped requests are the tested requests.
+const suwayomi = @import("manga_suwayomi_pure.zig");
 // Anti-block fetch layer — a fast plain GET, transparently re-fetched through
 // the anti-detect browser when the response is a Cloudflare/DDoS-Guard/captcha
 // interstitial. The HTML-scraper framework fetches (Madara / MangaThemesia base
 // sites + the generic readallcomics scraper) route through it; MangaDex/HeanCms
 // JSON stay on the per-host-UA `fetchUrl`. See fetchMaybeUnblocked below.
 const scrape = @import("scrape_fetch.zig");
+const db = @import("../core/db.zig");
+const io_global = @import("../core/io_global.zig");
 
 /// Percent-encode a search query (space → `+`). Delegates to the unit-tested
 /// pure helper so the shipped encoder IS the tested one.
@@ -82,6 +89,121 @@ pub fn drainPageTexFrees() void {
     pending_page_tex_count = 0;
 }
 
+// ══════════════════════════════════════════════════════════
+// Reading resume (last-read page, persisted per issue)
+// ══════════════════════════════════════════════════════════
+//
+// Same shape as the novels vertical: `library_status` under `comic_resume` is
+// the authoritative store, and `library_items` gets a denormalized row so home's
+// "Continue" rail can reopen the issue. All of it runs on the UI thread (the
+// reader render path), so no locking is needed.
+
+const RESUME_KIND = "comic_resume";
+/// A page turn must not hit sqlite — flipping through an issue would otherwise
+/// be one write per page. The tick coalesces: it writes at most this often, and
+/// closeComic forces a final flush so the last page always lands.
+const RESUME_DEBOUNCE_MS: i64 = 1500;
+
+/// Page index last written to sqlite. maxInt = "nothing written for this issue
+/// yet", which loadComic/loadPseBook reset so a new issue can't inherit the
+/// previous one's page and skip its first save.
+var resume_saved_page: usize = std.math.maxInt(usize);
+var resume_last_write_ms: i64 = 0;
+
+/// The current issue's stable identity: the source URL when there is one (it
+/// survives a restart and names the exact issue), else the title (OPDS-PSE).
+fn resumeKeyNow(out: []u8) []const u8 {
+    return pure.resumeKey(
+        state.app.comic.url_buf[0..state.app.comic.url_len],
+        state.app.comic.title[0..state.app.comic.title_len],
+        out,
+    );
+}
+
+/// Look up the persisted last-read page for `key` and arm it as the jump target
+/// for the load that's starting. Applied by applyPendingResume once pages stage.
+fn armPendingResume(key: []const u8) void {
+    if (key.len == 0) return;
+    var val_buf: [24]u8 = undefined;
+    const val = db.libraryGetStatus(RESUME_KIND, key, &val_buf);
+    state.app.comic.pending_resume_page = pure.parseResumePage(val);
+}
+
+/// Persist the last-read page and mirror it into the unified read-model.
+fn saveResume(page: usize) void {
+    var key_buf: [512]u8 = undefined;
+    const key = resumeKeyNow(&key_buf);
+    if (key.len == 0) return;
+    var val_buf: [24]u8 = undefined;
+    db.librarySetStatus(RESUME_KIND, key, pure.formatResumePage(&val_buf, page));
+
+    // Mirror into library_items so home's Continue rail spans comics too.
+    // library_status above stays authoritative; this is the denormalized cache.
+    // Progress is measured in PAGES (page+1 → secs, page_count → duration) so
+    // percentOf yields the read-through fraction. shouldRecordProgress keeps
+    // page 1 out of the rail — it is where every issue opens, so there is
+    // nothing to resume to, and it would sit at the CONTINUE_MIN_PCT floor.
+    const total = state.app.comic.page_count;
+    if (!pure.shouldRecordProgress(page, total)) return;
+    const title = state.app.comic.title[0..state.app.comic.title_len];
+    var link_buf: [800]u8 = undefined;
+    const link = pure.formatDeepLink(&link_buf, state.app.comic.url_buf[0..state.app.comic.url_len], title);
+    if (link.len == 0) return; // unreopenable (OPDS-PSE) → no dead row
+    var label_buf: [48]u8 = undefined;
+    const label = std.fmt.bufPrint(&label_buf, "Page {d}", .{page + 1}) catch "";
+    @import("library_store.zig").upsertProgress(
+        "comics",
+        key,
+        if (title.len > 0) title else key,
+        "",
+        @floatFromInt(page + 1),
+        @floatFromInt(total),
+        label,
+        link,
+    );
+}
+
+/// Debounced resume write. UI-THREAD ONLY — called every frame the reader is
+/// visible, which is exactly when the page can change (buttons, keys, and scroll
+/// mode all just move `current_page`, so polling it here catches every path).
+/// `force` bypasses the debounce for the final flush on close.
+pub fn tickResume(force: bool) void {
+    const cm = &state.app.comic;
+    if (cm.page_count == 0) return;
+    const page = cm.current_page;
+    if (page >= cm.page_count) return;
+    if (page == resume_saved_page) return;
+    const now = io_global.milliTimestamp();
+    // Not yet due: leave resume_saved_page stale so a later frame retries.
+    if (!force and now - resume_last_write_ms < RESUME_DEBOUNCE_MS) return;
+    resume_saved_page = page;
+    resume_last_write_ms = now;
+    saveResume(page);
+}
+
+/// Jump the reader to the persisted page once the issue's pages have staged.
+/// UI-THREAD ONLY. Consumes the request so it fires exactly once per load.
+fn applyPendingResume() void {
+    const cm = &state.app.comic;
+    if (cm.pending_resume_page == 0 or cm.page_count == 0) return;
+    const target = @min(cm.pending_resume_page, cm.page_count - 1);
+    cm.pending_resume_page = 0;
+    cm.current_page = target;
+    cm.scroll_to_page = true;
+    // Treat the restored page as already persisted — landing on it is not a read.
+    resume_saved_page = target;
+}
+
+/// Reopen a comic from a home library deep link (`comic|<url>|<title>`). Ignores
+/// links that aren't ours. loadComic arms the persisted page, so this reopens
+/// the issue AND lands on the page the reader was left on.
+pub fn openDeepLink(link: []const u8) void {
+    const parsed = pure.parseDeepLink(link) orelse return;
+    loadComic(parsed.url);
+    state.app.browse_source = .Comics;
+    state.app.router.navigate(.browse);
+}
+
 /// Kick off a background thread to fetch and parse a comic issue page.
 pub fn loadComic(url: []const u8) void {
     if (state.app.comic.is_loading.load(.acquire)) return;
@@ -109,6 +231,12 @@ pub fn loadComic(url: []const u8) void {
     state.app.comic.page_count = 0;
     state.app.comic.dl_progress.store(0, .release);
     state.app.comic.current_page = 0;
+
+    // Restore the last-read page for THIS issue (keyed by the URL just stored,
+    // so it works for a fresh open and for a home deep link alike). Reset the
+    // debounce bookkeeping first — the previous issue's page must not carry.
+    resume_saved_page = std.math.maxInt(usize);
+    armPendingResume(state.app.comic.url_buf[0..state.app.comic.url_len]);
 
     freeComicPages();
 
@@ -164,6 +292,10 @@ pub fn loadPseBook(title: []const u8, template: []const u8, count: u32, auth: []
     const tl = @min(title.len, state.app.comic.title.len);
     @memcpy(state.app.comic.title[0..tl], title[0..tl]);
     state.app.comic.title_len = tl;
+
+    // A PSE book has no scraper URL, so its resume key is the title (just set).
+    resume_saved_page = std.math.maxInt(usize);
+    armPendingResume(state.app.comic.title[0..tl]);
 
     // Stage page URLs 0-indexed, bounded by the page_urls array (128).
     const max_pages = state.app.comic.page_urls.len;
@@ -269,6 +401,9 @@ pub fn freeSearchCovers() void {
 
 /// Close the current comic and return to the browse/search view.
 pub fn closeComic() void {
+    // Final flush BEFORE the state is torn down — the resume key is derived from
+    // url_buf/title, and the page from current_page, all cleared just below.
+    tickResume(true);
     state.app.comic.narrating = false;
     state.app.comic.show_ocr_overlay = false;
     freeComicPages();
@@ -344,6 +479,22 @@ fn fetchComicThread(gen: u32) void {
             return;
         }
         logs.pushLog("info", "comics", "Comic loaded (Madara)", false);
+        downloadPages(gen);
+        return;
+    }
+
+    // ── Suwayomi cards carry a `suwayomi:<mangaId>` pseudo-URL ──
+    // Pages come from a chapters→chapter-meta→page-URL chain against the user's
+    // Suwayomi-Server (which proxies the real Mihon extension), so route BEFORE
+    // the generic scraper. Once page_urls are staged, downloadPages() takes over.
+    if (suwayomi.mangaIdFromRoute(url)) |manga_id| {
+        const ok = loadSuwayomiPages(manga_id);
+        state.app.comic.is_loading.store(false, .release);
+        if (!ok) {
+            logs.pushLog("error", "comics", "Suwayomi chapter failed to load", true);
+            return;
+        }
+        logs.pushLog("info", "comics", "Comic loaded (Suwayomi)", false);
         downloadPages(gen);
         return;
     }
@@ -1452,8 +1603,24 @@ var more_available: bool = true;
 //     Base-URL-driven like readallcomics: its endpoint comes from source_config
 //     ("madara"/"base"), so it is INERT until the user installs a Madara source.
 //     Cards carry a `madara:<mangaUrl>` pseudo-URL routed by fetchComicThread.
-const Source = enum { all, readallcomics, mangadex, heancms, mangathemesia, madara };
+//   • suwayomi     — a user-run Suwayomi-Server (Tachidesk) that runs actual
+//     Mihon/Aniyomi extension APKs. Its base URL + the id of the installed
+//     source to search come from source_config ("suwayomi"/"base",
+//     "suwayomi"/"source"), so it is INERT until the user configures it. Cards
+//     carry a `suwayomi:<mangaId>` pseudo-URL routed by fetchComicThread.
+const Source = enum { all, readallcomics, mangadex, heancms, mangathemesia, madara, suwayomi };
 var active_source: Source = .all;
+
+/// The Suwayomi server base URL + the installed-source id to search, or null
+/// when either is unconfigured (→ the engine stays inert). Both read fresh from
+/// source_config, whose static table can be reloaded, so callers must copy the
+/// bytes before the next reload().
+fn suwayomiBase() ?[]const u8 {
+    return @import("../core/source_config.zig").get("suwayomi", "base");
+}
+fn suwayomiSourceId() ?[]const u8 {
+    return @import("../core/source_config.zig").get("suwayomi", "source");
+}
 
 /// Does this source participate in the current selection?
 fn sourceActive(src: Source) bool {
@@ -1778,6 +1945,12 @@ fn searchWorker(gen: u32) void {
     if (sourceActive(.madara) and madaraBase() != null) {
         filled += fetchMadaraPage(query, 1, gen, filled);
     }
+    if (search_gen.load(.acquire) != gen) return;
+    // Suwayomi — inert until the server base + a source id are configured. Gives
+    // access to whichever installed Mihon/Aniyomi extension the user pointed at.
+    if (sourceActive(.suwayomi)) {
+        filled += fetchSuwayomiPage(query, 1, gen, filled);
+    }
 
     // Only the LAST source's page size can tell us whether more rows exist; a
     // short page from every active source means we've hit the end.
@@ -1836,6 +2009,11 @@ fn loadMoreWorker(gen: u32) void {
     if (sourceActive(.madara) and madaraBase() != null) {
         // Madara paginates by WordPress page number (1-based) like readallcomics.
         added += fetchMadaraPage(query, next_page, gen, sr_count);
+    }
+    if (search_gen.load(.acquire) != gen) return;
+    if (sourceActive(.suwayomi)) {
+        // Suwayomi's /source/{id}/search paginates by 1-based page number.
+        added += fetchSuwayomiPage(query, next_page, gen, sr_count);
     }
 
     if (added == 0 or added < RESULTS_PER_PAGE) more_available = false;
@@ -2095,6 +2273,156 @@ fn parseMangadexResults(json: []const u8, gen: u32, start: usize) usize {
     if (search_gen.load(.acquire) != gen) return 0;
     sr_count = count;
     return count - start;
+}
+
+/// Fetch + merge ONE Suwayomi source-search page (1-based `page`), writing rows
+/// from slot `start`. Returns the number of new rows (0 when "suwayomi" isn't
+/// configured / errored). Worker-thread only; JSON buffer is heap-allocated.
+fn fetchSuwayomiPage(query: []const u8, page: u32, gen: u32, start: usize) usize {
+    // Copy base + source id out of the reloadable source_config table.
+    var base_buf: [256]u8 = undefined;
+    const base_raw = suwayomiBase() orelse return 0; // inert (not configured)
+    const bn = @min(base_raw.len, base_buf.len);
+    @memcpy(base_buf[0..bn], base_raw[0..bn]);
+    const base = base_buf[0..bn];
+
+    var sid_buf: [24]u8 = undefined;
+    const sid_raw = suwayomiSourceId() orelse return 0; // inert until a source is picked
+    const sn = @min(sid_raw.len, sid_buf.len);
+    @memcpy(sid_buf[0..sn], sid_raw[0..sn]);
+    const source_id = sid_buf[0..sn];
+
+    var url_buf: [1024]u8 = undefined;
+    const url = suwayomi.buildSearchUrl(&url_buf, base, source_id, query, page) orelse return 0;
+
+    const json_buf = alloc.alloc(u8, 512 * 1024) catch return 0;
+    defer alloc.free(json_buf);
+    const n = fetchUrl(url, json_buf);
+    if (n == 0) return 0;
+
+    if (search_gen.load(.acquire) != gen) return 0;
+    return parseSuwayomiResults(json_buf[0..n], base, gen, start);
+}
+
+/// Parse a Suwayomi search response into sr_* from slot `start`. Returns the
+/// number of NEW rows appended. Mirrors parseMangadexResults: worker-thread
+/// only, never frees textures/pixels (stamps `gen` + writes the cover URL,
+/// leaving reclaimStaleCovers the sole owner). Cards store `suwayomi:<mangaId>`.
+fn parseSuwayomiResults(json: []const u8, base: []const u8, gen: u32, start: usize) usize {
+    var count: usize = start;
+    var it = suwayomi.MangaIter{ .json = json };
+    while (it.next()) |obj| {
+        if (count >= MAX_SEARCH_RESULTS) break;
+        var id_buf: [24]u8 = undefined;
+        var title_buf: [256]u8 = undefined;
+        var thumb_buf: [512]u8 = undefined;
+        const m = suwayomi.parseManga(obj, &id_buf, &title_buf, &thumb_buf) orelse continue;
+
+        var url_buf: [40]u8 = undefined;
+        const route = suwayomi.buildRouteUrl(&url_buf, m.id) orelse continue;
+        if (route.len > sr_urls[count].len) continue;
+
+        var t_safe: [256]u8 = undefined;
+        const title = @import("../core/text.zig").safeUtf8Buf(m.title[0..@min(m.title.len, 255)], &t_safe);
+        if (title.len == 0) continue;
+
+        // De-dupe against every row already collected.
+        {
+            var dup = false;
+            var d: usize = 0;
+            while (d < count) : (d += 1) {
+                if (std.mem.eql(u8, sr_urls[d][0..sr_url_lens[d]], route)) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) continue;
+        }
+
+        @memcpy(sr_urls[count][0..route.len], route);
+        sr_url_lens[count] = route.len;
+        const tlen = @min(title.len, sr_titles[count].len);
+        @memcpy(sr_titles[count][0..tlen], title[0..tlen]);
+        sr_title_lens[count] = tlen;
+
+        // Cover (thumbnailUrl absolutized against the server base; may be absent).
+        sr_cover_url_lens[count] = 0;
+        if (m.thumb.len > 0) {
+            var cov_buf: [640]u8 = undefined;
+            if (suwayomi.absolutizeThumb(&cov_buf, base, m.thumb)) |cov| {
+                if (cov.len < sr_cover_urls[count].len) {
+                    @memcpy(sr_cover_urls[count][0..cov.len], cov);
+                    sr_cover_url_lens[count] = cov.len;
+                }
+            }
+        }
+        sr_cover_gen[count] = gen;
+        sr_cover_failed[count] = false;
+
+        count += 1;
+    }
+    if (search_gen.load(.acquire) != gen) return 0;
+    sr_count = count;
+    return count - start;
+}
+
+/// Resolve a Suwayomi manga id into a readable page list: chapters → earliest
+/// chapter index → chapter meta (pageCount) → one page URL per page. Runs on the
+/// fetchComicThread worker; all parsing via manga_suwayomi_pure.
+fn loadSuwayomiPages(manga_id: []const u8) bool {
+    var base_buf: [256]u8 = undefined;
+    const base_raw = suwayomiBase() orelse return false;
+    const bn = @min(base_raw.len, base_buf.len);
+    @memcpy(base_buf[0..bn], base_raw[0..bn]);
+    const base = base_buf[0..bn];
+
+    // 1. Chapter list (onlineFetch forces a fresh pull from the source).
+    var ch_url_buf: [320]u8 = undefined;
+    const ch_url = suwayomi.buildChaptersUrl(&ch_url_buf, base, manga_id) orelse return false;
+    const ch_buf = alloc.alloc(u8, 256 * 1024) catch return false;
+    defer alloc.free(ch_buf);
+    const ch_n = fetchUrl(ch_url, ch_buf);
+    if (ch_n == 0 or workers.isQuitting()) return false;
+
+    var idx_buf: [16]u8 = undefined;
+    const ci_raw = suwayomi.firstChapterIndex(ch_buf[0..ch_n], &idx_buf) orelse {
+        logs.pushLog("warn", "comics", "Suwayomi: no chapters for this title", false);
+        return false;
+    };
+    var ci_store: [16]u8 = undefined;
+    @memcpy(ci_store[0..ci_raw.len], ci_raw);
+    const chapter_index = ci_store[0..ci_raw.len];
+
+    // 2. Chapter metadata → pageCount.
+    var cm_url_buf: [320]u8 = undefined;
+    const cm_url = suwayomi.buildChapterUrl(&cm_url_buf, base, manga_id, chapter_index) orelse return false;
+    const cm_buf = alloc.alloc(u8, 64 * 1024) catch return false;
+    defer alloc.free(cm_buf);
+    const cm_n = fetchUrl(cm_url, cm_buf);
+    if (cm_n == 0 or workers.isQuitting()) return false;
+    const pages = suwayomi.pageCount(cm_buf[0..cm_n]);
+    if (pages == 0) return false;
+
+    // 3. Stage one page URL per page (Suwayomi proxies + caches each page image).
+    const max_pages = state.app.comic.page_urls.len; // 128
+    var count: usize = 0;
+    var p: u32 = 0;
+    while (p < pages and count < max_pages) : (p += 1) {
+        var page_buf: [512]u8 = undefined;
+        const page_url = suwayomi.buildPageUrl(&page_buf, base, manga_id, chapter_index, p) orelse continue;
+        if (page_url.len >= state.app.comic.page_urls[count].len) continue;
+        @memcpy(state.app.comic.page_urls[count][0..page_url.len], page_url);
+        state.app.comic.page_url_lens[count] = page_url.len;
+        count += 1;
+    }
+    if (count == 0) return false;
+    state.app.comic.page_count = count;
+    if (state.app.comic.title_len == 0) {
+        const t = "Suwayomi";
+        @memcpy(state.app.comic.title[0..t.len], t);
+        state.app.comic.title_len = t.len;
+    }
+    return true;
 }
 
 /// Parse a MangaThemesia browse/search page into sr_* from slot `start`.
@@ -2412,6 +2740,10 @@ pub fn renderContent() void {
     // A comic is open → the reader fills the whole tab (images + tools live in
     // renderPaneContent). Reading happens here in Browse, not the player route.
     if (state.app.comic.is_loading.load(.acquire) or state.app.comic.page_count > 0) {
+        // Restore the persisted page once the issue's pages exist, then keep the
+        // last-read page persisted (debounced) for as long as the reader is up.
+        applyPendingResume();
+        tickResume(false);
         var reader = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
         defer reader.deinit();
         renderPaneContent(0);

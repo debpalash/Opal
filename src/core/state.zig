@@ -9,6 +9,7 @@ const subtitles_mod = @import("../player/subtitles.zig");
 const podcasts_pure = @import("../services/podcasts_pure.zig");
 const radio_pure = @import("../services/radio_pure.zig");
 const iptv_pure = @import("../services/iptv_pure.zig");
+const music_pure = @import("../services/music_subsonic_pure.zig");
 const audiobookshelf_pure = @import("../services/audiobookshelf_pure.zig");
 const opds_pure = @import("../services/opds_pure.zig");
 const anime_schedule_pure = @import("../services/anime_schedule_pure.zig");
@@ -20,7 +21,7 @@ const anime_schedule_pure = @import("../services/anime_schedule_pure.zig");
 pub const GridMode = enum { auto, cols_1, cols_2, cols_3, cols_4 };
 pub const ContentProvider = enum { mpv, comic_viewer };
 pub const VideoFillMode = enum { fit, cover };
-pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Audiobooks, Opds, Novels, Vndb, Drama, Iptv };
+pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Audiobooks, Opds, Novels, Vndb, Drama, Iptv, Music };
 pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, Scripts, AI, LangLearn, FileAssoc, About };
 pub const TmdbView = enum { Trending, Search, Favorites, Watchlist, Watching };
 pub const TmdbCategory = enum { trending, now_playing, top_rated, upcoming, popular };
@@ -826,6 +827,13 @@ pub const AppState = struct {
         scroll_to_page: bool = false, // signal render to scroll to comic_current_page
         ocr_thread: ?std.Thread = null,
         narrate_thread: ?std.Thread = null,
+
+        // ── Reading resume (last-read page, persisted) ──
+        // Page index the reader should jump to once pages finish staging. Set by
+        // loadComic/loadPseBook from the persisted `comic_resume` row (and hence
+        // by openDeepLink, which goes through loadComic); consumed exactly once
+        // by comics.applyPendingResume on the UI thread. 0 = nothing to restore.
+        pending_resume_page: usize = 0,
     } = .{},
 
     // ── Anime ──
@@ -933,6 +941,23 @@ pub const AppState = struct {
         selected_name_len: usize = 0,
         episodes: [200]podcasts_pure.Episode = std.mem.zeroes([200]podcasts_pure.Episode),
         episode_count: usize = 0,
+
+        // ── Now-playing episode (library_items mirror) ──
+        // Snapshot of the episode handed to mpv, so podcasts.tickNowPlaying can
+        // keep a proper `podcast` row in the unified read-model instead of the
+        // anonymous playback entry mpv would leave behind. Position itself is
+        // NOT stored here — watch_history already owns it, keyed by np_url.
+        // Written and read on the UI thread only (playEpisode + the frame tick).
+        np_url: [512]u8 = std.mem.zeroes([512]u8),
+        np_url_len: usize = 0,
+        np_title: [200]u8 = std.mem.zeroes([200]u8),
+        np_title_len: usize = 0,
+        np_show: [160]u8 = std.mem.zeroes([160]u8),
+        np_show_len: usize = 0,
+        np_art: [300]u8 = std.mem.zeroes([300]u8),
+        np_art_len: usize = 0,
+        np_active: bool = false,
+        np_last_ms: i64 = 0,
     } = .{},
 
     // ── Internet Radio (RadioBrowser API → audio stream via mpv) ──
@@ -975,6 +1000,43 @@ pub const AppState = struct {
         // bounded so we never hold the ~4 MB feed as parsed objects.
         results: [300]iptv_pure.IptvChannel = std.mem.zeroes([300]iptv_pure.IptvChannel),
         result_count: usize = 0,
+        // Browse filters (Live TV filter bar). Empty category/country = all;
+        // filter_quality/sort_mode are QualityFilter/SortMode enum indices. A
+        // change re-runs the fetch worker (services/iptv.zig applyFilters).
+        filter_category: [32]u8 = std.mem.zeroes([32]u8),
+        filter_category_len: usize = 0,
+        filter_country: [8]u8 = std.mem.zeroes([8]u8),
+        filter_country_len: usize = 0,
+        filter_quality: u8 = 0,
+        sort_mode: u8 = 0,
+        // Quick-filter view: 0 = All (network), 1 = Favorites, 2 = Recent (both
+        // loaded from the iptv_channels table — services/iptv_store.zig).
+        quick_filter: u8 = 0,
+        // Settings input for a personal M3U playlist URL (overrides the public
+        // directory when set). Persisted to source_config on Save.
+        m3u_cfg: [512]u8 = std.mem.zeroes([512]u8),
+        m3u_loaded: bool = false,
+    } = .{},
+
+    // ── Music (Subsonic/OpenSubsonic library → audio stream via mpv) ──
+    // Self-hosted music (Navidrome/Airsonic/Funkwhale/Ampache). Search → track
+    // list → play. Parsing/auth in services/music_subsonic_pure.zig; the fetch
+    // worker publishes here. Opt-in via source_config ("subsonic"/base,user,pass).
+    music: struct {
+        search_buf: [256]u8 = std.mem.zeroes([256]u8),
+        // Active source: 0 = JioSaavn (public, keyless — default), 1 = Subsonic
+        // (self-hosted). Drives search/play/cover dispatch in music_subsonic.zig.
+        source: u8 = 0,
+        is_loading: std.atomic.Value(bool) = .init(false),
+        fetch_error: bool = false,
+        results: [200]music_pure.MusicSong = std.mem.zeroes([200]music_pure.MusicSong),
+        result_count: usize = 0,
+        // Settings input buffers (Subsonic server URL + credentials). Persisted
+        // via source_config on Save; the engine reads source_config, not these.
+        cfg_base: [256]u8 = std.mem.zeroes([256]u8),
+        cfg_user: [64]u8 = std.mem.zeroes([64]u8),
+        cfg_pass: [160]u8 = std.mem.zeroes([160]u8),
+        cfg_loaded: bool = false,
     } = .{},
 
     // ── Novels (light-novel / web-novel reader) ──
@@ -1441,6 +1503,10 @@ pub fn navigateToTabNow(tab: DrawerTab) void {
         },
         .Iptv => {
             app.browse_source = .Iptv;
+            app.router.navigate(.browse);
+        },
+        .Music => {
+            app.browse_source = .Music;
             app.router.navigate(.browse);
         },
         .Comics => {

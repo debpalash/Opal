@@ -918,6 +918,11 @@ fn appFrame() !dvui.App.Result {
     // frees textures via dvui, which is UI-thread-only).
     @import("services/comics.zig").drainPendingLoad();
 
+    // Keep an in-progress podcast episode mirrored into library_items (its
+    // position is already persisted by the mpv path; this gives it a real
+    // `podcast` row). Self-throttled — cheap to call every frame.
+    @import("services/podcasts.zig").tickNowPlaying();
+
     // Process deferred player removal (safe: before any rendering)
     if (state.app.pending_remove_player_idx >= 0) {
         const idx = @as(usize, @intCast(state.app.pending_remove_player_idx));

@@ -1085,6 +1085,10 @@ pub fn renderInlineResults() void {
                 .local => "On disk",
                 .tmdb => "Catalog",
                 .comics => "Comics",
+                .livetv => "Live TV",
+                .music => "Music",
+                .radio => "Radio",
+                .podcast => "Podcast",
             };
         }
     }.get;
@@ -1243,6 +1247,10 @@ fn queueChatResult(idx: usize) void {
         .local => "local",
         .tmdb => "tmdb",
         .comics => "comics",
+        .livetv => "livetv",
+        .music => "music",
+        .radio => "radio",
+        .podcast => "podcast",
     };
     @import("queue.zig").addToQueue(url_str, name, src_label);
     state.showToast("Added to queue");

@@ -387,6 +387,27 @@ def test_anime_nsfw_filter():
     return "pass", "sfw=true on all Jikan URLs + Rx/R+ parser drop, gated on the toggle"
 
 
+@test("NSFW Control Is Settings-Only", "Page Shell")
+def test_nsfw_settings_only():
+    # The NSFW filter is toggled from Settings ONLY — browse/search tabs must not
+    # carry their own toggle. They still HONOR the global flag (that's tested
+    # elsewhere), but must never FLIP it.
+    settings = open(os.path.join(PROJECT_DIR, "src/ui/settings.zig")).read()
+    if 'toggleRow(@src(), "NSFW Filter"' not in settings:
+        return "fail", "Settings lost the NSFW Filter toggle (the only intended control)"
+
+    # No browse-facing module may write the flag (assignment), only read it.
+    flip = "state.app.nsfw_filter_enabled = "
+    offenders = []
+    for rel in ("src/services/search.zig", "src/services/anime.zig",
+                "src/services/vndb.zig", "src/services/iptv.zig"):
+        if flip in open(os.path.join(PROJECT_DIR, rel)).read():
+            offenders.append(rel)
+    if offenders:
+        return "fail", "browse tab still flips the NSFW flag (settings-only): " + ", ".join(offenders)
+    return "pass", "NSFW filter is controlled from Settings only; browse tabs read but never flip it"
+
+
 @test("Unified Downloads List", "Page Shell")
 def test_unified_downloads():
     # Downloads is ONE merged list (torrents + files + history) with filter

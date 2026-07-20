@@ -1258,8 +1258,11 @@ fn apiTmdb(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) v
     defer state.app.tmdb.results_mutex.unlock();
     const items = &state.app.tmdb.results;
     for (items.items, 0..) |item, idx| {
-        if (idx > 0) w.writeAll(",") catch return;
+        // Cap BEFORE the separator: writing the comma first emits a trailing
+        // comma on the 30th row, producing JSON the web UI can't parse. Latent
+        // until a grid actually exceeded 30 rows (YouTube channel pages do).
         if (idx >= 30) break;
+        if (idx > 0) w.writeAll(",") catch return;
         const rating_pct = @as(u8, @intFromFloat(std.math.clamp(item.rating * 10.0, 0.0, 100.0)));
         w.print("{{\"id\":{d},\"title\":\"", .{item.id}) catch return;
         escJsonWrite(&w, item.title[0..item.title_len]);
@@ -1301,8 +1304,11 @@ fn apiYoutube(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8
     var w = std.Io.Writer.fixed(&json_buf);
     w.writeAll("{\"items\":[") catch return;
     for (state.app.yt.results.items, 0..) |item, idx| {
-        if (idx > 0) w.writeAll(",") catch return;
+        // Cap BEFORE the separator: writing the comma first emits a trailing
+        // comma on the 30th row, producing JSON the web UI can't parse. Latent
+        // until a grid actually exceeded 30 rows (YouTube channel pages do).
         if (idx >= 30) break;
+        if (idx > 0) w.writeAll(",") catch return;
         const dur_min = @divTrunc(item.duration, 60);
         const dur_sec = @rem(item.duration, 60);
         w.writeAll("{\"id\":\"") catch return;

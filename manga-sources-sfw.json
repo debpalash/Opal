@@ -1,1814 +1,1838 @@
 [
-  {
-    "name": "Azora",
-    "base": "https://azorafly.com",
-    "framework": "heancms",
-    "lang": "ar"
-  },
-  {
-    "name": "EternalMangas",
-    "base": "https://eternalmangas.org",
-    "framework": "heancms",
-    "lang": "es"
-  },
-  {
-    "name": "Hijala Scans",
-    "base": "https://en-hijala.com",
-    "framework": "heancms",
-    "lang": "en"
-  },
-  {
-    "name": "Hive Scans",
-    "base": "https://hivetoons.org",
-    "framework": "heancms",
-    "lang": "en"
-  },
-  {
-    "name": "Kayn Scans",
-    "base": "https://kaynscan.org",
-    "framework": "heancms",
-    "lang": "en"
-  },
-  {
-    "name": "Ken Scans",
-    "base": "https://kencomics.com",
-    "framework": "heancms",
-    "lang": "en"
-  },
-  {
-    "name": "Lua Scans",
-    "base": "https://luacomic.org",
-    "framework": "heancms",
-    "lang": "en"
-  },
-  {
-    "name": "Magus Manga",
-    "base": "https://magustoon.org",
-    "framework": "heancms",
-    "lang": "en"
-  },
-  {
-    "name": "Nyx Scans",
-    "base": "https://nyxscans.com",
-    "framework": "heancms",
-    "lang": "en"
-  },
-  {
-    "name": "Orion Scans",
-    "base": "https://orion-scans.com",
-    "framework": "heancms",
-    "lang": "en"
-  },
-  {
-    "name": "Renascans",
-    "base": "https://renascans.net",
-    "framework": "heancms",
-    "lang": "en"
-  },
-  {
-    "name": "Sana Scans",
-    "base": "https://sanascans.com",
-    "framework": "heancms",
-    "lang": "en"
-  },
-  {
-    "name": "Vanilla Scans",
-    "base": "https://vanillascans.org",
-    "framework": "heancms",
-    "lang": "en"
-  },
-  {
-    "name": "24HNovel",
-    "base": "https://24hnovel.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "3asq",
-    "base": "https://3asq.online",
-    "framework": "madara",
-    "lang": "ar"
-  },
-  {
-    "name": "Amuy",
-    "base": "https://apenasmaisumyaoi.com",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Anikiga",
-    "base": "https://anikiga.com",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "Anisa Scans",
-    "base": "https://anisascans.in",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Anyone Manga",
-    "base": "https://anyonemanga.com",
-    "framework": "madara",
-    "lang": "ar"
-  },
-  {
-    "name": "Aqua Manga",
-    "base": "https://aquareader.org",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "ArazNovel",
-    "base": "https://araznovel.com",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "Arthur Scan",
-    "base": "https://arthurscan.xyz",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Arya Scans",
-    "base": "https://brainrotcomics.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Asura Scans TR",
-    "base": "https://asurascans.com.tr",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "BarManga",
-    "base": "https://archiviumbar.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Battle In 5 Seconds After Meeting",
-    "base": "https://www.deatte5.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Bega Translation",
-    "base": "https://begatranslation.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Biblio Panda",
-    "base": "https://bibliopanda.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Borat Scans",
-    "base": "https://boratscans.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Boruto Explorer",
-    "base": "https://leitor.borutoexplorer.com.br",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Bun Manga",
-    "base": "https://bunmanga.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Café com Yaoi",
-    "base": "https://cafecomyaoi.com.br",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Catharsis World",
-    "base": "https://catharsisworld.dig-it.info",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Cocomic",
-    "base": "https://cocomic.co",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Codex Zero",
-    "base": "https://codex.readkisho.me",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Coffee Manga",
-    "base": "https://coffeemanga.ink",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Decadence Scans",
-    "base": "https://reader.decadencescans.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Detective Conan Ar",
-    "base": "https://manga.detectiveconanar.com",
-    "framework": "madara",
-    "lang": "ar"
-  },
-  {
-    "name": "DiamondFansub",
-    "base": "https://diamondfansub.com",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "Domal Fansub",
-    "base": "https://dom4lfansub.online",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "Doodmanga",
-    "base": "https://www.doodmanga.com",
-    "framework": "madara",
-    "lang": "th"
-  },
-  {
-    "name": "DragonTea",
-    "base": "https://dragontea.ink",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "DragonTranslation.org",
-    "base": "https://dragontranslation.org",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Emperor Scan",
-    "base": "https://imperiomanhua.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Firescans",
-    "base": "https://firescans.xyz",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "FlameScans.lol",
-    "base": "https://flamescans.lol",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "FlowerManga.net",
-    "base": "https://flowermangas.net",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Frieren Online",
-    "base": "https://www.frieren.online",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "GakaMangas",
-    "base": "https://gakamangas.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "GalaxyDegenScans",
-    "base": "https://gdscans.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "GantzVN",
-    "base": "https://gantzvn.com",
-    "framework": "madara",
-    "lang": "vi"
-  },
-  {
-    "name": "Garcia Manga",
-    "base": "https://garciamanga.com",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "Ghost Scan",
-    "base": "https://ghostscan.xyz",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "GhosToon",
-    "base": "https://ghostoon.com",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "Gourmet Scans",
-    "base": "https://gourmetsupremacy.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Grabber Zone",
-    "base": "https://grabber.zone",
-    "framework": "madara",
-    "lang": "all"
-  },
-  {
-    "name": "Gremory Mangas",
-    "base": "https://gremoryhistorias.org",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Hades no Fansub",
-    "base": "https://lectorhades.latamtoon.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Harem de Kira",
-    "base": "https://kiraproject.lat",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Harmony-Scan",
-    "base": "https://harmony-scan.fr",
-    "framework": "madara",
-    "lang": "fr"
-  },
-  {
-    "name": "Hayalistic",
-    "base": "https://hayalistic.blog",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "HizoManga",
-    "base": "https://hizomanga.net",
-    "framework": "madara",
-    "lang": "ar"
-  },
-  {
-    "name": "Holotoon",
-    "base": "https://01.holotoon.site",
-    "framework": "madara",
-    "lang": "id"
-  },
-  {
-    "name": "Hot Cabaret Scan",
-    "base": "https://hotcabaretscan.com",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "House Of Otakus",
-    "base": "https://houseofotakusv2.xyz",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Hunters Scans",
-    "base": "https://readhunters.xyz",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Hwago",
-    "base": "https://01.hwago.xyz",
-    "framework": "madara",
-    "lang": "id"
-  },
-  {
-    "name": "InfraFandub",
-    "base": "https://infrafandub.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Inmortal Scan",
-    "base": "https://scanimnortal.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Inventario Oculto",
-    "base": "https://inventariooculto.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "IsekaiScan.top (unoriginal)",
-    "base": "https://isekaiscan.top",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Jinmangas",
-    "base": "https://jinmangas.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Kami Sama Explorer",
-    "base": "https://leitor.kamisama.com.br",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Kazoku Den",
-    "base": "https://www.kazokuden.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Kissmanga.in",
-    "base": "https://kissmanga.in",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "KlikManga",
-    "base": "https://klikmanga.org",
-    "framework": "madara",
-    "lang": "id"
-  },
-  {
-    "name": "Kmansin09",
-    "base": "https://kmansin09.top",
-    "framework": "madara",
-    "lang": "ja"
-  },
-  {
-    "name": "Kodoku Studio",
-    "base": "https://kodokustudio.com",
-    "framework": "madara",
-    "lang": "all"
-  },
-  {
-    "name": "KokoMangas",
-    "base": "https://kokomangas.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "KSGroupScans",
-    "base": "https://ksgroupscans.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Kun Manga Online",
-    "base": "https://www.kunmanga.online",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "LectorManga.lat",
-    "base": "https://lectormangass.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "LHTranslation",
-    "base": "https://lhtranslation.net",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Lily Manga",
-    "base": "https://lilymanga.net",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "LinkManga",
-    "base": "https://linkmanga.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Little Tyrant",
-    "base": "https://tiraninha.world",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "LumosKomik",
-    "base": "https://02.lumosgg.com",
-    "framework": "madara",
-    "lang": "id"
-  },
-  {
-    "name": "MadaraDex",
-    "base": "https://madaradex.org",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Manga Crab",
-    "base": "https://mangacrab.org",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Manga Dass",
-    "base": "https://mangadass.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Manga District",
-    "base": "https://mangadistrict.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Manga Kiss",
-    "base": "https://mangakiss.org",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Manga Livre.to",
-    "base": "https://mangalivre.to",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Manga Online",
-    "base": "https://mangaonline.blue",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Manga Romance",
-    "base": "https://mangaromance19.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Manga Starz",
-    "base": "https://manga-starz.net",
-    "framework": "madara",
-    "lang": "ar"
-  },
-  {
-    "name": "Manga Şehri.net",
-    "base": "https://manga-sehri.net",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "Manga-Lc",
-    "base": "https://manga-lc.net",
-    "framework": "madara",
-    "lang": "th"
-  },
-  {
-    "name": "Manga-Scantrad",
-    "base": "https://manga-scantrad.io",
-    "framework": "madara",
-    "lang": "fr"
-  },
-  {
-    "name": "MangaBlaze",
-    "base": "https://mangablaze.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "MangaDia",
-    "base": "https://mangadia.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "MangaGezgini",
-    "base": "https://mangagezgini.online",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "MangaGG",
-    "base": "https://mangagg.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "MangaGo.fun",
-    "base": "https://www.mangago.fun",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "MangaHe",
-    "base": "https://mangahe.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "MangaHub.fr",
-    "base": "https://mangahub.fr",
-    "framework": "madara",
-    "lang": "fr"
-  },
-  {
-    "name": "MangaIsekaiThai",
-    "base": "https://www.mangaisekaithai.net",
-    "framework": "madara",
-    "lang": "th"
-  },
-  {
-    "name": "MangaKa",
-    "base": "https://mangaka.cc",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Mangalek",
-    "base": "https://mangalik.net",
-    "framework": "madara",
-    "lang": "ar"
-  },
-  {
-    "name": "Mangalink",
-    "base": "https://link-manga.net",
-    "framework": "madara",
-    "lang": "ar"
-  },
-  {
-    "name": "MangaLionz",
-    "base": "https://manga-lionz.org",
-    "framework": "madara",
-    "lang": "ar"
-  },
-  {
-    "name": "MangaOwl.io (unoriginal)",
-    "base": "https://mangaowl.io",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "MangaRead.org",
-    "base": "https://www.mangaread.org",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Mangas Brasuka",
-    "base": "https://mangasbrasuka.com.br",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Mangas No Sekai",
-    "base": "https://mangasnosekai.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Mangas-Origines.fr",
-    "base": "https://mangas-origines.fr",
-    "framework": "madara",
-    "lang": "fr"
-  },
-  {
-    "name": "MangaSpark",
-    "base": "https://manga-spark.net",
-    "framework": "madara",
-    "lang": "ar"
-  },
-  {
-    "name": "Mangasushi",
-    "base": "https://mangasushi.org",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "MangaTilkisi",
-    "base": "https://www.tilkiscans.com",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "MangaTuk",
-    "base": "https://mangatuk.com",
-    "framework": "madara",
-    "lang": "ar"
-  },
-  {
-    "name": "MangaWOW",
-    "base": "https://mangawow.org",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "MangaWT",
-    "base": "https://mangawt.com",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "MangaYY",
-    "base": "https://mangayy.org",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "MangaZure",
-    "base": "https://mangazure.net",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "Manhua Plus",
-    "base": "https://manhuaplus.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "ManhuaBug",
-    "base": "https://www.manhuabug.com",
-    "framework": "madara",
-    "lang": "th"
-  },
-  {
-    "name": "ManhuaFast.net (unoriginal)",
-    "base": "https://manhuafast.net",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "ManhuaHot",
-    "base": "https://manhuahot.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "ManhuaKey",
-    "base": "https://www.manhuakey.com",
-    "framework": "madara",
-    "lang": "th"
-  },
-  {
-    "name": "Manhuanext",
-    "base": "https://manhuanext.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Manhuarm",
-    "base": "https://manhuarmtl.com",
-    "framework": "madara",
-    "lang": "ar"
-  },
-  {
-    "name": "ManhuaThai",
-    "base": "https://www.manhuathai.com",
-    "framework": "madara",
-    "lang": "th"
-  },
-  {
-    "name": "ManhuaTop",
-    "base": "https://manhuatop.org",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "ManhuaUS",
-    "base": "https://manhuaus.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Manhwa Reads",
-    "base": "https://manhwareads.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Manhwa Toon",
-    "base": "https://www.manhwatoon.me",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Manhwa-Latino",
-    "base": "https://manhwa-latino.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "ManhwaBreakup",
-    "base": "https://www.manhwabreakup.com",
-    "framework": "madara",
-    "lang": "th"
-  },
-  {
-    "name": "ManhwaGet",
-    "base": "https://manhwaget.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "ManhwaNex",
-    "base": "https://manhwanex.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Manhwatop",
-    "base": "https://manhwatop.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Marmota",
-    "base": "https://marmota.me",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "MG Komik",
-    "base": "https://id.mgkomik.cc",
-    "framework": "madara",
-    "lang": "id"
-  },
-  {
-    "name": "MHScans",
-    "base": "https://mhscans.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "MiniTwo Scan",
-    "base": "https://minitwoscan.com",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Monopoly Scan",
-    "base": "https://monopolymanhua.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Monte Tai",
-    "base": "https://montetaiscanlator.xyz",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Mugiwaras Oficial",
-    "base": "https://mugiwarasoficial.com",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Nebulosa Scan",
-    "base": "https://nebulosascan.com",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Ninja Scan",
-    "base": "https://ninjacomics.xyz",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Nivera Fansub",
-    "base": "https://niverafansub.one",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "Noblesse Translations",
-    "base": "https://nobledicion.yoveo.xyz",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Nocturne Summer",
-    "base": "https://nocfsb.com",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Ota Scans",
-    "base": "https://yurilabs.my.id",
-    "framework": "madara",
-    "lang": "id"
-  },
-  {
-    "name": "Pantheon Scan",
-    "base": "https://pantheon-scan.com",
-    "framework": "madara",
-    "lang": "fr"
-  },
-  {
-    "name": "Ragnarok Scanlation",
-    "base": "https://ragnarokscanlation.org",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "RawBaka",
-    "base": "https://rawbaka.com",
-    "framework": "madara",
-    "lang": "ja"
-  },
-  {
-    "name": "RD Scans",
-    "base": "https://rdscans.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "RichtoScan",
-    "base": "https://r1.richtoon.top",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Rocks Manga",
-    "base": "https://rocksmanga.com",
-    "framework": "madara",
-    "lang": "ar"
-  },
-  {
-    "name": "Rüya Manga",
-    "base": "https://www.ruyamanga2.com",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "Rüya Manga.net",
-    "base": "https://ruyamanga.net",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "S2Manga",
-    "base": "https://s2read.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "SamuraiScan",
-    "base": "https://samurai.j5z.xyz",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Setsu Scans",
-    "base": "https://setsuscans.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Siikomik",
-    "base": "https://siikomik.net",
-    "framework": "madara",
-    "lang": "id"
-  },
-  {
-    "name": "Sleepy Translations",
-    "base": "https://sleepytranslations.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Spmanhwa",
-    "base": "https://spmanhwa.online",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "SummerToon",
-    "base": "https://summertoons.net",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "Sunset Manga",
-    "base": "https://sunsetmanga.com",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "Sword Of Oblivion",
-    "base": "https://swordofoblivion.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Taurus Fansub",
-    "base": "https://lectortaurus.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "TonizuToon",
-    "base": "https://tonizu.top",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "ToonGod",
-    "base": "https://www.toongod.org",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Toonily",
-    "base": "https://toonily.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Toonizy",
-    "base": "https://toonizy.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Top Manhua",
-    "base": "https://mangatop.org",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "TopManhua.fan",
-    "base": "https://www.topmanhua.fan",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "TopManhua.net",
-    "base": "https://topmanhua.net",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Tortuga Ceviri",
-    "base": "https://tortugaceviri.com",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "TritiniaScans",
-    "base": "https://tritinia.org",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "TruyenTuoiTho",
-    "base": "https://truyentuoitho.online",
-    "framework": "madara",
-    "lang": "vi"
-  },
-  {
-    "name": "Türkçe Manga Oku",
-    "base": "https://trmangaoku.com",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "Webtoon Hatti",
-    "base": "https://webtoonhatti.club",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "WebtoonScan",
-    "base": "https://webtoonscan.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "WebtoonXYZ",
-    "base": "https://www.webtoon.xyz",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "WoopRead",
-    "base": "https://woopread.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "WuxiaWorld",
-    "base": "https://wuxiaworld.site",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "YakshaComics",
-    "base": "https://yakshacomics.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "YaoiScan",
-    "base": "https://yaoiscan.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Yuri on Air",
-    "base": "https://yurionair.top",
-    "framework": "madara",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Yuri-Online",
-    "base": "https://yuri-online.com",
-    "framework": "madara",
-    "lang": "es"
-  },
-  {
-    "name": "Zazamanga",
-    "base": "https://www.zazamanga.com",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Zinmanga",
-    "base": "https://mangazin.org",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "Zinmanga.net",
-    "base": "https://zinmanga.net",
-    "framework": "madara",
-    "lang": "en"
-  },
-  {
-    "name": "ÇaprazManga",
-    "base": "https://caprazmanga.com",
-    "framework": "madara",
-    "lang": "tr"
-  },
-  {
-    "name": "Akaza Scans",
-    "base": "https://akazascans.org",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Amanga Planet",
-    "base": "https://www.amangaplanet.com.tr",
-    "framework": "mangathemesia",
-    "lang": "tr"
-  },
-  {
-    "name": "APKOMIK",
-    "base": "https://01.apkomik.com",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "Arcura Fansub",
-    "base": "https://arcurafansub.com",
-    "framework": "mangathemesia",
-    "lang": "tr"
-  },
-  {
-    "name": "Area Manga",
-    "base": "https://ar.kenmanga.com",
-    "framework": "mangathemesia",
-    "lang": "ar"
-  },
-  {
-    "name": "Area Scans",
-    "base": "https://ar.areascans.org",
-    "framework": "mangathemesia",
-    "lang": "ar"
-  },
-  {
-    "name": "Arena Scans",
-    "base": "https://arenascan.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Armageddon",
-    "base": "https://www.silentquill.net",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Atemporal",
-    "base": "https://atemporal.cloud",
-    "framework": "mangathemesia",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Athrea Scans",
-    "base": "https://athreascans.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Bloom Scans",
-    "base": "https://bloomscans.com",
-    "framework": "mangathemesia",
-    "lang": "es"
-  },
-  {
-    "name": "BokugenTranslation",
-    "base": "https://bokugents.com",
-    "framework": "mangathemesia",
-    "lang": "es"
-  },
-  {
-    "name": "Celestial Moon",
-    "base": "https://celestialmoonscan.es",
-    "framework": "mangathemesia",
-    "lang": "es"
-  },
-  {
-    "name": "Cerberus Series",
-    "base": "https://legionscans.com/wp",
-    "framework": "mangathemesia",
-    "lang": "es"
-  },
-  {
-    "name": "Comic Asura",
-    "base": "https://comicasura.net",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Crow Scans",
-    "base": "https://crowscans.xyz",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "CulturedWorks",
-    "base": "https://culturedworks.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "DailySuka",
-    "base": "https://dailysuka.com",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "Despair Manga",
-    "base": "https://despair-manga.net",
-    "framework": "mangathemesia",
-    "lang": "ar"
-  },
-  {
-    "name": "Drake Scans",
-    "base": "https://drakecomic.org",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Elf Toon",
-    "base": "https://elftoon.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Eva Scans",
-    "base": "https://evascans.org",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Fin Manga",
-    "base": "https://www.fin-manga.com",
-    "framework": "mangathemesia",
-    "lang": "th"
-  },
-  {
-    "name": "gafeland",
-    "base": "https://gafeland.com",
-    "framework": "mangathemesia",
-    "lang": "tr"
-  },
-  {
-    "name": "Gaiatoon",
-    "base": "https://gaiatoon.com",
-    "framework": "mangathemesia",
-    "lang": "tr"
-  },
-  {
-    "name": "Galaxy Manga",
-    "base": "https://galaxymanga.io",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Go Manga",
-    "base": "https://www.go-manga.com",
-    "framework": "mangathemesia",
-    "lang": "th"
-  },
-  {
-    "name": "Hades Scans",
-    "base": "https://hadesscans.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Hijala",
-    "base": "https://hijala.com",
-    "framework": "mangathemesia",
-    "lang": "ar"
-  },
-  {
-    "name": "Izanami Scans",
-    "base": "https://izanamiscans.my.id",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "King of Shojo",
-    "base": "https://kingofshojo.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Kiwiya Scans",
-    "base": "https://kiwiyascans.com",
-    "framework": "mangathemesia",
-    "lang": "fr"
-  },
-  {
-    "name": "Komik Station",
-    "base": "https://komikstation.org",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "Komikhwa",
-    "base": "https://komikhwa.com",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "Komiku.com",
-    "base": "https://01.komiku.asia",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "Koreli Scans",
-    "base": "https://www.nabicix.com",
-    "framework": "mangathemesia",
-    "lang": "tr"
-  },
-  {
-    "name": "Kuro Manga",
-    "base": "https://kuromanga.me",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "Lagoon Scans",
-    "base": "https://lagoonscans.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Lava Scans",
-    "base": "https://lavascans.com",
-    "framework": "mangathemesia",
-    "lang": "ar"
-  },
-  {
-    "name": "Lelmanga",
-    "base": "https://www.lelmanga.com",
-    "framework": "mangathemesia",
-    "lang": "fr"
-  },
-  {
-    "name": "Luna Pieces",
-    "base": "https://lunapiecesfansub.com",
-    "framework": "mangathemesia",
-    "lang": "es"
-  },
-  {
-    "name": "Luvyaa",
-    "base": "https://v4.luvyaa.co",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "Madara Scans",
-    "base": "https://madarascans.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Makimaaaaa",
-    "base": "https://makimaaaaa.com",
-    "framework": "mangathemesia",
-    "lang": "th"
-  },
-  {
-    "name": "Manga Can",
-    "base": "https://mangacanblog.com",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "Manga Kusu",
-    "base": "https://mangakusu.com",
-    "framework": "mangathemesia",
-    "lang": "tr"
-  },
-  {
-    "name": "Manga Mukai",
-    "base": "https://mangamukai.com",
-    "framework": "mangathemesia",
-    "lang": "es"
-  },
-  {
-    "name": "Manga Stop",
-    "base": "https://mangastop.net",
-    "framework": "mangathemesia",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Manga Trend",
-    "base": "https://mangatrend.org",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Manga TV",
-    "base": "https://mangatv.net",
-    "framework": "mangathemesia",
-    "lang": "es"
-  },
-  {
-    "name": "Manga168",
-    "base": "https://manga1688.com",
-    "framework": "mangathemesia",
-    "lang": "th"
-  },
-  {
-    "name": "MangaEsp",
-    "base": "https://mangaesp.topmanhuas.org",
-    "framework": "mangathemesia",
-    "lang": "es"
-  },
-  {
-    "name": "MangaKimi",
-    "base": "https://www.mangakimi.com",
-    "framework": "mangathemesia",
-    "lang": "th"
-  },
-  {
-    "name": "Mangas Scans",
-    "base": "https://mangas-scans.com",
-    "framework": "mangathemesia",
-    "lang": "fr"
-  },
-  {
-    "name": "Mangastep",
-    "base": "https://mangastep.com",
-    "framework": "mangathemesia",
-    "lang": "th"
-  },
-  {
-    "name": "MangaTX",
-    "base": "https://mangatx.cc",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Manhuascan.us",
-    "base": "https://manhuascan.us",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Manhwa Indo",
-    "base": "https://www.manhwaindo.my",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "Manhwa List",
-    "base": "https://manhwalist02.asia",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "Manhwalist.org",
-    "base": "https://isekaikomik.com",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "Miau Scan",
-    "base": "https://leemiau.com",
-    "framework": "mangathemesia",
-    "lang": "es"
-  },
-  {
-    "name": "NekoScans",
-    "base": "https://nekoproject.org",
-    "framework": "mangathemesia",
-    "lang": "es"
-  },
-  {
-    "name": "Nemesis scans",
-    "base": "https://nemesisscans.com",
-    "framework": "mangathemesia",
-    "lang": "tr"
-  },
-  {
-    "name": "NexComic",
-    "base": "https://nexcomic.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Ngomik (unoriginal)",
-    "base": "https://02.ngomik.cc",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "Nika Toons",
-    "base": "https://nikatoons.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Nirvana Manga",
-    "base": "https://nirvanamanga.com",
-    "framework": "mangathemesia",
-    "lang": "tr"
-  },
-  {
-    "name": "Noromax",
-    "base": "https://noromax02.my.id",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "Nova Manhwas",
-    "base": "https://novamanhwa.cc",
-    "framework": "mangathemesia",
-    "lang": "es"
-  },
-  {
-    "name": "Noxen Scans",
-    "base": "https://noxenscan.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Omicaso",
-    "base": "https://omicaso.org",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "Origami Orpheans",
-    "base": "https://origami-orpheans.com",
-    "framework": "mangathemesia",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Pati Manga",
-    "base": "https://www.patimanga.com",
-    "framework": "mangathemesia",
-    "lang": "tr"
-  },
-  {
-    "name": "Point Zero Toons",
-    "base": "https://kitsuneyako.com",
-    "framework": "mangathemesia",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Rackus",
-    "base": "https://rackusreads.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Rage Scans",
-    "base": "https://ragescans.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Raindrop Fansub",
-    "base": "https://www.raindropteamfan.com",
-    "framework": "mangathemesia",
-    "lang": "tr"
-  },
-  {
-    "name": "Raven Scans",
-    "base": "https://ravenscans.org",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Razure",
-    "base": "https://razure.org",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "ReaperTrans",
-    "base": "https://reapertrans.com",
-    "framework": "mangathemesia",
-    "lang": "th"
-  },
-  {
-    "name": "Rizz Comic",
-    "base": "https://rizzfables.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Rizz Comic (unoriginal)",
-    "base": "https://rizzcomic.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "RokariComics",
-    "base": "https://rokaricomics.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Scythe Scans",
-    "base": "https://scythescans.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Serein Scan",
-    "base": "https://sereinscan.com",
-    "framework": "mangathemesia",
-    "lang": "tr"
-  },
-  {
-    "name": "Shijie Scans",
-    "base": "https://shijiescans.com",
-    "framework": "mangathemesia",
-    "lang": "tr"
-  },
-  {
-    "name": "Shirakami",
-    "base": "https://shirakami.xyz",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "Singmanga",
-    "base": "https://www.sing-manga.com",
-    "framework": "mangathemesia",
-    "lang": "th"
-  },
-  {
-    "name": "SkyMangas",
-    "base": "https://skymangas.com",
-    "framework": "mangathemesia",
-    "lang": "es"
-  },
-  {
-    "name": "Slow Manga",
-    "base": "https://www.slow-manga.net",
-    "framework": "mangathemesia",
-    "lang": "th"
-  },
-  {
-    "name": "Sodsaime",
-    "base": "https://www.xn--l3c0azab5a2gta.com",
-    "framework": "mangathemesia",
-    "lang": "th"
-  },
-  {
-    "name": "Soul Scans",
-    "base": "https://soulscans.my.id",
-    "framework": "mangathemesia",
-    "lang": "id"
-  },
-  {
-    "name": "Speed Manga",
-    "base": "https://speed-manga.net",
-    "framework": "mangathemesia",
-    "lang": "th"
-  },
-  {
-    "name": "Sushi-Scan",
-    "base": "https://sushiscan.net",
-    "framework": "mangathemesia",
-    "lang": "fr"
-  },
-  {
-    "name": "Sushiscan.fr",
-    "base": "https://sushiscan.fr",
-    "framework": "mangathemesia",
-    "lang": "fr"
-  },
-  {
-    "name": "Tanuki-Manga",
-    "base": "https://www.tanuki-manga.net",
-    "framework": "mangathemesia",
-    "lang": "th"
-  },
-  {
-    "name": "Tarot Scans",
-    "base": "https://www.tarotscans.com",
-    "framework": "mangathemesia",
-    "lang": "tr"
-  },
-  {
-    "name": "Tempest Scans",
-    "base": "https://tempestmangas.com",
-    "framework": "mangathemesia",
-    "lang": "tr"
-  },
-  {
-    "name": "Thunder Scans",
-    "base": "https://en-thunderscans.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "ToomTam-Manga",
-    "base": "https://toomtam-manga.com",
-    "framework": "mangathemesia",
-    "lang": "th"
-  },
-  {
-    "name": "Tsundoku Traduções",
-    "base": "https://tsundoku.com.br",
-    "framework": "mangathemesia",
-    "lang": "pt-BR"
-  },
-  {
-    "name": "Uchuujin Projects",
-    "base": "https://uchuujinmangas.com",
-    "framework": "mangathemesia",
-    "lang": "es"
-  },
-  {
-    "name": "Violet Scans",
-    "base": "https://violetscans.org",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Walpurgi Scan",
-    "base": "https://www.walpurgiscan.it",
-    "framework": "mangathemesia",
-    "lang": "it"
-  },
-  {
-    "name": "WitchScans",
-    "base": "https://witchscans.com",
-    "framework": "mangathemesia",
-    "lang": "en"
-  },
-  {
-    "name": "Zenith Scans",
-    "base": "https://zenithscans.com",
-    "framework": "mangathemesia",
-    "lang": "tr"
-  }
+ {
+  "name": "Azora",
+  "base": "https://azorafly.com",
+  "framework": "heancms",
+  "lang": "ar"
+ },
+ {
+  "name": "EternalMangas",
+  "base": "https://eternalmangas.org",
+  "framework": "heancms",
+  "lang": "es"
+ },
+ {
+  "name": "Hijala Scans",
+  "base": "https://en-hijala.com",
+  "framework": "heancms",
+  "lang": "en"
+ },
+ {
+  "name": "Hive Scans",
+  "base": "https://hivetoons.org",
+  "framework": "heancms",
+  "lang": "en"
+ },
+ {
+  "name": "Kayn Scans",
+  "base": "https://kaynscan.org",
+  "framework": "heancms",
+  "lang": "en"
+ },
+ {
+  "name": "Ken Scans",
+  "base": "https://kencomics.com",
+  "framework": "heancms",
+  "lang": "en"
+ },
+ {
+  "name": "Lua Scans",
+  "base": "https://luacomic.org",
+  "framework": "heancms",
+  "lang": "en"
+ },
+ {
+  "name": "Magus Manga",
+  "base": "https://magustoon.org",
+  "framework": "heancms",
+  "lang": "en"
+ },
+ {
+  "name": "Nyx Scans",
+  "base": "https://nyxscans.com",
+  "framework": "heancms",
+  "lang": "en"
+ },
+ {
+  "name": "Orion Scans",
+  "base": "https://orion-scans.com",
+  "framework": "heancms",
+  "lang": "en"
+ },
+ {
+  "name": "Renascans",
+  "base": "https://renascans.net",
+  "framework": "heancms",
+  "lang": "en"
+ },
+ {
+  "name": "Sana Scans",
+  "base": "https://sanascans.com",
+  "framework": "heancms",
+  "lang": "en"
+ },
+ {
+  "name": "Vanilla Scans",
+  "base": "https://vanillascans.org",
+  "framework": "heancms",
+  "lang": "en"
+ },
+ {
+  "name": "24HNovel",
+  "base": "https://24hnovel.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "3asq",
+  "base": "https://3asq.online",
+  "framework": "madara",
+  "lang": "ar"
+ },
+ {
+  "name": "Amuy",
+  "base": "https://apenasmaisumyaoi.com",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Anikiga",
+  "base": "https://anikiga.com",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "Anisa Scans",
+  "base": "https://anisascans.in",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Anyone Manga",
+  "base": "https://anyonemanga.com",
+  "framework": "madara",
+  "lang": "ar"
+ },
+ {
+  "name": "Aqua Manga",
+  "base": "https://aquareader.org",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "ArazNovel",
+  "base": "https://araznovel.com",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "Arthur Scan",
+  "base": "https://arthurscan.xyz",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Arya Scans",
+  "base": "https://brainrotcomics.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Asura Scans TR",
+  "base": "https://asurascans.com.tr",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "BarManga",
+  "base": "https://archiviumbar.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Battle In 5 Seconds After Meeting",
+  "base": "https://www.deatte5.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Bega Translation",
+  "base": "https://begatranslation.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Biblio Panda",
+  "base": "https://bibliopanda.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Borat Scans",
+  "base": "https://boratscans.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Boruto Explorer",
+  "base": "https://leitor.borutoexplorer.com.br",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Bun Manga",
+  "base": "https://bunmanga.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Café com Yaoi",
+  "base": "https://cafecomyaoi.com.br",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Catharsis World",
+  "base": "https://catharsisworld.dig-it.info",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Cocomic",
+  "base": "https://cocomic.co",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Codex Zero",
+  "base": "https://codex.readkisho.me",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Coffee Manga",
+  "base": "https://coffeemanga.ink",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Decadence Scans",
+  "base": "https://reader.decadencescans.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Detective Conan Ar",
+  "base": "https://manga.detectiveconanar.com",
+  "framework": "madara",
+  "lang": "ar"
+ },
+ {
+  "name": "DiamondFansub",
+  "base": "https://diamondfansub.com",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "Domal Fansub",
+  "base": "https://dom4lfansub.online",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "Doodmanga",
+  "base": "https://www.doodmanga.com",
+  "framework": "madara",
+  "lang": "th"
+ },
+ {
+  "name": "DragonTea",
+  "base": "https://dragontea.ink",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "DragonTranslation.org",
+  "base": "https://dragontranslation.org",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Emperor Scan",
+  "base": "https://imperiomanhua.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Firescans",
+  "base": "https://firescans.xyz",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "FlameScans.lol",
+  "base": "https://flamescans.lol",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "FlowerManga.net",
+  "base": "https://flowermangas.net",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Frieren Online",
+  "base": "https://www.frieren.online",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "GakaMangas",
+  "base": "https://gakamangas.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "GalaxyDegenScans",
+  "base": "https://gdscans.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "GantzVN",
+  "base": "https://gantzvn.com",
+  "framework": "madara",
+  "lang": "vi"
+ },
+ {
+  "name": "Garcia Manga",
+  "base": "https://garciamanga.com",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "Ghost Scan",
+  "base": "https://ghostscan.xyz",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "GhosToon",
+  "base": "https://ghostoon.com",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "Gourmet Scans",
+  "base": "https://gourmetsupremacy.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Grabber Zone",
+  "base": "https://grabber.zone",
+  "framework": "madara",
+  "lang": "all"
+ },
+ {
+  "name": "Gremory Mangas",
+  "base": "https://gremoryhistorias.org",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Hades no Fansub",
+  "base": "https://lectorhades.latamtoon.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Harem de Kira",
+  "base": "https://kiraproject.lat",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Harmony-Scan",
+  "base": "https://harmony-scan.fr",
+  "framework": "madara",
+  "lang": "fr"
+ },
+ {
+  "name": "Hayalistic",
+  "base": "https://hayalistic.blog",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "HizoManga",
+  "base": "https://hizomanga.net",
+  "framework": "madara",
+  "lang": "ar"
+ },
+ {
+  "name": "Holotoon",
+  "base": "https://01.holotoon.site",
+  "framework": "madara",
+  "lang": "id"
+ },
+ {
+  "name": "Hot Cabaret Scan",
+  "base": "https://hotcabaretscan.com",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "House Of Otakus",
+  "base": "https://houseofotakusv2.xyz",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Hunters Scans",
+  "base": "https://readhunters.xyz",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Hwago",
+  "base": "https://01.hwago.xyz",
+  "framework": "madara",
+  "lang": "id"
+ },
+ {
+  "name": "InfraFandub",
+  "base": "https://infrafandub.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Inmortal Scan",
+  "base": "https://scanimnortal.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Inventario Oculto",
+  "base": "https://inventariooculto.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "IsekaiScan.top (unoriginal)",
+  "base": "https://isekaiscan.top",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Jinmangas",
+  "base": "https://jinmangas.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Kami Sama Explorer",
+  "base": "https://leitor.kamisama.com.br",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Kazoku Den",
+  "base": "https://www.kazokuden.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Kissmanga.in",
+  "base": "https://kissmanga.in",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "KlikManga",
+  "base": "https://klikmanga.org",
+  "framework": "madara",
+  "lang": "id"
+ },
+ {
+  "name": "Kmansin09",
+  "base": "https://kmansin09.top",
+  "framework": "madara",
+  "lang": "ja"
+ },
+ {
+  "name": "Kodoku Studio",
+  "base": "https://kodokustudio.com",
+  "framework": "madara",
+  "lang": "all"
+ },
+ {
+  "name": "KokoMangas",
+  "base": "https://kokomangas.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "KSGroupScans",
+  "base": "https://ksgroupscans.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Kun Manga Online",
+  "base": "https://www.kunmanga.online",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "LectorManga.lat",
+  "base": "https://lectormangass.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "LHTranslation",
+  "base": "https://lhtranslation.net",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Lily Manga",
+  "base": "https://lilymanga.net",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "LinkManga",
+  "base": "https://linkmanga.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Little Tyrant",
+  "base": "https://tiraninha.world",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "LumosKomik",
+  "base": "https://02.lumosgg.com",
+  "framework": "madara",
+  "lang": "id"
+ },
+ {
+  "name": "MadaraDex",
+  "base": "https://madaradex.org",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Manga Crab",
+  "base": "https://mangacrab.org",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Manga Dass",
+  "base": "https://mangadass.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Manga District",
+  "base": "https://mangadistrict.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Manga Kiss",
+  "base": "https://mangakiss.org",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Manga Livre.to",
+  "base": "https://mangalivre.to",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Manga Online",
+  "base": "https://mangaonline.blue",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Manga Romance",
+  "base": "https://mangaromance19.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Manga Starz",
+  "base": "https://manga-starz.net",
+  "framework": "madara",
+  "lang": "ar"
+ },
+ {
+  "name": "Manga Şehri.net",
+  "base": "https://manga-sehri.net",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "Manga-Lc",
+  "base": "https://manga-lc.net",
+  "framework": "madara",
+  "lang": "th"
+ },
+ {
+  "name": "Manga-Scantrad",
+  "base": "https://manga-scantrad.io",
+  "framework": "madara",
+  "lang": "fr"
+ },
+ {
+  "name": "MangaBlaze",
+  "base": "https://mangablaze.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "MangaDia",
+  "base": "https://mangadia.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "MangaGezgini",
+  "base": "https://mangagezgini.online",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "MangaGG",
+  "base": "https://mangagg.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "MangaGo.fun",
+  "base": "https://www.mangago.fun",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "MangaHe",
+  "base": "https://mangahe.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "MangaHub.fr",
+  "base": "https://mangahub.fr",
+  "framework": "madara",
+  "lang": "fr"
+ },
+ {
+  "name": "MangaIsekaiThai",
+  "base": "https://www.mangaisekaithai.net",
+  "framework": "madara",
+  "lang": "th"
+ },
+ {
+  "name": "MangaKa",
+  "base": "https://mangaka.cc",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Mangalek",
+  "base": "https://mangalik.net",
+  "framework": "madara",
+  "lang": "ar"
+ },
+ {
+  "name": "Mangalink",
+  "base": "https://link-manga.net",
+  "framework": "madara",
+  "lang": "ar"
+ },
+ {
+  "name": "MangaLionz",
+  "base": "https://manga-lionz.org",
+  "framework": "madara",
+  "lang": "ar"
+ },
+ {
+  "name": "MangaOwl.io (unoriginal)",
+  "base": "https://mangaowl.io",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "MangaRead.org",
+  "base": "https://www.mangaread.org",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Mangas Brasuka",
+  "base": "https://mangasbrasuka.com.br",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Mangas No Sekai",
+  "base": "https://mangasnosekai.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Mangas-Origines.fr",
+  "base": "https://mangas-origines.fr",
+  "framework": "madara",
+  "lang": "fr"
+ },
+ {
+  "name": "MangaSpark",
+  "base": "https://manga-spark.net",
+  "framework": "madara",
+  "lang": "ar"
+ },
+ {
+  "name": "Mangasushi",
+  "base": "https://mangasushi.org",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "MangaTilkisi",
+  "base": "https://www.tilkiscans.com",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "MangaTuk",
+  "base": "https://mangatuk.com",
+  "framework": "madara",
+  "lang": "ar"
+ },
+ {
+  "name": "MangaWOW",
+  "base": "https://mangawow.org",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "MangaWT",
+  "base": "https://mangawt.com",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "MangaYY",
+  "base": "https://mangayy.org",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "MangaZure",
+  "base": "https://mangazure.net",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "Manhua Plus",
+  "base": "https://manhuaplus.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "ManhuaBug",
+  "base": "https://www.manhuabug.com",
+  "framework": "madara",
+  "lang": "th"
+ },
+ {
+  "name": "ManhuaFast.net (unoriginal)",
+  "base": "https://manhuafast.net",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "ManhuaHot",
+  "base": "https://manhuahot.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "ManhuaKey",
+  "base": "https://www.manhuakey.com",
+  "framework": "madara",
+  "lang": "th"
+ },
+ {
+  "name": "Manhuanext",
+  "base": "https://manhuanext.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Manhuarm",
+  "base": "https://manhuarmtl.com",
+  "framework": "madara",
+  "lang": "ar"
+ },
+ {
+  "name": "ManhuaThai",
+  "base": "https://www.manhuathai.com",
+  "framework": "madara",
+  "lang": "th"
+ },
+ {
+  "name": "ManhuaTop",
+  "base": "https://manhuatop.org",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "ManhuaUS",
+  "base": "https://manhuaus.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Manhwa Reads",
+  "base": "https://manhwareads.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Manhwa Toon",
+  "base": "https://www.manhwatoon.me",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Manhwa-Latino",
+  "base": "https://manhwa-latino.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "ManhwaBreakup",
+  "base": "https://www.manhwabreakup.com",
+  "framework": "madara",
+  "lang": "th"
+ },
+ {
+  "name": "ManhwaGet",
+  "base": "https://manhwaget.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "ManhwaNex",
+  "base": "https://manhwanex.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Manhwatop",
+  "base": "https://manhwatop.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Marmota",
+  "base": "https://marmota.me",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "MG Komik",
+  "base": "https://id.mgkomik.cc",
+  "framework": "madara",
+  "lang": "id"
+ },
+ {
+  "name": "MHScans",
+  "base": "https://mhscans.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "MiniTwo Scan",
+  "base": "https://minitwoscan.com",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Monopoly Scan",
+  "base": "https://monopolymanhua.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Monte Tai",
+  "base": "https://montetaiscanlator.xyz",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Mugiwaras Oficial",
+  "base": "https://mugiwarasoficial.com",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Nebulosa Scan",
+  "base": "https://nebulosascan.com",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Ninja Scan",
+  "base": "https://ninjacomics.xyz",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Nivera Fansub",
+  "base": "https://niverafansub.one",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "Noblesse Translations",
+  "base": "https://nobledicion.yoveo.xyz",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Nocturne Summer",
+  "base": "https://nocfsb.com",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Ota Scans",
+  "base": "https://yurilabs.my.id",
+  "framework": "madara",
+  "lang": "id"
+ },
+ {
+  "name": "Pantheon Scan",
+  "base": "https://pantheon-scan.com",
+  "framework": "madara",
+  "lang": "fr"
+ },
+ {
+  "name": "Ragnarok Scanlation",
+  "base": "https://ragnarokscanlation.org",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "RawBaka",
+  "base": "https://rawbaka.com",
+  "framework": "madara",
+  "lang": "ja"
+ },
+ {
+  "name": "RD Scans",
+  "base": "https://rdscans.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "RichtoScan",
+  "base": "https://r1.richtoon.top",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Rocks Manga",
+  "base": "https://rocksmanga.com",
+  "framework": "madara",
+  "lang": "ar"
+ },
+ {
+  "name": "Rüya Manga",
+  "base": "https://www.ruyamanga2.com",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "Rüya Manga.net",
+  "base": "https://ruyamanga.net",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "S2Manga",
+  "base": "https://s2read.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "SamuraiScan",
+  "base": "https://samurai.j5z.xyz",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Setsu Scans",
+  "base": "https://setsuscans.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Siikomik",
+  "base": "https://siikomik.net",
+  "framework": "madara",
+  "lang": "id"
+ },
+ {
+  "name": "Sleepy Translations",
+  "base": "https://sleepytranslations.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Spmanhwa",
+  "base": "https://spmanhwa.online",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "SummerToon",
+  "base": "https://summertoons.net",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "Sunset Manga",
+  "base": "https://sunsetmanga.com",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "Sword Of Oblivion",
+  "base": "https://swordofoblivion.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Taurus Fansub",
+  "base": "https://lectortaurus.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "TonizuToon",
+  "base": "https://tonizu.top",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "ToonGod",
+  "base": "https://www.toongod.org",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Toonily",
+  "base": "https://toonily.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Toonizy",
+  "base": "https://toonizy.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Top Manhua",
+  "base": "https://mangatop.org",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "TopManhua.fan",
+  "base": "https://www.topmanhua.fan",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "TopManhua.net",
+  "base": "https://topmanhua.net",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Tortuga Ceviri",
+  "base": "https://tortugaceviri.com",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "TritiniaScans",
+  "base": "https://tritinia.org",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "TruyenTuoiTho",
+  "base": "https://truyentuoitho.online",
+  "framework": "madara",
+  "lang": "vi"
+ },
+ {
+  "name": "Türkçe Manga Oku",
+  "base": "https://trmangaoku.com",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "Webtoon Hatti",
+  "base": "https://webtoonhatti.club",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "WebtoonScan",
+  "base": "https://webtoonscan.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "WebtoonXYZ",
+  "base": "https://www.webtoon.xyz",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "WoopRead",
+  "base": "https://woopread.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "WuxiaWorld",
+  "base": "https://wuxiaworld.site",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "YakshaComics",
+  "base": "https://yakshacomics.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "YaoiScan",
+  "base": "https://yaoiscan.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Yuri on Air",
+  "base": "https://yurionair.top",
+  "framework": "madara",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Yuri-Online",
+  "base": "https://yuri-online.com",
+  "framework": "madara",
+  "lang": "es"
+ },
+ {
+  "name": "Zazamanga",
+  "base": "https://www.zazamanga.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Zinmanga",
+  "base": "https://mangazin.org",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Zinmanga.net",
+  "base": "https://zinmanga.net",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "ÇaprazManga",
+  "base": "https://caprazmanga.com",
+  "framework": "madara",
+  "lang": "tr"
+ },
+ {
+  "name": "Akaza Scans",
+  "base": "https://akazascans.org",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Amanga Planet",
+  "base": "https://www.amangaplanet.com.tr",
+  "framework": "mangathemesia",
+  "lang": "tr"
+ },
+ {
+  "name": "APKOMIK",
+  "base": "https://01.apkomik.com",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "Arcura Fansub",
+  "base": "https://arcurafansub.com",
+  "framework": "mangathemesia",
+  "lang": "tr"
+ },
+ {
+  "name": "Area Manga",
+  "base": "https://ar.kenmanga.com",
+  "framework": "mangathemesia",
+  "lang": "ar"
+ },
+ {
+  "name": "Area Scans",
+  "base": "https://ar.areascans.org",
+  "framework": "mangathemesia",
+  "lang": "ar"
+ },
+ {
+  "name": "Arena Scans",
+  "base": "https://arenascan.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Armageddon",
+  "base": "https://www.silentquill.net",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Atemporal",
+  "base": "https://atemporal.cloud",
+  "framework": "mangathemesia",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Athrea Scans",
+  "base": "https://athreascans.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Bloom Scans",
+  "base": "https://bloomscans.com",
+  "framework": "mangathemesia",
+  "lang": "es"
+ },
+ {
+  "name": "BokugenTranslation",
+  "base": "https://bokugents.com",
+  "framework": "mangathemesia",
+  "lang": "es"
+ },
+ {
+  "name": "Celestial Moon",
+  "base": "https://celestialmoonscan.es",
+  "framework": "mangathemesia",
+  "lang": "es"
+ },
+ {
+  "name": "Cerberus Series",
+  "base": "https://legionscans.com/wp",
+  "framework": "mangathemesia",
+  "lang": "es"
+ },
+ {
+  "name": "Comic Asura",
+  "base": "https://comicasura.net",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Crow Scans",
+  "base": "https://crowscans.xyz",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "CulturedWorks",
+  "base": "https://culturedworks.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "DailySuka",
+  "base": "https://dailysuka.com",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "Despair Manga",
+  "base": "https://despair-manga.net",
+  "framework": "mangathemesia",
+  "lang": "ar"
+ },
+ {
+  "name": "Drake Scans",
+  "base": "https://drakecomic.org",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Elf Toon",
+  "base": "https://elftoon.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Eva Scans",
+  "base": "https://evascans.org",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Fin Manga",
+  "base": "https://www.fin-manga.com",
+  "framework": "mangathemesia",
+  "lang": "th"
+ },
+ {
+  "name": "gafeland",
+  "base": "https://gafeland.com",
+  "framework": "mangathemesia",
+  "lang": "tr"
+ },
+ {
+  "name": "Gaiatoon",
+  "base": "https://gaiatoon.com",
+  "framework": "mangathemesia",
+  "lang": "tr"
+ },
+ {
+  "name": "Galaxy Manga",
+  "base": "https://galaxymanga.io",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Go Manga",
+  "base": "https://www.go-manga.com",
+  "framework": "mangathemesia",
+  "lang": "th"
+ },
+ {
+  "name": "Hades Scans",
+  "base": "https://hadesscans.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Hijala",
+  "base": "https://hijala.com",
+  "framework": "mangathemesia",
+  "lang": "ar"
+ },
+ {
+  "name": "Izanami Scans",
+  "base": "https://izanamiscans.my.id",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "King of Shojo",
+  "base": "https://kingofshojo.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Kiwiya Scans",
+  "base": "https://kiwiyascans.com",
+  "framework": "mangathemesia",
+  "lang": "fr"
+ },
+ {
+  "name": "Komik Station",
+  "base": "https://komikstation.org",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "Komikhwa",
+  "base": "https://komikhwa.com",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "Komiku.com",
+  "base": "https://01.komiku.asia",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "Koreli Scans",
+  "base": "https://www.nabicix.com",
+  "framework": "mangathemesia",
+  "lang": "tr"
+ },
+ {
+  "name": "Kuro Manga",
+  "base": "https://kuromanga.me",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "Lagoon Scans",
+  "base": "https://lagoonscans.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Lava Scans",
+  "base": "https://lavascans.com",
+  "framework": "mangathemesia",
+  "lang": "ar"
+ },
+ {
+  "name": "Lelmanga",
+  "base": "https://www.lelmanga.com",
+  "framework": "mangathemesia",
+  "lang": "fr"
+ },
+ {
+  "name": "Luna Pieces",
+  "base": "https://lunapiecesfansub.com",
+  "framework": "mangathemesia",
+  "lang": "es"
+ },
+ {
+  "name": "Luvyaa",
+  "base": "https://v4.luvyaa.co",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "Madara Scans",
+  "base": "https://madarascans.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Makimaaaaa",
+  "base": "https://makimaaaaa.com",
+  "framework": "mangathemesia",
+  "lang": "th"
+ },
+ {
+  "name": "Manga Can",
+  "base": "https://mangacanblog.com",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "Manga Kusu",
+  "base": "https://mangakusu.com",
+  "framework": "mangathemesia",
+  "lang": "tr"
+ },
+ {
+  "name": "Manga Mukai",
+  "base": "https://mangamukai.com",
+  "framework": "mangathemesia",
+  "lang": "es"
+ },
+ {
+  "name": "Manga Stop",
+  "base": "https://mangastop.net",
+  "framework": "mangathemesia",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Manga Trend",
+  "base": "https://mangatrend.org",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Manga TV",
+  "base": "https://mangatv.net",
+  "framework": "mangathemesia",
+  "lang": "es"
+ },
+ {
+  "name": "Manga168",
+  "base": "https://manga1688.com",
+  "framework": "mangathemesia",
+  "lang": "th"
+ },
+ {
+  "name": "MangaEsp",
+  "base": "https://mangaesp.topmanhuas.org",
+  "framework": "mangathemesia",
+  "lang": "es"
+ },
+ {
+  "name": "MangaKimi",
+  "base": "https://www.mangakimi.com",
+  "framework": "mangathemesia",
+  "lang": "th"
+ },
+ {
+  "name": "Mangas Scans",
+  "base": "https://mangas-scans.com",
+  "framework": "mangathemesia",
+  "lang": "fr"
+ },
+ {
+  "name": "Mangastep",
+  "base": "https://mangastep.com",
+  "framework": "mangathemesia",
+  "lang": "th"
+ },
+ {
+  "name": "MangaTX",
+  "base": "https://mangatx.cc",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Manhuascan.us",
+  "base": "https://manhuascan.us",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Manhwa Indo",
+  "base": "https://www.manhwaindo.my",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "Manhwa List",
+  "base": "https://manhwalist02.asia",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "Manhwalist.org",
+  "base": "https://isekaikomik.com",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "Miau Scan",
+  "base": "https://leemiau.com",
+  "framework": "mangathemesia",
+  "lang": "es"
+ },
+ {
+  "name": "NekoScans",
+  "base": "https://nekoproject.org",
+  "framework": "mangathemesia",
+  "lang": "es"
+ },
+ {
+  "name": "Nemesis scans",
+  "base": "https://nemesisscans.com",
+  "framework": "mangathemesia",
+  "lang": "tr"
+ },
+ {
+  "name": "NexComic",
+  "base": "https://nexcomic.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Ngomik (unoriginal)",
+  "base": "https://02.ngomik.cc",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "Nika Toons",
+  "base": "https://nikatoons.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Nirvana Manga",
+  "base": "https://nirvanamanga.com",
+  "framework": "mangathemesia",
+  "lang": "tr"
+ },
+ {
+  "name": "Noromax",
+  "base": "https://noromax02.my.id",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "Nova Manhwas",
+  "base": "https://novamanhwa.cc",
+  "framework": "mangathemesia",
+  "lang": "es"
+ },
+ {
+  "name": "Noxen Scans",
+  "base": "https://noxenscan.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Omicaso",
+  "base": "https://omicaso.org",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "Origami Orpheans",
+  "base": "https://origami-orpheans.com",
+  "framework": "mangathemesia",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Pati Manga",
+  "base": "https://www.patimanga.com",
+  "framework": "mangathemesia",
+  "lang": "tr"
+ },
+ {
+  "name": "Point Zero Toons",
+  "base": "https://kitsuneyako.com",
+  "framework": "mangathemesia",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Rackus",
+  "base": "https://rackusreads.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Rage Scans",
+  "base": "https://ragescans.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Raindrop Fansub",
+  "base": "https://www.raindropteamfan.com",
+  "framework": "mangathemesia",
+  "lang": "tr"
+ },
+ {
+  "name": "Raven Scans",
+  "base": "https://ravenscans.org",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Razure",
+  "base": "https://razure.org",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "ReaperTrans",
+  "base": "https://reapertrans.com",
+  "framework": "mangathemesia",
+  "lang": "th"
+ },
+ {
+  "name": "Rizz Comic",
+  "base": "https://rizzfables.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Rizz Comic (unoriginal)",
+  "base": "https://rizzcomic.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "RokariComics",
+  "base": "https://rokaricomics.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Scythe Scans",
+  "base": "https://scythescans.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Serein Scan",
+  "base": "https://sereinscan.com",
+  "framework": "mangathemesia",
+  "lang": "tr"
+ },
+ {
+  "name": "Shijie Scans",
+  "base": "https://shijiescans.com",
+  "framework": "mangathemesia",
+  "lang": "tr"
+ },
+ {
+  "name": "Shirakami",
+  "base": "https://shirakami.xyz",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "Singmanga",
+  "base": "https://www.sing-manga.com",
+  "framework": "mangathemesia",
+  "lang": "th"
+ },
+ {
+  "name": "SkyMangas",
+  "base": "https://skymangas.com",
+  "framework": "mangathemesia",
+  "lang": "es"
+ },
+ {
+  "name": "Slow Manga",
+  "base": "https://www.slow-manga.net",
+  "framework": "mangathemesia",
+  "lang": "th"
+ },
+ {
+  "name": "Sodsaime",
+  "base": "https://www.xn--l3c0azab5a2gta.com",
+  "framework": "mangathemesia",
+  "lang": "th"
+ },
+ {
+  "name": "Soul Scans",
+  "base": "https://soulscans.my.id",
+  "framework": "mangathemesia",
+  "lang": "id"
+ },
+ {
+  "name": "Speed Manga",
+  "base": "https://speed-manga.net",
+  "framework": "mangathemesia",
+  "lang": "th"
+ },
+ {
+  "name": "Sushi-Scan",
+  "base": "https://sushiscan.net",
+  "framework": "mangathemesia",
+  "lang": "fr"
+ },
+ {
+  "name": "Sushiscan.fr",
+  "base": "https://sushiscan.fr",
+  "framework": "mangathemesia",
+  "lang": "fr"
+ },
+ {
+  "name": "Tanuki-Manga",
+  "base": "https://www.tanuki-manga.net",
+  "framework": "mangathemesia",
+  "lang": "th"
+ },
+ {
+  "name": "Tarot Scans",
+  "base": "https://www.tarotscans.com",
+  "framework": "mangathemesia",
+  "lang": "tr"
+ },
+ {
+  "name": "Tempest Scans",
+  "base": "https://tempestmangas.com",
+  "framework": "mangathemesia",
+  "lang": "tr"
+ },
+ {
+  "name": "Thunder Scans",
+  "base": "https://en-thunderscans.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "ToomTam-Manga",
+  "base": "https://toomtam-manga.com",
+  "framework": "mangathemesia",
+  "lang": "th"
+ },
+ {
+  "name": "Tsundoku Traduções",
+  "base": "https://tsundoku.com.br",
+  "framework": "mangathemesia",
+  "lang": "pt-BR"
+ },
+ {
+  "name": "Uchuujin Projects",
+  "base": "https://uchuujinmangas.com",
+  "framework": "mangathemesia",
+  "lang": "es"
+ },
+ {
+  "name": "Violet Scans",
+  "base": "https://violetscans.org",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Walpurgi Scan",
+  "base": "https://www.walpurgiscan.it",
+  "framework": "mangathemesia",
+  "lang": "it"
+ },
+ {
+  "name": "WitchScans",
+  "base": "https://witchscans.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "Zenith Scans",
+  "base": "https://zenithscans.com",
+  "framework": "mangathemesia",
+  "lang": "tr"
+ },
+ {
+  "name": "MangaDNA",
+  "base": "https://mangadna.com",
+  "framework": "mangathemesia",
+  "lang": "en"
+ },
+ {
+  "name": "ManhwaHub",
+  "base": "https://manhwahub.net",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "ManhwaZ",
+  "base": "https://manhwaz.com",
+  "framework": "madara",
+  "lang": "en"
+ },
+ {
+  "name": "Mgread.io",
+  "base": "https://mgread.io",
+  "framework": "madara",
+  "lang": "en"
+ }
 ]

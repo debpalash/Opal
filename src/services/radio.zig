@@ -22,6 +22,9 @@ const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const logs = @import("../core/logs.zig");
 const pure = @import("radio_pure.zig");
+/// App-wide stream-health probing (shared with Live TV) — the "radio" kind.
+const link_health = @import("link_health.zig");
+const RADIO_KIND = "radio";
 const io = @import("../core/io_global.zig");
 const poster = @import("../core/poster.zig");
 const rate_limit = @import("../core/rate_limit.zig");
@@ -777,12 +780,42 @@ fn renderCard(i: usize, card_w: f32) void {
         if (clicked) playStation(i);
     }
 
-    _ = dvui.label(@src(), "{s}", .{name}, .{
-        .id_extra = i + 3000,
-        .color_text = theme.colors.text_primary,
-        .expand = .horizontal,
-        .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
-    });
+    // Name row: stream-health dot + title. Probing is lazy — rendering a card
+    // kicks a bounded probe for its stream on the shared app-wide pool, and the
+    // dot uses the same colour mapping as Live TV (green live / yellow slow /
+    // red dead; nothing drawn until a probe lands).
+    {
+        var nrow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 6000, .expand = .horizontal });
+        defer nrow.deinit();
+
+        const stream_url = if (s.url_resolved_len > 0)
+            s.url_resolved[0..@min(s.url_resolved_len, s.url_resolved.len)]
+        else
+            s.url[0..@min(s.url_len, s.url.len)];
+        link_health.probe(RADIO_KIND, stream_url);
+        const st = link_health.statusOf(RADIO_KIND, stream_url);
+        if (st != .unknown) {
+            var dot = dvui.box(@src(), .{}, .{
+                .id_extra = i + 8000,
+                .min_size_content = .{ .w = 8, .h = 8 },
+                .max_size_content = .{ .w = 8, .h = 8 },
+                .corner_radius = dvui.Rect.all(4),
+                .background = true,
+                .color_fill = link_health.statusColor(st),
+                .gravity_y = 0.5,
+                .margin = .{ .x = 2, .y = 0, .w = 4, .h = 0 },
+            });
+            dot.deinit();
+        }
+
+        _ = dvui.label(@src(), "{s}", .{name}, .{
+            .id_extra = i + 3000,
+            .color_text = theme.colors.text_primary,
+            .expand = .horizontal,
+            .gravity_y = 0.5,
+            .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
+        });
+    }
 
     // Meta: codec · bitrate · country.
     var meta_buf: [120]u8 = undefined;

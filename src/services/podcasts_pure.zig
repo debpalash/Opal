@@ -467,3 +467,88 @@ test "parseRssEpisodes regression: item without enclosure is skipped, malformed 
     _ = parseRssEpisodes("<item><enclosure url=\"", &out);
     _ = parseRssEpisodes("<item><item><item></item>", &out);
 }
+
+// ══════════════════════════════════════════════════════════
+// Home deep link (library_items → reopen + resume an episode)
+// ══════════════════════════════════════════════════════════
+//
+// Episode POSITION is already persisted by the generic mpv path
+// (player.saveCurrentPosition → history.savePlaybackPosition → watch_history,
+// keyed by the enclosure URL, and replayed by player.tryResumePosition). What a
+// podcast lacked was IDENTITY in the unified read-model: this link carries the
+// show/episode/artwork so `library_items` holds a real podcast row instead of an
+// anonymous playback entry, and reopening it restores the now-playing card.
+
+/// The fields a home "Continue" row needs to reopen a podcast episode.
+pub const PodcastLink = struct {
+    url: []const u8, // audio enclosure URL — also the resume key mpv uses
+    artwork: []const u8, // show artwork (now-playing card)
+    show: []const u8, // show name → card subtitle
+    title: []const u8, // episode title → card title
+};
+
+/// Encode a podcast deep link: `podcast|<url>|<artwork>|<show>|<title>`. The
+/// episode title runs to the end so its own separators can't truncate it.
+/// Empty slice when there's no URL to play or it won't fit.
+pub fn formatDeepLink(out: []u8, url: []const u8, artwork: []const u8, show: []const u8, title: []const u8) []const u8 {
+    if (url.len == 0) return out[0..0];
+    return std.fmt.bufPrint(out, "podcast|{s}|{s}|{s}|{s}", .{ url, artwork, show, title }) catch out[0..0];
+}
+
+/// Decode a `podcast|…` deep link. Null when the prefix/field count is wrong, so
+/// a foreign link can never be routed into the podcast player.
+pub fn parseDeepLink(link: []const u8) ?PodcastLink {
+    const prefix = "podcast|";
+    if (!std.mem.startsWith(u8, link, prefix)) return null;
+    var rest = link[prefix.len..];
+    const i = std.mem.indexOfScalar(u8, rest, '|') orelse return null;
+    const url = rest[0..i];
+    if (url.len == 0) return null;
+    rest = rest[i + 1 ..];
+    const j = std.mem.indexOfScalar(u8, rest, '|') orelse return null;
+    const artwork = rest[0..j];
+    rest = rest[j + 1 ..];
+    const k = std.mem.indexOfScalar(u8, rest, '|') orelse return null;
+    return .{ .url = url, .artwork = artwork, .show = rest[0..k], .title = rest[k + 1 ..] };
+}
+
+test "podcast deep link: round-trips through format/parse" {
+    var buf: [1024]u8 = undefined;
+    const link = formatDeepLink(&buf, "https://cdn.x/ep12.mp3", "https://cdn.x/art.jpg", "The Show", "Episode 12");
+    try std.testing.expectEqualStrings(
+        "podcast|https://cdn.x/ep12.mp3|https://cdn.x/art.jpg|The Show|Episode 12",
+        link,
+    );
+    const got = parseDeepLink(link).?;
+    try std.testing.expectEqualStrings("https://cdn.x/ep12.mp3", got.url);
+    try std.testing.expectEqualStrings("https://cdn.x/art.jpg", got.artwork);
+    try std.testing.expectEqualStrings("The Show", got.show);
+    try std.testing.expectEqualStrings("Episode 12", got.title);
+}
+
+test "podcast deep link: optional artwork/show still parse" {
+    var buf: [1024]u8 = undefined;
+    const link = formatDeepLink(&buf, "https://cdn.x/e.mp3", "", "", "Ep");
+    const got = parseDeepLink(link).?;
+    try std.testing.expectEqualStrings("", got.artwork);
+    try std.testing.expectEqualStrings("", got.show);
+    try std.testing.expectEqualStrings("Ep", got.title);
+}
+
+test "podcast deep link: rejects foreign links and malformed input" {
+    try std.testing.expect(parseDeepLink("https://cdn.x/e.mp3") == null);
+    try std.testing.expect(parseDeepLink("comic|https://x.tld/i|T") == null);
+    try std.testing.expect(parseDeepLink("novel|wikisource||F") == null);
+    try std.testing.expect(parseDeepLink("podcast|https://cdn.x/e.mp3|art") == null); // too few fields
+    try std.testing.expect(parseDeepLink("podcast||art|show|T") == null); // no playable url
+    var buf: [1024]u8 = undefined;
+    try std.testing.expectEqualStrings("", formatDeepLink(&buf, "", "a", "s", "T"));
+    var tiny: [8]u8 = undefined;
+    try std.testing.expectEqualStrings("", formatDeepLink(&tiny, "https://cdn.x/e.mp3", "", "", "T"));
+}
+
+test "podcast deep link: an episode title containing '|' survives" {
+    var buf: [1024]u8 = undefined;
+    const link = formatDeepLink(&buf, "https://cdn.x/e.mp3", "", "Show", "Ep 4 | Part 2");
+    try std.testing.expectEqualStrings("Ep 4 | Part 2", parseDeepLink(link).?.title);
+}

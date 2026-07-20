@@ -52,9 +52,10 @@ def test_manga_madara_engine():
         if call not in comics:
             problems.append(f"comics.zig does not route through {call}")
 
-    # 4) Source.madara added at the END of the enum + a searchWorker branch.
-    if "madara }" not in comics and "madara,}" not in comics.replace(" ", ""):
-        problems.append("Source.madara not added at the end of the enum")
+    # 4) Source.madara is a member of the Source enum + has a searchWorker branch.
+    #    (Position-independent — more sources, e.g. suwayomi, can follow it.)
+    if "madara }" not in comics and "madara," not in comics:
+        problems.append("Source.madara not present in the Source enum")
     if "fetchMadaraPage" not in comics or "parseMadaraResults" not in comics:
         problems.append("comics.zig missing Madara search fetch/parse fns")
     if "sourceActive(.madara)" not in comics:

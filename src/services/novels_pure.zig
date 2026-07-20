@@ -389,8 +389,77 @@ pub fn resumeKey(work_title: []const u8, out: []u8) []const u8 {
 }
 
 // ══════════════════════════════════════════════════════════
+// Home deep link (library_items → reopen a novel)
+// ══════════════════════════════════════════════════════════
+
+/// The three fields a home "Continue" row needs to reopen a novel.
+pub const NovelLink = struct {
+    source: []const u8, // NovelSource tag name
+    url: []const u8, // absolute work URL (empty for Wikisource)
+    title: []const u8, // work title (the Wikisource key + display name)
+};
+
+/// Encode a novel deep link: `novel|<source>|<url>|<title>`. Title runs to the
+/// end so its own separators can't truncate it. Empty slice when it won't fit.
+pub fn formatDeepLink(out: []u8, source: []const u8, url: []const u8, title: []const u8) []const u8 {
+    if (source.len == 0 or title.len == 0) return out[0..0];
+    return std.fmt.bufPrint(out, "novel|{s}|{s}|{s}", .{ source, url, title }) catch out[0..0];
+}
+
+/// Decode a `novel|…` deep link. Null when the prefix/field count is wrong, so
+/// a non-novel link can never be routed into the novel reader.
+pub fn parseDeepLink(link: []const u8) ?NovelLink {
+    const prefix = "novel|";
+    if (!std.mem.startsWith(u8, link, prefix)) return null;
+    var rest = link[prefix.len..];
+    const i = std.mem.indexOfScalar(u8, rest, '|') orelse return null;
+    const source = rest[0..i];
+    rest = rest[i + 1 ..];
+    const j = std.mem.indexOfScalar(u8, rest, '|') orelse return null;
+    const url = rest[0..j];
+    const title = rest[j + 1 ..];
+    if (source.len == 0 or title.len == 0) return null;
+    return .{ .source = source, .url = url, .title = title };
+}
+
+// ══════════════════════════════════════════════════════════
 // Tests
 // ══════════════════════════════════════════════════════════
+
+test "novel deep link: round-trips through format/parse" {
+    var buf: [512]u8 = undefined;
+    const link = formatDeepLink(&buf, "wikisource", "", "Frankenstein");
+    try std.testing.expectEqualStrings("novel|wikisource||Frankenstein", link);
+    const got = parseDeepLink(link).?;
+    try std.testing.expectEqualStrings("wikisource", got.source);
+    try std.testing.expectEqualStrings("", got.url);
+    try std.testing.expectEqualStrings("Frankenstein", got.title);
+
+    const l2 = formatDeepLink(&buf, "readwn", "https://x.tld/novel/abc", "A Title");
+    const g2 = parseDeepLink(l2).?;
+    try std.testing.expectEqualStrings("readwn", g2.source);
+    try std.testing.expectEqualStrings("https://x.tld/novel/abc", g2.url);
+    try std.testing.expectEqualStrings("A Title", g2.title);
+}
+
+test "novel deep link: rejects foreign links and malformed input" {
+    try std.testing.expect(parseDeepLink("https://example.com/a.mp4") == null);
+    try std.testing.expect(parseDeepLink("magnet:?xt=urn:btih:abc") == null);
+    try std.testing.expect(parseDeepLink("novel|wikisource") == null); // missing fields
+    try std.testing.expect(parseDeepLink("novel||url|T") == null); // empty source
+    try std.testing.expect(parseDeepLink("novel|wikisource|url|") == null); // empty title
+    var buf: [512]u8 = undefined;
+    try std.testing.expectEqualStrings("", formatDeepLink(&buf, "wikisource", "", "")); // no title
+    var tiny: [4]u8 = undefined;
+    try std.testing.expectEqualStrings("", formatDeepLink(&tiny, "wikisource", "", "T")); // no room
+}
+
+test "novel deep link: a title containing '|' survives" {
+    var buf: [512]u8 = undefined;
+    const link = formatDeepLink(&buf, "wikisource", "", "Notes | Vol 1");
+    const got = parseDeepLink(link).?;
+    try std.testing.expectEqualStrings("Notes | Vol 1", got.title);
+}
 
 test "buildSearchUrl: encodes query + namespace 0" {
     var buf: [512]u8 = undefined;

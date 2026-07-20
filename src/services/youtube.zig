@@ -7,6 +7,9 @@ const io = @import("../core/io_global.zig");
 const workers = @import("../core/workers.zig");
 const tmdb_pure = @import("tmdb_pure.zig"); // unit-tested grid virtualization (visibleRows)
 const yt_pure = @import("youtube_pure.zig"); // unit-tested URL/format/suggestion helpers
+const it_pure = @import("youtube_innertube_pure.zig"); // unit-tested InnerTube body/parse helpers
+const content_cache = @import("../core/content_cache.zig");
+const ccp = @import("../core/content_cache_pure.zig");
 
 pub const alloc = @import("../core/alloc.zig").allocator;
 
@@ -104,6 +107,40 @@ var paged_query_len: usize = 0;
 // existing grid (yt-dlp re-sends the earlier page) and honours ITEM_CAP.
 var appending_more: bool = false;
 
+// ── InnerTube continuation cursor ──
+// InnerTube hands back an opaque token pointing at the NEXT page of whatever
+// feed produced the response, so load-more is one more POST instead of re-running
+// the whole `ytsearch{N}:` (which costs ~19s and re-sends every earlier row).
+// `cont_is_browse` records which endpoint the token belongs to: search
+// continuations go back to /search and yield videoRenderer rows, channel
+// continuations go to /browse and yield lockupViewModel rows.
+// All three are shared state — read/written only under yt_mutex.
+var cont_token: [it_pure.MAX_TOKEN_LEN]u8 = undefined;
+var cont_token_len: usize = 0;
+var cont_is_browse: bool = false;
+
+/// Stash the next-page token from `json` (clearing it when the feed has no more
+/// pages, so we never re-POST a spent cursor).
+fn rememberContinuation(json: []const u8, is_browse: bool) void {
+    const tok = it_pure.extractContinuationToken(json);
+    yt_mutex.lock();
+    defer yt_mutex.unlock();
+    cont_is_browse = is_browse;
+    if (tok) |t| {
+        cont_token_len = @min(t.len, cont_token.len);
+        @memcpy(cont_token[0..cont_token_len], t[0..cont_token_len]);
+    } else cont_token_len = 0;
+}
+
+/// Drop the cursor. Called whenever the feed identity changes (a new search or
+/// a new channel), so page 2 of the OLD feed can never land in the new grid.
+fn clearContinuation() void {
+    yt_mutex.lock();
+    defer yt_mutex.unlock();
+    cont_token_len = 0;
+    cont_is_browse = false;
+}
+
 // ── Channel mode ──
 // Clicking a card's channel name swaps the grid to that channel's uploads
 // (yt-dlp flat-playlist on /channel/{id}/videos). The flag is atomic because
@@ -170,6 +207,30 @@ fn appendYt(item: state.YtItem) void {
     };
     // Reset staging for the next row.
     staged_date_len = 0;
+    nudgeUi(false);
+}
+
+// ── Waterfall repaint ──
+// Rows now land within a few hundred ms of each other (InnerTube parses the
+// whole payload locally), so without an explicit repaint the grid would sit
+// idle until the next natural frame and the "progressive fill" would be
+// invisible. Batch the wake-ups: one refresh per REFRESH_BATCH appended rows is
+// enough for the fill to read as continuous, and per-item refreshes would just
+// burn frames. Safe from a worker (dvui.refresh is the documented cross-thread
+// wake — cf. core/poster.zig).
+const REFRESH_BATCH: usize = 3;
+var since_refresh: usize = 0;
+
+/// `force` = repaint now (end of a batch). Otherwise count toward the next
+/// batch — that counter is only ever touched from appendYt, i.e. under
+/// yt_mutex, so it needs no atomic of its own.
+fn nudgeUi(force: bool) void {
+    if (!force) {
+        since_refresh += 1;
+        if (since_refresh < REFRESH_BATCH) return;
+        since_refresh = 0;
+    }
+    if (state.app.dvui_win) |win| dvui.refresh(win, @src(), null);
 }
 
 /// True if a result with `video_id` is already in the grid. Caller holds yt_mutex.
@@ -215,6 +276,117 @@ const piped_instances = [_][]const u8{
     "api.piped.yt",
 };
 
+// ══════════════════════════════════════════════════════════
+// Encrypted on-disk cache of SEARCH RESULTS — stale-while-revalidate.
+// Serialization routes through content_cache_pure.Writer/Reader (tested);
+// the cache identity routes through it_pure.normalizeQuery (tested). Mirrors
+// resolver.zig's cacheKey/serialize/deserialize/populate/store shape.
+// ══════════════════════════════════════════════════════════
+
+const INNERTUBE_RESP_CAP: usize = 2 * 1024 * 1024;
+const YT_BLOB_CAP: usize = 128 * 1024;
+const YT_TTL_S: i64 = @import("browse_cache.zig").TTL_S;
+
+fn ytCacheKey(buf: []u8, query: []const u8) []const u8 {
+    var norm_buf: [256]u8 = undefined;
+    const norm = it_pure.normalizeQuery(query, &norm_buf);
+    return std.fmt.bufPrint(buf, "yt-search:{s}", .{norm}) catch "yt-search:";
+}
+
+/// Serialize the current grid into `out`. Caller holds yt_mutex.
+fn serializeYtResults(out: []u8) ?[]u8 {
+    var w = ccp.Writer.init(out);
+    const n: u16 = @intCast(@min(state.app.yt.results.items.len, ITEM_CAP));
+    w.u16v(n);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const it = state.app.yt.results.items[i];
+        w.blob(it.video_id[0..@min(it.video_id_len, it.video_id.len)]);
+        w.blob(it.title[0..@min(it.title_len, it.title.len)]);
+        w.blob(it.uploader[0..@min(it.uploader_len, it.uploader.len)]);
+        w.blob(it.channel_id[0..@min(it.channel_id_len, it.channel_id.len)]);
+        w.u32v(@intCast(std.math.clamp(it.duration, 0, std.math.maxInt(u32))));
+        w.u32v(@intCast(std.math.clamp(it.views, 0, std.math.maxInt(u32))));
+        w.blob(dateFor(i));
+    }
+    return w.done();
+}
+
+/// Publish cached rows into the grid (through appendYt, so the lazy-clear and
+/// index-aligned date arrays behave exactly as on a live fetch). Returns how
+/// many landed. Caller must NOT hold yt_mutex.
+fn deserializeYtInto(bytes: []const u8, gen: u32) usize {
+    var r = ccp.Reader.init(bytes);
+    const n = r.u16v() orelse return 0;
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < n and count < ITEM_CAP) : (i += 1) {
+        if (!isCurrent(gen)) break;
+        var it = state.YtItem{};
+        const vid = r.blob() orelse break;
+        if (!it_pure.validVideoId(vid)) break;
+        it.video_id_len = @min(vid.len, it.video_id.len);
+        @memcpy(it.video_id[0..it.video_id_len], vid[0..it.video_id_len]);
+        const title = r.blob() orelse break;
+        it.title_len = @min(title.len, it.title.len);
+        @memcpy(it.title[0..it.title_len], title[0..it.title_len]);
+        const up = r.blob() orelse break;
+        it.uploader_len = @min(up.len, it.uploader.len);
+        @memcpy(it.uploader[0..it.uploader_len], up[0..it.uploader_len]);
+        const cid = r.blob() orelse break;
+        it.channel_id_len = @min(cid.len, it.channel_id.len);
+        @memcpy(it.channel_id[0..it.channel_id_len], cid[0..it.channel_id_len]);
+        it.duration = r.u32v() orelse break;
+        it.views = r.u32v() orelse break;
+        const ymd = r.blob() orelse break;
+
+        var thumb_buf: [128]u8 = undefined;
+        if (it_pure.thumbUrl(it.video_id[0..it.video_id_len], &thumb_buf)) |turl| {
+            it.thumbnail_url_len = @min(turl.len, it.thumbnail_url.len);
+            @memcpy(it.thumbnail_url[0..it.thumbnail_url_len], turl[0..it.thumbnail_url_len]);
+        }
+
+        yt_mutex.lock();
+        if (ymd.len == 8) {
+            @memcpy(staged_date[0..8], ymd[0..8]);
+            staged_date_len = 8;
+        } else staged_date_len = 0;
+        appendYt(it);
+        yt_mutex.unlock();
+        count += 1;
+    }
+    if (count > 0) nudgeUi(true);
+    return count;
+}
+
+/// SWR read: paint the last-known rows for `query` INSTANTLY (no network) so a
+/// repeat search or a tab re-entry is never blank. Returns true if it seeded.
+fn populateYtFromCache(query: []const u8, gen: u32) bool {
+    if (!state.app.content_cache_enabled) return false;
+    const buf = alloc.alloc(u8, YT_BLOB_CAP) catch return false;
+    defer alloc.free(buf);
+    var key_buf: [288]u8 = undefined;
+    const key = ytCacheKey(&key_buf, query);
+    const hit = content_cache.get(key, buf) orelse return false;
+    return deserializeYtInto(hit.bytes, gen) > 0;
+}
+
+/// SWR write: persist the freshly-fetched rows so the next search is instant.
+/// Only called when LIVE rows landed (never re-stores a cache-seeded grid —
+/// that would refresh the TTL without a network fetch).
+fn storeYtToCache(query: []const u8) void {
+    if (!state.app.content_cache_enabled) return;
+    const buf = alloc.alloc(u8, YT_BLOB_CAP) catch return;
+    defer alloc.free(buf);
+    yt_mutex.lock();
+    const blob = if (state.app.yt.results.items.len == 0) null else serializeYtResults(buf);
+    yt_mutex.unlock();
+    if (blob) |b| {
+        var key_buf: [288]u8 = undefined;
+        content_cache.put(ytCacheKey(&key_buf, query), b, YT_TTL_S);
+    }
+}
+
 pub fn fetchYoutube(query: []const u8) void {
     if (state.app.yt.is_loading.load(.acquire)) return;
     channel_mode.store(false, .release); // a search always leaves channel view
@@ -241,6 +413,7 @@ pub fn fetchYoutube(query: []const u8) void {
     // on so load-more re-runs the same search even if the text box changes.
     loaded_count.store(PAGE_SIZE, .release);
     loading_more.store(false, .release);
+    clearContinuation(); // new feed → the old feed's page-2 cursor is void
     paged_query_len = S.q_len;
     @memcpy(paged_query[0..S.q_len], S.q_buf[0..S.q_len]);
 
@@ -255,17 +428,36 @@ pub fn fetchYoutube(query: []const u8) void {
                 state.app.yt.is_loading.store(false, .release);
             }
 
+            const q = S.q_buf[0..S.q_len];
+
             yt_mutex.lock();
             pending_clear = true; // old results stay until the first new one lands
             yt_mutex.unlock();
 
-            // yt-dlp first — reliable (~2s) and always available. Public Piped
-            // instances are frequently dead and stall the whole fetch with no
-            // timeout, so it's only a backup when yt-dlp yields nothing.
-            fetchViaYtdlp(S.q_buf[0..S.q_len], S.gen, PAGE_SIZE);
-            // pending_clear still armed ⇒ yt-dlp produced nothing ⇒ try Piped.
-            // (Can't use results.len here: lazy-clear keeps the old results.)
-            if (pending_clear and isCurrent(S.gen)) _ = fetchViaPiped(S.q_buf[0..S.q_len], S.gen);
+            // ── SWR seed ──
+            // Paint the last-known rows for this query from the encrypted disk
+            // cache first (no network) so the grid is never blank, then RE-ARM
+            // pending_clear so the first live row swaps them out in place
+            // (otherwise the live rows would append onto the cached ones).
+            _ = populateYtFromCache(q, S.gen);
+            yt_mutex.lock();
+            pending_clear = true;
+            yt_mutex.unlock();
+
+            // ── Layered fallback: InnerTube → yt-dlp → Piped ──
+            // InnerTube is ~1.1s vs yt-dlp's ~18.6s for the same 20 results, so
+            // it leads. Each later stage runs only if the previous published
+            // nothing AND this search is still current. `pending_clear` (not
+            // results.len) is the "did anything land" signal — the lazy-clear
+            // means the OLD results are still in the list until a new row lands.
+            if (isCurrent(S.gen)) _ = fetchViaInnerTube(q, S.gen, PAGE_SIZE);
+            if (pending_clear and isCurrent(S.gen)) fetchViaYtdlp(q, S.gen, PAGE_SIZE);
+            if (pending_clear and isCurrent(S.gen)) _ = fetchViaPiped(q, S.gen);
+
+            // Live rows landed (pending_clear was consumed after the re-arm) →
+            // refresh the cache entry. A fetch that produced nothing leaves the
+            // cached rows on screen and the stored entry untouched.
+            if (!pending_clear and isCurrent(S.gen)) storeYtToCache(q);
         }
     }.worker, .{}) catch blk: {
         state.app.yt.is_loading.store(false, .release);
@@ -301,13 +493,21 @@ pub fn openChannel(channel_id: []const u8, name: []const u8) void {
 
     state.app.yt.results.ensureTotalCapacity(alloc, 256) catch {};
 
+    clearContinuation(); // new feed → the old feed's page-2 cursor is void
+
     const S = struct {
         var id_buf: [32]u8 = undefined;
         var id_len: usize = 0;
+        var name_buf: [64]u8 = undefined;
+        var name_len: usize = 0;
         var gen: u32 = 0;
     };
     S.id_len = channel_id_len;
     @memcpy(S.id_buf[0..S.id_len], channel_id_buf[0..S.id_len]);
+    // Copy the name too: channel_name_buf is UI-thread state, and the worker
+    // stamps it onto every card (channel-page rows carry no byline).
+    S.name_len = channel_name_len;
+    @memcpy(S.name_buf[0..S.name_len], channel_name_buf[0..S.name_len]);
     S.gen = my_gen;
 
     const t = std.Thread.spawn(.{}, struct {
@@ -316,7 +516,19 @@ pub fn openChannel(channel_id: []const u8, name: []const u8) void {
             yt_mutex.lock();
             pending_clear = true; // seamless swap, same as a re-search
             yt_mutex.unlock();
-            fetchChannelViaYtdlp(S.id_buf[0..S.id_len], S.gen, PAGE_SIZE);
+            // InnerTube browse (~0.7s) first; yt-dlp's flat-playlist on the
+            // channel page (~19s) only if it yields nothing.
+            const n = fetchChannelViaInnerTube(S.id_buf[0..S.id_len], S.name_buf[0..S.name_len], S.gen);
+            if (n == 0) {
+                fetchChannelViaYtdlp(S.id_buf[0..S.id_len], S.gen, PAGE_SIZE);
+            } else if (isCurrent(S.gen)) {
+                // A browse page is 30 rows, not PAGE_SIZE — advance the cursor
+                // to what actually landed so load-more doesn't leave a gap.
+                yt_mutex.lock();
+                const have = state.app.yt.results.items.len;
+                yt_mutex.unlock();
+                loaded_count.store(have, .release);
+            }
         }
     }.worker, .{}) catch {
         state.app.yt.is_loading.store(false, .release);
@@ -360,6 +572,8 @@ pub fn fetchMore() void {
         var chan: bool = false;
         var id_buf: [32]u8 = undefined;
         var id_len: usize = 0;
+        var name_buf: [64]u8 = undefined;
+        var name_len: usize = 0;
     };
     S.q_len = paged_query_len;
     @memcpy(S.q_buf[0..S.q_len], paged_query[0..S.q_len]);
@@ -368,6 +582,8 @@ pub fn fetchMore() void {
     S.chan = in_channel;
     S.id_len = channel_id_len;
     @memcpy(S.id_buf[0..S.id_len], channel_id_buf[0..S.id_len]);
+    S.name_len = channel_name_len;
+    @memcpy(S.name_buf[0..S.name_len], channel_name_buf[0..S.name_len]);
 
     const t = std.Thread.spawn(.{}, struct {
         fn worker() void {
@@ -382,6 +598,27 @@ pub fn fetchMore() void {
                 yt_mutex.unlock();
             }
 
+            // ── Fast path: one continuation POST (~1s) ──
+            // The token points straight at the next page, so unlike the yt-dlp
+            // path there's no overlap to re-download and re-dedupe. appendYt
+            // still dedupes (appending_more) and still honours ITEM_CAP.
+            const n = fetchContinuation(S.gen, S.name_buf[0..S.name_len], S.id_buf[0..S.id_len]);
+            if (n > 0) {
+                // A continuation page isn't PAGE_SIZE-shaped (search gives 20,
+                // browse 30), so advance the cursor to what's actually on
+                // screen rather than the requested S.n.
+                if (isCurrent(S.gen)) {
+                    yt_mutex.lock();
+                    const have = state.app.yt.results.items.len;
+                    yt_mutex.unlock();
+                    loaded_count.store(have, .release);
+                }
+                return;
+            }
+
+            // ── Fallback: no token (or the continuation failed) → yt-dlp ──
+            // Re-runs the whole `ytsearch{N}:` / channel listing and leans on
+            // appendYt's videoIdExists dedupe to drop the repeated prefix.
             if (S.chan)
                 fetchChannelViaYtdlp(S.id_buf[0..S.id_len], S.gen, S.n)
             else
@@ -402,6 +639,169 @@ pub fn fetchMore() void {
 /// (out-of-date) results never reach the grid.
 fn isCurrent(gen: u32) bool {
     return search_gen.load(.acquire) == gen;
+}
+
+// ══════════════════════════════════════════════════════════
+// Fast path — YouTube InnerTube (/youtubei/v1/search)
+// ══════════════════════════════════════════════════════════
+
+/// One POST, one parse, rows appended as they're decoded. This replaces the
+/// yt-dlp spawn as the primary search: measured on this machine, InnerTube
+/// answers a 20-result search in ~1.1s where `yt-dlp ytsearch20:` takes ~18.6s
+/// (process start + extractor warm-up + its own round trips dominate).
+///
+/// Client choice: the plain `WEB` InnerTube client. PO tokens / bot walls gate
+/// *playback* stream URLs, not search metadata, so search needs no special
+/// client — and pinning one would only freeze us to today's YouTube (see the
+/// note in runYtdlp). `params` pins the result TYPE to "video", so channel rows
+/// and shelves never reach the grid.
+///
+/// Returns true if at least one row was published. Bails on a superseded gen.
+fn fetchViaInnerTube(query: []const u8, gen: u32, count: usize) bool {
+    var body_buf: [1600]u8 = undefined;
+    const post_body = it_pure.buildSearchBody(query, &body_buf) orelse return false;
+
+    // ~750 KB typical, heap-allocated: far too big for a worker stack.
+    const resp = alloc.alloc(u8, INNERTUBE_RESP_CAP) catch return false;
+    defer alloc.free(resp);
+
+    const json = innertubePost(it_pure.SEARCH_URL, post_body, resp) orelse return false;
+    const n = publishRows(json, gen, count, .{});
+    // Remember where page 2 starts. Stored even on a partial page: the token is
+    // what makes infinite scroll cheap.
+    rememberContinuation(json, false);
+    return n > 0;
+}
+
+/// Channel Videos tab via `/youtubei/v1/browse`. Channel pages return the newer
+/// `lockupViewModel` shape, so rows come from the lockup reader — but they land
+/// in the same grid, with the channel name/id we already know stamped on each
+/// card (a channel page's rows carry no byline of their own).
+/// Returns rows published; 0 means "fall back to yt-dlp".
+fn fetchChannelViaInnerTube(channel_id: []const u8, chan_name: []const u8, gen: u32) usize {
+    var body_buf: [512]u8 = undefined;
+    const post_body = it_pure.buildChannelBrowseBody(channel_id, &body_buf) orelse return 0;
+
+    const resp = alloc.alloc(u8, INNERTUBE_RESP_CAP) catch return 0;
+    defer alloc.free(resp);
+
+    const json = innertubePost(it_pure.BROWSE_URL, post_body, resp) orelse return 0;
+    const n = publishRows(json, gen, ITEM_CAP, .{ .lockup = true, .chan_name = chan_name, .chan_id = channel_id });
+    rememberContinuation(json, true);
+    return n;
+}
+
+/// Next page of whichever feed is currently on screen, via the continuation
+/// token stashed by the previous fetch. Search continuations POST to the search
+/// endpoint and yield `videoRenderer` rows; channel continuations POST to the
+/// browse endpoint and yield `lockupViewModel` rows — `cont_is_browse` records
+/// which. Returns rows published; 0 means "fall back to yt-dlp paging".
+fn fetchContinuation(gen: u32, chan_name: []const u8, chan_id: []const u8) usize {
+    var token_buf: [it_pure.MAX_TOKEN_LEN]u8 = undefined;
+    yt_mutex.lock();
+    const tlen = cont_token_len;
+    const is_browse = cont_is_browse;
+    if (tlen > 0) @memcpy(token_buf[0..tlen], cont_token[0..tlen]);
+    yt_mutex.unlock();
+    if (tlen == 0) return 0; // no token → last page, or we never got one
+
+    const body = alloc.alloc(u8, it_pure.MAX_TOKEN_LEN + 512) catch return 0;
+    defer alloc.free(body);
+    const post_body = it_pure.buildContinuationBody(token_buf[0..tlen], body) orelse return 0;
+
+    const resp = alloc.alloc(u8, INNERTUBE_RESP_CAP) catch return 0;
+    defer alloc.free(resp);
+
+    const url = if (is_browse) it_pure.BROWSE_URL else it_pure.SEARCH_URL;
+    const json = innertubePost(url, post_body, resp) orelse return 0;
+    const n = publishRows(json, gen, ITEM_CAP, .{
+        .lockup = is_browse,
+        .chan_name = if (is_browse) chan_name else "",
+        .chan_id = if (is_browse) chan_id else "",
+    });
+    // Chain to page N+1. A response without a token means we hit the end of the
+    // feed — clearing it stops fetchMore from re-POSTing a spent token.
+    rememberContinuation(json, is_browse);
+    return n;
+}
+
+/// One InnerTube POST. `out` must be heap-allocated (responses run ~300 KB–1 MB).
+fn innertubePost(url: []const u8, post_body: []const u8, out: []u8) ?[]const u8 {
+    return @import("reliable_fetch.zig").fetch(url, out, .{
+        .headers = &.{
+            .{ .name = "Content-Type", .value = "application/json" },
+            .{ .name = "Accept", .value = "application/json" },
+            .{ .name = "X-YouTube-Client-Name", .value = "1" },
+            .{ .name = "X-YouTube-Client-Version", .value = it_pure.CLIENT_VERSION },
+        },
+        .timeout_secs = 12,
+        // Plain JSON API, not TLS-fingerprint walled — skipping impersonation
+        // keeps this on the lowest-latency path.
+        .impersonate = false,
+        .post_body = post_body,
+    });
+}
+
+const RowSource = struct {
+    /// Read `lockupViewModel` rows (channel pages) instead of `videoRenderer`.
+    lockup: bool = false,
+    /// Byline to stamp on each row — channel pages don't carry one per item.
+    chan_name: []const u8 = "",
+    chan_id: []const u8 = "",
+};
+
+/// Decode rows out of an InnerTube payload and append them to the grid AS THEY
+/// PARSE (that's the waterfall — appendYt batches the repaints). Honours the
+/// generation guard on every row so a superseded search publishes nothing more.
+/// Returns how many landed.
+fn publishRows(json: []const u8, gen: u32, limit: usize, src: RowSource) usize {
+    const now_days = @divFloor(io.timestamp(), 86400);
+    var pos: usize = 0;
+    var n: usize = 0;
+    while (n < limit) {
+        if (!isCurrent(gen)) break; // superseded — stop feeding the grid
+        const v = (if (src.lockup) it_pure.nextLockupVideo(json, &pos) else it_pure.nextVideo(json, &pos)) orelse break;
+
+        var item = state.YtItem{};
+        item.video_id_len = @min(v.id.len, item.video_id.len);
+        @memcpy(item.video_id[0..item.video_id_len], v.id[0..item.video_id_len]);
+        item.title_len = it_pure.unescapeJson(v.title_raw, &item.title);
+        item.duration = v.duration;
+        item.views = v.views;
+
+        // Channel pages: every row is the channel we opened, so stamp the
+        // byline we already know. Search rows carry their own.
+        if (v.channel_raw.len > 0) {
+            item.uploader_len = it_pure.unescapeJson(v.channel_raw, &item.uploader);
+        } else {
+            item.uploader_len = @min(src.chan_name.len, item.uploader.len);
+            @memcpy(item.uploader[0..item.uploader_len], src.chan_name[0..item.uploader_len]);
+        }
+        const cid = if (v.channel_id.len > 0) v.channel_id else src.chan_id;
+        item.channel_id_len = @min(cid.len, item.channel_id.len);
+        @memcpy(item.channel_id[0..item.channel_id_len], cid[0..item.channel_id_len]);
+
+        var thumb_buf: [128]u8 = undefined;
+        if (it_pure.thumbUrl(v.id, &thumb_buf)) |turl| {
+            item.thumbnail_url_len = @min(turl.len, item.thumbnail_url.len);
+            @memcpy(item.thumbnail_url[0..item.thumbnail_url_len], turl[0..item.thumbnail_url_len]);
+        }
+
+        yt_mutex.lock();
+        // InnerTube gives a relative label ("6 years ago"); the card's date
+        // column is YYYYMMDD, so convert once here (formatAgo renders it back).
+        if (v.ago_days) |d| {
+            staged_date = it_pure.ymdFromDaysSinceEpoch(now_days - d);
+            staged_date_len = 8;
+        } else {
+            staged_date_len = 0;
+        }
+        appendYt(item);
+        yt_mutex.unlock();
+        n += 1;
+    }
+    if (n > 0) nudgeUi(true); // make sure the tail of the batch paints
+    return n;
 }
 
 fn fetchViaPiped(query: []const u8, gen: u32) bool {
@@ -551,10 +951,11 @@ fn runYtdlp(target: []const u8, item_range: ?[]const u8, gen: u32) void {
         "--no-warnings",
         "--socket-timeout",
         "10",
-        // TVHTML5 client dodges YouTube's bot wall + 429 (the default web client
-        // now demands a PO token). Same fix as the mpv playback path.
-        "--extractor-args",
-        "youtube:player_client=tv",
+        // NOTE: deliberately NO `--extractor-args youtube:player_client=…`.
+        // Pinning a client freezes us to whatever worked the day it was
+        // written; the `tv` pin we used to carry here now returns only
+        // storyboard formats on the playback path. yt-dlp maintains its own
+        // client-fallback chain — let it choose.
     }) |a| {
         argv_buf[argc] = a;
         argc += 1;
@@ -633,16 +1034,16 @@ fn parseYtdlpLine(line: []const u8) void {
     // yt-dlp search results include CHANNEL rows (id == channel_id, "UC…").
     // As a card that's a dead video: watch?v=UC… doesn't play and the vi/UC…
     // thumbnail 404s — skip them. (Channels are reachable via the clickable
-    // channel name on any of their videos.)
-    if (item.channel_id_len > 0 and
-        std.mem.eql(u8, item.video_id[0..item.video_id_len], item.channel_id[0..item.channel_id_len])) return;
+    // channel name on any of their videos.) Same tested predicate the InnerTube
+    // parser uses, so the two paths can't drift.
+    if (it_pure.isChannelRow(item.video_id[0..item.video_id_len], item.channel_id[0..item.channel_id_len])) return;
 
     var thumb_buf: [128]u8 = undefined;
-    if (std.fmt.bufPrint(&thumb_buf, "https://i.ytimg.com/vi/{s}/mqdefault.jpg", .{item.video_id[0..item.video_id_len]})) |thumb| {
-        const tlen = @min(thumb.len, 511);
+    if (it_pure.thumbUrl(item.video_id[0..item.video_id_len], &thumb_buf)) |thumb| {
+        const tlen = @min(thumb.len, item.thumbnail_url.len);
         @memcpy(item.thumbnail_url[0..tlen], thumb[0..tlen]);
         item.thumbnail_url_len = tlen;
-    } else |_| {}
+    }
 
     appendYt(item);
 }

@@ -2324,6 +2324,34 @@ pub fn loadContentDirectMeta(url: []const u8, art_url: []const u8, title: []cons
     state.gotoPlayer();
 }
 
+/// Like loadContentDirectMeta, but sends an arbitrary per-request header set
+/// (Referer + Origin + Cookie …) instead of just a Referer. Callers build the
+/// slice; sanitizing/joining happens in `http_headers_pure`.
+pub fn loadContentDirectMetaHeaders(
+    url: []const u8,
+    art_url: []const u8,
+    title: []const u8,
+    subtitle: []const u8,
+    user_agent: []const u8,
+    headers: []const @import("../player/player.zig").HttpHeader,
+) void {
+    if (state.app.players.items.len == 0) {
+        if (@import("../player/player.zig").MediaPlayer.init(alloc)) |np| {
+            state.app.players.append(alloc, np) catch {
+                np.deinit(alloc);
+                return;
+            };
+            state.app.active_player_idx = 0;
+        } else |_| return;
+    }
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
+    const p = state.app.players.items[state.app.active_player_idx];
+    p.provider = .mpv;
+    p.loadStreamWithHttpHeaders(url, user_agent, headers);
+    p.setNowPlaying(art_url, title, subtitle);
+    state.gotoPlayer();
+}
+
 /// Load content with automatic provider routing
 pub fn loadContent(url: []const u8) void {
     const extractors = @import("extractors.zig");

@@ -42,6 +42,14 @@ var resume_decided = std.atomic.Value(bool).init(false); // the fetch worker fin
 var resume_target_secs: f64 = 0; // seek target; <= 0 means start from the beginning
 var resume_item_id: [64]u8 = undefined; // the book tick() must see loaded before it seeks
 var resume_item_id_len: usize = 0;
+// Display snapshot for the unified library mirror (same mutex, same lifetime as
+// resume_item_id — the fetch worker is the only reader).
+var resume_title: [200]u8 = undefined;
+var resume_title_len: usize = 0;
+var resume_cover: [256]u8 = undefined;
+var resume_cover_len: usize = 0;
+var resume_stream_url: [512]u8 = undefined;
+var resume_stream_url_len: usize = 0;
 
 // ── Infinite-scroll pagination (Books view) ──
 // ABS `/api/libraries/{id}/items` pages are 0-based; `current_page` is the
@@ -386,6 +394,19 @@ pub fn playBook(idx: usize) void {
     const rlen = @min(idlen, resume_item_id.len);
     @memcpy(resume_item_id[0..rlen], id_buf[0..rlen]);
     resume_item_id_len = rlen;
+    // Display snapshot the fetch worker mirrors into library_items. A stream URL
+    // too long for the deep_link column is stored as empty rather than truncated
+    // (a half URL would resume nothing).
+    const rt = @min(tlen, resume_title.len);
+    @memcpy(resume_title[0..rt], title_buf[0..rt]);
+    resume_title_len = rt;
+    const rc = @min(cover.len, resume_cover.len);
+    @memcpy(resume_cover[0..rc], cover[0..rc]);
+    resume_cover_len = rc;
+    if (url.len <= resume_stream_url.len) {
+        @memcpy(resume_stream_url[0..url.len], url);
+        resume_stream_url_len = url.len;
+    } else resume_stream_url_len = 0;
     resume_mutex.unlock();
     resume_decided.store(false, .release);
     resume_pending.store(true, .release);
@@ -418,11 +439,21 @@ const ResumeFetch = struct {
         defer resume_decided.store(true, .release);
         defer @This().busy = false;
 
-        // Snapshot the book id this fetch is for; publish only if it's still current.
+        // Snapshot the book id + display fields this fetch is for; publish only
+        // if the id is still current.
         resume_mutex.lock();
         const idl = @min(resume_item_id_len, resume_item_id.len);
         var id_local: [64]u8 = undefined;
         @memcpy(id_local[0..idl], resume_item_id[0..idl]);
+        var title_local: [200]u8 = undefined;
+        const tl = @min(resume_title_len, title_local.len);
+        @memcpy(title_local[0..tl], resume_title[0..tl]);
+        var cover_local: [256]u8 = undefined;
+        const cl = @min(resume_cover_len, cover_local.len);
+        @memcpy(cover_local[0..cl], resume_cover[0..cl]);
+        var link_local: [512]u8 = undefined;
+        const ll = @min(resume_stream_url_len, link_local.len);
+        @memcpy(link_local[0..ll], resume_stream_url[0..ll]);
         resume_mutex.unlock();
         if (idl == 0 or !pure.validItemId(id_local[0..idl])) return;
 
@@ -438,6 +469,24 @@ const ResumeFetch = struct {
             return;
         };
         defer alloc.free(body);
+
+        // Mirror the SERVER's saved position (the authority for this vertical)
+        // into the unified read-model so home's Continue rail carries audiobooks.
+        // Done before the resume decision so a finished/near-zero book still
+        // refreshes its row (library_pure decides what belongs on the rail).
+        const info = pure.parseProgress(body);
+        if (ll > 0 and tl > 0) {
+            @import("library_store.zig").upsertProgress(
+                "audiobook",
+                id_local[0..idl],
+                title_local[0..tl],
+                cover_local[0..cl],
+                info.current_time orelse 0,
+                info.duration orelse 0,
+                "",
+                link_local[0..ll],
+            );
+        }
 
         const target = pure.resumeTargetFromJson(body) orelse return; // null → leave target 0
 

@@ -1836,6 +1836,24 @@ pub fn playEpisode(ep_no: []const u8) void {
             const db = @import("../core/db.zig");
             db.animeMarkWatched(mal_id, ep_num, true);
             db.animeUpsertContinue(mal_id, r.name[0..r.name_len], r.poster_url[0..r.poster_url_len], ep_num, r.episodes);
+            // Mirror into the unified read-model so the home Continue rail shows
+            // anime alongside the other verticals. anime_continue (above) stays
+            // authoritative; progress is measured in EPISODES, and the deep link
+            // is the MAL id — home routes it back through jumpToAnime().
+            {
+                var label_buf: [48]u8 = undefined;
+                const label = std.fmt.bufPrint(&label_buf, "E{d}", .{ep_num +| 1}) catch "";
+                @import("library_store.zig").upsertProgress(
+                    "anime",
+                    mal_id,
+                    r.name[0..r.name_len],
+                    r.poster_url[0..r.poster_url_len],
+                    @floatFromInt(ep_num),
+                    @floatFromInt(r.episodes),
+                    label,
+                    mal_id,
+                );
+            }
             // Refresh the cached Continue rail so My List reflects this play.
             state.app.anime.continue_loaded = false;
         }

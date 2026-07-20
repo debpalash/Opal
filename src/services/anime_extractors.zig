@@ -73,39 +73,23 @@ pub const Resolved = struct {
 /// X-Requested-With: XMLHttpRequest header (needed by MegaCloud). Returns the
 /// body slice, or null. Worker-thread only.
 fn curlGet(url: []const u8, referer: ?[]const u8, xrw: bool, out: []u8) ?[]const u8 {
-    var refbuf: [640]u8 = undefined;
-    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer argv.deinit(alloc);
-    argv.appendSlice(alloc, &.{ "curl", "-sL", "--compressed", "--max-time", "20", "-A", UA }) catch return null;
-    if (referer) |r| {
-        const h = std.fmt.bufPrint(&refbuf, "Referer: {s}", .{r}) catch return null;
-        argv.appendSlice(alloc, &.{ "-H", h }) catch return null;
+    // Route through the reliable-fetch seam: curl-impersonate (browser JA3/JA4)
+    // when installed + the DPI-bypass proxy, while keeping the per-host Referer
+    // and MegaCloud's X-Requested-With. Anime CDNs are the most fingerprint-
+    // walled hosts, so impersonation matters most here.
+    const rf = @import("reliable_fetch.zig");
+    var hbuf: [1]rf.Header = undefined;
+    var hlen: usize = 0;
+    if (xrw) {
+        hbuf[0] = .{ .name = "X-Requested-With", .value = "XMLHttpRequest" };
+        hlen = 1;
     }
-    if (xrw) argv.appendSlice(alloc, &.{ "-H", "X-Requested-With: XMLHttpRequest" }) catch return null;
-    argv.append(alloc, url) catch return null;
-
-    var child = io_g.Child.init(argv.items, alloc);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return null;
-
-    var body_len: usize = 0;
-    if (child.stdout) |*stdout| {
-        while (body_len < out.len) {
-            const r = io_g.read(stdout, out[body_len..]) catch break;
-            if (r == 0) break;
-            body_len += r;
-        }
-        var junk: [4096]u8 = undefined;
-        while (true) {
-            const r = io_g.read(stdout, &junk) catch break;
-            if (r == 0) break;
-        }
-    }
-    _ = child.wait() catch {};
-    if (body_len == 0) return null;
-    return out[0..body_len];
+    return rf.fetch(url, out, .{
+        .user_agent = UA,
+        .referer = referer,
+        .headers = hbuf[0..hlen],
+        .timeout_secs = 20,
+    });
 }
 
 /// Resolve a streaming-host EMBED URL to a direct stream. Returns null when the

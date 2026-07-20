@@ -202,22 +202,38 @@ def test_fetchimage_curl():
     return "fail", "fetchImage still routes images through std.http (anime posters return NULL)"
 
 
-@test("YouTube bypasses bot wall via tv client", "Network")
+@test("YouTube playback pins no player client", "Network")
 def test_youtube_player_client():
-    # REGRESSION — YouTube served "Sign in to confirm you're not a bot" + HTTP
-    # 429 to the default web client (it now wants a PO token), so playback,
-    # search, and extraction all failed. The TVHTML5 ("tv") player client is
-    # not gated that way and needs no cookies — verified returning a live
-    # stream URL. Must be set on every yt-dlp/mpv YouTube path.
+    # REGRESSION — "youtube links not playing". A previous fix pinned
+    # `youtube:player_client=tv` everywhere, because at the time the default web
+    # client got "Sign in to confirm you're not a bot" + HTTP 429. That pin has
+    # since inverted into the bug: the tv client now returns ONLY storyboard
+    # formats (sb0..sb3), so mpv's `bestvideo[height<=?N]+bestaudio/best`
+    # selector matches nothing and every video dies on "Requested format is not
+    # available". Verified against the live API on 2026-07-20.
+    #
+    # yt-dlp maintains its own client-fallback chain; pinning one client freezes
+    # us at whatever was true the day the pin was written. The playback and
+    # extraction paths must therefore pin NOTHING.
+    player = _src("src/player/player.zig")
+    extractors = _src("src/services/extractors.zig")
+    opts = _src("src/player/ytdl_opts_pure.zig")
+    build = _src("build.zig")
+
     checks = {
-        "playback (mpv ytdl-raw-options)": "youtube:player_client=tv" in _src("src/player/player.zig"),
-        "search/browse (youtube.zig)": "youtube:player_client=tv" in _src("src/services/youtube.zig"),
-        "extraction (extractors.zig)": "youtube:player_client=tv" in _src("src/services/extractors.zig"),
+        "playback unpinned": "player_client" not in player,
+        "extraction unpinned": "youtube:player_client=tv" not in extractors,
+        # The raw-options string is built by a tested pure fn so the exact value
+        # mpv receives is covered, not just the absence of a substring.
+        "raw options routed through pure": "ytdl_opts_pure" in player and "buildRawOptions(" in player,
+        "pure module present": "pub fn buildRawOptions" in opts,
+        "pure module guards the pin": 'indexOf(u8, s, "player_client") == null' in opts,
+        "test registered": 'b.path("src/player/ytdl_opts_pure.zig")' in build,
     }
     bad = [k for k, v in checks.items() if not v]
     if bad:
-        return "fail", "player_client=tv missing on: " + ", ".join(bad)
-    return "pass", "tv player client on playback + search + extraction (no bot wall / 429)"
+        return "fail", "player-client regression: " + ", ".join(bad)
+    return "pass", "no pinned yt-dlp player client; raw options built by tested pure fn"
 
 
 @test("Anime data loads despite Jikan flakiness", "Network")

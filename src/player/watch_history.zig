@@ -141,6 +141,11 @@ pub fn savePositionFull(name: []const u8, percent: f64, position_secs: f64, dura
     _ = db.step(stmt);
 
     updateCache(name, percent, position_secs, duration_secs, link);
+
+    // Mirror into the unified read-model (services/library_store) so the home
+    // "Continue" rail spans every vertical, not just TMDB. Keyed by the file
+    // identity so the same title reconciles across sessions; `link` resumes it.
+    @import("../services/library_store.zig").upsertProgress("watch", file_key, name, "", position_secs, duration_secs, "", link);
 }
 
 /// Update (or insert at front of) the in-memory cache. Null seconds leave the

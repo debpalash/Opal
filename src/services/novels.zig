@@ -914,6 +914,73 @@ fn saveResume(chapter: usize) void {
     var val_buf: [24]u8 = undefined;
     const val = pure.formatResume(&val_buf, chapter);
     db.librarySetStatus(RESUME_KIND, key, val);
+
+    // Mirror into the unified read-model so the home "Continue" rail spans the
+    // reading verticals too. library_status above stays authoritative; this is
+    // the denormalized cache. Progress is measured in CHAPTERS (chapter index →
+    // secs, chapter count → duration) so percentOf yields the read-through
+    // fraction; the deep link reopens the work through openDeepLink().
+    var link_buf: [512]u8 = undefined;
+    const link = pure.formatDeepLink(
+        &link_buf,
+        @tagName(open_source),
+        work_url_snap[0..work_url_snap_len],
+        title,
+    );
+    if (link.len == 0) return;
+    parse_mutex.lock();
+    const total = ch_count;
+    parse_mutex.unlock();
+    var label_buf: [48]u8 = undefined;
+    const label = std.fmt.bufPrint(&label_buf, "Chapter {d}", .{chapter + 1}) catch "";
+    @import("library_store.zig").upsertProgress(
+        "novels",
+        key,
+        title,
+        "",
+        @floatFromInt(chapter + 1),
+        @floatFromInt(total),
+        label,
+        link,
+    );
+}
+
+/// Reopen a novel from a home library deep link (`novel|<source>|<url>|<title>`).
+/// Ignores links that aren't ours or name an unknown source, then follows the
+/// same path as openNovel: publish the work snapshot, then fetch its chapters.
+pub fn openDeepLink(link: []const u8) void {
+    const parsed = pure.parseDeepLink(link) orelse return;
+    const src = std.meta.stringToEnum(NovelSource, parsed.source) orelse return;
+
+    open_source = src;
+
+    const tlen = @min(parsed.title.len, state.app.novels.work_title.len);
+    @memcpy(state.app.novels.work_title[0..tlen], parsed.title[0..tlen]);
+    state.app.novels.work_title_len = tlen;
+    @memcpy(work_snap[0..tlen], parsed.title[0..tlen]);
+    work_snap_len = tlen;
+
+    const ulen = @min(parsed.url.len, work_url_snap.len);
+    @memcpy(work_url_snap[0..ulen], parsed.url[0..ulen]);
+    work_url_snap_len = ulen;
+
+    state.app.novels.view = .chapters;
+    state.app.novels.chapters_loading.store(true, .release);
+    state.app.novels.fetch_error = false;
+
+    parse_mutex.lock();
+    ch_count = 0;
+    parse_mutex.unlock();
+
+    state.app.browse_source = .Novels;
+    state.app.router.navigate(.browse);
+
+    const my_gen = chapters_gen.fetchAdd(1, .acq_rel) + 1;
+    if (std.Thread.spawn(.{}, chaptersWorker, .{my_gen})) |t| {
+        t.detach();
+    } else |_| {
+        state.app.novels.chapters_loading.store(false, .release);
+    }
 }
 
 /// The persisted last-read chapter for the current work (0 when none).

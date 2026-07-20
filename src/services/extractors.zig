@@ -96,13 +96,13 @@ fn extractThread() void {
     const proxy_str = state.app.proxy_url[0..state.app.proxy_url_len];
     
     const ytdlp_bin = @import("ytdlp.zig").binary();
-    // player_client=tv dodges YouTube's bot wall / 429 with no cookies needed
-    // (the default web client now wants a PO token). Harmless for non-YouTube
-    // URLs (yt-dlp ignores the youtube: extractor-arg elsewhere).
+    // No youtube:player_client pin here — the `tv` client this used to force now
+    // returns storyboard-only formats, which broke every YouTube resolve. yt-dlp
+    // maintains its own client-fallback chain; let it choose. See
+    // src/player/ytdl_opts_pure.zig for the full history.
     const argv_proxy = [_][]const u8{
         ytdlp_bin, "--flat-playlist", "-j",
         "--no-warnings",
-        "--extractor-args", "youtube:player_client=tv",
         "--cookies-from-browser", "firefox",
         "--proxy", proxy_str,
         "--", url,
@@ -110,7 +110,6 @@ fn extractThread() void {
     const argv_direct = [_][]const u8{
         ytdlp_bin, "--flat-playlist", "-j",
         "--no-warnings",
-        "--extractor-args", "youtube:player_client=tv",
         "--cookies-from-browser", "firefox",
         "--", url,
     };

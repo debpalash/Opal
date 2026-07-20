@@ -800,10 +800,19 @@ fn renderExpanded(r: *const tp.Row) bool {
             const save_path = state.app.save_path_buf[0..state.app.save_path_len];
             var dp: [1024]u8 = undefined;
             if (std.fmt.bufPrintZ(&dp, "{s}/{s}", .{ save_path, r.diskSlice() })) |del| {
-                if (r.is_dir)
-                    io_global.cwdDeleteTree(del) catch {}
-                else
-                    io_global.cwdDeleteFile(del) catch {};
+                // Stat the target rather than trusting r.is_dir: a completed
+                // torrent that downloaded a FOLDER is a torrent row with is_dir
+                // == false, so deleteFile would silently no-op and leave the
+                // folder on disk. deleteTree handles both a dir and (harmlessly)
+                // a lone file via the fallback.
+                if (io_global.cwdStatFile(del)) |stx| {
+                    if (stx.kind == .directory)
+                        io_global.cwdDeleteTree(del) catch {}
+                    else
+                        io_global.cwdDeleteFile(del) catch {};
+                } else |_| {
+                    if (r.is_dir) io_global.cwdDeleteTree(del) catch {} else io_global.cwdDeleteFile(del) catch {};
+                }
                 browse_path_changed = true;
                 rows_dirty.store(true, .release);
                 expanded_key_len = 0;

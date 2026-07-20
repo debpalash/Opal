@@ -110,3 +110,96 @@ def test_opds_reading_client():
         return "fail", "; ".join(problems)
     return ("pass", "OPDS client wired: pure parser routed, config keys, tab + dispatch, "
             "comics reuse, settings section, OPDS-PSE page streaming (parse + pageUrl + Basic-auth forwarded)")
+
+
+@test("Comic reading position persists", "Reading")
+def test_comic_resume():
+    """A comic's last-read page must survive a restart, and reach home's
+    Continue rail with a deep link that reopens the issue at that page.
+
+    Mirrors the novels vertical: library_status ("comic_resume") is
+    authoritative, library_items is the denormalized read-model cache."""
+    comics = _src("src/services/comics.zig")
+    pure = _src("src/services/comics_pure.zig")
+    st = _src("src/core/state.zig")
+    home = _src("src/ui/home.zig")
+    build = _src("build.zig")
+
+    checks = {
+        # Pure, tested format/parse (no ad-hoc string surgery in the service).
+        "pure deep link": "pub fn formatDeepLink" in pure and "pub fn parseDeepLink" in pure,
+        "pure resume value": "pub fn formatResumePage" in pure and "pub fn parseResumePage" in pure,
+        "pure resume key": "pub fn resumeKey" in pure,
+        # Page 1 sits AT library_pure.CONTINUE_MIN_PCT (0.5, strict >), so the
+        # floor decision is a tested pure function rather than an inline guess.
+        "pure continue floor": "pub fn shouldRecordProgress" in pure,
+        "pure tests registered": 'b.path("src/services/comics_pure.zig")' in build,
+        # Authoritative store + read-model mirror, both routed through the pure fns.
+        "authoritative store": 'librarySetStatus(RESUME_KIND' in comics,
+        "resume kind": '"comic_resume"' in comics,
+        "read-model mirror": '"comics",' in comics and "library_store" in comics,
+        "routes through pure": "pure.formatDeepLink" in comics and "pure.resumeKey" in comics,
+        # Page turns must not hit sqlite once per page.
+        "debounced write": "RESUME_DEBOUNCE_MS" in comics,
+        # The write path runs on the reader render path (no opt-in flag), and the
+        # close path force-flushes so the final page always lands.
+        "tick on render path": "tickResume(false)" in comics,
+        "flush on close": "tickResume(true)" in comics,
+        # Restore: armed on load, applied once pages stage.
+        "arm on load": "armPendingResume(" in comics,
+        "pending state field": "pending_resume_page" in st,
+        "applies pending page": "fn applyPendingResume" in comics,
+        # Reopen from home.
+        "deep link opener": "pub fn openDeepLink" in comics,
+        "home dispatch": '"comics"' in home and "services/comics.zig" in home,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "comic resume incomplete: " + ", ".join(missing)
+    return "pass", "comic last-read page: library_status + debounced write + library_items mirror + deep-link reopen"
+
+
+@test("Podcast listening position persists", "Reading")
+def test_podcast_resume():
+    """Episode POSITION is already owned by the generic mpv path
+    (player.saveCurrentPosition -> history.savePlaybackPosition -> watch_history,
+    keyed by the enclosure URL; player.tryResumePosition seeks back on reload).
+
+    So the work here is IDENTITY: a real `podcast` library_items row (show +
+    episode + artwork + a deep link that replays and resumes), reading the
+    position back out of the authoritative store instead of duplicating it."""
+    podcasts = _src("src/services/podcasts.zig")
+    pure = _src("src/services/podcasts_pure.zig")
+    st = _src("src/core/state.zig")
+    dbz = _src("src/core/db.zig")
+    home = _src("src/ui/home.zig")
+    main = _src("src/main.zig")
+    build = _src("build.zig")
+    player = _src("src/player/player.zig")
+    history = _src("src/services/history.zig")
+
+    checks = {
+        # The pre-existing position store this feature deliberately reuses.
+        "mpv persists position": "saveCurrentPosition" in player and "savePlaybackPosition" in history,
+        "mpv resumes position": "tryResumePosition" in player,
+        "position read back, not duplicated": "watchGetProgress" in dbz and "watchGetProgress" in podcasts,
+        "no second position store": "savePosition" not in podcasts,
+        # Pure, tested deep link.
+        "pure deep link": "pub fn formatDeepLink" in pure and "pub fn parseDeepLink" in pure,
+        "pure tests registered": 'b.path("src/services/podcasts_pure.zig")' in build,
+        # A real podcast row, not an anonymous playback entry.
+        "read-model mirror": '"podcast",' in podcasts and "library_store" in podcasts,
+        "carries show + artwork": "np_show" in podcasts and "np_art" in podcasts,
+        "now-playing state": "np_url" in st and "np_active" in st,
+        # The mirror runs on a path that actually executes every frame.
+        "armed on play": "armNowPlaying(" in podcasts,
+        "ticked from appFrame": "tickNowPlaying()" in main,
+        "throttled": "NP_INTERVAL_MS" in podcasts,
+        # Reopen from home.
+        "deep link opener": "pub fn openDeepLink" in podcasts,
+        "home dispatch": '"podcast"' in home and "services/podcasts.zig" in home,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "podcast resume incomplete: " + ", ".join(missing)
+    return "pass", "podcast episode: reuses watch_history position + library_items podcast row + deep-link replay"

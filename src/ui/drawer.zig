@@ -73,7 +73,7 @@ fn groupOf(tab: state.DrawerTab) ?RailGroup {
         .YouTube, .Iptv => .video,
         .Anime, .Comics => .anime,
         .Novels, .Vndb, .Opds => .reading,
-        .Podcasts, .Radio, .Audiobooks => .audio,
+        .Podcasts, .Radio, .Audiobooks, .Music => .audio,
         .Web, .RSS => .web,
         else => null,
     };
@@ -171,6 +171,7 @@ fn renderGroup(g: RailGroup, gi: usize) void {
             renderRailTab(.Opds, shell.iconForTab(.Opds), "Books", 17);
         },
         .audio => {
+            renderRailTab(.Music, shell.iconForTab(.Music), "Music", 24);
             renderRailTab(.Podcasts, shell.iconForTab(.Podcasts), "Podcasts", 7);
             renderRailTab(.Radio, shell.iconForTab(.Radio), "Radio", 8);
             renderRailTab(.Audiobooks, shell.iconForTab(.Audiobooks), "Audiobooks", 18);
@@ -431,6 +432,7 @@ pub fn renderTabContent(tab: state.DrawerTab) void {
         .Podcasts => @import("../services/podcasts.zig").renderContent(),
         .Radio => @import("../services/radio.zig").renderContent(),
         .Iptv => @import("../services/iptv.zig").renderContent(),
+        .Music => @import("../services/music_subsonic.zig").renderContent(),
         .History => renderHistoryContent(),
         .RSS => rss.renderContent(),
         .Jellyfin => jellyfin_ui.renderContent(),

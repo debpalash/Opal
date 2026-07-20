@@ -829,3 +829,137 @@ test "firstChapterId: empty feed (no english chapters) → null" {
     try std.testing.expect(firstChapterId("{\"result\":\"ok\",\"data\":[]}") == null);
     try std.testing.expect(firstChapterId("") == null);
 }
+
+// ══════════════════════════════════════════════════════════
+// Reading resume (last-read page, persisted per issue)
+// ══════════════════════════════════════════════════════════
+//
+// Mirrors the novels vertical: `db.librarySetStatus("comic_resume", <key>, …)`
+// is authoritative, and `library_items` gets a denormalized row so the home
+// "Continue" rail can reopen the issue at the right page.
+
+/// The per-issue resume key (item_id). The source URL is preferred because it
+/// survives a restart and identifies the exact issue; OPDS-PSE books have no
+/// scraper URL, so they fall back to the book title. Empty when neither exists
+/// (an unidentifiable reader session must not write a row).
+pub fn resumeKey(url: []const u8, title: []const u8, out: []u8) []const u8 {
+    const src = if (url.len > 0) url else title;
+    const n = @min(src.len, out.len);
+    @memcpy(out[0..n], src[0..n]);
+    return out[0..n];
+}
+
+/// Format the stored resume value: the last-read page INDEX as a decimal string.
+pub fn formatResumePage(out: []u8, page: usize) []const u8 {
+    return std.fmt.bufPrint(out, "{d}", .{page}) catch out[0..0];
+}
+
+/// Parse a stored resume value back into a page index; 0 on empty / garbage.
+pub fn parseResumePage(s: []const u8) usize {
+    const t = std.mem.trim(u8, s, " \t\r\n");
+    return std.fmt.parseInt(usize, t, 10) catch 0;
+}
+
+/// Whether a reader position is worth a `library_items` "Continue" row.
+///
+/// Progress is measured in PAGES (page+1 of page_count), and
+/// `library_pure.CONTINUE_MIN_PCT` is 0.5 — a strict `>` floor. Page index 0 is
+/// where every issue opens, so it carries no information to resume TO, and
+/// 1/total would sit at-or-below the floor for a long issue anyway. From page
+/// index 1 the fraction is 2/total; the reader stages at most 128 pages
+/// (`state.app.comic.page_urls.len`), so the worst case is 2/128 = 1.56% —
+/// comfortably above the floor. Anything genuinely started therefore shows up.
+pub fn shouldRecordProgress(page: usize, total: usize) bool {
+    return total > 0 and page >= 1 and page < total;
+}
+
+/// The two fields a home "Continue" row needs to reopen a comic issue.
+pub const ComicLink = struct {
+    url: []const u8, // scraper / mangadex: pseudo-URL (empty for OPDS-PSE books)
+    title: []const u8, // display title
+};
+
+/// Encode a comic deep link: `comic|<url>|<title>`. Title runs to the end so its
+/// own separators can't truncate it. Empty slice when it won't fit, or when
+/// there's no URL to reopen (an OPDS-PSE book needs a live server session).
+pub fn formatDeepLink(out: []u8, url: []const u8, title: []const u8) []const u8 {
+    if (url.len == 0) return out[0..0];
+    return std.fmt.bufPrint(out, "comic|{s}|{s}", .{ url, title }) catch out[0..0];
+}
+
+/// Decode a `comic|…` deep link. Null when the prefix/field count is wrong, so
+/// a non-comic link can never be routed into the comic reader.
+pub fn parseDeepLink(link: []const u8) ?ComicLink {
+    const prefix = "comic|";
+    if (!std.mem.startsWith(u8, link, prefix)) return null;
+    const rest = link[prefix.len..];
+    const i = std.mem.indexOfScalar(u8, rest, '|') orelse return null;
+    const url = rest[0..i];
+    if (url.len == 0) return null;
+    return .{ .url = url, .title = rest[i + 1 ..] };
+}
+
+test "comic resume: key prefers the URL, falls back to the title" {
+    var buf: [512]u8 = undefined;
+    try std.testing.expectEqualStrings("https://x.tld/issue-1", resumeKey("https://x.tld/issue-1", "Issue 1", &buf));
+    try std.testing.expectEqualStrings("Berserk Vol.1", resumeKey("", "Berserk Vol.1", &buf));
+    try std.testing.expectEqualStrings("", resumeKey("", "", &buf));
+    var tiny: [4]u8 = undefined;
+    try std.testing.expectEqualStrings("http", resumeKey("https://x", "", &tiny)); // truncates, never overruns
+}
+
+test "comic resume: page value round-trips and survives garbage" {
+    var buf: [24]u8 = undefined;
+    try std.testing.expectEqualStrings("0", formatResumePage(&buf, 0));
+    try std.testing.expectEqualStrings("41", formatResumePage(&buf, 41));
+    try std.testing.expectEqual(@as(usize, 41), parseResumePage(formatResumePage(&buf, 41)));
+    try std.testing.expectEqual(@as(usize, 7), parseResumePage(" 7\n"));
+    try std.testing.expectEqual(@as(usize, 0), parseResumePage(""));
+    try std.testing.expectEqual(@as(usize, 0), parseResumePage("not-a-page"));
+    try std.testing.expectEqual(@as(usize, 0), parseResumePage("-3"));
+}
+
+test "comic resume: the Continue floor excludes page 1 but admits page 2" {
+    // library_pure.CONTINUE_MIN_PCT is 0.5 with a strict `>`: 1/200 == 0.5%
+    // would be excluded, so page index 0 never records. Page index 1 of the
+    // largest possible issue (128 staged pages) is 1.56% — above the floor.
+    try std.testing.expect(!shouldRecordProgress(0, 200));
+    try std.testing.expect(shouldRecordProgress(1, 128));
+    const pct = 2.0 / 128.0 * 100.0;
+    try std.testing.expect(pct > 0.5);
+    try std.testing.expect(!shouldRecordProgress(1, 0)); // no pages staged
+    try std.testing.expect(!shouldRecordProgress(9, 5)); // page beyond the end
+}
+
+test "comic deep link: round-trips through format/parse" {
+    var buf: [800]u8 = undefined;
+    const link = formatDeepLink(&buf, "https://readallcomics.com/x-men-1/", "X-Men #1");
+    try std.testing.expectEqualStrings("comic|https://readallcomics.com/x-men-1/|X-Men #1", link);
+    const got = parseDeepLink(link).?;
+    try std.testing.expectEqualStrings("https://readallcomics.com/x-men-1/", got.url);
+    try std.testing.expectEqualStrings("X-Men #1", got.title);
+
+    // MangaDex pseudo-URLs route the same way.
+    const l2 = formatDeepLink(&buf, "mangadex:2cd94273-6cbf-4671-a8bd-56245b59122d", "Berserk");
+    const g2 = parseDeepLink(l2).?;
+    try std.testing.expectEqualStrings("mangadex:2cd94273-6cbf-4671-a8bd-56245b59122d", g2.url);
+}
+
+test "comic deep link: rejects foreign links and unreopenable rows" {
+    try std.testing.expect(parseDeepLink("https://example.com/a.mp4") == null);
+    try std.testing.expect(parseDeepLink("novel|wikisource||Frankenstein") == null);
+    try std.testing.expect(parseDeepLink("magnet:?xt=urn:btih:abc") == null);
+    try std.testing.expect(parseDeepLink("comic|https://x.tld/i") == null); // no separator
+    try std.testing.expect(parseDeepLink("comic||T") == null); // empty url
+    var buf: [800]u8 = undefined;
+    // An OPDS-PSE book has no reopenable URL → no link, so no unresumable row.
+    try std.testing.expectEqualStrings("", formatDeepLink(&buf, "", "Berserk Vol.1"));
+    var tiny: [4]u8 = undefined;
+    try std.testing.expectEqualStrings("", formatDeepLink(&tiny, "https://x.tld/i", "T"));
+}
+
+test "comic deep link: a title containing '|' survives" {
+    var buf: [800]u8 = undefined;
+    const link = formatDeepLink(&buf, "https://x.tld/i", "Saga | Chapter 3");
+    try std.testing.expectEqualStrings("Saga | Chapter 3", parseDeepLink(link).?.title);
+}

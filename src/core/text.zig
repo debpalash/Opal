@@ -41,6 +41,41 @@ pub fn safeUtf8Buf(s: []const u8, out: []u8) []const u8 {
     return safeUtf8(out[0..n]);
 }
 
+/// Copy `src` into fixed buffer `dst` and write the resulting length to
+/// `len_out`, tolerating `src` ALIASING `dst`.
+///
+/// The recurring crash (footer's universal-language chip, the TV detail view,
+/// and safeUtf8Buf above) is a caller passing a buffer's OWN current slice back
+/// in — `@memcpy(buf[0..n], buf_slice)` panics with "arguments alias" because
+/// the operands overlap. `state.app` fields are `[N]u8`+len and their current
+/// value is frequently re-applied, so this is easy to hit. Guarding on pointer
+/// identity (identical slice → the bytes are already in place, a no-op) and
+/// using copyForwards for the disjoint case removes the whole class. Truncates
+/// to `dst.len`.
+pub fn setFixedBuf(dst: []u8, len_out: *usize, src: []const u8) void {
+    const n = @min(src.len, dst.len);
+    if (src.ptr != dst.ptr) std.mem.copyForwards(u8, dst[0..n], src[0..n]);
+    len_out.* = n;
+}
+
+test "setFixedBuf tolerates src aliasing dst (no @memcpy alias panic)" {
+    var buf: [8]u8 = undefined;
+    @memcpy(buf[0..5], "hello");
+    var len: usize = 0;
+    // Aliased: pass the buffer's own slice back in — must not panic.
+    setFixedBuf(buf[0..], &len, buf[0..5]);
+    try std.testing.expectEqual(@as(usize, 5), len);
+    try std.testing.expectEqualStrings("hello", buf[0..len]);
+}
+
+test "setFixedBuf copies disjoint src and truncates to dst" {
+    var dst: [4]u8 = undefined;
+    var len: usize = 0;
+    setFixedBuf(dst[0..], &len, "abcdef"); // longer than dst → truncates
+    try std.testing.expectEqual(@as(usize, 4), len);
+    try std.testing.expectEqualStrings("abcd", dst[0..len]);
+}
+
 test "safeUtf8Buf tolerates aliased src/dst (in-place validation)" {
     var buf: [8]u8 = undefined;
     @memcpy(buf[0..5], "hello");

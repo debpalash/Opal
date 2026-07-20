@@ -438,6 +438,93 @@ fn createTables() void {
         \\)
     );
 
+    // Live TV (IPTV) favorites + recently-watched. One table, `kind` = 'fav' or
+    // 'recent'; keyed by (kind, url_hash) so a channel can be both. Rows carry a
+    // display snapshot so the Favorites/Recent views paint without a network
+    // fetch (services/iptv_store.zig). `ts` drives recency ordering + prune.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS iptv_channels (
+        \\  kind TEXT NOT NULL,
+        \\  url_hash INTEGER NOT NULL,
+        \\  name TEXT,
+        \\  url TEXT,
+        \\  logo TEXT,
+        \\  quality TEXT,
+        \\  category TEXT,
+        \\  country TEXT,
+        \\  user_agent TEXT,
+        \\  referrer TEXT,
+        \\  ts INTEGER DEFAULT (strftime('%s','now')),
+        \\  PRIMARY KEY (kind, url_hash)
+        \\)
+    );
+
+    // Unified cross-vertical read-model: every vertical writes progress +
+    // favorites here (a denormalized display snapshot), so the home surface + a
+    // future sync can read ONE table instead of ~7 disjoint schemas. The source
+    // tables stay authoritative; this is a cache. `kind` namespaces the id
+    // (movie/tv/anime/iptv/music/…). See services/library_store.zig.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS library_items (
+        \\  kind TEXT NOT NULL,
+        \\  item_id TEXT NOT NULL,
+        \\  title TEXT,
+        \\  poster TEXT,
+        \\  resume_secs REAL DEFAULT 0,
+        \\  duration_secs REAL DEFAULT 0,
+        \\  percent REAL DEFAULT 0,
+        \\  is_favorite INTEGER DEFAULT 0,
+        \\  next_label TEXT DEFAULT '',
+        \\  deep_link TEXT DEFAULT '',
+        \\  updated_at INTEGER DEFAULT (strftime('%s','now')),
+        \\  PRIMARY KEY (kind, item_id)
+        \\)
+    );
+    exec("CREATE INDEX IF NOT EXISTS idx_library_updated ON library_items(updated_at DESC)");
+
+    // Live TV stream-health cache (probe results). Keyed by url_hash; `status` is
+    // the pure Health enum int (0 unknown/1 live/2 slow/3 dead), `checked_at`
+    // drives the TTL so a "Working only" filter is instant on revisit. See
+    // services/iptv_store.zig (health*) + the probe worker in services/iptv.zig.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS iptv_health (
+        \\  url_hash INTEGER PRIMARY KEY,
+        \\  status INTEGER NOT NULL,
+        \\  latency_ms INTEGER,
+        \\  checked_at INTEGER DEFAULT (strftime('%s','now'))
+        \\)
+    );
+
+    // App-wide stream-health cache — the generalization of iptv_health, keyed by
+    // url_hash and tagged with `kind` ('iptv' | 'radio' | …) so every vertical
+    // that plays a remote URL shares one probe cache and one TTL sweep. `status`
+    // is the pure link_health_pure.Status int (0 unknown/1 live/2 slow/3 dead).
+    // iptv_health is left in place (no destructive migration); new writes from
+    // services/link_health.zig land here.
+    //
+    // The key is (url_hash, kind), NOT url_hash alone: the same URL probed under
+    // two kinds must coexist, otherwise the second vertical's probe silently
+    // overwrites the first's. The first cut of this table got that wrong and
+    // never shipped, so the fix is a drop rather than a migration — this is a
+    // disposable TTL cache, there is nothing to preserve. Detect the old shape
+    // by `kind` not participating in the primary key (pragma_table_info.pk = 0).
+    if (tableExists("link_health")) {
+        const stmt = prepare("SELECT 1 FROM pragma_table_info('link_health') WHERE name='kind' AND pk=0");
+        defer finalize(stmt);
+        if (stmt != null and step(stmt) == c.SQLITE_ROW) exec("DROP TABLE link_health");
+    }
+    exec(
+        \\CREATE TABLE IF NOT EXISTS link_health (
+        \\  url_hash INTEGER NOT NULL,
+        \\  kind TEXT NOT NULL,
+        \\  status INTEGER NOT NULL,
+        \\  latency_ms INTEGER,
+        \\  checked_at INTEGER DEFAULT (strftime('%s','now')),
+        \\  PRIMARY KEY (url_hash, kind)
+        \\)
+    );
+    exec("CREATE INDEX IF NOT EXISTS idx_link_health_kind ON link_health(kind, checked_at)");
+
     // Carry existing continue-watching shows into tv_shows, once. OR IGNORE makes
     // it idempotent and keeps a real tv_shows row from being clobbered by the
     // stale tv_continue one. No data is at risk: watched history lives in
@@ -454,6 +541,15 @@ fn createTables() void {
 // ══════════════════════════════════════════════════════════
 // Helpers (exported for other modules)
 // ══════════════════════════════════════════════════════════
+
+/// True when `name` is an existing table. Used by the one-shot schema fixups in
+/// createTables so a pragma probe isn't run against a table that doesn't exist.
+pub fn tableExists(name: []const u8) bool {
+    const stmt = prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1") orelse return false;
+    defer finalize(stmt);
+    bindText(stmt, 1, name);
+    return step(stmt) == c.SQLITE_ROW;
+}
 
 pub fn exec(sql: [*:0]const u8) void {
     const d = db_handle orelse return;
@@ -1619,6 +1715,32 @@ pub fn libraryGetStatus(kind: []const u8, item_id: []const u8, buf: []u8) []cons
     const n = @min(s.len, buf.len);
     @memcpy(buf[0..n], s[0..n]);
     return buf[0..n];
+}
+
+/// Read back the seconds-accurate playback progress the mpv path persisted for
+/// `key` (a URL or absolute path). `watch_history` rows are keyed by `name`
+/// (the resolved file key, or the URL itself for a remote stream) and carry the
+/// original `link`, so both are matched. Returns false when there is no row or
+/// it has no usable duration — callers must not derive a percent from it then.
+///
+/// Used by podcasts.zig to mirror an in-flight episode into `library_items`
+/// without duplicating the position store player.zig already writes.
+pub fn watchGetProgress(key: []const u8, pos_out: *f64, dur_out: *f64) bool {
+    _ = db_handle orelse return false;
+    if (key.len == 0) return false;
+    const stmt = prepare(
+        "SELECT position_secs, duration_secs FROM watch_history " ++
+            "WHERE name = ?1 OR link = ?1 ORDER BY updated_at DESC LIMIT 1",
+    ) orelse return false;
+    defer finalize(stmt);
+    bindText(stmt, 1, key);
+    if (step(stmt) != c.SQLITE_ROW) return false;
+    const pos = columnDouble(stmt, 0);
+    const dur = columnDouble(stmt, 1);
+    if (dur <= 0) return false;
+    pos_out.* = pos;
+    dur_out.* = dur;
+    return true;
 }
 
 /// Resume position (seconds) for one episode, 0 when there is none.

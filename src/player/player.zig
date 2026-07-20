@@ -3,6 +3,8 @@ const dvui = @import("dvui");
 const c = @import("../core/c.zig");
 const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
+const http_headers = @import("http_headers_pure.zig");
+pub const HttpHeader = http_headers.HttpHeader;
 
 /// True if a Firefox profile dir exists, so yt-dlp's --cookies-from-browser
 /// firefox won't abort. Checked once and cached.
@@ -675,25 +677,58 @@ pub const MediaPlayer = struct {
         }
     }
 
-    /// Load a direct network stream (m3u8/mp4) with an HTTP Referer header.
+    /// Load a direct network stream with an explicit User-Agent and an arbitrary
+    /// set of per-request HTTP headers (Referer, Origin, Cookie, …).
     ///
-    /// Many anime hosts (StreamWish, DoodStream, MegaCloud…) 403 the CDN request
-    /// unless the embed-page Referer is sent. `http-header-fields` is honored by
-    /// mpv's http/hls stream layer, so we set it BEFORE loadfile. It persists on
-    /// this ctx; an empty referer clears it so a later unrelated load isn't
-    /// tagged with a stale Referer.
-    pub fn loadStreamWithHeaders(self: *MediaPlayer, url: []const u8, referer: []const u8) void {
-        if (referer.len > 0) {
-            var hdr_buf: [640]u8 = undefined;
-            if (std.fmt.bufPrintZ(&hdr_buf, "Referer: {s}", .{referer})) |hdr| {
-                _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "http-header-fields", hdr.ptr);
-            } else |_| {}
+    /// This is the single code path behind every headers-aware load. Both mpv
+    /// options persist on the ctx, so they are ALWAYS set here: the UA to the
+    /// caller's value or a browser default (never left stale from a prior
+    /// stream), and `http-header-fields` set-or-cleared so an unrelated later
+    /// load isn't tagged with someone else's Referer/Cookie.
+    ///
+    /// Header joining/sanitizing lives in `http_headers_pure.buildHeaderFields`
+    /// (mpv splits the option on `,`, so unsafe values are dropped there).
+    pub fn loadStreamWithHttpHeaders(self: *MediaPlayer, url: []const u8, user_agent: []const u8, headers: []const HttpHeader) void {
+        const default_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+        var ua_buf: [512]u8 = undefined;
+        if (std.fmt.bufPrintZ(&ua_buf, "{s}", .{if (user_agent.len > 0) user_agent else default_ua})) |ua| {
+            _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "user-agent", ua.ptr);
+        } else |_| {}
+
+        var join_buf: [2048]u8 = undefined;
+        const fields = http_headers.buildHeaderFields(headers, &join_buf);
+        if (fields.len > 0) {
+            var z_buf: [2049]u8 = undefined;
+            @memcpy(z_buf[0..fields.len], fields);
+            z_buf[fields.len] = 0;
+            _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "http-header-fields", @ptrCast(&z_buf[0]));
         } else {
             _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "http-header-fields", "");
         }
+
         var url_buf: [2048]u8 = undefined;
         const url_z = std.fmt.bufPrintZ(&url_buf, "{s}", .{url}) catch return;
         self.load_file(url_z.ptr);
+    }
+
+    /// Load a direct network stream (m3u8/mp4) with an HTTP Referer header.
+    ///
+    /// Many anime hosts (StreamWish, DoodStream, MegaCloud…) 403 the CDN request
+    /// unless the embed-page Referer is sent. Thin wrapper over
+    /// `loadStreamWithHttpHeaders` — an empty referer clears the option.
+    /// Note: this now also pins the UA to the browser default rather than
+    /// inheriting whatever a previously-played IPTV channel left on the ctx.
+    pub fn loadStreamWithHeaders(self: *MediaPlayer, url: []const u8, referer: []const u8) void {
+        self.loadStreamWithHttp(url, "", referer);
+    }
+
+    /// Load a direct network stream with an explicit User-Agent AND Referer.
+    ///
+    /// IPTV CDNs commonly 400/403 unless the exact user_agent / referrer from the
+    /// directory is sent (mpv's default "libmpv" UA is a frequent block).
+    pub fn loadStreamWithHttp(self: *MediaPlayer, url: []const u8, user_agent: []const u8, referer: []const u8) void {
+        const hdrs = [_]HttpHeader{.{ .name = "Referer", .value = referer }};
+        self.loadStreamWithHttpHeaders(url, user_agent, &hdrs);
     }
 
     /// Save current playback position to DB (called periodically from render loop)
@@ -826,24 +861,19 @@ pub const MediaPlayer = struct {
         //   "could not find firefox cookies database" and playback fails.
         // no-check-certificates: bypass SSL issues
         // no-playlist: prevent ytdl_hook from expanding model/channel pages
-        const cookies_prefix: []const u8 = if (firefoxProfileExists()) "cookies-from-browser=firefox," else "";
-        // YouTube now serves "Sign in to confirm you're not a bot" + HTTP 429 to
-        // the default web client (it wants a PO token / visitor data). The TVHTML5
-        // ("tv") player client is NOT gated that way and returns a direct stream
-        // URL with no cookies — verified against the live API. Route YouTube
-        // extraction through it for uninterrupted playback. Single client → no
-        // comma in the value, so it's safe in mpv's comma-separated raw options.
-        const yt_args = "extractor-args=youtube:player_client=tv,";
+        // Raw options are built by ytdl_opts_pure (tested) so the exact string
+        // mpv receives is covered — including the regression that no YouTube
+        // player client may be pinned here (see that module's header).
+        const ytdl_opts = @import("ytdl_opts_pure.zig");
         var raw_buf: [400]u8 = undefined;
-        if (state.app.proxy_url_len > 0) {
-            const proxy_str = state.app.proxy_url[0..state.app.proxy_url_len];
-            if (std.fmt.bufPrintZ(&raw_buf, "{s}{s}no-check-certificates=,no-playlist=,proxy={s}", .{ yt_args, cookies_prefix, proxy_str })) |raw| {
-                _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-raw-options", raw.ptr);
-            } else |_| {}
-        } else {
-            if (std.fmt.bufPrintZ(&raw_buf, "{s}{s}no-check-certificates=,no-playlist=", .{ yt_args, cookies_prefix })) |raw| {
-                _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-raw-options", raw.ptr);
-            } else |_| {}
+        if (ytdl_opts.buildRawOptions(.{
+            .firefox_cookies = firefoxProfileExists(),
+            .proxy = state.app.proxy_url[0..state.app.proxy_url_len],
+        }, &raw_buf)) |raw| {
+            var raw_z: [401]u8 = undefined;
+            @memcpy(raw_z[0..raw.len], raw);
+            raw_z[raw.len] = 0;
+            _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-raw-options", &raw_z);
         }
 
         // script-opts: ytdl_hook config + sponsorblock

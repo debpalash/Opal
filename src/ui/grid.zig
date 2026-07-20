@@ -352,11 +352,14 @@ fn renderAudioNowPlaying(i: usize, p: *player.MediaPlayer) void {
         p.togglePause();
     }
 
+    // NOT expanded: an expanded box fills the pane and its children stack from
+    // the TOP (gravity can't center content inside an already-full box), which
+    // pinned the art + title to the top with dead space below. Sized to content,
+    // gravity_x/y then centers the whole block in the pane.
     var stack = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = i + 8802,
         .gravity_x = 0.5,
         .gravity_y = 0.5,
-        .expand = .both,
     });
     defer stack.deinit();
 

@@ -15,6 +15,8 @@ const state = @import("../core/state.zig");
 const tmdb = @import("../services/tmdb.zig");
 const wh = @import("../player/watch_history.zig");
 const browser = @import("../services/browser.zig");
+const library_store = @import("../services/library_store.zig");
+const library_pure = @import("../services/library_pure.zig");
 
 const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
@@ -170,6 +172,8 @@ pub fn render() void {
         posterStrip("Favorites", icons.tvg.lucide.star, favorites, .Favorites, 3, card_w);
         budget -= rail_h;
     }
+    // Cross-vertical favorites (IPTV/music/…) from the unified library_items.
+    if (budget >= rail_h and renderLibraryRail(card_w)) budget -= rail_h;
 
     // Nothing at all to show → the value-prop tiles + gentle CTA fill the shell.
     const everything_empty = watching.items.len == 0 and watchlist.items.len == 0 and
@@ -935,6 +939,151 @@ fn posterStrip(title: []const u8, icon: []const u8, items: *std.ArrayListUnmanag
     while (i < n) : (i += 1) {
         tmdb.renderPosterCard(&items.items[i], i, card_w, poster_h);
     }
+}
+
+// ── Your Library rail (cross-vertical favorites from library_items) ──
+const LibSlot = struct {
+    pixels: ?[]u8 = null,
+    tex: ?dvui.Texture = null,
+    w: u32 = 0,
+    h: u32 = 0,
+    fetching: bool = false,
+    url_hash: u64 = 0,
+};
+var lib_slots: [24]LibSlot = [_]LibSlot{.{}} ** 24;
+
+/// Route a library row by its `kind`. Every kind a producer writes must land
+/// here — a row that can't be reopened is worse than no row:
+///   iptv / audiobook → play the stream URL directly (with title/poster meta)
+///   anime            → deep_link is the MAL id; jump to the show's detail view
+///   novels           → deep_link is `novel|<source>|<url>|<title>`; reopen it
+///   comics           → `comic|<url>|<title>`; reopen AND jump to the read page
+///   podcast          → `podcast|<url>|<art>|<show>|<title>`; replay + mpv seeks
+///   everything else  → browser.resumePlayback (files, magnets, http)
+fn openLibItem(item: *const library_pure.LibraryItem) void {
+    const link = item.deep_link[0..@min(item.deep_link_len, item.deep_link.len)];
+    if (link.len == 0) return;
+    const kind = item.kind[0..@min(item.kind_len, item.kind.len)];
+    const title = item.title[0..@min(item.title_len, item.title.len)];
+    if (std.mem.eql(u8, kind, "iptv")) {
+        browser.loadContentDirectMeta(link, "", title, "");
+    } else if (std.mem.eql(u8, kind, "audiobook")) {
+        browser.loadContentDirectMeta(link, item.poster[0..@min(item.poster_len, item.poster.len)], title, "");
+    } else if (std.mem.eql(u8, kind, "anime")) {
+        @import("../services/anime.zig").jumpToAnime(link);
+        state.app.browse_source = .Anime;
+        state.app.router.navigate(.browse);
+    } else if (std.mem.eql(u8, kind, "novels")) {
+        @import("../services/novels.zig").openDeepLink(link);
+    } else if (std.mem.eql(u8, kind, "comics")) {
+        @import("../services/comics.zig").openDeepLink(link);
+    } else if (std.mem.eql(u8, kind, "podcast")) {
+        @import("../services/podcasts.zig").openDeepLink(link);
+    } else {
+        browser.resumePlayback(link);
+    }
+}
+
+/// Returns true if the rail rendered (has favorites). Cross-vertical — surfaces
+/// IPTV/music/etc. favorites the TMDB rails can't.
+fn renderLibraryRail(card_w: f32) bool {
+    var items: [24]library_pure.LibraryItem = undefined;
+    const n = library_store.loadFavorites(items[0..]);
+    if (n == 0) return false;
+
+    // Header (icon + label; no TMDB "See all").
+    {
+        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = 7700,
+            .expand = .horizontal,
+            .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.sm, .w = theme.spacing.xs, .h = theme.spacing.xs },
+        });
+        defer hdr.deinit();
+        dvui.icon(@src(), "yourlib", icons.tvg.lucide.@"library-big", .{}, .{
+            .id_extra = 7700,
+            .color_text = theme.colors.accent,
+            .min_size_content = theme.iconSize(.sm),
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        });
+        _ = dvui.label(@src(), "Your Library", .{}, .{
+            .id_extra = 7700,
+            .color_text = theme.colors.text_primary,
+            .font = dvui.themeGet().font_heading,
+            .gravity_y = 0.5,
+        });
+    }
+
+    const poster_h = card_w * 1.5;
+    var scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
+        .id_extra = 7701,
+        .expand = .horizontal,
+        .background = false,
+        .min_size_content = .{ .w = 10, .h = poster_h + STRIP_CHROME },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = poster_h + STRIP_CHROME },
+        .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },
+    });
+    defer scroll.deinit();
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 7701 });
+    defer row.deinit();
+
+    const poster = @import("../core/poster.zig");
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const item = &items[i];
+        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = i + 7710,
+            .min_size_content = .{ .w = card_w, .h = poster_h + 20 },
+            .max_size_content = .{ .w = card_w, .h = poster_h + 20 },
+            .margin = dvui.Rect.all(4),
+        });
+        defer card.deinit();
+
+        var bw: dvui.ButtonWidget = undefined;
+        bw.init(@src(), .{}, .{
+            .id_extra = i + 7730,
+            .background = true,
+            .color_fill = theme.colors.bg_elevated,
+            .corner_radius = dvui.Rect.all(8),
+            .min_size_content = .{ .w = card_w, .h = poster_h },
+            .max_size_content = .{ .w = card_w, .h = poster_h },
+        });
+        bw.processEvents();
+        bw.drawBackground();
+
+        const slot = &lib_slots[i];
+        const purl = item.poster[0..@min(item.poster_len, item.poster.len)];
+        if (purl.len > 0) {
+            const h = std.hash.Fnv1a_64.hash(purl);
+            if (slot.url_hash != h and !slot.fetching) {
+                poster.deinitPoster(&slot.pixels, &slot.tex);
+                slot.w = 0;
+                slot.h = 0;
+                slot.url_hash = h;
+            }
+            _ = poster.uploadIfReady(&slot.pixels, slot.w, slot.h, &slot.tex);
+            if (slot.tex == null and !slot.fetching and slot.pixels == null)
+                poster.fetchAsync(purl, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
+        }
+        if (slot.tex) |*tex| {
+            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i + 7740, .expand = .both, .corner_radius = dvui.Rect.all(8) });
+        } else {
+            _ = dvui.icon(@src(), "libglyph", icons.tvg.lucide.star, .{}, .{ .id_extra = i + 7740, .color_text = theme.colors.text_tertiary, .gravity_x = 0.5, .gravity_y = 0.5, .expand = .both });
+        }
+        const clicked = bw.clicked();
+        bw.drawFocus();
+        bw.deinit();
+        if (clicked) openLibItem(item);
+
+        var t_safe: [200]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(item.title[0..@min(item.title_len, item.title.len)], &t_safe)}, .{
+            .id_extra = i + 7750,
+            .color_text = theme.colors.text_secondary,
+            .min_size_content = .{ .w = card_w, .h = 0 },
+            .max_size_content = .{ .w = card_w, .h = 18 },
+        });
+    }
+    return true;
 }
 
 fn sectionHeader(title: []const u8, icon: []const u8, view: state.TmdbView, id: usize) void {

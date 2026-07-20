@@ -845,17 +845,8 @@ pub fn renderSearchContent() void {
             }
         }
 
-        // NSFW filter toggle
-        if (dvui.button(@src(), if (state.app.nsfw_filter_enabled) "NSFW: Off" else "NSFW: On", .{}, .{
-            .id_extra = 8950,
-            .color_fill = if (state.app.nsfw_filter_enabled) dvui.Color{ .r = 60, .g = 30, .b = 30, .a = 255 } else dvui.Color{ .r = 50, .g = 30, .b = 50, .a = 255 },
-            .color_text = if (state.app.nsfw_filter_enabled) dvui.Color{ .r = 220, .g = 80, .b = 80, .a = 255 } else dvui.Color{ .r = 180, .g = 100, .b = 180, .a = 255 },
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-        })) {
-            state.app.nsfw_filter_enabled = !state.app.nsfw_filter_enabled;
-        }
+        // NSFW is controlled from Settings only (Settings › NSFW Filter) — no
+        // per-tab toggle here; the result list still honors the global flag.
 
         // Engine filter selector
         if (dvui.button(@src(), engine_filter.label(), .{}, .{
@@ -1477,6 +1468,10 @@ fn renderSourceStatusCluster() void {
         .{ .icon = icons.tvg.lucide.image, .name = "Comics", .bit = .comics, .st = resolver.status_comics.load(.acquire) },
         .{ .icon = icons.tvg.lucide.clapperboard, .name = "Stremio", .bit = .stremio, .st = resolver.status_stremio.load(.acquire) },
         .{ .icon = icons.tvg.lucide.rss, .name = "RSS", .bit = .rss, .st = resolver.status_rss.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.tv, .name = "Live TV", .bit = .livetv, .st = resolver.status_livetv.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.music, .name = "Music", .bit = .music, .st = resolver.status_music.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.radio, .name = "Radio", .bit = .radio, .st = resolver.status_radio.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.podcast, .name = "Podcasts", .bit = .podcast, .st = resolver.status_podcast.load(.acquire) },
     };
     for (rows, 0..) |r, i| {
         const enabled = resolver.sourceOn(r.bit);
@@ -1577,22 +1572,9 @@ fn renderUniversalResults() void {
             uni_sort = @enumFromInt(clicked);
             resolver.sortResultsBy(@intFromEnum(uni_sort));
         }
-        // NSFW filter toggle (honored by the card loop's is_nsfw check below).
-        const nsfw_label = if (state.app.nsfw_filter_enabled) "NSFW: off" else "NSFW: on";
-        if (dvui.button(@src(), nsfw_label, .{}, .{
-            .id_extra = 9060,
-            .color_fill = if (state.app.nsfw_filter_enabled) theme.transparent else theme.colors.bg_elevated,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_text = if (state.app.nsfw_filter_enabled) theme.colors.text_secondary else theme.colors.warning,
-            .border = dvui.Rect.all(0),
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
-            .gravity_y = 0.5,
-            .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
-        })) {
-            state.app.nsfw_filter_enabled = !state.app.nsfw_filter_enabled;
-            state.markConfigDirty();
-        }
+        // NSFW is controlled from Settings only (Settings › NSFW Filter) — no
+        // per-tab toggle here. The card loop's is_nsfw check below still honors
+        // the global state.app.nsfw_filter_enabled flag.
     } else if (!resolver.isResolving() and resolver.resolver_query_len > 0) {
         // Canonical empty state — search-x icon + canonical copy.
         components.emptyState(
@@ -1673,6 +1655,10 @@ fn sourceBitOf(item: *const @import("resolver.zig").ResolvedItem) @import("resol
         .stremio => .stremio,
         .local => .local,
         .tmdb => .torrent, // not produced by the universal fan-out
+        .livetv => .livetv,
+        .music => .music,
+        .radio => .radio,
+        .podcast => .podcast,
     };
 }
 
@@ -1699,6 +1685,10 @@ fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit
         .{ .name = "Stremio", .src = .stremio, .rss = false, .st = resolver.status_stremio.load(.acquire), .bit = .stremio },
         .{ .name = "RSS", .src = .torrent, .rss = true, .st = resolver.status_rss.load(.acquire), .bit = .rss },
         .{ .name = "On-disk", .src = .local, .rss = false, .st = resolver.status_local.load(.acquire), .bit = .local },
+        .{ .name = "Live TV", .src = .livetv, .rss = false, .st = resolver.status_livetv.load(.acquire), .bit = .livetv },
+        .{ .name = "Music", .src = .music, .rss = false, .st = resolver.status_music.load(.acquire), .bit = .music },
+        .{ .name = "Radio", .src = .radio, .rss = false, .st = resolver.status_radio.load(.acquire), .bit = .radio },
+        .{ .name = "Podcasts", .src = .podcast, .rss = false, .st = resolver.status_podcast.load(.acquire), .bit = .podcast },
     };
 
     const append = struct {
@@ -1795,6 +1785,10 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         .local => dvui.Color{ .r = 130, .g = 230, .b = 200, .a = 255 },
         .tmdb => dvui.Color{ .r = 1, .g = 180, .b = 228, .a = 255 },
         .comics => dvui.Color{ .r = 200, .g = 150, .b = 255, .a = 255 },
+        .livetv => dvui.Color{ .r = 150, .g = 220, .b = 150, .a = 255 },
+        .music => dvui.Color{ .r = 255, .g = 170, .b = 90, .a = 255 },
+        .radio => dvui.Color{ .r = 120, .g = 200, .b = 255, .a = 255 },
+        .podcast => dvui.Color{ .r = 255, .g = 140, .b = 170, .a = 255 },
     };
     const chip_text = switch (item.source) {
         .jellyfin => "Jellyfin",
@@ -1805,6 +1799,10 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         .local => "On disk",
         .tmdb => "Catalog",
         .comics => "Comics",
+        .livetv => "Live TV",
+        .music => "Music",
+        .radio => "Radio",
+        .podcast => "Podcast",
     };
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{

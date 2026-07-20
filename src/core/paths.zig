@@ -85,6 +85,15 @@ pub fn cacheFile(buf: []u8, name: []const u8) []const u8 {
     return std.fmt.bufPrint(buf, "{s}/.cache/opal/{s}", .{ home, name }) catch "/tmp/opal_cache";
 }
 
+/// ~/Music/Opal (music downloads dir)
+pub fn musicSavePath(buf: []u8) []const u8 {
+    if (getenv("XDG_MUSIC_DIR")) |m| {
+        return std.fmt.bufPrint(buf, "{s}/Opal", .{m}) catch "/tmp/opal_music";
+    }
+    const home = getHome();
+    return std.fmt.bufPrint(buf, "{s}/Music/Opal", .{home}) catch "/tmp/opal_music";
+}
+
 /// ~/Downloads/opal (default save path)
 pub fn defaultSavePath(buf: []u8) []const u8 {
     const home = getHome();

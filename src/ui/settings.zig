@@ -1629,22 +1629,42 @@ fn renderPlaybackTab() void {
             state.markConfigDirty();
         }
     }
-    // yt-dlp status row
+    // yt-dlp status + version + actions
     {
         const ytdlp = @import("../services/ytdlp.zig");
+        ytdlp.ensureVersion(); // kick a one-shot background `--version` query
+        const btn_opts = dvui.Options{ .color_fill = btn_inactive, .color_text = theme.colors.accent, .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md };
+
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer row.deinit();
         _ = dvui.label(@src(), "yt-dlp", .{}, .{ .color_text = labelText(), .gravity_y = 0.5 });
+
+        // Version (when resolved).
+        if (ytdlp.versionReady() and ytdlp.versionString().len > 0) {
+            var vb: [40]u8 = undefined;
+            const v = std.fmt.bufPrint(&vb, "v{s}", .{ytdlp.versionString()}) catch "";
+            _ = dvui.label(@src(), "{s}", .{v}, .{ .id_extra = 2903, .color_text = theme.colors.text_tertiary, .gravity_y = 0.5, .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 } });
+        }
+
         {
             var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             spacer.deinit();
         }
+
         if (ytdlp.isDownloading()) {
-            components.statusPill("Downloading", .info);
+            components.statusPill("Updating", .info);
             dvui.refresh(null, @src(), null); // worker has no UI wake — poll while pending
-        } else if (ytdlp.getPath() != null) {
+        } else if (!ytdlp.versionReady()) {
+            components.statusPill("Checking…", .info);
+            dvui.refresh(null, @src(), null); // poll until the version query lands
+        } else if (ytdlp.versionString().len > 0) {
+            // Works (system or bundled).
             components.statusPill("Installed", .success);
-            if (dvui.button(@src(), "Update", .{}, .{ .id_extra = 2901, .color_fill = btn_inactive, .color_text = theme.colors.accent, .border = dvui.Rect.all(0), .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs }, .corner_radius = theme.dims.rad_md })) {
+            if (dvui.button(@src(), "Open folder", .{}, btn_opts.override(.{ .id_extra = 2904 }))) {
+                var db: [512]u8 = undefined;
+                openExternal(ytdlp.binaryDir(&db));
+            }
+            if (dvui.button(@src(), "Update", .{}, btn_opts.override(.{ .id_extra = 2901 }))) {
                 ytdlp.update();
             }
         } else {
@@ -1653,6 +1673,15 @@ fn renderPlaybackTab() void {
                 ytdlp.ensureAvailable();
             }
         }
+    }
+    // yt-dlp path (small, for transparency + so "Open folder" is unambiguous).
+    {
+        const ytdlp = @import("../services/ytdlp.zig");
+        _ = dvui.label(@src(), "{s}", .{ytdlp.binary()}, .{
+            .id_extra = 2910,
+            .color_text = theme.colors.text_tertiary,
+            .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
+        });
     }
 
     // ── Keyboard Shortcuts ── (quiet text, no card chrome)
@@ -2134,6 +2163,102 @@ fn renderNetworkTab() void {
                     .gravity_y = 0.5,
                     .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
                 });
+            }
+        }
+
+        // ── Music server (Subsonic / OpenSubsonic) — Navidrome / Airsonic / … ──
+        settingRow("Music server (Subsonic)", 35, @src());
+        _ = dvui.label(@src(), "Navidrome · Airsonic · Gonic · Funkwhale · Ampache — your music library", .{}, .{
+            .id_extra = 3500,
+            .color_text = theme.colors.text_tertiary,
+        });
+        {
+            const music = @import("../services/music_subsonic.zig");
+            music.prefillConfig();
+            // Server URL
+            _ = dvui.label(@src(), "Server URL", .{}, .{ .id_extra = 3501, .color_text = theme.colors.text_secondary });
+            {
+                var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_base }, .placeholder = "http://localhost:4533" }, .{
+                    .id_extra = 3502,
+                    .expand = .horizontal,
+                    .min_size_content = .{ .w = 250, .h = 20 },
+                    .color_fill = theme.colors.bg_elevated,
+                    .color_border = theme.colors.border_subtle,
+                    .color_text = theme.colors.text_primary,
+                    .border = dvui.Rect.all(1),
+                    .corner_radius = theme.dims.rad_sm,
+                });
+                te.deinit();
+            }
+            // Username / Password
+            {
+                var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 3503, .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 26 } });
+                defer row.deinit();
+                var ute = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_user }, .placeholder = "username" }, .{
+                    .id_extra = 3504,
+                    .expand = .horizontal,
+                    .min_size_content = .{ .w = 120, .h = 20 },
+                    .color_fill = theme.colors.bg_elevated,
+                    .color_border = theme.colors.border_subtle,
+                    .color_text = theme.colors.text_primary,
+                    .border = dvui.Rect.all(1),
+                    .corner_radius = theme.dims.rad_sm,
+                });
+                ute.deinit();
+                var pte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_pass }, .placeholder = "password", .password_char = "•" }, .{
+                    .id_extra = 3505,
+                    .expand = .horizontal,
+                    .min_size_content = .{ .w = 120, .h = 20 },
+                    .color_fill = theme.colors.bg_elevated,
+                    .color_border = theme.colors.border_subtle,
+                    .color_text = theme.colors.text_primary,
+                    .border = dvui.Rect.all(1),
+                    .corner_radius = theme.dims.rad_sm,
+                    .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+                });
+                pte.deinit();
+            }
+            if (dvui.button(@src(), "Save", .{}, .{
+                .id_extra = 3506,
+                .color_fill = theme.colors.accent,
+                .color_text = theme.colors.text_on_accent,
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            })) {
+                music.saveConfig();
+            }
+        }
+
+        // ── Live TV playlist (M3U / Xtream) ──
+        settingRow("Live TV playlist (M3U)", 36, @src());
+        _ = dvui.label(@src(), "Your own IPTV playlist URL — overrides the public directory", .{}, .{
+            .id_extra = 3600,
+            .color_text = theme.colors.text_tertiary,
+        });
+        {
+            const iptv = @import("../services/iptv.zig");
+            iptv.prefillM3u();
+            {
+                var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.iptv.m3u_cfg }, .placeholder = "https://provider/playlist.m3u" }, .{
+                    .id_extra = 3602,
+                    .expand = .horizontal,
+                    .min_size_content = .{ .w = 250, .h = 20 },
+                    .color_fill = theme.colors.bg_elevated,
+                    .color_border = theme.colors.border_subtle,
+                    .color_text = theme.colors.text_primary,
+                    .border = dvui.Rect.all(1),
+                    .corner_radius = theme.dims.rad_sm,
+                });
+                te.deinit();
+            }
+            if (dvui.button(@src(), "Save", .{}, .{
+                .id_extra = 3606,
+                .color_fill = theme.colors.accent,
+                .color_text = theme.colors.text_on_accent,
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            })) {
+                iptv.saveM3u();
             }
         }
 

@@ -26,6 +26,10 @@ pub const SourceType = enum {
     local, // user's own downloaded files in save_path — instant playback
     tmdb, // catalog entry (movie/show) — click to find sources
     comics, // readallcomics.com issues — open in the comics reader
+    livetv, // an IPTV channel — HTTP direct (HLS)
+    music, // a song — HTTP direct / yt-dlp
+    radio, // a radio station stream — HTTP direct
+    podcast, // a podcast show — opens the Podcasts tab on that feed
 };
 
 pub const ResolvedItem = struct {
@@ -44,10 +48,21 @@ pub const ResolvedItem = struct {
     // For Jellyfin items
     jf_item_id: [64]u8 = std.mem.zeroes([64]u8),
     jf_item_id_len: usize = 0,
+    // Per-request play hints. Some IPTV CDNs 403 without the channel's own
+    // User-Agent/Referer, so a live channel reached from universal search has
+    // to carry them the way the Live TV tab does — otherwise it plays from the
+    // tab and fails from the omnibox. Empty for every other source.
+    http_ua: [192]u8 = std.mem.zeroes([192]u8),
+    http_ua_len: usize = 0,
+    http_referrer: [160]u8 = std.mem.zeroes([160]u8),
+    http_referrer_len: usize = 0,
 };
 
-// Shared result buffer
-pub var results: [64]ResolvedItem = std.mem.zeroes([64]ResolvedItem);
+// Shared result buffer. The cap is a hard ceiling on a single search wave —
+// with the audio/live verticals fanning out alongside video, 64 starved the
+// late finishers, so it is sized to give every source room to land.
+pub const MAX_RESULTS: usize = 96;
+pub var results: [MAX_RESULTS]ResolvedItem = std.mem.zeroes([MAX_RESULTS]ResolvedItem);
 pub var result_count: usize = 0;
 pub var results_mutex = @import("../core/sync.zig").Mutex{};
 
@@ -55,9 +70,9 @@ pub var results_mutex = @import("../core/sync.zig").Mutex{};
 // the on-disk cache (instant, no empty view), `results_from_cache` is true; the
 // first live result of the fresh wave then replaces the placeholder (see
 // pushResult). Guarded by results_mutex. Serialized blobs cap at ~160 KB
-// (64 rows × fixed buffers), so 256 KB is a safe scratch size.
+// (MAX_RESULTS rows × fixed buffers), so 512 KB is a safe scratch size.
 var results_from_cache: bool = false;
-const SEARCH_BLOB_CAP: usize = 256 * 1024;
+const SEARCH_BLOB_CAP: usize = 512 * 1024;
 const SEARCH_TTL_S: i64 = @import("browse_cache.zig").TTL_S;
 
 // Search state — shared across 7 worker threads + UI; access via atomics.
@@ -82,6 +97,10 @@ pub var status_torznab = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_archive = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_nasa = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_commons = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_livetv = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_music = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_radio = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_podcast = std.atomic.Value(SourceStatus).init(.idle);
 
 // Explicit u8 backing so std.atomic.Value(SourceStatus) is byte-atomic.
 pub const SourceStatus = enum(u8) { idle, searching, done, failed };
@@ -90,12 +109,15 @@ pub const SourceStatus = enum(u8) { idle, searching, done, failed };
 /// not spawned by resolve() (their status reads .idle) and their result
 /// groups are hidden. A mask of 0 is treated as "everything on" so the user
 /// can never filter themselves into a permanently empty search.
-pub const SourceBit = enum(u4) { local, torrent, jellyfin, youtube, anime, comics, stremio, rss };
-pub var source_mask: std.atomic.Value(u16) = std.atomic.Value(u16).init(0xFF);
+pub const SourceBit = enum(u4) { local, torrent, jellyfin, youtube, anime, comics, stremio, rss, livetv, music, radio, podcast };
+/// Every declared bit set. Kept in sync with SourceBit at comptime so adding a
+/// vertical can't silently leave its pill off (or make `all on` mis-detect).
+pub const ALL_SOURCE_BITS: u16 = (1 << @typeInfo(SourceBit).@"enum".fields.len) - 1;
+pub var source_mask: std.atomic.Value(u16) = std.atomic.Value(u16).init(ALL_SOURCE_BITS);
 
 pub fn sourceOn(bit: SourceBit) bool {
     const m = source_mask.load(.acquire);
-    if (m & 0xFF == 0) return true; // empty mask = all on
+    if (m & ALL_SOURCE_BITS == 0) return true; // empty mask = all on
     return (m >> @intFromEnum(bit)) & 1 == 1;
 }
 
@@ -335,6 +357,10 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     Pre.set(&status_archive, .stremio); // Internet Archive — legal HTTP-direct streams (rides the Stremio pill)
     Pre.set(&status_nasa, .stremio); // NASA image/video library — legal HTTP-direct, rides the Stremio pill
     Pre.set(&status_commons, .stremio); // Wikimedia Commons — legal HTTP-direct, rides the Stremio pill
+    Pre.set(&status_livetv, .livetv);
+    Pre.set(&status_music, .music);
+    Pre.set(&status_radio, .radio);
+    Pre.set(&status_podcast, .podcast);
 
 
 
@@ -373,6 +399,13 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     if (sourceOn(.stremio)) Spawn.go(resolveArchive, &status_archive); // archive.org public-domain — legal, default-on
     if (sourceOn(.stremio)) Spawn.go(resolveNasa, &status_nasa); // NASA library — legal HTTP-direct, default-on
     if (sourceOn(.stremio)) Spawn.go(resolveCommons, &status_commons); // Wikimedia Commons — legal HTTP-direct, default-on
+    // Audio / live verticals — these used to be reachable only from their own
+    // tab, so a universal search silently missed every song, station
+    // and podcast the app can play.
+    if (sourceOn(.livetv)) Spawn.go(resolveLiveTv, &status_livetv);
+    if (sourceOn(.music)) Spawn.go(resolveMusic, &status_music);
+    if (sourceOn(.radio)) Spawn.go(resolveRadio, &status_radio);
+    if (sourceOn(.podcast)) Spawn.go(resolvePodcasts, &status_podcast);
 
     // If filtering left nothing to spawn, close the resolve immediately —
     // no worker exists to call checkAllDone().
@@ -391,11 +424,23 @@ fn pushResult(item: ResolvedItem) bool {
     if (worker_gen != run_gen.load(.acquire)) return false;
     results_mutex.lock();
     defer results_mutex.unlock();
-    if (result_count >= 64) return false;
+    if (result_count >= MAX_RESULTS) return false;
 
     // Filter out error/garbage results at the source
     const name = item.name[0..@min(item.name_len, 256)];
     if (isErrorResult(name)) return false;
+
+    // Cross-source dedup: the same release surfaced by several sources (same
+    // magnet infohash, or identical URL) collapses to one row so the list
+    // doesn't flood. Keyed by the tested pure `sameItem`.
+    {
+        const dedup = @import("resolver_dedup_pure.zig");
+        const url = item.url[0..@min(item.url_len, item.url.len)];
+        var d: usize = 0;
+        while (d < result_count) : (d += 1) {
+            if (dedup.sameItem(results[d].url[0..@min(results[d].url_len, results[d].url.len)], url)) return true; // dup — silently dropped
+        }
+    }
 
     var scored_item = item;
     const match_info = computeMatch(scored_item);
@@ -696,7 +741,7 @@ fn cacheKey(buf: []u8, query: []const u8) []const u8 {
 /// Serialize the current `results` (under caller's lock) into `out`.
 fn serializeResults(out: []u8) ?[]u8 {
     var w = ccp.Writer.init(out);
-    const n: u16 = @intCast(@min(result_count, 64));
+    const n: u16 = @intCast(@min(result_count, MAX_RESULTS));
     w.u16v(n);
     var i: usize = 0;
     while (i < n) : (i += 1) {
@@ -711,6 +756,8 @@ fn serializeResults(out: []u8) ?[]u8 {
         w.u32v(it.score);
         w.boolv(it.is_nsfw);
         w.blob(it.jf_item_id[0..@min(it.jf_item_id_len, it.jf_item_id.len)]);
+        w.blob(it.http_ua[0..@min(it.http_ua_len, it.http_ua.len)]);
+        w.blob(it.http_referrer[0..@min(it.http_referrer_len, it.http_referrer.len)]);
     }
     return w.done();
 }
@@ -728,7 +775,7 @@ fn deserializeInto(bytes: []const u8) usize {
     const n = r.u16v() orelse return 0;
     var count: usize = 0;
     var i: usize = 0;
-    while (i < n and count < 64) : (i += 1) {
+    while (i < n and count < MAX_RESULTS) : (i += 1) {
         var it = ResolvedItem{};
         const name = r.blob() orelse break;
         copyField(&it.name, &it.name_len, name);
@@ -746,6 +793,10 @@ fn deserializeInto(bytes: []const u8) usize {
         it.is_nsfw = r.boolv() orelse break;
         const jf = r.blob() orelse break;
         copyField(&it.jf_item_id, &it.jf_item_id_len, jf);
+        const ua = r.blob() orelse break;
+        copyField(&it.http_ua, &it.http_ua_len, ua);
+        const ref = r.blob() orelse break;
+        copyField(&it.http_referrer, &it.http_referrer_len, ref);
         results[count] = it;
         count += 1;
     }
@@ -804,7 +855,9 @@ fn checkAllDone() void {
         status_yts.load(.acquire) != .searching and status_local.load(.acquire) != .searching and
         status_rss.load(.acquire) != .searching and status_comics.load(.acquire) != .searching and
         status_torznab.load(.acquire) != .searching and status_archive.load(.acquire) != .searching and
-        status_nasa.load(.acquire) != .searching and status_commons.load(.acquire) != .searching)
+        status_nasa.load(.acquire) != .searching and status_commons.load(.acquire) != .searching and
+        status_music.load(.acquire) != .searching and status_radio.load(.acquire) != .searching and
+        status_podcast.load(.acquire) != .searching and status_livetv.load(.acquire) != .searching)
     {
         // Swap so the resolving→done transition fires exactly once even if two
         // finishing workers observe "all done" concurrently — only the winner
@@ -914,11 +967,23 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
         .anime => 12,
         .comics => 14, // readable issues — rank near anime
         .youtube => 20,
+        // Audio verticals: a song/station/show is rarely what someone typing a
+        // title wants first, so they sit below every video source but above the
+        // non-playable catalog stub.
+        .livetv => 21,
+        .music => 22,
+        .podcast => 24,
+        .radio => 26,
         .tmdb => 30, // catalog stub — not directly playable, rank last
     };
 
     // Heavily penalize YouTube if intent is movie or show to prevent playing random trailers
     if (is_movie_or_show and item.source == .youtube) {
+        source_w += 1000;
+    }
+    // Same reasoning for the audio verticals — "the boys s01e01" should never
+    // surface a same-named song ahead of the episode.
+    if (is_movie_or_show and (item.source == .music or item.source == .radio or item.source == .podcast or item.source == .livetv)) {
         source_w += 1000;
     }
 
@@ -2111,6 +2176,203 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
 }
 
 // ══════════════════════════════════════════════════════════
+// Backends: audio verticals (music / radio / podcasts)
+//
+// These three used to be reachable ONLY from their own tab, so a universal
+// search for a song, a station or a show returned nothing. Each worker does
+// its own fetch + parse through the vertical's tested *_pure module — it must
+// NOT call the tab's search entry point (searchMusic/searchRadio/
+// searchPodcasts), which mutates that tab's visible state and would hijack the
+// user's browsing while they search for something else.
+// ══════════════════════════════════════════════════════════
+
+/// Cap per audio source — the fan-out already competes for MAX_RESULTS slots,
+/// and a music query returning 30 rows would bury every video result.
+const AUDIO_MAX: usize = 6;
+
+fn resolveLiveTv(query_buf: [256]u8, qlen: usize) void {
+    defer {
+        status_livetv.store(.done, .release);
+        checkAllDone();
+    }
+    const query = query_buf[0..qlen];
+    if (query.len < 2) return;
+
+    const iptv = @import("iptv.zig");
+    const ipure = @import("iptv_pure.zig");
+    // IptvChannel is a large fixed-buffer record — heap, not the worker stack.
+    const chans = alloc.alloc(ipure.IptvChannel, AUDIO_MAX) catch return;
+    defer alloc.free(chans);
+    // searchInto is tab-INDEPENDENT: it parses into `chans` and never touches
+    // state.app.iptv, so searching from the omnibox can't hijack the Live TV
+    // tab the user may be browsing. Returns 0 when the plugin isn't installed.
+    const n = iptv.searchInto(query, chans);
+
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const ch = chans[i];
+        const url = ch.url[0..ch.url_len];
+        if (url.len == 0) continue;
+
+        var item = std.mem.zeroes(ResolvedItem);
+        item.source = .livetv;
+        copyField(&item.name, &item.name_len, ch.name[0..ch.name_len]);
+        copyField(&item.url, &item.url_len, url);
+        // Carry the channel's play hints — some CDNs 403 without them.
+        copyField(&item.http_ua, &item.http_ua_len, ch.user_agent[0..ch.user_agent_len]);
+        copyField(&item.http_referrer, &item.http_referrer_len, ch.referrer[0..ch.referrer_len]);
+        var d: [128]u8 = undefined;
+        const detail = if (ch.country_len > 0)
+            std.fmt.bufPrint(&d, "Live TV - {s}", .{ch.country[0..ch.country_len]}) catch "Live TV"
+        else
+            "Live TV";
+        copyField(&item.detail, &item.detail_len, detail);
+        _ = pushResult(item);
+    }
+}
+
+fn resolveMusic(query_buf: [256]u8, qlen: usize) void {
+    defer {
+        status_music.store(.done, .release);
+        checkAllDone();
+    }
+    const query = query_buf[0..qlen];
+    if (query.len < 2) return;
+
+    const jp = @import("music_jiosaavn_pure.zig");
+    var url_buf: [640]u8 = undefined;
+    const url = jp.buildSearchUrl(&url_buf, query, 20) orelse return;
+
+    // JioSaavn search payloads run large — heap, not the worker stack.
+    const buf = alloc.alloc(u8, 512 * 1024) catch return;
+    defer alloc.free(buf);
+    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 }) orelse {
+        status_music.store(.failed, .release);
+        return;
+    };
+
+    var it = jp.SongIter{ .json = body };
+    var found: usize = 0;
+    while (found < AUDIO_MAX) {
+        const obj = it.next() orelse break;
+        var t: [200]u8 = undefined;
+        var a: [160]u8 = undefined;
+        var u: [512]u8 = undefined;
+        var im: [300]u8 = undefined;
+        const song = jp.parseSong(obj, &t, &a, &u, &im) orelse continue;
+
+        var item = std.mem.zeroes(ResolvedItem);
+        item.source = .music;
+        copyField(&item.name, &item.name_len, song.title);
+        copyField(&item.url, &item.url_len, song.perma_url);
+        var d: [128]u8 = undefined;
+        const detail = if (song.artist.len > 0)
+            std.fmt.bufPrint(&d, "Music - {s}", .{song.artist}) catch "Music"
+        else
+            "Music";
+        copyField(&item.detail, &item.detail_len, detail);
+        if (pushResult(item)) found += 1;
+    }
+}
+
+fn resolveRadio(query_buf: [256]u8, qlen: usize) void {
+    defer {
+        status_radio.store(.done, .release);
+        checkAllDone();
+    }
+    const query = query_buf[0..qlen];
+    if (query.len < 2) return;
+
+    const rp = @import("radio_pure.zig");
+    var enc_buf: [512]u8 = undefined;
+    const enc = @import("../core/http.zig").urlEncode(query, &enc_buf);
+    var url_buf: [640]u8 = undefined;
+    const url = rp.buildSearchUrl(enc, 20, 0, &url_buf);
+    if (url.len == 0) return;
+
+    const buf = alloc.alloc(u8, 512 * 1024) catch return;
+    defer alloc.free(buf);
+    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 }) orelse {
+        status_radio.store(.failed, .release);
+        return;
+    };
+
+    // Station is ~1.3KB; AUDIO_MAX of them is well under the stack budget.
+    var stations: [AUDIO_MAX]rp.Station = undefined;
+    const n = rp.parseStations(body, &stations);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const s = stations[i];
+        // url_resolved is the CDN-resolved stream; `url` is the advertised
+        // playlist/redirect fallback.
+        const stream = if (s.url_resolved_len > 0)
+            s.url_resolved[0..s.url_resolved_len]
+        else
+            s.url[0..s.url_len];
+        if (stream.len == 0) continue;
+
+        var item = std.mem.zeroes(ResolvedItem);
+        item.source = .radio;
+        copyField(&item.name, &item.name_len, s.name[0..s.name_len]);
+        copyField(&item.url, &item.url_len, stream);
+        var d: [128]u8 = undefined;
+        const detail = if (s.country_len > 0)
+            std.fmt.bufPrint(&d, "Radio - {s}", .{s.country[0..s.country_len]}) catch "Radio"
+        else
+            "Radio";
+        copyField(&item.detail, &item.detail_len, detail);
+        _ = pushResult(item);
+    }
+}
+
+fn resolvePodcasts(query_buf: [256]u8, qlen: usize) void {
+    defer {
+        status_podcast.store(.done, .release);
+        checkAllDone();
+    }
+    const query = query_buf[0..qlen];
+    if (query.len < 2) return;
+
+    const pp = @import("podcasts_pure.zig");
+    var enc_buf: [512]u8 = undefined;
+    const enc = @import("../core/http.zig").urlEncode(query, &enc_buf);
+    var url_buf: [640]u8 = undefined;
+    const url = std.fmt.bufPrint(
+        &url_buf,
+        "https://itunes.apple.com/search?media=podcast&limit=20&term={s}",
+        .{enc},
+    ) catch return;
+
+    const buf = alloc.alloc(u8, 512 * 1024) catch return;
+    defer alloc.free(buf);
+    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 }) orelse {
+        status_podcast.store(.failed, .release);
+        return;
+    };
+
+    const shows = alloc.alloc(pp.Podcast, AUDIO_MAX) catch return;
+    defer alloc.free(shows);
+    const n = pp.parseItunes(body, shows);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const s = shows[i];
+        if (s.feed_url_len == 0 or s.name_len == 0) continue;
+        var item = std.mem.zeroes(ResolvedItem);
+        item.source = .podcast;
+        copyField(&item.name, &item.name_len, s.name[0..s.name_len]);
+        // The feed URL is the identity — playItem opens the Podcasts tab on it.
+        copyField(&item.url, &item.url_len, s.feed_url[0..s.feed_url_len]);
+        var d: [128]u8 = undefined;
+        const detail = if (s.artist_len > 0)
+            std.fmt.bufPrint(&d, "Podcast - {s}", .{s.artist[0..s.artist_len]}) catch "Podcast"
+        else
+            "Podcast";
+        copyField(&item.detail, &item.detail_len, detail);
+        _ = pushResult(item);
+    }
+}
+
+// ══════════════════════════════════════════════════════════
 // Backend: Stremio (query installed addons via TMDB IMDB ID)
 // ══════════════════════════════════════════════════════════
 
@@ -2447,7 +2709,40 @@ pub fn playItem(idx: usize) void {
             // submitQuery (resolver fan-out) so results land in the universal view.
             @import("search.zig").submitQuery(item.name[0..item.name_len]);
         },
-        .youtube, .stremio, .local => {
+        .podcast => {
+            // No open-by-feed entry point exists yet, so hand the show title to
+            // the Podcasts tab's own search and reveal it — the user lands on
+            // the show with its episode list, one click from playing.
+            const podcasts = @import("podcasts.zig");
+            podcasts.searchPodcasts(item.name[0..item.name_len]);
+            state.navigateToTab(.Podcasts);
+        },
+                .livetv => {
+            // Must replay the channel's own User-Agent/Referer (+ derived
+            // Origin) — the same header set playChannel sends. Without it a
+            // header-gated CDN 403s, so the channel would play from the Live TV
+            // tab and fail from universal search.
+            const http_headers = @import("../player/http_headers_pure.zig");
+            const ref = item.http_referrer[0..item.http_referrer_len];
+            var origin_buf: [160]u8 = undefined;
+            const origin = if (ref.len > 0)
+                (http_headers.originFromReferer(ref, &origin_buf) orelse "")
+            else
+                "";
+            const hdrs = [_]http_headers.HttpHeader{
+                .{ .name = "Referer", .value = ref },
+                .{ .name = "Origin", .value = origin },
+            };
+            @import("browser.zig").loadContentDirectMetaHeaders(
+                item.url[0..item.url_len],
+                "",
+                item.name[0..item.name_len],
+                "",
+                item.http_ua[0..item.http_ua_len],
+                &hdrs,
+            );
+        },
+        .youtube, .stremio, .local, .music, .radio => {
             // Direct URL / local path — load into mpv.
             if (state.app.active_player_idx < state.app.players.items.len) {
                 const p = state.app.players.items[state.app.active_player_idx];

@@ -734,8 +734,12 @@ fn renderScrubber(
         scrub_band.deinit();
         // Right: duration (or remaining) — rendered after the band so it sits
         // at the row's right edge; click toggles total/remaining.
+        // Reserve width explicitly: the scrub band above is `.expand = .both`, so
+        // without a min size this box lands after the band has already claimed
+        // the row and renders at ~0px — the total time was invisible.
         var dur_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .gravity_y = 0.5,
+            .min_size_content = .{ .w = 58, .h = 0 },
             .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
             .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
             .corner_radius = dvui.Rect.all(theme.radius.sm),
@@ -743,7 +747,11 @@ fn renderScrubber(
         if (dvui.clicked(dur_box.data(), .{})) time_show_remaining = !time_show_remaining;
         components.tip(@src(), dur_box.data().*, if (time_show_remaining) "Showing remaining — click for total" else "Click to show remaining time");
         var dur_buf: [20]u8 = undefined;
-        const dur_str = if (time_show_remaining and d_sec >= t_sec) blk: {
+        // Unknown duration (live/streaming, or not probed yet) reads as "--:--"
+        // rather than a misleading 0:00.
+        const dur_str = if (d_sec == 0)
+            "--:--"
+        else if (time_show_remaining and d_sec >= t_sec) blk: {
             var b2: [16]u8 = undefined;
             const r = formatHmsBuf(&b2, d_sec - t_sec);
             break :blk std.fmt.bufPrint(&dur_buf, "-{s}", .{r}) catch "-0:00";
@@ -1022,10 +1030,12 @@ fn applyUniversalLanguage(ctx: ?*c.mpv.mpv_handle, lang: []const u8) void {
         } else |_| {}
         _ = c.mpv.mpv_command_string(ctx, "set sub-visibility yes");
     }
-    // Drive the online / AI subtitle search language too.
-    if (lang.len > 0 and lang.len <= state.app.sub_lang_buf.len) {
-        @memcpy(state.app.sub_lang_buf[0..lang.len], lang);
-        state.app.sub_lang_len = lang.len;
+    // Drive the online / AI subtitle search language too. `lang` is often the
+    // caller's own sub_lang_buf slice (the universal-language chip passes the
+    // current value back in), so this must be alias-safe — a plain @memcpy here
+    // panicked ("arguments alias"). setFixedBuf no-ops the identical-slice case.
+    if (lang.len > 0) {
+        @import("../core/text.zig").setFixedBuf(state.app.sub_lang_buf[0..], &state.app.sub_lang_len, lang);
     }
     state.showToast(if (best_aid >= 0 or best_sid >= 0)
         "Language applied to audio & subtitles"
@@ -1975,6 +1985,30 @@ pub fn renderLiquidGlassOverlay() void {
                 }
                 state.showToast("Stopped and deleted");
             }
+        }
+    } else if (active_p.np_title_len > 0) {
+        // ROW 3 (non-torrent) — now-playing title + subtitle, so a podcast /
+        // music track / stream shows its name in the controls exactly like a
+        // torrent shows its file name.
+        var np_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 0, .h = 18 },
+            .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = 2 },
+        });
+        defer np_row.deinit();
+
+        var tbuf: [256]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(active_p.np_title[0..@min(active_p.np_title_len, active_p.np_title.len)], &tbuf)}, .{
+            .color_text = theme.colors.text_secondary,
+            .gravity_y = 0.5,
+        });
+        if (active_p.np_subtitle_len > 0) {
+            var sbuf: [192]u8 = undefined;
+            _ = dvui.label(@src(), " · {s}", .{@import("../core/text.zig").safeUtf8Buf(active_p.np_subtitle[0..@min(active_p.np_subtitle_len, active_p.np_subtitle.len)], &sbuf)}, .{
+                .id_extra = 3,
+                .color_text = theme.colors.text_tertiary,
+                .gravity_y = 0.5,
+            });
         }
     }
 

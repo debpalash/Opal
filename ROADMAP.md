@@ -125,6 +125,44 @@
 
 ---
 
+## 🧭 Milestone 6 — Breadth, Reliability & Glue
+
+> Capability-level only — Opal ships **no** source URLs. Every source is opt-in
+> and configured locally (`~/.config/opal/`, source-neutral by design).
+
+### 6.1 — Content breadth (recent)
+- [x] Live TV: thumbnails, filters (category / country / quality / sort),
+      favorites & recents, live/dead stream health probing, per-stream headers
+- [x] Music vertical — streaming **and** self-hosted library, source selector,
+      cover art, direct-to-player audio
+- [x] Manga/comics: client for a self-hosted extension server (reach the full
+      community extension ecosystem), + more catalog engines
+- [x] NSFW controls centralized to Settings (never per-tab)
+- [ ] Music maturity — **local downloads** to a music dir, **synced lyrics**,
+      **waveform seekbar**, and **multi-region** sources via a data-driven
+      (pluggable) source interface, not a tab per source
+- [ ] Auto-managed extension server (spawned/health-checked in-app, so users
+      don't run a second app)
+
+### 6.2 — Reliability ("what you click actually plays")
+- [ ] One unified fetch path with browser-grade TLS fingerprinting + on-path
+      DPI bypass, so anti-bot walls stop silently breaking playback
+- [ ] App-wide live/dead surfacing (status dots + auto-skip to the next working
+      candidate), generalized from the Live TV health model
+- [ ] First-class per-request headers (Origin/Cookie) into the player
+
+### 6.3 — Glue (one app, not fifteen tabs)
+- [ ] Universal search that spans **every** vertical at once (finish the
+      resolver fan-out; unified result model + posters + dedup)
+- [ ] Unified "Continue / Your Library" home across all verticals
+- [ ] Cross-device progress + favorites sync over the local API
+
+### 6.4 — Reach
+- [ ] Real casting pipeline (Chromecast/DLNA) + a phone "couch-mode" cast-picker
+      on the existing remote API
+
+---
+
 ## 📝 Technical Debt & Cleanup
 - [ ] Fix `linker_options` lint in build.zig
 - [ ] Clean up dvui deinit warnings

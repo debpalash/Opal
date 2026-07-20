@@ -413,7 +413,108 @@ pub fn playEpisode(idx: usize) void {
     }
 
     @import("browser.zig").loadContentDirectMeta(url_buf[0..ulen], art_buf[0..alen], title_buf[0..tlen], name_buf[0..nlen]);
+    armNowPlaying(url_buf[0..ulen], art_buf[0..alen], name_buf[0..nlen], title_buf[0..tlen]);
     logs.pushLog("info", "podcasts", "Streaming podcast episode", false);
+}
+
+// ══════════════════════════════════════════════════════════
+// Listening resume (library_items mirror)
+// ══════════════════════════════════════════════════════════
+//
+// The POSITION is already persisted: mpv's frame callback runs
+// player.saveCurrentPosition → history.savePlaybackPosition every ~2s, which
+// writes `watch_history` keyed by the enclosure URL, and player.tryResumePosition
+// seeks back to it on the next load. So an episode already survives a restart.
+//
+// What was missing is IDENTITY — nothing wrote a `library_items` row, so an
+// episode in progress never reached home's Continue rail, and the generic
+// playback entry carries no show/episode/artwork. The tick below reads the
+// position back out of the authoritative store and mirrors it into a real
+// `podcast` row, rather than duplicating a second position store.
+
+/// How often the now-playing mirror touches sqlite. The position it reads is
+/// only refreshed every ~2s by the player, so anything tighter is wasted work.
+const NP_INTERVAL_MS: i64 = 5000;
+
+/// Remember the episode just handed to mpv so `tickNowPlaying` can mirror it.
+/// UI-THREAD ONLY (playEpisode / openDeepLink).
+fn armNowPlaying(url: []const u8, art: []const u8, show: []const u8, title: []const u8) void {
+    const p = &state.app.podcasts;
+    if (url.len == 0 or url.len > p.np_url.len) {
+        p.np_active = false;
+        return;
+    }
+    @memcpy(p.np_url[0..url.len], url);
+    p.np_url_len = url.len;
+    const al = @min(art.len, p.np_art.len);
+    @memcpy(p.np_art[0..al], art[0..al]);
+    p.np_art_len = al;
+    const sl = @min(show.len, p.np_show.len);
+    @memcpy(p.np_show[0..sl], show[0..sl]);
+    p.np_show_len = sl;
+    const tl = @min(title.len, p.np_title.len);
+    @memcpy(p.np_title[0..tl], title[0..tl]);
+    p.np_title_len = tl;
+    p.np_active = true;
+    p.np_last_ms = 0; // mirror on the next tick
+}
+
+/// Keep the in-progress episode's `library_items` row fresh. UI-THREAD ONLY —
+/// called once per frame from appFrame; self-throttled to NP_INTERVAL_MS.
+///
+/// Disarms as soon as the active player is playing something else, so a movie
+/// started after an episode can never write into the podcast's row.
+pub fn tickNowPlaying() void {
+    const p = &state.app.podcasts;
+    if (!p.np_active) return;
+    const now = io.milliTimestamp();
+    if (now - p.np_last_ms < NP_INTERVAL_MS) return;
+    p.np_last_ms = now;
+
+    const url = p.np_url[0..p.np_url_len];
+    if (state.app.active_player_idx >= state.app.players.items.len) {
+        p.np_active = false;
+        return;
+    }
+    const pl = state.app.players.items[state.app.active_player_idx];
+    const cur = pl.current_url[0..@min(pl.current_url_len, pl.current_url.len)];
+    if (!std.mem.eql(u8, cur, url)) {
+        p.np_active = false;
+        return;
+    }
+
+    var pos: f64 = 0;
+    var dur: f64 = 0;
+    if (!@import("../core/db.zig").watchGetProgress(url, &pos, &dur)) return;
+    if (pos <= 0) return;
+
+    const show = p.np_show[0..p.np_show_len];
+    const title = p.np_title[0..p.np_title_len];
+    const art = p.np_art[0..p.np_art_len];
+    var link_buf: [1200]u8 = undefined;
+    const link = pure.formatDeepLink(&link_buf, url, art, show, title);
+    if (link.len == 0) return;
+    @import("library_store.zig").upsertProgress(
+        "podcast",
+        url,
+        if (title.len > 0) title else show,
+        art,
+        pos,
+        dur,
+        show,
+        link,
+    );
+}
+
+/// Reopen a podcast episode from a home library deep link
+/// (`podcast|<url>|<artwork>|<show>|<title>`). Ignores links that aren't ours.
+/// Playback resumes because mpv seeks to the stored `watch_history` position for
+/// this URL (player.tryResumePosition) — the same path a fresh play takes.
+pub fn openDeepLink(link: []const u8) void {
+    const l = pure.parseDeepLink(link) orelse return;
+    @import("browser.zig").loadContentDirectMeta(l.url, l.artwork, l.title, l.show);
+    armNowPlaying(l.url, l.artwork, l.show, l.title);
+    logs.pushLog("info", "podcasts", "Resuming podcast episode", false);
 }
 
 // ══════════════════════════════════════════════════════════

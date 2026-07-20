@@ -518,6 +518,29 @@
         "base": "https://iptv-org.github.io/api"
       },
       "file": "plugins/iptv-org.json"
+    },
+    {
+      "id": "suwayomi",
+      "name": "Suwayomi (Mihon extensions)",
+      "type": "suwayomi",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "http://localhost:4567",
+        "source": ""
+      },
+      "file": "plugins/suwayomi.json"
+    },
+    {
+      "id": "subsonic",
+      "name": "Subsonic / Navidrome (Music)",
+      "type": "music",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "http://localhost:4533",
+        "user": "",
+        "pass": ""
+      },
+      "file": "plugins/subsonic.json"
     }
   ]
 }

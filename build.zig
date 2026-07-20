@@ -508,6 +508,53 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_iptv_pure).step);
 
+    // App-wide stream health: the probe classifier shared by Live TV and Radio
+    // (iptv_pure.zig re-exports these names; services/link_health.zig routes
+    // every probe worker through classify()).
+    const test_link_health_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/link_health_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_link_health_pure).step);
+
+    // YouTube InnerTube fast search: POST body building, the videoRenderer
+    // iterator, duration/view-count/published text parsing, the YYYYMMDD
+    // conversion, the thumbnail-URL builder, and the channel-row rejection
+    // shared with the yt-dlp line parser.
+    const test_youtube_innertube_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/youtube_innertube_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_youtube_innertube_pure).step);
+
+    // mpv ytdl-raw-options: the exact option string handed to mpv, incl. the
+    // regression guard that no YouTube player client is ever pinned again.
+    const test_ytdl_opts_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/ytdl_opts_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_ytdl_opts_pure).step);
+
+    // mpv per-request HTTP headers: comma-safe joining for `http-header-fields`
+    // and the Origin-from-Referer derivation. player.zig routes through these.
+    const test_http_headers_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/http_headers_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_http_headers_pure).step);
+
     // DPI-bypass sidecar: mode validation, the "127.0.0.1:<port>" builder, and
     // the enabled&&running proxy gate. dpi_bypass.zig routes through these.
     const test_dpi_bypass_pure = b.addTest(.{
@@ -808,6 +855,19 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_json_pure).step);
+
+    // Synced lyrics (lrclib.net): /api/get + /api/search URL building with
+    // percent-encoding, syncedLyrics/plainLyrics JSON extraction, the LRC
+    // timeline parse (metadata tags, multi-timestamp lines, sorting) and the
+    // active-line lookup that drives the music tab's highlight.
+    const test_lyrics_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/lyrics_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_lyrics_pure).step);
 
     // Home console display helpers (hex-hash watch-history names).
     const test_home_pure = b.addTest(.{
@@ -1120,6 +1180,78 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_manga_madara_pure).step);
 
+    // Suwayomi-Server (Tachidesk) source engine — REST URL building + search/
+    // chapter/page JSON extraction (routes the whole Mihon extension ecosystem).
+    const test_manga_suwayomi_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/manga_suwayomi_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_manga_suwayomi_pure).step);
+
+    // Subsonic/OpenSubsonic music engine — MD5 token auth + search/stream/cover
+    // URL building + song JSON extraction (one engine covers Navidrome/Airsonic/…).
+    const test_music_subsonic_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/music_subsonic_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_music_subsonic_pure).step);
+
+    // JioSaavn music source — public search URL + song JSON parse + cover upgrade
+    // (playback delegated to mpv/yt-dlp via the perma_url).
+    const test_music_jiosaavn_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/music_jiosaavn_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_music_jiosaavn_pure).step);
+
+    const test_music_download_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/music_download_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_music_download_pure).step);
+
+    const test_iptv_playlist_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/iptv_playlist_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_iptv_playlist_pure).step);
+
+    const test_library_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/library_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_library_pure).step);
+    const test_reliable_fetch_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/reliable_fetch_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_reliable_fetch_pure).step);
+    const test_resolver_dedup_pure = b.addTest(.{
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/services/resolver_dedup_pure.zig"), .target = target, .optimize = optimize }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_resolver_dedup_pure).step);
+
     // Anti-block scrape fetch — pure block detection (Cloudflare / DDoS-Guard /
     // captcha interstitial recognition). Keyed on challenge-only markers so a
     // normal page with a "Cloudflare" footer badge is NOT flagged; a 503+cf-ray
@@ -1209,4 +1341,29 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_content_cache_pure).step);
+
+    // Music tab, source 2 — Jellyfin AUDIO: the /Items?IncludeItemTypes=Audio
+    // search URL, the static `universal` stream URL, api_key-in-query auth, and
+    // the brace-matched "Items" parse (Jellyfin emits Name before Id, so a
+    // marker split shifted every title by one row).
+    const test_music_jellyfin_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/music_jellyfin_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_music_jellyfin_pure).step);
+
+    // Music tab, source 3 — Plex AUDIO: /search?type=10, the Part.key stream URL
+    // (never the Metadata `key`), thumb covers, X-Plex-Token placement, the
+    // server-relative path guard, and plex.json credential reuse.
+    const test_music_plex_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/music_plex_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_music_plex_pure).step);
 }
