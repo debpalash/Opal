@@ -137,6 +137,13 @@ pub fn coreInit() !void {
             const database = @import("core/db.zig");
             database.init();
 
+            // Web-UI account store: ensure the users/sessions tables exist and
+            // drop expired sessions. (Kept out of db.zig to preserve the
+            // core → services layering; db.init only owns core tables.)
+            const auth_store = @import("services/auth_store.zig");
+            auth_store.ensureTables();
+            auth_store.pruneExpired();
+
             // Restore starred AI chat messages before anything else touches
             // the message array.
             @import("services/ai_chat.zig").loadStarredFromDb();

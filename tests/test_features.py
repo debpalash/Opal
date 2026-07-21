@@ -67,6 +67,7 @@ from features import (  # noqa: F401
     test_youtube_innertube,
     test_library,
     test_web_ui,
+    test_headless_auth,
 )
 
 if __name__ == "__main__":
