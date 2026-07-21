@@ -37,12 +37,12 @@
 > [!TIP]
 > **🔮 New in [v0.5.0](../../releases/tag/v0.5.0)** — a **~40,000-channel Live TV / IPTV** catalog with instant, virtualized search · **Mihon / Tachiyomi manga extensions** (Opal runs the Suwayomi server *for* you — install, browse, and read in-app) · a refined YouTube with **AV1-safe playback**. &nbsp;[See the full release →](../../releases/tag/v0.5.0)
 
-Opal replaces the stack of apps you'd otherwise juggle — a player, a site for
-the show, a server front-end, a torrent client, a feed. You say what you want
-(a title, a file, a magnet), and it searches every source, plays anything, and
-remembers where you left off. A local-first app written in
-[Zig](https://ziglang.org) with a [dvui](https://github.com/david-vanderson/dvui)
-interface and an **mpv** core: one native binary, fast to open, quiet when idle.
+Opal replaces the stack you'd otherwise juggle — a player, a site for the show,
+a server front-end, a torrent client, a feed. Say what you want (a title, a
+file, a magnet); it searches every source, plays anything, and remembers where
+you left off. A local-first app in [Zig](https://ziglang.org) with a
+[dvui](https://github.com/david-vanderson/dvui) interface and an **mpv** core —
+one native binary, fast and quiet.
 
 <div align="center">
 
@@ -147,9 +147,8 @@ XDG-compliant:
 ## 🎯 The goal
 
 Replace the whole stack — streaming apps, server front-ends, trackers, feeds —
-with one self-sufficient app. Discovery, curation, memory, and playback all
-live on your machine, learn your taste without reporting it, and stay out of
-the way. Every release walks further in that direction ([`ROADMAP.md`](ROADMAP.md)).
+with one self-sufficient app. Discovery, curation, memory, and playback live on
+your machine and learn your taste without reporting it ([`ROADMAP.md`](ROADMAP.md)).
 
 ---
 
@@ -192,27 +191,13 @@ the way. Every release walks further in that direction ([`ROADMAP.md`](ROADMAP.m
 
 ## Why?
 
-- 🔭 **Search once, everything answers** — disk, torrents, Jellyfin, Plex,
-  Stremio, anime, YouTube, live TV, TMDB, comics & manga → one ranked list, a
-  play button on every row.
-- 🧲 **Magnets behave like files** — piece-prioritized torrent streaming: press
-  play on a magnet and you're watching while it downloads.
-- 📺 **Live TV without the box** — a **~40,000-channel IPTV** catalog (iptv-org +
-  FAST/DTT sources) with virtualized scrolling and instant, as-you-type search.
-- 📚 **Manga & comics, extended** — a built-in reader *plus* **Mihon / Tachiyomi
-  extensions**: Opal downloads and runs an embedded **Suwayomi** server for you,
-  so you install extensions and read their sources without leaving the app.
-- 🤖 **A local AI copilot** — *"what should I watch if I loved Interstellar?"*
-  answered with playable picks. Hands-free voice (Whisper STT, Piper/Kokoro TTS,
-  barge-in) and on-disk taste memory in `sqlite-vec`. No API key, no cloud.
-- ▶️ **A player that handles the details** — subtitles embedded, fetched, or
-  Whisper-generated on the fly · SponsorBlock · Chromecast · LAN watch-party ·
-  phone web remote (`:3000`) · session restore.
-- 🗺️ **Browse, not just search** — trending walls, genres, and episode
-  drill-downs across every source, including your Jellyfin and Plex.
-- 🧰 **…and the drawer** — live OCR on video frames · language-learning
-  flashcards · recommendations · history & queue · RSS · incognito
-  (<kbd>I</kbd>) · seven themes · JSON API (`:41595`) for your own automations.
+- 🔭 **Search once, everything answers** — disk, torrents, Jellyfin, Plex, Stremio, anime, YouTube, live TV, TMDB, manga → one ranked, playable list.
+- 🧲 **Magnets behave like files** — press play on a torrent and watch while it downloads.
+- 📺 **Live TV without the box** — a **~40,000-channel IPTV** catalog with instant, virtualized search.
+- 📚 **Manga & comics** — a built-in reader plus **Mihon / Tachiyomi** extensions on a **Suwayomi** server Opal runs for you.
+- 🤖 **A local AI copilot** — playable answers to *"what should I watch?"*, hands-free voice, on-disk taste memory. No API key, no cloud.
+- ▶️ **A player that sweats the details** — auto subtitles · SponsorBlock · Chromecast · watch-party · phone remote (`:3000`) · session restore.
+- 🧰 **…and the drawer** — OCR on video frames · language flashcards · recommendations · history & queue · RSS · incognito · seven themes · JSON API (`:41595`).
 
 ## 🆚 One app instead of ten
 
@@ -239,10 +224,9 @@ running locally on your hardware:
 
 ## 🧩 Browser extension
 
-The **Opal Connect** (Chrome / Edge / Firefox, MV3) turns any tab into an Opal
-action: send or queue the current video, hand a URL to the downloader, add a
-manga/novel site as a source in one click, or drive playback from a side-panel
-remote — search every source, reorder the queue, cast, host a watch-party.
+**Opal Connect** (Chrome / Edge / Firefox, MV3) turns any tab into an Opal
+action — send or queue a video, add a manga/novel site as a source, or drive
+playback from a side-panel remote: search, queue, transport, cast, watch-party.
 
 <div align="center">
   <img src="assets/screenshots/extension-sidebar.png" alt="Opal Connect side panel — connection status, page actions, transport controls, and a live cross-source search returning YouTube results with play and queue buttons" width="100%" />
