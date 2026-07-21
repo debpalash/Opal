@@ -331,6 +331,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
     <div class="sect">TMDB key</div>
     <div id="setup-tmdb" class="hint">Powers posters, seasons, trending.</div>
     <div class="search-row"><input id="setup-tmdb-key" placeholder="Paste TMDB API key / token" autocapitalize="off"><button id="setup-tmdb-save">Save</button></div>
+    <div class="sect">Account</div>
+    <div id="setup-account" class="hint">Signed in.</div>
+    <button id="signout" class="quick-btn">Sign out</button>
   </section>
 </main>
 
@@ -754,6 +757,8 @@ $('setup-install').onclick = async () => {
   try { const d = await api('/setup/sources'); $('setup-install').textContent = (d.installed || 0) + ' sources installed ✓'; browseLoaded = false; }
   catch { $('setup-install').textContent = 'Failed'; $('setup-install').disabled = false; }
 };
+// Sign out — revokes the session server-side and returns to the login screen.
+$('signout').onclick = () => unpair();
 $('setup-tmdb-save').onclick = async () => {
   const k = $('setup-tmdb-key').value.trim(); if (!k) return;
   try { await api('/setup/tmdb?key=' + encodeURIComponent(k)); $('setup-tmdb').textContent = 'TMDB key set ✓'; $('setup-tmdb-key').value=''; browseLoaded = false; }
