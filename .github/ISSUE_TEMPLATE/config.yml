@@ -7,5 +7,5 @@ contact_links:
     url: https://github.com/debpalash/Opal/blob/main/.github/SECURITY.md
     about: Please report vulnerabilities privately — see SECURITY.md.
   - name: Copyright / takedown
-    url: https://github.com/debpalash/Opal/blob/main/DMCA.md
+    url: https://github.com/debpalash/Opal/blob/main/docs/DMCA.md
     about: DMCA and content-removal process.

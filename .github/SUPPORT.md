@@ -17,7 +17,7 @@
 | A reproducible bug | [Bug report](../../issues/new?template=bug_report.yml) |
 | A feature | [Feature request](../../issues/new?template=feature_request.yml) |
 | To report a security vulnerability | [`SECURITY.md`](SECURITY.md) — **not** a public issue |
-| A copyright/takedown matter | [`DMCA.md`](DMCA.md) |
+| A copyright/takedown matter | [`DMCA.md`](../docs/DMCA.md) |
 
 ## What a good bug report includes
 

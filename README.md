@@ -276,7 +276,7 @@ thank us); and a threaded-Io shim for Zig 0.16. House rules in
 Content sources ship **off**: the core has no sources configured and nothing
 enables itself — you explicitly install endpoints from the plugin registry,
 and you can un-install them just as fast
-([`CONTENT_POLICY.md`](CONTENT_POLICY.md)).
+([`CONTENT_POLICY.md`](docs/CONTENT_POLICY.md)).
 
 <a id="support"></a>
 
@@ -311,9 +311,9 @@ licenses (libtorrent BSD, dvui/ONNX MIT, SDL2 zlib, SQLite public domain).
 > **Opal is a player and an aggregator — it hosts, indexes, and distributes
 > nothing.** It connects to sources *you* configure. Only access media you have
 > the legal right to access in your jurisdiction; read
-> [`CONTENT_POLICY.md`](CONTENT_POLICY.md) before enabling content plugins or
+> [`CONTENT_POLICY.md`](docs/CONTENT_POLICY.md) before enabling content plugins or
 > torrent features. BitTorrent exposes your IP to the swarm — use a VPN if that
-> matters to you. Rights holders: see [`DMCA.md`](DMCA.md) for the takedown
+> matters to you. Rights holders: see [`docs/DMCA.md`](docs/DMCA.md) for the takedown
 > process.
 
 Provided "as is", no warranty. The authors are not responsible for how the
