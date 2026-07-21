@@ -92,3 +92,31 @@ def test_auth_web_ui():
     if missing:
         return "fail", "web auth UI incomplete: " + ", ".join(missing)
     return "pass", "web UI: account create/sign-in (status-driven), pairing code removed"
+
+
+@test("Deploy profiles: TLS (Caddy) + Tailscale", "Auth")
+def test_deploy_profiles():
+    import os as _os
+    def rd(p):
+        fp = _os.path.join(PROJECT_DIR, p)
+        return open(fp).read() if _os.path.exists(fp) else ""
+    tls = rd("deploy/docker-compose.tls.yml")
+    caddy = rd("deploy/Caddyfile")
+    ts = rd("deploy/docker-compose.tailscale.yml")
+    serve = rd("deploy/tailscale-serve.json")
+    doc = rd("docs/headless-deploy.md")
+    checks = {
+        "caddy compose": "caddy:2" in tls and "opal" in tls and "443:443" in tls,
+        "caddyfile proxies opal": "reverse_proxy opal:41595" in caddy and "{$DOMAIN}" in caddy,
+        "tailscale sidecar": "tailscale/tailscale" in ts and "network_mode: service:tailscale" in ts
+            and "TS_AUTHKEY" in ts,
+        "tailscale serve → opal": "127.0.0.1:41595" in serve and "TS_CERT_DOMAIN" in serve,
+        # Opal not directly published in the TLS profile (Caddy is the face).
+        "opal internal in tls": "expose:" in tls,
+        "docs cover access": "docker-compose.tls.yml" in doc and "docker-compose.tailscale.yml" in doc
+            and "create an admin account" in doc,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "deploy profiles incomplete: " + ", ".join(missing)
+    return "pass", "deploy: Caddy TLS + Tailscale sidecar profiles + docs"

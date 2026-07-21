@@ -1,0 +1,49 @@
+# Opal headless server on your tailnet via a Tailscale sidecar.
+#
+# No public ports, no domain, no manual certs: Tailscale gives the node a
+# stable `*.ts.net` name and a real HTTPS cert, and `tailscale serve` proxies
+# it to Opal. Only devices on your tailnet can reach it (use Tailscale Funnel
+# if you want it public).
+#
+# 1. Get a reusable auth key: https://login.tailscale.com/admin/settings/keys
+# 2. From the repo root:
+#      TS_AUTHKEY=tskey-auth-xxxx docker compose -f deploy/docker-compose.tailscale.yml up --build -d
+# 3. Open https://opal.<your-tailnet>.ts.net and create your admin account.
+#
+# Opal shares the sidecar's network namespace, so `tailscale serve` reaches it
+# at 127.0.0.1:41595. Opal binds no host port of its own.
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    hostname: opal # → https://opal.<tailnet>.ts.net
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:?get a reusable key from the Tailscale admin console}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_EXTRA_ARGS: --accept-dns=false
+    volumes:
+      - ../data/tailscale:/var/lib/tailscale
+      - ./tailscale-serve.json:/config/serve.json:ro
+    devices:
+      - /dev/net/tun
+    cap_add:
+      - net_admin
+      - sys_module
+
+  opal:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: opal:headless
+    restart: unless-stopped
+    environment:
+      OPAL_HEADLESS: "1"
+    # Share the tailscale netns so `tailscale serve` proxies to localhost:41595.
+    network_mode: service:tailscale
+    volumes:
+      - ../data/config:/config
+      - ../data/cache:/cache
+      - ../data/media:/media
+    depends_on:
+      - tailscale

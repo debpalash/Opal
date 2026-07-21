@@ -1,0 +1,9 @@
+# Opal behind Caddy — automatic HTTPS via Let's Encrypt.
+# DOMAIN is injected from the compose environment (see docker-compose.tls.yml).
+# Caddy obtains + renews the cert automatically; it proxies to the opal
+# container on the internal compose network (opal itself never binds a public
+# port). Auth is Opal's own account login — Caddy just terminates TLS.
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy opal:41595
+}

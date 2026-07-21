@@ -100,6 +100,41 @@ unauthenticated liveness probe that returns `{"ok":true}` (served before the
 Bearer-auth gate). A clean HTTP 200 means the JSON API is up and serving; no
 token needed.
 
+## Access — accounts, HTTPS, Tailscale
+
+Auth is a **web-UI account**. On first visit the page prompts you to create an
+admin account (username + password, bcrypt-hashed); after that you sign in.
+There is no pairing code. Automation and the browser extension can still
+authenticate with the static `api.token`.
+
+For remote access, don't expose plain HTTP — put TLS in front. Two ready-to-run
+profiles ship in `deploy/`:
+
+**HTTPS via Caddy** (public domain, automatic Let's Encrypt cert):
+
+```sh
+# DNS for your domain must point at this host; ports 80 + 443 reachable.
+DOMAIN=opal.example.com docker compose -f deploy/docker-compose.tls.yml up --build -d
+# → https://opal.example.com  (create your account on first visit)
+```
+
+Caddy terminates TLS and proxies to `opal:41595`; Opal binds no public port.
+
+**Tailscale** (private tailnet, `*.ts.net` HTTPS, no domain/ports/certs to
+manage):
+
+```sh
+# Reusable auth key from https://login.tailscale.com/admin/settings/keys
+TS_AUTHKEY=tskey-auth-xxxx docker compose -f deploy/docker-compose.tailscale.yml up --build -d
+# → https://opal.<your-tailnet>.ts.net  (only your tailnet can reach it)
+```
+
+A `tailscale/tailscale` sidecar joins the tailnet and `tailscale serve`s Opal
+over HTTPS with a Tailscale-issued cert. Use Tailscale Funnel to make it public.
+
+Either way, keep the base HTTP server on `127.0.0.1`/the internal network and
+let the proxy handle TLS + exposure.
+
 ## NOT verifiable on macOS dev — needs a real Linux/Docker host
 
 The following **cannot** be validated on the macOS development machine and must
