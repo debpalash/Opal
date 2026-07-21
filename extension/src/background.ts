@@ -7,14 +7,9 @@
  * these requests are NOT subject to page CORS, so no server-side CORS change is
  * needed (Opal already sets permissive headers anyway).
  *
- * Endpoints (see src/services/remote.zig):
- *   POST /api/open?url=&title=&art=&subtitle=   play + rich now-playing card
- *   POST /api/ingest?type=&url=&title=&art=&subtitle=   typed send / queue
- *   POST /api/source/add?framework=&base=       install a site as an Opal source
- *   POST /api/download/url?url=                  hand a URL to Opal's downloader
- *   GET  /api/search?q=                          universal search
- *   GET  /api/status                             now-playing + connection probe
- *   POST /api/playpause | /api/seek_pct?v= | /api/volume?v= | /api/next_audio | /api/next_sub
+ * It exposes Opal's full remote surface — send/sources, unified search, the whole
+ * transport, queue, downloads, cast and watch-party. The action → endpoint map is
+ * `OpalAction` in shared.ts; server side is src/services/remote.zig.
  */
 
 import {
@@ -105,6 +100,57 @@ async function sendToOpal(req: OpalRequest): Promise<OpalResponse> {
       return opalFetch(`/api/next_audio`, "POST");
     case "nextSub":
       return opalFetch(`/api/next_sub`, "POST");
+    case "load":
+      return opalFetch(`/api/load?url=${enc(req.url ?? "")}`, "POST");
+    // ── Transport (extra) ──
+    case "seekFwd":
+      return opalFetch(`/api/fwd`, "POST");
+    case "seekBack":
+      return opalFetch(`/api/back`, "POST");
+    case "volUp":
+      return opalFetch(`/api/vol_up`, "POST");
+    case "volDown":
+      return opalFetch(`/api/vol_down`, "POST");
+    case "mute":
+      return opalFetch(`/api/mute`, "POST");
+    case "fullscreen":
+      return opalFetch(`/api/fullscreen`, "POST");
+    case "flip":
+      return opalFetch(`/api/flip`, "POST");
+    case "rotate":
+      return opalFetch(`/api/rotate`, "POST");
+    // ── Search / discovery ──
+    case "unifiedSearch":
+      return opalFetch(`/api/unified_search?q=${enc(req.query ?? "")}`, "GET");
+    case "recommendations":
+      return opalFetch(`/api/recommendations`, "GET");
+    // ── Queue ──
+    case "queueList":
+      return opalFetch(`/api/queue`, "GET");
+    case "queueMove":
+      return opalFetch(
+        `/api/queue/move?idx=${enc(String(req.idx ?? 0))}&dir=${enc(req.moveDir ?? "down")}`,
+        "POST",
+      );
+    // ── Downloads ──
+    case "downloadsList":
+      return opalFetch(`/api/downloads?dir=${enc(req.subdir ?? "")}`, "GET");
+    case "downloadsPlay":
+      return opalFetch(`/api/downloads/play?file=${enc(req.file ?? "")}`, "POST");
+    // ── Cast / watch-party ──
+    case "castDevices":
+      return opalFetch(`/api/cast/devices`, "GET");
+    case "castStart":
+      return opalFetch(
+        `/api/cast/start${req.device ? `?device=${enc(req.device)}` : ""}`,
+        "POST",
+      );
+    case "partyHost":
+      return opalFetch(`/api/party/host`, "POST");
+    case "partyJoin":
+      return opalFetch(`/api/party/join?ip=${enc(req.ip ?? "")}`, "POST");
+    case "partyStatus":
+      return opalFetch(`/api/party/status`, "GET");
     default:
       return { ok: false, error: `Unknown action: ${(req as OpalRequest).action}` };
   }

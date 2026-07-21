@@ -8,22 +8,22 @@ generic "open URL".
 
 ## What it does
 
-- **Add this site as an Opal source** — on a recognised manga/novel site the
-  extension detects the framework it's built on (Madara, MangaThemesia, HeanCMS,
-  LightNovel-WP, ReadWN) and installs it as an Opal source in one click. The site
-  becomes searchable in Opal's Comics / Novels immediately.
-- **Smart typed send** — the current page/link is classified (video / manga /
-  novel / anime / magnet / direct-media / article) and sent with a type hint, so
-  Opal routes it the right way. Right-click menus adapt ("Read chapter in Opal",
-  "Play episode in Opal", …).
-- **Rich metadata** — title, `og:image` cover, and the chapter/episode label are
-  scraped and sent so Opal shows a proper now-playing card, not a bare URL.
-- **Side-panel remote** — the toolbar icon opens a persistent side panel
-  (Chrome/Edge) or sidebar (Firefox) with now-playing, play/pause, seek, volume,
-  next audio/sub, a typed "send current tab", the add-source card, and a recent
-  log.
-- **Queue / Download / Read / Search** — queue a link, hand a URL to Opal's
-  downloader, extract readable article text, or search selected text.
+- **Add this site as an Opal source** — on a recognised manga/novel site it detects
+  the framework (Madara, MangaThemesia, HeanCMS, LightNovel-WP, ReadWN) and installs
+  it as an Opal source in one click, searchable in Comics / Novels immediately.
+- **Smart typed send** — the current page/link is classified (video / manga / novel /
+  anime / magnet / media / article) and sent with a type hint so Opal routes it right.
+  Right-click menus adapt ("Read chapter in Opal", "Play episode in Opal", …), with
+  title, cover and chapter label scraped for a proper now-playing card.
+- **Full side-panel remote** — the toolbar icon opens a persistent panel (Chrome/Edge)
+  or sidebar (Firefox) that drives *all* of Opal:
+  - **Search** every source (torrents, TMDB, YouTube, anime, Jellyfin) and play or
+    queue a result inline.
+  - **Transport** — play/pause, ±10s, seek, volume, mute, fullscreen, next audio/sub.
+  - **Queue** — view it live and reorder items.
+  - **Cast & watch-party** — find cast targets, host or join a LAN party.
+- **Queue / Download / Read** — queue a link, hand a URL to Opal's downloader, or
+  extract readable article text.
 
 Built with [extension.js](https://extension.js.org) (v3) + TypeScript.
 
@@ -68,16 +68,19 @@ Then load it:
 
 ## Supported actions & endpoints
 
-| Action                     | Endpoint (Opal, bearer-authed)                          |
-| -------------------------- | ------------------------------------------------------- |
-| Play / send tab (+ meta)   | `POST /api/open?url=&title=&art=&subtitle=`             |
-| Typed send / queue         | `POST /api/ingest?type=&url=&title=&art=&subtitle=`     |
-| Add site as source         | `POST /api/source/add?framework=&base=`                 |
-| Download                   | `POST /api/download/url?url=<enc>`                      |
-| Search selection           | `GET  /api/search?q=<enc>`                              |
-| Now-playing / connection   | `GET  /api/status`                                      |
-| Play/pause · seek · volume | `POST /api/playpause` · `/api/seek_pct?v=` · `/api/volume?v=` |
-| Next audio / subtitle      | `POST /api/next_audio` · `/api/next_sub`               |
+All bearer-authed against Opal (`src/services/remote.zig`). The full action → endpoint
+map lives in `src/shared.ts` (`OpalAction`).
+
+| Group      | Endpoints                                                                                   |
+| ---------- | ------------------------------------------------------------------------------------------- |
+| Send       | `POST /api/open` · `/api/ingest` · `/api/load` · `/api/download/url` (all `?url=&…`)         |
+| Sources    | `POST /api/source/add?framework=&base=`                                                      |
+| Search     | `GET /api/unified_search?q=` · `/api/search?q=` · `/api/recommendations`                     |
+| Transport  | `POST /api/playpause` · `/api/fwd` · `/api/back` · `/api/seek_pct?v=` · `/api/volume?v=` · `/api/vol_up` · `/api/vol_down` · `/api/mute` · `/api/fullscreen` · `/api/flip` · `/api/rotate` · `/api/next_audio` · `/api/next_sub` |
+| Status     | `GET /api/status`                                                                            |
+| Queue      | `GET /api/queue` · `POST /api/queue/move?idx=&dir=up\|down`                                   |
+| Downloads  | `GET /api/downloads?dir=` · `POST /api/downloads/play?file=`                                  |
+| Cast/party | `GET /api/cast/devices` · `POST /api/cast/start` · `POST /api/party/host` · `/api/party/join?ip=` · `GET /api/party/status` |
 
 `type` for `/api/ingest` is one of
 `video｜manga｜novel｜anime｜magnet｜media｜article｜chapters｜queue`.

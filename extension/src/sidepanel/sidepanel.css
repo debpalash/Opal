@@ -278,6 +278,144 @@ body {
   font-size: 13px;
 }
 
+/* ── Search / queue / cast lists ── */
+.card-head.between {
+  justify-content: space-between;
+  width: 100%;
+}
+.search-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.text-input {
+  all: unset;
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--fg);
+}
+.text-input:focus {
+  border-color: var(--accent);
+}
+.btn.compact,
+.btn.primary.compact {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+}
+.link-btn {
+  all: unset;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 15px;
+  padding: 0 4px;
+}
+.link-btn:hover {
+  color: var(--accent-2);
+}
+.results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.results-empty {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 0;
+}
+.result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+.result:last-child {
+  border-bottom: none;
+}
+.result-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.badge {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent-2), var(--accent));
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.result-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.result-title.played {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.result-detail {
+  font-size: 11px;
+  color: var(--muted);
+}
+.result-btns {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.mini-btn {
+  all: unset;
+  cursor: pointer;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  font-size: 13px;
+  background: var(--card-2);
+  border: 1px solid var(--border);
+}
+.mini-btn:hover {
+  background: var(--border);
+}
+.mini-btn.primary {
+  background: linear-gradient(135deg, var(--accent-2), var(--accent));
+  color: #fff;
+  border-color: transparent;
+}
+.mini-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.details summary {
+  cursor: pointer;
+  list-style: none;
+}
+.details summary::-webkit-details-marker {
+  display: none;
+}
+.details[open] summary {
+  margin-bottom: 10px;
+}
+.detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 /* ── Recent ── */
 .recent {
   list-style: none;

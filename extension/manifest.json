@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Opal Connector",
-  "version": "0.2.0",
-  "description": "Send any website's media, articles, downloads and scraped page data to a locally-running Opal — and turn manga/novel sites into Opal sources in one click.",
+  "version": "0.3.0",
+  "description": "Send any website's media, articles and downloads to a locally-running Opal, turn manga/novel sites into Opal sources, and drive the full remote — search, transport, queue, cast and watch-party — from the side panel.",
   "icons": {
     "16": "images/icon-16.png",
     "48": "images/icon-48.png",

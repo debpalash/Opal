@@ -63,12 +63,51 @@
         <button id="fwd" class="icon-btn" title="Forward 10s">⏩</button>
         <button id="next-audio" class="icon-btn" title="Next audio track">🔊</button>
         <button id="next-sub" class="icon-btn" title="Next subtitle">💬</button>
+        <button id="mute" class="icon-btn" title="Mute">🔇</button>
+        <button id="fullscreen" class="icon-btn" title="Fullscreen">⛶</button>
       </div>
       <div class="vol-row">
         <span class="vol-ico">🔈</span>
         <input id="vol" class="range" type="range" min="0" max="150" value="100" step="1" />
       </div>
     </section>
+
+    <!-- Search every Opal source -->
+    <section class="card">
+      <div class="card-title small">Search Opal</div>
+      <div class="search-row">
+        <input id="search-q" class="text-input" type="search" placeholder="Movies, shows, anime, YouTube…" />
+        <button id="search-go" class="btn primary compact">Go</button>
+      </div>
+      <ul id="search-results" class="results"></ul>
+    </section>
+
+    <!-- Play queue -->
+    <section class="card">
+      <div class="card-head between">
+        <div class="card-title small">Queue</div>
+        <button id="queue-refresh" class="link-btn" title="Refresh queue">↻</button>
+      </div>
+      <ul id="queue-list" class="results"><li class="results-empty">Queue is empty.</li></ul>
+    </section>
+
+    <!-- Cast + watch party -->
+    <details class="card details">
+      <summary class="card-title small">Cast &amp; watch party</summary>
+      <div class="detail-body">
+        <div class="btn-row">
+          <button id="cast-find" class="btn ghost">📡 Find devices</button>
+        </div>
+        <ul id="cast-list" class="results"></ul>
+        <div class="btn-row">
+          <button id="party-host" class="btn ghost">🎉 Host party</button>
+        </div>
+        <div class="search-row">
+          <input id="party-ip" class="text-input" type="text" placeholder="Host IP to join" />
+          <button id="party-join" class="btn compact">Join</button>
+        </div>
+      </div>
+    </details>
 
     <!-- Recent actions -->
     <section class="card">
