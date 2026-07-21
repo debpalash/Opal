@@ -78,12 +78,10 @@ Prefer to do it yourself? Find your row — every file is on the
 | 🪟 | **Windows** (x64) | run the `.msi` — or unzip the portable `.zip` anywhere |
 | 🛠 | **From source** | `git clone` → `zig build run` (deps below) |
 
-<sub>🍎 macOS calls the downloaded `.dmg` **"damaged"** — it isn't; that's
-Gatekeeper's way of saying we haven't paid Apple $99/yr for notarization yet.
-Either use the one-command installer above (no quarantine, no dialog), or run
-`sudo xattr -cr /Applications/Opal.app` once after dragging. 🪟 Windows builds are
-the newest of the family — treat the first releases as adventurous (SmartScreen
-will also want a word). 🍎 Intel Macs: source build works
+<sub>🍎 macOS may flag the `.dmg` as **"damaged"** — it isn't; we're not yet
+Apple-notarized. Use the one-command installer (no dialog), or run `sudo xattr
+-cr /Applications/Opal.app` once after dragging. 🪟 Windows is the newest port —
+SmartScreen will want a word. 🍎 Intel Macs: build from source
 (`HOMEBREW_PREFIX=/usr/local`).</sub>
 
 **First launch:** open **Settings** (<kbd>⌘</kbd><kbd>,</kbd>) and paste a free
@@ -149,16 +147,10 @@ XDG-compliant, no surprises:
 
 ## 🎯 The goal
 
-**Become the true alternative to the whole stack** — the streaming apps, the
-server front-ends, the trackers, the recommendation feeds — by being
-**self-sufficient**: one interface that understands what you need and quietly
-takes care of it, powered by an AI that runs on *your* hardware and answers to
-*you*.
-
-A media system shouldn't need a corporation attached. Discovery, curation,
-memory, playback — Opal's bet is that all of it can live on your machine,
-learn your taste without reporting it, and get out of the way. Every release
-walks further in that direction ([`ROADMAP.md`](ROADMAP.md)).
+Replace the whole stack — streaming apps, server front-ends, trackers, feeds —
+with one self-sufficient app. Discovery, curation, memory, and playback all
+live on your machine, learn your taste without reporting it, and stay out of
+the way. Every release walks further in that direction ([`ROADMAP.md`](ROADMAP.md)).
 
 ---
 
@@ -264,14 +256,11 @@ web/             # companion web UI (its own Zig project)
 extension/       # Opal Connector — cross-browser MV3 extension (play/read/download/scrape → Opal); see extension/README.md
 ```
 
-The parts we're quietly proud of: the whole system — player, search, torrent
-streamer, AI — compiles to **one fast native binary**; **one** global
-allocator with leak detection on every exit; fixed-size buffers instead of
-heap churn; a single `state.app` hub with disciplined thread-safety rules; a
-render loop that repaints **only when something changed** (your fans will
-thank us); and a threaded-Io shim for Zig 0.16. House rules in
-[`CONTRIBUTING.md`](.github/CONTRIBUTING.md); where this is all going in
-[`ROADMAP.md`](ROADMAP.md).
+Player, search, torrent streamer, and AI compile to **one native binary**: a
+single leak-checked global allocator, fixed-size buffers over heap churn, one
+`state.app` hub under strict thread-safety rules, and a render loop that
+repaints only on change. House rules in
+[`CONTRIBUTING.md`](.github/CONTRIBUTING.md).
 
 Content sources ship **off**: the core has no sources configured and nothing
 enables itself — you explicitly install endpoints from the plugin registry,
@@ -282,16 +271,12 @@ and you can un-install them just as fast
 
 ## 💜 Support development
 
-Opal has no telemetry to monetize and no account system to upsell — it runs on
-goodwill:
+No telemetry to monetize, no accounts to upsell — Opal runs on goodwill:
 
-- ☕ **[Buy the maintainer a coffee on Ko-fi](https://ko-fi.com/debpalash)** or
-  💸 **[chip in via PayPal](https://paypal.me/palashCoder)** — donations keep
-  the release cadence honest and the coffee supply uninterrupted.
-- ⭐ **Star the repo** — it's genuinely how people find it.
+- ☕ **[Ko-fi](https://ko-fi.com/debpalash)** or 💸 **[PayPal](https://paypal.me/palashCoder)** — keep the release cadence (and the coffee) going.
+- ⭐ **Star the repo** — it's how people find it.
 - 🐛 **File good bugs** ([how](.github/SUPPORT.md)) · 🔧 **send PRs** ([how](.github/CONTRIBUTING.md)).
-- 📣 **Show someone.** This pitch lands best as a 30-second demo — the GIFs
-  above are yours to share.
+- 📣 **Show someone** — the GIFs above are yours to share.
 
 ## 🤝 Contributing
 
