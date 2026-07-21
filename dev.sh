@@ -80,6 +80,7 @@ cleanup() {
     pkill -f opal-tts-server   2>/dev/null || true
     pkill -f opal-stt-server   2>/dev/null || true
     pkill -f Suwayomi-Server-  2>/dev/null || true
+    pkill -f engines/nova2.py  2>/dev/null || true
     exit 0
 }
 trap cleanup INT TERM

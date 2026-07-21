@@ -600,6 +600,25 @@ pub fn memorySearch(phrase: []const u8) void {
     submitQuery(phrase);
 }
 
+/// Shutdown sweep: reap any lingering `engines/nova2.py` torrent-search
+/// subprocesses. The normal path already drains + waits the current search child
+/// (appDeinit joins search_thread → asyncSearchTask's `child.wait()`), but a
+/// SUPERSEDED search that was detached mid-flight (see triggerSearch) can outlive
+/// a graceful exit and orphan its multiprocessing pool. Sweep those on teardown.
+/// (A SIGKILL of Opal itself is inherently unreapable — this only helps clean
+/// exit; mirrors the sidecar reaping in dev.sh / suwayomi_server.)
+pub fn reapWorkers() void {
+    const builtin = @import("builtin");
+    if (builtin.os.tag != .linux and builtin.os.tag != .macos) return;
+    const alloc = @import("../core/alloc.zig").allocator;
+    var k = @import("../core/io_global.zig").Child.init(&.{ "pkill", "-f", "engines/nova2.py" }, alloc);
+    k.stdin_behavior = .Ignore;
+    k.stdout_behavior = .Ignore;
+    k.stderr_behavior = .Ignore;
+    k.spawn() catch return;
+    _ = k.wait() catch {};
+}
+
 pub fn triggerSearch(query_text: []const u8) void {
     if (query_text.len == 0) return;
 

@@ -485,3 +485,22 @@ def test_sysmeter():
     if missing:
         return "fail", "missing: " + ", ".join(missing)
     return "pass", "CPU/MEM/THR/NRG meters: 1Hz off-thread sampler, tested thresholds"
+
+
+@test("Search subprocesses reaped on shutdown", "Stability")
+def test_search_workers_reaped():
+    # A superseded/detached nova2.py torrent search can outlive a clean exit and
+    # orphan its Python multiprocessing pool. appDeinit sweeps them; dev.sh too.
+    sr = _src("src/services/search.zig")
+    mn = _src("src/main.zig")
+    dev = _src("dev.sh")
+    checks = {
+        "reapWorkers exists": "pub fn reapWorkers(" in sr and "engines/nova2.py" in sr,
+        "os-gated pkill": '"pkill"' in sr and "builtin.os.tag" in sr,
+        "appDeinit calls it": "search.reapWorkers()" in mn,
+        "dev.sh reaps too": "pkill -f engines/nova2.py" in dev,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "reap wiring incomplete: " + ", ".join(missing)
+    return "pass", "nova2.py search workers reaped on clean shutdown (appDeinit + dev.sh)"

@@ -409,6 +409,9 @@ pub fn appDeinit() void {
     search.search_abort.store(true, .release);
     if (search.search_thread) |t| t.join();
     search.search_thread = null;
+    // Reap any superseded/detached nova2.py search subprocesses so no orphaned
+    // Python multiprocessing pool is left behind after a clean exit.
+    search.reapWorkers();
 
     search.clearResults();
     search.search_results.deinit(@import("core/alloc.zig").allocator);
