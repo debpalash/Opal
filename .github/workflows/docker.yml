@@ -82,7 +82,8 @@ jobs:
           [ "${#TOKEN}" -ge 32 ] || { echo "FAIL: register (token='$TOKEN')"; docker logs opal; exit 1; }
           echo "── session token authorizes an API route ──"
           curl -fsS -H "Authorization: Bearer $TOKEN" -o /dev/null http://localhost:41595/api/status || { echo "FAIL: session auth"; exit 1; }
-          curl -fsS -o /dev/null -w '%{http_code}' http://localhost:41595/api/status | grep -q 401 || { echo "FAIL: expected 401 without token"; exit 1; }
+          code=$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:41595/api/status)
+          [ "$code" = 401 ] || { echo "FAIL: expected 401 without token, got $code"; exit 1; }
           echo "── web UI ──"
           curl -fsS http://localhost:41595/ | grep -qiE 'opal|<!doctype' || { echo "FAIL: web UI"; exit 1; }
           echo "SMOKE OK"
