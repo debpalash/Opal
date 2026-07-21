@@ -6,10 +6,9 @@
   ### Play everything. From one app.
 
   **A free, open-source, local-first media player + browser.** Search and stream
-  movies, TV, anime, **live TV / IPTV**, YouTube, torrents, and manga — alongside
-  your own **Jellyfin & Plex** — with a **private, on-device AI copilot**. One fast
-  native binary. No accounts, no cloud, no subscription. The self-hosted
-  alternative to Stremio, Kodi, and the whole streaming stack.
+  movies, TV, anime, **live TV / IPTV**, YouTube, torrents, and manga — plus your
+  own **Jellyfin & Plex** — with a private, on-device **AI copilot**. One native
+  binary; no accounts, no cloud, no subscription.
 
   <p>
     <a href="../../actions/workflows/ci.yml"><img src="https://github.com/debpalash/Opal/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
@@ -24,7 +23,7 @@
   <p>
     <a href="#get-it"><b>Get it</b></a> ·
     <a href="#see-it"><b>See it</b></a> ·
-    <a href="#the-ai"><b>The AI</b></a> ·
+    <a href="#the-ai"><b>Why</b></a> ·
     <a href="#under-the-hood"><b>Under the hood</b></a> ·
     <a href="#support"><b>Support Development</b></a>
     (<a href="https://ko-fi.com/debpalash">Ko-fi</a>, <a href="https://paypal.me/palashCoder">PayPal</a>)
@@ -57,8 +56,8 @@ interface and an **mpv** core: one native binary, fast to open, quiet when idle.
 
 ## 🚀 Get it
 
-One command. It figures out your platform, verifies checksums, and it's also
-the updater (`… -s -- update`) and version manager (`OPAL_VERSION=v0.1.0 …`):
+One command — it detects your platform, verifies checksums, and doubles as the
+updater (`… -s -- update`) and version pin (`OPAL_VERSION=v0.1.0 …`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/debpalash/Opal/main/scripts/install.sh | sh
@@ -67,7 +66,7 @@ curl -fsSL https://raw.githubusercontent.com/debpalash/Opal/main/scripts/install
 Prefer to do it yourself? Find your row — every file is on the
 [Releases](../../releases) page:
 
-|  | Platform | The move |
+|  | Platform | Install |
 |---|---|---|
 | 🍎 | **macOS** (Apple silicon) | open the `.dmg`, drag, done |
 | 🍺 | **Homebrew** | `brew install debpalash/tap/opal` |
@@ -134,7 +133,7 @@ the contract — and every PR reports its tally
 
 <br/>
 
-XDG-compliant, no surprises:
+XDG-compliant:
 
 - `~/.config/opal/` — config, tokens (`0600`), and `opal.db` (history, AI memory)
 - `~/.cache/opal/` — caches
@@ -176,8 +175,8 @@ the way. Every release walks further in that direction ([`ROADMAP.md`](ROADMAP.m
   <tr>
     <td width="50%" valign="top">
       <img src="assets/media/browse.gif" width="100%" alt="Scrolling the trending wall, then switching to the YouTube tab" /><br/>
-      <b>🗺️ Browse like you own the place</b><br/>
-      <sub>Trending walls, genres, episode drill-downs — one tab bar, zero franchises acquired.</sub>
+      <b>🗺️ Browse every source in one place</b><br/>
+      <sub>Trending walls, genres, and episode drill-downs across TMDB, YouTube, anime, Jellyfin, and Plex.</sub>
     </td>
     <td width="50%" valign="top">
       <img src="assets/media/ask-the-ai.gif" width="100%" alt="A suggestion chip answered by the local AI with a poster rail" /><br/>
@@ -204,13 +203,12 @@ the way. Every release walks further in that direction ([`ROADMAP.md`](ROADMAP.m
   extensions**: Opal downloads and runs an embedded **Suwayomi** server for you,
   so you install extensions and read their sources without leaving the app.
 - 🤖 **A local AI copilot** — *"what should I watch if I loved Interstellar?"*
-  answered with playable picks; hands-free voice (Whisper ears, Piper/Kokoro
-  mouth, barge-in); taste memory in on-disk `sqlite-vec`. No API key, no bill,
-  no "your data helps us improve."
-- ▶️ **A player that sweats details** — subtitles embedded, fetched, or
-  Whisper-generated on the spot · SponsorBlock · Chromecast · LAN watch-party ·
-  phone web remote (`:3000`) · session restore mid-sentence.
-- 🗺️ **Browse like you own the place** — trending walls, genres, episode
+  answered with playable picks. Hands-free voice (Whisper STT, Piper/Kokoro TTS,
+  barge-in) and on-disk taste memory in `sqlite-vec`. No API key, no cloud.
+- ▶️ **A player that handles the details** — subtitles embedded, fetched, or
+  Whisper-generated on the fly · SponsorBlock · Chromecast · LAN watch-party ·
+  phone web remote (`:3000`) · session restore.
+- 🗺️ **Browse, not just search** — trending walls, genres, and episode
   drill-downs across every source, including your Jellyfin and Plex.
 - 🧰 **…and the drawer** — live OCR on video frames · language-learning
   flashcards · recommendations · history & queue · RSS · incognito
@@ -218,8 +216,8 @@ the way. Every release walks further in that direction ([`ROADMAP.md`](ROADMAP.m
 
 ## 🆚 One app instead of ten
 
-Opal is a free, open-source alternative to a whole shelf of tools — running
-locally, on your hardware, answering to you:
+Opal is a free, open-source alternative to a shelf of separate tools, all
+running locally on your hardware:
 
 | Instead of… | Opal gives you |
 |---|---|
@@ -237,7 +235,7 @@ locally, on your hardware, answering to you:
 |---|---|---|---|
 | <kbd>S</kbd> search | <kbd>B</kbd> browser | <kbd>D</kbd> library | <kbd>H</kbd> history |
 | <kbd>F</kbd> fullscreen | <kbd>P</kbd> playlist | <kbd>G</kbd> grid layout | <kbd>Z</kbd> fit/crop |
-| <kbd>⌘</kbd><kbd>O</kbd> open file | <kbd>⌘</kbd><kbd>,</kbd> settings | <kbd>Esc</kbd> backs out of things, politely | <kbd>⇧</kbd><kbd>I</kbd> **the cheat sheet** |
+| <kbd>⌘</kbd><kbd>O</kbd> open file | <kbd>⌘</kbd><kbd>,</kbd> settings | <kbd>Esc</kbd> back out | <kbd>⇧</kbd><kbd>I</kbd> **cheat sheet** |
 
 ---
 
@@ -308,8 +306,7 @@ software is used or for content reached through third-party sources.
 
 <div align="center">
   <img src="assets/logo.svg" width="40" alt="" /><br/>
-  <sub>Built with Zig, mpv, and an unreasonable number of late nights.<br/>
-  <b>Now go watch something.</b></sub>
+  <sub>Built with Zig, mpv, and dvui.</sub>
 
   <br/><br/>
   <sub>
