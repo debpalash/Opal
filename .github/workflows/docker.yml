@@ -48,7 +48,44 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push (linux/amd64)
+      # Build into the local daemon first so we can actually RUN the container
+      # and prove it serves before publishing (the Linux image had never been
+      # started — see docs/headless-server-spec.md §2).
+      - name: Build for smoke test (load, linux/amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: opal:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the container (/health, /pair, web UI)
+        run: |
+          set -euo pipefail
+          docker run -d --name opal -p 41595:41595 -e OPAL_PAIR_CODE=123456 opal:ci
+          echo "── what the binary links (S1 will drop SDL/X11) ──"
+          docker exec opal sh -c 'ldd /usr/local/bin/opal | grep -Ei "sdl|libx11" || echo "(no SDL/X11 in ldd)"' || true
+          echo "── wait for /health ──"
+          ok=""
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://localhost:41595/health; then ok=1; break; fi
+            sleep 2
+          done
+          if [ -z "$ok" ]; then echo "FAIL: /health never came up"; docker logs opal; exit 1; fi
+          echo "health OK"
+          echo "── pair ──"
+          TOKEN=$(curl -fsS "http://localhost:41595/pair?code=123456" || true)
+          echo "$TOKEN" | grep -q '"token"' || { echo "FAIL: pairing"; docker logs opal; exit 1; }
+          echo "── web UI ──"
+          curl -fsS http://localhost:41595/ | grep -qiE 'opal|<!doctype' || { echo "FAIL: web UI"; exit 1; }
+          echo "SMOKE OK"
+          docker logs opal | tail -20
+          docker rm -f opal
+
+      - name: Push to GHCR
         uses: docker/build-push-action@v6
         with:
           context: .
