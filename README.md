@@ -3,16 +3,22 @@
 
   # Opal
 
-  ### Play everything.
+  ### Play everything. From one app.
 
-  **The evolved media player for the next decades of entertainment.**
+  **A free, open-source, local-first media player + browser.** Search and stream
+  movies, TV, anime, **live TV / IPTV**, YouTube, torrents, and manga — alongside
+  your own **Jellyfin & Plex** — with a **private, on-device AI copilot**. One fast
+  native binary. No accounts, no cloud, no subscription. The self-hosted
+  alternative to Stremio, Kodi, and the whole streaming stack.
 
   <p>
-    <a href="https://github.com/debpalash/Opal/actions/workflows/ci.yml"><img src="https://github.com/debpalash/Opal/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-    <a href="../../releases"><img src="https://img.shields.io/github/v/release/debpalash/Opal?include_prereleases&color=8b5cf6" alt="Release" /></a>
+    <a href="../../actions/workflows/ci.yml"><img src="https://github.com/debpalash/Opal/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
+    <a href="../../releases"><img src="https://img.shields.io/github/v/release/debpalash/Opal?include_prereleases&color=8b5cf6&label=release" alt="Latest release" /></a>
+    <a href="../../releases"><img src="https://img.shields.io/github/downloads/debpalash/Opal/total?color=8b5cf6&label=downloads" alt="Total downloads" /></a>
+    <a href="../../stargazers"><img src="https://img.shields.io/github/stars/debpalash/Opal?color=8b5cf6&label=stars" alt="GitHub stars" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License: GPL-3.0" /></a>
-    <img src="https://img.shields.io/badge/zig-0.16-f7a41d" alt="Zig 0.16" />
-    <img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey" alt="Platforms: macOS, Linux, and Windows" />
+    <img src="https://img.shields.io/badge/zig-0.16-f7a41d" alt="Written in Zig 0.16" />
+    <img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey" alt="Runs on macOS, Linux, and Windows" />
   </p>
 
   <p>
@@ -24,11 +30,14 @@
     (<a href="https://ko-fi.com/debpalash">Ko-fi</a>, <a href="https://paypal.me/palashCoder">PayPal</a>)
   </p>
 
-  <img src="assets/screenshots/home.png" alt="Opal home — time-aware greeting, an ask-anything box, and tonight's trending row" width="100%" />
+  <img src="assets/screenshots/home.png" alt="Opal home screen — a time-aware greeting, an ask-anything search box, and tonight's trending row of movies and shows" width="100%" />
   <sub><em>It's late. Opal knows it's late.</em></sub>
 </div>
 
 <br/>
+
+> [!TIP]
+> **🔮 New in [v0.5.0](../../releases/tag/v0.5.0)** — a **~18,000-channel Live TV / IPTV** catalog with instant, virtualized search · **Mihon / Tachiyomi manga extensions** (Opal runs the Suwayomi server *for* you — install, browse, and read in-app) · a refined YouTube with **AV1-safe playback**. &nbsp;[See the full release →](../../releases/tag/v0.5.0)
 
 > **It's 11 PM and you just want to watch something.** So why are there nine
 > tabs open? A player for the files. A site for the show. An app for the
@@ -179,7 +188,7 @@ walks further in that direction ([`ROADMAP.md`](ROADMAP.md)).
     <td width="50%" valign="top">
       <img src="assets/screenshots/search.png" width="100%" alt="One query fanned out across every source, ranked" /><br/>
       <b>🔭 One search, every source</b><br/>
-      <sub>Disk, torrents, Jellyfin, Stremio, anime, YouTube, TMDB, comics — one ranked, playable list.</sub>
+      <sub>Disk, torrents, Jellyfin, Plex, Stremio, anime, YouTube, live TV, TMDB, manga — one ranked, playable list.</sub>
     </td>
   </tr>
   <tr>
@@ -202,10 +211,16 @@ walks further in that direction ([`ROADMAP.md`](ROADMAP.md)).
 
 ## Why it sticks
 
-- 🧲 **Magnets behave like files** — piece-prioritized streaming: press play
-  on a torrent and you're watching while it downloads.
-- 🔭 **Search once, everything answers** — disk, torrents, Jellyfin, Stremio,
-  anime, YouTube, TMDB, comics → one ranked list, a play button on every row.
+- 🔭 **Search once, everything answers** — disk, torrents, Jellyfin, Plex,
+  Stremio, anime, YouTube, live TV, TMDB, comics & manga → one ranked list, a
+  play button on every row.
+- 🧲 **Magnets behave like files** — piece-prioritized torrent streaming: press
+  play on a magnet and you're watching while it downloads.
+- 📺 **Live TV without the box** — a **~18,000-channel IPTV** catalog (iptv-org +
+  FAST/DTT sources) with virtualized scrolling and instant, as-you-type search.
+- 📚 **Manga & comics, extended** — a built-in reader *plus* **Mihon / Tachiyomi
+  extensions**: Opal downloads and runs an embedded **Suwayomi** server for you,
+  so you install extensions and read their sources without leaving the app.
 - 🤖 **A local AI copilot** — *"what should I watch if I loved Interstellar?"*
   answered with playable picks; hands-free voice (Whisper ears, Piper/Kokoro
   mouth, barge-in); taste memory in on-disk `sqlite-vec`. No API key, no bill,
@@ -215,10 +230,24 @@ walks further in that direction ([`ROADMAP.md`](ROADMAP.md)).
   phone web remote (`:3000`) · session restore mid-sentence.
 - 🗺️ **Browse like you own the place** — trending walls, genres, episode
   drill-downs across every source, including your Jellyfin and Plex.
-- 🧰 **…and the drawer** — comics & manga reader · live OCR on video frames ·
-  language-learning flashcards · recommendations · history & queue · RSS ·
-  incognito (<kbd>I</kbd>) · seven themes · JSON API (`:41595`) for your own
-  automations.
+- 🧰 **…and the drawer** — live OCR on video frames · language-learning
+  flashcards · recommendations · history & queue · RSS · incognito
+  (<kbd>I</kbd>) · seven themes · JSON API (`:41595`) for your own automations.
+
+## 🆚 One app instead of ten
+
+Opal is a free, open-source alternative to a whole shelf of tools — running
+locally, on your hardware, answering to you:
+
+| Instead of… | Opal gives you |
+|---|---|
+| **Stremio / Kodi** + a pile of add-ons | one search across every source, a play button on each row |
+| **an IPTV / live-TV app** | ~18,000 live channels, searchable as you type |
+| **Jellyfin / Plex** web clients | your own media servers, browsed natively |
+| **Tachiyomi / Mihon** stuck on your phone | manga extensions on the desktop — server bundled and self-managed |
+| **a torrent client** + a player | magnet → instant streaming while it downloads |
+| **ChatGPT** for *"what do I watch?"* | a local AI copilot — no key, no bill, no feed |
+| **SponsorBlock · subtitle sites · Chromecast apps** | all built in |
 
 ## ⌨️ Keyboard-first, remote-friendly
 
@@ -306,4 +335,11 @@ software is used or for content reached through third-party sources.
   <img src="assets/logo.svg" width="40" alt="" /><br/>
   <sub>Built with Zig, mpv, and an unreasonable number of late nights.<br/>
   <b>Now go watch something.</b></sub>
+
+  <br/><br/>
+  <sub>
+  <b>Opal</b> — open-source media player · IPTV / live TV player · torrent streaming ·
+  Jellyfin & Plex client · YouTube desktop app · manga reader (Mihon / Tachiyomi / Suwayomi) ·
+  local AI copilot · self-hosted Stremio & Kodi alternative · for macOS, Linux, and Windows.
+  </sub>
 </div>
