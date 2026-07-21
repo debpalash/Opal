@@ -4,7 +4,7 @@ contact_links:
     url: https://github.com/debpalash/Opal/discussions
     about: 'Setup help and "How do I…?" questions live in Discussions, not issues.'
   - name: Security vulnerability
-    url: https://github.com/debpalash/Opal/blob/main/SECURITY.md
+    url: https://github.com/debpalash/Opal/blob/main/.github/SECURITY.md
     about: Please report vulnerabilities privately — see SECURITY.md.
   - name: Copyright / takedown
     url: https://github.com/debpalash/Opal/blob/main/DMCA.md

@@ -36,7 +36,7 @@
 <br/>
 
 > [!TIP]
-> **🔮 New in [v0.5.0](../../releases/tag/v0.5.0)** — a **~18,000-channel Live TV / IPTV** catalog with instant, virtualized search · **Mihon / Tachiyomi manga extensions** (Opal runs the Suwayomi server *for* you — install, browse, and read in-app) · a refined YouTube with **AV1-safe playback**. &nbsp;[See the full release →](../../releases/tag/v0.5.0)
+> **🔮 New in [v0.5.0](../../releases/tag/v0.5.0)** — a **~40,000-channel Live TV / IPTV** catalog with instant, virtualized search · **Mihon / Tachiyomi manga extensions** (Opal runs the Suwayomi server *for* you — install, browse, and read in-app) · a refined YouTube with **AV1-safe playback**. &nbsp;[See the full release →](../../releases/tag/v0.5.0)
 
 Opal replaces the stack of apps you'd otherwise juggle — a player, a site for
 the show, a server front-end, a torrent client, a feed. You say what you want
@@ -127,7 +127,7 @@ zig build test      # pure-Zig unit tests only (fast)
 
 `fail` = real regression. `skip` = optional component not installed. That's
 the contract — and every PR reports its tally
-(see [`CONTRIBUTING.md`](CONTRIBUTING.md)).
+(see [`CONTRIBUTING.md`](.github/CONTRIBUTING.md)).
 
 </details>
 
@@ -199,14 +199,14 @@ walks further in that direction ([`ROADMAP.md`](ROADMAP.md)).
 
 <a id="the-ai"></a>
 
-## Why it sticks
+## Why?
 
 - 🔭 **Search once, everything answers** — disk, torrents, Jellyfin, Plex,
   Stremio, anime, YouTube, live TV, TMDB, comics & manga → one ranked list, a
   play button on every row.
 - 🧲 **Magnets behave like files** — piece-prioritized torrent streaming: press
   play on a magnet and you're watching while it downloads.
-- 📺 **Live TV without the box** — a **~18,000-channel IPTV** catalog (iptv-org +
+- 📺 **Live TV without the box** — a **~40,000-channel IPTV** catalog (iptv-org +
   FAST/DTT sources) with virtualized scrolling and instant, as-you-type search.
 - 📚 **Manga & comics, extended** — a built-in reader *plus* **Mihon / Tachiyomi
   extensions**: Opal downloads and runs an embedded **Suwayomi** server for you,
@@ -232,7 +232,7 @@ locally, on your hardware, answering to you:
 | Instead of… | Opal gives you |
 |---|---|
 | **Stremio / Kodi** + a pile of add-ons | one search across every source, a play button on each row |
-| **an IPTV / live-TV app** | ~18,000 live channels, searchable as you type |
+| **an IPTV / live-TV app** | ~40,000 live channels, searchable as you type |
 | **Jellyfin / Plex** web clients | your own media servers, browsed natively |
 | **Tachiyomi / Mihon** stuck on your phone | manga extensions on the desktop — server bundled and self-managed |
 | **a torrent client** + a player | magnet → instant streaming while it downloads |
@@ -270,7 +270,7 @@ allocator with leak detection on every exit; fixed-size buffers instead of
 heap churn; a single `state.app` hub with disciplined thread-safety rules; a
 render loop that repaints **only when something changed** (your fans will
 thank us); and a threaded-Io shim for Zig 0.16. House rules in
-[`CONTRIBUTING.md`](CONTRIBUTING.md); where this is all going in
+[`CONTRIBUTING.md`](.github/CONTRIBUTING.md); where this is all going in
 [`ROADMAP.md`](ROADMAP.md).
 
 Content sources ship **off**: the core has no sources configured and nothing
@@ -289,16 +289,16 @@ goodwill:
   💸 **[chip in via PayPal](https://paypal.me/palashCoder)** — donations keep
   the release cadence honest and the coffee supply uninterrupted.
 - ⭐ **Star the repo** — it's genuinely how people find it.
-- 🐛 **File good bugs** ([how](SUPPORT.md)) · 🔧 **send PRs** ([how](CONTRIBUTING.md)).
+- 🐛 **File good bugs** ([how](.github/SUPPORT.md)) · 🔧 **send PRs** ([how](.github/CONTRIBUTING.md)).
 - 📣 **Show someone.** This pitch lands best as a 30-second demo — the GIFs
   above are yours to share.
 
 ## 🤝 Contributing
 
-Yes please — read [`CONTRIBUTING.md`](CONTRIBUTING.md) and the
-[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), run `just test-all`, and report the
+Yes please — read [`CONTRIBUTING.md`](.github/CONTRIBUTING.md) and the
+[`CODE_OF_CONDUCT.md`](.github/CODE_OF_CONDUCT.md), run `just test-all`, and report the
 tally in your PR. Questions live in [Discussions](../../discussions);
-the full help map is in [`SUPPORT.md`](SUPPORT.md).
+the full help map is in [`SUPPORT.md`](.github/SUPPORT.md).
 
 ## 📜 License
 
