@@ -163,6 +163,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 #player{position:fixed;inset:0;background:#000;z-index:60;display:none;flex-direction:column}
 #player.on{display:flex}
 #player video{width:100%;flex:1;min-height:0;background:#000}
+#yt-embed{position:fixed;inset:0;background:#000;z-index:60;display:none;flex-direction:column}
+#yt-embed.on{display:flex}
+#yt-embed iframe{width:100%;flex:1;min-height:0;border:0;background:#000}
+#yt-embed .bar{display:flex;align-items:center;gap:10px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:var(--bg-1)}
+#yt-embed .bar .t{flex:1;font-size:13px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#yt-embed .bar button{color:var(--accent);font-weight:600}
 #player .bar{display:flex;align-items:center;gap:10px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));
   background:var(--bg-surface)}
 #player .bar .t{flex:1;font-size:13px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -226,6 +232,15 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   </section>
 
   <!-- Anime -->
+  <section class="page" id="page-yt">
+    <div class="search-row">
+      <input id="yt-q" placeholder="Search YouTube…" autocapitalize="off">
+      <button id="yt-go">Go</button>
+    </div>
+    <div class="hint" id="yt-hint">Search YouTube — tap a video to play it here.</div>
+    <div id="yt-results"></div>
+  </section>
+
   <section class="page" id="page-anime">
     <div class="search-row">
       <input id="anime-q" placeholder="Search anime…" autocapitalize="off">
@@ -302,6 +317,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   <button data-page="np" class="on"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg>Playing</button>
   <button data-page="browse"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Browse</button>
   <button data-page="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Search</button>
+  <button data-page="yt"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="3"/><path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none"/></svg>YouTube</button>
   <button data-page="anime"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg>Anime</button>
   <button data-page="podcasts"><svg viewBox="0 0 24 24"><circle cx="12" cy="11" r="3"/><path d="M12 14v7"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M6 14a8 8 0 1 1 12 0"/></svg>Podcasts</button>
   <button data-page="jf"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>Jellyfin</button>
@@ -323,6 +339,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 <div id="player">
   <video id="video" controls playsinline autoplay></video>
   <div class="bar"><div class="t" id="player-title"></div><button id="player-close">Close</button></div>
+</div>
+
+<!-- YouTube embed player (plays in the browser, hosted or companion) -->
+<div id="yt-embed">
+  <iframe id="yt-frame" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>
+  <div class="bar"><div class="t" id="yt-embed-title"></div><button id="yt-embed-close">Close</button></div>
 </div>
 
 <script>
@@ -371,7 +393,7 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   // Leaving the current tab: stop any settle watchers still polling a now-hidden
   // page (they otherwise keep hitting the server for ~36s). clearInterval on a
   // null/stale handle is a harmless no-op.
-  clearInterval(searchWatch); clearInterval(animeWatch); clearInterval(podWatch); clearInterval(jfWatch);
+  clearInterval(searchWatch); clearInterval(animeWatch); clearInterval(podWatch); clearInterval(jfWatch); clearInterval(ytWatch);
   jfLibTries = 0;
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'page-' + b.dataset.page));
@@ -740,6 +762,60 @@ function renderAnimeEpisodes(eps){
     b.textContent = '▶';
   });
 }
+
+// ── YouTube ──
+// /youtube/search triggers a background yt-dlp/InnerTube fetch and returns
+// {ok:true}; poll GET /youtube for {items:[{id,title,channel,dur_min,dur_sec,
+// views}],loading}. Playback is in-browser via the YouTube embed (works hosted
+// AND companion); on a desktop companion we instead hand the URL to mpv (/load).
+let ytWatch = null;
+const fmtViews = n => { n = +n || 0; return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? Math.round(n/1e3)+'K' : String(n); };
+$('yt-go').onclick = () => runYt();
+$('yt-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runYt(); $('yt-q').blur(); } });
+function runYt(){
+  const q = $('yt-q').value.trim(); if (!q) return;
+  $('yt-hint').innerHTML = '<span class="spin"></span> Searching YouTube…';
+  $('yt-results').innerHTML = ''; lastHtml.yt = '';
+  api('/youtube/search?q=' + encodeURIComponent(q)).catch(()=>{});
+  clearInterval(ytWatch);
+  let ticks = 0;
+  ytWatch = setInterval(async () => {
+    ticks++;
+    try {
+      const d = await api('/youtube');
+      renderYt(d.items || []);
+      if ((!d.loading && ticks > 2) || ticks > 40) {
+        clearInterval(ytWatch);
+        $('yt-hint').textContent = (d.items || []).length + ' videos.';
+      }
+    } catch { clearInterval(ytWatch); }
+  }, 900);
+}
+function renderYt(items){
+  const html = items.map(v => `
+    <div class="result">
+      <div class="t">${esc(v.title)}</div>
+      <div class="m">
+        <span class="src">${esc(v.channel || '')}</span>
+        ${(v.dur_min || v.dur_sec) ? `<span>${v.dur_min}:${String(v.dur_sec).padStart(2,'0')}</span>` : ''}
+        ${v.views ? `<span>${fmtViews(v.views)} views</span>` : ''}
+        <button class="play" data-id="${esc(v.id)}" data-title="${esc(v.title)}">Play</button>
+      </div>
+    </div>`).join('') || '<div class="empty">No results yet</div>';
+  if (html === lastHtml.yt) return;
+  lastHtml.yt = html;
+  $('yt-results').innerHTML = html;
+  $('yt-results').querySelectorAll('.play').forEach(b => b.onclick = () => {
+    if (HOSTED) openYtEmbed(b.dataset.id, b.dataset.title);
+    else { api('/load?url=' + encodeURIComponent('https://www.youtube.com/watch?v=' + b.dataset.id)).catch(()=>{}); b.textContent = 'Sent ✓'; }
+  });
+}
+function openYtEmbed(id, title){
+  $('yt-embed-title').textContent = title || '';
+  $('yt-frame').src = 'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(id) + '?autoplay=1';
+  $('yt-embed').classList.add('on');
+}
+$('yt-embed-close').onclick = () => { $('yt-frame').src = ''; $('yt-embed').classList.remove('on'); };
 
 // ── Podcasts ──
 // Server routes are async: /podcasts/search & /podcasts/episodes trigger
