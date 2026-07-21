@@ -22,6 +22,8 @@ VERTICALS = {
     "youtube":  ("yt",       "page-yt",       ["/youtube/search", "/youtube"]),
     "livetv":   ("tv",       "page-tv",       ["/livetv"]),
     "ai":       ("ai",       "page-ai",       ["/ai/send", "/ai"]),
+    "music":    ("music",    "page-music",    ["/music/search", "/music"]),
+    "radio":    ("radio",    "page-radio",    ["/radio/search", "/radio"]),
 }
 
 
@@ -138,3 +140,33 @@ def test_web_ui_ai():
     if missing:
         return "fail", "AI tab incomplete: " + ", ".join(missing)
     return "pass", "AI copilot: /api/ai send+poll transcript, phase, playable picks + web tab"
+
+
+@test("Web UI Music + Radio tabs and routes", "Web UI")
+def test_web_ui_music_radio():
+    ui = _src("web/index.html")
+    rm = _src("src/services/remote.zig")
+    checks = {
+        # Routes: async search + poll + play-by-index, like the other verticals.
+        "music route": "fn apiMusic(" in rm and '"/music/search"' in rm and '"/music/play"' in rm
+            and "music.searchMusic(" in rm and "music.playSong(" in rm,
+        "radio route": "fn apiRadio(" in rm and '"/radio/search"' in rm and '"/radio/play"' in rm
+            and "radio.searchRadio(" in rm and "radio.playStation(" in rm,
+        # GET seeds the once-per-session popular list.
+        "radio seeds popular": "radio.loadPopularOnce()" in rm,
+        # Direct stream URLs so a hosted browser can play them itself.
+        "music exposes stream url": "s.play_url[0..s.play_url_len]" in rm,
+        "radio prefers resolved url": "url_resolved_len > 0" in rm,
+        # Big result arrays -> heap, not the spawned-thread stack.
+        "responses heap-allocated": rm.count("alloc.alloc(u8, 96 * 1024)") >= 2,
+        # Web tabs.
+        "music tab": 'data-page="music"' in ui and 'id="page-music"' in ui and "function runMusic(" in ui,
+        "radio tab": 'data-page="radio"' in ui and 'id="page-radio"' in ui and "function runRadio(" in ui,
+        "hosted vs companion play": "HOSTED && u) openStreamUrl(" in ui
+            and "/music/play?idx=" in ui and "/radio/play?idx=" in ui,
+        "watchers cleaned": "clearInterval(muWatch)" in ui and "clearInterval(raWatch)" in ui,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "music/radio incomplete: " + ", ".join(missing)
+    return "pass", "Music + Radio: search/poll/play routes + tabs (hosted plays stream URL)"

@@ -267,6 +267,24 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
     <button id="ai-clear" class="btn-more">Clear chat</button>
   </section>
 
+  <section class="page" id="page-music">
+    <div class="search-row">
+      <input id="mu-q" placeholder="Search songs, artists…" autocapitalize="off">
+      <button id="mu-go">Go</button>
+    </div>
+    <div class="hint" id="mu-hint">Search music — plays here when hosted, on the desktop otherwise.</div>
+    <div id="mu-results"></div>
+  </section>
+
+  <section class="page" id="page-radio">
+    <div class="search-row">
+      <input id="ra-q" placeholder="Search stations, genres…" autocapitalize="off">
+      <button id="ra-go">Go</button>
+    </div>
+    <div class="hint" id="ra-hint">Loading popular stations…</div>
+    <div id="ra-results"></div>
+  </section>
+
   <section class="page" id="page-tv">
     <div class="search-row">
       <input id="tv-q" placeholder="Search live channels…" autocapitalize="off">
@@ -366,6 +384,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   <button data-page="yt"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="3"/><path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none"/></svg>YouTube</button>
   <button data-page="tv"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="13" rx="2"/><path d="m8 3 4 4 4-4"/></svg>Live TV</button>
   <button data-page="ai"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-4.2-7.6L21 4l-1 4.2A8.9 8.9 0 0 1 21 12z"/><path d="M8 12h.01M12 12h.01M16 12h.01"/></svg>Ask</button>
+  <button data-page="music"><svg viewBox="0 0 24 24"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg>Music</button>
+  <button data-page="radio"><svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="3"/><rect x="2" y="7" width="20" height="14" rx="2"/><path d="m16 3-8 4"/></svg>Radio</button>
   <button data-page="anime"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg>Anime</button>
   <button data-page="podcasts"><svg viewBox="0 0 24 24"><circle cx="12" cy="11" r="3"/><path d="M12 14v7"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M6 14a8 8 0 1 1 12 0"/></svg>Podcasts</button>
   <button data-page="jf"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>Jellyfin</button>
@@ -479,7 +499,7 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   // Leaving the current tab: stop any settle watchers still polling a now-hidden
   // page (they otherwise keep hitting the server for ~36s). clearInterval on a
   // null/stale handle is a harmless no-op.
-  clearInterval(searchWatch); clearInterval(animeWatch); clearInterval(podWatch); clearInterval(jfWatch); clearInterval(ytWatch); clearInterval(aiWatch);
+  clearInterval(searchWatch); clearInterval(animeWatch); clearInterval(podWatch); clearInterval(jfWatch); clearInterval(ytWatch); clearInterval(aiWatch); clearInterval(muWatch); clearInterval(raWatch);
   jfLibTries = 0;
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'page-' + b.dataset.page));
@@ -488,6 +508,8 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   if (b.dataset.page === 'setup') loadSetup();
   if (b.dataset.page === 'tv') loadTv();
   if (b.dataset.page === 'ai') loadAi();
+  if (b.dataset.page === 'music') loadMusic();
+  if (b.dataset.page === 'radio') loadRadio();
   if (b.dataset.page === 'anime') loadAnime();
   if (b.dataset.page === 'podcasts') loadPodcasts();
   if (b.dataset.page === 'jf') loadJellyfin();
@@ -901,6 +923,102 @@ function renderAnimeEpisodes(eps){
   $('anime-episodes').querySelectorAll('.ep-btn').forEach(b => b.onclick = () => {
     api('/anime/play?ep=' + encodeURIComponent(b.dataset.ep)).catch(()=>{});
     b.textContent = '▶';
+  });
+}
+
+// ── Music ──
+// /music/search kicks off an async fetch; poll GET /music for {loading,songs}.
+// Each song carries a direct stream url: hosted plays it in the browser,
+// companion hands the index to the desktop player.
+let muWatch = null;
+function loadMusic(){ api('/music').then(d => renderMusic(d.songs || [])).catch(()=>{}); }
+$('mu-go').onclick = () => runMusic();
+$('mu-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runMusic(); $('mu-q').blur(); } });
+function runMusic(){
+  const q = $('mu-q').value.trim(); if (!q) return;
+  $('mu-hint').innerHTML = '<span class="spin"></span> Searching music…';
+  $('mu-results').innerHTML = ''; lastHtml.music = '';
+  api('/music/search?q=' + encodeURIComponent(q)).catch(()=>{});
+  clearInterval(muWatch);
+  let ticks = 0;
+  muWatch = setInterval(async () => {
+    ticks++;
+    try {
+      const d = await api('/music');
+      renderMusic(d.songs || []);
+      if ((!d.loading && ticks > 2) || ticks > 40) {
+        clearInterval(muWatch);
+        $('mu-hint').textContent = (d.songs || []).length + ' songs.';
+      }
+    } catch { clearInterval(muWatch); }
+  }, 900);
+}
+function renderMusic(songs){
+  const html = songs.map((s, i) => `
+    <div class="result">
+      <div class="t">${esc(s.title)}</div>
+      <div class="m"><span class="src">${esc(s.artist || '')}</span>
+        <button class="play" data-i="${i}" data-url="${encodeURIComponent(s.url || '')}">Play</button></div>
+    </div>`).join('') || '<div class="empty">No songs yet</div>';
+  if (html === lastHtml.music) return;
+  lastHtml.music = html;
+  $('mu-results').innerHTML = html;
+  $('mu-results').querySelectorAll('.play').forEach(b => b.onclick = () => {
+    const u = decodeURIComponent(b.dataset.url || '');
+    if (HOSTED && u) openStreamUrl(u, b.parentElement.parentElement.querySelector('.t').textContent);
+    else { api('/music/play?idx=' + b.dataset.i).catch(()=>{}); b.textContent = 'Sent ✓'; }
+  });
+}
+
+// ── Radio ──
+// GET /radio seeds the popular list on first open; /radio/search filters.
+let raWatch = null;
+function loadRadio(){
+  api('/radio').then(d => {
+    renderRadio(d.stations || []);
+    if (d.loading) pollRadio();
+    else $('ra-hint').textContent = (d.stations || []).length + ' stations.';
+  }).catch(()=>{});
+}
+$('ra-go').onclick = () => runRadio();
+$('ra-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runRadio(); $('ra-q').blur(); } });
+function runRadio(){
+  const q = $('ra-q').value.trim(); if (!q) return;
+  $('ra-hint').innerHTML = '<span class="spin"></span> Searching stations…';
+  api('/radio/search?q=' + encodeURIComponent(q)).catch(()=>{});
+  pollRadio();
+}
+function pollRadio(){
+  clearInterval(raWatch);
+  let ticks = 0;
+  raWatch = setInterval(async () => {
+    ticks++;
+    try {
+      const d = await api('/radio');
+      renderRadio(d.stations || []);
+      if ((!d.loading && ticks > 2) || ticks > 40) {
+        clearInterval(raWatch);
+        $('ra-hint').textContent = (d.stations || []).length + ' stations.';
+      }
+    } catch { clearInterval(raWatch); }
+  }, 900);
+}
+function renderRadio(sts){
+  const html = sts.map((s, i) => `
+    <div class="result">
+      <div class="t">${esc(s.name)}</div>
+      <div class="m">
+        ${s.country ? `<span class="src">${esc(s.country)}</span>` : ''}
+        ${s.tags ? `<span>${esc((s.tags || '').split(',').slice(0,2).join(', '))}</span>` : ''}
+        <button class="play" data-i="${i}" data-url="${encodeURIComponent(s.url || '')}">Listen</button></div>
+    </div>`).join('') || '<div class="empty">No stations yet</div>';
+  if (html === lastHtml.radio) return;
+  lastHtml.radio = html;
+  $('ra-results').innerHTML = html;
+  $('ra-results').querySelectorAll('.play').forEach(b => b.onclick = () => {
+    const u = decodeURIComponent(b.dataset.url || '');
+    if (HOSTED && u) openStreamUrl(u, b.parentElement.parentElement.querySelector('.t').textContent);
+    else { api('/radio/play?idx=' + b.dataset.i).catch(()=>{}); b.textContent = 'Sent ✓'; }
   });
 }
 

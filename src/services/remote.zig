@@ -536,6 +536,14 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         apiAi(stream, api_path, query);
         return;
     }
+    if (std.mem.startsWith(u8, api_path, "/music")) {
+        apiMusic(stream, api_path, query);
+        return;
+    }
+    if (std.mem.startsWith(u8, api_path, "/radio")) {
+        apiRadio(stream, api_path, query);
+        return;
+    }
     if (std.mem.eql(u8, api_path, "/history")) {
         apiHistory(stream);
         return;
@@ -1103,6 +1111,119 @@ fn apiSearch(stream: std.Io.net.Stream, query: []const u8) void {
     w.writeAll(if (search_svc.is_searching.load(.acquire)) "true" else "false") catch return;
     w.writeAll("}") catch return;
     sendJson(stream, json_buf[0..w.end]);
+}
+
+/// Music (JioSaavn / Subsonic / Jellyfin / Plex). Async search + poll:
+///   POST /api/music/search?q=  → {"ok":true}
+///   POST /api/music/play?idx=  → play on the desktop (companion mode)
+///   GET  /api/music            → {loading,source,songs:[{title,artist,cover,url}]}
+/// `url` is the direct stream, so a hosted browser can play it itself.
+fn apiMusic(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+    const music = @import("music_subsonic.zig");
+    const alloc = @import("../core/alloc.zig").allocator;
+
+    if (std.mem.eql(u8, api_path, "/music/search")) {
+        if (getQueryParam(query, "q")) |raw| {
+            var dec: [256]u8 = undefined;
+            music.searchMusic(urlDecode(raw, &dec) orelse raw);
+        }
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/music/play")) {
+        if (getQueryParam(query, "idx")) |v| {
+            const idx = std.fmt.parseInt(usize, v, 10) catch 0;
+            if (idx < state.app.music.result_count) music.playSong(idx);
+        }
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
+
+    const buf = alloc.alloc(u8, 96 * 1024) catch {
+        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(buf);
+    var w = std.Io.Writer.fixed(buf);
+    w.print("{{\"loading\":{s},\"source\":{d},\"songs\":[", .{
+        if (state.app.music.is_loading.load(.acquire)) "true" else "false",
+        state.app.music.source,
+    }) catch return;
+    var i: usize = 0;
+    const n = @min(state.app.music.result_count, 80);
+    while (i < n) : (i += 1) {
+        const s = state.app.music.results[i];
+        if (i > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"title\":\"") catch return;
+        escJsonWrite(&w, s.title[0..s.title_len]);
+        w.writeAll("\",\"artist\":\"") catch return;
+        escJsonWrite(&w, s.artist[0..s.artist_len]);
+        w.writeAll("\",\"cover\":\"") catch return;
+        escJsonWrite(&w, s.cover[0..s.cover_len]);
+        w.writeAll("\",\"url\":\"") catch return;
+        escJsonWrite(&w, s.play_url[0..s.play_url_len]);
+        w.writeAll("\"}") catch return;
+    }
+    w.writeAll("]}") catch return;
+    sendJson(stream, buf[0..w.end]);
+}
+
+/// Internet radio (radio-browser). Same async shape as music; GET seeds the
+/// once-per-session popular list when nothing has been searched yet.
+///   POST /api/radio/search?q= · POST /api/radio/play?idx= · GET /api/radio
+fn apiRadio(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+    const radio = @import("radio.zig");
+    const alloc = @import("../core/alloc.zig").allocator;
+
+    if (std.mem.eql(u8, api_path, "/radio/search")) {
+        if (getQueryParam(query, "q")) |raw| {
+            var dec: [256]u8 = undefined;
+            radio.searchRadio(urlDecode(raw, &dec) orelse raw);
+        }
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/radio/play")) {
+        if (getQueryParam(query, "idx")) |v| {
+            const idx = std.fmt.parseInt(usize, v, 10) catch 0;
+            if (idx < state.app.radio.result_count) radio.playStation(idx);
+        }
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
+
+    // Nothing loaded yet → seed the popular list (once per session, async).
+    if (state.app.radio.result_count == 0) radio.loadPopularOnce();
+
+    const buf = alloc.alloc(u8, 96 * 1024) catch {
+        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(buf);
+    var w = std.Io.Writer.fixed(buf);
+    w.print("{{\"loading\":{s},\"stations\":[", .{
+        if (state.app.radio.is_loading.load(.acquire)) "true" else "false",
+    }) catch return;
+    var i: usize = 0;
+    const n = @min(state.app.radio.result_count, 80);
+    while (i < n) : (i += 1) {
+        const st = state.app.radio.results[i];
+        const u = if (st.url_resolved_len > 0) st.url_resolved[0..st.url_resolved_len] else st.url[0..st.url_len];
+        if (i > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"name\":\"") catch return;
+        escJsonWrite(&w, st.name[0..st.name_len]);
+        w.writeAll("\",\"url\":\"") catch return;
+        escJsonWrite(&w, u);
+        w.writeAll("\",\"favicon\":\"") catch return;
+        escJsonWrite(&w, st.favicon[0..st.favicon_len]);
+        w.writeAll("\",\"tags\":\"") catch return;
+        escJsonWrite(&w, st.tags[0..st.tags_len]);
+        w.writeAll("\",\"country\":\"") catch return;
+        escJsonWrite(&w, st.country[0..st.country_len]);
+        w.writeAll("\"}") catch return;
+    }
+    w.writeAll("]}") catch return;
+    sendJson(stream, buf[0..w.end]);
 }
 
 /// Local AI copilot. Async like the other verticals: POST /api/ai/send?q= kicks
