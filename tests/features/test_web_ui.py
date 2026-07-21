@@ -21,6 +21,7 @@ VERTICALS = {
     "activity": ("act",      "page-act",      ["/torrents", "/queue", "/downloads", "/history"]),
     "youtube":  ("yt",       "page-yt",       ["/youtube/search", "/youtube"]),
     "livetv":   ("tv",       "page-tv",       ["/livetv"]),
+    "ai":       ("ai",       "page-ai",       ["/ai/send", "/ai"]),
 }
 
 
@@ -112,3 +113,28 @@ def test_web_ui_downloads_and_sources():
     if missing:
         return "fail", "download/source UI incomplete: " + ", ".join(missing)
     return "pass", "Activity add-download (url+magnet) + Setup source catalog install"
+
+
+@test("Web UI AI copilot tab + /api/ai route", "Web UI")
+def test_web_ui_ai():
+    ui = _src("web/index.html")
+    rm = _src("src/services/remote.zig")
+    checks = {
+        # Server: async send + poll, mirroring the other verticals.
+        "route dispatch": '"/ai"' in rm and "fn apiAi(" in rm,
+        "send + clear": '"/ai/send"' in rm and '"/ai/clear"' in rm and "chat.sendMessage()" in rm,
+        "transcript + phase": "chat.message_count" in rm and "phaseLabel(chat.phase)" in rm,
+        # Playable picks the model resolved come back with the transcript.
+        "playable results": "chat.chat_result_count" in rm and "chat_results[r]" in rm,
+        # A 50-msg transcript can exceed 100KB — must not sit on the thread stack.
+        "response heap-allocated": "alloc.alloc(u8, 192 * 1024)" in rm,
+        # Web: tab, transcript, ask, results.
+        "tab wired": 'data-page="ai"' in ui and 'id="page-ai"' in ui and "function loadAi(" in ui,
+        "ask + poll": "function askAi(" in ui and "/ai/send?q=" in ui and "aiWatch" in ui,
+        "renders transcript": "function renderAi(" in ui and 'class="msg' in ui,
+        "watcher cleanup": "clearInterval(aiWatch)" in ui,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "AI tab incomplete: " + ", ".join(missing)
+    return "pass", "AI copilot: /api/ai send+poll transcript, phase, playable picks + web tab"

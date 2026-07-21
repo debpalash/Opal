@@ -532,6 +532,10 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         apiLiveTv(stream, query);
         return;
     }
+    if (std.mem.startsWith(u8, api_path, "/ai")) {
+        apiAi(stream, api_path, query);
+        return;
+    }
     if (std.mem.eql(u8, api_path, "/history")) {
         apiHistory(stream);
         return;
@@ -1099,6 +1103,74 @@ fn apiSearch(stream: std.Io.net.Stream, query: []const u8) void {
     w.writeAll(if (search_svc.is_searching.load(.acquire)) "true" else "false") catch return;
     w.writeAll("}") catch return;
     sendJson(stream, json_buf[0..w.end]);
+}
+
+/// Local AI copilot. Async like the other verticals: POST /api/ai/send?q= kicks
+/// off generation and returns {ok}; poll GET /api/ai for the transcript, the
+/// current phase, and any playable picks the model resolved.
+///   POST /api/ai/send?q=…   → {"ok":true}
+///   POST /api/ai/clear      → {"ok":true}
+///   GET  /api/ai            → {generating,phase,messages:[{role,text}],results:[…]}
+/// The response is heap-allocated: a 50-message transcript can exceed 100 KB,
+/// far past the spawned-thread stack budget.
+fn apiAi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+    const chat = @import("ai_chat.zig");
+    const alloc = @import("../core/alloc.zig").allocator;
+
+    if (std.mem.eql(u8, api_path, "/ai/send")) {
+        if (getQueryParam(query, "q")) |raw| {
+            var dec: [1024]u8 = undefined;
+            const q = urlDecode(raw, &dec) orelse raw;
+            const n = @min(q.len, chat.MAX_INPUT_LEN - 1);
+            @memcpy(chat.input_buf[0..n], q[0..n]);
+            chat.input_len = n;
+            chat.sendMessage();
+        }
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/ai/clear")) {
+        chat.clearHistory();
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
+
+    const buf = alloc.alloc(u8, 192 * 1024) catch {
+        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(buf);
+    var w = std.Io.Writer.fixed(buf);
+    w.print("{{\"generating\":{s},\"phase\":\"", .{
+        if (chat.is_generating.load(.acquire)) "true" else "false",
+    }) catch return;
+    escJsonWrite(&w, chat.phaseLabel(chat.phase));
+    w.writeAll("\",\"messages\":[") catch return;
+    var i: usize = 0;
+    while (i < chat.message_count and i < chat.MAX_MESSAGES) : (i += 1) {
+        const m = chat.messages[i];
+        if (i > 0) w.writeAll(",") catch return;
+        w.print("{{\"role\":\"{s}\",\"text\":\"", .{@tagName(m.role)}) catch return;
+        escJsonWrite(&w, m.text[0..m.text_len]);
+        w.writeAll("\"}") catch return;
+    }
+    // Playable picks the copilot resolved (magnets/urls) — the web UI can play
+    // them straight from the answer.
+    w.writeAll("],\"results\":[") catch return;
+    var r: usize = 0;
+    while (r < chat.chat_result_count and r < chat.chat_results.len) : (r += 1) {
+        const it = chat.chat_results[r];
+        if (r > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"name\":\"") catch return;
+        escJsonWrite(&w, it.name[0..it.name_len]);
+        w.writeAll("\",\"detail\":\"") catch return;
+        escJsonWrite(&w, it.detail[0..it.detail_len]);
+        w.writeAll("\",\"url\":\"") catch return;
+        escJsonWrite(&w, it.url[0..it.url_len]);
+        w.writeAll("\"}") catch return;
+    }
+    w.writeAll("]}") catch return;
+    sendJson(stream, buf[0..w.end]);
 }
 
 /// Live TV / IPTV: page the SQLite channel catalog.
