@@ -22,7 +22,7 @@ pub const GridMode = enum { auto, cols_1, cols_2, cols_3, cols_4 };
 pub const ContentProvider = enum { mpv, comic_viewer };
 pub const VideoFillMode = enum { fit, cover };
 pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Audiobooks, Opds, Novels, Vndb, Drama, Iptv, Music };
-pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, Scripts, AI, LangLearn, FileAssoc, About };
+pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, Scripts, AI, LangLearn, FileAssoc, LiveTv, About };
 pub const TmdbView = enum { Trending, Search, Favorites, Watchlist, Watching };
 pub const TmdbCategory = enum { trending, now_playing, top_rated, upcoming, popular };
 pub const TmdbMediaFilter = enum { all, movie, tv };
@@ -996,9 +996,10 @@ pub const AppState = struct {
         // True while results[] holds the full popular directory rather than a
         // user search — drives the grid heading only.
         showing_popular: bool = false,
-        // Fixed array (never reallocated) — the channel cap. 300 keeps the parse
-        // bounded so we never hold the ~4 MB feed as parsed objects.
-        results: [300]iptv_pure.IptvChannel = std.mem.zeroes([300]iptv_pure.IptvChannel),
+        // Fixed render window (never reallocated). The full directory lives in
+        // the SQLite catalog (services/iptv_catalog.zig); this holds only the
+        // paged slice the grid draws — see iptv_pure.RENDER_WINDOW.
+        results: [iptv_pure.RENDER_WINDOW]iptv_pure.IptvChannel = std.mem.zeroes([iptv_pure.RENDER_WINDOW]iptv_pure.IptvChannel),
         result_count: usize = 0,
         // Browse filters (Live TV filter bar). Empty category/country = all;
         // filter_quality/sort_mode are QualityFilter/SortMode enum indices. A
@@ -1012,10 +1013,6 @@ pub const AppState = struct {
         // Quick-filter view: 0 = All (network), 1 = Favorites, 2 = Recent (both
         // loaded from the iptv_channels table — services/iptv_store.zig).
         quick_filter: u8 = 0,
-        // Settings input for a personal M3U playlist URL (overrides the public
-        // directory when set). Persisted to source_config on Save.
-        m3u_cfg: [512]u8 = std.mem.zeroes([512]u8),
-        m3u_loaded: bool = false,
     } = .{},
 
     // ── Music (Subsonic/OpenSubsonic library → audio stream via mpv) ──

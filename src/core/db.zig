@@ -525,6 +525,66 @@ fn createTables() void {
     );
     exec("CREATE INDEX IF NOT EXISTS idx_link_health_kind ON link_health(kind, checked_at)");
 
+    // Live TV channel CATALOG. The Live TV directory used to live in a fixed
+    // [300]IptvChannel array in app state — fine for one iptv-org window, but the
+    // goal is now every channel from many user playlists (100k+), which no static
+    // BSS array can hold (~1.7KB/channel → ~170MB at 100k). So the catalog is a
+    // table: each installed source is ingested once (SWR, 24h), the render path
+    // pages it with LIMIT/OFFSET, and search is a LIKE over an index. FTS5 would
+    // be nicer but the Windows mingw libsqlite3 may lack it, and a LIKE scan over
+    // an indexed name column is sub-10ms even at 100k — so no FTS dependency.
+    //
+    // `source_id` is the installed plugin id the row came from, so a source can
+    // be re-ingested or removed atomically (DELETE WHERE source_id=?). The unique
+    // (source_id, url_hash) key dedupes a playlist that lists the same stream
+    // twice without an O(n^2) in-memory pass. `nsfw` is stored so the hard
+    // adult-filter is a WHERE clause, never a trust-the-upstream assumption.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS iptv_catalog (
+        \\  id INTEGER PRIMARY KEY,
+        \\  source_id TEXT NOT NULL,
+        \\  url_hash INTEGER NOT NULL,
+        \\  name TEXT NOT NULL,
+        \\  name_lc TEXT NOT NULL,
+        \\  url TEXT NOT NULL,
+        \\  logo TEXT,
+        \\  category TEXT,
+        \\  country TEXT,
+        \\  quality TEXT,
+        \\  user_agent TEXT,
+        \\  referrer TEXT,
+        \\  nsfw INTEGER DEFAULT 0,
+        \\  quality_tier INTEGER DEFAULT 0,
+        \\  UNIQUE (source_id, url_hash)
+        \\)
+    );
+    // quality_tier (leading integer of the quality label, e.g. "1080p"→1080) was
+    // added after the first catalog shipped; back-fill the column on pre-existing
+    // catalogs so the Live TV quality filter/sort has it. Guarded by a pragma
+    // check (ADD COLUMN would error every startup otherwise). Disposable cache —
+    // existing rows read tier 0 until the next 24h SWR re-ingest recomputes them.
+    if (tableExists("iptv_catalog")) {
+        const stmt = prepare("SELECT 1 FROM pragma_table_info('iptv_catalog') WHERE name='quality_tier'");
+        defer finalize(stmt);
+        if (stmt != null and step(stmt) != c.SQLITE_ROW)
+            exec("ALTER TABLE iptv_catalog ADD COLUMN quality_tier INTEGER DEFAULT 0");
+    }
+    // name_lc drives the search LIKE (lowercased at ingest so the query need not
+    // call lower() per row); country/category drive the drill-in facets.
+    exec("CREATE INDEX IF NOT EXISTS idx_iptv_catalog_name ON iptv_catalog(name_lc)");
+    exec("CREATE INDEX IF NOT EXISTS idx_iptv_catalog_source ON iptv_catalog(source_id)");
+    exec("CREATE INDEX IF NOT EXISTS idx_iptv_catalog_facets ON iptv_catalog(country, category)");
+    // Per-source ingest bookkeeping: when a source was last ingested (drives the
+    // 24h SWR refresh) and how many channels it contributed (so the settings
+    // page shows counts without a COUNT(*) scan of a 100k table).
+    exec(
+        \\CREATE TABLE IF NOT EXISTS iptv_source_meta (
+        \\  source_id TEXT PRIMARY KEY,
+        \\  ingested_at INTEGER DEFAULT 0,
+        \\  channel_count INTEGER DEFAULT 0
+        \\)
+    );
+
     // Carry existing continue-watching shows into tv_shows, once. OR IGNORE makes
     // it idempotent and keeps a real tv_shows row from being clobbered by the
     // stale tv_continue one. No data is at risk: watched history lives in

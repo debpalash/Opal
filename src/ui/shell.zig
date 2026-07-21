@@ -538,7 +538,38 @@ fn isMedia(text: []const u8) bool {
 fn renderPage(r: Route) !void {
     switch (r) {
         .player => {
-            try @import("grid.zig").renderGrid();
+            // Player route: the grid (video/waveform cell) on the left, and — when
+            // synced lyrics are loaded — a docked lyrics column on the right. The
+            // lyrics column is a real layout slot, NOT an overlay, so it can never
+            // cover the waveform/video in the cell.
+            const show_lyrics = blk: {
+                if (state.app.active_player_idx >= state.app.players.items.len) break :blk false;
+                if (state.app.players.items[state.app.active_player_idx].provider != .mpv) break :blk false;
+                break :blk @import("../services/music_subsonic.zig").lyricsHave();
+            };
+
+            if (show_lyrics) {
+                // Horizontal split: video/waveform grid (flex) + docked lyrics
+                // column (fixed 320px). renderGrid()'s own grid_wrapper is
+                // `.expand = .both`, so it IS the flex child directly — no extra
+                // `left` wrapper. That matters: the video texture fills the cell
+                // via `.expand = .ratio`, which (dvui.placeIn) only grows to a
+                // parent whose content rect already has a DEFINITE height. Every
+                // ancestor box must propagate full height down its main axis; an
+                // extra vertical wrapper here added a min-size propagation level
+                // that (together with the fixed, non-vertically-expanding lyrics
+                // sibling) left the cell chain resolving to the grid's tiny min
+                // height, collapsing the ratio image to a min-sized box. Fewer
+                // levels + both split children vertically-expanding (see the
+                // panel's `.expand = .vertical`) keeps the height unambiguous.
+                var split = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+                defer split.deinit();
+                try @import("grid.zig").renderGrid();
+                @import("../services/music_subsonic.zig").renderLyricsPanel();
+            } else {
+                try @import("grid.zig").renderGrid();
+            }
+
             // Transport controls overlay (play/pause/scrubber/volume). The
             // legacy layout calls this right after the grid (main.zig); the page
             // shell must too, or the player has no controls. Gated internally by

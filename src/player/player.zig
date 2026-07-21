@@ -847,13 +847,17 @@ pub const MediaPlayer = struct {
 
     pub fn applyYtdlFormat(self: *MediaPlayer) void {
         const ytdlp = @import("../services/ytdlp.zig");
-        const fmt_strings = [_][*:0]const u8{ "bestvideo[height<=?720]+bestaudio/best", "bestvideo[height<=?1080]+bestaudio/best", "bestvideo[height<=?2160]+bestaudio/best", "bestaudio/best" };
-        const active_fmt = fmt_strings[state.app.ytdl_format_idx];
+        // The format string deprioritizes AV1 (av01): many GPUs — Apple Silicon
+        // before M3, and older PCs — can't hardware-decode it, and mpv then shows
+        // a black frame with audio only. vp9/h264 videotoolbox-decode fine. Built
+        // in a tested pure module so the exact -f string is covered.
+        const ytdl_format = @import("ytdl_format_pure.zig");
+        const active_fmt = ytdl_format.formatFor(state.app.ytdl_format_idx);
         // Use bundled yt-dlp if available, else fall back to system
         const ytdl_path = ytdlp.getPath() orelse "yt-dlp";
 
         // ytdl-format is a top-level mpv option
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-format", active_fmt);
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-format", active_fmt.ptr);
 
         // ytdl-raw-options is a top-level mpv option (NOT script-opts!)
         // cookies-from-browser: reuse Firefox session for auth/cookie walls —

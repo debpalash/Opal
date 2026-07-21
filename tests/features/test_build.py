@@ -236,6 +236,33 @@ def test_youtube_player_client():
     return "pass", "no pinned yt-dlp player client; raw options built by tested pure fn"
 
 
+@test("yt-dlp format deprioritizes AV1", "Player")
+def test_ytdl_format_av1():
+    # REGRESSION — YouTube video played as a BLACK frame with audio only on Macs
+    # without an AV1 hardware decoder (Apple Silicon pre-M3): the format asked for
+    # plain "best" video, which is av01 at 1080p+, and videotoolbox can't decode
+    # it ("Your platform doesn't support hardware accelerated AV1 decoding" ->
+    # "Video: no video"). The -f string must prefer vp9/h264 (both hw-decode),
+    # with an any-codec last resort so a clip that ONLY has AV1 still plays.
+    player = _src("src/player/player.zig")
+    fmt = _src("src/player/ytdl_format_pure.zig")
+    build = _src("build.zig")
+    checks = {
+        "pure format module present": "pub fn formatFor" in fmt,
+        "excludes av01": "[vcodec!*=av01]" in fmt,
+        "any-codec fallback kept": fmt.count('test "') >= 3 and "/best" in fmt,
+        "player routes through it": "ytdl_format_pure" in player
+            and "formatFor(state.app.ytdl_format_idx)" in player,
+        # The old inline format array (no codec preference) must be gone.
+        "inline best-only array removed": 'bestvideo[height<=?720]+bestaudio/best"' not in player,
+        "test registered": 'b.path("src/player/ytdl_format_pure.zig")' in build,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "av1 format regression: " + ", ".join(bad)
+    return "pass", "ytdl-format prefers vp9/h264 over av1 (hw-decodable), any-codec fallback"
+
+
 @test("Anime data loads despite Jikan flakiness", "Network")
 def test_anime_jikan_resilience():
     # REGRESSION — every anime view was blank by default: Jikan 504s on the

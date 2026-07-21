@@ -869,6 +869,53 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_lyrics_pure).step);
 
+    // Play-queue row width budget. dvui's horizontal box starves later siblings
+    // instead of shrinking earlier ones, so an uncapped title label used to eat
+    // the row and leave the move/play/remove buttons at zero width. These tests
+    // pin the arithmetic that keeps the action strip reserved at every UI scale.
+    const test_queue_layout_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/queue_layout_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_queue_layout_pure).step);
+
+    // Live TV SQLite catalog: LIKE-pattern escaping/lowercasing and the adult
+    // group denylist that keeps porn out of the 100k-channel directory.
+    const test_iptv_catalog_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/iptv_catalog_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_iptv_catalog_pure).step);
+
+    // Curated Live TV source registry: id safety, per-kind install body, URL
+    // classification for the custom-playlist box.
+    const test_iptv_sources = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/iptv_sources.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_iptv_sources).step);
+
+    // yt-dlp format selection: the -f string must deprioritize AV1 (av01) so
+    // GPUs without an AV1 decoder (Apple Silicon pre-M3) get a decodable stream
+    // instead of a black frame, while keeping an any-codec last resort.
+    const test_ytdl_format_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/ytdl_format_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_ytdl_format_pure).step);
+
     // Home console display helpers (hex-hash watch-history names).
     const test_home_pure = b.addTest(.{
         .root_module = b.createModule(.{
@@ -1190,6 +1237,17 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_manga_suwayomi_pure).step);
+
+    // Mihon/Tachiyomi extension-repo support — curated repos, index.min.json
+    // parsing (extension/source ingest) + Suwayomi /api/v1/extension/* builders.
+    const test_mihon_repo_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/mihon_repo_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_mihon_repo_pure).step);
 
     // Subsonic/OpenSubsonic music engine — MD5 token auth + search/stream/cover
     // URL building + song JSON extraction (one engine covers Navidrome/Airsonic/…).

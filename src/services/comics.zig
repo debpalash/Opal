@@ -27,6 +27,7 @@ const heancms = @import("manga_heancms_pure.zig");
 // extension without reimplementing each engine. URL/JSON logic is all in
 // manga_suwayomi_pure so the shipped requests are the tested requests.
 const suwayomi = @import("manga_suwayomi_pure.zig");
+const mihon = @import("mihon.zig"); // extension discovery/install panel
 // Anti-block fetch layer — a fast plain GET, transparently re-fetched through
 // the anti-detect browser when the response is a Cloudflare/DDoS-Guard/captcha
 // interstitial. The HTML-scraper framework fetches (Madara / MangaThemesia base
@@ -1622,6 +1623,26 @@ fn suwayomiSourceId() ?[]const u8 {
     return @import("../core/source_config.zig").get("suwayomi", "source");
 }
 
+/// Point the Comics grid at a specific installed Suwayomi source (a numeric
+/// source id from an extension the user just installed via the Mihon panel):
+/// persist it as suwayomi/source, select the Suwayomi source filter, close the
+/// extension panel, and load that source's default listing. This is the bridge
+/// from "installed an extension" to "browse its manga". Called by mihon.zig.
+pub fn browseSuwayomiSource(source_id: []const u8) void {
+    if (source_id.len == 0) return;
+    const sc = @import("../core/source_config.zig");
+    // Merge into the existing suwayomi config (keep base), set/replace source.
+    var body: [256]u8 = undefined;
+    const base = suwayomiBase() orelse "";
+    if (std.fmt.bufPrint(&body, "{{\"base\":\"{s}\",\"source\":\"{s}\"}}", .{ base, source_id })) |b| {
+        _ = sc.install("suwayomi", b);
+    } else |_| return;
+    mihon.close();
+    active_source = .suwayomi;
+    // Kick a default listing for the newly selected source.
+    searchComics(DEFAULT_FEED_QUERY);
+}
+
 /// Does this source participate in the current selection?
 fn sourceActive(src: Source) bool {
     return active_source == .all or active_source == src;
@@ -2737,6 +2758,12 @@ fn coverWorker(idx: usize) void {
 
 pub fn renderContent() void {
     drainPageTexFrees(); // free textures queued by the plugin manga-reload worker (UI thread)
+    // Mihon extension browser takes over the whole tab when open (its own repo
+    // picker + install list); the button below opens it.
+    if (mihon.isOpen()) {
+        mihon.renderPanel();
+        return;
+    }
     // A comic is open → the reader fills the whole tab (images + tools live in
     // renderPaneContent). Reading happens here in Browse, not the player route.
     if (state.app.comic.is_loading.load(.acquire) or state.app.comic.page_count > 0) {
@@ -2844,7 +2871,26 @@ pub fn renderContent() void {
         // Madara engine (~332 WordPress sites) — inert until a "madara" source is
         // installed, exactly like ReadAllComics.
         renderSourceChip("Madara", 5, .madara);
+        // Suwayomi (Mihon extensions) — only when a server + source are set, so
+        // the chip appears once the user has installed + picked an extension.
+        if (suwayomiBase() != null and suwayomiSourceId() != null) {
+            renderSourceChip("Suwayomi", 6, .suwayomi);
+        }
         renderPluginSourceBadges();
+
+        // Extensions — opens the Mihon extension browser (fetch a repo's
+        // index.min.json, install/remove onto the Suwayomi server).
+        if (dvui.button(@src(), "Extensions", .{}, .{
+            .id_extra = 73500,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.accent,
+            .color_border = theme.colors.accent,
+            .border = dvui.Rect.all(1),
+            .corner_radius = theme.dims.rad_md,
+            .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
+            .margin = .{ .x = 6, .y = 0, .w = 2, .h = 0 },
+            .gravity_y = 0.5,
+        })) mihon.open();
 
         // Divider between the source group and the result/quick-link group.
         _ = dvui.label(@src(), "  •  ", .{}, .{

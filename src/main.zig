@@ -397,6 +397,9 @@ pub fn appDeinit() void {
     state.app.tmdb.favorites.deinit(@import("core/alloc.zig").allocator);
     state.app.tmdb.watchlist.deinit(@import("core/alloc.zig").allocator);
     state.app.tmdb.watching.deinit(@import("core/alloc.zig").allocator);
+    // Stop the embedded Suwayomi server (if Opal launched one) so no JVM is left
+    // orphaned after exit.
+    @import("services/suwayomi_server.zig").stopEmbedded();
     // Frees per-item thumb_pixels + the index-aligned date arrays, then the list.
     @import("services/youtube.zig").deinit();
     // Playlist drawer caches (filter match flags + shuffle order).

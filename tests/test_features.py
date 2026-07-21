@@ -61,6 +61,7 @@ from features import (  # noqa: F401
     test_browse_rail_groups,
     test_iptv,
     test_suwayomi,
+    test_mihon,
     test_music,
     test_universal_search,
     test_youtube_innertube,

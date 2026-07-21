@@ -139,6 +139,23 @@ pub fn anyInstalled() bool {
     return entry_count > 0;
 }
 
+/// Uninstall a source by id: delete its `<id>.json` and reload so it goes inert
+/// immediately. Mirrors plugin_repo.uninstall but keyed by id, for callers (the
+/// Live TV settings page) that toggle a source without a plugin-list index.
+/// Rejects the same unsafe ids as install(). No-op if the file is absent.
+pub fn uninstallById(id: []const u8) void {
+    if (id.len == 0 or id.len > 32) return;
+    for (id) |ch| {
+        if (ch == '/' or ch == '\\' or ch == '.' or ch == 0) return;
+    }
+    var dir_buf: [600]u8 = undefined;
+    const dir_path = sourcesDir(&dir_buf);
+    var fp_buf: [700]u8 = undefined;
+    const fp = std.fmt.bufPrint(&fp_buf, "{s}/{s}.json", .{ dir_path, id }) catch return;
+    io.cwdDeleteFile(fp) catch {};
+    reload();
+}
+
 /// True if any endpoint is installed for `id`.
 pub fn has(id: []const u8) bool {
     mutex.lock();

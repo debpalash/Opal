@@ -785,12 +785,14 @@ pub fn renderContent() void {
         });
     }
 
-    renderLyrics();
     renderResults();
 }
 
 // ══════════════════════════════════════════════════════════
-// Synced lyrics panel (lrclib) — only drawn when a timeline is loaded
+// Synced lyrics panel (lrclib) — only drawn when a timeline is loaded.
+// This lives in the PLAYER view (shell.zig calls renderLyricsPanel on the
+// .player route), NOT the Music tab: the Music tab is a search/browse grid,
+// and showing lyrics there on the now-playing track was a misplaced surface.
 // ══════════════════════════════════════════════════════════
 /// Playback position of the active mpv player in milliseconds, or null when
 /// there is no active player / it isn't an mpv-backed one.
@@ -804,7 +806,13 @@ fn playbackMs() ?u32 {
     return @intFromFloat(time_pos * 1000.0);
 }
 
-fn renderLyrics() void {
+/// True when a synced-lyric timeline is currently loaded (used by the player
+/// route to decide whether to reserve a lyrics column — without rendering).
+pub fn lyricsHave() bool {
+    return lyrics.hasLyrics();
+}
+
+pub fn renderLyricsPanel() void {
     if (!lyrics.hasLyrics()) return;
 
     var snap: [400]lyrics.LyricLine = undefined;
@@ -814,22 +822,35 @@ fn renderLyrics() void {
     const pos_ms = playbackMs() orelse 0;
     const active = lyrics.currentIndex(pos_ms);
 
+    // Docked right column: fixed 320px width, fills the route height. It is
+    // placed in a real layout slot beside the player grid (shell.zig), so it
+    // never floats over the video/waveform cell.
+    //
+    // `.expand = .vertical` is load-bearing: in the horizontal split this makes
+    // the panel a full-height slot (placeIn's vertical branch fills the split's
+    // cross axis) AND makes BOTH split children vertically-expanding, so the
+    // horizontal box's cross-axis height is unambiguous. Width stays pinned at
+    // 320 because min==max and `.vertical` carries no horizontal weight.
     var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .expand = .horizontal,
+        .expand = .vertical,
+        .min_size_content = .{ .w = 320, .h = 0 },
+        .max_size_content = .{ .w = 320, .h = std.math.floatMax(f32) },
         .background = true,
-        .color_fill = theme.colors.bg_elevated,
-        .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
+        .color_fill = theme.colors.bg_surface,
+        .color_border = theme.colors.border_subtle,
+        .border = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
+        .padding = .{ .x = 16, .y = 12, .w = 16, .h = 12 },
     });
     defer panel.deinit();
 
     _ = dvui.label(@src(), "Lyrics", .{}, .{
         .color_text = theme.colors.text_tertiary,
-        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
+        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
     });
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
-        .expand = .horizontal,
-        .min_size_content = .{ .w = 100, .h = 132 },
+        .expand = .both,
+        .min_size_content = .{ .w = 100, .h = 100 },
         .background = false,
     });
     defer scroll.deinit();
@@ -842,8 +863,9 @@ fn renderLyrics() void {
         _ = dvui.label(@src(), "{s}", .{txt}, .{
             .id_extra = i + 70000,
             .expand = .horizontal,
-            .color_text = if (is_active) theme.colors.accent else theme.colors.text_secondary,
-            .padding = .{ .x = 2, .y = 1, .w = 2, .h = 1 },
+            .color_text = if (is_active) theme.colors.text_primary else theme.colors.text_secondary,
+            .font = if (is_active) dvui.themeGet().font_heading else dvui.themeGet().font_body,
+            .padding = .{ .x = 2, .y = 3, .w = 2, .h = 3 },
         });
     }
 }

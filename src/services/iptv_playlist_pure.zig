@@ -89,6 +89,9 @@ pub fn parseM3u(text: []const u8, out: []p.IptvChannel, nsfw_allowed: bool, quer
             .quality = .any,
             .nsfw_allowed = nsfw_allowed,
         };
+        // Carry the adult flag (name/url heuristic) so a store can gate it on a
+        // setting; acceptChannel still drops it when nsfw_allowed is false.
+        c.nsfw = p.isNsfw(c.name[0..c.name_len], c.url[0..c.url_len]);
         if (!p.acceptChannel(c, c.category[0..c.category_len], c.country[0..c.country_len], false, filters)) continue;
         count += 1;
     }

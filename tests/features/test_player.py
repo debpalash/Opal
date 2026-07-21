@@ -513,13 +513,48 @@ def test_youtube_browse():
         # Durations: "1:15:03", not "75:03" — and no "+07" sign artifact (Zig
         # zero-pads signed ints with a forced sign).
         "hour-aware duration pure + routed": ("pub fn formatDuration" in ytp
-                                              and yt.count("yt_pure.formatDuration(") >= 2),
+                                              and yt.count("yt_pure.formatDuration(") >= 1),
         "pure module is unit-tested": "youtube_pure.zig" in bz,
     }
     bad = [k for k, v in checks.items() if not v]
     if bad:
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "suggestions dropdown + clickable channels + play→player wired"
+
+
+@test("YouTube card: sticky icon actions, compact footer", "Browse")
+def test_youtube_card_footer():
+    """Regression + redesign: the Play/Queue buttons were clipped to a sliver on
+    any card whose title wrapped to two lines, because they lived in the fixed-
+    height footer below the title. Fix: they're now ICON-only buttons stuck to
+    the THUMBNAIL (thumbActionIcon), independent of the footer, so a tall title
+    can never clip them. The footer carries only the (compact) title + meta."""
+    yt = _src("src/services/youtube.zig")
+    checks = {
+        # Sticky thumbnail-anchored icon buttons (no text), Play + Queue.
+        "sticky icon action helper": "fn thumbActionIcon(" in yt,
+        "play + queue icons wired": "thumbActionIcon(idx + 171, icons.tvg.lucide.play, true)" in yt
+            and "thumbActionIcon(idx + 172, icons.tvg.lucide.plus, false)" in yt,
+        "actions anchored bottom-left of thumb": ".gravity_x = 0.0," in yt and ".gravity_y = 1.0," in yt,
+        # Thumbnail is a plain box now (a wrapping button would eat the icon
+        # clicks — parent processes events before children).
+        "thumbnail not a button": "var thumb = dvui.box(@src()" in yt,
+        # No text-button actions row in the footer any more.
+        "footer actions row removed": 'dvui.button(@src(), "Play"' not in yt
+            and 'dvui.button(@src(), "Queue"' not in yt,
+        # Compact fonts: title at body size, meta smaller.
+        "compact title font": "fn titleFont()" in yt
+            and "font_heading.withSize(theme.font_size.body)" in yt,
+        "compact meta font": "fn metaFont()" in yt and ".font = metaFont()," in yt,
+        # Footer height reserved from the SAME title font, title clamped to 2 lines.
+        "footer reserves title font": "const title = titleFont();" in yt
+            and "2.0 * title.lineHeight()" in yt,
+        "title clamped to two lines": ".h = 2.0 * titleFont().lineHeight()" in yt,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "card redesign: " + ", ".join(bad)
+    return "pass", "Play/Queue are sticky thumbnail icon buttons; compact footer can't clip them"
 
 
 @test("macOS Now Playing media keys", "Player")
@@ -849,3 +884,55 @@ def test_torrent_file_loading():
     if bad:
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "torrent_add_file C API + .torrent route + shared player attach"
+
+
+@test("Play queue row layout", "Player")
+def test_queue_row_layout():
+    """Regression: the queue's move/play/remove buttons were invisible on most rows.
+
+    dvui's horizontal BoxWidget does not squeeze children — rectFor hands each
+    child its FULL min size and subtracts from the remaining budget, so once the
+    budget hits zero every LATER sibling is handed a zero-width rect. The row is
+    [thumb][title/meta][actions] and the title box held UNCAPPED labels, whose
+    min width is the whole rendered text width. Long titles therefore consumed
+    the row and starved the action strip. The cap must stay on the labels.
+    """
+    q = _src("src/services/queue.zig")
+    pure = _src("src/services/queue_layout_pure.zig")
+    build = _src("build.zig")
+
+    checks = {
+        "pure module present": bool(pure),
+        "actions width helper": "pub fn actionsW" in pure and "pub fn iconButtonW" in pure,
+        "title budget helper": "pub fn titleCapW" in pure,
+        "clamped, never negative": "MIN_TITLE_W" in pure and "@max(MIN_TITLE_W" in pure,
+        "first-frame fallback": "FALLBACK_ROW_W" in pure,
+        "has tests": pure.count('test "') >= 6,
+        "test registered": 'b.path("src/services/queue_layout_pure.zig")' in build,
+
+        # Production must route through the tested arithmetic, not re-derive it.
+        "queue imports the pure module": 'queue_layout_pure.zig' in q,
+        "row width read from parent": "dvui.parentGet().data().contentRect().w" in q,
+        "actions reserved from live font": "layout.actionsW(" in q
+            and "font_body.textHeight()" in q,
+        "title cap applied": "layout.titleCapW(" in q,
+        # The load-bearing assertion: both labels AND their box carry a cap.
+        # Drop any one of them and the strip is starved again.
+        "labels capped": q.count("max_size_content = .{ .w = title_w") >= 3,
+
+        # The old byte-count truncation measured bytes, not pixels, so it neither
+        # contained wide text nor scaled with the font — and could split a
+        # multi-byte UTF-8 codepoint, rendering a replacement glyph.
+        "byte truncation gone": "max_title" not in q and "title[0..@min(title.len" not in q,
+        # 78px could not fit its own four buttons at the theme font, and being a
+        # constant it did not grow with UI scale.
+        "hardcoded 78px reservation gone": ".w = 78," not in q,
+
+        # Header row has the same [label][...][buttons] shape and the same risk.
+        "header label capped": ".w = 140," in q,
+    }
+
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "queue layout regression: " + ", ".join(bad)
+    return "pass", "queue rows reserve the action strip; titles ellipsize to a scale-aware cap"

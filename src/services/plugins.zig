@@ -1042,6 +1042,125 @@ fn renderSourcePlugins() void {
     }
 }
 
+// Suwayomi (Mihon extensions) server — the base URL + a connection test. This is
+// the "manage server" home; the extension INDEX (browse + install extensions)
+// lives in the Comics tab → Extensions button.
+var suwa_url_buf: [256]u8 = std.mem.zeroes([256]u8);
+var suwa_prefilled: bool = false;
+var suwa_test_msg: [64]u8 = std.mem.zeroes([64]u8);
+var suwa_test_len: usize = 0;
+
+fn suwaTest() void {
+    const sc = @import("../core/source_config.zig");
+    const base = sc.get("suwayomi", "base") orelse {
+        setSuwaMsg("Save a server URL first");
+        return;
+    };
+    var url_buf: [320]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/api/v1/extension/list", .{std.mem.trimEnd(u8, base, "/")}) catch return;
+    const argv = [_][]const u8{ "curl", "-sL", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "6", url };
+    var child = @import("../core/io_global.zig").Child.init(&argv, @import("../core/alloc.zig").allocator);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    _ = child.spawn() catch {
+        setSuwaMsg("Could not reach the server");
+        return;
+    };
+    var code_buf: [16]u8 = undefined;
+    const n = if (child.stdout) |*so| @import("../core/io_global.zig").readAll(so, &code_buf) catch 0 else 0;
+    _ = child.wait() catch {};
+    const code = std.fmt.parseInt(u32, std.mem.trim(u8, code_buf[0..n], " \r\n"), 10) catch 0;
+    if (code == 200) setSuwaMsg("Connected — server reachable") else {
+        var m: [64]u8 = undefined;
+        setSuwaMsg(std.fmt.bufPrint(&m, "No response (code {d})", .{code}) catch "No response");
+    }
+}
+
+fn setSuwaMsg(msg: []const u8) void {
+    const k = @min(msg.len, suwa_test_msg.len);
+    @memcpy(suwa_test_msg[0..k], msg[0..k]);
+    suwa_test_len = k;
+}
+
+fn renderSuwayomi() void {
+    const sc = @import("../core/source_config.zig");
+    const srv = @import("suwayomi_server.zig");
+    var card = cardBegin(@src(), 4);
+    defer card.deinit();
+    cardTitle(@src(), "Suwayomi server (Mihon extensions)", "Opal can run the server for you — Start it, then browse & install extensions in Comics → Extensions.");
+
+    // ── Embedded server control ──
+    const st = srv.statusEnum();
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        defer row.deinit();
+
+        const dot: dvui.Color = switch (st) {
+            .running => theme.colors.success,
+            .downloading, .starting => theme.colors.warning,
+            .err, .no_java => theme.colors.danger,
+            .idle => theme.colors.text_tertiary,
+        };
+        var d = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 9, .h = 9 }, .max_size_content = .{ .w = 9, .h = 9 }, .corner_radius = dvui.Rect.all(5), .background = true, .color_fill = dot, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 } });
+        d.deinit();
+
+        const label = if (srv.statusText().len > 0) srv.statusText() else switch (st) {
+            .running => "Running",
+            else => "Stopped",
+        };
+        _ = dvui.label(@src(), "{s}", .{label}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+
+        { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+
+        const busy_now = st == .downloading or st == .starting;
+        if (st == .running) {
+            if (dvui.button(@src(), "Stop", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.danger, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .gravity_y = 0.5 })) {
+                srv.stopEmbedded();
+            }
+        } else if (!busy_now) {
+            if (dvui.button(@src(), "Start server", .{}, .{ .color_fill = theme.colors.accent, .color_text = dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .gravity_y = 0.5 })) {
+                srv.startEmbedded();
+            }
+        }
+    }
+
+    // ── Advanced: point at an EXTERNAL server instead ──
+    if (!suwa_prefilled) {
+        suwa_prefilled = true;
+        const cur = sc.get("suwayomi", "base") orelse "http://localhost:4567";
+        const k = @min(cur.len, suwa_url_buf.len - 1);
+        @memcpy(suwa_url_buf[0..k], cur[0..k]);
+    }
+    _ = dvui.label(@src(), "Advanced: use an external server", .{}, .{ .color_text = theme.colors.text_tertiary, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 2 } });
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        defer row.deinit();
+
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &suwa_url_buf }, .placeholder = "http://localhost:4567" }, .{
+            .expand = .horizontal, .gravity_y = 0.5,
+            .color_fill = theme.colors.bg_elevated, .color_border = theme.colors.border_subtle,
+            .color_text = theme.colors.text_primary, .border = dvui.Rect.all(1), .corner_radius = theme.dims.rad_sm,
+        });
+        te.deinit();
+
+        if (dvui.button(@src(), "Save", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.accent, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 }, .gravity_y = 0.5 })) {
+            const url = std.mem.trim(u8, suwa_url_buf[0 .. std.mem.indexOfScalar(u8, &suwa_url_buf, 0) orelse suwa_url_buf.len], " \t\r\n");
+            var body: [320]u8 = undefined;
+            const src = sc.get("suwayomi", "source") orelse "";
+            if (std.fmt.bufPrint(&body, "{{\"base\":\"{s}\",\"source\":\"{s}\"}}", .{ url, src })) |b| {
+                _ = sc.install("suwayomi", b);
+                setSuwaMsg("Saved");
+            } else |_| {}
+        }
+        if (dvui.button(@src(), "Test", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 }, .gravity_y = 0.5 })) {
+            suwaTest();
+        }
+    }
+    if (suwa_test_len > 0) {
+        _ = dvui.label(@src(), "{s}", .{suwa_test_msg[0..suwa_test_len]}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
+    }
+}
+
 fn renderDebrid() void {
     const pr = @import("plugin_repo.zig");
     var card = cardBegin(@src(), 1);
@@ -1125,6 +1244,7 @@ pub fn renderContent() void {
     defer scroll.deinit();
 
     renderSourcePlugins();
+    renderSuwayomi();
     renderDebrid();
     renderTrakt();
 

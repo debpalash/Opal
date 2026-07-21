@@ -79,15 +79,54 @@ var card_w: f32 = 200; // user-cyclable card width, clamp 150..360
 const CARD_MIN: f32 = 150;
 const CARD_MAX: f32 = 360;
 
-/// Card footer height below the 16:9 thumbnail — holds the 2-line title, the
-/// channel + "views · date" meta lines, and the Play/Queue action row. Referenced
-/// by BOTH the uniform card sizing (renderCard pins min==max = thumb_h + this) AND
-/// the grid's virtualization row pitch, so the spacer math and the card can never
-/// drift (mirrors tmdb.zig/comics.zig/jellyfin_ui.zig CARD_FOOTER_H). 150 == the
-/// footer allowance the card's max_size_content already used before pinning, so no
-/// card that fit before can clip now — the footer content (font-driven, ~110 logical
-/// px at body=11) sits well inside it at every UI scale.
-const CARD_FOOTER_H: f32 = 150;
+/// The card title font. Heading WEIGHT at body SIZE — compact, and small enough
+/// that a two-line title stays short. cardFooterH() MUST measure the SAME font.
+fn titleFont() dvui.Font {
+    return dvui.themeGet().font_heading.withSize(theme.font_size.body);
+}
+
+/// A small, always-visible icon button stuck to a card thumbnail (Play / Queue).
+/// Anchored to the thumbnail, NOT the footer, so it can never be clipped by a
+/// tall title. Icon-only, no text. `accent` fills it with the accent colour (the
+/// primary Play affordance); otherwise a dark scrim keeps a secondary action
+/// legible on any thumbnail. Returns true when clicked.
+fn thumbActionIcon(id: usize, icon: []const u8, accent: bool) bool {
+    return dvui.buttonIcon(@src(), "ytact", icon, .{}, .{}, .{
+        .id_extra = id,
+        .color_text = if (accent) dvui.Color.black else dvui.Color.white,
+        .color_fill = if (accent) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 175 },
+        .color_fill_hover = theme.colors.accent,
+        .corner_radius = dvui.Rect.all(16),
+        .min_size_content = theme.iconSize(.sm),
+        .padding = dvui.Rect.all(5),
+        .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
+    });
+}
+
+/// Card footer height below the 16:9 thumbnail — holds the (always-reserved)
+/// 2-line title and the channel + "views · date" meta lines. Referenced by BOTH
+/// the uniform card sizing (renderCard pins min==max = thumb_h + this) AND the
+/// grid's virtualization row pitch, so the spacer math and the card can never
+/// drift (mirrors tmdb.zig/comics.zig).
+///
+/// The Play/Queue buttons are NO LONGER in the footer — they're icon buttons
+/// stuck to the thumbnail (see thumbActionIcon), independent of this height, so a
+/// tall title can never clip them. The footer therefore only reserves the two
+/// text blocks, from LIVE font metrics so it scales with the UI. Must be called
+/// inside a frame (themeGet needs a live window).
+fn cardFooterH() f32 {
+    const title = titleFont(); // MUST match the label's font (see titleFont)
+    const meta = metaFont(); // channel + views·date lines
+    const info_pad_top: f32 = 5; // info box top padding
+    const title_h: f32 = 2.0 * title.lineHeight(); // ALWAYS reserve 2 title lines
+    const meta_h: f32 = 3.0 + 2.0 * meta.lineHeight(); // meta box top pad + 2 lines
+    return @ceil(info_pad_top + title_h + meta_h + 6.0); // small slack
+}
+
+/// Compact font for the channel + views·date lines under the title.
+fn metaFont() dvui.Font {
+    return dvui.themeGet().font_body.withSize(theme.font_size.small);
+}
 
 // ── Infinite scroll / load-more ──
 // yt-dlp's flat search has no page cursor, so we re-run `ytsearch{N}:` with a
@@ -1277,23 +1316,26 @@ pub fn renderContent() void {
     defer yt_mutex.unlock();
 
     // Responsive grid of 16:9 video tiles from the LIVE width; the column count
-    // derives from the user-cyclable card width.
+    // derives from the user-cyclable card width. The gutter matches the card's
+    // 4px margin on each side (8px between neighbours) so the grid reads as a
+    // uniform, evenly-spaced lattice at every width.
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(260, (if (rect_w > 1) rect_w else 900) - 8);
-    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / card_w)));
-    const real_card_w: f32 = @max(120, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
+    const gutter: f32 = 6; // 2 * card margin (3)
+    const cols: usize = @max(1, @as(usize, @intFromFloat((avail_w + gutter) / (card_w + gutter))));
+    const real_card_w: f32 = @max(120, (avail_w - @as(f32, @floatFromInt(cols - 1)) * gutter) / @as(f32, @floatFromInt(cols)));
 
     // ── Virtualization (same shape as tmdb.zig/comics.zig/jellyfin_ui.zig) ──
     // Cards are uniform (renderCard pins min==max height), so rows have a fixed
-    // pitch: thumb + footer content, plus the card's 6px bottom padding and 3px
-    // top/bottom margins (min_sizeGet = padSize(min_size_content) adds padding +
-    // margin around the content → +12 total). Rows outside the viewport (±2
-    // overscan) collapse into two spacer boxes, so the grid lays out a handful of
-    // rows per frame instead of all ~200 card widget trees. The base index of
-    // each row (row * cols) is IDENTICAL to the prior loop's `i`, so every card's
-    // id_extra scheme is unchanged and retained widget state is unaffected.
+    // pitch: thumb + footer content, plus the card's 4px top/bottom margins
+    // (min_sizeGet = padSize(min_size_content) adds padding + margin around the
+    // content → +8 total). Rows outside the viewport (±2 overscan) collapse into
+    // two spacer boxes, so the grid lays out a handful of rows per frame instead
+    // of all ~200 card widget trees. The base index of each row (row * cols) is
+    // IDENTICAL to the prior loop's `i`, so every card's id_extra scheme is
+    // unchanged and retained widget state is unaffected.
     const thumb_h: f32 = real_card_w * 9.0 / 16.0;
-    const row_h: f32 = thumb_h + CARD_FOOTER_H + 12;
+    const row_h: f32 = thumb_h + cardFooterH() + 6; // +6 = card's 3px top+bottom margin
     const total_rows = (state.app.yt.results.items.len + cols - 1) / cols;
     const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
 
@@ -1408,7 +1450,7 @@ const cat_chips = [_]CatChip{
 fn renderToolbar() void {
     var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
         .expand = .horizontal,
-        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 5 },
     });
     defer bar.deinit();
 
@@ -1448,7 +1490,7 @@ fn renderToolbar() void {
 
     // Item count + card-size controls.
     toolbarDivider(950);
-    _ = dvui.label(@src(), "{d} videos", .{state.app.yt.results.items.len}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+    _ = dvui.label(@src(), "{d} videos", .{state.app.yt.results.items.len}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5, .font = metaFont() });
 
     const dim = dvui.Color{ .r = 120, .g = 120, .b = 148, .a = 200 };
     if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
@@ -1672,9 +1714,10 @@ fn renderCatChip(idx: usize, chip: CatChip, current: []const u8) void {
         .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
         .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
         .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+        .padding = .{ .x = 7, .y = 3, .w = 7, .h = 3 },
         .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
         .gravity_y = 0.5,
+        .font = metaFont(),
     })) {
         setQuery(chip.query);
         recordFired(chip.query);
@@ -1698,37 +1741,42 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
     const thumb_h: f32 = the_card_w * 9.0 / 16.0;
 
     // min == max height → uniform row pitch, which the grid's virtualization
-    // spacer math depends on (row_h = thumb_h + CARD_FOOTER_H + padding + margins).
-    // CARD_FOOTER_H (150) is the same footer allowance max_size_content used
-    // before, so nothing that fit under the old cap can clip now.
+    // spacer math depends on (row_h = thumb_h + cardFooterH() + padding + margins).
+    // cardFooterH() is font-metric-derived and sized for the WORST case (2-line
+    // title) at the live UI scale — it MUST be the exact same call the pitch calc
+    // uses (grid loop above), or the card and the spacer drift.
+    const footer_h = cardFooterH();
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = idx,
+        .id_extra = idx + 9000,
         .background = true,
         .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(6),
-        .min_size_content = .{ .w = the_card_w, .h = thumb_h + CARD_FOOTER_H },
-        .max_size_content = .{ .w = the_card_w, .h = thumb_h + CARD_FOOTER_H },
+        .color_border = theme.colors.border_subtle,
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(theme.radius.lg),
+        .min_size_content = .{ .w = the_card_w, .h = thumb_h + footer_h },
+        .max_size_content = .{ .w = the_card_w, .h = thumb_h + footer_h },
         .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
-        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
+        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     });
     defer card.deinit();
 
-    // Thumbnail (16:9) — a clickable button-widget hosting the image + hover
-    // overlay, so the whole poster is one hit-target (quick-play on click).
+    // Thumbnail (16:9). A plain container (NOT a button): the Play/Queue icon
+    // buttons are overlaid on it, and a wrapping button would swallow their
+    // clicks (a parent ButtonWidget processes events before its children, so it
+    // would claim the click meant for the Queue icon). Play is now the accent
+    // icon, so the whole-poster quick-play click is no longer needed.
     {
-        var bw: dvui.ButtonWidget = undefined;
-        bw.init(@src(), .{}, .{
+        var thumb = dvui.box(@src(), .{}, .{
             .id_extra = idx + 100,
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_app,
-            .corner_radius = .{ .x = theme.radius.md, .y = theme.radius.md, .w = 0, .h = 0 },
+            .color_fill = theme.colors.bg_deep,
+            .corner_radius = .{ .x = theme.radius.lg, .y = theme.radius.lg, .w = 0, .h = 0 },
             .min_size_content = .{ .w = the_card_w, .h = thumb_h },
             .max_size_content = .{ .w = the_card_w, .h = thumb_h },
             .padding = dvui.Rect.all(0),
         });
-        bw.processEvents();
-        bw.drawBackground();
+        defer thumb.deinit();
 
         if (item.thumb_tex == null and item.thumb_pixels != null and
             item.thumb_pixels.?.len == @as(usize, item.thumb_w) * @as(usize, item.thumb_h) * 4)
@@ -1742,7 +1790,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
             }
         }
 
-        // Stack: image (or placeholder) + duration badge + hover overlay.
+        // Stack: image (or placeholder) + duration badge + sticky action icons.
         {
             var stack = dvui.overlay(@src(), .{ .id_extra = idx + 140, .expand = .both });
             defer stack.deinit();
@@ -1773,35 +1821,43 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
                 });
             }
 
-            // Duration badge (bottom-right).
+            // Duration badge (bottom-right) — a tight pill over a soft scrim so
+            // it stays legible on both dark and light thumbnails.
             if (item.duration > 0) {
                 var dur_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .id_extra = idx + 161,
                     .gravity_x = 1.0,
                     .gravity_y = 1.0,
                     .background = true,
-                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 200 },
-                    .corner_radius = dvui.Rect.all(2),
-                    .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
-                    .margin = dvui.Rect.all(2),
+                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 180 },
+                    .corner_radius = dvui.Rect.all(4),
+                    .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
+                    .margin = .{ .x = 0, .y = 0, .w = 6, .h = 6 },
                 });
                 defer dur_box.deinit();
 
                 var dur_buf: [24]u8 = undefined;
                 const dur_str = yt_pure.formatDuration(item.duration, &dur_buf);
                 if (dur_str.len > 0) {
-                    _ = dvui.labelNoFmt(@src(), dur_str, .{}, .{ .id_extra = idx + 162, .color_text = dvui.Color.white });
+                    _ = dvui.labelNoFmt(@src(), dur_str, .{}, .{ .id_extra = idx + 162, .color_text = dvui.Color.white, .font = metaFont() });
                 }
             }
 
-            // Hover overlay: dimmed scrim + metadata + centered play affordance.
-            if (bw.hovered()) renderHoverMeta(item, idx);
+            // Sticky action icons (bottom-left) — always visible, thumbnail-
+            // anchored so they can never be clipped by a tall title. Play (accent)
+            // + Queue (add). Icon-only, no text.
+            {
+                var abar = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                    .id_extra = idx + 170,
+                    .gravity_x = 0.0,
+                    .gravity_y = 1.0,
+                    .margin = .{ .x = 6, .y = 0, .w = 0, .h = 6 },
+                });
+                defer abar.deinit();
+                if (thumbActionIcon(idx + 171, icons.tvg.lucide.play, true)) sendToPlayer(item, false);
+                if (thumbActionIcon(idx + 172, icons.tvg.lucide.plus, false)) sendToPlayer(item, true);
+            }
         }
-
-        const clicked = bw.clicked();
-        bw.drawFocus();
-        bw.deinit();
-        if (clicked) sendToPlayer(item, false);
     }
 
     // Info
@@ -1809,20 +1865,30 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
         var info = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = idx + 200,
             .expand = .horizontal,
-            .padding = .{ .x = 6, .y = 2, .w = 6, .h = 0 },
+            .padding = .{ .x = 8, .y = 5, .w = 8, .h = 0 },
         });
         defer info.deinit();
 
         // Title — clamped to two lines (each line auto-ellipsized by dvui),
         // UTF-8 safe. A "\n" split near the width-derived midpoint at a word
         // boundary gives a balanced two-line block; long single words just
-        // ellipsize on line one.
+        // ellipsize on line one. Heading weight reads as a proper video title.
         var title_buf: [160]u8 = undefined;
-        const title_2l = twoLineTitle(title, the_card_w, &title_buf);
+        const title_2l = twoLineTitle(title, the_card_w - 20, &title_buf);
+        // Clamp the title to EXACTLY its reserved two lines. Without this a title
+        // whose font renders taller than cardFooterH() estimated would grow the
+        // info box and shove the actions row past the card's fixed max height,
+        // where it clips to a sliver — the reported "queue buttons don't show"
+        // bug. With the clamp the title can never steal the actions' space,
+        // regardless of font-metric surprises. Same 2-line height cardFooterH
+        // reserves, so they cannot drift.
         _ = dvui.labelNoFmt(@src(), title_2l, .{}, .{
             .id_extra = idx + 300,
             .expand = .horizontal,
             .color_text = theme.colors.text_primary,
+            .font = titleFont(),
+            .max_size_content = .{ .w = std.math.floatMax(f32), .h = 2.0 * titleFont().lineHeight() },
+            .gravity_y = 0.0,
         });
 
         // Two-line meta: channel on its own line, then "1.5M views · 3w ago".
@@ -1832,7 +1898,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
             var meta = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = idx + 400,
                 .expand = .horizontal,
-                .padding = .{ .x = 0, .y = 3, .w = 0, .h = 0 },
+                .padding = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
             });
             defer meta.deinit();
 
@@ -1846,6 +1912,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
                         .id_extra = idx + 410,
                         .expand = .horizontal,
                         .color_text = theme.colors.text_secondary,
+                        .font = metaFont(),
                     })) {
                         openChannel(item.channel_id[0..item.channel_id_len], item.uploader[0..item.uploader_len]);
                     }
@@ -1854,6 +1921,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
                         .id_extra = idx + 410,
                         .expand = .horizontal,
                         .color_text = theme.colors.text_secondary,
+                        .font = metaFont(),
                     });
                 }
             }
@@ -1867,24 +1935,13 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
                 _ = dvui.labelNoFmt(@src(), ml, .{}, .{
                     .id_extra = idx + 430,
                     .expand = .horizontal,
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = theme.colors.text_tertiary,
+                    .font = metaFont(),
                 });
             }
         }
-
-        // Actions
-        {
-            var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = idx + 500, .padding = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
-            defer acts.deinit();
-
-            if (dvui.button(@src(), "  Play  ", .{}, .{ .id_extra = idx + 510, .color_fill = theme.colors.accent, .color_text = dvui.Color.black, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 16, .y = 4, .w = 16, .h = 4 } })) {
-                sendToPlayer(item, false);
-            }
-
-            if (dvui.button(@src(), "  Queue  ", .{}, .{ .id_extra = idx + 520, .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.accent, .color_border = theme.colors.accent, .border = dvui.Rect.all(1), .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 16, .y = 4, .w = 16, .h = 4 }, .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 } })) {
-                sendToPlayer(item, true);
-            }
-        }
+        // Play/Queue moved to sticky icon buttons on the thumbnail (see above),
+        // so the footer no longer carries an actions row — nothing to clip.
     }
 
     // ── Right-click context menu ──
@@ -2011,79 +2068,6 @@ fn truncateUtf8(s_in: []const u8, max: usize, out: []u8) []const u8 {
         oi += ell.len;
     }
     return out[0..oi];
-}
-
-/// Dimmed scrim + full metadata + a centered ▶ play affordance, over a hovered
-/// thumbnail. Clicking the thumbnail (handled by the parent button) plays.
-fn renderHoverMeta(item: *state.YtItem, idx: usize) void {
-    var ov = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = idx + 600,
-        .expand = .both,
-        .background = true,
-        .color_fill = dvui.Color{ .r = 8, .g = 10, .b = 16, .a = 224 },
-        .corner_radius = .{ .x = theme.radius.md, .y = theme.radius.md, .w = 0, .h = 0 },
-        .padding = dvui.Rect.all(8),
-    });
-    defer ov.deinit();
-
-    // Full title (wraps).
-    _ = dvui.label(@src(), "{s}", .{safeUtf8(item.title[0..item.title_len])}, .{
-        .id_extra = idx + 601,
-        .expand = .horizontal,
-        .color_text = theme.colors.text_primary,
-        .font = dvui.themeGet().font_heading,
-    });
-
-    // Channel.
-    if (item.uploader_len > 0) {
-        _ = dvui.label(@src(), "{s}", .{safeUtf8(item.uploader[0..item.uploader_len])}, .{
-            .id_extra = idx + 602,
-            .expand = .horizontal,
-            .color_text = theme.colors.text_secondary,
-        });
-    }
-
-    // Views · date line.
-    {
-        var line = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = idx + 603, .expand = .horizontal, .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 } });
-        defer line.deinit();
-
-        if (item.views > 0) {
-            var vbuf: [32]u8 = undefined;
-            _ = dvui.label(@src(), "{s}", .{yt_pure.viewsStr(item.views, &vbuf)}, .{ .id_extra = idx + 604, .color_text = theme.colors.text_secondary });
-        }
-        const ymd = dateFor(idx);
-        if (ymd.len == 8) {
-            var abuf: [16]u8 = undefined;
-            const ago = formatAgo(ymd, &abuf);
-            if (ago.len > 0) {
-                if (item.views > 0) _ = dvui.label(@src(), "  ·  ", .{}, .{ .id_extra = idx + 605, .color_text = theme.colors.border_subtle });
-                _ = dvui.label(@src(), "{s}", .{ago}, .{ .id_extra = idx + 606, .color_text = theme.colors.text_secondary });
-            }
-        }
-    }
-
-    // Duration.
-    if (item.duration > 0) {
-        var dbuf: [24]u8 = undefined;
-        const ds = yt_pure.formatDuration(item.duration, &dbuf);
-        if (ds.len > 0) {
-            _ = dvui.label(@src(), "{s}", .{ds}, .{ .id_extra = idx + 607, .color_text = theme.colors.text_secondary });
-        }
-    }
-
-    // Centered ▶ play affordance.
-    {
-        var center = dvui.overlay(@src(), .{ .id_extra = idx + 608, .expand = .both });
-        defer center.deinit();
-        dvui.icon(@src(), "play", icons.tvg.lucide.play, .{}, .{
-            .id_extra = idx + 609,
-            .gravity_x = 0.5,
-            .gravity_y = 0.5,
-            .color_text = theme.colors.accent,
-            .min_size_content = .{ .w = 40, .h = 40 },
-        });
-    }
 }
 
 fn sendToPlayer(item: *state.YtItem, appendToPlaylist: bool) void {

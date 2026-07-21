@@ -26,6 +26,12 @@ const std = @import("std");
 /// `mangadex:<uuid>`), keeping the reader's page pipeline unchanged.
 pub const SCHEME = "suwayomi:";
 
+/// Mihon extension-repo support (discovery + install): curated repo table,
+/// index.min.json parsing, and Suwayomi `/api/v1/extension/*` URL builders.
+/// Re-exported so callers reach it as `suwayomi.repo.*` through the one import
+/// comics.zig already holds; keeps the whole Mihon engine one module graph.
+pub const repo = @import("mihon_repo_pure.zig");
+
 // ── ID validation (security gate) ──
 // ids/indices are interpolated straight into request paths, so they must be
 // pure digits — anything with a `/`, `?`, `.` or `%` could escape the endpoint.

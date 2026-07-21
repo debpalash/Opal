@@ -4,6 +4,7 @@ const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const c = @import("../core/c.zig");
+const layout = @import("queue_layout_pure.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -263,8 +264,13 @@ pub fn renderContent() void {
             .color_text = theme.colors.accent, .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
         });
+        // Capped for the same reason as the row titles: this label sits before
+        // three text buttons in a horizontal box, and dvui starves later
+        // siblings rather than shrinking earlier ones.
         _ = dvui.label(@src(), "Play Queue", .{}, .{
             .color_text = theme.colors.text_primary, .gravity_y = 0.5,
+            .font = dvui.themeGet().font_heading,
+            .max_size_content = .{ .w = 140, .h = std.math.floatMax(f32) },
         });
 
         { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
@@ -365,9 +371,28 @@ fn renderNowPlaying() void {
     }
 }
 
+/// The row's own horizontal padding (6 left + 6 right) plus the gap trailing the
+/// thumbnail/glyph column, so the width budget accounts for chrome the text
+/// column never gets to use.
+const CARD_CHROME_W: f32 = 6 + 6 + 4;
+/// Thumbnail column: the 80px poster plus its 6px right margin.
+const CARD_THUMB_W: f32 = 80 + 6;
+/// Fallback source glyph: one icon at the body font plus its 10px right margin.
+const CARD_GLYPH_W: f32 = 10 + 10;
+/// Move-up, move-down, play, remove.
+const CARD_ACTION_COUNT: usize = 4;
+
 fn renderQueueCard(item: *QueueItem, idx: usize) void {
     const title = if (item.title_len > 0) item.title[0..item.title_len] else item.url[0..item.url_len];
     const source = item.source[0..item.source_len];
+
+    // Row width budget. Read the PARENT's content rect before opening the card
+    // box — the card itself has no definite width until it has been laid out,
+    // whereas the enclosing scroll area does (dvui returns 0 on the very first
+    // frame, which titleCapW handles with its fallback).
+    const row_w = dvui.parentGet().data().contentRect().w;
+    const acts_w = layout.actionsW(dvui.themeGet().font_body.textHeight(), CARD_ACTION_COUNT);
+    const leading_w: f32 = if (item.thumb_url_len > 0) CARD_THUMB_W else CARD_GLYPH_W;
 
     var card = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = idx, .expand = .horizontal, .background = true,
@@ -426,31 +451,50 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         });
     }
 
-    // Title + meta (must not overflow — clip long titles)
+    // Title + meta.
+    //
+    // These labels MUST carry a width cap. dvui's horizontal box does not
+    // squeeze children: it hands each one its full min size and subtracts from
+    // the remaining budget (BoxWidget.rectFor), so a later sibling gets a
+    // zero-width rect once the budget runs out. An uncapped label reports the
+    // entire rendered text width as its min, which let a long title consume the
+    // whole row and left the action strip below invisible — the bug this fixes.
+    //
+    // max_size_content clamps the REPORTED min size (WidgetData) and LabelWidget
+    // ellipsizes to it, so the cap both contains the text and guarantees the
+    // buttons keep their space. This replaces a fixed 35/55 BYTE truncation,
+    // which measured the wrong thing (bytes, not pixels — so it neither
+    // contained wide text nor scaled with the font) and could slice a multi-byte
+    // UTF-8 codepoint in half, rendering a replacement glyph.
     {
+        const title_w = layout.titleCapW(row_w, leading_w, acts_w, CARD_CHROME_W);
         var info = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = idx + 700, .expand = .horizontal,
+            .max_size_content = .{ .w = title_w, .h = std.math.floatMax(f32) },
         });
         defer info.deinit();
 
-        // Truncate title — shorter when thumbnail takes space
-        const max_title: usize = if (item.thumb_url_len > 0) 35 else 55;
-        const display_title = title[0..@min(title.len, max_title)];
-        _ = dvui.labelNoFmt(@src(), display_title, .{}, .{
+        _ = dvui.labelNoFmt(@src(), title, .{}, .{
             .id_extra = idx + 710,
             .color_text = if (item.played) theme.colors.text_secondary else theme.colors.text_primary,
+            .max_size_content = .{ .w = title_w, .h = std.math.floatMax(f32) },
         });
 
         _ = dvui.label(@src(), "{s}", .{source}, .{
             .id_extra = idx + 720, .color_text = theme.colors.border_subtle,
+            .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+            .max_size_content = .{ .w = title_w, .h = std.math.floatMax(f32) },
         });
     }
 
-    // Action buttons (fixed width, never pushed off-screen)
+    // Action buttons. The reservation is derived from the live font height (see
+    // queue_layout_pure.actionsW) rather than the old hardcoded 78px, which was
+    // narrower than the four buttons actually need at the theme's own font size
+    // and did not grow at all with UI scale.
     {
         var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = idx + 800, .gravity_y = 0.5,
-            .min_size_content = .{ .w = 78, .h = 0 },
+            .min_size_content = .{ .w = acts_w, .h = 0 },
         });
         defer acts.deinit();
 

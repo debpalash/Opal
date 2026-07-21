@@ -32,6 +32,14 @@ const std = @import("std");
 /// further down. Pure, so importing it keeps this module test-registerable.
 const lh = @import("link_health_pure.zig");
 
+/// Live TV render window — how many channel rows are materialized in app state
+/// at once (state.app.iptv.results). The full directory (100k+ from many
+/// playlists) lives in the SQLite catalog (services/iptv_catalog.zig); this is
+/// just the paged slice the grid draws, grown by loadMore up to this cap and
+/// filled by a catalog query. 1200 × ~1.7KB ≈ 2 MB — a bounded window, not the
+/// whole catalog. Was a hard 300 back when the directory WAS this array.
+pub const RENDER_WINDOW: usize = 1200;
+
 // ── Fixed-buffer record (shared with state.zig; no dvui/atomics so std.mem.zeroes works). ──
 
 pub const IptvChannel = struct {
@@ -488,6 +496,11 @@ fn fillPass(json: []const u8, out: []IptvChannel, filters: Filters, id_mode: IdM
         // streams; null-channel streams carry none (so a category/country filter
         // correctly excludes them).
         const meta_nsfw = if (has_id) ctx.enrich(c) else false;
+        // Record the adult flag on the channel (precise channels.json is_nsfw, or
+        // the name/url heuristic) so a downstream store can gate it on a setting
+        // rather than lose the information. acceptChannel still drops it here when
+        // the caller passed nsfw_allowed=false.
+        c.nsfw = meta_nsfw or isNsfw(c.name[0..c.name_len], c.url[0..c.url_len]);
         if (!acceptChannel(c, c.category[0..c.category_len], c.country[0..c.country_len], meta_nsfw, filters)) continue;
         count += 1;
     }

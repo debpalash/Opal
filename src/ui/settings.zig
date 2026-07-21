@@ -179,6 +179,7 @@ fn renderLeftNav(compact: bool) void {
         .{ .tab = .AI, .label = "AI & Voice", .icon = icons.tvg.lucide.@"message-square-text" },
         .{ .tab = .LangLearn, .label = "Language", .icon = icons.tvg.lucide.languages },
         .{ .tab = .FileAssoc, .label = "File Types", .icon = icons.tvg.lucide.@"file-cog" },
+        .{ .tab = .LiveTv, .label = "Live TV", .icon = icons.tvg.lucide.tv },
         .{ .tab = .About, .label = "About", .icon = icons.tvg.lucide.info },
     };
 
@@ -231,6 +232,7 @@ fn sectionMatchesSearch(tab: state.SettingsTab) bool {
         .AI => &.{ "Voice Backend", "STT", "TTS", "Whisper", "Kokoro", "MLX", "Sherpa", "Co-Watcher", "Models", "Dependencies" },
         .LangLearn => &.{ "Translate", "ASR", "Dubbing", "TTS", "Voice", "Speed", "Flashcard", "Transcribe" },
         .FileAssoc => &.{ "File Associations", "Default Handler", "Register", "Video", "Audio", "Torrent", "Playlist", "Comics" },
+        .LiveTv => &.{ "Live TV", "IPTV", "Channels", "Playlist" },
     };
     for (sections) |s| if (matchesSearch(s)) return true;
     return false;
@@ -370,6 +372,7 @@ fn renderRightPane() void {
         .AI => "AI & Voice",
         .LangLearn => "Language Learning",
         .FileAssoc => "File Associations",
+        .LiveTv => "Live TV",
         .About => "About Opal",
     });
 
@@ -383,6 +386,7 @@ fn renderRightPane() void {
         .AI => renderAIContentBody(),
         .LangLearn => renderLangLearnTab(),
         .FileAssoc => renderFileAssocTab(),
+        .LiveTv => renderLiveTvTab(),
         .About => renderAboutTab(),
     }
 
@@ -1162,7 +1166,7 @@ fn renderGeneralTab() void {
     // NSFW Filter toggle — pure bool flip.
     {
         const before = state.app.nsfw_filter_enabled;
-        components.toggleRow(@src(), "NSFW Filter", "Hide adult content in search & anime browsing", &state.app.nsfw_filter_enabled);
+        components.toggleRow(@src(), "NSFW Filter", "Hide adult content in search, anime, and Live TV", &state.app.nsfw_filter_enabled);
         if (state.app.nsfw_filter_enabled != before) state.markConfigDirty();
     }
 
@@ -2229,38 +2233,9 @@ fn renderNetworkTab() void {
             }
         }
 
-        // ── Live TV playlist (M3U / Xtream) ──
-        settingRow("Live TV playlist (M3U)", 36, @src());
-        _ = dvui.label(@src(), "Your own IPTV playlist URL — overrides the public directory", .{}, .{
-            .id_extra = 3600,
-            .color_text = theme.colors.text_tertiary,
-        });
-        {
-            const iptv = @import("../services/iptv.zig");
-            iptv.prefillM3u();
-            {
-                var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.iptv.m3u_cfg }, .placeholder = "https://provider/playlist.m3u" }, .{
-                    .id_extra = 3602,
-                    .expand = .horizontal,
-                    .min_size_content = .{ .w = 250, .h = 20 },
-                    .color_fill = theme.colors.bg_elevated,
-                    .color_border = theme.colors.border_subtle,
-                    .color_text = theme.colors.text_primary,
-                    .border = dvui.Rect.all(1),
-                    .corner_radius = theme.dims.rad_sm,
-                });
-                te.deinit();
-            }
-            if (dvui.button(@src(), "Save", .{}, .{
-                .id_extra = 3606,
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.text_on_accent,
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
-            })) {
-                iptv.saveM3u();
-            }
-        }
+        // The Live TV custom-playlist box moved to Settings → Live TV
+        // (renderLiveTvTab), which ingests it into the channel catalog rather
+        // than the retired public-directory override.
 
     renderAudiobookshelfSection();
 }
@@ -2938,6 +2913,216 @@ fn renderCacheSection() void {
     if (components.confirmDangerButton(@src(), "Clear cache", 1)) {
         content_cache.clearAll();
         state.showToast("Content cache cleared");
+    }
+}
+
+// ── Live TV (IPTV) settings ──
+// The catalog is fed by curated public IPTV directories (iptv-org etc.) plus an
+// optional user M3U. Install/uninstall + ingest all live in services/iptv.zig;
+// this tab is purely UI over that API. Custom-URL text is backed by a settings-
+// local buffer prefilled once from the saved config (see below).
+var livetv_url_buf: [512]u8 = std.mem.zeroes([512]u8);
+var livetv_url_prefilled: bool = false;
+// Whether to flag the custom playlist as adult (all its channels NSFW-gated).
+var livetv_adult: bool = false;
+var source_config_checked: bool = false;
+
+fn renderLiveTvTab() void {
+    const iptv = @import("../services/iptv.zig");
+    const sources = @import("../services/iptv_sources.zig");
+    const source_config = @import("../core/source_config.zig");
+
+    // ── Catalog header: total channels + manual refresh ──
+    sectionHeader("Channels", "Live TV pulled from public IPTV directories", 10, @src());
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.sm },
+        });
+        defer row.deinit();
+
+        var count_buf: [64]u8 = undefined;
+        const count_str = std.fmt.bufPrint(&count_buf, "{d} channels in your catalog", .{iptv.catalogTotal()}) catch "channels";
+        _ = dvui.label(@src(), "{s}", .{count_str}, .{
+            .color_text = theme.colors.text_secondary,
+            .gravity_y = 0.5,
+        });
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
+        if (iptv.isIngesting()) {
+            _ = dvui.label(@src(), "Updating…", .{}, .{
+                .color_text = theme.colors.warning,
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+            });
+            dvui.refresh(null, @src(), null); // live-update while the ingest runs
+        }
+        if (dvui.button(@src(), "Refresh now", .{}, .{
+            .color_fill = theme.colors.accent,
+            .color_text = theme.colors.text_on_accent,
+            .border = dvui.Rect.all(0),
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            .gravity_y = 0.5,
+        })) {
+            iptv.refreshAllSources(true);
+            state.showToast("Refreshing Live TV channels…");
+        }
+    }
+
+    // Hard product invariant — surfaced, never a toggle.
+    _ = dvui.label(@src(), "Adult channels are always filtered out.", .{}, .{
+        .color_text = theme.colors.text_tertiary,
+        .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
+    });
+
+    // ── Curated sources ──
+    sectionHeader("Sources", "Toggle a directory on to install and ingest its channels", 20, @src());
+    for (sources.SOURCES, 0..) |s, i| {
+        if (std.mem.eql(u8, s.id, sources.CUSTOM_ID)) continue; // custom handled below
+        const id_base = 200 + i * 10;
+        const installed = source_config.has(s.id);
+
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = id_base,
+            .expand = .horizontal,
+            .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.sm },
+        });
+        defer row.deinit();
+
+        // Left column: name + a muted meta line (region · note · channels).
+        {
+            var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = id_base + 1, .gravity_y = 0.5 });
+            defer col.deinit();
+
+            _ = dvui.label(@src(), "{s}", .{s.name}, .{
+                .id_extra = id_base + 2,
+                .color_text = theme.colors.text_primary,
+            });
+
+            var cbuf: [40]u8 = undefined;
+            const chan_txt: []const u8 = if (installed)
+                (std.fmt.bufPrint(&cbuf, "{d} channels", .{iptv.sourceChannelCount(s.id)}) catch "")
+            else if (s.approx > 0)
+                (std.fmt.bufPrint(&cbuf, "~{d} channels", .{s.approx}) catch "")
+            else
+                "";
+
+            var mbuf: [256]u8 = undefined;
+            const meta: []const u8 = blk: {
+                if (s.note.len > 0 and chan_txt.len > 0)
+                    break :blk std.fmt.bufPrint(&mbuf, "{s} · {s} · {s}", .{ s.region, s.note, chan_txt }) catch s.region;
+                if (s.note.len > 0)
+                    break :blk std.fmt.bufPrint(&mbuf, "{s} · {s}", .{ s.region, s.note }) catch s.region;
+                if (chan_txt.len > 0)
+                    break :blk std.fmt.bufPrint(&mbuf, "{s} · {s}", .{ s.region, chan_txt }) catch s.region;
+                break :blk s.region;
+            };
+            _ = dvui.label(@src(), "{s}", .{meta}, .{
+                .id_extra = id_base + 3,
+                .color_text = theme.colors.text_tertiary,
+                .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+            });
+        }
+
+        {
+            var sp = dvui.box(@src(), .{}, .{ .id_extra = id_base + 4, .expand = .horizontal });
+            sp.deinit();
+        }
+
+        // Right: install toggle. Accent fill = installed; neutral = off.
+        if (dvui.button(@src(), if (installed) "On" else "Off", .{}, .{
+            .id_extra = id_base + 5,
+            .color_fill = if (installed) theme.colors.accent else theme.colors.bg_elevated,
+            .color_text = if (installed) theme.colors.text_on_accent else theme.colors.text_secondary,
+            .border = dvui.Rect.all(0),
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 14, .y = 5, .w = 14, .h = 5 },
+            .gravity_y = 0.5,
+        })) {
+            if (installed) {
+                iptv.uninstallSource(s.id);
+                state.showToast("Removed a Live TV source");
+            } else {
+                iptv.installSource(s.id);
+                state.showToast("Installing Live TV source…");
+            }
+        }
+    }
+
+    // ── Custom playlist ──
+    sectionHeader("Custom playlist", "Add your own M3U / M3U8 URL", 30, @src());
+    {
+        // Prefill the local buffer once from the saved custom URL.
+        if (!livetv_url_prefilled) {
+            if (source_config.get(sources.CUSTOM_ID, "url")) |saved| {
+                const n = @min(saved.len, livetv_url_buf.len - 1);
+                @memcpy(livetv_url_buf[0..n], saved[0..n]);
+            }
+            livetv_url_prefilled = true;
+        }
+
+        {
+            var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &livetv_url_buf }, .placeholder = "https://provider/playlist.m3u8" }, .{
+                .id_extra = 300,
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 250, .h = 20 },
+                .color_fill = theme.colors.bg_elevated,
+                .color_border = theme.colors.border_subtle,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(1),
+                .corner_radius = theme.dims.rad_sm,
+            });
+            te.deinit();
+        }
+
+        // Adult (18+) flag: mark every channel from this playlist NSFW, so it's
+        // hidden unless the NSFW filter is off (Live TV adult content is governed
+        // by that setting). Prefill from the saved custom-source config.
+        if (!source_config_checked) {
+            source_config_checked = true;
+            livetv_adult = @import("../core/source_config.zig").get("iptv-custom", "adult") != null;
+        }
+        _ = dvui.checkbox(@src(), &livetv_adult, "Adult (18+) playlist — hidden unless NSFW filter is off", .{
+            .id_extra = 305,
+        });
+
+        var btn_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = 301,
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
+        });
+        defer btn_row.deinit();
+
+        if (dvui.button(@src(), "Save", .{}, .{
+            .id_extra = 302,
+            .color_fill = theme.colors.accent,
+            .color_text = theme.colors.text_on_accent,
+            .border = dvui.Rect.all(0),
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+        })) {
+            const raw = livetv_url_buf[0 .. std.mem.indexOfScalar(u8, &livetv_url_buf, 0) orelse livetv_url_buf.len];
+            const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+            iptv.setCustomUrl(trimmed, livetv_adult);
+            state.showToast(if (trimmed.len > 0) "Saved custom playlist" else "Cleared custom playlist");
+        }
+        if (dvui.button(@src(), "Clear", .{}, .{
+            .id_extra = 303,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_secondary,
+            .border = dvui.Rect.all(0),
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
+        })) {
+            @memset(&livetv_url_buf, 0);
+            livetv_adult = false;
+            iptv.setCustomUrl("", false);
+            state.showToast("Cleared custom playlist");
+        }
     }
 }
 

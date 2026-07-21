@@ -520,6 +520,116 @@
       "file": "plugins/iptv-org.json"
     },
     {
+      "id": "iptv-org-index",
+      "name": "IPTV - iptv-org full index",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://iptv-org.github.io/iptv/index.m3u"
+      },
+      "file": "plugins/iptv-org-index.json"
+    },
+    {
+      "id": "free-tv",
+      "name": "IPTV - Free-TV (global)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8"
+      },
+      "file": "plugins/free-tv.json"
+    },
+    {
+      "id": "m3upt",
+      "name": "IPTV - M3UPT (Portugal)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://raw.githubusercontent.com/LITUATUI/M3UPT/main/M3U/M3UPT.m3u"
+      },
+      "file": "plugins/m3upt.json"
+    },
+    {
+      "id": "iptv-italia",
+      "name": "IPTV - Italia",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://raw.githubusercontent.com/Tundrak/IPTV-Italia/main/iptvita.m3u"
+      },
+      "file": "plugins/iptv-italia.json"
+    },
+    {
+      "id": "youtube-live",
+      "name": "IPTV - YouTube Live channels",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://raw.githubusercontent.com/benmoose39/YouTube_to_m3u/main/youtube.m3u"
+      },
+      "file": "plugins/youtube-live.json"
+    },
+    {
+      "id": "tdtchannels",
+      "name": "IPTV - TDTChannels (Spain/Portugal)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://www.tdtchannels.com/lists/tv.m3u8"
+      },
+      "file": "plugins/tdtchannels.json"
+    },
+    {
+      "id": "pluto-tv",
+      "name": "IPTV - Pluto TV (FAST)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://raw.githubusercontent.com/BuddyChewChew/app-m3u-generator/main/playlists/plutotv_all.m3u"
+      },
+      "file": "plugins/pluto-tv.json"
+    },
+    {
+      "id": "samsung-tvplus",
+      "name": "IPTV - Samsung TV Plus (FAST)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://raw.githubusercontent.com/BuddyChewChew/app-m3u-generator/main/playlists/samsungtvplus_all.m3u"
+      },
+      "file": "plugins/samsung-tvplus.json"
+    },
+    {
+      "id": "plex-tv",
+      "name": "IPTV - Plex (FAST)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://raw.githubusercontent.com/BuddyChewChew/app-m3u-generator/main/playlists/plex_all.m3u"
+      },
+      "file": "plugins/plex-tv.json"
+    },
+    {
+      "id": "roku-tv",
+      "name": "IPTV - The Roku Channel (FAST)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://raw.githubusercontent.com/BuddyChewChew/app-m3u-generator/main/playlists/roku_all.m3u"
+      },
+      "file": "plugins/roku-tv.json"
+    },
+    {
+      "id": "tubi-tv",
+      "name": "IPTV - Tubi (FAST)",
+      "type": "iptv-m3u",
+      "version": "1.0.0",
+      "endpoints": {
+        "url": "https://raw.githubusercontent.com/BuddyChewChew/app-m3u-generator/main/playlists/tubi_all.m3u"
+      },
+      "file": "plugins/tubi-tv.json"
+    },
+    {
       "id": "suwayomi",
       "name": "Suwayomi (Mihon extensions)",
       "type": "suwayomi",
@@ -529,6 +639,20 @@
         "source": ""
       },
       "file": "plugins/suwayomi.json"
+    },
+    {
+      "id": "mihon",
+      "name": "Mihon extension repos",
+      "type": "mihon-repos",
+      "version": "1.0.0",
+      "note": "Register these index.min.json catalog URLs on your Suwayomi server (Extension repos), then install extensions. See https://wotaku.wiki/ext/mihon",
+      "repos": [
+        { "name": "Keiyoushi", "kind": "manga", "url": "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json" },
+        { "name": "Yuzono (manga)", "kind": "manga", "url": "https://raw.githubusercontent.com/yuzono/manga-repo/repo/index.min.json" },
+        { "name": "Suwayomi", "kind": "manga", "url": "https://raw.githubusercontent.com/Suwayomi/tachiyomi-extension/repo/index.min.json" },
+        { "name": "Yuzono (anime)", "kind": "anime", "url": "https://raw.githubusercontent.com/yuzono/anime-repo/repo/index.min.json" },
+        { "name": "Secozzi (anime)", "kind": "anime", "url": "https://raw.githubusercontent.com/Secozzi/aniyomi-extensions/refs/heads/repo/index.min.json" }
+      ]
     },
     {
       "id": "subsonic",
