@@ -32,6 +32,9 @@ input{font:inherit;color:var(--text-1)}
 #pair-btn:disabled{opacity:.55}
 #pair-err{color:var(--danger);min-height:20px;font-size:13px}
 #auth-toggle{color:var(--accent);cursor:pointer;font-size:13px}
+/* extra bottom margin so the last row clears the fixed bottom nav */
+.btn-more{display:block;margin:14px auto 32px;padding:9px 22px;background:var(--bg-elevated);
+  border:1px solid var(--border);border-radius:var(--rad);color:var(--text-2);font-size:13px}
 
 /* ── Header ── */
 header{display:flex;align-items:center;gap:10px;padding:14px 16px 8px}
@@ -249,6 +252,16 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
     <div id="yt-results"></div>
   </section>
 
+  <section class="page" id="page-tv">
+    <div class="search-row">
+      <input id="tv-q" placeholder="Search live channels…" autocapitalize="off">
+      <button id="tv-go">Go</button>
+    </div>
+    <div class="hint" id="tv-hint">Live TV — search or browse the channel catalog.</div>
+    <div id="tv-results"></div>
+    <button id="tv-more" class="btn-more" style="display:none">Load more</button>
+  </section>
+
   <section class="page" id="page-anime">
     <div class="search-row">
       <input id="anime-q" placeholder="Search anime…" autocapitalize="off">
@@ -326,6 +339,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   <button data-page="browse"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Browse</button>
   <button data-page="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Search</button>
   <button data-page="yt"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="3"/><path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none"/></svg>YouTube</button>
+  <button data-page="tv"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="13" rx="2"/><path d="m8 3 4 4 4-4"/></svg>Live TV</button>
   <button data-page="anime"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></svg>Anime</button>
   <button data-page="podcasts"><svg viewBox="0 0 24 24"><circle cx="12" cy="11" r="3"/><path d="M12 14v7"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M6 14a8 8 0 1 1 12 0"/></svg>Podcasts</button>
   <button data-page="jf"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>Jellyfin</button>
@@ -446,6 +460,7 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   if (b.dataset.page === 'act') loadActivity();
   if (b.dataset.page === 'browse') loadBrowse();
   if (b.dataset.page === 'setup') loadSetup();
+  if (b.dataset.page === 'tv') loadTv();
   if (b.dataset.page === 'anime') loadAnime();
   if (b.dataset.page === 'podcasts') loadPodcasts();
   if (b.dataset.page === 'jf') loadJellyfin();
@@ -807,6 +822,67 @@ function renderAnimeEpisodes(eps){
     api('/anime/play?ep=' + encodeURIComponent(b.dataset.ep)).catch(()=>{});
     b.textContent = '▶';
   });
+}
+
+// ── Live TV ──
+// /livetv pages the SQLite channel catalog server-side (~37k rows):
+// ?q=&offset= → {total,offset,channels}. Adult channels follow the app's NSFW
+// filter, exactly like the desktop tab. Hosted: play the stream URL in the
+// browser <video> (HLS plays natively on Safari/iOS); companion: hand to mpv.
+let tvOffset = 0, tvTotal = 0, tvQuery = '';
+function loadTv(){ if (!$('tv-results').children.length) runTv(true); }
+$('tv-go').onclick = () => runTv(true);
+$('tv-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runTv(true); $('tv-q').blur(); } });
+$('tv-more').onclick = () => runTv(false);
+
+async function runTv(reset){
+  if (reset) { tvOffset = 0; tvQuery = $('tv-q').value.trim(); $('tv-results').innerHTML = ''; }
+  $('tv-hint').innerHTML = '<span class="spin"></span> Loading channels…';
+  try {
+    const d = await api('/livetv?q=' + encodeURIComponent(tvQuery) + '&offset=' + tvOffset);
+    tvTotal = d.total || 0;
+    const got = d.channels || [];
+    appendTv(got);
+    tvOffset += got.length;
+    $('tv-hint').textContent = tvTotal
+      ? tvOffset + ' of ' + tvTotal.toLocaleString() + ' channels'
+      : 'No channels yet — install a Live TV source in the desktop app.';
+    $('tv-more').style.display = (tvOffset < tvTotal && got.length) ? '' : 'none';
+  } catch { $('tv-hint').textContent = 'Could not load channels.'; }
+}
+
+function appendTv(chans){
+  const html = chans.map(c => `
+    <div class="result">
+      <div class="t">${esc(c.name)}</div>
+      <div class="m">
+        ${c.country ? `<span class="src">${esc(c.country)}</span>` : ''}
+        ${c.quality ? `<span>${esc(c.quality)}</span>` : ''}
+        ${c.category ? `<span>${esc(c.category)}</span>` : ''}
+        <button class="play" data-url="${encodeURIComponent(c.url)}" data-name="${esc(c.name)}">Watch</button>
+      </div>
+    </div>`).join('');
+  $('tv-results').insertAdjacentHTML('beforeend', html);
+  $('tv-results').querySelectorAll('.play:not([data-wired])').forEach(b => {
+    b.setAttribute('data-wired', '1');
+    b.onclick = () => {
+      const url = decodeURIComponent(b.dataset.url);
+      if (HOSTED) openStreamUrl(url, b.dataset.name);
+      else { api('/load?url=' + encodeURIComponent(url)).catch(()=>{}); b.textContent = 'Sent ✓'; }
+    };
+  });
+}
+
+// Play an external stream URL straight in the browser (Live TV). Distinct from
+// openPlayer(), which streams a local downloaded file via /stream.
+function openStreamUrl(url, title){
+  const v = $('video');
+  $('player-title').textContent = title || '';
+  [...v.querySelectorAll('track')].forEach(tr => tr.remove());
+  v.src = url;
+  $('player').classList.add('on');
+  v.onerror = () => { $('player-title').textContent = (title || '') + ' — stream not playable in this browser (try Safari for HLS)'; };
+  v.play().catch(()=>{});
 }
 
 // ── YouTube ──

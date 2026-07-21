@@ -20,6 +20,7 @@ VERTICALS = {
     "rss":      ("rss",      "page-rss",      ["/rss"]),
     "activity": ("act",      "page-act",      ["/torrents", "/queue", "/downloads", "/history"]),
     "youtube":  ("yt",       "page-yt",       ["/youtube/search", "/youtube"]),
+    "livetv":   ("tv",       "page-tv",       ["/livetv"]),
 }
 
 
@@ -63,3 +64,27 @@ def test_web_ui_youtube():
     if missing:
         return "fail", "YouTube tab incomplete: " + ", ".join(missing)
     return "pass", "YouTube: search + poll + in-browser embed + /load fallback"
+
+
+@test("Web UI Live TV tab + /api/livetv route", "Web UI")
+def test_web_ui_livetv():
+    ui = _src("web/index.html")
+    rm = _src("src/services/remote.zig")
+    checks = {
+        # Server: pages the SQLite catalog, NSFW-filtered like the desktop tab.
+        "route dispatch": '"/livetv"' in rm and "fn apiLiveTv(" in rm,
+        "pages the catalog": "queryPage(rows, offset" in rm and "cat.count(q)" in rm,
+        "nsfw follows setting": "nsfw_allowed = !state.app.nsfw_filter_enabled" in rm,
+        # IptvChannel is ~1.6KB — a stack page would blow the thread budget.
+        "page heap-allocated": "alloc.alloc(ipure.IptvChannel" in rm,
+        # Web: search + paging + watch.
+        "tab wired": 'data-page="tv"' in ui and 'id="page-tv"' in ui and "function loadTv(" in ui,
+        "search + paging": "function runTv(" in ui and "tvOffset" in ui and 'id="tv-more"' in ui,
+        # Hosted plays the stream URL in-browser; companion hands it to mpv.
+        "watch both modes": "function openStreamUrl(" in ui and "if (HOSTED) openStreamUrl(" in ui
+            and "/load?url=" in ui,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "Live TV incomplete: " + ", ".join(missing)
+    return "pass", "Live TV: /api/livetv catalog paging + web tab (search, load-more, watch)"
