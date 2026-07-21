@@ -1,0 +1,61 @@
+# Build the headless-server image and publish it to GHCR (ghcr.io/debpalash/opal).
+#
+# The Dockerfile compiles the whole Zig app + native deps INSIDE the image on a
+# Linux runner (it is not buildable on the macOS dev host), so CI is the real
+# gate. Auth uses the auto-provisioned GITHUB_TOKEN — `packages: write` below is
+# all that is needed; no PAT.
+name: Docker (GHCR)
+
+on:
+  workflow_dispatch: {}          # manual "build a release image now"
+  release:
+    types: [published]           # every published GitHub release
+  push:
+    tags: ["v*"]                 # and every version tag
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/opal
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          # :latest on the default branch, :vX.Y.Z + :X.Y.Z on tags, plus :sha.
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=sha,format=short
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push (linux/amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
