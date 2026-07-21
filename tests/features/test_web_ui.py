@@ -88,3 +88,27 @@ def test_web_ui_livetv():
     if missing:
         return "fail", "Live TV incomplete: " + ", ".join(missing)
     return "pass", "Live TV: /api/livetv catalog paging + web tab (search, load-more, watch)"
+
+
+@test("Web UI add-download + source catalog", "Web UI")
+def test_web_ui_downloads_and_sources():
+    ui = _src("web/index.html")
+    rm = _src("src/services/remote.zig")
+    checks = {
+        # Activity: paste a URL or magnet. Magnets -> /load (torrent session),
+        # plain URLs -> the segmented HTTP downloader.
+        "add-download box": 'id="dl-url"' in ui and 'id="dl-go"' in ui,
+        "magnet vs url routing": "/^magnet:/i.test(u)" in ui and "/download/url?url=" in ui
+            and "'/load?url='" in ui,
+        "download route exists": '"/download/url"' in rm,
+        # Setup: browse + install from the bundled comic/novel source catalog.
+        "source catalog ui": 'id="srcs-list"' in ui and "function loadSources(" in ui
+            and "/source/catalog" in ui,
+        "catalog filter": 'id="srcs-q"' in ui and "function renderSources(" in ui,
+        "install wires source/add": "/source/add?framework=" in ui,
+        "catalog routes exist": '"/source/catalog"' in rm and '"/source/add"' in rm,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "download/source UI incomplete: " + ", ".join(missing)
+    return "pass", "Activity add-download (url+magnet) + Setup source catalog install"

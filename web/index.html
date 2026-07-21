@@ -313,6 +313,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 
   <!-- Activity -->
   <section class="page" id="page-act">
+    <div class="sect">Add a download</div>
+    <div class="search-row"><input id="dl-url" placeholder="Paste a direct file URL or magnet" autocapitalize="off"><button id="dl-go">Add</button></div>
+    <div class="hint" id="dl-hint"></div>
     <div class="sect">Downloading</div>
     <div id="torrents"></div>
     <div class="sect">Queue</div>
@@ -331,6 +334,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
     <div class="sect">TMDB key</div>
     <div id="setup-tmdb" class="hint">Powers posters, seasons, trending.</div>
     <div class="search-row"><input id="setup-tmdb-key" placeholder="Paste TMDB API key / token" autocapitalize="off"><button id="setup-tmdb-save">Save</button></div>
+    <div class="sect">Comic / novel sources</div>
+    <div class="hint" id="srcs-hint">Install a site from the bundled catalog.</div>
+    <div class="search-row"><input id="srcs-q" placeholder="Filter catalog…" autocapitalize="off"></div>
+    <div id="srcs-list"></div>
     <div class="sect">Account</div>
     <div id="setup-account" class="hint">Signed in.</div>
     <button id="signout" class="quick-btn">Sign out</button>
@@ -751,12 +758,63 @@ async function loadSetup(){
     $('setup-install').textContent = d.has_sources ? 'Starter sources installed' : 'Install starter sources';
     $('setup-tmdb').textContent = d.has_tmdb ? 'TMDB key set ✓' : 'Powers posters, seasons, trending.';
   } catch {}
+  loadSources();
 }
 $('setup-install').onclick = async () => {
   $('setup-install').textContent = 'Installing…'; $('setup-install').disabled = true;
   try { const d = await api('/setup/sources'); $('setup-install').textContent = (d.installed || 0) + ' sources installed ✓'; browseLoaded = false; }
   catch { $('setup-install').textContent = 'Failed'; $('setup-install').disabled = false; }
 };
+// ── Add a download (Activity) ──
+// Magnets go to /load (torrent session); plain URLs to the segmented HTTP
+// downloader via /download/url.
+$('dl-go').onclick = async () => {
+  const u = $('dl-url').value.trim();
+  if (!u) return;
+  $('dl-hint').textContent = 'Starting…';
+  const magnet = /^magnet:/i.test(u);
+  try {
+    const d = await api((magnet ? '/load?url=' : '/download/url?url=') + encodeURIComponent(u));
+    const ok = d && (d.ok === undefined || d.ok);
+    $('dl-hint').textContent = ok ? 'Started ✓' : (d.error || 'Could not start.');
+    if (ok) { $('dl-url').value = ''; loadActivity(); }
+  } catch { $('dl-hint').textContent = 'Failed — is the URL reachable?'; }
+};
+$('dl-url').addEventListener('keydown', e => { if (e.key === 'Enter') $('dl-go').click(); });
+
+// ── Comic / novel source catalog (Setup) ──
+// /source/catalog is the bundled curated list ({name,base,framework,lang});
+// /source/add installs one so it shows up in Comics / Novels.
+let srcCatalog = null;
+async function loadSources(){
+  if (srcCatalog) return renderSources();
+  try {
+    srcCatalog = await api('/source/catalog');
+    if (!Array.isArray(srcCatalog)) srcCatalog = [];
+    renderSources();
+  } catch { $('srcs-hint').textContent = 'Could not load the source catalog.'; }
+}
+$('srcs-q').addEventListener('input', () => renderSources());
+function renderSources(){
+  const q = $('srcs-q').value.trim().toLowerCase();
+  const rows = (srcCatalog || []).filter(s => !q || (s.name || '').toLowerCase().includes(q)).slice(0, 40);
+  $('srcs-hint').textContent = (srcCatalog || []).length + ' sources in the catalog' + (q ? ` · ${rows.length} shown` : '');
+  $('srcs-list').innerHTML = rows.map(s => `
+    <div class="result">
+      <div class="t">${esc(s.name)}</div>
+      <div class="m"><span class="src">${esc(s.framework || '')}</span>
+        ${s.lang ? `<span>${esc(s.lang)}</span>` : ''}
+        <button class="play" data-fw="${esc(s.framework || '')}" data-base="${encodeURIComponent(s.base || '')}">Install</button></div>
+    </div>`).join('') || '<div class="empty">No matches</div>';
+  $('srcs-list').querySelectorAll('.play').forEach(b => b.onclick = async () => {
+    b.textContent = '…';
+    try {
+      const d = await api('/source/add?framework=' + encodeURIComponent(b.dataset.fw) + '&base=' + b.dataset.base);
+      b.textContent = (d && d.ok === false) ? 'Failed' : 'Installed ✓';
+    } catch { b.textContent = 'Failed'; }
+  });
+}
+
 // Sign out — revokes the session server-side and returns to the login screen.
 $('signout').onclick = () => unpair();
 $('setup-tmdb-save').onclick = async () => {
