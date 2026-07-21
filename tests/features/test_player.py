@@ -236,11 +236,15 @@ def test_web_companion():
         "bundled serving": "resourceRoot" in rm and "web/index.html" in rm,
         "settings pairing ui": "pairingCode" in stg and "lanIp" in stg,
         "build bundles web": "Resources/web" in sh,
-        "client pairs": "/pair?code=" in web and "localStorage" in web and "__ZIGZAG_API_TOKEN__" not in web,
+        # The web UI moved to account auth (test_headless_auth.py); the pairing
+        # code was removed from the page. The /pair route still exists server-side
+        # (legacy) but no client uses it.
+        "client uses accounts": "/api/auth/status" in web and "/api/auth/" in web
+            and "submitAuth" in web and "localStorage" in web and 'id="pair-code"' not in web,
     }
     missing = [k for k, v in checks.items() if not v]
     if not missing:
-        return "pass", "pairing-code auth + LAN bind + bundled mobile page wired"
+        return "pass", "server pair route + LAN bind + bundled page; web UI uses account auth"
     return "fail", f"missing: {missing}"
 
 

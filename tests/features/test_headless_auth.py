@@ -70,3 +70,25 @@ def test_auth_routes():
     if missing:
         return "fail", "auth routes incomplete: " + ", ".join(missing)
     return "pass", "auth routes: status/register/login/logout + session-aware Bearer gate"
+
+
+@test("Web UI account login/register (no pairing code)", "Auth")
+def test_auth_web_ui():
+    ui = _src("web/index.html")
+    checks = {
+        # Account screen replaces the pairing screen (same #pair-screen overlay).
+        "account fields": 'id="auth-user"' in ui and 'id="auth-pass"' in ui and 'id="auth-pass2"' in ui,
+        "status drives mode": "/api/auth/status" in ui and "needs_setup" in ui
+            and "authMode" in ui,
+        # routes are built as '/api/auth/' + (reg ? 'register' : 'login')
+        "register + login POST": "'register' : 'login'" in ui and "function submitAuth(" in ui
+            and "/api/auth/" in ui,
+        "logout revokes session": "/api/auth/logout" in ui and "function unpair(" in ui,
+        "boot shows auth": "if (TOKEN) paired(); else showAuth();" in ui,
+        # The 6-digit pairing code is gone from the web UI.
+        "no pairing code": "/pair?code=" not in ui and 'id="pair-code"' not in ui,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "web auth UI incomplete: " + ", ".join(missing)
+    return "pass", "web UI: account create/sign-in (status-driven), pairing code removed"

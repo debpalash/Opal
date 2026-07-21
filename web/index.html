@@ -25,11 +25,13 @@ input{font:inherit;color:var(--text-1)}
   align-items:center;justify-content:center;gap:14px;z-index:50;padding:24px;text-align:center}
 #pair-screen h1{font-size:26px;font-weight:700}
 #pair-screen p{color:var(--text-2);max-width:340px}
-#pair-code{width:200px;text-align:center;letter-spacing:8px;font-size:24px;padding:12px;
-  background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--rad);outline:none}
-#pair-code:focus{border-color:var(--accent)}
+.auth-input{width:260px;max-width:80vw;font-size:16px;padding:12px 14px;
+  background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--rad);outline:none;color:var(--text)}
+.auth-input:focus{border-color:var(--accent)}
 #pair-btn{background:var(--accent);color:#0c0c11;font-weight:600;padding:12px 32px;border-radius:var(--rad)}
+#pair-btn:disabled{opacity:.55}
 #pair-err{color:var(--danger);min-height:20px;font-size:13px}
+#auth-toggle{color:var(--accent);cursor:pointer;font-size:13px}
 
 /* ── Header ── */
 header{display:flex;align-items:center;gap:10px;padding:14px 16px 8px}
@@ -183,10 +185,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 
 <div id="pair-screen">
   <div class="logo" style="width:52px;height:52px;border-radius:14px;background:linear-gradient(135deg,#8ab4ff,#6a5acd)"></div>
-  <h1>Pair with Opal</h1>
-  <p>Enter the 6-digit code from <b>Settings › Scripts › Web Remote Control</b> on your computer.</p>
-  <input id="pair-code" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="••••••" autocomplete="one-time-code">
-  <button id="pair-btn">Connect</button>
+  <h1 id="auth-title">Welcome to Opal</h1>
+  <p id="auth-sub">Create your account to get started.</p>
+  <input id="auth-user" class="auth-input" placeholder="Username" autocapitalize="off" autocorrect="off" autocomplete="username">
+  <input id="auth-pass" class="auth-input" type="password" placeholder="Password" autocomplete="current-password">
+  <input id="auth-pass2" class="auth-input" type="password" placeholder="Confirm password" autocomplete="new-password" style="display:none">
+  <button id="pair-btn">Continue</button>
   <div id="pair-err"></div>
 </div>
 
@@ -366,9 +370,12 @@ const api = (path) => fetch(BASE + '/api' + path, { headers: TOKEN ? { Authoriza
 // re-requesting <img> sources every tick.
 const lastHtml = {};
 
-// ── Pairing ──
+// ── Account auth (identical for headless + desktop-remote; no pairing code) ──
+// First run (no accounts) → create the admin; otherwise → sign in. The token is
+// a session token stored like before, so the rest of the app is unchanged.
 let HOSTED = false;
-function unpair(){ TOKEN=''; localStorage.removeItem('opal_token'); $('pair-screen').style.display='flex'; }
+let authMode = 'login'; // 'register' on first-run
+
 function paired(){
   $('pair-screen').style.display='none';
   api('/host').then(h => {
@@ -379,18 +386,53 @@ function paired(){
   loadCalendar();
   startStatus();
 }
-$('pair-btn').onclick = async () => {
-  const code = $('pair-code').value.trim();
-  if (code.length !== 6) { $('pair-err').textContent = 'Enter all 6 digits'; return; }
-  $('pair-err').textContent = '';
+
+// Sign out — also the 401 handler in api(). Revokes the session server-side.
+function unpair(){
+  const t = TOKEN;
+  TOKEN=''; localStorage.removeItem('opal_token');
+  if (t) fetch(BASE + '/api/auth/logout', { method:'POST', headers:{ Authorization:'Bearer '+t } }).catch(()=>{});
+  showAuth();
+}
+
+async function showAuth(){
+  $('pair-screen').style.display='flex';
+  $('pair-err').textContent='';
   try {
-    const r = await fetch(BASE + '/pair?code=' + encodeURIComponent(code));
-    if (!r.ok) { $('pair-err').textContent = 'Wrong code — check Settings on the desktop'; return; }
-    const d = await r.json();
-    if (d.token) { TOKEN = d.token; localStorage.setItem('opal_token', TOKEN); paired(); }
-  } catch { $('pair-err').textContent = 'Can’t reach Opal — same Wi-Fi?'; }
-};
-$('pair-code').addEventListener('keydown', e => { if (e.key === 'Enter') $('pair-btn').click(); });
+    const d = await (await fetch(BASE + '/api/auth/status')).json();
+    authMode = d.needs_setup ? 'register' : 'login';
+  } catch { authMode = 'login'; }
+  const reg = authMode === 'register';
+  $('auth-title').textContent = reg ? 'Welcome to Opal' : 'Sign in';
+  $('auth-sub').textContent = reg ? 'Create the admin account for this server.' : 'Enter your Opal account to continue.';
+  $('auth-pass2').style.display = reg ? '' : 'none';
+  $('auth-pass').setAttribute('autocomplete', reg ? 'new-password' : 'current-password');
+  $('pair-btn').textContent = reg ? 'Create account' : 'Sign in';
+  $('auth-user').value=''; $('auth-pass').value=''; $('auth-pass2').value='';
+  setTimeout(() => $('auth-user').focus(), 50);
+}
+
+async function submitAuth(){
+  const u = $('auth-user').value.trim(), p = $('auth-pass').value, reg = authMode === 'register';
+  if (!u || !p) { $('pair-err').textContent = 'Enter a username and password.'; return; }
+  if (reg && p.length < 8) { $('pair-err').textContent = 'Password must be at least 8 characters.'; return; }
+  if (reg && p !== $('auth-pass2').value) { $('pair-err').textContent = 'Passwords don’t match.'; return; }
+  $('pair-err').textContent=''; $('pair-btn').disabled = true;
+  try {
+    const body = 'username=' + encodeURIComponent(u) + '&password=' + encodeURIComponent(p);
+    const r = await fetch(BASE + '/api/auth/' + (reg ? 'register' : 'login'),
+      { method:'POST', headers:{ 'Content-Type':'application/x-www-form-urlencoded' }, body });
+    const d = await r.json().catch(()=>({}));
+    if (r.ok && d.token) { TOKEN = d.token; localStorage.setItem('opal_token', TOKEN); paired(); }
+    else $('pair-err').textContent = r.status === 401 ? 'Wrong username or password.' : (d.error || 'Something went wrong.');
+  } catch { $('pair-err').textContent = 'Can’t reach Opal — is the server running?'; }
+  finally { $('pair-btn').disabled = false; }
+}
+
+$('pair-btn').onclick = submitAuth;
+$('auth-user').addEventListener('keydown', e => { if (e.key === 'Enter') { authMode === 'register' ? $('auth-pass').focus() : submitAuth(); } });
+$('auth-pass').addEventListener('keydown', e => { if (e.key === 'Enter') submitAuth(); });
+$('auth-pass2').addEventListener('keydown', e => { if (e.key === 'Enter') submitAuth(); });
 
 // ── Tabs ──
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
@@ -1056,7 +1098,7 @@ function renderRssItems(items, fetching){
 }
 
 // ── Boot ──
-if (TOKEN) paired(); else unpair();
+if (TOKEN) paired(); else showAuth();
 </script>
 </body>
 </html>
