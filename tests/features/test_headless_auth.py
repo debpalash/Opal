@@ -48,3 +48,25 @@ def test_auth_store():
     if missing:
         return "fail", "auth store incomplete: " + ", ".join(missing)
     return "pass", "auth_store: users+sessions tables, bcrypt via auth_pure, wired at startup"
+
+
+@test("Auth routes + session Bearer gate", "Auth")
+def test_auth_routes():
+    rm = _src("src/services/remote.zig")
+    checks = {
+        "auth route dispatch": '"/api/auth/"' in rm,
+        "status/register/login/logout": all(f'"{s}"' in rm for s in ("status", "register", "login", "logout")),
+        # First account = admin; registration then closes.
+        "first-run gated register": "userCount() != 0" in rm and "registration closed" in rm,
+        "issues session on success": "issueSession(uid" in rm and "TOKEN_HEX" in rm,
+        # The Bearer gate accepts the static token OR a live session.
+        "session-aware gate": "fn isAuthorized(" in rm and "validSession(token)" in rm
+            and "if (!isAuthorized(presented))" in rm,
+        # Credentials from the POST body, not the URL.
+        "creds from body": "fn credParam(" in rm and "fn requestBody(" in rm,
+        "typed error codes": "409 Conflict" in rm and "403 Forbidden" in rm,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "auth routes incomplete: " + ", ".join(missing)
+    return "pass", "auth routes: status/register/login/logout + session-aware Bearer gate"

@@ -455,12 +455,87 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
         return;
     }
 
-    // All other endpoints require Bearer auth.
+    // ── Account auth (same for headless AND desktop-remote; supersedes the
+    // pairing code) ── the only unauthenticated data routes besides /health,
+    // since they are how a browser OBTAINS a session token. Credentials arrive
+    // in the POST body so they never land in URLs / access logs.
+    if (std.mem.startsWith(u8, path, "/api/auth/")) {
+        const auth_store = @import("auth_store.zig");
+        const sub = path["/api/auth/".len..];
+
+        if (std.mem.eql(u8, sub, "status")) {
+            const authed = if (extractBearer(request)) |b| isAuthorized(b) else false;
+            var jb: [64]u8 = undefined;
+            const j = std.fmt.bufPrint(&jb, "{{\"needs_setup\":{s},\"authed\":{s}}}", .{
+                if (auth_store.userCount() == 0) "true" else "false",
+                if (authed) "true" else "false",
+            }) catch return;
+            sendJson(stream, j);
+            return;
+        }
+
+        if (std.mem.eql(u8, sub, "logout")) {
+            if (extractBearer(request)) |b| auth_store.revokeSession(b);
+            sendJson(stream, "{\"ok\":true}");
+            return;
+        }
+
+        if (std.mem.eql(u8, sub, "register") or std.mem.eql(u8, sub, "login")) {
+            const body = requestBody(request);
+            var ubuf: [96]u8 = undefined;
+            var pbuf: [256]u8 = undefined;
+            const username = credParam(body, query, "username", &ubuf) orelse {
+                sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"missing username\"}");
+                return;
+            };
+            const password = credParam(body, query, "password", &pbuf) orelse {
+                sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"missing password\"}");
+                return;
+            };
+
+            if (std.mem.eql(u8, sub, "register")) {
+                // First-run only: the first account becomes the admin. Once any
+                // account exists registration is closed (admin adds users later).
+                if (auth_store.userCount() != 0) {
+                    sendJsonStatus(stream, "403 Forbidden", "{\"error\":\"registration closed\"}");
+                    return;
+                }
+                auth_store.createUser(username, password, true) catch |e| {
+                    switch (e) {
+                        error.Taken => sendJsonStatus(stream, "409 Conflict", "{\"error\":\"username taken\"}"),
+                        error.Invalid => sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"username 3-32 chars [a-zA-Z0-9._-], password 8+ chars\"}"),
+                        error.Db => sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"server error\"}"),
+                    }
+                    return;
+                };
+            }
+
+            const uid = auth_store.authenticate(username, password) orelse {
+                sendUnauthorized(stream);
+                return;
+            };
+            var tok: [auth_store.TOKEN_HEX]u8 = undefined;
+            if (!auth_store.issueSession(uid, &tok)) {
+                sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"server error\"}");
+                return;
+            }
+            var jb: [96]u8 = undefined;
+            const j = std.fmt.bufPrint(&jb, "{{\"token\":\"{s}\"}}", .{tok[0..]}) catch return;
+            sendJson(stream, j);
+            return;
+        }
+
+        sendUnauthorized(stream);
+        return;
+    }
+
+    // All other endpoints require Bearer auth: the static api.token (automation
+    // / the browser extension) OR a live web-login session token.
     const presented = extractBearer(request) orelse {
         sendUnauthorized(stream);
         return;
     };
-    if (!api_token_ready.load(.acquire) or !constantTimeEqual(presented, api_token[0..])) {
+    if (!isAuthorized(presented)) {
         sendUnauthorized(stream);
         return;
     }
@@ -936,6 +1011,34 @@ fn sendJson(stream: std.Io.net.Stream, json: []const u8) void {
     const h = std.fmt.bufPrint(&header, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nContent-Length: {d}\r\n\r\n", .{json.len}) catch return;
     _ = @import("../core/io_global.zig").streamWriteAll(stream, h) catch {};
     _ = @import("../core/io_global.zig").streamWriteAll(stream, json) catch {};
+}
+
+/// Like sendJson but with a caller-chosen status line (e.g. "409 Conflict").
+fn sendJsonStatus(stream: std.Io.net.Stream, status: []const u8, json: []const u8) void {
+    var header: [256]u8 = undefined;
+    const h = std.fmt.bufPrint(&header, "HTTP/1.1 {s}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {d}\r\n\r\n", .{ status, json.len }) catch return;
+    _ = io_g.streamWriteAll(stream, h) catch {};
+    _ = io_g.streamWriteAll(stream, json) catch {};
+}
+
+/// True if the presented Bearer token is the static api.token (automation /
+/// extension) OR a live web-login session token.
+fn isAuthorized(token: []const u8) bool {
+    if (api_token_ready.load(.acquire) and constantTimeEqual(token, api_token[0..])) return true;
+    return @import("auth_store.zig").validSession(token);
+}
+
+/// Bytes after the HTTP header terminator (the request body), or "".
+fn requestBody(request: []const u8) []const u8 {
+    if (std.mem.indexOf(u8, request, "\r\n\r\n")) |i| return request[i + 4 ..];
+    return "";
+}
+
+/// A credential param from the POST body (form-encoded) then the query, decoded.
+/// Body-first keeps passwords out of the URL / access logs.
+fn credParam(body: []const u8, query: []const u8, key: []const u8, out: []u8) ?[]const u8 {
+    const raw = getQueryParam(body, key) orelse getQueryParam(query, key) orelse return null;
+    return urlDecode(raw, out) orelse raw;
 }
 
 // Placeholder in the served HTML that the page reads to obtain its bearer
