@@ -14,7 +14,7 @@ def test_added_torrent_engines():
            "torrentgalaxy", "academictorrents", "ilcorsaronero", "tokyotoshokan", "torrentfunk",
            "knaben"]
     eng_dir = os.path.join(PROJECT_DIR, "engines", "engines")
-    m = json.load(open(os.path.join(PROJECT_DIR, "plugins-manifest.json")))
+    m = json.load(open(os.path.join(PROJECT_DIR, "data", "plugins-manifest.json")))
     torrent_ids = {p["id"] for p in m["plugins"] if p.get("type") == "torrent"}
     missing_eng, bad_class, missing_manifest = [], [], []
     for eid in ids:

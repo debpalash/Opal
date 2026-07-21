@@ -118,7 +118,7 @@ def test_music():
     # ── Manifest carries the subsonic entry ──
     manifest_ok = False
     try:
-        man = json.load(open(os.path.join(PROJECT_DIR, "plugins-manifest.json")))
+        man = json.load(open(os.path.join(PROJECT_DIR, "data", "plugins-manifest.json")))
         manifest_ok = any(p.get("id") == "subsonic" and p.get("type") == "music" for p in man.get("plugins", []))
     except Exception:
         manifest_ok = False

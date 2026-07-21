@@ -149,7 +149,7 @@ def test_iptv_tab():
     }
 
     # ── Bundled manifest carries the iptv-org plugin entry ──
-    mpath = os.path.join(PROJECT_DIR, "plugins-manifest.json")
+    mpath = os.path.join(PROJECT_DIR, "data", "plugins-manifest.json")
     manifest_ok = False
     try:
         with open(mpath) as f:
@@ -268,7 +268,7 @@ def test_iptv_catalog():
         "sources test registered": 'b.path("src/services/iptv_sources.zig")' in build,
 
         # ── Manifest carries the new m3u sources ──
-        "manifest m3u sources": '"type": "iptv-m3u"' in _src("plugins-manifest.json"),
+        "manifest m3u sources": '"type": "iptv-m3u"' in _src("data/plugins-manifest.json"),
         # Distinct (non-iptv-org-mirror) catalogs added: TDTChannels DTT + FAST
         # providers, each with its own streams. Registered + mirrored in manifest.
         "distinct sources in registry": all(
@@ -276,7 +276,7 @@ def test_iptv_catalog():
             for i in ("tdtchannels", "pluto-tv", "samsung-tvplus", "plex-tv", "roku-tv", "tubi-tv")
         ),
         "distinct sources in manifest": all(
-            f'"id": "{i}"' in _src("plugins-manifest.json")
+            f'"id": "{i}"' in _src("data/plugins-manifest.json")
             for i in ("tdtchannels", "pluto-tv", "samsung-tvplus", "plex-tv", "roku-tv", "tubi-tv")
         ),
         "distinct sources stay opt-in": srcs.count(".default_on = true") <= 4,

@@ -260,7 +260,7 @@ def test_eztv_calendar():
     if not svc or not pur:
         return "fail", "eztv_calendar.zig / eztv_calendar_pure.zig missing"
 
-    manifest_path = os.path.join(PROJECT_DIR, "plugins-manifest.json")
+    manifest_path = os.path.join(PROJECT_DIR, "data", "plugins-manifest.json")
     eztv = {}
     if os.path.exists(manifest_path):
         with open(manifest_path) as f:

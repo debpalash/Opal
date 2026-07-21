@@ -324,7 +324,7 @@ def test_anime_lists_plugin():
     an = _src("src/services/anime.zig")
     pure = _src("src/services/anime_lists_pure.zig")
     bz = _src("build.zig")
-    with open(os.path.join(PROJECT_DIR, "plugins-manifest.json")) as fh:
+    with open(os.path.join(PROJECT_DIR, "data", "plugins-manifest.json")) as fh:
         manifest = _json.load(fh)
     entry = next((p for p in manifest["plugins"] if p["id"] == "lists"), None)
 

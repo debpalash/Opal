@@ -24,9 +24,9 @@ def test_manga_source_catalog():
 
     # 1) Catalog file exists at the project root (bundled into Resources by
     #    scripts/build-app.sh alongside plugins-manifest.json).
-    path = os.path.join(PROJECT_DIR, "manga-sources-sfw.json")
+    path = os.path.join(PROJECT_DIR, "data", "manga-sources-sfw.json")
     if not os.path.exists(path):
-        return "fail", "manga-sources-sfw.json missing from project root"
+        return "fail", "data/manga-sources-sfw.json missing"
 
     # 2) Valid JSON array.
     try:

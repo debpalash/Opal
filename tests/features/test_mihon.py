@@ -121,7 +121,7 @@ def test_mihon():
     })
 
     # ── Bundled manifest carries the curated Mihon repo entry ──
-    mpath = os.path.join(PROJECT_DIR, "plugins-manifest.json")
+    mpath = os.path.join(PROJECT_DIR, "data", "plugins-manifest.json")
     manifest_ok = False
     try:
         man = json.load(open(mpath))

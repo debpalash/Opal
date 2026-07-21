@@ -39,7 +39,7 @@ def test_allanime_gated():
         problems.append("decodeSourceURL does not accept an injected base")
 
     # 4) Manifest entries present (bundled + per-plugin file reference).
-    with open(os.path.join(PROJECT_DIR, "plugins-manifest.json")) as fh:
+    with open(os.path.join(PROJECT_DIR, "data", "plugins-manifest.json")) as fh:
         manifest = _json.load(fh)
     entry = next((p for p in manifest["plugins"] if p["id"] == "allanime"), None)
     if not (entry and entry.get("type") == "anime"):

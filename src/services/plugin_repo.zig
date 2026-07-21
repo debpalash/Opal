@@ -167,7 +167,7 @@ pub fn loadLocalManifest() void {
     const path: []const u8 = if (state.resourceRoot()) |r|
         (std.fmt.bufPrint(&path_buf, "{s}/plugins-manifest.json", .{r}) catch return)
     else
-        "plugins-manifest.json";
+        "data/plugins-manifest.json";
     const body = io.cwdReadFileAlloc(path, alloc, 262144) catch return;
     defer alloc.free(body);
     parseManifest(body);
@@ -499,6 +499,6 @@ pub fn readMangaCatalog() ?[]u8 {
     const path: []const u8 = if (state.resourceRoot()) |r|
         (std.fmt.bufPrint(&path_buf, "{s}/manga-sources-sfw.json", .{r}) catch return null)
     else
-        "manga-sources-sfw.json";
+        "data/manga-sources-sfw.json";
     return io.cwdReadFileAlloc(path, alloc, 512 * 1024) catch return null;
 }

@@ -64,7 +64,7 @@ def test_suwayomi():
     }
 
     # ── Bundled manifest carries the Suwayomi entry ──
-    mpath = os.path.join(PROJECT_DIR, "plugins-manifest.json")
+    mpath = os.path.join(PROJECT_DIR, "data", "plugins-manifest.json")
     manifest_ok = False
     try:
         man = json.load(open(mpath))

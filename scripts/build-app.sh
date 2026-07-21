@@ -53,16 +53,16 @@ done
 
 # Bundle the source-plugin manifest so the Plugins page shows the full list
 # instantly + offline (plugin_repo.loadLocalManifest reads it from Resources).
-if [ -f "$ROOT/plugins-manifest.json" ]; then
-    cp "$ROOT/plugins-manifest.json" "$APP_DIR/Contents/Resources/plugins-manifest.json"
+if [ -f "$ROOT/data/plugins-manifest.json" ]; then
+    cp "$ROOT/data/plugins-manifest.json" "$APP_DIR/Contents/Resources/plugins-manifest.json"
 fi
 
 # Bundle the opt-in SFW manga source catalog (Madara/MangaThemesia/HeanCms sites
 # classified from the keiyoushi index). Browsed/installed via the Plugins tab or
 # the /api/source/catalog endpoint — never auto-loaded, no scraper URL hardcoded
 # in the binary. (plugin_repo.loadMangaCatalog reads it from Resources.)
-if [ -f "$ROOT/manga-sources-sfw.json" ]; then
-    cp "$ROOT/manga-sources-sfw.json" "$APP_DIR/Contents/Resources/manga-sources-sfw.json"
+if [ -f "$ROOT/data/manga-sources-sfw.json" ]; then
+    cp "$ROOT/data/manga-sources-sfw.json" "$APP_DIR/Contents/Resources/manga-sources-sfw.json"
 fi
 
 # Bundle the DPI-bypass proxy sidecar (debpalash/zig-bypassdpi). Opal spawns it

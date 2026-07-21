@@ -77,7 +77,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /src/zig-out/bin/opal /usr/local/bin/opal
 COPY --from=builder /src/libtorrent_wrapper.so /usr/local/lib/
 COPY --from=builder /src/web/index.html /opt/opal/web/index.html
-COPY --from=builder /src/plugins-manifest.json /opt/opal/plugins-manifest.json
+COPY --from=builder /src/data/plugins-manifest.json /opt/opal/plugins-manifest.json
 COPY --from=builder /src/engines /opt/opal/engines
 RUN ldconfig
 

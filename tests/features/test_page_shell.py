@@ -411,9 +411,9 @@ def test_bundled_manifest():
     # plugins-manifest.json is loaded via loadLocalManifest() before the network
     # refresh, bundled into the .app by build-app.sh, and read from resourceRoot.
     import json
-    mpath = os.path.join(PROJECT_DIR, "plugins-manifest.json")
+    mpath = os.path.join(PROJECT_DIR, "data", "plugins-manifest.json")
     if not os.path.exists(mpath):
-        return "fail", "plugins-manifest.json missing at repo root"
+        return "fail", "data/plugins-manifest.json missing"
     try:
         m = json.load(open(mpath))
     except Exception as e:
