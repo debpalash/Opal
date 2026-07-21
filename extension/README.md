@@ -6,6 +6,11 @@ downloads and — its headline trick — whole manga/novel **sites** to your
 locally-running Opal, so link-sending feels native to the app instead of a
 generic "open URL".
 
+<div align="center">
+  <img src="../assets/screenshots/extension-sidebar.png" alt="Opal Connector side panel — connection status, page send/queue/download/read actions, transport controls, and a live cross-source search" width="100%" />
+  <sub><em>The side panel: connection status, page actions, transport, and a cross-source search — all driving a local Opal.</em></sub>
+</div>
+
 ## What it does
 
 - **Add this site as an Opal source** — on a recognised manga/novel site it detects

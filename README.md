@@ -237,6 +237,21 @@ running locally on your hardware:
 | <kbd>F</kbd> fullscreen | <kbd>P</kbd> playlist | <kbd>G</kbd> grid layout | <kbd>Z</kbd> fit/crop |
 | <kbd>⌘</kbd><kbd>O</kbd> open file | <kbd>⌘</kbd><kbd>,</kbd> settings | <kbd>Esc</kbd> back out | <kbd>⇧</kbd><kbd>I</kbd> **cheat sheet** |
 
+## 🧩 Browser extension
+
+The **Opal Connector** (Chrome / Edge / Firefox, MV3) turns any tab into an Opal
+action: send or queue the current video, hand a URL to the downloader, add a
+manga/novel site as a source in one click, or drive playback from a side-panel
+remote — search every source, reorder the queue, cast, host a watch-party.
+
+<div align="center">
+  <img src="assets/screenshots/extension-sidebar.png" alt="Opal Connector side panel — connection status, page actions, transport controls, and a live cross-source search returning YouTube results with play and queue buttons" width="100%" />
+</div>
+
+Build it from `extension/` (`npm install && npm run build`, then load unpacked),
+pair it with your Opal API token, and every action routes to the desktop app.
+Setup and endpoint reference in [`extension/README.md`](extension/README.md).
+
 ---
 
 <a id="under-the-hood"></a>
