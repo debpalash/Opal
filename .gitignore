@@ -113,3 +113,8 @@ zls.json
 dist/
 *.dmg
 
+
+# Docker compose runtime mounts (deploy/docker-compose.yml)
+data/config/
+data/cache/
+data/media/

@@ -23,8 +23,10 @@ tmp
 *.tmp
 *.log
 
-# Docker artifacts / local data mounts
-data
+# Docker artifacts / local runtime mounts (keep the bundled data/*.json resources)
+data/config
+data/cache
+data/media
 docker-compose.override.yml
 
 # OS cruft
