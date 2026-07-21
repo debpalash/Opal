@@ -287,7 +287,7 @@ the full help map is in [`SUPPORT.md`](.github/SUPPORT.md).
 
 ## 📜 License
 
-**GPL-3.0** (see [`LICENSE`](LICENSE), [`NOTICE.md`](NOTICE.md)) — the honest
+**GPL-3.0** (see [`LICENSE`](LICENSE), [`NOTICE.md`](docs/NOTICE.md)) — the honest
 choice for a program linked against libmpv. Bundled dependencies keep their own
 licenses (libtorrent BSD, dvui/ONNX MIT, SDL2 zlib, SQLite public domain).
 

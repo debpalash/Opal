@@ -1,11 +1,11 @@
 # Opal — headless server
 #
-# NOT verifiable on macOS dev. Run on a real Linux/Docker host.
-#   docker compose up --build -d
+# NOT verifiable on macOS dev. Run on a real Linux/Docker host, from repo root:
+#   docker compose -f deploy/docker-compose.yml up --build -d
 services:
   opal:
     build:
-      context: .
+      context: ..
       dockerfile: Dockerfile
     image: opal:headless
     restart: unless-stopped
@@ -16,6 +16,7 @@ services:
       - "41595:41595" # web UI + JSON API (single port; pairing code in `docker compose logs`)
     volumes:
       # Mount config.json + api.token under /config/opal/ (XDG_CONFIG_HOME=/config).
-      - ./data/config:/config
-      - ./data/cache:/cache
-      - ./data/media:/media
+      # Paths are relative to this file; ../ keeps runtime data at the repo root.
+      - ../data/config:/config
+      - ../data/cache:/cache
+      - ../data/media:/media

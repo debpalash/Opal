@@ -90,7 +90,7 @@ jobs:
           mkdir -p opal-${VERSION}-linux-x86_64
           cp zig-out/bin/opal opal-${VERSION}-linux-x86_64/
           cp libtorrent_wrapper.so opal-${VERSION}-linux-x86_64/ 2>/dev/null || true
-          cp LICENSE NOTICE.md README.md opal-${VERSION}-linux-x86_64/
+          cp LICENSE docs/NOTICE.md README.md opal-${VERSION}-linux-x86_64/
           # Desktop entry + icon ride along so downstream repackagers
           # (AUR opal-bin, etc.) can install them from this one artifact.
           cp packaging/opal.desktop opal-${VERSION}-linux-x86_64/
@@ -333,7 +333,7 @@ jobs:
             printf '%s' "$unresolved"
             exit 1
           fi
-          cp LICENSE NOTICE.md staging/
+          cp LICENSE docs/NOTICE.md staging/
           cat > staging/README.txt <<EOF
           Opal ${VERSION} — portable Windows build (x86_64, experimental)
 
