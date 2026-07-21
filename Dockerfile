@@ -98,8 +98,8 @@ ENV XDG_CONFIG_HOME=/config \
     HOME=/config \
     OPAL_HEADLESS=1
 
-# One port: web UI + JSON API, served by opal itself. Pairing code prints to
-# the container log on start (docker logs). OPAL_PAIR_CODE pins a fixed code.
+# One port: web UI + JSON API, served by opal itself. On first visit the web UI
+# prompts you to create an admin account (username + password) — no pairing code.
 EXPOSE 41595
 
 # Non-root + liveness.

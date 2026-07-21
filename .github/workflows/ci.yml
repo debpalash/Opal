@@ -74,7 +74,8 @@ jobs:
   # Headless Docker image: the ONLY reliable gate for the hosted deployment
   # (macOS dev hosts cannot validate a Linux image). Builds the image, boots
   # it, and smoke-tests the unauthenticated surface: /health liveness and the
-  # /pair code exchange (pinned via OPAL_PAIR_CODE) returning the token.
+  # account flow — first-run register returns a session token that authorizes
+  # the API, and no token is 401.
   docker-headless:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -84,16 +85,19 @@ jobs:
         run: docker build -t opal:headless .
       - name: Boot + smoke
         run: |
-          docker run -d --name opal -e OPAL_PAIR_CODE=123456 -p 41595:41595 opal:headless
+          docker run -d --name opal -p 41595:41595 opal:headless
           for i in $(seq 1 30); do
             curl -fs http://127.0.0.1:41595/health && break
             sleep 2
           done
           curl -fs http://127.0.0.1:41595/health | grep -q '"ok":true'
-          curl -fs http://127.0.0.1:41595/ | grep -q 'Pair with Opal'
-          curl -fs 'http://127.0.0.1:41595/pair?code=123456' | grep -qE '"token":"[0-9a-f]{32}"'
-          # wrong code must 401
-          ! curl -fs 'http://127.0.0.1:41595/pair?code=000000'
+          curl -fs http://127.0.0.1:41595/ | grep -qiE 'opal|<!doctype'
+          curl -fs http://127.0.0.1:41595/api/auth/status | grep -q '"needs_setup":true'
+          TOKEN=$(curl -fs -X POST --data 'username=ci-admin&password=ci-smoke-pass' http://127.0.0.1:41595/api/auth/register | sed 's/.*"token":"//;s/".*//')
+          [ "${#TOKEN}" -ge 32 ]
+          curl -fs -H "Authorization: Bearer $TOKEN" -o /dev/null http://127.0.0.1:41595/api/status
+          # no token must 401
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:41595/api/status)" = 401 ]
       - name: Logs on failure
         if: failure()
         run: docker logs opal || true

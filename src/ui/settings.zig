@@ -3432,7 +3432,7 @@ fn renderScriptsTab() void {
         }
     }
 
-    // ── Web Remote Control ── (toggle row; phone URL + pairing code hints)
+    // ── Web Remote Control ── (toggle row; phone URL + account sign-in hint)
     {
         const remote = @import("../services/remote.zig");
         var hint_buf: [96]u8 = undefined;
@@ -3456,30 +3456,19 @@ fn renderScriptsTab() void {
             }
         }
 
-        // Pairing row — open the URL on the phone, type this code once.
+        // Account hint — open the URL in a browser and sign in with an account
+        // created there (first visit creates the admin). No pairing code.
         if (state.app.web_remote_enabled) {
             var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .expand = .horizontal,
                 .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = theme.spacing.xs },
             });
             defer prow.deinit();
-            var code_buf: [40]u8 = undefined;
-            const code_line = std.fmt.bufPrint(&code_buf, "Pairing code:  {s}", .{remote.pairingCode()}) catch "Pairing code";
-            _ = dvui.label(@src(), "{s}", .{code_line}, .{
-                .color_text = theme.colors.accent,
-                .font = dvui.themeGet().font_mono,
+            _ = dvui.label(@src(), "Open the address above in a browser and create an account to sign in.", .{}, .{
+                .color_text = theme.colors.text_secondary,
                 .gravity_y = 0.5,
                 .expand = .horizontal,
             });
-            if (dvui.button(@src(), "New code", .{}, .{
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.text_secondary,
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 2 },
-            })) {
-                remote.regeneratePairCode();
-                state.showToast("Pairing code rotated");
-            }
         }
     }
 

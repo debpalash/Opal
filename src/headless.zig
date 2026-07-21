@@ -54,18 +54,18 @@ pub fn headlessMain() !void {
     // ── 2b. Web UI + JSON API — headless's entire reason to exist ──
     // The desktop default is web_remote OFF (nothing listens until the user
     // opts in via Settings); a headless box has no Settings, and an API-less
-    // headless Opal is useless — force it on, qbittorrent-nox style. The
-    // pairing code is the browser bootstrap, so print it to stdout where
-    // `docker logs` / journald can show it.
+    // headless Opal is useless — force it on, qbittorrent-nox style. Auth is a
+    // web-UI account (create it on first visit); no pairing code to fish from
+    // logs. Print the URL + first-run hint to stdout for `docker logs`/journald.
     @import("core/state.zig").app.web_remote_enabled = true;
     const remote = @import("services/remote.zig");
     remote.start();
     io.sleep(300 * std.time.ns_per_ms); // let the listener come up before printing
     std.debug.print(
-        "[opal] web ui:       http://<host>:41595/\n" ++
-            "[opal] pairing code: {s}\n" ++
-            "[opal] api token:    $XDG_CONFIG_HOME/opal/api.token\n",
-        .{remote.pairingCode()},
+        "[opal] web ui:    http://localhost:41595/  (or this host's LAN / Tailscale address)\n" ++
+            "[opal] first run: open the web UI and create your admin account\n" ++
+            "[opal] api token: $XDG_CONFIG_HOME/opal/api.token  (for automation / the browser extension)\n",
+        .{},
     );
     logs.pushLog(
         "info",

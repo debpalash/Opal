@@ -1,11 +1,16 @@
 # Headless deployment (Opal)
 
-Run Opal as a headless server in Docker — qbittorrent-nox style. ONE port
-(`:41595`) serves both the web UI (`/`) and the JSON API; no GUI/window is
-opened. On start the container log prints the web URL and the 6-digit
-pairing code; open the page, enter the code, done. Pin a fixed code with
-`OPAL_PAIR_CODE=NNNNNN`. Browser playback streams downloaded files via
-HTTP Range (`/stream`) with SRT sidecars served as WebVTT (`/vtt`).
+Run Opal as a headless server in Docker — qbittorrent-nox / Jellyfin style. ONE
+port (`:41595`) serves both the web UI (`/`) and the JSON API; no GUI/window is
+opened. On first visit the web UI prompts you to **create an admin account**
+(username + password, bcrypt-hashed); after that you sign in — no pairing code.
+Automation and the browser extension can still use the static `api.token`
+(`$XDG_CONFIG_HOME/opal/api.token`). Browser playback streams downloaded files
+via HTTP Range (`/stream`) with SRT sidecars served as WebVTT (`/vtt`).
+
+Put it behind a reverse proxy (Caddy / nginx / Traefik) for HTTPS, or expose it
+on your tailnet with `tailscale serve`. Bind to `127.0.0.1` and let the proxy
+handle TLS + public access.
 
 > The binary, app name, and on-disk config dir is `opal` --
 > do not expect an `opal` path anywhere.

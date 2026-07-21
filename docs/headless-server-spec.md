@@ -25,7 +25,7 @@ plan for finishing the Docker/web-UI server story.
 
 | Phase | What | Status |
 |---|---|---|
-| H0 | Headless entry serves web UI + JSON API on **:41595**, prints pairing code to stdout | **Shipped** |
+| H0 | Headless entry serves web UI + JSON API on **:41595**, prints web URL + first-run hint to stdout | **Shipped** |
 | H2 | Browser playback: `/api/stream` HTTP Range + SRT→VTT `/vtt` | **Shipped** (smoked on the macOS headless binary) |
 | H3 | Web parity tier 1: browse, TV drill-down, calendar, torrents, history, first-run setup | **Shipped** |
 | H1 | Dockerfile builds `-Dheadless`, non-root, healthcheck, volumes | **Builds green on GHCR** (my `docker.yml` + `.dockerignore` fix) |
@@ -171,7 +171,7 @@ macOS cannot validate the container. Add to `docker.yml` (or a new job) after
 the image builds:
 1. `docker run -d -p 41595:41595 <img>`; poll `/health` until 200 (start-period
    ≤ 30 s) — **this is the S0/S1 correctness gate that never ran.**
-2. Read the pairing code from `docker logs`; `POST /pair?code=` → assert a token
+2. First-run `POST /api/auth/register` → assert a session token; then use it
    comes back.
 3. `GET /` → 200 + contains the web-app marker.
 4. (S1) assert `ldd /usr/local/bin/opal | grep -E 'X11|SDL' == ∅` inside the

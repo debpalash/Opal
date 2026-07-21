@@ -190,54 +190,6 @@ fn sendUnauthorized(stream: std.Io.net.Stream) void {
     _ = io_g.streamWriteAll(stream, resp) catch {};
 }
 
-// ── Pairing (phone onboarding) ──
-// A 6-digit code shown in Settings; the web page exchanges it for the bearer
-// token via GET /pair?code=NNNNNN (the ONLY way to obtain the token remotely —
-// it is never injected into the served page). Rotates on every server start
-// and after MAX_PAIR_FAILS bad attempts; each failure sleeps 300ms.
-var pair_code: [6]u8 = std.mem.zeroes([6]u8);
-var pair_ready: bool = false;
-var pair_fails = std.atomic.Value(u32).init(0);
-const MAX_PAIR_FAILS = 10;
-
-pub fn regeneratePairCode() void {
-    // Container/ops override: OPAL_PAIR_CODE=NNNNNN pins a fixed code so a
-    // reverse-proxied deployment doesn't need `docker logs` after restarts.
-    if (@import("../core/io_global.zig").getenv("OPAL_PAIR_CODE")) |pc| {
-        if (pc.len == 6) {
-            var ok = true;
-            for (pc) |ch| {
-                if (ch < '0' or ch > '9') ok = false;
-            }
-            if (ok) {
-                @memcpy(pair_code[0..], pc[0..6]);
-                pair_fails.store(0, .release);
-                pair_ready = true;
-                return;
-            }
-        }
-    }
-    var raw: [6]u8 = undefined;
-    if (io_g.openFileAbsolute("/dev/urandom", .{})) |f| {
-        var fh = f;
-        defer fh.close(io_g.io());
-        _ = io_g.readAll(fh, &raw) catch {
-            for (&raw, 0..) |*b, i| b.* = @truncate(@as(u64, @bitCast(io_g.milliTimestamp())) >> @intCast(i * 7));
-        };
-    } else |_| {
-        for (&raw, 0..) |*b, i| b.* = @truncate(@as(u64, @bitCast(io_g.milliTimestamp())) >> @intCast(i * 7));
-    }
-    for (&pair_code, 0..) |*d, i| d.* = '0' + raw[i] % 10;
-    pair_fails.store(0, .release);
-    pair_ready = true;
-}
-
-/// Current pairing code for the Settings UI ("——————" until the server ran).
-pub fn pairingCode() []const u8 {
-    if (!pair_ready) return "------";
-    return pair_code[0..];
-}
-
 // ── LAN address for the Settings hint ──
 var lan_ip_buf: [48]u8 = std.mem.zeroes([48]u8);
 var lan_ip_len: usize = 0;
@@ -271,7 +223,6 @@ pub fn lanIp() []const u8 {
 pub fn start() void {
     if (running.load(.acquire)) return;
     loadOrCreateToken();
-    regeneratePairCode();
     running.store(true, .release);
     server_thread = std.Thread.spawn(.{}, serverLoop, .{}) catch null;
 }
@@ -298,7 +249,7 @@ pub fn isRunning() bool {
 fn serverLoop() void {
     // Bind all interfaces: the server itself is OPT-IN (Settings › Web Remote,
     // off by default) and its whole point is reaching Opal from a phone on the
-    // LAN. Auth: bearer token, obtainable only via the 6-digit pairing code.
+    // LAN. Auth: bearer token from account login (/api/auth) or the api.token file.
     const ip = "0.0.0.0";
     const addr = std.Io.net.IpAddress.parseIp4(ip, port) catch return;
     var server = addr.listen(io_g.io(), .{ .reuse_address = true }) catch return;
@@ -331,7 +282,7 @@ fn serverLoop() void {
 
 /// Serializes /api/* handler logic across connection threads — exactly the
 /// guarantees handlers were written under when the server was sequential.
-/// Static/stream/pair paths do NOT take it (they touch no shared app state).
+/// Static/stream paths do NOT take it (they touch no shared app state).
 var api_mutex: @import("../core/sync.zig").Mutex = .{};
 
 
@@ -342,10 +293,10 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
     const request = buf[0..n];
 
     // NOTE: no DNS-rebinding Host gate here anymore. It existed to protect the
-    // token-INJECTED page; the token is no longer injected anywhere (the /pair
-    // code exchange is the only bootstrap) and the gate 403'd real phones
+    // token-INJECTED page; the token is no longer injected anywhere (the browser
+    // logs in via /api/auth for a session token) and the gate 403'd real phones
     // (Host: 192.168.x.x) once windowed mode started binding the LAN.
-    // Unauthenticated surface is now: static page, throttled /pair, /health.
+    // Unauthenticated surface is now: static page, /api/auth/*, /health.
 
     var lines = std.mem.splitScalar(u8, request, '\n');
     const first_line = lines.next() orelse return;
@@ -365,8 +316,8 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
     }
 
     // The HTML shell is served unauthenticated (there is no way to bootstrap
-    // otherwise); it contains NO secrets — the page asks for the 6-digit
-    // pairing code and exchanges it below. Bundled copy first (installed
+    // otherwise); it contains NO secrets — the page presents the account
+    // login/register (which POST to /api/auth). Bundled copy first (installed
     // .app), repo copy in dev.
     if (std.mem.eql(u8, path, "/") or std.mem.eql(u8, path, "/index.html")) {
         var res_buf: [700]u8 = undefined;
@@ -383,25 +334,6 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
             } else |_| {}
         }
         serveStaticFile(stream, "web/index.html", "text/html");
-        return;
-    }
-
-    // Pairing: exchange the 6-digit Settings code for the bearer token. The
-    // only unauthenticated data route; throttled + code rotates on abuse.
-    if (std.mem.eql(u8, path, "/pair")) {
-        const presented_code = getQueryParam(query, "code") orelse "";
-        const ok = pair_ready and presented_code.len == 6 and
-            constantTimeEqual(presented_code, pair_code[0..]) and
-            api_token_ready.load(.acquire);
-        if (ok) {
-            var jb: [96]u8 = undefined;
-            const j = std.fmt.bufPrint(&jb, "{{\"token\":\"{s}\"}}", .{api_token[0..]}) catch return;
-            sendJson(stream, j);
-        } else {
-            io_g.sleep(300 * std.time.ns_per_ms); // brute-force throttle
-            if (pair_fails.fetchAdd(1, .acq_rel) + 1 >= MAX_PAIR_FAILS) regeneratePairCode();
-            sendUnauthorized(stream);
-        }
         return;
     }
 
@@ -456,7 +388,7 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
     }
 
     // ── Account auth (same for headless AND desktop-remote; supersedes the
-    // pairing code) ── the only unauthenticated data routes besides /health,
+    // account) ── the only unauthenticated data routes besides /health,
     // since they are how a browser OBTAINS a session token. Credentials arrive
     // in the POST body so they never land in URLs / access logs.
     if (std.mem.startsWith(u8, path, "/api/auth/")) {
@@ -1059,7 +991,7 @@ fn serveStaticFile(stream: std.Io.net.Stream, path: []const u8, content_type: []
 
     // No token injection: since the server binds the LAN (opt-in), a page
     // carrying the bearer token would hand full control to any device that
-    // GETs `/`. The page bootstraps via the /pair code exchange instead.
+    // GETs `/`. The page bootstraps via account login (/api/auth) instead.
     const body: []const u8 = raw;
 
     // SECURITY: deliberately NO `Access-Control-Allow-Origin` here — a

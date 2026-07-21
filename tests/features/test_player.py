@@ -218,33 +218,32 @@ def test_tv_calendar_and_hwdec():
     return "fail", f"missing: {missing}"
 
 
-@test("Web Companion: Pairing + LAN Bind + Bundled Page", "Remote")
+@test("Web Companion: Account Auth + LAN Bind + Bundled Page", "Remote")
 def test_web_companion():
-    # Phase 1 of docs/web-companion.md: /pair code exchange is the ONLY way to
-    # get the token (no injection into the unauthenticated page), server binds
-    # LAN when the opt-in toggle is on, page served from Resources/web with a
-    # dev fallback, Settings shows LAN URL + pairing code, build bundles it.
+    # The pairing code is gone (test_headless_auth.py owns the account system).
+    # This covers the rest of the companion story: server binds LAN when the
+    # opt-in toggle is on, the page is served from Resources/web with a dev
+    # fallback, Settings shows the LAN URL + an account hint, build bundles it.
     rm = _src("src/services/remote.zig")
     stg = _src("src/ui/settings.zig")
     sh = open(os.path.join(PROJECT_DIR, "scripts/build-app.sh")).read()
     web = open(os.path.join(PROJECT_DIR, "web/index.html")).read()
     checks = {
-        "pair route": '"/pair"' in rm and "regeneratePairCode" in rm,
-        "brute-force guard": "MAX_PAIR_FAILS" in rm and "sleep(300" in rm,
+        # Pairing is fully removed server-side.
+        "no pair route": '"/pair"' not in rm and "regeneratePairCode" not in rm
+            and "pairingCode" not in rm and "MAX_PAIR_FAILS" not in rm,
         "no token injection": "replaceOwned" not in rm,
         "lan bind": '"0.0.0.0"' in rm and "127.0.0.1" not in _between(rm, "fn serverLoop", "std.debug.print"),
         "bundled serving": "resourceRoot" in rm and "web/index.html" in rm,
-        "settings pairing ui": "pairingCode" in stg and "lanIp" in stg,
+        "settings account hint": "lanIp" in stg and "create an account" in stg and "pairingCode" not in stg,
         "build bundles web": "Resources/web" in sh,
-        # The web UI moved to account auth (test_headless_auth.py); the pairing
-        # code was removed from the page. The /pair route still exists server-side
-        # (legacy) but no client uses it.
+        # The web UI authenticates via accounts, not a pairing code.
         "client uses accounts": "/api/auth/status" in web and "/api/auth/" in web
             and "submitAuth" in web and "localStorage" in web and 'id="pair-code"' not in web,
     }
     missing = [k for k, v in checks.items() if not v]
     if not missing:
-        return "pass", "server pair route + LAN bind + bundled page; web UI uses account auth"
+        return "pass", "account auth (no pairing) + LAN bind + bundled page"
     return "fail", f"missing: {missing}"
 
 
@@ -269,9 +268,9 @@ def test_hosted_mode_and_perf():
         "query-token media auth": '"/stream"' in rm and 'getQueryParam(query, "t")' in rm,
         "parity routes": '"/calendar"' in rm and '"/tv"' in rm and '"/host"' in rm and '"/torrents"' in rm,
         "thread-per-conn + api mutex": "api_mutex" in rm and "Thread.spawn(.{}, Handler.run" in rm,
-        "headless serves web": "web_remote_enabled = true" in hl and "pairingCode()" in hl,
-        "docker headless build": "-Dheadless=true" in dk and "OPAL_PAIR_CODE" in dk and "3000" not in dk,
-        "ci gate": "docker-headless" in ci and "/pair?code=123456" in ci,
+        "headless serves web": "web_remote_enabled = true" in hl and "create your admin account" in hl,
+        "docker headless build": "-Dheadless=true" in dk and "3000" not in dk,
+        "ci gate": "docker-headless" in ci and "/api/auth/register" in ci,
         "hosted web player": "openPlayer" in web and "/stream?file=" in web and "/vtt?file=" in web,
         "web torrent progress": "pollTorrents" in web,
         "browser-first setup": '"/setup/sources"' in rm and "installStarterPack" in rm and "loadSetup" in web,
