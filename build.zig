@@ -322,6 +322,16 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_plugins_pure).step);
 
+    // Headless account auth: bcrypt hash/verify + credential validation.
+    const test_auth_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/auth_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_auth_pure).step);
+
     // Logs view: level-tag normalization + consecutive-duplicate collapsing.
     const test_logs_pure = b.addTest(.{
         .root_module = b.createModule(.{
