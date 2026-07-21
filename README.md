@@ -31,7 +31,6 @@
   </p>
 
   <img src="assets/screenshots/home.png" alt="Opal home screen — a time-aware greeting, an ask-anything search box, and tonight's trending row of movies and shows" width="100%" />
-  <sub><em>It's late. Opal knows it's late.</em></sub>
 </div>
 
 <br/>
@@ -39,21 +38,12 @@
 > [!TIP]
 > **🔮 New in [v0.5.0](../../releases/tag/v0.5.0)** — a **~18,000-channel Live TV / IPTV** catalog with instant, virtualized search · **Mihon / Tachiyomi manga extensions** (Opal runs the Suwayomi server *for* you — install, browse, and read in-app) · a refined YouTube with **AV1-safe playback**. &nbsp;[See the full release →](../../releases/tag/v0.5.0)
 
-> **It's 11 PM and you just want to watch something.** So why are there nine
-> tabs open? A player for the files. A site for the show. An app for the
-> server. A wiki for "what episode was that." A feed deciding what you see
-> next. Opal's whole thesis is that this is *one job*: you say what you're in
-> the mood for — a title, a file, a magnet, a vibe — and a moment later you're
-> watching it. That's it. That's the app.
-
-For decades the "media player" has been the dumb end of the pipeline — the
-thing other apps hand a file to. Opal is what comes after: **the place where
-watching *starts***. It searches everywhere at once, curates to your taste,
-remembers where you left off, and plays anything — a local-first media app
-written in [Zig](https://ziglang.org), with an immediate-mode
-[dvui](https://github.com/david-vanderson/dvui) interface and an **mpv**
-heart. It opens in a blink, idles in silence, and quits with a receipt:
-`Clean shutdown: 0 memory leaks.`
+Opal replaces the stack of apps you'd otherwise juggle — a player, a site for
+the show, a server front-end, a torrent client, a feed. You say what you want
+(a title, a file, a magnet), and it searches every source, plays anything, and
+remembers where you left off. A local-first app written in
+[Zig](https://ziglang.org) with a [dvui](https://github.com/david-vanderson/dvui)
+interface and an **mpv** core: one native binary, fast to open, quiet when idle.
 
 <div align="center">
 
