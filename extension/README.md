@@ -1,4 +1,4 @@
-# Opal Connector — browser extension
+# Opal Connect — browser extension
 
 A cross-browser (Chrome / Edge / Firefox, **Manifest V3**) companion for the
 [Opal](../README.md) desktop app. It hands any website's media, articles,
@@ -7,7 +7,7 @@ locally-running Opal, so link-sending feels native to the app instead of a
 generic "open URL".
 
 <div align="center">
-  <img src="../assets/screenshots/extension-sidebar.png" alt="Opal Connector side panel — connection status, page send/queue/download/read actions, transport controls, and a live cross-source search" width="100%" />
+  <img src="../assets/screenshots/extension-sidebar.png" alt="Opal Connect side panel — connection status, page send/queue/download/read actions, transport controls, and a live cross-source search" width="100%" />
   <sub><em>The side panel: connection status, page actions, transport, and a cross-source search — all driving a local Opal.</em></sub>
 </div>
 
@@ -31,6 +31,18 @@ generic "open URL".
   extract readable article text.
 
 Built with [extension.js](https://extension.js.org) (v3) + TypeScript.
+
+## Install (prebuilt)
+
+Grab a build from the [latest release](../../../releases/latest) — the assets are
+`opal-connect-<ver>-chrome.zip` and `opal-connect-<ver>-firefox.zip`.
+
+- **Chrome / Edge**: unzip, then `chrome://extensions` → *Developer mode* →
+  *Load unpacked* → pick the unzipped folder.
+- **Firefox**: `about:debugging` → *This Firefox* → *Load Temporary Add-on* →
+  pick the zip (unsigned add-ons load per-session until signed on AMO).
+
+Then pair it — see *Get your API token* below.
 
 ## Requirements
 

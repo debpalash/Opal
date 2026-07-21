@@ -1,5 +1,5 @@
 /**
- * Opal Connector — content script.
+ * Opal Connect — content script.
  *
  * Runs on every page. Jobs:
  *   1. Detect the manga/novel *framework* a site is built on (Madara,
@@ -340,7 +340,7 @@ function injectButton(d: Detection): void {
   injected = true;
 
   const host = document.createElement("div");
-  host.id = "opal-connector-host";
+  host.id = "opal-connect-host";
   host.style.all = "initial";
   host.style.position = "fixed";
   host.style.zIndex = "2147483647";

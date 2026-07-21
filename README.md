@@ -239,18 +239,20 @@ running locally on your hardware:
 
 ## 🧩 Browser extension
 
-The **Opal Connector** (Chrome / Edge / Firefox, MV3) turns any tab into an Opal
+The **Opal Connect** (Chrome / Edge / Firefox, MV3) turns any tab into an Opal
 action: send or queue the current video, hand a URL to the downloader, add a
 manga/novel site as a source in one click, or drive playback from a side-panel
 remote — search every source, reorder the queue, cast, host a watch-party.
 
 <div align="center">
-  <img src="assets/screenshots/extension-sidebar.png" alt="Opal Connector side panel — connection status, page actions, transport controls, and a live cross-source search returning YouTube results with play and queue buttons" width="100%" />
+  <img src="assets/screenshots/extension-sidebar.png" alt="Opal Connect side panel — connection status, page actions, transport controls, and a live cross-source search returning YouTube results with play and queue buttons" width="100%" />
 </div>
 
-Build it from `extension/` (`npm install && npm run build`, then load unpacked),
-pair it with your Opal API token, and every action routes to the desktop app.
-Setup and endpoint reference in [`extension/README.md`](extension/README.md).
+**Install** — download the Chrome/Edge or Firefox build from the
+[latest release](../../releases/latest) (unzip → load unpacked), or build from
+`extension/` (`npm install && npm run build`). Pair it with your Opal API token
+and every action routes to the desktop app. Setup and endpoint reference in
+[`extension/README.md`](extension/README.md).
 
 ---
 
@@ -266,7 +268,7 @@ src/
 ├── services/    # search, AI, torrents, jellyfin, remote API, ...
 └── ui/          # dvui widgets — theme tokens, shell, grid, player chrome
 web/             # companion web UI (its own Zig project)
-extension/       # Opal Connector — cross-browser MV3 extension (play/read/download/scrape → Opal); see extension/README.md
+extension/       # Opal Connect — cross-browser MV3 extension (play/read/download/scrape → Opal); see extension/README.md
 ```
 
 Player, search, torrent streamer, and AI compile to **one native binary**: a

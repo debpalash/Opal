@@ -425,8 +425,33 @@ jobs:
             Opal-*-windows-x86_64.msi
           if-no-files-found: error
 
+  # ── Browser extension (Opal Connect) ────────────────────────────────────
+  # Builds the Chrome + Firefox packages and ships them as release assets.
+  extension:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build Opal Connect (Chrome + Firefox)
+        working-directory: extension
+        run: |
+          npm install
+          npx extension build --browser chrome  --zip --polyfill
+          npx extension build --browser firefox --zip --polyfill
+          VER=$(node -p "require('./manifest.json').version")
+          mkdir -p out
+          cp "dist/chrome/opal-connect-${VER}.zip"  "out/opal-connect-${VER}-chrome.zip"
+          cp "dist/firefox/opal-connect-${VER}.zip" "out/opal-connect-${VER}-firefox.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension
+          path: extension/out/opal-connect-*.zip
+          if-no-files-found: error
+
   publish:
-    needs: [macos-arm64, linux-x86_64, windows-x86_64]
+    needs: [macos-arm64, linux-x86_64, windows-x86_64, extension]
     # macos-arm64 must succeed; the best-effort jobs contribute artifacts only
     # when they happen to pass (unmatched globs below just warn).
     if: always() && needs.macos-arm64.result == 'success'
@@ -455,6 +480,7 @@ jobs:
             artifacts/opal-*-linux-x86_64.run
             artifacts/opal-*-windows-x86_64.zip
             artifacts/Opal-*-windows-x86_64.msi
+            artifacts/opal-connect-*.zip
             artifacts/SHA256SUMS.txt
           generate_release_notes: true
           draft: false

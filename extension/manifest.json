@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Opal Connector",
+  "name": "Opal Connect",
   "version": "0.3.0",
   "description": "Send any website's media, articles and downloads to a locally-running Opal, turn manga/novel sites into Opal sources, and drive the full remote — search, transport, queue, cast and watch-party — from the side panel.",
   "icons": {
@@ -52,7 +52,7 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "opal-connector@opal.app",
+      "id": "opal-connect@opal.app",
       "strict_min_version": "115.0"
     }
   }

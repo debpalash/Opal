@@ -1,5 +1,5 @@
 /**
- * Opal Connector — background service worker.
+ * Opal Connect — background service worker.
  *
  * The SINGLE place that talks to the local Opal JSON API. The content script and
  * the side panel send messages here; this worker owns the bearer token and does
