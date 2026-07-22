@@ -582,7 +582,11 @@ def test_macos_now_playing():
         "build compiles .m": "src/macos/media_remote.m" in bz,
         "build links framework": 'linkFramework("MediaPlayer"' in bz,
         "externs match .m": all(s in m and s in z for s in externs),
-        "zig macos guard": "builtin.os.tag != .macos" in z,
+        # macOS AND not headless — the server build stops compiling
+        # media_remote.m (build.zig Phase S1), so the externs must be
+        # comptime-unreachable there too.
+        "zig macos guard": "const enabled = builtin.os.tag == .macos and !@import(\"build_options\").headless;" in z
+            and "if (!enabled) return;" in z,
         "zig player guard": "active_player_idx >= state.app.players.items.len" in z,
         "pure decode/clamp routed": "clampSeekTarget" in zp and "clampSeekTarget" in z
             and "pure.decode" in z,

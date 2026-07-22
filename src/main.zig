@@ -249,6 +249,9 @@ fn detectResourceRoot() void {
     if (io_g.cwdAccess("engines/nova2.py", .{})) |_| return else |_| {}
 
     // Bundled: SDL_GetBasePath() → "<App>/Contents/Resources/" (trailing slash).
+    // Headless links no SDL (build.zig Phase S1) and is never run from a .app
+    // bundle anyway — a server resolves its resources from CWD/XDG.
+    if (@import("build_options").headless) return;
     const base = c.sdl.SDL_GetBasePath();
     if (base == null) return;
     defer c.sdl.SDL_free(base);

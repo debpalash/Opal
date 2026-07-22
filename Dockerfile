@@ -42,8 +42,8 @@ ENV PATH="/opt/zig:${PATH}"
 WORKDIR /src
 COPY . .
 
-# Headless entry (compile-time; no dvui frame loop at runtime — SDL is still
-# LINKED this cycle, the no-SDL link is a follow-up). ReleaseSafe keeps
+# Headless entry (compile-time). Phase S1: -Dheadless swaps dvui for
+# src/core/dvui_headless.zig and links no SDL2/X11/GL at all. ReleaseSafe keeps
 # runtime safety checks on for the server.
 RUN zig build -Dheadless=true -Doptimize=ReleaseSafe
 
@@ -69,14 +69,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         # python3 only needed if the voice/TTS/STT sidecars are wanted:
         python3 \
-        # ── S0 STOPGAP (remove after Phase S1, docs/headless-server-spec.md) ──
-        # The -Dheadless binary still bundles dvui's static SDL2, which carries
-        # DT_NEEDED entries for X11/pulse/asound even though no window ever
-        # opens. The slim build (S1) drops the SDL/dvui link and these go away.
-        # The generous set below covers SDL2's usual load-time deps; CI's
-        # container smoke test (ldd + /health) is the source of truth.
-        libx11-6 libxext6 libxrandr2 libxi6 libxcursor1 libxfixes3 \
-        libxrender1 libpulse0 libasound2 libgl1 \
+    # No X11/GL/pulse/asound: Phase S1 removed the SDL2 link entirely, so the
+    # binary has no DT_NEEDED entry for any of them. CI asserts this (the
+    # docker smoke greps `ldd` for SDL|X11) — if it ever fails, the fix is to
+    # find what re-introduced the GUI link, not to reinstate these packages.
     && rm -rf /var/lib/apt/lists/*
 
 # Copy build artifacts. The app resolves web/index.html, engines/ and the

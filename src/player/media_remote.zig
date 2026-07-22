@@ -18,6 +18,12 @@ const c = @import("../core/c.zig");
 const logs = @import("../core/logs.zig");
 const pure = @import("media_remote_pure.zig");
 
+/// macOS AND not headless. The server build stops compiling media_remote.m
+/// (build.zig Phase S1) so it links no Cocoa/Foundation — and a headless server
+/// has no Now Playing card to publish and no media keys to receive. Comptime, so
+/// the externs below are never referenced in the emitted server binary.
+const enabled = builtin.os.tag == .macos and !@import("build_options").headless;
+
 extern fn opal_media_remote_init() void;
 extern fn opal_media_remote_poll(arg_out: *f64) c_int;
 extern fn opal_nowplaying_update(
@@ -38,7 +44,7 @@ var last_paused: bool = true;
 /// onto the active player, then refresh the system Now Playing card
 /// (immediately on play/pause flips, ~1s cadence otherwise).
 pub fn frameTick() void {
-    if (builtin.os.tag != .macos) return;
+    if (!enabled) return;
     pollCommands();
     updateNowPlaying();
 }
@@ -46,7 +52,7 @@ pub fn frameTick() void {
 /// App shutdown (appDeinit) / explicit teardown: drop the Now Playing card.
 /// Player-close is handled by frameTick noticing there is no active player.
 pub fn clear() void {
-    if (builtin.os.tag != .macos) return;
+    if (!enabled) return;
     clearIfActive();
 }
 

@@ -66,8 +66,14 @@ jobs:
         run: |
           set -euo pipefail
           docker run -d --name opal -p 41595:41595 opal:ci
-          echo "── what the binary links (S1 will drop SDL/X11) ──"
-          docker exec opal sh -c 'ldd /usr/local/bin/opal | grep -Ei "sdl|libx11" || echo "(no SDL/X11 in ldd)"' || true
+          echo "── Phase S1 acceptance: the server binary links NO GUI stack ──"
+          docker exec opal ldd /usr/local/bin/opal
+          if docker exec opal ldd /usr/local/bin/opal | grep -Eiq 'sdl|libx11|libxext|libgl|libpulse|libasound'; then
+            echo "FAIL: GUI libraries crept back into the headless binary."
+            echo "Fix what re-introduced the dvui/SDL link — do NOT reinstate the runtime packages."
+            exit 1
+          fi
+          echo "no SDL/X11/GL/pulse/asound — slim build intact"
           echo "── wait for /health ──"
           ok=""
           for i in $(seq 1 30); do

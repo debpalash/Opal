@@ -66,12 +66,16 @@ pub fn build(b: *std.Build) void {
         exe.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{brew_prefix}) });
         // Native Now Playing card + hardware media keys (MPNowPlayingInfoCenter
         // / MPRemoteCommandCenter) — see src/macos/media_remote.m and its Zig
-        // side src/player/media_remote.zig.
-        exe.root_module.addCSourceFile(.{
-            .file = b.path("src/macos/media_remote.m"),
-            .flags = &[_][]const u8{ "-fobjc-arc", "-O2" },
-        });
-        exe.root_module.linkFramework("MediaPlayer", .{});
+        // side src/player/media_remote.zig. Desktop only: it drags in the ObjC
+        // runtime + Foundation, which the desktop build got transitively from
+        // dvui's bundled SDL2 and which headless (Phase S1) no longer links.
+        if (!headless) {
+            exe.root_module.addCSourceFile(.{
+                .file = b.path("src/macos/media_remote.m"),
+                .flags = &[_][]const u8{ "-fobjc-arc", "-O2" },
+            });
+            exe.root_module.linkFramework("MediaPlayer", .{});
+        }
     } else if (is_windows) {
         // Windows (MinGW/MSYS2): headers + import libs from the MINGW64 prefix.
         // dvui's bundled SDL2 supplies the SDL symbols (like macOS), so only
@@ -90,18 +94,37 @@ pub fn build(b: *std.Build) void {
         if (dvui_mod.import_table.get("backend")) |backend_mod| {
             backend_mod.addCMacro("_FORTIFY_SOURCE", "0");
         }
-    } else {
+    } else if (!headless) {
         // Non-macOS: link system SDL2. On macOS, dvui's bundled SDL2 is used
         // (avoids duplicate-class ObjC warnings when both static + dyn SDL2 load).
-        // headless (-Dheadless, non-macOS) would skip this SDL2 link, but
-        // main/player/grid still import dvui unconditionally this cycle.
-        // headless: full dvui/SDL removal is follow-up; keep linked so the binary still runs.
         exe.root_module.linkSystemLibrary("SDL2", .{});
     }
 
-    // Add dvui_sdl2 which is a fully bundled standalone backend.
-    // headless: full dvui/SDL removal is follow-up; keep linked so the binary still runs.
-    exe.root_module.addImport("dvui", dvui_dep.module("dvui_sdl2"));
+    if (headless) {
+        // ── Phase S1: the server build links no GUI stack at all ──
+        // dvui is swapped for a stub (src/core/dvui_headless.zig). This works
+        // only because Zig analyzes reachable decls: `main == headlessEntry`
+        // never references appFrame, so ui/* and every render* in services/*
+        // are not compiled. See docs/headless-server-spec.md.
+        const stub = b.createModule(.{
+            .root_source_file = b.path("src/core/dvui_headless.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        // The stub's one real dependency: poster.zig decodes cover art through
+        // dvui.c.stbi_*, and /poster serves it over HTTP. Compile dvui's OWN
+        // vendored stb_image so the decoder is byte-for-byte the desktop one.
+        stub.addIncludePath(dvui_dep.path("vendor/stb"));
+        stub.addCSourceFile(.{
+            .file = dvui_dep.path("vendor/stb/stb_image_impl.c"),
+            .flags = &[_][]const u8{"-O2"},
+        });
+        exe.root_module.addImport("dvui", stub);
+    } else {
+        // Add dvui_sdl2 which is a fully bundled standalone backend.
+        exe.root_module.addImport("dvui", dvui_dep.module("dvui_sdl2"));
+    }
 
     // Expose -Dheadless to the app code via @import("build_options").
     exe.root_module.addImport("build_options", build_options.createModule());

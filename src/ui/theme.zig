@@ -395,6 +395,12 @@ pub fn reapplyIfPending() void {
 }
 
 fn applyToDvui() void {
+    // Headless links no dvui (build.zig Phase S1) and setTheme() is on the
+    // server's startup path via coreInit. The onUiThread() guard below already
+    // returns here at runtime — comptime makes it so the widget-side theme
+    // symbols are never analyzed in the server build. `colors` is still set by
+    // the caller, which is all the remote/web side ever reads.
+    if (@import("build_options").headless) return;
     // dvui themeGet/themeSet mutate the global current_window's theme and MUST
     // run only on the UI/render thread. config.load() calls setPreset on a
     // background worker; current_window being a GLOBAL means a null-check races

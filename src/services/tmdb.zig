@@ -432,6 +432,10 @@ var search_focused: bool = false;
 /// Jump the gallery back to the top — call whenever the underlying result set
 /// changes meaning (view/category/filter/search), not on pagination appends.
 pub fn resetGalleryScroll() void {
+    // Reachable from fetchDiscover, which the headless server does run — but
+    // there is no gallery to scroll and no dvui to scroll it with (build.zig
+    // Phase S1). Comptime so `gallery_si`'s dvui type is never analyzed.
+    if (@import("build_options").headless) return;
     gallery_si.scrollToOffset(.vertical, 0);
     grid_focus = null;
 }

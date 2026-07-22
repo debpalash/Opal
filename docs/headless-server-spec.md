@@ -28,110 +28,73 @@ plan for finishing the Docker/web-UI server story.
 | H0 | Headless entry serves web UI + JSON API on **:41595**, prints web URL + first-run hint to stdout | **Shipped** |
 | H2 | Browser playback: `/api/stream` HTTP Range + SRT→VTT `/vtt` | **Shipped** (smoked on the macOS headless binary) |
 | H3 | Web parity tier 1: browse, TV drill-down, calendar, torrents, history, first-run setup | **Shipped** |
-| H1 | Dockerfile builds `-Dheadless`, non-root, healthcheck, volumes | **Builds green on GHCR** (my `docker.yml` + `.dockerignore` fix) |
+| H1 | Dockerfile builds `-Dheadless`, non-root, healthcheck, volumes | **Builds green on GHCR** (`docker.yml` + `.dockerignore` fix) |
+| S0 | Image actually *runs*: runtime `.so` deps + a CI gate that starts the container and hits `/health` | **Shipped** |
+| S1 | Slim build: no dvui/SDL/X11 link (§2) | **Shipped** |
+| S2 | Drop the S0 stopgap packages; `ldd` grep is a hard CI gate | **Shipped** |
 
-**One codebase, ~one port, mostly built.** The gaps below are what remain.
+**One codebase, one port, mostly built.** The gaps below are what remain.
 
-## 2. The blocker: the `-Dheadless` binary is not actually GUI-free
+## 2. Phase S1 — the slim build (**SHIPPED**)
 
-`build.zig:96-104` still links dvui + SDL2 into the headless build ("full
-dvui/SDL removal is follow-up; keep linked so the binary still runs"). dvui
-bundles a **static** `libSDL2.a` that **dynamically** references
-`libX11.so.6`, `libXext.so.6`, `libpulse.so.0` (confirmed in the GHCR build's
-LLD output). The runtime image installs **none** of these.
+The `-Dheadless` binary now links **no GUI stack at all**.
 
-**Consequence:** the container binary very likely fails at exec with
-`libX11.so.6: cannot open shared object file`. H2/H3 were validated against the
-*macOS* headless binary (works — macOS uses bundled frameworks); the actual
-Linux container has never been run. **This must be fixed before the image is
-usable.**
+`build.zig` swaps the dvui module for `src/core/dvui_headless.zig` and skips the
+SDL2 link. On macOS it also stops compiling `src/macos/media_remote.m` (the Now
+Playing card), which was the last thing pulling in the ObjC runtime + Foundation
+— the desktop build had been getting those transitively from dvui's bundled
+SDL2.
 
-Two fixes, sequenced:
+**Why the stub is small.** Zig only analyzes *reachable* decls. `main ==
+headlessEntry` never references `appFrame`, so all of `ui/*` and every `render*`
+in `services/*` is never compiled. Roughly 60 modules `@import("dvui")`; they
+need the module to **exist** and reference **zero** symbols from it. Only five
+files in the headless graph touch real ones: `main.zig`, `core/state.zig`,
+`core/poster.zig`, `player/player.zig`, `services/comics.zig`.
 
-### Phase S0 — make the image run *today* (unblock, ~1 line)
-Add the transitive `.so` deps to the runtime stage so the current fat binary
-loads:
-```dockerfile
-# runtime stage apt list, until the slim build lands (Phase S1):
-libx11-6 libxext6 libpulse0 libasound2
-```
-Then **verify in CI** the container actually starts and answers `/health` (see
-§6). This is the correctness gate that was never run.
+The stub therefore exposes: `App.panic`/`App.logFn` (std fallbacks), `Window`
+(opaque), `Texture` + `update`/`destroyLater`, `textureCreate` (fails —
+`?Texture` fields just stay null), `textureDestroyLater`, `Color`/`Color.PMA`
+(layout must match: `player.zig` allocates frame buffers as `[]Color.PMA`),
+`refresh` (no-op), `current_window` (always null), and `c.stbi_*`.
 
-### Phase S1 — slim build: link no dvui/SDL/X11 (the real fix)
-Make `-Dheadless` produce a binary with zero GUI linkage.
+**The one real dependency:** `poster.zig` decodes cover art through
+`dvui.c.stbi_load_from_memory`. build.zig compiles dvui's **own** vendored
+`vendor/stb/stb_image_impl.c` for the stub, so the decoder is the same source as
+the desktop build — no behavior drift.
 
-**build.zig changes** (`b.option "headless"` already exists at line 7):
-```zig
-if (!headless) {
-    exe.root_module.linkSystemLibrary("SDL2", .{});           // ~line 99
-    exe.root_module.addImport("dvui", dvui_dep.module("dvui_sdl2")); // ~line 104
-} else {
-    exe.root_module.addImport("dvui", b.createModule(.{
-        .root_source_file = b.path("src/core/dvui_headless.zig"), // the stub
-    }));
-}
-```
-The stub (`src/core/dvui_headless.zig`) exposes only the dvui surface the
-**headless-reachable** graph references. Windowed-only files (`ui/*`, grid,
-drawer, header, footer, settings, `appFrame`) are simply never compiled in the
-headless build because `headlessEntry` never references them — Zig only compiles
-reachable code.
+**Three call sites were comptime-gated** rather than widening the stub (the rule:
+prefer `if (build_options.headless) return;` at the caller):
 
-**Stub surface (audited — final).** 34 files import dvui, but the split is
-favorable:
-- **~30 service/UI-helper modules** (`search`, `tmdb`, `anime`, `youtube`,
-  `queue`, `jellyfin`, `rss`, `logs`, `playlist`, …) touch dvui only inside
-  *render* functions headless never calls. Zig's lazy per-decl analysis skips
-  them entirely — they need the `dvui` module to **exist**, but **zero** stub
-  symbols.
-- **All of `ui/*`** plus `main.zig`'s `appFrame`/`appInit`/`dvui_app` are
-  **never referenced** by the headless entry (`main == headlessEntry`), so they
-  aren't compiled at all.
-- **Only 4 files** sit in the guaranteed-compiled headless graph and force real
-  dvui symbols: `main.zig` (top-level), `core/state.zig`, `core/poster.zig`,
-  `player/player.zig`.
+| Call site | Why it is reachable headless |
+|---|---|
+| `ui/theme.zig applyToDvui` | `coreInit` calls `setTheme()`; it already returned early off the UI thread, now comptime |
+| `services/tmdb.zig resetGalleryScroll` | reachable from `fetchDiscover`; pure gallery scroll state |
+| `player/media_remote.zig` | `clear()` runs from `appDeinit`; already had an `os.tag != .macos` guard, now `enabled = macos and !headless` |
 
-The stub (`src/core/dvui_headless.zig`) must therefore expose exactly **8
-top-level names / ~14 symbols**:
+**Measured (macOS, debug):**
 
-| # | Symbol | Used by | Stub form |
-|---|--------|---------|-----------|
-| 1 | `App.panic`, `App.logFn` | `main.zig` `pub const panic` / `std_options.logFn` | real fns; **signatures must match** `root.panic` / `std.Options.logFn` (confirm against pinned dvui) — logFn → plain stderr |
-| 2 | `Window` | `state.dvui_win: ?*dvui.Window` | opaque type (`opaque {}`) |
-| 3 | `Texture`, `Texture.update(...)` | `state`/`player` texture fields | type + no-op method |
-| 4 | `textureCreate(...)` | `poster.zig` | no-op returning a dummy `Texture` |
-| 5 | `textureDestroyLater(...)` | `poster.zig` | no-op |
-| 6 | `Color.PMA` (type), `Color.PMA.black` | `poster`/`player` pixel buffers | `extern struct { r,g,b,a: u8 }` + const |
-| 7 | `refresh(win, src, id)` | worker-thread UI pokes (`state`, `poster`, `player`, `suwayomi_server`) | no-op |
-| 8 | `c.stbi_load_from_memory`, `c.stbi_image_free` | `poster.zig` bg image decode | **the only non-trivial part** — see below |
+| | desktop | headless |
+|---|---|---|
+| linked libs | 16 frameworks incl. Cocoa/AppKit/OpenGL/Metal/MediaPlayer | `libmpv`, `libsqlite3`, `libtorrent_wrapper`, `libSystem` |
+| binary | 50 MB | 16 MB |
 
-**The one real decision (item 8):** `poster.zig` decodes images through dvui's
-bundled stb_image. The stub's `c` namespace must therefore either **(a) vendor a
-tiny `stb_image.h` compile** into the headless build (dvui already ships it —
-reuse the same source), or **(b) repoint `poster.zig` at its own decoder**.
-Recommend **(a)** — smallest change, no behavior drift. Also: `detectResourceRoot`
-(`main.zig:245`) calls `c.sdl.SDL_GetBasePath` — guard it behind
-`if (!build_options.headless)` (headless resolves the resource root from cwd/XDG
-anyway).
+The Docker runtime stage no longer installs `libx11-6 libxext6 libxrandr2 libxi6
+libxcursor1 libxfixes3 libxrender1 libpulse0 libasound2 libgl1` (the S0
+stopgap), and `docker.yml`'s container smoke **fails the build** if `ldd` ever
+shows `sdl|libx11|libxext|libgl|libpulse|libasound` again. That grep is the
+acceptance test — if it trips, find what re-introduced the GUI link rather than
+reinstating the packages.
 
-**Fallback:** if compiling `-Dheadless` against the stub reveals a
-`remote.zig`-reachable *data* function that transitively calls a dvui *widget*
-(the audit found none, but it's only provable by building), comptime-gate that
-call behind `if (!build_options.headless)` rather than widen the stub.
+Desktop linkage and binary size are unchanged.
 
-**Acceptance:** `zig build -Dheadless=true` produces a binary whose `ldd` shows
-**no** libSDL2/libX11/libXext/libpulse; the stub is ~40–60 lines; desktop build
-byte-identical to today; `zig build test` + `test_features.py` stay 0-fail.
-
-## 3. Phase S2 — image hardening (mostly done; finish after S1)
+## 3. Phase S2 — image hardening
 
 Already in the Dockerfile: multi-stage, `-Dheadless -Doptimize=ReleaseSafe`,
 non-root `opal` user, `/config /cache /media` volumes, `HEALTHCHECK /health`,
-XDG env. Remaining:
-- After S1, **remove** `libx11-6 libxext6 libpulse0 libasound2` (S0's stopgap)
-  from the runtime stage; keep `libmpv2 libsqlite3-0 libtorrent-rasterbar2.0
-  ffmpeg` (still used by torrent/stream) and `python3` (nova2 scrapers).
+XDG env. The S0 stopgap packages are **gone** (S1 made them unnecessary), leaving
+`libmpv2 libsqlite3-0 libtorrent-rasterbar2.0 ffmpeg` (torrent/stream) and
+`python3` (nova2 scrapers). Remaining:
 - Confirm `onnxruntime` handling: OCR/AI in a server is optional — decide
   whether to link it in the headless build or `-Docr=false`-style gate it out
   (smaller image). **Open decision, §7.**
@@ -142,8 +105,10 @@ XDG env. Remaining:
 - **GHCR publish** — `docker.yml` ships `ghcr.io/debpalash/opal:latest|:sha`
   (done). **Left:** make the package public (manual, needs `write:packages`).
 - **Multi-arch** — add `linux/arm64` to `docker/build-push-action` `platforms`
-  (Raspberry Pi / Apple-silicon servers). Needs QEMU or native arm runners;
-  the slim build (S1) makes arm64 far cheaper (no X11 stack to satisfy).
+  (Raspberry Pi / Apple-silicon servers). Needs QEMU or native arm runners.
+  **Now unblocked:** S1 removed the X11 stack, so there is nothing left to
+  cross-satisfy — the remaining cost is emulated compile time for the Zig app +
+  libtorrent, which argues for a native arm runner over QEMU.
 - **compose** — `deploy/docker-compose.yml` already points at the image build;
   add a `image: ghcr.io/debpalash/opal:latest` variant for pull-don't-build.
 
@@ -174,8 +139,9 @@ the image builds:
 2. First-run `POST /api/auth/register` → assert a session token; then use it
    comes back.
 3. `GET /` → 200 + contains the web-app marker.
-4. (S1) assert `ldd /usr/local/bin/opal | grep -E 'X11|SDL' == ∅` inside the
-   image.
+4. assert `ldd /usr/local/bin/opal` matches no
+   `sdl|libx11|libxext|libgl|libpulse|libasound` — **shipped, and it fails the
+   build rather than warning.**
 Feature suite: every new route keeps its `*_pure.zig` parse test + a
 `test_features.py` wiring check (existing discipline).
 
@@ -185,10 +151,11 @@ Feature suite: every new route keeps its `*_pure.zig` parse test + a
    build.zig:220, default off). A `-full` tag can add it later.
 2. **mpv:** **keep** in headless (torrent stream/probe path uses it; it needs no
    GUI libs — only SDL/X11/dvui do).
-3. **stb_image (§2 item 8):** **vendor dvui's stb source** into the headless
-   build — no behavior drift vs. repointing poster.zig.
+3. **stb_image:** **vendor dvui's stb source** into the headless build — no
+   behavior drift vs. repointing poster.zig. ✅ shipped (build.zig compiles
+   `dvui_dep.path("vendor/stb/stb_image_impl.c")` into the stub module).
 4. **arm64:** **after S1** — the slim build removes the X11 cross-satisfy pain,
-   making arm64 cheap.
+   making arm64 cheap. S1 is done; arm64 is the next distribution step.
 
 ## 8. Execution order
 
@@ -198,8 +165,10 @@ public GHCR) → **S4** (retire `web/app`, parity tier 2). S0 and the S1 audit c
 start in parallel; S0 is a same-day unblock, S1 is the architecture work.
 
 ## 9. Left to do (this spec's follow-ups)
-- Confirm `App.panic` / `App.logFn` signatures against the pinned dvui dep so
-  the stub matches (§2 item 1).
-- Decide §2 item 8 (vendor stb_image vs. repoint poster.zig) and §7 items
-  (OCR gate default, keep mpv, arm64 timing).
-- Land S0 + CI run-gate first (proves the image actually works) before S1.
+- **S3 multi-arch:** add `linux/arm64` (native arm runner preferred over QEMU).
+- **S3 manual:** make the GHCR package public (needs a human with
+  `write:packages` — CI cannot flip package visibility).
+- **S2:** pin a numeric non-root UID for k8s `runAsNonRoot`; decide the ONNX/OCR
+  `-full` tag.
+- **S4:** retire `web/app`; finish parity tier 2 (Plex, Audiobookshelf, Novels,
+  OPDS, Drama, VNDB, Logs).
