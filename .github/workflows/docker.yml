@@ -4,6 +4,16 @@
 # Linux runner (it is not buildable on the macOS dev host), so CI is the real
 # gate. Auth uses the auto-provisioned GITHUB_TOKEN — `packages: write` below is
 # all that is needed; no PAT.
+#
+# MULTI-ARCH (Phase S3): amd64 and arm64 are built on NATIVE runners in parallel
+# — `ubuntu-24.04-arm` is a real ARM machine, so there is no QEMU. That matters
+# here more than usual: this image compiles the entire Zig app plus
+# libtorrent-rasterbar from source, which under emulation runs several times
+# longer and has historically been where multi-arch attempts time out.
+# Each arch smoke-tests its OWN image before anything is published, then a merge
+# job stitches the two digests into one manifest list. So `docker pull` on a
+# Raspberry Pi or an Apple-silicon server gets an arm64 image that CI has
+# actually started and served from.
 name: Docker (GHCR)
 
 on:
@@ -21,8 +31,18 @@ env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/opal
 
 jobs:
-  image:
-    runs-on: ubuntu-24.04
+  build:
+    strategy:
+      fail-fast: false           # an arm64 failure shouldn't hide an amd64 one
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,34 +53,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Derive image tags
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE }}
-          # :latest on the default branch, :vX.Y.Z + :X.Y.Z on tags, plus :sha.
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=sha,format=short
-
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
       # Build into the local daemon first so we can actually RUN the container
       # and prove it serves before publishing (the Linux image had never been
-      # started — see docs/headless-server-spec.md §2).
-      - name: Build for smoke test (load, linux/amd64)
+      # started — see docs/headless-server-spec.md §2). Native runner, so the
+      # image under test is the same architecture we then push.
+      - name: Build for smoke test (load)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           load: true
           tags: opal:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
       - name: Smoke test the container (/health, account auth, web UI)
         run: |
@@ -74,6 +83,12 @@ jobs:
             exit 1
           fi
           echo "no SDL/X11/GL/pulse/asound — slim build intact"
+          echo "── the image really is ${{ matrix.arch }} ──"
+          got=$(docker exec opal uname -m)
+          case "${{ matrix.arch }}:$got" in
+            amd64:x86_64|arm64:aarch64) echo "arch OK ($got)" ;;
+            *) echo "FAIL: expected ${{ matrix.arch }}, container reports $got"; exit 1 ;;
+          esac
           echo "── wait for /health ──"
           ok=""
           for i in $(seq 1 30); do
@@ -90,20 +105,86 @@ jobs:
           curl -fsS -H "Authorization: Bearer $TOKEN" -o /dev/null http://localhost:41595/api/status || { echo "FAIL: session auth"; exit 1; }
           code=$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:41595/api/status)
           [ "$code" = 401 ] || { echo "FAIL: expected 401 without token, got $code"; exit 1; }
+          echo "── logs route (the headless operator's window into the app) ──"
+          curl -fsS -H "Authorization: Bearer $TOKEN" http://localhost:41595/api/logs?limit=5 | grep -q '"entries"' || { echo "FAIL: /api/logs"; exit 1; }
           echo "── web UI ──"
           curl -fsS http://localhost:41595/ | grep -qiE 'opal|<!doctype' || { echo "FAIL: web UI"; exit 1; }
-          echo "SMOKE OK"
+          echo "SMOKE OK (${{ matrix.arch }})"
           docker logs opal | tail -20
           docker rm -f opal
 
-      - name: Push to GHCR
+      # Push WITHOUT a tag and record the digest. Tagging happens once, in the
+      # merge job — two jobs pushing the same tag would race and the second
+      # would simply overwrite the first arch instead of joining it.
+      - name: Push by digest
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      # The filename IS the digest (minus the sha256: prefix) — the merge job
+      # reassembles `<image>@sha256:<name>` from it.
+      - name: Export the digest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [ -n "$DIGEST" ] || { echo "FAIL: build-push-action produced no digest"; exit 1; }
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # One manifest list over both digests, carrying every tag. `docker pull`
+  # then resolves to the right arch automatically.
+  merge:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          # :latest on the default branch, :vX.Y.Z + :X.Y.Z on tags, plus :sha.
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=sha,format=short
+
+      - name: Create the manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+
+      - name: Show what was published
+        run: docker buildx imagetools inspect ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}

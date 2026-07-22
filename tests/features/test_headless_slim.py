@@ -119,3 +119,31 @@ def test_docker_slim_runtime():
             detail += f" (still installed: {', '.join(still_there)})"
         return "fail", "docker slim runtime incomplete: " + detail
     return "pass", "Dockerfile: no X11/GL/pulse/asound; CI fails if they return"
+
+
+@test("Multi-arch image built on native runners", "Headless")
+def test_docker_multiarch():
+    import os as _os
+    fp = _os.path.join(PROJECT_DIR, ".github/workflows/docker.yml")
+    wf = open(fp).read() if _os.path.exists(fp) else ""
+    checks = {
+        # NATIVE arm, not QEMU: this image compiles the whole Zig app plus
+        # libtorrent from source, which is where emulated multi-arch builds
+        # time out.
+        "native arm runner": "ubuntu-24.04-arm" in wf and "linux/arm64" in wf,
+        "no qemu": "setup-qemu-action" not in wf,
+        # Each arch smokes its OWN image before anything is published.
+        "per-arch smoke": "SMOKE OK (${{ matrix.arch }})" in wf
+            and "docker exec opal uname -m" in wf,
+        # Two jobs pushing the same tag would race and overwrite rather than
+        # join, so both push by digest and one merge job does the tagging.
+        "push by digest": "push-by-digest=true" in wf and "digest-${{ matrix.arch }}" in wf,
+        "manifest merged once": "docker buildx imagetools create" in wf
+            and "needs: build" in wf,
+        # Shared gha cache across arches would thrash.
+        "per-arch cache scope": wf.count("scope=${{ matrix.arch }}") >= 2,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "multi-arch build incomplete: " + ", ".join(missing)
+    return "pass", "amd64 + arm64 on native runners, smoked per-arch, merged to one manifest"

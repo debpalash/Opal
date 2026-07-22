@@ -32,6 +32,8 @@ plan for finishing the Docker/web-UI server story.
 | S0 | Image actually *runs*: runtime `.so` deps + a CI gate that starts the container and hits `/health` | **Shipped** |
 | S1 | Slim build: no dvui/SDL/X11 link (§2) | **Shipped** |
 | S2 | Drop the S0 stopgap packages; `ldd` grep is a hard CI gate | **Shipped** |
+| S3 | Multi-arch: amd64 + arm64 on native runners, per-arch smoke, one manifest | **Shipped** |
+| S4 | Parity tier 2 — 21 web verticals (Comics/Novels/Drama/VNDB/ABS/OPDS/Plex/Logs) | **Shipped** |
 
 **One codebase, one port, mostly built.** The gaps below are what remain.
 
@@ -104,11 +106,13 @@ XDG env. The S0 stopgap packages are **gone** (S1 made them unnecessary), leavin
 
 - **GHCR publish** — `docker.yml` ships `ghcr.io/debpalash/opal:latest|:sha`
   (done). **Left:** make the package public (manual, needs `write:packages`).
-- **Multi-arch** — add `linux/arm64` to `docker/build-push-action` `platforms`
-  (Raspberry Pi / Apple-silicon servers). Needs QEMU or native arm runners.
-  **Now unblocked:** S1 removed the X11 stack, so there is nothing left to
-  cross-satisfy — the remaining cost is emulated compile time for the Zig app +
-  libtorrent, which argues for a native arm runner over QEMU.
+- **Multi-arch** — **shipped.** `linux/amd64` + `linux/arm64` build in parallel
+  on NATIVE runners (`ubuntu-24.04-arm`), not QEMU: this image compiles the Zig
+  app and libtorrent from source, which is exactly where emulated multi-arch
+  builds time out. Each arch smoke-tests its own image (including a `uname -m`
+  assertion) before anything is published; both push by digest and a single
+  merge job stitches them into one manifest list, because two jobs pushing the
+  same tag would overwrite rather than join.
 - **compose** — `deploy/docker-compose.yml` already points at the image build;
   add a `image: ghcr.io/debpalash/opal:latest` variant for pull-don't-build.
 
@@ -165,10 +169,11 @@ public GHCR) → **S4** (retire `web/app`, parity tier 2). S0 and the S1 audit c
 start in parallel; S0 is a same-day unblock, S1 is the architecture work.
 
 ## 9. Left to do (this spec's follow-ups)
-- **S3 multi-arch:** add `linux/arm64` (native arm runner preferred over QEMU).
-- **S3 manual:** make the GHCR package public (needs a human with
-  `write:packages` — CI cannot flip package visibility).
 - **S2:** pin a numeric non-root UID for k8s `runAsNonRoot`; decide the ONNX/OCR
   `-full` tag.
-- **S4:** retire `web/app`; finish parity tier 2 (Plex, Audiobookshelf, Novels,
-  OPDS, Drama, VNDB, Logs).
+- **S4:** retire `web/app` (parity tier 2 itself is done — 21 verticals).
+- **Verify on real hardware:** the arm64 image is CI-smoked but has not been run
+  on an actual Raspberry Pi / Apple-silicon server.
+- **Server verticals unsmoked:** Plex, Audiobookshelf and OPDS routes are wired
+  and answer correctly when unconfigured, but nothing has exercised them against
+  a live server.
