@@ -963,3 +963,41 @@ test "comic deep link: a title containing '|' survives" {
     const link = formatDeepLink(&buf, "https://x.tld/i", "Saga | Chapter 3");
     try std.testing.expectEqualStrings("Saga | Chapter 3", parseDeepLink(link).?.title);
 }
+
+// ══════════════════════════════════════════════════════════
+// Page image MIME sniffing
+// ══════════════════════════════════════════════════════════
+
+/// Content-Type for a downloaded comic page. `page_pixels[i]` holds the ORIGINAL
+/// encoded bytes exactly as the source served them (jpeg/png/webp/gif/avif), so
+/// the HTTP page route (`/api/comics/page`) has to sniff rather than trust an
+/// extension — many sources serve `.jpg` URLs with webp payloads. Falls back to
+/// `image/jpeg`, which every browser will still try to decode.
+pub fn imageMime(bytes: []const u8) []const u8 {
+    if (bytes.len >= 3 and bytes[0] == 0xFF and bytes[1] == 0xD8 and bytes[2] == 0xFF) return "image/jpeg";
+    if (bytes.len >= 8 and std.mem.eql(u8, bytes[0..8], "\x89PNG\r\n\x1a\n")) return "image/png";
+    if (bytes.len >= 6 and (std.mem.eql(u8, bytes[0..6], "GIF87a") or std.mem.eql(u8, bytes[0..6], "GIF89a"))) return "image/gif";
+    if (bytes.len >= 12 and std.mem.eql(u8, bytes[0..4], "RIFF") and std.mem.eql(u8, bytes[8..12], "WEBP")) return "image/webp";
+    // ISO-BMFF: `....ftyp<brand>`; avif/avis are the only ones a page source emits.
+    if (bytes.len >= 12 and std.mem.eql(u8, bytes[4..8], "ftyp") and
+        (std.mem.eql(u8, bytes[8..12], "avif") or std.mem.eql(u8, bytes[8..12], "avis"))) return "image/avif";
+    if (bytes.len >= 2 and bytes[0] == 'B' and bytes[1] == 'M') return "image/bmp";
+    return "image/jpeg";
+}
+
+test "comic page mime: sniffs the real container, not the extension" {
+    try std.testing.expectEqualStrings("image/jpeg", imageMime("\xFF\xD8\xFF\xE0JFIF"));
+    try std.testing.expectEqualStrings("image/png", imageMime("\x89PNG\r\n\x1a\nIHDR"));
+    try std.testing.expectEqualStrings("image/gif", imageMime("GIF89a\x01\x00"));
+    try std.testing.expectEqualStrings("image/webp", imageMime("RIFF\x24\x00\x00\x00WEBPVP8 "));
+    try std.testing.expectEqualStrings("image/avif", imageMime("\x00\x00\x00\x18ftypavif\x00\x00"));
+    try std.testing.expectEqualStrings("image/bmp", imageMime("BM\x36\x00"));
+}
+
+test "comic page mime: short/unknown bytes fall back to jpeg, never crash" {
+    try std.testing.expectEqualStrings("image/jpeg", imageMime(""));
+    try std.testing.expectEqualStrings("image/jpeg", imageMime("R"));
+    try std.testing.expectEqualStrings("image/jpeg", imageMime("RIFF\x00\x00\x00\x00AVI "));
+    try std.testing.expectEqualStrings("image/jpeg", imageMime("\x89PNG"));
+    try std.testing.expectEqualStrings("image/jpeg", imageMime("<html><body>404"));
+}

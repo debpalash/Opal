@@ -58,8 +58,14 @@ pub fn requestLoad(url: []const u8) void {
     state.app.comic.pending_load.store(true, .release);
 }
 
+/// Thread-safe close request (remote.zig's connection threads). See `requestLoad`.
+pub fn requestClose() void {
+    state.app.comic.pending_close.store(true, .release);
+}
+
 /// Drain a pending remote comic-load request. UI-THREAD ONLY — call once per frame.
 pub fn drainPendingLoad() void {
+    if (state.app.comic.pending_close.swap(false, .acq_rel)) closeComic();
     if (!state.app.comic.pending_load.swap(false, .acq_rel)) return;
     const n = state.app.comic.pending_load_len;
     if (n == 0 or n >= state.app.comic.pending_load_url.len) return;
@@ -340,6 +346,21 @@ fn psePageDownloadThread(gen: u32) void {
     }
 }
 
+/// Guards `state.app.comic.page_pixels[]` against readers that are neither the
+/// UI thread nor a download worker — today just `copyPage` (the HTTP page route).
+var pages_mutex: @import("../core/sync.zig").Mutex = .{};
+
+/// Copy page `i`'s encoded bytes for an off-UI-thread consumer. Caller frees with
+/// `a`. Null = out of range or not downloaded yet (the caller answers 404 and the
+/// client retries as `dl_progress` climbs).
+pub fn copyPage(i: usize, a: std.mem.Allocator) ?[]u8 {
+    if (i >= 128) return null;
+    pages_mutex.lock();
+    defer pages_mutex.unlock();
+    const px = state.app.comic.page_pixels[i] orelse return null;
+    return a.dupe(u8, px) catch null;
+}
+
 /// Free all downloaded page textures/pixels and the OCR cache.
 pub fn freeComicPages() void {
     // UAF guard #1 — page-download workers (downloadSinglePage): switching comics
@@ -373,6 +394,13 @@ pub fn freeComicPages() void {
         t.join();
         state.app.comic.ocr_thread = null;
     }
+
+    // UAF guard #3: remote.zig's `/api/comics/page` route copies page_pixels on a
+    // connection thread, which the dl_gen/dl_in_flight cancel protocol above does
+    // NOT cover (that one only fences the download workers). A plain mutex is
+    // enough: readers hold it only for the memcpy, and neither side nests locks.
+    pages_mutex.lock();
+    defer pages_mutex.unlock();
 
     for (0..128) |i| {
         page_decode_failed[i] = false; // fresh page set — clear the decode-failure latch

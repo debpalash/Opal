@@ -779,6 +779,9 @@ pub const AppState = struct {
         pending_load_url: [512]u8 = std.mem.zeroes([512]u8),
         pending_load_len: usize = 0,
         pending_load: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        // Same deferral as pending_load, for the remote /api/comics/close route:
+        // closeComic frees dvui textures, so only the UI thread may run it.
+        pending_close: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
         thread: ?std.Thread = null,
         page_urls: [128][512]u8 = std.mem.zeroes([128][512]u8),
         page_url_lens: [128]usize = std.mem.zeroes([128]usize),

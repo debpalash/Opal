@@ -18,21 +18,21 @@ pub const CastDevice = struct {
 
 pub var devices: [16]CastDevice = undefined;
 pub var device_count: usize = 0;
-pub var is_scanning: bool = false;
-pub var is_casting: bool = false;
+// Written by detached workers, polled by the UI thread AND remote.zig's
+// connection threads → atomics, not plain bools (CLAUDE.md thread-safety rule).
+pub var is_scanning: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+pub var is_casting: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 pub var active_device_idx: ?usize = null;
 
 /// Discover cast devices using `catt scan`
 pub fn scanDevices() void {
-    if (is_scanning) return;
-    is_scanning = true;
+    if (is_scanning.load(.acquire)) return;
+    is_scanning.store(true, .release);
     device_count = 0;
 
     if (std.Thread.spawn(.{}, struct {
         fn worker() void {
-            defer {
-                is_scanning = false;
-            }
+            defer is_scanning.store(false, .release);
 
             const argv = [_][]const u8{ "catt", "scan", "-t", "5" };
             var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
@@ -81,20 +81,21 @@ pub fn scanDevices() void {
     }.worker, .{})) |t| t.detach() else |_| {}
 }
 
-/// Cast current video URL to a device
-pub fn castTo(device_idx: usize) void {
+/// Cast `url` to a discovered device.
+///
+/// The URL is a PARAMETER, not read from `state.app.players` here: every caller
+/// already holds `state.players_mutex` (remote.zig's player tail, the UI thread),
+/// and reaching into the player list from this function would have re-read it
+/// unlocked. See `castActive` for the convenience wrapper.
+pub fn castTo(device_idx: usize, url: []const u8) void {
     if (device_idx >= device_count) return;
-    if (state.app.active_player_idx >= state.app.players.items.len) return;
-    
-    const p = state.app.players.items[state.app.active_player_idx];
-    if (p.current_url_len == 0) {
+    if (url.len == 0) {
         state.showToast("No video loaded to cast");
         return;
     }
 
-    is_casting = true;
+    is_casting.store(true, .release);
     active_device_idx = device_idx;
-    const url = p.current_url[0..p.current_url_len];
     const device_name = devices[device_idx].name[0..devices[device_idx].name_len];
 
     // Allocate copies for the thread
@@ -104,7 +105,7 @@ pub fn castTo(device_idx: usize) void {
     if (std.Thread.spawn(.{}, struct {
         fn worker(u: []const u8, dev: []const u8) void {
             defer {
-                is_casting = false;
+                is_casting.store(false, .release);
                 alloc.free(u);
                 alloc.free(dev);
             }
@@ -124,6 +125,17 @@ pub fn castTo(device_idx: usize) void {
     }.worker, .{ url_copy, name_copy })) |t| t.detach() else |_| {}
 }
 
+/// Cast whatever the active player is showing. CALLER MUST HOLD
+/// `state.players_mutex` — it reads the player list.
+pub fn castActive(device_idx: usize) void {
+    if (state.app.active_player_idx >= state.app.players.items.len) {
+        state.showToast("No video loaded to cast");
+        return;
+    }
+    const p = state.app.players.items[state.app.active_player_idx];
+    castTo(device_idx, p.current_url[0..p.current_url_len]);
+}
+
 /// Stop casting
 pub fn stopCast() void {
     if (std.Thread.spawn(.{}, struct {
@@ -132,7 +144,7 @@ pub fn stopCast() void {
             var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
             child.spawn() catch return;
             _ = child.wait() catch {};
-            is_casting = false;
+            is_casting.store(false, .release);
             active_device_idx = null;
             state.showToast("Cast stopped");
         }

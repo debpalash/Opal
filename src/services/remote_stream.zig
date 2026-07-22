@@ -145,6 +145,26 @@ pub fn handleJfPoster(stream: std.Io.net.Stream, item_id: []const u8) void {
     serveProxied(stream, url, cache_key);
 }
 
+/// GET /api/comics/page?i=<n>[&t=] — serve one downloaded comic page.
+///
+/// `state.app.comic.page_pixels[i]` already holds the ORIGINAL encoded bytes the
+/// source served (comics.zig downloads, it never re-encodes), so this is a copy
+/// and a write — no proxying, no disk cache, and the reader's cookies/referer
+/// never matter. `comics.copyPage` takes the pages mutex so a concurrent
+/// `loadComic` can't free the buffer mid-send; a not-yet-downloaded page is a
+/// 404 the client re-polls as `dl_progress` climbs.
+pub fn handleComicPage(stream: std.Io.net.Stream, idx: usize) void {
+    if (idx >= state.app.comic.page_count) return send404(stream);
+    const comics = @import("comics.zig");
+    const bytes = comics.copyPage(idx, alloc) orelse return send404(stream);
+    defer alloc.free(bytes);
+    const mime = @import("comics_pure.zig").imageMime(bytes);
+    var hdr: [256]u8 = undefined;
+    // no-store: page N means a different image once the reader loads a new comic.
+    const h = std.fmt.bufPrint(&hdr, "HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nCache-Control: no-store\r\nContent-Length: {d}\r\nAccess-Control-Allow-Origin: *\r\n\r\n", .{ mime, bytes.len }) catch return;
+    if (writeAll(stream, h)) _ = writeAll(stream, bytes);
+}
+
 /// GET /api/podcasts/poster?idx=<n>[&t=] — proxy a podcast show's iTunes cover
 /// (a public https URL held in state) through the shared poster disk cache. By
 /// index (not an arbitrary URL param) so the proxy can only ever fetch an

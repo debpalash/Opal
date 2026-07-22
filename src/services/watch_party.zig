@@ -348,6 +348,15 @@ fn applyCommand(cmd: []const u8) void {
 }
 
 /// Get party status string for UI
+/// Connected viewers when hosting (0 otherwise). `statusText` bakes this into a
+/// display string; the JSON API needs the number on its own.
+pub fn peerCount() usize {
+    if (role != .host) return 0;
+    clients_mutex.lock();
+    defer clients_mutex.unlock();
+    return client_count;
+}
+
 pub fn statusText(buf: *[64]u8) []const u8 {
     return switch (role) {
         .none => "No Party",

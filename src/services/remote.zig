@@ -6,6 +6,7 @@ const paths_mod = @import("../core/paths.zig");
 const logs = @import("../core/logs.zig");
 const sync = @import("../core/sync.zig");
 const io_g = @import("../core/io_global.zig");
+const txt = @import("../core/text.zig");
 
 // ══════════════════════════════════════════════════════════
 // Web Remote Control — JSON API for Opal Web UI
@@ -341,7 +342,7 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
     // Authorization header, so these take the token as ?t= instead. Same
     // constant-time check as the Bearer gate; dispatch lives in
     // remote_stream.zig to keep this file to routing/auth.
-    if (std.mem.eql(u8, path, "/events") or std.mem.eql(u8, path, "/stream") or std.mem.eql(u8, path, "/vtt") or std.mem.eql(u8, path, "/poster") or std.mem.eql(u8, path, "/api/jellyfin/poster") or std.mem.eql(u8, path, "/api/podcasts/poster")) {
+    if (std.mem.eql(u8, path, "/events") or std.mem.eql(u8, path, "/stream") or std.mem.eql(u8, path, "/vtt") or std.mem.eql(u8, path, "/poster") or std.mem.eql(u8, path, "/api/jellyfin/poster") or std.mem.eql(u8, path, "/api/podcasts/poster") or std.mem.eql(u8, path, "/api/comics/page")) {
         const t = getQueryParam(query, "t") orelse "";
         if (!api_token_ready.load(.acquire) or !constantTimeEqual(t, api_token[0..])) {
             sendUnauthorized(stream);
@@ -380,6 +381,9 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
             // rejects with a 404.
             const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "", 10) catch std.math.maxInt(usize);
             rs.handlePodcastPoster(stream, idx);
+        } else if (std.mem.eql(u8, path, "/api/comics/page")) {
+            const i = std.fmt.parseInt(usize, getQueryParam(query, "i") orelse "", 10) catch std.math.maxInt(usize);
+            rs.handleComicPage(stream, i);
         } else {
             const pp = urlDecode(getQueryParam(query, "path") orelse "", &dec_buf) orelse "";
             rs.handlePoster(stream, pp);
@@ -805,7 +809,14 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         return;
     }
     if (std.mem.eql(u8, api_path, "/recommendations")) {
-        sendJson(stream, "{\"items\":[]}");
+        apiRecommendations(stream, query);
+        return;
+    }
+    // Watch party + cast — deliberately ABOVE the players_mutex tail: party
+    // status and device discovery are meaningful with nothing playing, and the
+    // tail's "no player" early-return would have answered them all with an error.
+    if (std.mem.startsWith(u8, api_path, "/party/") or std.mem.startsWith(u8, api_path, "/cast/")) {
+        apiPartyCast(stream, api_path, query);
         return;
     }
 
@@ -932,23 +943,8 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         w.writeAll("]}") catch return;
         sendJson(stream, json_buf[0..w.end]);
 
-        // ── Watch Party ──
-    } else if (std.mem.eql(u8, api_path, "/party/host")) {
-        const wp = @import("watch_party.zig");
-        wp.hostParty();
-        sendJson(stream, "{\"ok\":true,\"action\":\"party_host\"}");
-    } else if (std.mem.eql(u8, api_path, "/party/join")) {
-        if (getQueryParam(query, "ip")) |ip| {
-            const wp = @import("watch_party.zig");
-            wp.joinParty(ip);
-        }
-        sendJson(stream, "{\"ok\":true,\"action\":\"party_join\"}");
-    } else if (std.mem.eql(u8, api_path, "/party/status")) {
-        sendJson(stream, "{\"connected\":false}");
-    } else if (std.mem.eql(u8, api_path, "/cast/devices")) {
-        sendJson(stream, "{\"devices\":[]}");
-    } else if (std.mem.eql(u8, api_path, "/cast/start")) {
-        sendJson(stream, "{\"ok\":true,\"action\":\"cast_start\"}");
+        // Watch party + cast dispatch earlier (apiPartyCast) — they must work
+        // with no player loaded, so they never reach this tail.
     } else {
         sendJson(stream, "{\"error\":\"unknown\"}");
     }
@@ -1754,6 +1750,159 @@ fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
     sendJson(stream, json_buf[0..w.end]);
 }
 
+/// Has /api/recommendations kicked the generator yet this process? Read/written
+/// from connection threads → atomic.
+var rec_kicked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+/// GET /api/recommendations — the desktop "For You" rail.
+///
+/// Async like every other vertical: the first call kicks the generator and comes
+/// back `{"loading":true,"items":[]}`; the client re-polls. `recommendations[]`
+/// carries no poster/year (see recommendations.zig), so the payload is title +
+/// reason + tmdb id, which is exactly what the desktop rail renders.
+fn apiRecommendations(stream: std.Io.net.Stream, query: []const u8) void {
+    const rec = @import("recommendations.zig");
+    // Kick ONCE per process (or on ?refresh=1). Gating on `rec_count == 0`
+    // instead would re-kick forever for a user whose history yields no picks —
+    // a legitimate empty result — and the client would poll `loading` for good.
+    const refresh = std.mem.eql(u8, getQueryParam(query, "refresh") orelse "", "1");
+    if ((refresh or !rec_kicked.swap(true, .acq_rel)) and !rec.is_loading.load(.acquire)) {
+        // generateRecommendations snapshots the active player on THIS thread.
+        state.players_mutex.lock();
+        rec.generateRecommendations();
+        state.players_mutex.unlock();
+        sendJson(stream, "{\"loading\":true,\"items\":[]}");
+        return;
+    }
+    const loading = rec.is_loading.load(.acquire);
+    var json_buf: [16 * 1024]u8 = undefined;
+    var w = std.Io.Writer.fixed(&json_buf);
+    w.print("{{\"loading\":{s},\"items\":[", .{if (loading) "true" else "false"}) catch return;
+    // The worker writes rec_count/recommendations[] unlocked — clamp, and treat
+    // the lengths as untrusted so a torn read can't slice out of bounds.
+    const n = @min(rec.rec_count, rec.recommendations.len);
+    for (rec.recommendations[0..n], 0..) |*r, i| {
+        if (i > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"title\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(r.title[0..@min(r.title_len, r.title.len)]));
+        w.writeAll("\",\"reason\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(r.reason[0..@min(r.reason_len, r.reason.len)]));
+        w.print("\",\"id\":{d},\"score\":{d:.3}}}", .{ r.id, r.score }) catch return;
+    }
+    w.writeAll("]}") catch return;
+    sendJson(stream, json_buf[0..w.end]);
+}
+
+/// Watch party (/party/*) and cast (/cast/*).
+///
+/// Both are LAN features that must answer with no player loaded, so this runs
+/// before remote.zig's players_mutex tail. `/cast/start` is the one exception —
+/// it needs the active player's URL, so it takes the mutex itself and hands the
+/// URL to cast.zig by value rather than letting cast.zig re-read the list.
+fn apiPartyCast(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+    const wp = @import("watch_party.zig");
+    const cast = @import("cast.zig");
+
+    if (std.mem.eql(u8, api_path, "/party/host")) {
+        wp.hostParty();
+        sendJson(stream, "{\"ok\":true,\"action\":\"party_host\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/party/join")) {
+        var dec: [64]u8 = undefined;
+        const ip = urlDecode(getQueryParam(query, "ip") orelse "", &dec) orelse "";
+        wp.joinParty(ip); // no-ops on empty / over-long input
+        sendJson(stream, "{\"ok\":true,\"action\":\"party_join\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/party/leave")) {
+        wp.leaveParty();
+        sendJson(stream, "{\"ok\":true,\"action\":\"party_leave\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/party/chat")) {
+        if (getQueryParam(query, "msg")) |m| {
+            var dec: [256]u8 = undefined;
+            const msg = txt.safeUtf8(urlDecode(m, &dec) orelse m);
+            const n = @min(msg.len, wp.chat_input.len - 1);
+            @memcpy(wp.chat_input[0..n], msg[0..n]);
+            wp.chat_input[n] = 0;
+            wp.sendChat();
+        }
+        sendJson(stream, "{\"ok\":true,\"action\":\"party_chat\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/party/status")) {
+        var sbuf: [64]u8 = undefined;
+        const status = wp.statusText(&sbuf);
+        var json_buf: [8 * 1024]u8 = undefined;
+        var w = std.Io.Writer.fixed(&json_buf);
+        w.print("{{\"role\":\"{s}\",\"connected\":{s},\"peers\":{d},\"port\":{d},\"host_ip\":\"{s}\",\"status\":\"", .{
+            @tagName(wp.role),
+            if (wp.role != .none) "true" else "false",
+            wp.peerCount(),
+            wp.party_port,
+            lanIp(),
+        }) catch return;
+        escJsonWrite(&w, status);
+        w.writeAll("\",\"chat\":[") catch return;
+        const cn = @min(wp.chat_count, wp.chat_msgs.len);
+        for (0..cn) |i| {
+            if (i > 0) w.writeAll(",") catch return;
+            w.writeAll("\"") catch return;
+            escJsonWrite(&w, txt.safeUtf8(wp.chat_msgs[i][0..@min(wp.chat_msg_lens[i], wp.chat_msgs[i].len)]));
+            w.writeAll("\"") catch return;
+        }
+        w.writeAll("]}") catch return;
+        sendJson(stream, json_buf[0..w.end]);
+        return;
+    }
+
+    if (std.mem.eql(u8, api_path, "/cast/scan")) {
+        cast.scanDevices();
+        sendJson(stream, "{\"ok\":true,\"action\":\"cast_scan\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/cast/start")) {
+        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "0", 10) catch 0;
+        // castActive reads state.app.players — take the same lock the tail does.
+        state.players_mutex.lock();
+        cast.castActive(idx);
+        state.players_mutex.unlock();
+        sendJson(stream, "{\"ok\":true,\"action\":\"cast_start\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/cast/stop")) {
+        cast.stopCast();
+        sendJson(stream, "{\"ok\":true,\"action\":\"cast_stop\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/cast/devices")) {
+        // First hit kicks a `catt scan`; the client polls until scanning clears.
+        if (cast.device_count == 0 and !cast.is_scanning.load(.acquire)) cast.scanDevices();
+        var json_buf: [4 * 1024]u8 = undefined;
+        var w = std.Io.Writer.fixed(&json_buf);
+        w.print("{{\"scanning\":{s},\"casting\":{s},\"active\":{?d},\"devices\":[", .{
+            if (cast.is_scanning.load(.acquire)) "true" else "false",
+            if (cast.is_casting.load(.acquire)) "true" else "false",
+            cast.active_device_idx,
+        }) catch return;
+        const n = @min(cast.device_count, cast.devices.len);
+        for (cast.devices[0..n], 0..) |*d, i| {
+            if (i > 0) w.writeAll(",") catch return;
+            w.writeAll("{\"name\":\"") catch return;
+            escJsonWrite(&w, txt.safeUtf8(d.name[0..@min(d.name_len, d.name.len)]));
+            w.writeAll("\",\"ip\":\"") catch return;
+            escJsonWrite(&w, txt.safeUtf8(d.ip[0..@min(d.ip_len, d.ip.len)]));
+            w.writeAll("\"}") catch return;
+        }
+        w.writeAll("]}") catch return;
+        sendJson(stream, json_buf[0..w.end]);
+        return;
+    }
+    sendJson(stream, "{\"error\":\"unknown\"}");
+}
+
 fn apiComics(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
     if (std.mem.eql(u8, api_path, "/comics/load")) {
         if (getQueryParam(query, "url")) |url| {
@@ -1766,15 +1915,28 @@ fn apiComics(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         sendJson(stream, "{\"ok\":true,\"action\":\"load_comic\"}");
         return;
     }
-    // Return current state
+    if (std.mem.eql(u8, api_path, "/comics/close")) {
+        // closeComic frees dvui textures → UI thread only; requestClose defers.
+        @import("comics.zig").requestClose();
+        sendJson(stream, "{\"ok\":true,\"action\":\"close_comic\"}");
+        return;
+    }
+    // Return current state. `downloaded` vs `pages` is what the reader polls to
+    // know which /api/comics/page?i= indices will answer 200 rather than 404.
+    const cm = &state.app.comic;
     var json_buf: [2048]u8 = undefined;
     var w = std.Io.Writer.fixed(&json_buf);
-    w.print("{{\"loading\":{s},\"pages\":{d},\"current\":{d},\"url\":\"", .{
-        if (state.app.comic.is_loading.load(.acquire)) "true" else "false",
-        state.app.comic.page_count,
-        state.app.comic.current_page,
+    w.print("{{\"loading\":{s},\"pages\":{d},\"downloaded\":{d},\"current\":{d},\"has_next\":{s},\"has_prev\":{s},\"title\":\"", .{
+        if (cm.is_loading.load(.acquire)) "true" else "false",
+        cm.page_count,
+        cm.dl_progress.load(.acquire),
+        cm.current_page,
+        if (cm.next_url_len > 0) "true" else "false",
+        if (cm.prev_url_len > 0) "true" else "false",
     }) catch return;
-    escJsonWrite(&w, state.app.comic.url_buf[0..state.app.comic.url_len]);
+    escJsonWrite(&w, txt.safeUtf8(cm.title[0..@min(cm.title_len, cm.title.len)]));
+    w.writeAll("\",\"url\":\"") catch return;
+    escJsonWrite(&w, cm.url_buf[0..cm.url_len]);
     w.writeAll("\"}") catch return;
     sendJson(stream, json_buf[0..w.end]);
 }
