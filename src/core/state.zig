@@ -677,6 +677,10 @@ pub const AppState = struct {
         thread: ?std.Thread = null,
         api_key: [256]u8 = std.mem.zeroes([256]u8),
         api_key_len: usize = 0,
+        // True when api_key holds the build-time embedded default rather than a
+        // user-supplied key. Kept out of the saved config (so key rotation
+        // reaches everyone) and out of the "already onboarded" heuristic.
+        api_key_is_default: bool = false,
         loaded_once: bool = false,
         // Gallery card target width (px) — user-cyclable compact/normal/large/xl.
         card_w: f32 = 124,
@@ -707,10 +711,15 @@ pub const AppState = struct {
     opensub_api_key_len: usize = 0,
 
     // ── OMDb (omdbapi.com) ratings enrichment ──
-    // User-supplied free key (omdbapi.com, 1k/day). Empty → the OMDb worker is
-    // fully inert (no fetch). Persisted like tmdb/opensub keys; see config.zig.
+    // Free key (omdbapi.com, 1k/day) for real IMDb / RT / Metacritic scores.
+    // May be user-supplied or the build-time embedded default; empty → the OMDb
+    // worker is fully inert (no fetch). User keys persist like tmdb/opensub keys;
+    // the embedded default does not (see config.zig / omdb_api_key_is_default).
     omdb_api_key: [128]u8 = std.mem.zeroes([128]u8),
     omdb_api_key_len: usize = 0,
+    // True when omdb_api_key holds the build-time embedded default (mirrors
+    // tmdb.api_key_is_default): kept out of the saved config.
+    omdb_api_key_is_default: bool = false,
 
     // ── Subdl (api.subdl.com) subtitle provider ──
     // User-supplied FREE per-user key (subdl.com → panel → API). Empty → the
@@ -1284,23 +1293,69 @@ pub var players_mutex: @import("sync.zig").Mutex = .{};
 // Utility Functions
 // ══════════════════════════════════════════════════════════
 
-/// Load TMDB token from the environment ($OPAL_TMDB_TOKEN, $TMDB_API_TOKEN,
-/// or legacy $ZIGZAG_TMDB_TOKEN), or fall back to .env file.
+/// Copy a user-supplied TMDB token into app state (clears the "embedded
+/// default" flag so it persists and counts as onboarding).
+pub fn setTmdbKey(token: []const u8) void {
+    const len = @min(token.len, app.tmdb.api_key.len);
+    @memcpy(app.tmdb.api_key[0..len], token[0..len]);
+    app.tmdb.api_key_len = len;
+    app.tmdb.api_key_is_default = false;
+}
+
+/// Copy a user-supplied OMDb key into app state (clears the default flag).
+pub fn setOmdbKey(key: []const u8) void {
+    const len = @min(key.len, app.omdb_api_key.len);
+    @memcpy(app.omdb_api_key[0..len], key[0..len]);
+    app.omdb_api_key_len = len;
+    app.omdb_api_key_is_default = false;
+}
+
+/// Load the TMDB + OMDb keys at startup. Precedence, highest first:
+///   1. environment vars ($OPAL_TMDB_TOKEN / $TMDB_API_TOKEN / legacy; and
+///      $OPAL_OMDB_KEY / $OMDB_API_KEY),
+///   2. a `.env` file (cwd, then the config dir),
+///   3. the keys embedded at build time (build_options) — so a fresh install
+///      works with no setup. A later config.load() (a saved Settings key) still
+///      overrides everything here.
 pub fn loadTmdbTokenFromEnv() void {
-    // 1. Try env vars first (new name, generic name, legacy name).
-    const env_names = [_][*:0]const u8{ "OPAL_TMDB_TOKEN", "TMDB_API_TOKEN", "ZIGZAG_TMDB_TOKEN" };
-    for (env_names) |name| {
+    // 1. Process env vars first.
+    const tmdb_env = [_][*:0]const u8{ "OPAL_TMDB_TOKEN", "TMDB_API_TOKEN", "ZIGZAG_TMDB_TOKEN" };
+    for (tmdb_env) |name| {
         if (if (std.c.getenv(name)) |raw| std.mem.span(raw) else null) |token| {
             if (token.len > 0) {
-                const len = @min(token.len, app.tmdb.api_key.len);
-                @memcpy(app.tmdb.api_key[0..len], token[0..len]);
-                app.tmdb.api_key_len = len;
-                return;
+                setTmdbKey(token);
+                break;
             }
         }
     }
-    // 2. Fall back to .env file in cwd
+    const omdb_env = [_][*:0]const u8{ "OPAL_OMDB_KEY", "OMDB_API_KEY" };
+    for (omdb_env) |name| {
+        if (if (std.c.getenv(name)) |raw| std.mem.span(raw) else null) |key| {
+            if (key.len > 0) {
+                setOmdbKey(key);
+                break;
+            }
+        }
+    }
+
+    // 2. Fall back to .env (only fills keys still unset).
     loadTmdbFromDotEnv();
+
+    // 3. Fall back to the build-time embedded defaults. Marked is_default so
+    //    they are neither persisted nor treated as "the user brought a key".
+    const build_options = @import("build_options");
+    if (app.tmdb.api_key_len == 0 and build_options.tmdb_default_token.len > 0) {
+        const len = @min(build_options.tmdb_default_token.len, app.tmdb.api_key.len);
+        @memcpy(app.tmdb.api_key[0..len], build_options.tmdb_default_token[0..len]);
+        app.tmdb.api_key_len = len;
+        app.tmdb.api_key_is_default = true;
+    }
+    if (app.omdb_api_key_len == 0 and build_options.omdb_default_key.len > 0) {
+        const len = @min(build_options.omdb_default_key.len, app.omdb_api_key.len);
+        @memcpy(app.omdb_api_key[0..len], build_options.omdb_default_key[0..len]);
+        app.omdb_api_key_len = len;
+        app.omdb_api_key_is_default = true;
+    }
 }
 
 fn readFileAll(dir_path: []const u8, name: []const u8, buf: []u8) ?[]const u8 {
@@ -1335,9 +1390,18 @@ fn loadTmdbFromDotEnv() void {
         const keys = [_][]const u8{ "TMDB_API_TOKEN=", "OPAL_TMDB_TOKEN=", "ZIGZAG_TMDB_TOKEN=" };
         for (keys) |key| {
             if (env.findValue(content, key)) |token| {
-                const len = @min(token.len, app.tmdb.api_key.len);
-                @memcpy(app.tmdb.api_key[0..len], token[0..len]);
-                app.tmdb.api_key_len = len;
+                setTmdbKey(token);
+                break;
+            }
+        }
+    }
+
+    // OMDb key (IMDb / RT / Metacritic ratings) — same pattern
+    if (app.omdb_api_key_len == 0) {
+        const keys = [_][]const u8{ "OMDB_API_KEY=", "OPAL_OMDB_KEY=" };
+        for (keys) |key| {
+            if (env.findValue(content, key)) |token| {
+                setOmdbKey(token);
                 break;
             }
         }

@@ -10,6 +10,18 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption(bool, "headless", headless);
 
+    // Default API keys compiled into the binary so a fresh install works out of
+    // the box — end users of a release build don't have to register their own.
+    // Resolved at build time from env vars (release CI injects repo secrets),
+    // falling back to a repo-root `.env` (gitignored) for local release builds.
+    // Empty when unset, which just restores bring-your-own-key behavior. A
+    // runtime env var / .env / Settings entry always OVERRIDES the embedded
+    // value (see state.loadTmdbTokenFromEnv). NB: an embedded key is extractable
+    // from the shipped binary — only bake in free, rate-limited keys (a TMDB
+    // read token, an OMDb free key), never anything sensitive.
+    build_options.addOption([]const u8, "tmdb_default_token", embeddedKey(b, &.{ "OPAL_TMDB_TOKEN", "TMDB_API_TOKEN" }));
+    build_options.addOption([]const u8, "omdb_default_key", embeddedKey(b, &.{ "OPAL_OMDB_KEY", "OMDB_API_KEY" }));
+
     const exe = b.addExecutable(.{
         .name = "opal",
         .root_module = b.createModule(.{
@@ -1457,4 +1469,44 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_music_plex_pure).step);
+}
+
+/// Resolve a build-time default API key: the first matching build environment
+/// variable wins; otherwise fall back to a `NAME=value` line in the repo-root
+/// `.env` (gitignored). Returns "" when nothing is found, which the app treats
+/// as "no embedded default". Never bakes a value into the repo — the source is
+/// the build environment or an untracked .env.
+fn embeddedKey(b: *std.Build, names: []const []const u8) []const u8 {
+    for (names) |name| {
+        if (b.graph.environ_map.get(name)) |v| {
+            if (v.len > 0) return b.dupe(v);
+        }
+    }
+    // .env is optional; a missing file / read error just means "no default".
+    const body = b.build_root.handle.readFileAlloc(b.graph.io, ".env", b.allocator, .limited(64 * 1024)) catch return "";
+    for (names) |name| {
+        if (envFileValue(body, name)) |v| {
+            if (v.len > 0) return b.dupe(v);
+        }
+    }
+    return "";
+}
+
+/// Minimal `.env` lookup for build time: find a `NAME=value` line, skipping
+/// blank and `#`-comment lines and stripping one layer of surrounding quotes.
+/// Mirrors src/core/env.zig's runtime parser closely enough for key extraction.
+fn envFileValue(body: []const u8, name: []const u8) ?[]const u8 {
+    var it = std.mem.splitScalar(u8, body, '\n');
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0 or line[0] == '#') continue;
+        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        if (!std.mem.eql(u8, std.mem.trim(u8, line[0..eq], " \t"), name)) continue;
+        var val = std.mem.trim(u8, line[eq + 1 ..], " \t");
+        if (val.len >= 2 and (val[0] == '"' or val[0] == '\'') and val[val.len - 1] == val[0]) {
+            val = val[1 .. val.len - 1];
+        }
+        return val;
+    }
+    return null;
 }

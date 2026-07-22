@@ -13,7 +13,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 
 /// Current app version. Kept in sync with build.zig.zon + Info.plist
 /// (scripts/build-app.sh derives CFBundleShortVersionString from the zon).
-pub const APP_VERSION: []const u8 = "0.5.0";
+pub const APP_VERSION: []const u8 = "0.6.0";
 
 const RELEASE_API = "https://api.github.com/repos/debpalash/Opal/releases/latest";
 
