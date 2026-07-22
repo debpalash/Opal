@@ -295,6 +295,13 @@ def test_eztv_calendar():
         # full interval on a dead fetch blanked the section for 15 minutes after
         # a single reset. A failure now backs off seconds and doubles.
         "deadline-gated refetch":      "if (now < next_fetch_ms.load(.acquire)) return;" in svc,
+        # The rail's whole failure mode is ISP DPI resetting the eztv TLS
+        # connection. It built its curl argv by hand and never consulted
+        # proxyArgs(), so turning the bypass setting on changed nothing here.
+        # Measured on a DPI-throttled link: 9/15 direct vs 15/15 through the
+        # sidecar.
+        "honours the dpi bypass":      ('@import("dpi_bypass.zig").proxyArgs()' in svc
+                                        and "argv[argc] = url;" in svc),
         "failure backs off":           ("fn armNext(ok: bool)" in svc
                                         and "pure.nextDelayMs(streak, RETRY_BASE_MS, REFRESH_INTERVAL_MS)" in svc
                                         and "defer armNext(ok);" in svc),

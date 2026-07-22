@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-07-22T23:45:18",
-  "total": 270,
-  "passed": 260,
+  "timestamp": "2026-07-23T00:09:46",
+  "total": 271,
+  "passed": 261,
   "failed": 0,
   "warnings": 2,
   "skipped": 8,
@@ -211,7 +211,7 @@
       "skip": 0
     },
     "Page Shell": {
-      "pass": 43,
+      "pass": 44,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -276,7 +276,7 @@
       "name": "Database Exists",
       "category": "Database",
       "status": "pass",
-      "detail": "Size: 115484.0 KB",
+      "detail": "Size: 115500.0 KB",
       "duration_ms": 0
     },
     {
@@ -312,7 +312,7 @@
       "category": "Database",
       "status": "pass",
       "detail": "0 TMDB items",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "AI Memory Table",
@@ -410,21 +410,21 @@
       "category": "Database",
       "status": "pass",
       "detail": "4 statements OK against schema",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "name": "Chat session SQL matches schema",
       "category": "Memory",
       "status": "pass",
       "detail": "sidebar SELECT + restore + tagged INSERT OK against schema",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Total Recall Wired",
       "category": "Recall",
       "status": "pass",
       "detail": "scene capture + recall_scene tool + DB store wired",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "aimemory position_secs Column",
@@ -445,20 +445,20 @@
       "category": "Database",
       "status": "pass",
       "detail": "v1\u2192v2 migration + path keying + formatDuration wiring OK",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "name": "Zig Build",
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 49.6 MB",
-      "duration_ms": 16339
+      "duration_ms": 823
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "49.6 MB, built at 23:45:00",
+      "detail": "49.6 MB, built at 00:02:24",
       "duration_ms": 0
     },
     {
@@ -494,7 +494,7 @@
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 82
+      "duration_ms": 99
     },
     {
       "name": "Embedding Server Health",
@@ -508,21 +508,21 @@
       "category": "Server",
       "status": "pass",
       "detail": "compile-time headless entry + coreInit/headlessMain + 0.0.0.0 bind + -Dheadless",
-      "duration_ms": 1
+      "duration_ms": 3
     },
     {
       "name": "Headless Render Guards",
       "category": "Server",
       "status": "pass",
       "detail": "render-context/pixels gated; grid guards mpv_gl; theme defers off-UI-thread",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Zig Unit Tests",
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 4332
+      "duration_ms": 4388
     },
     {
       "name": "Poster/image fetch uses curl not std.http",
@@ -564,7 +564,7 @@
       "category": "Network",
       "status": "pass",
       "detail": "curl content fetchers bound connect time (dead host fails in ~3s)",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "HTTP client seeds Client.now for TLS",
@@ -585,7 +585,7 @@
       "category": "Packaging",
       "status": "pass",
       "detail": "install.sh installs the vendored .app; formula is a binary install at 0.5.0",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "File associations + single instance",
@@ -606,35 +606,35 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 1226
+      "duration_ms": 1825
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "pass",
       "detail": "faster-whisper importable",
-      "duration_ms": 1448
+      "duration_ms": 1699
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 21
+      "duration_ms": 25
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 24
+      "duration_ms": 21
     },
     {
       "name": "Conversational: voice-server echo guard + live partials",
       "category": "Voice",
       "status": "pass",
       "detail": "echo guard drops self-echo; real interruption passes; PARTIAL streamed",
-      "duration_ms": 27
+      "duration_ms": 30
     },
     {
       "name": "Conversational: prefer full-duplex event loop + wiring",
@@ -648,56 +648,56 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 25
+      "duration_ms": 27
     },
     {
       "name": "Compiles: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 24
+      "duration_ms": 27
     },
     {
       "name": "Compiles: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 24
+      "duration_ms": 27
     },
     {
       "name": "Compiles: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 25
+      "duration_ms": 32
     },
     {
       "name": "--check degrades: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 927
+      "duration_ms": 1081
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 25
+      "duration_ms": 27
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 1050
+      "duration_ms": 1203
     },
     {
       "name": "Tracked + compiles: tools/lang_server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "tracked + py_compile OK",
-      "duration_ms": 41
+      "duration_ms": 44
     },
     {
       "name": "Parakeet conversational self-install wired",
@@ -711,7 +711,7 @@
       "category": "Voice",
       "status": "pass",
       "detail": "frame loop + toggleConversation + toggleMicRecording all wire callbacks",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Whisper Model Present",
@@ -725,7 +725,7 @@
       "category": "Voice Scripts",
       "status": "skip",
       "detail": "no ggml model",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Sherpa Model Canonicalization",
@@ -879,7 +879,7 @@
       "category": "Settings",
       "status": "pass",
       "detail": "EQ + video filters + download limit + cowatch sensitivity persist & replay",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Unified Search: Local Files",
@@ -900,42 +900,42 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 8206
+      "duration_ms": 7515
     },
     {
       "name": "Cloud LLM Backend + No Silent Local Installs",
       "category": "AI Features",
       "status": "pass",
       "detail": "cloud providers + bearer auth + on-demand-only local models wired",
-      "duration_ms": 0
+      "duration_ms": 4
     },
     {
       "name": "Parakeet TDT Voice Backend Wired",
       "category": "AI Features",
       "status": "pass",
       "detail": "parakeet v2/v3 backends + downloads + settings rows wired",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Incognito Chat Leaves No Trace",
       "category": "AI Features",
       "status": "pass",
       "detail": "sinks guarded + retrieval skipped + composer toggle present",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Chat Console: Wrapped Transcript + Agent Steps",
       "category": "AI Features",
       "status": "pass",
       "detail": "console transcript + hero + follow-scroll + agent steps wired",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "name": "OMDb Ratings Enrichment",
       "category": "Enrichment",
       "status": "pass",
       "detail": "OMDb enrichment wired (parser+worker+UI+persist); key set=False",
-      "duration_ms": 2
+      "duration_ms": 3
     },
     {
       "name": "Local taste engine: activity + vectors + For You",
@@ -984,14 +984,14 @@
       "category": "Browser",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 43
+      "duration_ms": 52
     },
     {
       "name": "Bridge protocol selftest",
       "category": "Browser",
       "status": "pass",
       "detail": "framing + pump model OK",
-      "duration_ms": 43
+      "duration_ms": 50
     },
     {
       "name": "Browser bookmarks SQL matches schema",
@@ -1012,14 +1012,14 @@
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 112
+      "duration_ms": 148
     },
     {
       "name": "Browser: CloakBrowser engine + upgrades",
       "category": "Browser",
       "status": "pass",
       "detail": "engine picker + find/zoom/downloads/history/reader wired",
-      "duration_ms": 71
+      "duration_ms": 98
     },
     {
       "name": "Single-Media Mode",
@@ -1264,7 +1264,7 @@
       "category": "Stability",
       "status": "pass",
       "detail": "all 58 default-valued fields assigned in init",
-      "duration_ms": 2
+      "duration_ms": 3
     },
     {
       "name": "Stream Resources Resolvable When Bundled",
@@ -1313,7 +1313,7 @@
       "category": "Stability",
       "status": "pass",
       "detail": "no discarded std.Thread.spawn handles in src/",
-      "duration_ms": 26
+      "duration_ms": 32
     },
     {
       "name": "TMDB Fetch Stages Results Off-Thread",
@@ -1383,7 +1383,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 17
+      "duration_ms": 21
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -1530,7 +1530,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 174
+      "duration_ms": 257
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1698,14 +1698,14 @@
       "category": "Reading",
       "status": "pass",
       "detail": "Madara engine wired: pure parser routed (builders + image-attr rule + grid/chapter/page scanners), Source.madara + searchWorker branch, source_config-gated (inert without base), madara: route \u2192 shared reader pipeline, Referer on page fetches, AJAX chapter fallback, AES-protector path skipped",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Light-novel reader",
       "category": "Reading",
       "status": "pass",
       "detail": "novels reader wired: pure(html\u2192text/url/paginate/resume) \u2192 enum\u2192nav\u2192service (Wikisource)",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Light-novel source engines",
@@ -1719,14 +1719,14 @@
       "category": "Transfers",
       "status": "pass",
       "detail": "gallery-dl backend wired: pure\u2192service\u2192dispatch\u2192history+config. gallery-dl not installed (backend inert \u2014 pure tests cover logic)",
-      "duration_ms": 34
+      "duration_ms": 31
     },
     {
       "name": "VNDB visual-novel catalog",
       "category": "Reading",
       "status": "pass",
       "detail": "VNDB catalog wired: pure(body/parse/SFW-filter) \u2192 POST api.vndb.org \u2192 enum\u2192nav\u2192service; SFW gate routed",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Asian drama + tokusatsu",
@@ -1768,7 +1768,7 @@
       "category": "Reading",
       "status": "pass",
       "detail": "MangaThemesia wired: pure parser registered + routed (browse URL, image-attr rule, search/details/chapters, readerarea + JSON page fallback), Source.mangathemesia + searchWorker branch, source_config-gated, themesia: scheme \u2192 shared reader pipeline with Referer/Accept headers",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "SFW manga source catalog",
@@ -1782,14 +1782,14 @@
       "category": "Network",
       "status": "pass",
       "detail": "anti-block fetch wired: pure(isBlocked/needsBrowser, no false-pos) \u2192 scrape_fetch \u2192 bridge fetchhtml on dedicated page; selftest ok",
-      "duration_ms": 73
+      "duration_ms": 138
     },
     {
       "name": "Scrapers routed through anti-block fetch",
       "category": "Network",
       "status": "pass",
       "detail": "comics(Madara/MangaThemesia/generic)\u2192fetchMaybeUnblocked, anime embeds\u2192scrapeFetch, novels(scraper engines)\u2192scrapeHtml; MangaDex/HeanCms JSON + Wikisource + POST paths left on curl",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Opal browser extension",
@@ -1803,14 +1803,14 @@
       "category": "Player",
       "status": "pass",
       "detail": "extractors wired: pure(unpackPacked + streamwish/mp4upload/streamtape/dood/megacloud, routed) \u2192 driver(resolveEmbed, scrapeFetch/curl+XRW, yt-dlp delegate) \u2192 playEmbed(Referer via http-header-fields, sub-add, gotoPlayer)",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Anime site frameworks (DooPlay + AnimeStream)",
       "category": "Player",
       "status": "pass",
       "detail": "DooPlay + AnimeStream engines wired: two tested pure parsers registered + routed (search/details/episodes + embed extraction), DooPlay doo_player_ajax admin-ajax embed chain, AnimeStream .eplister + base64 iframe embed, source_config-gated, episode play \u2192 embed \u2192 playEmbed/resolveEmbed",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Encrypted content cache",
@@ -1845,7 +1845,7 @@
       "category": "Player",
       "status": "pass",
       "detail": "allanime gated: resolver reads source_config base+referer, no host literal in source, decodeSourceURL base injected, manifest wired",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Plugins page groups + filters the source catalog",
@@ -1887,7 +1887,7 @@
       "category": "Video",
       "status": "pass",
       "detail": "Live TV catalog: SQLite (100k) + curated opt-in sources + SWR 24h ingest + nsfw-gated adult",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "name": "Suwayomi source engine",
@@ -1901,7 +1901,7 @@
       "category": "Integration",
       "status": "pass",
       "detail": "Mihon: pure(repos/gates/parse/endpoints) + service (fetch/install/render) opened from Comics; nsfw-gated",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "name": "Subsonic music engine",
@@ -1915,7 +1915,7 @@
       "category": "Search",
       "status": "pass",
       "detail": "Universal search reaches live tv/music/radio/podcasts; cap 96; audio ranked below video",
-      "duration_ms": 1
+      "duration_ms": 3
     },
     {
       "name": "Synced lyrics (lrclib)",
@@ -1936,7 +1936,7 @@
       "category": "Video",
       "status": "pass",
       "detail": "InnerTube fast path wired: pure(body/iter/fields) -> reliable_fetch POST -> batched refresh; fallback InnerTube>yt-dlp>Piped; SWR content cache",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Unified library read-model",
@@ -1957,7 +1957,7 @@
       "category": "Web UI",
       "status": "pass",
       "detail": "20 verticals wired (nav + section + routes)",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "name": "Web UI YouTube tab",
@@ -1992,7 +1992,7 @@
       "category": "Web UI",
       "status": "pass",
       "detail": "Music + Radio: search/poll/play routes + tabs (hosted plays stream URL)",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Auth core (bcrypt) present + tested",
@@ -2020,14 +2020,14 @@
       "category": "Auth",
       "status": "pass",
       "detail": "web UI: account create/sign-in (status-driven), pairing code removed",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Deploy profiles: TLS (Caddy) + Tailscale",
       "category": "Auth",
       "status": "pass",
       "detail": "deploy: Caddy TLS + Tailscale sidecar profiles + docs",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "name": "Recommendations route backed by the For You engine",
@@ -2041,7 +2041,7 @@
       "category": "Remote API",
       "status": "pass",
       "detail": "/api/party/* + /api/cast/* backed by watch_party.zig + cast.zig",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Comic page images served over HTTP",
@@ -2090,7 +2090,7 @@
       "category": "Packaging",
       "status": "pass",
       "detail": "default expands to 2 packages (opal, opal-bin) \u2014 v0.5.0 regression covered",
-      "duration_ms": 5
+      "duration_ms": 8
     },
     {
       "name": "AUR publish runs where makepkg exists",
@@ -2139,7 +2139,7 @@
       "category": "Web UI",
       "status": "pass",
       "detail": "Comics reader + Novels drill-down + Drama/VNDB catalogs",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "OPDS fetches through curl, not std.http",
@@ -2160,6 +2160,13 @@
       "category": "Headless",
       "status": "pass",
       "detail": "runs as uid/gid 10001 \u2014 satisfies k8s runAsNonRoot",
+      "duration_ms": 0
+    },
+    {
+      "name": "Calendar fetches honour the DPI-bypass setting",
+      "category": "Page Shell",
+      "status": "pass",
+      "detail": "eztv + tv calendars route through the DPI-bypass sidecar when enabled",
       "duration_ms": 0
     }
   ]

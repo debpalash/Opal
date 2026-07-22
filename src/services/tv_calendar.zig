@@ -57,7 +57,26 @@ pub fn refreshOnce() void {
 }
 
 fn curlInto(url: []const u8, buf: []u8) usize {
-    var child = io.Child.init(&.{ "curl", "-s", "--connect-timeout", "3", "--max-time", "8", url }, alloc);
+    // Same DPI-bypass routing as eztv_calendar.curlInto — this one also hits the
+    // eztv get-torrents API (for "is the latest aired episode available?"), and
+    // was likewise ignoring the user's bypass setting.
+    var argv: [12][]const u8 = undefined;
+    var argc: usize = 0;
+    for ([_][]const u8{ "curl", "-s", "--connect-timeout", "3", "--max-time", "8" }) |x| {
+        argv[argc] = x;
+        argc += 1;
+    }
+    if (@import("dpi_bypass.zig").proxyArgs()) |pa| {
+        for (pa) |x| {
+            if (argc >= argv.len - 1) break;
+            argv[argc] = x;
+            argc += 1;
+        }
+    }
+    argv[argc] = url;
+    argc += 1;
+
+    var child = io.Child.init(argv[0..argc], alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     child.spawn() catch return 0;

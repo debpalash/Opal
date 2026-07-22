@@ -195,3 +195,27 @@ def test_docker_numeric_uid():
     if missing:
         return "fail", "container user incomplete: " + ", ".join(missing)
     return "pass", "runs as uid/gid 10001 — satisfies k8s runAsNonRoot"
+
+
+@test("Calendar fetches honour the DPI-bypass setting", "Page Shell")
+def test_calendar_proxy_routing():
+    ez = _src("src/services/eztv_calendar.zig")
+    tv = _src("src/services/tv_calendar.zig")
+    lh = _src("src/services/link_health.zig")
+    # Both calendar fetchers hit eztv, which is exactly the kind of host ISP DPI
+    # resets (curl exit 35 / http_code 000). Both hand-rolled their curl argv and
+    # skipped proxyArgs(), so the user's "Bypass ISP blocking" toggle did nothing
+    # for these rails. Measured after the fix on a throttled link: 9/15 requests
+    # succeeded direct, 15/15 through the sidecar.
+    checks = {
+        "eztv calendar proxies": '@import("dpi_bypass.zig").proxyArgs()' in ez,
+        "tv calendar proxies": '@import("dpi_bypass.zig").proxyArgs()' in tv,
+        # URL must stay LAST in the argv, after any injected proxy flags.
+        "url appended last": ez.count("argv[argc] = url;") == 1 and tv.count("argv[argc] = url;") == 1,
+        # Same shape as the module that already did this correctly.
+        "matches link_health pattern": '@import("dpi_bypass.zig").proxyArgs()' in lh,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "calendar proxy routing incomplete: " + ", ".join(missing)
+    return "pass", "eztv + tv calendars route through the DPI-bypass sidecar when enabled"
