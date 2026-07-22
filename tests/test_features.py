@@ -71,6 +71,7 @@ from features import (  # noqa: F401
     test_remote_stubs,
     test_headless_slim,
     test_aur_publish,
+    test_web_parity2,
 )
 
 if __name__ == "__main__":

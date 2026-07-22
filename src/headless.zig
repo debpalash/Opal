@@ -94,6 +94,10 @@ pub fn headlessMain() !void {
         // Every 100ms rather than on the 2s tick: it is an atomic swap when
         // idle, and a reader waiting on a page shouldn't eat 2s of latency.
         @import("services/comics.zig").drainPendingLoad();
+        // Same class of seam: drama's fetch worker stages results under a mutex
+        // and the RENDER path commits them. No render path here, so the parse
+        // succeeded and result_count stayed 0.
+        @import("services/drama.zig").pumpPending();
 
         const now_ms = io.milliTimestamp();
         if (now_ms - last_tick_ms >= tick_interval_ms) {

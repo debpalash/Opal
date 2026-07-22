@@ -798,6 +798,40 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         apiComics(stream, api_path, query);
         return;
     }
+    // Server logs — the desktop Logs tab, over HTTP. Especially load-bearing
+    // headless, where `docker logs` only carries stdout.
+    if (std.mem.startsWith(u8, api_path, "/logs")) {
+        apiLogs(stream, api_path, query);
+        return;
+    }
+    // Visual novels (catalog only — VNs aren't launchable).
+    if (std.mem.startsWith(u8, api_path, "/vndb")) {
+        apiVndb(stream, api_path, query);
+        return;
+    }
+    // Asian drama catalog.
+    if (std.mem.startsWith(u8, api_path, "/drama")) {
+        apiDrama(stream, api_path, query);
+        return;
+    }
+    // Novels — search → chapters → reader.
+    if (std.mem.startsWith(u8, api_path, "/novels")) {
+        apiNovels(stream, api_path, query);
+        return;
+    }
+    // Self-hosted servers: Audiobookshelf, OPDS catalogs, Plex.
+    if (std.mem.startsWith(u8, api_path, "/abs")) {
+        apiAbs(stream, api_path, query);
+        return;
+    }
+    if (std.mem.startsWith(u8, api_path, "/opds")) {
+        apiOpds(stream, api_path, query);
+        return;
+    }
+    if (std.mem.startsWith(u8, api_path, "/plex")) {
+        apiPlex(stream, api_path, query);
+        return;
+    }
     // Jellyfin
     if (std.mem.startsWith(u8, api_path, "/jellyfin")) {
         apiJellyfin(stream, api_path, query);
@@ -1750,6 +1784,557 @@ fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
     sendJson(stream, json_buf[0..w.end]);
 }
 
+/// GET /api/logs[?errors=1&limit=N] — the in-app log ring.
+///
+/// The single most useful route on a headless box: `docker logs` only shows
+/// stdout, while everything the desktop Logs tab renders (scraper output, mpv
+/// stderr, worker errors) lives in this ring.
+///
+/// logCount()/getLog() are UNLOCKED accessors — valid only inside a
+/// lockRead()/unlockRead() pair, because a worker's pushLog evicts and frees the
+/// oldest entry's slices. So the whole serialization happens under the lock, and
+/// nothing in this loop may log.
+fn apiLogs(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+    const a = @import("../core/alloc.zig").allocator;
+
+    if (std.mem.eql(u8, api_path, "/logs/clear")) {
+        logs.clear();
+        sendJson(stream, "{\"ok\":true,\"action\":\"logs_clear\"}");
+        return;
+    }
+
+    const errors_only = std.mem.eql(u8, getQueryParam(query, "errors") orelse "", "1");
+    // Newest-N window: the ring holds 1024 entries and a browser wants the tail.
+    const limit = std.fmt.parseInt(usize, getQueryParam(query, "limit") orelse "200", 10) catch 200;
+
+    // 1024 entries can exceed 256KB of text — heap, never the thread stack.
+    const json_buf = a.alloc(u8, 512 * 1024) catch return;
+    defer a.free(json_buf);
+    var w = std.Io.Writer.fixed(json_buf);
+    w.writeAll("{\"entries\":[") catch return;
+
+    logs.lockRead();
+    const total = logs.logCount();
+    // Walk oldest→newest but start late enough to emit at most `limit` rows.
+    var idx: usize = if (total > limit) total - limit else 0;
+    var emitted: usize = 0;
+    while (idx < total) : (idx += 1) {
+        const e = logs.getLog(idx);
+        if (errors_only and !e.is_error) continue;
+        if (emitted > 0) w.writeAll(",") catch break;
+        emitted += 1;
+        w.print("{{\"ts\":{d},\"error\":{s},\"level\":\"", .{
+            e.timestamp,
+            if (e.is_error) "true" else "false",
+        }) catch break;
+        escJsonWrite(&w, txt.safeUtf8(e.level));
+        w.writeAll("\",\"prefix\":\"") catch break;
+        escJsonWrite(&w, txt.safeUtf8(e.prefix));
+        w.writeAll("\",\"text\":\"") catch break;
+        // Log text is untrusted (mpv stderr, scraper output) — invalid UTF-8
+        // here would produce a response the browser refuses to parse.
+        escJsonWrite(&w, txt.safeUtf8(e.text));
+        w.writeAll("\"}") catch break;
+    }
+    logs.unlockRead();
+
+    w.writeAll("]}") catch return;
+    sendJson(stream, json_buf[0..w.end]);
+}
+
+/// GET /api/vndb[/search?q=] — visual-novel catalog. No play route: VNs aren't
+/// launchable, this is a browsable catalog like the desktop tab.
+fn apiVndb(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+    const vndb = @import("vndb.zig");
+    const v = &state.app.vndb;
+
+    if (std.mem.eql(u8, api_path, "/vndb/search")) {
+        if (getQueryParam(query, "q")) |q| {
+            var decoded: [256]u8 = undefined;
+            vndb.searchVndb(txt.safeUtf8(urlDecode(q, &decoded) orelse q));
+        }
+        sendJson(stream, "{\"ok\":true,\"action\":\"vndb_search\"}");
+        return;
+    }
+
+    // First GET seeds the popular list, mirroring the desktop tab's one-shot.
+    if (v.result_count == 0 and !v.is_loading.load(.acquire)) vndb.loadPopularOnce();
+
+    const a = @import("../core/alloc.zig").allocator;
+    // 180 rows × a 1KB description — heap.
+    const json_buf = a.alloc(u8, 320 * 1024) catch return;
+    defer a.free(json_buf);
+    var w = std.Io.Writer.fixed(json_buf);
+    w.print("{{\"loading\":{s},\"popular\":{s},\"results\":[", .{
+        if (v.is_loading.load(.acquire)) "true" else "false",
+        if (v.showing_popular) "true" else "false",
+    }) catch return;
+    const n = @min(v.result_count, v.results.len);
+    for (v.results[0..n], 0..) |*r, i| {
+        if (i > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"id\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(r.id[0..@min(r.id_len, r.id.len)]));
+        w.writeAll("\",\"title\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(r.title[0..@min(r.title_len, r.title.len)]));
+        w.writeAll("\",\"image\":\"") catch return;
+        escJsonWrite(&w, r.image_url[0..@min(r.image_url_len, r.image_url.len)]);
+        w.writeAll("\",\"released\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(r.released[0..@min(r.released_len, r.released.len)]));
+        w.writeAll("\",\"description\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(r.description[0..@min(r.description_len, r.description.len)]));
+        w.print("\",\"rating\":{d:.2}}}", .{r.rating}) catch return;
+    }
+    w.writeAll("]}") catch return;
+    sendJson(stream, json_buf[0..w.end]);
+}
+
+/// GET /api/drama[/play?idx=] — the Asian-drama catalog (TMDB /discover/tv).
+/// Browse-only: drama.zig has no search entry point, so neither does this.
+fn apiDrama(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+    const drama = @import("drama.zig");
+    const d = &state.app.drama;
+
+    if (std.mem.eql(u8, api_path, "/drama/play")) {
+        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
+        if (idx >= d.result_count) {
+            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such drama\"}");
+            return;
+        }
+        // playSelected() takes no index — it reads selected_idx. Set it first.
+        d.selected_idx = idx;
+        drama.playSelected();
+        sendJson(stream, "{\"ok\":true,\"action\":\"drama_play\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/drama/more")) {
+        drama.loadMore();
+        sendJson(stream, "{\"ok\":true,\"action\":\"drama_more\"}");
+        return;
+    }
+
+    // Every drama entry point no-ops without a TMDB key — say so rather than
+    // returning a permanently empty list the client can't explain.
+    if (state.app.tmdb.api_key_len == 0) {
+        sendJson(stream, "{\"loading\":false,\"needs_tmdb_key\":true,\"results\":[]}");
+        return;
+    }
+    if (!d.loaded_once and !d.is_loading.load(.acquire)) drama.loadCatalog();
+
+    const a = @import("../core/alloc.zig").allocator;
+    const json_buf = a.alloc(u8, 320 * 1024) catch return;
+    defer a.free(json_buf);
+    var w = std.Io.Writer.fixed(json_buf);
+    w.print("{{\"loading\":{s},\"streaming\":{s},\"needs_tmdb_key\":false,\"results\":[", .{
+        if (d.is_loading.load(.acquire)) "true" else "false",
+        if (d.stream_loading.load(.acquire)) "true" else "false",
+    }) catch return;
+    const n = @min(d.result_count, d.results.len);
+    for (d.results[0..n], 0..) |*r, i| {
+        if (i > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"id\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(r.id[0..@min(r.id_len, r.id.len)]));
+        w.writeAll("\",\"name\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(r.name[0..@min(r.name_len, r.name.len)]));
+        w.writeAll("\",\"year\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(r.year[0..@min(r.year_len, r.year.len)]));
+        // A TMDB path like "/abc.jpg"; the client prefixes an image base.
+        w.writeAll("\",\"poster_path\":\"") catch return;
+        escJsonWrite(&w, r.poster_path[0..@min(r.poster_path_len, r.poster_path.len)]);
+        w.writeAll("\",\"overview\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(r.overview[0..@min(r.overview_len, r.overview.len)]));
+        w.print("\",\"vote\":{d:.1}}}", .{r.vote}) catch return;
+    }
+    w.writeAll("]}") catch return;
+    sendJson(stream, json_buf[0..w.end]);
+}
+
+/// GET /api/novels — search → chapter list → chapter text, the desktop drill-down.
+///
+/// `/novels/search?q=` → results; `/novels/open?idx=` → that novel's chapters;
+/// `/novels/chapter?idx=` → its text; `/novels/next|prev`. `GET /novels` returns
+/// whichever view is live, so one poll drives the whole flow.
+fn apiNovels(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+    const nov = @import("novels.zig");
+    const n = &state.app.novels;
+
+    if (std.mem.eql(u8, api_path, "/novels/search")) {
+        if (getQueryParam(query, "q")) |q| {
+            var decoded: [256]u8 = undefined;
+            nov.searchNovels(txt.safeUtf8(urlDecode(q, &decoded) orelse q));
+        }
+        sendJson(stream, "{\"ok\":true,\"action\":\"novel_search\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/novels/open")) {
+        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
+        if (idx >= nov.resultCount()) {
+            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such novel\"}");
+            return;
+        }
+        nov.openNovel(idx);
+        sendJson(stream, "{\"ok\":true,\"action\":\"novel_open\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/novels/chapter")) {
+        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
+        if (idx >= nov.chapterCount()) {
+            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such chapter\"}");
+            return;
+        }
+        nov.openChapter(idx);
+        sendJson(stream, "{\"ok\":true,\"action\":\"novel_chapter\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/novels/next")) {
+        nov.nextChapter();
+        sendJson(stream, "{\"ok\":true,\"action\":\"novel_next\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/novels/prev")) {
+        nov.prevChapter();
+        sendJson(stream, "{\"ok\":true,\"action\":\"novel_prev\"}");
+        return;
+    }
+
+    const a = @import("../core/alloc.zig").allocator;
+    // text_buf alone is 128KB, and JSON escaping can nearly double it.
+    const json_buf = a.alloc(u8, 384 * 1024) catch return;
+    defer a.free(json_buf);
+    var w = std.Io.Writer.fixed(json_buf);
+    w.print("{{\"view\":\"{s}\",\"loading\":{s},\"chapters_loading\":{s},\"text_loading\":{s},\"error\":{s},\"title\":\"", .{
+        @tagName(n.view),
+        if (n.is_loading.load(.acquire)) "true" else "false",
+        if (n.chapters_loading.load(.acquire)) "true" else "false",
+        if (n.text_loading.load(.acquire)) "true" else "false",
+        if (n.fetch_error) "true" else "false",
+    }) catch return;
+    escJsonWrite(&w, txt.safeUtf8(n.work_title[0..@min(n.work_title_len, n.work_title.len)]));
+    w.writeAll("\",\"chapter_label\":\"") catch return;
+    escJsonWrite(&w, txt.safeUtf8(n.chapter_label[0..@min(n.chapter_label_len, n.chapter_label.len)]));
+    w.print("\",\"current_chapter\":{d},\"truncated\":{s},\"results\":[", .{
+        n.current_chapter,
+        if (n.text_truncated) "true" else "false",
+    }) catch return;
+
+    var i: usize = 0;
+    const rn = nov.resultCount();
+    while (i < rn) : (i += 1) {
+        const row = nov.resultRow(i) orelse break;
+        if (i > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"title\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(row.title()));
+        w.print("\",\"source\":{d}}}", .{row.source}) catch return;
+    }
+    w.writeAll("],\"chapters\":[") catch return;
+    i = 0;
+    const cn = nov.chapterCount();
+    while (i < cn) : (i += 1) {
+        const row = nov.chapterRow(i) orelse break;
+        if (i > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"title\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(row.title()));
+        w.writeAll("\"}") catch return;
+    }
+    w.writeAll("],\"text\":\"") catch return;
+    escJsonWrite(&w, txt.safeUtf8(n.text_buf[0..@min(n.text_len, n.text_buf.len)]));
+    w.writeAll("\"}") catch return;
+    sendJson(stream, json_buf[0..w.end]);
+}
+
+/// GET /api/abs — Audiobookshelf: libraries → books → play.
+///
+/// `/abs/login?server=&user=&pass=`, `/abs/libraries`, `/abs/open?idx=`,
+/// `/abs/back`, `/abs/more`, `/abs/play?idx=`, `/abs/logout`.
+fn apiAbs(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+    const abs = @import("audiobookshelf.zig");
+    const s = &state.app.abs;
+
+    if (std.mem.eql(u8, api_path, "/abs/login")) {
+        // Credentials come from the POST body where possible (credParam), so a
+        // password never lands in a URL or an access log — same rule as
+        // /api/auth/login.
+        var dec: [256]u8 = undefined;
+        if (getQueryParam(query, "server")) |v| {
+            const sv = txt.safeUtf8(urlDecode(v, &dec) orelse v);
+            const n = @min(sv.len, s.server_url.len);
+            @memcpy(s.server_url[0..n], sv[0..n]);
+            s.server_url_len = n;
+        }
+        if (getQueryParam(query, "user")) |v| {
+            var d2: [128]u8 = undefined;
+            const uv = txt.safeUtf8(urlDecode(v, &d2) orelse v);
+            const n = @min(uv.len, s.login_user_buf.len - 1);
+            @memcpy(s.login_user_buf[0..n], uv[0..n]);
+            s.login_user_buf[n] = 0;
+        }
+        if (getQueryParam(query, "pass")) |v| {
+            var d3: [128]u8 = undefined;
+            const pv = urlDecode(v, &d3) orelse v;
+            const n = @min(pv.len, s.login_pass_buf.len - 1);
+            @memcpy(s.login_pass_buf[0..n], pv[0..n]);
+            s.login_pass_buf[n] = 0;
+        }
+        abs.authenticate();
+        sendJson(stream, "{\"ok\":true,\"action\":\"abs_login\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/abs/logout")) {
+        abs.disconnect();
+        sendJson(stream, "{\"ok\":true,\"action\":\"abs_logout\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/abs/libraries")) {
+        abs.fetchLibraries();
+        sendJson(stream, "{\"ok\":true,\"action\":\"abs_libraries\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/abs/open")) {
+        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
+        if (idx >= s.library_count) {
+            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such library\"}");
+            return;
+        }
+        abs.openLibrary(idx);
+        sendJson(stream, "{\"ok\":true,\"action\":\"abs_open\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/abs/back")) {
+        abs.goToLibraries();
+        sendJson(stream, "{\"ok\":true,\"action\":\"abs_back\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/abs/more")) {
+        abs.loadMore();
+        sendJson(stream, "{\"ok\":true,\"action\":\"abs_more\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/abs/play")) {
+        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
+        if (idx >= s.book_count) {
+            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such book\"}");
+            return;
+        }
+        abs.playBook(idx);
+        sendJson(stream, "{\"ok\":true,\"action\":\"abs_play\"}");
+        return;
+    }
+
+    const a = @import("../core/alloc.zig").allocator;
+    const json_buf = a.alloc(u8, 192 * 1024) catch return;
+    defer a.free(json_buf);
+    var w = std.Io.Writer.fixed(json_buf);
+    w.print("{{\"connected\":{s},\"loading\":{s},\"view\":\"{s}\",\"server\":\"", .{
+        if (s.connected) "true" else "false",
+        if (s.is_loading.load(.acquire)) "true" else "false",
+        @tagName(s.view),
+    }) catch return;
+    escJsonWrite(&w, s.server_url[0..@min(s.server_url_len, s.server_url.len)]);
+    w.writeAll("\",\"error\":\"") catch return;
+    escJsonWrite(&w, txt.safeUtf8(s.login_error[0..@min(s.login_error_len, s.login_error.len)]));
+    w.writeAll("\",\"library\":\"") catch return;
+    escJsonWrite(&w, txt.safeUtf8(s.selected_lib_name[0..@min(s.selected_lib_name_len, s.selected_lib_name.len)]));
+    w.writeAll("\",\"libraries\":[") catch return;
+    const ln = @min(s.library_count, s.libraries.len);
+    for (s.libraries[0..ln], 0..) |*l, i| {
+        if (i > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"name\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(l.name[0..@min(l.name_len, l.name.len)]));
+        w.writeAll("\",\"media_type\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(l.media_type[0..@min(l.media_type_len, l.media_type.len)]));
+        w.writeAll("\"}") catch return;
+    }
+    w.writeAll("],\"books\":[") catch return;
+    const bn = @min(s.book_count, s.books.len);
+    for (s.books[0..bn], 0..) |*b, i| {
+        if (i > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"title\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(b.title[0..@min(b.title_len, b.title.len)]));
+        w.writeAll("\",\"author\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(b.author[0..@min(b.author_len, b.author.len)]));
+        w.print("\",\"duration\":{d}}}", .{b.duration_secs}) catch return;
+    }
+    w.writeAll("]}") catch return;
+    sendJson(stream, json_buf[0..w.end]);
+}
+
+/// GET /api/opds — an OPDS catalog (Komga / Kavita / Calibre-Web / LANraragi).
+/// Browse-only: `/opds/connect`, `/opds/open?idx=`, `/opds/back`, `/opds/more`,
+/// `/opds/disconnect`.
+fn apiOpds(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+    const opds = @import("opds.zig");
+    const o = &state.app.opds;
+
+    if (std.mem.eql(u8, api_path, "/opds/connect")) {
+        var dec: [256]u8 = undefined;
+        if (getQueryParam(query, "server")) |v| {
+            const sv = txt.safeUtf8(urlDecode(v, &dec) orelse v);
+            const n = @min(sv.len, o.server_url.len);
+            @memcpy(o.server_url[0..n], sv[0..n]);
+            o.server_url_len = n;
+        }
+        // user_buf/pass_buf are NUL-TERMINATED with no _len companion (see
+        // config.zig) — write the terminator, don't set a length.
+        if (getQueryParam(query, "user")) |v| {
+            var d2: [128]u8 = undefined;
+            const uv = txt.safeUtf8(urlDecode(v, &d2) orelse v);
+            const n = @min(uv.len, o.user_buf.len - 1);
+            @memcpy(o.user_buf[0..n], uv[0..n]);
+            o.user_buf[n] = 0;
+        }
+        if (getQueryParam(query, "pass")) |v| {
+            var d3: [128]u8 = undefined;
+            const pv = urlDecode(v, &d3) orelse v;
+            const n = @min(pv.len, o.pass_buf.len - 1);
+            @memcpy(o.pass_buf[0..n], pv[0..n]);
+            o.pass_buf[n] = 0;
+        }
+        opds.connect();
+        sendJson(stream, "{\"ok\":true,\"action\":\"opds_connect\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/opds/disconnect")) {
+        opds.disconnect();
+        sendJson(stream, "{\"ok\":true,\"action\":\"opds_disconnect\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/opds/open")) {
+        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
+        if (idx >= o.entry_count) {
+            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such entry\"}");
+            return;
+        }
+        opds.openEntry(idx);
+        sendJson(stream, "{\"ok\":true,\"action\":\"opds_open\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/opds/back")) {
+        opds.goBack();
+        sendJson(stream, "{\"ok\":true,\"action\":\"opds_back\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/opds/more")) {
+        opds.loadMore();
+        sendJson(stream, "{\"ok\":true,\"action\":\"opds_more\"}");
+        return;
+    }
+
+    const a = @import("../core/alloc.zig").allocator;
+    const json_buf = a.alloc(u8, 256 * 1024) catch return;
+    defer a.free(json_buf);
+    var w = std.Io.Writer.fixed(json_buf);
+    w.print("{{\"connected\":{s},\"loading\":{s},\"depth\":{d},\"error\":{s},\"message\":\"", .{
+        if (o.connected) "true" else "false",
+        if (o.is_loading.load(.acquire)) "true" else "false",
+        o.nav_depth,
+        if (o.fetch_error) "true" else "false",
+    }) catch return;
+    escJsonWrite(&w, txt.safeUtf8(o.error_msg[0..@min(o.error_msg_len, o.error_msg.len)]));
+    w.writeAll("\",\"feed\":\"") catch return;
+    escJsonWrite(&w, txt.safeUtf8(o.feed_title[0..@min(o.feed_title_len, o.feed_title.len)]));
+    w.writeAll("\",\"entries\":[") catch return;
+    const n = @min(o.entry_count, o.entries.len);
+    for (o.entries[0..n], 0..) |*e, i| {
+        if (i > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"title\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(e.titleSlice()));
+        w.print("\",\"nav\":{s},\"streamable\":{s},\"pages\":{d},\"type\":\"", .{
+            if (e.is_navigation) "true" else "false",
+            if (e.isPseStreamable()) "true" else "false",
+            e.pse_count,
+        }) catch return;
+        escJsonWrite(&w, txt.safeUtf8(e.contentTypeSlice()));
+        w.writeAll("\"}") catch return;
+    }
+    w.writeAll("]}") catch return;
+    sendJson(stream, json_buf[0..w.end]);
+}
+
+/// GET /api/plex — Plex sections → items → play.
+///
+/// Sign-in is Plex's PIN flow: `/plex/connect` starts it and the status payload
+/// carries `pin`, which the user enters at plex.tv/link. There is no
+/// username/password route because plex.zig doesn't have one.
+fn apiPlex(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+    const plex = @import("plex.zig");
+
+    if (std.mem.eql(u8, api_path, "/plex/connect")) {
+        plex.connect();
+        sendJson(stream, "{\"ok\":true,\"action\":\"plex_connect\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/plex/disconnect")) {
+        plex.disconnect();
+        sendJson(stream, "{\"ok\":true,\"action\":\"plex_disconnect\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/plex/sections")) {
+        plex.fetchSections();
+        sendJson(stream, "{\"ok\":true,\"action\":\"plex_sections\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/plex/open")) {
+        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
+        if (idx >= plex.section_count) {
+            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such section\"}");
+            return;
+        }
+        plex.fetchItems(idx);
+        sendJson(stream, "{\"ok\":true,\"action\":\"plex_open\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/plex/more")) {
+        plex.loadMore();
+        sendJson(stream, "{\"ok\":true,\"action\":\"plex_more\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/plex/play")) {
+        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
+        if (idx >= plex.item_count) {
+            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such item\"}");
+            return;
+        }
+        plex.play(idx);
+        sendJson(stream, "{\"ok\":true,\"action\":\"plex_play\"}");
+        return;
+    }
+
+    const a = @import("../core/alloc.zig").allocator;
+    const json_buf = a.alloc(u8, 192 * 1024) catch return;
+    defer a.free(json_buf);
+    var w = std.Io.Writer.fixed(json_buf);
+    w.print("{{\"connected\":{s},\"loading\":{s},\"state\":\"{s}\",\"active_section\":{d},\"server\":\"", .{
+        if (plex.isConnected()) "true" else "false",
+        if (plex.is_loading.load(.acquire)) "true" else "false",
+        @tagName(plex.conn_state.load(.acquire)),
+        plex.active_section,
+    }) catch return;
+    escJsonWrite(&w, txt.safeUtf8(plex.server_name[0..@min(plex.server_name_len, plex.server_name.len)]));
+    w.writeAll("\",\"pin\":\"") catch return;
+    escJsonWrite(&w, txt.safeUtf8(plex.pin_code[0..@min(plex.pin_code_len, plex.pin_code.len)]));
+    w.writeAll("\",\"status\":\"") catch return;
+    escJsonWrite(&w, txt.safeUtf8(plex.status_msg[0..@min(plex.status_msg_len, plex.status_msg.len)]));
+    w.writeAll("\",\"sections\":[") catch return;
+    const sn = @min(plex.section_count, plex.sections.len);
+    for (plex.sections[0..sn], 0..) |*s, i| {
+        if (i > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"title\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(s.title[0..@min(s.title_len, s.title.len)]));
+        w.writeAll("\"}") catch return;
+    }
+    w.writeAll("],\"items\":[") catch return;
+    const inn = @min(plex.item_count, plex.items.len);
+    for (plex.items[0..inn], 0..) |*it, i| {
+        if (i > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"title\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(it.title[0..@min(it.title_len, it.title.len)]));
+        w.writeAll("\",\"year\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(it.year[0..@min(it.year_len, it.year.len)]));
+        w.writeAll("\"}") catch return;
+    }
+    w.writeAll("]}") catch return;
+    sendJson(stream, json_buf[0..w.end]);
+}
+
 /// Has /api/recommendations kicked the generator yet this process? Read/written
 /// from connection threads → atomic.
 var rec_kicked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
@@ -1913,6 +2498,43 @@ fn apiComics(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
             comics_svc.requestLoad(comic_url);
         }
         sendJson(stream, "{\"ok\":true,\"action\":\"load_comic\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/comics/search")) {
+        if (getQueryParam(query, "q")) |q| {
+            var decoded: [256]u8 = undefined;
+            const term = txt.safeUtf8(urlDecode(q, &decoded) orelse q);
+            // searchComics spawns its own worker and no-ops while one is in
+            // flight, so this is safe to call straight from a connection thread.
+            @import("comics.zig").searchComics(term);
+        }
+        sendJson(stream, "{\"ok\":true,\"action\":\"comic_search\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/comics/results")) {
+        const comics_svc = @import("comics.zig");
+        const a = @import("../core/alloc.zig").allocator;
+        // 120 rows × (url + title + cover url) — heap, not the thread stack.
+        const json_buf = a.alloc(u8, 96 * 1024) catch return;
+        defer a.free(json_buf);
+        var w = std.Io.Writer.fixed(json_buf);
+        w.print("{{\"loading\":{s},\"results\":[", .{
+            if (comics_svc.searching()) "true" else "false",
+        }) catch return;
+        var i: usize = 0;
+        while (i < comics_svc.searchCount()) : (i += 1) {
+            const row = comics_svc.searchRow(i) orelse break;
+            if (i > 0) w.writeAll(",") catch return;
+            w.writeAll("{\"title\":\"") catch return;
+            escJsonWrite(&w, txt.safeUtf8(row.title));
+            w.writeAll("\",\"url\":\"") catch return;
+            escJsonWrite(&w, row.url);
+            w.writeAll("\",\"cover\":\"") catch return;
+            escJsonWrite(&w, row.cover_url);
+            w.writeAll("\"}") catch return;
+        }
+        w.writeAll("]}") catch return;
+        sendJson(stream, json_buf[0..w.end]);
         return;
     }
     if (std.mem.eql(u8, api_path, "/comics/close")) {

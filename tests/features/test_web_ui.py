@@ -24,6 +24,16 @@ VERTICALS = {
     "ai":       ("ai",       "page-ai",       ["/ai/send", "/ai"]),
     "music":    ("music",    "page-music",    ["/music/search", "/music"]),
     "radio":    ("radio",    "page-radio",    ["/radio/search", "/radio"]),
+    "comics":   ("comics",   "page-comics",   ["/comics/search", "/comics/results", "/comics/load"]),
+    # /novels/{open,chapter} are built by concat ('/novels/' + kind), so the
+    # literal "/novels/chapter" never appears — assert the base and the poll.
+    "novels":   ("novels",   "page-novels",   ["/novels/search", "/novels/open", "/novels'"]),
+    "drama":    ("drama",    "page-drama",    ["/drama", "/drama/play"]),
+    "vndb":     ("vndb",     "page-vndb",     ["/vndb/search", "/vndb"]),
+    "abs":      ("abs",      "page-abs",      ["/abs/login", "/abs"]),
+    "opds":     ("opds",     "page-opds",     ["/opds/connect", "/opds"]),
+    "plex":     ("plex",     "page-plex",     ["/plex/connect", "/plex"]),
+    "logs":     ("logs",     "page-logs",     ["/logs?limit=", "/logs/clear"]),
 }
 
 

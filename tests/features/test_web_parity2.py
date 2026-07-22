@@ -1,0 +1,138 @@
+"""Parity tier 2 — the last seven desktop verticals reach the web UI.
+
+Comics, Novels, Drama, VNDB, Audiobookshelf, OPDS, Plex and Logs. Two of these
+needed the service to grow a public read API (their results were private module
+vars), and two needed headless to pump a worker→UI publish seam it had no render
+thread to drive — those are the checks worth keeping, not the route strings.
+
+See tests/features/harness.py for the shared @test decorator + _src()."""
+from .harness import *  # noqa: F401,F403
+
+
+@test("Server logs exposed over HTTP", "Web UI")
+def test_logs_route():
+    rm = _src("src/services/remote.zig")
+    ui = _src("web/index.html")
+    checks = {
+        "route + clear": "fn apiLogs(" in rm and '"/logs/clear"' in rm,
+        # logCount()/getLog() are UNLOCKED accessors — a worker's pushLog evicts
+        # and frees the oldest entry's slices mid-read without this.
+        "serialized under lockRead": "logs.lockRead();" in rm and "logs.unlockRead();" in rm
+            and rm.index("logs.lockRead();") < rm.index("logs.getLog(idx)")
+            and rm.index("logs.getLog(idx)") < rm.index("logs.unlockRead();"),
+        # mpv stderr / scraper output is untrusted bytes.
+        "text sanitised": "escJsonWrite(&w, txt.safeUtf8(e.text));" in rm,
+        "errors + limit filters": 'getQueryParam(query, "errors")' in rm
+            and 'getQueryParam(query, "limit")' in rm,
+        # 1024 entries can exceed 256KB of text.
+        "response heap-allocated": "a.alloc(u8, 512 * 1024)" in rm,
+        "tab wired": 'data-page="logs"' in ui and 'id="page-logs"' in ui
+            and "async function loadLogs(" in ui and "logErrorsOnly" in ui,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "logs route incomplete: " + ", ".join(missing)
+    return "pass", "/api/logs: ring serialized under lockRead, level/error filters + tab"
+
+
+@test("Headless pumps worker→UI publish seams", "Headless")
+def test_headless_pumps_seams():
+    hl = _src("src/headless.zig")
+    dr = _src("src/services/drama.zig")
+    cm = _src("src/services/comics.zig")
+    # The recurring headless bug: a service's fetch worker stages results and the
+    # RENDER path commits them. Headless has no render path, so the fetch
+    # succeeded and the results never appeared. Each seam needs an explicit pump.
+    checks = {
+        "comics load drained": "comics.zig\").drainPendingLoad();" in hl
+            and "pub fn drainPendingLoad()" in cm,
+        "drama results drained": "drama.zig\").pumpPending();" in hl
+            and "pub fn pumpPending()" in dr,
+        # Every 100ms, not on the 2s bookkeeping tick — it's an atomic swap when
+        # idle and a reader waiting on a comic page shouldn't eat 2s.
+        "pumped every poll, not the slow tick": hl.index("drainPendingLoad();") < hl.index("const now_ms = io.milliTimestamp();"),
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "unpumped headless seams: " + ", ".join(missing)
+    return "pass", "headless serve loop drains comics + drama publish seams"
+
+
+@test("Private service results exposed through read APIs", "Web UI")
+def test_service_read_apis():
+    cm = _src("src/services/comics.zig")
+    nv = _src("src/services/novels.zig")
+    rm = _src("src/services/remote.zig")
+    checks = {
+        # comics: sr_* stay private (they also own cover pixels + GPU textures).
+        "comics search accessors": "pub fn searchRow(" in cm and "pub fn searchCount(" in cm
+            and "pub fn searching()" in cm,
+        # sr_searching was a plain bool written by a worker; connection threads
+        # poll it now too.
+        "comics search flag atomic": "var sr_searching_v: std.atomic.Value(bool)" in cm,
+        # novels: nr_*/ch_* are rewritten in place under parse_mutex, so the
+        # accessors copy OUT under the same lock rather than handing back slices.
+        "novels accessors copy under mutex": "pub fn resultRow(" in nv and "pub fn chapterRow(" in nv
+            and nv.count("parse_mutex.lock();\n    defer parse_mutex.unlock();") >= 4,
+        "novels rows are copies": "pub const ListRow = struct" in nv and "title_buf: [256]u8" in nv,
+        "routes use them": "comics_svc.searchRow(i)" in rm and "nov.resultRow(i)" in rm,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "service read APIs incomplete: " + ", ".join(missing)
+    return "pass", "comics + novels listings readable off-thread without exposing internals"
+
+
+@test("Self-hosted server verticals (ABS, OPDS, Plex)", "Web UI")
+def test_server_verticals():
+    rm = _src("src/services/remote.zig")
+    ui = _src("web/index.html")
+    checks = {
+        "routes exist": all(f"fn api{n}(" in rm for n in ("Abs", "Opds", "Plex")),
+        "abs flow": all(f'"/abs/{s}"' in rm for s in ("login", "logout", "libraries", "open", "back", "play")),
+        "opds flow": all(f'"/opds/{s}"' in rm for s in ("connect", "disconnect", "open", "back", "more")),
+        # Plex sign-in is the PIN flow — there is no username/password route
+        # because plex.zig has none.
+        "plex pin flow": '"/plex/connect"' in rm and '\\"pin\\":\\"' in rm
+            and "plex.tv/link" in ui,
+        # opds user_buf/pass_buf are NUL-terminated with no _len companion.
+        "opds creds nul-terminated": "o.user_buf[n] = 0;" in rm and "o.pass_buf[n] = 0;" in rm,
+        "bad index is a 404": rm.count('sendJsonStatus(stream, "404 Not Found"') >= 5,
+        "tabs render sign-in": all(f'id="page-{t}"' in ui for t in ("abs", "opds", "plex"))
+            and 'id="abs-login"' in ui and 'id="opds-login"' in ui,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "server verticals incomplete: " + ", ".join(missing)
+    return "pass", "ABS/OPDS/Plex: browse+play routes and sign-in forms (server-gated)"
+
+
+@test("Comics reader + Drama/VNDB/Novels tabs", "Web UI")
+def test_reader_tabs():
+    rm = _src("src/services/remote.zig")
+    ui = _src("web/index.html")
+    checks = {
+        # Page <img> must carry the token in the query — it can't set a header.
+        "reader uses token-in-query": "/api/comics/page?i=${i}&t=${encodeURIComponent(TOKEN)}" in ui,
+        # Pages land out of order across 8 download workers, so only the
+        # contiguous downloaded prefix is safe to render.
+        "renders downloaded prefix": "length: d.downloaded" in ui,
+        "reader closes server-side": "api('/comics/close')" in ui,
+        # drama.zig has no search entry point — don't ship a box that can't work.
+        "drama is browse-only": "fn apiDrama(" in rm and '"/drama/search"' not in rm
+            and 'id="dr-q"' not in ui,
+        # Every drama entry point no-ops without a TMDB key; say so.
+        "drama explains a missing key": '\\"needs_tmdb_key\\":true' in rm
+            and "needs_tmdb_key" in ui,
+        # playSelected() takes no index.
+        "drama play sets selected_idx": "d.selected_idx = idx;" in rm,
+        # VNs aren't launchable — catalog only, no play route.
+        "vndb has no play route": "fn apiVndb(" in rm and '"/vndb/play"' not in rm,
+        "novels drill-down": all(f'"/novels/{s}"' in rm for s in ("search", "open", "chapter", "next", "prev")),
+        "watchers cleaned": all(f"clearInterval({w})" in ui for w in
+                                ("cxWatch", "cxPages", "nvWatch", "drWatch", "vnWatch", "absWatch", "opWatch", "plWatch")),
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "reader tabs incomplete: " + ", ".join(missing)
+    return "pass", "Comics reader + Novels drill-down + Drama/VNDB catalogs"

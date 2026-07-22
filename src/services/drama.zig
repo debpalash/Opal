@@ -159,6 +159,20 @@ fn fetchPage(my_gen: u32, page: u32, append: bool) void {
     logs.pushLog("info", "drama", std.fmt.bufPrint(&lb, "Loaded {d} titles (TMDB p{d})", .{ n, page }) catch "Loaded", false);
 }
 
+/// Drain worker-staged results into the live grid from a non-render caller.
+///
+/// The desktop reaches applyPending() through renderContent(); headless has no
+/// render path, so its serve loop calls this instead. Without it the fetch
+/// worker parses TMDB fine ("Loaded 20 titles") and `result_count` stays 0
+/// forever — /api/drama returned an empty list with loading:false.
+///
+/// Safe off the render thread in the headless build: the texture retire below
+/// is a no-op there (textureCreate always fails, so poster_tex is always null)
+/// and dvui.refresh is stubbed out.
+pub fn pumpPending() void {
+    applyPending();
+}
+
 /// UI-THREAD ONLY — swap staged results into the live grid, freeing the old
 /// cards' poster textures here (texture destroy must not run on a worker).
 fn applyPending() void {

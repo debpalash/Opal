@@ -1512,7 +1512,9 @@ var sr_cover_gen: [MAX_SEARCH_RESULTS]u32 = std.mem.zeroes([MAX_SEARCH_RESULTS]u
 var covers_render_gen: u32 = 0;
 
 var sr_count: usize = 0;
-var sr_searching: bool = false;
+/// True while a search worker is in flight. Atomic: the worker clears it, and
+/// both the render thread and remote.zig's connection threads poll it.
+var sr_searching_v: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var loaded_default: bool = false;
 var last_fetch_s: i64 = 0; // SWR cache timestamp
 var sr_query_buf: [256]u8 = undefined;
@@ -1567,7 +1569,7 @@ fn putDefaultCache() void {
 /// revalidating fetch this same frame.
 fn seedDefaultFromCache() void {
     if (!state.app.content_cache_enabled) return;
-    if (loaded_default or sr_count != 0 or sr_searching) return;
+    if (loaded_default or sr_count != 0 or sr_searching_v.load(.acquire)) return;
     if (state.app.comic.search_buf[0] != 0 or state.app.comic.title_len != 0) return;
     const buf = alloc.alloc(u8, COMICS_BLOB_CAP) catch return;
     defer alloc.free(buf);
@@ -1611,6 +1613,40 @@ var last_fired_len: usize = 0;
 var sr_page: u32 = 1;
 var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var more_available: bool = true;
+
+// ── Read-only view of the search listing, for remote.zig's /api/comics ──
+// The sr_* arrays stay private: the render path also owns cover pixels and GPU
+// textures per slot, which nothing outside this file may touch. These three
+// expose only what a JSON client needs.
+
+/// One search hit, copied out by value. `url` is what /api/comics/load takes.
+pub const SearchRow = struct {
+    url: []const u8,
+    title: []const u8,
+    cover_url: []const u8,
+};
+
+pub fn searching() bool {
+    return sr_searching_v.load(.acquire) or loading_more.load(.acquire);
+}
+
+pub fn searchCount() usize {
+    return @min(sr_count, MAX_SEARCH_RESULTS);
+}
+
+/// Row `i`, or null when out of range. The slices point into the sr_* statics,
+/// which a *later* search rewrites in place — so JSON-encode the result before
+/// yielding, and never hold it across a call that could re-enter comics.zig.
+/// (Same contract the render path already lives with; a copy per row would cost
+/// 120 × 928 bytes for no benefit.)
+pub fn searchRow(i: usize) ?SearchRow {
+    if (i >= searchCount()) return null;
+    return .{
+        .url = sr_urls[i][0..@min(sr_url_lens[i], sr_urls[i].len)],
+        .title = sr_titles[i][0..@min(sr_title_lens[i], sr_titles[i].len)],
+        .cover_url = sr_cover_urls[i][0..@min(sr_cover_url_lens[i], sr_cover_urls[i].len)],
+    };
+}
 
 // ── Source selector ──
 // Two native sources today; plugin sources are surfaced dynamically as badges.
@@ -1731,8 +1767,8 @@ fn reclaimStaleCovers() void {
 }
 
 pub fn searchComics(query: []const u8) void {
-    if (sr_searching or query.len == 0 or query.len >= sr_query_buf.len) return;
-    sr_searching = true;
+    if (sr_searching_v.load(.acquire) or query.len == 0 or query.len >= sr_query_buf.len) return;
+    sr_searching_v.store(true, .release);
     // Fresh search → reset pagination so infinite-scroll starts at page 1 again.
     sr_page = 1;
     more_available = true;
@@ -1746,7 +1782,7 @@ pub fn searchComics(query: []const u8) void {
     last_fired_len = query.len;
     const gen = search_gen.fetchAdd(1, .acq_rel) + 1;
     const t = std.Thread.spawn(.{}, searchWorker, .{gen}) catch {
-        sr_searching = false;
+        sr_searching_v.store(false, .release);
         return;
     };
     t.detach();
@@ -1963,7 +1999,7 @@ fn fetchMadaraPage(query: []const u8, page: u32, gen: u32, start: usize) usize {
 /// unchanged; MangaDex fills the rest — and is the whole listing on a fresh
 /// install, where readallcomics is inert.
 fn searchWorker(gen: u32) void {
-    defer sr_searching = false;
+    defer sr_searching_v.store(false, .release);
     const query = sr_query_buf[0..sr_query_len];
 
     var filled: usize = 0;
@@ -2016,7 +2052,7 @@ fn searchWorker(gen: u32) void {
 /// rows onto the existing listing (dedup by URL, bounded by MAX_SEARCH_RESULTS).
 /// Runs on a detached thread; guarded by `loading_more`.
 pub fn loadMoreResults() void {
-    if (!more_available or loading_more.load(.acquire) or sr_searching) return;
+    if (!more_available or loading_more.load(.acquire) or sr_searching_v.load(.acquire)) return;
     if (sr_count == 0 or sr_count >= MAX_SEARCH_RESULTS or sr_query_len == 0) return;
     if (loading_more.swap(true, .acq_rel)) return;
     const t = std.Thread.spawn(.{}, loadMoreWorker, .{search_gen.load(.acquire)}) catch {
@@ -2811,10 +2847,10 @@ pub fn renderContent() void {
 
     // First open shows a default popular feed so the tab isn't blank (the
     // search box stays free for anything else).
-    if (!loaded_default and sr_count == 0 and !sr_searching and state.app.comic.search_buf[0] == 0 and state.app.comic.title_len == 0) {
+    if (!loaded_default and sr_count == 0 and !sr_searching_v.load(.acquire) and state.app.comic.search_buf[0] == 0 and state.app.comic.title_len == 0) {
         loaded_default = true;
         searchComics(DEFAULT_FEED_QUERY);
-    } else if (sr_count > 0 and !sr_searching and sr_query_len > 0 and state.app.comic.title_len == 0 and
+    } else if (sr_count > 0 and !sr_searching_v.load(.acquire) and sr_query_len > 0 and state.app.comic.title_len == 0 and
         @import("browse_cache.zig").isStale(last_fetch_s))
     {
         // SWR: refresh the current listing in the background once it's stale.
@@ -2875,7 +2911,7 @@ pub fn renderContent() void {
             const now_ms = @import("../core/io_global.zig").milliTimestamp();
             const changed = !(input.len == last_fired_len and std.mem.eql(u8, input, last_fired_query[0..last_fired_len]));
             if (changed) last_edit_ms = now_ms;
-            if (changed and input.len >= 2 and !is_url and !sr_searching and
+            if (changed and input.len >= 2 and !is_url and !sr_searching_v.load(.acquire) and
                 (now_ms - last_edit_ms) >= 400)
             {
                 searchComics(input);
@@ -2929,12 +2965,12 @@ pub fn renderContent() void {
         // Result count (or live status).
         {
             var cb: [48]u8 = undefined;
-            const cs = if (sr_searching and sr_count == 0)
+            const cs = if (sr_searching_v.load(.acquire) and sr_count == 0)
                 @as([]const u8, "Searching…")
             else
                 std.fmt.bufPrint(&cb, "{d} results", .{sr_count}) catch "";
             _ = dvui.label(@src(), "{s}", .{cs}, .{
-                .color_text = if (sr_searching and sr_count == 0) theme.colors.accent else theme.colors.text_secondary,
+                .color_text = if (sr_searching_v.load(.acquire) and sr_count == 0) theme.colors.accent else theme.colors.text_secondary,
                 .gravity_y = 0.5,
                 .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
             });
@@ -2969,7 +3005,7 @@ pub fn renderContent() void {
     }
 
     // ── Cover-grid discovery ──
-    if (sr_count == 0 and sr_searching) {
+    if (sr_count == 0 and sr_searching_v.load(.acquire)) {
         _ = dvui.label(@src(), "Searching…", .{}, .{
             .color_text = theme.colors.accent,
             .gravity_x = 0.5,

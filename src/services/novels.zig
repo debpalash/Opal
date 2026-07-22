@@ -107,6 +107,65 @@ var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 var chapters_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 var text_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
+// ── Read-only view of the listings, for remote.zig's /api/novels ──
+// The nr_*/ch_* arrays stay private (workers rewrite them in place under
+// parse_mutex). These copy out under the SAME mutex, so a connection thread can
+// never read a row mid-rewrite. Copy semantics, not slices: the caller is on
+// another thread and holds nothing once the lock drops.
+
+pub const ListRow = struct {
+    title_buf: [256]u8 = std.mem.zeroes([256]u8),
+    title_len: usize = 0,
+    url_buf: [512]u8 = std.mem.zeroes([512]u8),
+    url_len: usize = 0,
+    source: u8 = 0,
+
+    pub fn title(self: *const ListRow) []const u8 {
+        return self.title_buf[0..@min(self.title_len, self.title_buf.len)];
+    }
+    pub fn url(self: *const ListRow) []const u8 {
+        return self.url_buf[0..@min(self.url_len, self.url_buf.len)];
+    }
+};
+
+pub fn resultCount() usize {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    return @min(nr_count, MAX_RESULTS);
+}
+
+pub fn resultRow(i: usize) ?ListRow {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (i >= @min(nr_count, MAX_RESULTS)) return null;
+    var out: ListRow = .{};
+    out.title_len = @min(nr_title_lens[i], out.title_buf.len);
+    @memcpy(out.title_buf[0..out.title_len], nr_titles[i][0..out.title_len]);
+    out.url_len = @min(nr_url_lens[i], out.url_buf.len);
+    @memcpy(out.url_buf[0..out.url_len], nr_urls[i][0..out.url_len]);
+    out.source = @intFromEnum(nr_source[i]);
+    return out;
+}
+
+pub fn chapterCount() usize {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    return @min(ch_count, MAX_CHAPTERS);
+}
+
+pub fn chapterRow(i: usize) ?ListRow {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (i >= @min(ch_count, MAX_CHAPTERS)) return null;
+    var out: ListRow = .{};
+    out.title_len = @min(ch_title_lens[i], out.title_buf.len);
+    @memcpy(out.title_buf[0..out.title_len], ch_titles[i][0..out.title_len]);
+    out.url_len = @min(ch_url_lens[i], out.url_buf.len);
+    @memcpy(out.url_buf[0..out.url_len], ch_urls[i][0..out.url_len]);
+    out.source = @intFromEnum(open_source);
+    return out;
+}
+
 // ── Infinite-scroll pagination (search grid) ──
 // `current_page` is the highest scraper-source page merged into nr_* (Wikisource
 // paginates by offset instead — see loadMoreWorker). `loading_more` serializes
