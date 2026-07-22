@@ -9,8 +9,9 @@ const io_g = @import("../core/io_global.zig");
 const txt = @import("../core/text.zig");
 
 // ══════════════════════════════════════════════════════════
-// Web Remote Control — JSON API for Opal Web UI
-// API bridge on :9876, Web UI (Ziex) on :3000
+// Web Remote Control — JSON API + the web UI, both on :41595.
+// One process, one port: `web/index.html` is served from this file. (The old
+// separate :3000 Zig web project was retired in Phase S4.)
 // ══════════════════════════════════════════════════════════
 
 var server_thread: ?std.Thread = null;
@@ -1042,7 +1043,8 @@ fn serveStaticFile(stream: std.Io.net.Stream, path: []const u8, content_type: []
 
     // SECURITY: deliberately NO `Access-Control-Allow-Origin` here — a
     // cross-origin site the user visits must not be able to read this body.
-    // The token-gated JSON API keeps CORS for the :3000 dev web UI.
+    // The token-gated JSON API still sends CORS, for the browser extension and
+    // external automation; this static-asset path deliberately does not.
     var header: [512]u8 = undefined;
     const h = std.fmt.bufPrint(&header, "HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nX-Content-Type-Options: nosniff\r\nContent-Length: {d}\r\n\r\n", .{ content_type, body.len }) catch return;
     _ = @import("../core/io_global.zig").streamWriteAll(stream, h) catch {};

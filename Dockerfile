@@ -99,8 +99,15 @@ ENV XDG_CONFIG_HOME=/config \
 EXPOSE 41595
 
 # Non-root + liveness.
-RUN useradd -r -m -d /config opal && chown -R opal /config /cache /media /opt/opal
-USER opal
+# Pinned NUMERIC uid/gid, not just a name: Kubernetes `runAsNonRoot` inspects the
+# USER value and cannot prove a *name* is non-root, so a name-only USER makes the
+# pod fail to schedule. 10001 is high enough to avoid colliding with distro
+# system accounts. Numeric ids also make bind-mount ownership predictable —
+# `chown -R 10001:10001 ./data` on the host is unambiguous.
+RUN groupadd -g 10001 opal \
+    && useradd -r -u 10001 -g 10001 -m -d /config opal \
+    && chown -R 10001:10001 /config /cache /media /opt/opal
+USER 10001:10001
 WORKDIR /opt/opal
 
 # HEALTHCHECK hits /health — an unauthenticated liveness probe that returns

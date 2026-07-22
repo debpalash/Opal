@@ -34,7 +34,6 @@ const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const logs = @import("../core/logs.zig");
 const pure = @import("opds_pure.zig");
-const http = @import("../core/http.zig");
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
 
 const alloc = @import("../core/alloc.zig").allocator;
@@ -79,24 +78,57 @@ fn opdsAuthHeader(buf: []u8) []const u8 {
 
 /// GET an OPDS feed with HTTP Basic auth into a fresh heap buffer (caller frees).
 /// Returns null on connect/parse failure or an empty body.
+///
+/// curl, NOT http.fetch/std.http — the same call this module used to make, and
+/// the same reason tmdb_api.zig gives for its own curl path. Measured against
+/// Project Gutenberg's live catalog (a plain, reachable OPDS feed): curl gets
+/// 200 over both https AND http, while std.http's `client.request` fails at
+/// connect for either scheme. Since that is the first hop, OPDS could not reach
+/// a server the rest of the app talks to fine. 43 other services already fetch
+/// through curl; this was one of the last holdouts.
 fn opdsGet(url: []const u8, user: []const u8, pass: []const u8) ?[]u8 {
     var auth_buf: [512]u8 = undefined;
+    // basicAuthHeader yields a full header LINE ("Authorization: Basic …"),
+    // which is exactly what curl -H wants.
     const auth: ?[]const u8 = if (user.len > 0 or pass.len > 0)
         pure.basicAuthHeader(user, pass, &auth_buf)
     else
         null;
 
-    const resp_buf = alloc.alloc(u8, 256 * 1024) catch return null;
-    defer alloc.free(resp_buf);
-    const resp = http.fetch(url, resp_buf, .{
-        .timeout_secs = 15,
-        .accept = "application/atom+xml,application/xml",
-        .auth_header = auth,
-        .max_response = 256 * 1024,
-    }) orelse return null;
+    const io_g = @import("../core/io_global.zig");
+    // -L: OPDS catalogs routinely redirect (Komga /opds → /opds/v1.2, trailing
+    // slashes, http→https). --max-time bounds the whole request the way the old
+    // watchdog did.
+    var child = if (auth) |a|
+        io_g.Child.init(&.{
+            "curl",       "-sL",
+            "-H",         "Accept: application/atom+xml,application/xml",
+            "-H",         a,
+            "--max-time", "15",
+            url,
+        }, alloc)
+    else
+        io_g.Child.init(&.{
+            "curl",       "-sL",
+            "-H",         "Accept: application/atom+xml,application/xml",
+            "--max-time", "15",
+            url,
+        }, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return null;
 
-    const result = alloc.alloc(u8, resp.len) catch return null;
-    @memcpy(result, resp);
+    const resp_buf = alloc.alloc(u8, 256 * 1024) catch {
+        _ = child.wait() catch {};
+        return null;
+    };
+    defer alloc.free(resp_buf);
+    const n = if (child.stdout) |*so| io_g.readAll(so, resp_buf) catch 0 else 0;
+    _ = child.wait() catch {};
+    if (n == 0) return null;
+
+    const result = alloc.alloc(u8, n) catch return null;
+    @memcpy(result, resp_buf[0..n]);
     return result;
 }
 

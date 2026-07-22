@@ -136,3 +136,62 @@ def test_reader_tabs():
     if missing:
         return "fail", "reader tabs incomplete: " + ", ".join(missing)
     return "pass", "Comics reader + Novels drill-down + Drama/VNDB catalogs"
+
+
+@test("OPDS fetches through curl, not std.http", "Web UI")
+def test_opds_curl_fetch():
+    op = _src("src/services/opds.zig")
+    checks = {
+        # Measured against Project Gutenberg's live catalog: curl gets 200 over
+        # BOTH https and http, while std.http's client.request failed at connect
+        # for either scheme — so OPDS could not reach a server the rest of the
+        # app talks to fine. tmdb_api.zig documents the same workaround.
+        "fetches via curl": '"curl"' in op and '"-sL"' in op,
+        "no std.http left": "http.fetch(" not in op and 'const http = @import("../core/http.zig")' not in op,
+        # OPDS catalogs redirect constantly (Komga /opds → /opds/v1.2, http→https).
+        "follows redirects": '"-sL"' in op,
+        "request is bounded": '"--max-time"' in op,
+        # basicAuthHeader yields a whole header line, which is what curl -H takes.
+        "basic auth preserved": "pure.basicAuthHeader(user, pass, &auth_buf)" in op
+            and '"-H",         a,' in op,
+        "atom accept header": "Accept: application/atom+xml" in op,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "opds fetch incomplete: " + ", ".join(missing)
+    return "pass", "OPDS over curl (-sL, bounded, Basic auth) — verified live against Gutenberg"
+
+
+@test("Web UI consolidated to one file on one port", "Web UI")
+def test_web_consolidation():
+    import os as _os
+    checks = {
+        # The vestigial :3000 Zig web project is gone.
+        "web/app deleted": not _os.path.exists(_os.path.join(PROJECT_DIR, "web/app")),
+        "web build files deleted": not _os.path.exists(_os.path.join(PROJECT_DIR, "web/build.zig")),
+        "index.html kept": _os.path.exists(_os.path.join(PROJECT_DIR, "web/index.html")),
+        # remote.zig's header used to claim ":9876 + :3000" while listening on 41595.
+        "remote header truthful": ":9876" not in _src("src/services/remote.zig"),
+        "claude.md updated": ":3000" not in open(_os.path.join(PROJECT_DIR, "CLAUDE.md")).read(),
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "web consolidation incomplete: " + ", ".join(missing)
+    return "pass", "one file (web/index.html), one port (:41595), no :3000 project"
+
+
+@test("Container runs as a pinned non-root UID", "Headless")
+def test_docker_numeric_uid():
+    import os as _os
+    df = open(_os.path.join(PROJECT_DIR, "Dockerfile")).read()
+    checks = {
+        # k8s runAsNonRoot inspects USER and cannot prove a NAME is non-root, so
+        # a name-only USER makes the pod fail to schedule.
+        "numeric USER": "USER 10001:10001" in df and "USER opal" not in df,
+        "uid+gid pinned": "-u 10001" in df and "groupadd -g 10001" in df,
+        "volumes owned numerically": "chown -R 10001:10001" in df,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "container user incomplete: " + ", ".join(missing)
+    return "pass", "runs as uid/gid 10001 — satisfies k8s runAsNonRoot"

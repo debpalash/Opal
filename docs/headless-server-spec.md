@@ -118,11 +118,11 @@ XDG env. The S0 stopgap packages are **gone** (S1 made them unnecessary), leavin
 
 ## 5. Phase S4 — web UI: single canonical surface + parity tier 2
 
-**Consolidation (settled in H0):** the web UI is `web/index.html` (single file,
-~50 KB, 982 lines) served by `remote.zig` at `:41595/`. The old `web/app/*` Zig
-project (`:3000`) is vestigial (`web/app/main.zig` is 13 lines) — **formally
-retire it**: delete `web/app`, `web/build.zig*`, keep only `web/index.html`, and
-drop any `:3000` references in docs. One process, one port, Jellyfin-shaped.
+**Consolidation — DONE.** The web UI is `web/index.html`, a single file served by
+`remote.zig` at `:41595/`. The vestigial `web/app/*` Zig project and
+`web/build.zig*` are deleted, and the `:3000` references are gone from the docs
+and from `remote.zig`'s own header (which had claimed ":9876 + :3000" while the
+code listened on 41595). One process, one port, Jellyfin-shaped.
 
 **Parity tier 2 (H4 carryover):**
 - Settings-over-API subset: sources starter-pack install, TMDB key, save path,
@@ -165,13 +165,12 @@ Feature suite: every new route keeps its `*_pure.zig` parse test + a
 
 **S0** (image runs — add .so deps + CI run-gate) → **S1** (slim build: build.zig
 gate + dvui stub) → **S2** (drop stopgap deps, harden) → **S3** (multi-arch,
-public GHCR) → **S4** (retire `web/app`, parity tier 2). S0 and the S1 audit can
+public GHCR) → **S4** (retire `web/app`, parity tier 2). All shipped. S0 and the S1 audit can
 start in parallel; S0 is a same-day unblock, S1 is the architecture work.
 
 ## 9. Left to do (this spec's follow-ups)
 - **S2:** pin a numeric non-root UID for k8s `runAsNonRoot`; decide the ONNX/OCR
   `-full` tag.
-- **S4:** retire `web/app` (parity tier 2 itself is done — 21 verticals).
 - **Verify on real hardware:** the arm64 image is CI-smoked but has not been run
   on an actual Raspberry Pi / Apple-silicon server.
 - **Server verticals unsmoked:** Plex, Audiobookshelf and OPDS routes are wired

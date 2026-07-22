@@ -128,7 +128,7 @@ their network exposure:
 | Service | Bind address | Notes |
 | --- | --- | --- |
 | Remote JSON API | `0.0.0.0:41595` | Bearer-token auth; reachable on your LAN |
-| Web UI | `:3000` | Companion local web interface |
+| Web UI | `:41595` | Web interface, served by the JSON API process |
 | Watch-party (when hosting) | `0.0.0.0:41596` | No auth; LAN co-watch |
 | AI llama-server | `127.0.0.1:41592` | Loopback only |
 | Embedding server | `:41593` | Local |
