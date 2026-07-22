@@ -90,6 +90,10 @@ def test_comic_page_route():
         # closeComic frees dvui textures → UI thread only.
         "close deferred to ui thread": '"/comics/close"' in rm and "pub fn requestClose()" in cm
             and "pending_close.swap(false, .acq_rel)" in cm,
+        # The desktop drains from appFrame(); headless has no frame loop, so
+        # without this the load/close routes answered {"ok":true} and the
+        # pending flag was never acted on.
+        "headless drains the deferral": "drainPendingLoad()" in _src("src/headless.zig"),
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:

@@ -108,7 +108,30 @@ fn showNameOf(title: []const u8, buf: []u8) []const u8 {
 var loading = std.atomic.Value(bool).init(false);
 /// 0 = never fetched. Set BEFORE the spawn so a failing fetch backs off for a
 /// full interval instead of being retried every frame.
-var last_fetch_ms = std.atomic.Value(i64).init(0);
+/// Earliest wall-clock ms at which another fetch may start. 0 = never fetched.
+/// This is a DEADLINE, not "when we last fetched": a failed attempt arms a short
+/// one and a successful attempt arms the full cadence, which the old
+/// `last_fetch_ms + REFRESH_INTERVAL` formulation could not express.
+var next_fetch_ms = std.atomic.Value(i64).init(0);
+
+/// Retry floor after a failed fetch. See `pure.nextDelayMs` for why a failure
+/// must not arm the full REFRESH_INTERVAL_MS.
+const RETRY_BASE_MS: i64 = 15 * 1000;
+
+/// Consecutive failed fetches; 0 after any success. Written by the worker,
+/// read by refreshTick on the render thread → atomic.
+var fail_streak = std.atomic.Value(u32).init(0);
+
+/// Record a fetch outcome and arm the next attempt. The worker calls this on
+/// EVERY exit path (via `defer`) — an attempt that returned without reporting
+/// would leave the deadline at refreshTick's optimistic full-interval stamp,
+/// i.e. exactly the 15-minute blackout this is here to prevent.
+fn armNext(ok: bool) void {
+    const streak = if (ok) 0 else fail_streak.load(.acquire) +| 1;
+    fail_streak.store(streak, .release);
+    const delay = pure.nextDelayMs(streak, RETRY_BASE_MS, REFRESH_INTERVAL_MS);
+    next_fetch_ms.store(io.milliTimestamp() + delay, .release);
+}
 
 /// Endpoint `field` from the installed eztv plugin, or null → stay inert.
 /// The returned slice points into source_config's static table; copy it before
@@ -143,16 +166,24 @@ const Fetch = struct {
     fn worker() void {
         const S = @This();
         defer loading.store(false, .release);
+        // Outcome-reporting must cover every exit path, including the OOM one
+        // below — hence a flag flipped on success rather than a call before
+        // each `return`.
+        var ok = false;
+        defer armNext(ok);
 
         const body = alloc.alloc(u8, BODY_CAP) catch return;
         defer alloc.free(body);
 
         const n = curlInto(S.url[0..S.url_len], body);
-        if (n == 0) return; // network hiccup — next tick retries after the interval
+        // 0 bytes = the TLS connection died with no HTTP response (curl 35),
+        // the common DPI failure. Retry in seconds, not after a full interval.
+        if (n == 0) return;
 
         const back: u8 = 1 - front.load(.acquire);
         const got = pure.parseFeed(body[0..n], &bufs[back]);
         if (got == 0) return; // keep whatever we already had on screen
+        ok = true;
 
         // One card per show, newest episode each.
         const cards = pure.groupShows(bufs[back][0..got], &card_bufs[back], showNameOf);
@@ -192,15 +223,17 @@ pub fn refreshTick() void {
     if (loading.load(.acquire)) return;
 
     const now = io.milliTimestamp();
-    const last = last_fetch_ms.load(.acquire);
-    if (last != 0 and now - last < REFRESH_INTERVAL_MS) return;
+    if (now < next_fetch_ms.load(.acquire)) return;
 
     // Build the URL BEFORE the spawn, into the carrier, by value.
     const built = pure.buildFeedUrl(api, MAX_ENTRIES, &Fetch.url) orelse return;
     Fetch.url_len = built.len;
 
     loading.store(true, .release);
-    last_fetch_ms.store(now, .release);
+    // Optimistic full-interval stamp so a wedged fetch can't be re-kicked every
+    // frame if `loading` is somehow missed. The worker's armNext() overwrites
+    // this with the real deadline as soon as it knows the outcome.
+    next_fetch_ms.store(now + REFRESH_INTERVAL_MS, .release);
 
     (std.Thread.spawn(.{}, Fetch.worker, .{}) catch {
         loading.store(false, .release);

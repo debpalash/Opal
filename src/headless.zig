@@ -87,6 +87,14 @@ pub fn headlessMain() !void {
     while (!shutdown.load(.acquire)) {
         io.sleep(100 * std.time.ns_per_ms);
 
+        // Deferred work the desktop drains from appFrame(). This loop IS the
+        // headless equivalent of the UI thread — without it /api/comics/load
+        // and /api/comics/close set their pending flag and nothing ever acts on
+        // it, so the comics vertical answered {"ok":true} and did nothing.
+        // Every 100ms rather than on the 2s tick: it is an atomic swap when
+        // idle, and a reader waiting on a page shouldn't eat 2s of latency.
+        @import("services/comics.zig").drainPendingLoad();
+
         const now_ms = io.milliTimestamp();
         if (now_ms - last_tick_ms >= tick_interval_ms) {
             last_tick_ms = now_ms;

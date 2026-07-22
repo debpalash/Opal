@@ -751,3 +751,51 @@ test "firstTvResult: no results / null poster / junk" {
     try std.testing.expectEqual(@as(i32, 42), hit.tmdb_id);
     try std.testing.expectEqual(@as(usize, 0), hit.poster_path_len);
 }
+
+// ── Refresh scheduling ──
+
+/// How long to wait before the next feed attempt.
+///
+/// eztv fetches fail INTERMITTENTLY on DPI-throttled links: the TLS connection
+/// is reset with no HTTP response at all (curl exit 35 / `http_code 000`), and
+/// the very next attempt often succeeds. Measured on one such link: 3 of 5
+/// identical requests returned 200, the other two returned nothing.
+///
+/// Treating that like a successful fetch — stamping the full 15-minute cadence —
+/// left the Watching page's release section EMPTY for 15 minutes after a single
+/// reset, which on a ~40%-loss link means empty almost every time you look at
+/// it. So: success arms the normal cadence; a failure retries soon and backs off
+/// geometrically, capped at the normal cadence so a genuinely dead endpoint
+/// (plugin points nowhere, site gone) is polled no harder than a healthy one.
+///
+/// `consecutive_failures` is 0 immediately after a success.
+pub fn nextDelayMs(consecutive_failures: u32, retry_base_ms: i64, refresh_ms: i64) i64 {
+    if (consecutive_failures == 0) return refresh_ms;
+    // Saturating shift: 2^n overflows i64 at n=63, and the cap makes anything
+    // past ~10 doublings identical anyway.
+    const shift: u6 = @intCast(@min(consecutive_failures - 1, 20));
+    const scaled = std.math.shlExact(i64, retry_base_ms, shift) catch refresh_ms;
+    return @min(scaled, refresh_ms);
+}
+
+test "eztv backoff: success uses the normal cadence" {
+    const refresh: i64 = 15 * 60 * 1000;
+    try std.testing.expectEqual(refresh, nextDelayMs(0, 15_000, refresh));
+}
+
+test "eztv backoff: a single reset retries in seconds, not 15 minutes" {
+    const refresh: i64 = 15 * 60 * 1000;
+    // The whole point: one dropped TLS connection must not blank the section
+    // for a full refresh interval.
+    try std.testing.expectEqual(@as(i64, 15_000), nextDelayMs(1, 15_000, refresh));
+    try std.testing.expectEqual(@as(i64, 30_000), nextDelayMs(2, 15_000, refresh));
+    try std.testing.expectEqual(@as(i64, 60_000), nextDelayMs(3, 15_000, refresh));
+}
+
+test "eztv backoff: a dead endpoint is never polled harder than a healthy one" {
+    const refresh: i64 = 15 * 60 * 1000;
+    try std.testing.expectEqual(refresh, nextDelayMs(30, 15_000, refresh));
+    // No overflow panic on an absurd failure count or base.
+    try std.testing.expectEqual(refresh, nextDelayMs(std.math.maxInt(u32), 15_000, refresh));
+    try std.testing.expectEqual(refresh, nextDelayMs(5, std.math.maxInt(i64), refresh));
+}

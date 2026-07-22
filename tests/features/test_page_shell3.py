@@ -290,7 +290,14 @@ def test_eztv_calendar():
 
         # ── Live, not once-per-session ──
         "named refresh interval":      "pub const REFRESH_INTERVAL_MS" in svc,
-        "interval-gated refetch":      "REFRESH_INTERVAL_MS) return;" in svc,
+        # Gated on an explicit DEADLINE, not `last_fetch + INTERVAL`. eztv drops
+        # TLS connections intermittently on DPI-throttled links; stamping the
+        # full interval on a dead fetch blanked the section for 15 minutes after
+        # a single reset. A failure now backs off seconds and doubles.
+        "deadline-gated refetch":      "if (now < next_fetch_ms.load(.acquire)) return;" in svc,
+        "failure backs off":           ("fn armNext(ok: bool)" in svc
+                                        and "pure.nextDelayMs(streak, RETRY_BASE_MS, REFRESH_INTERVAL_MS)" in svc
+                                        and "defer armNext(ok);" in svc),
         "clock via io_global":         "io.milliTimestamp()" in svc,
         "no std.time":                 "std.time." not in svc,
         # A countdown baked at fetch time freezes on screen. It must be derived
