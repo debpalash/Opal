@@ -37,6 +37,12 @@ jobs:
           brew update
           brew install mpv sqlite onnxruntime sdl2 libtorrent-rasterbar create-dmg
       - name: Build .app bundle (ReleaseFast)
+        # Bake the default TMDB/OMDb keys into the release binary so end users
+        # work out of the box (build.zig reads these env vars). Absent secrets
+        # resolve to "" — the build just falls back to bring-your-own-key.
+        env:
+          OPAL_TMDB_TOKEN: ${{ secrets.TMDB_API_TOKEN }}
+          OPAL_OMDB_KEY: ${{ secrets.OMDB_API_KEY }}
         run: ./scripts/build-app.sh
       - name: Package
         run: |
@@ -83,6 +89,10 @@ jobs:
           sudo cp -r onnxruntime-linux-x64-${ORT_VER}/lib/*     /usr/local/lib/
           sudo ldconfig
       - name: Build (ReleaseSafe)
+        # Bake the default TMDB/OMDb keys into the release binary (see build.zig).
+        env:
+          OPAL_TMDB_TOKEN: ${{ secrets.TMDB_API_TOKEN }}
+          OPAL_OMDB_KEY: ${{ secrets.OMDB_API_KEY }}
         run: zig build -Doptimize=ReleaseSafe -fsys=sdl2
       - name: Package binary tarball
         run: |
@@ -243,6 +253,10 @@ jobs:
           echo "ONNXRUNTIME_DIR=$(pwd -W)/onnxruntime-win-x64-${ORT_VER}" >> "$GITHUB_ENV"
 
       - name: Build (ReleaseSafe)
+        # Bake the default TMDB/OMDb keys into the release binary (see build.zig).
+        env:
+          OPAL_TMDB_TOKEN: ${{ secrets.TMDB_API_TOKEN }}
+          OPAL_OMDB_KEY: ${{ secrets.OMDB_API_KEY }}
         run: zig build -Doptimize=ReleaseSafe
 
       - name: Stage portable payload (exe + wrapper + DLL closure)

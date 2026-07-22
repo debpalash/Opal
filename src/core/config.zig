@@ -63,9 +63,12 @@ pub fn save() void {
     setKey("dpi_bypass_mode", if (state.app.dpi_bypass_mode_len > 0) state.app.dpi_bypass_mode[0..state.app.dpi_bypass_mode_len] else "sni");
     setKey("ytdl_format_idx", fmtInt(&fb, state.app.ytdl_format_idx));
     setKey("drawer_width_px", fmtFloat(&fb, state.app.drawer_width_px));
-    setKey("tmdb_api_key", state.app.tmdb.api_key[0..state.app.tmdb.api_key_len]);
+    // Persist only USER keys, never the build-time embedded default: writing the
+    // default would pin it in the user's DB and defeat key rotation, and would
+    // make a fresh install look "already onboarded". Empty string clears the row.
+    setKey("tmdb_api_key", if (state.app.tmdb.api_key_is_default) "" else state.app.tmdb.api_key[0..state.app.tmdb.api_key_len]);
     setKey("opensub_api_key", state.app.opensub_api_key[0..state.app.opensub_api_key_len]);
-    setKey("omdb_api_key", state.app.omdb_api_key[0..state.app.omdb_api_key_len]);
+    setKey("omdb_api_key", if (state.app.omdb_api_key_is_default) "" else state.app.omdb_api_key[0..state.app.omdb_api_key_len]);
     setKey("subdl_api_key", state.app.subdl_api_key[0..state.app.subdl_api_key_len]);
     setKey("sponsorblock_enabled", if (state.app.sponsorblock_enabled) "1" else "0");
     setKey("anime_skip_enabled", if (state.app.anime_skip_enabled) "1" else "0");
@@ -218,8 +221,11 @@ pub fn load() void {
 
     // Grandfather pre-wizard installs: a config that already carries a TMDB
     // key or has source plugins installed predates onboarding — don't nag.
+    // The build-time embedded default key does NOT count (every fresh install
+    // has it) — only a real user-supplied key marks a pre-wizard install.
     if (!state.app.onboarded and
-        (state.app.tmdb.api_key_len > 0 or @import("source_config.zig").anyInstalled()))
+        ((state.app.tmdb.api_key_len > 0 and !state.app.tmdb.api_key_is_default) or
+            @import("source_config.zig").anyInstalled()))
     {
         state.app.onboarded = true;
     }
@@ -348,8 +354,10 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.drawer_width_px = std.fmt.parseFloat(f32, val) catch 480.0;
     } else if (std.mem.eql(u8, key, "tmdb_api_key")) {
         if (val.len > 0 and val.len <= 256) {
+            // A saved key is a real user key — override any embedded default.
             @memcpy(state.app.tmdb.api_key[0..val.len], val);
             state.app.tmdb.api_key_len = val.len;
+            state.app.tmdb.api_key_is_default = false;
         }
     } else if (std.mem.eql(u8, key, "opensub_api_key")) {
         if (val.len > 0 and val.len <= 128) {
@@ -360,6 +368,7 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         if (val.len > 0 and val.len <= 128) {
             @memcpy(state.app.omdb_api_key[0..val.len], val);
             state.app.omdb_api_key_len = val.len;
+            state.app.omdb_api_key_is_default = false;
         }
     } else if (std.mem.eql(u8, key, "subdl_api_key")) {
         if (val.len > 0 and val.len <= 128) {

@@ -188,9 +188,7 @@ fn setupPage() void {
             if (accentButton(220, "Save") or entered) {
                 const klen = std.mem.indexOfScalar(u8, &tmdb_key_buf, 0) orelse 0;
                 if (klen > 0) {
-                    const n = @min(klen, state.app.tmdb.api_key.len);
-                    @memcpy(state.app.tmdb.api_key[0..n], tmdb_key_buf[0..n]);
-                    state.app.tmdb.api_key_len = n;
+                    state.setTmdbKey(tmdb_key_buf[0..klen]);
                     state.markConfigDirty();
                     state.showToast("TMDB key saved");
                 }

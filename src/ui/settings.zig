@@ -1207,9 +1207,18 @@ fn renderGeneralTab() void {
         });
         const tmdb_changed = te.text_changed;
         te.deinit();
+        const tmdb_was_default = state.app.tmdb.api_key_is_default;
         state.app.tmdb.api_key_len = std.mem.indexOfScalar(u8, &state.app.tmdb.api_key, 0) orelse 0;
-        if (tmdb_changed) state.markConfigDirty();
-        _ = dvui.label(@src(), "Free key from themoviedb.org/settings/api", .{}, .{
+        if (tmdb_changed) {
+            // Any edit turns the field into a real user key (persisted, overrides
+            // the built-in default).
+            state.app.tmdb.api_key_is_default = false;
+            state.markConfigDirty();
+        }
+        _ = dvui.label(@src(), "{s}", .{if (tmdb_was_default and !tmdb_changed)
+            "Using Opal's built-in key — paste your own to override."
+        else
+            "Free key from themoviedb.org/settings/api"}, .{
             .id_extra = 143,
             .color_text = theme.colors.text_tertiary,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
@@ -1223,6 +1232,7 @@ fn renderGeneralTab() void {
     settingRow("API Key", 150, @src());
     {
         const has_omdb = state.app.omdb_api_key_len > 0;
+        const omdb_was_default = state.app.omdb_api_key_is_default;
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.omdb_api_key }, .placeholder = "Optional — paste free key from omdbapi.com", .password_char = "•" }, .{
             .id_extra = 152,
             .expand = .horizontal,
@@ -1236,8 +1246,13 @@ fn renderGeneralTab() void {
         const omdb_changed = te.text_changed;
         te.deinit();
         state.app.omdb_api_key_len = std.mem.indexOfScalar(u8, &state.app.omdb_api_key, 0) orelse 0;
-        if (omdb_changed) state.markConfigDirty();
-        _ = dvui.label(@src(), "{s}", .{if (has_omdb)
+        if (omdb_changed) {
+            state.app.omdb_api_key_is_default = false;
+            state.markConfigDirty();
+        }
+        _ = dvui.label(@src(), "{s}", .{if (omdb_was_default and !omdb_changed)
+            "Using Opal's built-in key — paste your own to override."
+        else if (has_omdb)
             "Key set — IMDb / RT / Metacritic scores show on movie & show pages."
         else
             "Free key (1,000/day) from omdbapi.com/apikey.aspx — leave blank to disable."}, .{
