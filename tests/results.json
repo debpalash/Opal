@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-07-22T16:12:58",
-  "total": 258,
-  "passed": 248,
+  "timestamp": "2026-07-22T16:16:45",
+  "total": 261,
+  "passed": 251,
   "failed": 0,
   "warnings": 2,
   "skipped": 8,
@@ -67,7 +67,7 @@
       "skip": 0
     },
     "Packaging": {
-      "pass": 2,
+      "pass": 5,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -452,7 +452,7 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 49.5 MB",
-      "duration_ms": 524
+      "duration_ms": 414
     },
     {
       "name": "Binary Exists",
@@ -494,7 +494,7 @@
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 28
+      "duration_ms": 23
     },
     {
       "name": "Embedding Server Health",
@@ -522,7 +522,7 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 4494
+      "duration_ms": 3202
     },
     {
       "name": "Poster/image fetch uses curl not std.http",
@@ -585,7 +585,7 @@
       "category": "Packaging",
       "status": "pass",
       "detail": "install.sh installs the vendored .app; formula is a binary install at 0.5.0",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "File associations + single instance",
@@ -606,28 +606,28 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 1159
+      "duration_ms": 721
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "pass",
       "detail": "faster-whisper importable",
-      "duration_ms": 1053
+      "duration_ms": 990
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 23
+      "duration_ms": 21
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "skip",
       "detail": "pactl not available",
-      "duration_ms": 21
+      "duration_ms": 23
     },
     {
       "name": "Conversational: voice-server echo guard + live partials",
@@ -662,7 +662,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 24
+      "duration_ms": 23
     },
     {
       "name": "Compiles: opal-voice-server.py",
@@ -676,7 +676,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 945
+      "duration_ms": 927
     },
     {
       "name": "--check degrades: opal-tts-server.py",
@@ -690,14 +690,14 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 978
+      "duration_ms": 1056
     },
     {
       "name": "Tracked + compiles: tools/lang_server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "tracked + py_compile OK",
-      "duration_ms": 41
+      "duration_ms": 40
     },
     {
       "name": "Parakeet conversational self-install wired",
@@ -900,28 +900,28 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 8443
+      "duration_ms": 8669
     },
     {
       "name": "Cloud LLM Backend + No Silent Local Installs",
       "category": "AI Features",
       "status": "pass",
       "detail": "cloud providers + bearer auth + on-demand-only local models wired",
-      "duration_ms": 1
+      "duration_ms": 3
     },
     {
       "name": "Parakeet TDT Voice Backend Wired",
       "category": "AI Features",
       "status": "pass",
       "detail": "parakeet v2/v3 backends + downloads + settings rows wired",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Incognito Chat Leaves No Trace",
       "category": "AI Features",
       "status": "pass",
       "detail": "sinks guarded + retrieval skipped + composer toggle present",
-      "duration_ms": 2
+      "duration_ms": 3
     },
     {
       "name": "Chat Console: Wrapped Transcript + Agent Steps",
@@ -935,14 +935,14 @@
       "category": "Enrichment",
       "status": "pass",
       "detail": "OMDb enrichment wired (parser+worker+UI+persist); key set=False",
-      "duration_ms": 4
+      "duration_ms": 5
     },
     {
       "name": "Local taste engine: activity + vectors + For You",
       "category": "AI",
       "status": "pass",
       "detail": "activity log + vec_taste vectors + gated For You tier wired",
-      "duration_ms": 5
+      "duration_ms": 4
     },
     {
       "name": "Theme Presets Defined",
@@ -991,7 +991,7 @@
       "category": "Browser",
       "status": "pass",
       "detail": "framing + pump model OK",
-      "duration_ms": 34
+      "duration_ms": 30
     },
     {
       "name": "Browser bookmarks SQL matches schema",
@@ -1012,14 +1012,14 @@
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 99
+      "duration_ms": 100
     },
     {
       "name": "Browser: CloakBrowser engine + upgrades",
       "category": "Browser",
       "status": "pass",
       "detail": "engine picker + find/zoom/downloads/history/reader wired",
-      "duration_ms": 56
+      "duration_ms": 53
     },
     {
       "name": "Single-Media Mode",
@@ -1530,7 +1530,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 156
+      "duration_ms": 155
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1719,7 +1719,7 @@
       "category": "Transfers",
       "status": "pass",
       "detail": "gallery-dl backend wired: pure\u2192service\u2192dispatch\u2192history+config. gallery-dl not installed (backend inert \u2014 pure tests cover logic)",
-      "duration_ms": 27
+      "duration_ms": 26
     },
     {
       "name": "VNDB visual-novel catalog",
@@ -1775,14 +1775,14 @@
       "category": "Integration",
       "status": "pass",
       "detail": "306 SFW sources (heancms=13, madara=186, mangathemesia=107); opt-in via installMangaSource + /source/catalog, all route through source_config.install",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Anti-block scrape fetch",
       "category": "Network",
       "status": "pass",
       "detail": "anti-block fetch wired: pure(isBlocked/needsBrowser, no false-pos) \u2192 scrape_fetch \u2192 bridge fetchhtml on dedicated page; selftest ok",
-      "duration_ms": 55
+      "duration_ms": 56
     },
     {
       "name": "Scrapers routed through anti-block fetch",
@@ -2076,6 +2076,27 @@
       "category": "Headless",
       "status": "pass",
       "detail": "Dockerfile: no X11/GL/pulse/asound; CI fails if they return",
+      "duration_ms": 0
+    },
+    {
+      "name": "AUR push script: package list expands to two packages",
+      "category": "Packaging",
+      "status": "pass",
+      "detail": "default expands to 2 packages (opal, opal-bin) \u2014 v0.5.0 regression covered",
+      "duration_ms": 4
+    },
+    {
+      "name": "AUR publish runs where makepkg exists",
+      "category": "Packaging",
+      "status": "pass",
+      "detail": "aur job: archlinux container + non-root builder, makepkg available",
+      "duration_ms": 0
+    },
+    {
+      "name": "AUR clone failure names the key registration step",
+      "category": "Packaging",
+      "status": "pass",
+      "detail": "clone failure distinguishes an unregistered key from a new package",
       "duration_ms": 0
     }
   ]

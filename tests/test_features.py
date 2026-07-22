@@ -70,6 +70,7 @@ from features import (  # noqa: F401
     test_headless_auth,
     test_remote_stubs,
     test_headless_slim,
+    test_aur_publish,
 )
 
 if __name__ == "__main__":

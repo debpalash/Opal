@@ -27,6 +27,26 @@ Rules of engagement:
       `SHA256SUMS` file alongside.
 - [ ] Load the README logged-out: badges, screenshots, GIFs all render.
 
+### Manual steps no script or workflow can do for you
+
+These three need a human with the right account — there is no API for the first
+two, and the third is a key only you can register.
+
+- [ ] **Social preview image.** Upload `assets/social-preview.png` (1280×640,
+      already the right size) at Settings → General → Social preview. This is
+      what every Discord/Slack/X link unfurl shows; without it they render a
+      generic grey Octocat card. The REST API cannot set it — it is UI-only.
+- [x] **GHCR package public.** `ghcr.io/debpalash/opal` already serves an
+      anonymous manifest pull, so `docker pull` works without a login. If a
+      future package regresses to private: Packages → opal → Package settings →
+      Change visibility (needs `write:packages`; CI's `GITHUB_TOKEN` cannot).
+- [ ] **AUR SSH key.** `release.yml`'s `aur` job fails with
+      `Permission denied (publickey)` until the public half of the
+      `AUR_SSH_PRIVATE_KEY` repo secret is registered on the `debpalash` account
+      at <https://aur.archlinux.org/account/> → *SSH Public Key*. The repo vars
+      (`AUR_PUBLISH_ENABLED`, `AUR_USERNAME`, `AUR_EMAIL`) and the secret are
+      already set; the key registration is the only missing piece.
+
 ## 1. Now — artifacts in GitHub Releases
 
 What ships today, and who each file is for:

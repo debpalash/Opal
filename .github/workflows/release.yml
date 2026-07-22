@@ -493,18 +493,35 @@ jobs:
   aur:
     needs: publish
     runs-on: ubuntu-24.04
+    # Arch container, not a bare Ubuntu runner: AUR rejects a push whose
+    # .SRCINFO is missing or stale, and only `makepkg --printsrcinfo` can
+    # produce it from a PKGBUILD. `updpkgsums` (pacman-contrib) likewise fills
+    # the sha256sums from the now-public release URLs.
+    container: archlinux:base-devel
     # GitHub Actions does not allow `secrets.*` in a job-level `if:`.
     # Gate on vars only here; push-to-aur.sh verifies the secret is set
     # and bails with a clear message if AUR_SSH_PRIVATE_KEY is empty.
     if: ${{ vars.AUR_PUBLISH_ENABLED == 'true' }}
     steps:
+      - name: Install Arch tooling
+        run: pacman -Syu --noconfirm --needed git openssh pacman-contrib
       - uses: actions/checkout@v4
-      #pacman-contrib isn't on Ubuntu; we set AUR_SKIP_MAKEPKG=1 since the
-      #separate ci.yml Arch job covers the build-proof.
+      - name: Create the makepkg user
+        # makepkg (and updpkgsums, which shells out to it) refuse to run as
+        # root. Everything the script touches must therefore be writable by
+        # `builder`, including $HOME where the SSH key is materialised.
+        run: |
+          useradd -m builder
+          chown -R builder "$GITHUB_WORKSPACE"
+      # AUR_SKIP_MAKEPKG=1: the release job publishes metadata, it does not
+      # need to compile Opal a fourth time — ci.yml's native Arch job is the
+      # build proof.
       - name: Push PKGBUILDs to AUR
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           AUR_USERNAME: ${{ vars.AUR_USERNAME }}
           AUR_EMAIL: ${{ vars.AUR_EMAIL }}
           AUR_SKIP_MAKEPKG: "1"
-        run: ./packaging/aur/push-to-aur.sh
+        run: |
+          sudo -u builder --preserve-env=AUR_SSH_PRIVATE_KEY,AUR_USERNAME,AUR_EMAIL,AUR_SKIP_MAKEPKG \
+            env HOME=/home/builder ./packaging/aur/push-to-aur.sh

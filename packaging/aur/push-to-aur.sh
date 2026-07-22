@@ -26,7 +26,14 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-PKGS=("${@:-opal opal-bin}")
+# NOT `PKGS=("${@:-opal opal-bin}")` — with no args that expands to a SINGLE
+# element "opal opal-bin", and the loop below then tries to clone
+# aur:"opal opal-bin".git. That is exactly what the v0.5.0 release job did.
+if [[ $# -gt 0 ]]; then
+  PKGS=("$@")
+else
+  PKGS=(opal opal-bin)
+fi
 
 # ─── CI mode: materialise the SSH key + identity into a sandbox ──────────
 if [[ -n "${AUR_SSH_PRIVATE_KEY:-}" ]]; then
@@ -56,7 +63,12 @@ for pkg in "${PKGS[@]}"; do
     # First-time publish: the repo doesn't exist yet on AUR. `git clone`
     # against an empty AUR namespace returns an empty repo with exit 0;
     # if it actually failed (e.g. permission denied), surface that clearly.
-    echo "error: clone of aur:${pkg} failed — does the AUR account own that namespace?"
+    echo "error: clone of aur:${pkg} failed."
+    echo "  A brand-new package name is NOT an error — AUR returns an empty repo"
+    echo "  with exit 0 for those. 'Permission denied (publickey)' means the"
+    echo "  public key matching AUR_SSH_PRIVATE_KEY is not registered on the"
+    echo "  '${AUR_USERNAME:-<AUR_USERNAME>}' account: add it at"
+    echo "  https://aur.archlinux.org/account/ → 'SSH Public Key'."
     rm -rf "$workdir"
     exit 1
   fi
@@ -70,6 +82,15 @@ for pkg in "${PKGS[@]}"; do
     updpkgsums
   else
     echo "warn: updpkgsums missing — keeping 'SKIP' checksums (AUR will reject if URL hashes mismatch)"
+  fi
+  # AUR REJECTS a push whose .SRCINFO is missing or out of sync with PKGBUILD,
+  # and only makepkg can generate it (a PKGBUILD is bash, not a data file). The
+  # CI job therefore runs in an Arch container — a plain Ubuntu runner has no
+  # makepkg and this line would abort under `set -e` right after the clone.
+  if ! command -v makepkg >/dev/null 2>&1; then
+    echo "error: makepkg not found — cannot generate .SRCINFO, and AUR requires it."
+    echo "  Run this on an Arch host, or in an archlinux container (see release.yml)."
+    exit 1
   fi
   makepkg --printsrcinfo > .SRCINFO             # AUR requires .SRCINFO in sync
   if [[ "$skip_makepkg" -eq 0 ]] && command -v makepkg >/dev/null 2>&1; then
