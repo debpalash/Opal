@@ -489,3 +489,61 @@ test "shouldKickTrending does not refire after arm or success" {
     try std.testing.expect(!shouldKickTrending(true, 32, 5, false, false)); // has results
     try std.testing.expect(!shouldKickTrending(true, 32, 0, true, false)); // already loading
 }
+
+/// Format unix seconds as "YYYY-MM-DD" into `out` (needs >= 10 bytes).
+/// Pure date math via std.time.epoch — no clock read, so it stays testable and
+/// Zig-0.16 safe (the banned call is std.time.timestamp(), not these helpers).
+pub fn ymd(at: i64, out: []u8) ?[]const u8 {
+    if (at <= 0 or out.len < 10) return null;
+    const es = std.time.epoch.EpochSeconds{ .secs = @intCast(at) };
+    const yd = es.getEpochDay().calculateYearDay();
+    const md = yd.calculateMonthDay();
+    return std.fmt.bufPrint(out, "{d:0>4}-{d:0>2}-{d:0>2}", .{
+        yd.year,
+        md.month.numeric(),
+        @as(u16, md.day_index) + 1,
+    }) catch null;
+}
+
+/// URL for the "Upcoming" movie rail.
+///
+/// NOT /movie/upcoming. TMDB defines that endpoint relative to what is in
+/// cinemas and applies a region window, so without a region it mixes in titles
+/// that already released — users see "upcoming" films that are months old
+/// (issue #21). /discover with a hard `primary_release_date.gte` floor plus an
+/// ascending sort is the documented way to get a true forward-looking list, and
+/// it paginates consistently.
+///
+/// `today` is "YYYY-MM-DD". Returns null if `buf` is too small.
+pub fn upcomingUrl(buf: []u8, today: []const u8, page: u32) ?[]const u8 {
+    return std.fmt.bufPrint(
+        buf,
+        "https://api.themoviedb.org/3/discover/movie?primary_release_date.gte={s}" ++
+            "&sort_by=primary_release_date.asc&page={d}",
+        .{ today, page },
+    ) catch null;
+}
+
+test "ymd formats unix seconds as YYYY-MM-DD" {
+    var b: [16]u8 = undefined;
+    // 2026-07-26T00:00:00Z
+    try std.testing.expectEqualStrings("2026-07-26", ymd(1785024000, &b).?);
+    // Zero-padding on both month and day.
+    try std.testing.expectEqualStrings("2021-01-05", ymd(1609804800, &b).?);
+    try std.testing.expect(ymd(0, &b) == null);
+    var tiny: [4]u8 = undefined;
+    try std.testing.expect(ymd(1785024000, &tiny) == null);
+}
+
+test "upcomingUrl filters to future releases (issue #21 regression)" {
+    var b: [256]u8 = undefined;
+    const u = upcomingUrl(&b, "2026-07-26", 1).?;
+    // The bug: /movie/upcoming returns already-released titles.
+    try std.testing.expect(std.mem.indexOf(u8, u, "/movie/upcoming") == null);
+    try std.testing.expect(std.mem.indexOf(u8, u, "primary_release_date.gte=2026-07-26") != null);
+    try std.testing.expect(std.mem.indexOf(u8, u, "sort_by=primary_release_date.asc") != null);
+    try std.testing.expect(std.mem.indexOf(u8, u, "page=1") != null);
+    // Page is threaded through for infinite scroll.
+    const u_p7 = upcomingUrl(&b, "2026-07-26", 7).?;
+    try std.testing.expect(std.mem.indexOf(u8, u_p7, "page=7") != null);
+}

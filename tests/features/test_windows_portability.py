@@ -72,7 +72,7 @@ def test_http_client_now_seeded():
     return "pass", "all http.Client construction routes through newClient()"
 
 
-@test("http: newClient seeds .now", "Windows")
+@test("http: newClient prewarms TLS state", "Windows")
 def test_new_client_helper_seeds():
     src = _read("src/core/http.zig")
     if not src:
@@ -80,21 +80,20 @@ def test_new_client_helper_seeds():
     m = _re.search(r"pub fn newClient\(\)[^{]*\{(.*?)\n\}", src, _re.S)
     if not m:
         return "fail", "core/http.zig has no pub fn newClient()"
-    body = m.group(1)
-    if ".now" not in body or "Timestamp.now" not in body:
-        return "fail", "newClient() does not seed client.now — the null unwrap is back"
-    return "pass", "newClient() seeds .now from the realtime clock"
+    if "prewarmTls(" not in m.group(1):
+        return "fail", "newClient() does not prewarm TLS — the null unwrap is back"
+    return "pass", "newClient() prewarms CA bundle + now"
 
 
-@test("http: shared client still seeds .now", "Windows")
+@test("http: shared client prewarms TLS state", "Windows")
 def test_shared_client_seeds():
     src = _read("src/core/http.zig")
     m = _re.search(r"fn sharedClient\(\)[^{]*\{(.*?)\n\}", src, _re.S)
     if not m:
         return "fail", "core/http.zig has no fn sharedClient()"
-    if "now" not in m.group(1):
-        return "fail", "sharedClient() no longer seeds g_client.now"
-    return "pass", "sharedClient() seeds g_client.now"
+    if "prewarmTls(" not in m.group(1):
+        return "fail", "sharedClient() no longer prewarms g_client's TLS state"
+    return "pass", "sharedClient() prewarms g_client TLS state"
 
 
 # ── 2. entropy ──────────────────────────────────────────────────────────────

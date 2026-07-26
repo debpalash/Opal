@@ -316,16 +316,40 @@ def test_curl_connect_timeout():
     return "pass", "curl content fetchers bound connect time (dead host fails in ~3s)"
 
 
-@test("HTTP client seeds Client.now for TLS", "Network")
+@test("HTTP client prewarms CA bundle + Client.now together", "Network")
 def test_http_client_now():
-    # REGRESSION — the app aborted with "attempt to use null value" the instant
-    # any std.http fetch negotiated TLS (e.g. a poster fetch redirecting to
-    # https), because Zig 0.16's Client.now is null by default and the TLS path
-    # dereferences `client.now.?` for cert-validity. Must be seeded.
+    # REGRESSION (two of them, in sequence).
+    #
+    # 1. The app aborted with "attempt to use null value" the instant a fetch
+    #    negotiated TLS via redirect: Client.now is null by default and
+    #    Tls.create dereferences `client.now.?` for cert-validity.
+    # 2. The fix for (1) set ONLY `now` — but request() guards its whole TLS
+    #    preparation block with `if (client.now != null) break :tls`, so `now`
+    #    is also the "ca_bundle is loaded" sentinel. Setting it alone made std
+    #    skip bundle.rescan() forever, leaving the bundle empty, and EVERY https
+    #    fetch failed with TlsInitializationFailed. Verified against live hosts:
+    #    seeding `now` alone → 0/6 urls fetched; prewarming both → 5/6.
+    #
+    # So the invariant is: set both, or neither. Never just `now`.
     h = _src("src/core/http.zig")
-    if "client.now = std.Io.Timestamp.now(" in h:
-        return "pass", "Client.now seeded with the realtime clock before TLS use"
-    return "fail", "http.Client.now not seeded — TLS fetches will panic"
+    if "fn prewarmTls(" not in h:
+        return "fail", "no prewarmTls() — TLS state is not prepared as a unit"
+    import re
+    m = re.search(r"fn prewarmTls\(.*?\n\}", h, re.S)
+    body = m.group(0) if m else ""
+    if "rescan(" not in body:
+        return "fail", "prewarmTls does not rescan the CA bundle — https will fail"
+    if "client.now = " not in body:
+        return "fail", "prewarmTls does not stamp client.now — TLS redirects will panic"
+    # Nobody may set `now` outside the helper.
+    code = "\n".join(ln for ln in h.splitlines() if not ln.lstrip().startswith("//"))
+    stray = [
+        ln.strip() for ln in code.splitlines()
+        if re.search(r"\.now = ", ln) and "client.now = now" not in ln
+    ]
+    if stray:
+        return "fail", "`now` set outside prewarmTls (empty CA bundle): " + "; ".join(stray)
+    return "pass", "prewarmTls() loads the CA bundle and stamps now together"
 
 
 @test("HTTP shared keep-alive client + enforced timeout", "Network")

@@ -281,7 +281,14 @@ fn buildApiUrl(buf: *[512]u8, mode: FetchMode, query: []const u8, cat: state.Tmd
         .popular => std.fmt.bufPrint(buf, "https://api.themoviedb.org/3/{s}/popular?page={d}", .{ list_mt, page }) catch null,
         .top_rated => std.fmt.bufPrint(buf, "https://api.themoviedb.org/3/{s}/top_rated?page={d}", .{ list_mt, page }) catch null,
         .now_playing => std.fmt.bufPrint(buf, "https://api.themoviedb.org/3/movie/now_playing?page={d}", .{page}) catch null,
-        .upcoming => std.fmt.bufPrint(buf, "https://api.themoviedb.org/3/movie/upcoming?page={d}", .{page}) catch null,
+        // Routed through tmdb_pure so the tested URL is the shipped URL — see
+        // upcomingUrl for why /movie/upcoming showed already-released films.
+        .upcoming => blk: {
+            var day_buf: [16]u8 = undefined;
+            const today = @import("tmdb_pure.zig").ymd(@import("../core/io_global.zig").timestamp(), &day_buf) orelse
+                break :blk std.fmt.bufPrint(buf, "https://api.themoviedb.org/3/movie/upcoming?page={d}", .{page}) catch null;
+            break :blk @import("tmdb_pure.zig").upcomingUrl(buf, today, page);
+        },
     };
 }
 

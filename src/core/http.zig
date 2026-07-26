@@ -67,22 +67,45 @@ var client_init_lock: sync.Mutex = .{};
 // fetchImage, picks it up immediately via proxyArgs). Loopback-only target.
 var g_dpi_proxy: std.http.Client.Proxy = undefined;
 
-/// Construct a std.http.Client with `now` seeded. **Always use this instead of
-/// `std.http.Client{ .allocator = …, .io = … }`.**
+/// Load the CA bundle AND stamp `now`, the two halves of std's TLS state.
 ///
-/// `Client.now` defaults to null and `Client.request()` only seeds it when the
-/// INITIAL url is https. A plain-http url whose server 30x-redirects to https
-/// takes `Request.redirect()` → `client.connect(…, .tls)` → `Tls.create`, which
-/// does `client.now.?` — a null unwrap. That panics in ReleaseSafe (the mode the
-/// Linux and Windows releases ship) and is silent UB in ReleaseFast (macOS), so
-/// the same redirect that hard-crashes a Windows user looks fine to a mac dev.
-/// That asymmetry is issue #21: "crashes on almost anything".
+/// **Both, or neither — never just `now`.** In `Client.request()` the whole TLS
+/// preparation block is guarded by `if (client.now != null) break :tls;`, so
+/// `now` doubles as the "ca_bundle is populated" sentinel. Setting `now` alone
+/// makes std skip `bundle.rescan()` forever, leaving `ca_bundle` EMPTY — every
+/// https request then dies with `error.TlsInitializationFailed`. That is what
+/// commit fa3fb82 did while fixing the panic below, which is why so much of the
+/// app had to fall back to shelling out to curl.
 ///
-/// Seeding once is correct: cert-validity windows are months, and std re-rescans
-/// the CA bundle on demand.
+/// The panic it was fixing is real: `request()` prepares TLS only when the
+/// INITIAL url is https. A plain-http url that 30x-redirects to https reaches
+/// `Request.redirect()` → `client.connect(…, .tls)` → `Tls.create`, which does
+/// `client.now.?`. Null unwrap — a panic in ReleaseSafe (Linux + Windows
+/// releases), silent UB in ReleaseFast (macOS). Prewarming both fields fixes the
+/// panic and the redirect keeps a working bundle.
+///
+/// Doing this once is correct: cert-validity windows are months.
+fn prewarmTls(client: *std.http.Client) void {
+    const io = io_global.io();
+    var bundle: std.crypto.Certificate.Bundle = .empty;
+    const now = std.Io.Clock.real.now(io);
+    bundle.rescan(alloc.allocator, io, now) catch {
+        // No bundle → leave `now` null so std retries the rescan on the next
+        // request rather than latching a permanently empty bundle.
+        bundle.deinit(alloc.allocator);
+        return;
+    };
+    client.now = now;
+    std.mem.swap(std.crypto.Certificate.Bundle, &client.ca_bundle, &bundle);
+    bundle.deinit(alloc.allocator); // the old (empty) bundle
+}
+
+/// Construct a std.http.Client with its TLS state prewarmed. **Always use this
+/// instead of `std.http.Client{ .allocator = …, .io = … }`** — see prewarmTls
+/// for why a bare literal crashes on http→https redirects (issue #21).
 pub fn newClient() std.http.Client {
     var client: std.http.Client = .{ .allocator = alloc.allocator, .io = io_global.io() };
-    client.now = std.Io.Timestamp.now(io_global.io(), .real);
+    prewarmTls(&client);
     return client;
 }
 
@@ -96,13 +119,9 @@ fn sharedClient() *std.http.Client {
     if (client_ready.load(.acquire)) return &g_client; // lost the race — already built
     const io = io_global.io();
     g_client = .{ .allocator = alloc.allocator, .io = io };
-    // Zig 0.16's TLS path reads `client.now.?` for cert-validity checks; it is
-    // null by default and panics the moment a request negotiates TLS (e.g. an
-    // http→https redirect on a poster fetch). Seed it with the realtime clock.
-    // One seed suffices: cert-validity windows are months/years, and the std
-    // TLS path re-rescans the CA bundle on demand. (Refreshing it per-fetch on
-    // a SHARED client would be a data race on `client.now`.)
-    g_client.now = std.Io.Timestamp.now(io, .real);
+    // Load the CA bundle and stamp `now` together — setting `now` alone made
+    // std skip the bundle rescan and broke every https fetch. See prewarmTls.
+    prewarmTls(&g_client);
 
     // Route through the DPI-bypass sidecar when the user enabled it and the
     // proxy is up. `.plain` is the transport to reach the LOCAL proxy (plain TCP

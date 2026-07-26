@@ -14,9 +14,14 @@
 FROM debian:12-slim AS builder
 
 # Pin a 0.16.x Zig (project requires 0.16.x). Adjust ZIG_VERSION as 0.16.x
-# point releases land; the URL is the official tarball for linux-x86_64.
+# point releases land.
+#
+# The tarball arch is DERIVED, never hardcoded. It used to be pinned to
+# zig-x86_64-linux-*, which made every arm64 build fail: on ubuntu-24.04-arm the
+# amd64 binary is not runnable at all ("zig: Exec format error", CI run
+# 29963780063) and under an emulating local daemon it gets far enough to SEGV
+# the build runner instead. The arm64 image has therefore never built.
 ARG ZIG_VERSION=0.16.0
-ARG ZIG_TARBALL=zig-x86_64-linux-${ZIG_VERSION}.tar.xz
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
@@ -32,11 +37,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Zig 0.16.x onto PATH.
-RUN curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/${ZIG_TARBALL}" -o /tmp/zig.tar.xz \
-    && mkdir -p /opt/zig \
-    && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1 \
-    && rm /tmp/zig.tar.xz
+# Install Zig 0.16.x onto PATH, matching the image's own architecture.
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in \
+        amd64) zarch=x86_64 ;; \
+        arm64) zarch=aarch64 ;; \
+        *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${zarch}-linux-${ZIG_VERSION}.tar.xz" \
+        -o /tmp/zig.tar.xz; \
+    mkdir -p /opt/zig; \
+    tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1; \
+    rm /tmp/zig.tar.xz; \
+    # Fail loudly here rather than 200 lines later inside `zig build`.
+    /opt/zig/zig version
 ENV PATH="/opt/zig:${PATH}"
 
 WORKDIR /src
