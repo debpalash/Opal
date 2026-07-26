@@ -110,16 +110,12 @@ pub fn pauseVoiceServer() void {
 pub fn stopAllAudio() void {
     is_speaking.store(false, .release);
     const io = @import("../core/io_global.zig");
-    const alloc = @import("../core/alloc.zig").allocator;
     const names: []const []const u8 = if (@import("builtin").os.tag == .macos)
         &.{ "say", "afplay" }
     else
         &.{ "aplay", "paplay", "ffplay" };
     for (names) |n| {
-        var k = io.Child.init(&.{ "pkill", "-x", n }, alloc);
-        k.stdout_behavior = .Ignore;
-        k.stderr_behavior = .Ignore;
-        _ = k.spawnAndWait() catch {};
+        io.killByName(n);
     }
 }
 
@@ -160,29 +156,11 @@ pub fn killStaleServers() void {
     @import("../core/io_global.zig").deleteFileAbsolute(TTS_SOCKET) catch {};
     @import("../core/io_global.zig").deleteFileAbsolute(STT_SOCKET) catch {};
     // Kill any running python server processes by script name
-    var kv = @import("../core/io_global.zig").Child.init(
-        &.{ "pkill", "-f", "opal-voice-server.py" },
-        @import("../core/alloc.zig").allocator,
-    );
-    kv.stdout_behavior = .Ignore;
-    kv.stderr_behavior = .Ignore;
-    _ = kv.spawnAndWait() catch {};
-    var kt = @import("../core/io_global.zig").Child.init(
-        &.{ "pkill", "-f", "opal-tts-server.py" },
-        @import("../core/alloc.zig").allocator,
-    );
-    kt.stdout_behavior = .Ignore;
-    kt.stderr_behavior = .Ignore;
-    _ = kt.spawnAndWait() catch {};
+    @import("../core/io_global.zig").killByCommandLine("opal-voice-server.py", false);
+    @import("../core/io_global.zig").killByCommandLine("opal-tts-server.py", false);
     // STT server is spawned later by ensureSttServer — kill any leftover too,
     // otherwise it accumulates as a zombie opal-stt-server.py across runs.
-    var ks = @import("../core/io_global.zig").Child.init(
-        &.{ "pkill", "-f", "opal-stt-server.py" },
-        @import("../core/alloc.zig").allocator,
-    );
-    ks.stdout_behavior = .Ignore;
-    ks.stderr_behavior = .Ignore;
-    _ = ks.spawnAndWait() catch {};
+    @import("../core/io_global.zig").killByCommandLine("opal-stt-server.py", false);
     // Reset flags
     voice_server_started = false;
     tts_server_started = false;

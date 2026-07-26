@@ -286,3 +286,96 @@ def test_elf_needed_probe():
     if r.stdout.strip():
         return "fail", "elf-needed.py printed libraries for a non-ELF file"
     return "pass", "elf-needed.py fails closed on unreadable input"
+
+
+# ── 6. cross-platform process/paths (Suwayomi + sidecars) ───────────────────
+
+@test("portability: no hardcoded /dev/null in spawned argv", "Windows")
+def test_no_hardcoded_devnull():
+    # Windows has no /dev/null: curl resolves it against the CWD, fails to
+    # create dev\null and exits non-zero — so `curl -o /dev/null -w %{http_code}`
+    # reports FAILURE for a healthy server. That is how the embedded Suwayomi
+    # server could never be detected as running on Windows.
+    offenders = []
+    for rel, text in _zig_sources():
+        if rel.endswith("core/io_global.zig"):
+            continue  # defines devNull()
+        for i, ln in enumerate(_strip_comments(text).splitlines(), 1):
+            if '"/dev/null"' in ln:
+                offenders.append(f"{rel}:{i}")
+    if offenders:
+        return "fail", ("hardcoded /dev/null in argv (breaks on Windows): "
+                        + ", ".join(offenders) + " — use io_global.devNull()")
+    return "pass", "every spawned argv uses io_global.devNull()"
+
+
+@test("portability: no raw pkill outside io_global", "Windows")
+def test_no_raw_pkill():
+    # pkill does not exist on Windows, so every cleanup path using it was a
+    # silent no-op there — orphaning the Suwayomi JVM (166 MB), the nova2
+    # workers, and the voice sidecars on exit.
+    offenders = []
+    for rel, text in _zig_sources():
+        if rel.endswith("core/io_global.zig"):
+            continue  # the one sanctioned implementation
+        for i, ln in enumerate(_strip_comments(text).splitlines(), 1):
+            if '"pkill"' in ln or '"killall"' in ln:
+                offenders.append(f"{rel}:{i}")
+    if offenders:
+        return "fail", ("raw pkill/killall (no-op on Windows, orphans the child): "
+                        + ", ".join(offenders)
+                        + " — use io_global.killByCommandLine()/killByName()")
+    return "pass", "all process kills route through the portable helpers"
+
+
+@test("portability: kill helpers cover all three platforms", "Windows")
+def test_kill_helpers_shape():
+    src = _read("src/core/io_global.zig")
+    m = _re.search(r"pub fn killByCommandLine\(.*?\n\}", src, _re.S)
+    if not m:
+        return "fail", "io_global has no killByCommandLine()"
+    body = m.group(0)
+    if "Win32_Process" not in body or "CommandLine" not in body:
+        return "fail", "killByCommandLine has no Windows path (taskkill cannot filter on command line)"
+    if "pkill" not in body:
+        return "fail", "killByCommandLine lost its POSIX path"
+    if '"-9"' not in body:
+        return "fail", "killByCommandLine dropped force/SIGKILL — llama-server needs it"
+    n = _re.search(r"pub fn killByName\(.*?\n\}", src, _re.S)
+    if not n or "taskkill" not in n.group(0):
+        return "fail", "killByName has no Windows path"
+    return "pass", "killByCommandLine + killByName both cover Windows and POSIX"
+
+
+@test("suwayomi: Java hint is per-platform", "Windows")
+def test_suwayomi_java_hint():
+    src = _read("src/services/suwayomi_server.zig")
+    m = _re.search(r"if \(!hasJava\(\)\) \{(.*?)\n    \}", src, _re.S)
+    if not m:
+        return "fail", "suwayomi_server has no hasJava() guard"
+    body = m.group(1)
+    if "brew" in body and ".macos" not in body:
+        return "fail", "Java hint tells every platform to use brew"
+    for tag in (".macos", ".windows"):
+        if tag not in body:
+            return "fail", f"Java hint has no {tag} branch"
+    return "pass", "Java install hint branches per platform"
+
+
+@test("suwayomi: data dir resolves on all three platforms", "Windows")
+def test_suwayomi_data_dir():
+    src = _read("src/services/suwayomi_server.zig")
+    m = _re.search(r"fn dataDir\(.*?\n\}", src, _re.S)
+    if not m:
+        return "fail", "suwayomi_server has no dataDir()"
+    body = m.group(0)
+    checks = {
+        "macOS Application Support": "Library/Application Support" in body,
+        "Windows APPDATA": "APPDATA" in body,
+        "Linux XDG/.local": "XDG_DATA_HOME" in body and ".local/share" in body,
+        "USERPROFILE fallback": "USERPROFILE" in body,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "dataDir missing: " + ", ".join(bad)
+    return "pass", "dataDir covers macOS, Windows and Linux"

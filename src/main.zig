@@ -456,13 +456,7 @@ pub fn appDeinit() void {
     };
 
     for (kill_targets) |target| {
-        var child = @import("core/io_global.zig").Child.init(
-            &.{ "pkill", "-f", target },
-            @import("core/alloc.zig").allocator,
-        );
-        child.stdout_behavior = .Ignore;
-        child.stderr_behavior = .Ignore;
-        _ = child.spawnAndWait() catch {};
+        @import("core/io_global.zig").killByCommandLine(target, false);
     }
 
     // llama-server (AI backend)

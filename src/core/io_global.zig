@@ -1,5 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
+// Safe: alloc.zig imports only std, so there is no import cycle back to here.
+const alloc_mod = @import("alloc.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -73,6 +75,98 @@ pub fn getenv(name: [*:0]const u8) ?[]const u8 {
 pub fn randomSecure(buf: []u8) bool {
     io().randomSecure(buf) catch return false;
     return true;
+}
+
+/// The platform's bit-bucket path, for passing to a spawned tool.
+///
+/// **Never hardcode "/dev/null" in an argv.** Windows has no such path: curl
+/// resolves it relative to the CWD, fails to create `dev\null`, and exits
+/// non-zero — so `curl -o /dev/null -w %{http_code}` (the health-probe idiom
+/// used all over this codebase) reports failure for a server that is perfectly
+/// healthy.
+pub fn devNull() []const u8 {
+    return if (is_windows) "NUL" else "/dev/null";
+}
+
+/// Kill every process whose FULL COMMAND LINE contains `pattern`.
+///
+/// `pkill -f` does not exist on Windows, and `taskkill` cannot filter on a
+/// command line (its COMMANDLINE filter is not supported), so matching a JVM by
+/// the jar it is running needs CIM. Without this, every `pkill` cleanup path in
+/// the app is a silent no-op on Windows and the child — a Suwayomi JVM, a voice
+/// sidecar, a llama-server — is orphaned when Opal exits.
+///
+/// `force` maps to `pkill -9` on POSIX. Windows Stop-Process is always forceful,
+/// so it only affects the POSIX side — pass it where the caller previously used
+/// -9, so a stubborn child (llama-server) still dies.
+///
+/// Best-effort by design: callers use this for cleanup and must not depend on
+/// the process actually being gone.
+pub fn killByCommandLine(pattern: []const u8, force: bool) void {
+    if (is_windows) {
+        var script_buf: [512]u8 = undefined;
+        // Single-quoted in PowerShell, so escape any embedded quote by doubling.
+        var pat_buf: [256]u8 = undefined;
+        var n: usize = 0;
+        for (pattern) |ch| {
+            if (n + 2 > pat_buf.len) break;
+            if (ch == '\'') {
+                pat_buf[n] = '\'';
+                n += 1;
+            }
+            pat_buf[n] = ch;
+            n += 1;
+        }
+        const script = std.fmt.bufPrint(
+            &script_buf,
+            "Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*{s}*' }} | " ++
+                "ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
+            .{pat_buf[0..n]},
+        ) catch return;
+        var c = Child.init(&.{ "powershell", "-NoProfile", "-NonInteractive", "-Command", script }, alloc_mod.allocator);
+        c.stdin_behavior = .Ignore;
+        c.stdout_behavior = .Ignore;
+        c.stderr_behavior = .Ignore;
+        c.spawn() catch return;
+        _ = c.wait() catch {};
+    } else {
+        var c = if (force)
+            Child.init(&.{ "pkill", "-9", "-f", pattern }, alloc_mod.allocator)
+        else
+            Child.init(&.{ "pkill", "-f", pattern }, alloc_mod.allocator);
+        c.stdin_behavior = .Ignore;
+        c.stdout_behavior = .Ignore;
+        c.stderr_behavior = .Ignore;
+        c.spawn() catch return;
+        _ = c.wait() catch {};
+    }
+}
+
+/// Kill processes by EXACT executable name (`pkill -x`) — not a command-line
+/// substring. Use when the name is unambiguous and matching a substring could
+/// hit unrelated processes. Windows matches the image name, where the `.exe`
+/// suffix is optional in the filter.
+pub fn killByName(name: []const u8) void {
+    if (is_windows) {
+        var img_buf: [128]u8 = undefined;
+        const img = if (std.mem.endsWith(u8, name, ".exe"))
+            name
+        else
+            std.fmt.bufPrint(&img_buf, "{s}.exe", .{name}) catch return;
+        var c = Child.init(&.{ "taskkill", "/F", "/IM", img }, alloc_mod.allocator);
+        c.stdin_behavior = .Ignore;
+        c.stdout_behavior = .Ignore;
+        c.stderr_behavior = .Ignore;
+        c.spawn() catch return;
+        _ = c.wait() catch {};
+    } else {
+        var c = Child.init(&.{ "pkill", "-x", name }, alloc_mod.allocator);
+        c.stdin_behavior = .Ignore;
+        c.stdout_behavior = .Ignore;
+        c.stderr_behavior = .Ignore;
+        c.spawn() catch return;
+        _ = c.wait() catch {};
+    }
 }
 
 /// Replacement for removed std.time.timestamp (seconds since epoch).

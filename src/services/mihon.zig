@@ -162,7 +162,7 @@ fn registerRepoOnServer(repo_url: []const u8) void {
 /// GET `url` and return the HTTP status code (0 on transport failure). Used for
 /// install/uninstall, where Suwayomi returns 200 with no useful body.
 fn curlCode(url: []const u8) u32 {
-    const argv = [_][]const u8{ "curl", "-sL", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "25", url };
+    const argv = [_][]const u8{ "curl", "-sL", "-o", @import("../core/io_global.zig").devNull(), "-w", "%{http_code}", "--max-time", "25", url };
     var child = io.Child.init(&argv, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;

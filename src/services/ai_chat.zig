@@ -368,13 +368,7 @@ pub fn stopAll() void {
     const t = std.Thread.spawn(.{}, struct {
         fn run() void {
             voice.stopAllAudio();
-            var kill_rec = @import("../core/io_global.zig").Child.init(
-                &.{ "pkill", "-f", "rec.*opal_ai_mic" },
-                @import("../core/alloc.zig").allocator,
-            );
-            kill_rec.stdout_behavior = .Ignore;
-            kill_rec.stderr_behavior = .Ignore;
-            _ = kill_rec.spawnAndWait() catch {};
+            @import("../core/io_global.zig").killByCommandLine("rec.*opal_ai_mic", false);
         }
     }.run, .{}) catch {
         return;

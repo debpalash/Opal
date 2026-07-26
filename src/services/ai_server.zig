@@ -497,12 +497,7 @@ pub fn startServer() void {
     if (backend_kind == .apfel) {
         // ── macOS: Apple Intelligence via apfel ──
         // Kill any orphaned apfel serve processes
-        var pkill = @import("../core/io_global.zig").Child.init(&.{ "pkill", "-f", "apfel --serve" }, @import("../core/alloc.zig").allocator);
-        pkill.stdin_behavior = .Ignore;
-        pkill.stdout_behavior = .Ignore;
-        pkill.stderr_behavior = .Ignore;
-        pkill.spawn() catch {};
-        _ = pkill.wait() catch {};
+        @import("../core/io_global.zig").killByCommandLine("apfel --serve", false);
         @import("../core/io_global.zig").sleep(300 * std.time.ns_per_ms);
 
         server_running = true;
@@ -532,12 +527,8 @@ pub fn startServer() void {
     } else {
         // ── Linux/Windows: Bonsai + llama-server ──
         // Kill any orphaned llama-server processes to free VRAM
-        var pkill = @import("../core/io_global.zig").Child.init(&.{ "pkill", "-9", "-f", "llama-server" }, @import("../core/alloc.zig").allocator);
-        pkill.stdin_behavior = .Ignore;
-        pkill.stdout_behavior = .Ignore;
-        pkill.stderr_behavior = .Ignore;
-        pkill.spawn() catch {};
-        _ = pkill.wait() catch {};
+        // force: this one used pkill -9 — keep SIGKILL semantics on POSIX.
+        @import("../core/io_global.zig").killByCommandLine("llama-server", true);
         @import("../core/io_global.zig").sleep(500 * std.time.ns_per_ms); // Give GPU time to reclaim
 
         server_running = true;
@@ -648,11 +639,7 @@ pub fn stopServer() void {
         .gemma_llama => "llama-server",
         .cloud => unreachable, // handled above
     };
-    var pkill = @import("../core/io_global.zig").Child.init(&.{ "pkill", "-f", pkill_pattern }, @import("../core/alloc.zig").allocator);
-    pkill.stdout_behavior = .Ignore;
-    pkill.stderr_behavior = .Ignore;
-    if (pkill.spawn()) |_| {} else |_| {}
-    _ = pkill.wait() catch {};
+    @import("../core/io_global.zig").killByCommandLine(pkill_pattern, false);
 
     server_running = false;
     model_status = .offline;

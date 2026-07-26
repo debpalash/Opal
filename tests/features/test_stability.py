@@ -496,7 +496,10 @@ def test_search_workers_reaped():
     dev = _src("dev.sh")
     checks = {
         "reapWorkers exists": "pub fn reapWorkers(" in sr and "engines/nova2.py" in sr,
-        "os-gated pkill": '"pkill"' in sr and "builtin.os.tag" in sr,
+        # Was "os-gated pkill": reapWorkers early-returned on anything that
+        # wasn't linux/macos, so Windows orphaned a python process per search.
+        # It now routes through the portable io_global helper with no OS gate.
+        "portable kill, no OS gate": "killByCommandLine(" in sr,
         "appDeinit calls it": "search.reapWorkers()" in mn,
         "dev.sh reaps too": "pkill -f engines/nova2.py" in dev,
     }

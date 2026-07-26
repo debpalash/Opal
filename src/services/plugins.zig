@@ -1058,7 +1058,7 @@ fn suwaTest() void {
     };
     var url_buf: [320]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "{s}/api/v1/extension/list", .{std.mem.trimEnd(u8, base, "/")}) catch return;
-    const argv = [_][]const u8{ "curl", "-sL", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "6", url };
+    const argv = [_][]const u8{ "curl", "-sL", "-o", @import("../core/io_global.zig").devNull(), "-w", "%{http_code}", "--max-time", "6", url };
     var child = @import("../core/io_global.zig").Child.init(&argv, @import("../core/alloc.zig").allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;

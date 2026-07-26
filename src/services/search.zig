@@ -608,15 +608,9 @@ pub fn memorySearch(phrase: []const u8) void {
 /// (A SIGKILL of Opal itself is inherently unreapable — this only helps clean
 /// exit; mirrors the sidecar reaping in dev.sh / suwayomi_server.)
 pub fn reapWorkers() void {
-    const builtin = @import("builtin");
-    if (builtin.os.tag != .linux and builtin.os.tag != .macos) return;
-    const alloc = @import("../core/alloc.zig").allocator;
-    var k = @import("../core/io_global.zig").Child.init(&.{ "pkill", "-f", "engines/nova2.py" }, alloc);
-    k.stdin_behavior = .Ignore;
-    k.stdout_behavior = .Ignore;
-    k.stderr_behavior = .Ignore;
-    k.spawn() catch return;
-    _ = k.wait() catch {};
+    // No OS guard: killByCommandLine is portable now, so Windows reaps its
+    // nova2 workers too instead of orphaning a python process per search.
+    @import("../core/io_global.zig").killByCommandLine("engines/nova2.py", false);
 }
 
 pub fn triggerSearch(query_text: []const u8) void {

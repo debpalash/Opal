@@ -153,7 +153,7 @@ fn fileExists(path: []const u8) bool {
 
 /// True if the server answers on the port.
 fn pingPort() bool {
-    var c = io.Child.init(&.{ "curl", "-sL", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "4", BASE_URL ++ "/api/v1/extension/list" }, alloc);
+    var c = io.Child.init(&.{ "curl", "-sL", "-o", io.devNull(), "-w", "%{http_code}", "--max-time", "4", BASE_URL ++ "/api/v1/extension/list" }, alloc);
     c.stdout_behavior = .Pipe;
     c.stderr_behavior = .Ignore;
     c.spawn() catch return false;
@@ -186,7 +186,14 @@ fn worker() void {
     defer busy.store(false, .release);
 
     if (!hasJava()) {
-        setStatus(.no_java, "Java not found — install a JRE (e.g. `brew install openjdk`)");
+        // Per-platform install hint: `brew install openjdk` is useless advice on
+        // Windows and Linux, which is where this message is most likely to fire
+        // (macOS often has a JDK already).
+        setStatus(.no_java, switch (@import("builtin").os.tag) {
+            .macos => "Java not found — install a JRE: brew install openjdk",
+            .windows => "Java not found — install a JRE (e.g. winget install Microsoft.OpenJDK.21), then reopen Opal so it picks up PATH",
+            else => "Java not found — install a JRE (e.g. apt install default-jre, or pacman -S jre-openjdk)",
+        });
         return;
     }
 
@@ -266,14 +273,14 @@ fn worker() void {
     setStatus(.err, "Server did not come up — check Java / logs");
 }
 
-/// Stop the embedded server (pkill by pattern). Safe to call any time, incl. on
-/// app shutdown (main.zig) so no JVM is orphaned.
+/// Stop the embedded server. Safe to call any time, incl. on app shutdown
+/// (main.zig) so no JVM is orphaned.
+///
+/// Matched by command line, not image name: the process is `java`, and killing
+/// every JVM on the machine would be hostile. io.killByCommandLine handles the
+/// Windows side — `pkill` does not exist there, so this used to be a silent
+/// no-op and left a 166 MB server running after Opal quit.
 pub fn stopEmbedded() void {
-    var k = io.Child.init(&.{ "pkill", "-f", PKILL_PAT }, alloc);
-    k.stdin_behavior = .Ignore;
-    k.stdout_behavior = .Ignore;
-    k.stderr_behavior = .Ignore;
-    k.spawn() catch return;
-    _ = k.wait() catch {};
+    io.killByCommandLine(PKILL_PAT, false);
     if (statusEnum() != .no_java) setStatus(.idle, "Server stopped");
 }
