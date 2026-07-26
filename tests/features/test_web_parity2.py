@@ -172,8 +172,13 @@ def test_web_consolidation():
         "index.html kept": _os.path.exists(_os.path.join(PROJECT_DIR, "web/index.html")),
         # remote.zig's header used to claim ":9876 + :3000" while listening on 41595.
         "remote header truthful": ":9876" not in _src("src/services/remote.zig"),
-        "claude.md updated": ":3000" not in open(_os.path.join(PROJECT_DIR, "CLAUDE.md")).read(),
     }
+    # CLAUDE.md is gitignored, so it is absent on CI — a bare open() here raised
+    # FileNotFoundError and failed the whole suite on every CI run. Check it only
+    # where it exists (a dev checkout), which is the only place it can drift.
+    _claude = _os.path.join(PROJECT_DIR, "CLAUDE.md")
+    if _os.path.exists(_claude):
+        checks["claude.md updated"] = ":3000" not in open(_claude).read()
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "web consolidation incomplete: " + ", ".join(missing)
