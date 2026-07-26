@@ -50,12 +50,18 @@ pub fn startGeneration(thumb: *ThumbnailState, file_path: []const u8, duration_s
         hash = hash *% 31 +% ch;
     }
     
-    const dir_str = std.fmt.bufPrintZ(&thumb.dir_buf, "/tmp/opal_thumbs/{x}", .{hash}) catch return;
+    // Cache dir, not "/tmp": Windows has no /tmp, so makeDirAbsolute failed and
+    // every thumbnail write landed nowhere — scrub previews were silently dead
+    // there (reported as "some tabs don't load thumbnails", issue #21).
+    // paths.cacheFile maps to %LOCALAPPDATA%\opal\cache on Windows.
+    var root_buf: [512]u8 = undefined;
+    const root = @import("../core/paths.zig").cacheFile(&root_buf, "thumbs");
+    const dir_str = std.fmt.bufPrintZ(&thumb.dir_buf, "{s}/{x}", .{ root, hash }) catch return;
     thumb.dir_len = dir_str.len;
 
-    // Create directory
-    @import("../core/io_global.zig").makeDirAbsolute("/tmp/opal_thumbs") catch {};
-    @import("../core/io_global.zig").makeDirAbsolute(dir_str) catch {};
+    // Create directory (makePath, not makeDir — the cache root may not exist yet).
+    @import("../core/io_global.zig").cwdMakePath(root) catch {};
+    @import("../core/io_global.zig").cwdMakePath(dir_str) catch {};
 
     // Store source info
     const copy_len = @min(file_path.len, thumb.source_path_buf.len - 1);

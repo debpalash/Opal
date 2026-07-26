@@ -618,10 +618,16 @@ fn swapQueueItems(idx_a: usize, idx_b: usize) void {
     queue_items[idx_b].id = id_a;
 }
 
-const thumb_cache_dir = "/tmp/opal_thumbs/queue";
+/// Queue thumbnail cache. Was "/tmp/opal_thumbs/queue" — absent on Windows, so
+/// queue thumbnails were silently dead there (issue #21). Resolved lazily
+/// because paths.cacheFile needs a buffer.
+fn thumbCacheDir(buf: []u8) []const u8 {
+    return @import("../core/paths.zig").cacheFile(buf, "thumbs/queue");
+}
 
 fn thumbCachePath(item_id: i64, out: *[384]u8) ?[]const u8 {
-    return std.fmt.bufPrintZ(out, thumb_cache_dir ++ "/{d}.jpg", .{item_id}) catch null;
+    var dir_buf: [512]u8 = undefined;
+    return std.fmt.bufPrintZ(out, "{s}/{d}.jpg", .{ thumbCacheDir(&dir_buf), item_id }) catch null;
 }
 
 // Cap concurrent thumbnail-fetch threads so a full queue can't spawn 200
@@ -708,7 +714,8 @@ fn fetchQueueThumb(item: *QueueItem) void {
             if (body.len < 100) return;
 
             // 3) Save to disk cache
-            @import("../core/io_global.zig").cwdMakePath(thumb_cache_dir) catch {};
+            var tdir_buf: [512]u8 = undefined;
+            @import("../core/io_global.zig").cwdMakePath(thumbCacheDir(&tdir_buf)) catch {};
             if (thumbCachePath(id, &path_buf)) |cache_path| {
                 if (@import("../core/io_global.zig").cwdCreateFile(cache_path, .{})) |cf| {
                     _ = @import("../core/io_global.zig").writeAll(cf, body) catch {};

@@ -2832,8 +2832,18 @@ fn renderStorageTab() void {
         var vid_path_buf: [256]u8 = undefined;
         const dl_path = paths.defaultSavePath(&dl_path_buf);
         const vid_path = paths.videosSavePath(&vid_path_buf);
-        const preset_paths = [_][]const u8{ dl_path, vid_path, "/tmp/opal_torrents" };
-        const path_names = [_][]const u8{ "~/Downloads (default)", "~/Videos", "/tmp (tmpfs)" };
+        // Third preset is "scratch space that survives until reboot". Hardcoding
+        // /tmp offered Windows users a path that cannot exist; io.tmpDir maps to
+        // %TEMP% there.
+        var tmp_dir_buf: [512]u8 = undefined;
+        var tmp_path_buf: [576]u8 = undefined;
+        const tmp_path = std.fmt.bufPrint(
+            &tmp_path_buf,
+            "{s}/opal_torrents",
+            .{@import("../core/io_global.zig").tmpDir(&tmp_dir_buf)},
+        ) catch "opal_torrents";
+        const preset_paths = [_][]const u8{ dl_path, vid_path, tmp_path };
+        const path_names = [_][]const u8{ "~/Downloads (default)", "~/Videos", "Temp (scratch)" };
 
         var sel: usize = path_names.len; // none-active sentinel
         for (preset_paths, 0..) |p, idx| {

@@ -76,6 +76,88 @@ jobs:
   # it, and smoke-tests the unauthenticated surface: /health liveness and the
   # account flow — first-run register returns a session token that authorizes
   # the API, and no token is 401.
+  # Windows runtime smoke — build the HEADLESS server on Windows and actually
+  # run it. This job exists because of a specific bug class: POSIX-only shell
+  # idioms that fail SILENTLY on Windows. `curl -o /dev/null` (no such path on
+  # Windows) made the embedded Suwayomi health probe report failure for a
+  # healthy server, and `pkill` (nonexistent) made every sidecar cleanup a
+  # no-op. Neither showed up in a build — only in running the thing.
+  #
+  # Headless, not the GUI build: it needs no window/session, and it exposes
+  # /health, so the runner can assert the server is genuinely serving rather
+  # than merely "still alive after 10 seconds" (which a hung process passes).
+  #
+  # Experimental for now, like unit-tests(windows) — promote once a few runs
+  # come back green.
+  smoke-windows:
+    runs-on: windows-2022
+    continue-on-error: true
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Force LF checkout
+        # build.zig's torrent-wrapper step runs through MSYS2 `sh`; CRLF would
+        # break it. Must run before checkout, and before MSYS2 exists.
+        shell: pwsh
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          # MINGW64, not UCRT64 — see release.yml for the CRT-mismatch story.
+          msystem: MINGW64
+          path-type: inherit
+          update: true
+          install: >-
+            git
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-mpv
+            mingw-w64-x86_64-sqlite3
+            mingw-w64-x86_64-libtorrent-rasterbar
+            mingw-w64-x86_64-pkgconf
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Build headless (ReleaseSafe)
+        run: zig build -Dheadless=true -Doptimize=ReleaseSafe
+      - name: Boot + smoke
+        run: |
+          set -eu
+          # Resources must sit beside the exe: detectResourceRoot probes for
+          # engines/nova2.py, and without it torrent search silently returns
+          # nothing (the issue #21 packaging bug).
+          cp -r engines web zig-out/bin/ 2>/dev/null || true
+          cp data/plugins-manifest.json zig-out/bin/ 2>/dev/null || true
+          cd zig-out/bin
+          ./opal.exe &
+          OPAL_PID=$!
+          ok=0
+          for i in $(seq 1 40); do
+            if curl -fs http://127.0.0.1:41595/health >/dev/null 2>&1; then ok=1; break; fi
+            # Fail fast if the process died rather than waiting out the loop.
+            kill -0 "$OPAL_PID" 2>/dev/null || { echo "::error::opal.exe exited before serving"; exit 1; }
+            sleep 3
+          done
+          [ "$ok" = 1 ] || { echo "::error::/health never came up"; exit 1; }
+          curl -fs http://127.0.0.1:41595/health | grep -q '"ok":true'
+          curl -fs http://127.0.0.1:41595/ | grep -qiE 'opal|<!doctype'
+          # Unauthenticated API must 401 — same contract as the container.
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:41595/api/status)" = 401 ]
+          # The two Windows-only regressions this job exists to catch:
+          #  1. `curl -o NUL -w %{http_code}` is the health-probe idiom the app
+          #     uses internally (io_global.devNull). Prove it works HERE.
+          code=$(curl -sL -o NUL -w '%{http_code}' --max-time 10 http://127.0.0.1:41595/health)
+          [ "$code" = 200 ] || { echo "::error::curl -o NUL probe returned $code, not 200"; exit 1; }
+          #  2. killByCommandLine's Windows path must actually terminate a child.
+          powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*opal.exe*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }"
+          sleep 3
+          if curl -fs --max-time 5 http://127.0.0.1:41595/health >/dev/null 2>&1; then
+            echo "::error::CIM kill did not stop opal.exe — killByCommandLine is a no-op on Windows"
+            exit 1
+          fi
+          echo "windows smoke passed: serves /health, 401s unauthed, NUL probe works, CIM kill works"
+
   docker-headless:
     runs-on: ubuntu-latest
     timeout-minutes: 45

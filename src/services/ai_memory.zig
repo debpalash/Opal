@@ -37,10 +37,11 @@ pub fn getEmbedding(text: []const u8, floats_out: *[EMBED_DIM]f32) bool {
     // Use thread-unique temp files to avoid race conditions
     var req_path_buf: [64]u8 = undefined;
     const tid = std.Thread.getCurrentId();
-    const req_path = std.fmt.bufPrintZ(&req_path_buf, "/tmp/opal_embed_req_{d}.json", .{tid}) catch return false;
+    var tmp_dir_buf: [512]u8 = undefined;
+    const req_path = std.fmt.bufPrintZ(&req_path_buf, "{s}/opal_embed_req_{d}.json", .{ @import("../core/io_global.zig").tmpDir(&tmp_dir_buf), tid }) catch return false;
 
     var resp_path_buf: [64]u8 = undefined;
-    const resp_path = std.fmt.bufPrintZ(&resp_path_buf, "/tmp/opal_embed_resp_{d}.json", .{tid}) catch return false;
+    const resp_path = std.fmt.bufPrintZ(&resp_path_buf, "{s}/opal_embed_resp_{d}.json", .{ @import("../core/io_global.zig").tmpDir(&tmp_dir_buf), tid }) catch return false;
 
     // Write request body to file
     if (@import("../core/io_global.zig").cwdCreateFile(req_path, .{})) |req_file| {

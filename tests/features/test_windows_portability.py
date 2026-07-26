@@ -379,3 +379,39 @@ def test_suwayomi_data_dir():
     if bad:
         return "fail", "dataDir missing: " + ", ".join(bad)
     return "pass", "dataDir covers macOS, Windows and Linux"
+
+
+@test("portability: feature caches use paths.cacheFile, not /tmp", "Windows")
+def test_no_tmp_in_feature_caches():
+    # /tmp does not exist on Windows, so any unconditional write there fails and
+    # the feature dies silently. This killed scrub thumbnails and subtitle
+    # download on Windows (issue #21 reported both). paths.cacheFile maps to
+    # %LOCALAPPDATA%\opal\cache there.
+    #
+    # paths.zig itself is exempt: its /tmp strings are last-resort fallbacks for
+    # when HOME/APPDATA are unset, not the normal path. ai_voice/voice_backend
+    # are exempt too — they use unix domain sockets, so that subsystem is
+    # POSIX-only by construction (see the Windows support note in the README).
+    exempt = ("core/paths.zig", "services/ai_voice.zig", "services/voice_backend.zig",
+              "services/browser_pure.zig", "services/lang_learn.zig", "services/ai_context.zig",
+              # .dmg installer path — macOS-only by construction.
+              "services/updater.zig",
+              # Legacy-migration READS of paths a much older build wrote. Opening
+              # a path that cannot exist is a harmless no-op, not a broken write.
+              "services/history.zig")
+    offenders = []
+    for rel, text in _zig_sources():
+        if any(rel.replace("\\", "/").endswith(e) for e in exempt):
+            continue
+        for i, ln in enumerate(_strip_comments(text).splitlines(), 1):
+            if '"/tmp/' not in ln:
+                continue
+            # `… catch "/tmp/x"` is a last-resort fallback for when the real
+            # lookup fails, not the normal path — same status as paths.zig.
+            if 'catch "/tmp/' in ln:
+                continue
+            offenders.append(f"{rel}:{i}")
+    if offenders:
+        return "fail", ("unconditional /tmp write (silently dead on Windows): "
+                        + ", ".join(offenders) + " — use paths.cacheFile()")
+    return "pass", "thumbnails, subtitles and friends use the platform cache dir"

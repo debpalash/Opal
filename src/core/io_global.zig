@@ -77,6 +77,31 @@ pub fn randomSecure(buf: []u8) bool {
     return true;
 }
 
+/// Platform temp directory, no trailing slash. `%TEMP%` on Windows (falling
+/// back to the documented `C:\Windows\Temp`), `$TMPDIR` then `/tmp` elsewhere.
+///
+/// **Never hardcode "/tmp/…" for a file the app writes.** Windows has no /tmp,
+/// so the create fails and whatever feature depended on it dies silently — this
+/// is what killed scrub thumbnails and subtitle downloads there. For anything
+/// that should SURVIVE a reboot use paths.cacheFile() instead; this is only for
+/// genuinely transient scratch files.
+pub fn tmpDir(buf: []u8) []const u8 {
+    if (is_windows) {
+        const t = getenv("TEMP") orelse getenv("TMP") orelse return "C:/Windows/Temp";
+        const n = @min(t.len, buf.len);
+        @memcpy(buf[0..n], t[0..n]);
+        return buf[0..n];
+    }
+    const t = getenv("TMPDIR") orelse return "/tmp";
+    // $TMPDIR conventionally carries a trailing slash on macOS; strip it so
+    // callers can always join with "/".
+    const trimmed = std.mem.trimEnd(u8, t, "/");
+    if (trimmed.len == 0) return "/tmp";
+    const n = @min(trimmed.len, buf.len);
+    @memcpy(buf[0..n], trimmed[0..n]);
+    return buf[0..n];
+}
+
 /// The platform's bit-bucket path, for passing to a spawned tool.
 ///
 /// **Never hardcode "/dev/null" in an argv.** Windows has no such path: curl

@@ -393,9 +393,14 @@ fn doDownload(file_id: i64) void {
         return;
     };
 
-    // Download .srt to /tmp
-    var path_buf: [128]u8 = undefined;
-    const sub_path = std.fmt.bufPrintZ(&path_buf, "/tmp/opal_sub_{d}.srt", .{file_id}) catch return;
+    // Download the .srt into the cache dir, NOT "/tmp": that path does not exist
+    // on Windows, so the write failed and subtitle download was dead there
+    // (issue #21). paths.cacheFile maps to %LOCALAPPDATA%\opal\cache.
+    var subs_root: [512]u8 = undefined;
+    const subs_dir = @import("../core/paths.zig").cacheFile(&subs_root, "subs");
+    @import("../core/io_global.zig").cwdMakePath(subs_dir) catch {};
+    var path_buf: [640]u8 = undefined;
+    const sub_path = std.fmt.bufPrintZ(&path_buf, "{s}/opal_sub_{d}.srt", .{ subs_dir, file_id }) catch return;
 
     // Need null-terminated link for curl
     var link_z: [512]u8 = undefined;
@@ -637,7 +642,10 @@ fn doSubdlDownload(url_path: []const u8) void {
         return;
     }
 
-    io_g.cwdMakePath("/tmp/opal_subs") catch {};
+    // Cache dir, not "/tmp" — absent on Windows (issue #21).
+    var subs_root: [512]u8 = undefined;
+    const subs_dir = @import("../core/paths.zig").cacheFile(&subs_root, "subs");
+    io_g.cwdMakePath(subs_dir) catch {};
 
     var url_buf: [640]u8 = undefined;
     const url = std.fmt.bufPrintZ(&url_buf, "https://dl.subdl.com{s}", .{url_path}) catch {
@@ -645,7 +653,11 @@ fn doSubdlDownload(url_path: []const u8) void {
         return;
     };
 
-    const zip_path = "/tmp/opal_subs/subdl.zip";
+    var zip_buf: [640]u8 = undefined;
+    const zip_path = std.fmt.bufPrintZ(&zip_buf, "{s}/subdl.zip", .{subs_dir}) catch {
+        state.showToast("Path error");
+        return;
+    };
     var dl = io_g.Child.init(
         &.{ "curl", "-s", "-L", "--max-time", "25", "-A", USER_AGENT, "-o", zip_path, url },
         alloc,
@@ -668,7 +680,12 @@ fn doSubdlDownload(url_path: []const u8) void {
     }
 
     var path_buf: [1024]u8 = undefined;
-    const srt = extractFirstSubtitle(zip_path, "/tmp/opal_subs/subdl", &path_buf) orelse {
+    var xdir_buf: [640]u8 = undefined;
+    const extract_dir = std.fmt.bufPrint(&xdir_buf, "{s}/subdl", .{subs_dir}) catch {
+        state.showToast("Path error");
+        return;
+    };
+    const srt = extractFirstSubtitle(zip_path, extract_dir, &path_buf) orelse {
         state.showToast("No subtitle in archive");
         logs.pushLog("warn", "subs", "Subdl ZIP contained no subtitle file", true);
         return;

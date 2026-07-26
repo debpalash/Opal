@@ -159,7 +159,8 @@ fn worker(args: *WorkerArgs) void {
     const S = struct { var counter: u64 = 0; };
     S.counter +%= 1;
     var tmp_wav_buf: [512]u8 = undefined;
-    const tmp_wav = std.fmt.bufPrintZ(&tmp_wav_buf, "/tmp/opal_autosubs_{d}.wav", .{S.counter}) catch {
+    var tmp_dir_buf: [512]u8 = undefined;
+    const tmp_wav = std.fmt.bufPrintZ(&tmp_wav_buf, "{s}/opal_autosubs_{d}.wav", .{ @import("../core/io_global.zig").tmpDir(&tmp_dir_buf), S.counter }) catch {
         setStatus("tmp path too long");
         return;
     };

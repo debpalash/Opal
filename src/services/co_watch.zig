@@ -205,7 +205,9 @@ const S = struct {
         ) catch return;
 
         // Write to a SEPARATE temp file (must not collide with ai_req.json).
-        const req_path = "/tmp/opal_cowatch_req.json";
+        var tmp_buf: [512]u8 = undefined;
+        var req_buf: [640]u8 = undefined;
+        const req_path = std.fmt.bufPrintZ(&req_buf, "{s}/opal_cowatch_req.json", .{@import("../core/io_global.zig").tmpDir(&tmp_buf)}) catch return;
         if (io.cwdCreateFile(req_path, .{})) |f| {
             io.writeAll(f, body) catch {};
             f.close(io.io());
@@ -217,9 +219,14 @@ const S = struct {
         var url_buf: [192]u8 = undefined;
         const url = std.fmt.bufPrintZ(&url_buf, "{s}/v1/chat/completions", .{srv_url}) catch return;
 
+        // curl's --data-binary wants "@<path>". req_path is runtime now (it was
+        // a comptime literal), so build the argument at runtime too.
+        var at_buf: [648]u8 = undefined;
+        const at_req = std.fmt.bufPrintZ(&at_buf, "@{s}", .{req_path}) catch return;
+
         // ── ONE completion via curl ──────────────────────────────────────────
         var child = io.Child.init(
-            &.{ "curl", "-s", "--max-time", "6", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", "@" ++ req_path, url },
+            &.{ "curl", "-s", "--max-time", "6", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", at_req, url },
             alloc,
         );
         child.stdout_behavior = .Pipe;
