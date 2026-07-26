@@ -76,13 +76,21 @@ jobs:
           set -euo pipefail
           docker run -d --name opal -p 41595:41595 opal:ci
           echo "── Phase S1 acceptance: the server binary links NO GUI stack ──"
-          docker exec opal ldd /usr/local/bin/opal
-          if docker exec opal ldd /usr/local/bin/opal | grep -Eiq 'sdl|libx11|libxext|libgl|libpulse|libasound'; then
+          # Check the binary's OWN DT_NEEDED entries, NOT `ldd`. ldd resolves the
+          # whole transitive closure, and libmpv legitimately pulls in SDL2, X11,
+          # GL and friends — so an `ldd | grep -q sdl` gate can never come back
+          # clean, and it failed the moment the image actually built. See
+          # scripts/elf-needed.py, which exits non-zero if it cannot read the
+          # table so a broken probe fails loudly instead of passing vacuously.
+          docker cp opal:/usr/local/bin/opal /tmp/opal-bin
+          needed=$(python3 scripts/elf-needed.py /tmp/opal-bin)
+          echo "$needed"
+          if printf '%s\n' "$needed" | grep -Eiq 'sdl|libx11|libxext|libgl|libpulse|libasound'; then
             echo "FAIL: GUI libraries crept back into the headless binary."
             echo "Fix what re-introduced the dvui/SDL link — do NOT reinstate the runtime packages."
             exit 1
           fi
-          echo "no SDL/X11/GL/pulse/asound — slim build intact"
+          echo "no SDL/X11/GL/pulse/asound in DT_NEEDED — slim build intact"
           echo "── the image really is ${{ matrix.arch }} ──"
           got=$(docker exec opal uname -m)
           case "${{ matrix.arch }}:$got" in

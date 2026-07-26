@@ -96,6 +96,9 @@ COPY --from=builder /src/zig-out/bin/opal /usr/local/bin/opal
 COPY --from=builder /src/libtorrent_wrapper.so /usr/local/lib/
 COPY --from=builder /src/web/index.html /opt/opal/web/index.html
 COPY --from=builder /src/data/plugins-manifest.json /opt/opal/plugins-manifest.json
+# browser.zig resolves camoufox_bridge.py from the resource root; without it
+# every scraper-backed source logs "camoufox_bridge.py not found" and is dead.
+COPY --from=builder /src/scripts/camoufox_bridge.py /opt/opal/scripts/camoufox_bridge.py
 COPY --from=builder /src/engines /opt/opal/engines
 RUN ldconfig
 

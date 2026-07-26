@@ -108,7 +108,14 @@ def test_docker_slim_runtime():
         # Still needed: torrent/stream path and the nova2 scrapers.
         "runtime deps kept": all(p in df for p in ("libmpv2", "libsqlite3-0", "libtorrent-rasterbar2.0", "ffmpeg", "python3")),
         # macOS can't validate a Linux image — this grep IS the S1 acceptance test.
-        "ldd gate is hard": "ldd /usr/local/bin/opal" in wf
+        #
+        # It used to require an `ldd` gate, but ldd resolves the TRANSITIVE
+        # closure and libmpv legitimately pulls in SDL2/X11/GL — so that gate
+        # could never pass once the image actually built (verified against a
+        # real aarch64 image: 8 GUI libs via libmpv, 0 in the binary's own
+        # DT_NEEDED). The gate now reads DT_NEEDED via scripts/elf-needed.py.
+        "S1 gate checks DT_NEEDED": "elf-needed.py" in wf,
+        "S1 gate not ldd-based": "ldd /usr/local/bin/opal" not in wf
             and "sdl|libx11|libxext|libgl|libpulse|libasound" in wf
             and "exit 1" in wf,
     }

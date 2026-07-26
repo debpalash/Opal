@@ -246,3 +246,43 @@ def test_bridge_path_windows_aware():
     if "configDir" not in body:
         return "fail", "getBridgePath does not use paths.configDir()"
     return "pass", "getBridgePath uses paths.configDir() + the resource root"
+
+
+# ── 5. runtime option correctness ───────────────────────────────────────────
+
+@test("mpv: reconnect_on_http_error is set once, not twice", "Windows")
+def test_reconnect_option_single_key():
+    # stream-lavf-o is a KEY-VALUE list. The option used to appear twice —
+    # "…reconnect_on_http_error=4xx,reconnect_on_http_error=5xx" — so ffmpeg
+    # kept only the LAST write and 4xx reconnects were silently off: one 403/404
+    # on an IPTV segment ended the stream instead of retrying ("IPTV barely
+    # works, lots of buffering", issue #21). A comma inside a value needs mpv's
+    # %<len>% escape. Verified against mpv 0.41: a wrong length is a hard parse
+    # error ("Invalid length 99 for 'stream-lavf-o'"), so the escape is checked.
+    src = _read("src/player/player.zig")
+    lines = [ln for ln in src.splitlines()
+             if "stream-lavf-o" in ln and not ln.lstrip().startswith("//")]
+    if not lines:
+        return "fail", "player.zig no longer sets stream-lavf-o"
+    for ln in lines:
+        if ln.count("reconnect_on_http_error=") > 1:
+            return "fail", "reconnect_on_http_error set twice — ffmpeg keeps only the last"
+        if "reconnect_on_http_error=" in ln and "%7%4xx,5xx" not in ln:
+            return "fail", "reconnect_on_http_error must use the %7%4xx,5xx escape"
+    return "pass", "reconnect_on_http_error set once, comma-escaped as %7%4xx,5xx"
+
+
+@test("docker: S1 gate reads DT_NEEDED, not ldd", "Windows")
+def test_elf_needed_probe():
+    import subprocess
+    script = _os.path.join(PROJECT_DIR, "scripts", "elf-needed.py")
+    if not _os.path.exists(script):
+        return "fail", "scripts/elf-needed.py missing — the S1 gate has no probe"
+    # It must FAIL on a non-ELF input rather than print nothing and exit 0,
+    # which is what would make the CI gate pass vacuously.
+    r = subprocess.run(["python3", script, __file__], capture_output=True, text=True)
+    if r.returncode == 0:
+        return "fail", "elf-needed.py exits 0 on a non-ELF file — gate would pass vacuously"
+    if r.stdout.strip():
+        return "fail", "elf-needed.py printed libraries for a non-ELF file"
+    return "pass", "elf-needed.py fails closed on unreadable input"

@@ -464,7 +464,15 @@ pub const MediaPlayer = struct {
         // brought it back. Blocking on a slow stream is fine and expected; timing
         // out is fatal.
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "network-timeout", "0");
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5,reconnect_on_network_error=1,reconnect_on_http_error=4xx,reconnect_on_http_error=5xx");
+        // reconnect_on_http_error used to appear TWICE here ("…=4xx,…=5xx").
+        // stream-lavf-o is a KEY-VALUE list, so that is one key set twice and
+        // ffmpeg keeps the last write — 4xx reconnects were silently disabled,
+        // meaning a single 403/404 on an IPTV segment ended the stream instead
+        // of retrying. ffmpeg wants ONE comma-separated value, and a comma
+        // inside a value needs mpv's %<len>% escape: %7% == len("4xx,5xx").
+        // (Verified against mpv 0.41 — a wrong length is a hard parse error,
+        // so this escape is checked, not merely tolerated.)
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5,reconnect_on_network_error=1,reconnect_on_http_error=%7%4xx,5xx");
         // HLS-specific: tolerate errors and start further behind live edge to build a huge preload buffer
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "hls-bitrate", "max");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "demuxer-lavf-o", "live_start_index=-10");
