@@ -15,14 +15,11 @@ const io = @import("../core/io_global.zig");
 pub const TOKEN_HEX = 48;
 const SESSION_TTL_S: i64 = 30 * 24 * 3600; // 30 days
 
-// ── CSPRNG bytes from /dev/urandom (same source as remote.zig's token) ──
+// ── CSPRNG bytes from the platform entropy source (same as remote.zig's token).
+// Not /dev/urandom directly: that path does not exist on Windows, so session
+// tokens and salts could never be generated there (issue #21). ──
 fn fillRandom(buf: []u8) bool {
-    if (io.openFileAbsolute("/dev/urandom", .{})) |f| {
-        var fh = f;
-        defer fh.close(io.io());
-        const n = io.readAll(fh, buf) catch return false;
-        return n == buf.len;
-    } else |_| return false;
+    return io.randomSecure(buf);
 }
 
 fn hexEncode(bytes: []const u8, out: []u8) void {

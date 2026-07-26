@@ -347,6 +347,28 @@ jobs:
             printf '%s' "$unresolved"
             exit 1
           fi
+          # Runtime resource payload. The exe alone is not a working install:
+          # torrent search shells out to `python3 engines/nova2.py`, the browser
+          # scraper needs scripts/camoufox_bridge.py, the Plugins tab reads
+          # plugins-manifest.json, and Web Remote serves web/index.html. Shipping
+          # only the exe + DLLs is why Windows users saw "torrent search returns
+          # nothing", "camoufox_bridge.py not found" and an empty Plugins tab
+          # (issue #21). macOS bundles all of this via scripts/build-app.sh; this
+          # is the Windows equivalent. heat -srd harvests these into the MSI too.
+          cp -R engines staging/engines
+          find staging/engines -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+          mkdir -p staging/scripts staging/web
+          cp scripts/camoufox_bridge.py staging/scripts/
+          cp web/index.html staging/web/
+          cp data/plugins-manifest.json staging/
+          cp data/manga-sources-sfw.json staging/ 2>/dev/null || true
+          # DPI-bypass sidecar (services/dpi_bypass.zig resolves it from the
+          # resource root, same as plugins-manifest).
+          cp zig-out/bin/zig-bypassdpi.exe staging/ 2>/dev/null || true
+          # detectResourceRoot() probes for engines/nova2.py beside the exe — if
+          # that is missing the whole payload above is unreachable at runtime.
+          test -f staging/engines/nova2.py \
+            || { echo "::error::engines/nova2.py missing from staging"; exit 1; }
           cp LICENSE docs/NOTICE.md staging/
           cat > staging/README.txt <<EOF
           Opal ${VERSION} — portable Windows build (x86_64, experimental)

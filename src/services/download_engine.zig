@@ -501,7 +501,7 @@ const ProbeResult = struct {
 /// Probe with `Range: bytes=0-0`: a 206 proves range support AND carries the
 /// full size in Content-Range; a 200 means no ranges (Content-Length = size).
 fn probe(url: []const u8) ?ProbeResult {
-    var client = std.http.Client{ .allocator = alloc.allocator, .io = io_global.io() };
+    var client = @import("../core/http.zig").newClient();
     defer client.deinit();
 
     const uri = std.Uri.parse(url) catch return null;
@@ -835,7 +835,7 @@ fn segmentWorker(idx: usize, token: u32, si: usize) void {
     };
     defer io_global.closeFile(file);
 
-    var client = std.http.Client{ .allocator = alloc.allocator, .io = io_global.io() };
+    var client = @import("../core/http.zig").newClient();
     defer client.deinit();
 
     const seg = d.segs[si];

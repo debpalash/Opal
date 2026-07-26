@@ -40,6 +40,14 @@ if [ -d "$ROOT/engines" ]; then
     find "$APP_DIR/Contents/Resources/engines" -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null || true
 fi
 
+# Bundle the browser-scraper bridge. browser.zig spawns camoufox_bridge.py and
+# resolves it from the resource root; without it in Resources an installed .app
+# logs "camoufox_bridge.py not found" and every scraper-backed source is dead.
+echo "[build-app] Bundling browser bridge (scripts/camoufox_bridge.py)…"
+mkdir -p "$APP_DIR/Contents/Resources/scripts"
+[ -f "$ROOT/scripts/camoufox_bridge.py" ] && \
+    cp "$ROOT/scripts/camoufox_bridge.py" "$APP_DIR/Contents/Resources/scripts/"
+
 # Bundle the voice helper scripts. ai_voice spawns `python3 bin/opal-voice-server.py`
 # (hands-free conversation: VAD + live partials + full-duplex barge-in), plus the
 # STT/TTS sidecars. Without these in Resources, an installed .app finds no voice

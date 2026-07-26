@@ -853,7 +853,7 @@ fn fetchViaPiped(query: []const u8, gen: u32) bool {
         var url_buf: [768]u8 = undefined;
         const url = std.fmt.bufPrint(&url_buf, "https://{s}/search?q={s}&filter=videos", .{ host, encoded[0..elen] }) catch continue;
 
-        var client = std.http.Client{ .allocator = alloc, .io = io.io() };
+        var client = @import("../core/http.zig").newClient();
         defer client.deinit();
 
         const uri = std.Uri.parse(url) catch continue;
@@ -1205,7 +1205,7 @@ pub fn fetchThumb(item: *state.YtItem) void {
             while (attempt < 2) : (attempt += 1) {
                 const used_cache = attempt == 0 and cached != null;
                 const body: []const u8 = if (used_cache) cached.? else blk: {
-                    var client = std.http.Client{ .allocator = alloc, .io = io.io() };
+                    var client = @import("../core/http.zig").newClient();
                     defer client.deinit();
 
                     const uri = std.Uri.parse(turl) catch return;
@@ -1657,7 +1657,7 @@ fn fireSuggest(query: []const u8) void {
             var url_buf: [640]u8 = undefined;
             const url = yt_pure.suggestUrl(S.q_buf[0..S.q_len], &url_buf) orelse return;
 
-            var client = std.http.Client{ .allocator = alloc, .io = io.io() };
+            var client = @import("../core/http.zig").newClient();
             defer client.deinit();
 
             const uri = std.Uri.parse(url) catch return;

@@ -680,9 +680,7 @@ pub fn loadIntoMpv(engine: *SubtitleEngine, mpv_ctx: *c.mpv.mpv_handle) void {
     if (engine.state != .ready) return;
 
     const path = engine.srt_path[0..engine.srt_path_len];
-    var cmd_buf: [512]u8 = undefined;
-    const cmd = std.fmt.bufPrintZ(&cmd_buf, "sub-add \"{s}\"", .{path}) catch return;
-    _ = c.mpv.mpv_command_string(mpv_ctx, cmd.ptr);
+    _ = c.mpvSubAdd(mpv_ctx, path);
     engine.loaded_idx = @intCast(@min(engine.selected_idx, std.math.maxInt(i32)));
     state.showToast("Subtitle loaded");
     logs.pushLog("info", "subs", "Subtitle loaded into player", false);

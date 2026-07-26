@@ -421,9 +421,7 @@ fn doDownload(file_id: i64) void {
     // Load into mpv
     if (state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
-        var cmd_buf: [256]u8 = undefined;
-        const cmd = std.fmt.bufPrintZ(&cmd_buf, "sub-add \"{s}\"", .{sub_path}) catch return;
-        _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
+        _ = c.mpvSubAdd(p.mpv_ctx, sub_path);
     }
 
     state.showToast("Subtitle loaded");
@@ -678,9 +676,7 @@ fn doSubdlDownload(url_path: []const u8) void {
 
     if (state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
-        var cmd_buf: [1152]u8 = undefined;
-        const cmd = std.fmt.bufPrintZ(&cmd_buf, "sub-add \"{s}\"", .{srt}) catch return;
-        _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
+        _ = c.mpvSubAdd(p.mpv_ctx, srt);
     }
 
     state.showToast("Subtitle loaded");

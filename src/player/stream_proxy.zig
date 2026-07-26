@@ -83,14 +83,12 @@ var csprng_mutex = sync.Mutex{};
 
 fn seedCsprng() void {
     var seed: [std.Random.DefaultCsprng.secret_seed_length]u8 = undefined;
-    // Try /dev/urandom (macOS + Linux). Fall back to time/pid/counter if unavailable.
-    var seeded = false;
-    if (io_g.openFileAbsolute("/dev/urandom", .{})) |f| {
-        var fh = f;
-        defer fh.close(io_g.io());
-        const n = io_g.readAll(fh, &seed) catch 0;
-        if (n == seed.len) seeded = true;
-    } else |_| {}
+    // Platform entropy (\Device\CNG on Windows, arc4random_buf on macOS,
+    // getrandom on Linux). This used to read /dev/urandom directly, so on
+    // Windows it ALWAYS missed and fell through to the time/pid mixer below —
+    // i.e. every Windows run had a guessable loopback proxy token. The weak
+    // path stays only as a last resort for platforms std cannot serve.
+    const seeded = io_g.randomSecure(&seed);
     if (!seeded) {
         const t = io_g.milliTimestamp();
         const tid = std.Thread.getCurrentId();

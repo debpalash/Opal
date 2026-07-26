@@ -324,23 +324,34 @@ var last_visit_url_len: usize = 0;
 
 fn getBridgePath() ?[]const u8 {
     const io = @import("../core/io_global.zig");
+    const S = struct {
+        var buf: [1024]u8 = undefined;
+    };
 
-    // 1) Look for camoufox_bridge.py relative to the working dir (bundled scripts dir).
+    // 1) Relative to the working dir (dev / launched-from-project).
     const rel = "scripts/" ++ BRIDGE_SCRIPT;
     if (io.cwdAccess(rel, .{})) |_| {
         return rel;
     } else |_| {}
 
-    // 2) Look under the Opal config dir (~/.config/opal/scripts/camoufox_bridge.py).
-    if (io.getenv("HOME")) |home| {
-        const S = struct {
-            var buf: [512]u8 = undefined;
-        };
-        const p = std.fmt.bufPrint(&S.buf, "{s}/.config/opal/scripts/{s}", .{ home, BRIDGE_SCRIPT }) catch return null;
-        if (io.cwdAccess(p, .{})) |_| {
-            return p;
+    // 2) Under the bundled resource root — a .app launched from /Applications
+    //    (or the Windows install dir) has a CWD that reaches neither the repo
+    //    nor the config dir.
+    if (@import("../core/state.zig").resourceRoot()) |root| {
+        if (std.fmt.bufPrint(&S.buf, "{s}scripts/{s}", .{ root, BRIDGE_SCRIPT })) |p| {
+            if (io.cwdAccess(p, .{})) |_| return p else |_| {}
         } else |_| {}
     }
+
+    // 3) Under the Opal config dir. This used to hand-build "$HOME/.config/opal"
+    //    from getenv("HOME") — but Windows sets neither HOME nor .config, so the
+    //    probe could never hit there (issue #21: "camoufox_bridge.py not found").
+    //    paths.configDir maps to %APPDATA%\opal on Windows.
+    var dir_buf: [512]u8 = undefined;
+    const dir = @import("../core/paths.zig").configDir(&dir_buf);
+    if (std.fmt.bufPrint(&S.buf, "{s}/scripts/{s}", .{ dir, BRIDGE_SCRIPT })) |p| {
+        if (io.cwdAccess(p, .{})) |_| return p else |_| {}
+    } else |_| {}
 
     return null;
 }

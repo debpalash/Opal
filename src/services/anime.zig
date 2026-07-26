@@ -2549,10 +2549,7 @@ pub fn playEmbed(embed_url: []const u8) void {
                 p.loadStreamWithHeaders(resolved.streamUrl(), resolved.refererStr());
                 // Attach subtitle tracks (e.g. MegaCloud caption tracks).
                 for (resolved.subs[0..resolved.sub_count]) |sub| {
-                    var cmd_buf: [640]u8 = undefined;
-                    if (std.fmt.bufPrintZ(&cmd_buf, "sub-add \"{s}\"", .{sub.url[0..sub.url_len]})) |cmd| {
-                        _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
-                    } else |_| {}
+                    _ = c.mpvSubAdd(p.mpv_ctx, sub.url[0..sub.url_len]);
                 }
                 logs.pushLog("info", "anime", "Embed resolved → streaming", false);
             }

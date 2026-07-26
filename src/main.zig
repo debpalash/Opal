@@ -260,12 +260,27 @@ fn detectResourceRoot() void {
 
     // Commit only if engines/ actually lives there.
     var probe: [1100]u8 = undefined;
-    const probe_path = std.fmt.bufPrint(&probe, "{s}engines/nova2.py", .{base_slice}) catch return;
-    io_g.cwdAccess(probe_path, .{}) catch return;
+    if (std.fmt.bufPrint(&probe, "{s}engines/nova2.py", .{base_slice})) |probe_path| {
+        if (io_g.cwdAccess(probe_path, .{})) |_| {
+            @memcpy(state.app.resource_root[0..base_slice.len], base_slice);
+            state.app.resource_root_len = base_slice.len;
+            logs.pushLog("info", "init", "Using bundled resource root", false);
+            return;
+        } else |_| {}
+    } else |_| {}
 
-    @memcpy(state.app.resource_root[0..base_slice.len], base_slice);
-    state.app.resource_root_len = base_slice.len;
-    logs.pushLog("info", "init", "Using bundled resource root", false);
+    // Distro packages install the binary to /usr/bin (so SDL_GetBasePath is
+    // "/usr/bin/") but its resources to a private libdir — probe those. Without
+    // this a .deb/.rpm install finds no engines/ and torrent search silently
+    // returns nothing, the same symptom Windows had in issue #21.
+    for ([_][]const u8{ "/usr/lib/opal/", "/usr/local/lib/opal/", "/usr/share/opal/" }) |cand| {
+        const p = std.fmt.bufPrint(&probe, "{s}engines/nova2.py", .{cand}) catch continue;
+        io_g.cwdAccess(p, .{}) catch continue;
+        @memcpy(state.app.resource_root[0..cand.len], cand);
+        state.app.resource_root_len = cand.len;
+        logs.pushLog("info", "init", "Using installed resource root", false);
+        return;
+    }
 }
 
 fn appInit(win: *dvui.Window) !void {
@@ -355,7 +370,7 @@ fn forwardToRunningInstance(arg: []const u8) bool {
     var auth_buf: [48]u8 = undefined;
     const auth = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{tok_buf[0..tok_n]}) catch return false;
 
-    var client = std.http.Client{ .allocator = @import("core/alloc.zig").allocator, .io = io_g.io() };
+    var client = @import("core/http.zig").newClient();
     defer client.deinit();
     const uri = std.Uri.parse(url) catch return false;
     var req = client.request(.POST, uri, .{ .extra_headers = &.{

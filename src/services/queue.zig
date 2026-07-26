@@ -686,7 +686,7 @@ fn fetchQueueThumb(item: *QueueItem) void {
             }
 
             // 2) Download from network
-            var client = std.http.Client{ .allocator = alloc, .io = @import("../core/io_global.zig").io() };
+            var client = @import("../core/http.zig").newClient();
             defer client.deinit();
 
             const uri = std.Uri.parse(url) catch return;

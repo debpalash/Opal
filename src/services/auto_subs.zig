@@ -252,9 +252,7 @@ fn worker(args: *WorkerArgs) void {
     setStatus("Loading subtitles...");
     if (state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
-        var cmd_buf: [800]u8 = undefined;
-        const cmd = std.fmt.bufPrintZ(&cmd_buf, "sub-add \"{s}\"", .{load_target}) catch return;
-        _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
+        _ = c.mpvSubAdd(p.mpv_ctx, load_target);
     }
     _ = @import("../core/io_global.zig").deleteFileAbsolute(tmp_wav) catch {};
     setStatus("Auto-subtitles ready");

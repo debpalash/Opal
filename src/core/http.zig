@@ -67,6 +67,25 @@ var client_init_lock: sync.Mutex = .{};
 // fetchImage, picks it up immediately via proxyArgs). Loopback-only target.
 var g_dpi_proxy: std.http.Client.Proxy = undefined;
 
+/// Construct a std.http.Client with `now` seeded. **Always use this instead of
+/// `std.http.Client{ .allocator = …, .io = … }`.**
+///
+/// `Client.now` defaults to null and `Client.request()` only seeds it when the
+/// INITIAL url is https. A plain-http url whose server 30x-redirects to https
+/// takes `Request.redirect()` → `client.connect(…, .tls)` → `Tls.create`, which
+/// does `client.now.?` — a null unwrap. That panics in ReleaseSafe (the mode the
+/// Linux and Windows releases ship) and is silent UB in ReleaseFast (macOS), so
+/// the same redirect that hard-crashes a Windows user looks fine to a mac dev.
+/// That asymmetry is issue #21: "crashes on almost anything".
+///
+/// Seeding once is correct: cert-validity windows are months, and std re-rescans
+/// the CA bundle on demand.
+pub fn newClient() std.http.Client {
+    var client: std.http.Client = .{ .allocator = alloc.allocator, .io = io_global.io() };
+    client.now = std.Io.Timestamp.now(io_global.io(), .real);
+    return client;
+}
+
 fn sharedClient() *std.http.Client {
     if (client_ready.load(.acquire)) return &g_client;
     // Slow path: build it once. The init-once mutex only guards CONSTRUCTION,

@@ -341,8 +341,12 @@ def test_http_shared_client_and_timeout():
     h = _src("src/core/http.zig")
     mn = _src("src/main.zig")
     checks = {
-        # No per-call Client construction remains inside the file.
-        "no per-call client": "std.http.Client{" not in h,
+        # No per-call Client construction remains inside the file. Code only:
+        # newClient()'s doc comment quotes the banned form on purpose, to show
+        # callers what not to write (see tests/features/test_windows_portability).
+        "no per-call client": "std.http.Client{" not in "\n".join(
+            ln for ln in h.splitlines() if not ln.lstrip().startswith("//")
+        ),
         # A module-global shared client + lazy getter.
         "global shared client": "var g_client: std.http.Client" in h and "fn sharedClient(" in h,
         # timeout_secs is actually consumed, not merely defined.

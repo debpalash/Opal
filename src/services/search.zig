@@ -378,7 +378,7 @@ fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator, my_gen: u64) vo
     var url_buf: [512]u8 = undefined;
     const api_url = std.fmt.bufPrint(&url_buf, "{s}?limit=100&page=1", .{api}) catch return;
 
-    var client = std.http.Client{ .allocator = allocator, .io = @import("../core/io_global.zig").io() };
+    var client = @import("../core/http.zig").newClient();
     defer client.deinit();
 
     const uri = std.Uri.parse(api_url) catch return;

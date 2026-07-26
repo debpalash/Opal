@@ -61,6 +61,20 @@ pub fn getenv(name: [*:0]const u8) ?[]const u8 {
     return std.mem.span(raw);
 }
 
+/// Fill `buf` with cryptographically secure random bytes. Returns false if the
+/// platform has no entropy source (callers MUST treat that as fatal for secrets
+/// — never fall back to a timestamp seed).
+///
+/// Use this instead of reading "/dev/urandom" directly: that path does not exist
+/// on Windows, so every hand-rolled reader silently failed there and disabled
+/// whatever it guarded (the remote API token, the content-cache key, the auth
+/// store salt). std.Io routes to \Device\CNG on Windows, arc4random_buf on
+/// macOS/BSD and getrandom(2) on Linux.
+pub fn randomSecure(buf: []u8) bool {
+    io().randomSecure(buf) catch return false;
+    return true;
+}
+
 /// Replacement for removed std.time.timestamp (seconds since epoch).
 pub fn timestamp() i64 {
     var tv: std.c.timeval = undefined;

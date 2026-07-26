@@ -28,25 +28,24 @@ var csprng_init: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var csprng: std.Random.DefaultCsprng = undefined;
 var csprng_mutex = sync.Mutex{};
 
-/// Seed the CSPRNG from /dev/urandom. Returns false if that read fails — we do
-/// NOT fall back to a timestamp seed: a predictable bearer token is worse than
-/// no remote API at all (callers leave api_token_ready false so endpoints 401).
+/// Seed the CSPRNG from the platform entropy source. Returns false if that
+/// fails — we do NOT fall back to a timestamp seed: a predictable bearer token
+/// is worse than no remote API at all (callers leave api_token_ready false so
+/// endpoints 401).
+///
+/// This used to read /dev/urandom directly, which does not exist on Windows —
+/// so every Windows user got "CSPRNG unavailable — remote API disabled" and no
+/// api.token was ever written, making browser-extension pairing impossible
+/// (issue #21). io_g.randomSecure is the portable source.
 fn seedCsprng() bool {
     var seed: [std.Random.DefaultCsprng.secret_seed_length]u8 = undefined;
-    if (io_g.openFileAbsolute("/dev/urandom", .{})) |f| {
-        var fh = f;
-        defer fh.close(io_g.io());
-        const n = io_g.readAll(fh, &seed) catch 0;
-        if (n == seed.len) {
-            csprng = std.Random.DefaultCsprng.init(seed);
-            return true;
-        }
-    } else |_| {}
-    return false;
+    if (!io_g.randomSecure(&seed)) return false;
+    csprng = std.Random.DefaultCsprng.init(seed);
+    return true;
 }
 
 /// Fill `out` with random hex. Returns false if the CSPRNG could not be seeded
-/// (no /dev/urandom) — `out` is left untouched in that case.
+/// (no platform entropy source) — `out` is left untouched in that case.
 fn fillRandomHex(out: *[TOKEN_HEX_LEN]u8) bool {
     csprng_mutex.lock();
     defer csprng_mutex.unlock();

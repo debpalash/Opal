@@ -38,8 +38,8 @@ var install_key: [32]u8 = undefined;
 var key_ok = std.atomic.Value(bool).init(false);
 var disabled_logged = std.atomic.Value(bool).init(false);
 
-// CSPRNG for the install key + per-entry nonces. Seeded once from /dev/urandom
-// (0.16 removed std.crypto.random; this mirrors remote.zig's token CSPRNG). A
+// CSPRNG for the install key + per-entry nonces. Seeded once from the platform
+// entropy source (0.16 removed std.crypto.random; mirrors remote.zig's token). A
 // failed seed leaves the cache disabled — we never fall back to a weak nonce.
 var rng: std.Random.DefaultCsprng = undefined;
 var rng_init = std.atomic.Value(bool).init(false);
@@ -51,13 +51,9 @@ fn randomBytes(out: []u8) bool {
     defer rng_mutex.unlock();
     if (!rng_init.load(.acquire)) {
         var seed: [std.Random.DefaultCsprng.secret_seed_length]u8 = undefined;
-        var ok = false;
-        if (io.openFileAbsolute("/dev/urandom", .{})) |f| {
-            const n = io.readAll(f, &seed) catch 0;
-            f.close(io.io());
-            ok = (n == seed.len);
-        } else |_| {}
-        if (!ok) return false;
+        // Portable entropy: /dev/urandom is absent on Windows, which is why
+        // Windows users saw "Content cache disabled (no key)" (issue #21).
+        if (!io.randomSecure(&seed)) return false;
         rng = std.Random.DefaultCsprng.init(seed);
         rng_init.store(true, .release);
     }

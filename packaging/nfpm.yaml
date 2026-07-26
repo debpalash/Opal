@@ -19,6 +19,21 @@ contents:
   # build.zig; shipped in a private libdir so it never shadows system libs.
   - src: libtorrent_wrapper.so
     dst: /usr/lib/opal/libtorrent_wrapper.so
+  # Runtime resource payload. The binary alone is not a working install: torrent
+  # search shells out to `python3 engines/nova2.py`, the browser scraper needs
+  # camoufox_bridge.py, the Plugins tab reads plugins-manifest.json and Web
+  # Remote serves web/index.html. main.zig's detectResourceRoot probes
+  # /usr/lib/opal for engines/nova2.py and roots everything there.
+  - src: engines
+    dst: /usr/lib/opal/engines
+  - src: scripts/camoufox_bridge.py
+    dst: /usr/lib/opal/scripts/camoufox_bridge.py
+  - src: web/index.html
+    dst: /usr/lib/opal/web/index.html
+  - src: data/plugins-manifest.json
+    dst: /usr/lib/opal/plugins-manifest.json
+  - src: data/manga-sources-sfw.json
+    dst: /usr/lib/opal/manga-sources-sfw.json
   - src: packaging/opal.desktop
     dst: /usr/share/applications/opal.desktop
   - src: assets/logo.svg
