@@ -510,16 +510,21 @@ pub fn ymd(at: i64, out: []u8) ?[]const u8 {
 /// NOT /movie/upcoming. TMDB defines that endpoint relative to what is in
 /// cinemas and applies a region window, so without a region it mixes in titles
 /// that already released — users see "upcoming" films that are months old
-/// (issue #21). /discover with a hard `primary_release_date.gte` floor plus an
-/// ascending sort is the documented way to get a true forward-looking list, and
-/// it paginates consistently.
+/// (issue #21). /discover with a hard `primary_release_date.gte` floor is the
+/// documented way to get a genuinely forward-looking list, and it paginates
+/// consistently.
+///
+/// Sorted by popularity, NOT by date. Date-ascending returns every obscure
+/// global release landing tomorrow, which is a worse rail than the bug it
+/// replaced — /movie/upcoming was at least popularity-weighted. The date floor
+/// is what fixes the reported bug; the sort is what keeps the rail watchable.
 ///
 /// `today` is "YYYY-MM-DD". Returns null if `buf` is too small.
 pub fn upcomingUrl(buf: []u8, today: []const u8, page: u32) ?[]const u8 {
     return std.fmt.bufPrint(
         buf,
         "https://api.themoviedb.org/3/discover/movie?primary_release_date.gte={s}" ++
-            "&sort_by=primary_release_date.asc&page={d}",
+            "&sort_by=popularity.desc&page={d}",
         .{ today, page },
     ) catch null;
 }
@@ -541,7 +546,10 @@ test "upcomingUrl filters to future releases (issue #21 regression)" {
     // The bug: /movie/upcoming returns already-released titles.
     try std.testing.expect(std.mem.indexOf(u8, u, "/movie/upcoming") == null);
     try std.testing.expect(std.mem.indexOf(u8, u, "primary_release_date.gte=2026-07-26") != null);
-    try std.testing.expect(std.mem.indexOf(u8, u, "sort_by=primary_release_date.asc") != null);
+    // Popularity-sorted, not date-sorted: date-ascending fills the rail with
+    // obscure titles releasing tomorrow.
+    try std.testing.expect(std.mem.indexOf(u8, u, "sort_by=popularity.desc") != null);
+    try std.testing.expect(std.mem.indexOf(u8, u, "primary_release_date.asc") == null);
     try std.testing.expect(std.mem.indexOf(u8, u, "page=1") != null);
     // Page is threaded through for infinite scroll.
     const u_p7 = upcomingUrl(&b, "2026-07-26", 7).?;
