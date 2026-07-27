@@ -436,6 +436,24 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_dropup_pure).step);
 
+    // Player control bar: clock formatting, scrub geometry (pointer→fraction,
+    // fraction→gravity), torrent buffered-ahead analysis, seek throttle, volume
+    // ramp, transport state, responsive collapse.
+    //
+    // WIRED SO FAR: formatTime (footer.formatHmsBuf routes through it, so the
+    // shipped clock is the tested clock). The rest are tested but NOT yet on the
+    // shipped path — footer.zig still has its own inline copies. Wiring them is
+    // tracked work, not done; do not read these tests as coverage of the bar's
+    // current behaviour until the corresponding call site is routed through.
+    const test_footer_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ui/footer_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_footer_pure).step);
+
     // Audio EQ preset → af spec, video-filter clamp, download-limit sanitize —
     // the persist-and-replay mapping shared by settings.zig + player.zig init.
     const test_av_pure = b.addTest(.{

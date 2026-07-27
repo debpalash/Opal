@@ -1,6 +1,10 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
+// Pure (io-free, dvui-free) player-bar logic — clock formatting, scrub
+// geometry, transport state. Unit-tested in footer_pure.zig; the bar routes
+// through it so the tested logic is the shipped logic.
+const footer_pure = @import("footer_pure.zig");
 const c = @import("../core/c.zig");
 const state = @import("../core/state.zig");
 const player = @import("../player/player.zig");
@@ -74,16 +78,14 @@ pub fn pickerOpen() bool {
 
 // ── Helpers ──
 
-/// Pretty-format a duration in seconds as HH:MM:SS or MM:SS (when under 1h).
+/// Pretty-format a duration in seconds as H:MM:SS or M:SS (when under 1h).
+///
+/// Routed through footer_pure so the shipped clock IS the tested clock. The
+/// short form no longer zero-pads minutes ("0:42", not "00:42") — that is the
+/// convention every mainstream player uses, and it is covered by the boundary
+/// tests in footer_pure (59s → 0:59, 3599s → 59:59, 3600s → 1:00:00).
 fn formatHmsBuf(buf: []u8, sec: u32) []const u8 {
-    const h = sec / 3600;
-    const m = (sec % 3600) / 60;
-    const s = sec % 60;
-    const res = if (h > 0)
-        std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ h, m, s })
-    else
-        std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}", .{ m, s });
-    return res catch buf[0..0];
+    return footer_pure.formatTime(buf, sec);
 }
 
 /// Returns true when the mouse is over the given screen rect this frame.
