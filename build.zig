@@ -754,6 +754,18 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_rank).step);
 
+    // Storage page accounting: byte formatting at every unit boundary, the
+    // percent-of-total clamp, and the guard that user data is never one-click
+    // removable (losing opal.db is unrecoverable).
+    const test_storage_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/storage_usage_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_storage_pure).step);
+
     // TMDB pure string helpers: string-aware results splitter (FROM/HotD id-corruption
     // regression) + HTTPS→HTTP fallback rewrite.
     const test_tmdb_pure = b.addTest(.{

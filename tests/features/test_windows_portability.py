@@ -415,3 +415,89 @@ def test_no_tmp_in_feature_caches():
         return "fail", ("unconditional /tmp write (silently dead on Windows): "
                         + ", ".join(offenders) + " — use paths.cacheFile()")
     return "pass", "thumbnails, subtitles and friends use the platform cache dir"
+
+
+# ── 7. Storage settings page ────────────────────────────────────────────────
+
+@test("storage: page accounts for every store, not just one cache", "Storage")
+def test_storage_page_itemised():
+    # The page used to render a single hardcoded line —
+    # "SQLite: ~/.config/opal/opal.db" — which was the WRONG PATH on Windows
+    # (%APPDATA%\opal) and Linux ($XDG_CONFIG_HOME), carried no size, and
+    # ignored everything else. A real install measured 1.3 GB while the page
+    # reported 0.3 MB (models 715M, venv 248M, Suwayomi jar 166M, db 113M).
+    ui = _read("src/ui/settings.zig")
+    svc = _read("src/core/storage_usage.zig")
+    if not svc:
+        return "fail", "core/storage_usage.zig missing"
+    # Code only — the replacement's doc comment quotes the old string on purpose
+    # so nobody reintroduces it.
+    if "SQLite: ~/.config/opal" in _strip_comments(ui):
+        return "fail", "storage page still hardcodes a POSIX-only db path"
+    if "renderDiskUsageSection" not in ui:
+        return "fail", "storage page has no disk-usage section"
+    # Each store the app actually owns must be accounted for.
+    for want in ("models", "venv", "suwayomi", "sherpa-onnx", "bin",
+                 "content", "thumbs", "subs", "iptv-channels.json", "opal.db"):
+        if want not in svc:
+            return "fail", f"storage scan does not account for {want!r}"
+    # The DB row must include the WAL — it alone can be tens of MB.
+    if "opal.db-wal" not in svc:
+        return "fail", "db row ignores the WAL, under-reporting library size"
+    return "pass", "disk usage itemised across caches, downloads and user data"
+
+
+@test("storage: sizes are scanned off the render thread", "Storage")
+def test_storage_scan_is_async():
+    # renderCacheSection called content_cache.sizeBytes() every frame, which
+    # opens the cache dir and stats every file — a filesystem walk per frame.
+    # Walking a multi-GB tree that way would stall the UI outright.
+    svc = _read("src/core/storage_usage.zig")
+    ui = _read("src/ui/settings.zig")
+    m = _re.search(r"pub fn scanAsync\(\) void \{(.*?)\n\}", svc, _re.S)
+    if not m:
+        return "fail", "storage_usage has no scanAsync()"
+    if "Thread.spawn" not in m.group(1):
+        return "fail", "scanAsync does not spawn a worker — it would block the frame"
+    if "scanning.load(.acquire)" not in m.group(1):
+        return "fail", "scanAsync has no in-flight guard; a rescan could stack walks"
+    sec = _re.search(r"fn renderDiskUsageSection\(\) void \{(.*?)\n\}\n", ui, _re.S)
+    body = sec.group(1) if sec else ""
+    for banned in ("dirSize(", "openDirAbsolute(", "fileSize("):
+        if banned in body:
+            return "fail", f"render path calls {banned} — filesystem IO per frame"
+    if "count" not in body:
+        return "fail", "render path does not read the published count"
+    return "pass", "scan runs on a worker; render only reads the snapshot"
+
+
+@test("storage: user data cannot be deleted from the page", "Storage")
+def test_storage_user_data_protected():
+    # opal.db holds watch history, library and settings and has no backup.
+    # The refusal lives in removeEntry, not just in whether a button is drawn.
+    svc = _read("src/core/storage_usage.zig")
+    m = _re.search(r"pub fn removeEntry\(.*?\n\}", svc, _re.S)
+    if not m:
+        return "fail", "storage_usage has no removeEntry()"
+    if "isRemovable" not in m.group(0):
+        return "fail", "removeEntry does not check isRemovable — it could delete the library"
+    pure = _read("src/core/storage_usage_pure.zig")
+    if "user_data => false" not in pure:
+        return "fail", "isRemovable no longer refuses user_data"
+    return "pass", "removeEntry refuses user_data at the service layer"
+
+
+@test("storage: recursive scan is bounded and skips symlinks", "Storage")
+def test_storage_scan_bounded():
+    # A symlink into the media library would make Opal appear to occupy the
+    # whole disk; a link loop would hang the worker outright.
+    svc = _read("src/core/storage_usage.zig")
+    m = _re.search(r"fn dirSize\(.*?\n\}", svc, _re.S)
+    if not m:
+        return "fail", "storage_usage has no dirSize()"
+    body = m.group(0)
+    if "depth > " not in body:
+        return "fail", "dirSize has no depth cap — a link loop would hang the scan"
+    if ".directory =>" not in body or "else => {}" not in body:
+        return "fail", "dirSize does not restrict itself to files and directories"
+    return "pass", "dirSize is depth-capped and counts only real files"
