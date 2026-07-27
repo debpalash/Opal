@@ -2873,9 +2873,19 @@ fn renderStorageTab() void {
 
         // Two-step confirm — a single stray click used to run DELETE FROM
         // watch_history, irreversibly dropping every resume position.
-        if (components.confirmDangerButton(@src(), "Clear Watch History", 0)) {
-            watch.clearAll();
-            state.showToast("Watch history cleared — restore below");
+        //
+        // Wrapped in a horizontal row: confirmDangerButton sets gravity_y=0.5,
+        // which in a VERTICAL parent centers the button in the remaining space
+        // and floats it over the sections below (it overlapped the Disk usage
+        // rows). Inside a horizontal row, gravity_y means "center in this row",
+        // which is what it was written for.
+        {
+            var r = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+            defer r.deinit();
+            if (components.confirmDangerButton(@src(), "Clear Watch History", 0)) {
+                watch.clearAll();
+                state.showToast("Watch history cleared — restore below");
+            }
         }
         // One-level undo: clearAll() snapshots into watch_history_backup.
         if (watch.backup_available) {
@@ -3075,9 +3085,14 @@ fn renderCacheSection() void {
     }
 
     // Clear cache — two-step confirm (destructive; drops all cached entries).
-    if (components.confirmDangerButton(@src(), "Clear cache", 1)) {
-        content_cache.clearAll();
-        state.showToast("Content cache cleared");
+    // Horizontal wrapper for the same gravity_y reason as Clear Watch History.
+    {
+        var r = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        defer r.deinit();
+        if (components.confirmDangerButton(@src(), "Clear cache", 1)) {
+            content_cache.clearAll();
+            state.showToast("Content cache cleared");
+        }
     }
 }
 

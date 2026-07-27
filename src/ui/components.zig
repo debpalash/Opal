@@ -635,6 +635,15 @@ pub fn loadingState(label: []const u8) void {
 /// danger color for 3 seconds — and only the confirming second click returns
 /// true. A ghost/text button; pass a stable id_extra when emitting several
 /// from one source location.
+///
+/// **Call this inside a HORIZONTAL parent.** It sets `gravity_y = 0.5`, which
+/// centers the button in the space the parent hands it. In a horizontal row
+/// that is vertical centering — correct. In a VERTICAL parent it centers in the
+/// remaining height, so the button floats away from where it was written and
+/// draws on top of later siblings. Settings → Storage hit exactly this: "Clear
+/// Watch History" and "Clear cache" rendered over the Disk usage rows. Wrap the
+/// call in `dvui.box(@src(), .{ .dir = .horizontal }, …)` if the surrounding
+/// layout is a vertical stack.
 pub fn confirmDangerButton(src: std.builtin.SourceLocation, label: []const u8, id_extra: usize) bool {
     var bw: dvui.ButtonWidget = undefined;
     bw.init(src, .{}, .{
