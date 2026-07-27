@@ -750,14 +750,11 @@ fn renderScrubber(
         components.tip(@src(), dur_box.data().*, if (time_show_remaining) "Showing remaining — click for total" else "Click to show remaining time");
         var dur_buf: [20]u8 = undefined;
         // Unknown duration (live/streaming, or not probed yet) reads as "--:--"
-        // rather than a misleading 0:00.
-        const dur_str = if (d_sec == 0)
-            "--:--"
-        else if (time_show_remaining and d_sec >= t_sec) blk: {
-            var b2: [16]u8 = undefined;
-            const r = formatHmsBuf(&b2, d_sec - t_sec);
-            break :blk std.fmt.bufPrint(&dur_buf, "-{s}", .{r}) catch "-0:00";
-        } else formatHmsBuf(&dur_buf, d_sec);
+        // rather than a misleading 0:00. Routed through footer_pure so the
+        // remaining-time arithmetic — including the d_sec < t_sec case, which
+        // the old inline version fell through to showing the TOTAL instead of a
+        // clamped "-0:00" — is the tested one.
+        const dur_str = footer_pure.formatTrailing(&dur_buf, t_sec, d_sec, time_show_remaining);
         _ = dvui.label(@src(), "{s}", .{dur_str}, .{
             .color_text = theme.colors.text_tertiary,
             .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
@@ -814,12 +811,8 @@ fn renderScrubber(
             var map_buf: [2048]u8 = undefined;
             const map_len = c.mpv.torrent_get_piece_map(state.torrentSession(), active_p.current_torrent_id, &map_buf, 2048);
             if (map_len > 0) {
-                var downloaded_count: usize = 0;
-                var i: usize = 0;
-                while (i < @as(usize, @intCast(@max(@as(c_int, 0), map_len)))) : (i += 1) {
-                    if (map_buf[i] == '1') downloaded_count += 1;
-                }
-                BufCache.frac = @as(f32, @floatFromInt(downloaded_count)) / @as(f32, @floatFromInt(map_len));
+                const n: usize = @intCast(@max(@as(c_int, 0), map_len));
+                BufCache.frac = footer_pure.pieceMapFraction(map_buf[0..@min(n, map_buf.len)]);
             }
         }
         const buf_frac: f32 = BufCache.frac;
@@ -840,7 +833,7 @@ fn renderScrubber(
 
     // 3. Played fill — overlay on top.
     {
-        const played_frac: f32 = @floatCast(@max(0.0, @min(1.0, percent_pos / 100.0)));
+        const played_frac: f32 = footer_pure.percentToFrac(percent_pos);
         if (played_frac > 0.0) {
             var played = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = 3,
@@ -935,13 +928,16 @@ fn renderScrubber(
             var last_seek_pct: f64 = -1.0;
         };
         const seek_pct = @as(f64, slider_pct * 100.0);
-        if (now_ms - S.last_seek_ms > 100 or @abs(seek_pct - S.last_seek_pct) > 2.0) {
+        // Throttle routed through footer_pure: the tests pin BOTH halves of the
+        // rule — a fast drag is rate-limited, but a big jump (a click far from
+        // the playhead) is never swallowed by the rate limit.
+        if (footer_pure.shouldSeek(now_ms, S.last_seek_ms, seek_pct, S.last_seek_pct)) {
             var buf: [64]u8 = undefined;
             if (std.fmt.bufPrintZ(&buf, "seek {d:.2} absolute-percent+keyframes", .{seek_pct})) |seek_cmd| {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, seek_cmd.ptr);
             } else |_| {}
 
-            if (active_p.current_torrent_id >= 0 and now_ms - S.last_seek_ms > 500) {
+            if (active_p.current_torrent_id >= 0 and footer_pure.shouldPrioritize(now_ms, S.last_seek_ms)) {
                 c.mpv.torrent_seek_prioritize(state.torrentSession(), active_p.current_torrent_id, active_p.selected_file_idx, seek_pct);
             }
 
@@ -953,7 +949,7 @@ fn renderScrubber(
     // Hover-only timestamp tooltip above the cursor.
     if (hovered and duration > 0) {
         const mouse_x = state.app.last_mouse_x;
-        const frac = @max(0.0, @min(1.0, (mouse_x - band_rect.x) / @max(1.0, band_rect.w)));
+        const frac = footer_pure.fractionAt(mouse_x, band_rect.x, band_rect.w);
         const hover_time = frac * @as(f32, @floatCast(duration));
         const ht_sec = @as(u32, @intFromFloat(@max(0.0, hover_time)));
         var ht_buf: [16]u8 = undefined;
@@ -1691,7 +1687,7 @@ pub fn renderLiquidGlassOverlay() void {
         }
 
         const vol_f64: f64 = SlowProps.volume;
-        var vol_val: f32 = @floatCast(@max(0.0, @min(1.0, vol_f64 / 100.0)));
+        var vol_val: f32 = footer_pure.volumeFraction(vol_f64);
         if (dvui.slider(@src(), .{ .fraction = &vol_val }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 120, .h = 4 },
@@ -1703,7 +1699,7 @@ pub fn renderLiquidGlassOverlay() void {
             .background = true,
         })) {
             var set_vol_cmd: [64]u8 = undefined;
-            if (std.fmt.bufPrintZ(&set_vol_cmd, "set volume {d}", .{@as(i32, @intFromFloat(vol_val * 100.0))})) |cmd| {
+            if (std.fmt.bufPrintZ(&set_vol_cmd, "set volume {d}", .{footer_pure.volumePercent(@as(f64, vol_val) * 100.0)})) |cmd| {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cmd.ptr);
             } else |_| {}
         }
@@ -2278,7 +2274,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
         });
-        var vol_val: f32 = @floatCast(@max(0.0, @min(1.0, volume / 100.0)));
+        var vol_val: f32 = footer_pure.volumeFraction(volume);
         if (dvui.slider(@src(), .{ .fraction = &vol_val }, .{
             .min_size_content = .{ .w = 90, .h = 4 },
             .max_size_content = .{ .w = 90, .h = 4 },

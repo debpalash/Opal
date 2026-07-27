@@ -440,11 +440,17 @@ pub fn build(b: *std.Build) void {
     // fraction→gravity), torrent buffered-ahead analysis, seek throttle, volume
     // ramp, transport state, responsive collapse.
     //
-    // WIRED SO FAR: formatTime (footer.formatHmsBuf routes through it, so the
-    // shipped clock is the tested clock). The rest are tested but NOT yet on the
-    // shipped path — footer.zig still has its own inline copies. Wiring them is
-    // tracked work, not done; do not read these tests as coverage of the bar's
-    // current behaviour until the corresponding call site is routed through.
+    // ON THE SHIPPED PATH (footer.zig calls these, so the tests cover real
+    // behaviour): formatTime, formatTrailing, percentToFrac, fractionAt,
+    // pieceMapFraction, shouldSeek, shouldPrioritize, volumeFraction,
+    // volumePercent.
+    //
+    // TESTED BUT NOT YET SHIPPED — these back v2 affordances the bar does not
+    // draw yet (hover time chip, buffered-ahead range, width-based collapse,
+    // explicit transport state): timeLabelChars, timeLabelWidth, hoverChipWidth,
+    // segmentGravityX, centeredGravityX, bufferedAheadEnd, volumeLevel,
+    // transportState/Label/Busy, barLayout. Do not read those as coverage of
+    // current behaviour — there is no current behaviour to cover.
     const test_footer_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ui/footer_pure.zig"),
