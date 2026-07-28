@@ -2330,9 +2330,26 @@ pub fn loadContentDirectMeta(url: []const u8, art_url: []const u8, title: []cons
     const len = @min(url.len, 2048);
     @memcpy(url_z[0..len], url[0..len]);
     url_z[len] = 0;
+    stashFromNowPlaying(art_url, title, subtitle);
+    state.consumePendingPlay(p);
     p.load_file(@as([*c]const u8, @ptrCast(&url_z[0])));
     p.setNowPlaying(art_url, title, subtitle);
     state.gotoPlayer();
+}
+
+/// Fall back to the now-playing card's own art/title for the loading screen
+/// when the caller did not stash richer context itself.
+///
+/// Every direct-play entry point already hands this function an art URL, a
+/// title and a subtitle — podcasts, radio, IPTV, Audiobookshelf, the browser
+/// extension, Continue Watching. Deriving the loading-screen context from them
+/// here means all of those get cover art while they buffer without touching
+/// two dozen call sites. A caller that DID stash (music, TMDB) wins: its stash
+/// carries a kind, a year and a score this cannot know.
+fn stashFromNowPlaying(art_url: []const u8, title: []const u8, subtitle: []const u8) void {
+    if (state.app.pending_play_title_len > 0 or state.app.pending_play_art_len > 0) return;
+    if (art_url.len == 0 and title.len == 0) return;
+    state.stashPendingPlayFull(title, art_url, "", .other, "", 0, subtitle);
 }
 
 /// Like loadContentDirectMeta, but sends an arbitrary per-request header set
@@ -2358,6 +2375,8 @@ pub fn loadContentDirectMetaHeaders(
     if (state.app.active_player_idx >= state.app.players.items.len) return;
     const p = state.app.players.items[state.app.active_player_idx];
     p.provider = .mpv;
+    stashFromNowPlaying(art_url, title, subtitle);
+    state.consumePendingPlay(p);
     p.loadStreamWithHttpHeaders(url, user_agent, headers);
     p.setNowPlaying(art_url, title, subtitle);
     state.gotoPlayer();

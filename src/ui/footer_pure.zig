@@ -112,18 +112,6 @@ pub fn fractionAt(x: f32, track_x: f32, track_w: f32) f32 {
     return @max(0.0, @min(1.0, f));
 }
 
-/// dvui gravity_x that places a child of width `len_frac` (as a fraction of the
-/// parent) so its LEFT edge sits at `start_frac`. Gravity interpolates over the
-/// leftover space, so the mapping is `start / (1 - len)`; a child that fills the
-/// parent has no leftover space and pins to 0.
-pub fn segmentGravityX(start_frac: f32, len_frac: f32) f32 {
-    const len = @max(0.0, @min(1.0, len_frac));
-    const start = @max(0.0, @min(1.0, start_frac));
-    const room = 1.0 - len;
-    if (room <= 0.0001) return 0.0;
-    return @max(0.0, @min(1.0, start / room));
-}
-
 /// dvui gravity_x that centers a `label_w`-wide chip on `cursor_x` inside a
 /// track, clamped so the chip never pokes out of either end of the track.
 pub fn centeredGravityX(cursor_x: f32, track_x: f32, track_w: f32, label_w: f32) f32 {
@@ -265,10 +253,15 @@ pub const BarLayout = struct {
     skip_buttons: bool,
 };
 
-pub const BREAK_VOLUME: f32 = 620;
-pub const BREAK_CHIPS: f32 = 520;
-pub const BREAK_BADGES: f32 = 440;
-pub const BREAK_SKIP: f32 = 360;
+// Thresholds are MEASURED against the real bar, not guessed: at 1200pt the
+// full set fits with slack and the close button sits at the right edge; at
+// 700pt with every group enabled the row overflowed and clipped the close
+// button off the end — the exact failure this collapse exists to prevent. Each
+// constant is the width below which the next group must go, with margin.
+pub const BREAK_VOLUME: f32 = 900; // 120pt track + its gap + hover readout
+pub const BREAK_CHIPS: f32 = 800; // aspect, audio-device, sub-lang, uni-lang
+pub const BREAK_BADGES: f32 = 520; // chapters, find-subtitles, torrent files
+pub const BREAK_SKIP: f32 = 320; // playlist/episode skip, rewind, fullscreen
 
 pub fn barLayout(width: f32) BarLayout {
     return .{
@@ -343,19 +336,6 @@ test "clampFrac / percentToFrac: NaN and out-of-range are safe" {
     try expectApproxEqAbs(@as(f32, 0.5), percentToFrac(50.0), 0.001);
     try expectApproxEqAbs(@as(f32, 0.0), percentToFrac(std.math.nan(f64)), 0.001);
     try expectApproxEqAbs(@as(f32, 1.0), percentToFrac(150.0), 0.001);
-}
-
-test "segmentGravityX: places an inset buffered run" {
-    // A half-width segment starting halfway has exactly half the parent left
-    // over, so it must sit at the far end of that leftover space.
-    try expectApproxEqAbs(@as(f32, 1.0), segmentGravityX(0.5, 0.5), 0.001);
-    // A quarter-width segment at the start pins left.
-    try expectApproxEqAbs(@as(f32, 0.0), segmentGravityX(0.0, 0.25), 0.001);
-    // Quarter-width at 0.25 → 0.25 / 0.75.
-    try expectApproxEqAbs(@as(f32, 1.0 / 3.0), segmentGravityX(0.25, 0.25), 0.001);
-    // Full-width child: no leftover space, never divide by zero.
-    try expectApproxEqAbs(@as(f32, 0.0), segmentGravityX(0.5, 1.0), 0.001);
-    try expectApproxEqAbs(@as(f32, 0.0), segmentGravityX(0.5, 2.0), 0.001);
 }
 
 test "centeredGravityX: centers on the cursor, clamped inside the track" {
@@ -438,16 +418,30 @@ test "barLayout: sheds groups widest-first as the bar narrows" {
     const wide = barLayout(1400);
     try expect(wide.volume_slider and wide.secondary_chips and wide.status_badges and wide.skip_buttons);
 
-    const mid = barLayout(560);
-    try expect(!mid.volume_slider);
-    try expect(mid.secondary_chips and mid.status_badges and mid.skip_buttons);
+    // 700pt: the measured width at which the full set overflowed and clipped
+    // the close button. Both the volume track and the picker chips must be
+    // gone by here — with the chips still on, the row still ran off the end.
+    const seven = barLayout(700);
+    try expect(!seven.volume_slider and !seven.secondary_chips);
+    try expect(seven.status_badges and seven.skip_buttons);
+
+    // Only the volume track goes at first — the chips still fit.
+    const eight_fifty = barLayout(850);
+    try expect(!eight_fifty.volume_slider);
+    try expect(eight_fifty.secondary_chips and eight_fifty.status_badges and eight_fifty.skip_buttons);
 
     const narrow = barLayout(460);
-    try expect(!narrow.volume_slider and !narrow.secondary_chips);
-    try expect(narrow.status_badges and narrow.skip_buttons);
+    try expect(!narrow.volume_slider and !narrow.secondary_chips and !narrow.status_badges);
+    try expect(narrow.skip_buttons);
 
     const tiny = barLayout(300);
     try expect(!tiny.volume_slider and !tiny.secondary_chips and !tiny.status_badges and !tiny.skip_buttons);
+
+    // A grid cell in a 3x3 workspace — the case that motivated the whole
+    // collapse. Everything optional is gone; the essentials still render.
+    const cell = barLayout(400);
+    try expect(!cell.volume_slider and !cell.secondary_chips and !cell.status_badges);
+    try expect(cell.skip_buttons);
 
     // Monotonic: nothing ever comes BACK as the bar gets narrower.
     var w: f32 = 1400;
@@ -460,4 +454,160 @@ test "barLayout: sheds groups widest-first as the bar narrows" {
         try expect(!(cur.skip_buttons and !prev.skip_buttons));
         prev = cur;
     }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// Scrub-band paint geometry
+// ══════════════════════════════════════════════════════════════════
+//
+// The scrubber's five visual layers (base track, buffered fill, played fill,
+// chapter pips, hover knob) used to be dvui boxes sized with
+// `min_size_content = { .w = track_rect.w * frac }`. A child's min size
+// propagates up to the parent's DERIVED min (dvui takes max(specified,
+// derived)), so the band's minimum width ratcheted toward the whole row and
+// squeezed the trailing duration label to 0px — the total time was invisible
+// from the third frame on (measured: dur box w=92.8 on frame 2, w=0.0 on
+// frame 3, with the string itself still correct).
+//
+// The layers are decoration — nothing about them is interactive (the seek is a
+// separate transparent slider). So they're painted as plain rects instead, and
+// contribute no min size at all. These helpers compute those rects.
+
+pub const BarRect = struct { x: f32, y: f32, w: f32, h: f32 };
+
+/// A horizontal fill bar `thickness` tall, vertically centered in the band,
+/// spanning `frac` of the band's width from its left edge. `frac` is clamped
+/// to [0,1]; a non-finite band or fraction yields a zero-width bar rather than
+/// a NaN rect that would paint garbage.
+pub fn fillBar(bx: f32, by: f32, bw: f32, bh: f32, thickness: f32, frac: f32) BarRect {
+    if (!finite4(bx, by, bw, bh) or !std.math.isFinite(thickness)) return .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+    const f = clampFrac(frac);
+    const t = @max(0.0, @min(thickness, bh));
+    return .{
+        .x = bx,
+        .y = by + (bh - t) * 0.5,
+        .w = @max(0.0, bw) * f,
+        .h = t,
+    };
+}
+
+/// A horizontal bar covering the span `start_frac`..`end_frac` of the band.
+/// Used for the contiguous buffered-ahead range, which starts at the playhead
+/// rather than at the left edge. An inverted or empty span yields a zero-width
+/// rect (nothing to paint) instead of a negative-width one.
+pub fn fillSegment(bx: f32, by: f32, bw: f32, bh: f32, thickness: f32, start_frac: f32, end_frac: f32) BarRect {
+    const whole = fillBar(bx, by, bw, bh, thickness, 1.0);
+    if (whole.w <= 0) return whole;
+    const s = clampFrac(start_frac);
+    const e = clampFrac(end_frac);
+    if (e <= s) return .{ .x = whole.x + whole.w * s, .y = whole.y, .w = 0, .h = whole.h };
+    return .{
+        .x = whole.x + whole.w * s,
+        .y = whole.y,
+        .w = whole.w * (e - s),
+        .h = whole.h,
+    };
+}
+
+/// A `w`×`h` marker (chapter pip, hover knob) vertically centered in the band
+/// and placed so it never overhangs either end — `frac` 0 pins it flush left,
+/// 1 flush right. This is dvui's `gravity_x` rule, kept identical so swapping
+/// the boxes for direct paints moved nothing on screen.
+pub fn markerAt(bx: f32, by: f32, bw: f32, bh: f32, w: f32, h: f32, frac: f32) BarRect {
+    if (!finite4(bx, by, bw, bh) or !finite4(w, h, 0, 0)) return .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+    const f = clampFrac(frac);
+    const mw = @max(0.0, @min(w, bw));
+    const mh = @max(0.0, @min(h, bh));
+    return .{
+        .x = bx + (@max(0.0, bw) - mw) * f,
+        .y = by + (bh - mh) * 0.5,
+        .w = mw,
+        .h = mh,
+    };
+}
+
+fn finite4(a: f32, b: f32, c: f32, d: f32) bool {
+    return std.math.isFinite(a) and std.math.isFinite(b) and
+        std.math.isFinite(c) and std.math.isFinite(d);
+}
+
+test "fillBar centers the track and scales with the fraction" {
+    const band_x: f32 = 100;
+    const band_y: f32 = 50;
+    const band_w: f32 = 400;
+    const band_h: f32 = 26;
+
+    const full = fillBar(band_x, band_y, band_w, band_h, 4, 1.0);
+    try expect(full.x == 100);
+    try expect(full.w == 400);
+    try expect(full.h == 4);
+    try expect(full.y == 50 + (26 - 4) / 2); // vertically centered
+
+    const half = fillBar(band_x, band_y, band_w, band_h, 4, 0.5);
+    try expect(half.w == 200);
+    try expect(half.x == full.x); // always grows from the left edge
+    try expect(half.y == full.y);
+
+    // Hovering thickens the track but keeps it centered.
+    const thick = fillBar(band_x, band_y, band_w, band_h, 6, 1.0);
+    try expect(thick.h == 6);
+    try expect(thick.y == 50 + (26 - 6) / 2);
+}
+
+test "fillBar clamps out-of-range fractions and thickness" {
+    try expect(fillBar(0, 0, 400, 26, 4, -1).w == 0);
+    try expect(fillBar(0, 0, 400, 26, 4, 5).w == 400);
+    // Thickness can never exceed the band it sits in.
+    try expect(fillBar(0, 0, 400, 26, 999, 1).h == 26);
+    try expect(fillBar(0, 0, 400, 26, -3, 1).h == 0);
+}
+
+test "fillBar refuses to emit a NaN rect" {
+    const nan = std.math.nan(f32);
+    const r = fillBar(nan, 0, 400, 26, 4, 0.5);
+    try expect(r.w == 0 and r.h == 0);
+    const r2 = fillBar(0, 0, 400, 26, 4, nan);
+    // clampFrac handles a NaN fraction; the rect must still be finite.
+    try expect(std.math.isFinite(r2.w) and std.math.isFinite(r2.x));
+}
+
+test "markerAt spans flush-left to flush-right without overhang" {
+    const left = markerAt(100, 50, 400, 26, 8, 8, 0.0);
+    try expect(left.x == 100);
+    const right = markerAt(100, 50, 400, 26, 8, 8, 1.0);
+    try expect(right.x == 100 + 400 - 8); // right edge lands exactly on the band edge
+    try expect(right.x + right.w == 100 + 400);
+    const mid = markerAt(100, 50, 400, 26, 8, 8, 0.5);
+    try expect(mid.x == 100 + (400 - 8) / 2);
+    // Centered vertically, same as the fills.
+    try expect(mid.y == 50 + (26 - 8) / 2);
+}
+
+test "markerAt never escapes a band narrower than the marker" {
+    const r = markerAt(0, 0, 4, 26, 8, 8, 1.0);
+    try expect(r.w == 4);
+    try expect(r.x == 0);
+    try expect(r.x + r.w <= 4);
+}
+
+test "fillSegment spans start..end and never inverts" {
+    const seg = fillSegment(100, 50, 400, 26, 4, 0.25, 0.75);
+    try expect(seg.x == 100 + 100);
+    try expect(seg.w == 200);
+    try expect(seg.h == 4);
+
+    // Full span matches a plain full-width bar exactly.
+    const full = fillSegment(100, 50, 400, 26, 4, 0.0, 1.0);
+    const bar = fillBar(100, 50, 400, 26, 4, 1.0);
+    try expect(full.x == bar.x and full.w == bar.w and full.y == bar.y);
+
+    // Nothing buffered ahead: end == start → nothing painted, positioned at the
+    // playhead rather than at a negative width.
+    const empty = fillSegment(100, 50, 400, 26, 4, 0.6, 0.6);
+    try expect(empty.w == 0);
+    try expect(empty.x == 100 + 240);
+
+    // Inverted input can never produce a negative-width rect.
+    const inverted = fillSegment(100, 50, 400, 26, 4, 0.9, 0.1);
+    try expect(inverted.w == 0);
 }

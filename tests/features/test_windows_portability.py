@@ -501,3 +501,51 @@ def test_storage_scan_bounded():
     if ".directory =>" not in body or "else => {}" not in body:
         return "fail", "dirSize does not restrict itself to files and directories"
     return "pass", "dirSize is depth-capped and counts only real files"
+
+
+@test("storage: poster art is accounted for and capped by bytes", "Storage")
+def test_poster_cache_row():
+    """Two holes in the same cache.
+
+    (a) Poster art lives in the `poster_cache` TABLE, so the Storage page's
+        filesystem walk could not see it. It was silently rolled into the
+        library-database row — i.e. presented as unremovable user data, when in
+        fact every byte is re-downloadable and it can run to hundreds of MB.
+
+    (b) The only eviction rule capped the ROW COUNT at 5000, which does not
+        bound disk at all: 5000 posters is ~30 MB of small art or ~2.4 GB of
+        large art. The database only ever grew."""
+    su = _src("src/core/storage_usage.zig")
+    sp = _src("src/core/storage_usage_pure.zig")
+    po = _src("src/core/poster.zig")
+
+    checks = {
+        # (a) A real row, of a kind that is removable but NOT path-backed.
+        "db_cache kind": "db_cache," in sp,
+        "kind is removable": ".cache, .db_cache, .download => true," in sp,
+        "database-backed predicate": "pub fn isDatabaseBacked(" in sp,
+        "poster row added": '"Poster art cache"' in su and ".db_cache" in su,
+        "row size from the table": "poster.cacheBytes()" in su,
+        # The remover must branch on the kind BEFORE the empty-path refusal,
+        # or the row is listed as removable and then silently refuses.
+        "remover branches first": su.index("isDatabaseBacked") < su.index("const path = e.pathStr();"),
+        "remover clears the table": "poster.cacheClear()" in su,
+        # (b) Byte budget, evicting oldest-first, bounded loop.
+        "byte budget": "POSTER_CACHE_BUDGET" in sp,
+        "overBudget pure": "pub fn overBudget(" in sp,
+        "eviction wired": "evictToBudgetLocked(su_pure.POSTER_CACHE_BUDGET)" in po,
+        "evicts oldest first": "ORDER BY cached_at ASC" in po,
+        "eviction terminates": "guard < 16" in po,
+        # The poster bytes are inside opal.db, so the library-database row must
+        # subtract them or the same bytes are counted twice and every % is off.
+        "no double count": "const db_only = if (db > posters)" in su and ".user_data, db_only)" in su,
+        # Regression tests name both holes.
+        "db_cache test": "database-backed caches are removable but never unlinked" in sp,
+        "budget test": "overBudget drives byte-based eviction, not a row count" in sp,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "poster cache accounting/cap incomplete: " + ", ".join(missing)
+    return "pass", ("poster art is its own removable Storage row (sized from the table, "
+                    "cleared with DELETE) and the cache is capped at a byte budget with "
+                    "oldest-first eviction, not just a 5000-row count")

@@ -12,15 +12,39 @@ pub const Kind = enum {
     /// Large downloaded artifacts (ML models, the Suwayomi jar, a python venv).
     /// Safe to drop, but re-downloading is expensive — warn about the size.
     download,
+    /// A cache that lives INSIDE the library database (the poster_cache table),
+    /// not as its own file. Same "safe to drop" semantics as `cache`, but it is
+    /// cleared with a DELETE rather than by unlinking a path — so the row
+    /// carries no path and the remover must not try to unlink one.
+    db_cache,
     /// Irreplaceable: the library, watch history, settings. Never offer a
     /// one-click delete for these; they are shown for accounting only.
     user_data,
 };
 
+/// True when the row is backed by a table rather than a file tree. Storage's
+/// remover branches on this BEFORE it looks at the path — a db_cache row has
+/// no path, and the old "no path → refuse" rule would have made it undeletable.
+pub fn isDatabaseBacked(kind: Kind) bool {
+    return kind == .db_cache;
+}
+
+/// Byte budget for the poster cache. Past this, the oldest posters are evicted
+/// on write. The previous rule capped the ROW COUNT at 5000, which says nothing
+/// about size: 5000 posters is anywhere from 30 MB to 2.5 GB depending on the
+/// art, and the database file only ever grew.
+pub const POSTER_CACHE_BUDGET: u64 = 256 * 1024 * 1024;
+
+/// How many bytes over budget the cache is; 0 when it is within budget.
+/// Eviction targets this number rather than a fixed row count.
+pub fn overBudget(bytes: u64, budget: u64) u64 {
+    return if (bytes > budget) bytes - budget else 0;
+}
+
 /// Whether the UI may offer a "remove" action for this kind at all.
 pub fn isRemovable(kind: Kind) bool {
     return switch (kind) {
-        .cache, .download => true,
+        .cache, .db_cache, .download => true,
         .user_data => false,
     };
 }
@@ -29,7 +53,7 @@ pub fn isRemovable(kind: Kind) bool {
 /// Big re-downloads deserve a confirm even though they are technically safe.
 pub fn needsConfirm(kind: Kind) bool {
     return switch (kind) {
-        .cache => false,
+        .cache, .db_cache => false,
         .download, .user_data => true,
     };
 }
@@ -99,4 +123,32 @@ test "user data is never one-click removable" {
     // Expensive re-downloads still get the two-step confirm.
     try std.testing.expect(!needsConfirm(.cache));
     try std.testing.expect(needsConfirm(.download));
+}
+
+test "database-backed caches are removable but never unlinked" {
+    // REGRESSION GUARD: the poster cache lives in the poster_cache table, so it
+    // has no path. The remover must branch on isDatabaseBacked BEFORE its
+    // "empty path → refuse" rule, or the row is permanently undeletable.
+    try std.testing.expect(isRemovable(.db_cache));
+    try std.testing.expect(!needsConfirm(.db_cache)); // cheap to refetch
+    try std.testing.expect(isDatabaseBacked(.db_cache));
+    // Nothing else may take the database path.
+    try std.testing.expect(!isDatabaseBacked(.cache));
+    try std.testing.expect(!isDatabaseBacked(.download));
+    try std.testing.expect(!isDatabaseBacked(.user_data));
+}
+
+test "overBudget drives byte-based eviction, not a row count" {
+    const B = POSTER_CACHE_BUDGET;
+    try std.testing.expectEqual(@as(u64, 0), overBudget(0, B));
+    try std.testing.expectEqual(@as(u64, 0), overBudget(B, B)); // exactly at budget is fine
+    try std.testing.expectEqual(@as(u64, 1), overBudget(B + 1, B));
+    try std.testing.expectEqual(@as(u64, B), overBudget(2 * B, B));
+    // A budget of 0 means "evict everything", not "divide by zero".
+    try std.testing.expectEqual(@as(u64, 100), overBudget(100, 0));
+    // The old count rule could not distinguish these two; the byte rule does.
+    const five_thousand_small: u64 = 5000 * 6 * 1024; // ~30 MB of art
+    const five_thousand_large: u64 = 5000 * 500 * 1024; // ~2.4 GB of art
+    try std.testing.expectEqual(@as(u64, 0), overBudget(five_thousand_small, B));
+    try std.testing.expect(overBudget(five_thousand_large, B) > 0);
 }

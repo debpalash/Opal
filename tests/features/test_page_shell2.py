@@ -165,7 +165,9 @@ def test_subtab_layout():
     sh = _src("src/ui/shell.zig")
     if "var page_col = dvui.box" not in sh:
         return "fail", "route fade missing the single-child column wrapper"
-    if "scrollArea" not in sh.split("fn subTabs")[1].split("fn ")[0]:
+    # subTabs() is now a thin wrapper over the generic subTabsOf() (the Plugins
+    # route reuses the same strip), so the layout guard reads the generic body.
+    if "scrollArea" not in sh.split("fn subTabsOf")[1].split("\nfn ")[0]:
         return "fail", "sub-tab strip not in a height-reserving scroll strip"
     return "pass", "fade wraps one column; sub-tabs reserve their row"
 
@@ -451,3 +453,38 @@ def test_unified_downloads():
     if missing:
         return "fail", "missing: " + ", ".join(missing)
     return "pass", "one merged list: pure dedup + chips + union actions + infohash join"
+
+
+@test("Responsive Breakpoints Measure Points, Not Scaled Units", "Page Shell")
+def test_breakpoints_in_points():
+    """The shell renders inside dvui.scale(ui_scale), so root.rect.w is in
+    scaled units. Comparing it to point thresholds fired the breakpoints
+    ~1/ui_scale too late: at 900pt the nav kept full labels + Donate and pushed
+    the whole right-hand action cluster (Now playing / Plugins / Logs /
+    Settings / overflow) off the window edge."""
+    sh = _src("src/ui/shell.zig")
+    sp = _src("src/core/scale_pure.zig")
+    bz = _src("build.zig")
+
+    checks = {
+        # Pure conversion + predicates, registered for `zig build test`.
+        "pure layoutPoints": "pub fn layoutPoints(" in sp,
+        "pure isCompact": "pub fn isCompact(" in sp,
+        "pure isNarrow": "pub fn isNarrow(" in sp,
+        "thresholds named": "COMPACT_PT" in sp and "NARROW_PT" in sp,
+        "registered": "scale_pure.zig" in bz,
+        # Regression test names the actual measurement that caught it.
+        "regression test": "breakpoints measure on-screen points" in sp,
+        "degenerate-frame test": "breakpoints are inert on a degenerate first frame" in sp,
+        # Production routes through the pure predicates with the live ui_scale —
+        # no raw comparison left behind.
+        "shell uses isCompact": "scale_pure.isCompact(w, state.app.ui_scale)" in sh,
+        "shell uses isNarrow": "scale_pure.isNarrow(w, state.app.ui_scale)" in sh,
+        "no raw threshold": "w < 760" not in sh and "w < 950" not in sh,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "breakpoint scaling fix incomplete: " + ", ".join(missing)
+    return "pass", ("compact/narrow breakpoints convert scaled layout units to "
+                    "on-screen points via scale_pure, so the right-hand nav "
+                    "actions stay reachable on narrow windows")

@@ -792,15 +792,26 @@ pub fn renderGrid() !void {
                     // Everything else (raw magnet paste, plain file/URL) keeps
                     // the original hourglass + source-path text unchanged.
                     const text_mod = @import("../core/text.zig");
-                    const has_tmdb_ctx = p.loading_poster_path_len > 0;
+                    const lpure = @import("loading_pure.zig");
+                    const io_g = @import("../core/io_global.zig");
+                    // Any source that stashed art gets the rich screen — TMDB
+                    // movies and episodes, anime, and music (whose cover is an
+                    // absolute URL rather than a TMDB fragment). Everything
+                    // else still falls through to the hourglass below.
+                    const has_meta = p.loading_art_len > 0 or p.loading_title_len > 0;
+                    const kind = lpure.MediaKind.fromInt(p.loading_kind);
 
-                    if (has_tmdb_ctx and !p.loading_meta_fetch_started) {
+                    if (has_meta and !p.loading_meta_fetch_started) {
                         p.loading_meta_fetch_started = true;
-                        var url_buf: [256]u8 = undefined;
-                        if (std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w500{s}", .{p.loading_poster_path[0..p.loading_poster_path_len]})) |url| {
-                            @import("../core/poster.zig").fetchAsync(url, &p.loading_poster_pixels, &p.loading_poster_w, &p.loading_poster_h, &p.loading_poster_fetching);
-                        } else |_| {}
-                        if (p.loading_title_len > 0) {
+                        p.loading_card_since_ms = io_g.milliTimestamp();
+                        var url_buf: [320]u8 = undefined;
+                        const art_url = lpure.posterUrl(p.loading_art[0..p.loading_art_len], &url_buf);
+                        if (art_url.len > 0) {
+                            @import("../core/poster.zig").fetchAsync(art_url, &p.loading_poster_pixels, &p.loading_poster_w, &p.loading_poster_h, &p.loading_poster_fetching);
+                        }
+                        // Trivia lookup only makes sense for titles Wikipedia
+                        // is likely to have an article on.
+                        if (p.loading_title_len > 0 and kind != .other) {
                             @import("../services/wikipedia.zig").fetchTrivia(
                                 p.loading_title[0..p.loading_title_len],
                                 p.loading_is_tv,
@@ -810,15 +821,15 @@ pub fn renderGrid() !void {
                             );
                         }
                     }
-                    if (has_tmdb_ctx) {
+                    if (has_meta) {
                         _ = @import("../core/poster.zig").uploadIfReady(&p.loading_poster_pixels, p.loading_poster_w, p.loading_poster_h, &p.loading_poster_tex);
                     }
 
                     var load_overlay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
                     {
-                        if (has_tmdb_ctx and p.loading_poster_tex != null) {
-                            // Full-bleed poster behind a dim scrim so the spinner
-                            // + text stay legible over whatever art loaded.
+                        if (has_meta and p.loading_poster_tex != null) {
+                            // Full-bleed art behind a dim scrim so the text
+                            // stays legible over whatever poster loaded.
                             _ = dvui.image(@src(), .{ .source = .{ .texture = p.loading_poster_tex.? } }, .{
                                 .id_extra = i + 3010,
                                 .expand = .both,
@@ -849,7 +860,7 @@ pub fn renderGrid() !void {
                         });
                         defer load_stack.deinit();
 
-                        if (has_tmdb_ctx and p.loading_title_len > 0) {
+                        if (has_meta and p.loading_title_len > 0) {
                             _ = dvui.icon(@src(), "", icons.tvg.lucide.hourglass, .{}, .{
                                 .id_extra = i + 3150,
                                 .color_text = theme.colors.text_primary,
@@ -863,9 +874,35 @@ pub fn renderGrid() !void {
                             _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(p.loading_title[0..p.loading_title_len], &title_buf)}, .{
                                 .id_extra = i + 3151,
                                 .color_text = theme.colors.text_primary,
+                                .font = dvui.themeGet().font_heading,
                                 .gravity_x = 0.5,
-                                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
+                                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
                             });
+
+                            // Meta line: kind, year, artist/episode, score.
+                            // Skips whatever the source did not supply, so a
+                            // music track shows "Music · <artist>" and never a
+                            // dangling separator.
+                            {
+                                var meta_buf: [160]u8 = undefined;
+                                var extra_buf: [96]u8 = undefined;
+                                const meta = lpure.metaLine(
+                                    &meta_buf,
+                                    kind,
+                                    p.loading_year[0..p.loading_year_len],
+                                    p.loading_rating,
+                                    text_mod.safeUtf8Buf(p.loading_extra[0..p.loading_extra_len], &extra_buf),
+                                );
+                                if (meta.len > 0) {
+                                    _ = dvui.label(@src(), "{s}", .{meta}, .{
+                                        .id_extra = i + 3152,
+                                        .color_text = theme.colors.text_tertiary,
+                                        .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+                                        .gravity_x = 0.5,
+                                        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 10 },
+                                    });
+                                }
+                            }
 
                             // Prefer the fetched Wikipedia trivia; fall back to the
                             // TMDB synopsis stashed at play-start while it's still
@@ -876,18 +913,89 @@ pub fn renderGrid() !void {
                                 p.loading_overview[0..p.loading_overview_len];
 
                             if (trivia_src.len > 0) {
-                                var trivia_wrap = dvui.box(@src(), .{}, .{
+                                // One paragraph held still for the whole wait.
+                                // Cut it into cards that rotate every few
+                                // seconds, and let the viewer page through them
+                                // — a torrent resolve is long enough that a
+                                // static block of text stops being read.
+                                const cards = lpure.splitFacts(trivia_src);
+                                const now_ms = io_g.milliTimestamp();
+                                if (p.loading_card_since_ms == 0) p.loading_card_since_ms = now_ms;
+                                const card_i = lpure.cardIndex(
+                                    cards.count,
+                                    now_ms - p.loading_card_since_ms,
+                                    p.loading_card_manual,
+                                );
+
+                                var trivia_wrap = dvui.box(@src(), .{ .dir = .vertical }, .{
                                     .id_extra = i + 3160,
                                     .gravity_x = 0.5,
-                                    .max_size_content = .{ .w = 440, .h = std.math.floatMax(f32) },
+                                    .max_size_content = .{ .w = 460, .h = std.math.floatMax(f32) },
                                 });
                                 defer trivia_wrap.deinit();
+
                                 var trivia_buf: [400]u8 = undefined;
-                                dvui.labelEx(@src(), "{s}", .{text_mod.safeUtf8Buf(trivia_src, &trivia_buf)}, .{ .align_x = 0.5 }, .{
+                                dvui.labelEx(@src(), "{s}", .{text_mod.safeUtf8Buf(cards.slice(trivia_src, card_i), &trivia_buf)}, .{ .align_x = 0.5 }, .{
                                     .id_extra = i + 3161,
                                     .color_text = theme.colors.text_secondary,
                                     .expand = .horizontal,
                                 });
+
+                                // Pager: dots for position plus prev/next. Only
+                                // when there is more than one card — a single
+                                // fact needs no controls.
+                                if (cards.count > 1) {
+                                    var pager = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                                        .id_extra = i + 3170,
+                                        .gravity_x = 0.5,
+                                        .margin = .{ .x = 0, .y = 10, .w = 0, .h = 0 },
+                                    });
+                                    defer pager.deinit();
+
+                                    if (dvui.buttonIcon(@src(), "fact-prev", icons.tvg.lucide.@"chevron-left", .{}, .{}, .{
+                                        .id_extra = i + 3171,
+                                        .color_fill = theme.transparent,
+                                        .color_text = theme.colors.text_tertiary,
+                                        .border = dvui.Rect.all(0),
+                                        .min_size_content = .{ .w = 18, .h = 18 },
+                                        .max_size_content = .{ .w = 18, .h = 18 },
+                                        .gravity_y = 0.5,
+                                    })) {
+                                        // +count-1 rather than -1: the counter is
+                                        // unsigned and wraps, so stepping back
+                                        // from card 0 must not underflow.
+                                        p.loading_card_manual +%= cards.count - 1;
+                                        p.loading_card_since_ms = now_ms;
+                                    }
+
+                                    for (0..cards.count) |d| {
+                                        const on = (d == card_i);
+                                        var dot = dvui.box(@src(), .{}, .{
+                                            .id_extra = i + 3180 + d,
+                                            .background = true,
+                                            .color_fill = if (on) theme.colors.text_primary else theme.colors.border_subtle,
+                                            .corner_radius = dvui.Rect.all(theme.radius.pill),
+                                            .min_size_content = .{ .w = 5, .h = 5 },
+                                            .max_size_content = .{ .w = 5, .h = 5 },
+                                            .margin = .{ .x = 3, .y = 0, .w = 3, .h = 0 },
+                                            .gravity_y = 0.5,
+                                        });
+                                        dot.deinit();
+                                    }
+
+                                    if (dvui.buttonIcon(@src(), "fact-next", icons.tvg.lucide.@"chevron-right", .{}, .{}, .{
+                                        .id_extra = i + 3172,
+                                        .color_fill = theme.transparent,
+                                        .color_text = theme.colors.text_tertiary,
+                                        .border = dvui.Rect.all(0),
+                                        .min_size_content = .{ .w = 18, .h = 18 },
+                                        .max_size_content = .{ .w = 18, .h = 18 },
+                                        .gravity_y = 0.5,
+                                    })) {
+                                        p.loading_card_manual +%= 1;
+                                        p.loading_card_since_ms = now_ms;
+                                    }
+                                }
                             }
                         } else {
                             components.emptyState(icons.tvg.lucide.hourglass, "Loading...", "");

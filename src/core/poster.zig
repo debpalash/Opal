@@ -2,6 +2,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const http = @import("http.zig");
 const db = @import("db.zig");
+const su_pure = @import("storage_usage_pure.zig");
 
 // ══════════════════════════════════════════════════════════
 // Opal v2 — Poster Daemon
@@ -89,12 +90,51 @@ fn cacheStore(key: i64, encoded: []const u8, w: u32, h: u32) void {
     db.bindInt(stmt, 3, @intCast(w));
     db.bindInt(stmt, 4, @intCast(h));
     _ = db.step(stmt);
-    // Periodic prune: keep the newest ~5000 posters (worst case ≈ a few
-    // hundred MB). Every 64 stores, not every store — the subquery scans.
+    // Periodic prune, every 64 stores rather than every store (the subquery
+    // scans). Two rules, because a row count alone does not bound disk: 5000
+    // posters is ~30 MB of small art or ~2.4 GB of large art, and the database
+    // only ever grew. The byte budget is the real cap; the row cap stays as a
+    // cheap upper bound on the table's row count.
     cache_store_count +%= 1;
     if (cache_store_count % 64 == 0) {
         db.exec("DELETE FROM poster_cache WHERE item_id NOT IN (SELECT item_id FROM poster_cache ORDER BY cached_at DESC LIMIT 5000)");
+        evictToBudgetLocked(su_pure.POSTER_CACHE_BUDGET);
     }
+}
+
+/// Total bytes of cached poster art. This is the number the Storage page shows
+/// — it lives inside opal.db, so it is invisible to a filesystem walk.
+pub fn cacheBytes() u64 {
+    cache_lock.lock();
+    defer cache_lock.unlock();
+    return cacheBytesLocked();
+}
+
+fn cacheBytesLocked() u64 {
+    const stmt = db.prepare("SELECT COALESCE(SUM(LENGTH(jpeg_data)), 0) FROM poster_cache") orelse return 0;
+    defer db.finalize(stmt);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return 0;
+    const v = db.columnInt64(stmt, 0);
+    return if (v > 0) @intCast(v) else 0;
+}
+
+
+/// Drop the oldest posters until the cache fits `budget`. Deletes in batches
+/// rather than one statement per row, and re-measures between batches so a run
+/// of unusually large blobs can't leave it still over budget.
+fn evictToBudgetLocked(budget: u64) void {
+    var guard: u8 = 0;
+    while (su_pure.overBudget(cacheBytesLocked(), budget) > 0 and guard < 16) : (guard += 1) {
+        db.exec("DELETE FROM poster_cache WHERE item_id IN (SELECT item_id FROM poster_cache ORDER BY cached_at ASC LIMIT 256)");
+    }
+}
+
+/// Drop every cached poster. Backs the Storage page's poster-cache row; art is
+/// re-downloaded on next view, so there is nothing to confirm.
+pub fn cacheClear() void {
+    cache_lock.lock();
+    defer cache_lock.unlock();
+    db.exec("DELETE FROM poster_cache");
 }
 
 // ── Public cache API for providers with their OWN download workers ──

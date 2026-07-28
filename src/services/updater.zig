@@ -11,9 +11,14 @@ const logs = @import("../core/logs.zig");
 const state = @import("../core/state.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 
-/// Current app version. Kept in sync with build.zig.zon + Info.plist
-/// (scripts/build-app.sh derives CFBundleShortVersionString from the zon).
-pub const APP_VERSION: []const u8 = "0.6.0";
+/// Current app version, injected from build.zig.zon at build time.
+///
+/// This was a hand-maintained constant "kept in sync" with the zon. It drifted:
+/// v0.6.1 shipped with it still reading "0.6.0", so the About page showed the
+/// wrong version AND every 0.6.1 user was told an update was available forever,
+/// since the check below compares this string to the latest GitHub tag
+/// (issue #21). One source of truth now — build.zig parses the zon.
+pub const APP_VERSION: []const u8 = @import("build_options").app_version;
 
 const RELEASE_API = "https://api.github.com/repos/debpalash/Opal/releases/latest";
 

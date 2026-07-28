@@ -17,7 +17,12 @@ cd "$ROOT"
 
 # ── 1. Build release binary ────────────────────────────────────
 echo "[build-app] Compiling ReleaseFast…"
-"$ZIG" build -Doptimize=ReleaseFast
+# -Dcpu is pinned, not left native. A release binary built without it bakes in
+# whatever ISA the build machine has: the v0.6.1 Linux artifact was compiled on
+# a runner with AVX-512 and died with SIGILL on every CPU without it (issue
+# #22). The same hazard applies here — a bundle built on a newer Apple Silicon
+# runner would fault on an M1. apple_m1 is the floor Opal supports.
+"$ZIG" build -Doptimize=ReleaseFast -Dcpu="${OPAL_CPU:-apple_m1}"
 
 [ -f "$BIN_PATH" ] || { echo "[build-app] ERROR: $BIN_PATH missing"; exit 1; }
 

@@ -79,8 +79,21 @@ pub fn replay() void {
 }
 
 pub fn render() void {
-    // Only when reopened from Settings (replay_active) — never at startup.
-    if (!replay_active or !state.app.config_loaded.load(.acquire) or state.app.is_headless) return;
+    // Shown on a genuine first run, and whenever reopened from Settings.
+    //
+    // This used to be `if (!replay_active) return` — i.e. the FIRST-RUN wizard
+    // never ran on first run, only if you already knew to find "Replay setup"
+    // in Settings > About. Every new user landed on the full UI with no
+    // orientation at all ("its kinda confusing, the whole ui so maybe
+    // onboarding is needed", issue #21).
+    //
+    // Existing installs are already protected: config.load() grandfathers any
+    // config carrying a real TMDB key or installed sources by setting
+    // `onboarded`, so turning the trigger on cannot nag people who have been
+    // using Opal for months. `config_loaded` is what makes that ordering
+    // safe — without it the wizard would flash before the flag is read.
+    if (!state.app.config_loaded.load(.acquire) or state.app.is_headless) return;
+    if (!replay_active and state.app.onboarded) return;
     // A stale/replayed index that outruns the current tour count can't dead-end.
     page = nav.clamp(page, PAGE_COUNT);
 

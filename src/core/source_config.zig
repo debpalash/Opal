@@ -17,7 +17,10 @@ const paths = @import("paths.zig");
 const io = @import("io_global.zig");
 const alloc = @import("alloc.zig").allocator;
 
-const MAX_ENTRIES = 64;
+const pure = @import("source_config_pure.zig");
+const logs = @import("logs.zig");
+
+const MAX_ENTRIES = pure.MAX_ENTRIES;
 
 const Entry = struct {
     id: [32]u8 = std.mem.zeroes([32]u8),
@@ -39,10 +42,15 @@ pub fn sourcesDir(buf: []u8) []const u8 {
     return std.fmt.bufPrint(buf, "{s}/plugins/sources", .{cfg}) catch cfg;
 }
 
+/// Fields seen this reload, including any that did not fit — the difference is
+/// what got dropped. A dropped field is a source that looks installed and is
+/// silently inert, so it must be reported, never swallowed.
+var fields_seen: usize = 0;
+
 fn putEntry(id: []const u8, field: []const u8, val: []const u8) void {
+    if (!pure.validId(id) or !pure.validField(field, val)) return;
+    fields_seen += 1;
     if (entry_count >= MAX_ENTRIES) return;
-    if (id.len == 0 or id.len > 32 or field.len == 0 or field.len > 24) return;
-    if (val.len == 0 or val.len > 512) return;
     var e = &entries[entry_count];
     @memcpy(e.id[0..id.len], id);
     e.id_len = id.len;
@@ -59,6 +67,7 @@ pub fn reload() void {
     mutex.lock();
     defer mutex.unlock();
     entry_count = 0;
+    fields_seen = 0;
 
     var dir_buf: [600]u8 = undefined;
     const dir_path = sourcesDir(&dir_buf);
@@ -67,9 +76,8 @@ pub fn reload() void {
 
     var it = dir.iterate();
     while (it.next(io.io()) catch null) |entry| {
-        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".json")) continue;
-        const id = entry.name[0 .. entry.name.len - 5]; // strip ".json"
-        if (id.len == 0 or id.len > 32) continue;
+        if (entry.kind != .file) continue;
+        const id = pure.idFromFileName(entry.name) orelse continue;
 
         var fp_buf: [700]u8 = undefined;
         const fp = std.fmt.bufPrint(&fp_buf, "{s}/{s}", .{ dir_path, entry.name }) catch continue;
@@ -87,6 +95,19 @@ pub fn reload() void {
             }
         }
     }
+
+    // LOUD on overflow. The table is sized in fields, not sources, and it used
+    // to drop the excess in silence: the Plugins page then kept offering
+    // "Install" for a source already on disk, and that source stayed inert.
+    const dropped = pure.overflowBy(fields_seen, MAX_ENTRIES);
+    if (dropped > 0) {
+        var lb: [128]u8 = undefined;
+        logs.pushLog("error", "sources", std.fmt.bufPrint(
+            &lb,
+            "{d} source endpoint(s) dropped — table holds {d}, {d} installed. Those sources are inert.",
+            .{ dropped, MAX_ENTRIES, fields_seen },
+        ) catch "source endpoint table full — some sources are inert", true);
+    }
 }
 
 /// Install (or overwrite) a source by writing its flat JSON string map to
@@ -97,11 +118,7 @@ pub fn reload() void {
 /// source"): the site the user is browsing becomes a real, searchable source in
 /// one click — matching Opal's source-neutral, source_config-driven design.
 pub fn install(id: []const u8, json_fields: []const u8) bool {
-    if (id.len == 0 or id.len > 32) return false;
-    // Reject path separators / traversal in the id — it's used as a filename.
-    for (id) |ch| {
-        if (ch == '/' or ch == '\\' or ch == '.' or ch == 0) return false;
-    }
+    if (!pure.validId(id)) return false;
     var dir_buf: [600]u8 = undefined;
     const dir_path = sourcesDir(&dir_buf);
     io.cwdMakePath(dir_path) catch {};
@@ -144,10 +161,7 @@ pub fn anyInstalled() bool {
 /// Live TV settings page) that toggle a source without a plugin-list index.
 /// Rejects the same unsafe ids as install(). No-op if the file is absent.
 pub fn uninstallById(id: []const u8) void {
-    if (id.len == 0 or id.len > 32) return;
-    for (id) |ch| {
-        if (ch == '/' or ch == '\\' or ch == '.' or ch == 0) return;
-    }
+    if (!pure.validId(id)) return;
     var dir_buf: [600]u8 = undefined;
     const dir_path = sourcesDir(&dir_buf);
     var fp_buf: [700]u8 = undefined;

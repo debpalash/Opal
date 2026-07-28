@@ -108,8 +108,21 @@ pub const MediaPlayer = struct {
     // the plain hourglass + path text it always showed.
     loading_title: [128]u8 = std.mem.zeroes([128]u8),
     loading_title_len: usize = 0,
-    loading_poster_path: [64]u8 = std.mem.zeroes([64]u8),
-    loading_poster_path_len: usize = 0,
+    /// TMDB path fragment OR a full cover URL — resolved by
+    /// ui/loading_pure.posterUrl so every source can show art here.
+    loading_art: [256]u8 = std.mem.zeroes([256]u8),
+    loading_art_len: usize = 0,
+    loading_kind: u8 = 0,
+    loading_year: [8]u8 = std.mem.zeroes([8]u8),
+    loading_year_len: usize = 0,
+    loading_rating: f32 = 0,
+    loading_extra: [96]u8 = std.mem.zeroes([96]u8),
+    loading_extra_len: usize = 0,
+    /// Fact-card deck state: how many times the viewer paged, and when they
+    /// last did (the auto-rotate clock restarts from there so a manual page
+    /// gets a full interval instead of flipping again immediately).
+    loading_card_manual: usize = 0,
+    loading_card_since_ms: i64 = 0,
     loading_overview: [400]u8 = std.mem.zeroes([400]u8),
     loading_overview_len: usize = 0,
     loading_is_tv: bool = false,
@@ -349,8 +362,16 @@ pub const MediaPlayer = struct {
         @memset(&self.loading_label, 0);
         self.loading_title_len = 0;
         @memset(&self.loading_title, 0);
-        self.loading_poster_path_len = 0;
-        @memset(&self.loading_poster_path, 0);
+        self.loading_art_len = 0;
+        @memset(&self.loading_art, 0);
+        self.loading_kind = 0;
+        self.loading_year_len = 0;
+        @memset(&self.loading_year, 0);
+        self.loading_rating = 0;
+        self.loading_extra_len = 0;
+        @memset(&self.loading_extra, 0);
+        self.loading_card_manual = 0;
+        self.loading_card_since_ms = 0;
         self.loading_overview_len = 0;
         @memset(&self.loading_overview, 0);
         self.loading_is_tv = false;

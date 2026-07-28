@@ -370,6 +370,9 @@ pub const AppState = struct {
     browse_source: DrawerTab = .TMDB,
     library_tab: DrawerTab = .Queue,
     system_tab: DrawerTab = .Logs,
+    /// Sub-tab of the Plugins route (its own nav-bar menu since the split from
+    /// the old combined "Logs & Plugins" page).
+    plugin_tab: @import("router.zig").PluginTab = .sources,
 
     // dvui window handle — set once in appInit. Stored here so worker
     // threads (e.g. the mpv render-update callback) can wake the UI loop
@@ -530,12 +533,21 @@ pub const AppState = struct {
         }
     } = .{},
 
-    // First-run onboarding: default true so the setup wizard (LLM/voice deps
-    // checklist, etc.) does NOT pop up at startup — it was a macOS/brew-centric
-    // nag that added no value on Windows. Still reachable on demand from
-    // Settings › About (onboarding.replay). config.zig load() honors a persisted
-    // value if present.
-    onboarded: bool = true,
+    // First-run onboarding. Defaults FALSE so a fresh install runs the wizard.
+    //
+    // It defaulted true — i.e. off — because the wizard was once a macOS/brew
+    // dependency checklist that just nagged on Windows. That is no longer what
+    // it is: page 0 now offers to install the starter sources (without which
+    // search and "click a movie" return nothing at all), takes a TMDB key, and
+    // points at the AI settings; the rest is a feature tour. Leaving it off
+    // meant every new user landed on the full UI with no orientation and no
+    // sources — reported as "TMDB shows no output when I click on any movie"
+    // and "its kinda confusing, the whole ui" (issue #21).
+    //
+    // Existing installs are unaffected: config.load() honors a persisted
+    // `onboarded` row, and grandfathers any config carrying a real TMDB key or
+    // installed sources.
+    onboarded: bool = false,
 
     // ── "Resume last played?" launch prompt (replaces silent session restore) ──
     init_history_loaded: bool = false, // set on the init worker after watch.load()
@@ -612,11 +624,25 @@ pub const AppState = struct {
     // unrelated later magnet (e.g. a raw drag-dropped torrent).
     pending_play_title: [128]u8 = std.mem.zeroes([128]u8),
     pending_play_title_len: usize = 0,
-    pending_play_poster_path: [64]u8 = std.mem.zeroes([64]u8),
-    pending_play_poster_path_len: usize = 0,
+    // 256, not 64: this used to hold a bare TMDB path fragment ("/abc.jpg")
+    // with the image base hard-coded at the render site, which is why no
+    // non-TMDB source could ever show art on the loading screen. It now holds
+    // either a fragment or a full URL (a Subsonic/Jellyfin/Plex cover, an
+    // anime poster) — see ui/loading_pure.posterUrl.
+    pending_play_art: [256]u8 = std.mem.zeroes([256]u8),
+    pending_play_art_len: usize = 0,
     pending_play_overview: [400]u8 = std.mem.zeroes([400]u8),
     pending_play_overview_len: usize = 0,
     pending_play_is_tv: bool = false,
+    /// ui/loading_pure.MediaKind as an integer (fixed-size-state convention).
+    pending_play_kind: u8 = 0,
+    pending_play_year: [8]u8 = std.mem.zeroes([8]u8),
+    pending_play_year_len: usize = 0,
+    pending_play_rating: f32 = 0,
+    /// Free-form third field on the meta line — an artist for music, "S2E4"
+    /// for an episode.
+    pending_play_extra: [96]u8 = std.mem.zeroes([96]u8),
+    pending_play_extra_len: usize = 0,
 
     // Directory that holds bundled runtime resources (engines/, scripts/, …).
     // Empty = use the current working directory (dev: launched from project
@@ -1449,14 +1475,83 @@ pub fn resourceRoot() ?[]const u8 {
 /// (search.zig) when the resolved torrent actually attaches to a player, so
 /// the loading screen can show this title's poster + a trivia blurb instead
 /// of a bare hourglass. Overwrites any previous unconsumed stash.
-pub fn stashPendingPlay(title: []const u8, poster_path: []const u8, overview: []const u8, is_tv: bool) void {
+pub fn stashPendingPlay(title: []const u8, art: []const u8, overview: []const u8, is_tv: bool) void {
+    stashPendingPlayFull(title, art, overview, if (is_tv) .tv else .movie, "", 0, "");
+}
+
+/// Full form: every source that knows more than a title and a poster (a year,
+/// a score, an artist, an episode code) can hand it over, and the loading
+/// screen shows a meta line instead of a bare title.
+pub fn stashPendingPlayFull(
+    title: []const u8,
+    art: []const u8,
+    overview: []const u8,
+    kind: @import("../ui/loading_pure.zig").MediaKind,
+    year: []const u8,
+    rating: f32,
+    extra: []const u8,
+) void {
     app.pending_play_title_len = @min(title.len, app.pending_play_title.len);
     @memcpy(app.pending_play_title[0..app.pending_play_title_len], title[0..app.pending_play_title_len]);
-    app.pending_play_poster_path_len = @min(poster_path.len, app.pending_play_poster_path.len);
-    @memcpy(app.pending_play_poster_path[0..app.pending_play_poster_path_len], poster_path[0..app.pending_play_poster_path_len]);
+    app.pending_play_art_len = @min(art.len, app.pending_play_art.len);
+    @memcpy(app.pending_play_art[0..app.pending_play_art_len], art[0..app.pending_play_art_len]);
     app.pending_play_overview_len = @min(overview.len, app.pending_play_overview.len);
     @memcpy(app.pending_play_overview[0..app.pending_play_overview_len], overview[0..app.pending_play_overview_len]);
-    app.pending_play_is_tv = is_tv;
+    app.pending_play_is_tv = (kind == .tv);
+    app.pending_play_kind = kind.toInt();
+    app.pending_play_year_len = @min(year.len, app.pending_play_year.len);
+    @memcpy(app.pending_play_year[0..app.pending_play_year_len], year[0..app.pending_play_year_len]);
+    app.pending_play_rating = rating;
+    app.pending_play_extra_len = @min(extra.len, app.pending_play_extra.len);
+    @memcpy(app.pending_play_extra[0..app.pending_play_extra_len], extra[0..app.pending_play_extra_len]);
+}
+
+/// Move the pending-play stash onto `p` and clear it, so the loading screen can
+/// show art + a meta line + trivia for this play.
+///
+/// Lives here rather than inline at one call site because there are TWO ways
+/// media reaches a player: the torrent path (search.attachTorrentToPlayer) and
+/// the direct-URL path (browser.loadContentDirectMeta*, which is how music,
+/// Jellyfin and every other stream plays). The copy used to exist only on the
+/// torrent path, so a stash made by a direct-play source was never consumed and
+/// its art never appeared.
+pub fn consumePendingPlay(p: *MediaPlayer) void {
+    // Free any stale poster from a previous play on this (reused) player, and
+    // reset the fetch latches so this play starts its own lookups.
+    @import("poster.zig").deinitPoster(&p.loading_poster_pixels, &p.loading_poster_tex);
+    p.loading_poster_w = 0;
+    p.loading_poster_h = 0;
+    p.loading_poster_fetching = false;
+    p.loading_meta_fetch_started = false;
+    p.loading_trivia_len = 0;
+    p.loading_trivia_fetching = false;
+    p.loading_card_manual = 0;
+    p.loading_card_since_ms = 0;
+
+    p.loading_title_len = app.pending_play_title_len;
+    @memcpy(p.loading_title[0..p.loading_title_len], app.pending_play_title[0..p.loading_title_len]);
+    p.loading_art_len = app.pending_play_art_len;
+    @memcpy(p.loading_art[0..p.loading_art_len], app.pending_play_art[0..p.loading_art_len]);
+    p.loading_overview_len = app.pending_play_overview_len;
+    @memcpy(p.loading_overview[0..p.loading_overview_len], app.pending_play_overview[0..p.loading_overview_len]);
+    p.loading_is_tv = app.pending_play_is_tv;
+    p.loading_kind = app.pending_play_kind;
+    p.loading_year_len = app.pending_play_year_len;
+    @memcpy(p.loading_year[0..p.loading_year_len], app.pending_play_year[0..p.loading_year_len]);
+    p.loading_rating = app.pending_play_rating;
+    p.loading_extra_len = app.pending_play_extra_len;
+    @memcpy(p.loading_extra[0..p.loading_extra_len], app.pending_play_extra[0..p.loading_extra_len]);
+
+    // Clear the stash so it can't leak onto a later unrelated play (a raw
+    // drag-dropped torrent, a pasted URL).
+    app.pending_play_title_len = 0;
+    app.pending_play_art_len = 0;
+    app.pending_play_overview_len = 0;
+    app.pending_play_is_tv = false;
+    app.pending_play_kind = 0;
+    app.pending_play_year_len = 0;
+    app.pending_play_rating = 0;
+    app.pending_play_extra_len = 0;
 }
 
 /// Show a toast notification for 3 seconds.
@@ -1616,10 +1711,7 @@ pub fn navigateToTabNow(tab: DrawerTab) void {
             app.browse_source = .Opds;
             app.router.navigate(.browse);
         },
-        .Plugins => {
-            app.system_tab = .Plugins;
-            app.router.navigate(.system);
-        },
+        .Plugins => app.router.navigate(.plugins),
         .Logs => {
             app.system_tab = .Logs;
             app.router.navigate(.system);

@@ -93,7 +93,23 @@ jobs:
         env:
           OPAL_TMDB_TOKEN: ${{ secrets.TMDB_API_TOKEN }}
           OPAL_OMDB_KEY: ${{ secrets.OMDB_API_KEY }}
-        run: zig build -Doptimize=ReleaseSafe -fsys=sdl2
+        # -Dcpu is NOT optional for a release artifact. Without it, zig build
+        # targets the NATIVE cpu, so the binary bakes in whatever ISA the
+        # GitHub runner happened to have — and that pool is heterogeneous.
+        # v0.6.0 landed on a runner without AVX-512 and v0.6.1 landed on one
+        # with it: same source, same Zig 0.16.0, but the v0.6.1 binary carries
+        # AVX-512 in 241 symbols (kmovd, vpternlogq, vpermt2b — v0.6.0 has
+        # zero) and dies with SIGILL on every CPU without it. That is all Zen
+        # 1-3 Ryzen and every 12th-14th gen Intel consumer part, i.e. most
+        # desktop Linux users (issue #22, Ryzen 7 5700X).
+        # x86_64_v2 = SSE4.2 + POPCNT, i.e. anything from ~2009 on.
+        run: zig build -Doptimize=ReleaseSafe -fsys=sdl2 -Dcpu=x86_64_v2
+      - name: Verify ISA baseline
+        # The -Dcpu flag above silently stopping being passed is exactly how
+        # v0.6.1 shipped an AVX-512 binary. Prove it from the artifact, not
+        # from the command line. Verified to reject the real v0.6.1 binary
+        # (305 symbols) and accept v0.6.0 (0).
+        run: python3 scripts/check-isa-baseline.py zig-out/bin/opal
       - name: Package binary tarball
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -257,7 +273,13 @@ jobs:
         env:
           OPAL_TMDB_TOKEN: ${{ secrets.TMDB_API_TOKEN }}
           OPAL_OMDB_KEY: ${{ secrets.OMDB_API_KEY }}
-        run: zig build -Doptimize=ReleaseSafe
+        # Pinned ISA baseline — see the linux job for why a native-cpu
+        # release build is a bug, not an optimisation.
+        run: zig build -Doptimize=ReleaseSafe -Dcpu=x86_64_v2
+
+      - name: Verify ISA baseline
+        # Same gate as the linux job — MSYS2 ships objdump.
+        run: python3 scripts/check-isa-baseline.py zig-out/bin/opal.exe
 
       - name: Stage portable payload (exe + wrapper + DLL closure)
         run: |

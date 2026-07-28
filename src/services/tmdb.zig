@@ -1147,11 +1147,14 @@ fn sendToSearch(item: *state.TmdbItem) void {
         std.fmt.bufPrint(&query_buf, "{s} {s}", .{ title, year }) catch return
     else
         std.fmt.bufPrint(&query_buf, "{s}", .{title}) catch return;
-    state.stashPendingPlay(
+    state.stashPendingPlayFull(
         title,
         item.poster_path[0..@min(item.poster_path_len, item.poster_path.len)],
         safeUtf8(item.overview[0..@min(item.overview_len, item.overview.len)]),
-        false,
+        .movie,
+        year,
+        item.rating,
+        safeUtf8(item.genre_text[0..@min(item.genre_text_len, item.genre_text.len)]),
     );
     state.navigateToTab(.Search);
     // Universal (all-source) search — populates resolver.results, which is what
@@ -1802,7 +1805,11 @@ pub fn playEpisodeOf(
 ) void {
     if (tmdb_id == 0 or episode < 1 or season < 0) return;
 
-    state.stashPendingPlay(name, poster_path, ep_overview, true);
+    // "S2E4" on the loading screen's meta line — the episode you are waiting
+    // for, not just the show name.
+    var epc_buf: [16]u8 = undefined;
+    const ep_code = std.fmt.bufPrint(&epc_buf, "S{d}E{d}", .{ season, episode }) catch "";
+    state.stashPendingPlayFull(name, poster_path, ep_overview, .tv, "", 0, ep_code);
 
     // Arm the deferred watch commit. The player's time-pos stream commits it
     // (DB + Trakt + Continue) once real playback passes ~2 minutes — clicking

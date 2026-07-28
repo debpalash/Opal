@@ -304,8 +304,22 @@ fn parseManifest(body: []const u8) void {
 
 // ── Install / uninstall ──────────────────────────────────────────────────────
 
+/// Installed == the source file exists on disk.
+///
+/// This used to ask the parsed endpoint table (`source_config.has`), which is a
+/// different question: a source whose fields did not fit the table reported
+/// "not installed" even though install() had written its file, so the page kept
+/// offering Install and clicking it changed nothing visible. Install writes the
+/// file and uninstall deletes it, so the file is the authority. (The table
+/// overflow that exposed this is fixed too — see source_config_pure — but the
+/// button must not depend on table capacity in the first place.)
 pub fn isInstalled(id: []const u8) bool {
-    return source_config.has(id);
+    if (!@import("../core/source_config_pure.zig").validId(id)) return false;
+    var fp_buf: [700]u8 = undefined;
+    const fp = sourceFilePath(&fp_buf, id);
+    if (fp.len == 0) return false;
+    _ = io.cwdStatFile(fp) catch return false;
+    return true;
 }
 
 fn sourceFilePath(buf: []u8, id: []const u8) []const u8 {

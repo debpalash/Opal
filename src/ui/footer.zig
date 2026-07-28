@@ -706,10 +706,17 @@ fn renderScrubber(
     // IINA-style scrub row: elapsed time on the left, the seek band filling
     // the middle, total/remaining on the right (click the right label to
     // toggle, same as IINA).
+    // 26 is a FLOOR, not a cap. The row used to also set
+    // `max_size_content.h = 26`, which clipped its own text: the elapsed/total
+    // clocks lost their descenders and the hover-time chip (label + padding +
+    // rounded background) was cut off top and bottom. Nothing in the row wants
+    // to be tall — the fills are painted rather than sized (see below), the
+    // seek slider asks for track_h, and the rest are single-line labels — so
+    // letting the row take its natural height cannot run away, and a later
+    // type-ramp change can no longer clip it.
     var srow = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .min_size_content = .{ .w = 0, .h = 26 },
-        .max_size_content = .{ .w = 0, .h = 26 },
         .padding = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = 0 },
     });
     defer srow.deinit();
@@ -719,12 +726,20 @@ fn renderScrubber(
     const t_sec: u32 = @intFromFloat(safe_time);
     const d_sec: u32 = @intFromFloat(safe_dur);
 
+    // Both clocks reserve the width of the WIDEST string they can ever print
+    // for this duration, so the seek band does not shift sideways when the
+    // elapsed time rolls 9:59 → 10:00 (or 59:59 → 1:00:00) — the band used to
+    // twitch a few pixels on every such rollover.
+    const elapsed_w = footer_pure.timeLabelWidth(d_sec, false);
+    const trailing_w = footer_pure.timeLabelWidth(d_sec, true);
+
     {
         var cur_buf: [16]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{formatHmsBuf(&cur_buf, t_sec)}, .{
+        _ = dvui.label(@src(), "{s}", .{footer_pure.formatTime(&cur_buf, t_sec)}, .{
             .color_text = theme.colors.text_primary,
             .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
             .gravity_y = 0.5,
+            .min_size_content = .{ .w = elapsed_w, .h = 0 },
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
     }
@@ -741,7 +756,9 @@ fn renderScrubber(
         // the row and renders at ~0px — the total time was invisible.
         var dur_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .gravity_y = 0.5,
-            .min_size_content = .{ .w = 58, .h = 0 },
+            // Sized for the longest string this duration can produce (the
+            // signed "-H:MM:SS" remaining form is the widest), not a magic 58.
+            .min_size_content = .{ .w = trailing_w, .h = 0 },
             .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
             .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
             .corner_radius = dvui.Rect.all(theme.radius.sm),
@@ -776,78 +793,85 @@ fn renderScrubber(
     });
     defer track_overlay.deinit();
 
-    const track_rect = track_overlay.data().contentRectScale().r;
+    const track_rs = track_overlay.data().contentRectScale();
+    const track_rect = track_rs.r;
+    // Layers 1-5 are PAINTED, not built as widgets. As boxes they sized
+    // themselves with `min_size_content.w = track_rect.w * frac`, and a child's
+    // min size propagates up to the parent's derived min (dvui takes
+    // max(specified, derived)) — so the band's minimum ratcheted toward the
+    // whole row and left the trailing duration label 0px wide from the third
+    // frame on. Nothing here is interactive (the seek is the transparent
+    // slider below), so a plain fill is both correct and cheaper. Geometry
+    // comes from footer_pure so the placement rules are unit-tested.
+    const px = track_rs.s; // logical → physical
+    const th_px = track_h * px;
+    const fillRounded = struct {
+        fn f(b: footer_pure.BarRect, color: dvui.Color, radius: f32) void {
+            if (b.w <= 0 or b.h <= 0) return;
+            const r: dvui.Rect.Physical = .{ .x = b.x, .y = b.y, .w = b.w, .h = b.h };
+            r.fill(dvui.Rect.Physical.all(radius), .{ .color = color });
+        }
+    }.f;
 
     // 1. Base track — thin visual line centered in the tall band.
-    {
-        var base = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = 1,
-            .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(track_h * 0.5),
-            // Explicit width from the measured overlay rect — expand does
-            // NOT stretch inside this overlay (the line collapsed to a dash).
-            .min_size_content = .{ .w = track_rect.w, .h = track_h },
-            .max_size_content = .{ .w = track_rect.w, .h = track_h },
-            .gravity_y = 0.5,
-        });
-        base.deinit();
-    }
+    fillRounded(
+        footer_pure.fillBar(track_rect.x, track_rect.y, track_rect.w, track_rect.h, th_px, 1.0),
+        theme.colors.bg_elevated,
+        th_px * 0.5,
+    );
 
-    // 2. Buffered fill (torrent download — single leading bar). The piece-map
-    // fetch + full have-count scan used to run every frame (~30fps); cache the
-    // computed fraction at ~2Hz keyed on the torrent id (same idiom as PipCache
-    // below — switching to a different torrent invalidates it immediately).
+    // 2. Torrent download coverage — TWO bars, because overall completion and
+    // "will the next minute play" are different questions and only the second
+    // one predicts a stall. A dim leading bar shows total completion; a
+    // brighter segment starting at the playhead shows the CONTIGUOUS run that
+    // is actually downloaded ahead of you. When that segment collapses to the
+    // playhead, nothing is buffered ahead and playback is about to stall.
+    //
+    // The piece-map fetch + scan used to run every frame (~30fps); both numbers
+    // are cached at ~2Hz keyed on the torrent id (same idiom as PipCache below —
+    // switching to a different torrent invalidates it immediately).
+    const played_frac = footer_pure.percentToFrac(percent_pos);
     if (active_p.current_torrent_id >= 0) {
         const BufCache = struct {
             var tid: i32 = -1;
             var last_ms: i64 = 0;
             var frac: f32 = 0.0;
+            var ahead_end: f32 = 0.0;
+            var ahead_from: f32 = 0.0;
         };
         if (BufCache.tid != active_p.current_torrent_id or now_ms - BufCache.last_ms > 500) {
             BufCache.tid = active_p.current_torrent_id;
             BufCache.last_ms = now_ms;
             BufCache.frac = 0.0;
+            BufCache.ahead_end = played_frac;
+            BufCache.ahead_from = played_frac;
             var map_buf: [2048]u8 = undefined;
             const map_len = c.mpv.torrent_get_piece_map(state.torrentSession(), active_p.current_torrent_id, &map_buf, 2048);
             if (map_len > 0) {
                 const n: usize = @intCast(@max(@as(c_int, 0), map_len));
-                BufCache.frac = footer_pure.pieceMapFraction(map_buf[0..@min(n, map_buf.len)]);
+                const map = map_buf[0..@min(n, map_buf.len)];
+                BufCache.frac = footer_pure.pieceMapFraction(map);
+                BufCache.ahead_end = footer_pure.bufferedAheadEnd(map, played_frac);
             }
         }
-        const buf_frac: f32 = BufCache.frac;
-        if (buf_frac > 0.0) {
-            var buf_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = 2,
-                .background = true,
-                .color_fill = theme.colors.accent_dim,
-                .corner_radius = dvui.Rect.all(track_h * 0.5),
-                .min_size_content = .{ .w = track_rect.w * buf_frac, .h = track_h },
-                .max_size_content = .{ .w = track_rect.w * buf_frac, .h = track_h },
-                .gravity_x = 0.0,
-                .gravity_y = 0.5,
-            });
-            buf_box.deinit();
-        }
+        fillRounded(
+            footer_pure.fillBar(track_rect.x, track_rect.y, track_rect.w, track_rect.h, th_px, BufCache.frac),
+            theme.colors.bg_hover,
+            th_px * 0.5,
+        );
+        fillRounded(
+            footer_pure.fillSegment(track_rect.x, track_rect.y, track_rect.w, track_rect.h, th_px, BufCache.ahead_from, BufCache.ahead_end),
+            theme.colors.accent_dim,
+            th_px * 0.5,
+        );
     }
 
-    // 3. Played fill — overlay on top.
-    {
-        const played_frac: f32 = footer_pure.percentToFrac(percent_pos);
-        if (played_frac > 0.0) {
-            var played = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = 3,
-                .background = true,
-                .color_fill = theme.colors.accent,
-                .corner_radius = dvui.Rect.all(track_h * 0.5),
-                .min_size_content = .{ .w = track_rect.w * played_frac, .h = track_h },
-                .max_size_content = .{ .w = track_rect.w * played_frac, .h = track_h },
-                .gravity_x = 0.0,
-                .gravity_y = 0.5,
-            });
-            played.deinit();
-        }
-    }
+    // 3. Played fill — painted on top of the buffered bars.
+    fillRounded(
+        footer_pure.fillBar(track_rect.x, track_rect.y, track_rect.w, track_rect.h, th_px, played_frac),
+        theme.colors.accent,
+        th_px * 0.5,
+    );
 
     // 4. Chapter pips — only after metadata is loaded. Chapter times are
     // CACHED (refreshed at most every 2s per player): they only change on
@@ -881,45 +905,41 @@ fn renderScrubber(
                 }
             }
         }
-        for (PipCache.fracs[0..PipCache.count], 0..) |pip_frac, pi| {
-            var pip = dvui.box(@src(), .{ .dir = .vertical }, .{
-                .id_extra = pi + 1024,
-                .background = true,
-                .color_fill = theme.colors.text_tertiary,
-                .min_size_content = .{ .w = 2, .h = track_h },
-                .max_size_content = .{ .w = 2, .h = track_h },
-                .gravity_x = pip_frac,
-                .gravity_y = 0.5,
-            });
-            pip.deinit();
+        for (PipCache.fracs[0..PipCache.count]) |pip_frac| {
+            fillRounded(
+                footer_pure.markerAt(track_rect.x, track_rect.y, track_rect.w, track_rect.h, 2 * px, th_px, pip_frac),
+                theme.colors.text_tertiary,
+                0,
+            );
         }
     }
 
     // 5. Hover knob.
     if (hovered) {
-        const knob_frac: f32 = @floatCast(@max(0.0, @min(1.0, percent_pos / 100.0)));
-        var knob = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = 4,
-            .background = true,
-            .color_fill = theme.colors.accent,
-            .corner_radius = dvui.Rect.all(theme.radius.pill),
-            .min_size_content = .{ .w = 8, .h = 8 },
-            .max_size_content = .{ .w = 8, .h = 8 },
-            .gravity_x = knob_frac,
-            .gravity_y = 0.5,
-        });
-        knob.deinit();
+        const knob_px = 8 * px;
+        fillRounded(
+            footer_pure.markerAt(track_rect.x, track_rect.y, track_rect.w, track_rect.h, knob_px, knob_px, footer_pure.percentToFrac(percent_pos)),
+            theme.colors.accent,
+            knob_px * 0.5,
+        );
     }
 
     // Interactive transparent slider — captures the seek input.
+    // `color_bar` matters: dvui's slider paints its filled portion with
+    // `color_bar orelse theme.highlight.fill`, which ignores color_fill. Left
+    // unset it drew dvui's default blue bar OVER the five Opal-styled layers
+    // above, so the buffered fill, the accent played fill and the chapter pips
+    // were painted every frame and then completely hidden. Transparent here
+    // keeps the slider input-only, which is what the comment always claimed.
+    const invisible = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
     var slider_pct: f32 = @floatCast(percent_pos / 100.0);
     if (std.math.isNan(slider_pct)) slider_pct = 0.0;
-    if (dvui.slider(@src(), .{ .fraction = &slider_pct }, .{
+    if (dvui.slider(@src(), .{ .fraction = &slider_pct, .color_bar = invisible }, .{
         .expand = .both,
         .min_size_content = .{ .w = 100, .h = track_h },
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_text = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_border = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = invisible,
+        .color_text = invisible,
+        .color_border = invisible,
         .background = false,
         .border = dvui.Rect.all(0),
     })) {
@@ -946,20 +966,36 @@ fn renderScrubber(
         }
     }
 
-    // Hover-only timestamp tooltip above the cursor.
+    // Hover-only timestamp chip above the cursor. It is CENTRED on the pointer
+    // and clamped inside the track: `gravity_x = frac` alone anchored the
+    // chip's left edge near 0 and its right edge near 1, so the preview drifted
+    // up to a full chip-width away from the pixel it was describing, and read
+    // furthest-off at exactly the two ends people scrub to most.
     if (hovered and duration > 0) {
         const mouse_x = state.app.last_mouse_x;
         const frac = footer_pure.fractionAt(mouse_x, band_rect.x, band_rect.w);
         const hover_time = frac * @as(f32, @floatCast(duration));
         const ht_sec = @as(u32, @intFromFloat(@max(0.0, hover_time)));
         var ht_buf: [16]u8 = undefined;
-        const ht_str = formatHmsBuf(&ht_buf, ht_sec);
+        const ht_str = footer_pure.formatTime(&ht_buf, ht_sec);
+        const chip_w = footer_pure.hoverChipWidth(d_sec);
 
-        _ = dvui.label(@src(), "{s}", .{ht_str}, .{
-            .color_text = theme.colors.text_primary,
-            .gravity_x = frac,
+        var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .background = true,
+            .color_fill = theme.colors.bg_surface,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .min_size_content = .{ .w = chip_w, .h = 0 },
+            .padding = .{ .x = theme.spacing.xs, .y = 1, .w = theme.spacing.xs, .h = 1 },
+            .gravity_x = footer_pure.centeredGravityX(mouse_x, band_rect.x, band_rect.w, chip_w),
             .gravity_y = 0.0,
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
+        });
+        defer chip.deinit();
+        _ = dvui.label(@src(), "{s}", .{ht_str}, .{
+            .color_text = theme.colors.text_primary,
+            .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+            .gravity_x = 0.5,
+            .gravity_y = 0.5,
         });
     }
 }
@@ -1389,6 +1425,7 @@ pub fn renderLiquidGlassOverlay() void {
         var volume: f64 = 100.0;
         var pl_count: i64 = 0;
         var pl_pos: i64 = 0;
+        var paused_for_cache: i64 = 0;
         var last_player_idx: usize = 0;
     };
     if (SlowProps.last_player_idx != state.app.active_player_idx) {
@@ -1402,8 +1439,18 @@ pub fn renderLiquidGlassOverlay() void {
         _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "volume", c.mpv.MPV_FORMAT_DOUBLE, &SlowProps.volume);
         _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "playlist-count", c.mpv.MPV_FORMAT_INT64, &SlowProps.pl_count);
         _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "playlist-pos", c.mpv.MPV_FORMAT_INT64, &SlowProps.pl_pos);
+        _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "paused-for-cache", c.mpv.MPV_FORMAT_FLAG, &SlowProps.paused_for_cache);
     }
 
+    // What the bar SAYS it is doing, decided in one tested place. Previously
+    // the only signal was the play/pause glyph, so a file still opening and a
+    // stream stalled on an empty cache both looked exactly like "paused" — the
+    // user had no way to tell "I pressed pause" from "this is buffering".
+    const transport = footer_pure.transportState(
+        active_p.is_loading,
+        is_paused,
+        SlowProps.paused_for_cache == 1,
+    );
     const toggle_icon = if (is_paused) icons.tvg.lucide.play else icons.tvg.lucide.pause;
 
     // ═══════════════════════════════════════════════════════════════
@@ -1423,8 +1470,21 @@ pub fn renderLiquidGlassOverlay() void {
         });
         defer ctrl_row.deinit();
 
+        // Responsive collapse. The bar lives inside a grid CELL, so in a 3×3
+        // workspace it can be ~400pt wide — the fixed layout simply overflowed
+        // and clipped the close button off the end, leaving no way to shut the
+        // player. Groups are shed widest-first (tested order in footer_pure)
+        // so play/pause, the clocks, mute, the track chips and close always
+        // fit. Measured in on-screen POINTS, not scaled layout units, for the
+        // same reason the shell breakpoints are (see core/scale_pure.zig).
+        const bar_pt = @import("../core/scale_pure.zig").layoutPoints(
+            ctrl_row.data().rect.w,
+            state.app.ui_scale,
+        );
+        const fit = footer_pure.barLayout(bar_pt);
+
         var wd: dvui.WidgetData = undefined;
-        const has_playlist = SlowProps.pl_count > 1;
+        const has_playlist = SlowProps.pl_count > 1 and fit.skip_buttons;
 
         // ── Previous episode ──
         //
@@ -1433,7 +1493,7 @@ pub fn renderLiquidGlassOverlay() void {
         // different thing entirely — that's the button below, and it only appears
         // when there IS an mpv playlist.
         const tv_lib = @import("../services/tv_library.zig");
-        const on_episode = tv_lib.playingEpisode();
+        const on_episode = tv_lib.playingEpisode() and fit.skip_buttons;
         if (on_episode) {
             const has_prev = tv_lib.neighborEpisode(-1) != null;
             if (dvui.buttonIcon(@src(), "ep-prev", icons.tvg.lucide.@"chevron-first", .{}, .{}, .{
@@ -1470,8 +1530,8 @@ pub fn renderLiquidGlassOverlay() void {
             components.tip(@src(), wd, "Previous track");
         }
 
-        // Rewind 10s — 36px square.
-        if (dvui.buttonIcon(@src(), "rewind10", icons.tvg.lucide.rewind, .{}, .{}, .{
+        // Rewind 10s — 36px square. Sheds with the rest of the skip group.
+        if (fit.skip_buttons) if (dvui.buttonIcon(@src(), "rewind10", icons.tvg.lucide.rewind, .{}, .{}, .{
             .data_out = &wd,
             .color_fill = transparent,
             .color_text = theme.colors.text_primary,
@@ -1483,8 +1543,8 @@ pub fn renderLiquidGlassOverlay() void {
             .max_size_content = .{ .w = 30, .h = 30 },
         })) {
             _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek -10");
-        }
-        components.tip(@src(), wd, "Skip back 10s (\xE2\x86\x90)");
+        };
+        if (fit.skip_buttons) components.tip(@src(), wd, "Skip back 10s (\xE2\x86\x90)");
 
         // Play / Pause — bare icon, no resting fill: it reads as part of the
         // transport row rather than a stamped accent chip. Size (34px vs 30px)
@@ -1507,6 +1567,22 @@ pub fn renderLiquidGlassOverlay() void {
             active_p.togglePause();
         }
         components.tip(@src(), wd, "Play/Pause (Space)");
+
+        // Status beside the transport: only the states the glyph cannot express
+        // ("Loading…", "Buffering…"). Playing and a deliberate pause print
+        // nothing — the icon already says it, and a permanent label there would
+        // just be noise.
+        {
+            const status = footer_pure.transportLabel(transport);
+            if (status.len > 0) {
+                _ = dvui.label(@src(), "{s}", .{status}, .{
+                    .color_text = if (footer_pure.transportBusy(transport)) theme.colors.accent else theme.colors.text_tertiary,
+                    .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = 0 },
+                });
+            }
+        }
 
         // Fullscreen toggle. (This button used to seek +10s; seeking forward is
         // still on the right-arrow key, which is where it always was.)
@@ -1601,7 +1677,9 @@ pub fn renderLiquidGlassOverlay() void {
 
         // ── Status badges — times moved to the scrub row (IINA layout:
         // elapsed left of the seek line, total/remaining right of it). ──
-        {
+        // Purely informational text (playlist position, speed, A-B loop), so
+        // it sheds before any control you can press.
+        if (fit.status_badges) {
             var time_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .gravity_y = 0.5,
                 .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -1638,8 +1716,16 @@ pub fn renderLiquidGlassOverlay() void {
         }
 
         // ── Volume: mute toggle + barely-there track, visually grouped ──
+        // The glyph tracks the LEVEL, not just the mute flag: volume 0, a
+        // whisper and full blast all wore the same "volume-2" speaker before,
+        // so the icon carried no information unless you were muted.
         const is_muted = SlowProps.is_muted == 1;
-        const m_icon = if (is_muted) icons.tvg.lucide.@"volume-x" else icons.tvg.lucide.@"volume-2";
+        const m_icon = switch (footer_pure.volumeLevel(SlowProps.volume, is_muted)) {
+            .muted => icons.tvg.lucide.@"volume-x",
+            .off => icons.tvg.lucide.volume,
+            .low => icons.tvg.lucide.@"volume-1",
+            .high => icons.tvg.lucide.@"volume-2",
+        };
         if (dvui.buttonIcon(@src(), "mute-tog", m_icon, .{}, .{}, .{
             .data_out = &wd,
             .color_fill = transparent,
@@ -1657,7 +1743,9 @@ pub fn renderLiquidGlassOverlay() void {
         components.tip(@src(), wd, if (is_muted) "Unmute" else "Mute");
 
         // 120px fixed slider — grouped tight against the mute icon, no boxed
-        // chrome: faint trough, secondary (non-accent) fill.
+        // chrome: faint trough, secondary (non-accent) fill. First group to go
+        // when the bar narrows; the mute button (the essential control) stays.
+        if (fit.volume_slider) {
         var slider_host = dvui.box(@src(), .{ .dir = .vertical }, .{
             .min_size_content = .{ .w = 120, .h = 20 },
             .max_size_content = .{ .w = 120, .h = 20 },
@@ -1719,6 +1807,7 @@ pub fn renderLiquidGlassOverlay() void {
             var gap = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 4, .h = 0 } });
             gap.deinit();
         }
+        } // fit.volume_slider
 
         // ── Spacer pushes pickers + close to the right edge ──
         {
@@ -1728,8 +1817,9 @@ pub fn renderLiquidGlassOverlay() void {
 
         // ── Picker icon-chips: aspect, chapters, audio, subs, lang, files ──
 
-        // Aspect (always available)
-        {
+        // Aspect — reports state rather than acting; sheds with the
+        // secondary chips before anything you press to control playback.
+        if (fit.secondary_chips) {
             const ar_text = currentAspectChipText(active_p.mpv_ctx);
             const ar_active = !std.mem.eql(u8, ar_text, "Auto");
             if (pickerIconChip(@src(), 700, icons.tvg.lucide.ratio, ar_text, ar_active, "Aspect ratio", .aspect)) {
@@ -1737,8 +1827,8 @@ pub fn renderLiquidGlassOverlay() void {
             }
         }
 
-        // Chapters — only when count > 1.
-        {
+        // Chapters — only when count > 1, and only while the picker chips fit.
+        if (fit.secondary_chips) {
             var chp_buf: [16]u8 = undefined;
             const chp = currentChapterChipText(active_p.mpv_ctx, &chp_buf);
             if (chp.count > 1) {
@@ -1759,7 +1849,7 @@ pub fn renderLiquidGlassOverlay() void {
 
         // Audio output device (speaker chip — highlighted when a device is
         // pinned instead of "auto").
-        {
+        if (fit.secondary_chips) {
             const dev_pinned = currentAudioDevicePinned(active_p.mpv_ctx);
             if (pickerIconChip(@src(), 708, icons.tvg.lucide.speaker, "", dev_pinned, "Audio output device", .audio_device)) {
                 open_picker = if (open_picker == .audio_device) .none else .audio_device;
@@ -1776,7 +1866,7 @@ pub fn renderLiquidGlassOverlay() void {
         }
 
         // Subtitle language.
-        {
+        if (fit.secondary_chips) {
             const cur_lang = state.app.sub_lang_buf[0..state.app.sub_lang_len];
             const chip = if (cur_lang.len > 0) cur_lang else "eng";
             if (pickerIconChip(@src(), 704, icons.tvg.lucide.globe, chip, cur_lang.len > 0, "Subtitle search language", .lang)) {
@@ -1788,7 +1878,7 @@ pub fn renderLiquidGlassOverlay() void {
         // and the online/AI subtitle search language all to the chosen language
         // (defaults to English / the globe-chip selection), instead of visiting
         // each picker. Not a drop-up (kind .none) — it acts immediately.
-        {
+        if (fit.secondary_chips) {
             const uni_lang = if (state.app.sub_lang_len > 0) state.app.sub_lang_buf[0..state.app.sub_lang_len] else "eng";
             if (pickerIconChip(@src(), 709, icons.tvg.lucide.languages, uni_lang, false, "Set audio + subtitles to this language", .none)) {
                 applyUniversalLanguage(active_p.mpv_ctx, uni_lang);
@@ -1798,7 +1888,7 @@ pub fn renderLiquidGlassOverlay() void {
         // Find Subtitles — direct shortcut. Opens the picker AND kicks the
         // keyless search immediately (debounced inside the engine); the keyed
         // opensubtitles.com search joins in only when a key is configured.
-        if (pickerIconChip(@src(), 705, icons.tvg.lucide.search, "Subs", state.app.sub_picker_open, "Find subtitles online", .subs)) {
+        if (fit.secondary_chips and pickerIconChip(@src(), 705, icons.tvg.lucide.search, "Subs", state.app.sub_picker_open, "Find subtitles online", .subs)) {
             // Toggle, like every other chip — clicking an open panel's chip closes
             // it. It used to only ever open, so the chip could not dismiss what it
             // had opened (harmless with a modal scrim to click through; not with a
@@ -1816,7 +1906,7 @@ pub fn renderLiquidGlassOverlay() void {
         }
 
         // Files (torrent multi-file playlist).
-        if (active_p.current_torrent_id >= 0) {
+        if (active_p.current_torrent_id >= 0 and fit.secondary_chips) {
             const file_count = c.mpv.torrent_get_file_count(state.torrentSession(), active_p.current_torrent_id);
             if (file_count > 1) {
                 var f_buf: [16]u8 = undefined;

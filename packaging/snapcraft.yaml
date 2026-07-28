@@ -136,7 +136,7 @@ parts:
       # VERIFY: the PKGBUILD notes LLD can emit a cosmetic "error: warning(link)"
       # while still producing a binary; if that bites here, mirror its
       # `|| true` + explicit artifact check.
-      zig build -Doptimize=ReleaseFast -fsys=sdl2
+      zig build -Doptimize=ReleaseFast -fsys=sdl2 -Dcpu=x86_64_v2
       test -f zig-out/bin/opal
 
       # ── 4. Version from git ───────────────────────────────────────────────

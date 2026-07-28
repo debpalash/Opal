@@ -59,7 +59,9 @@ COPY . .
 # Headless entry (compile-time). Phase S1: -Dheadless swaps dvui for
 # src/core/dvui_headless.zig and links no SDL2/X11/GL at all. ReleaseSafe keeps
 # runtime safety checks on for the server.
-RUN zig build -Dheadless=true -Doptimize=ReleaseSafe
+# Pinned ISA baseline: the image must run on any x86-64 host, not just one
+# matching the machine that built it (see issue #22 / release.yml).
+RUN zig build -Dheadless=true -Doptimize=ReleaseSafe -Dcpu=x86_64_v2
 
 # Artifacts to copy out of the builder into the runtime stage:
 #   - the opal binary              (zig-out/bin/opal)

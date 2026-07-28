@@ -576,6 +576,25 @@ pub fn playSong(idx: usize) void {
         else => return,
     }
 
+    // Stash the cover + artist so the loading screen shows album art and a
+    // meta line instead of a bare hourglass. Music never reached that screen
+    // before: the art field held a TMDB path fragment and the renderer pasted
+    // the TMDB image base in front of it, so an absolute cover URL was
+    // unusable. loading_pure.posterUrl now takes either form.
+    {
+        var cov_buf: [1024]u8 = undefined;
+        const cover_url = coverUrlFor(song, &cov_buf);
+        state.stashPendingPlayFull(
+            name_buf[0..nlen],
+            cover_url,
+            "",
+            .album,
+            "",
+            0,
+            artist_buf[0..alen],
+        );
+    }
+
     @import("browser.zig").loadContentDirectMeta(url, "", name_buf[0..nlen], artist_buf[0..alen]);
     logs.pushLog("info", "music", "Streaming track", false);
 
@@ -919,40 +938,52 @@ fn renderSearchBar() void {
     }
 }
 
+/// Resolve a row's cover reference to a fetchable URL, against LIVE creds.
+///
+/// What `cover` holds is per-source: JioSaavn a full URL, Subsonic a coverArt
+/// id, Jellyfin the item id, Plex a server-relative `thumb` path — the last
+/// three are resolved here rather than being baked into the row, so a
+/// re-sign-in can't leave a stale token behind. `buf` must be large enough for
+/// any of them (1 KB is).
+///
+/// Shared by the grid's cover art and the loading screen's album art; one
+/// resolver, so the two can never disagree about where the art lives.
+pub fn coverUrlFor(song: *const pure.MusicSong, url_buf: []u8) []const u8 {
+    const cover_field = song.cover[0..@min(song.cover_len, song.cover.len)];
+    if (cover_field.len == 0) return url_buf[0..0];
+    var b: [256]u8 = undefined;
+    var tokb: [320]u8 = undefined;
+    switch (state.app.music.source) {
+        SRC_JIOSAAVN => {
+            if (cover_field.len > url_buf.len) return url_buf[0..0];
+            @memcpy(url_buf[0..cover_field.len], cover_field);
+            return url_buf[0..cover_field.len];
+        },
+        SRC_SUBSONIC => {
+            var q: [300]u8 = undefined;
+            if (creds(&b, &q)) |c| {
+                if (pure.buildCoverUrl(url_buf, c.base, c.authq, cover_field, 256)) |cov| return cov;
+            }
+        },
+        SRC_JELLYFIN => {
+            if (jfCreds(&b, &tokb)) |c| {
+                if (jf_pure.buildCoverUrl(url_buf, c.base, c.token, cover_field)) |cov| return cov;
+            }
+        },
+        SRC_PLEX => {
+            if (plexCreds(&b, &tokb)) |c| {
+                if (px_pure.buildCoverUrl(url_buf, c.base, c.token, cover_field)) |cov| return cov;
+            }
+        },
+        else => {},
+    }
+    return url_buf[0..0];
+}
+
 fn renderCover(i: usize, song: *const pure.MusicSong) void {
     const slot = &cover_slots[i];
-    const cover_field = song.cover[0..@min(song.cover_len, song.cover.len)];
-
-    // Resolve the cover image URL. What `cover` holds is per-source: JioSaavn a
-    // full URL, Subsonic a coverArt id, Jellyfin the item id, Plex a
-    // server-relative `thumb` path — the last three are resolved against LIVE
-    // creds here rather than being baked into the row. A big buffer holds any.
     var url_buf: [1024]u8 = undefined;
-    var cover_url: []const u8 = "";
-    if (cover_field.len > 0) {
-        var b: [256]u8 = undefined;
-        var tokb: [320]u8 = undefined;
-        switch (state.app.music.source) {
-            SRC_JIOSAAVN => cover_url = cover_field,
-            SRC_SUBSONIC => {
-                var q: [300]u8 = undefined;
-                if (creds(&b, &q)) |c| {
-                    if (pure.buildCoverUrl(&url_buf, c.base, c.authq, cover_field, 256)) |cov| cover_url = cov;
-                }
-            },
-            SRC_JELLYFIN => {
-                if (jfCreds(&b, &tokb)) |c| {
-                    if (jf_pure.buildCoverUrl(&url_buf, c.base, c.token, cover_field)) |cov| cover_url = cov;
-                }
-            },
-            SRC_PLEX => {
-                if (plexCreds(&b, &tokb)) |c| {
-                    if (px_pure.buildCoverUrl(&url_buf, c.base, c.token, cover_field)) |cov| cover_url = cov;
-                }
-            },
-            else => {},
-        }
-    }
+    const cover_url = coverUrlFor(song, &url_buf);
 
     if (cover_url.len > 0) {
         const h = std.hash.Fnv1a_64.hash(cover_url);

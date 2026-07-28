@@ -464,3 +464,136 @@ def test_file_associations_single_instance():
     if bad:
         return "fail", f"association/forwarding wiring missing in: {', '.join(bad)}"
     return "pass", "LSHandlerRank Default, .desktop MimeType, wxs ProgId, /api/open forwarding all present"
+
+
+@test("Release builds pin the ISA baseline", "Build")
+def test_release_isa_baseline():
+    """Issue #22: v0.6.1 Linux crashed with SIGILL on a Ryzen 7 5700X while
+    v0.6.0 worked — same source, same Zig 0.16.0.
+
+    Cause: `zig build` with no `-Dcpu` targets the NATIVE cpu, so the artifact
+    bakes in whatever ISA the GitHub runner happened to have, and that pool is
+    heterogeneous. Disassembly of the two published binaries: v0.6.1 uses
+    AVX-512 in 305 symbols (kmovd, vpternlogq, vpermt2b, vpmovq2m); v0.6.0 uses
+    it in zero. Every CPU without AVX-512 — all Zen 1-3 Ryzen, every 12th-14th
+    gen Intel consumer part — faulted before the first frame.
+
+    Every distribution build now pins -Dcpu, and a gate proves it from the
+    artifact rather than trusting the flag to stay on the command line."""
+    import os, re
+    rel = _src(".github/workflows/release.yml")
+    docker = _src("Dockerfile")
+    snap = _src("packaging/snapcraft.yaml")
+    app = _src("scripts/build-app.sh")
+    gate_path = os.path.join(PROJECT_DIR, "scripts", "check-isa-baseline.py")
+
+    # Every `zig build` that produces a DISTRIBUTED artifact must pin -Dcpu.
+    # (AUR builds from source on the user's own machine, where native is right.)
+    unpinned = []
+    for name, text in (("release.yml", rel), ("Dockerfile", docker),
+                       ("snapcraft.yaml", snap), ("build-app.sh", app)):
+        for line in text.splitlines():
+            if re.search(r"\bzig(\"|\s|\$\{)?\S*\s+build\b", line) and "-Doptimize" in line:
+                if "-Dcpu" not in line:
+                    unpinned.append(f"{name}: {line.strip()[:70]}")
+    if unpinned:
+        return "fail", "release build without a pinned -Dcpu: " + "; ".join(unpinned)
+
+    if not os.path.exists(gate_path):
+        return "fail", "scripts/check-isa-baseline.py missing"
+    gate = open(gate_path).read()
+
+    checks = {
+        "x86 builds pin v2": rel.count("-Dcpu=x86_64_v2") >= 2,
+        "macos pins a floor": "apple_m1" in app,
+        "gate wired for linux": "check-isa-baseline.py zig-out/bin/opal" in rel,
+        "gate wired for windows": "check-isa-baseline.py zig-out/bin/opal.exe" in rel,
+        # The gate must fail closed — an unreadable binary or a stub
+        # disassembly must not silently pass.
+        "fails without objdump": "no objdump on PATH" in gate,
+        "fails on empty disassembly": "not a real disassembly" in gate,
+        "detects opmask ops": "kmov" in gate and "vpternlog" in gate,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "ISA baseline gate incomplete: " + ", ".join(missing)
+    return "pass", ("every distributed build pins -Dcpu (x86_64_v2 / apple_m1) and a "
+                    "fail-closed gate scans the artifact; verified to reject the real "
+                    "v0.6.1 binary and accept v0.6.0")
+
+
+@test("App version has one source of truth", "Build")
+def test_version_single_source():
+    """Issue #21: "did clean installation of opal ui still shows 0.6.0".
+
+    updater.zig carried `APP_VERSION` as a hand-maintained constant whose own
+    doc comment said "kept in sync with build.zig.zon". It drifted — v0.6.1
+    shipped with it still reading "0.6.0". Two consequences: the About page
+    showed the wrong version, and because the update check compares this exact
+    string to the latest GitHub tag, every 0.6.1 user was told an update was
+    available forever."""
+    import re
+    up = _src("src/services/updater.zig")
+    bz = _src("build.zig")
+
+    checks = {
+        "version injected at build time": 'APP_VERSION: []const u8 = @import("build_options").app_version;' in up,
+        "build exposes it": 'addOption([]const u8, "app_version"' in bz,
+        "read from the zon": '@import("build.zig.zon").version' in bz,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "version wiring incomplete: " + ", ".join(missing)
+
+    # No hardcoded x.y.z version literal may remain in updater.zig CODE — that
+    # is the copy that drifted. Comments are stripped first; the doc comment
+    # above APP_VERSION names the old value on purpose.
+    code = "\n".join(l for l in up.splitlines() if not l.lstrip().startswith("//"))
+    literals = re.findall(r'"\d+\.\d+\.\d+"', code)
+    if literals:
+        return "fail", f"hardcoded version literal(s) back in updater.zig: {literals}"
+    return "pass", "APP_VERSION comes from build.zig.zon via build_options; no hand-maintained copy"
+
+
+@test("First-run onboarding actually runs on first run", "Build")
+def test_onboarding_first_run():
+    """Issue #21: "its kinda confusing, the whole ui so maybe onboarding is
+    needed" — and, relatedly, "TMDB show no output when i click on any movie".
+
+    Opal ships with NO sources, so search and "click a movie" (which runs a
+    universal search) return nothing until the starter pack is installed. The
+    wizard whose first card installs it was disabled two ways: `onboarded`
+    defaulted to true, and render() returned unless `replay_active`, which only
+    Settings > About sets. So the first-run wizard never ran on first run —
+    every new user landed on the full UI with no sources and no orientation.
+
+    It was switched off back when the wizard was a macOS/brew dependency
+    checklist that only nagged Windows users; it is now three cross-platform
+    decisions plus a feature tour, so the reason no longer holds.
+
+    Existing installs stay untouched: config.load() honours a persisted
+    `onboarded` row and grandfathers configs that already carry a real TMDB key
+    or installed sources."""
+    ob = _src("src/ui/onboarding.zig")
+    st = _src("src/core/state.zig")
+    cf = _src("src/core/config.zig")
+
+    checks = {
+        "default is off-until-onboarded": "onboarded: bool = false," in st,
+        "renders on first run": "if (!replay_active and state.app.onboarded) return;" in ob,
+        "no replay-only gate": "if (!replay_active or !state.app.config_loaded" not in ob,
+        # Ordering guard: without config_loaded the wizard would flash before
+        # the persisted flag is read.
+        "waits for config": "state.app.config_loaded.load(.acquire)" in ob,
+        "never in headless": "state.app.is_headless" in ob,
+        # Existing installs must not be nagged.
+        "grandfathers old installs": "if (!state.app.onboarded and" in cf and "anyInstalled()" in cf,
+        "still replayable": "pub fn replay()" in ob,
+        # The card that fixes "no results anywhere".
+        "offers starter sources": "installStarterPack()" in ob,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "first-run onboarding wiring incomplete: " + ", ".join(missing)
+    return "pass", ("wizard shows on a fresh profile (verified on screen) and stays hidden "
+                    "for installs with a persisted flag, a real TMDB key or sources")

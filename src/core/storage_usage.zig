@@ -16,6 +16,7 @@
 const std = @import("std");
 const io = @import("io_global.zig");
 const paths = @import("paths.zig");
+const poster = @import("poster.zig");
 const logs = @import("logs.zig");
 const pure = @import("storage_usage_pure.zig");
 
@@ -124,6 +125,10 @@ fn worker() void {
     var built: usize = 0;
     var p: [700]u8 = undefined;
 
+    // Measured once, up front: it is both its own row and a deduction from the
+    // library-database row, and those two must agree.
+    const posters = poster.cacheBytes();
+
     // ── User data: shown for accounting, never one-click removable ──
     {
         // The library DB plus its WAL/shm siblings — they are one logical store
@@ -134,8 +139,14 @@ fn worker() void {
             const fp = std.fmt.bufPrint(&p, "{s}/{s}", .{ cfg, name }) catch continue;
             db += fileSize(fp);
         }
+        // Poster art is inside opal.db but is listed as its own removable row
+        // below, so subtract it here — otherwise the same bytes are counted
+        // twice and every percentage on the page is wrong. On a live install
+        // that is not a rounding detail: 100 MB of poster art in a 120 MB
+        // opal.db meant the "not removable" row was 87% reclaimable cache.
+        const db_only = if (db > posters) db - posters else 0;
         const fp = std.fmt.bufPrint(&p, "{s}/opal.db", .{cfg}) catch "";
-        add(&built, "Library database", fp, "Watch history, library, settings — not removable", .user_data, db);
+        add(&built, "Library database", fp, "Watch history, library, settings — not removable", .user_data, db_only);
     }
 
     // ── Large downloads: reclaimable, but expensive to refetch ──
@@ -162,6 +173,13 @@ fn worker() void {
     {
         const fp = std.fmt.bufPrint(&p, "{s}subs", .{cache_root}) catch "";
         add(&built, "Subtitles", fp, "Downloaded .srt files", .cache, dirSize(fp, 0));
+    }
+    {
+        // Poster art — lives in the poster_cache TABLE, so a filesystem walk
+        // cannot see it; it was silently rolled into the library-database row
+        // and therefore presented as unremovable user data. It is a cache: it
+        // can be hundreds of MB, and every byte is re-downloadable.
+        add(&built, "Poster art cache", "", "Inside the library database — re-downloaded on next view", .db_cache, posters);
     }
     {
         // IPTV catalog lands as loose json files in the cache root, so size the
@@ -196,6 +214,14 @@ pub fn removeEntry(idx: usize) bool {
     if (idx >= count) return false;
     const e = &entries[idx];
     if (!pure.isRemovable(e.kind)) return false;
+    // Table-backed rows are cleared with a DELETE and carry no path, so this
+    // must come BEFORE the empty-path refusal below — otherwise the poster
+    // cache would be listed as removable and then silently refuse to go.
+    if (pure.isDatabaseBacked(e.kind)) {
+        poster.cacheClear();
+        scanAsync();
+        return true;
+    }
     const path = e.pathStr();
     if (path.len == 0) return false;
     // Caches/downloads are directories except the IPTV row, which points at one

@@ -1237,6 +1237,9 @@ fn renderTrakt() void {
     }
 }
 
+/// Legacy single-scroll page: every section stacked. Still used by the old
+/// drawer rail. The page-shell Plugins route renders one section at a time via
+/// `renderSection` instead.
 pub fn renderContent() void {
     if (!scanned) scanPlugins();
 
@@ -1247,7 +1250,28 @@ pub fn renderContent() void {
     renderSuwayomi();
     renderDebrid();
     renderTrakt();
+    renderContentPlugins();
+}
 
+/// One section of the Plugins page, selected by the nav-bar Plugins menu.
+/// Sections are the same renderers the legacy stacked page uses, so the two
+/// surfaces can never drift.
+pub fn renderSection(tab: @import("../core/router.zig").PluginTab) void {
+    if (!scanned) scanPlugins();
+
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_app });
+    defer scroll.deinit();
+
+    switch (tab) {
+        .sources => renderSourcePlugins(),
+        .suwayomi => renderSuwayomi(),
+        .debrid => renderDebrid(),
+        .trakt => renderTrakt(),
+        .content => renderContentPlugins(),
+    }
+}
+
+fn renderContentPlugins() void {
     // ── Content plugins (external executables) — advanced, own card ──
     var card = cardBegin(@src(), 3);
     defer card.deinit();

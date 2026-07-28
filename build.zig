@@ -19,6 +19,14 @@ pub fn build(b: *std.Build) void {
     // value (see state.loadTmdbTokenFromEnv). NB: an embedded key is extractable
     // from the shipped binary — only bake in free, rate-limited keys (a TMDB
     // read token, an OMDb free key), never anything sensitive.
+    // App version, read from build.zig.zon so there is ONE source of truth.
+    // updater.zig used to carry its own `APP_VERSION` constant "kept in sync"
+    // by hand; it drifted, and v0.6.1 shipped reporting itself as 0.6.0 in the
+    // About page — and, worse, telling every 0.6.1 user an update was
+    // available forever, because the update check compares this string to the
+    // latest GitHub tag (issue #21).
+    build_options.addOption([]const u8, "app_version", zonVersion(b));
+
     build_options.addOption([]const u8, "tmdb_default_token", embeddedKey(b, &.{ "OPAL_TMDB_TOKEN", "TMDB_API_TOKEN" }));
     build_options.addOption([]const u8, "omdb_default_key", embeddedKey(b, &.{ "OPAL_OMDB_KEY", "OMDB_API_KEY" }));
 
@@ -445,12 +453,11 @@ pub fn build(b: *std.Build) void {
     // pieceMapFraction, shouldSeek, shouldPrioritize, volumeFraction,
     // volumePercent.
     //
-    // TESTED BUT NOT YET SHIPPED — these back v2 affordances the bar does not
-    // draw yet (hover time chip, buffered-ahead range, width-based collapse,
-    // explicit transport state): timeLabelChars, timeLabelWidth, hoverChipWidth,
-    // segmentGravityX, centeredGravityX, bufferedAheadEnd, volumeLevel,
-    // transportState/Label/Busy, barLayout. Do not read those as coverage of
-    // current behaviour — there is no current behaviour to cover.
+    // Control-bar decisions: clock formatting and label widths, scrub-band
+    // paint geometry, hover-chip placement, buffered-ahead range, the seek
+    // throttle, the volume ramp, the transport state machine, and the
+    // width-based collapse order. All of it is wired into footer.zig — a test
+    // there asserts no export goes unreachable.
     const test_footer_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ui/footer_pure.zig"),
@@ -459,6 +466,30 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_footer_pure).step);
+
+    // Playback loading screen: art-URL resolution for every source (TMDB
+    // fragment vs. an absolute music-server cover), splitting a summary into
+    // rotating fact cards, which card is showing, and the meta line.
+    const test_loading_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ui/loading_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_loading_pure).step);
+
+    // Installed-source table: capacity (sized in FIELDS, not sources), the
+    // filename-safety rule shared by install/uninstall, and the overflow
+    // report that must never be silent again.
+    const test_source_config_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/source_config_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_source_config_pure).step);
 
     // Audio EQ preset → af spec, video-filter clamp, download-limit sanitize —
     // the persist-and-replay mapping shared by settings.zig + player.zig init.
@@ -1512,6 +1543,13 @@ pub fn build(b: *std.Build) void {
 /// `.env` (gitignored). Returns "" when nothing is found, which the app treats
 /// as "no embedded default". Never bakes a value into the repo — the source is
 /// the build environment or an untracked .env.
+/// `.version` from build.zig.zon — the single source of truth for the app
+/// version. Imported rather than duplicated: a hand-maintained copy is what
+/// shipped v0.6.1 reporting itself as "0.6.0".
+fn zonVersion(_: *std.Build) []const u8 {
+    return @import("build.zig.zon").version;
+}
+
 fn embeddedKey(b: *std.Build, names: []const []const u8) []const u8 {
     for (names) |name| {
         if (b.graph.environ_map.get(name)) |v| {

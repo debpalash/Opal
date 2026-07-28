@@ -943,3 +943,196 @@ def test_queue_row_layout():
     if bad:
         return "fail", "queue layout regression: " + ", ".join(bad)
     return "pass", "queue rows reserve the action strip; titles ellipsize to a scale-aware cap"
+
+
+@test("Scrubber paints its layers instead of sizing widgets", "Player")
+def test_scrubber_paint_layers():
+    """Two regressions in one fix.
+
+    (a) The five scrub layers were dvui boxes sized with
+        `min_size_content.w = track_rect.w * frac`. A child's min size
+        propagates to the parent's derived min (dvui takes max(specified,
+        derived)), so the band ratcheted toward the whole row and squeezed the
+        trailing duration to 0px — measured w=92.8 on frame 2, w=0.0 on frame 3
+        with the string still correct. Users saw no total duration.
+
+    (b) dvui's slider paints its filled portion with
+        `color_bar orelse theme.highlight.fill` — it ignores color_fill. Left
+        unset, that default blue bar covered all five Opal-styled layers, so
+        the buffered fill, accent played fill and chapter pips were computed
+        and painted every frame and then hidden."""
+    ft = _src("src/ui/footer.zig")
+    fp = _src("src/ui/footer_pure.zig")
+    bz = _src("build.zig")
+
+    scrub = ft.split("fn renderScrubber")[1].split("\nfn ")[0]
+
+    checks = {
+        # Pure geometry exists, is registered, and names the regression.
+        "pure fillBar": "pub fn fillBar(" in fp,
+        "pure markerAt": "pub fn markerAt(" in fp,
+        "pure registered": "footer_pure.zig" in bz,
+        "centering test": "fillBar centers the track" in fp,
+        "no-overhang test": "markerAt spans flush-left to flush-right" in fp,
+        "nan guard test": "fillBar refuses to emit a NaN rect" in fp,
+        # Production paints through the pure geometry.
+        "paints via fillBar": "footer_pure.fillBar(" in scrub,
+        "paints via markerAt": "footer_pure.markerAt(" in scrub,
+        "uses Rect.fill": "r.fill(dvui.Rect.Physical.all(" in scrub,
+        # (a) No layer may reintroduce a track-width min size — that is the bug.
+        "no track-width min": "min_size_content = .{ .w = track_rect.w" not in scrub,
+        # (b) The seek slider must stay invisible, color_bar included.
+        "slider color_bar transparent": ".color_bar = invisible" in scrub,
+        "slider stays input-only": ".color_fill = invisible" in scrub and ".background = false" in scrub,
+        # The trailing duration still routes through the tested formatter.
+        "duration formatted purely": "footer_pure.formatTrailing(" in scrub,
+        # REGRESSION: the row pinned max_size_content.h = 26, which clipped its
+        # OWN text — the elapsed/total clocks lost their descenders and the
+        # hover-time chip was cut off top and bottom. 26 must stay a floor.
+        "row height is a floor": ".min_size_content = .{ .w = 0, .h = 26 }" in scrub,
+        "row height is not capped": ".max_size_content = .{ .w = 0, .h = 26 }" not in scrub,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "scrubber paint/duration fix incomplete: " + ", ".join(missing)
+    return "pass", ("scrub layers painted via tested footer_pure geometry (no min-size "
+                    "propagation, so the trailing duration keeps its width) and the seek "
+                    "slider is fully transparent including color_bar")
+
+
+@test("Control bar v2 affordances are wired, not just tested", "Player")
+def test_control_bar_v2_wired():
+    """footer_pure.zig grew a tested pure layer for the v2 control bar, but
+    twelve of its functions were never called from footer.zig — tested logic
+    that shipped nothing. Each one now drives real UI:
+
+      timeLabelWidth   both clocks reserve their widest string, so the seek
+                       band stops twitching sideways at 9:59 -> 10:00
+      hoverChipWidth / centeredGravityX
+                       the hover preview is centred on the pointer and clamped
+                       inside the track (it used to drift a chip-width off at
+                       exactly the two ends people scrub to)
+      bufferedAheadEnd the contiguous downloaded run AHEAD of the playhead,
+                       which is what predicts a stall; total completion does not
+      volumeLevel      speaker glyph tracks the level, not just the mute flag
+      transportState / transportLabel / transportBusy
+                       "Loading..." vs "Buffering..." vs a deliberate pause
+      barLayout        sheds control groups widest-first so the close button is
+                       never clipped off the end in a small grid cell"""
+    ft = _src("src/ui/footer.zig")
+    fp = _src("src/ui/footer_pure.zig")
+
+    wired = [
+        "timeLabelWidth", "hoverChipWidth", "centeredGravityX", "bufferedAheadEnd",
+        "fillSegment", "volumeLevel", "transportState", "transportLabel",
+        "transportBusy", "barLayout",
+    ]
+    missing = [fn for fn in wired if f"footer_pure.{fn}(" not in ft]
+    if missing:
+        return "fail", "pure fns tested but never called from footer.zig: " + ", ".join(missing)
+
+    # Every exported pure fn must be reachable from production, directly or via
+    # another pure fn — otherwise it is coverage that ships nothing.
+    import re
+    exported = re.findall(r"^pub fn (\w+)\(", fp, re.M)
+    orphans = []
+    for fn in exported:
+        if f"footer_pure.{fn}(" in ft:
+            continue
+        # transitively used inside footer_pure by a shipped function?
+        if len(re.findall(rf"\b{fn}\(", fp)) > 1:
+            continue
+        orphans.append(fn)
+    if orphans:
+        return "fail", "unreachable pure fns (delete or wire them): " + ", ".join(orphans)
+
+    checks = {
+        # barLayout must gate real groups, not be computed and ignored.
+        "layout computed": "footer_pure.barLayout(bar_pt)" in ft,
+        "gates volume": "if (fit.volume_slider)" in ft,
+        "gates chips": "if (fit.secondary_chips)" in ft,
+        "gates badges": "if (fit.status_badges)" in ft,
+        "gates skips": "fit.skip_buttons" in ft,
+        # Width measured in on-screen points, same rule as the shell.
+        "width in points": "layoutPoints(" in ft and "state.app.ui_scale" in ft,
+        # Thresholds record the measurement that set them.
+        "thresholds measured": "clipped the close button" in fp,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "control bar v2 wiring incomplete: " + ", ".join(bad)
+    return "pass", (f"all {len(exported)} footer_pure exports reachable from production; "
+                    "barLayout sheds volume -> chips -> badges -> skips so the close "
+                    "button survives at 460pt (verified on screen at 1200/850/700/460)")
+
+
+@test("Loading screen shows art + rotating facts for every source", "Player")
+def test_loading_screen_infotainment():
+    """The buffering screen was a hourglass plus, for TMDB movie/TV plays only,
+    a poster and ONE static paragraph. Three problems:
+
+      (a) The art field held a bare TMDB path fragment and the renderer pasted
+          the TMDB image base in front of it, so an absolute cover URL from
+          Subsonic/Jellyfin/Plex/JioSaavn was unusable — music could never show
+          album art here, only the hourglass.
+      (b) One paragraph sat unchanged for the whole wait. A torrent resolve
+          plus first-parts buffering runs tens of seconds.
+      (c) Nothing on the screen identified WHAT was loading beyond the title —
+          no year, no score, no episode code, no artist."""
+    gr = _src("src/ui/grid.zig")
+    lp = _src("src/ui/loading_pure.zig")
+    st = _src("src/core/state.zig")
+    pl = _src("src/player/player.zig")
+    tm = _src("src/services/tmdb.zig")
+    mu = _src("src/services/music_subsonic.zig")
+    bz = _src("build.zig")
+
+    checks = {
+        # Pure layer exists, registered, and drives production.
+        "pure registered": "loading_pure.zig" in bz,
+        "pure posterUrl": "pub fn posterUrl(" in lp,
+        "pure splitFacts": "pub fn splitFacts(" in lp,
+        "pure cardIndex": "pub fn cardIndex(" in lp,
+        "pure metaLine": "pub fn metaLine(" in lp,
+        "render uses posterUrl": "lpure.posterUrl(" in gr,
+        "render uses splitFacts": "lpure.splitFacts(" in gr,
+        "render uses cardIndex": "lpure.cardIndex(" in gr,
+        "render uses metaLine": "lpure.metaLine(" in gr,
+        # (a) One art field that takes a fragment OR an absolute URL, and the
+        # TMDB base is no longer pasted on at the call site.
+        "art field widened": "pending_play_art: [256]u8" in st and "loading_art: [256]u8" in pl,
+        "no hardcoded tmdb base in render": "image.tmdb.org" not in gr,
+        "music stashes cover": "coverUrlFor(song" in mu and "stashPendingPlayFull(" in mu,
+        # REGRESSION: media reaches a player two ways — the torrent path and the
+        # direct-URL path (music, Jellyfin, every stream). The stash was only
+        # consumed on the torrent path, so a direct-play source could stash art
+        # that was never picked up and never shown.
+        "one stash consumer": "pub fn consumePendingPlay(" in st,
+        "torrent path consumes": "state.consumePendingPlay(p);" in _src("src/services/search.zig"),
+        "direct path consumes": _src("src/services/browser.zig").count("state.consumePendingPlay(p);") >= 2,
+        # Podcasts, radio, IPTV, Audiobookshelf and the browser extension all
+        # already hand loadContentDirectMeta an art URL + title. Deriving the
+        # loading context from those covers every one of them without editing
+        # two dozen call sites; a caller that stashed richer data still wins.
+        "art falls back to now-playing": "fn stashFromNowPlaying(" in _src("src/services/browser.zig"),
+        "explicit stash wins": "if (state.app.pending_play_title_len > 0" in _src("src/services/browser.zig"),
+        "one cover resolver": "pub fn coverUrlFor(" in mu,
+        # (b) Cards rotate and can be paged by hand.
+        "deck state": "loading_card_manual" in pl and "loading_card_since_ms" in pl,
+        "pager rendered": '"fact-prev"' in gr and '"fact-next"' in gr,
+        "no unsigned underflow": "cards.count - 1" in gr,
+        # (c) Meta line fed by every source that knows more than a title.
+        "kind + year + rating stashed": "pending_play_kind" in st and "pending_play_rating" in st,
+        "movie passes year+rating": "item.rating," in tm,
+        "episode passes code": '"S{d}E{d}"' in tm,
+        # Regression guards from the pure tests.
+        "absolute-url test": "posterUrl expands a TMDB fragment and passes an absolute URL through" in lp,
+        "abbreviation test": "splitFacts does not break on abbreviations or decimals" in lp,
+        "unrated test": "metaLine omits an unrated score instead of printing zero" in lp,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "loading screen enhancement incomplete: " + ", ".join(missing)
+    return "pass", ("loading screen resolves art for any source (TMDB fragment or absolute "
+                    "cover URL), shows a kind/year/score/artist meta line, and rotates "
+                    "summary facts on a pageable deck")

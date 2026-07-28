@@ -2192,30 +2192,10 @@ fn attachTorrentToPlayer(tid: c_int, source: []const u8) void {
 
         // Adopt the TMDB-linked loading context (if any) stashed by whoever
         // kicked off this play (tmdb.zig's sendToSearch / playTvEpisode), so
-        // grid.zig's loading overlay can show a poster + trivia instead of
-        // the bare hourglass. Free any stale poster from a previous play on
-        // this (reused) player first, then clear the stash so it can't leak
-        // onto a later unrelated magnet (e.g. a raw drag-dropped torrent).
-        @import("../core/poster.zig").deinitPoster(&p.loading_poster_pixels, &p.loading_poster_tex);
-        p.loading_poster_w = 0;
-        p.loading_poster_h = 0;
-        p.loading_poster_fetching = false;
-        p.loading_meta_fetch_started = false;
-        p.loading_trivia_len = 0;
-        p.loading_trivia_fetching = false;
-
-        p.loading_title_len = state.app.pending_play_title_len;
-        @memcpy(p.loading_title[0..p.loading_title_len], state.app.pending_play_title[0..p.loading_title_len]);
-        p.loading_poster_path_len = state.app.pending_play_poster_path_len;
-        @memcpy(p.loading_poster_path[0..p.loading_poster_path_len], state.app.pending_play_poster_path[0..p.loading_poster_path_len]);
-        p.loading_overview_len = state.app.pending_play_overview_len;
-        @memcpy(p.loading_overview[0..p.loading_overview_len], state.app.pending_play_overview[0..p.loading_overview_len]);
-        p.loading_is_tv = state.app.pending_play_is_tv;
-
-        state.app.pending_play_title_len = 0;
-        state.app.pending_play_poster_path_len = 0;
-        state.app.pending_play_overview_len = 0;
-        state.app.pending_play_is_tv = false;
+        // Loading-screen context (art, meta line, trivia). One shared
+        // consumer — the direct-URL path uses it too, so music and streams get
+        // the same screen instead of a bare hourglass.
+        state.consumePendingPlay(p);
 
         // Store URL for workspace persistence
         const url_len = @min(source.len, 2048);

@@ -23,8 +23,48 @@ pub const Route = enum {
     player,
     assistant,
     settings,
+    /// Plugins — its own top-level destination (nav-bar menu), split out of the
+    /// former "Logs & Plugins" system page so the plugin surfaces are reachable
+    /// in one click instead of via a sub-tab behind the Logs icon.
+    plugins,
     system,
 };
+
+/// Sub-navigation inside the Plugins route. Each variant is one card section
+/// of the old single-scroll Plugins page; the nav-bar menu jumps straight to
+/// one of them.
+pub const PluginTab = enum {
+    sources,
+    suwayomi,
+    debrid,
+    trakt,
+    content,
+};
+
+/// Display order for the Plugins menu and its in-page tab strip. Keep this the
+/// single source of truth — the UI iterates it rather than hard-coding a list.
+pub const PLUGIN_TABS = [_]PluginTab{ .sources, .suwayomi, .debrid, .trakt, .content };
+
+pub fn pluginTabLabel(t: PluginTab) []const u8 {
+    return switch (t) {
+        .sources => "Sources",
+        .suwayomi => "Suwayomi",
+        .debrid => "Debrid",
+        .trakt => "Trakt",
+        .content => "Content plugins",
+    };
+}
+
+/// One-line description shown next to the label in the nav-bar menu.
+pub fn pluginTabHint(t: PluginTab) []const u8 {
+    return switch (t) {
+        .sources => "Endpoints and credentials for built-in connectors",
+        .suwayomi => "Manga server: extensions and library",
+        .debrid => "Real-Debrid / AllDebrid account link",
+        .trakt => "Scrobbling and watch-status sync",
+        .content => "External executable plugins",
+    };
+}
 
 /// Max depth of each history ring. 32 covers any realistic session; older
 /// entries fall off the bottom (oldest-evicted) rather than blocking nav.
@@ -192,9 +232,37 @@ test "leavePlayer returns to last non-player page or home" {
     try std.testing.expectEqual(Route.settings, h4.current);
 }
 
+test "plugins is a first-class route, distinct from system" {
+    var h: History = .{};
+    h.navigate(.plugins);
+    try std.testing.expectEqual(Route.plugins, h.current);
+    // Going to Logs must be a real navigation, not a no-op — the two pages were
+    // one route ("Logs & Plugins") before the split.
+    h.navigate(.system);
+    try std.testing.expectEqual(Route.system, h.current);
+    h.goBack();
+    try std.testing.expectEqual(Route.plugins, h.current);
+}
+
+test "every plugin tab is listed exactly once with a unique label and a hint" {
+    // A missing variant here means the nav menu silently drops a page.
+    try std.testing.expectEqual(
+        @typeInfo(PluginTab).@"enum".fields.len,
+        PLUGIN_TABS.len,
+    );
+    for (PLUGIN_TABS, 0..) |t, i| {
+        try std.testing.expect(pluginTabLabel(t).len > 0);
+        try std.testing.expect(pluginTabHint(t).len > 0);
+        for (PLUGIN_TABS[i + 1 ..]) |other| {
+            try std.testing.expect(t != other);
+            try std.testing.expect(!std.mem.eql(u8, pluginTabLabel(t), pluginTabLabel(other)));
+        }
+    }
+}
+
 test "back stack caps without blocking navigation" {
     var h: History = .{};
-    const seq = [_]Route{ .search, .browse, .downloads, .queue, .history, .player, .assistant, .settings, .system };
+    const seq = [_]Route{ .search, .browse, .downloads, .queue, .history, .player, .assistant, .settings, .plugins, .system };
     // Far more navigations than HISTORY_CAP; must never overflow.
     var n: usize = 0;
     while (n < HISTORY_CAP * 3) : (n += 1) {

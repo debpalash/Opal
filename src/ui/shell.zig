@@ -36,12 +36,17 @@ pub fn render() !void {
     defer root.deinit();
 
     // Responsive breakpoints (one-frame lag acceptable; 0 on first paint → wide).
-    //   compact (< 760): mobile layout — top nav links move to a bottom tab bar.
-    //   narrow  (< 1180): still a top nav, but nav-link text collapses to
+    //   compact (< 760pt): mobile layout — top nav links move to a bottom tab bar.
+    //   narrow  (< 950pt): still a top nav, but nav-link text collapses to
     //     icons-only and the omnibox tightens so everything fits as you resize.
+    // The thresholds are ON-SCREEN POINTS. This shell renders inside
+    // dvui.scale(ui_scale), so root.rect.w is in scaled units — scale_pure
+    // converts. Comparing the raw value fired the breakpoints ~1/ui_scale too
+    // late and pushed the right-hand nav actions off the window edge.
     const w = root.data().rect.w;
-    const compact = w > 1 and w < 760;
-    const narrow = w > 1 and w < 950;
+    const scale_pure = @import("../core/scale_pure.zig");
+    const compact = scale_pure.isCompact(w, state.app.ui_scale);
+    const narrow = scale_pure.isNarrow(w, state.app.ui_scale);
 
     // Immersive playback: on the Player route, give the video the whole window by
     // hiding the top nav (and compact bottom tabs) once the viewer goes idle or
@@ -119,6 +124,7 @@ pub fn render() !void {
             const sub_key: usize = switch (r) {
                 .browse => @intFromEnum(state.app.browse_source),
                 .system => @intFromEnum(state.app.system_tab),
+                .plugins => @intFromEnum(state.app.plugin_tab),
                 else => 0,
             };
             var page_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.base, .easing = theme.motion.enter }, .{
@@ -262,7 +268,12 @@ fn renderTopNav(compact: bool, narrow: bool) void {
     if (components.iconButton(@src(), icons.tvg.lucide.play, "Now playing", state.app.router.current == .player)) {
         state.app.router.navigate(.player);
     }
-    if (components.iconButton(@src(), icons.tvg.lucide.@"scroll-text", "Logs & Plugins", state.app.router.current == .system)) {
+    // Plugins — its own nav-bar menu. Was a sub-tab hidden behind the
+    // "Logs & Plugins" icon, which meant two clicks and no hint that Suwayomi /
+    // Debrid / Trakt lived there at all. The dropdown lists every section, so
+    // each is one click from anywhere.
+    pluginsMenu();
+    if (components.iconButton(@src(), icons.tvg.lucide.@"scroll-text", "Logs", state.app.router.current == .system)) {
         state.app.router.navigate(.system);
     }
     if (components.iconButton(@src(), icons.tvg.lucide.settings, "Settings", state.app.router.current == .settings)) {
@@ -294,6 +305,53 @@ fn renderTopNav(compact: bool, narrow: bool) void {
             });
             defer col.deinit();
             renderOverflowItems();
+        }
+    }
+}
+
+/// Nav-bar Plugins menu: a puzzle-icon dropdown listing every section of the
+/// Plugins route. Selecting one navigates AND sets the sub-tab, so the menu is
+/// a direct jump rather than "open the page, then hunt for the card".
+fn pluginsMenu() void {
+    const on_route = state.app.router.current == .plugins;
+    var m = dvui.menu(@src(), .horizontal, .{ .gravity_y = 0.5 });
+    defer m.deinit();
+    if (dvui.menuItemIcon(@src(), "Plugins", icons.tvg.lucide.puzzle, .{ .submenu = true }, .{
+        .color_text = if (on_route) theme.colors.accent else theme.colors.text_secondary,
+        .color_fill = if (on_route) theme.colors.bg_elevated else transparent,
+        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .min_size_content = theme.iconSize(.sm),
+        .padding = dvui.Rect.all(6),
+    })) |r| {
+        var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
+        defer fw.deinit();
+        var col = dvui.menu(@src(), .vertical, .{
+            .background = true,
+            .color_fill = theme.colors.bg_surface,
+            .border = dvui.Rect.all(1),
+            .color_border = theme.colors.border_subtle,
+            .corner_radius = dvui.Rect.all(theme.radius.md),
+        });
+        defer col.deinit();
+
+        for (router.PLUGIN_TABS, 0..) |t, i| {
+            const active = on_route and state.app.plugin_tab == t;
+            if (dvui.menuItemLabel(@src(), router.pluginTabLabel(t), .{}, .{
+                .id_extra = 900 + i,
+                .expand = .horizontal,
+                .color_text = if (active) theme.colors.accent else theme.colors.text_primary,
+            }) != null) {
+                state.app.plugin_tab = t;
+                state.app.router.navigate(.plugins);
+            }
+            var f = dvui.themeGet().font_body;
+            f.size = theme.font_size.micro;
+            _ = dvui.label(@src(), "{s}", .{router.pluginTabHint(t)}, .{
+                .id_extra = 900 + i,
+                .color_text = theme.colors.text_tertiary,
+                .font = f,
+                .margin = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = theme.spacing.xs },
+            });
         }
     }
 }
@@ -589,9 +647,15 @@ fn renderPage(r: Route) !void {
         .downloads => drawer.renderTabContent(.Downloads),
         .queue => drawer.renderTabContent(.Queue),
         .history => drawer.renderTabContent(.History),
+        .plugins => {
+            pluginSubTabs();
+            @import("../services/plugins.zig").renderSection(state.app.plugin_tab);
+        },
         .system => {
-            subTabs(&.{ .Logs, .Plugins }, &state.app.system_tab, 300);
-            drawer.renderTabContent(state.app.system_tab);
+            // Logs only — Plugins moved to its own nav-bar menu/route. A
+            // one-entry tab strip would be pure chrome, so it's dropped.
+            state.app.system_tab = .Logs;
+            drawer.renderTabContent(.Logs);
         },
     }
 }
@@ -664,6 +728,21 @@ pub fn iconForTab(t: state.DrawerTab) []const u8 {
 /// narrow windows, and flexbox wrapping reported a collapsed min height here,
 /// letting the page content render on top of the bar.
 fn subTabs(tabs: []const state.DrawerTab, sel: *state.DrawerTab, id_extra: usize) void {
+    subTabsOf(state.DrawerTab, tabs, sel, id_extra, tabLabel, iconForTab);
+}
+
+/// Generic body of `subTabs`, parameterised over the tab enum so the Plugins
+/// route reuses the exact same strip (and its self-measuring height fix)
+/// instead of a second copy that drifts. Each instantiation gets its own
+/// `MeasuredH` static, which is what we want — one per strip.
+fn subTabsOf(
+    comptime T: type,
+    tabs: []const T,
+    sel: *T,
+    id_extra: usize,
+    comptime labelFn: fn (T) []const u8,
+    comptime iconFn: fn (T) []const u8,
+) void {
     // Strip height: SELF-MEASURED from the previous frame's laid-out bar
     // (plus a fallback floor). Exact-fit constants kept clipping label
     // descenders whenever the type ramp or fonts changed — the bar knows its
@@ -704,19 +783,35 @@ fn subTabs(tabs: []const state.DrawerTab, sel: *state.DrawerTab, id_extra: usize
         });
         defer row.deinit();
         if (navRowInteract(row)) sel.* = t;
-        dvui.icon(@src(), "tab", iconForTab(t), .{}, .{
+        dvui.icon(@src(), "tab", iconFn(t), .{}, .{
             .id_extra = id_extra + i + 1,
             .color_text = fg,
             .min_size_content = theme.iconSize(.sm),
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
         });
-        _ = dvui.label(@src(), "{s}", .{tabLabel(t)}, .{
+        _ = dvui.label(@src(), "{s}", .{labelFn(t)}, .{
             .id_extra = id_extra + i + 1,
             .color_text = fg,
             .gravity_y = 0.5,
         });
     }
+}
+
+/// In-page tab strip for the Plugins route. Mirrors the nav-bar Plugins menu
+/// (same order, same labels — both read `router.PLUGIN_TABS`).
+fn pluginSubTabs() void {
+    subTabsOf(router.PluginTab, &router.PLUGIN_TABS, &state.app.plugin_tab, 320, router.pluginTabLabel, pluginTabIcon);
+}
+
+fn pluginTabIcon(t: router.PluginTab) []const u8 {
+    return switch (t) {
+        .sources => icons.tvg.lucide.@"plug-zap",
+        .suwayomi => icons.tvg.lucide.@"book-open",
+        .debrid => icons.tvg.lucide.cloud,
+        .trakt => icons.tvg.lucide.@"refresh-cw",
+        .content => icons.tvg.lucide.puzzle,
+    };
 }
 
 // ── Compact bottom tab bar (mobile) ──

@@ -91,6 +91,11 @@ jobs:
   # come back green.
   smoke-windows:
     runs-on: windows-2022
+    # STILL advisory. The job has failed on every run since it was added
+    # (opal.exe exits before serving) and the step captured no output, so the
+    # cause is unknown. It stays non-blocking until it goes green at least
+    # once; promoting a permanently-red job would just teach everyone to
+    # ignore CI. The `diagnose` dump below is what will identify the cause.
     continue-on-error: true
     timeout-minutes: 45
     defaults:
@@ -130,16 +135,28 @@ jobs:
           cp -r engines web zig-out/bin/ 2>/dev/null || true
           cp data/plugins-manifest.json zig-out/bin/ 2>/dev/null || true
           cd zig-out/bin
-          ./opal.exe &
+          # Capture the app's own output. Without this the job could only ever
+          # report "exited before serving" with no reason attached — a red gate
+          # that tells you nothing is barely better than no gate, and this one
+          # has failed on every run since it was added.
+          ./opal.exe > opal.log 2>&1 &
           OPAL_PID=$!
+          diagnose() {
+            echo "--- opal.log ---"
+            cat opal.log 2>/dev/null || echo "(no output captured)"
+            echo "--- unresolved DLL imports ---"
+            ldd ./opal.exe 2>/dev/null | grep -i "not found" || echo "(none)"
+            echo "--- files beside the exe ---"
+            ls -la
+          }
           ok=0
           for i in $(seq 1 40); do
             if curl -fs http://127.0.0.1:41595/health >/dev/null 2>&1; then ok=1; break; fi
             # Fail fast if the process died rather than waiting out the loop.
-            kill -0 "$OPAL_PID" 2>/dev/null || { echo "::error::opal.exe exited before serving"; exit 1; }
+            kill -0 "$OPAL_PID" 2>/dev/null || { echo "::error::opal.exe exited before serving"; diagnose; exit 1; }
             sleep 3
           done
-          [ "$ok" = 1 ] || { echo "::error::/health never came up"; exit 1; }
+          [ "$ok" = 1 ] || { echo "::error::/health never came up"; diagnose; exit 1; }
           curl -fs http://127.0.0.1:41595/health | grep -q '"ok":true'
           curl -fs http://127.0.0.1:41595/ | grep -qiE 'opal|<!doctype'
           # Unauthenticated API must 401 — same contract as the container.
