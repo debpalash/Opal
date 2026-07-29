@@ -226,16 +226,20 @@ pub fn ensureDefaultAddons() void {
     }
 }
 
-/// Add well-known addons as fallback when the catalog API is unavailable
+/// Add well-known addons as fallback when the catalog API is unavailable.
+///
+/// CyberFlix and KnightCrawler used to be in this list and were removed: as
+/// of 2026-07 cyberflix.elfhosted.com/manifest.json returns 404 and
+/// knightcrawler.elfhosted.com redirects to a page literally titled
+/// "KnightCrawler is deprecated". A dead entry here is worse than a missing
+/// one — it is offered to the user as a working addon.
 fn addKnownAddons() void {
     const known = [_]struct { name: []const u8, desc: []const u8, url: []const u8, types: []const u8 }{
         .{ .name = "Torrentio", .desc = "Torrent streams from multiple indexers", .url = "https://torrentio.strem.fun/manifest.json", .types = "movie,series" },
-        .{ .name = "CyberFlix", .desc = "Free streaming from multiple sources", .url = "https://cyberflix.elfhosted.com/manifest.json", .types = "movie,series" },
         .{ .name = "MediaFusion", .desc = "Combined torrent and DDL streams", .url = "https://mediafusion.elfhosted.com/manifest.json", .types = "movie,series" },
         .{ .name = "Comet", .desc = "Debrid streaming via Real-Debrid/AllDebrid", .url = "https://comet.elfhosted.com/manifest.json", .types = "movie,series" },
         .{ .name = "Anime Kitsu", .desc = "Anime catalog with Kitsu integration", .url = "https://anime-kitsu.strem.fun/manifest.json", .types = "anime" },
         .{ .name = "OpenSubtitles", .desc = "Subtitles from OpenSubtitles.com", .url = "https://opensubtitles-v3.strem.io/manifest.json", .types = "movie,series" },
-        .{ .name = "KnightCrawler", .desc = "Self-hosted torrent indexer streams", .url = "https://knightcrawler.elfhosted.com/manifest.json", .types = "movie,series" },
         .{ .name = "ThePirateBay+", .desc = "ThePirateBay streams (debrid-capable)", .url = "https://thepiratebay-plus.strem.fun/manifest.json", .types = "movie,series" },
         .{ .name = "TMDB", .desc = "Rich movie/series catalog + metadata", .url = "https://tmdb.elfhosted.com/manifest.json", .types = "movie,series" },
         .{ .name = "USA TV Next", .desc = "Live US TV channels", .url = "https://raw.githubusercontent.com/yowmamasita/usa-tv-next/main/manifest.json", .types = "tv" },

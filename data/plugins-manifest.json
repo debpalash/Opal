@@ -212,28 +212,6 @@
       "file": "plugins/comet.json"
     },
     {
-      "id": "knightcrawler",
-      "name": "KnightCrawler (Stremio)",
-      "type": "stremio",
-      "version": "1.0.0",
-      "endpoints": {
-        "stremio": "https://knightcrawler.elfhosted.com/manifest.json",
-        "types": "movie,series"
-      },
-      "file": "plugins/knightcrawler.json"
-    },
-    {
-      "id": "cyberflix",
-      "name": "CyberFlix (Stremio)",
-      "type": "stremio",
-      "version": "1.0.0",
-      "endpoints": {
-        "stremio": "https://cyberflix.elfhosted.com/manifest.json",
-        "types": "movie,series"
-      },
-      "file": "plugins/cyberflix.json"
-    },
-    {
       "id": "thepiratebay-plus",
       "name": "ThePirateBay+ (Stremio)",
       "type": "stremio",
@@ -440,7 +418,7 @@
       "type": "torrent",
       "version": "1.0.0",
       "endpoints": {
-        "base": "https://www.torrentfunk2.com"
+        "base": "https://www.torrentfunk.com"
       },
       "file": "plugins/torrentfunk.json"
     },
@@ -647,11 +625,31 @@
       "version": "1.0.0",
       "note": "Register these index.min.json catalog URLs on your Suwayomi server (Extension repos), then install extensions. See https://wotaku.wiki/ext/mihon",
       "repos": [
-        { "name": "Keiyoushi", "kind": "manga", "url": "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json" },
-        { "name": "Yuzono (manga)", "kind": "manga", "url": "https://raw.githubusercontent.com/yuzono/manga-repo/repo/index.min.json" },
-        { "name": "Suwayomi", "kind": "manga", "url": "https://raw.githubusercontent.com/Suwayomi/tachiyomi-extension/repo/index.min.json" },
-        { "name": "Yuzono (anime)", "kind": "anime", "url": "https://raw.githubusercontent.com/yuzono/anime-repo/repo/index.min.json" },
-        { "name": "Secozzi (anime)", "kind": "anime", "url": "https://raw.githubusercontent.com/Secozzi/aniyomi-extensions/refs/heads/repo/index.min.json" }
+        {
+          "name": "Keiyoushi",
+          "kind": "manga",
+          "url": "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"
+        },
+        {
+          "name": "Yuzono (manga)",
+          "kind": "manga",
+          "url": "https://raw.githubusercontent.com/yuzono/manga-repo/repo/index.min.json"
+        },
+        {
+          "name": "Suwayomi",
+          "kind": "manga",
+          "url": "https://raw.githubusercontent.com/Suwayomi/tachiyomi-extension/repo/index.min.json"
+        },
+        {
+          "name": "Yuzono (anime)",
+          "kind": "anime",
+          "url": "https://raw.githubusercontent.com/yuzono/anime-repo/repo/index.min.json"
+        },
+        {
+          "name": "Secozzi (anime)",
+          "kind": "anime",
+          "url": "https://raw.githubusercontent.com/Secozzi/aniyomi-extensions/refs/heads/repo/index.min.json"
+        }
       ]
     },
     {

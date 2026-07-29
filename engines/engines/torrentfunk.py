@@ -15,7 +15,7 @@ except ImportError:
 
 
 class torrentfunk(object):
-    url = 'https://www.torrentfunk2.com'
+    url = 'https://www.torrentfunk.com'
     name = 'TorrentFunk'
     supported_categories = {'all': 'all', 'movies': 'movie', 'tv': 'television', 'music': 'music', 'games': 'games',
                             'anime': 'anime', 'software': 'software'}
@@ -24,7 +24,7 @@ class torrentfunk(object):
 
         def __init__(self):
             HTMLParser.__init__(self)
-            self.url = 'https://www.torrentfunk2.com'
+            self.url = 'https://www.torrentfunk.com'
             self.TABLE_INDEX = 5
             self.insideDataTd = False
             self.tdCount = -1
