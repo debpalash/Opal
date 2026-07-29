@@ -134,6 +134,15 @@ jobs:
           # nothing (the issue #21 packaging bug).
           cp -r engines web zig-out/bin/ 2>/dev/null || true
           cp data/plugins-manifest.json zig-out/bin/ 2>/dev/null || true
+          # The C++ torrent wrapper is built by a sh step in build.zig and lands
+          # in the REPO ROOT, not in zig-out/bin. The exe links it by name, so
+          # launching from zig-out/bin without it dies instantly with
+          # "torrent_wrapper.dll: cannot open shared object file" — which is
+          # exactly what this job had been failing on since it was added, with
+          # no output to say so. The release job stages it the same way.
+          cp torrent_wrapper.dll zig-out/bin/ 2>/dev/null \
+            || cp libtorrent_wrapper.dll zig-out/bin/ 2>/dev/null \
+            || echo "::warning::no torrent wrapper DLL found to stage"
           cd zig-out/bin
           # Capture the app's own output. Without this the job could only ever
           # report "exited before serving" with no reason attached — a red gate
