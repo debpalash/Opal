@@ -17,7 +17,7 @@
     <a href="../../stargazers"><img src="https://img.shields.io/github/stars/debpalash/Opal?color=8b5cf6&label=stars" alt="GitHub stars" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License: GPL-3.0" /></a>
     <img src="https://img.shields.io/badge/zig-0.16-f7a41d" alt="Written in Zig 0.16" />
-    <img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey" alt="Runs on macOS, Linux, and Windows" />
+    <img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows%20(alpha)-lightgrey" alt="Runs on macOS and Linux; Windows is alpha" />
   </p>
 
   <p>
@@ -72,13 +72,20 @@ Or pick your row — every file is on [Releases](../../releases):
 | 🎩 | **Fedora / openSUSE** | `sudo dnf install ./opal-*.x86_64.rpm` |
 | 🏹 | **Arch** | `yay -S opal-bin` (or `opal` to build) |
 | 🐧 | **Any Linux** | `chmod +x Opal-*.AppImage` and run it |
-| 🪟 | **Windows** (x64) | run the `.msi` — or unzip the portable `.zip` |
+| 🪟 | **Windows** (x64) — **alpha** | run the `.msi` — or unzip the portable `.zip` |
 | 🛠 | **From source** | `git clone` → `zig build run` |
 
 <sub>🍎 macOS may call the `.dmg` **"damaged"** — it isn't; we're not Apple-notarized
 yet. The one-command installer skips the dialog, or run `sudo xattr -cr
-/Applications/Opal.app` once. 🪟 Windows is the newest port — SmartScreen will
-want a word. 🍎 Intel Macs: build from source (`HOMEBREW_PREFIX=/usr/local`).</sub>
+/Applications/Opal.app` once. 🍎 Intel Macs: build from source
+(`HOMEBREW_PREFIX=/usr/local`).</sub>
+
+> [!WARNING]
+> **Windows support is alpha.** It is the newest port and is not yet at parity
+> with macOS and Linux — expect rough edges and bugs the other two do not have.
+> SmartScreen will also want a word. Please do
+> [file issues](https://github.com/debpalash/Opal/issues); they are what moves it
+> forward. macOS (Apple silicon) and Linux x86_64 are the supported platforms.
 
 **First launch:** open **Settings** (<kbd>⌘</kbd><kbd>,</kbd>) and paste a free
 **TMDB v4 token** to light up movie/TV browsing. Voice and AI models are opt-in
@@ -287,6 +294,6 @@ licenses (libtorrent BSD, dvui/ONNX MIT, SDL2 zlib, SQLite public domain).
   <sub>
   <b>Opal</b> — open-source media player · IPTV / live TV player · torrent streaming ·
   Jellyfin & Plex client · YouTube desktop app · manga reader (Mihon / Tachiyomi / Suwayomi) ·
-  local AI copilot · self-hosted Stremio & Kodi alternative · for macOS, Linux, and Windows.
+  local AI copilot · self-hosted Stremio & Kodi alternative · for macOS and Linux (Windows alpha).
   </sub>
 </div>

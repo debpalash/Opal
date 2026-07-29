@@ -597,3 +597,54 @@ def test_onboarding_first_run():
         return "fail", "first-run onboarding wiring incomplete: " + ", ".join(missing)
     return "pass", ("wizard shows on a fresh profile (verified on screen) and stays hidden "
                     "for installs with a persisted flag, a real TMDB key or sources")
+
+
+@test("Workflow shell scripts parse", "Build")
+def test_workflow_shell_syntax():
+    """A `run:` block that isn't valid shell fails in CI with exit 127 and no
+    output at all — you get a red job and no clue why. That is exactly what a
+    stray line-continuation in ci.yml's smoke step cost: the whole script
+    failed to parse, so not one of its own error messages ever ran.
+
+    `bash -n` parses without executing, so this is cheap and catches it before
+    the push. pwsh/cmd steps are skipped — only shell blocks are checked."""
+    import glob, os, subprocess
+    try:
+        import yaml
+    except ImportError:
+        return "skip", "pyyaml not installed"
+
+    bash = "/bin/bash"
+    if not os.path.exists(bash):
+        return "skip", "no /bin/bash"
+
+    bad, checked = [], 0
+    for wf in sorted(glob.glob(os.path.join(PROJECT_DIR, ".github", "workflows", "*.yml"))):
+        try:
+            doc = yaml.safe_load(open(wf))
+        except Exception as e:
+            bad.append(f"{os.path.basename(wf)}: unparseable YAML ({e})")
+            continue
+        for job in (doc.get("jobs") or {}).values():
+            job_shell = ((job.get("defaults") or {}).get("run") or {}).get("shell", "")
+            for step in job.get("steps") or []:
+                script = step.get("run")
+                if not script:
+                    continue
+                shell = step.get("shell", job_shell) or ""
+                if any(s in shell for s in ("pwsh", "powershell", "cmd", "python")):
+                    continue
+                checked += 1
+                # ${{ }} expressions are not shell — neutralise them first.
+                import re
+                cleaned = re.sub(r"\$\{\{[^}]*\}\}", "EXPR", script)
+                r = subprocess.run([bash, "-n"], input=cleaned, capture_output=True, text=True)
+                if r.returncode != 0:
+                    name = step.get("name", "<unnamed>")
+                    bad.append(f"{os.path.basename(wf)} / {name}: {r.stderr.strip()[:120]}")
+
+    if bad:
+        return "fail", "workflow shell scripts do not parse: " + "; ".join(bad[:4])
+    if checked == 0:
+        return "fail", "no shell steps found to check — the walker is broken"
+    return "pass", f"{checked} workflow shell step(s) parse under bash -n"

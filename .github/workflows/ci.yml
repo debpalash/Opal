@@ -140,9 +140,9 @@ jobs:
           # "torrent_wrapper.dll: cannot open shared object file" — which is
           # exactly what this job had been failing on since it was added, with
           # no output to say so. The release job stages it the same way.
-          cp torrent_wrapper.dll zig-out/bin/ 2>/dev/null \
-            || cp libtorrent_wrapper.dll zig-out/bin/ 2>/dev/null \
-            || echo "::warning::no torrent wrapper DLL found to stage"
+          for w in torrent_wrapper.dll libtorrent_wrapper.dll; do
+            if [ -f "$w" ]; then cp "$w" zig-out/bin/; break; fi
+          done
           cd zig-out/bin
           # Capture the app's own output. Without this the job could only ever
           # report "exited before serving" with no reason attached — a red gate

@@ -110,6 +110,15 @@ def check(path):
             continue
         body = line.split("\t", 1)[1] if "\t" in line else ""
         if AVX512_ONLY.match(body):
+            # objdump prints "(bad)" for operands it could not decode. A line
+            # like `kandb  (bad),%k5,(bad)` is not an instruction at all — it is
+            # the disassembler starting mid-stream in alignment padding or data
+            # and resynchronising a few bytes later. The real v0.6.3 Windows
+            # build produced exactly this, sandwiched between `data16 … nopw`
+            # padding and a genuine function prologue. Counting it would be a
+            # false positive, and PE sections invite them.
+            if "(bad)" in body:
+                continue
             hits += 1
             offenders.setdefault(sym, set()).add(body.split()[0])
             if len(context) < 4:
