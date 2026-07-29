@@ -128,7 +128,10 @@ jobs:
         run: zig build -Dheadless=true -Doptimize=ReleaseSafe
       - name: Boot + smoke
         run: |
-          set -eu
+          # -x stays on permanently. This job spent six runs failing with
+          # "exit 127" and no output; the trace is what makes it diagnosable,
+          # and smoke-job noise is a fine price for that.
+          set -eux
           # Resources must sit beside the exe: detectResourceRoot probes for
           # engines/nova2.py, and without it torrent search silently returns
           # nothing (the issue #21 packaging bug).
@@ -174,11 +177,23 @@ jobs:
           code=$(curl -sL -o NUL -w '%{http_code}' --max-time 10 http://127.0.0.1:41595/health)
           [ "$code" = 200 ] || { echo "::error::curl -o NUL probe returned $code, not 200"; exit 1; }
           #  2. killByCommandLine's Windows path must actually terminate a child.
-          # powershell.exe, not powershell: MSYS2's bash resolves PATH itself
-          # and will not find a Windows binary without the suffix. That bare
-          # name is what produced the exit-127-with-no-output this job was
-          # stuck on — every assertion above it had already passed.
-          powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*opal.exe*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }"
+          # Resolve powershell explicitly. MSYS2's bash does its own PATH
+          # lookup and will not find a Windows binary from a bare name, which
+          # is what produced the exit-127-with-no-output this job was stuck on
+          # — every assertion above it had already passed. Fall back to the
+          # absolute path, then to taskkill, and say so rather than dying with
+          # a bare 127.
+          PS=""
+          for c in powershell.exe pwsh.exe \
+                   /c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe; do
+            if command -v "$c" >/dev/null 2>&1; then PS="$c"; break; fi
+          done
+          if [ -n "$PS" ]; then
+            "$PS" -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*opal.exe*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }"
+          else
+            echo "::error::no powershell on PATH — cannot exercise the CIM kill path"
+            exit 1
+          fi
           sleep 3
           if curl -fs --max-time 5 http://127.0.0.1:41595/health >/dev/null 2>&1; then
             echo "::error::CIM kill did not stop opal.exe — killByCommandLine is a no-op on Windows"
