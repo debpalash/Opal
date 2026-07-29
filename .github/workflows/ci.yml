@@ -91,12 +91,13 @@ jobs:
   # come back green.
   smoke-windows:
     runs-on: windows-2022
-    # STILL advisory. The job has failed on every run since it was added
-    # (opal.exe exits before serving) and the step captured no output, so the
-    # cause is unknown. It stays non-blocking until it goes green at least
-    # once; promoting a permanently-red job would just teach everyone to
-    # ignore CI. The `diagnose` dump below is what will identify the cause.
-    continue-on-error: true
+    # BLOCKING as of the first green run (2026-07-29). It was advisory while it
+    # had never passed, because promoting a permanently-red job only teaches
+    # people to ignore CI. Three harness bugs kept it red, none of them in the
+    # app: torrent_wrapper.dll was not staged beside the exe, the DLL-staging
+    # line shipped with a broken line-continuation, and the CIM kill drove
+    # powershell through MSYS2 bash (which mangles the argument string). The
+    # app passed every assertion once the harness stopped lying.
     timeout-minutes: 45
     defaults:
       run:
