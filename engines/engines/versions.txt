@@ -15,9 +15,9 @@ therarbg: 1.4
 tokyotoshokan: 2.3
 torlock: 2.28
 torrentdownloads: 1.00
-torrentfunk: 1.1
+torrentfunk: 1.2
 torrentgalaxy: 1.0
-torrentproject: 1.91
+torrentproject: 1.92
 torrentscsv: 1.8
 uindex: 1.1
 yts: 1.3

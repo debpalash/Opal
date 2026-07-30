@@ -1,4 +1,4 @@
-# VERSION: 1.1
+# VERSION: 1.2
 # AUTHORS: mauricci
 
 from helpers import retrieve_url
@@ -96,7 +96,6 @@ class torrentfunk(object):
         # analyze firt page with 250 results
         for currPage in range(1, 2):
             url = self.url + '/{0}/torrents/{1}.html?sort=seed&o=desc&i=250'.format(currCat, what, currPage)
-            print(url)
             html = retrieve_url(url)
             parser.feed(html)
             if len(parser.fullResData) <= 0:

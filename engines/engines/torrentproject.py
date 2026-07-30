@@ -1,6 +1,7 @@
-# VERSION: 1.91
+# VERSION: 1.92
 # AUTHORS: mauricci
 
+import sys
 import re
 from datetime import datetime
 from html.parser import HTMLParser
@@ -91,7 +92,11 @@ class torrentproject:
                                 try:
                                     prettyPrinter(self.singleResData)  # type: ignore[arg-type] # refactor later
                                 except Exception:  # pylint: disable=broad-exception-caught
-                                    print(self.singleResData)
+                                    # Was print(...) to stdout: a failed row got
+                                    # dumped as a Python dict repr into the
+                                    # result stream, where Opal parsed it as a
+                                    # torrent. Diagnostics go to the app log.
+                                    print(self.singleResData, file=sys.stderr)
                                 self.pageRes.append(self.singleResData)
                                 self.fullResData.append(self.singleResData)
                     self.singleResData = self.get_single_data()

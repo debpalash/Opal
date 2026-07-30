@@ -260,3 +260,61 @@ def therarbg_detail_fetch_is_isolated():
     finally:
         m.retrieve_url = real
     return "pass", "unresolvable magnets skip their row; feed() survives"
+
+
+@test("nova2 engine catalog: nothing prints to stdout but results", "Torrents")
+def engines_do_not_pollute_stdout():
+    """stdout is the result channel; a stray print() becomes a malformed row.
+
+    nova2 engines emit results by calling prettyPrinter(), which writes one
+    pipe-delimited row per torrent to stdout. Opal's resolver parses that
+    stream line by line, so any other print() injects a bogus row.
+    `torrentfunk.py` shipped a debug `print(url)` in search(): every query
+    prefixed the result set with a bare URL line. It survived because the
+    engine's row count was never checked against its printed line count.
+
+    download_torrent() legitimately prints the saved path -- that is nova2's
+    documented contract for that entry point, and it never runs during search.
+    """
+    import ast
+    problems = []
+    for name in _plugin_files():
+        if name in QUARANTINE:
+            continue
+        path = os.path.join(ENGINES_DIR, name + ".py")
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            src = fh.read()
+        try:
+            tree = ast.parse(src)
+        except SyntaxError as exc:
+            problems.append(f"{name}: does not parse ({exc})")
+            continue
+
+        # Anything under `if __name__ == "__main__":` is a manual harness.
+        allowed = set()
+        for node in tree.body:
+            if isinstance(node, ast.If):
+                for sub in ast.walk(node):
+                    allowed.add(id(sub))
+
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.FunctionDef) or fn.name == "download_torrent":
+                continue
+            for node in ast.walk(fn):
+                if not (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name)
+                        and node.func.id == "print"
+                        and id(node) not in allowed):
+                    continue
+                # `print(..., file=sys.stderr)` is the correct way to report a
+                # diagnostic -- it lands in the app log, not the result stream.
+                redirected = any(kw.arg == "file" for kw in node.keywords)
+                if not redirected:
+                    problems.append(
+                        f"{name}.{fn.name}() line {node.lineno}: print() to the "
+                        "result stream")
+
+    if problems:
+        return "fail", "; ".join(problems)
+    return "pass", (f"all {len(_plugin_files())} engines emit only via "
+                    "prettyPrinter")
