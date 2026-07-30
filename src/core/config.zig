@@ -50,6 +50,7 @@ pub fn save() void {
     setKey("tts_voice", state.app.tts_voice_buf[0..state.app.tts_voice_len]);
     setKey("tts_speed", fmtFloat(&fb, state.app.tts_speed));
     setKey("kokoro_sid", fmtInt(&fb, @as(usize, @import("../services/voice_backend.zig").kokoro_sid)));
+    setKey("music_discovery", if (state.app.music_discovery_enabled) "1" else "0");
     setKey("lang_learn", if (state.app.lang_learn_enabled) "1" else "0");
     setKey("asr_enabled", if (state.app.asr_enabled) "1" else "0");
     setKey("live_asr", if (state.app.live_asr_enabled) "1" else "0");
@@ -310,6 +311,8 @@ fn applyConfig(key: []const u8, val: []const u8) void {
     } else if (std.mem.eql(u8, key, "kokoro_sid")) {
         const sid = std.fmt.parseInt(u16, val, 10) catch 0;
         @import("../services/voice_backend.zig").kokoro_sid = if (sid <= 53) sid else 53;
+    } else if (std.mem.eql(u8, key, "music_discovery")) {
+        state.app.music_discovery_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "lang_learn")) {
         state.app.lang_learn_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "asr_enabled")) {

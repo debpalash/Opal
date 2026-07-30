@@ -4,6 +4,7 @@
 //! these functions instead of keeping its own copy.
 
 const std = @import("std");
+const subs = @import("subtitles_pure.zig");
 
 pub const SourceType = enum {
     jellyfin,
@@ -39,16 +40,60 @@ fn isStopWord(word: []const u8) bool {
     return false;
 }
 
-/// Compute match % + composite sort score. Lower score = better.
-/// Byte-for-byte equivalent to resolver.computeMatch scoring (as of 2026-04-19).
-pub fn computeMatch(item: Item, query: []const u8, intent: []const u8) MatchInfo {
+/// Query-token hit counts for one candidate title.
+pub const Counts = struct {
+    match_words: u32,
+    total_words: u32,
+
+    /// Percentage of scoreable query tokens found. 50 when the query had no
+    /// scoreable token at all (matches the historical resolver behaviour).
+    pub fn pct(self: Counts) u8 {
+        if (self.total_words == 0) return 50;
+        return @intCast((self.match_words * 100) / self.total_words);
+    }
+};
+
+/// True for a bare `sXXeYY` query token — the episode marker itself, which is
+/// matched against the whole release name rather than the series title.
+fn isEpisodeToken(word: []const u8) bool {
+    if (subs.findSxxEyy(word)) |m| return m.at == 0;
+    return false;
+}
+
+/// Count how many scoreable tokens of `query` occur in `name`.
+///
+/// THE SCENE RULE (bug: "Alan Carrs Epic Gameshow S01E04 Strike it Lucky …"
+/// auto-played for the query "lucky s01e04" and wore the show *Lucky*'s poster
+/// and synopsis): in a scene release the SERIES TITLE precedes the SxxEyy
+/// token, and everything after it is the episode name plus quality tags. When
+/// the QUERY is itself an episode query (it carries an sXXeYY token — which is
+/// exactly what tmdb_pure.episodeQuery builds for smart play), its title
+/// tokens are therefore matched against `subtitles_pure.seriesTitle(name)`
+/// only — the same cut `subtitles_pure.parse`, eztv_calendar's show grouping
+/// and tv_library's TV/movie split already use — so an episode NAME can no
+/// longer impersonate a series. The sXXeYY token itself still matches anywhere
+/// in the name.
+///
+/// Two deliberate carve-outs:
+///   • a MOVIE release has no marker, so its series title IS its whole name —
+///     film scoring is byte-for-byte unchanged;
+///   • a free-text query with no sXXeYY ("strike it lucky") still scores over
+///     the whole name, so searching by EPISODE title keeps working.
+///
+/// Shared by `computeMatch` here and by `resolver.computeMatch` in production,
+/// so the shipped scoring is the scoring the tests exercise.
+pub fn matchCounts(name: []const u8, query: []const u8) Counts {
     var lower_name: [256]u8 = undefined;
-    const nlen = @min(item.name.len, 255);
-    for (0..nlen) |i| lower_name[i] = std.ascii.toLower(item.name[i]);
+    const nlen = @min(name.len, 255);
+    for (0..nlen) |i| lower_name[i] = std.ascii.toLower(name[i]);
+    const full = lower_name[0..nlen];
 
     var lower_query: [256]u8 = undefined;
     const ql = @min(query.len, 255);
     for (0..ql) |i| lower_query[i] = std.ascii.toLower(query[i]);
+
+    const query_is_episodic = subs.findSxxEyy(lower_query[0..ql]) != null;
+    const title_hay = if (query_is_episodic) subs.seriesTitle(full) else full;
 
     var match_words: u32 = 0;
     var total_words: u32 = 0;
@@ -66,16 +111,22 @@ pub fn computeMatch(item: Item, query: []const u8, intent: []const u8) MatchInfo
         total_words += 1;
 
         var is_numeric = true;
-        for (word) |ch| if (!std.ascii.isDigit(ch)) { is_numeric = false; break; };
+        for (word) |ch| if (!std.ascii.isDigit(ch)) {
+            is_numeric = false;
+            break;
+        };
 
-        const hay = lower_name[0..nlen];
+        const hay = if (isEpisodeToken(word)) full else title_hay;
         if (is_numeric) {
             var hi: usize = 0;
             while (std.mem.indexOfPos(u8, hay, hi, word)) |p| {
                 const before_ok = (p == 0) or !std.ascii.isDigit(hay[p - 1]);
                 const after_idx = p + word.len;
                 const after_ok = (after_idx >= hay.len) or !std.ascii.isDigit(hay[after_idx]);
-                if (before_ok and after_ok) { match_words += 1; break; }
+                if (before_ok and after_ok) {
+                    match_words += 1;
+                    break;
+                }
                 hi = p + 1;
             }
         } else {
@@ -83,9 +134,24 @@ pub fn computeMatch(item: Item, query: []const u8, intent: []const u8) MatchInfo
         }
     }
 
-    const pct: u8 = if (total_words > 0)
-        @intCast((match_words * 100) / total_words)
-    else 50;
+    return .{ .match_words = match_words, .total_words = total_words };
+}
+
+/// Compute match % + composite sort score. Lower score = better.
+/// Byte-for-byte equivalent to resolver.computeMatch scoring (as of 2026-04-19).
+pub fn computeMatch(item: Item, query: []const u8, intent: []const u8) MatchInfo {
+    var lower_name: [256]u8 = undefined;
+    const nlen = @min(item.name.len, 255);
+    for (0..nlen) |i| lower_name[i] = std.ascii.toLower(item.name[i]);
+
+    var lower_query: [256]u8 = undefined;
+    const ql = @min(query.len, 255);
+    for (0..ql) |i| lower_query[i] = std.ascii.toLower(query[i]);
+
+    const counts = matchCounts(item.name, query);
+    const match_words = counts.match_words;
+    const total_words = counts.total_words;
+    const pct: u8 = counts.pct();
 
     if (match_words == 0) return .{
         .match_pct = 0, .score = 9999,
@@ -368,6 +434,85 @@ pub fn pickBest(cands: []const PickCand) ?usize {
         return i;
     }
     return null;
+}
+
+/// May the poster/synopsis we stashed for `query` be shown while `name` loads?
+///
+/// Wrong metadata is worse than none, so this is stricter than `pickBest`'s
+/// 60% rank bar: EVERY scoreable token of the query must be present, and (per
+/// `matchCounts`) the title tokens must be present in the release's SERIES
+/// title. "lucky s01e04" vs "Alan Carrs Epic Gameshow S01E04 Strike it Lucky"
+/// fails here, so that play shows a bare hourglass instead of Lucky's poster.
+pub fn metadataSafeFor(name: []const u8, query: []const u8) bool {
+    const c = matchCounts(name, query);
+    if (c.total_words == 0) return false; // nothing to verify against
+    return c.match_words == c.total_words;
+}
+
+test "matchCounts: an episode NAME cannot impersonate a series (Alan Carr / Lucky regression)" {
+    // The exact release from the bug report, against the query smart-play
+    // builds for the tracked show "Lucky" S01E04.
+    const release = "Alan Carrs Epic Gameshow S01E04 Strike it Lucky 1080p AMZN WEB-DL DDP2 0 H 264-NTb [eztv]";
+    const c = matchCounts(release, "lucky s01e04");
+    try std.testing.expectEqual(@as(u32, 2), c.total_words);
+    try std.testing.expectEqual(@as(u32, 1), c.match_words); // only s01e04
+    try std.testing.expectEqual(@as(u8, 50), c.pct()); // below PICK_MIN_MATCH
+    try std.testing.expect(c.pct() < PICK_MIN_MATCH);
+    try std.testing.expect(!metadataSafeFor(release, "lucky s01e04"));
+
+    // Dotted scene form of the same release behaves identically.
+    const dotted = "Alan.Carrs.Epic.Gameshow.S01E04.Strike.it.Lucky.1080p.AMZN.WEB-DL.DDP2.0.H.264-NTb-eztv";
+    try std.testing.expect(matchCounts(dotted, "lucky s01e04").pct() < PICK_MIN_MATCH);
+
+    // The show it really is still matches its own query, 100%.
+    try std.testing.expectEqual(@as(u8, 100), matchCounts(release, "alan carrs epic gameshow s01e04").pct());
+    try std.testing.expect(metadataSafeFor(release, "alan carrs epic gameshow s01e04"));
+
+    // And the real "Lucky" release still matches "lucky s01e04".
+    try std.testing.expectEqual(@as(u8, 100), matchCounts("Lucky.S01E04.1080p.WEB.h264-GROUP", "lucky s01e04").pct());
+    try std.testing.expect(metadataSafeFor("Lucky.S01E04.1080p.WEB.h264-GROUP", "lucky s01e04"));
+}
+
+test "matchCounts: real-world shapes — dotted, year-in-title, multi-word, numeric titles" {
+    // Dotted multi-word show.
+    try std.testing.expectEqual(@as(u8, 100), matchCounts("Rick.and.Morty.S09E10.1080p.WEB.h264", "rick and morty s09e10").pct());
+    // Title that legitimately contains a number.
+    try std.testing.expectEqual(@as(u8, 100), matchCounts("The.100.S07E16.The.Last.War.1080p.WEB", "the 100 s07e16").pct());
+    try std.testing.expectEqual(@as(u8, 100), matchCounts("X-Men.97.S02E02.1080p.WEB.h264-GROUP", "x-men s02e02").pct());
+    // Year in the show title.
+    try std.testing.expectEqual(@as(u8, 100), matchCounts("Doctor.Who.2005.S13E01.1080p.HDTV", "doctor who 2005 s13e01").pct());
+    // A title token that appears ONLY after the marker no longer counts: the
+    // episode is "The Last War", the series is not "war".
+    try std.testing.expect(matchCounts("The.100.S07E16.The.Last.War.1080p.WEB", "war s07e16").pct() < PICK_MIN_MATCH);
+}
+
+test "matchCounts: a free-text query with no SxxEyy still searches the whole name" {
+    // Searching by EPISODE title must keep working — the series-title cut only
+    // applies when the query itself is an episode query.
+    const release = "Alan Carrs Epic Gameshow S01E04 Strike it Lucky 1080p AMZN WEB-DL DDP2 0 H 264-NTb [eztv]";
+    try std.testing.expectEqual(@as(u8, 100), matchCounts(release, "strike it lucky").pct());
+    try std.testing.expectEqual(@as(u8, 100), matchCounts(release, "alan carr gameshow").pct());
+    // …but adding the marker re-arms the rule.
+    try std.testing.expect(matchCounts(release, "strike lucky s01e04").pct() == 33);
+}
+
+test "matchCounts: MOVIE releases are untouched by the scene rule" {
+    // No SxxEyy → series title IS the whole name, so film scoring is unchanged.
+    try std.testing.expectEqual(@as(u8, 100), matchCounts("Inception.2010.PROPER.1080p.BluRay.x264-GROUP", "inception 2010").pct());
+    try std.testing.expectEqual(@as(u8, 100), matchCounts("Lucky.2017.1080p.WEB-DL.DD5.1.H264-FGT", "lucky 2017").pct());
+    try std.testing.expectEqual(@as(u8, 100), matchCounts("Iron.Man.2.2010.1080p.BluRay", "iron man 2").pct());
+    // The numeric word-boundary rule still holds for films.
+    try std.testing.expectEqual(@as(u8, 66), matchCounts("Iron.Man.2008.1080p.BluRay", "iron man 2").pct());
+    try std.testing.expect(metadataSafeFor("Inception.2010.PROPER.1080p.BluRay.x264-GROUP", "inception 2010"));
+}
+
+test "metadataSafeFor: partial matches and empty queries yield NO metadata" {
+    // 50% is enough to rank but never enough to borrow a poster.
+    try std.testing.expect(!metadataSafeFor("Silo.S03E05.1080p.WEB", "silo s03e04"));
+    try std.testing.expect(!metadataSafeFor("Some.Unrelated.Thing.1080p", "inception 2010"));
+    // No scoreable token → nothing was verified → no metadata.
+    try std.testing.expect(!metadataSafeFor("Anything.1080p", ""));
+    try std.testing.expect(!metadataSafeFor("Anything.1080p", "a of the"));
 }
 
 test "pickBest: first confident hit wins; dead magnets and weak matches skipped" {

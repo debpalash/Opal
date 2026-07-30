@@ -46,11 +46,23 @@ class torlock:
 
             if self.item_found:
                 if tag == "td":
-                    param_class = params["class"]
+                    param_class = params.get("class")
                     if param_class is not None:
-                        self.item_name = self.parser_class.get(param_class)
-                        if self.item_name:
-                            self.current_item[self.item_name] = ""
+                        # Match ANY class token, not the whole attribute. Torlock
+                        # now emits compound classes -- `<td class="tul h1">` for
+                        # the seed column, `<td class="tdl hidden-sm-down">` for
+                        # leech -- and an exact-string lookup missed every one of
+                        # them, so `seeds` was never set and prettyPrinter died
+                        # with KeyError: 'seeds' on every query. The site was
+                        # serving 750 KB of perfectly good rows the whole time.
+                        for token in param_class.split():
+                            name = self.parser_class.get(token)
+                            if name:
+                                self.item_name = name
+                                self.current_item[name] = ""
+                                break
+                        else:
+                            self.item_name = None
 
             elif self.article_found and tag == "a":
                 link = params.get("href")

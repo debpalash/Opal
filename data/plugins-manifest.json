@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "name": "Opal Plugins",
-  "description": "Source endpoints for Opal. The app holds the connector code; these supply the URLs and enable the source. Install writes ~/.config/opal/plugins/sources/<id>.json. Torrent ids match the nova2 engine that runs them; stremio entries add a Stremio add-on (one URL, many sources).",
+  "description": "Source endpoints for Opal. The app holds the connector code; these supply the URLs and enable the source. Install writes ~/.config/opal/plugins/sources/<id>.json. Torrent ids match the nova2 engine that runs them; stremio entries add a Stremio add-on (one URL, many sources). Two optional endpoint fields apply to any source: \"mirrors\" (a list, or a comma-separated string, of alternate origins tried in order when \"base\" is unreachable/blocked) and, for torznab, \"path\" (the endpoint template, \"{indexer}\" substituted).",
   "plugins": [
     {
       "id": "apibay",
@@ -27,10 +27,15 @@
       "id": "yts",
       "name": "YTS (movies)",
       "type": "torrent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
-        "base": "https://yts.mx",
-        "api": "https://yts.mx/api/v2/list_movies.json"
+        "base": "https://yts.gg",
+        "api": "https://movies-api.accel.li/api/v2/list_movies.json",
+        "mirrors": [
+          "https://yts.gg",
+          "https://yts.lt",
+          "https://yts.am"
+        ]
       },
       "file": "plugins/yts.json"
     },
@@ -58,22 +63,16 @@
       "file": "plugins/nyaa.json"
     },
     {
-      "id": "kickass",
-      "name": "KickAss",
-      "type": "torrent",
-      "version": "1.0.0",
-      "endpoints": {
-        "base": "https://kickasstorrents.to"
-      },
-      "file": "plugins/kickass.json"
-    },
-    {
       "id": "limetorrents",
       "name": "LimeTorrents",
       "type": "torrent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
-        "base": "https://www.limetorrents.lol"
+        "base": "https://www.limetorrents.cc",
+        "mirrors": [
+          "https://limetorrents.cc",
+          "https://www.limetorrents.lol"
+        ]
       },
       "file": "plugins/limetorrents.json"
     },
@@ -91,9 +90,12 @@
       "id": "torrentproject",
       "name": "TorrentProject",
       "type": "torrent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
-        "base": "https://torrentproject2.net"
+        "base": "https://torrentproject.com.se",
+        "mirrors": [
+          "https://torrentproject.com.se"
+        ]
       },
       "file": "plugins/torrentproject.json"
     },
@@ -131,19 +133,21 @@
       "id": "jackett",
       "name": "Jackett (self-hosted)",
       "type": "torrent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
-        "base": "http://127.0.0.1:9117"
+        "base": "http://127.0.0.1:9117",
+        "apikey": "YOUR_API_KEY_HERE"
       },
       "file": "plugins/jackett.json"
     },
     {
       "id": "torznab",
-      "name": "Torznab / Prowlarr",
+      "name": "Torznab (Jackett / Prowlarr / bitmagnet)",
       "type": "torrent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
         "base": "",
+        "path": "/api/v2.0/indexers/{indexer}/results/torznab/api",
         "apikey": "",
         "indexer": "all"
       }
@@ -663,6 +667,15 @@
         "pass": ""
       },
       "file": "plugins/subsonic.json"
+    },
+    {
+      "id": "listenbrainz",
+      "name": "ListenBrainz (music discovery)",
+      "type": "music",
+      "version": "1.0.0",
+      "endpoints": {
+        "enabled": "1"
+      }
     }
   ]
 }

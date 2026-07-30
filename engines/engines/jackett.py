@@ -6,6 +6,7 @@
 
 import json
 import os
+import sys
 import urllib.request
 import xml.etree.ElementTree
 from datetime import datetime
@@ -51,9 +52,22 @@ proxy_manager.enable_proxy(False)  # off by default
 
 
 ###############################################################################
-# load configuration from file
-CONFIG_FILE = 'jackett.json'
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), CONFIG_FILE)
+# load configuration
+#
+# Opal change: this engine used to read ONLY engines/engines/jackett.json, while
+# the Plugins page wrote ~/.config/opal/plugins/sources/jackett.json — a file it
+# never opened. Install appeared to succeed and changed nothing. The user config
+# now wins, so the Install button controls what it appears to; the in-repo file
+# stays as a fallback for an existing hand-edited setup.
+#
+# Key names: the Plugins page writes {base, apikey} (the endpoint names every
+# other Opal source uses); this engine historically wanted {url, api_key}. Both
+# spellings are accepted, so neither side has to know about the other.
+import opal_sources  # noqa: E402  (engines/ is on sys.path, added by nova2.py)
+
+SOURCE_ID = 'jackett'
+LEGACY_CONFIG_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'jackett.json')
+CONFIG_PATH = os.path.join(opal_sources.sources_dir(), SOURCE_ID + '.json')
 CONFIG_DATA: Dict[str, Any] = {
     'api_key': 'YOUR_API_KEY_HERE',  # jackett api
     'url': 'http://127.0.0.1:9117',  # jackett url
@@ -65,30 +79,32 @@ PRINTER_THREAD_LOCK = Lock()
 
 def load_configuration() -> None:
     global CONFIG_DATA
-    try:
-        # try to load user data from file
-        with open(CONFIG_PATH, encoding='utf-8') as f:
-            CONFIG_DATA = json.load(f)  # pyright: ignore [reportConstantRedefinition]
-    except ValueError:
-        # if file exists, but it's malformed we load add a flag
-        CONFIG_DATA['malformed'] = True
-    except Exception:  # pylint: disable=broad-exception-caught
-        # if file doesn't exist, we create it
-        save_configuration()
+    loaded: Dict[str, Any] = opal_sources.load(SOURCE_ID)
+    if not loaded:
+        try:
+            with open(LEGACY_CONFIG_PATH, encoding='utf-8') as f:
+                loaded = json.load(f)
+        except ValueError:
+            CONFIG_DATA['malformed'] = True
+            return
+        except Exception:  # pylint: disable=broad-exception-caught
+            loaded = {}
+    # NOTE: no file is written back. Creating the user file here would make the
+    # source look INSTALLED to the Plugins page and to nova2's install gate
+    # without the user ever asking for it.
 
-    # do some checks
-    if any(item not in CONFIG_DATA for item in ['api_key', 'tracker_first', 'url']):
-        CONFIG_DATA['malformed'] = True
+    # Accept Opal's endpoint names as aliases of this engine's historical ones.
+    if 'url' not in loaded and 'base' in loaded:
+        loaded['url'] = loaded['base']
+    if 'api_key' not in loaded and 'apikey' in loaded:
+        loaded['api_key'] = loaded['apikey']
 
-    # add missing keys
-    if 'thread_count' not in CONFIG_DATA:
-        CONFIG_DATA['thread_count'] = 20
-        save_configuration()
-
-
-def save_configuration() -> None:
-    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-        f.write(json.dumps(CONFIG_DATA, indent=4, sort_keys=True))
+    for key, default in (('api_key', ''), ('url', ''), ('tracker_first', False), ('thread_count', 20)):
+        if key not in loaded:
+            loaded[key] = default
+    if not loaded['url'] or not loaded['api_key']:
+        loaded['malformed'] = True
+    CONFIG_DATA = loaded  # pyright: ignore [reportConstantRedefinition]
 
 
 load_configuration()
@@ -97,7 +113,7 @@ load_configuration()
 
 class jackett:
     name = 'Jackett'
-    url = CONFIG_DATA['url'] if CONFIG_DATA['url'][-1] != '/' else CONFIG_DATA['url'][:-1]
+    url = (CONFIG_DATA['url'] or '').rstrip('/')
     api_key = CONFIG_DATA['api_key']
     thread_count = CONFIG_DATA['thread_count']
     supported_categories = {
@@ -265,18 +281,11 @@ class jackett:
         return response
 
     def handle_error(self, error_msg: str, what: str) -> None:
-        # we need to print the search text to be displayed in qBittorrent when
-        # 'Torrent names only' is enabled
-        self.pretty_printer_thread_safe({
-            'link': self.url,
-            'name': f"Jackett: {error_msg}! Right-click this row and select 'Open description page' to open help. Configuration file: '{CONFIG_PATH}' Search: '{what}'",
-            'size': -1,
-            'seeds': -1,
-            'leech': -1,
-            'engine_url': self.url,
-            'desc_link': 'https://github.com/qbittorrent/search-plugins/wiki/How-to-configure-Jackett-plugin',  # noqa
-            'pub_date': -1
-        })
+        # Opal change: this used to emit the error as a RESULT ROW, so a Jackett
+        # install with no api key yet put "Jackett: api key error!..." into the
+        # user's search results as if it were a torrent. Opal parses stdout rows;
+        # diagnostics belong on stderr (which lands in the app log).
+        print(f"jackett: {error_msg} (config: {CONFIG_PATH}, search: '{what}')", file=sys.stderr)
 
     def pretty_printer_thread_safe(self, dictionary: Dict[str, Any]) -> None:
         escaped_dict = self.escape_pipe(dictionary)

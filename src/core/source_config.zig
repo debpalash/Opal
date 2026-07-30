@@ -90,8 +90,30 @@ pub fn reload() void {
 
         var fit = parsed.value.object.iterator();
         while (fit.next()) |fkv| {
-            if (fkv.value_ptr.* == .string) {
-                putEntry(id, fkv.key_ptr.*, fkv.value_ptr.*.string);
+            switch (fkv.value_ptr.*) {
+                .string => |s| putEntry(id, fkv.key_ptr.*, s),
+                // A list-valued field (`"mirrors": ["https://a", "https://b"]`)
+                // is folded into the same comma-separated string a hand-written
+                // `"mirrors": "a,b"` produces, so mirrors_pure has exactly ONE
+                // representation to parse. Silently dropping arrays here is what
+                // would make a manifest mirror list vanish on install.
+                .array => |arr| {
+                    var joined: [pure.MAX_VAL_LEN]u8 = undefined;
+                    var w: usize = 0;
+                    for (arr.items) |el| {
+                        if (el != .string or el.string.len == 0) continue;
+                        const need = el.string.len + @as(usize, if (w == 0) 0 else 1);
+                        if (w + need > joined.len) break;
+                        if (w > 0) {
+                            joined[w] = ',';
+                            w += 1;
+                        }
+                        @memcpy(joined[w..][0..el.string.len], el.string);
+                        w += el.string.len;
+                    }
+                    if (w > 0) putEntry(id, fkv.key_ptr.*, joined[0..w]);
+                },
+                else => {},
             }
         }
     }

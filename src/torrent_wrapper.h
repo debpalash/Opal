@@ -18,6 +18,14 @@ int torrent_add_magnet(TorrentSession session, const char* magnet_url, const cha
 // torrent is marked ready without a metadata-fetch phase.
 int torrent_add_file(TorrentSession session, const char* torrent_path, const char* save_path);
 
+// Replace the list of extra public trackers injected into every torrent on add.
+// `newline_separated` is one announce URL per line (blank lines ignored) — the
+// blob services/trackers.zig builds from the daily public tracker list. NULL or
+// an empty string restores the baked-in offline fallback set. The wrapper does
+// NOT validate: scheme/host/dedupe/cap are enforced (and unit-tested) in
+// services/trackers_pure.zig.
+void torrent_set_extra_trackers(TorrentSession session, const char* newline_separated);
+
 // Get the total number of registered torrents
 int torrent_count(TorrentSession session);
 
@@ -70,6 +78,17 @@ int torrent_is_paused(TorrentSession session, int torrent_id);
 int torrent_get_num_peers(TorrentSession session, int torrent_id);
 int torrent_get_upload_rate(TorrentSession session, int torrent_id);
 long long torrent_get_total_size(TorrentSession session, int torrent_id);
+
+// Bytes verified so far (status().total_done). The stall watchdog compares
+// BYTES between samples — the float progress from torrent_poll is too coarse on
+// a large torrent to tell "one slow piece" from "dead swarm".
+long long torrent_get_downloaded(TorrentSession session, int torrent_id);
+
+// Force an immediate announce to all trackers (ignoring their min interval) plus
+// a DHT announce. Recovery for a stalled torrent — a stalled download is an
+// inconvenience, a stalled stream is a frozen film. Rate limiting, backoff and
+// the attempt cap are the CALLER's job and live in torrent_stall_pure.zig.
+void torrent_force_reannounce(TorrentSession session, int torrent_id);
 
 // Piece-aware reads for HTTP streaming proxy
 int torrent_get_piece_size(TorrentSession session, int torrent_id);

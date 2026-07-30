@@ -1074,6 +1074,12 @@ pub const AppState = struct {
         cfg_loaded: bool = false,
     } = .{},
 
+    // Music discovery (ListenBrainz similar-artists + MusicBrainz studio
+    // albums). OFF by default: services/music_discovery.zig opens no socket
+    // until this flips (Settings › Network) or a `listenbrainz` source plugin
+    // is installed. Persisted as config key "music_discovery".
+    music_discovery_enabled: bool = false,
+
     // ── Novels (light-novel / web-novel reader) ──
     // Drill: search → novel → chapter list → paged text reader. Structural
     // sibling of `comic`, but renders TEXT, not page images. Search results and
@@ -1504,6 +1510,21 @@ pub fn stashPendingPlayFull(
     app.pending_play_rating = rating;
     app.pending_play_extra_len = @min(extra.len, app.pending_play_extra.len);
     @memcpy(app.pending_play_extra[0..app.pending_play_extra_len], extra[0..app.pending_play_extra_len]);
+}
+
+/// Drop an unconsumed stash. Wrong metadata is worse than none: when the
+/// stream we are about to play cannot be confidently tied to the title we
+/// stashed for (see resolver_rank.metadataSafeFor), the loading screen must
+/// fall back to the bare hourglass rather than wear another show's poster.
+pub fn clearPendingPlay() void {
+    app.pending_play_title_len = 0;
+    app.pending_play_art_len = 0;
+    app.pending_play_overview_len = 0;
+    app.pending_play_is_tv = false;
+    app.pending_play_kind = 0;
+    app.pending_play_year_len = 0;
+    app.pending_play_rating = 0;
+    app.pending_play_extra_len = 0;
 }
 
 /// Move the pending-play stash onto `p` and clear it, so the loading screen can

@@ -785,14 +785,21 @@ pub fn renderGrid() !void {
                         }
                     }
                 } else if (p.is_loading) {
-                    // ── Loading indicator — shown immediately on load_file() ──
-                    // TMDB-linked plays (movie search / TV episode — see
-                    // search.zig's addMagnetToEngine) stash a poster + title,
-                    // which we use here for a poster+trivia loading screen.
-                    // Everything else (raw magnet paste, plain file/URL) keeps
-                    // the original hourglass + source-path text unchanged.
+                    // ── Loading screen — shown immediately on load_file() ──
+                    //
+                    // One screen for every source now. TMDB-linked plays (movie
+                    // search / TV episode — see search.zig's addMagnetToEngine),
+                    // anime and music stash a poster + title and get the full
+                    // treatment; a raw magnet paste or plain file falls back to
+                    // its cleaned source name, but still gets the progress block
+                    // instead of the bare hourglass it used to get. Which pieces
+                    // appear at a given cell size, how text is truncated, and how
+                    // the numbers are formatted all come from loading_pure.
                     const text_mod = @import("../core/text.zig");
                     const lpure = @import("loading_pure.zig");
+                    // Bar geometry (fillBar / fillSegment) is shared with the
+                    // control bar rather than re-derived here — one tested copy.
+                    const fpure = @import("footer_pure.zig");
                     const io_g = @import("../core/io_global.zig");
                     // Any source that stashed art gets the rich screen — TMDB
                     // movies and episodes, anime, and music (whose cover is an
@@ -827,193 +834,448 @@ pub fn renderGrid() !void {
 
                     var load_overlay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
                     {
-                        if (has_meta and p.loading_poster_tex != null) {
-                            // Full-bleed art behind a dim scrim so the text
-                            // stays legible over whatever poster loaded.
-                            _ = dvui.image(@src(), .{ .source = .{ .texture = p.loading_poster_tex.? } }, .{
-                                .id_extra = i + 3010,
-                                .expand = .both,
-                                // Without an explicit minimum, dvui takes the
-                                // IMAGE'S NATURAL SIZE as this box's minimum — and
-                                // this is a TMDB w500 poster (~500x750). That made
-                                // the player cell demand more height than the window
-                                // had, which pushed the control bar off the bottom
-                                // edge and left it clipped to a sliver. It only
-                                // showed on a TMDB-linked play (an episode); a plain
-                                // magnet paste draws the small hourglass instead and
-                                // was always fine. `.expand = .both` already fills
-                                // the cell, so the natural size buys nothing.
-                                .min_size_content = .{ .w = 0, .h = 0 },
-                            });
-                            var scrim = dvui.box(@src(), .{}, .{ .id_extra = i + 3011, .expand = .both, .background = true, .color_fill = theme.colors.overlay });
-                            scrim.deinit();
-                        } else if (dvui.button(@src(), "", .{}, .{ .id_extra = i + 3000, .expand = .both, .color_fill = theme.colors.bg_deep })) {
-                            // Dark backdrop captures clicks to select this pane.
+                        // ── Backdrop ──
+                        //
+                        // Deliberately a FLAT themed fill, not the artwork. The
+                        // stashed art is a TMDB **w500** poster (500x750); drawing
+                        // it with `.expand = .both` blew it up across the whole
+                        // cell — roughly a 3x upscale, which is why it came out
+                        // soft and colour-cast, and it drowned the text besides.
+                        // The poster now appears at (at most) its native size in
+                        // the stack below, and the text sits on a themed surface
+                        // where contrast is guaranteed in all seven presets rather
+                        // than depending on whatever poster happened to load.
+                        // Doubles as the click target that selects this pane.
+                        if (dvui.button(@src(), "", .{}, .{
+                            .id_extra = i + 3000,
+                            .expand = .both,
+                            .color_fill = theme.colors.bg_deep,
+                            .border = dvui.Rect.all(0),
+                            .corner_radius = theme.dims.rad_sm,
+                        })) {
                             state.app.active_player_idx = i;
                         }
+
+                        // What fits in THIS cell. The screen lives in a grid cell,
+                        // which in a 3x3 workspace is a few hundred points — the
+                        // poster, the fact deck and the swarm readout are shed in
+                        // that order (breakpoints tested in loading_pure.layout).
+                        const scale_pure = @import("../core/scale_pure.zig");
+                        const cell_rect = load_overlay.data().rect;
+                        const lay = lpure.layout(
+                            scale_pure.layoutPoints(cell_rect.w, state.app.ui_scale),
+                            scale_pure.layoutPoints(cell_rect.h, state.app.ui_scale),
+                        );
+                        // The breakpoints are decided in on-screen POINTS (a grid
+                        // cell is the same physical size whatever the density
+                        // setting), but dvui sizes widgets in SCALED units — the
+                        // shell renders inside `dvui.scale(ui_scale)`. Convert the
+                        // two dimensions back before handing them to a widget, or
+                        // the column comes out ~25% too wide at the default 0.8.
+                        const ui_s: f32 = if (state.app.ui_scale > 0.01) state.app.ui_scale else 1.0;
+                        const content_w = lay.content_w / ui_s;
+                        const poster_max_h = lay.poster_max_h / ui_s;
+
+                        const now_ms = io_g.milliTimestamp();
+
+                        // ── Swarm snapshot, cached at ~2Hz per cell ──
+                        //
+                        // torrent_poll + get_num_peers + get_piece_map are C calls
+                        // into libtorrent; at ~30fps per loading cell that is pure
+                        // waste. Keyed on the torrent id so switching titles
+                        // invalidates immediately (same idiom as footer.zig).
+                        const Swarm = struct {
+                            const SLOTS = 8;
+                            var tid: [SLOTS]i32 = [_]i32{-1} ** SLOTS;
+                            var at_ms: [SLOTS]i64 = [_]i64{0} ** SLOTS;
+                            var rate: [SLOTS]i32 = [_]i32{0} ** SLOTS;
+                            var seeds: [SLOTS]i32 = [_]i32{0} ** SLOTS;
+                            var peers: [SLOTS]i32 = [_]i32{0} ** SLOTS;
+                            var prog: [SLOTS]f32 = [_]f32{0} ** SLOTS;
+                            var buckets: [SLOTS][lpure.PIECE_BUCKETS]f32 =
+                                [_][lpure.PIECE_BUCKETS]f32{[_]f32{0} ** lpure.PIECE_BUCKETS} ** SLOTS;
+                            var bucket_n: [SLOTS]usize = [_]usize{0} ** SLOTS;
+                        };
+                        const slot = i % Swarm.SLOTS;
+                        const is_torrent_load = p.is_torrent and p.current_torrent_id >= 0;
+                        if (is_torrent_load and
+                            (Swarm.tid[slot] != p.current_torrent_id or now_ms - Swarm.at_ms[slot] > 500))
+                        {
+                            Swarm.tid[slot] = p.current_torrent_id;
+                            Swarm.at_ms[slot] = now_ms;
+                            var s_pct: f32 = 0;
+                            var s_rate: i32 = 0;
+                            var s_seeds: i32 = 0;
+                            _ = c.mpv.torrent_poll(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, null, 0, &s_pct, &s_rate, &s_seeds);
+                            Swarm.prog[slot] = s_pct;
+                            Swarm.rate[slot] = s_rate;
+                            Swarm.seeds[slot] = s_seeds;
+                            Swarm.peers[slot] = c.mpv.torrent_get_num_peers(state.torrentSession(), p.current_torrent_id);
+                            var map_buf: [4096]u8 = undefined;
+                            const map_len = c.mpv.torrent_get_piece_map(state.torrentSession(), p.current_torrent_id, &map_buf, map_buf.len);
+                            Swarm.bucket_n[slot] = if (map_len > 0)
+                                lpure.pieceBuckets(map_buf[0..@min(@as(usize, @intCast(map_len)), map_buf.len)], &Swarm.buckets[slot])
+                            else
+                                0;
+                        }
+
+                        // The slot is shared between cells (i % SLOTS), so read it
+                        // only when it actually belongs to THIS torrent —
+                        // otherwise a second pane would show the first one's
+                        // peer count, which is worse than showing nothing.
+                        const sw_ok = is_torrent_load and Swarm.tid[slot] == p.current_torrent_id;
+                        const sw_rate: i32 = if (sw_ok) Swarm.rate[slot] else 0;
+                        const sw_seeds: i32 = if (sw_ok) Swarm.seeds[slot] else 0;
+                        const sw_peers: i32 = if (sw_ok) Swarm.peers[slot] else 0;
+                        const sw_prog: f32 = if (sw_ok) Swarm.prog[slot] else 0;
+                        const sw_buckets: usize = if (sw_ok) Swarm.bucket_n[slot] else 0;
+
+                        // Readiness, NOT whole-torrent progress, whenever the
+                        // stream gate has a plan: the bytes the demuxer blocks on
+                        // are the head + the container index at the END of the
+                        // file, so overall completion counts up encouragingly
+                        // while playback never starts (see stream_gate.zig).
+                        const gate = @import("../player/stream_gate.zig");
+                        const gated = p.current_torrent_id >= 0 and p.selected_file_idx >= 0 and
+                            gate.hasPlan(p.current_torrent_id, p.selected_file_idx);
+                        const buf_pct: u8 = if (gated)
+                            lpure.clampPercent(@intCast(gate.bufferPercent(p.current_torrent_id, p.selected_file_idx)))
+                        else
+                            lpure.percentOf(sw_prog);
+                        const phase = lpure.phaseOf(is_torrent_load, p.has_metadata, sw_peers, buf_pct);
 
                         var load_stack = dvui.box(@src(), .{ .dir = .vertical }, .{
                             .id_extra = i + 3100,
                             .gravity_x = 0.5,
                             .gravity_y = 0.5,
-                            .expand = .both,
+                            // A floor, never a cap: an expanded box stacks its
+                            // children from the top (gravity cannot centre inside
+                            // an already-full box), which is what pinned the old
+                            // screen's content against the top edge.
+                            .min_size_content = .{ .w = content_w, .h = 0 },
                         });
                         defer load_stack.deinit();
 
-                        if (has_meta and p.loading_title_len > 0) {
-                            _ = dvui.icon(@src(), "", icons.tvg.lucide.hourglass, .{}, .{
-                                .id_extra = i + 3150,
-                                .color_text = theme.colors.text_primary,
-                                .min_size_content = .{ .w = 28, .h = 28 },
-                                .max_size_content = .{ .w = 28, .h = 28 },
-                                .gravity_x = 0.5,
-                                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
-                            });
+                        // ── Poster card — contained, never upscaled ──
+                        if (lay.poster) {
+                            if (p.loading_poster_tex) |tex| {
+                                const fit = lpure.posterFit(
+                                    @intCast(tex.width),
+                                    @intCast(tex.height),
+                                    content_w * 0.55,
+                                    poster_max_h,
+                                );
+                                if (fit.w > 0 and fit.h > 0) {
+                                    _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
+                                        .id_extra = i + 3010,
+                                        .min_size_content = .{ .w = fit.w, .h = fit.h },
+                                        .max_size_content = .{ .w = fit.w, .h = fit.h },
+                                        .corner_radius = theme.dims.rad_md,
+                                        .gravity_x = 0.5,
+                                        .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.lg },
+                                    });
+                                }
+                            }
+                        }
 
-                            var title_buf: [128]u8 = undefined;
-                            _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(p.loading_title[0..p.loading_title_len], &title_buf)}, .{
+                        // ── Title ──
+                        //
+                        // A plain magnet paste has no stashed title, so fall back
+                        // to the cleaned source label instead of dropping to a
+                        // bare hourglass with a mid-path slice under it.
+                        {
+                            var raw_buf: [192]u8 = undefined;
+                            var safe_buf: [192]u8 = undefined;
+                            var title_buf: [192]u8 = undefined;
+                            const from_meta = p.loading_title_len > 0;
+                            const raw: []const u8 = if (from_meta)
+                                p.loading_title[0..p.loading_title_len]
+                            else if (p.loading_label_len > 0)
+                                cleanDisplayName(&raw_buf, p.loading_label[0..p.loading_label_len])
+                            else
+                                "Loading";
+                            // safeUtf8Buf first: the fixed buffers can hold a
+                            // sequence cut mid-codepoint, and ellipsizeWords only
+                            // promises codepoint-safe output for valid input.
+                            const safe = text_mod.safeUtf8Buf(raw, &safe_buf);
+                            const title = lpure.ellipsizeWords(
+                                safe,
+                                title_buf.len,
+                                &title_buf,
+                                from_meta and lpure.filledBuffer(p.loading_title_len, p.loading_title.len),
+                            );
+
+                            var title_wrap = dvui.box(@src(), .{ .dir = .vertical }, .{
+                                .id_extra = i + 3140,
+                                .gravity_x = 0.5,
+                                .max_size_content = .{ .w = content_w, .h = std.math.floatMax(f32) },
+                            });
+                            defer title_wrap.deinit();
+                            dvui.labelEx(@src(), "{s}", .{title}, .{ .align_x = 0.5 }, .{
                                 .id_extra = i + 3151,
                                 .color_text = theme.colors.text_primary,
                                 .font = dvui.themeGet().font_heading,
+                                .expand = .horizontal,
+                            });
+                        }
+
+                        // ── Meta line: kind, year, artist/episode, score ──
+                        // Skips whatever the source did not supply, so a music
+                        // track shows "Music · <artist>" and never a dangling
+                        // separator.
+                        if (has_meta) {
+                            var meta_buf: [160]u8 = undefined;
+                            var extra_buf: [96]u8 = undefined;
+                            const meta = lpure.metaLine(
+                                &meta_buf,
+                                kind,
+                                p.loading_year[0..p.loading_year_len],
+                                p.loading_rating,
+                                text_mod.safeUtf8Buf(p.loading_extra[0..p.loading_extra_len], &extra_buf),
+                            );
+                            if (meta.len > 0) {
+                                _ = dvui.label(@src(), "{s}", .{meta}, .{
+                                    .id_extra = i + 3152,
+                                    .color_text = theme.colors.text_tertiary,
+                                    .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+                                    .gravity_x = 0.5,
+                                });
+                            }
+                        }
+
+                        // ── Progress ──
+                        //
+                        // The old screen's ONLY indicator was a static hourglass
+                        // glyph, so "still finding peers", "buffered, handing to
+                        // mpv" and "hung" were indistinguishable. Phase, buffer
+                        // percentage, rate, swarm size and elapsed time each
+                        // appear only when they are actually known — a printed
+                        // zero reads as a stall (see loading_pure.statusLine).
+                        {
+                            const show_pct = lpure.phaseShowsPercent(phase) and (gated or buf_pct > 0);
+                            var phase_buf: [64]u8 = undefined;
+                            const phase_txt: []const u8 = if (show_pct)
+                                (std.fmt.bufPrint(&phase_buf, "{s} \u{00B7} {d}%", .{ lpure.phaseLabel(phase), buf_pct }) catch lpure.phaseLabel(phase))
+                            else
+                                lpure.phaseLabel(phase);
+                            _ = dvui.label(@src(), "{s}", .{phase_txt}, .{
+                                .id_extra = i + 3190,
+                                .color_text = theme.colors.text_secondary,
                                 .gravity_x = 0.5,
-                                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
+                                .margin = .{ .x = 0, .y = theme.spacing.lg, .w = 0, .h = theme.spacing.sm },
+                            });
+                        }
+
+                        // Bars are PAINTED, not built as widgets: a child's
+                        // min_size_content propagates into the parent's derived
+                        // minimum, so a fill sized with `min_size_content.w =
+                        // track_w * frac` ratchets the column wider every frame
+                        // and squeezes its siblings (the exact bug footer.zig hit
+                        // with its scrub band). A plain fill contributes zero min
+                        // size. Geometry comes from the unit-tested footer_pure
+                        // helpers rather than a second copy of the same maths.
+                        const paintBar = struct {
+                            fn f(b: fpure.BarRect, color: dvui.Color, radius: f32) void {
+                                if (b.w <= 0 or b.h <= 0) return;
+                                const rr: dvui.Rect.Physical = .{ .x = b.x, .y = b.y, .w = b.w, .h = b.h };
+                                rr.fill(dvui.Rect.Physical.all(radius), .{ .color = color });
+                            }
+                        }.f;
+
+                        if (is_torrent_load) {
+                            var band = dvui.box(@src(), .{}, .{
+                                .id_extra = i + 3200,
+                                .gravity_x = 0.5,
+                                .expand = .horizontal,
+                                .min_size_content = .{ .w = content_w, .h = 6 },
+                                .max_size_content = .{ .w = content_w, .h = 6 },
+                            });
+                            const brs = band.data().contentRectScale();
+                            const bth = 5.0 * brs.s;
+                            paintBar(
+                                fpure.fillBar(brs.r.x, brs.r.y, brs.r.w, brs.r.h, bth, 1.0),
+                                theme.colors.bg_elevated,
+                                bth * 0.5,
+                            );
+                            paintBar(
+                                fpure.fillBar(brs.r.x, brs.r.y, brs.r.w, brs.r.h, bth, @as(f32, @floatFromInt(buf_pct)) / 100.0),
+                                theme.colors.accent,
+                                bth * 0.5,
+                            );
+                            band.deinit();
+                        }
+
+                        // ── Piece map ──
+                        // Where the swarm actually has data, downsampled to a
+                        // fixed number of segments (a torrent has thousands of
+                        // pieces). Skipped entirely when the map is empty, so it
+                        // never shows an all-dark bar that reads as a dead peer.
+                        if (lay.piece_bar and sw_buckets > 0) {
+                            var pband = dvui.box(@src(), .{}, .{
+                                .id_extra = i + 3210,
+                                .gravity_x = 0.5,
+                                .expand = .horizontal,
+                                .min_size_content = .{ .w = content_w, .h = 5 },
+                                .max_size_content = .{ .w = content_w, .h = 5 },
+                                .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
+                            });
+                            const prs = pband.data().contentRectScale();
+                            const pth = 4.0 * prs.s;
+                            const n = sw_buckets;
+                            const nf: f32 = @floatFromInt(n);
+                            const acc = theme.colors.accent;
+                            for (0..n) |b| {
+                                const seg = fpure.fillSegment(
+                                    prs.r.x,
+                                    prs.r.y,
+                                    prs.r.w,
+                                    prs.r.h,
+                                    pth,
+                                    @as(f32, @floatFromInt(b)) / nf,
+                                    @as(f32, @floatFromInt(b + 1)) / nf,
+                                );
+                                if (seg.w <= 0) continue;
+                                const cov = @max(0.0, @min(1.0, Swarm.buckets[slot][b]));
+                                const gap = @min(seg.w * 0.3, prs.s);
+                                const a: u8 = @intFromFloat(@round(30.0 + 200.0 * cov));
+                                paintBar(
+                                    .{ .x = seg.x, .y = seg.y, .w = @max(prs.s, seg.w - gap), .h = seg.h },
+                                    .{ .r = acc.r, .g = acc.g, .b = acc.b, .a = a },
+                                    1.0,
+                                );
+                            }
+                            pband.deinit();
+                        }
+
+                        // ── Swarm readout ──
+                        if (lay.stats) {
+                            var stat_buf: [96]u8 = undefined;
+                            const stats = lpure.statusLine(&stat_buf, .{
+                                .rate_bps = sw_rate,
+                                .peers = sw_peers,
+                                .seeds = sw_seeds,
+                                .elapsed_secs = if (is_torrent_load and p.metadata_start_time > 0)
+                                    io_g.timestamp() - p.metadata_start_time
+                                else
+                                    0,
+                            });
+                            if (stats.len > 0) {
+                                _ = dvui.label(@src(), "{s}", .{stats}, .{
+                                    .id_extra = i + 3220,
+                                    .color_text = theme.colors.text_tertiary,
+                                    .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+                                    .gravity_x = 0.5,
+                                    .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
+                                });
+                            }
+                        }
+
+                        // ── Fact deck ──
+                        //
+                        // Prefer the fetched Wikipedia trivia; fall back to the
+                        // TMDB synopsis stashed at play-start while it is still in
+                        // flight (or if it never lands). One paragraph held still
+                        // for a whole minute stops being read, so it is cut into
+                        // sentence cards that rotate and can be paged.
+                        const trivia_src = if (p.loading_trivia_len > 0)
+                            p.loading_trivia[0..p.loading_trivia_len]
+                        else
+                            p.loading_overview[0..p.loading_overview_len];
+                        const trivia_cut = if (p.loading_trivia_len > 0)
+                            lpure.filledBuffer(p.loading_trivia_len, p.loading_trivia.len)
+                        else
+                            lpure.filledBuffer(p.loading_overview_len, p.loading_overview.len);
+
+                        if (lay.facts and trivia_src.len > 0) {
+                            const cards = lpure.splitFacts(trivia_src);
+                            if (p.loading_card_since_ms == 0) p.loading_card_since_ms = now_ms;
+                            const card_i = lpure.cardIndex(
+                                cards.count,
+                                now_ms - p.loading_card_since_ms,
+                                p.loading_card_manual,
+                            );
+
+                            var trivia_wrap = dvui.box(@src(), .{ .dir = .vertical }, .{
+                                .id_extra = i + 3160,
+                                .gravity_x = 0.5,
+                                .max_size_content = .{ .w = content_w, .h = std.math.floatMax(f32) },
+                                .margin = .{ .x = 0, .y = theme.spacing.lg, .w = 0, .h = 0 },
+                            });
+                            defer trivia_wrap.deinit();
+
+                            var safe_card: [400]u8 = undefined;
+                            var card_buf: [400]u8 = undefined;
+                            const card_raw = cards.slice(trivia_src, card_i);
+                            // Only the LAST card can carry the upstream cut — the
+                            // earlier ones ended on a real sentence break.
+                            const card_cut = trivia_cut and card_i + 1 == cards.count;
+                            const card_txt = lpure.ellipsizeWords(
+                                text_mod.safeUtf8Buf(card_raw, &safe_card),
+                                lay.fact_max,
+                                &card_buf,
+                                card_cut,
+                            );
+                            dvui.labelEx(@src(), "{s}", .{card_txt}, .{ .align_x = 0.5 }, .{
+                                .id_extra = i + 3161,
+                                .color_text = theme.colors.text_secondary,
+                                .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+                                .expand = .horizontal,
                             });
 
-                            // Meta line: kind, year, artist/episode, score.
-                            // Skips whatever the source did not supply, so a
-                            // music track shows "Music · <artist>" and never a
-                            // dangling separator.
-                            {
-                                var meta_buf: [160]u8 = undefined;
-                                var extra_buf: [96]u8 = undefined;
-                                const meta = lpure.metaLine(
-                                    &meta_buf,
-                                    kind,
-                                    p.loading_year[0..p.loading_year_len],
-                                    p.loading_rating,
-                                    text_mod.safeUtf8Buf(p.loading_extra[0..p.loading_extra_len], &extra_buf),
-                                );
-                                if (meta.len > 0) {
-                                    _ = dvui.label(@src(), "{s}", .{meta}, .{
-                                        .id_extra = i + 3152,
-                                        .color_text = theme.colors.text_tertiary,
-                                        .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
-                                        .gravity_x = 0.5,
-                                        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 10 },
-                                    });
-                                }
-                            }
-
-                            // Prefer the fetched Wikipedia trivia; fall back to the
-                            // TMDB synopsis stashed at play-start while it's still
-                            // in flight (or if it never lands).
-                            const trivia_src = if (p.loading_trivia_len > 0)
-                                p.loading_trivia[0..p.loading_trivia_len]
-                            else
-                                p.loading_overview[0..p.loading_overview_len];
-
-                            if (trivia_src.len > 0) {
-                                // One paragraph held still for the whole wait.
-                                // Cut it into cards that rotate every few
-                                // seconds, and let the viewer page through them
-                                // — a torrent resolve is long enough that a
-                                // static block of text stops being read.
-                                const cards = lpure.splitFacts(trivia_src);
-                                const now_ms = io_g.milliTimestamp();
-                                if (p.loading_card_since_ms == 0) p.loading_card_since_ms = now_ms;
-                                const card_i = lpure.cardIndex(
-                                    cards.count,
-                                    now_ms - p.loading_card_since_ms,
-                                    p.loading_card_manual,
-                                );
-
-                                var trivia_wrap = dvui.box(@src(), .{ .dir = .vertical }, .{
-                                    .id_extra = i + 3160,
+                            // Pager: dots for position plus prev/next. Only when
+                            // there is more than one card — a single fact needs no
+                            // controls.
+                            if (cards.count > 1) {
+                                var pager = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                                    .id_extra = i + 3170,
                                     .gravity_x = 0.5,
-                                    .max_size_content = .{ .w = 460, .h = std.math.floatMax(f32) },
+                                    .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = 0 },
                                 });
-                                defer trivia_wrap.deinit();
+                                defer pager.deinit();
 
-                                var trivia_buf: [400]u8 = undefined;
-                                dvui.labelEx(@src(), "{s}", .{text_mod.safeUtf8Buf(cards.slice(trivia_src, card_i), &trivia_buf)}, .{ .align_x = 0.5 }, .{
-                                    .id_extra = i + 3161,
-                                    .color_text = theme.colors.text_secondary,
-                                    .expand = .horizontal,
-                                });
-
-                                // Pager: dots for position plus prev/next. Only
-                                // when there is more than one card — a single
-                                // fact needs no controls.
-                                if (cards.count > 1) {
-                                    var pager = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                                        .id_extra = i + 3170,
-                                        .gravity_x = 0.5,
-                                        .margin = .{ .x = 0, .y = 10, .w = 0, .h = 0 },
-                                    });
-                                    defer pager.deinit();
-
-                                    if (dvui.buttonIcon(@src(), "fact-prev", icons.tvg.lucide.@"chevron-left", .{}, .{}, .{
-                                        .id_extra = i + 3171,
-                                        .color_fill = theme.transparent,
-                                        .color_text = theme.colors.text_tertiary,
-                                        .border = dvui.Rect.all(0),
-                                        .min_size_content = .{ .w = 18, .h = 18 },
-                                        .max_size_content = .{ .w = 18, .h = 18 },
-                                        .gravity_y = 0.5,
-                                    })) {
-                                        // +count-1 rather than -1: the counter is
-                                        // unsigned and wraps, so stepping back
-                                        // from card 0 must not underflow.
-                                        p.loading_card_manual +%= cards.count - 1;
-                                        p.loading_card_since_ms = now_ms;
-                                    }
-
-                                    for (0..cards.count) |d| {
-                                        const on = (d == card_i);
-                                        var dot = dvui.box(@src(), .{}, .{
-                                            .id_extra = i + 3180 + d,
-                                            .background = true,
-                                            .color_fill = if (on) theme.colors.text_primary else theme.colors.border_subtle,
-                                            .corner_radius = dvui.Rect.all(theme.radius.pill),
-                                            .min_size_content = .{ .w = 5, .h = 5 },
-                                            .max_size_content = .{ .w = 5, .h = 5 },
-                                            .margin = .{ .x = 3, .y = 0, .w = 3, .h = 0 },
-                                            .gravity_y = 0.5,
-                                        });
-                                        dot.deinit();
-                                    }
-
-                                    if (dvui.buttonIcon(@src(), "fact-next", icons.tvg.lucide.@"chevron-right", .{}, .{}, .{
-                                        .id_extra = i + 3172,
-                                        .color_fill = theme.transparent,
-                                        .color_text = theme.colors.text_tertiary,
-                                        .border = dvui.Rect.all(0),
-                                        .min_size_content = .{ .w = 18, .h = 18 },
-                                        .max_size_content = .{ .w = 18, .h = 18 },
-                                        .gravity_y = 0.5,
-                                    })) {
-                                        p.loading_card_manual +%= 1;
-                                        p.loading_card_since_ms = now_ms;
-                                    }
-                                }
-                            }
-                        } else {
-                            components.emptyState(icons.tvg.lucide.hourglass, "Loading...", "");
-
-                            // Truncated source path beneath the canonical empty state.
-                            if (p.loading_label_len > 0) {
-                                const src_text = p.loading_label[0..p.loading_label_len];
-                                const display = if (src_text.len > 45) src_text[src_text.len - 45 ..] else src_text;
-                                // loading_label is a file path / network title written
-                                // by the load worker — validate a copy so a non-UTF-8
-                                // byte (or a tail slice cut mid-codepoint) can't panic dvui.
-                                var ll_buf: [64]u8 = undefined;
-                                _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(display, &ll_buf)}, .{
-                                    .id_extra = i + 4002,
+                                if (dvui.buttonIcon(@src(), "fact-prev", icons.tvg.lucide.@"chevron-left", .{}, .{}, .{
+                                    .id_extra = i + 3171,
+                                    .color_fill = theme.transparent,
                                     .color_text = theme.colors.text_tertiary,
-                                    .gravity_x = 0.5,
-                                    .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
-                                });
+                                    .border = dvui.Rect.all(0),
+                                    .min_size_content = .{ .w = 18, .h = 18 },
+                                    .max_size_content = .{ .w = 18, .h = 18 },
+                                    .gravity_y = 0.5,
+                                })) {
+                                    // +count-1 rather than -1: the counter is
+                                    // unsigned and wraps, so stepping back from
+                                    // card 0 must not underflow.
+                                    p.loading_card_manual +%= cards.count - 1;
+                                    p.loading_card_since_ms = now_ms;
+                                }
+
+                                for (0..cards.count) |d| {
+                                    const on = (d == card_i);
+                                    var dot = dvui.box(@src(), .{}, .{
+                                        .id_extra = i + 3180 + d,
+                                        .background = true,
+                                        .color_fill = if (on) theme.colors.text_primary else theme.colors.border_subtle,
+                                        .corner_radius = dvui.Rect.all(theme.radius.pill),
+                                        .min_size_content = .{ .w = 5, .h = 5 },
+                                        .max_size_content = .{ .w = 5, .h = 5 },
+                                        .margin = .{ .x = 3, .y = 0, .w = 3, .h = 0 },
+                                        .gravity_y = 0.5,
+                                    });
+                                    dot.deinit();
+                                }
+
+                                if (dvui.buttonIcon(@src(), "fact-next", icons.tvg.lucide.@"chevron-right", .{}, .{}, .{
+                                    .id_extra = i + 3172,
+                                    .color_fill = theme.transparent,
+                                    .color_text = theme.colors.text_tertiary,
+                                    .border = dvui.Rect.all(0),
+                                    .min_size_content = .{ .w = 18, .h = 18 },
+                                    .max_size_content = .{ .w = 18, .h = 18 },
+                                    .gravity_y = 0.5,
+                                })) {
+                                    p.loading_card_manual +%= 1;
+                                    p.loading_card_since_ms = now_ms;
+                                }
                             }
                         }
                     }

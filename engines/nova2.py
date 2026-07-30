@@ -32,7 +32,6 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 import importlib
-import os
 import pathlib
 import sys
 import traceback
@@ -52,6 +51,8 @@ if current_path not in sys.path:
     sys.path.append(current_path)
 
 import helpers
+import novaprinter
+import opal_sources
 
 # enable SOCKS proxy for all plugins by default
 helpers.enable_socks_proxy(True)
@@ -131,22 +132,12 @@ def list_engines() -> list[EngineModuleName]:
 def installed_engines() -> set[str]:
     """Engine ids the user has explicitly installed via Opal's plugin manager
     (a `sources/<id>.json` marker). Opal ships NEUTRAL — with nothing installed
-    this is empty and no engine runs, so no search source is live by default."""
-    # Must mirror core/paths.zig configDir(), or every engine looks uninstalled.
-    # Windows keeps config under %APPDATA%\opal (winConfigBase), NOT ~/.config —
-    # looking in the POSIX spot there found nothing, so every engine stayed gated
-    # off and torrent search silently returned zero results.
-    if sys.platform == 'win32':
-        config_base = os.environ.get('APPDATA') or path.join(
-            path.expanduser('~'), 'AppData', 'Roaming')
-    else:
-        config_base = os.environ.get('XDG_CONFIG_HOME') or path.join(
-            path.expanduser('~'), '.config')
-    sources_dir = path.join(config_base, 'opal', 'plugins', 'sources')
-    try:
-        return {f[:-5] for f in os.listdir(sources_dir) if f.endswith('.json')}
-    except OSError:
-        return set()
+    this is empty and no engine runs, so no search source is live by default.
+
+    The directory layout must mirror core/paths.zig configDir(), so it lives in
+    opal_sources alongside the base/mirrors lookup that reads the same files —
+    two copies of that path is how the two halves drift apart."""
+    return opal_sources.installed_ids()
 
 
 def import_engine(engine_module_name: EngineModuleName) -> Optional[type[Engine]]:
@@ -206,24 +197,31 @@ def get_capabilities(engines: Iterable[EngineModuleName]) -> str:
     return ET.tostring(capabilities_element, 'unicode')
 
 
-def run_search(search_params: tuple[type[Engine], str, Category]) -> bool:
+def run_search(search_params: tuple[type[Engine], str, Category, EngineModuleName]) -> bool:
     """
     Run search in engine
 
-    :param search_params: A tuple with engine, query and category.
+    :param search_params: A tuple with engine, query, category and module name.
     :return: ``False`` if any exceptions occurred. ``True`` otherwise.
+
+    The engine's ``url`` is taken from the source the user installed
+    (``sources/<module_name>.json``) rather than the class attribute, and each
+    configured mirror is tried in turn until one returns rows — see
+    opal_sources. With no source file, or one without a base, the engine keeps
+    its own hardcoded URL and this is a plain single-host search.
     """
 
-    engine_class, what, cat = search_params
+    engine_class, what, cat, module_name = search_params
     try:
         engine = engine_class()
         # avoid exceptions due to invalid category
+        category = ''
         if hasattr(engine, 'supported_categories'):
-            if cat.name in engine.supported_categories:
-                engine.search(what, cat.name)
-        else:
-            engine.search(what)
-        return True
+            if cat.name not in engine.supported_categories:
+                return True
+            category = cat.name
+        return opal_sources.search_with_failover(
+            engine, module_name, what, category, novaprinter.printed_count)
     except Exception:
         traceback.print_exc()
         return False
@@ -270,7 +268,8 @@ if __name__ == "__main__":
             return ExitCode.ArgError.value
 
         what = urllib.parse.quote(' '.join(sys.argv[3:]))
-        params = ((engine_class, what, category) for e in engines if (engine_class := import_engine(e)) is not None)
+        params = ((engine_class, what, category, e)
+                  for e in engines if (engine_class := import_engine(e)) is not None)
 
         search_success = False
         if THREADED:

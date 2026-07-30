@@ -73,6 +73,9 @@ from features import (  # noqa: F401
     test_aur_publish,
     test_web_parity2,
     test_windows_portability,
+    test_trackers,
+    test_source_layer,
+    test_engine_health,
 )
 
 if __name__ == "__main__":

@@ -33,8 +33,28 @@ struct TorrentNode {
     int read_stream_file_idx = -1;
 };
 
+// ─── Extra public trackers ───
+// The offline fallback, and the ONLY copy of it. This list used to be pasted
+// verbatim into torrent_add_magnet AND torrent_add_file, so every change had to
+// be made twice. Zig replaces it at runtime with a freshly fetched public list
+// (services/trackers.zig → torrent_set_extra_trackers); these 8 are what a cold,
+// offline start gets. Keep in sync with trackers_pure.FALLBACK.
+static const char* const DEFAULT_TRACKERS[] = {
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://tracker.bittor.pw:1337/announce",
+    "udp://public.popcorn-tracker.org:6969/announce",
+    "udp://tracker.dler.org:6969/announce",
+    "udp://exodus.desync.com:6969/announce",
+    "udp://open.demonii.com:1337/announce",
+};
+
 struct SessionContext {
     lt::session* ses;
+    // Trackers injected into every torrent on add. Seeded with DEFAULT_TRACKERS
+    // and replaced wholesale by torrent_set_extra_trackers(). Guarded by mtx.
+    std::vector<std::string> extra_trackers;
     // STABLE-ID model: torrents are keyed by a monotonic id that is NEVER
     // reused or renumbered. torrent_remove() ERASES the entry (freeing the dead
     // node), but next_id only ever increases, so a freed id is never handed out
@@ -67,6 +87,31 @@ static std::shared_ptr<TorrentNode> get_node(SessionContext* ctx, int id) {
     std::lock_guard<std::mutex> lk(ctx->mtx);
     auto it = ctx->torrents.find(id);
     return it == ctx->torrents.end() ? nullptr : it->second;
+}
+
+// ─── Helper: inject the extra public tracker list into a freshly added torrent ───
+// A magnet's own tracker list is frequently empty or dead, and a .torrent's is
+// often years stale, so both add paths need this. Snapshot under the lock, then
+// call add_tracker OUTSIDE it (libtorrent's handle is internally synchronized;
+// holding ctx->mtx across ~75 add_tracker calls would serialize the session).
+//
+// NOTE: no tier is assigned. torrent_init sets announce_to_all_tiers +
+// announce_to_all_trackers, so every entry is announced regardless. The old
+// magnet path kept a local tier counter that it incremented per tracker but
+// never stored into announce_entry::tier -- dead code, now gone.
+static void add_extra_trackers(SessionContext* ctx, const std::shared_ptr<TorrentNode>& node) {
+    std::vector<std::string> snap;
+    {
+        std::lock_guard<std::mutex> lk(ctx->mtx);
+        snap = ctx->extra_trackers;
+    }
+    for (const std::string& t : snap) {
+        if (t.empty()) continue;
+        try {
+            lt::announce_entry ae(t);
+            node->handle.add_tracker(ae);
+        } catch (...) {}
+    }
 }
 
 // ─── Helper: Get file piece range ───
@@ -168,7 +213,34 @@ extern "C" TorrentSession torrent_init() {
         "dht.aelitis.com:6881");
 
     ctx->ses = new lt::session(pack);
+    for (const char* t : DEFAULT_TRACKERS) ctx->extra_trackers.emplace_back(t);
     return ctx;
+}
+
+// Replace the injected tracker list. `newline_separated` is one announce URL per
+// line (blank lines ignored) — exactly what trackers_pure.serializeZ() emits.
+// Validation (scheme, host, dedupe, cap) already happened in Zig, where it is
+// unit-tested; this only splits and stores. Passing NULL or an empty string
+// restores the baked-in DEFAULT_TRACKERS rather than leaving a torrent with none.
+extern "C" void torrent_set_extra_trackers(TorrentSession session, const char* newline_separated) {
+    if (!session) return;
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+
+    std::vector<std::string> parsed;
+    if (newline_separated) {
+        std::istringstream in(newline_separated);
+        std::string line;
+        while (std::getline(in, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (!line.empty()) parsed.push_back(line);
+        }
+    }
+    if (parsed.empty()) {
+        for (const char* t : DEFAULT_TRACKERS) parsed.emplace_back(t);
+    }
+
+    std::lock_guard<std::mutex> lk(ctx->mtx);
+    ctx->extra_trackers.swap(parsed);
 }
 
 extern "C" int torrent_add_magnet(TorrentSession session, const char* magnet_url, const char* save_path) {
@@ -213,24 +285,11 @@ extern "C" int torrent_add_magnet(TorrentSession session, const char* magnet_url
         // FASTEST peers, while sequential forces them from ORDERED peers.
         // The apply_streaming_window() function handles playback ordering.
         
-        // Add popular public trackers for better peer discovery
-        static const char* extra_trackers[] = {
-            "udp://tracker.opentrackr.org:1337/announce",
-            "udp://open.stealth.si:80/announce",
-            "udp://tracker.torrent.eu.org:451/announce",
-            "udp://tracker.bittor.pw:1337/announce",
-            "udp://public.popcorn-tracker.org:6969/announce",
-            "udp://tracker.dler.org:6969/announce",
-            "udp://exodus.desync.com:6969/announce",
-            "udp://open.demonii.com:1337/announce",
-        };
-        int tier = 10;
-        for (const char* t : extra_trackers) {
-            lt::announce_entry ae(t);
-            node->handle.add_tracker(ae);
-            tier++;
-        }
-        
+        // Add popular public trackers for better peer discovery (live list when
+        // Zig has fetched one, else the baked-in offline set).
+        add_extra_trackers(ctx, node);
+
+
         // If we have cached metadata, immediately set up initial streaming window
         if (!ec2 && atp.ti) {
             node->ready_flag = true;
@@ -288,22 +347,9 @@ extern "C" int torrent_add_file(TorrentSession session, const char* torrent_path
     node->last_deadline_piece = -1;
 
     if (!ec && node->handle.is_valid()) {
-        // Add popular public trackers for better peer discovery (mirrors the
-        // magnet path — a .torrent's own tracker list is often stale/dead).
-        static const char* extra_trackers[] = {
-            "udp://tracker.opentrackr.org:1337/announce",
-            "udp://open.stealth.si:80/announce",
-            "udp://tracker.torrent.eu.org:451/announce",
-            "udp://tracker.bittor.pw:1337/announce",
-            "udp://public.popcorn-tracker.org:6969/announce",
-            "udp://tracker.dler.org:6969/announce",
-            "udp://exodus.desync.com:6969/announce",
-            "udp://open.demonii.com:1337/announce",
-        };
-        for (const char* t : extra_trackers) {
-            lt::announce_entry ae(t);
-            node->handle.add_tracker(ae);
-        }
+        // Same injected list as the magnet path — a .torrent's own tracker list
+        // is often stale/dead.
+        add_extra_trackers(ctx, node);
     }
 
     if (ec) return -1;
@@ -786,6 +832,42 @@ extern "C" int torrent_get_upload_rate(TorrentSession session, int torrent_id) {
         return node->handle.status().upload_rate;
     } catch (...) {}
     return 0;
+}
+
+// Bytes verified so far. The stall watchdog needs BYTES, not the float progress
+// torrent_poll reports: on a 20 GB torrent a 0..1 float barely moves across a
+// whole piece, which reads as "no progress" and would trip a false stall.
+extern "C" long long torrent_get_downloaded(TorrentSession session, int torrent_id) {
+    if (!session || torrent_id < 0) return 0;
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+    auto node = get_node(ctx, torrent_id);
+    if (!node) return 0;
+    try {
+        if (!node->alive || !node->handle.is_valid()) return 0;
+        return static_cast<long long>(node->handle.status().total_done);
+    } catch (...) {}
+    return 0;
+}
+
+// Force an immediate re-announce to every tracker, plus a DHT announce.
+//
+// ignore_min_interval is deliberate and is the whole point: the tracker just
+// told us to wait (typically 30 min), and waiting 30 minutes is not an option
+// when the thing that stalled is a film someone is watching. The CALLER is
+// responsible for not abusing this — the minimum interval, exponential backoff
+// and attempt cap live in torrent_stall_pure.zig, where they are unit-tested.
+extern "C" void torrent_force_reannounce(TorrentSession session, int torrent_id) {
+    if (!session || torrent_id < 0) return;
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+    auto node = get_node(ctx, torrent_id);
+    if (!node) return;
+    try {
+        if (!node->alive || !node->handle.is_valid()) return;
+        // seconds=0 (now), idx=-1 (all trackers).
+        node->handle.force_reannounce(0, -1, lt::torrent_handle::ignore_min_interval);
+        // A dead tracker set is exactly when the DHT is the only way out.
+        node->handle.force_dht_announce();
+    } catch (...) {}
 }
 
 extern "C" long long torrent_get_total_size(TorrentSession session, int torrent_id) {

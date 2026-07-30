@@ -1927,6 +1927,17 @@ fn smartPlayEpisode(query: []const u8) void {
 
     if (chosen_url_len > 0) {
         const url = chosen_url[0..chosen_url_len];
+        // The stash made by playEpisodeOf describes the show the user ASKED
+        // for. Attach it only if the release we picked really is that show —
+        // the rank bar (60%) is deliberately loose, and a release whose
+        // EPISODE name happens to contain the show's title used to slip
+        // through wearing the wrong poster and synopsis (the "Alan Carrs Epic
+        // Gameshow S01E04 Strike it Lucky" → *Lucky* bug). No metadata beats
+        // wrong metadata, so a partial match clears the stash.
+        if (!rank.metadataSafeFor(chosen_name[0..chosen_name_len], query)) {
+            state.clearPendingPlay();
+            logs.pushLog("warn", "tmdb", "Stream title doesn't match the episode — showing no artwork", false);
+        }
         if (std.mem.startsWith(u8, url, "magnet:") or chosen_source == .torrent) {
             search.loadTorrentToPlayer(url);
         } else {

@@ -200,6 +200,19 @@ pub fn coreInit() !void {
             // gated source stays inert until the user installs it.
             @import("core/source_config.zig").reload();
             @import("services/plugin_repo.zig").init(); // load saved GitHub token
+            {
+                // Bring already-installed sources up to the bundled manifest.
+                // The installed file overrides both the manifest and the
+                // engine's own default, so without this a corrected endpoint
+                // never reaches anyone who installed the source before the fix
+                // — which is exactly how yts.mx (NS delegation gone) and
+                // limetorrent.in (now serving a TheRarBg page under 200 OK)
+                // stayed live in the field after both were corrected upstream.
+                // Only rewrites when the manifest version is strictly newer.
+                const pr = @import("services/plugin_repo.zig");
+                pr.loadLocalManifest();
+                _ = pr.migrateStaleSources();
+            }
             @import("services/trakt.zig").init(); // load saved Trakt credentials/token
             @import("services/plex.zig").init(); // load saved Plex token/server
             // DPI-bypass proxy sidecar: config.load() above restored the flag +
@@ -1107,6 +1120,16 @@ fn appFrame() !dvui.App.Result {
     // Audiobookshelf: seek a freshly-opened book to its server-saved position
     // (no-op unless a resume is pending + the fetch resolved + mpv has the file).
     @import("services/audiobookshelf.zig").tick();
+
+    // Live public tracker list: load the cache on the first tick, re-fetch once
+    // a day on a worker. What gets injected into every magnet/.torrent on add,
+    // which is what time-to-first-piece hangs on. Self-throttled to 5 min.
+    @import("services/trackers.zig").tick();
+
+    // Stall watchdog: a torrent with no new bytes and no peers gets a forced
+    // tracker + DHT reannounce (rate-limited, backed off, capped). Self-
+    // throttled to 2 Hz; no-op with no live torrents.
+    @import("services/torrent_stall.zig").tick();
 
     // Screensaver inhibit: mpv's stop-screensaver requires a VO; we use SW render,
     // so SDL handles it. Toggle when any player is actively playing (not paused).

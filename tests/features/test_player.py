@@ -1136,3 +1136,69 @@ def test_loading_screen_infotainment():
     return "pass", ("loading screen resolves art for any source (TMDB fragment or absolute "
                     "cover URL), shows a kind/year/score/artist meta line, and rotates "
                     "summary facts on a pageable deck")
+
+
+@test("Loading screen: contained art, readable type, real progress", "Player")
+def test_loading_screen_progress():
+    """A user screenshot of the buffering screen showed four things wrong:
+
+      (a) the w500 poster was drawn with `.expand = .both`, i.e. upscaled ~3x
+          across the whole cell — soft, colour-cast, and it swamped the text;
+      (b) the summary ended mid-word with a bare stump, because the [400]u8
+          buffer it lives in had simply been cut;
+      (c) the only progress indicator was a STATIC hourglass glyph — no rate,
+          no peers, no buffer percentage, no elapsed time, so a working load
+          and a hung one looked identical;
+      (d) the fact deck loading_pure supports was only reachable on one path.
+
+    Every layout/format decision behind the fix lives in loading_pure with
+    tests; the dvui draw calls themselves are GUI-only and are not covered."""
+    gr = _src("src/ui/grid.zig")
+    lp = _src("src/ui/loading_pure.zig")
+
+    checks = {
+        # (a) Art is contained at native scale, never stretched to the cell.
+        "pure posterFit": "pub fn posterFit(" in lp,
+        "render uses posterFit": "lpure.posterFit(" in gr,
+        "no full-bleed art": ".source = .{ .texture = p.loading_poster_tex.? } }, .{\n                                .id_extra = i + 3010,\n                                .expand = .both," not in gr,
+        "upscale regression test": "posterFit contains, preserves aspect, and never upscales" in lp,
+        # (b) Word-boundary truncation with a real ellipsis, upstream cut aware.
+        "pure ellipsize": "pub fn ellipsizeWords(" in lp,
+        "pure filledBuffer": "pub fn filledBuffer(" in lp,
+        "render ellipsizes title": "lpure.ellipsizeWords(" in gr,
+        "render flags upstream cut": "lpure.filledBuffer(" in gr,
+        "real ellipsis not three dots": 'ELLIPSIS = "\\u{2026}"' in lp,
+        "mid-word regression test": "ellipsizeWords cuts at a word boundary, never mid-word" in lp,
+        "utf8 truncation test": "ellipsizeWords never splits a UTF-8 codepoint" in lp,
+        # (c) Real progress: phase, buffer %, rate, swarm, elapsed, piece bar.
+        "pure phase": "pub fn phaseOf(" in lp and "pub fn phaseLabel(" in lp,
+        "pure statusLine": "pub fn statusLine(" in lp,
+        "pure rate": "pub fn formatRate(" in lp,
+        "pure elapsed": "pub fn formatElapsed(" in lp,
+        "pure percent clamp": "pub fn percentOf(" in lp and "pub fn clampPercent(" in lp,
+        "pure piece buckets": "pub fn pieceBuckets(" in lp,
+        "render shows phase": "lpure.phaseLabel(" in gr and "lpure.phaseOf(" in gr,
+        "render shows swarm": "lpure.statusLine(" in gr,
+        "render shows buffer pct": "lpure.percentOf(" in gr and "lpure.clampPercent(" in gr,
+        "render polls swarm": "torrent_get_num_peers" in gr and "torrent_get_piece_map" in gr,
+        "render draws piece bar": "lpure.pieceBuckets(" in gr,
+        # A missing value is omitted, never printed as a zero that reads as a
+        # stall — the whole point of the readout.
+        "omits unknown rate": 'formatRate omits a rate it does not have' in lp,
+        "omits unknown swarm": "statusLine drops every element it does not have" in lp,
+        "never rounds up to 100": "percentOf clamps and refuses to round a partial buffer up to 100" in lp,
+        # Bars are PAINTED: a child min_size_content ratchets the parent's
+        # derived minimum and silently clips sibling text (footer.zig hit this).
+        "bars painted, not widgets": "fpure.fillBar(" in gr and "rr.fill(" in gr,
+        "no per-frame C polling": "now_ms - Swarm.at_ms[slot] > 500" in gr,
+        # (d) Responsive: the screen lives in a grid cell that can be small.
+        "pure layout breakpoints": "pub fn layout(" in lp and "BREAK_FACTS_W" in lp,
+        "render uses layout": "lpure.layout(" in gr and "lay.poster" in gr and "lay.facts" in gr,
+        "layout regression test": "layout sheds poster then facts as the cell shrinks" in lp,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "loading screen polish incomplete: " + ", ".join(missing)
+    return "pass", ("art contained at native scale, word-boundary ellipsis, and a live "
+                    "phase/buffer/rate/peers/elapsed readout with a painted piece bar; "
+                    "all decisions routed through loading_pure (dvui draws are GUI-only)")

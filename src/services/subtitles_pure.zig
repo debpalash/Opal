@@ -18,7 +18,11 @@ fn isSep(ch: u8) bool {
 }
 
 /// Find `S<dd>E<dd>` (case-insensitive) and return (index, season, episode).
-fn findSxxEyy(name: []const u8) ?struct { at: usize, s: u16, e: u16 } {
+///
+/// Public because it is the ONE SxxEyy detector in the tree: eztv_calendar's
+/// show grouping, tv_library's movie/TV split and resolver_rank's scene-title
+/// rule all key off this exact scan rather than re-rolling their own.
+pub fn findSxxEyy(name: []const u8) ?struct { at: usize, s: u16, e: u16 } {
     var i: usize = 0;
     while (i + 3 < name.len) : (i += 1) {
         if (name[i] != 'S' and name[i] != 's') continue;
@@ -63,6 +67,19 @@ fn normalizeInto(src: []const u8, out: []u8) []const u8 {
     return out[0..n];
 }
 
+/// The SERIES TITLE of a scene release: everything BEFORE the first SxxEyy
+/// token. Whatever follows the marker is the episode name plus release/quality
+/// tags, never the series — "Alan Carrs Epic Gameshow S01E04 Strike it Lucky
+/// 1080p …" is an episode of "Alan Carrs Epic Gameshow", not of "Lucky".
+///
+/// Returns the name unchanged when there is no SxxEyy marker, so a MOVIE
+/// release ("Inception.2010.1080p.BluRay") keeps its whole name. Raw (no
+/// separator normalization) — callers that want a display name normalize.
+pub fn seriesTitle(name: []const u8) []const u8 {
+    const m = findSxxEyy(name) orelse return name;
+    return name[0..m.at];
+}
+
 /// Parse a media name (torrent title, filename, or media-title) into a search
 /// query plus optional TV episode fields. `query_out` and `show_out` are
 /// caller-owned scratch buffers the returned slices point into.
@@ -82,7 +99,10 @@ pub fn parse(name_in: []const u8, query_out: []u8, show_out: []u8) Parsed {
     }
 
     if (findSxxEyy(name)) |m| {
-        const show = normalizeInto(name[0..m.at], show_out);
+        // Same rule, one implementation: `seriesTitle` is what resolver_rank
+        // scores against, so the show this reports and the show a release is
+        // ranked as can never drift apart.
+        const show = normalizeInto(seriesTitle(name), show_out);
         // Query = "show SxxEyy" so query-based providers still match.
         const q = normalizeInto(name, query_out);
         return .{ .query = q, .is_tv = true, .show = show, .season = m.s, .episode = m.e };
@@ -491,6 +511,42 @@ test "parse handles lowercase sxxeyy and plain names" {
     const p2 = parse("Some Movie Title", &q, &s);
     try std.testing.expect(!p2.is_tv);
     try std.testing.expectEqualStrings("Some Movie Title", p2.query);
+}
+
+test "seriesTitle: the series precedes SxxEyy (Alan Carr / Strike it Lucky regression)" {
+    // The release that made the loading screen show the show "Lucky": the
+    // EPISODE name after the marker must never be read as the series.
+    try std.testing.expectEqualStrings(
+        "Alan Carrs Epic Gameshow ",
+        seriesTitle("Alan Carrs Epic Gameshow S01E04 Strike it Lucky 1080p AMZN WEB-DL DDP2 0 H 264-NTb [eztv]"),
+    );
+    try std.testing.expectEqualStrings(
+        "Alan.Carrs.Epic.Gameshow.",
+        seriesTitle("Alan.Carrs.Epic.Gameshow.S01E04.Strike.it.Lucky.1080p.AMZN.WEB-DL.DDP2.0.H.264-NTb-eztv"),
+    );
+    // Lowercase marker, multi-word show, apostrophe.
+    try std.testing.expectEqualStrings("Alan Carr's Epic Gameshow ", seriesTitle("Alan Carr's Epic Gameshow s01e04 Strike it Lucky"));
+    // A number that is genuinely part of the title survives.
+    try std.testing.expectEqualStrings("The.100.", seriesTitle("The.100.S07E16.The.Last.War.1080p"));
+    try std.testing.expectEqualStrings("X-Men.97.", seriesTitle("X-Men.97.S02E02.1080p.WEB.h264"));
+    // No marker → a movie release keeps its whole name (film must not break).
+    try std.testing.expectEqualStrings(
+        "Inception.2010.PROPER.1080p.BluRay.x264-GROUP",
+        seriesTitle("Inception.2010.PROPER.1080p.BluRay.x264-GROUP"),
+    );
+    try std.testing.expectEqualStrings("Lucky.2017.1080p.WEB-DL", seriesTitle("Lucky.2017.1080p.WEB-DL"));
+    // Season pack (no episode) is not an episode marker.
+    try std.testing.expectEqualStrings("Silo.S02.COMPLETE.1080p", seriesTitle("Silo.S02.COMPLETE.1080p"));
+}
+
+test "parse: episode name after SxxEyy never becomes the show (Alan Carr regression)" {
+    var q: [256]u8 = undefined;
+    var s: [256]u8 = undefined;
+    const p = parse("Alan Carrs Epic Gameshow S01E04 Strike it Lucky 1080p AMZN WEB-DL DDP2 0 H 264-NTb [eztv]", &q, &s);
+    try std.testing.expect(p.is_tv);
+    try std.testing.expectEqual(@as(u16, 1), p.season);
+    try std.testing.expectEqual(@as(u16, 4), p.episode);
+    try std.testing.expectEqualStrings("Alan Carrs Epic Gameshow", p.show);
 }
 
 test "unescapeJsonSlashes collapses backslash-slash" {

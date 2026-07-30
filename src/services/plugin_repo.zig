@@ -12,6 +12,7 @@ const io = @import("../core/io_global.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 const source_config = @import("../core/source_config.zig");
 const logs = @import("../core/logs.zig");
+const pure = @import("../core/source_config_pure.zig");
 const state = @import("../core/state.zig");
 
 // Cap on parsed manifest entries. The bundled plugins-manifest.json already
@@ -283,8 +284,32 @@ fn parseManifest(body: []const u8) void {
             var first = true;
             var it = ep.object.iterator();
             while (it.next()) |kv| {
-                if (kv.value_ptr.* != .string) continue;
-                const seg = std.fmt.bufPrint(out[w..], "{s}\"{s}\":\"{s}\"", .{ if (first) "" else ",", kv.key_ptr.*, kv.value_ptr.*.string }) catch break;
+                // A list-valued endpoint (`"mirrors": [...]`) is flattened to the
+                // comma-separated string source_config stores, so it survives the
+                // install instead of being dropped on the floor here.
+                var joined: [512]u8 = undefined;
+                const val: []const u8 = switch (kv.value_ptr.*) {
+                    .string => |s| s,
+                    .array => |list| blk: {
+                        var jw: usize = 0;
+                        for (list.items) |el| {
+                            if (el != .string or el.string.len == 0) continue;
+                            if (jw + el.string.len + 1 > joined.len) break;
+                            if (jw > 0) {
+                                joined[jw] = ',';
+                                jw += 1;
+                            }
+                            @memcpy(joined[jw..][0..el.string.len], el.string);
+                            jw += el.string.len;
+                        }
+                        break :blk joined[0..jw];
+                    },
+                    else => continue,
+                };
+                // An empty STRING is kept — torznab ships `"base":""` as a
+                // skeleton for the user to fill in — but an empty list is not.
+                if (kv.value_ptr.* == .array and val.len == 0) continue;
+                const seg = std.fmt.bufPrint(out[w..], "{s}\"{s}\":\"{s}\"", .{ if (first) "" else ",", kv.key_ptr.*, val }) catch break;
                 w += seg.len;
                 first = false;
             }
@@ -347,12 +372,74 @@ fn fetchRepoFile(repo_path: []const u8, out: []u8) usize {
 }
 
 fn writeSource(id: []const u8, data: []const u8) bool {
+    return writeSourceVersioned(id, data, "");
+}
+
+/// Write an installed source, stamping the manifest version it came from.
+///
+/// The stamp is what makes upgrades possible at all: without it there is no way
+/// to tell a source installed from today's manifest from one installed a year
+/// ago, so a corrected endpoint could never reach an existing install. See
+/// `migrateStaleSources`.
+///
+/// The version is spliced in as the first key rather than appended, so it
+/// survives a `data` payload that ends in a trailing newline or whitespace.
+fn writeSourceVersioned(id: []const u8, data: []const u8, version: []const u8) bool {
     var dir_buf: [600]u8 = undefined;
     io.cwdMakePath(source_config.sourcesDir(&dir_buf)) catch {};
     var fp_buf: [700]u8 = undefined;
-    io.cwdWriteFile(.{ .sub_path = sourceFilePath(&fp_buf, id), .data = data }) catch return false;
+    const path = sourceFilePath(&fp_buf, id);
+
+    var stamped: [2048]u8 = undefined;
+    var payload = data;
+    // Only splice when we have a version AND the payload is a JSON object we
+    // recognise. Anything else is written through untouched — a source that
+    // cannot be stamped is still better than a source that fails to install.
+    if (version.len > 0 and data.len >= 2 and data[0] == '{') {
+        const rest = std.mem.trimStart(u8, data[1..], " \t\r\n");
+        const sep: []const u8 = if (rest.len > 0 and rest[0] != '}') "," else "";
+        payload = std.fmt.bufPrint(&stamped, "{{\"{s}\":\"{s}\"{s}{s}", .{
+            pure.VERSION_KEY, version, sep, rest,
+        }) catch data;
+    }
+
+    io.cwdWriteFile(.{ .sub_path = path, .data = payload }) catch return false;
     source_config.reload();
     return true;
+}
+
+/// Rewrite installed sources whose manifest entry has since been corrected.
+///
+/// Without this, a fixed endpoint never reaches anyone who already installed the
+/// source: `reload()` reads the file on disk, and the file wins over both the
+/// manifest and the engine's own default. That is not hypothetical — `yts.mx`
+/// lost its NS delegation at the .mx registry and `limetorrent.in` began serving
+/// a TheRarBg page under a 200 OK, and both were corrected in the manifest while
+/// every existing install carried on querying the dead host.
+///
+/// Only rewrites when the manifest version is strictly newer than the stamp on
+/// disk, so a user's own edits to an up-to-date source are never clobbered.
+/// Returns how many were migrated.
+pub fn migrateStaleSources() usize {
+    var migrated: usize = 0;
+    for (plugins[0..plugin_count]) |*pl| {
+        if (pl.endpoints_len == 0) continue;
+        const id = pl.idSlice();
+        if (!source_config.has(id)) continue; // not installed — nothing to migrate
+        const manifest_v = pl.version[0..pl.version_len];
+        const installed_v = source_config.get(id, pure.VERSION_KEY) orelse "";
+        if (!pure.versionNewer(manifest_v, installed_v)) continue;
+        if (writeSourceVersioned(id, pl.endpoints[0..pl.endpoints_len], manifest_v)) {
+            migrated += 1;
+            var lb: [96]u8 = undefined;
+            logs.pushLog("info", "sources", std.fmt.bufPrint(
+                &lb,
+                "updated {s} endpoints to manifest v{s}",
+                .{ id, manifest_v },
+            ) catch "source endpoints updated", false);
+        }
+    }
+    return migrated;
 }
 
 pub fn install(idx: usize) void {
@@ -412,7 +499,7 @@ pub fn install(idx: usize) void {
         state.showToastTyped("Plugin has no endpoint", .warning);
         return;
     }
-    if (!writeSource(pl.idSlice(), pl.endpoints[0..pl.endpoints_len])) {
+    if (!writeSourceVersioned(pl.idSlice(), pl.endpoints[0..pl.endpoints_len], pl.version[0..pl.version_len])) {
         state.showToastTyped("Install failed (write)", .err);
         return;
     }
@@ -454,7 +541,7 @@ pub fn installStarterPack() usize {
         }
         if (!wanted or pl.endpoints_len == 0) continue;
         if (source_config.has(id)) continue;
-        if (writeSource(id, pl.endpoints[0..pl.endpoints_len])) installed += 1;
+        if (writeSourceVersioned(id, pl.endpoints[0..pl.endpoints_len], pl.version[0..pl.version_len])) installed += 1;
     }
     return installed;
 }

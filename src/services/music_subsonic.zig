@@ -598,6 +598,10 @@ pub fn playSong(idx: usize) void {
     @import("browser.zig").loadContentDirectMeta(url, "", name_buf[0..nlen], artist_buf[0..alen]);
     logs.pushLog("info", "music", "Streaming track", false);
 
+    // Seed music discovery with what was actually played. Local-only and
+    // network-free — it just keeps the seed ring warm in case the user opts in.
+    @import("music_discovery.zig").noteListen(artist_buf[0..alen]);
+
     // Synced lyrics for the NEW track: drop the previous timeline first so a
     // stale song's lines can never be shown against this one's playback clock.
     lyrics.clear();
@@ -790,6 +794,11 @@ pub fn renderContent() void {
             }
         }
     }
+
+    // Discovery rail — the one music surface that suggests something you do NOT
+    // already have. Renders nothing at all unless the user opted in
+    // (services/music_discovery.zig enabled()).
+    @import("music_discovery.zig").renderRail();
 
     if (state.app.music.fetch_error) {
         const emsg: []const u8 = switch (state.app.music.source) {

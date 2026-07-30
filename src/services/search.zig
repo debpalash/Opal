@@ -86,7 +86,12 @@ pub const EngineFilter = enum(u4) {
     torrentproject = 5,
     nyaa = 6,
     limetorrents = 7,
-    kickass = 8,
+    // 8 was `kickass`. engines/engines/kickass.py was 14 bytes containing the
+    // literal text "404: Not Found" — a failed download committed as source in
+    // b9c4d15. nova2 never imported it, but this enum advertised it with a
+    // label and a chip colour, so the UI offered a source that could not exist.
+    // The discriminant is left as a gap: values are explicit and nothing maps
+    // this enum to or from an integer.
     solidtorrents = 9,
     torrentscsv = 10,
     apibay = 11,
@@ -102,7 +107,6 @@ pub const EngineFilter = enum(u4) {
             .torrentproject => "TorrentProject",
             .nyaa => "Nyaa",
             .limetorrents => "LimeTorrents",
-            .kickass => "KickAss",
             .solidtorrents => "SolidTorrents",
             .torrentscsv => "TorrentsCSV",
             .apibay => "APIBay",
@@ -120,7 +124,6 @@ pub const EngineFilter = enum(u4) {
             .torrentproject => "torrentproject",
             .nyaa => "nyaa",
             .limetorrents => "limetorrents",
-            .kickass => "kickass",
             .solidtorrents => "solidtorrents",
             .torrentscsv => "torrentscsv",
             .apibay => "apibay",
@@ -182,7 +185,6 @@ fn engineColor(name: []const u8) dvui.Color {
     if (std.mem.eql(u8, name, "eztv")) return dvui.Color{ .r = 100, .g = 180, .b = 255, .a = 255 };
     if (std.mem.eql(u8, name, "torrentproject")) return dvui.Color{ .r = 180, .g = 130, .b = 255, .a = 255 };
     if (std.mem.eql(u8, name, "nyaa")) return dvui.Color{ .r = 255, .g = 120, .b = 180, .a = 255 };
-    if (std.mem.eql(u8, name, "kickass")) return dvui.Color{ .r = 255, .g = 160, .b = 80, .a = 255 };
     if (std.mem.eql(u8, name, "limetorrents")) return dvui.Color{ .r = 120, .g = 220, .b = 120, .a = 255 };
     if (std.mem.eql(u8, name, "solidtorrents")) return dvui.Color{ .r = 80, .g = 200, .b = 220, .a = 255 };
     if (std.mem.eql(u8, name, "torrentscsv")) return dvui.Color{ .r = 200, .g = 200, .b = 100, .a = 255 };
@@ -1536,15 +1538,19 @@ fn renderSourceStatusCluster() void {
     }
 }
 
-/// Torrent sources span three backends (nova2, 1337x, YTS) — show one chip:
-/// searching if any is still going, failed only if all failed, else done.
+/// Torrent sources span two backends (nova2, YTS) — show one chip: searching if
+/// either is still going, failed only if both failed, else done.
+///
+/// A third backend (a native 1337x scraper) used to be counted here. It could
+/// never report .failed — it returned early on a source id that never matched —
+/// so the `and`-chain below could never reach .failed either, and a total
+/// torrent-search failure still rendered as "done". Removing it fixes that.
 fn combinedTorrentStatus() @import("resolver.zig").SourceStatus {
     const r = @import("resolver.zig");
     const a = r.status_torrent.load(.acquire);
-    const b = r.status_1337x.load(.acquire);
     const c2 = r.status_yts.load(.acquire);
-    if (a == .searching or b == .searching or c2 == .searching) return .searching;
-    if (a == .failed and b == .failed and c2 == .failed) return .failed;
+    if (a == .searching or c2 == .searching) return .searching;
+    if (a == .failed and c2 == .failed) return .failed;
     return .done;
 }
 

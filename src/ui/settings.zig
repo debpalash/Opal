@@ -2248,6 +2248,25 @@ fn renderNetworkTab() void {
             }
         }
 
+        // ── Music discovery (ListenBrainz + MusicBrainz) ──
+        // OFF by default. Every other music source only plays what you already
+        // have; this is the only one that suggests something new. No API key —
+        // ListenBrainz is keyless and its data is CC0 — but it does mean
+        // outbound requests, so the user opts in explicitly.
+        {
+            const before = state.app.music_discovery_enabled;
+            components.toggleRow(
+                @src(),
+                "Music discovery",
+                "Suggest albums from artists similar to what you play, via ListenBrainz and MusicBrainz. No account or API key; off means no requests.",
+                &state.app.music_discovery_enabled,
+            );
+            if (before != state.app.music_discovery_enabled) {
+                @import("../core/config.zig").save();
+                if (state.app.music_discovery_enabled) @import("../services/music_discovery.zig").refresh();
+            }
+        }
+
         // The Live TV custom-playlist box moved to Settings → Live TV
         // (renderLiveTvTab), which ingests it into the channel catalog rather
         // than the retired public-directory override.

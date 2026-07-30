@@ -166,3 +166,45 @@ def test_mpv_http_headers():
     if missing:
         return "fail", "Header wiring incomplete: " + ", ".join(missing)
     return "pass", "mpv headers generalized: Referer+Origin+arbitrary, comma-safe, one code path"
+
+
+@test("Scene-title match rule (episode name can't impersonate a series)", "Search")
+def test_scene_title_match_rule():
+    """Regression: "Alan Carrs Epic Gameshow S01E04 Strike it Lucky 1080p …"
+    scored 100% for the query "lucky s01e04" (the token matched the EPISODE
+    name after the marker), cleared the auto-play bar, and the loading screen
+    wore the show *Lucky*'s poster + synopsis."""
+    res = _src("src/services/resolver.zig")
+    rank = _src("src/services/resolver_rank.zig")
+    subs = _src("src/services/subtitles_pure.zig")
+    tmdb = _src("src/services/tmdb.zig")
+    state = _src("src/core/state.zig")
+
+    checks = {
+        # One SxxEyy parser, one series-title cut, shared by every consumer.
+        "seriesTitle in the pure subtitle parser": "pub fn seriesTitle(" in subs,
+        "findSxxEyy exported": "pub fn findSxxEyy(" in subs,
+        "parse routes through seriesTitle": "normalizeInto(seriesTitle(name), show_out)" in subs,
+
+        # The rule itself, in the pure ranker.
+        "matchCounts is pure + public": "pub fn matchCounts(" in rank,
+        "title tokens scored on the series title": "subs.seriesTitle(full)" in rank,
+        "episode marker still matches anywhere": "isEpisodeToken(word)) full else title_hay" in rank,
+
+        # Production must not keep its own copy of the loop (that copy was the bug).
+        "resolver delegates to matchCounts": 'resolver_rank.zig").matchCounts(name, query)' in res,
+        "no duplicate token loop left": "isStopWord(word)) continue;" not in res,
+        "no duplicate stop-word list": "const stop_words = [_][]const u8" not in res,
+
+        # Wrong metadata is worse than none.
+        "metadata confidence gate": "pub fn metadataSafeFor(" in rank,
+        "gate requires every query token": "c.match_words == c.total_words" in rank,
+        "smart play clears an unsafe stash": "rank.metadataSafeFor(chosen_name[0..chosen_name_len], query)" in tmdb
+            and "state.clearPendingPlay();" in tmdb,
+        "clearPendingPlay exists": "pub fn clearPendingPlay(" in state,
+    }
+
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "Scene-title rule incomplete: " + ", ".join(missing)
+    return "pass", "Series title = text before SxxEyy; low-confidence picks show no art"

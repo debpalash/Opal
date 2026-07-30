@@ -128,3 +128,90 @@ def test_music():
     if missing:
         return "fail", "Music wiring incomplete: " + ", ".join(missing)
     return "pass", "Music tab: 4 sources (JioSaavn/Subsonic/Jellyfin/Plex), each pure-routed + inert when unconfigured"
+
+
+@test("Music discovery (ListenBrainz + MusicBrainz)", "Audio")
+def test_music_discovery():
+    """Opal's first RECOMMENDATION source: seeds -> similar artists -> studio albums.
+
+    Guards the three things that make it safe to ship: it is INERT until the
+    user opts in, MusicBrainz is addressed politely (rate limit + contactable
+    UA), and every decision (release-type filter, dedupe, ranking, cache TTL)
+    routes through the tested pure module rather than being re-implemented in
+    the fetch worker."""
+    p = _src("src/services/music_discovery_pure.zig")
+    s = _src("src/services/music_discovery.zig")
+    svc = _src("src/services/music_subsonic.zig")
+    st = _src("src/core/state.zig")
+    cfg = _src("src/core/config.zig")
+    settings = _src("src/ui/settings.zig")
+    build = _src("build.zig")
+
+    checks = {
+        # ── Modules exist and the pure half carries the logic ──
+        "pure module": bool(p),
+        "service module": bool(s),
+        "seed collection pure": "pub fn collectSeeds(" in p,
+        "name normalisation pure": "pub fn normalizeName(" in p,
+        "studio-album filter pure": "pub fn isStudioAlbum(" in p,
+        "similarity ranking pure": "pub fn rankSimilar(" in p,
+        "album dedupe pure": "pub fn dedupeAlbums(" in p,
+        "cache key + ttl pure": "pub fn cacheKey(" in p and "pub fn ttlFor(" in p and "pub fn cacheExpired(" in p,
+        "backoff pure": "pub fn backoffMs(" in p,
+        "json extraction pure": "pub fn jsonStrField(" in p and "pub fn arrayScope(" in p,
+
+        # ── ListenBrainz, NOT Last.fm (no API key, CC0 data) ──
+        "listenbrainz endpoint": "labs.api.listenbrainz.org/similar-artists/json" in p,
+        "listenbrainz algorithm param": "algorithm=" in p and "LB_ALGORITHM" in p,
+        "musicbrainz artist search": "musicbrainz.org/ws/2/artist?query=" in p,
+        "musicbrainz release-group browse": "musicbrainz.org/ws/2/release-group?artist=" in p,
+        "no last.fm endpoint": "audioscrobbler" not in p.lower() and "audioscrobbler" not in s.lower(),
+        "no api key": "api_key" not in p.lower() and "apikey" not in p.lower(),
+
+        # ── Politeness: contactable UA + shared rate limiter + 429 backoff ──
+        "descriptive user agent": "pub const USER_AGENT" in p and 'USER_AGENT = "Opal/' in p and "github.com" in p,
+        "ua actually sent": ".user_agent = pure.USER_AGENT" in s,
+        "rate limiter used": "rate_limit.acquire(" in s and '"musicbrainz"' in s,
+        "backoff on failure": "pure.backoffMs(" in s,
+
+        # ── Inert by default ──
+        "opt-in flag in state": "music_discovery_enabled: bool = false" in st,
+        "flag persisted": '"music_discovery"' in cfg,
+        "settings toggle": "Music discovery" in settings,
+        "gate function": "pub fn enabled()" in s and "state.app.music_discovery_enabled" in s,
+        "source_config marker honoured": 'source_config.has("listenbrainz")' in s,
+        "every fetch gated": s.count("if (!enabled()) return") >= 2,
+        "rail renders nothing when off": "pub fn renderRail()" in s and "if (!enabled()) return;" in s,
+
+        # ── Seeds degrade to nothing rather than being invented ──
+        "seeds from played artists": "pub fn noteListen(" in s and 'music_discovery.zig").noteListen(' in svc,
+        "no seeds -> no fetch": "if (w_seed_count == 0) return" in s,
+
+        # ── Production routes THROUGH the pure module (no drift) ──
+        "production routes through pure": all(
+            f"pure.{fn}(" in s
+            for fn in ("collectSeeds", "buildArtistSearchUrl", "buildSimilarArtistsUrl",
+                       "buildReleaseGroupUrl", "parseTopArtistMbid", "parseSimilarArtists",
+                       "rankSimilar", "parseStudioAlbums", "dedupeAlbums", "sortAlbums",
+                       "cacheKey", "ttlFor", "cacheExpired", "backoffMs")
+        ),
+
+        # ── Thread safety + Opal conventions ──
+        "atomic busy flag": "busy = std.atomic.Value(bool)" in s and "busy.load(.acquire)" in s,
+        "mutex on published rows": "pub_mutex" in s and "sync.Mutex" in s,
+        "worker buffers on the heap": "alloc.create(Work)" in s and "alloc.destroy(w)" in s,
+        "inputs snapshotted before spawn": "w_seed_count = currentSeeds(" in s and "std.Thread.spawn(.{}, worker" in s,
+        "io_global wrappers only": "std.fs.cwd()" not in s and "std.time.timestamp()" not in s and "std.Thread.sleep(" not in s,
+        "cache under the cache dir": "paths.cacheFile(" in s,
+
+        # ── Rail wired into the Music tab ──
+        "rail rendered in music tab": 'music_discovery.zig").renderRail()' in svc,
+
+        # ── Pure module registered with the zig test step ──
+        "test registered": 'b.path("src/services/music_discovery_pure.zig")' in build,
+    }
+
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "Music discovery incomplete: " + ", ".join(missing)
+    return "pass", "Discovery: seeds -> ListenBrainz similar artists -> MusicBrainz studio albums, inert until opt-in"

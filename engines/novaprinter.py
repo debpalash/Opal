@@ -39,7 +39,19 @@ SearchResults = TypedDict('SearchResults', {
 })
 
 
+# Rows printed by this process. nova2's mirror failover reads it to tell "this
+# host returned nothing" from "this host returned results" without having to
+# intercept stdout.
+results_printed: int = 0
+
+
+def printed_count() -> int:
+    return results_printed
+
+
 def prettyPrinter(dictionary: SearchResults) -> None:
+    global results_printed
+    results_printed += 1
     outtext = "|".join((
         dictionary["link"],
         dictionary["name"].replace("|", " "),

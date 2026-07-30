@@ -146,3 +146,69 @@ test "validField mirrors the fixed buffers it feeds" {
     try expect(!validField("base", "v" ** (MAX_VAL_LEN + 1)));
     try expect(validField("base", "v" ** MAX_VAL_LEN));
 }
+
+// ── Installed-source versioning ───────────────────────────────────────────
+//
+// A source was installed once and then kept its endpoints forever. The bundled
+// manifest carries a per-plugin `version`, and `plugin_repo` parsed it into
+// `pl.version` — but nothing ever compared it against what was on disk, so
+// there was no upgrade path at all.
+//
+// That is how dead domains survive a release. `yts.mx` lost its NS delegation
+// at the .mx registry and `limetorrent.in` started serving a TheRarBg page;
+// both were corrected in the manifest, and every existing install kept right on
+// using the dead host, because the installed file overrides the manifest.
+//
+// The installed file now carries the manifest version it was written from,
+// under this key. `versionNewer` decides whether to rewrite it.
+
+/// Key holding the manifest version an installed source file was written from.
+/// Leading underscore keeps it out of the endpoint namespace — no real endpoint
+/// field starts with one, and `get(id, "base")` is unaffected.
+pub const VERSION_KEY = "_v";
+
+/// True when dotted-numeric `a` is a strictly newer version than `b`.
+///
+/// Compares segment by segment as integers, so 1.10.0 > 1.9.0 (a plain string
+/// compare gets that backwards). A missing segment reads as 0, so 1.1 == 1.1.0.
+/// A non-numeric or empty `b` — which is what an install predating versioning
+/// looks like — is older than any valid `a`, so those get upgraded exactly once.
+pub fn versionNewer(a: []const u8, b: []const u8) bool {
+    if (a.len == 0) return false;
+    var ai = std.mem.splitScalar(u8, a, '.');
+    var bi = std.mem.splitScalar(u8, b, '.');
+    var guard: usize = 0;
+    while (guard < 8) : (guard += 1) {
+        const as = ai.next();
+        const bs = bi.next();
+        if (as == null and bs == null) return false; // equal all the way down
+        const av = std.fmt.parseInt(u32, as orelse "0", 10) catch 0;
+        const bv = std.fmt.parseInt(u32, bs orelse "0", 10) catch 0;
+        if (av != bv) return av > bv;
+    }
+    return false;
+}
+
+test "versionNewer: numeric segments, not string order" {
+    try expect(versionNewer("1.1.0", "1.0.0"));
+    try expect(!versionNewer("1.0.0", "1.1.0"));
+    try expect(!versionNewer("1.0.0", "1.0.0"));
+    // The case a lexicographic compare gets wrong.
+    try expect(versionNewer("1.10.0", "1.9.0"));
+    try expect(!versionNewer("1.9.0", "1.10.0"));
+    // Missing segments read as zero.
+    try expect(!versionNewer("1.1", "1.1.0"));
+    try expect(versionNewer("1.1.1", "1.1"));
+}
+
+test "versionNewer: an install predating versioning is always upgraded" {
+    // No _v key at all -> empty string. This is every source installed before
+    // this change shipped, including the ones pinned to yts.mx.
+    try expect(versionNewer("1.0.0", ""));
+    try expect(versionNewer("1.1.0", ""));
+    // Garbage parses as 0 rather than erroring, so it still upgrades.
+    try expect(versionNewer("1.0.0", "not-a-version"));
+    // But an empty manifest version never triggers a rewrite loop.
+    try expect(!versionNewer("", "1.0.0"));
+    try expect(!versionNewer("", ""));
+}

@@ -491,6 +491,18 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_source_config_pure).step);
 
+    // Per-source mirror failover: candidate ordering (base first, then the
+    // `mirrors` list), last-good rotation, and 200-OK challenge-page detection.
+    // mirrors.zig routes every selection decision through these.
+    const test_mirrors_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/mirrors_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_mirrors_pure).step);
+
     // Audio EQ preset → af spec, video-filter clamp, download-limit sanitize —
     // the persist-and-replay mapping shared by settings.zig + player.zig init.
     const test_av_pure = b.addTest(.{
@@ -1392,6 +1404,18 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_music_download_pure).step);
 
+    // Music discovery (ListenBrainz + MusicBrainz) — seed collection, name
+    // normalisation/dedupe, similar-artist ranking, studio-album release-type
+    // filtering, cache keys + TTL expiry, backoff, and the URL builders.
+    const test_music_discovery_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/music_discovery_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_music_discovery_pure).step);
+
     const test_iptv_playlist_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/iptv_playlist_pure.zig"),
@@ -1536,6 +1560,33 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_music_plex_pure).step);
+
+    // Live public tracker list: BOTH upstream separator styles (blank-line and
+    // plain newline) parsed by one parser, scheme filter, host dedupe, the
+    // MAX_TRACKERS cap, the 0.0.0.0 DNS-sinkhole reject, the baked-in offline
+    // fallback and the daily-TTL refresh rule. Fixtures are the real upstream
+    // files verbatim.
+    const test_trackers_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/trackers_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_trackers_pure).step);
+
+    // Stalled-torrent reannounce policy: stall detection on BYTES (not the
+    // coarse float progress), the healthy-swarm no-op, min interval +
+    // exponential backoff + attempt cap, give-up reported exactly once, and the
+    // clock-went-backwards guard.
+    const test_torrent_stall_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/torrent_stall_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_torrent_stall_pure).step);
 }
 
 /// Resolve a build-time default API key: the first matching build environment

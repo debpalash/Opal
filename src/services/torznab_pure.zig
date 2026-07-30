@@ -92,6 +92,99 @@ pub fn pickLink(item_block: []const u8) ?[]const u8 {
     return null;
 }
 
+// ── Endpoint shape ───────────────────────────────────────────────────────────
+//
+// "Torznab" names a RESPONSE format, not a URL. Every server that speaks it puts
+// the endpoint somewhere different, so the path must be configurable per install:
+//
+//   Jackett    {base}/api/v2.0/indexers/{indexer}/results/torznab/api   (default)
+//   Prowlarr   {base}/{indexerId}/api        — :9696, per-indexer id
+//   bitmagnet  {base}/torznab/api            — no indexer segment at all
+//
+// The path used to be baked in as Jackett's, so the source called
+// "Torznab / Prowlarr" could only ever talk to Jackett. A `path` endpoint field
+// (template, `{indexer}` substituted) covers all three with one adapter.
+
+/// Jackett's path shape — the historical hardcoded value, kept as the default so
+/// existing `torznab.json` installs (base+apikey+indexer, no `path`) keep working.
+pub const DEFAULT_PATH = "/api/v2.0/indexers/{indexer}/results/torznab/api";
+
+/// Base origin with surrounding whitespace and any trailing '/' removed, so
+/// `{base}{path}` never produces a doubled slash.
+pub fn trimBase(raw: []const u8) []const u8 {
+    var b = std.mem.trim(u8, raw, " \t\r\n");
+    while (b.len > 0 and b[b.len - 1] == '/') b = b[0 .. b.len - 1];
+    return b;
+}
+
+/// Expand a path template: substitute every `{indexer}`, force a leading '/',
+/// drop a trailing '/'. Empty template → `DEFAULT_PATH`. Null when it doesn't fit.
+pub fn expandPath(template: []const u8, indexer: []const u8, buf: []u8) ?[]const u8 {
+    var t = std.mem.trim(u8, template, " \t\r\n");
+    if (t.len == 0) t = DEFAULT_PATH;
+
+    var w: usize = 0;
+    if (t[0] != '/') {
+        if (w >= buf.len) return null;
+        buf[w] = '/';
+        w += 1;
+    }
+
+    const ph = "{indexer}";
+    var pos: usize = 0;
+    while (pos < t.len) {
+        if (std.mem.indexOfPos(u8, t, pos, ph)) |at| {
+            const lit = t[pos..at];
+            if (w + lit.len + indexer.len > buf.len) return null;
+            @memcpy(buf[w..][0..lit.len], lit);
+            w += lit.len;
+            @memcpy(buf[w..][0..indexer.len], indexer);
+            w += indexer.len;
+            pos = at + ph.len;
+        } else {
+            const lit = t[pos..];
+            if (w + lit.len > buf.len) return null;
+            @memcpy(buf[w..][0..lit.len], lit);
+            w += lit.len;
+            break;
+        }
+    }
+    while (w > 1 and buf[w - 1] == '/') w -= 1;
+    if (w == 0) return null;
+    return buf[0..w];
+}
+
+/// Full Torznab search URL. `enc_key`/`enc_query` must already be percent-encoded.
+/// An empty apikey omits the parameter entirely (bitmagnet needs no key, and
+/// `apikey=` made Jackett reject the request outright). Null when it doesn't fit.
+pub fn buildSearchUrl(
+    base: []const u8,
+    path_template: []const u8,
+    indexer: []const u8,
+    enc_key: []const u8,
+    enc_query: []const u8,
+    buf: []u8,
+) ?[]const u8 {
+    const b = trimBase(base);
+    if (b.len == 0) return null;
+
+    var path_buf: [512]u8 = undefined;
+    const p = expandPath(path_template, indexer, &path_buf) orelse return null;
+
+    // A template may already carry a query (e.g. bitmagnet "/torznab/api?cat=2000").
+    const sep: []const u8 = if (std.mem.indexOfScalar(u8, p, '?') != null) "&" else "?";
+
+    var w = std.Io.Writer.fixed(buf);
+    w.writeAll(b) catch return null;
+    w.writeAll(p) catch return null;
+    w.writeAll(sep) catch return null;
+    if (enc_key.len > 0) {
+        w.print("apikey={s}&", .{enc_key}) catch return null;
+    }
+    w.print("t=search&q={s}", .{enc_query}) catch return null;
+    return buf[0..w.end];
+}
+
 /// Seeders count for an item, or 0 when the attr is missing/malformed.
 pub fn seeders(item_block: []const u8) u16 {
     const s = torznabAttr(item_block, "seeders") orelse return 0;
@@ -179,6 +272,73 @@ test "seeders and sizeBytes parse" {
 test "stripCdata unwraps CDATA titles" {
     const block = "<item><title><![CDATA[ Some & Title ]]></title></item>";
     try std.testing.expectEqualStrings("Some & Title", extractTag(block, "<title>", "</title>").?);
+}
+
+test "trimBase strips whitespace and trailing slashes" {
+    try std.testing.expectEqualStrings("http://h:9117", trimBase("http://h:9117"));
+    try std.testing.expectEqualStrings("http://h:9117", trimBase("  http://h:9117/  "));
+    try std.testing.expectEqualStrings("http://h:9117", trimBase("http://h:9117///"));
+    try std.testing.expectEqualStrings("", trimBase("///"));
+}
+
+test "expandPath substitutes {indexer} and normalises the slashes" {
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "/api/v2.0/indexers/all/results/torznab/api",
+        expandPath("", "all", &buf).?, // empty → Jackett default
+    );
+    try std.testing.expectEqualStrings(
+        "/api/v2.0/indexers/rarbg/results/torznab/api",
+        expandPath(DEFAULT_PATH, "rarbg", &buf).?,
+    );
+    // No placeholder at all (bitmagnet) — template used verbatim.
+    try std.testing.expectEqualStrings("/torznab/api", expandPath("/torznab/api", "all", &buf).?);
+    // Missing leading slash and a trailing one.
+    try std.testing.expectEqualStrings("/torznab/api", expandPath("torznab/api/", "all", &buf).?);
+    // Multiple placeholders.
+    try std.testing.expectEqualStrings("/a/x/b/x", expandPath("/a/{indexer}/b/{indexer}", "x", &buf).?);
+    // Too small a buffer fails instead of truncating into a wrong URL.
+    var tiny: [4]u8 = undefined;
+    try std.testing.expect(expandPath(DEFAULT_PATH, "all", &tiny) == null);
+}
+
+test "buildSearchUrl covers Jackett, Prowlarr and bitmagnet from one adapter" {
+    // REGRESSION: the path was hardcoded to Jackett's shape, so the source
+    // shipped as "Torznab / Prowlarr" could not reach Prowlarr or bitmagnet.
+    var buf: [512]u8 = undefined;
+
+    // Jackett (default path, key present) — byte-identical to the old hardcode.
+    try std.testing.expectEqualStrings(
+        "http://127.0.0.1:9117/api/v2.0/indexers/all/results/torznab/api?apikey=KEY&t=search&q=dune",
+        buildSearchUrl("http://127.0.0.1:9117", "", "all", "KEY", "dune", &buf).?,
+    );
+
+    // Prowlarr — per-indexer path on :9696, no /api/v2.0 segment.
+    try std.testing.expectEqualStrings(
+        "http://127.0.0.1:9696/12/api?apikey=KEY&t=search&q=dune",
+        buildSearchUrl("http://127.0.0.1:9696", "/{indexer}/api", "12", "KEY", "dune", &buf).?,
+    );
+
+    // bitmagnet — fixed path, no indexer, no api key: the apikey param is OMITTED
+    // (an empty `apikey=` is rejected outright by Jackett and meaningless here).
+    try std.testing.expectEqualStrings(
+        "http://127.0.0.1:3333/torznab/api?t=search&q=dune",
+        buildSearchUrl("http://127.0.0.1:3333/", "/torznab/api", "all", "", "dune", &buf).?,
+    );
+
+    // A template that already has a query string continues it with '&'.
+    try std.testing.expectEqualStrings(
+        "http://h/torznab/api?cat=2000&t=search&q=dune",
+        buildSearchUrl("http://h", "/torznab/api?cat=2000", "all", "", "dune", &buf).?,
+    );
+
+    // Empty base → no URL (the source stays inert rather than hitting "/api/...").
+    try std.testing.expect(buildSearchUrl("", "", "all", "K", "q", &buf) == null);
+    try std.testing.expect(buildSearchUrl("   ", "", "all", "K", "q", &buf) == null);
+
+    // Overflow returns null instead of a truncated, wrong URL.
+    var small: [16]u8 = undefined;
+    try std.testing.expect(buildSearchUrl("http://127.0.0.1:9117", "", "all", "KEY", "dune", &small) == null);
 }
 
 test "malformed XML regression: no crash, no bogus links" {

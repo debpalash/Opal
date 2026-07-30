@@ -91,9 +91,15 @@ def test_sources_externalized():
     rv = _src("src/services/resolver.zig")
     sr = _src("src/services/search.zig")
     cm = _src("src/services/comics.zig")
+    eng = _src("engines/opal_sources.py")
     checks = {
         "source_config.get exists": "pub fn get(" in sc and "plugins/sources" in sc,
-        "1337x via config": 'get("1337x"' in rv,
+        # 1337x is served by the nova2 `one337x` engine, not by a Zig resolver:
+        # the native resolver read source id "1337x" while the installed file is
+        # one337x.json, so it never once ran and has been deleted. The engine
+        # reads the same installed source file through engines/opal_sources.py.
+        "1337x via config": "sources_dir" in eng and "def candidates_for" in eng
+                            and "opal_sources" in _src("engines/nova2.py"),
         "yts via config": 'get("yts"' in rv,
         "eztv via config": 'get("eztv"' in sr,
         "readallcomics via config": 'get("readallcomics"' in rv and 'get("readallcomics"' in cm,

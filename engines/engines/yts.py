@@ -9,7 +9,7 @@ import datetime
 from novaprinter import prettyPrinter
 
 class yts:
-    url = 'https://yts.mx'
+    url = 'https://yts.gg'
     name = 'YTS (Movies)'
     supported_categories = {
         'all': '',
@@ -44,7 +44,7 @@ class yts:
                 'sort_by': 'seeds',
                 'order_by': 'desc',
             })
-            api_url = f'https://yts.mx/api/v2/list_movies.json?{params}'
+            api_url = f'https://movies-api.accel.li/api/v2/list_movies.json?{params}'
 
             try:
                 req = urllib.request.Request(api_url, headers={'User-Agent': self._get_ua()})

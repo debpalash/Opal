@@ -88,7 +88,6 @@ pub var status_stremio = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_torrent = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_anime = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_yt = std.atomic.Value(SourceStatus).init(.idle);
-pub var status_1337x = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_yts = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_local = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_rss = std.atomic.Value(SourceStatus).init(.idle);
@@ -348,7 +347,6 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     Pre.set(&status_torrent, .torrent);
     Pre.set(&status_anime, .anime);
     Pre.set(&status_yt, .youtube);
-    Pre.set(&status_1337x, .torrent);
     Pre.set(&status_yts, .torrent);
     Pre.set(&status_local, .local);
     Pre.set(&status_rss, .rss);
@@ -388,8 +386,12 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     if (sourceOn(.local)) Spawn.go(resolveLocalFiles, &status_local); // instant — already on disk
     if (sourceOn(.rss)) Spawn.go(resolveRss, &status_rss); // already-fetched magnets matching query
     if (sourceOn(.jellyfin)) Spawn.go(resolveJellyfin, &status_jf);
+    // 1337x is covered by nova2's one337x.py engine (spawned above with "all").
+    // A second, native 1337x scraper used to be spawned here; it read source id
+    // "1337x" while the installed file is one337x.json, so it never once ran.
+    // Repointing it would have scraped 1337x twice per search — and it was not
+    // even a fast path: one detail-page fetch per result at 1 req/sec.
     if (sourceOn(.torrent)) Spawn.go(resolveTorrentsNova2, &status_torrent);
-    if (sourceOn(.torrent)) Spawn.go(resolve1337x, &status_1337x);
     if (sourceOn(.torrent)) Spawn.go(resolveYts, &status_yts);
     if (sourceOn(.torrent)) Spawn.go(resolveTorznab, &status_torznab); // self-hosted Prowlarr/Jackett — inert w/o marker
     if (sourceOn(.anime)) Spawn.go(resolveAnime, &status_anime);
@@ -629,10 +631,7 @@ fn resolveComics(query_buf: [256]u8, qlen: usize) void {
     }
 
     // Endpoint migrated to opal-plugins — inert until the user installs "readallcomics".
-    const base = @import("../core/source_config.zig").get("readallcomics", "base") orelse return;
-    var url_buf: [640]u8 = undefined;
-    // Same URL comics.zig builds for page 1.
-    const url = std.fmt.bufPrint(&url_buf, "{s}/?story={s}&s=&type=comic", .{ base, enc[0..el] }) catch return;
+    _ = @import("../core/source_config.zig").get("readallcomics", "base") orelse return;
 
     // readallcomics pages can be large — heap the fetch buffer (never on the
     // worker stack, per the >64KB rule).
@@ -640,10 +639,18 @@ fn resolveComics(query_buf: [256]u8, qlen: usize) void {
     defer alloc.free(page);
 
     @import("../core/rate_limit.zig").acquire("readallcomics", 1.0);
-    const body = @import("../core/http.zig").fetch(url, page, .{
+    // Mirror failover — this is a scrape-class site that gets blocked and moves
+    // domain; `mirrors` in its source file lists the alternates to fall back to.
+    const build = struct {
+        fn f(q: []const u8, host: []const u8, url_buf: []u8) ?[]const u8 {
+            // Same URL comics.zig builds for page 1.
+            return std.fmt.bufPrint(url_buf, "{s}/?story={s}&s=&type=comic", .{ host, q }) catch null;
+        }
+    }.f;
+    const body = @import("../core/mirrors.zig").fetch("readallcomics", page, .{
         .timeout_secs = 6,
         .user_agent = "Mozilla/5.0",
-    }) orelse return;
+    }, enc[0..el], build) orelse return;
     const html = body;
     if (html.len < 100) return;
 
@@ -851,7 +858,7 @@ fn storeToCache() void {
 fn checkAllDone() void {
     if (status_jf.load(.acquire) != .searching and status_stremio.load(.acquire) != .searching and
         status_torrent.load(.acquire) != .searching and status_anime.load(.acquire) != .searching and
-        status_yt.load(.acquire) != .searching and status_1337x.load(.acquire) != .searching and
+        status_yt.load(.acquire) != .searching and
         status_yts.load(.acquire) != .searching and status_local.load(.acquire) != .searching and
         status_rss.load(.acquire) != .searching and status_comics.load(.acquire) != .searching and
         status_torznab.load(.acquire) != .searching and status_archive.load(.acquire) != .searching and
@@ -866,14 +873,8 @@ fn checkAllDone() void {
     }
 }
 
-const stop_words = [_][]const u8{ "the", "a", "an", "of", "in", "on", "to", "and", "for", "is", "it", "my", "me", "at", "by" };
-
-fn isStopWord(word: []const u8) bool {
-    for (stop_words) |sw| {
-        if (std.mem.eql(u8, word, sw)) return true;
-    }
-    return false;
-}
+// The stop-word list moved to resolver_rank (it is part of matchCounts, which
+// this file now calls) — a second copy here is how the two scorers drifted.
 
 /// Detect error/garbage results from broken indexers (Jackett API errors, etc.)
 fn isErrorResult(name: []const u8) bool {
@@ -896,9 +897,6 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
     const query = resolver_query[0..resolver_query_len];
     const name = item.name[0..item.name_len];
 
-    var match_words: u32 = 0;
-    var total_words: u32 = 0;
-
     var lower_name: [256]u8 = undefined;
     const nlen = @min(name.len, 255);
     for (0..nlen) |i| lower_name[i] = std.ascii.toLower(name[i]);
@@ -907,49 +905,13 @@ fn computeMatch(item: ResolvedItem) MatchInfo {
     const ql = @min(query.len, 255);
     for (0..ql) |i| lower_query[i] = std.ascii.toLower(query[i]);
 
-    var qi: usize = 0;
-    while (qi < ql) {
-        while (qi < ql and lower_query[qi] == ' ') qi += 1;
-        if (qi >= ql) break;
-        const word_start = qi;
-        while (qi < ql and lower_query[qi] != ' ') qi += 1;
-        const word = lower_query[word_start..qi];
-        if (word.len == 0) continue;
-        if (word.len == 1 and !std.ascii.isDigit(word[0])) continue;
-        if (isStopWord(word)) continue;
-        total_words += 1;
-
-        // Fully-numeric tokens (e.g. "2" in "iron man 2") must match on
-        // word boundaries — otherwise "2" matches inside "2008" and ruins
-        // ranking for sequels.
-        var is_numeric = true;
-        for (word) |ch| if (!std.ascii.isDigit(ch)) {
-            is_numeric = false;
-            break;
-        };
-
-        const hay = lower_name[0..nlen];
-        if (is_numeric) {
-            var hi: usize = 0;
-            while (std.mem.indexOfPos(u8, hay, hi, word)) |p| {
-                const before_ok = (p == 0) or !std.ascii.isDigit(hay[p - 1]);
-                const after_idx = p + word.len;
-                const after_ok = (after_idx >= hay.len) or !std.ascii.isDigit(hay[after_idx]);
-                if (before_ok and after_ok) {
-                    match_words += 1;
-                    break;
-                }
-                hi = p + 1;
-            }
-        } else {
-            if (std.mem.indexOf(u8, hay, word) != null) match_words += 1;
-        }
-    }
-
-    const pct: u8 = if (total_words > 0)
-        @intCast((match_words * 100) / total_words)
-    else
-        50;
+    // Token counting lives in resolver_rank.matchCounts — pure and tested,
+    // including the scene rule that stops an episode NAME ("… S01E04 Strike it
+    // Lucky …") from matching a series query ("lucky s01e04"). This file used
+    // to carry a copy of that loop; the copy is what shipped the bug.
+    const counts = @import("resolver_rank.zig").matchCounts(name, query);
+    const match_words = counts.match_words;
+    const pct: u8 = counts.pct();
 
     if (match_words == 0) return .{ .match_pct = 0, .score = 9999 };
 
@@ -1211,185 +1173,6 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
     }
 }
 
-// ══════════════════════════════════════════════════════════
-// Backend: Direct 1337x HTTP scrape (no Jackett/nova2 needed)
-// ══════════════════════════════════════════════════════════
-
-fn resolve1337x(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_1337x.store(.done, .release);
-        checkAllDone();
-    }
-
-    const query = query_buf[0..qlen];
-
-    // URL-encode query (replace spaces with +)
-    var enc: [256]u8 = undefined;
-    var el: usize = 0;
-    for (query) |ch| {
-        if (el + 3 >= enc.len) break;
-        if (ch == ' ') {
-            enc[el] = '+';
-            el += 1;
-        } else if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.') {
-            enc[el] = ch;
-            el += 1;
-        } else {
-            enc[el] = '%';
-            enc[el + 1] = "0123456789ABCDEF"[ch >> 4];
-            enc[el + 2] = "0123456789ABCDEF"[ch & 0xF];
-            el += 3;
-        }
-    }
-
-    // Endpoint migrated to opal-plugins — inert until the user installs "1337x".
-    const base = @import("../core/source_config.zig").get("1337x", "base") orelse return;
-
-    var url_buf: [512]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "{s}/search/{s}/1/", .{ base, enc[0..el] }) catch return;
-
-    // v2: throttle to ≤1 req/sec per origin so parallel queries don't trip rate limits.
-    @import("../core/rate_limit.zig").acquire("1337x", 1.0);
-
-    // Heap, not stack: the search page (128 KB) plus the per-result detail page
-    // (another 128 KB) would put 256 KB of live buffers on this spawned worker's
-    // 512 KB stack — close enough to overflow (with the other locals) to crash.
-    // One reused det_buf for the whole result loop keeps it to two heap blocks.
-    const page_buf = alloc.alloc(u8, 128 * 1024) catch return;
-    defer alloc.free(page_buf);
-    const det_buf = alloc.alloc(u8, 128 * 1024) catch return;
-    defer alloc.free(det_buf);
-
-    // Fetch search page
-    const page = @import("../core/http.zig").fetch(url, page_buf, .{
-        .timeout_secs = 8,
-        .user_agent = "Mozilla/5.0",
-    }) orelse return;
-    const pn = page.len;
-    if (pn < 100) return;
-
-    // Parse result links: <a href="/torrent/12345/Title-Here/">
-    var pos: usize = 0;
-    var found: usize = 0;
-    const link_prefix = "/torrent/";
-
-    while (found < 10 and pos < pn) {
-        const href_start = std.mem.indexOfPos(u8, page, pos, link_prefix) orelse break;
-        // Find the enclosing <a> tag to get the title text
-        const close_tag = std.mem.indexOfScalarPos(u8, page, href_start, '>') orelse {
-            pos = href_start + 1;
-            continue;
-        };
-        const href_end = std.mem.indexOfScalarPos(u8, page, href_start, '"') orelse close_tag;
-
-        // Extract href path
-        const href = page[href_start..href_end];
-        if (href.len < 15) {
-            pos = href_end + 1;
-            continue;
-        }
-
-        // Extract title text between > and </a>
-        const title_start = close_tag + 1;
-        const title_end = std.mem.indexOfPos(u8, page, title_start, "</a>") orelse {
-            pos = close_tag + 1;
-            continue;
-        };
-        const raw_title = page[title_start..title_end];
-
-        // Clean HTML tags from title (there might be nested spans)
-        var clean_title: [256]u8 = undefined;
-        var ct_len: usize = 0;
-        var in_tag = false;
-        for (raw_title) |ch| {
-            if (ch == '<') {
-                in_tag = true;
-                continue;
-            }
-            if (ch == '>') {
-                in_tag = false;
-                continue;
-            }
-            if (!in_tag and ct_len < 255) {
-                clean_title[ct_len] = ch;
-                ct_len += 1;
-            }
-        }
-
-        if (ct_len < 3) {
-            pos = title_end + 1;
-            continue;
-        }
-
-        // Extract seeds from the same row — look for <td class="coll-2 seeds">N</td>
-        const seeds_marker = "seeds\">";
-        var seeds_val: u16 = 0;
-        if (std.mem.indexOfPos(u8, page, title_end, seeds_marker)) |sp| {
-            const ss = sp + seeds_marker.len;
-            const se = std.mem.indexOfScalarPos(u8, page, ss, '<') orelse ss;
-            seeds_val = std.fmt.parseInt(u16, page[ss..se], 10) catch 0;
-        }
-
-        // Build full URL for magnet fetch
-        var detail_url: [512]u8 = undefined;
-        const du = std.fmt.bufPrint(&detail_url, "{s}{s}", .{ base, href }) catch {
-            pos = title_end + 1;
-            continue;
-        };
-
-        // Fetch the detail page to get magnet link (reuses the function-level
-        // heap det_buf — overwritten each iteration, processed before the next).
-        @import("../core/rate_limit.zig").acquire("1337x", 1.0);
-        const det_page = @import("../core/http.zig").fetch(du, det_buf, .{
-            .timeout_secs = 6,
-            .user_agent = "Mozilla/5.0",
-        }) orelse {
-            pos = title_end + 1;
-            continue;
-        };
-        const dn = det_page.len;
-
-        // Find magnet link
-        const magnet_prefix = "magnet:?xt=";
-        if (dn > 50) {
-            if (std.mem.indexOf(u8, det_buf[0..dn], magnet_prefix)) |mp| {
-                const magnet_end = std.mem.indexOfScalarPos(u8, det_buf[0..dn], mp, '"') orelse
-                    std.mem.indexOfScalarPos(u8, det_buf[0..dn], mp, '\'') orelse
-                    @min(mp + 500, dn);
-                const magnet = det_buf[mp..magnet_end];
-
-                var item = std.mem.zeroes(ResolvedItem);
-                item.source = .torrent;
-
-                const nlen = @min(ct_len, 255);
-                @memcpy(item.name[0..nlen], clean_title[0..nlen]);
-                item.name_len = nlen;
-
-                const ulen = @min(magnet.len, 2047);
-                @memcpy(item.url[0..ulen], magnet[0..ulen]);
-                item.url_len = ulen;
-
-                item.quality = detectQuality(clean_title[0..ct_len]);
-                item.seeds = seeds_val;
-
-                var det: [128]u8 = undefined;
-                const dstr = std.fmt.bufPrint(&det, "Torrent · 1337x · {d} seeds", .{seeds_val}) catch "Torrent · 1337x";
-                const dlen = @min(dstr.len, 127);
-                @memcpy(item.detail[0..dlen], dstr[0..dlen]);
-                item.detail_len = dlen;
-
-                _ = pushResult(item);
-                found += 1;
-            }
-        }
-
-        pos = title_end + 1;
-    }
-
-    if (found > 0) {
-        logs.pushLog("info", "resolver", "1337x direct results found", false);
-    }
-}
 
 // YTS API — fast movie search (runs in parallel)
 fn resolveYts(query_buf: [256]u8, qlen: usize) void {
@@ -1486,16 +1269,27 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
 }
 
 // ══════════════════════════════════════════════════════════
-// Backend: Torznab / Prowlarr / Jackett (generic self-hosted indexer)
+// Backend: Torznab (self-hosted Jackett / Prowlarr / bitmagnet)
 //
-// One adapter for the user's OWN self-hosted Prowlarr/Jackett: it aggregates
-// every indexer the user has configured there via the standard Torznab endpoint,
-// instead of hardcoding each tracker. Ships INERT — no endpoint is baked into
-// the binary. The source stays silent until the user installs a marker at
-// ~/.config/opal/plugins/sources/torznab.json supplying {base, apikey, indexer}.
-// With no marker, get("torznab","base") is null → this returns immediately →
-// zero network activity (neutral-ship). XML item parsing is routed through the
-// tested torznab_pure.zig helpers.
+// One adapter for the user's OWN self-hosted indexer: it aggregates every
+// indexer configured there via the standard Torznab feed, instead of hardcoding
+// each tracker. Ships INERT — no endpoint is baked into the binary. The source
+// stays silent until the user installs a marker at
+// ~/.config/opal/plugins/sources/torznab.json supplying {base, path, apikey,
+// indexer}. With no marker, get("torznab","base") is null → this returns
+// immediately → zero network activity (neutral-ship).
+//
+// `path` is a TEMPLATE ("{indexer}" substituted), because "Torznab" names a
+// response format, not a URL — each server puts the endpoint somewhere else:
+//
+//   Jackett    /api/v2.0/indexers/{indexer}/results/torznab/api   (the default)
+//   Prowlarr   /{indexer}/api        on :9696, {indexer} = the numeric indexer id
+//   bitmagnet  /torznab/api          no indexer segment, no api key
+//
+// This used to be hardcoded to Jackett's shape, so the source shipped as
+// "Torznab / Prowlarr" could not in fact reach Prowlarr (or bitmagnet). URL
+// building is routed through torznab_pure.buildSearchUrl and XML item parsing
+// through the other torznab_pure helpers.
 // ══════════════════════════════════════════════════════════
 
 fn resolveTorznab(query_buf: [256]u8, qlen: usize) void {
@@ -1506,16 +1300,15 @@ fn resolveTorznab(query_buf: [256]u8, qlen: usize) void {
 
     const query = query_buf[0..qlen];
     const sc = @import("../core/source_config.zig");
+    const tz = @import("torznab_pure.zig");
 
     // Endpoint migrated to opal-plugins — inert until the user installs "torznab".
     // get() returns a slice into a static table that reload() can mutate, so copy
     // every config value into a local buffer before issuing the next get().
+    // Presence check only — mirrors.fetch() re-reads base (and `mirrors`) itself
+    // and hands each candidate host to the URL builder below.
     const base_raw = sc.get("torznab", "base") orelse return;
     if (base_raw.len == 0 or base_raw.len > 512) return;
-    var base_buf: [512]u8 = undefined;
-    @memcpy(base_buf[0..base_raw.len], base_raw);
-    var base: []const u8 = base_buf[0..base_raw.len];
-    if (base.len > 0 and base[base.len - 1] == '/') base = base[0 .. base.len - 1]; // strip trailing slash
 
     var key_buf: [256]u8 = undefined;
     var key_len: usize = 0;
@@ -1535,19 +1328,22 @@ fn resolveTorznab(query_buf: [256]u8, qlen: usize) void {
         }
     }
 
+    // Path template — absent means Jackett's shape, which is what the hardcoded
+    // URL used to be, so existing installs are unaffected.
+    var path_buf: [512]u8 = undefined;
+    var path: []const u8 = "";
+    if (sc.get("torznab", "path")) |p| {
+        if (p.len > 0 and p.len <= path_buf.len) {
+            @memcpy(path_buf[0..p.len], p);
+            path = path_buf[0..p.len];
+        }
+    }
+
     // Percent-encode the query + apikey (both go in the query string) per CLAUDE.md.
     var q_enc: [512]u8 = undefined;
     const enc_q = @import("../core/http.zig").urlEncode(query, &q_enc);
     var k_enc: [512]u8 = undefined;
     const enc_k = @import("../core/http.zig").urlEncode(key_buf[0..key_len], &k_enc);
-
-    // Standard Prowlarr/Jackett Torznab/Newznab search endpoint.
-    var url_buf: [1024]u8 = undefined;
-    const url = std.fmt.bufPrint(
-        &url_buf,
-        "{s}/api/v2.0/indexers/{s}/results/torznab/api?apikey={s}&t=search&q={s}",
-        .{ base, indexer, enc_k, enc_q },
-    ) catch return;
 
     // Heap, not stack: a Torznab response with many indexers can be large; keep
     // it off this spawned worker's 512 KB stack.
@@ -1555,14 +1351,29 @@ fn resolveTorznab(query_buf: [256]u8, qlen: usize) void {
     defer alloc.free(page_buf);
 
     @import("../core/rate_limit.zig").acquire("torznab", 1.0);
-    const body = @import("../core/http.zig").fetch(url, page_buf, .{
+
+    // Mirror failover: a self-hosted indexer usually has one host, but a user
+    // running Jackett on both a LAN box and a VPS can list the second in
+    // `mirrors` and searches keep working when the first is down.
+    const Ctx = struct {
+        path: []const u8,
+        indexer: []const u8,
+        enc_k: []const u8,
+        enc_q: []const u8,
+    };
+    const ctx = Ctx{ .path = path, .indexer = indexer, .enc_k = enc_k, .enc_q = enc_q };
+    const build = struct {
+        fn f(cx: Ctx, host: []const u8, url_buf: []u8) ?[]const u8 {
+            return tz.buildSearchUrl(host, cx.path, cx.indexer, cx.enc_k, cx.enc_q, url_buf);
+        }
+    }.f;
+
+    const body = @import("../core/mirrors.zig").fetch("torznab", page_buf, .{
         .timeout_secs = 12,
         .user_agent = "Opal/1.0",
-    }) orelse return;
+    }, ctx, build) orelse return;
     const n = body.len;
     if (n < 50) return;
-
-    const tz = @import("torznab_pure.zig");
 
     var pos: usize = 0;
     var found: usize = 0;
