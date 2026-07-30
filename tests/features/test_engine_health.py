@@ -189,3 +189,74 @@ def test_engine_declares_url_and_categories():
         return "fail", "; ".join(problems)
     return "pass", ("every plugin declares an absolute url, name and "
                     "supported_categories; 1 known instance-attr-only engine")
+
+
+@test("nova2 engine catalog: no engine is orphaned by the install gate", "Torrents")
+def engine_reachable_from_manifest():
+    """Every shipped engine must have a manifest id, or it can never run.
+
+    nova2.py filters engines through `opal_sources.installed_ids()`. An engine
+    with no manifest id gets no install entry, so the gate drops it silently --
+    indistinguishable at the CLI from a dead site. `piratebay.py` sat in the
+    repo in exactly that state: it parsed fine and returned a full result set
+    when called directly, but had returned zero through nova2 for its whole
+    life. It was deleted rather than wired up, because it scraped the same
+    apibay.org endpoint as `apibay.py` and returned byte-identical rows.
+    """
+    import json
+    with open(os.path.join(PROJECT_DIR, "data", "plugins-manifest.json"),
+              encoding="utf-8") as fh:
+        raw = json.load(fh)
+    plugins = raw["plugins"] if isinstance(raw, dict) else raw
+    ids = {p["id"] for p in plugins}
+
+    orphans = [n for n in _plugin_files()
+               if n not in ids and n not in QUARANTINE]
+    if orphans:
+        return "fail", ("shipped but unreachable through nova2's install gate "
+                        "(no manifest id): " + ", ".join(orphans))
+    return "pass", f"all {len(_plugin_files())} engines have a manifest id"
+
+
+@test("therarbg: a dead detail fetch drops one row, not the page", "Torrents")
+def therarbg_detail_fetch_is_isolated():
+    """Regression: IndexError inside handle_starttag zeroed the whole search.
+
+    therarbg resolves each magnet by fetching that row's detail page from
+    inside an HTMLParser callback. `magnet_urls[0]` was unguarded, so a single
+    unresolvable magnet raised IndexError out through feed() and discarded
+    every row already parsed -- a 50-row page became zero results. The site was
+    serving 153 KB of good rows throughout.
+    """
+    sys.path.insert(0, ENGINES_DIR)
+    sys.path.insert(0, os.path.join(PROJECT_DIR, "engines"))
+    try:
+        import therarbg as m
+    except Exception as exc:  # pragma: no cover
+        return "skip", f"cannot import therarbg: {exc}"
+
+    if m.detail_url("https://therarbg.com", "/post-detail/x/") != \
+            "https://therarbg.com/post-detail/x/":
+        return "fail", "detail_url doubles the slash on a rooted href"
+    if m.first_magnet('<a href="magnet:?xt=urn:btih:ABC">x</a>') != \
+            "magnet:?xt=urn:btih:ABC":
+        return "fail", "first_magnet did not extract a plain magnet href"
+    for empty in ("<p>nothing</p>", "", None):
+        if m.first_magnet(empty) is not None:
+            return "fail", f"first_magnet({empty!r}) should be None, not raise"
+
+    # Every detail fetch fails; the feed must still complete.
+    real = m.retrieve_url
+    m.retrieve_url = lambda _u: (_ for _ in ()).throw(OSError("dead fetch"))
+    try:
+        parser = m.therarbg.MyHtmlParser("https://therarbg.com")
+        parser.feed('<table><tbody><tr><td>c</td>'
+                    '<td><a href="/post-detail/a/b/">Some Release</a></td>'
+                    '<td><a href="/get-posts/category:Movies/">Movies</a></td>'
+                    '<td>d</td><td>e</td><td>1.0 GB</td><td>9</td><td>2</td>'
+                    '</tr></tbody></table>')
+    except Exception as exc:
+        return "fail", f"a failing detail fetch still escapes feed(): {exc!r}"
+    finally:
+        m.retrieve_url = real
+    return "pass", "unresolvable magnets skip their row; feed() survives"

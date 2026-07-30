@@ -9,10 +9,9 @@ knaben: 1.0
 limetorrents: 4.14
 nyaa: 1.5
 one337x: 2.5
-piratebay: 3.9
 rutor: 1.00
 solidtorrents: 2.8
-therarbg: 1.3
+therarbg: 1.4
 tokyotoshokan: 2.3
 torlock: 2.28
 torrentdownloads: 1.00

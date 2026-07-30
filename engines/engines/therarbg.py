@@ -1,4 +1,4 @@
-# VERSION: 1.3
+# VERSION: 1.4
 # AUTHORS: BurningMop (burning.mop@yandex.com)
 
 # LICENSING INFORMATION
@@ -26,6 +26,31 @@ import time
 import threading
 from helpers import download_file, retrieve_url
 from novaprinter import prettyPrinter, anySizeToBytes
+
+MAGNET_RE = r'href=["\']magnet:.+?["\']'
+
+
+def detail_url(base, href):
+    """Join a listing href onto the site base without doubling the slash.
+
+    hrefs come through as `/post-detail/...`, so the naive f'{base}/{href}'
+    produced `https://therarbg.com//post-detail/...`.
+    """
+    return '{}/{}'.format(base.rstrip('/'), (href or '').lstrip('/'))
+
+
+def first_magnet(html):
+    """First magnet URI in a detail page, or None when there isn't one.
+
+    Returning None rather than raising is the whole point: this runs inside an
+    HTMLParser callback, so an IndexError here aborts the feed and throws away
+    every row already parsed -- one unresolvable magnet zeroed a 50-row page.
+    """
+    for match in re.finditer(MAGNET_RE, html or '', re.MULTILINE):
+        parts = re.split(r'["\']', match.group())
+        if len(parts) > 1 and parts[1]:
+            return parts[1]
+    return None
 
 
 class therarbg(object):
@@ -97,13 +122,17 @@ class therarbg(object):
                 if self.column == 2 and tag == self.A and not self.alreadyParseName :
                     self.shouldParseName = True
                     href = params.get('href')
-                    link = f'{self.url}/{href}'
+                    link = detail_url(self.url, href)
                     self.row['desc_link'] = link
 
-                    torrent_page = retrieve_url(link)
-                    matches = re.finditer(self.magnet_regex, torrent_page, re.MULTILINE)
-                    magnet_urls = [x.group() for x in matches]
-                    self.row['link'] = magnet_urls[0].split('"')[1]
+                    # A dead detail fetch drops this one row; it must never
+                    # escape into feed() and take the other 49 with it.
+                    try:
+                        magnet = first_magnet(retrieve_url(link))
+                    except Exception:
+                        magnet = None
+                    if magnet:
+                        self.row['link'] = magnet
 
                 if self.column == 3 and tag == self.A:
                     self.shouldGetCategory = True                 
@@ -145,7 +174,11 @@ class therarbg(object):
 
             if tag == self.TR and self.foundTableTbody:
                 self.row['engine_url'] = self.url
-                prettyPrinter(self.row)
+                # Skip rows whose magnet never resolved, and rows the listing
+                # left half-parsed -- prettyPrinter KeyErrors on a missing key,
+                # which would abort the feed just as the IndexError used to.
+                if all(self.row.get(k) for k in ('link', 'name', 'size', 'seeds', 'leech')):
+                    prettyPrinter(self.row)
                 self.column = 0
                 self.row = {}
                 self.insideRow = False
