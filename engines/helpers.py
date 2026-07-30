@@ -1,4 +1,4 @@
-# VERSION: 1.56
+# VERSION: 1.57
 
 # Author:
 #  Christophe DUMEZ (chris@qbittorrent.org)
@@ -35,6 +35,7 @@ import os
 import socket
 import ssl
 import sys
+import time
 import tempfile
 import urllib.error
 import urllib.parse
@@ -64,6 +65,10 @@ def _getBrowserUserAgent() -> str:
 
 
 _headers: dict[str, str] = {'User-Agent': _getBrowserUserAgent()}
+
+# Seconds to wait before each retry. Short and bounded on purpose: a fully dead
+# host must not add more than ~1s per fetch to a search that is already slow.
+_RETRY_BACKOFF = (0.3, 0.7)
 _original_socket = socket.socket
 
 
@@ -96,16 +101,42 @@ def enable_socks_proxy(enable: bool) -> None:
 htmlentitydecode = html.unescape
 
 
-def retrieve_url(url: str, custom_headers: Mapping[str, str] = {}, request_data: Optional[Any] = None, ssl_context: Optional[ssl.SSLContext] = None, unescape_html_entities: bool = True) -> str:
+def _is_retryable(exc: Exception) -> bool:
+    """Whether a failed fetch is worth another attempt.
+
+    A 4xx is the server's considered answer -- 403 from a bot wall, 404 for a
+    dead path -- and retrying it just burns time. Connection resets, timeouts
+    and 5xx/429 are transient, and on this class of site they are common: a
+    host observed answering roughly one request in three returns zero rows on
+    every search, because a single reset ends the only attempt.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code == 429 or exc.code >= 500
+    return True  # URLError, socket timeout, IncompleteRead
+
+
+def retrieve_url(url: str, custom_headers: Mapping[str, str] = {}, request_data: Optional[Any] = None, ssl_context: Optional[ssl.SSLContext] = None, unescape_html_entities: bool = True, attempts: int = 3) -> str:
     """
     Return the content of the url page as a string
+
+    `attempts` bounds transient-failure retries (see `_is_retryable`). Pass
+    attempts=1 for per-row best-effort fetches, where a miss should drop that
+    row rather than multiply the latency of a whole page.
     """
 
     request = urllib.request.Request(url, request_data, {**_headers, **custom_headers})
-    try:
-        response = urllib.request.urlopen(request, context=ssl_context)
-    except urllib.error.URLError:
-        pass  # Silently handle connection errors
+    response = None
+    for attempt in range(max(1, attempts)):
+        try:
+            response = urllib.request.urlopen(request, context=ssl_context)
+            break
+        except Exception as exc:  # URLError, HTTPError, socket.timeout
+            if not isinstance(exc, (urllib.error.URLError, OSError)):
+                raise
+            if attempt == attempts - 1 or not _is_retryable(exc):
+                return ""  # Silently handle connection errors
+            time.sleep(_RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF) - 1)])
+    if response is None:
         return ""
     try:
         data: bytes = response.read()

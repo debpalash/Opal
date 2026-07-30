@@ -318,3 +318,72 @@ def engines_do_not_pollute_stdout():
         return "fail", "; ".join(problems)
     return "pass", (f"all {len(_plugin_files())} engines emit only via "
                     "prettyPrinter")
+
+
+@test("nova2 fetch: transient failures retry, 4xx does not", "Torrents")
+def retrieve_url_retries_transient_failures():
+    """A single reset used to zero a whole search.
+
+    helpers.retrieve_url made exactly one attempt and returned "" on any
+    URLError. Several torrent hosts answer only intermittently from a given
+    network -- eztvx.to was measured returning 200 on the third try, 000 on the
+    first two -- so every engine reported zero rows for a site that was up. A
+    4xx must NOT be retried: 403 from a bot wall and 404 for a dead path are
+    the server's considered answer, and retrying only burns time.
+    """
+    sys.path.insert(0, os.path.join(PROJECT_DIR, "engines"))
+    try:
+        import helpers
+        import urllib.error
+    except Exception as exc:  # pragma: no cover
+        return "skip", f"cannot import helpers: {exc}"
+
+    if not hasattr(helpers, "_is_retryable"):
+        return "fail", "helpers._is_retryable is gone; retry policy lost"
+
+    reset = urllib.error.URLError(OSError("Connection reset by peer"))
+    if not helpers._is_retryable(reset):
+        return "fail", "a connection reset must be retryable"
+    for code in (400, 403, 404):
+        err = urllib.error.HTTPError("u", code, "m", {}, None)  # type: ignore[arg-type]
+        if helpers._is_retryable(err):
+            return "fail", f"HTTP {code} must not be retried"
+    for code in (429, 500, 503):
+        err = urllib.error.HTTPError("u", code, "m", {}, None)  # type: ignore[arg-type]
+        if not helpers._is_retryable(err):
+            return "fail", f"HTTP {code} should be retried"
+
+    # A host that fails twice then answers must yield its body, not "".
+    calls = {"n": 0}
+
+    class _Resp:
+        def read(self):
+            return b"<html>ok</html>"
+
+        def getheader(self, _name, _default=""):
+            return "text/html"
+
+    def _flaky(_req, **_kw):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise urllib.error.URLError(OSError("reset"))
+        return _Resp()
+
+    real_open, real_sleep = helpers.urllib.request.urlopen, helpers.time.sleep
+    helpers.urllib.request.urlopen = _flaky
+    helpers.time.sleep = lambda _s: None
+    try:
+        body = helpers.retrieve_url("https://example.invalid/")
+        if "ok" not in body:
+            return "fail", f"3rd-attempt success not returned (got {body!r})"
+        if calls["n"] != 3:
+            return "fail", f"expected 3 attempts, made {calls['n']}"
+        # attempts=1 must not retry -- therarbg's per-row fetch relies on this.
+        calls["n"] = 0
+        helpers.retrieve_url("https://example.invalid/", attempts=1)
+        if calls["n"] != 1:
+            return "fail", f"attempts=1 made {calls['n']} attempts"
+    finally:
+        helpers.urllib.request.urlopen = real_open
+        helpers.time.sleep = real_sleep
+    return "pass", "retries transient failures 3x, honours attempts=1, skips 4xx"

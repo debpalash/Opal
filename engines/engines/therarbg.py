@@ -127,8 +127,10 @@ class therarbg(object):
 
                     # A dead detail fetch drops this one row; it must never
                     # escape into feed() and take the other 49 with it.
+                    # attempts=1: this fires once per row, so retrying here
+                    # would multiply a whole page's latency to save one row.
                     try:
-                        magnet = first_magnet(retrieve_url(link))
+                        magnet = first_magnet(retrieve_url(link, attempts=1))
                     except Exception:
                         magnet = None
                     if magnet:
