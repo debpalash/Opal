@@ -55,7 +55,9 @@ def test_torznab_path_template():
         problems.append("resolver.zig still hardcodes the Jackett torznab path")
     if "tz.buildSearchUrl(" not in resolver:
         problems.append("resolver.zig does not route through torznab_pure.buildSearchUrl")
-    if 'get("torznab", "path")' not in resolver:
+    # The lookup used to be hardcoded to the "torznab" id. It is now per-id, so
+    # a Prowlarr entry gets the same treatment -- see the TORZNAB_IDS test below.
+    if 'get(src_id, "path")' not in resolver:
         problems.append("resolver.zig never reads the torznab path template")
 
     # 3) The misleading "Prowlarr works" claim is gone from the comments.
@@ -375,3 +377,53 @@ def test_manifest_base_matches_engine_default():
                         "working engine): " + "; ".join(mismatches))
     return "pass", (f"all {len(bases)} manifest bases agree with their engine's own "
                     "default, so unifying the config cannot disable a working host")
+
+
+@test("Every Torznab-compatible source id is actually queried", "Sources")
+def test_torznab_ids_are_read():
+    """Adding a manifest entry nobody reads is the session's recurring bug.
+
+    `resolveTorznab` used to read exactly one hardcoded source id, "torznab".
+    Shipping a separate "prowlarr" entry — with the path template verified from
+    Prowlarr's own NewznabController, [HttpGet("/api/v1/indexer/{id:int}/newznab")]
+    — would have produced yet another install button that changed nothing.
+
+    So: every manifest entry carrying a Torznab `path` must be in TORZNAB_IDS,
+    and every id in TORZNAB_IDS must exist in the manifest. And `jackett` must
+    NOT be there: nova2's jackett.py already queries it, so listing it would hit
+    the user's Jackett twice per search — the double-scrape that made the native
+    1337x resolver worth deleting rather than repairing."""
+    rv = _src("src/services/resolver.zig")
+    manifest = _json.loads(_src("data/plugins-manifest.json"))
+
+    block = _between(rv, "const TORZNAB_IDS", ";")
+    listed = set(_re.findall(r'"([a-z0-9_-]+)"', block))
+
+    path_sources = {p["id"] for p in manifest["plugins"]
+                    if isinstance(p.get("endpoints"), dict) and "path" in p["endpoints"]}
+    manifest_ids = {p["id"] for p in manifest["plugins"]}
+
+    checks = {
+        "TORZNAB_IDS exists": bool(listed),
+        "resolver loops the table": "for (TORZNAB_IDS) |id| resolveTorznabId(" in rv,
+        "per-id fn reads the id": 'sc.get(src_id, "base")' in rv,
+        "no hardcoded torznab lookup": 'sc.get("torznab"' not in rv,
+        # Every source shipping a path template must be queried.
+        "all path-sources queried": path_sources <= listed,
+        # And nothing listed may be missing from the manifest.
+        "no phantom ids": listed <= manifest_ids,
+        # jackett is covered by nova2 — listing it double-queries.
+        "jackett excluded": "jackett" not in listed,
+        "exclusion explained": "jackett.py" in _between(rv, "/// `jackett` is deliberately NOT here",
+                                                        "const TORZNAB_IDS"),
+        # Prowlarr's verified path must be what ships.
+        "prowlarr path verified": any(
+            p["id"] == "prowlarr" and p["endpoints"].get("path") == "/api/v1/indexer/{indexer}/newznab"
+            for p in manifest["plugins"]),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", ("torznab id wiring incomplete: " + ", ".join(missing) +
+                        f" (listed={sorted(listed)}, path_sources={sorted(path_sources)})")
+    return "pass", (f"all {len(listed)} Torznab ids ({', '.join(sorted(listed))}) are read by "
+                    "the resolver; jackett excluded to avoid double-querying via nova2")

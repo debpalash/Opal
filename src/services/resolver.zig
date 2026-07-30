@@ -1292,11 +1292,34 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
 // through the other torznab_pure helpers.
 // ══════════════════════════════════════════════════════════
 
+/// Source ids that speak the Torznab/Newznab protocol. Each is a separate
+/// installable entry so the Plugins page can name the thing the user actually
+/// runs, instead of making them guess that "Torznab" means their Prowlarr.
+///
+/// They differ ONLY in the `path` template shipped in the manifest:
+///   Jackett    /api/v2.0/indexers/{indexer}/results/torznab/api   (the default)
+///   Prowlarr   /api/v1/indexer/{indexer}/newznab                  (numeric id)
+///   bitmagnet  /torznab/api
+///
+/// Every installed one is queried; a user may well run both a generic Torznab
+/// endpoint and a Prowlarr. Uninstalled ids cost nothing -- `get(id,"base")`
+/// returns null and resolveTorznabId returns immediately.
+///
+/// `jackett` is deliberately NOT here: the nova2 engine engines/engines/jackett.py
+/// already queries it, and listing it would hit the user's Jackett twice on every
+/// search. That is the same double-scrape that made the native 1337x resolver
+/// worth deleting rather than repairing.
+const TORZNAB_IDS = [_][]const u8{ "torznab", "prowlarr" };
+
 fn resolveTorznab(query_buf: [256]u8, qlen: usize) void {
     defer {
         status_torznab.store(.done, .release);
         checkAllDone();
     }
+    for (TORZNAB_IDS) |id| resolveTorznabId(id, query_buf, qlen);
+}
+
+fn resolveTorznabId(src_id: []const u8, query_buf: [256]u8, qlen: usize) void {
 
     const query = query_buf[0..qlen];
     const sc = @import("../core/source_config.zig");
@@ -1307,12 +1330,12 @@ fn resolveTorznab(query_buf: [256]u8, qlen: usize) void {
     // every config value into a local buffer before issuing the next get().
     // Presence check only — mirrors.fetch() re-reads base (and `mirrors`) itself
     // and hands each candidate host to the URL builder below.
-    const base_raw = sc.get("torznab", "base") orelse return;
+    const base_raw = sc.get(src_id, "base") orelse return;
     if (base_raw.len == 0 or base_raw.len > 512) return;
 
     var key_buf: [256]u8 = undefined;
     var key_len: usize = 0;
-    if (sc.get("torznab", "apikey")) |k| {
+    if (sc.get(src_id, "apikey")) |k| {
         if (k.len > 0 and k.len <= key_buf.len) {
             @memcpy(key_buf[0..k.len], k);
             key_len = k.len;
@@ -1321,7 +1344,7 @@ fn resolveTorznab(query_buf: [256]u8, qlen: usize) void {
 
     var idx_buf: [64]u8 = undefined;
     var indexer: []const u8 = "all"; // default: query every configured indexer
-    if (sc.get("torznab", "indexer")) |ix| {
+    if (sc.get(src_id, "indexer")) |ix| {
         if (ix.len > 0 and ix.len <= idx_buf.len) {
             @memcpy(idx_buf[0..ix.len], ix);
             indexer = idx_buf[0..ix.len];
@@ -1332,7 +1355,7 @@ fn resolveTorznab(query_buf: [256]u8, qlen: usize) void {
     // URL used to be, so existing installs are unaffected.
     var path_buf: [512]u8 = undefined;
     var path: []const u8 = "";
-    if (sc.get("torznab", "path")) |p| {
+    if (sc.get(src_id, "path")) |p| {
         if (p.len > 0 and p.len <= path_buf.len) {
             @memcpy(path_buf[0..p.len], p);
             path = path_buf[0..p.len];
@@ -1368,7 +1391,7 @@ fn resolveTorznab(query_buf: [256]u8, qlen: usize) void {
         }
     }.f;
 
-    const body = @import("../core/mirrors.zig").fetch("torznab", page_buf, .{
+    const body = @import("../core/mirrors.zig").fetch(src_id, page_buf, .{
         .timeout_secs = 12,
         .user_agent = "Opal/1.0",
     }, ctx, build) orelse return;

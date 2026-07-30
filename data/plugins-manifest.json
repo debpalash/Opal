@@ -153,6 +153,18 @@
       }
     },
     {
+      "id": "prowlarr",
+      "name": "Prowlarr (self-hosted)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "http://127.0.0.1:9696",
+        "path": "/api/v1/indexer/{indexer}/newznab",
+        "apikey": "",
+        "indexer": "1"
+      }
+    },
+    {
       "id": "readallcomics",
       "name": "ReadAllComics",
       "type": "comics",
@@ -330,9 +342,13 @@
       "id": "therarbg",
       "name": "TheRARBG",
       "type": "torrent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
-        "base": "https://therarbg.com"
+        "base": "https://therarbg.com",
+        "mirrors": [
+          "https://therarbg.com",
+          "https://therarbg.to"
+        ]
       },
       "file": "plugins/therarbg.json"
     },
