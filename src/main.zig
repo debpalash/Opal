@@ -212,6 +212,13 @@ pub fn coreInit() !void {
                 const pr = @import("services/plugin_repo.zig");
                 pr.loadLocalManifest();
                 _ = pr.migrateStaleSources();
+                // And drop the ones the migration cannot reach: a source removed
+                // from the manifest has no entry to migrate, so its install just
+                // stays. stremio.loadInstalledAddons() reads the sources dir
+                // directly, so cyberflix (404) and knightcrawler ("deprecated",
+                // served under a 200) were still live add-ons in existing
+                // profiles after both were dropped from the shipped list.
+                _ = pr.retireDeadSources();
             }
             @import("services/trakt.zig").init(); // load saved Trakt credentials/token
             @import("services/plex.zig").init(); // load saved Plex token/server

@@ -321,6 +321,68 @@ def test_source_version_migration():
                     "source_config_pure.versionNewer")
 
 
+@test("A source dropped from the shipped code is uninstalled, not just unlisted", "Sources")
+def test_dead_sources_are_retired():
+    """Removing a dead source from the code only stops OFFERING it.
+
+    migrateStaleSources walks the manifest, so a source *removed* from the
+    manifest is precisely the one it cannot reach — the install file stays, and
+    the file is what the loaders read. `stremio.loadInstalledAddons()` scans
+    ~/.config/opal/plugins/sources itself and accepts any file with a "stremio"
+    field, so `cyberflix` and `knightcrawler` were still live add-ons in an
+    existing profile after both were deleted from `addKnownAddons` — measured
+    2026-07-30: cyberflix's manifest returns 404 and knightcrawler serves a page
+    titled "KnightCrawler is deprecated" under a 200 OK, which the resolver would
+    parse as a manifest. `kickass` was the same shape: engine file deleted,
+    install left behind.
+
+    The retirement must be keyed on the dead host, not on the id alone: the same
+    id re-pointed at a self-hosted instance is working user config.
+    """
+    pr = _src("src/services/plugin_repo.zig")
+    sp = _src("src/core/source_config_pure.zig")
+    mn = _src("src/main.zig")
+    st = _src("src/services/stremio.zig")
+    mf = _json.loads(_src("data/plugins-manifest.json"))
+    by_id = {p["id"]: p for p in mf["plugins"]}
+
+    checks = {
+        # Pure, tested decision — and the table lives next to it.
+        "shouldRetire exists": "pub fn shouldRetire(" in sp,
+        "retirement table exists": "pub const RETIRED = [_]Retired{" in sp,
+        "host-keyed test": "re-pointed the id at their own instance" in sp,
+        "table well-formed test": "the retirement table is well-formed" in sp,
+        # Caller routes through the pure rule and gates on being installed.
+        "retirement exists": "pub fn retireDeadSources(" in pr,
+        "routes through pure": "pure.shouldRetire(r.host, installed_val)" in pr,
+        "only retires installed": "if (!source_config.has(r.id)) continue;" in pr,
+        "deletes the file": "source_config.uninstallById(r.id)" in pr,
+        # Runs at startup, after the manifest migration.
+        "wired at startup": "retireDeadSources()" in mn,
+        "runs after migration": mn.index("migrateStaleSources()") < mn.index(
+            "retireDeadSources()"),
+        # Every retired id must be gone from the shipped surfaces too, or startup
+        # deletes a file the app then re-offers.
+        "kickass gone from manifest": "kickass" not in by_id,
+        "cyberflix gone from manifest": "cyberflix" not in by_id,
+        "knightcrawler gone from manifest": "knightcrawler" not in by_id,
+        "cyberflix not offered": '.url = "https://cyberflix' not in st,
+        "knightcrawler not offered": '.name = "KnightCrawler"' not in st,
+    }
+
+    # The three retired ids in the pure table must be exactly what the docs and
+    # the manifest agree are gone — a silent 4th entry would delete user config.
+    ids = _re.findall(r'\.id = "([^"]+)", \.field', sp)
+    if sorted(ids) != ["cyberflix", "kickass", "knightcrawler"]:
+        return "fail", f"unexpected RETIRED ids {ids} — each deletes a user's file"
+
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "dead-source retirement incomplete: " + ", ".join(missing)
+    return "pass", (f"{len(ids)} retired sources uninstalled at startup, each only "
+                    "while it still points at the host that died")
+
+
 @test("No manifest base overrides a working engine default with a dead host", "Sources")
 def test_manifest_base_matches_engine_default():
     """A regression the source-config unification introduced.
@@ -427,3 +489,138 @@ def test_torznab_ids_are_read():
                         f" (listed={sorted(listed)}, path_sources={sorted(path_sources)})")
     return "pass", (f"all {len(listed)} Torznab ids ({', '.join(sorted(listed))}) are read by "
                     "the resolver; jackett excluded to avoid double-querying via nova2")
+
+
+@test("Prowlarr: the shipped URL resolves on a server that answers", "Sources")
+def test_prowlarr_url_against_live_server():
+    """Every Prowlarr check so far was static — nothing ever answered.
+
+    The path template was read out of Prowlarr's own source, but a template that
+    is *quoted* correctly and a template that a running Prowlarr actually routes
+    are different claims, and only the first had ever been tested. So: stand up a
+    server implementing Prowlarr's real routing and drive the shipped URL at it.
+
+    Prowlarr's NewznabController carries BOTH routes on one handler (verified
+    against develop):
+
+        [HttpGet("/api/v1/indexer/{id:int}/newznab")]
+        [HttpGet("{id:int}/api")]
+
+    which is why this repo documents two different-looking Prowlarr paths — they
+    are aliases, not a contradiction. Note `{id:int}`: the indexer segment must be
+    NUMERIC, so `resolveTorznabId`'s "all" fallback (fine for Jackett) cannot work
+    against Prowlarr. The manifest ships "1" for exactly that reason.
+
+    The URL under test is not re-derived here; it is the expected string pinned by
+    torznab_pure's own `buildSearchUrl` test, so this cannot drift from the
+    builder. A wrong-shape URL must 404 — otherwise the test would pass no matter
+    what the template said.
+    """
+    import http.server
+    import threading
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    APIKEY = "KEY"
+    FEED = ('<?xml version="1.0" encoding="UTF-8"?>'
+            '<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">'
+            '<channel><title>Prowlarr</title>'
+            '<item><title>Dune 2021 1080p BluRay x264</title>'
+            '<guid>abc</guid>'
+            '<enclosure url="magnet:?xt=urn:btih:AAAABBBBCCCCDDDDEEEE" '
+            'length="2147483648" type="application/x-bittorrent" />'
+            '<torznab:attr name="seeders" value="42" />'
+            '<torznab:attr name="size" value="2147483648" />'
+            '</item></channel></rss>')
+
+    hits = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        # Prowlarr's routes: /{id:int}/api and /api/v1/indexer/{id:int}/newznab.
+        ROUTES = (_re.compile(r"^/(\d+)/api$"),
+                  _re.compile(r"^/api/v1/indexer/(\d+)/newznab$"))
+
+        def do_GET(self):  # noqa: N802
+            path, _, qs = self.path.partition("?")
+            params = urllib.parse.parse_qs(qs)
+            hits.append(self.path)
+            if not any(r.match(path) for r in self.ROUTES):
+                self.send_error(404, "no route")
+                return
+            if params.get("apikey", [""])[0] != APIKEY:
+                self.send_error(401, "bad apikey")
+                return
+            if params.get("t", [""])[0] != "search":
+                self.send_error(400, "unsupported t")
+                return
+            body = FEED.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/rss+xml")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_a):
+            pass  # keep the suite output clean
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        pure = _src("src/services/torznab_pure.zig")
+        # The Prowlarr URL the builder is pinned to produce, taken from its own
+        # test so the two cannot disagree.
+        pinned = _re.search(r'"(http://127\.0\.0\.1:9696/\d+/api\?[^"]+)"', pure)
+        if not pinned:
+            return "fail", ("torznab_pure's buildSearchUrl test no longer pins a "
+                            "Prowlarr URL — nothing to drive")
+        built = pinned.group(1).replace("127.0.0.1:9696", f"127.0.0.1:{port}")
+
+        def get(url):
+            try:
+                with urllib.request.urlopen(url, timeout=10) as r:
+                    return r.status, r.read().decode()
+            except urllib.error.HTTPError as e:
+                return e.code, ""
+            except Exception as e:  # pragma: no cover
+                return 0, str(e)
+
+        status, body = get(built)
+        if status != 200:
+            return "fail", f"shipped Prowlarr URL got {status}, not 200: {built}"
+
+        # The feed must carry what the resolver reads off each <item>.
+        for needle in ("<item>", "<title>", "magnet:?xt=urn:btih:",
+                       'name="seeders"'):
+            if needle not in body:
+                return "fail", f"Prowlarr feed missing {needle!r}"
+
+        # The manifest's own template must expand to a route this server serves.
+        mf = _json.loads(_src("data/plugins-manifest.json"))
+        pl = next(p for p in mf["plugins"] if p["id"] == "prowlarr")
+        tmpl = pl["endpoints"]["path"].replace("{indexer}", pl["endpoints"]["indexer"])
+        m_status, _ = get(f"http://127.0.0.1:{port}{tmpl}?apikey={APIKEY}&t=search&q=dune")
+        if m_status != 200:
+            return "fail", (f"manifest prowlarr path {tmpl!r} got {m_status} on a "
+                            "server implementing Prowlarr's real routes")
+
+        # Negative control: Jackett's shape must NOT resolve here, or this test
+        # would pass for any template at all.
+        j_status, _ = get(f"http://127.0.0.1:{port}"
+                          f"/api/v2.0/indexers/1/results/torznab/api?apikey={APIKEY}&t=search&q=dune")
+        if j_status == 200:
+            return "fail", "Jackett's path also answered — the mock is not route-strict"
+
+        # And a non-numeric indexer must fail, which is why "all" cannot be the
+        # Prowlarr default.
+        a_status, _ = get(f"http://127.0.0.1:{port}/all/api?apikey={APIKEY}&t=search&q=dune")
+        if a_status == 200:
+            return "fail", "a non-numeric indexer answered — mock ignores {id:int}"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    return "pass", (f"shipped Prowlarr URL returns a parseable torznab feed over HTTP "
+                    f"({len(hits)} requests); Jackett's path and a non-numeric "
+                    "indexer both 404 as Prowlarr would")

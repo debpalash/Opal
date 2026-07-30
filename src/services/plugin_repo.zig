@@ -442,6 +442,33 @@ pub fn migrateStaleSources() usize {
     return migrated;
 }
 
+/// Uninstall sources whose consumer or host is gone (`pure.RETIRED`).
+///
+/// migrateStaleSources only rewrites ids the manifest still carries, so a source
+/// dropped from the manifest is exactly the one it cannot reach. Those installs
+/// keep working: `stremio.loadInstalledAddons()` enumerates the sources
+/// directory itself, so a retired add-on stays live — and burns one of the
+/// sixteen installed slots — until its file is gone. Returns how many were
+/// removed. Only fires while the value on disk still names the dead host (see
+/// `pure.shouldRetire`), so a user's own re-pointed instance survives.
+pub fn retireDeadSources() usize {
+    var retired: usize = 0;
+    for (pure.RETIRED) |r| {
+        if (!source_config.has(r.id)) continue; // not installed — nothing to do
+        const installed_val = source_config.get(r.id, r.field) orelse "";
+        if (!pure.shouldRetire(r.host, installed_val)) continue;
+        source_config.uninstallById(r.id);
+        retired += 1;
+        var lb: [160]u8 = undefined;
+        logs.pushLog("info", "sources", std.fmt.bufPrint(
+            &lb,
+            "retired dead source {s}: {s}",
+            .{ r.id, r.why },
+        ) catch "retired a dead source", false);
+    }
+    return retired;
+}
+
 pub fn install(idx: usize) void {
     if (idx >= plugin_count) return;
     const pl = &plugins[idx];

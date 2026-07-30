@@ -101,6 +101,19 @@ pub fn pickLink(item_block: []const u8) ?[]const u8 {
 //   Prowlarr   {base}/{indexerId}/api        — :9696, per-indexer id
 //   bitmagnet  {base}/torznab/api            — no indexer segment at all
 //
+// Prowlarr appears in this repo under two different-looking paths; they are
+// ALIASES, not a contradiction. Its NewznabController puts both routes on one
+// handler (verified against Prowlarr/develop):
+//
+//   [HttpGet("/api/v1/indexer/{id:int}/newznab")]
+//   [HttpGet("{id:int}/api")]
+//
+// Note `{id:int}` — the indexer segment must be NUMERIC. "all" is a valid
+// Jackett indexer and is the fallback in resolveTorznabId, but Prowlarr will not
+// route it, which is why the manifest ships a numeric `indexer` for prowlarr.
+// Both routes are exercised over real HTTP by test_source_layer.py::"Prowlarr:
+// the shipped URL resolves on a server that answers".
+//
 // The path used to be baked in as Jackett's, so the source called
 // "Torznab / Prowlarr" could only ever talk to Jackett. A `path` endpoint field
 // (template, `{indexer}` substituted) covers all three with one adapter.

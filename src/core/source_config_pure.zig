@@ -201,6 +201,85 @@ test "versionNewer: numeric segments, not string order" {
     try expect(versionNewer("1.1.1", "1.1"));
 }
 
+// ── Retired sources ───────────────────────────────────────────────────────
+//
+// Dropping a dead source from the shipped code only stops OFFERING it. The
+// user's `<id>.json` stays on disk, and every loader that enumerates that
+// directory keeps honouring it — `stremio.loadInstalledAddons()` reads the
+// directory itself and accepts any file carrying a "stremio" field, so
+// `cyberflix` (manifest 404) and `knightcrawler` (200 OK on a page titled
+// "KnightCrawler is deprecated") stayed live add-ons in an existing profile
+// long after both were removed from `addKnownAddons`. Measured 2026-07-30 in a
+// real profile: two of the sixteen installed-addon slots, one of them handing
+// the resolver a deprecation page under a 200. `kickass` was the same shape —
+// the engine file was deleted, the install was not.
+//
+// `shouldRetire` is the guard against over-reach: a retirement applies only
+// while the installed value still points at the host that died, so a user who
+// re-pointed the id at their own instance keeps it.
+
+pub const Retired = struct {
+    id: []const u8,
+    field: []const u8,
+    /// Host substring that must still be present for the retirement to apply.
+    /// Empty means retire regardless of endpoint — for an id whose CONSUMER is
+    /// gone, where no endpoint can revive it (an engine absent from the build).
+    host: []const u8,
+    why: []const u8,
+};
+
+pub const RETIRED = [_]Retired{
+    .{ .id = "kickass", .field = "base", .host = "", .why = "engine deleted (was a 14-byte 404 page)" },
+    .{ .id = "cyberflix", .field = "stremio", .host = "cyberflix.elfhosted.com", .why = "addon manifest returns 404" },
+    .{ .id = "knightcrawler", .field = "stremio", .host = "knightcrawler.elfhosted.com", .why = "deprecated upstream" },
+};
+
+/// Whether an installed source matching a RETIRED entry should be uninstalled.
+/// `host` empty → yes (the consumer is gone). Otherwise only when the value on
+/// disk still names the dead host.
+pub fn shouldRetire(host: []const u8, installed_val: []const u8) bool {
+    if (host.len == 0) return true;
+    if (installed_val.len == 0) return false;
+    return std.mem.indexOf(u8, installed_val, host) != null;
+}
+
+test "shouldRetire only fires on the host that actually died" {
+    // The two measured cases.
+    try expect(shouldRetire("cyberflix.elfhosted.com",
+        "https://cyberflix.elfhosted.com/manifest.json"));
+    try expect(shouldRetire("knightcrawler.elfhosted.com",
+        "https://knightcrawler.elfhosted.com/manifest.json"));
+    // A user who re-pointed the id at their own instance keeps it: same id,
+    // different host. Retiring this would delete working user config.
+    try expect(!shouldRetire("knightcrawler.elfhosted.com",
+        "http://192.168.1.10:7000/manifest.json"));
+    try expect(!shouldRetire("cyberflix.elfhosted.com",
+        "https://cyberflix.example.net/manifest.json"));
+    // A debrid-substituted URL still carries the host, so it must still match.
+    try expect(shouldRetire("knightcrawler.elfhosted.com",
+        "https://knightcrawler.elfhosted.com/realdebrid/ABC123/manifest.json"));
+    // No value on disk for that field is NOT grounds to delete a keyed
+    // retirement — the file may hold a different field entirely.
+    try expect(!shouldRetire("cyberflix.elfhosted.com", ""));
+    // Empty host = the consumer is gone; no endpoint can revive it.
+    try expect(shouldRetire("", "https://kickasstorrents.to"));
+    try expect(shouldRetire("", ""));
+}
+
+test "the retirement table is well-formed" {
+    // Each id must be usable as a filename, or uninstallById silently no-ops
+    // and the dead source lives on.
+    for (RETIRED) |r| {
+        try expect(validId(r.id));
+        try expect(r.field.len > 0 and r.field.len <= MAX_FIELD_LEN);
+        try expect(r.why.len > 0);
+    }
+    // No duplicate ids — a second entry for one id would be dead config.
+    for (RETIRED, 0..) |a, i| {
+        for (RETIRED[i + 1 ..]) |b| try expect(!std.mem.eql(u8, a.id, b.id));
+    }
+}
+
 test "versionNewer: an install predating versioning is always upgraded" {
     // No _v key at all -> empty string. This is every source installed before
     // this change shipped, including the ones pinned to yts.mx.
