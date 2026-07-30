@@ -320,6 +320,239 @@ def engines_do_not_pollute_stdout():
                     "prettyPrinter")
 
 
+@test("nova2 spawn: the torrent search has a deadline of its own", "Torrents")
+def resolve_torrents_has_a_watchdog():
+    """The search could hang forever waiting on nova2, and did.
+
+    `resolveTorrentsNova2` drains nova2's stdout to EOF and then `wait()`s, with
+    no deadline anywhere. Before `helpers._FETCH_TIMEOUT` existed, a host that
+    completed the handshake and then went silent held urlopen() open with no
+    bound, so nova2 never exited, the drain loop never returned, and
+    `status_torrent` never left `.searching` — the search simply never finished.
+
+    Two properties matter, and both are structural rather than something a unit
+    test can drive (this is a GUI/thread path — see CLAUDE.md's rule 3):
+
+    1. The deadline must live on a SEPARATE thread. The read loop blocks inside
+       takeDelimiter() waiting for a line that never arrives, so an in-loop
+       elapsed-time check could never fire on the one case it exists for.
+    2. It must signal by pid via terminateProcess (SIGTERM, no reap) rather than
+       child.kill(). nova2 runs a multiprocessing pool; reaping it out from under
+       the reader is what left workers writing into a dead pipe, spewing
+       BrokenPipeError and leaking semaphores. The drain-then-wait() must still be
+       the thing that observes the exit.
+    """
+    rv = open(os.path.join(PROJECT_DIR, "src/services/resolver.zig"),
+              encoding="utf-8").read()
+    block = rv[rv.index("fn resolveTorrentsNova2("):]
+    block = block[:block.index("\nfn ", 10)]
+
+    checks = {
+        "watchdog exists": "Watchdog" in block,
+        "runs on its own thread": "std.Thread.spawn(.{}, Watchdog.run" in block,
+        # pid by value, not a pointer into the frame (CLAUDE.md thread rules).
+        "signals by pid": "io_glob.terminateProcess(self.pid)" in block,
+        "pid copied by value": "pid: io_glob.Child.Id" in block,
+        # Must NOT reap the child itself — wait() below still owns that.
+        "does not kill/reap": "child.kill()" not in block,
+        "still drains then waits": "_ = child.wait() catch {};" in block,
+        # Joined before the frame dies, or `&watchdog` dangles.
+        "joined before return": "t.join();" in block,
+        "has a stop flag": "watchdog.done.store(true, .release)" in block,
+        # Why a thread and not an in-loop check — the trap this replaced.
+        "explains the blocking read": "takeDelimiter" in block and "in-loop" in block,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "nova2 watchdog incomplete: " + ", ".join(missing)
+
+    deadline = _re.search(r"\.deadline_ms = (\d+)\s*\*\s*1000", block)
+    if not deadline:
+        return "fail", "no deadline_ms literal — cannot tell what the bound is"
+    secs = int(deadline.group(1))
+    # Must exceed the bounded Python worst case (_FETCH_TIMEOUT * attempts +
+    # backoff, ~46s) or it would fire on merely-slow searches, and stay finite.
+    if not 60 <= secs <= 600:
+        return "fail", (f"deadline is {secs}s — must clear the ~46s bounded Python "
+                        "worst case without being effectively infinite")
+    return "pass", (f"nova2 bounded at {secs}s by a separate watchdog thread that "
+                    "SIGTERMs by pid; drain-then-wait still reaps")
+
+
+@test("nova2 fetch: a bot wall falls back to the anti-detect browser", "Torrents")
+def retrieve_url_routes_walls_to_the_browser():
+    """A 403 is not retryable, so walled engines sat at a permanent zero.
+
+    Measured 2026-07-30: `1337x.to` answered 403 to 7 of 10 requests, and
+    `uindex` serves a Cloudflare interstitial on /search.php while its homepage
+    returns 200. `_is_retryable` is right to refuse both — a bot wall is the
+    server's considered answer — but that left no path at all for those engines.
+
+    Opal already defeats exactly this for its Zig scrapers in
+    `src/services/scrape_fetch.zig` (plain curl, then the anti-detect browser
+    when the response is an interstitial). nova2 runs in a child process and
+    cannot call it, so `GET /api/scrape` exposes it and `retrieve_url` falls back
+    there. Two shapes must both route: a 403/503 status, and — the one that fails
+    silently — a challenge page served under 200 OK, which an engine otherwise
+    parses into zero rows on a fetch that looked like it worked.
+    """
+    sys.path.insert(0, os.path.join(PROJECT_DIR, "engines"))
+    try:
+        import helpers
+        import urllib.error
+    except Exception as exc:  # pragma: no cover
+        return "skip", f"cannot import helpers: {exc}"
+
+    for sym in ("_looks_walled", "_opal_scrape", "_opal_api_token"):
+        if not hasattr(helpers, sym):
+            return "fail", f"helpers.{sym} is gone; walled engines have no path"
+
+    # Status walls, and the 200-interstitial bodies.
+    if not helpers._looks_walled(403, ""):
+        return "fail", "403 must be treated as a wall"
+    if not helpers._looks_walled(503, ""):
+        return "fail", "503 must be treated as a wall"
+    for body in ("<title>Just a moment...</title>",
+                 "Checking your browser before accessing",
+                 "<div id='cf-browser-verification'>",
+                 "Enable JavaScript and cookies to continue"):
+        if not helpers._looks_walled(0, body):
+            return "fail", f"challenge body not detected: {body!r}"
+    # And the false positives that must NOT burn ~45s of browser time.
+    if helpers._looks_walled(200, "<html>real rows</html>"):
+        return "fail", "a normal 200 page was called a wall"
+    if helpers._looks_walled(0, ""):
+        return "fail", "an empty body is a dead host, not a wall"
+    if helpers._looks_walled(429, ""):
+        return "fail", ("429 is transient and _is_retryable already handles it — "
+                        "sending it to the browser wastes ~45s on a 0.7s problem")
+
+    # A 403 must reach _opal_scrape exactly once, and its body must be returned.
+    calls = {"scrape": 0, "open": 0}
+
+    def _walled(_req, **_kw):
+        calls["open"] += 1
+        raise urllib.error.HTTPError("u", 403, "Forbidden", {}, None)  # type: ignore[arg-type]
+
+    def _fake_scrape(_url):
+        calls["scrape"] += 1
+        return "<html>unblocked rows</html>"
+
+    real_open, real_sleep = helpers.urllib.request.urlopen, helpers.time.sleep
+    real_scrape = helpers._opal_scrape
+    helpers.urllib.request.urlopen = _walled
+    helpers.time.sleep = lambda _s: None
+    helpers._opal_scrape = _fake_scrape
+    try:
+        body = helpers.retrieve_url("https://walled.invalid/search")
+        if "unblocked rows" not in body:
+            return "fail", f"403 did not fall back to the browser (got {body!r})"
+        if calls["scrape"] != 1:
+            return "fail", f"expected 1 browser attempt, made {calls['scrape']}"
+        if calls["open"] != 1:
+            return "fail", f"403 was retried {calls['open']}x; a wall must not retry"
+
+        # A dead host must NOT spend browser time.
+        calls["scrape"] = 0
+        def _dead(_req, **_kw):
+            raise urllib.error.URLError(OSError("reset"))
+        helpers.urllib.request.urlopen = _dead
+        helpers.retrieve_url("https://dead.invalid/", attempts=2)
+        if calls["scrape"] != 0:
+            return "fail", "a connection reset went to the browser; only walls should"
+    finally:
+        helpers.urllib.request.urlopen = real_open
+        helpers.time.sleep = real_sleep
+        helpers._opal_scrape = real_scrape
+
+    # The server half must exist, and must not hold the API mutex while it blocks.
+    rm = open(os.path.join(PROJECT_DIR, "src/services/remote.zig"),
+              encoding="utf-8").read()
+    if '"/api/scrape"' not in rm or "fn handleScrape(" not in rm:
+        return "fail", "remote.zig exposes no /api/scrape for the engines to call"
+    if "scrapeFetch(url, buf)" not in rm:
+        return "fail", "handleScrape does not route through scrape_fetch"
+    # Ordering: the route must be handled BEFORE the api_mutex block, or a 45s
+    # browser fetch freezes every other endpoint including playback control.
+    if rm.index('"/api/scrape"') > rm.index("api_mutex.lock();\n        defer api_mutex.unlock();\n        handleApi"):
+        return "fail", ("/api/scrape is dispatched under api_mutex — a 45s browser "
+                        "fetch would freeze the whole API")
+    return "pass", ("403/503 and 200-interstitials fall back to /api/scrape once; "
+                    "resets and 429 do not; route is off the api_mutex")
+
+
+@test("nova2 fetch: every attempt carries a socket deadline", "Torrents")
+def retrieve_url_bounds_every_attempt():
+    """An unanswered fetch used to hang the whole torrent search forever.
+
+    `urlopen()` with no `timeout=` uses the global default socket timeout, which
+    is None, and nothing in nova2 calls `socket.setdefaulttimeout`. A host that
+    completes the TCP handshake and then never answers therefore blocks its
+    engine thread indefinitely -- and `resolver.zig::resolveTorrents` drains
+    nova2's stdout to EOF then `wait()`s with no deadline of its own, so one such
+    host holds the entire search open. Measured: a single retrieve_url call to
+    `ilcorsaronero.link` ran past 20 minutes from this network.
+
+    The deadline must be PER ATTEMPT, not per call: the retry loop added in 1.57
+    multiplied an unbounded wait by `attempts`.
+    """
+    sys.path.insert(0, os.path.join(PROJECT_DIR, "engines"))
+    try:
+        import helpers
+        import urllib.error
+    except Exception as exc:  # pragma: no cover
+        return "skip", f"cannot import helpers: {exc}"
+
+    if not isinstance(getattr(helpers, "_FETCH_TIMEOUT", None), (int, float)):
+        return "fail", "helpers._FETCH_TIMEOUT is gone; fetches are unbounded again"
+    if not 0 < helpers._FETCH_TIMEOUT <= 30:
+        return "fail", (f"_FETCH_TIMEOUT={helpers._FETCH_TIMEOUT} is not a usable "
+                        "deadline (want 0 < t <= 30)")
+
+    seen = []
+
+    class _Resp:
+        def read(self):
+            return b"<html>ok</html>"
+
+        def getheader(self, _name, _default=""):
+            return "text/html"
+
+    def _record(_req, **kw):
+        seen.append(kw.get("timeout", "MISSING"))
+        # Fail the first two so the retry path is the one under test.
+        if len(seen) < 3:
+            raise urllib.error.URLError(OSError("reset"))
+        return _Resp()
+
+    real_open, real_sleep = helpers.urllib.request.urlopen, helpers.time.sleep
+    helpers.urllib.request.urlopen = _record
+    helpers.time.sleep = lambda _s: None
+    try:
+        helpers.retrieve_url("https://example.invalid/")
+    finally:
+        helpers.urllib.request.urlopen = real_open
+        helpers.time.sleep = real_sleep
+
+    # download_file() shares the defect and the fix; catch a bare call there too.
+    src = open(os.path.join(PROJECT_DIR, "engines", "helpers.py"),
+               encoding="utf-8").read()
+    # At least one argument, and no timeout= among them. Bare `urlopen()` in
+    # prose does not match.
+    bare = _re.findall(r"urlopen\((?![^)]*timeout=)[^)]+\)", src)
+    if bare:
+        return "fail", f"urlopen call with no timeout= remains: {bare}"
+
+    if not seen:
+        return "fail", "retrieve_url made no request at all"
+    unbounded = [i for i, t in enumerate(seen) if t == "MISSING" or t is None]
+    if unbounded:
+        return "fail", (f"attempt(s) {unbounded} of {len(seen)} passed no timeout to "
+                        "urlopen -- a hung host blocks the search forever")
+    return "pass", (f"all {len(seen)} attempts bounded at "
+                    f"{helpers._FETCH_TIMEOUT}s each")
+
+
 @test("nova2 fetch: transient failures retry, 4xx does not", "Torrents")
 def retrieve_url_retries_transient_failures():
     """A single reset used to zero a whole search.

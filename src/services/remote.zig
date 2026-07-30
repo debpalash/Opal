@@ -476,6 +476,23 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
         return;
     }
 
+    // Anti-block fetch, exposed to local automation and — the reason it exists —
+    // to the nova2 Python engines, which have no way to reach Opal's anti-detect
+    // browser from their own process. `uindex` and `one337x` answer 403 to a
+    // plain urllib GET (measured: 1337x.to 403 on 7 of 10 tries), and no retry
+    // policy can fix a bot wall. scrape_fetch already defeats exactly that for
+    // the Zig scrapers; this is the same call, reachable over the API.
+    //
+    // Deliberately handled BEFORE the api_mutex block below: scrapeFetch blocks
+    // up to ~45s on the browser fallback, and holding api_mutex for that long
+    // would freeze every other endpoint (playback control included). It runs on
+    // this connection thread, which satisfies scrapeFetch's worker-thread-only
+    // contract — never the UI thread.
+    if (std.mem.eql(u8, path, "/api/scrape")) {
+        handleScrape(stream, query);
+        return;
+    }
+
     if (std.mem.startsWith(u8, path, "/api/")) {
         api_mutex.lock();
         defer api_mutex.unlock();
@@ -987,6 +1004,52 @@ fn sendJson(stream: std.Io.net.Stream, json: []const u8) void {
     const h = std.fmt.bufPrint(&header, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nContent-Length: {d}\r\n\r\n", .{json.len}) catch return;
     _ = @import("../core/io_global.zig").streamWriteAll(stream, h) catch {};
     _ = @import("../core/io_global.zig").streamWriteAll(stream, json) catch {};
+}
+
+/// GET /api/scrape?url=<percent-encoded> → the page body, fetched through
+/// scrape_fetch (plain curl fast path, anti-detect browser when the response is
+/// a Cloudflare / DDoS-Guard / captcha interstitial).
+///
+/// Exists for the nova2 Python engines: they run in a child process and cannot
+/// call browser.fetchHtmlBlocking, so a walled site is simply zero rows for
+/// them. `helpers.retrieve_url` falls back here when a fetch comes back walled.
+///
+/// Body is returned as-is with `text/plain` — the caller is a scraper parsing
+/// HTML/JSON, and text/plain keeps a browser from ever rendering a scraped page
+/// as live markup from Opal's own origin. 502 when nothing could be fetched, so
+/// the caller can tell "walled and unrecoverable" from "empty page".
+fn handleScrape(stream: std.Io.net.Stream, query: []const u8) void {
+    var dec_buf: [2048]u8 = undefined;
+    const raw = getQueryParam(query, "url") orelse {
+        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"url required\"}");
+        return;
+    };
+    const url = urlDecode(raw, &dec_buf) orelse raw;
+    if (url.len == 0 or !(std.mem.startsWith(u8, url, "http://") or std.mem.startsWith(u8, url, "https://"))) {
+        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"url must be http(s)\"}");
+        return;
+    }
+
+    // 2 MB: a torrent search page with 250 rows measured 722 KB (torrentfunk),
+    // so this has room for the largest listing observed with headroom. Heap, not
+    // stack — this runs on a connection thread (see the CLAUDE.md 64KB rule).
+    const cap = 2 * 1024 * 1024;
+    const alloc = @import("../core/alloc.zig").allocator;
+    const buf = alloc.alloc(u8, cap) catch {
+        sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(buf);
+
+    const body = @import("scrape_fetch.zig").scrapeFetch(url, buf) orelse {
+        sendJsonStatus(stream, "502 Bad Gateway", "{\"error\":\"fetch failed\"}");
+        return;
+    };
+
+    var header: [256]u8 = undefined;
+    const h = std.fmt.bufPrint(&header, "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {d}\r\n\r\n", .{body.len}) catch return;
+    _ = io_g.streamWriteAll(stream, h) catch {};
+    _ = io_g.streamWriteAll(stream, body) catch {};
 }
 
 /// Like sendJson but with a caller-chosen status line (e.g. "409 Conflict").

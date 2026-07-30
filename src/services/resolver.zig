@@ -7,6 +7,7 @@ const c = @import("../core/c.zig");
 const logs = @import("../core/logs.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
+const io_glob = @import("../core/io_global.zig");
 const content_cache = @import("../core/content_cache.zig");
 const ccp = @import("../core/content_cache_pure.zig");
 
@@ -1096,6 +1097,53 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
     // on pipe WouldBlock + reader-buffer resets.
     var child_reader_buf: [8192]u8 = undefined;
     var reader = child.stdout.?.reader(@import("../core/io_global.zig").io(), &child_reader_buf);
+
+    // Watchdog: a deadline of our own, so this search cannot hang forever.
+    //
+    // The real fix was on the Python side — every fetch is now bounded by
+    // helpers._FETCH_TIMEOUT — and before that a host which completed the
+    // handshake and then went silent held urlopen() open with no deadline at
+    // all, so nova2 never exited and this loop never returned. The search just
+    // never finished.
+    //
+    // It has to be a separate thread, not a check inside the read loop: the loop
+    // blocks in takeDelimiter() waiting for a line that never comes, so an
+    // in-loop deadline could never fire on precisely the case it exists for.
+    //
+    // SIGTERM by pid via terminateProcess() — it signals WITHOUT reaping, so the
+    // drain-then-wait() below still observes the exit and nova2's pool tears down
+    // through its own handlers. That matters: kill()ing it out from under the
+    // reader is what used to leave workers writing into a dead pipe. The pid is
+    // copied by value, never a pointer into this frame.
+    const Watchdog = struct {
+        pid: io_glob.Child.Id,
+        deadline_ms: i64,
+        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        fired: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+        fn run(self: *@This()) void {
+            const start = io_glob.milliTimestamp();
+            while (!self.done.load(.acquire)) {
+                if (io_glob.milliTimestamp() - start > self.deadline_ms) {
+                    self.fired.store(true, .release);
+                    logs.pushLog("warn", "resolver", "nova2 passed its deadline — ending the search with what it returned", true);
+                    io_glob.terminateProcess(self.pid);
+                    return;
+                }
+                io_glob.sleep(250 * std.time.ns_per_ms);
+            }
+        }
+    };
+    // 180s: generous next to the bounded Python worst case (~46s per fetch, run
+    // in nova2's pool), so this only fires when something below has genuinely
+    // stopped making progress rather than merely being slow.
+    var watchdog = Watchdog{ .pid = child.id.?, .deadline_ms = 180 * 1000 };
+    const wd_thread: ?std.Thread = std.Thread.spawn(.{}, Watchdog.run, .{&watchdog}) catch null;
+    // Joined BEFORE this frame dies — `&watchdog` must not outlive it.
+    defer if (wd_thread) |t| {
+        watchdog.done.store(true, .release);
+        t.join();
+    };
 
     var found: usize = 0;
     var scanned: usize = 0;
