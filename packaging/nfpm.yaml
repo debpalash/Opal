@@ -7,7 +7,10 @@ name: opal
 arch: amd64
 platform: linux
 version: "${VERSION}"
-maintainer: "Palash <via github.com/debpalash>"
+# Debian and RPM both expect a parseable `Name <email>` here; the old
+# "Palash <via github.com/debpalash>" was not a valid address and shows up
+# verbatim in `apt show` / `rpm -qi` output.
+maintainer: "Palash Debnath <aur@palash.dev>"
 homepage: "https://github.com/debpalash/Opal"
 license: "GPL-3.0-only"
 description: "Play everything — media player, universal search, torrent streaming, local AI."

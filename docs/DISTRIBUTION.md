@@ -91,29 +91,51 @@ ideally let a user submit it.
 
 ### 2.2 AUR (Arch Linux)
 
-The in-repo [`PKGBUILD`](../PKGBUILD) builds from the **local** working tree
-— fine for `makepkg` on your own box, not publishable as-is.
+Two packages live in [`packaging/aur/`](../packaging/aur), both publishable
+as-is and both pushed automatically by `release.yml` on every `vX.Y.Z` tag:
 
-- [ ] Adapt the PKGBUILD to fetch the release:
-      `source=("$pkgname-$pkgver.tar.gz::https://github.com/debpalash/Opal/archive/refs/tags/v$pkgver.tar.gz")`
-      with real `sha256sums`, and build in `"$srcdir/Opal-$pkgver"` instead
-      of `$startdir`.
-- [ ] Fix `makedepends`: it currently says `zig>=0.15.2`; the project
-      requires **0.16.x**. Check whether Arch's `zig` package has caught up;
-      if not, depend on `zig-bin` from AUR or vendor the toolchain fetch.
+| Package | Source | Build |
+|---|---|---|
+| [`opal`](../packaging/aur/opal/PKGBUILD) | GitHub source tarball for the tag | compiles with `zig` |
+| [`opal-bin`](../packaging/aur/opal-bin/PKGBUILD) | official release tarball + the source tag for the resource payload | none |
+
+Things that are easy to get wrong here, and why they are the way they are:
+
+- **Never hand-compile `libtorrent_wrapper.so` in the PKGBUILD.** `build.zig`
+  compiles it with `-Wl,-soname,libtorrent_wrapper.so`. A manual `g++` line
+  that omits the soname makes the linker record the absolute `$srcdir` path as
+  the binary's `DT_NEEDED`, and the installed package then fails to load at all
+  once `makepkg` deletes that directory.
+- **The binary alone is not a working install.** `detectResourceRoot()` in
+  `src/main.zig` probes for `engines/nova2.py` beside the binary and then under
+  `/usr/lib/opal`, `/usr/local/lib/opal`, `/usr/share/opal`. Both PKGBUILDs
+  install the same payload `packaging/nfpm.yaml` ships to deb/rpm — `engines/`,
+  `scripts/camoufox_bridge.py`, `web/index.html` and the two `data/*.json`
+  manifests. Omit it and torrent search silently returns zero results.
+- **`python` is a hard `depends`, not an optdepend** — every torrent query
+  shells out to `python3 engines/nova2.py`. The engines vendor their own
+  `socks`/`helpers` modules, so no pip packages are required.
+- **`-Dcpu=x86_64_v2` is mandatory.** Zig otherwise targets the build host's
+  native CPU, and a package built on an AVX-512 machine SIGILLs everywhere else
+  (issue #22). Same reasoning as the release job.
+- **`sha256sums` must be real.** `SKIP` is only legitimate for VCS sources;
+  `updpkgsums` refreshes them, and `push-to-aur.sh` runs it for you.
+- **`pkgver` is synced from the tag** by `push-to-aur.sh` (`RELEASE_VERSION`,
+  defaulting to `GITHUB_REF_NAME`). Before that existed the PKGBUILDs were
+  hand-edited and drifted — v0.6.3 shipped with both still pinned at 0.1.2.
+
+Remaining one-time setup:
+
 - [ ] Create an account at <https://aur.archlinux.org>, add your SSH public
       key under account settings.
-- [ ] Claim the name: `git clone ssh://aur@aur.archlinux.org/opal.git`
-      (cloning an empty repo reserves it on first push).
-- [ ] Add `PKGBUILD`, generate metadata:
-      `makepkg --printsrcinfo > .SRCINFO` (commit **both** files — the AUR
-      rejects pushes without `.SRCINFO`).
-- [ ] Test in a clean chroot (`extra-x86_64-build` from `devtools`), then
-      `git push`.
-- [ ] **`opal-bin` variant:** second AUR package sourcing the prebuilt Linux
-      tarball from Releases — no `zig`/`gcc` makedepends, near-instant
-      install, same runtime `depends`. Same clone/push dance against
-      `ssh://aur@aur.archlinux.org/opal-bin.git`.
+- [ ] Set the `AUR_SSH_PRIVATE_KEY` / `AUR_USERNAME` / `AUR_EMAIL` repo
+      secrets and the `AUR_PUBLISH_ENABLED=true` repo variable — the `aur` job
+      in `release.yml` is gated on them.
+- [ ] First publish (either let the release job do it, or run
+      `packaging/aur/push-to-aur.sh` from an Arch box). Pushing to
+      `ssh://aur@aur.archlinux.org/opal.git` is what claims the name.
+- [ ] Test in a clean chroot: `extra-x86_64-build` from `devtools`, plus
+      `namcap` on the resulting `.pkg.tar.zst`.
 
 ### 2.3 Debian / Ubuntu
 
