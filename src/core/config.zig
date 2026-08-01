@@ -40,6 +40,9 @@ pub fn save() void {
     setKey("nsfw_filter", if (state.app.nsfw_filter_enabled) "1" else "0");
     setKey("gallerydl_enabled", if (state.app.gallerydl_enabled) "1" else "0");
     setKey("scrape_use_browser", if (state.app.scrape_use_browser) "1" else "0");
+    setKey("prefetch_playlist", if (state.app.prefetch_playlist) "1" else "0");
+    setKey("audio_passthrough", if (state.app.audio_passthrough) "1" else "0");
+    setKey("audio_exclusive", if (state.app.audio_exclusive) "1" else "0");
     setKey("taste_suggestions", if (state.app.taste_enabled) "1" else "0");
     setKey("content_cache_enabled", if (state.app.content_cache_enabled) "1" else "0");
     setKey("auto_download_subs", if (state.app.auto_download_subs) "1" else "0");
@@ -279,6 +282,12 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.gallerydl_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "scrape_use_browser")) {
         state.app.scrape_use_browser = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "prefetch_playlist")) {
+        state.app.prefetch_playlist = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "audio_passthrough")) {
+        state.app.audio_passthrough = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "audio_exclusive")) {
+        state.app.audio_exclusive = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "taste_suggestions")) {
         state.app.taste_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "content_cache_enabled")) {

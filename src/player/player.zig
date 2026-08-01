@@ -469,6 +469,35 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "demuxer-seekable-cache", "yes");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "idle", "yes");
 
+        // ── Opt-in playback options ──
+        //
+        // Adopted from JJenkx/mpv-atmos-patched's tuning guide, but only the
+        // options that exist in UPSTREAM mpv — verified against this build with
+        // `mpv --list-options` on 2026-08-01. That repo's headline features
+        // (TrueHD/Atmos MAT passthrough, http-segmented-connections,
+        // demuxer-cache-unselected-*) live in its own patched mpv+FFmpeg and are
+        // NOT reachable from a system mpv, so they are deliberately not here.
+        //
+        // Every one defaults OFF, because each trades something real:
+        if (state.app.prefetch_playlist) {
+            // Makes next-episode transitions instant. Costs a second concurrent
+            // download — on a torrent that is a whole extra swarm, which is why
+            // this is not the default for a streaming-first app.
+            _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "prefetch-playlist", "yes");
+        }
+        if (state.app.audio_passthrough) {
+            // Bitstream compressed audio to an AVR instead of decoding it.
+            // TrueHD is deliberately absent: upstream mpv cannot emit the MAT
+            // framing Atmos needs (that is the entire reason the atmos fork
+            // exists), so listing it here would advertise silence.
+            _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "audio-spdif", "ac3,dts,eac3");
+        }
+        if (state.app.audio_exclusive) {
+            // Exclusive device access: bit-perfect, but nothing else on the
+            // machine can make a sound while a player is open.
+            _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "audio-exclusive", "yes");
+        }
+
         // ── Network stream resilience ──
         // With HTTP proxy for torrents, cache-pause works correctly:
         // the proxy stalls HTTP when pieces aren't ready, mpv shows "Buffering..."

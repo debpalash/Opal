@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-08-01T11:33:28",
-  "total": 337,
-  "passed": 328,
+  "timestamp": "2026-08-01T12:31:45",
+  "total": 338,
+  "passed": 329,
   "failed": 0,
   "warnings": 1,
   "skipped": 8,
@@ -61,7 +61,7 @@
       "skip": 0
     },
     "Player": {
-      "pass": 21,
+      "pass": 22,
       "fail": 0,
       "warn": 0,
       "skip": 0
@@ -300,7 +300,7 @@
       "name": "Database Exists",
       "category": "Database",
       "status": "pass",
-      "detail": "Size: 130300.0 KB",
+      "detail": "Size: 130324.0 KB",
       "duration_ms": 0
     },
     {
@@ -370,7 +370,7 @@
       "name": "User Preferences Table",
       "category": "Memory",
       "status": "pass",
-      "detail": "active_hour=5:00 (w:305)",
+      "detail": "active_hour=6:00 (w:306)",
       "duration_ms": 0
     },
     {
@@ -476,13 +476,13 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 50.0 MB",
-      "duration_ms": 488
+      "duration_ms": 468
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "50.0 MB, built at 11:31:55",
+      "detail": "50.0 MB, built at 12:30:19",
       "duration_ms": 0
     },
     {
@@ -546,7 +546,7 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 3654
+      "duration_ms": 4585
     },
     {
       "name": "Poster/image fetch uses curl not std.http",
@@ -623,7 +623,7 @@
       "category": "Build",
       "status": "pass",
       "detail": "every distributed build pins -Dcpu (x86_64_v2 / apple_m1) and a fail-closed gate scans the artifact; verified to reject the real v0.6.1 binary and accept v0.6.0",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "name": "App version has one source of truth",
@@ -644,7 +644,7 @@
       "category": "Build",
       "status": "pass",
       "detail": "35 workflow shell step(s) parse under bash -n",
-      "duration_ms": 150
+      "duration_ms": 163
     },
     {
       "name": "Voice Server Socket",
@@ -658,21 +658,21 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 760
+      "duration_ms": 1346
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "pass",
       "detail": "faster-whisper importable",
-      "duration_ms": 955
+      "duration_ms": 1121
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 21
+      "duration_ms": 22
     },
     {
       "name": "PulseAudio Echo Cancel",
@@ -686,7 +686,7 @@
       "category": "Voice",
       "status": "pass",
       "detail": "echo guard drops self-echo; real interruption passes; PARTIAL streamed",
-      "duration_ms": 26
+      "duration_ms": 28
     },
     {
       "name": "Conversational: prefer full-duplex event loop + wiring",
@@ -700,21 +700,21 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 23
+      "duration_ms": 25
     },
     {
       "name": "Compiles: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 23
+      "duration_ms": 25
     },
     {
       "name": "Compiles: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 25
+      "duration_ms": 27
     },
     {
       "name": "Compiles: opal-voice-server.py",
@@ -728,28 +728,28 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 964
+      "duration_ms": 1105
     },
     {
       "name": "--check degrades: opal-tts-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 27
+      "duration_ms": 28
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 0 (deps present)",
-      "duration_ms": 1035
+      "duration_ms": 1105
     },
     {
       "name": "Tracked + compiles: tools/lang_server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "tracked + py_compile OK",
-      "duration_ms": 44
+      "duration_ms": 42
     },
     {
       "name": "Parakeet conversational self-install wired",
@@ -952,14 +952,14 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 16393
+      "duration_ms": 10028
     },
     {
       "name": "Cloud LLM Backend + No Silent Local Installs",
       "category": "AI Features",
       "status": "pass",
       "detail": "cloud providers + bearer auth + on-demand-only local models wired",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "name": "Parakeet TDT Voice Backend Wired",
@@ -973,28 +973,28 @@
       "category": "AI Features",
       "status": "pass",
       "detail": "sinks guarded + retrieval skipped + composer toggle present",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Chat Console: Wrapped Transcript + Agent Steps",
       "category": "AI Features",
       "status": "pass",
       "detail": "console transcript + hero + follow-scroll + agent steps wired",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "OMDb Ratings Enrichment",
       "category": "Enrichment",
       "status": "pass",
       "detail": "OMDb enrichment wired (parser+worker+UI+persist); key set=False",
-      "duration_ms": 2
+      "duration_ms": 4
     },
     {
       "name": "Local taste engine: activity + vectors + For You",
       "category": "AI",
       "status": "pass",
       "detail": "activity log + vec_taste vectors + gated For You tier wired",
-      "duration_ms": 1
+      "duration_ms": 3
     },
     {
       "name": "Theme Presets Defined",
@@ -1036,21 +1036,21 @@
       "category": "Browser",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 40
+      "duration_ms": 43
     },
     {
       "name": "Bridge protocol selftest",
       "category": "Browser",
       "status": "pass",
       "detail": "framing + pump model OK",
-      "duration_ms": 30
+      "duration_ms": 33
     },
     {
       "name": "Browser bookmarks SQL matches schema",
       "category": "Browser",
       "status": "pass",
       "detail": "3 statements OK against schema",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "browser_pure registered in zig tests",
@@ -1064,14 +1064,14 @@
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 77
+      "duration_ms": 113
     },
     {
       "name": "Browser: CloakBrowser engine + upgrades",
       "category": "Browser",
       "status": "pass",
       "detail": "engine picker + find/zoom/downloads/history/reader wired",
-      "duration_ms": 55
+      "duration_ms": 60
     },
     {
       "name": "Single-Media Mode",
@@ -1148,7 +1148,7 @@
       "category": "Remote",
       "status": "pass",
       "detail": "account auth (no pairing) + LAN bind + bundled page",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Hosted Mode: Stream/VTT/Poster + Docker + Perf Fixes",
@@ -1333,6 +1333,13 @@
       "duration_ms": 0
     },
     {
+      "name": "Playback extras: only upstream mpv options, all opt-in",
+      "category": "Player",
+      "status": "pass",
+      "detail": "3 upstream options (spdif=ac3,dts,eac3), all default off, no fork-only flags that would break a system mpv",
+      "duration_ms": 0
+    },
+    {
       "name": "Log Severity By Level",
       "category": "Stability",
       "status": "pass",
@@ -1400,7 +1407,7 @@
       "category": "Stability",
       "status": "pass",
       "detail": "no discarded std.Thread.spawn handles in src/",
-      "duration_ms": 22
+      "duration_ms": 23
     },
     {
       "name": "TMDB Fetch Stages Results Off-Thread",
@@ -1470,7 +1477,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "services navigate via navigateToTab",
-      "duration_ms": 14
+      "duration_ms": 15
     },
     {
       "name": "Omnibox \u2192 Unified Search",
@@ -1589,7 +1596,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "11 engines placed, class==module, manifest-wired",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "name": "Polish Tokens Adopted",
@@ -1624,7 +1631,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 169
+      "duration_ms": 171
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -1883,7 +1890,7 @@
       "category": "Network",
       "status": "pass",
       "detail": "anti-block fetch wired: pure(isBlocked/needsBrowser, no false-pos) \u2192 scrape_fetch \u2192 bridge fetchhtml on dedicated page; selftest ok",
-      "duration_ms": 55
+      "duration_ms": 57
     },
     {
       "name": "Scrapers routed through anti-block fetch",
@@ -1995,7 +2002,7 @@
       "category": "Video",
       "status": "pass",
       "detail": "IPTV wired: pure(url/m3u8/nsfw/parse) -> gated fetch -> enum/nav/rail; manifest present",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "name": "Live TV SQLite catalog (100k channels)",
@@ -2009,7 +2016,7 @@
       "category": "Integration",
       "status": "pass",
       "detail": "Suwayomi wired: pure(rest/search/chapters/pages) -> gated engine + reader; manifest present",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Mihon extension repos + ingest",
@@ -2303,7 +2310,7 @@
       "category": "Windows",
       "status": "pass",
       "detail": "all http.Client construction routes through newClient()",
-      "duration_ms": 48
+      "duration_ms": 50
     },
     {
       "name": "http: newClient prewarms TLS state",
@@ -2401,21 +2408,21 @@
       "category": "Windows",
       "status": "pass",
       "detail": "elf-needed.py fails closed on unreadable input",
-      "duration_ms": 22
+      "duration_ms": 26
     },
     {
       "name": "portability: no hardcoded /dev/null in spawned argv",
       "category": "Windows",
       "status": "pass",
       "detail": "every spawned argv uses io_global.devNull()",
-      "duration_ms": 50
+      "duration_ms": 55
     },
     {
       "name": "portability: no raw pkill outside io_global",
       "category": "Windows",
       "status": "pass",
       "detail": "all process kills route through the portable helpers",
-      "duration_ms": 52
+      "duration_ms": 53
     },
     {
       "name": "portability: kill helpers cover all three platforms",
@@ -2443,7 +2450,7 @@
       "category": "Windows",
       "status": "pass",
       "detail": "thumbnails, subtitles and friends use the platform cache dir",
-      "duration_ms": 47
+      "duration_ms": 49
     },
     {
       "name": "storage: page accounts for every store, not just one cache",
@@ -2506,21 +2513,21 @@
       "category": "Sources",
       "status": "pass",
       "detail": "one config file, read by the engine",
-      "duration_ms": 63
+      "duration_ms": 124
     },
     {
       "name": "nova2 engines read the installed source config",
       "category": "Sources",
       "status": "pass",
       "detail": "installed base drives the nova2 engines",
-      "duration_ms": 60
+      "duration_ms": 70
     },
     {
       "name": "Sources fail over to mirror domains",
       "category": "Sources",
       "status": "pass",
       "detail": "ordered failover + last-good memory, both layers",
-      "duration_ms": 60
+      "duration_ms": 66
     },
     {
       "name": "Installed sources are migrated when the manifest corrects an endpoint",
@@ -2541,7 +2548,7 @@
       "category": "Sources",
       "status": "pass",
       "detail": "all 32 manifest bases agree with their engine's own default, so unifying the config cannot disable a working host",
-      "duration_ms": 1
+      "duration_ms": 3
     },
     {
       "name": "Every Torznab-compatible source id is actually queried",
@@ -2555,21 +2562,21 @@
       "category": "Sources",
       "status": "pass",
       "detail": "shipped Prowlarr URL returns a parseable torznab feed over HTTP (4 requests); Jackett's path and a non-numeric indexer both 404 as Prowlarr would",
-      "duration_ms": 507
+      "duration_ms": 508
     },
     {
       "name": "nova2 engine catalog: versions.txt complete and matching",
       "category": "Torrents",
       "status": "pass",
       "detail": "23 plugins, every one versioned and matching its header (1 quarantined non-plugin)",
-      "duration_ms": 4
+      "duration_ms": 2
     },
     {
       "name": "nova2 engine catalog: every plugin satisfies the import contract",
       "category": "Torrents",
       "status": "pass",
       "detail": "23 plugins import and expose their capabilities",
-      "duration_ms": 90
+      "duration_ms": 85
     },
     {
       "name": "nova2 engine catalog: plugins declare url + name + categories",
@@ -2590,7 +2597,7 @@
       "category": "Torrents",
       "status": "pass",
       "detail": "unresolvable magnets skip their row; feed() survives",
-      "duration_ms": 6
+      "duration_ms": 5
     },
     {
       "name": "nova2 engine catalog: nothing prints to stdout but results",

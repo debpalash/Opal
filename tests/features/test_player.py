@@ -1257,3 +1257,77 @@ def test_picture_presets():
         return "fail", "picture preset wiring incomplete: " + ", ".join(missing)
     return "pass", ("6 presets, Auto keyed off the transfer function (not the "
                     "gamut), applied on load + on change, persisted")
+
+
+@test("Playback extras: only upstream mpv options, all opt-in", "Player")
+def test_playback_extras():
+    """Adopted from JJenkx/mpv-atmos-patched's tuning guide -- selectively.
+
+    That project's headline features live in its OWN patched mpv+FFmpeg and are
+    unreachable from a system mpv. Verified against the installed build on
+    2026-08-01 with `mpv --list-options`:
+
+        prefetch-playlist              present   -> adopted
+        audio-spdif                    present   -> adopted
+        audio-exclusive                present   -> adopted
+        demuxer-cache-unselected-subs  ABSENT    -> not adopted
+        http-segmented-connections     ABSENT    -> not adopted
+
+    Setting an option mpv does not know is not harmless: mpv refuses to start
+    with an unknown option, so a fork-only flag here would break playback
+    outright on every system build.
+
+    All three default OFF because each trades something real -- prefetch costs a
+    second concurrent download (on a torrent, another swarm), passthrough is
+    silence on hardware that cannot decode the bitstream, and exclusive mode
+    mutes everything else on the machine.
+    """
+    ply = _src("src/player/player.zig")
+    st = _src("src/core/state.zig")
+    cfg = _src("src/core/config.zig")
+    setg = _src("src/ui/settings.zig")
+
+    FORK_ONLY = ("demuxer-cache-unselected-subs", "demuxer-cache-unselected-audio",
+                 "http-segmented-connections", "http-segmented-chunk-size",
+                 "http-segmented-auto-size", "prefetch-demuxer-max-bytes",
+                 "http-segmented-prefetch-connections")
+    # Comments name these to explain why they are excluded, so scan code only.
+    ply_code = "\n".join(l for l in ply.splitlines()
+                         if not l.lstrip().startswith("//"))
+    leaked = [o for o in FORK_ONLY if o in ply_code]
+    if leaked:
+        return "fail", ("fork-only mpv options would break a system mpv at "
+                        "startup: " + ", ".join(leaked))
+
+    # TrueHD must not be advertised: upstream mpv cannot emit the MAT framing
+    # Atmos needs, so offering it would promise silence.
+    spdif = _re.search(r'"audio-spdif", "([^"]+)"', ply)
+    if not spdif:
+        return "fail", "audio-spdif not wired"
+    if "truehd" in spdif.group(1).lower():
+        return "fail", ("audio-spdif advertises truehd, which upstream mpv "
+                        "cannot emit (that is why the atmos fork exists)")
+
+    checks = {
+        "prefetch wired": '"prefetch-playlist", "yes"' in ply,
+        "exclusive wired": '"audio-exclusive", "yes"' in ply,
+        "prefetch gated": "if (state.app.prefetch_playlist)" in ply,
+        "passthrough gated": "if (state.app.audio_passthrough)" in ply,
+        "exclusive gated": "if (state.app.audio_exclusive)" in ply,
+        # Defaults must be off, or a toggle turns itself on for everyone.
+        "prefetch defaults off": "prefetch_playlist: bool = false" in st,
+        "passthrough defaults off": "audio_passthrough: bool = false" in st,
+        "exclusive defaults off": "audio_exclusive: bool = false" in st,
+        "persisted": all(f'setKey("{k}"' in cfg for k in
+                         ("prefetch_playlist", "audio_passthrough", "audio_exclusive")),
+        "loaded": all(f'"{k}")' in cfg for k in
+                      ("prefetch_playlist", "audio_passthrough", "audio_exclusive")),
+        "reachable in Settings": "Playback Extras" in setg,
+        # These are read as options at init, so the UI must not imply they are live.
+        "next-file caveat surfaced": "next file you open" in setg,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "playback extras incomplete: " + ", ".join(missing)
+    return "pass", (f"3 upstream options (spdif={spdif.group(1)}), all default off, "
+                    "no fork-only flags that would break a system mpv")

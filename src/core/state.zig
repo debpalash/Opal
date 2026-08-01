@@ -412,6 +412,16 @@ pub const AppState = struct {
     // through the anti-detect browser (services/scrape_fetch.zig). Effective
     // only when a browser engine is installed; default ON.
     scrape_use_browser: bool = true,
+
+    // ── Playback options verified present in upstream mpv (2026-08-01) ──
+    // All three default OFF: each trades something real, so none should turn
+    // itself on. See player.zig for what each costs.
+    /// `prefetch-playlist` — start the next playlist item while this one plays.
+    prefetch_playlist: bool = false,
+    /// `audio-spdif` — bitstream compressed audio to an AVR instead of decoding.
+    audio_passthrough: bool = false,
+    /// `audio-exclusive` — take exclusive control of the output device.
+    audio_exclusive: bool = false,
     // "Personalized suggestions (local-only)" — gates the activity/taste
     // engine (services/activity.zig): recording AND the Home "For You" row.
     taste_enabled: bool = true,

@@ -223,7 +223,7 @@ fn sectionMatchesSearch(tab: state.SettingsTab) bool {
     if (search_len == 0) return true;
     const sections: []const []const u8 = switch (tab) {
         .General => &.{ "Interface", "Behavior", "TMDB", "Theme", "Scale", "Grid", "NSFW", "Seek Sync", "API Key" },
-        .Playback => &.{ "Video Processing", "Audio Equalizer", "Audio Output", "Device", "Streaming", "Shortcuts", "Filters", "Capture", "Hardware", "Decode", "Deband", "Interpolation", "Brightness", "Contrast", "Saturation", "Gamma", "Screenshot", "Auto-advance", "Resume" },
+        .Playback => &.{ "Video Processing", "Audio Equalizer", "Playback Extras", "Prefetch", "Passthrough", "Exclusive", "Audio Output", "Device", "Streaming", "Shortcuts", "Filters", "Capture", "Hardware", "Decode", "Deband", "Interpolation", "Brightness", "Contrast", "Saturation", "Gamma", "Screenshot", "Auto-advance", "Resume" },
         .About => &.{ "About", "Version", "Update", "Credits", "License", "Donate", "Sponsors", "Links", "TMDB" },
         .Subtitles => &.{ "OpenSubtitles", "Subdl", "Language", "Search", "API Key", "Font", "Delay", "Whisper" },
         .Network => &.{ "Download", "Trackers", "Proxy", "Speed", "Limit", "Port", "Browser", "Engine", "Camoufox", "CloakBrowser", "Audiobookshelf", "Audiobook", "OPDS", "Reading", "Komga", "Kavita", "Calibre" },
@@ -1554,6 +1554,28 @@ fn renderPlaybackTab() void {
                 _ = c.mpv.mpv_command_string(p.mpv_ctx, eq_cmd.ptr);
             }
             state.markConfigDirty();
+        }
+    }
+
+    // ── Playback extras ──
+    // Upstream-mpv options, each off by default because each trades something.
+    // They take effect on the NEXT file opened: mpv reads them as options at
+    // player init, and re-applying them live would mean tearing down the audio
+    // chain mid-playback.
+    sectionHeader("Playback Extras", "Applied to the next file you open", 25, @src());
+    {
+        const before_pf = state.app.prefetch_playlist;
+        components.toggleRow(@src(), "Prefetch next in playlist", "Instant next-episode start. Costs a second concurrent download — on a torrent, a whole extra swarm.", &state.app.prefetch_playlist);
+        const before_pt = state.app.audio_passthrough;
+        components.toggleRow(@src(), "Audio passthrough (AC3/DTS/E-AC3)", "Bitstream to an AV receiver instead of decoding. Silence if your output cannot decode it. TrueHD/Atmos needs a patched mpv and is not offered.", &state.app.audio_passthrough);
+        const before_ex = state.app.audio_exclusive;
+        components.toggleRow(@src(), "Exclusive audio device", "Bit-perfect output. Nothing else on the machine can make a sound while a player is open.", &state.app.audio_exclusive);
+        if (before_pf != state.app.prefetch_playlist or
+            before_pt != state.app.audio_passthrough or
+            before_ex != state.app.audio_exclusive)
+        {
+            state.markConfigDirty();
+            state.showToast("Applies to the next file you open");
         }
     }
 
