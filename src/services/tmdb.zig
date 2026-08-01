@@ -317,10 +317,66 @@ fn renderSearchInline() void {
     // Grid arrow-nav must yield to the text field while it's being edited.
     if (dvui.focusedWidgetId() == te.data().id) search_focused = true;
     te.deinit();
-    if (components.toolbarGo(@src(), "Go") or enter_pressed) {
-        state.app.tmdb.page = 1;
-        resetGalleryScroll();
-        api.fetchCurrentView(false);
+
+    // ── Live search ──
+    // Results follow typing instead of waiting for Enter/Go, debounced so a
+    // five-letter title costs one request rather than five. Enter and Go still
+    // work and bypass the wait.
+    {
+        const lsp = @import("live_search_pure.zig");
+        const io_g = @import("../core/io_global.zig");
+        const L = struct {
+            var seen: [128]u8 = std.mem.zeroes([128]u8);
+            var seen_len: usize = 0;
+            var changed_ms: i64 = 0;
+            var fired: [128]u8 = std.mem.zeroes([128]u8);
+            var fired_len: usize = 0;
+        };
+
+        const raw = &state.app.tmdb.search_buf;
+        const cur_len = std.mem.indexOfScalar(u8, raw, 0) orelse raw.len;
+        const cur = raw[0..@min(cur_len, L.seen.len)];
+        const now = io_g.milliTimestamp();
+
+        // Stamp the moment the text last changed — the debounce measures quiet
+        // since this, not time since the box was first touched.
+        if (!std.mem.eql(u8, cur, L.seen[0..L.seen_len])) {
+            @memcpy(L.seen[0..cur.len], cur);
+            L.seen_len = cur.len;
+            L.changed_ms = now;
+        }
+
+        if (lsp.shouldRestore(cur, L.fired[0..L.fired_len])) {
+            // Box emptied: drop straight back to Trending rather than leaving
+            // results for a query that no longer exists on screen.
+            L.fired_len = 0;
+            state.app.tmdb.page = 1;
+            resetGalleryScroll();
+            switchView(.Trending);
+        } else if (lsp.shouldFire(.{
+            .current = cur,
+            .last_fired = L.fired[0..L.fired_len],
+            .ms_since_change = now - L.changed_ms,
+            .in_flight = state.app.tmdb.is_loading.load(.acquire),
+        })) {
+            @memcpy(L.fired[0..cur.len], cur);
+            L.fired_len = cur.len;
+            state.app.tmdb.view = .Search; // fetchCurrentView dispatches on this
+            state.app.tmdb.page = 1;
+            resetGalleryScroll();
+            api.fetchCurrentView(false);
+        }
+
+        if (components.toolbarGo(@src(), "Go") or enter_pressed) {
+            // Explicit submit: skip the debounce, and record it so the live path
+            // doesn't immediately re-issue the same query.
+            @memcpy(L.fired[0..cur.len], cur);
+            L.fired_len = cur.len;
+            state.app.tmdb.view = .Search;
+            state.app.tmdb.page = 1;
+            resetGalleryScroll();
+            api.fetchCurrentView(false);
+        }
     }
 }
 

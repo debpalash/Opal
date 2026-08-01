@@ -1120,6 +1120,16 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_theme_pure).step);
 
+    // Type-as-you-go search: debounce, min-length and duplicate suppression.
+    const test_live_search_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/live_search_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_live_search_pure).step);
+
     // macOS media-key bridge: remote-command decode + Control Center seek
     // clamp + Now Playing playback rate (media_remote.zig routes the polled
     // commands through these).

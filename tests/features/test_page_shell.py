@@ -475,3 +475,54 @@ def test_command_palette():
     if missing:
         return "fail", "command palette wiring incomplete: " + ", ".join(missing)
     return "pass", "palette renders as an overlay, Ctrl/Cmd+K toggles it, listItem re-applied"
+
+
+@test("Movies/TV: live search follows typing, debounced", "UI")
+def test_tmdb_live_search():
+    """Search used to require Enter or clicking Go.
+
+    Every rule in live_search_pure is a way to waste an API call or make the box
+    feel broken, which is why the decision is pure and tested rather than inline
+    in the draw call:
+
+      * fire per keystroke  -> a five-letter title costs five TMDB requests, and
+                               overlapping responses can land out of order,
+                               leaving the grid showing results for a prefix
+      * fire on one char    -> "a" searches the whole catalogue
+      * fire on same text   -> this runs from a draw call, so every repaint
+                               re-requests what is already on screen
+      * fire while in flight-> reintroduces the out-of-order race
+
+    Clearing the box is deliberately NOT debounced: the user is looking at
+    results for a query they just deleted, so Trending is restored immediately.
+    """
+    lsp = _src("src/services/live_search_pure.zig")
+    tm = _src("src/services/tmdb.zig")
+    bld = _src("build.zig")
+
+    checks = {
+        "pure decision exists": "pub fn shouldFire(" in lsp,
+        "restore is separate": "pub fn shouldRestore(" in lsp,
+        "has a debounce": "DEBOUNCE_MS" in lsp,
+        "has a minimum length": "MIN_CHARS" in lsp,
+        # Each guard needs a test naming the failure it prevents.
+        "debounce tested": "waits for the typing to stop" in lsp,
+        "min-chars tested": "one character is not a query" in lsp,
+        "duplicate-suppression tested": "identical text never re-requests" in lsp,
+        "in-flight tested": "never overlaps an in-flight request" in lsp,
+        "restore tested": "fires the moment the box is emptied" in lsp,
+        # Wired into the real input.
+        "routes through pure": "lsp.shouldFire(" in tm and "lsp.shouldRestore(" in tm,
+        "guards on is_loading": "tmdb.is_loading.load(.acquire)" in tm,
+        "sets Search view before fetching": "state.app.tmdb.view = .Search" in tm,
+        # Enter/Go must still work AND record what they fired, or the live path
+        # immediately re-issues the same query.
+        "explicit submit still works": "enter_pressed" in tm,
+        "submit records what it fired": tm.count("L.fired_len = cur.len;") >= 2,
+        "unit tests registered": "live_search_pure.zig" in bld,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "live search incomplete: " + ", ".join(missing)
+    return "pass", ("typing drives TMDB search after a quiet period; repaints, "
+                    "1-char queries and overlapping requests all suppressed")
