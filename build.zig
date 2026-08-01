@@ -1046,6 +1046,18 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_scale_pure).step);
 
+    // Runtime display probe: Linux EDID/sysfs fallback plus the shared Auto
+    // scale seam used by startup and Settings.
+    const test_display_info = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/display_info.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_display_info).step);
+
     // Media file classification: playable vs executable/archive (torrent
     // file auto-selection safety).
     const test_media_ext = b.addTest(.{

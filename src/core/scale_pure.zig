@@ -25,15 +25,69 @@ pub fn clampScale(s: f32) f32 {
     return std.math.clamp(s, MIN_SCALE, MAX_SCALE);
 }
 
-/// Device-aware default ui_scale for a display whose DPI content scale is
-/// `natural_scale`. Denser on high-DPI, readable-safe on standard-DPI.
-pub fn deviceScale(natural_scale: f32) f32 {
+/// What the platform could tell us about the physical panel. All fields are 0
+/// when unknown — every consumer treats 0 as "no signal" rather than a value.
+pub const Display = struct {
+    px_w: f32 = 0,
+    px_h: f32 = 0,
+    /// Physical size of the panel. Only Linux fills these in (from EDID);
+    /// macOS and Windows report a trustworthy content scale instead.
+    mm_w: f32 = 0,
+    mm_h: f32 = 0,
+};
+
+/// True physical pixel density, or null when the panel's size is unknown or the
+/// numbers are implausible. Projectors and some EDIDs report a 0 or absurd
+/// physical size, and a bogus DPI here would pick a bogus default scale.
+pub fn physicalDpi(d: Display) ?f32 {
+    if (!std.math.isFinite(d.px_w) or !std.math.isFinite(d.mm_w)) return null;
+    if (d.px_w <= 0 or d.mm_w <= 0) return null;
+    const dpi = d.px_w / (d.mm_w / 25.4);
+    if (!std.math.isFinite(dpi) or dpi < 40 or dpi > 800) return null;
+    return dpi;
+}
+
+/// Device-aware default ui_scale.
+///
+/// `natural_scale` is the OS content scale and is authoritative WHEN THE OS
+/// ACTUALLY REPORTS ONE: macOS and Windows do, and second-guessing them would
+/// double-apply the same correction. Linux frequently does not — on a Wayland
+/// or X11 session with no `Xft.dpi` set, dvui's backend has nothing to read and
+/// falls back to exactly 1.0. That 1.0 is not a measurement, it is a shrug, and
+/// treating it as "standard DPI" is how a 2560x1600 190-DPI laptop panel ended
+/// up defaulting to 0.8 and rendering unreadably small.
+///
+/// So: trust a reported scale above ~1.15, and otherwise fall back to the panel
+/// itself — real DPI when the physical size is known, raw resolution when it is
+/// not.
+pub fn deviceScale(natural_scale: f32, d: Display) f32 {
     // Tiers are ~20% below a 1× baseline — the user runs Opal deliberately
     // compact (see the compact type ramp); the chrome should stay quiet.
-    if (!std.math.isFinite(natural_scale) or natural_scale <= 0) return 0.8;
-    if (natural_scale >= 1.9) return 0.68; // Retina / 200% (macOS, hi-res Win/Linux)
-    if (natural_scale >= 1.4) return 0.72; // ~150% displays
-    if (natural_scale >= 1.15) return 0.76; // ~125% displays
+    if (std.math.isFinite(natural_scale) and natural_scale > 0) {
+        if (natural_scale >= 1.9) return 0.68; // Retina / 200% (macOS, hi-res Win/Linux)
+        if (natural_scale >= 1.4) return 0.72; // ~150% displays
+        if (natural_scale >= 1.15) return 0.76; // ~125% displays
+    }
+
+    // No usable OS scale. Derive density from the panel.
+    if (physicalDpi(d)) |dpi| {
+        if (dpi >= 200) return 1.30; // 4K/5K laptop panels
+        if (dpi >= 170) return 1.20; // ~190 DPI (2560x1600 14", 2880x1800 15")
+        if (dpi >= 140) return 1.00; // 1080p 14" and similar
+        if (dpi >= 115) return 0.90;
+        return 0.80; // ~96 DPI desktop monitor — the original baseline
+    }
+
+    // Physical size unknown: resolution alone. Deliberately gentler than the
+    // DPI ramp, because width cannot distinguish a 14" 2560-wide laptop
+    // (~190 DPI) from a 27" 2560-wide desktop monitor (~109 DPI) — overshooting
+    // the desktop case is worse than undershooting the laptop one, which the
+    // Settings slider fixes in one drag.
+    if (std.math.isFinite(d.px_w)) {
+        if (d.px_w >= 3840) return 1.20;
+        if (d.px_w >= 2560) return 1.10;
+        if (d.px_w >= 1920) return 0.90;
+    }
     return 0.8; // standard DPI — floor for readability at 1 logical px = 1 physical
 }
 
@@ -71,18 +125,55 @@ pub fn isNarrow(rect_w: f32, ui_scale: f32) bool {
     return pt > 1 and pt < NARROW_PT;
 }
 
-test "deviceScale is denser on high-DPI, readable on standard-DPI" {
-    try std.testing.expectEqual(@as(f32, 0.68), deviceScale(2.0)); // Mac Retina
-    try std.testing.expectEqual(@as(f32, 0.68), deviceScale(3.0)); // very high-DPI clamps to densest tier
-    try std.testing.expectEqual(@as(f32, 0.72), deviceScale(1.5)); // 150% Windows
-    try std.testing.expectEqual(@as(f32, 0.76), deviceScale(1.25)); // 125% Windows
-    try std.testing.expectEqual(@as(f32, 0.8), deviceScale(1.0)); // standard DPI Linux/Win
+test "deviceScale trusts a reported OS content scale" {
+    // A display the OS described: the panel numbers must not perturb the tier.
+    const hidpi_panel = Display{ .px_w = 2560, .px_h = 1600, .mm_w = 340, .mm_h = 220 };
+    try std.testing.expectEqual(@as(f32, 0.68), deviceScale(2.0, hidpi_panel)); // Mac Retina
+    try std.testing.expectEqual(@as(f32, 0.68), deviceScale(3.0, .{})); // very high-DPI clamps to densest tier
+    try std.testing.expectEqual(@as(f32, 0.72), deviceScale(1.5, .{})); // 150% Windows
+    try std.testing.expectEqual(@as(f32, 0.76), deviceScale(1.25, .{})); // 125% Windows
 }
 
-test "deviceScale rejects bogus display reports" {
-    try std.testing.expectEqual(@as(f32, 0.8), deviceScale(0));
-    try std.testing.expectEqual(@as(f32, 0.8), deviceScale(-2.0));
-    try std.testing.expectEqual(@as(f32, 0.8), deviceScale(std.math.nan(f32)));
+test "deviceScale falls back to the panel when the OS reports no scale" {
+    // Linux, Wayland, no Xft.dpi → natural_scale is 1.0 as a shrug, not a
+    // measurement. 2560x1600 in 340x220mm is ~191 DPI and must not read as
+    // "standard DPI"; 0.8 here is the bug this fallback exists to fix.
+    const laptop_2560 = Display{ .px_w = 2560, .px_h = 1600, .mm_w = 340, .mm_h = 220 };
+    try std.testing.expectEqual(@as(f32, 1.20), deviceScale(1.0, laptop_2560));
+
+    // Same pixel width, 27" desktop monitor (~109 DPI) — must stay compact.
+    const desktop_27 = Display{ .px_w = 2560, .px_h = 1440, .mm_w = 597, .mm_h = 336 };
+    try std.testing.expectEqual(@as(f32, 0.80), deviceScale(1.0, desktop_27));
+
+    // 4K 15" laptop, ~294 DPI.
+    const laptop_4k = Display{ .px_w = 3840, .px_h = 2160, .mm_w = 332, .mm_h = 187 };
+    try std.testing.expectEqual(@as(f32, 1.30), deviceScale(1.0, laptop_4k));
+
+    // Nothing known at all → the historical default, unchanged.
+    try std.testing.expectEqual(@as(f32, 0.8), deviceScale(1.0, .{}));
+}
+
+test "deviceScale uses resolution when physical size is missing" {
+    try std.testing.expectEqual(@as(f32, 1.20), deviceScale(1.0, .{ .px_w = 3840 }));
+    try std.testing.expectEqual(@as(f32, 1.10), deviceScale(1.0, .{ .px_w = 2560 }));
+    try std.testing.expectEqual(@as(f32, 0.90), deviceScale(1.0, .{ .px_w = 1920 }));
+    try std.testing.expectEqual(@as(f32, 0.80), deviceScale(1.0, .{ .px_w = 1366 }));
+}
+
+test "physicalDpi rejects implausible panel geometry" {
+    try std.testing.expect(physicalDpi(.{ .px_w = 2560, .mm_w = 340 }) != null);
+    try std.testing.expect(physicalDpi(.{ .px_w = 2560, .mm_w = 0 }) == null); // EDID gave no size
+    try std.testing.expect(physicalDpi(.{ .px_w = 0, .mm_w = 340 }) == null);
+    // A projector reporting a 4m-wide "panel" — ~16 DPI, below the floor.
+    try std.testing.expect(physicalDpi(.{ .px_w = 2560, .mm_w = 4000 }) == null);
+}
+
+test "deviceScale tolerates a garbage natural scale" {
+    try std.testing.expectEqual(@as(f32, 0.8), deviceScale(0, .{}));
+    try std.testing.expectEqual(@as(f32, 0.8), deviceScale(-1, .{}));
+    try std.testing.expectEqual(@as(f32, 0.8), deviceScale(std.math.nan(f32), .{}));
+    // …and still consults the panel in that case.
+    try std.testing.expectEqual(@as(f32, 1.20), deviceScale(std.math.nan(f32), .{ .px_w = 2560, .mm_w = 340 }));
 }
 
 test "clampScale keeps values in the usable band" {
