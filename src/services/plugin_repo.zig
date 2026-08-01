@@ -534,6 +534,41 @@ pub fn install(idx: usize) void {
     state.showToastTyped(std.fmt.bufPrint(&tb, "Installed {s}", .{pl.nameSlice()}) catch "Installed", .success);
 }
 
+pub const BulkInstall = struct {
+    /// Sources newly written to disk.
+    installed: usize = 0,
+    /// Sources skipped because installing them would need a per-plugin network
+    /// fetch (the manifest did not inline their endpoints).
+    deferred: usize = 0,
+};
+
+/// Install every available source that can be installed WITHOUT touching the
+/// network. Already-installed sources are skipped, so this is safe to press
+/// repeatedly.
+///
+/// Sources whose endpoints were not inlined in the manifest are counted in
+/// `deferred` and left alone rather than fetched. Fetching them in a loop is
+/// what makes this dangerous: GitHub allows 60 unauthenticated requests an
+/// hour, so a 45-source catalog would exhaust the budget partway through and
+/// 403 the rest — the same failure that made individual installs unreliable
+/// before endpoints were inlined (see `install`). One-by-one those still work;
+/// en masse they do not, so this refuses to try.
+pub fn installAllInlined() BulkInstall {
+    var out = BulkInstall{};
+    for (plugins[0..plugin_count]) |*pl| {
+        const id = pl.idSlice();
+        if (source_config.has(id)) continue;
+        if (pl.endpoints_len == 0) {
+            out.deferred += 1;
+            continue;
+        }
+        if (writeSourceVersioned(id, pl.endpoints[0..pl.endpoints_len], pl.version[0..pl.version_len])) {
+            out.installed += 1;
+        }
+    }
+    return out;
+}
+
 pub fn uninstall(idx: usize) void {
     if (idx >= plugin_count) return;
     var fp_buf: [700]u8 = undefined;
