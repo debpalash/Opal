@@ -1,4 +1,4 @@
-# VERSION: 1.4
+# VERSION: 1.5
 # AUTHORS: LightDestory (https://github.com/LightDestory) achernet (https://github.com/achernet)
 import concurrent.futures
 import re
@@ -59,13 +59,15 @@ class academictorrents(object):
                 saved_date = f.readline().rstrip()
                 if current_date == saved_date:
                     return
-        req = request.urlopen(DATABASE_URL)
-        db_local_text = req.read().decode("utf-8")
+        # Through helpers: this is a multi-MB download that ran with no retry and
+        # no socket deadline, so a stalled mirror hung the engine outright.
+        db_local_text = retrieve_url(DATABASE_URL, unescape_html_entities=False)
+        if not db_local_text:
+            return  # leave any existing cache in place rather than truncating it
         f = open(cache_path, "w", encoding="utf-8")
         f.write(f"{str(date.today())}\n")
         f.write(db_local_text)
         f.close()
-        req.close()
 
     def resolve_search_result(self, torrent) -> SearchResults:
         data = {

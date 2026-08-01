@@ -1,4 +1,4 @@
-# VERSION: 2.5
+# VERSION: 2.7
 # AUTHORS: ZigZag
 
 import re
@@ -8,6 +8,7 @@ import http.client
 import html
 import datetime
 
+from helpers import retrieve_url
 from novaprinter import prettyPrinter
 
 class one337x:
@@ -36,12 +37,12 @@ class one337x:
         return f"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:{ver}.0) Gecko/20100101 Firefox/{ver}.0"
 
     def _fetch(self, url):
-        try:
-            req = urllib.request.Request(url, headers={'User-Agent': self._get_ua()})
-            resp = urllib.request.urlopen(req, timeout=10)
-            return resp.read().decode('utf-8', 'replace')
-        except Exception:
-            return ''
+        # Through helpers, NOT a private urlopen. This engine had its own fetch
+        # and so opted out of every hardening retrieve_url has: the retry, the
+        # per-attempt socket deadline, and the anti-block browser fallback. That
+        # last one is the whole ballgame here -- 1337x.to answers 403 to most
+        # requests, and a private urlopen has no way past a bot wall.
+        return retrieve_url(url, {'User-Agent': self._get_ua()})
 
     def search(self, what, cat='all'):
         query = urllib.parse.unquote(what)
@@ -59,7 +60,11 @@ class one337x:
             found = False
             for row in rows:
                 try:
-                    name_m = re.search(r'class="name".*?<a href="(/torrent/[^"]+)"[^>]*>(.*?)</a>', row, re.DOTALL)
+                    # The class attribute is a LIST: 1337x serves
+                    # `class="coll-1 name"`, so an exact `class="name"` match
+                    # never fires and every row was skipped -- the engine read as
+                    # dead even on a page with 20 good rows. Match the token.
+                    name_m = re.search(r'class="[^"]*\bname\b[^"]*".*?<a href="(/torrent/[^"]+)"[^>]*>(.*?)</a>', row, re.DOTALL)
                     if not name_m:
                         continue
                     detail_path = name_m.group(1)

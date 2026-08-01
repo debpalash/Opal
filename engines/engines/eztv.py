@@ -1,4 +1,4 @@
-# VERSION: 1.23
+# VERSION: 1.24
 # AUTHORS: nindogo
 # CONTRIBUTORS: Diego de las Heras (ngosang@hotmail.es)
 
@@ -89,19 +89,12 @@ class eztv:
     def do_query(self, what: str) -> str:
         url = f"{self.url}/search/{what.replace('%20', '-')}"
         data = b"layout=def_wlinks"
-        try:
-            return retrieve_url(url, request_data=data)
-        except TypeError:
-            # Older versions of retrieve_url did not support request_data/POST, se we must do the
-            # request ourselves...
-            user_agent = 'Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0'
-            req = urllib.request.Request(url, data, {'User-Agent': user_agent})
-            try:
-                response: http.client.HTTPResponse = urllib.request.urlopen(req)  # nosec B310 # pylint: disable=consider-using-with
-                return response.read().decode('utf-8')
-            except urllib.error.URLError:
-                pass
-            return ""
+        # No hand-rolled fallback. This used to drop to a bare urllib.urlopen when
+        # retrieve_url raised TypeError ("older versions did not support
+        # request_data") -- ours has supported it for years, so that branch was
+        # dead weight that would silently bypass the retry, the per-attempt
+        # deadline and the anti-block browser fallback if it ever fired again.
+        return retrieve_url(url, request_data=data)
 
     def search(self, what: str, cat: str = 'all') -> None:
         eztv_html = self.do_query(what)

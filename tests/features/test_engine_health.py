@@ -320,6 +320,116 @@ def engines_do_not_pollute_stdout():
                     "prettyPrinter")
 
 
+@test("nova2 engine catalog: every engine fetches through helpers", "Torrents")
+def engines_do_not_hand_roll_their_own_fetch():
+    """A private urlopen opts an engine out of every hardening there is.
+
+    `helpers.retrieve_url` is the one choke point that carries the retry, the
+    per-attempt socket deadline and the anti-block browser fallback. EIGHT
+    engines had their own `urllib.request.urlopen` and so got none of it --
+    including `one337x` and `uindex`, the exact two the browser fallback was
+    built for. Every improvement to retrieve_url had been silently bypassed by
+    the engines that needed it most.
+
+    `eztv` was the sharpest case: its direct call sat in an `except TypeError`
+    branch guarding against "older versions of retrieve_url did not support
+    request_data", which ours has supported for years -- dead code that would
+    have dropped to an unhardened fetch if it ever fired.
+    """
+    problems = []
+    for name in _plugin_files():
+        if name in QUARANTINE:
+            continue
+        src = open(os.path.join(ENGINES_DIR, name + ".py"),
+                   encoding="utf-8", errors="replace").read()
+        for m in _re.finditer(r"^(?!\s*#).*\burlopen\s*\(", src, _re.M):
+            line = src[:m.start()].count("\n") + 1
+            problems.append(f"{name}.py:{line} calls urlopen directly")
+    if problems:
+        return "fail", ("engines must fetch through helpers.retrieve_url: "
+                        + "; ".join(problems))
+    return "pass", (f"all {len(_plugin_files())} engines fetch through "
+                    "helpers.retrieve_url — one choke point, no bypasses")
+
+
+@test("one337x/uindex: the parsers match the markup the sites actually serve", "Torrents")
+def walled_engine_parsers_match_real_markup():
+    """Both engines were zero for two stacked reasons, not one.
+
+    Getting past the bot wall exposed the second: their selectors no longer
+    matched. Fixtures below are the real markup, taken from pages fetched
+    through the anti-detect browser on 2026-08-01.
+
+    - 1337x serves `class="coll-1 name"`. The parser required an exact
+      `class="name"`, so every row was skipped on a page holding 20 good ones.
+    - uindex serves `<a href="magnet:..." ... class="sr-magnet">` -- href FIRST.
+      The parser required `class="sr-magnet"` then `href=`, so it matched none
+      of 100 magnets. Its NAME pattern survived only because uindex happens to
+      put class before title on that other tag, so the engine found every name
+      and no link, and reported nothing.
+
+    Attribute order and class-list position are not part of any contract; both
+    patterns must be written so a reordering cannot silently zero the engine.
+    """
+    sys.path.insert(0, ENGINES_DIR)
+    sys.path.insert(0, os.path.join(PROJECT_DIR, "engines"))
+    import re as _re2
+
+    row_1337x = (
+        '<td class="coll-1 name" style="padding-right: 61px;">'
+        '<a href="/sub/42/0/" class="icon"><i class="flaticon-hd"></i></a>'
+        '<a href="/torrent/5093050/The-Matrix-4-Resurrections-2021-1080p-WEBRip-x264/">'
+        'The.Matrix.4.Resurrections.2021.1080p.WEBRip.x264</a></td>'
+        '<td class="coll-2 seeds">8688</td><td class="coll-3 leeches">957</td>'
+        '<td class="coll-date">Dec. 22nd \'21</td>'
+        '<td class="coll-4 size mob-user">2.8 GB<span class="seeds">8688</span></td>'
+    )
+    uindex_tags = (
+        '<a href="magnet:?xt=urn:btih:B6C82DE149515B6000D1424044BD676724883F33'
+        '&dn=Matrix%20Revolutions" class="sr-magnet">M</a>'
+        '<a href="/details.php?id=25085251" class="sr-torrent-link" '
+        'title="Matrix Revolutions (2003) WEBRip 1080p">x</a>'
+    )
+
+    problems = []
+    try:
+        import one337x as m1
+    except Exception as exc:  # pragma: no cover
+        return "skip", f"cannot import one337x: {exc}"
+
+    src1 = open(os.path.join(ENGINES_DIR, "one337x.py"), encoding="utf-8").read()
+    pat1 = _re2.search(r"name_m = re\.search\(r'([^']+)'", src1)
+    if not pat1:
+        problems.append("one337x: no name_m pattern found")
+    elif not _re2.search(pat1.group(1), row_1337x, _re2.DOTALL):
+        problems.append("one337x: name pattern misses class=\"coll-1 name\"")
+
+    src2 = open(os.path.join(ENGINES_DIR, "uindex.py"), encoding="utf-8").read()
+    # Comments quote the OLD broken pattern to explain the bug, so scan code only.
+    code2 = "\n".join(l for l in src2.splitlines() if not l.lstrip().startswith("#"))
+    if 'class="sr-magnet"\\s+href=' in code2:
+        problems.append("uindex: magnet pattern is order-dependent again")
+    found = []
+    for tag in _re2.findall(r'<a\b[^>]*>', uindex_tags):
+        if 'sr-magnet' not in tag:
+            continue
+        h = _re2.search(r'href="(magnet:\?xt=urn:btih:[^"]+)"', tag)
+        if h:
+            found.append(h.group(1))
+    if len(found) != 1:
+        problems.append(f"uindex: href-first magnet tag not matched ({found})")
+
+    # Neither engine may go back to a private fetch.
+    for n, s in (("one337x", src1), ("uindex", src2)):
+        if "retrieve_url" not in s:
+            problems.append(f"{n}: no longer routes through helpers")
+
+    if problems:
+        return "fail", "; ".join(problems)
+    return "pass", ("both parsers match the markup the sites really serve "
+                    "(class lists, href-before-class), and both fetch via helpers")
+
+
 @test("nova2 spawn: the torrent search has a deadline of its own", "Torrents")
 def resolve_torrents_has_a_watchdog():
     """The search could hang forever waiting on nova2, and did.

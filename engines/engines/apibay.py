@@ -1,4 +1,4 @@
-# VERSION: 1.0
+# VERSION: 1.1
 # AUTHORS: ZigZag
 # Apibay — the public PirateBay API mirror (JSON, no scraping needed)
 
@@ -7,6 +7,7 @@ import urllib.parse
 import urllib.request
 import datetime
 
+from helpers import retrieve_url
 from novaprinter import prettyPrinter
 
 
@@ -46,9 +47,10 @@ class apibay:
         api_url = f'{self.url}/q.php?q={urllib.parse.quote(query)}&cat={cat_id}'
 
         try:
-            req = urllib.request.Request(api_url, headers={'User-Agent': self._get_ua()})
-            resp = urllib.request.urlopen(req, timeout=12)
-            data = json.loads(resp.read().decode('utf-8'))
+            # Through helpers: retry + per-attempt deadline + anti-block fallback.
+            raw = retrieve_url(api_url, {'User-Agent': self._get_ua()},
+                               unescape_html_entities=False)
+            data = json.loads(raw)
         except Exception:
             return
 

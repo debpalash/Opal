@@ -1,4 +1,4 @@
-# VERSION: 1.0
+# VERSION: 1.1
 # AUTHORS: Opal
 # Knaben — a torrent metasearch aggregator (JSON POST API, no scraping needed)
 
@@ -6,6 +6,7 @@ import json
 import urllib.parse
 import urllib.request
 
+from helpers import retrieve_url
 from novaprinter import prettyPrinter
 
 
@@ -46,18 +47,14 @@ class knaben:
         }).encode('utf-8')
 
         try:
-            req = urllib.request.Request(
-                self.url,
-                data=body,
-                headers={
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                    'User-Agent': 'Opal',
-                },
-                method='POST',
-            )
-            resp = urllib.request.urlopen(req, timeout=12)
-            data = json.loads(resp.read().decode('utf-8'))
+            # Through helpers: retry + per-attempt deadline + anti-block fallback.
+            # request_data makes urllib issue a POST, same as method='POST'.
+            raw = retrieve_url(self.url, {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'User-Agent': 'Opal',
+            }, body, unescape_html_entities=False)
+            data = json.loads(raw)
         except Exception:
             return
 

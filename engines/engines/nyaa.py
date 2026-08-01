@@ -1,4 +1,4 @@
-# VERSION: 1.5
+# VERSION: 1.6
 # AUTHORS: ZigZag
 
 import json
@@ -6,6 +6,7 @@ import urllib.parse
 import urllib.request
 import datetime
 
+from helpers import retrieve_url
 from novaprinter import prettyPrinter
 
 class nyaa:
@@ -23,12 +24,10 @@ class nyaa:
         return f"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:{ver}.0) Gecko/20100101 Firefox/{ver}.0"
 
     def _fetch(self, url):
-        try:
-            req = urllib.request.Request(url, headers={'User-Agent': self._get_ua()})
-            resp = urllib.request.urlopen(req, timeout=10)
-            return resp.read().decode('utf-8', 'replace')
-        except Exception:
-            return ''
+        # Through helpers, NOT a private urlopen: a private fetch opts the
+        # engine out of the retry, the per-attempt socket deadline and the
+        # anti-block browser fallback that retrieve_url provides.
+        return retrieve_url(url, {'User-Agent': self._get_ua()})
 
     def search(self, what, cat='all'):
         query = urllib.parse.unquote(what)

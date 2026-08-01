@@ -255,7 +255,11 @@ def retrieve_url(url: str, custom_headers: Mapping[str, str] = {}, request_data:
             time.sleep(_RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF) - 1)])
     if response is None:
         # A wall is worth one browser attempt; a dead host is not.
-        if walled:
+        # request_data is None => this was a GET, which is all /api/scrape can
+        # replay. Falling back on a POST would silently reissue it as a GET and
+        # hand the caller a page it never asked for (eztv posts
+        # `layout=def_wlinks`), so a walled POST stays a failure.
+        if walled and request_data is None:
             unblocked = _opal_scrape(url)
             if unblocked:
                 return html.unescape(unblocked) if unescape_html_entities else unblocked
@@ -283,7 +287,7 @@ def retrieve_url(url: str, custom_headers: Mapping[str, str] = {}, request_data:
     # A challenge page served under 200 OK is the failure mode that hides: the
     # engine parses the interstitial and reports zero rows on a fetch that looked
     # like it worked. uindex does exactly this on /search.php.
-    if _looks_walled(0, dataStr):
+    if _looks_walled(0, dataStr) and request_data is None:
         unblocked = _opal_scrape(url)
         if unblocked:
             dataStr = unblocked

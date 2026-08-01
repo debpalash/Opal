@@ -1,4 +1,4 @@
-# VERSION: 1.3
+# VERSION: 1.4
 # AUTHORS: ZigZag
 
 import json
@@ -6,6 +6,7 @@ import urllib.parse
 import urllib.request
 import datetime
 
+from helpers import retrieve_url
 from novaprinter import prettyPrinter
 
 class yts:
@@ -47,9 +48,10 @@ class yts:
             api_url = f'https://movies-api.accel.li/api/v2/list_movies.json?{params}'
 
             try:
-                req = urllib.request.Request(api_url, headers={'User-Agent': self._get_ua()})
-                resp = urllib.request.urlopen(req, timeout=10)
-                data = json.loads(resp.read().decode('utf-8'))
+            # Through helpers: retry + per-attempt deadline + anti-block fallback.
+                raw = retrieve_url(api_url, {'User-Agent': self._get_ua()},
+                                   unescape_html_entities=False)
+                data = json.loads(raw)
             except Exception:
                 break
 

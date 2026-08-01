@@ -1,4 +1,4 @@
-# VERSION: 1.1
+# VERSION: 1.3
 # AUTHORS: ZigZag
 # UIndex — BitTorrent indexer (uindex.org)
 # Uses class-based selectors: sr-magnet, sr-torrent-link
@@ -10,6 +10,7 @@ import html as html_mod
 import datetime
 import ssl
 
+from helpers import retrieve_url
 from novaprinter import prettyPrinter
 
 
@@ -42,16 +43,15 @@ class uindex:
         return f"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:{ver}.0) Gecko/20100101 Firefox/{ver}.0"
 
     def _fetch(self, url):
-        try:
-            ctx = ssl.create_default_context()
-            req = urllib.request.Request(url, headers={
-                'User-Agent': self._get_ua(),
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            })
-            resp = urllib.request.urlopen(req, timeout=12, context=ctx)
-            return resp.read().decode('utf-8', 'replace')
-        except Exception:
-            return ''
+        # Through helpers, NOT a private urlopen: a private fetch opts the
+        # engine out of the retry, the per-attempt socket deadline and the
+        # anti-block browser fallback that retrieve_url provides.
+        # uindex serves a Cloudflare interstitial on /search.php under a 200,
+        # so the browser fallback is the only thing that gets a real page here.
+        return retrieve_url(url, {
+            'User-Agent': self._get_ua(),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        }, None, ssl.create_default_context())
 
     def search(self, what, cat='all'):
         query = urllib.parse.unquote(what)
@@ -71,10 +71,20 @@ class uindex:
             #   <a class="sr-torrent-link" href="/details.php?id=..." title="TORRENT NAME">
 
             # Find all magnet links with class="sr-magnet"
-            magnet_matches = re.findall(
-                r'class="sr-magnet"\s+href="(magnet:\?xt=urn:btih:[^"]+)"',
-                page_html
-            )
+            # Attribute ORDER is not part of the contract. uindex serves
+            #   <a href="magnet:?xt=..." ... class="sr-magnet">
+            # i.e. href FIRST, so a `class="sr-magnet"\s+href="..."` pattern
+            # matched nothing on a page carrying 100 magnets. (The name pattern
+            # below happened to survive only because uindex puts class before
+            # title on THAT tag -- so the engine found every name and no link,
+            # and reported zero.) Scan the tag, then pull the href out of it.
+            magnet_matches = []
+            for tag in re.findall(r'<a\b[^>]*>', page_html):
+                if 'sr-magnet' not in tag:
+                    continue
+                href = re.search(r'href="(magnet:\?xt=urn:btih:[^"]+)"', tag)
+                if href:
+                    magnet_matches.append(href.group(1))
             # Find all torrent name links with class="sr-torrent-link"
             name_matches = re.findall(
                 r'class="sr-torrent-link"[^>]*title="([^"]*)"',
