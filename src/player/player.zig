@@ -1041,6 +1041,68 @@ fn mpvRenderUpdateCallback(_: ?*anyopaque) callconv(.c) void {
     }
 }
 
+/// Apply the current picture preset to `p`, resolving `auto` against the file's
+/// own colour metadata.
+///
+/// Called on MPV_EVENT_FILE_LOADED (colour metadata is not known before that) and
+/// whenever the user changes the preset on a live player. The four properties
+/// are the ones Opal's video equalizer already drives, so this is a different
+/// way of setting settings that were always there — not a second pipeline.
+///
+/// Note this is a GRADE, not HDR passthrough: `vo=libmpv` + SW render means mpv
+/// rasterises to a CPU buffer and the display never sees HDR metadata. What the
+/// `hdr` preset fixes is the flat, grey, desaturated look HDR material has when
+/// shown through an SDR path.
+pub fn applyPicturePreset(p: anytype) void {
+    const av_pure = @import("av_pure.zig");
+
+    // mpv reports these as strings on video-params; absent (audio, or not yet
+    // decoded) reads as empty, which isHdrVideo treats as "not HDR".
+    var gamma_buf: [32]u8 = undefined;
+    var prim_buf: [32]u8 = undefined;
+    const gamma = getPropStringInto(p.mpv_ctx, "video-params/gamma", &gamma_buf);
+    const primaries = getPropStringInto(p.mpv_ctx, "video-params/primaries", &prim_buf);
+
+    const chosen = av_pure.resolveAuto(
+        av_pure.picturePresetFromInt(state.app.picture_preset),
+        gamma,
+        primaries,
+    );
+    const v = av_pure.pictureValues(chosen);
+
+    const props = [_]struct { prop: [*:0]const u8, val: i32 }{
+        .{ .prop = "brightness", .val = v.brightness },
+        .{ .prop = "contrast", .val = v.contrast },
+        .{ .prop = "saturation", .val = v.saturation },
+        .{ .prop = "gamma", .val = v.gamma },
+    };
+    var buf: [16]u8 = undefined;
+    for (props) |pr| {
+        const s = std.fmt.bufPrintZ(&buf, "{d}", .{av_pure.clampVideoFilter(pr.val)}) catch continue;
+        _ = c.mpv.mpv_set_property_string(p.mpv_ctx, pr.prop, s.ptr);
+    }
+}
+
+/// The loaded video's transfer function (`pq`, `hlg`, `bt.1886`, …), or empty
+/// when nothing is loaded. Lets the UI show what `auto` actually resolved to
+/// instead of an opaque "Auto".
+pub fn colorGammaOf(p: anytype, buf: []u8) []const u8 {
+    return getPropStringInto(p.mpv_ctx, "video-params/gamma", buf);
+}
+
+/// Read an mpv string property into `buf`, returning a slice of it (empty when
+/// the property is unset). mpv owns the returned string, so it is copied out and
+/// freed here rather than escaping.
+fn getPropStringInto(ctx: ?*c.mpv.mpv_handle, name: [*:0]const u8, buf: []u8) []const u8 {
+    const s = c.mpv.mpv_get_property_string(ctx, name);
+    if (s == null) return "";
+    defer c.mpv.mpv_free(@ptrCast(s));
+    const span = std.mem.span(s);
+    const n = @min(span.len, buf.len);
+    @memcpy(buf[0..n], span[0..n]);
+    return buf[0..n];
+}
+
 pub fn updateTorrentBackgroundTasks() void {
     for (state.app.players.items) |p| {
         // PUMP MPV EVENTS
@@ -1051,6 +1113,11 @@ pub fn updateTorrentBackgroundTasks() void {
             if (ev.*.event_id == c.mpv.MPV_EVENT_START_FILE) {
                 p.provider = .mpv;
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_FILE_LOADED) {
+                // Colour metadata is known now, which is the earliest the `auto`
+                // picture preset can decide anything — before this, video-params
+                // is empty and every file would look SDR.
+                applyPicturePreset(p);
+
                 // Tracks are parsed now. If the media brought no subtitle track
                 // (no embedded stream, no sidecar picked up by sub-auto=fuzzy),
                 // kick an automatic OpenSubtitles fetch for the best match.

@@ -1584,6 +1584,45 @@ pub fn renderLiquidGlassOverlay() void {
             }
         }
 
+        // Picture preset — cycles Auto → Standard → HDR → Cinema → TV Show →
+        // Vivid. On the transport bar rather than buried in Settings because it
+        // is a per-viewing choice (a film at night wants different handling from
+        // an episode at noon), and because `Auto` needs to be visible: it is the
+        // only affordance that tells the user HDR material was detected and
+        // corrected. The label doubles as the readout.
+        {
+            const av_pure = @import("../player/av_pure.zig");
+            const cur = av_pure.picturePresetFromInt(state.app.picture_preset);
+            // Show what Auto actually resolved to, not just "Auto" — otherwise
+            // there is no way to tell whether the HDR correction is active.
+            var gbuf: [32]u8 = undefined;
+            const label = blk: {
+                if (cur != .auto) break :blk av_pure.pictureLabel(cur);
+                const g = player.colorGammaOf(active_p, &gbuf);
+                break :blk if (av_pure.isHdrVideo(g, "")) "Auto \u{00B7} HDR" else "Auto";
+            };
+            if (dvui.button(@src(), label, .{}, .{
+                .data_out = &wd,
+                .color_fill = transparent,
+                .color_text = if (cur == .auto) theme.colors.text_primary else theme.colors.accent,
+                .border = dvui.Rect.all(0),
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .gravity_y = 0.5,
+                .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+                .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
+            })) {
+                const next: u8 = (@intFromEnum(cur) + 1) % 6;
+                state.app.picture_preset = next;
+                // Apply to every open player, not just the active one — the
+                // preset is a global viewing preference, and a second window
+                // left on the old grade would look like a bug.
+                for (state.app.players.items) |p| player.applyPicturePreset(p);
+                state.markConfigDirty();
+                dvui.refresh(null, @src(), null);
+            }
+            components.tip(@src(), wd, "Picture preset — Auto detects HDR and corrects it for this display");
+        }
+
         // Fullscreen toggle. (This button used to seek +10s; seeking forward is
         // still on the right-arrow key, which is where it always was.)
         {

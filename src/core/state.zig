@@ -563,6 +563,10 @@ pub const AppState = struct {
     // Video color filters — persisted i32 in mpv's -100..100 range. Replayed at
     // player init (player.zig) so they survive restart / apply to new files;
     // written by the Settings ± buttons and clamped via av_pure.clampVideoFilter.
+    /// Picture preset (av_pure.PicturePreset as an int). Default `auto`, which
+    /// applies the HDR correction only to material whose transfer function says
+    /// it is HDR. Stored as an int so config round-tripping stays trivial.
+    picture_preset: usize = 0,
     vf_brightness: i32 = 0,
     vf_contrast: i32 = 0,
     vf_saturation: i32 = 0,

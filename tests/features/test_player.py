@@ -1202,3 +1202,58 @@ def test_loading_screen_progress():
     return "pass", ("art contained at native scale, word-boundary ellipsis, and a live "
                     "phase/buffer/rate/peers/elapsed readout with a painted piece bar; "
                     "all decisions routed through loading_pure (dvui draws are GUI-only)")
+
+
+@test("Picture presets: auto-HDR detection wired end to end", "Player")
+def test_picture_presets():
+    """One switch for colour/contrast/shadows, with an HDR-aware Auto.
+
+    Opal renders via `vo=libmpv` + MPV_RENDER_API_TYPE_SW: mpv rasterises to a
+    CPU buffer that SDL blits, so there is no swapchain to hand HDR metadata to
+    and `target-colorspace-hint` has nothing to act on -- true HDR passthrough is
+    not reachable from this architecture. What IS reachable, and is what people
+    actually complain about, is that HDR material shown through an SDR path
+    looks flat and grey because it was graded for a far higher peak luminance.
+
+    The preset drives the same four equalizer properties Opal's Video Filters
+    settings already drive, so this is a new way to set existing controls rather
+    than a second pipeline.
+    """
+    avp = _src("src/player/av_pure.zig")
+    ply = _src("src/player/player.zig")
+    ftr = _src("src/ui/footer.zig")
+    cfg = _src("src/core/config.zig")
+    st = _src("src/core/state.zig")
+    bld = _src("build.zig")
+
+    checks = {
+        # Pure policy, tested next to the values it defines.
+        "preset enum": "pub const PicturePreset = enum" in avp,
+        "values fn": "pub fn pictureValues(" in avp,
+        "hdr detection": "pub fn isHdrVideo(" in avp,
+        "auto resolution": "pub fn resolveAuto(" in avp,
+        "corrupt config -> auto": "pub fn picturePresetFromInt(" in avp,
+        # The gamut/dynamic-range distinction is the easy thing to get wrong.
+        "bt.2020 alone is not HDR": "WIDE GAMUT" in avp or "gamut hint" in avp,
+        "regression test for it": "bt.1886" in avp and "bt.2020" in avp,
+        # Applied where colour metadata first exists, and on user change.
+        "applied on file load": "applyPicturePreset(p);" in ply
+                                and "MPV_EVENT_FILE_LOADED" in ply,
+        "reads video-params": '"video-params/gamma"' in ply,
+        "routes through pure": "av_pure.resolveAuto(" in ply,
+        "clamps before setting": "av_pure.clampVideoFilter(" in ply,
+        # Reachable from the transport bar, not buried in Settings.
+        "control on the player bar": "picture_preset" in ftr,
+        "applies to every player": "players.items) |p| player.applyPicturePreset" in ftr,
+        # Persisted.
+        "state field": "picture_preset: usize" in st,
+        "config saves": 'setKey("picture_preset"' in cfg,
+        "config loads via pure": "picturePresetFromInt(" in cfg,
+        # Unit tests registered.
+        "av_pure tests registered": "av_pure.zig" in bld,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "picture preset wiring incomplete: " + ", ".join(missing)
+    return "pass", ("6 presets, Auto keyed off the transfer function (not the "
+                    "gamut), applied on load + on change, persisted")

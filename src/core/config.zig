@@ -56,6 +56,7 @@ pub fn save() void {
     setKey("live_asr", if (state.app.live_asr_enabled) "1" else "0");
     setKey("dubbing_enabled", if (state.app.dubbing_enabled) "1" else "0");
     setKey("eq_preset", fmtInt(&fb, state.app.eq_preset));
+    setKey("picture_preset", fmtInt(&fb, state.app.picture_preset));
     setKey("download_rate_limit", fmtInt(&fb, @as(usize, @intCast(state.app.download_rate_limit))));
     setKey("http_dl_segments", fmtInt(&fb, @as(usize, state.app.http_dl_segments)));
     setKey("http_dl_max_concurrent", fmtInt(&fb, @as(usize, state.app.http_dl_max_concurrent)));
@@ -325,6 +326,12 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.dubbing_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "eq_preset")) {
         state.app.eq_preset = std.fmt.parseInt(usize, val, 10) catch 0;
+    } else if (std.mem.eql(u8, key, "picture_preset")) {
+        // Routed through the pure mapping so a corrupt value lands on `auto`
+        // rather than whatever integer happened to be stored.
+        const avp = @import("../player/av_pure.zig");
+        state.app.picture_preset = @intFromEnum(avp.picturePresetFromInt(
+            std.fmt.parseInt(usize, val, 10) catch 0));
     } else if (std.mem.eql(u8, key, "download_rate_limit")) {
         state.app.download_rate_limit = @import("../player/av_pure.zig").sanitizeDownloadLimit(std.fmt.parseInt(i32, val, 10) catch 0);
         // Session may already be up (torrent_init worker) — apply now; if not,
