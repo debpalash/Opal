@@ -690,7 +690,17 @@ function runSearch(){
   }, 900);
 }
 function renderResults(rs){
-  const html = rs.slice(0, 60).map(r => `
+  // Sort by seeds, descending. The API returns results in ARRIVAL order — the
+  // order engines happened to answer in — so a 0-seed academic torrent that
+  // replied first outranked a 6130-seed release that replied second. Seeds are
+  // the one signal that says "this will actually download", so they order the
+  // list. Ties and unknown counts fall back to arrival order, which keeps the
+  // sort stable rather than shuffling equal rows on every repaint.
+  const seedsOf = (r) => { const n = parseInt(r.seeds, 10); return Number.isFinite(n) ? n : -1; };
+  const ranked = rs.map((r, i) => [r, i])
+                   .sort((a, b) => (seedsOf(b[0]) - seedsOf(a[0])) || (a[1] - b[1]))
+                   .map(([r]) => r);
+  const html = ranked.slice(0, 60).map(r => `
     <div class="result">
       <div class="t">${esc(r.title)}</div>
       <div class="m">
