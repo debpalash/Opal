@@ -43,6 +43,15 @@ pub const ResolvedItem = struct {
     source: SourceType = .torrent,
     quality: u8 = 0, // 0=unknown, 1=480, 2=720, 3=1080, 4=4K
     seeds: u16 = 0,
+    /// Payload size. Every torrent backend already reports this and every one of
+    /// them threw it away, so the list could not show a size and
+    /// `torrent_risk_pure.assess` was called with 0 — disabling its entire
+    /// size-based arm (a "1080p BluRay" that is 4 MB is the classic scam, and
+    /// nothing could see it). 0 means genuinely unknown.
+    size_bytes: u64 = 0,
+    /// Leechers. Seeds alone hide the difference between a dead torrent and a
+    /// busy one; seeds/leech is the ratio people actually judge a swarm by.
+    leech: u16 = 0,
     match_pct: u8 = 0, // 0-100% keyword match score for UI display
     score: u32 = 9999, // cached composite sort score (lower = better)
     is_nsfw: bool = false, // computed at insert from item name
@@ -1158,9 +1167,9 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
         var it = std.mem.splitScalar(u8, line, '|');
         const link = it.next() orelse continue;
         const name = it.next() orelse continue;
-        _ = it.next(); // size
+        const size_str = it.next() orelse continue; // bytes, or "-1" when unknown
         const seeds_str = it.next() orelse continue;
-        _ = it.next(); // leech
+        const leech_str = it.next() orelse continue;
         const engine = it.next() orelse continue;
 
         if (name.len < 3 or link.len < 5) continue;
@@ -1178,6 +1187,13 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
 
         item.quality = detectQuality(name);
         item.seeds = std.fmt.parseInt(u16, seeds_str, 10) catch 0;
+        item.leech = std.fmt.parseInt(u16, leech_str, 10) catch 0;
+        // nova2's contract is bytes, with -1 for "unknown" — which parses as a
+        // huge u64 if read unsigned, so it goes through i64 first.
+        item.size_bytes = blk: {
+            const v = std.fmt.parseInt(i64, std.mem.trim(u8, size_str, " \t"), 10) catch break :blk 0;
+            break :blk if (v > 0) @intCast(v) else 0;
+        };
 
         // Clean engine name from URL
         var eng_buf: [32]u8 = undefined;
@@ -1473,6 +1489,9 @@ fn resolveTorznabId(src_id: []const u8, query_buf: [256]u8, qlen: usize) void {
 
         item.quality = detectQuality(title);
         item.seeds = tz.seeders(block);
+        // torznab_pure already parses this (<size>, the torznab attr, then the
+        // enclosure length) and it was being dropped on the floor.
+        item.size_bytes = tz.sizeBytes(block);
 
         var det: [128]u8 = undefined;
         const dstr = std.fmt.bufPrint(&det, "Torrent · Torznab · {d} seeds", .{item.seeds}) catch "Torrent · Torznab";

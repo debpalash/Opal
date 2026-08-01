@@ -632,6 +632,24 @@ pub fn triggerSearch(query_text: []const u8) void {
     }
 
     search_abort.store(false, .release);
+
+    // Pre-warm the anti-detect browser, non-blocking.
+    //
+    // Walled engines (1337x, uindex) reach it through /api/scrape, but the
+    // bridge takes ~20s to boot and fetchHtmlBlocking gives up waiting after
+    // that — so the FIRST walled search after launch was a guaranteed miss, and
+    // only the retry returned rows. Starting it here means it is coming up while
+    // the engines are still fetching, and it is already warm (~2s per scrape) by
+    // the time one of them is actually blocked.
+    //
+    // Gated on the user having opted into browser-backed scraping AND having an
+    // engine installed, so this never spawns a ~200 MB browser for someone who
+    // does not use it. ensureBridge() is itself a no-op once running.
+    if (state.app.scrape_use_browser) {
+        const browser = @import("browser.zig");
+        if (browser.engineReady(browser.active_engine)) browser.ensureBridge();
+    }
+
     history.addSearchHistory(query_text);
     const query = @import("../core/alloc.zig").allocator.dupe(u8, query_text) catch return;
     search_thread = std.Thread.spawn(.{}, asyncSearchTask, .{ query, new_gen }) catch {
@@ -1787,11 +1805,14 @@ fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit
 fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedItem) void {
     const resolver = @import("resolver.zig");
 
-    // Scam heuristics only apply to torrent listings (universal results carry
-    // no size, so name-only assessment). Block = play/queue refuse the row.
+    // Scam heuristics only apply to torrent listings. The size argument used to
+    // be a hardcoded 0 because ResolvedItem carried no size, which silently
+    // disabled every size-based rule in assess() — a "1080p BluRay" that is 4 MB
+    // is the classic scam and nothing could see it. The backends always had the
+    // number; it is now kept.
     const risk_pure = @import("torrent_risk_pure.zig");
     const risk = if (item.source == .torrent)
-        risk_pure.assess(item.name[0..item.name_len], 0)
+        risk_pure.assess(item.name[0..item.name_len], @floatFromInt(item.size_bytes))
     else
         risk_pure.Assessment{};
 
@@ -1850,27 +1871,20 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         .gravity_y = 0.5,
     });
 
-    // Muted meta: quality · seeds — compact, right of the title.
+    // Muted meta: quality · size · seeds/leech. Composition is pure and tested
+    // (search_meta_pure.metaLine) so the formatting rules are not buried in a
+    // draw call.
     {
-        var meta_buf: [40]u8 = undefined;
-        var w: usize = 0;
-        const q_text: []const u8 = switch (item.quality) {
-            4 => "4K",
-            3 => "1080p",
-            2 => "720p",
-            1 => "480p",
-            else => "",
-        };
-        if (q_text.len > 0) {
-            @memcpy(meta_buf[0..q_text.len], q_text);
-            w = q_text.len;
-        }
-        if (item.seeds > 0) {
-            const rest = std.fmt.bufPrint(meta_buf[w..], "{s}{d} seeds", .{ if (w > 0) " · " else "", item.seeds }) catch "";
-            w += rest.len;
-        }
-        if (w > 0) {
-            _ = dvui.label(@src(), "{s}", .{meta_buf[0..w]}, .{
+        const meta_pure = @import("search_meta_pure.zig");
+        var meta_buf: [64]u8 = undefined;
+        const meta = meta_pure.metaLine(.{
+            .quality = item.quality,
+            .size_bytes = item.size_bytes,
+            .seeds = item.seeds,
+            .leech = item.leech,
+        }, &meta_buf);
+        if (meta.len > 0) {
+            _ = dvui.label(@src(), "{s}", .{meta}, .{
                 .id_extra = idx + 9600,
                 .color_text = theme.colors.text_secondary,
                 .gravity_y = 0.5,

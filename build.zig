@@ -1100,6 +1100,16 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_torznab_pure).step);
 
+    // Search-result meta line: size/seed/leech formatting and field omission.
+    const test_search_meta_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/search_meta_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_search_meta_pure).step);
+
     // macOS media-key bridge: remote-command decode + Control Center seek
     // clamp + Now Playing playback rate (media_remote.zig routes the polled
     // commands through these).
