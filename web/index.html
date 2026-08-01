@@ -695,7 +695,7 @@ function renderResults(rs){
       <div class="t">${esc(r.title)}</div>
       <div class="m">
         ${r.seeds ? `<span>▲ ${esc(String(r.seeds))}</span>` : ''}
-        ${r.size ? `<span>${esc(String(r.size))}</span>` : ''}
+        ${fmtSize(r.size) ? `<span>${esc(fmtSize(r.size))}</span>` : ''}
         <span class="src">${esc(r.source || '')}</span>
         <button class="play" data-url="${encodeURIComponent(r.magnet || r.url || '')}">Play</button>
       </div>
@@ -1851,9 +1851,14 @@ $('jf-disconnect').onclick = async () => { try { await api('/jellyfin/disconnect
 // ── RSS ──
 // GET /rss -> {feeds:[name], items:[{title,seeds,peers,size,magnet}], fetching}.
 // /rss/refresh?idx=N re-fetches feed N; items carry a magnet -> /load like Search.
+// The API sends sizes as a BYTE COUNT, sometimes as a numeric string and
+// sometimes as -1 for "the source did not say". Coerce and reject the
+// non-values here rather than at each call site — the search results list
+// rendered `r.size` straight through and showed rows reading "69026891608".
 function fmtSize(b){
-  if (!b) return '';
-  const u = ['B','KB','MB','GB','TB']; let i = 0, n = b;
+  const n0 = typeof b === 'number' ? b : parseFloat(b);
+  if (!Number.isFinite(n0) || n0 <= 0) return '';
+  const u = ['B','KB','MB','GB','TB']; let i = 0, n = n0;
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
   return (n >= 10 || i === 0 ? Math.round(n) : n.toFixed(1)) + ' ' + u[i];
 }

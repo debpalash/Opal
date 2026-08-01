@@ -1,4 +1,4 @@
-academictorrents: 1.5
+academictorrents: 1.6
 apibay: 1.1
 bitsearch: 1.2
 eztv: 1.24

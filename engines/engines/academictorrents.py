@@ -1,4 +1,4 @@
-# VERSION: 1.5
+# VERSION: 1.6
 # AUTHORS: LightDestory (https://github.com/LightDestory) achernet (https://github.com/achernet)
 import concurrent.futures
 import re
@@ -36,12 +36,27 @@ class academictorrents(object):
         self.filters = []
 
     def _torrent_filter(self, item) -> bool:
-        title: str = item.findtext("title").lower()
-        desc: str = item.findtext("description").lower()
-        for f in self.filters:
-            if f in title or f in desc:
-                return True
-        return False
+        """Every query term must appear, in the title or the description.
+
+        This was an OR: one matching term was enough. Academic dataset
+        descriptions are long prose, so a common word carried the whole
+        catalogue -- searching "Spider-Man: Brand New Day" returned 25 rows of
+        Crossref data files, MIT lecture videos and Wikipedia dumps, because
+        "new" and "day" appear somewhere in almost every description. A
+        multi-word query means all of the words; AND is what the user asked for.
+
+        Empty terms are dropped first: `"" in title` is always True, so a query
+        with a trailing or doubled space matched EVERY item even under AND.
+        """
+        terms = [f for f in self.filters if f]
+        if not terms:
+            return False
+        title: str = (item.findtext("title") or "").lower()
+        desc: str = (item.findtext("description") or "").lower()
+        for f in terms:
+            if f not in title and f not in desc:
+                return False
+        return True
 
     def _retrieve_database(self):
         folder_path = Path(f"{system_paths[sys.platform]}/qbit_plugins_data")

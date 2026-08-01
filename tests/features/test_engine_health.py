@@ -859,3 +859,68 @@ def retrieve_url_retries_transient_failures():
         helpers.urllib.request.urlopen = real_open
         helpers.time.sleep = real_sleep
     return "pass", "retries transient failures 3x, honours attempts=1, skips 4xx"
+
+
+@test("academictorrents: a multi-word query means ALL the words", "Torrents")
+def academictorrents_and_filter():
+    """Found by using the app: 25 of 48 rows were noise.
+
+    Searching "Spider-Man: Brand New Day" in the web UI returned Crossref data
+    files, MIT lecture videos and Wikipedia dumps from academictorrents. The
+    filter was an OR — one matching term was enough — and academic dataset
+    descriptions are long prose, so common words like "new" and "day" appear
+    somewhere in nearly every item and carried the entire catalogue.
+
+    Also pins the empty-term case: `"" in title` is always True, so a query with
+    a trailing or doubled space matched EVERY item even after switching to AND.
+    """
+    sys.path.insert(0, ENGINES_DIR)
+    sys.path.insert(0, os.path.join(PROJECT_DIR, "engines"))
+    try:
+        import academictorrents as m
+    except Exception as exc:  # pragma: no cover
+        return "skip", f"cannot import academictorrents: {exc}"
+
+    import xml.etree.ElementTree as ET
+
+    def item(title, desc):
+        e = ET.Element("item")
+        ET.SubElement(e, "title").text = title
+        ET.SubElement(e, "description").text = desc
+        return e
+
+    eng = m.academictorrents(output=False)
+    # The exact row that leaked: matches "new"/"day" in prose, nothing else.
+    noise = item("March 2026 Public Data File from Crossref",
+                 "A new public data file released this day for research use.")
+    real = item("Spider-Man Brand New Day 2026 1080p",
+                "brand new day movie release")
+
+    eng.filters = ["spider-man", "brand", "new", "day"]
+    if eng._torrent_filter(noise):
+        return "fail", ("OR filter is back: an unrelated dataset matched a "
+                        "multi-word query on common words alone")
+    if not eng._torrent_filter(real):
+        return "fail", "AND filter rejected an item containing every term"
+
+    # A single term still works — this is not an accidental exact-match filter.
+    eng.filters = ["crossref"]
+    if not eng._torrent_filter(noise):
+        return "fail", "single-term search stopped matching"
+
+    # Empty terms must not match everything.
+    eng.filters = ["", ""]
+    if eng._torrent_filter(noise):
+        return "fail", 'empty query terms matched (`"" in title` is always True)'
+    eng.filters = ["crossref", ""]
+    if not eng._torrent_filter(noise):
+        return "fail", "a stray empty term broke an otherwise valid query"
+
+    # Missing title/description must not raise.
+    bare = ET.Element("item")
+    eng.filters = ["anything"]
+    try:
+        eng._torrent_filter(bare)
+    except Exception as exc:
+        return "fail", f"item with no title/description raised: {exc!r}"
+    return "pass", "all terms required; empty terms dropped; single-term search intact"
