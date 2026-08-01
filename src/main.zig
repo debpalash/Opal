@@ -749,7 +749,12 @@ fn appFrame() !dvui.App.Result {
     if (!device_scale_applied and state.app.config_loaded.load(.acquire)) {
         device_scale_applied = true;
         if (state.app.ui_scale_auto) {
-            state.app.ui_scale = @import("core/scale_pure.zig").deviceScale(dvui.windowNaturalScale());
+            // The panel probe is Linux-only and returns null everywhere else;
+            // deviceScale only consults it when the OS reported no usable
+            // content scale, so macOS/Windows behaviour is unchanged.
+            const scale_pure = @import("core/scale_pure.zig");
+            const panel = @import("core/display_info.zig").probe() orelse scale_pure.Display{};
+            state.app.ui_scale = scale_pure.deviceScale(dvui.windowNaturalScale(), panel);
         }
     }
 
