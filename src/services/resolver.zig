@@ -433,13 +433,116 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
 var run_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 threadlocal var worker_gen: u32 = 0;
 
+/// Where a backend's results land.
+///
+/// Every backend calls `pushResult`, which wrote straight into the global
+/// `results` array. That is what made a background warm impossible: filling the
+/// cache for a title the user is likely to watch next would have overwritten the
+/// list they were looking at. A sink makes the destination a property of the
+/// WORKER rather than of the module.
+///
+/// The live sink is still the globals the UI renders — `results`,
+/// `result_count`, `results_from_cache` — so the search path is unchanged. Only
+/// a worker that opts in writes somewhere else.
+pub const Sink = struct {
+    items: []ResolvedItem,
+    count: usize = 0,
+    /// Mirrors `results_from_cache`: the first live row of a wave clears a
+    /// cache-seeded placeholder so stale rows never mix with revalidated ones.
+    from_cache: bool = false,
+    /// The query these results are scored against. The live sink leaves this
+    /// empty and falls back to the module-level query; a warm carries its own,
+    /// because it is resolving something other than what the user just typed.
+    query: []const u8 = "",
+};
+
+/// Sink for THIS thread. null = the live results the UI renders.
+///
+/// Thread-local rather than a parameter because backends are spawned as bare
+/// `fn(query_buf, qlen)` thread entry points and call `pushResult` from deep
+/// inside their own parsing code; threading a sink through every one of them
+/// would touch far more code than it protects.
+threadlocal var thread_sink: ?*Sink = null;
+
+/// Warm the search cache for `query` WITHOUT touching the live results.
+///
+/// This is the whole point of the sink. Opal already caches search results
+/// (SWR: `populateFromCache` / `storeToCache`), but only as a side effect of the
+/// user searching — so the first search for the next episode of a show they are
+/// mid-way through is always cold. Warming it in the background makes that one
+/// instant.
+///
+/// Deliberately narrow: it runs the two backends that answer a title in a single
+/// HTTP request (EZTV's JSON API and Torznab/Prowlarr), not the whole 17-backend
+/// fan-out. A warm is speculative work for something the user has NOT asked for,
+/// so it must not cost a full search's worth of network — and those two are the
+/// ones that carry seeds/size for an episode.
+///
+/// Runs on the CALLER's thread; call it from a worker, never the UI thread.
+pub fn warmQuery(query: []const u8) void {
+    if (!state.app.content_cache_enabled) return;
+    if (query.len == 0 or query.len > 255) return;
+
+    const rows = alloc.alloc(ResolvedItem, MAX_RESULTS) catch return;
+    defer alloc.free(rows);
+    var sink = Sink{ .items = rows, .query = query };
+
+    var qbuf: [256]u8 = undefined;
+    @memcpy(qbuf[0..query.len], query);
+
+    const prev = thread_sink;
+    thread_sink = &sink;
+    resolveEztv(qbuf, query.len);
+    resolveTorznab(qbuf, query.len);
+    thread_sink = prev;
+
+    if (sink.count == 0) return;
+
+    const buf = alloc.alloc(u8, SEARCH_BLOB_CAP) catch return;
+    defer alloc.free(buf);
+    const blob = serializeRows(sink.items[0..sink.count], buf) orelse return;
+    var key_buf: [288]u8 = undefined;
+    content_cache.put(cacheKey(&key_buf, query), blob, SEARCH_TTL_S);
+
+    var lb: [96]u8 = undefined;
+    logs.pushLog("info", "resolver", std.fmt.bufPrint(
+        &lb,
+        "warmed {d} results for \"{s}\"",
+        .{ sink.count, query[0..@min(query.len, 40)] },
+    ) catch "warmed search cache", false);
+}
+
 fn pushResult(item: ResolvedItem) bool {
     // Superseded wave (user searched again mid-flight) — drop, don't mix
-    // stale rows for the previous query into the fresh result list.
-    if (worker_gen != run_gen.load(.acquire)) return false;
+    // stale rows for the previous query into the fresh result list. A warm has
+    // no wave to be superseded by, so this only guards the live path.
+    if (thread_sink == null and worker_gen != run_gen.load(.acquire)) return false;
+
+    if (thread_sink) |s| {
+        // Private buffer, single owner: no lock, and no contention with the UI
+        // thread reading `results` every frame.
+        return pushInto(s.items, &s.count, &s.from_cache, item, s.query);
+    }
     results_mutex.lock();
     defer results_mutex.unlock();
-    if (result_count >= MAX_RESULTS) return false;
+    return pushInto(&results, &result_count, &results_from_cache, item, "");
+}
+
+/// The insert itself: filter, dedup, score, insert sorted. Shared by both sinks
+/// so ranking can never differ between what a warm caches and what a live
+/// search shows — a cache that ranked differently from the search would be worse
+/// than no cache.
+///
+/// Caller owns the locking. `query` empty means "use the module-level query"
+/// (the live path), so the live behaviour is byte-for-byte what it was.
+fn pushInto(
+    items: []ResolvedItem,
+    count: *usize,
+    from_cache: *bool,
+    item: ResolvedItem,
+    query: []const u8,
+) bool {
+    if (count.* >= items.len) return false;
 
     // Filter out error/garbage results at the source
     const name = item.name[0..@min(item.name_len, 256)];
@@ -452,13 +555,13 @@ fn pushResult(item: ResolvedItem) bool {
         const dedup = @import("resolver_dedup_pure.zig");
         const url = item.url[0..@min(item.url_len, item.url.len)];
         var d: usize = 0;
-        while (d < result_count) : (d += 1) {
-            if (dedup.sameItem(results[d].url[0..@min(results[d].url_len, results[d].url.len)], url)) return true; // dup — silently dropped
+        while (d < count.*) : (d += 1) {
+            if (dedup.sameItem(items[d].url[0..@min(items[d].url_len, items[d].url.len)], url)) return true; // dup — silently dropped
         }
     }
 
     var scored_item = item;
-    const match_info = computeMatch(scored_item);
+    const match_info = computeMatchAgainst(scored_item, query);
     if (match_info.match_pct == 0) return false;
 
     scored_item.match_pct = match_info.match_pct;
@@ -468,29 +571,29 @@ fn pushResult(item: ResolvedItem) bool {
 
     // SWR: the first live result of a fresh wave replaces the cache-seeded
     // placeholder, so stale cached rows never mix with the revalidated set.
-    if (results_from_cache) {
-        result_count = 0;
-        results_from_cache = false;
+    if (from_cache.*) {
+        count.* = 0;
+        from_cache.* = false;
     }
 
     // Insert sorted by score (lower = better) — compare cached scores, O(n)
-    var insert_at: usize = result_count;
+    var insert_at: usize = count.*;
     var i: usize = 0;
-    while (i < result_count) : (i += 1) {
-        if (results[i].score > score) {
+    while (i < count.*) : (i += 1) {
+        if (items[i].score > score) {
             insert_at = i;
             break;
         }
     }
     // Shift items down
-    if (insert_at < result_count) {
-        var j: usize = result_count;
+    if (insert_at < count.*) {
+        var j: usize = count.*;
         while (j > insert_at) : (j -= 1) {
-            results[j] = results[j - 1];
+            items[j] = items[j - 1];
         }
     }
-    results[insert_at] = scored_item;
-    result_count += 1;
+    items[insert_at] = scored_item;
+    count.* += 1;
     return true;
 }
 
@@ -760,12 +863,20 @@ fn cacheKey(buf: []u8, query: []const u8) []const u8 {
 
 /// Serialize the current `results` (under caller's lock) into `out`.
 fn serializeResults(out: []u8) ?[]u8 {
+    return serializeRows(results[0..@min(result_count, MAX_RESULTS)], out);
+}
+
+/// Serialize an explicit row set. Takes the rows rather than reading the
+/// globals so a sink's private buffer can be persisted with the SAME encoder —
+/// a warm that wrote a different blob shape than the live path would poison the
+/// cache the live path reads back.
+fn serializeRows(rows: []const ResolvedItem, out: []u8) ?[]u8 {
     var w = ccp.Writer.init(out);
-    const n: u16 = @intCast(@min(result_count, MAX_RESULTS));
+    const n: u16 = @intCast(@min(rows.len, MAX_RESULTS));
     w.u16v(n);
     var i: usize = 0;
     while (i < n) : (i += 1) {
-        const it = results[i];
+        const it = rows[i];
         w.blob(it.name[0..@min(it.name_len, it.name.len)]);
         w.blob(it.detail[0..@min(it.detail_len, it.detail.len)]);
         w.blob(it.url[0..@min(it.url_len, it.url.len)]);
@@ -907,8 +1018,11 @@ const MatchInfo = struct { match_pct: u8, score: u32 };
 
 /// Compute match percentage + composite sorting score.
 /// Lower score = better result. match_pct=0 means zero keyword hits (filtered).
-fn computeMatch(item: ResolvedItem) MatchInfo {
-    const query = resolver_query[0..resolver_query_len];
+/// Score `item` against `query_override`, or the module-level query when it is
+/// empty. A warm resolves a title the user has not typed, so it cannot score
+/// against `resolver_query` — every row would match 0% and be dropped.
+fn computeMatchAgainst(item: ResolvedItem, query_override: []const u8) MatchInfo {
+    const query = if (query_override.len > 0) query_override else resolver_query[0..resolver_query_len];
     const name = item.name[0..item.name_len];
 
     var lower_name: [256]u8 = undefined;

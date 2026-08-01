@@ -679,3 +679,51 @@ def test_eztv_api_backend():
         return "fail", "eztv api backend incomplete: " + ", ".join(missing)
     return "pass", ("EZTV served from its JSON API in one request, reusing the "
                     "Stremio IMDb lookup; inert until the source is installed")
+
+
+@test("Resolver: results go to a sink, so a warm cannot clobber a search", "Sources")
+def test_resolver_sink():
+    """pushResult wrote straight into the global results array.
+
+    That is what made a background warm impossible: filling the cache for the
+    next episode of a show would have overwritten the list the user was looking
+    at. The destination is now a property of the WORKER, not the module — the
+    live sink is still the globals the UI renders, so the search path is
+    unchanged, and only a worker that opts in writes elsewhere.
+
+    Both halves had to be de-globalised, not just one: the insert (pushInto) AND
+    the encoder (serializeRows). A warm that wrote a different blob shape than
+    the live path would poison the cache the live path reads back.
+    """
+    rv = _src("src/services/resolver.zig")
+    lib = _src("src/services/tv_library.zig")
+
+    checks = {
+        "sink type exists": "pub const Sink = struct" in rv,
+        "sink is per-thread": "threadlocal var thread_sink" in rv,
+        "insert takes the destination": "fn pushInto(" in rv,
+        "live path still the globals": "pushInto(&results, &result_count, &results_from_cache" in rv,
+        "encoder takes explicit rows": "fn serializeRows(" in rv,
+        "live encoder delegates": "return serializeRows(results[0.." in rv,
+        # Ranking must be shared, or the cache disagrees with the search.
+        "one insert path": rv.count("fn pushInto(") == 1,
+        # A warm scores against its OWN query; the live query would match 0%.
+        "scores against the sink query": "computeMatchAgainst(scored_item, query)" in rv,
+        "sink carries a query": "query: []const u8 = \"\"," in rv,
+        # Real consumer — the sink is not a speculative abstraction.
+        "warm exists": "pub fn warmQuery(" in rv,
+        "warm writes to the cache": "content_cache.put(cacheKey(&key_buf, query)" in rv,
+        # Narrow on purpose: speculative work must not cost a full search.
+        "warm is narrow": "resolveEztv(qbuf, query.len)" in rv and "resolveTorznab(qbuf" in rv,
+        # Superseded-wave guard applies to the live path only; a warm has no wave.
+        "wave guard is live-only": "if (thread_sink == null and worker_gen != run_gen" in rv,
+        # Trigger, bounded.
+        "triggered from Watching": "warmNextUp();" in lib,
+        "one show, once": "if (S.done or S.busy) return;" in lib,
+        "off the UI thread": "std.Thread.spawn(.{}, S.run" in lib,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "resolver sink incomplete: " + ", ".join(missing)
+    return "pass", ("results routed through a per-thread sink; warm fills the "
+                    "cache with the same ranking and encoder, never the live list")

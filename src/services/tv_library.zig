@@ -479,6 +479,7 @@ const CARD_CHROME: f32 = 74; // title + status line + progress bar
 pub fn renderContent() void {
     syncOnce();
     buildSnapshot();
+    warmNextUp();
 
     // Release feed + live countdown. Periodically refreshed (15 min), and fully
     // inert unless the eztv source plugin is installed — its endpoints live in
@@ -692,6 +693,55 @@ fn renderCard(idx: usize, slot: usize) void {
 /// continue-watching row, and a movie drops its watch-history entry. Per-episode
 /// watched flags are left alone in every case, so re-adding a show later does
 /// not silently reset how far the user had got.
+/// Warm the search cache for the next episode of the first show that has one.
+///
+/// Opening Watching is the strongest signal available that the user is about to
+/// press play on something here, and the search that follows is always cold —
+/// SWR only caches as a side effect of a search that already happened. This
+/// spends one background lookup so that press is instant.
+///
+/// Deliberately ONE show, once per page visit, on a detached thread: this is
+/// speculative work for something the user has not asked for, so it must not
+/// turn opening a page into a burst of network traffic. resolver.warmQuery
+/// writes to a private sink, so it cannot disturb whatever the user searches
+/// next (that is exactly what the sink exists for).
+fn warmNextUp() void {
+    const S = struct {
+        var done: bool = false;
+        var busy: bool = false;
+        var q: [256]u8 = std.mem.zeroes([256]u8);
+        var qlen: usize = 0;
+
+        fn run() void {
+            defer busy = false;
+            @import("resolver.zig").warmQuery(q[0..qlen]);
+        }
+    };
+    if (S.done or S.busy) return;
+
+    var i: usize = 0;
+    while (i < row_count) : (i += 1) {
+        const r = &rows[i];
+        if (r.kind != .tv or !r.has_next) continue;
+        const name = r.nameSlice();
+        if (name.len == 0) continue;
+        const q = std.fmt.bufPrint(&S.q, "{s} S{d:0>2}E{d:0>2}", .{
+            name, r.next.season, r.next.episode,
+        }) catch return;
+        S.qlen = q.len;
+        S.done = true;
+        S.busy = true;
+        if (std.Thread.spawn(.{}, S.run, .{})) |t| {
+            t.detach();
+        } else |_| {
+            S.busy = false;
+        }
+        return;
+    }
+    // Nothing to warm — don't re-scan the list on every repaint.
+    if (row_count > 0) S.done = true;
+}
+
 fn removeRow(r: *const tp.Row) void {
     switch (r.kind) {
         .tv => {
