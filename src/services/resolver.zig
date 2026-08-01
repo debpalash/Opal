@@ -103,6 +103,7 @@ pub var status_local = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_rss = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_comics = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_torznab = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_eztv = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_archive = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_nasa = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_commons = std.atomic.Value(SourceStatus).init(.idle);
@@ -362,6 +363,7 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     Pre.set(&status_rss, .rss);
     Pre.set(&status_comics, .comics);
     Pre.set(&status_torznab, .torrent); // generic Torznab/Prowlarr — a torrent source
+    Pre.set(&status_eztv, .torrent); // EZTV JSON API — a torrent source
     Pre.set(&status_archive, .stremio); // Internet Archive — legal HTTP-direct streams (rides the Stremio pill)
     Pre.set(&status_nasa, .stremio); // NASA image/video library — legal HTTP-direct, rides the Stremio pill
     Pre.set(&status_commons, .stremio); // Wikimedia Commons — legal HTTP-direct, rides the Stremio pill
@@ -404,6 +406,7 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     if (sourceOn(.torrent)) Spawn.go(resolveTorrentsNova2, &status_torrent);
     if (sourceOn(.torrent)) Spawn.go(resolveYts, &status_yts);
     if (sourceOn(.torrent)) Spawn.go(resolveTorznab, &status_torznab); // self-hosted Prowlarr/Jackett — inert w/o marker
+    if (sourceOn(.torrent)) Spawn.go(resolveEztv, &status_eztv); // EZTV JSON API — inert w/o the eztv source installed
     if (sourceOn(.anime)) Spawn.go(resolveAnime, &status_anime);
     if (sourceOn(.youtube)) Spawn.go(resolveYouTube, &status_yt);
     if (sourceOn(.comics)) Spawn.go(resolveComics, &status_comics); // readallcomics.com HTML scrape
@@ -871,7 +874,8 @@ fn checkAllDone() void {
         status_yt.load(.acquire) != .searching and
         status_yts.load(.acquire) != .searching and status_local.load(.acquire) != .searching and
         status_rss.load(.acquire) != .searching and status_comics.load(.acquire) != .searching and
-        status_torznab.load(.acquire) != .searching and status_archive.load(.acquire) != .searching and
+        status_torznab.load(.acquire) != .searching and status_eztv.load(.acquire) != .searching and
+        status_archive.load(.acquire) != .searching and
         status_nasa.load(.acquire) != .searching and status_commons.load(.acquire) != .searching and
         status_music.load(.acquire) != .searching and status_radio.load(.acquire) != .searching and
         status_podcast.load(.acquire) != .searching and status_livetv.load(.acquire) != .searching)
@@ -1374,6 +1378,101 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
 /// search. That is the same double-scrape that made the native 1337x resolver
 /// worth deleting rather than repairing.
 const TORZNAB_IDS = [_][]const u8{ "torznab", "prowlarr" };
+
+// ══════════════════════════════════════════════════════════
+// Backend: EZTV (JSON API)
+//
+// EZTV's HTML search is unusable from here and no amount of scraping fixes it:
+// `eztvx.to` resets ~90% of connections, and its live mirror is
+// Cloudflare-walled AND lists rows that link to `/ep/<id>/` detail pages rather
+// than embedding magnets — 50 detail fetches per search, through a browser.
+//
+// The JSON API answers the same question in one request, with the magnet, seeds,
+// peers and byte size inline, and (measured 2026-08-01) is served without a
+// wall. It is IMDb-keyed rather than text-searchable, which is why this waited
+// on `resolveImdbId` being extracted: the query→IMDb step is the Stremio
+// backend's, reused rather than duplicated.
+//
+// Inert until the user installs the `eztv` source — the endpoint lives in the
+// plugin config, never in the binary.
+// ══════════════════════════════════════════════════════════
+
+fn resolveEztv(query_buf: [256]u8, qlen: usize) void {
+    defer {
+        status_eztv.store(.done, .release);
+        checkAllDone();
+    }
+
+    const sc = @import("../core/source_config.zig");
+    const ez = @import("eztv_api_pure.zig");
+
+    // Presence check only; mirrors.fetch re-reads base + mirrors itself.
+    const base_probe = sc.get("eztv", "base") orelse return;
+    if (base_probe.len == 0) return;
+
+    const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
+    if (api_key.len == 0) return; // no TMDB key -> no IMDb id -> nothing to ask
+
+    var imdb_buf: [16]u8 = undefined;
+    var is_series = false;
+    const imdb_len = resolveImdbId(query_buf[0..qlen], api_key, &imdb_buf, &is_series);
+    if (imdb_len == 0) return;
+
+    // EZTV wants the bare number: `imdb_id=tt6048596` returns an empty list,
+    // which reads exactly like "no releases" (see eztv_api_pure.stripTtPrefix).
+    const numeric = ez.stripTtPrefix(imdb_buf[0..imdb_len]);
+    if (!ez.isNumericId(numeric)) return;
+
+    // Heap: a full season's feed runs to hundreds of KB, well past what belongs
+    // on a spawned worker's stack (CLAUDE.md thread rules).
+    const page = alloc.alloc(u8, 512 * 1024) catch return;
+    defer alloc.free(page);
+
+    @import("../core/rate_limit.zig").acquire("eztv", 1.0);
+
+    const Ctx = struct { numeric: []const u8 };
+    const ctx = Ctx{ .numeric = numeric };
+    const build = struct {
+        fn f(cx: Ctx, host: []const u8, url_buf: []u8) ?[]const u8 {
+            return ez.buildUrl(host, cx.numeric, 100, url_buf);
+        }
+    }.f;
+
+    const body = @import("../core/mirrors.zig").fetch("eztv", page, .{
+        .timeout_secs = 12,
+        .user_agent = "Opal/1.0",
+    }, ctx, build) orelse return;
+    if (body.len < 20) return;
+
+    var items: [40]ez.Item = undefined;
+    const n = ez.parseItems(body, &items);
+
+    for (items[0..n]) |it| {
+        var item = std.mem.zeroes(ResolvedItem);
+        item.source = .torrent;
+
+        const nlen = @min(it.title.len, 255);
+        @memcpy(item.name[0..nlen], it.title[0..nlen]);
+        item.name_len = nlen;
+
+        const ulen = @min(it.magnet.len, 2047);
+        @memcpy(item.url[0..ulen], it.magnet[0..ulen]);
+        item.url_len = ulen;
+
+        item.quality = detectQuality(it.title);
+        item.seeds = it.seeds;
+        item.leech = it.peers;
+        item.size_bytes = it.size_bytes;
+
+        var det: [128]u8 = undefined;
+        const dstr = std.fmt.bufPrint(&det, "Torrent · EZTV · {d} seeds", .{it.seeds}) catch "Torrent · EZTV";
+        const dlen = @min(dstr.len, 127);
+        @memcpy(item.detail[0..dlen], dstr[0..dlen]);
+        item.detail_len = dlen;
+
+        _ = pushResult(item);
+    }
+}
 
 fn resolveTorznab(query_buf: [256]u8, qlen: usize) void {
     defer {

@@ -624,3 +624,58 @@ def test_prowlarr_url_against_live_server():
     return "pass", (f"shipped Prowlarr URL returns a parseable torznab feed over HTTP "
                     f"({len(hits)} requests); Jackett's path and a non-numeric "
                     "indexer both 404 as Prowlarr would")
+
+
+@test("EZTV: JSON API backend, sharing the Stremio IMDb lookup", "Sources")
+def test_eztv_api_backend():
+    """EZTV's HTML search is unusable and no amount of scraping fixes it.
+
+    Measured 2026-08-01: eztvx.to resets ~90% of connections, and its live
+    mirror is Cloudflare-walled AND lists rows linking to `/ep/<id>/` detail
+    pages instead of embedding magnets — 50 browser fetches per search. The JSON
+    API answers the same question in ONE request with magnet, seeds, peers and
+    byte size inline, unwalled.
+
+    It is IMDb-keyed rather than text-searchable, which is why this waited on
+    resolveImdbId being extracted from resolveStremio: the query→IMDb step is
+    shared, not duplicated. Two lookups that drifted would send the two backends
+    after different titles for the same query.
+    """
+    rv = _src("src/services/resolver.zig")
+    ez = _src("src/services/eztv_api_pure.zig")
+    bld = _src("build.zig")
+    mf = _json.loads(_src("data/plugins-manifest.json"))
+    eztv = next((p for p in mf["plugins"] if p["id"] == "eztv"), None)
+
+    checks = {
+        "backend exists": "fn resolveEztv(" in rv,
+        "shares the IMDb lookup": "resolveImdbId(query_buf[0..qlen], api_key" in rv,
+        "no duplicate lookup": rv.count("fn resolveImdbId(") == 1,
+        # Fan-out: a status nobody waits on means the search reports done early.
+        "status declared": "pub var status_eztv" in rv,
+        "pre-set before the wave": "Pre.set(&status_eztv" in rv,
+        "spawned": "Spawn.go(resolveEztv, &status_eztv)" in rv,
+        "awaited in checkAllDone": "status_eztv.load(.acquire) != .searching" in rv,
+        # Neutral-ship: inert until the user installs the source.
+        "inert without the source": 'sc.get("eztv", "base") orelse return' in rv,
+        # Carries the fields the result row now shows.
+        "fills size and leech": "item.size_bytes = it.size_bytes;" in rv and "item.leech = it.peers;" in rv,
+        # Heap, not a spawned worker's stack (CLAUDE.md thread rules).
+        "page buffer on the heap": "alloc.alloc(u8, 512 * 1024)" in rv,
+        # Pure parsing, tested.
+        "parser is pure": "pub fn parseItems(" in ez,
+        "tt-prefix guarded": "pub fn stripTtPrefix(" in ez,
+        "id validated before the URL": "pub fn isNumericId(" in ez,
+        "unit tests registered": "eztv_api_pure.zig" in bld,
+        # The quoted-number case: size_bytes arrives as a STRING.
+        "quoted numbers tested": "arrives QUOTED" in ez,
+        # The mirror is justified: the API answers there, the HTML page does not.
+        "api mirror shipped": eztv is not None and
+                              "https://eztv1.xyz" in _json.dumps(eztv["endpoints"].get("mirrors", [])),
+        "eztv version bumped": eztv is not None and eztv["version"] != "1.0.0",
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "eztv api backend incomplete: " + ", ".join(missing)
+    return "pass", ("EZTV served from its JSON API in one request, reusing the "
+                    "Stremio IMDb lookup; inert until the source is installed")

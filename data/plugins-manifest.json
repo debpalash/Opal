@@ -43,12 +43,15 @@
       "id": "eztv",
       "name": "EZTV (TV)",
       "type": "torrent",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
         "base": "https://eztvx.to",
         "api": "https://eztvx.to/api/get-torrents",
         "calendar": "https://eztvx.to/calendar/",
-        "countdown": "https://eztvx.to/countdown/"
+        "countdown": "https://eztvx.to/countdown/",
+        "mirrors": [
+          "https://eztv1.xyz"
+        ]
       },
       "file": "plugins/eztv.json"
     },
@@ -218,7 +221,7 @@
     },
     {
       "id": "comet",
-      "name": "Comet · debrid (Stremio)",
+      "name": "Comet \u00b7 debrid (Stremio)",
       "type": "stremio",
       "version": "1.0.0",
       "endpoints": {
