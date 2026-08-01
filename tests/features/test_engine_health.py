@@ -320,6 +320,85 @@ def engines_do_not_pollute_stdout():
                     "prettyPrinter")
 
 
+@test("The anti-block fallback does not depend on the Web Remote toggle", "Torrents")
+def scrape_endpoint_is_always_reachable():
+    """The wall fallback was off by default, behind an unrelated switch.
+
+    nova2 engines reach Opal's anti-detect browser over HTTP because they are a
+    child process. Hanging that on `remote.start()` tied it to Settings › Web
+    Remote — off by default — so the fallback that gets `1337x` and `uindex` off
+    zero was itself off by default, and the only way to enable it was to also
+    expose the whole JSON API to the LAN. Two unrelated things behind one switch.
+
+    `startLocal()` is a second listener bound to 127.0.0.1 only, always running,
+    serving exactly one route. It must NOT reuse handleApi: this one exists
+    whether or not the user opted in, so its surface stays one route, and it
+    still requires the same bearer token.
+    """
+    rm = _src("src/services/remote.zig")
+    mn = _src("src/main.zig")
+    hp = _src("engines/helpers.py")
+
+    checks = {
+        "local listener exists": "pub fn startLocal(" in rm,
+        "binds loopback only": 'parseIp4("127.0.0.1", local_port)' in rm,
+        "started unconditionally at init": "startLocal();" in mn,
+        # Not gated on the toggle the way remote.start() is.
+        "not behind web_remote": "web_remote_enabled) @import(\"services/remote.zig\").startLocal"
+                                 not in mn,
+        "serves only /api/scrape": 'if (!std.mem.eql(u8, path, "/api/scrape"))' in rm,
+        "still requires the token": "isAuthorized(presented)" in rm.split("fn handleLocalRequest")[1],
+        "does not reuse handleApi": "handleApi(" not in rm.split("fn handleLocalRequest")[1].split("\n}")[0],
+        # Client prefers the always-on port, falls back to the opt-in one.
+        "client tries loopback port first": "OPAL_SCRAPE_PORT" in hp and
+                                            hp.index("OPAL_SCRAPE_PORT") < hp.index("OPAL_REMOTE_PORT"),
+        "client has both ports": "41596" in hp and "41595" in hp,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "scrape listener wiring incomplete: " + ", ".join(missing)
+    return "pass", ("loopback-only /api/scrape runs regardless of Web Remote; "
+                    "client prefers 41596 and falls back to 41595")
+
+
+@test("The stall watchdog runs off the UI thread", "Torrents")
+def stall_watchdog_is_not_frame_driven():
+    """A watchdog gated on the window being drawn cannot rescue anything.
+
+    `tick()` was called from appFrame, and dvui only runs a frame when the window
+    has events. Measured 2026-08-01: a torrent pinned at 0 bytes for over two
+    minutes, far past the 20s threshold, produced no watchdog activity at all
+    while the window sat in the background — the sampler was simply not running.
+
+    It now owns a thread. Two consequences the code has to respect: the toast can
+    no longer be raised inline (state.showToastTyped writes the shared toast
+    buffer with no lock), and the thread must be joined before the torrent
+    session it samples is torn down.
+    """
+    ts = _src("src/services/torrent_stall.zig")
+    mn = _src("src/main.zig")
+
+    checks = {
+        "has its own thread": "std.Thread.spawn(.{}, loop" in ts,
+        "started at init": "torrent_stall.zig\").start();" in mn,
+        "joined at shutdown": "torrent_stall.zig\").stop();" in mn,
+        "stop joins the thread": "t.join();" in ts,
+        # tick() must no longer be driven from the frame path.
+        "frame no longer drives tick": "torrent_stall.zig\").tick();" not in mn,
+        # Toast is handed to the UI thread, not written from the worker.
+        "toast queued not raised": "queueToast(" in ts,
+        "toast drained on UI thread": "drainToast()" in mn,
+        "queue is lock-guarded": "toast_lock.lock();" in ts,
+        "worker does not call showToast directly":
+            "state.showToastTyped" not in ts.split("fn tick()")[1].split("fn report(")[0],
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "stall watchdog threading incomplete: " + ", ".join(missing)
+    return "pass", ("watchdog samples on its own thread, joined at shutdown; "
+                    "toast handed to the UI thread under a lock")
+
+
 @test("nova2 engine catalog: every engine fetches through helpers", "Torrents")
 def engines_do_not_hand_roll_their_own_fetch():
     """A private urlopen opts an engine out of every hardening there is.

@@ -190,24 +190,32 @@ def _opal_api_token() -> Optional[str]:
 
 
 def _opal_scrape(url: str) -> Optional[str]:
-    """Re-fetch `url` through Opal's anti-block fetch. None if unavailable."""
+    """Re-fetch `url` through Opal's anti-block fetch. None if unavailable.
+
+    Two ports, in order. 41596 is the loopback-only listener Opal always runs and
+    is the one to rely on; 41595 is the full JSON API, which only exists when the
+    user has switched on Settings › Web Remote. Trying the always-on port first
+    is what keeps the fallback working with the remote API off.
+    """
     token = _opal_api_token()
     if not token:
         return None
-    port = os.environ.get('OPAL_REMOTE_PORT', '41595')
-    api = 'http://127.0.0.1:{0}/api/scrape?url={1}'.format(
-        port, urllib.parse.quote(url, safe=''))
-    req = urllib.request.Request(api, headers={'Authorization': 'Bearer ' + token})
-    try:
-        resp = urllib.request.urlopen(req, timeout=_SCRAPE_TIMEOUT)
-        body = resp.read().decode('utf-8', 'replace')
-    except Exception:
-        return None  # app not running, or the browser could not get through
-    if not body:
-        return None
-    print('helpers: unblocked {0} via the anti-detect browser'.format(url),
-          file=sys.stderr)  # stdout is the result stream
-    return body
+    ports = [os.environ.get('OPAL_SCRAPE_PORT', '41596'),
+             os.environ.get('OPAL_REMOTE_PORT', '41595')]
+    for port in ports:
+        api = 'http://127.0.0.1:{0}/api/scrape?url={1}'.format(
+            port, urllib.parse.quote(url, safe=''))
+        req = urllib.request.Request(api, headers={'Authorization': 'Bearer ' + token})
+        try:
+            resp = urllib.request.urlopen(req, timeout=_SCRAPE_TIMEOUT)
+            body = resp.read().decode('utf-8', 'replace')
+        except Exception:
+            continue  # not listening on this port, or the browser was blocked
+        if body:
+            print('helpers: unblocked {0} via the anti-detect browser'.format(url),
+                  file=sys.stderr)  # stdout is the result stream
+            return body
+    return None
 
 
 def _is_retryable(exc: Exception) -> bool:

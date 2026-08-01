@@ -10,8 +10,16 @@
 //! curve and the give-up rule live in `torrent_stall_pure.zig` so the shipped
 //! policy IS the tested policy.
 //!
-//! UI thread only (called from appFrame). Self-throttled to 2 Hz; each sample
-//! is three cheap C calls per live torrent.
+//! Runs on its OWN thread, not the UI thread.
+//!
+//! It used to be called from appFrame, which is only reached when dvui draws a
+//! frame — and dvui idles when the window has no events. Measured 2026-08-01: a
+//! torrent pinned at 0 bytes with 0 peers for over two minutes, far past the 20s
+//! threshold, produced no reannounce at all while the window sat in the
+//! background. A watchdog whose entire job is rescuing a wedged download cannot
+//! be gated on the user looking at the window.
+//!
+//! Self-throttled to 2 Hz; each sample is three cheap C calls per live torrent.
 
 const std = @import("std");
 const c = @import("../core/c.zig");
@@ -46,8 +54,68 @@ fn slotFor(id: i32) ?*pure.Watch {
     return &watches[k];
 }
 
-/// Sample every live torrent and act on the pure verdict. Cheap to call every
-/// frame — throttled to 2 Hz internally.
+// ── Toast hand-off (watchdog thread → UI thread) ─────────────────────────────
+//
+// The watchdog runs off-thread now, and state.showToastTyped writes the shared
+// toast buffer with no lock. Queue here, drain on the UI thread.
+var toast_lock: @import("../core/sync.zig").Mutex = .{};
+var toast_buf: [128]u8 = std.mem.zeroes([128]u8);
+var toast_len: usize = 0;
+var toast_pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+fn queueToast(msg: []const u8) void {
+    toast_lock.lock();
+    defer toast_lock.unlock();
+    const n = @min(msg.len, toast_buf.len);
+    @memcpy(toast_buf[0..n], msg[0..n]);
+    toast_len = n;
+    toast_pending.store(true, .release);
+}
+
+/// UI-thread only: show any toast the watchdog queued. Cheap no-op when idle.
+pub fn drainToast() void {
+    if (!toast_pending.load(.acquire)) return;
+    toast_lock.lock();
+    var msg: [128]u8 = undefined;
+    const n = toast_len;
+    @memcpy(msg[0..n], toast_buf[0..n]);
+    toast_pending.store(false, .release);
+    toast_lock.unlock();
+    state.showToastTyped(msg[0..n], .warning);
+}
+
+var running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var thread: ?std.Thread = null;
+
+/// Start the watchdog thread. Idempotent — safe to call from init more than once.
+pub fn start() void {
+    if (running.swap(true, .acq_rel)) return;
+    thread = std.Thread.spawn(.{}, loop, .{}) catch {
+        running.store(false, .release);
+        return;
+    };
+}
+
+/// Stop and join. Called at shutdown so the thread cannot outlive the session.
+pub fn stop() void {
+    if (!running.swap(false, .acq_rel)) return;
+    if (thread) |t| {
+        t.join();
+        thread = null;
+    }
+}
+
+fn loop() void {
+    logs.pushLog("info", "torrent", "Stall watchdog running (own thread, 2 Hz)", false);
+    // 250ms slices rather than one long sleep: stop() must not wait half a
+    // second per shutdown, and tick() throttles itself to 2 Hz anyway.
+    while (running.load(.acquire)) {
+        tick();
+        io_g.sleep(250 * std.time.ns_per_ms);
+    }
+}
+
+/// Sample every live torrent and act on the pure verdict. Throttled to 2 Hz.
 pub fn tick() void {
     const now_ms = io_g.milliTimestamp();
     if (now_ms - last_tick_ms < 500) return;
@@ -93,7 +161,10 @@ pub fn tick() void {
             },
             .give_up => {
                 report(ses, i, "Torrent stalled - no peers after repeated reannounces", .{});
-                state.showToastTyped("Torrent stalled: no peers found. Try another source.", .warning);
+                // Queued, not shown directly: showToastTyped writes app.toast_*
+                // with no lock, and this is no longer the UI thread. drainToast()
+                // below hands it over on the next frame.
+                queueToast("Torrent stalled: no peers found. Try another source.");
             },
         }
     }

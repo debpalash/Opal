@@ -209,6 +209,14 @@ pub fn coreInit() !void {
                 // limetorrent.in (now serving a TheRarBg page under 200 OK)
                 // stayed live in the field after both were corrected upstream.
                 // Only rewrites when the manifest version is strictly newer.
+                // Off-thread so a wedged torrent is rescued whether or not the
+                // window is drawing (see torrent_stall.zig).
+                @import("services/torrent_stall.zig").start();
+                // Loopback-only /api/scrape, always on. The nova2 engines need it
+                // to get past a Cloudflare wall, and gating that on Settings ›
+                // Web Remote meant the fallback was off by default and could only
+                // be enabled by also exposing the JSON API to the LAN.
+                @import("services/remote.zig").startLocal();
                 const pr = @import("services/plugin_repo.zig");
                 pr.loadLocalManifest();
                 _ = pr.migrateStaleSources();
@@ -407,6 +415,10 @@ fn forwardToRunningInstance(arg: []const u8) bool {
 }
 
 pub fn appDeinit() void {
+    // Join the stall watchdog before the torrent session goes away — it samples
+    // that session every 250ms and must not outlive it.
+    @import("services/torrent_stall.zig").stop();
+
     // Stop conversation/voice mode
     const voice = @import("services/ai_voice.zig");
     voice.conversation_active.store(false, .release);
@@ -1148,9 +1160,12 @@ fn appFrame() !dvui.App.Result {
     @import("services/trackers.zig").tick();
 
     // Stall watchdog: a torrent with no new bytes and no peers gets a forced
-    // tracker + DHT reannounce (rate-limited, backed off, capped). Self-
-    // throttled to 2 Hz; no-op with no live torrents.
-    @import("services/torrent_stall.zig").tick();
+    // tracker + DHT reannounce (rate-limited, backed off, capped). It runs on
+    // its OWN thread (started in background init) — driving it from here meant
+    // it only ran while dvui was drawing, and dvui idles when the window has no
+    // events, so a torrent wedged in the background was never rescued. All that
+    // is left on the UI thread is showing a toast the watchdog queued.
+    @import("services/torrent_stall.zig").drainToast();
 
     // Screensaver inhibit: mpv's stop-screensaver requires a VO; we use SW render,
     // so SDL handles it. Toggle when any player is actively playing (not paused).

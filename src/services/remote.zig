@@ -228,6 +228,104 @@ pub fn start() void {
     server_thread = std.Thread.spawn(.{}, serverLoop, .{}) catch null;
 }
 
+/// Loopback-only companion listener, ALWAYS on, serving exactly one route:
+/// `/api/scrape`.
+///
+/// The nova2 Python engines reach Opal's anti-detect browser over HTTP because
+/// they run in a child process. Hanging that on `start()` tied it to Settings ›
+/// Web Remote, which is off by default — so the bot-wall fallback that gets
+/// `1337x` and `uindex` off zero was itself off by default, and turning it on
+/// meant exposing the whole JSON API to the LAN. Two unrelated things behind one
+/// switch.
+///
+/// This binds 127.0.0.1 only, so it is not reachable from the network no matter
+/// what the Web Remote toggle says, and it still requires the same bearer token.
+pub var local_port: u16 = 41596;
+var local_running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var local_thread: ?std.Thread = null;
+
+pub fn startLocal() void {
+    if (local_running.swap(true, .acq_rel)) return;
+    loadOrCreateToken();
+    local_thread = std.Thread.spawn(.{}, localLoop, .{}) catch {
+        local_running.store(false, .release);
+        return;
+    };
+}
+
+pub fn stopLocal() void {
+    if (!local_running.swap(false, .acq_rel)) return;
+    // Kick accept() awake with a local connection, same as stop() does.
+    if (std.Io.net.IpAddress.parseIp4("127.0.0.1", local_port)) |addr| {
+        if (addr.connect(io_g.io(), .{ .mode = .stream })) |conn| {
+            var c2 = conn;
+            c2.close(io_g.io());
+        } else |_| {}
+    } else |_| {}
+    if (local_thread) |t| {
+        t.join();
+        local_thread = null;
+    }
+}
+
+fn localLoop() void {
+    const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", local_port) catch return;
+    var server = addr.listen(io_g.io(), .{ .reuse_address = true }) catch return;
+    defer server.deinit(io_g.io());
+
+    while (local_running.load(.acquire)) {
+        const conn = server.accept(io_g.io()) catch continue;
+        const Handler = struct {
+            fn run(c2: std.Io.net.Stream) void {
+                var c3 = c2;
+                defer c3.close(io_g.io());
+                handleLocalRequest(c3);
+            }
+        };
+        if (std.Thread.spawn(.{}, Handler.run, .{conn})) |t| {
+            t.detach();
+        } else |_| {
+            var c4 = conn;
+            defer c4.close(io_g.io());
+            handleLocalRequest(c4);
+        }
+    }
+}
+
+/// `/api/scrape` and nothing else. Deliberately NOT a second door into handleApi:
+/// this listener exists whether or not the user opted into the remote API, so its
+/// surface stays exactly one route.
+fn handleLocalRequest(stream: std.Io.net.Stream) void {
+    var buf: [4096]u8 = undefined;
+    const n = io_g.streamReadAll(stream, &buf) catch return;
+    if (n == 0) return;
+    const request = buf[0..n];
+
+    var lines = std.mem.splitScalar(u8, request, '\n');
+    const first_line = lines.next() orelse return;
+    var parts = std.mem.splitScalar(u8, first_line, ' ');
+    _ = parts.next() orelse return; // method
+    const full_path = parts.next() orelse return;
+    var path_parts = std.mem.splitScalar(u8, full_path, '?');
+    const path = path_parts.next() orelse return;
+    const query = path_parts.next() orelse "";
+
+    if (!std.mem.eql(u8, path, "/api/scrape")) {
+        const resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
+        _ = io_g.streamWriteAll(stream, resp) catch {};
+        return;
+    }
+    const presented = extractBearer(request) orelse {
+        sendUnauthorized(stream);
+        return;
+    };
+    if (!isAuthorized(presented)) {
+        sendUnauthorized(stream);
+        return;
+    }
+    handleScrape(stream, query);
+}
+
 pub fn stop() void {
     if (!running.load(.acquire)) return;
     running.store(false, .release);

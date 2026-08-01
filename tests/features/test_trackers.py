@@ -96,16 +96,27 @@ def test_stall_reannounce():
         "watchdog calls force_reannounce": "torrent_force_reannounce(ses" in svc,
         "watchdog samples bytes+peers": "torrent_get_downloaded(ses" in svc
                                         and "torrent_get_num_peers(ses" in svc,
-        # 5. Surfaced to the user, not a silent freeze.
+        # 5. Surfaced to the user, not a silent freeze. The toast is QUEUED for
+        # the UI thread now that the watchdog samples off-thread — writing
+        # app.toast_* from a worker would race the frame that reads it.
         "logs the stall": "logs.pushLog(" in svc,
-        "toasts on give-up": "showToastTyped(" in svc,
+        "toasts on give-up": "queueToast(" in svc and "showToastTyped(" in svc,
         # User-facing strings stay plain ASCII (no emoji, no em-dashes).
         "no emoji in surfaced strings": all(
             all(ord(ch) < 128 for ch in s)
             for s in _re.findall(r'"([^"\n]*)"', svc)
         ),
-        # 6. Wired into the frame loop + registered for unit tests.
-        "ticked from appFrame": 'services/torrent_stall.zig").tick()' in main,
+        # 6. Driven off-thread + registered for unit tests.
+        #
+        # It used to be ticked from appFrame. dvui only runs a frame when the
+        # window has events, so a torrent wedged while the window sat in the
+        # background was never sampled at all — measured 2026-08-01, over two
+        # minutes at 0 bytes with no watchdog activity. A rescue mechanism cannot
+        # be gated on the user looking at the window.
+        "runs on its own thread": "std.Thread.spawn(.{}, loop" in svc,
+        "started at init": 'torrent_stall.zig").start()' in main,
+        "joined at shutdown": 'torrent_stall.zig").stop()' in main,
+        "not ticked from appFrame": 'services/torrent_stall.zig").tick()' not in main,
         "pure test registered in build.zig": "torrent_stall_pure.zig" in bld,
     }
     bad = [k for k, v in checks.items() if not v]
