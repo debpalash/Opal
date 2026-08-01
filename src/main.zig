@@ -1371,6 +1371,9 @@ fn appFrame() !dvui.App.Result {
     const settings = @import("ui/settings.zig");
     settings.renderSettingsModal();
     settings.renderCheatSheet();
+    // Command palette (Ctrl/Cmd+K). Rendered alongside the other overlays so it
+    // layers above the page shell; self-gating on command_palette_open.
+    @import("ui/command_palette.zig").render();
     settings.renderMediaInfo();
     settings.renderDepsModal();
     @import("ui/footer.zig").renderSubPicker();

@@ -349,6 +349,9 @@ pub const AppState = struct {
     hovered_cell_idx: ?usize = null,
     video_fill_mode: VideoFillMode = .fit,
     cheatsheet_open: bool = false,
+    /// Command palette overlay (Ctrl/Cmd+K). Ephemeral — deliberately not
+    /// persisted; reopening the app into a modal search box would be hostile.
+    command_palette_open: bool = false,
     media_info_open: bool = false,
     stats_overlay_open: bool = false,
     sub_picker_open: bool = false,

@@ -437,3 +437,41 @@ def test_bundled_manifest():
     if "plugins-manifest.json" not in sh:
         return "fail", "build-app.sh does not bundle plugins-manifest.json"
     return "pass", f"{len(plugins)} plugins, offline-loaded + bundled"
+
+
+@test("Command palette: Ctrl/Cmd+K overlay wired", "UI")
+def test_command_palette():
+    """Re-applied from feat/arch-build-distribution rather than merged.
+
+    That branch could not be merged: main has diverged past it, and 21 files
+    conflicted with main's newer code (its resolver.zig would have reinstated a
+    nova2 read that main deliberately replaced for dropping data). The palette
+    and its dependencies were additive, so they were lifted onto current main
+    instead — `listItem` needed no rewrite because every `tk` token it uses
+    already exists here.
+    """
+    cp = _src("src/ui/command_palette.zig")
+    mn = _src("src/main.zig")
+    inp = _src("src/ui/input.zig")
+    st = _src("src/core/state.zig")
+    comp = _src("src/ui/components.zig")
+
+    checks = {
+        "palette module exists": "pub fn render() void" in cp,
+        "self-gates on the flag": "if (!state.app.command_palette_open) return;" in cp,
+        "rendered each frame": 'command_palette.zig").render()' in mn,
+        "state flag exists": "command_palette_open: bool" in st,
+        # Not persisted: reopening into a modal search box would be hostile.
+        "flag is ephemeral": 'setKey("command_palette' not in _src("src/core/config.zig"),
+        # The binding must sit OUTSIDE the unmodified-key switch, or it is dead
+        # code — the same trap that left the cheat sheet unreachable.
+        "ctrl/cmd+K bound": "key == .k and (mod.control() or mod.command())" in inp,
+        "binding precedes the no-modifier switch":
+            inp.index("key == .k and (mod.control()") < inp.index("key == .d and !mod.control()"),
+        # Its one missing dependency came across too.
+        "listItem primitive present": "pub fn listItem(" in comp,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "command palette wiring incomplete: " + ", ".join(missing)
+    return "pass", "palette renders as an overlay, Ctrl/Cmd+K toggles it, listItem re-applied"

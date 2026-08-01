@@ -91,6 +91,17 @@ pub fn processGlobalInputs() void {
                 continue;
             }
 
+            // Ctrl/Cmd+K = command palette. Also outside the no-modifier switch
+            // below, for the same reason the cheat sheet is: that switch only
+            // runs for unmodified keys, so a binding placed there is dead code.
+            // Both modifiers are accepted so the muscle memory works whichever
+            // platform the user came from.
+            if (key == .k and (mod.control() or mod.command()) and !mod.shift() and !mod.alt()) {
+                state.app.command_palette_open = !state.app.command_palette_open;
+                dvui.refresh(null, @src(), null);
+                continue;
+            }
+
             // D = Toggle drawer (legacy layout). In the default page shell the
             // drawer never renders, so the old toggle was a silent no-op —
             // route to the Library page there instead (the drawer's analog).
