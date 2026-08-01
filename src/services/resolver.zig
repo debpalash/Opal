@@ -2299,49 +2299,35 @@ fn parseSxxEyy(query: []const u8, out_season: *i32, out_episode: *i32) void {
     }
 }
 
-fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_stremio.store(.done, .release);
-        checkAllDone();
-    }
-
-    const stremio = @import("stremio.zig");
-    // Neutral: query only the Stremio addons the user has installed via the
-    // plugin manager (re-read each search so installs/uninstalls take effect).
-    stremio.loadInstalledAddons();
-    if (stremio.installed_count == 0) return;
-
-    const query = query_buf[0..qlen];
-    const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
-    if (api_key.len == 0) return;
-
-    // Parse season/episode from query (e.g. "from s01e05" → season=1, episode=5)
-    var ep_season: i32 = 0;
-    var ep_episode: i32 = 0;
-    parseSxxEyy(query, &ep_season, &ep_episode);
+/// Resolve a free-text query to an IMDb id via TMDB, writing it into `out_imdb`
+/// and returning its length (0 = could not resolve). `out_is_series` reports
+/// whether TMDB classified the match as a TV show.
+///
+/// Extracted verbatim from resolveStremio so the EZTV backend can reuse it
+/// rather than carry a second copy — an IMDb lookup that drifted between two
+/// backends would send them after different titles for the same query.
+fn resolveImdbId(query: []const u8, api_key: []const u8, out_imdb: []u8, out_is_series: *bool) usize {
+    var imdb_len: usize = 0;
+    const intent = resolver_intent[0..resolver_intent_len];
+    const tv_id = state.app.tmdb.tv_id;
 
     // ── Resolve TMDB ID → IMDB ID ──
     // Fast path when intent="tv": we already know the TMDB TV ID from the detail
     // view — skip the text search, use the stored ID directly for external_ids.
-    var imdb_id: [16]u8 = undefined;
-    var imdb_len: usize = 0;
-    var stremio_type: []const u8 = "movie";
 
-    const intent = resolver_intent[0..resolver_intent_len];
-    const tv_id = state.app.tmdb.tv_id;
 
     if (std.mem.eql(u8, intent, "tv") and tv_id > 0) {
         // Direct external_ids lookup — one fewer TMDB API call
-        stremio_type = "series";
+        out_is_series.* = true;
         var ext_url: [256]u8 = undefined;
-        const eurl = std.fmt.bufPrint(&ext_url, "/3/tv/{d}/external_ids", .{tv_id}) catch return;
+        const eurl = std.fmt.bufPrint(&ext_url, "/3/tv/{d}/external_ids", .{tv_id}) catch return 0;
         var buf2: [4096]u8 = undefined;
         @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
         const n2 = @import("tmdb_api.zig").tmdbApiInto(eurl, api_key, &buf2);
-        if (n2 < 10) return;
+        if (n2 < 10) return 0;
         if (extractStr(buf2[0..n2], "\"imdb_id\":\"")) |imdb| {
             imdb_len = @min(imdb.len, 15);
-            @memcpy(imdb_id[0..imdb_len], imdb[0..imdb_len]);
+            @memcpy(out_imdb[0..imdb_len], imdb[0..imdb_len]);
         }
     } else {
         // General path: text search to find TMDB ID, then external_ids
@@ -2384,12 +2370,12 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
         }
 
         var tmdb_url: [512]u8 = undefined;
-        const turl = std.fmt.bufPrint(&tmdb_url, "/3/search/multi?query={s}&page=1", .{enc[0..el]}) catch return;
+        const turl = std.fmt.bufPrint(&tmdb_url, "/3/search/multi?query={s}&page=1", .{enc[0..el]}) catch return 0;
 
         var buf: [32 * 1024]u8 = undefined;
         @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
         const n = @import("tmdb_api.zig").tmdbApiInto(turl, api_key, &buf);
-        if (n < 20) return;
+        if (n < 20) return 0;
 
         var tmdb_id: [16]u8 = undefined;
         var tmdb_id_len: usize = 0;
@@ -2406,24 +2392,55 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
             @memcpy(media_type[0..mtl], mt[0..mtl]);
             media_type_len = mtl;
         }
-        if (tmdb_id_len == 0) return;
+        if (tmdb_id_len == 0) return 0;
 
         const mt_str = if (media_type_len > 0) media_type[0..media_type_len] else "movie";
-        stremio_type = if (std.mem.eql(u8, mt_str, "tv")) "series" else "movie";
+        out_is_series.* = std.mem.eql(u8, mt_str, "tv");
 
         var ext_url: [256]u8 = undefined;
-        const eurl = std.fmt.bufPrint(&ext_url, "/3/{s}/{s}/external_ids", .{ mt_str, tmdb_id[0..tmdb_id_len] }) catch return;
+        const eurl = std.fmt.bufPrint(&ext_url, "/3/{s}/{s}/external_ids", .{ mt_str, tmdb_id[0..tmdb_id_len] }) catch return 0;
 
         var buf2: [4096]u8 = undefined;
         @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
         const n2 = @import("tmdb_api.zig").tmdbApiInto(eurl, api_key, &buf2);
-        if (n2 < 10) return;
+        if (n2 < 10) return 0;
 
         if (extractStr(buf2[0..n2], "\"imdb_id\":\"")) |imdb| {
             imdb_len = @min(imdb.len, 15);
-            @memcpy(imdb_id[0..imdb_len], imdb[0..imdb_len]);
+            @memcpy(out_imdb[0..imdb_len], imdb[0..imdb_len]);
         }
     }
+
+
+    return imdb_len;
+}
+
+fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
+    defer {
+        status_stremio.store(.done, .release);
+        checkAllDone();
+    }
+
+    const stremio = @import("stremio.zig");
+    // Neutral: query only the Stremio addons the user has installed via the
+    // plugin manager (re-read each search so installs/uninstalls take effect).
+    stremio.loadInstalledAddons();
+    if (stremio.installed_count == 0) return;
+
+    const query = query_buf[0..qlen];
+    const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
+    if (api_key.len == 0) return;
+
+    // Parse season/episode from query (e.g. "from s01e05" → season=1, episode=5)
+    var ep_season: i32 = 0;
+    var ep_episode: i32 = 0;
+    parseSxxEyy(query, &ep_season, &ep_episode);
+
+    // ── Resolve TMDB ID → IMDB ID (shared with the EZTV backend) ──
+    var imdb_id: [16]u8 = undefined;
+    var is_series = false;
+    const imdb_len = resolveImdbId(query, api_key, &imdb_id, &is_series);
+    const stremio_type: []const u8 = if (is_series) "series" else "movie";
 
     if (imdb_len == 0) return;
 
