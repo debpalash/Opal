@@ -44,3 +44,17 @@ and platform license terms.
 Each component remains under its own license and copyright. Refer to the
 upstream projects for full license texts. Nothing in this NOTICE modifies the
 terms under which those components are distributed.
+
+### The Movie Database (TMDB)
+
+Movie and TV metadata, posters, and trending data come from
+[TMDB](https://www.themoviedb.org).
+
+> This product uses the TMDB API but is not endorsed or certified by TMDB.
+
+The TMDB wordmark bundled at `src/ui/tmdb_logo.png` is TMDB's official artwork,
+taken unmodified (beyond SVG→PNG rasterisation) from
+<https://www.themoviedb.org/about/logos-attribution>. It is TMDB's trademark,
+not Opal's, and is used solely to attribute them as the data source — it is not
+covered by Opal's GPL-3.0 grant. The same attribution is shown in-app under
+**Settings → TMDB Integration**.

@@ -87,9 +87,13 @@ yet. The one-command installer skips the dialog, or run `sudo xattr -cr
 > [file issues](https://github.com/debpalash/Opal/issues); they are what moves it
 > forward. macOS (Apple silicon) and Linux x86_64 are the supported platforms.
 
-**First launch:** open **Settings** (<kbd>⌘</kbd><kbd>,</kbd>) and paste a free
-**TMDB v4 token** to light up movie/TV browsing. Voice and AI models are opt-in
-downloads — one button each, nothing installs itself.
+**First launch:** release builds ship with a working **TMDB** key, so movie/TV
+browsing lights up immediately. If you **built from source** (including the AUR
+`opal` package), there is no key compiled in — open **Settings**
+(<kbd>⌘</kbd><kbd>,</kbd>) → **TMDB Integration** and paste a free v4 token.
+See [TMDB setup](docs/TMDB-SETUP.md) for where to get one and the other ways to
+supply it. Voice and AI models are opt-in downloads — one button each, nothing
+installs itself.
 
 <details>
 <summary><b>🧱 Building from source</b></summary>
