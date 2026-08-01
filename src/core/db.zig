@@ -1265,6 +1265,23 @@ pub fn animeUpsertContinue(mal_id: []const u8, title: []const u8, poster_url: []
 /// first), up to out.len rows. Each fixed buffer is filled with a clamped
 /// @memcpy; the lazy poster_* UI fields are left untouched. Returns the number
 /// of rows written.
+/// Drop a series from the anime continue-watching list.
+///
+/// Only the continue row goes: per-episode watched flags live in their own table
+/// and are deliberately left alone, so removing a show from the Watching page
+/// and later re-adding it does not silently reset how far the user had got.
+pub fn animeRemoveContinue(mal_id: []const u8) void {
+    _ = db_handle orelse return;
+    if (mal_id.len == 0) return;
+    const stmt = prepare("DELETE FROM anime_continue WHERE mal_id = ?") orelse {
+        logs.pushLog("error", "anime", "animeRemoveContinue: prepare failed", true);
+        return;
+    };
+    defer finalize(stmt);
+    bindText(stmt, 1, mal_id);
+    _ = step(stmt);
+}
+
 pub fn animeGetContinue(out: []@import("state.zig").ContinueItem) usize {
     if (out.len == 0) return 0;
     _ = db_handle orelse return 0;

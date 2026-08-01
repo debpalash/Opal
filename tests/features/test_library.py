@@ -85,3 +85,50 @@ def test_library_producers():
     if missing:
         return "fail", "library producers incomplete: " + ", ".join(missing)
     return "pass", "producers wired: watch, iptv, novels, anime, audiobook, comics, podcast"
+
+
+@test("Watching: items can be removed, without losing progress", "Library")
+def test_watching_remove():
+    """The Watching page had no way to drop anything from it.
+
+    Its rows come from three different stores, so "remove" is a different call
+    per kind — and the important property is that none of them destroys watch
+    progress:
+
+      tv     tvSetTracked(id, false)   — tvGetShows filters `tracked <> 0`
+      anime  animeRemoveContinue(mal)  — deletes ONLY the continue row
+      movie  watch_history.remove(idx) — drops that history entry
+
+    Per-episode watched flags live in their own tables and are deliberately left
+    alone, so removing a show and re-adding it later does not silently reset how
+    far the user had got. That is the whole reason anime gets its own narrow
+    delete instead of clearing its watched table too.
+    """
+    lib = _src("src/services/tv_library.zig")
+    card = _src("src/ui/media_card.zig")
+    dbz = _src("src/core/db.zig")
+
+    checks = {
+        "card exposes remove": "remove }" in card or "remove," in card.split("pub const Click")[1][:80],
+        "remove is opt-in": "removable: bool = false" in card,
+        "watching opts in": ".removable = true" in lib,
+        "dispatch exists": "fn removeRow(" in lib,
+        "tv un-tracks": "db.tvSetTracked(r.tmdb_id, false)" in lib,
+        "anime drops continue row": "db.animeRemoveContinue(mal)" in lib,
+        "movie drops history entry": "watch_history.zig\").remove(" in lib,
+        "anime delete added": "pub fn animeRemoveContinue(" in dbz,
+        # Narrow on purpose: only the continue row, never the watched flags.
+        "anime delete is narrow": "DELETE FROM anime_continue WHERE mal_id = ?" in dbz,
+        "progress preserved deliberately": "watched flags" in dbz or "watched flags" in lib,
+        # The snapshot is cached; without invalidating it the card lingers.
+        "snapshot invalidated": "library_dirty.store(true, .release)" in lib,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "watching remove incomplete: " + ", ".join(missing)
+
+    # A movie row's hist_idx indexes a live array, so it must be guarded.
+    if "if (r.hist_idx < 0) return;" not in lib:
+        return "fail", "movie removal does not guard hist_idx < 0"
+    return "pass", ("all three kinds removable from Watching; watched flags "
+                    "preserved so re-adding does not reset progress")

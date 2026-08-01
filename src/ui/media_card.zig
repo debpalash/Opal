@@ -14,13 +14,15 @@ const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 const poster = @import("../core/poster.zig");
 const theme = @import("theme.zig");
+const icons = @import("icons");
+const components = @import("components.zig");
 
 pub const CARD_W: f32 = 150;
 pub const POSTER_H: f32 = CARD_W * 1.5;
 /// Title + status line + (progress bar | action button).
 pub const CHROME_H: f32 = 74;
 
-pub const Click = enum { none, open, action };
+pub const Click = enum { none, open, action, remove };
 
 pub const Card = struct {
     /// Fully-qualified artwork URL. Empty renders the empty poster frame.
@@ -38,6 +40,11 @@ pub const Card = struct {
 
     /// Null hides the button.
     action_label: ?[]const u8 = null,
+
+    /// Show a "Remove" control, returning `.remove` when clicked. Opt-in: most
+    /// card surfaces (search results, release rails) have nothing to remove
+    /// FROM, and a delete affordance there would be meaningless at best.
+    removable: bool = false,
 };
 
 /// Draw one card. `it` carries the poster's fetch/texture state and must be a
@@ -154,18 +161,49 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
         }
     }
 
-    // ── Action ──
-    if (card.action_label) |lbl| {
-        if (dvui.button(@src(), lbl, .{}, .{
+    // ── Action row ──
+    // Action button and Remove share a row so a removable card is the same
+    // height as a non-removable one; a card that grew when it gained a delete
+    // control would make the grid reflow between kinds.
+    if (card.action_label != null or card.removable) {
+        var arow = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = id_extra,
             .expand = .horizontal,
-            .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-            .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-        })) clicked = .action;
+        });
+        defer arow.deinit();
+
+        if (card.action_label) |lbl| {
+            if (dvui.button(@src(), lbl, .{}, .{
+                .id_extra = id_extra,
+                .expand = .horizontal,
+                .background = true,
+                .color_fill = theme.colors.bg_elevated,
+                .color_text = theme.colors.text_primary,
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+                .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+            })) clicked = .action;
+        } else {
+            // Keep Remove pinned right even with no action button beside it.
+            var sp = dvui.box(@src(), .{}, .{ .id_extra = id_extra, .expand = .horizontal });
+            sp.deinit();
+        }
+
+        if (card.removable) {
+            var wd: dvui.WidgetData = undefined;
+            if (dvui.buttonIcon(@src(), "card-remove", icons.tvg.lucide.x, .{}, .{}, .{
+                .data_out = &wd,
+                .id_extra = id_extra,
+                .color_fill = theme.transparent,
+                .color_text = theme.colors.text_tertiary,
+                .border = dvui.Rect.all(0),
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .gravity_y = 0.5,
+                .padding = .{ .x = 5, .y = 5, .w = 5, .h = 5 },
+                .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
+            })) clicked = .remove;
+            components.tip(@src(), wd, "Remove from Watching");
+        }
     }
 
     return clicked;

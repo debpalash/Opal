@@ -673,13 +673,48 @@ fn renderCard(idx: usize, slot: usize) void {
         .progress = if (r.prog.total > 0) r.prog.fraction() else null,
         .progress_label = prog_label,
         .action_label = playLabel(r),
+        .removable = true,
     });
 
     switch (click) {
         .none => {},
         .open => openRow(r),
         .action => playRow(r),
+        .remove => removeRow(r),
     }
+}
+
+/// Drop a row from the Watching page.
+///
+/// Each kind lives in a different store, so "remove" means a different call for
+/// each — but none of them destroys watch progress. TV un-tracks the show
+/// (tvGetShows filters on `tracked <> 0`), anime deletes only its
+/// continue-watching row, and a movie drops its watch-history entry. Per-episode
+/// watched flags are left alone in every case, so re-adding a show later does
+/// not silently reset how far the user had got.
+fn removeRow(r: *const tp.Row) void {
+    switch (r.kind) {
+        .tv => {
+            if (r.tmdb_id == 0) return;
+            db.tvSetTracked(r.tmdb_id, false);
+        },
+        .anime => {
+            const mal = r.id[0..@min(r.id_len, r.id.len)];
+            if (mal.len == 0) return;
+            db.animeRemoveContinue(mal);
+        },
+        .movie => {
+            // hist_idx is an index into a live array, so it is only valid for
+            // this frame's snapshot — remove immediately and rebuild.
+            if (r.hist_idx < 0) return;
+            @import("../player/watch_history.zig").remove(@intCast(r.hist_idx));
+        },
+    }
+    // The snapshot is cached until something marks it stale; without this the
+    // card stays on screen until an unrelated change happens to invalidate it.
+    library_dirty.store(true, .release);
+    state.showToast("Removed from Watching");
+    dvui.refresh(null, @src(), null);
 }
 
 /// The play button's label, or null when this row has nothing playable.
