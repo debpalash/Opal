@@ -1053,7 +1053,10 @@ fn appFrame() !dvui.App.Result {
     {
         const TitleState = struct {
             var title_ctr: u32 = 0;
-            var last_title: [300]u8 = std.mem.zeroes([300]u8);
+            // Sized to win_title below. The justified title is padded out to the
+            // full bar width, so it is far longer than the old "name — Opal" run
+            // and a 300-byte cache here would overflow on @memcpy.
+            var last_title: [520]u8 = std.mem.zeroes([520]u8);
             var last_len: usize = 0;
         };
         TitleState.title_ctr +%= 1;
@@ -1094,11 +1097,22 @@ fn appFrame() !dvui.App.Result {
                         }
                     }
 
-                    var win_title: [300]u8 = undefined;
-                    const wt: ?[:0]u8 = if (name_len > 0)
-                        std.fmt.bufPrintZ(&win_title, "{s} \xe2\x80\x94 Opal{s}", .{ name_buf[0..name_len], meters }) catch null
+                    // Media name LEFT, meters RIGHT, padded apart to the width of
+                    // the title bar. The title is one OS-rendered string, so the
+                    // only justification available is spaces between the halves
+                    // (see sysmon_pure.justifyTitle).
+                    var left_buf: [300]u8 = undefined;
+                    const left: []const u8 = if (name_len > 0)
+                        (std.fmt.bufPrint(&left_buf, "{s} \xe2\x80\x94 Opal", .{name_buf[0..name_len]}) catch "Opal")
                     else
-                        std.fmt.bufPrintZ(&win_title, "Opal \xe2\x80\x94 Play everything{s}", .{meters}) catch null;
+                        "Opal \xe2\x80\x94 Play everything";
+
+                    var just_buf: [512]u8 = undefined;
+                    const sp2 = @import("core/sysmon_pure.zig");
+                    const joined = sp2.justifyTitle(left, sp2.metersBody(meters), sp2.titleCols(state.app.win_w), &just_buf);
+
+                    var win_title: [520]u8 = undefined;
+                    const wt: ?[:0]u8 = std.fmt.bufPrintZ(&win_title, "{s}", .{joined}) catch null;
                     if (wt) |t| {
                         if (!std.mem.eql(u8, t, TitleState.last_title[0..TitleState.last_len])) {
                             c.sdl.SDL_SetWindowTitle(sw, t.ptr);
