@@ -84,6 +84,26 @@ _RETRY_BACKOFF = (0.3, 0.7)
 # 15s is well past the <5s these sites take when they answer at all, and bounds
 # a fully hung host at 15*attempts + backoff (~46s at the default 3).
 _FETCH_TIMEOUT = 15
+
+# ...but only for a DIRECT fetch. Through Opal's DPI-bypass SOCKS sidecar the
+# same request pays SOCKS setup, the bypass's own connect, and the segmented
+# handshake it uses to get past the filter. Measured on a connection that blocks
+# trackers by SNI: torrentdownloads answered in 20.5s proxied versus <5s direct.
+# At a 15s deadline every proxied fetch timed out, retrieve_url swallowed it
+# (see its `return ""`), and the engines reported zero results -- so turning the
+# bypass on appeared to do nothing for search, which is the opposite of the
+# point. Applied only while a proxy is actually configured, so direct fetches
+# keep the tight bound above and a dead host still fails fast.
+_FETCH_TIMEOUT_PROXIED = 40
+
+_proxy_active = False
+
+
+def fetch_timeout() -> int:
+    """Per-attempt deadline, widened while a SOCKS proxy is in use."""
+    return _FETCH_TIMEOUT_PROXIED if _proxy_active else _FETCH_TIMEOUT
+
+
 _original_socket = socket.socket
 
 
@@ -110,6 +130,12 @@ def enable_socks_proxy(enable: bool) -> None:
                 socket.socket = cast(type[socket.socket], socks.socksocket)  # type: ignore[misc]
     else:
         socket.socket = _original_socket  # type: ignore[misc]
+
+    # Derived from whether the patch actually took, rather than from `enable`:
+    # every branch above is conditional on an env var being present and
+    # well-formed, so `enable=True` alone does not mean a proxy is in play.
+    global _proxy_active
+    _proxy_active = socket.socket is not _original_socket
 
 
 # This is only provided for backward compatibility, new code should not use it
@@ -243,7 +269,7 @@ def retrieve_url(url: str, custom_headers: Mapping[str, str] = {}, request_data:
     walled = False
     for attempt in range(max(1, attempts)):
         try:
-            response = urllib.request.urlopen(request, timeout=_FETCH_TIMEOUT, context=ssl_context)
+            response = urllib.request.urlopen(request, timeout=fetch_timeout(), context=ssl_context)
             break
         except Exception as exc:  # URLError, HTTPError, socket.timeout
             if not isinstance(exc, (urllib.error.URLError, OSError)):
@@ -303,7 +329,7 @@ def download_file(url: str, referer: Optional[str] = None, ssl_context: Optional
     request = urllib.request.Request(url, headers=_headers)
     if referer is not None:
         request.add_header('referer', referer)
-    response = urllib.request.urlopen(request, timeout=_FETCH_TIMEOUT, context=ssl_context)
+    response = urllib.request.urlopen(request, timeout=fetch_timeout(), context=ssl_context)
     data = response.read()
 
     # Check if it is gzipped

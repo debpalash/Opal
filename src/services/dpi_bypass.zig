@@ -85,6 +85,8 @@ pub fn start() void {
     // Publish the loopback address for proxyArgs() (routed through the pure
     // builder so the shipped string is the tested string).
     argv_store[1] = pure.loopbackAddr(&addr_buf, PORT);
+    // Same publication for the search engines' SOCKS URL (see engineEnv).
+    initSocksUrl();
 
     var path_buf: [1100]u8 = undefined;
     const bin = binaryPath(&path_buf);
@@ -138,4 +140,74 @@ pub fn stop() void {
 pub fn proxyArgs() ?[]const []const u8 {
     if (!pure.shouldProxy(enabled(), isRunning())) return null;
     return argv_store[0..];
+}
+
+// ── Search-engine plumbing ──────────────────────────────────────────────────
+//
+// proxyArgs() above only covers requests curl makes from the Zig side (TMDB,
+// images). The torrent search engines are a separate world: nova2.py runs as a
+// child process and does its own HTTP, so with the sidecar running it still
+// connected DIRECTLY and got filtered exactly as before. On a connection where
+// trackers are blocked by SNI that reads as "DPI bypass is on and most sources
+// still return nothing".
+//
+// engines/helpers.py already supports this — `enable_socks_proxy()` reads the
+// `qbt_socks_proxy` variable (inherited from qBittorrent's nova2, which these
+// engines come from). Nothing was ever setting it.
+
+/// SOCKS URL for the search engines, or null when the proxy is not usable.
+///
+/// `socks5h`, not `socks5`: the trailing h makes the PROXY resolve hostnames
+/// (helpers.py keys `resolveHostname` off exactly that). It matters because the
+/// networks that filter on SNI generally poison DNS for the same domains, so
+/// resolving locally would defeat the tunnel before it was used.
+pub fn socksUrl() ?[]const u8 {
+    if (!pure.shouldProxy(enabled(), isRunning())) return null;
+    return socks_url_store[0..socks_url_len];
+}
+
+var socks_url_store: [40]u8 = undefined;
+var socks_url_len: usize = 0;
+
+fn initSocksUrl() void {
+    const s = std.fmt.bufPrint(&socks_url_store, "socks5h://127.0.0.1:{d}", .{PORT}) catch return;
+    socks_url_len = s.len;
+}
+
+/// Environment for a spawned search engine: the current environment plus
+/// `qbt_socks_proxy`. Returns null when no proxy is active OR when the copy
+/// fails, and callers then spawn with the inherited environment — a search that
+/// runs unproxied is better than a search that does not run.
+///
+/// The map owns its strings; the caller must `deinit()` it AFTER the child has
+/// been spawned.
+pub fn engineEnv(gpa: std.mem.Allocator) ?std.process.Environ.Map {
+    const url = socksUrl() orelse return null;
+
+    var map = std.process.Environ.Map.init(gpa);
+    var ok = false;
+    defer if (!ok) map.deinit();
+
+    // Seed from the current environment. Passing an env_map REPLACES the
+    // child's environment wholesale, so dropping this would strip PATH/HOME and
+    // break the interpreter itself.
+    switch (@import("builtin").os.tag) {
+        .windows => {
+            const peb = std.os.windows.peb();
+            const env_ptr: [*:0]const u16 = @ptrCast(@alignCast(peb.ProcessParameters.Environment));
+            map.putWindowsBlock(.{ .ptr = env_ptr }) catch return null;
+        },
+        else => {
+            var i: usize = 0;
+            while (std.c.environ[i]) |entry| : (i += 1) {
+                const kv = std.mem.span(entry);
+                const eq = std.mem.indexOfScalar(u8, kv, '=') orelse continue;
+                map.put(kv[0..eq], kv[eq + 1 ..]) catch return null;
+            }
+        },
+    }
+
+    map.put("qbt_socks_proxy", url) catch return null;
+    ok = true;
+    return map;
 }

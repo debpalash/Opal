@@ -54,8 +54,19 @@ import helpers
 import novaprinter
 import opal_sources
 
-# enable SOCKS proxy for all plugins by default
-helpers.enable_socks_proxy(True)
+# The SOCKS proxy is enabled per search worker (see run_search), NOT here.
+#
+# enable_socks_proxy() monkey-patches the GLOBAL socket.socket to PySocks. Doing
+# that in this parent process breaks multiprocessing itself on Python 3.14+:
+# Linux switched the default start method from `fork` to `forkserver`, and the
+# Pool bootstrap then connects to the fork server over an AF_UNIX socket. That
+# connection goes through the patched socket and PySocks rejects it with
+# "PySocks doesn't support IPv6: /tmp/pymp-*/sock-*", so Pool() raises and the
+# whole search dies before a single engine runs. Measured: with qbt_socks_proxy
+# set, apibay went from 100 rows to 0.
+#
+# Patching inside the workers keeps this process's socket pristine, so the Pool
+# bootstrap uses a real AF_UNIX socket while every engine fetch still tunnels.
 
 THREADED: bool = True
 try:
@@ -212,6 +223,13 @@ def run_search(search_params: tuple[type[Engine], str, Category, EngineModuleNam
     """
 
     engine_class, what, cat, module_name = search_params
+
+    # Install the SOCKS proxy HERE, in the process that actually fetches. See
+    # the note at the top of this module for why it must not happen in the
+    # parent. Idempotent and cheap, and a no-op when qbt_socks_proxy is unset,
+    # so the direct path is unchanged.
+    helpers.enable_socks_proxy(True)
+
     try:
         engine = engine_class()
         # avoid exceptions due to invalid category

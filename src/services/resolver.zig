@@ -1086,6 +1086,12 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
     // Run from the bundled resource root when installed (CWD is "/" from a
     // /Applications launch); null in dev keeps the inherited project-dir CWD.
     child.cwd = state.resourceRoot();
+    // Same DPI-bypass routing as services/search.zig — universal search spawns
+    // its own nova2, so fixing only the Torrent tab would have left the main
+    // search box still going direct.
+    var engine_env = @import("dpi_bypass.zig").engineEnv(alloc);
+    defer if (engine_env) |*m| m.deinit();
+    if (engine_env) |*m| child.env_map = m;
     _ = child.spawn() catch {
         logs.pushLog("warn", "resolver", "nova2.py spawn failed", false);
         return;
