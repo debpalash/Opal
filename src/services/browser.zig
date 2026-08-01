@@ -1097,7 +1097,22 @@ fn sendNavigate(url: []const u8) void {
 /// on failure / timeout. SYNCHRONOUS — call ONLY from a scraper worker thread
 /// (like curl today), never the UI thread; it blocks up to ~45s. One scrape
 /// runs at a time (scrape_req_mutex). Starts the bridge if it isn't running.
+/// POST variant of `fetchHtmlBlocking`. Same contract, same 45s ceiling: the
+/// bridge navigates to `url` first so the origin's challenge clears and its
+/// cookies are held, then POSTs `body` from inside that page context.
+///
+/// Exists because a GET-only unblock path is not enough for every site: EZTV
+/// only emits magnet links in response to `layout=def_wlinks`, so an unblocked
+/// GET returns the rows with none of the links.
+pub fn fetchHtmlPostBlocking(url: []const u8, body: []const u8, out_buf: []u8) ?[]const u8 {
+    return scrapeCommand(url, body, out_buf);
+}
+
 pub fn fetchHtmlBlocking(url: []const u8, out_buf: []u8) ?[]const u8 {
+    return scrapeCommand(url, null, out_buf);
+}
+
+fn scrapeCommand(url: []const u8, post_body: ?[]const u8, out_buf: []u8) ?[]const u8 {
     if (url.len == 0 or url.len >= 2048) return null;
 
     // Bring the bridge up if needed and wait (bounded ~20s) for it to be ready.
@@ -1122,8 +1137,13 @@ pub fn fetchHtmlBlocking(url: []const u8, out_buf: []u8) ?[]const u8 {
 
     var esc_buf: [4096]u8 = undefined;
     const esc_url = escapeJsonString(url, &esc_buf);
-    var cmd_buf: [4200]u8 = undefined;
-    const cmd = std.fmt.bufPrint(&cmd_buf, "{{\"cmd\":\"fetchhtml\",\"url\":\"{s}\",\"wait\":15000}}", .{esc_url}) catch return null;
+    var cmd_buf: [8400]u8 = undefined;
+    const cmd = if (post_body) |b| blk: {
+        var body_esc: [4096]u8 = undefined;
+        if (b.len >= body_esc.len / 2) return null; // escaping could overflow
+        const esc_body = escapeJsonString(b, &body_esc);
+        break :blk std.fmt.bufPrint(&cmd_buf, "{{\"cmd\":\"fetchpost\",\"url\":\"{s}\",\"body\":\"{s}\",\"wait\":15000}}", .{ esc_url, esc_body }) catch return null;
+    } else std.fmt.bufPrint(&cmd_buf, "{{\"cmd\":\"fetchhtml\",\"url\":\"{s}\",\"wait\":15000}}", .{esc_url}) catch return null;
     sendCommand(cmd);
 
     // Poll for the 'H' frame / fetchhtml error (bounded: goto 25s + challenge

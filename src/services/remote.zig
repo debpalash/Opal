@@ -323,7 +323,15 @@ fn handleLocalRequest(stream: std.Io.net.Stream) void {
         sendUnauthorized(stream);
         return;
     }
-    handleScrape(stream, query);
+    // A body (everything past the blank line) means "replay this as a POST".
+    // Bounded by the 4 KB request buffer above, which is far more than a form
+    // body like `layout=def_wlinks` needs.
+    const post: ?[]const u8 = blk: {
+        const sep = std.mem.indexOf(u8, request, "\r\n\r\n") orelse break :blk null;
+        const b = request[sep + 4 ..];
+        break :blk if (b.len > 0) b else null;
+    };
+    handleScrapeBody(stream, query, post);
 }
 
 pub fn stop() void {
@@ -1117,6 +1125,14 @@ fn sendJson(stream: std.Io.net.Stream, json: []const u8) void {
 /// as live markup from Opal's own origin. 502 when nothing could be fetched, so
 /// the caller can tell "walled and unrecoverable" from "empty page".
 fn handleScrape(stream: std.Io.net.Stream, query: []const u8) void {
+    handleScrapeBody(stream, query, null);
+}
+
+/// `post` is the form body to replay, or null for a GET. Sites that only emit
+/// what a scraper needs in response to a POST (EZTV gates its magnet links
+/// behind `layout=def_wlinks`) are unreachable over GET no matter how well the
+/// challenge is cleared.
+fn handleScrapeBody(stream: std.Io.net.Stream, query: []const u8, post: ?[]const u8) void {
     var dec_buf: [2048]u8 = undefined;
     const raw = getQueryParam(query, "url") orelse {
         sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"url required\"}");
@@ -1139,7 +1155,8 @@ fn handleScrape(stream: std.Io.net.Stream, query: []const u8) void {
     };
     defer alloc.free(buf);
 
-    const body = @import("scrape_fetch.zig").scrapeFetch(url, buf) orelse {
+    const sf = @import("scrape_fetch.zig");
+    const body = (if (post) |p| sf.scrapeFetchPost(url, p, buf) else sf.scrapeFetch(url, buf)) orelse {
         sendJsonStatus(stream, "502 Bad Gateway", "{\"error\":\"fetch failed\"}");
         return;
     };

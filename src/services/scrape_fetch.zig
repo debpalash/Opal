@@ -51,7 +51,7 @@ fn browserFallbackAvailable() bool {
 ///
 /// curl writes headers to stderr (`-D /dev/stderr`) and the body to stdout, so
 /// the two streams come back on separate pipes with no interleaving to untangle.
-fn plainFetch(url: []const u8, out_buf: []u8, hdr_buf: []u8, hdr_len: *usize, status: *u16) ?[]const u8 {
+fn plainFetch(url: []const u8, post_body: ?[]const u8, out_buf: []u8, hdr_buf: []u8, hdr_len: *usize, status: *u16) ?[]const u8 {
     hdr_len.* = 0;
     status.* = 0;
 
@@ -61,10 +61,22 @@ fn plainFetch(url: []const u8, out_buf: []u8, hdr_buf: []u8, hdr_len: *usize, st
     // the argv here (not reliable_fetch.fetch) because we also need curl's
     // response headers on stderr (`-D /dev/stderr`) for the block detector.
     const be = @import("reliable_fetch.zig").backend();
-    var argv: [24][]const u8 = undefined;
+    var argv: [28][]const u8 = undefined;
     var an: usize = 0;
     argv[an] = be.bin;
     an += 1;
+    if (post_body) |b| {
+        // --data-binary, not -d: -d strips newlines and CRs, which silently
+        // corrupts any body that is not a single form line.
+        argv[an] = "--data-binary";
+        an += 1;
+        argv[an] = b;
+        an += 1;
+        argv[an] = "-H";
+        an += 1;
+        argv[an] = "Content-Type: application/x-www-form-urlencoded";
+        an += 1;
+    }
     if (be.token.len > 0) {
         argv[an] = "--impersonate";
         an += 1;
@@ -135,13 +147,26 @@ fn plainFetch(url: []const u8, out_buf: []u8, hdr_buf: []u8, hdr_len: *usize, st
 /// Returns the (possibly browser-unblocked) body, or null if nothing could be
 /// fetched. SYNCHRONOUS — worker-thread only.
 pub fn scrapeFetch(url: []const u8, out_buf: []u8) ?[]const u8 {
+    return scrapeFetchBody(url, null, out_buf);
+}
+
+/// POST variant. `post_body` is sent as `application/x-www-form-urlencoded` on
+/// both the plain path and the browser fallback, so a site that only reveals
+/// what a scraper needs in response to a form POST (EZTV's `layout=def_wlinks`,
+/// which is what gates its magnet links) is reachable through the unblock path
+/// rather than only over GET.
+pub fn scrapeFetchPost(url: []const u8, post_body: []const u8, out_buf: []u8) ?[]const u8 {
+    return scrapeFetchBody(url, post_body, out_buf);
+}
+
+fn scrapeFetchBody(url: []const u8, post_body: ?[]const u8, out_buf: []u8) ?[]const u8 {
     announceReady();
     if (url.len == 0 or out_buf.len == 0) return null;
 
     var hdr_buf: [16 * 1024]u8 = undefined;
     var hdr_len: usize = 0;
     var status: u16 = 0;
-    const body = plainFetch(url, out_buf, &hdr_buf, &hdr_len, &status);
+    const body = plainFetch(url, post_body, out_buf, &hdr_buf, &hdr_len, &status);
 
     const body_head = if (body) |b| b[0..@min(b.len, 16 * 1024)] else "";
     const headers = hdr_buf[0..hdr_len];
@@ -158,12 +183,14 @@ pub fn scrapeFetch(url: []const u8, out_buf: []u8) ?[]const u8 {
     }
 
     logs.pushLog("info", "scrape", "Blocked — retrying through the anti-detect browser", true);
-    if (browser.fetchHtmlBlocking(url, out_buf)) |html| {
-        return html;
-    }
+    const unblocked = if (post_body) |b|
+        browser.fetchHtmlPostBlocking(url, b, out_buf)
+    else
+        browser.fetchHtmlBlocking(url, out_buf);
+    if (unblocked) |html| return html;
 
     // Browser path failed/timed out — best-effort plain body. `out_buf` may
     // have been overwritten by fetchHtmlBlocking on partial failure, so re-run
     // the plain fetch to hand back a clean (if blocked) body rather than junk.
-    return plainFetch(url, out_buf, &hdr_buf, &hdr_len, &status);
+    return plainFetch(url, post_body, out_buf, &hdr_buf, &hdr_len, &status);
 }

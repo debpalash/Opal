@@ -470,6 +470,44 @@ def apply_command(page, pump, cmd, viewport, scrape=None):
             html = wait_for_challenge_clear(sp, wait_ms)
             send_html_frame(html.encode("utf-8", "replace"))
 
+        elif action == "fetchpost":
+            # Anti-block POST. Some sites only emit what a scraper needs in
+            # response to a form POST -- EZTV hides magnet links behind
+            # `layout=def_wlinks` -- and a GET-only unblock path returns a page
+            # with the rows but none of the links.
+            #
+            # Two steps, and the order is the whole point: navigate to the URL
+            # first and clear any challenge, so the scrape page holds the origin's
+            # cookies, THEN issue the POST from inside that page context. Posting
+            # without the first step just gets the interstitial again.
+            url = cmd.get("url", "")
+            body = cmd.get("body", "")
+            ctype = cmd.get("content_type", "application/x-www-form-urlencoded")
+            wait_ms = cmd.get("wait", 15000)
+            if not url:
+                send_json({"event": "fetchhtml", "error": "no url"})
+                return True
+            try:
+                sp = get_scrape_page(page, scrape)
+                sp.goto(url, wait_until="domcontentloaded", timeout=25000)
+                wait_for_challenge_clear(sp, wait_ms)
+                text = sp.evaluate(
+                    """async ([u, b, ct]) => {
+                        const r = await fetch(u, {
+                            method: 'POST',
+                            credentials: 'include',
+                            headers: {'Content-Type': ct},
+                            body: b,
+                        });
+                        return await r.text();
+                    }""",
+                    [url, body, ctype],
+                ) or ""
+            except Exception as e:
+                send_json({"event": "fetchhtml", "error": str(e)[:180]})
+                return True
+            send_html_frame(text[:MAX_SCRAPE_BYTES].encode("utf-8", "replace"))
+
         elif action == "fetchapi":
             # Read a JSON/text API from the trusted (cookie-bearing) scrape page
             # context — so an API behind the same Cloudflare zone succeeds once

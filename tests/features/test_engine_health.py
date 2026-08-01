@@ -623,7 +623,7 @@ def retrieve_url_routes_walls_to_the_browser():
         calls["open"] += 1
         raise urllib.error.HTTPError("u", 403, "Forbidden", {}, None)  # type: ignore[arg-type]
 
-    def _fake_scrape(_url):
+    def _fake_scrape(_url, post_body=None):
         calls["scrape"] += 1
         return "<html>unblocked rows</html>"
 
@@ -654,13 +654,63 @@ def retrieve_url_routes_walls_to_the_browser():
         helpers.time.sleep = real_sleep
         helpers._opal_scrape = real_scrape
 
+    # A walled POST must be replayed as a POST, never downgraded to a GET.
+    # EZTV gates its magnet links behind `layout=def_wlinks`; an unblocked GET
+    # returns the rows and none of the links, which looks like success.
+    if helpers._as_post_body(None) is not None:
+        return "fail", "a GET must not be turned into a POST"
+    if helpers._as_post_body(b"layout=def_wlinks") != b"layout=def_wlinks":
+        return "fail", "a bytes body must survive the unblock path"
+    if helpers._as_post_body("layout=def_wlinks") != b"layout=def_wlinks":
+        return "fail", "a str body must be encoded, not dropped"
+
+    seen_body = {}
+
+    def _walled2(_req, **_kw):
+        raise urllib.error.HTTPError("u", 403, "Forbidden", {}, None)  # type: ignore[arg-type]
+
+    def _scrape_capture(_url, post_body=None):
+        seen_body["b"] = post_body
+        return "<html>unblocked</html>"
+
+    helpers.urllib.request.urlopen = _walled2
+    helpers.time.sleep = lambda _s: None
+    helpers._opal_scrape = _scrape_capture
+    try:
+        helpers.retrieve_url("https://walled.invalid/s", request_data=b"layout=def_wlinks")
+        if seen_body.get("b") != b"layout=def_wlinks":
+            return "fail", f"POST body not forwarded to the unblock path ({seen_body})"
+        seen_body.clear()
+        helpers.retrieve_url("https://walled.invalid/s")
+        if seen_body.get("b") is not None:
+            return "fail", "a GET was sent to the unblock path with a body"
+    finally:
+        helpers.urllib.request.urlopen = real_open
+        helpers.time.sleep = real_sleep
+        helpers._opal_scrape = real_scrape
+
     # The server half must exist, and must not hold the API mutex while it blocks.
     rm = open(os.path.join(PROJECT_DIR, "src/services/remote.zig"),
               encoding="utf-8").read()
     if '"/api/scrape"' not in rm or "fn handleScrape(" not in rm:
         return "fail", "remote.zig exposes no /api/scrape for the engines to call"
-    if "scrapeFetch(url, buf)" not in rm:
+    if "sf.scrapeFetch(url, buf)" not in rm:
         return "fail", "handleScrape does not route through scrape_fetch"
+    # POST support all the way down: endpoint -> scrape_fetch -> browser bridge.
+    for sym, where in (("scrapeFetchPost(url, p, buf)", "remote.zig"),
+                       ("fetchHtmlPostBlocking", "scrape_fetch.zig")):
+        src = rm if where == "remote.zig" else open(
+            os.path.join(PROJECT_DIR, "src/services/scrape_fetch.zig"), encoding="utf-8").read()
+        if sym not in src:
+            return "fail", f"{where} lacks the POST path ({sym})"
+    bridge = open(os.path.join(PROJECT_DIR, "scripts/camoufox_bridge.py"),
+                  encoding="utf-8").read()
+    if '"fetchpost"' not in bridge:
+        return "fail", "camoufox_bridge.py has no fetchpost action"
+    # The POST must happen AFTER the challenge clears, or it just re-hits the
+    # interstitial with no cookies.
+    if bridge.index("wait_for_challenge_clear(sp, wait_ms)\n                text = sp.evaluate") < 0:
+        return "fail", "fetchpost posts before clearing the challenge"
     # Ordering: the route must be handled BEFORE the api_mutex block, or a 45s
     # browser fetch freezes every other endpoint including playback control.
     if rm.index('"/api/scrape"') > rm.index("api_mutex.lock();\n        defer api_mutex.unlock();\n        handleApi"):

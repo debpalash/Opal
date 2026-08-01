@@ -1,4 +1,4 @@
-# VERSION: 1.58
+# VERSION: 1.59
 
 # Author:
 #  Christophe DUMEZ (chris@qbittorrent.org)
@@ -174,6 +174,22 @@ def _looks_walled(status: int, body: str) -> bool:
     return any(m in head for m in _WALL_MARKERS)
 
 
+def _as_post_body(request_data: Optional[Any]) -> Optional[bytes]:
+    """The original request body as bytes, or None when the request was a GET.
+
+    urllib treats "data is not None" as "make this a POST", so this is exactly
+    the condition that decides the method — and the unblock path has to preserve
+    it rather than quietly turning a POST into a GET.
+    """
+    if request_data is None:
+        return None
+    if isinstance(request_data, bytes):
+        return request_data
+    if isinstance(request_data, str):
+        return request_data.encode('utf-8')
+    return None  # file-like / iterable bodies cannot be replayed
+
+
 def _opal_api_token() -> Optional[str]:
     """Opal's static API token, or None when the app has never written one."""
     try:
@@ -189,8 +205,13 @@ def _opal_api_token() -> Optional[str]:
         return None
 
 
-def _opal_scrape(url: str) -> Optional[str]:
+def _opal_scrape(url: str, post_body: Optional[bytes] = None) -> Optional[str]:
     """Re-fetch `url` through Opal's anti-block fetch. None if unavailable.
+
+    `post_body` is replayed as a form POST from inside the unblocked page
+    context. Some sites only emit what a scraper needs in response to one --
+    EZTV gates its magnet links behind `layout=def_wlinks`, so an unblocked GET
+    returns the rows and none of the links.
 
     Two ports, in order. 41596 is the loopback-only listener Opal always runs and
     is the one to rely on; 41595 is the full JSON API, which only exists when the
@@ -205,7 +226,8 @@ def _opal_scrape(url: str) -> Optional[str]:
     for port in ports:
         api = 'http://127.0.0.1:{0}/api/scrape?url={1}'.format(
             port, urllib.parse.quote(url, safe=''))
-        req = urllib.request.Request(api, headers={'Authorization': 'Bearer ' + token})
+        req = urllib.request.Request(api, data=post_body,
+                                     headers={'Authorization': 'Bearer ' + token})
         try:
             resp = urllib.request.urlopen(req, timeout=_SCRAPE_TIMEOUT)
             body = resp.read().decode('utf-8', 'replace')
@@ -262,13 +284,12 @@ def retrieve_url(url: str, custom_headers: Mapping[str, str] = {}, request_data:
                 break  # give up on the plain path
             time.sleep(_RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF) - 1)])
     if response is None:
-        # A wall is worth one browser attempt; a dead host is not.
-        # request_data is None => this was a GET, which is all /api/scrape can
-        # replay. Falling back on a POST would silently reissue it as a GET and
-        # hand the caller a page it never asked for (eztv posts
-        # `layout=def_wlinks`), so a walled POST stays a failure.
-        if walled and request_data is None:
-            unblocked = _opal_scrape(url)
+        # A wall is worth one browser attempt; a dead host is not. The original
+        # method is preserved: a POST is replayed as a POST, never silently
+        # downgraded to a GET (eztv posts `layout=def_wlinks`, and the GET
+        # response carries the rows but none of the magnet links).
+        if walled:
+            unblocked = _opal_scrape(url, _as_post_body(request_data))
             if unblocked:
                 return html.unescape(unblocked) if unescape_html_entities else unblocked
         return ""  # Silently handle connection errors
@@ -295,8 +316,8 @@ def retrieve_url(url: str, custom_headers: Mapping[str, str] = {}, request_data:
     # A challenge page served under 200 OK is the failure mode that hides: the
     # engine parses the interstitial and reports zero rows on a fetch that looked
     # like it worked. uindex does exactly this on /search.php.
-    if _looks_walled(0, dataStr) and request_data is None:
-        unblocked = _opal_scrape(url)
+    if _looks_walled(0, dataStr):
+        unblocked = _opal_scrape(url, _as_post_body(request_data))
         if unblocked:
             dataStr = unblocked
 
