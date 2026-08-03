@@ -35,10 +35,20 @@ else
   PKGS=(opal opal-bin)
 fi
 
+# Version to publish, without the leading "v". In CI this comes from the tag
+# that triggered the release; locally, override with RELEASE_VERSION=0.6.4 to
+# republish a specific version. Empty means "trust the pkgver in the PKGBUILD".
+RELEASE_VERSION="${RELEASE_VERSION:-${GITHUB_REF_NAME:-}}"
+RELEASE_VERSION="${RELEASE_VERSION#v}"
+
 # ─── CI mode: materialise the SSH key + identity into a sandbox ──────────
 if [[ -n "${AUR_SSH_PRIVATE_KEY:-}" ]]; then
-  : "${AUR_USERNAME:?AUR_USERNAME required in CI mode}"
-  : "${AUR_EMAIL:?AUR_EMAIL required in CI mode}"
+  # Git commit identity for the AUR push. These are not secrets — they end up
+  # in the public AUR git log, and the same address is already in the PKGBUILD
+  # Maintainer line — so they default here and only AUR_SSH_PRIVATE_KEY has to
+  # be configured as a repository secret. Override either via the environment.
+  AUR_USERNAME="${AUR_USERNAME:-debpalash}"
+  AUR_EMAIL="${AUR_EMAIL:-aur@palash.dev}"
   if [[ -z "${AUR_SSH_PRIVATE_KEY// }" ]]; then
     echo "::notice::AUR_SSH_PRIVATE_KEY is empty — AUR publish is a no-op. Register a deploy key on your AUR account and set the repository secret."
     exit 0
@@ -74,6 +84,21 @@ for pkg in "${PKGS[@]}"; do
   fi
   cp "$pkg/PKGBUILD" "$workdir/"
   pushd "$workdir" >/dev/null
+
+  # Sync pkgver to the tag being released. Without this the PKGBUILD's pkgver
+  # is whatever was last hand-edited, and the AUR package silently lags the
+  # release — v0.6.3 shipped with these PKGBUILDs still pinned at 0.1.2, so
+  # `yay -S opal` built a version that was five releases old. A version change
+  # also resets pkgrel to 1, per Arch packaging rules.
+  if [[ -n "$RELEASE_VERSION" ]]; then
+    current=$(grep -oP '^pkgver=\K.*' PKGBUILD)
+    if [[ "$current" != "$RELEASE_VERSION" ]]; then
+      echo "  pkgver: $current → $RELEASE_VERSION (pkgrel reset to 1)"
+      sed -i -e "s/^pkgver=.*/pkgver=${RELEASE_VERSION}/" \
+             -e "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+    fi
+  fi
+
   # Fill sha256sums from the live URLs (now that the tag is public). On an
   # Arch host this Just Works; on the CI Ubuntu runner we skip (sources
   # aren't downloadable until the release artifacts are uploaded, and we
@@ -81,7 +106,7 @@ for pkg in "${PKGS[@]}"; do
   if command -v updpkgsums >/dev/null 2>&1; then
     updpkgsums
   else
-    echo "warn: updpkgsums missing — keeping 'SKIP' checksums (AUR will reject if URL hashes mismatch)"
+    echo "warn: updpkgsums missing — the committed sha256sums must already match the released URLs"
   fi
   # AUR REJECTS a push whose .SRCINFO is missing or out of sync with PKGBUILD,
   # and only makepkg can generate it (a PKGBUILD is bash, not a data file). The

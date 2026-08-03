@@ -1,0 +1,23 @@
+pkgbase = opal
+	pkgdesc = Play everything — media player, universal search, torrent streaming, local AI, one native binary
+	pkgver = 0.6.3
+	pkgrel = 1
+	url = https://github.com/debpalash/Opal
+	arch = x86_64
+	license = GPL-3.0-only
+	makedepends = zig>=0.16.0
+	depends = mpv
+	depends = sdl2
+	depends = sqlite
+	depends = libtorrent-rasterbar
+	depends = curl
+	depends = ffmpeg
+	depends = python
+	depends = hicolor-icon-theme
+	optdepends = yt-dlp: YouTube playback and downloads
+	optdepends = streamlink: live stream resolution
+	optdepends = onnxruntime: OCR bubble detection (rebuild with -Docr=true)
+	source = opal-0.6.3.tar.gz::https://github.com/debpalash/Opal/archive/refs/tags/v0.6.3.tar.gz
+	sha256sums = 6d78b8d3b36a8deed48c4cd55bf84c0345ee3c94da754c0e57beef0174c80550
+
+pkgname = opal

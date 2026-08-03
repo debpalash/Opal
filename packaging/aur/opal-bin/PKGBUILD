@@ -1,15 +1,13 @@
-# Maintainer: Palash <via github.com/debpalash>
-# AUR binary package for Opal — repackages the official release tarball.
-# Checksums: run `updpkgsums` (or packaging/aur/push-to-aur.sh) once the
-# release is public.
+# Maintainer: Palash Debnath <aur@palash.dev>
+# AUR binary package for Opal — repackages the official release build.
 pkgname=opal-bin
-pkgver=0.1.2
+pkgver=0.6.3
 pkgrel=1
 pkgdesc="Play everything — media player, universal search, torrent streaming, local AI (official binary)"
 arch=('x86_64')
 url="https://github.com/debpalash/Opal"
 license=('GPL-3.0-only')
-provides=('opal')
+provides=("opal=$pkgver")
 conflicts=('opal')
 depends=(
     'mpv'
@@ -18,24 +16,49 @@ depends=(
     'libtorrent-rasterbar'
     'curl'
     'ffmpeg'
+    # Torrent search shells out to `python3 engines/nova2.py` on every query.
+    'python'
+    'hicolor-icon-theme'
 )
 optdepends=(
     'yt-dlp: YouTube playback and downloads'
     'streamlink: live stream resolution'
     'onnxruntime: OCR bubble detection'
-    'python: voice helper scripts (STT/TTS servers)'
 )
-source=("https://github.com/debpalash/Opal/releases/download/v$pkgver/opal-$pkgver-linux-x86_64.tar.gz")
-sha256sums=('SKIP') # filled by updpkgsums at submission time
+# Two sources on purpose. The release tarball carries the compiled binary and
+# the wrapper .so; it does NOT carry the runtime resource payload (engines/,
+# scripts/camoufox_bridge.py, web/, data/) that main.zig's detectResourceRoot()
+# probes for under /usr/lib/opal. Without that payload torrent search silently
+# returns nothing. The payload is plain data — scripts and JSON, no compilation
+# — so taking it from the matching source tag is exact, not an approximation.
+source=(
+    "$pkgname-$pkgver.tar.gz::https://github.com/debpalash/Opal/releases/download/v$pkgver/opal-$pkgver-linux-$CARCH.tar.gz"
+    "$pkgname-$pkgver-resources.tar.gz::https://github.com/debpalash/Opal/archive/refs/tags/v$pkgver.tar.gz"
+)
+sha256sums=(
+    '8fad7440738fa764c696c6af9fbf4df3ade0db20bfaaab36976c63f81bf81b65'
+    '6d78b8d3b36a8deed48c4cd55bf84c0345ee3c94da754c0e57beef0174c80550'
+)
 
 package() {
-    cd "opal-$pkgver-linux-x86_64"
+    cd "opal-$pkgver-linux-$CARCH"
 
-    # The binary's rpath includes $ORIGIN/../lib/opal, so the wrapper lib
-    # resolves from /usr/lib/opal without ldconfig fiddling.
+    # The binary's DT_NEEDED is the bare soname and its rpath includes
+    # $ORIGIN/../lib/opal, so the wrapper resolves from /usr/lib/opal with no
+    # ldconfig fiddling.
     install -Dm755 opal                  "$pkgdir/usr/bin/opal"
     install -Dm755 libtorrent_wrapper.so "$pkgdir/usr/lib/opal/libtorrent_wrapper.so"
     install -Dm644 opal.desktop          "$pkgdir/usr/share/applications/opal.desktop"
     install -Dm644 opal.svg              "$pkgdir/usr/share/icons/hicolor/scalable/apps/opal.svg"
     install -Dm644 LICENSE               "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 NOTICE.md             "$pkgdir/usr/share/licenses/$pkgname/NOTICE.md"
+
+    # Runtime resource payload, from the matching source tag.
+    cd "$srcdir/Opal-$pkgver"
+    cp -a engines "$pkgdir/usr/lib/opal/engines"
+    find "$pkgdir/usr/lib/opal/engines" -type d -name '__pycache__' -prune -exec rm -rf {} +
+    install -Dm755 scripts/camoufox_bridge.py  "$pkgdir/usr/lib/opal/scripts/camoufox_bridge.py"
+    install -Dm644 web/index.html              "$pkgdir/usr/lib/opal/web/index.html"
+    install -Dm644 data/plugins-manifest.json  "$pkgdir/usr/lib/opal/plugins-manifest.json"
+    install -Dm644 data/manga-sources-sfw.json "$pkgdir/usr/lib/opal/manga-sources-sfw.json"
 }

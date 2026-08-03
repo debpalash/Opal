@@ -106,6 +106,11 @@ pub var search_buf: [256]u8 = std.mem.zeroes([256]u8);
 // category with a name/kind search + installed-only toggle — see plugins_pure.
 var src_filter_buf: [64]u8 = std.mem.zeroes([64]u8);
 var src_installed_only: bool = false;
+/// "Install all" is armed by a first click and fires on the second. This page
+/// tells the user "Only install sources you trust" two lines above the button;
+/// a single misclick that silently enables 40-odd scrapers would make a liar of
+/// it. Reset whenever there is nothing left to install.
+var src_bulk_armed: bool = false;
 
 /// Atomically claim the loading slot. Returns true if the caller now owns
 /// it (was idle), false if a worker is already running. Caller must release
@@ -933,10 +938,22 @@ fn renderSourcePlugins() void {
     var card = cardBegin(@src(), 0);
     defer card.deinit();
 
-    // Installed count for the summary line (also used by the installed-only filter).
+    // Installed count for the summary line (also used by the installed-only
+    // filter), plus how many "Install all" would write. Counted in ONE pass:
+    // isInstalled takes a lock and scans the installed list, and this runs every
+    // frame the tab is open, so a second full pass just to size a button label
+    // would double that for nothing.
     var installed_total: usize = 0;
+    var installable_total: usize = 0;
     for (0..pr.plugin_count) |i| {
-        if (pr.isInstalled(pr.plugins[i].idSlice())) installed_total += 1;
+        const p = &pr.plugins[i];
+        if (pr.isInstalled(p.idSlice())) {
+            installed_total += 1;
+        } else if (p.endpoints_len > 0) {
+            // No inline endpoints means installing it needs a network fetch,
+            // which the bulk path deliberately refuses to do.
+            installable_total += 1;
+        }
     }
 
     // Header row: title + count summary + a small Refresh.
@@ -948,6 +965,50 @@ fn renderSourcePlugins() void {
         {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
+        }
+        // Install all — bulk-enable every source that can be written straight
+        // from the manifest. Hidden once nothing is left to install rather than
+        // shown disabled, so it never invites a click that does nothing.
+        {
+            const installable = installable_total;
+            if (installable == 0) src_bulk_armed = false;
+            if (installable > 0) {
+                var lbl_buf: [32]u8 = undefined;
+                const lbl: []const u8 = if (src_bulk_armed)
+                    (std.fmt.bufPrint(&lbl_buf, "Install {d}?", .{installable}) catch "Install all?")
+                else
+                    "Install all";
+                if (dvui.button(@src(), lbl, .{}, .{
+                    .id_extra = 81300,
+                    .color_fill = if (src_bulk_armed) theme.colors.accent else theme.colors.bg_elevated,
+                    .color_text = if (src_bulk_armed) dvui.Color.white else theme.colors.text_secondary,
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+                    .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+                    .gravity_y = 0.5,
+                })) {
+                    if (src_bulk_armed) {
+                        src_bulk_armed = false;
+                        const res = pr.installAllInlined();
+                        var tb: [96]u8 = undefined;
+                        if (res.deferred > 0) {
+                            state.showToastTyped(std.fmt.bufPrint(
+                                &tb,
+                                "Installed {d} · {d} need installing individually",
+                                .{ res.installed, res.deferred },
+                            ) catch "Installed", .success);
+                        } else {
+                            state.showToastTyped(std.fmt.bufPrint(
+                                &tb,
+                                "Installed {d} sources",
+                                .{res.installed},
+                            ) catch "Installed", .success);
+                        }
+                    } else {
+                        src_bulk_armed = true;
+                    }
+                }
+            }
         }
         if (dvui.button(@src(), "Refresh", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 }, .gravity_y = 0.5 })) {
             // Do NOT zero plugin_count here: refresh() fetches on a background

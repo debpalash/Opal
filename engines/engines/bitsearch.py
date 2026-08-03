@@ -10,7 +10,10 @@ from novaprinter import prettyPrinter
 
 
 class bitsearch(object):
-    url = "https://bitsearch.to/"
+    # bitsearch.to now 301s to bitsearch.eu; follow the move at the source so
+    # the engine does not spend a request on the redirect (verified 2026-08-01:
+    # `curl -IL https://bitsearch.to/` lands on https://bitsearch.eu/).
+    url = "https://bitsearch.eu/"
     name = "BitSearch"
     supported_categories = {
         "all": "",

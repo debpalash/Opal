@@ -6,6 +6,15 @@ pub fn build(b: *std.Build) void {
 
     const headless = b.option(bool, "headless", "Build headless server (no SDL/X11 link)") orelse false;
 
+    // Dev convenience rpath: the ABSOLUTE build directory, so a freshly built
+    // binary finds the libtorrent_wrapper.so sitting beside build.zig. Distro
+    // packaging must turn this OFF (-Ddev-rpath=false): $srcdir is deleted
+    // after the build, leaving a dangling absolute RUNPATH entry that namcap
+    // rejects as insecure and that the loader would happily search if anyone
+    // ever recreated the path. Packaged installs resolve the wrapper through
+    // the $ORIGIN entries added below instead.
+    const dev_rpath = b.option(bool, "dev-rpath", "Add the build directory to the binary's rpath (default: true; packagers want false)") orelse true;
+
     // Expose the headless flag to the app as a `build_options` import.
     const build_options = b.addOptions();
     build_options.addOption(bool, "headless", headless);
@@ -222,7 +231,12 @@ pub fn build(b: *std.Build) void {
         // anywhere but the build dir (the Docker runtime stage failed exactly
         // this way). With a SONAME the NEEDED is just the name, resolved via
         // rpath / ldconfig (/usr/local/lib) wherever it's installed.
-        "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -Wl,-soname,libtorrent_wrapper.so $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar; fi";
+        // -Wl,-z,relro -Wl,-z,now: full RELRO. This g++ call bypasses the
+        // distro's LDFLAGS (makepkg exports hardening flags that only reach
+        // compilers it invokes itself), so namcap reported the wrapper as
+        // "lacks FULL RELRO". Passing them here is what makes the shipped .so
+        // match the rest of the distro's hardening baseline.
+        "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -Wl,-soname,libtorrent_wrapper.so -Wl,-z,relro -Wl,-z,now $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar; fi";
 
     // Only invoke the host g++ when it can actually produce a wrapper for the
     // target (native builds). Cross-compiling (e.g. windows from macOS for a
@@ -236,8 +250,19 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addLibraryPath(b.path("."));
     exe.root_module.linkSystemLibrary("torrent_wrapper", .{});
     // rpath is ELF/Mach-O only; PE resolves DLLs next to the exe at runtime.
-    if (!is_windows) {
+    if (!is_windows and dev_rpath) {
         exe.root_module.addRPath(b.path(".")); // Ensure the binary can find the locally compiled wrapper
+    } else if (!is_windows) {
+        // Dropping the explicit addRPath above is NOT enough on its own. Zig
+        // defaults to -feach-lib-rpath, which mirrors every addLibraryPath()
+        // entry — including the b.path(".") on the line above, which the link
+        // needs to FIND libtorrent_wrapper.so — into RUNPATH as an absolute
+        // path. Verified: with only the addRPath removed, the binary still came
+        // out carrying the build directory. -fno-each-lib-rpath is what
+        // actually keeps it out. Everything the packaged binary needs is either
+        // in the default loader path (SDL2/mpv/sqlite from /usr/lib) or covered
+        // by the $ORIGIN entries below.
+        exe.each_lib_rpath = false;
     }
     // Packaged-install layouts (deb/rpm/.run/tarball): let the installed
     // binary find libtorrent_wrapper.so relative to itself — next to the
@@ -900,6 +925,17 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_scale_pure).step);
+
+    // Panel geometry parsing (sysfs mode lines + EDID physical size) that feeds
+    // the scale default on Linux, where the OS often reports no content scale.
+    const test_display_info = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/display_info.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_display_info).step);
 
     // Media file classification: playable vs executable/archive (torrent
     // file auto-selection safety).
