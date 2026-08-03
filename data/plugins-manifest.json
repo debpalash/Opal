@@ -391,7 +391,7 @@
       "type": "torrent",
       "version": "1.0.0",
       "endpoints": {
-        "base": "https://bitsearch.to"
+        "base": "https://bitsearch.eu"
       },
       "file": "plugins/bitsearch.json"
     },
