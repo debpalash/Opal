@@ -1,9 +1,15 @@
-# Maintainer: Palash <via github.com/debpalash>
+# Maintainer: Palash Debnath <aur@palash.dev>
 # AUR source package for Opal — builds from the release tarball.
-# Checksums: run `updpkgsums` (or packaging/aur/push-to-aur.sh, which does it
-# for you) once the tag is public — GitHub archive URLs 404 while private.
+#
+# TMDB: the official release binaries have a TMDB token compiled in from a CI
+# secret. A source build does not, so movie/TV browse starts empty until the
+# user pastes a free v4 token into Settings -> TMDB Integration (or exports
+# $OPAL_TMDB_TOKEN). To bake your own key into the package instead, build with
+#   OPAL_TMDB_TOKEN='eyJ...' makepkg -si
+# build.zig reads it at configure time. See docs/TMDB-SETUP.md upstream.
+# opal-bin repackages the official binary and therefore needs none of this.
 pkgname=opal
-pkgver=0.1.2
+pkgver=0.6.3
 pkgrel=1
 pkgdesc="Play everything — media player, universal search, torrent streaming, local AI, one native binary"
 arch=('x86_64')
@@ -16,41 +22,91 @@ depends=(
     'libtorrent-rasterbar'
     'curl'
     'ffmpeg'
+    # Torrent search is not optional plumbing — the app shells out to
+    # `python3 engines/nova2.py` for every query (src/services/search.zig).
+    # The engines vendor their own socks/helpers modules, so a bare
+    # interpreter is enough; no pip packages are needed.
+    'python'
+    'hicolor-icon-theme'
 )
 makedepends=(
     'zig>=0.16.0'
-    'gcc'
+    # gcc, pkgconf and sh come from base-devel, which makepkg assumes.
+    # build.zig invokes g++ itself to produce libtorrent_wrapper.so.
 )
 optdepends=(
     'yt-dlp: YouTube playback and downloads'
     'streamlink: live stream resolution'
-    'onnxruntime: OCR bubble detection'
-    'python: voice helper scripts (STT/TTS servers)'
+    'onnxruntime: OCR bubble detection (rebuild with -Docr=true)'
 )
 source=("$pkgname-$pkgver.tar.gz::https://github.com/debpalash/Opal/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP') # filled by updpkgsums at submission time
+sha256sums=('6d78b8d3b36a8deed48c4cd55bf84c0345ee3c94da754c0e57beef0174c80550')
+
+# Zig resolves build.zig.zon dependencies over the network. Keep that fetch in
+# prepare() (where makepkg permits it) and point the cache at $srcdir so the
+# build never writes to the packager's ~/.cache. The export lives inside the
+# functions on purpose — $srcdir is not set while makepkg is merely sourcing
+# this file for metadata (.SRCINFO), and exporting an empty value there would
+# send Zig's cache to the filesystem root.
+prepare() {
+    export ZIG_GLOBAL_CACHE_DIR="$srcdir/zig-global-cache"
+    cd "Opal-$pkgver"
+    zig build --fetch
+}
 
 build() {
+    export ZIG_GLOBAL_CACHE_DIR="$srcdir/zig-global-cache"
     cd "Opal-$pkgver"
 
-    # 1. C++ torrent wrapper (isolates the libtorrent C++ ABI from Zig)
-    g++ -std=c++17 -O3 -shared -fPIC \
-        src/torrent_wrapper.cpp \
-        -o libtorrent_wrapper.so \
-        -ltorrent-rasterbar
+    # No hand-rolled g++ line here. build.zig compiles src/torrent_wrapper.cpp
+    # with -Wl,-soname,libtorrent_wrapper.so; a manual compile that omits the
+    # soname makes the linker record the ABSOLUTE $srcdir path as the exe's
+    # DT_NEEDED, and the installed binary then fails to load at all once
+    # makepkg deletes that directory.
+    #
+    #   -fsys=sdl2      link the system SDL2 (Wayland) instead of dvui's
+    #                   bundled static copy
+    #   -Dcpu=x86_64_v2 match the upstream release ISA floor. Zig would
+    #                   otherwise target the build host's native CPU, and a
+    #                   package built on an AVX-512 machine SIGILLs on every
+    #                   other one (upstream issue #22).
+    local flags=(-Doptimize=ReleaseSafe -fsys=sdl2 -Dcpu=x86_64_v2)
 
-    # 2. The app. -fsys=sdl2 links the system SDL2 (Wayland support);
-    #    the binary carries $ORIGIN/../lib/opal in its rpath, matching the
-    #    install layout below.
-    zig build -Doptimize=ReleaseSafe -fsys=sdl2
+    # -Ddev-rpath=false drops the absolute $srcdir RUNPATH entry, which is
+    # dangling by the time the package is installed and which namcap reports as
+    # an insecure rpath. The $ORIGIN and $ORIGIN/../lib/opal entries build.zig
+    # always adds are what actually resolve the wrapper from /usr/lib/opal.
+    # Probed rather than passed blind: the option landed after v0.6.3, and Zig
+    # hard-errors on an unknown -D flag, so hardcoding it here would break the
+    # moment this PKGBUILD is pointed at an older tag.
+    if zig build -h 2>&1 | grep -q -- '-Ddev-rpath'; then
+        flags+=(-Ddev-rpath=false)
+    fi
+
+    zig build "${flags[@]}"
 }
 
 package() {
     cd "Opal-$pkgver"
 
-    install -Dm755 zig-out/bin/opal          "$pkgdir/usr/bin/opal"
-    install -Dm755 libtorrent_wrapper.so     "$pkgdir/usr/lib/opal/libtorrent_wrapper.so"
-    install -Dm644 packaging/opal.desktop    "$pkgdir/usr/share/applications/opal.desktop"
-    install -Dm644 assets/logo.svg           "$pkgdir/usr/share/icons/hicolor/scalable/apps/opal.svg"
-    install -Dm644 LICENSE                   "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm755 zig-out/bin/opal       "$pkgdir/usr/bin/opal"
+    install -Dm755 libtorrent_wrapper.so  "$pkgdir/usr/lib/opal/libtorrent_wrapper.so"
+
+    # Runtime resource payload. The binary alone is not a working install:
+    # main.zig's detectResourceRoot() probes /usr/lib/opal/engines/nova2.py and
+    # roots torrent search, the browser scraper, the Plugins tab and Web Remote
+    # there. Mirrors packaging/nfpm.yaml, which does the same for deb/rpm.
+    install -dm755 "$pkgdir/usr/lib/opal"
+    cp -a engines "$pkgdir/usr/lib/opal/engines"
+    # Byte-compiled leftovers from a dirty source tree are not shippable.
+    find "$pkgdir/usr/lib/opal/engines" -type d -name '__pycache__' -prune -exec rm -rf {} +
+    install -Dm755 scripts/camoufox_bridge.py     "$pkgdir/usr/lib/opal/scripts/camoufox_bridge.py"
+    install -Dm644 web/index.html                 "$pkgdir/usr/lib/opal/web/index.html"
+    install -Dm644 data/plugins-manifest.json     "$pkgdir/usr/lib/opal/plugins-manifest.json"
+    install -Dm644 data/manga-sources-sfw.json    "$pkgdir/usr/lib/opal/manga-sources-sfw.json"
+
+    install -Dm644 packaging/opal.desktop "$pkgdir/usr/share/applications/opal.desktop"
+    install -Dm644 assets/logo.svg        "$pkgdir/usr/share/icons/hicolor/scalable/apps/opal.svg"
+    install -Dm644 LICENSE                "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 docs/NOTICE.md         "$pkgdir/usr/share/licenses/$pkgname/NOTICE.md"
 }

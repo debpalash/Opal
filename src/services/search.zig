@@ -251,6 +251,15 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
     var child = @import("../core/io_global.zig").Child.init(argv.items, allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Inherit;
+
+    // Route the engines through the DPI-bypass proxy when it is running.
+    // Without this the sidecar only covered Zig-side curl, so on a filtered
+    // connection the app fetched TMDB fine while most torrent sources returned
+    // nothing — the bypass appeared to do nothing for search. Null when the
+    // proxy is off, which spawns with the inherited environment as before.
+    var engine_env = @import("dpi_bypass.zig").engineEnv(allocator);
+    defer if (engine_env) |*m| m.deinit();
+    if (engine_env) |*m| child.env_map = m;
     // Resolve engines/nova2.py from the bundled resource root when installed
     // (CWD is "/" from a /Applications launch); null keeps the dev CWD.
     child.cwd = state.resourceRoot();

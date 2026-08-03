@@ -1080,7 +1080,9 @@ fn renderGeneralTab() void {
         if (components.segment(@src(), &scale_labels, sel)) |clicked| {
             if (clicked == 0) {
                 state.app.ui_scale_auto = true;
-                state.app.ui_scale = @import("../core/scale_pure.zig").deviceScale(dvui.windowNaturalScale());
+                const scale_pure = @import("../core/scale_pure.zig");
+                const panel = @import("../core/display_info.zig").probe() orelse scale_pure.Display{};
+                state.app.ui_scale = scale_pure.deviceScale(dvui.windowNaturalScale(), panel);
             } else {
                 state.app.ui_scale_auto = false;
                 state.app.ui_scale = scales[clicked - 1];
@@ -1222,6 +1224,44 @@ fn renderGeneralTab() void {
             .id_extra = 143,
             .color_text = theme.colors.text_tertiary,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
+        });
+    }
+
+    // ── TMDB attribution ──
+    // Required: TMDB's logos-and-attribution terms say every application using
+    // their data or images must attribute TMDB as the source, and the trailing
+    // sentence is the disclaimer their API terms ask for. Kept here rather than
+    // on the Movies/TV wall so it is present and findable without putting a
+    // third-party logo on the content surface. The mark is TMDB's official
+    // short SVG rendered to PNG (assets sourced from themoviedb.org); do not
+    // recolour or restyle it — their brand rules only permit the supplied
+    // artwork.
+    {
+        var attr = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = 144,
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.sm },
+        });
+        defer attr.deinit();
+
+        _ = dvui.image(@src(), .{
+            .source = .{ .imageFile = .{ .bytes = @embedFile("tmdb_logo.png"), .name = "tmdb-attribution" } },
+        }, .{
+            .id_extra = 145,
+            .gravity_y = 0.5,
+            // Source art is 320x42 (7.62:1) — pin both bounds to that ratio so
+            // the wordmark can never stretch. 14px tall keeps the "TMDB"
+            // letterforms legible beside the tertiary-weight caption; much
+            // smaller and they turn to mush.
+            .min_size_content = .{ .w = 107, .h = 14 },
+            .max_size_content = .{ .w = 107, .h = 14 },
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        });
+
+        _ = dvui.label(@src(), "This product uses the TMDB API but is not endorsed or certified by TMDB.", .{}, .{
+            .id_extra = 146,
+            .gravity_y = 0.5,
+            .color_text = theme.colors.text_tertiary,
         });
     }
 

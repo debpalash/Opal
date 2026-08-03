@@ -6,7 +6,8 @@
 #   ./scripts/install-deps.sh             # install (asks for sudo if needed)
 #   ./scripts/install-deps.sh --check      # exit 0 if all present, 1 if missing
 #
-# The package list mirrors PKGBUILD depends/makedepends/optdepends. Note that
+# The package list mirrors packaging/aur/opal/PKGBUILD's
+# depends/makedepends/optdepends. Note that
 # OCR (ONNX Runtime) is OPTIONAL — `zig build -Docr=true` enables it. Without
 # -Docr, opal builds and runs without onnxruntime.
 set -euo pipefail
