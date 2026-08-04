@@ -71,36 +71,38 @@ fn realCheck() Status {
 
     // sherpa STT + TTS models — probe a canonical file per bundle.
     var sherpa_home_buf: [512]u8 = undefined;
-    const home2 = @import("paths.zig").homeDir();
-    if (std.fmt.bufPrintZ(&sherpa_home_buf, "{s}/.config/opal/models/sherpa-whisper-tiny/tiny-tokens.txt", .{home2})) |p| {
+    var __cfg_buf_0: [512]u8 = undefined;
+    const home2 = @import("paths.zig").configDir(&__cfg_buf_0);
+    if (std.fmt.bufPrintZ(&sherpa_home_buf, "{s}/models/sherpa-whisper-tiny/tiny-tokens.txt", .{home2})) |p| {
         s.sherpa_model = have(p);
     } else |_| {}
     var sherpa_tts_buf: [512]u8 = undefined;
-    if (std.fmt.bufPrintZ(&sherpa_tts_buf, "{s}/.config/opal/models/sherpa-vits-piper/en_US-lessac-medium.onnx", .{home2})) |p| {
+    if (std.fmt.bufPrintZ(&sherpa_tts_buf, "{s}/models/sherpa-vits-piper/en_US-lessac-medium.onnx", .{home2})) |p| {
         s.sherpa_tts_model = have(p);
     } else |_| {}
     var sherpa_stream_buf: [512]u8 = undefined;
-    if (std.fmt.bufPrintZ(&sherpa_stream_buf, "{s}/.config/opal/models/sherpa-stream-zipformer/encoder.onnx", .{home2})) |p| {
+    if (std.fmt.bufPrintZ(&sherpa_stream_buf, "{s}/models/sherpa-stream-zipformer/encoder.onnx", .{home2})) |p| {
         s.sherpa_stream_model = have(p);
     } else |_| {}
     var sherpa_kokoro_buf: [512]u8 = undefined;
-    if (std.fmt.bufPrintZ(&sherpa_kokoro_buf, "{s}/.config/opal/models/sherpa-kokoro/model.onnx", .{home2})) |p| {
+    if (std.fmt.bufPrintZ(&sherpa_kokoro_buf, "{s}/models/sherpa-kokoro/model.onnx", .{home2})) |p| {
         s.sherpa_kokoro_model = have(p);
     } else |_| {}
     var pk2_buf: [512]u8 = undefined;
-    if (std.fmt.bufPrintZ(&pk2_buf, "{s}/.config/opal/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/encoder.int8.onnx", .{home2})) |p| {
+    if (std.fmt.bufPrintZ(&pk2_buf, "{s}/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/encoder.int8.onnx", .{home2})) |p| {
         s.parakeet_v2_model = have(p);
     } else |_| {}
     var pk3_buf: [512]u8 = undefined;
-    if (std.fmt.bufPrintZ(&pk3_buf, "{s}/.config/opal/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/encoder.int8.onnx", .{home2})) |p| {
+    if (std.fmt.bufPrintZ(&pk3_buf, "{s}/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/encoder.int8.onnx", .{home2})) |p| {
         s.parakeet_v3_model = have(p);
     } else |_| {}
     s.sherpa_mic_cli = have("/opt/homebrew/bin/sherpa-onnx-microphone") or
         have("/usr/local/bin/sherpa-onnx-microphone");
 
     var home_buf: [512]u8 = undefined;
-    const home = @import("paths.zig").homeDir();
-    if (std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models/ggml-tiny.en.bin", .{home})) |model_path| {
+    var __cfg_buf_1: [512]u8 = undefined;
+    const home = @import("paths.zig").configDir(&__cfg_buf_1);
+    if (std.fmt.bufPrintZ(&home_buf, "{s}/models/ggml-tiny.en.bin", .{home})) |model_path| {
         s.whisper_model = have(model_path);
     } else |_| {}
 
@@ -187,8 +189,9 @@ pub fn fetchParakeetBlocking(is_v3: bool) bool {
         "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2";
 
     var home_buf: [512]u8 = undefined;
-    const home = @import("paths.zig").homeDir();
-    const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return false;
+    var __cfg_buf_2: [512]u8 = undefined;
+    const home = @import("paths.zig").configDir(&__cfg_buf_2);
+    const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/models", .{home}) catch return false;
     io_global.makeDirAbsolute(models_dir) catch {};
 
     // Already extracted → no-op.
@@ -252,8 +255,9 @@ pub fn fetchSherpaWhisperAsync() void {
         fn worker() void {
             defer sherpa_model_downloading = false;
             var home_buf: [512]u8 = undefined;
-            const home = @import("paths.zig").homeDir();
-            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
+            var __cfg_buf_3: [512]u8 = undefined;
+            const home = @import("paths.zig").configDir(&__cfg_buf_3);
+            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/models", .{home}) catch return;
             io_global.makeDirAbsolute(models_dir) catch {};
 
             var tar_buf: [512]u8 = undefined;
@@ -316,8 +320,9 @@ pub fn fetchSherpaTtsAsync() void {
         fn worker() void {
             defer sherpa_tts_downloading = false;
             var home_buf: [512]u8 = undefined;
-            const home = @import("paths.zig").homeDir();
-            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
+            var __cfg_buf_4: [512]u8 = undefined;
+            const home = @import("paths.zig").configDir(&__cfg_buf_4);
+            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/models", .{home}) catch return;
             io_global.makeDirAbsolute(models_dir) catch {};
 
             var tar_buf: [512]u8 = undefined;
@@ -377,8 +382,9 @@ pub fn fetchSherpaKokoroAsync() void {
         fn worker() void {
             defer sherpa_kokoro_downloading = false;
             var home_buf: [512]u8 = undefined;
-            const home = @import("paths.zig").homeDir();
-            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
+            var __cfg_buf_5: [512]u8 = undefined;
+            const home = @import("paths.zig").configDir(&__cfg_buf_5);
+            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/models", .{home}) catch return;
             io_global.makeDirAbsolute(models_dir) catch {};
 
             var tar_buf: [512]u8 = undefined;
@@ -434,8 +440,9 @@ pub fn fetchSherpaStreamAsync() void {
         fn worker() void {
             defer sherpa_stream_downloading = false;
             var home_buf: [512]u8 = undefined;
-            const home = @import("paths.zig").homeDir();
-            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
+            var __cfg_buf_6: [512]u8 = undefined;
+            const home = @import("paths.zig").configDir(&__cfg_buf_6);
+            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/models", .{home}) catch return;
             io_global.makeDirAbsolute(models_dir) catch {};
 
             var tar_buf: [512]u8 = undefined;
@@ -520,8 +527,9 @@ pub fn fetchWhisperModelAsync() void {
         fn worker() void {
             defer whisper_model_downloading.store(false, .release);
             var home_buf: [512]u8 = undefined;
-            const home = @import("paths.zig").homeDir();
-            const dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
+            var __cfg_buf_7: [512]u8 = undefined;
+            const home = @import("paths.zig").configDir(&__cfg_buf_7);
+            const dir = std.fmt.bufPrintZ(&home_buf, "{s}/models", .{home}) catch return;
 
             // mkpath + check if already present
             io_global.makeDirAbsolute(dir) catch {};
@@ -607,9 +615,10 @@ fn setStatus(comptime fmt: []const u8, args: anytype) void {
 /// Path to the managed mlx-whisper binary inside our uv venv.
 /// Returns null if not installed yet.
 pub fn mlxWhisperBinPath(buf: []u8) ?[]const u8 {
-    const home = @import("paths.zig").homeDir();
+    var __cfg_buf_8: [512]u8 = undefined;
+    const home = @import("paths.zig").configDir(&__cfg_buf_8);
     // Check managed venv first
-    const venv_bin = std.fmt.bufPrintZ(buf, "{s}/.config/opal/mlx-venv/bin/mlx_whisper", .{home}) catch return null;
+    const venv_bin = std.fmt.bufPrintZ(buf, "{s}/mlx-venv/bin/mlx_whisper", .{home}) catch return null;
     if (io_global.cwdAccess(venv_bin, .{})) |_| return venv_bin else |_| {}
     // Check system-wide
     if (io_global.cwdAccess("/opt/homebrew/bin/mlx_whisper", .{})) |_| return "/opt/homebrew/bin/mlx_whisper" else |_| {}
@@ -670,7 +679,7 @@ pub fn fetchMlxWhisperModelAsync() void {
 
             // ── Step 2: Create venv with uv (downloads its own Python) ──
             var venv_buf: [512]u8 = undefined;
-            const venv_dir = std.fmt.bufPrintZ(&venv_buf, "{s}/.config/opal/mlx-venv", .{home}) catch return;
+            const venv_dir = std.fmt.bufPrintZ(&venv_buf, "{s}/mlx-venv", .{home}) catch return;
 
             var pip_check_buf: [512]u8 = undefined;
             const venv_python = std.fmt.bufPrintZ(&pip_check_buf, "{s}/bin/python", .{venv_dir}) catch return;

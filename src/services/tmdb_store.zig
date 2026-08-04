@@ -133,9 +133,10 @@ fn loadListFromDb(list_name: []const u8, target: *std.ArrayListUnmanaged(state.T
 // ══════════════════════════════════════════════════════════
 
 pub fn migrateFromTsv() void {
-    const home = paths.homeDir();
+    var __cfg_buf_0: [512]u8 = undefined;
+    const home = @import("../core/paths.zig").configDir(&__cfg_buf_0);
     var path_buf: [512]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/opal/tmdb_lists.tsv", .{home}) catch return;
+    const path = std.fmt.bufPrintZ(&path_buf, "{s}/tmdb_lists.tsv", .{home}) catch return;
 
     const file = @import("../core/io_global.zig").openFileAbsolute(path, .{}) catch return;
     defer file.close(@import("../core/io_global.zig").io());
@@ -180,15 +181,16 @@ pub fn migrateFromTsv() void {
     db.exec("COMMIT");
 
     var old_buf: [512]u8 = undefined;
-    const old_path = std.fmt.bufPrint(&old_buf, "{s}/.config/opal/tmdb_lists.tsv.migrated", .{home}) catch return;
+    const old_path = std.fmt.bufPrint(&old_buf, "{s}/tmdb_lists.tsv.migrated", .{home}) catch return;
     @import("../core/io_global.zig").renameAbsolute(path, old_path) catch {};
 }
 
 // Also migrate old separate tmdb.db if it exists
 pub fn migrateOldDb() void {
-    const home = paths.homeDir();
+    var __cfg_buf_1: [512]u8 = undefined;
+    const home = @import("../core/paths.zig").configDir(&__cfg_buf_1);
     var path_buf: [512]u8 = undefined;
-    const old_db_path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/opal/tmdb.db", .{home}) catch return;
+    const old_db_path = std.fmt.bufPrintZ(&path_buf, "{s}/tmdb.db", .{home}) catch return;
     // Just delete it — data was already in tmdb_lists.tsv which we migrated above
     @import("../core/io_global.zig").deleteFileAbsolute(old_db_path) catch {};
 }

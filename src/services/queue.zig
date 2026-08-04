@@ -49,13 +49,14 @@ var db_initialized: bool = false;
 pub fn initDb() void {
     if (db_initialized) return;
 
-    const home = @import("../core/paths.zig").homeDir();
+    var __cfg_buf_0: [512]u8 = undefined;
+    const home = @import("../core/paths.zig").configDir(&__cfg_buf_0);
     var path_buf: [256]u8 = undefined;
-    const db_path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/opal/queue.db", .{home}) catch return;
+    const db_path = std.fmt.bufPrintZ(&path_buf, "{s}/queue.db", .{home}) catch return;
     
     // Ensure directory exists
     var dir_buf: [256]u8 = undefined;
-    const dir_path = std.fmt.bufPrintZ(&dir_buf, "{s}/.config/opal", .{home}) catch return;
+    const dir_path = std.fmt.bufPrintZ(&dir_buf, "{s}", .{home}) catch return;
     _ = @import("../core/io_global.zig").makeDirAbsolute(dir_path) catch {};
     
     if (c.sqlite.sqlite3_open(db_path.ptr, &db) != c.sqlite.SQLITE_OK) {

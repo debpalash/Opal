@@ -610,3 +610,30 @@ def test_ytdlp_verifies_execution():
     if bad:
         return "fail", "verifyWorker missing: " + ", ".join(bad)
     return "pass", "a bundled yt-dlp that will not run is disowned in favour of PATH"
+
+
+@test("portability: no hand-built ~/.config/opal paths", "Windows")
+def test_no_hardcoded_config_path():
+    # paths.configDir() is %APPDATA%\opal on Windows and honours XDG_CONFIG_HOME
+    # on POSIX. Building "{home}/.config/opal/..." by hand bypassed both, so
+    # Windows split its state across two trees — config.tsv in %APPDATA%\opal,
+    # everything else under a literal C:\Users\x\.config\opal — and an
+    # XDG_CONFIG_HOME user got the same split on Linux.
+    #
+    # Display strings are exempt: a label reading "~/.config/opal/scripts" is
+    # cosmetic, not a path the code resolves.
+    offenders = []
+    for rel, text in _zig_sources():
+        if rel.endswith("core/paths.zig"):
+            continue
+        for i, ln in enumerate(_strip_comments(text).splitlines(), 1):
+            if "/.config/opal" not in ln:
+                continue
+            # A format placeholder means this line is CONSTRUCTING a path.
+            if "{s}/.config/opal" in ln:
+                offenders.append(f"{rel}:{i}")
+    if offenders:
+        return "fail", ("hand-built config path (bypasses %APPDATA% and "
+                        "XDG_CONFIG_HOME): " + ", ".join(offenders)
+                        + " — use paths.configDir()")
+    return "pass", "every config path is built from paths.configDir()"

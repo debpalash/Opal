@@ -69,15 +69,17 @@ pub fn sherpaBin(comptime name: []const u8, buf: []u8) ?[]const u8 {
 
 /// ~/.config/opal/models/silero_vad.onnx, when present.
 pub fn sileroPath(buf: []u8) ?[]const u8 {
-    const home = @import("../core/paths.zig").homeDir();
-    const p = std.fmt.bufPrint(buf, "{s}/.config/opal/models/silero_vad.onnx", .{home}) catch return null;
+    var __cfg_buf_0: [512]u8 = undefined;
+    const home = @import("../core/paths.zig").configDir(&__cfg_buf_0);
+    const p = std.fmt.bufPrint(buf, "{s}/models/silero_vad.onnx", .{home}) catch return null;
     if (io_global.cwdAccess(p, .{})) |_| return p else |_| return null;
 }
 
 fn parakeetPresent(dir_name: []const u8) bool {
-    const home = @import("../core/paths.zig").homeDir();
+    var __cfg_buf_1: [512]u8 = undefined;
+    const home = @import("../core/paths.zig").configDir(&__cfg_buf_1);
     var buf: [512]u8 = undefined;
-    const p = std.fmt.bufPrint(&buf, "{s}/.config/opal/models/{s}/encoder.int8.onnx", .{ home, dir_name }) catch return false;
+    const p = std.fmt.bufPrint(&buf, "{s}/models/{s}/encoder.int8.onnx", .{ home, dir_name }) catch return false;
     if (io_global.cwdAccess(p, .{})) |_| return true else |_| return false;
 }
 
@@ -150,9 +152,10 @@ fn installWorker() void {
         }
     }.f;
 
-    const home = @import("../core/paths.zig").homeDir();
+    var __cfg_buf_2: [512]u8 = undefined;
+    const home = @import("../core/paths.zig").configDir(&__cfg_buf_2);
     var dir_buf: [512]u8 = undefined;
-    const opal_dir = std.fmt.bufPrint(&dir_buf, "{s}/.config/opal", .{home}) catch return fail("path too long");
+    const opal_dir = std.fmt.bufPrint(&dir_buf, "{s}", .{home}) catch return fail("path too long");
     var models_buf: [512]u8 = undefined;
     const models_dir = std.fmt.bufPrint(&models_buf, "{s}/models", .{opal_dir}) catch return fail("path too long");
     io_global.makeDirAbsolute(models_dir) catch {};

@@ -1123,9 +1123,10 @@ fn tryPlugins(url: []const u8) bool {
     if (tryPluginsInDir("plugins", url)) return true;
 
     // 2) Try user plugins directory
-    const home = @import("../core/paths.zig").homeDir();
+    var __cfg_buf_0: [512]u8 = undefined;
+    const home = @import("../core/paths.zig").configDir(&__cfg_buf_0);
     var dir_buf: [256]u8 = undefined;
-    const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/.config/opal/plugins/comics", .{home}) catch return false;
+    const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/plugins/comics", .{home}) catch return false;
     return tryPluginsInDir(dir_path, url);
 }
 
@@ -3142,9 +3143,10 @@ fn renderSourceChip(label: []const u8, id: usize, src: Source) void {
 fn renderPluginSourceBadges() void {
     var shown: usize = 0;
     showPluginBadgesInDir("plugins", &shown);
-    const home = @import("../core/paths.zig").homeDir();
+    var __cfg_buf_1: [512]u8 = undefined;
+    const home = @import("../core/paths.zig").configDir(&__cfg_buf_1);
     var dir_buf: [256]u8 = undefined;
-    const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/.config/opal/plugins/comics", .{home}) catch return;
+    const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/plugins/comics", .{home}) catch return;
     showPluginBadgesInDir(dir_path, &shown);
 }
 

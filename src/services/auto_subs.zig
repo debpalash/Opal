@@ -49,24 +49,25 @@ fn resolveWhisperBin() ?[]const u8 {
 
 fn resolveWhisperModel(buf: *[512]u8) ?[]const u8 {
     const io = @import("../core/io_global.zig");
-    const home = @import("../core/paths.zig").homeDir();
+    var __cfg_buf_0: [512]u8 = undefined;
+    const home = @import("../core/paths.zig").configDir(&__cfg_buf_0);
     const lang = whisper_lang[0..whisper_lang_len];
     const size = whisper_model_size[0..whisper_model_size_len];
     const is_en = std.mem.eql(u8, lang, "en");
 
     // Try language-specific model first (e.g. ggml-tiny.en.bin for English)
     if (is_en) {
-        const p = std.fmt.bufPrintZ(buf, "{s}/.config/opal/models/ggml-{s}.en.bin", .{home, size}) catch return null;
+        const p = std.fmt.bufPrintZ(buf, "{s}/models/ggml-{s}.en.bin", .{home, size}) catch return null;
         if (io.cwdAccess(p, .{})) |_| return p else |_| {}
     }
     // Try multilingual model (e.g. ggml-tiny.bin)
     {
-        const p = std.fmt.bufPrintZ(buf, "{s}/.config/opal/models/ggml-{s}.bin", .{home, size}) catch return null;
+        const p = std.fmt.bufPrintZ(buf, "{s}/models/ggml-{s}.bin", .{home, size}) catch return null;
         if (io.cwdAccess(p, .{})) |_| return p else |_| {}
     }
     // Fallback: any tiny model
     {
-        const p = std.fmt.bufPrintZ(buf, "{s}/.config/opal/models/ggml-tiny.en.bin", .{home}) catch return null;
+        const p = std.fmt.bufPrintZ(buf, "{s}/models/ggml-tiny.en.bin", .{home}) catch return null;
         if (io.cwdAccess(p, .{})) |_| return p else |_| {}
     }
     return null;

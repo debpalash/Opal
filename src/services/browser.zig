@@ -41,11 +41,12 @@ pub fn engineDisplayName(e: Engine) []const u8 {
 // Resolve the venv python under the Opal config dir (~/.config/opal/venv/bin/python3).
 // Returns null if $HOME is unset. Falls back to bare "python3" handled by callers.
 fn getVenvPython() ?[]const u8 {
-    const home = @import("../core/paths.zig").homeDir();
+    var __cfg_buf_0: [512]u8 = undefined;
+    const home = @import("../core/paths.zig").configDir(&__cfg_buf_0);
     const S = struct {
         var buf: [512]u8 = undefined;
     };
-    return std.fmt.bufPrint(&S.buf, "{s}/.config/opal/venv/bin/python3", .{home}) catch null;
+    return std.fmt.bufPrint(&S.buf, "{s}/venv/bin/python3", .{home}) catch null;
 }
 
 // Bridge process state (singleton — one browser instance shared across all panes)
@@ -187,9 +188,10 @@ fn installWorker() void {
     const engine = install_engine_target;
     const pkg = pure.enginePipPackage(engine);
 
-    const home = @import("../core/paths.zig").homeDir();
+    var __cfg_buf_1: [512]u8 = undefined;
+    const home = @import("../core/paths.zig").configDir(&__cfg_buf_1);
     var venv_buf: [512]u8 = undefined;
-    const venv = std.fmt.bufPrint(&venv_buf, "{s}/.config/opal/venv", .{home}) catch return fail("path too long");
+    const venv = std.fmt.bufPrint(&venv_buf, "{s}/venv", .{home}) catch return fail("path too long");
     var py_buf: [512]u8 = undefined;
     const py = std.fmt.bufPrint(&py_buf, "{s}/bin/python3", .{venv}) catch return fail("path too long");
 
@@ -247,12 +249,13 @@ pub fn engineReady(e: Engine) bool {
 /// Does the Opal venv contain `pkg` in site-packages? Scans venv/lib for the
 /// python3.x dir (version varies across machines) — cheap, cached by caller.
 fn checkVenvPackage(pkg: []const u8) bool {
-    const home = @import("../core/paths.zig").homeDir();
+    var __cfg_buf_2: [512]u8 = undefined;
+    const home = @import("../core/paths.zig").configDir(&__cfg_buf_2);
     var py_buf: [512]u8 = undefined;
-    const py = std.fmt.bufPrint(&py_buf, "{s}/.config/opal/venv/bin/python3", .{home}) catch return false;
+    const py = std.fmt.bufPrint(&py_buf, "{s}/venv/bin/python3", .{home}) catch return false;
     io_g.cwdAccess(py, .{}) catch return false;
     var lib_buf: [512]u8 = undefined;
-    const lib = std.fmt.bufPrint(&lib_buf, "{s}/.config/opal/venv/lib", .{home}) catch return false;
+    const lib = std.fmt.bufPrint(&lib_buf, "{s}/venv/lib", .{home}) catch return false;
     var dir = io_g.cwdOpenDir(lib, .{ .iterate = true }) catch return false;
     defer dir.close(io_g.io());
     var iter = dir.iterate();
