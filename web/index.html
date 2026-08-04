@@ -124,6 +124,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   letter-spacing:.06em;margin:18px 0 8px}
 /* Access page (Setup › Access): each control group is a carded block so the
    password / sessions / token / network sections read as separate actions. */
+.sect.fold{cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px}
+.sect.fold::before{content:"▾";font-size:11px;opacity:.7;transition:transform .12s}
+.sect.fold.shut::before{transform:rotate(-90deg)}
+.fold-body{display:block}
+.fold-body.shut{display:none}
 .acc-group{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--rad);
   padding:12px;margin-bottom:10px}
 .acc-title{font-weight:600;font-size:14px;margin-bottom:4px}
@@ -1209,6 +1214,7 @@ async function loadSetup(){
   loadAbout();
   loadLiveTvSources();
   loadWebUi();
+  foldSetup();
   loadParty();
   loadAccess();
 }
@@ -1440,6 +1446,46 @@ $('suwa-stop').onclick = async () => {
     { method:'POST', headers:{ Authorization:'Bearer ' + TOKEN } });
   setTimeout(loadSuwayomi, 500);
 };
+
+// ── Setup page folding ──
+// Setup grew to ~10,500px: eleven sections stacked flat, so anything past the
+// third was a scroll expedition. Each `.sect` header now folds the run of
+// elements after it, and only the first is open on arrival. Done in JS over the
+// existing markup rather than by restructuring it, so every id the loaders look
+// up stays exactly where it was — the nodes are MOVED into a wrapper, not
+// recreated, so existing references survive.
+let setupFolded = false;
+function foldSetup(){
+  if (setupFolded) return;
+  const page = document.getElementById('page-setup');
+  if (!page) return;
+  setupFolded = true;
+  const kids = [...page.children];
+  // `body` tracks where subsequent siblings go, but each header's handler must
+  // close over ITS OWN pair. Hoisting both out of the loop made every header
+  // toggle the last section instead of its own — clicking "Plugins" opened
+  // "Access". Caught by clicking one in a real browser; a source-level check
+  // could not have seen it.
+  let body = null, first = true;
+  for (const el of kids) {
+    if (el.classList.contains('sect')) {
+      const head = el;
+      const myBody = document.createElement('div');
+      myBody.className = 'fold-body';
+      head.classList.add('fold');
+      head.after(myBody);
+      if (!first) { head.classList.add('shut'); myBody.classList.add('shut'); }
+      first = false;
+      head.onclick = () => {
+        head.classList.toggle('shut');
+        myBody.classList.toggle('shut');
+      };
+      body = myBody;
+      continue;
+    }
+    if (body) body.append(el);
+  }
+}
 
 // ── Live TV sources (Setup › Live TV) ──
 async function loadLiveTvSources() {

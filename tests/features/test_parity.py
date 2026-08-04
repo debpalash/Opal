@@ -385,3 +385,41 @@ def test_load_magnet_routing():
     if "ap.load_file(" not in body:
         return "fail", "/load lost its plain-URL branch"
     return "pass", "/load sends magnets to the torrent engine and everything else to the player"
+
+
+@test("Web UI: Setup folds into sections; torrent pct has resolution", "Parity")
+def test_setup_folding_and_pct():
+    # Both found by driving the running app on 2026-08-04.
+    #
+    # Setup had grown to ~10,500px — eleven sections stacked flat, so anything
+    # past the third was a scroll expedition. Folding is applied in JS over the
+    # existing markup rather than by restructuring it, and the nodes are MOVED
+    # into a wrapper rather than recreated, so every id the loaders resolve by
+    # getElementById still points at the same element.
+    #
+    # And /api/torrents reported pct as a u8. On a 129 MB torrent moving at
+    # ~1 KB/s that read "0%" for the first 1.3 MB — about twenty minutes — while
+    # pieces were genuinely landing, so a slow torrent and a dead one looked
+    # identical. That distinction is the entire job of the number.
+    ui = _src("web/index.html")
+    rm = _src("src/services/remote.zig")
+    checks = {
+        "fold helper exists": "function foldSetup(" in ui,
+        "fold runs on the setup page": "foldSetup();" in ui,
+        "fold styles present": ".fold-body.shut{display:none}" in ui,
+        # Recreating nodes would break every getElementById the loaders use.
+        "fold moves nodes rather than rebuilding": "body.append(el)" in ui and "innerHTML" not in
+            ui[ui.index("function foldSetup("):ui.index("// ── Live TV sources")],
+        "first section stays open": "if (!first) { head.classList.add('shut')" in ui,
+        # Each handler must close over its OWN header/body pair. Hoisting them
+        # out of the loop made every header toggle the LAST section — clicking
+        # "Plugins" opened "Access". Only a real click in a browser showed it.
+        "handlers close over their own section":
+            "const head = el;" in ui and "myBody.classList.toggle('shut')" in ui,
+        "pct keeps a decimal": '\\"pct\\":{d:.1}' in rm,
+        "pct no longer truncated to u8": "@as(u8, @intFromFloat(std.math.clamp(progress" not in rm,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "Setup folds by section; torrent pct reports one decimal"

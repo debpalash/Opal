@@ -4338,9 +4338,14 @@ fn apiTorrents(stream: std.Io.net.Stream) void {
         if (emitted > 0) w.writeAll(",") catch return;
         w.writeAll("{\"name\":\"") catch return;
         escJsonWrite(&w, t_name[0..name_len]);
-        w.print("\",\"id\":{d},\"pct\":{d},\"rate\":{d},\"seeds\":{d},\"paused\":{s}}}", .{
+        // One decimal, not a u8. Measured 2026-08-04 on a 129 MB torrent moving
+        // at ~1 KB/s: it read "0%" for the first 1.3 MB, i.e. for twenty minutes,
+        // while pieces were genuinely landing. A slow torrent and a dead one
+        // looked identical, which is the one distinction this number exists to
+        // make.
+        w.print("\",\"id\":{d},\"pct\":{d:.1},\"rate\":{d},\"seeds\":{d},\"paused\":{s}}}", .{
             i,
-            @as(u8, @intFromFloat(std.math.clamp(progress * 100.0, 0.0, 100.0))),
+            std.math.clamp(progress * 100.0, 0.0, 100.0),
             dl_rate,
             seeds,
             if (c.mpv.torrent_is_paused(state.torrentSession(), i) != 0) "true" else "false",
