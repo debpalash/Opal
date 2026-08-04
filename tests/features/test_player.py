@@ -1509,3 +1509,42 @@ def fullscreen_needs_a_double_tap():
     if missing:
         return "fail", "double-tap fullscreen incomplete: " + ", ".join(missing)
     return "pass", "F F toggles fullscreen via the shared double-tap tracker"
+
+
+@test("Fullscreen puts the OS window fullscreen, not just the layout", "Player")
+def fullscreen_reaches_the_window():
+    """"Fullscreen" only ever expanded the player inside a normal window.
+
+    fullscreen_player_idx meant "give this player the whole grid and hide the
+    chrome". Nothing in the app had ever called SDL_SetWindowFullscreen, so every
+    route to it — F F, double-clicking the video, the AI `fullscreen` action, the
+    /fullscreen instant command — left the title bar, the dock and everything
+    behind the window exactly where they were.
+
+    The window is reconciled to the state once per frame rather than at each call
+    site: they all move the same flag, Escape clears it too, and one reconcile
+    cannot fall out of step the way five scattered SDL calls would.
+    """
+    mn = _src("src/main.zig")
+    block = _between(mn, "Put the OS WINDOW into fullscreen", "player.updateTorrentBackgroundTasks();")
+    checks = {
+        "the SDL call exists at all": "SDL_SetWindowFullscreen" in mn,
+        "driven by the shared state flag": "state.app.fullscreen_player_idx != null" in block,
+        # Desktop fullscreen borrows the current resolution: no mode-change
+        # flash, and exiting cannot strand the desktop at the video's size.
+        "uses FULLSCREEN_DESKTOP": "SDL_WINDOW_FULLSCREEN_DESKTOP" in block,
+        # One SDL call per real change, not one per frame.
+        "latched against re-applying": "want != FsState.applied" in block,
+        # A refused change must not be recorded as done.
+        "latches only on success": "== 0) {" in block and "FsState.applied = want;" in block,
+        # No call site should start poking SDL directly again.
+        # Count the CALL, not the name — the comment above it names the
+        # function too, and matching that made this read as two call sites.
+        "no second call site": mn.count("c.sdl.SDL_SetWindowFullscreen(") == 1
+                               and "SDL_SetWindowFullscreen(" not in _src("src/ui/input.zig")
+                               and "SDL_SetWindowFullscreen(" not in _src("src/ui/grid.zig"),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "window fullscreen not wired: " + ", ".join(missing)
+    return "pass", "one per-frame reconcile drives SDL from fullscreen_player_idx"

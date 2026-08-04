@@ -1138,6 +1138,48 @@ fn appFrame() !dvui.App.Result {
         }
     }
 
+    // ── Put the OS WINDOW into fullscreen, not just the layout ──
+    //
+    // `fullscreen_player_idx` only ever meant "give this player the whole grid
+    // and hide the chrome". Nothing in the app had ever called
+    // SDL_SetWindowFullscreen, so every route to it — F F, double-clicking the
+    // video, the AI `fullscreen` action, the /fullscreen instant command — just
+    // expanded the player inside a normal window. On a desktop that is visibly
+    // not fullscreen: the title bar, the dock and everything behind the window
+    // stay exactly where they were.
+    //
+    // Reconciled here, once per frame, rather than at each of those call sites:
+    // they all move the same piece of state, and Escape clears it too, so one
+    // place that makes the window agree with the state cannot fall out of step
+    // the way five SDL calls would. The `applied` latch keeps it to one SDL call
+    // per actual change instead of one per frame.
+    //
+    // FULLSCREEN_DESKTOP, not FULLSCREEN: it borrows the desktop resolution
+    // instead of switching the display mode, so there is no mode-change flash,
+    // other spaces/monitors are undisturbed, and coming back out cannot leave
+    // the desktop at the video's resolution.
+    {
+        const FsState = struct {
+            var applied: bool = false;
+        };
+        const want = state.app.fullscreen_player_idx != null;
+        if (want != FsState.applied) {
+            if (dvui_win) |win| {
+                const sdl_win: ?*c.sdl.SDL_Window = @ptrCast(win.backend.impl.window);
+                if (sdl_win) |sw| {
+                    const flags: u32 = if (want) c.sdl.SDL_WINDOW_FULLSCREEN_DESKTOP else 0;
+                    // Only latch on success: if the window manager refuses, the
+                    // next frame retries rather than believing a change that
+                    // never happened and leaving the layout expanded inside a
+                    // windowed frame.
+                    if (c.sdl.SDL_SetWindowFullscreen(sw, flags) == 0) {
+                        FsState.applied = want;
+                    }
+                }
+            }
+        }
+    }
+
     player.updateTorrentBackgroundTasks();
 
     // Native macOS Now Playing + hardware media keys: drain pending remote
