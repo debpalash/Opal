@@ -739,7 +739,7 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
     if (std.mem.startsWith(u8, path, "/api/")) {
         api_mutex.lock();
         defer api_mutex.unlock();
-        handleApi(stream, path[4..], query);
+        handleApi(stream, path[4..], query, request);
     } else {
         const resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
         _ = io_g.streamWriteAll(stream, resp) catch {};
@@ -785,7 +785,11 @@ fn stashRemoteOpen(url: []const u8, kind: []const u8, title: []const u8, art: []
     state.wakeUi(); // idle UI loop won't run a frame otherwise
 }
 
-fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8, request: []const u8) void {
+    // The POST body, for the routes that take credentials. credParam() reads it
+    // ahead of the query string so a debrid key or a GitHub token can be sent
+    // where it will not be logged as part of a URL.
+    const body = requestBody(request);
     // ── Non-player endpoints checked first ──
     // Search
     if (std.mem.eql(u8, api_path, "/search")) {
@@ -933,7 +937,41 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     }
     // Installed source plugins + the debrid / repo integration config.
     if (std.mem.eql(u8, api_path, "/plugins")) {
-        apiPlugins(stream, query);
+        apiPlugins(stream, query, body);
+        return;
+    }
+    // Version + update state — the desktop Settings › About tab. GET only:
+    // triggering a download of a new build from a remote session would install
+    // software on someone else's machine, so `?action=check` is as far as it
+    // goes and the actual update stays a desktop action.
+    if (std.mem.eql(u8, api_path, "/about")) {
+        const up = @import("updater.zig");
+        if (std.mem.eql(u8, getQueryParam(query, "action") orelse "", "check")) up.checkAsync();
+        var out: [512]u8 = undefined;
+        var w = std.Io.Writer.fixed(&out);
+        w.writeAll("{\"version\":\"") catch return;
+        escJsonWrite(&w, up.APP_VERSION);
+        w.writeAll("\",\"latest\":\"") catch return;
+        escJsonWrite(&w, up.latestTag());
+        w.print("\",\"has_update\":{s},\"checking\":{s},\"error\":\"", .{
+            if (up.has_update) "true" else "false",
+            if (up.is_checking) "true" else "false",
+        }) catch return;
+        escJsonWrite(&w, up.lastError());
+        w.writeAll("\"}") catch return;
+        sendJson(stream, out[0..w.end]);
+        return;
+    }
+    // Trakt: scrobbling + watch-status sync. GET reports connection state; POST
+    // takes ?action=connect|disconnect or a client_id/client_secret write.
+    if (std.mem.eql(u8, api_path, "/trakt")) {
+        apiTrakt(stream, query, body);
+        return;
+    }
+    // Suwayomi: the manga extension server Opal can run for you. GET reports
+    // status; POST takes ?action=start|stop.
+    if (std.mem.eql(u8, api_path, "/suwayomi")) {
+        apiSuwayomi(stream, query, body);
         return;
     }
     // Home hub: at-a-glance counts + what to continue.
@@ -983,9 +1021,9 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     // base+framework to /source/add below (that writes source_config). Empty
     // array when the catalog file isn't bundled.
     if (std.mem.eql(u8, api_path, "/source/catalog")) {
-        if (@import("plugin_repo.zig").readMangaCatalog()) |body| {
-            defer @import("../core/alloc.zig").allocator.free(body);
-            sendJson(stream, body);
+        if (@import("plugin_repo.zig").readMangaCatalog()) |catalog| {
+            defer @import("../core/alloc.zig").allocator.free(catalog);
+            sendJson(stream, catalog);
         } else {
             sendJson(stream, "[]");
         }
@@ -2173,18 +2211,44 @@ fn apiParty(stream: std.Io.net.Stream, query: []const u8) void {
 ///
 /// The debrid API key is never echoed back: it is a credential, and the page
 /// only needs to know whether one is set.
-fn apiPlugins(stream: std.Io.net.Stream, query: []const u8) void {
-    const repo = @import("plugin_repo.zig");
-    var kbuf: [32]u8 = undefined;
-    if (credParam("", query, "key", &kbuf)) |key| {
-        var vbuf: [256]u8 = undefined;
-        const val = credParam("", query, "value", &vbuf) orelse "";
+/// `/api/trakt` — the Plugins › Trakt tab, for the web UI.
+///
+/// GET reports connection state. The access token is never sent: a remote
+/// caller only needs to know whether one exists, and `user_code` (the short
+/// code trakt.tv/activate asks for) is the only thing it must actually display.
+///
+/// POST takes `?action=connect|disconnect`, or a `key`/`value` pair writing
+/// client_id / client_secret. Device auth is the whole reason this is small:
+/// the browser never handles the token, it just shows the code and polls.
+fn apiTrakt(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {
+    const trakt = @import("trakt.zig");
+    var abuf: [16]u8 = undefined;
+    if (credParam(body, query, "action", &abuf)) |action| {
+        if (std.mem.eql(u8, action, "connect")) {
+            if (trakt.client_id_len == 0) {
+                sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"set client_id first\"}");
+                return;
+            }
+            trakt.startDeviceAuth();
+            sendJson(stream, "{\"ok\":true,\"pending\":true}");
+            return;
+        }
+        if (std.mem.eql(u8, action, "disconnect")) {
+            trakt.disconnect();
+            sendJson(stream, "{\"ok\":true}");
+            return;
+        }
+        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"action must be connect or disconnect\"}");
+        return;
+    }
+    var kbuf: [24]u8 = undefined;
+    if (credParam(body, query, "key", &kbuf)) |key| {
+        var vbuf: [128]u8 = undefined;
+        const val = credParam(body, query, "value", &vbuf) orelse "";
         const Field = struct { name: []const u8, buf: []u8, len: *usize };
         const fields = [_]Field{
-            .{ .name = "repo", .buf = &repo.repo_buf, .len = &repo.repo_len },
-            .{ .name = "token", .buf = &repo.token_buf, .len = &repo.token_len },
-            .{ .name = "debrid_provider", .buf = &repo.debrid_provider_buf, .len = &repo.debrid_provider_len },
-            .{ .name = "debrid_key", .buf = &repo.debrid_key_buf, .len = &repo.debrid_key_len },
+            .{ .name = "client_id", .buf = &trakt.client_id, .len = &trakt.client_id_len },
+            .{ .name = "client_secret", .buf = &trakt.client_secret, .len = &trakt.client_secret_len },
         };
         for (fields) |f| {
             if (!std.mem.eql(u8, f.name, key)) continue;
@@ -2195,6 +2259,93 @@ fn apiPlugins(stream: std.Io.net.Stream, query: []const u8) void {
             @memset(f.buf, 0);
             @memcpy(f.buf[0..val.len], val);
             f.len.* = val.len;
+            trakt.save();
+            sendJson(stream, "{\"ok\":true}");
+            return;
+        }
+        sendJsonStatus(stream, "404 Not Found", "{\"error\":\"unknown trakt setting\"}");
+        return;
+    }
+    var out: [512]u8 = undefined;
+    var w = std.Io.Writer.fixed(&out);
+    // has_client_id / has_client_secret, never the values — same rule the
+    // /plugins GET follows for the debrid key.
+    w.print("{{\"connected\":{s},\"pending\":{s},\"scrobbling\":{s},\"has_client_id\":{s},\"has_client_secret\":{s},\"user_code\":\"", .{
+        if (trakt.isConnected()) "true" else "false",
+        if (trakt.auth_pending) "true" else "false",
+        if (trakt.is_scrobbling) "true" else "false",
+        if (trakt.client_id_len > 0) "true" else "false",
+        if (trakt.client_secret_len > 0) "true" else "false",
+    }) catch return;
+    escJsonWrite(&w, trakt.user_code[0..@min(trakt.user_code_len, trakt.user_code.len)]);
+    w.writeAll("\"}") catch return;
+    sendJson(stream, out[0..w.end]);
+}
+
+/// `/api/suwayomi` — the Plugins › Suwayomi tab, for the web UI.
+///
+/// The manga extension server Opal can run on the user's behalf. GET reports
+/// status; POST takes `?action=start|stop`. No credentials are involved, so
+/// this one is only a lifecycle control.
+fn apiSuwayomi(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {
+    const suwa = @import("suwayomi_server.zig");
+    var abuf: [16]u8 = undefined;
+    if (credParam(body, query, "action", &abuf)) |action| {
+        if (std.mem.eql(u8, action, "start")) {
+            suwa.startEmbedded();
+            sendJson(stream, "{\"ok\":true}");
+            return;
+        }
+        if (std.mem.eql(u8, action, "stop")) {
+            suwa.stopEmbedded();
+            sendJson(stream, "{\"ok\":true}");
+            return;
+        }
+        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"action must be start or stop\"}");
+        return;
+    }
+    var out: [512]u8 = undefined;
+    var w = std.Io.Writer.fixed(&out);
+    w.print("{{\"running\":{s},\"status\":\"", .{if (suwa.isRunning()) "true" else "false"}) catch return;
+    escJsonWrite(&w, suwa.statusText());
+    w.writeAll("\"}") catch return;
+    sendJson(stream, out[0..w.end]);
+}
+
+fn apiPlugins(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {
+    const repo = @import("plugin_repo.zig");
+    var kbuf: [32]u8 = undefined;
+    // body first: debrid_key and the GitHub token are secrets, and a query
+    // string is the one place they would end up in a log or a browser history.
+    if (credParam(body, query, "key", &kbuf)) |key| {
+        var vbuf: [256]u8 = undefined;
+        const val = credParam(body, query, "value", &vbuf) orelse "";
+        // `persist` is not optional bookkeeping: none of these live in
+        // config.tsv, so markConfigDirty() alone left every write in memory and
+        // it was gone on restart. The desktop path calls saveDebrid() by hand
+        // (plugins.zig); saveToken() had no caller anywhere.
+        const Persist = enum { none, debrid, token };
+        const Field = struct { name: []const u8, buf: []u8, len: *usize, persist: Persist = .none };
+        const fields = [_]Field{
+            .{ .name = "repo", .buf = &repo.repo_buf, .len = &repo.repo_len },
+            .{ .name = "token", .buf = &repo.token_buf, .len = &repo.token_len, .persist = .token },
+            .{ .name = "debrid_provider", .buf = &repo.debrid_provider_buf, .len = &repo.debrid_provider_len, .persist = .debrid },
+            .{ .name = "debrid_key", .buf = &repo.debrid_key_buf, .len = &repo.debrid_key_len, .persist = .debrid },
+        };
+        for (fields) |f| {
+            if (!std.mem.eql(u8, f.name, key)) continue;
+            if (val.len > f.buf.len) {
+                sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"value too long\"}");
+                return;
+            }
+            @memset(f.buf, 0);
+            @memcpy(f.buf[0..val.len], val);
+            f.len.* = val.len;
+            switch (f.persist) {
+                .debrid => repo.saveDebrid(),
+                .token => repo.saveToken(),
+                .none => {},
+            }
             state.markConfigDirty();
             sendJson(stream, "{\"ok\":true}");
             return;
@@ -2308,6 +2459,16 @@ fn settingValueWrite(w: *std.Io.Writer, k: sap.Key) void {
     if (std.mem.eql(u8, k.name, "auto_download_subs")) return w.writeAll(b.j(state.app.auto_download_subs)) catch {};
     if (std.mem.eql(u8, k.name, "nsfw_filter")) return w.writeAll(b.j(state.app.nsfw_filter_enabled)) catch {};
     if (std.mem.eql(u8, k.name, "incognito")) return w.writeAll(b.j(state.app.incognito_mode)) catch {};
+    if (std.mem.eql(u8, k.name, "ui_scale_auto")) return w.writeAll(b.j(state.app.ui_scale_auto)) catch {};
+    if (std.mem.eql(u8, k.name, "taste_enabled")) return w.writeAll(b.j(state.app.taste_enabled)) catch {};
+    if (std.mem.eql(u8, k.name, "ui_scale")) return w.print("{d}", .{@as(i32, @intFromFloat(state.app.ui_scale * 100))}) catch {};
+    if (std.mem.eql(u8, k.name, "theme")) {
+        w.writeAll("\"") catch return;
+        const th = @import("../ui/theme.zig");
+        escJsonWrite(w, th.presetName(th.active_preset));
+        w.writeAll("\"") catch return;
+        return;
+    }
     if (std.mem.eql(u8, k.name, "download_rate_limit")) return w.print("{d}", .{state.app.download_rate_limit}) catch {};
     if (std.mem.eql(u8, k.name, "lang_learn")) return w.writeAll(b.j(state.app.lang_learn_enabled)) catch {};
     if (std.mem.eql(u8, k.name, "translate")) return w.writeAll(b.j(state.app.translate_enabled)) catch {};
@@ -2382,6 +2543,10 @@ fn settingApply(k: sap.Key, raw: []const u8) bool {
                 state.app.translate_enabled = v;
             } else if (std.mem.eql(u8, k.name, "dubbing")) {
                 state.app.dubbing_enabled = v;
+            } else if (std.mem.eql(u8, k.name, "ui_scale_auto")) {
+                state.app.ui_scale_auto = v;
+            } else if (std.mem.eql(u8, k.name, "taste_enabled")) {
+                state.app.taste_enabled = v;
             } else return false;
         },
         .integer => {
@@ -2390,11 +2555,30 @@ fn settingApply(k: sap.Key, raw: []const u8) bool {
                 state.app.download_rate_limit = n;
             } else if (std.mem.eql(u8, k.name, "tts_speed")) {
                 state.app.tts_speed = @as(f32, @floatFromInt(n)) / 100.0;
+            } else if (std.mem.eql(u8, k.name, "ui_scale")) {
+                // Setting an explicit scale means the user is overriding the
+                // DPI-derived value, so clear the auto flag — otherwise the next
+                // frame recomputes it and the write appears to do nothing.
+                state.app.ui_scale = @as(f32, @floatFromInt(n)) / 100.0;
+                state.app.ui_scale_auto = false;
             } else return false;
         },
         .text => {
             const t = sap.parseText(k, raw) orelse return false;
-            if (std.mem.eql(u8, k.name, "sub_lang")) {
+            if (std.mem.eql(u8, k.name, "theme")) {
+                // Matched against the same presetName() the desktop picker
+                // shows, so "Rosé" round-trips and an unknown name is rejected
+                // rather than silently leaving the theme unchanged.
+                const th = @import("../ui/theme.zig");
+                inline for (@typeInfo(th.ThemePreset).@"enum".fields) |f| {
+                    const preset: th.ThemePreset = @enumFromInt(f.value);
+                    if (std.mem.eql(u8, th.presetName(preset), t)) {
+                        th.setPreset(preset);
+                        return true;
+                    }
+                }
+                return false;
+            } else if (std.mem.eql(u8, k.name, "sub_lang")) {
                 const n = @min(t.len, state.app.sub_lang_buf.len);
                 @memset(&state.app.sub_lang_buf, 0);
                 @memcpy(state.app.sub_lang_buf[0..n], t[0..n]);

@@ -69,6 +69,17 @@ COVERED = {
     "home hub":          ("home",  ["/home"]),
     "plugins manager":   ("setup", ["/plugins"]),
     "watch party":       ("setup", ["/party"]),
+    # Closed 2026-08-04. Debrid already had inputs on the Setup page but its
+    # writes were never persisted (saveDebrid/saveToken had no caller on the API
+    # path), so it only looked covered until a restart.
+    "debrid link":       ("setup", ["/plugins"]),
+    "trakt sync":        ("setup", ["/trakt"]),
+    "suwayomi config":   ("setup", ["/suwayomi"]),
+    # Closed 2026-08-04: theme / UI scale / personalized suggestions joined the
+    # settings registry. The TMDB and OMDb API keys stay desktop-only — registry
+    # values ride in a query string and nothing secret may.
+    "general settings":  ("setup", ["/settings"]),
+    "about":             ("setup", ["/about"]),
 }
 
 # Desktop capabilities with no web equivalent yet. `why` is what a user loses.
@@ -78,14 +89,8 @@ COVERED = {
 # them against router.zig / state.zig, so a desktop tab could exist with no web
 # equivalent and no entry here, and parity still read 98%. It was really 83%.
 GAPS = {
-    "suwayomi config":   "Plugins › Suwayomi (manga server URL, extension install). No /api route at all.",
-    "debrid link":       "Plugins › Debrid (Real-Debrid / AllDebrid account link). No /api route at all.",
-    "trakt sync":        "Plugins › Trakt (scrobbling, watch-status sync). No /api route at all.",
-    "general settings":  "Settings › General. Not in the web settings registry (settings_api_pure.KEYS).",
-    "scripts settings":  "Settings › Scripts (user script hooks). Not in the registry.",
     "live tv settings":  "Settings › Live TV (playlist/EPG sources). The /livetv *browser* is covered; its settings are not.",
-    "web ui settings":   "Settings › Web UI (port, bind address). Chicken-and-egg from the web UI, but a remote user still can't see it.",
-    "about":             "Settings › About (version, build info). Cosmetic, but nothing surfaces it.",
+    "web ui settings":   "Settings › Web UI (port, bind address). Changing the port from the web UI disconnects the caller, so it needs a confirm flow rather than a registry row.",
 }
 
 # Desktop capabilities a browser cannot have, by nature — counted separately so
@@ -93,6 +98,8 @@ GAPS = {
 # below 100% forever by something no amount of work can close.
 NOT_APPLICABLE = {
     "file associations": "Registering the OS default handler for media files. A web page cannot do this.",
+    # Deliberately never exposed, not merely unbuilt.
+    "scripts settings": "Settings › Scripts configures which local executables Opal runs. Exposing that to a remote session is a remote-code-execution surface, so it stays desktop-only.",
 }
 
 # Every desktop navigation surface, read out of the source enums, mapped to the
@@ -226,3 +233,61 @@ def test_parity_completeness():
 
     n = sum(len(v) for v in found.values())
     return "pass", f"all {n} desktop surfaces across 3 enums are classified"
+
+
+@test("Web API: plugin credentials post in a body, and persist", "Parity")
+def test_plugin_credentials():
+    # Two defects behind the "debrid link" gap, both invisible from the UI:
+    #
+    # 1. The debrid key and the GitHub token were sent as query parameters, the
+    #    one place a secret ends up in a server log or a browser history.
+    #    credParam() reads the body first, so handleApi now threads it through.
+    # 2. Neither was ever persisted. None of these live in config.tsv, so
+    #    markConfigDirty() did nothing for them — saveDebrid() was called only
+    #    from the desktop UI and saveToken() had no caller anywhere. A key
+    #    entered from the web UI survived until the next restart and no further.
+    rm = _src("src/services/remote.zig")
+    ui = _src("web/index.html")
+    checks = {
+        "handleApi receives the request":
+            "fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8, request: []const u8)" in rm,
+        "body extracted for credential routes": "const body = requestBody(request);" in rm,
+        "apiPlugins reads the body first": 'credParam(body, query, "key"' in rm,
+        "debrid writes persist": "repo.saveDebrid()" in rm,
+        "token writes persist": "repo.saveToken()" in rm,
+        "web UI posts secrets in a body":
+            "'key=' + encodeURIComponent(k) + '&value=' + encodeURIComponent(v)" in ui,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "plugin credentials travel in the POST body and are written to disk"
+
+
+@test("Web API: trakt / suwayomi / about routes are read-safe", "Parity")
+def test_new_plugin_routes():
+    # Each of these closes a parity gap, and each withholds something on
+    # purpose — the pattern the /plugins GET already followed for the debrid key.
+    rm = _src("src/services/remote.zig")
+    ui = _src("web/index.html")
+    checks = {
+        "trakt route": 'api_path, "/trakt"' in rm and "fn apiTrakt(" in rm,
+        "suwayomi route": 'api_path, "/suwayomi"' in rm and "fn apiSuwayomi(" in rm,
+        "about route": 'api_path, "/about"' in rm,
+        # The Trakt access token must never leave the machine: device auth means
+        # the browser only ever needs the short activation code.
+        "trakt withholds the access token":
+            "has_client_id" in rm and "access_token\\\":" not in rm,
+        # An update is a software install; a remote session may ask for a check
+        # but must not trigger the download.
+        "about does not expose the downloader":
+            "downloadAndOpenAsync" not in rm,
+        "web UI has all three cards":
+            'id="trakt-hint"' in ui and 'id="suwa-hint"' in ui and 'id="about-hint"' in ui,
+        "web UI loads them on the setup page":
+            "loadTrakt();" in ui and "loadSuwayomi();" in ui and "loadAbout();" in ui,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "trakt/suwayomi/about exposed, tokens and the updater withheld"

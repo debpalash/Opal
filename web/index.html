@@ -560,6 +560,29 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
     </div>
     <div id="plug-list"></div>
 
+    <div class="acc-group">
+      <div class="acc-title">Trakt</div>
+      <div class="hint" id="trakt-hint">Loading…</div>
+      <div class="cfg-row"><span>Client ID</span><input id="trakt-id" placeholder="unchanged"></div>
+      <div class="cfg-row"><span>Client secret</span><input id="trakt-secret" type="password" placeholder="unchanged"></div>
+      <button id="trakt-save" class="quick-btn">Save keys</button>
+      <button id="trakt-connect" class="quick-btn">Connect</button>
+      <button id="trakt-disconnect" class="quick-btn">Disconnect</button>
+    </div>
+
+    <div class="acc-group">
+      <div class="acc-title">Suwayomi</div>
+      <div class="hint" id="suwa-hint">Loading…</div>
+      <button id="suwa-start" class="quick-btn">Start server</button>
+      <button id="suwa-stop" class="quick-btn">Stop server</button>
+    </div>
+
+    <div class="acc-group">
+      <div class="acc-title">About</div>
+      <div class="hint" id="about-hint">Loading…</div>
+      <button id="about-check" class="quick-btn">Check for updates</button>
+    </div>
+
     <div class="sect">Watch Party</div>
     <div class="hint" id="party-hint">Loading…</div>
     <div class="acc-group">
@@ -1158,6 +1181,9 @@ async function loadSetup(){
   loadSources();
   loadSettings();
   loadPlugins();
+  loadTrakt();
+  loadSuwayomi();
+  loadAbout();
   loadParty();
   loadAccess();
 }
@@ -1304,8 +1330,15 @@ async function loadPlugins(){
   } catch { $('plug-hint').textContent = 'Could not load plugins.'; }
 }
 $('plug-save').onclick = async () => {
-  const put = (k, v) => fetch(BASE + '/api/plugins?key=' + k + '&value=' + encodeURIComponent(v),
-    { method:'POST', headers:{ Authorization:'Bearer ' + TOKEN } });
+  // Body, not query string: the token and the debrid key are secrets, and a URL
+  // is the one place they would be logged or land in browser history. The
+  // server reads the body ahead of the query (credParam).
+  const put = (k, v) => fetch(BASE + '/api/plugins', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + TOKEN,
+               'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'key=' + encodeURIComponent(k) + '&value=' + encodeURIComponent(v),
+  });
   await put('repo', $('plug-repo').value.trim());
   await put('debrid_provider', $('plug-debrid-provider').value.trim());
   // Empty means "leave alone", not "clear" — otherwise opening the page and
@@ -1315,6 +1348,91 @@ $('plug-save').onclick = async () => {
   $('plug-token').value = ''; $('plug-debrid-key').value = '';
   $('plug-hint').textContent = 'Saved ✓';
   loadPlugins();
+};
+
+// ── Trakt (Setup › Plugins › Trakt) ──
+// Device auth: the browser never sees the access token. It shows the short code
+// trakt.tv/activate asks for and re-polls until the desktop side has the token.
+let traktPoll = null;
+async function loadTrakt() {
+  let d;
+  try { d = await api('/trakt'); } catch (e) { $('trakt-hint').textContent = 'Unavailable'; return; }
+  $('trakt-id').placeholder = d.has_client_id ? 'set — type to replace' : 'not set';
+  $('trakt-secret').placeholder = d.has_client_secret ? 'set — type to replace' : 'not set';
+  if (d.connected) {
+    $('trakt-hint').textContent = d.scrobbling ? 'Connected — scrobbling' : 'Connected';
+  } else if (d.pending) {
+    $('trakt-hint').textContent = d.user_code
+      ? 'Go to trakt.tv/activate and enter ' + d.user_code
+      : 'Requesting a code…';
+  } else {
+    $('trakt-hint').textContent = 'Not connected.';
+  }
+  // Only poll while a device auth is in flight, and stop the moment it lands —
+  // otherwise the page keeps a timer alive for the whole session.
+  if (d.pending && !traktPoll) traktPoll = setInterval(loadTrakt, 3000);
+  if (!d.pending && traktPoll) { clearInterval(traktPoll); traktPoll = null; }
+}
+$('trakt-save').onclick = async () => {
+  const put = (k, v) => fetch(BASE + '/api/trakt', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + TOKEN,
+               'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'key=' + encodeURIComponent(k) + '&value=' + encodeURIComponent(v),
+  });
+  // Empty means "leave alone", same rule as the integrations block above.
+  if ($('trakt-id').value) await put('client_id', $('trakt-id').value.trim());
+  if ($('trakt-secret').value) await put('client_secret', $('trakt-secret').value);
+  $('trakt-id').value = ''; $('trakt-secret').value = '';
+  $('trakt-hint').textContent = 'Saved ✓';
+  loadTrakt();
+};
+$('trakt-connect').onclick = async () => {
+  await fetch(BASE + '/api/trakt?action=connect',
+    { method:'POST', headers:{ Authorization:'Bearer ' + TOKEN } });
+  loadTrakt();
+};
+$('trakt-disconnect').onclick = async () => {
+  await fetch(BASE + '/api/trakt?action=disconnect',
+    { method:'POST', headers:{ Authorization:'Bearer ' + TOKEN } });
+  loadTrakt();
+};
+
+// ── Suwayomi (Setup › Plugins › Suwayomi) ──
+async function loadSuwayomi() {
+  let d;
+  try { d = await api('/suwayomi'); } catch (e) { $('suwa-hint').textContent = 'Unavailable'; return; }
+  $('suwa-hint').textContent = d.status || (d.running ? 'Running' : 'Stopped');
+}
+$('suwa-start').onclick = async () => {
+  await fetch(BASE + '/api/suwayomi?action=start',
+    { method:'POST', headers:{ Authorization:'Bearer ' + TOKEN } });
+  // The server takes a few seconds to come up; re-read rather than guess.
+  setTimeout(loadSuwayomi, 1500);
+};
+$('suwa-stop').onclick = async () => {
+  await fetch(BASE + '/api/suwayomi?action=stop',
+    { method:'POST', headers:{ Authorization:'Bearer ' + TOKEN } });
+  setTimeout(loadSuwayomi, 500);
+};
+
+// ── About (Setup › About) ──
+// Read-only by design: installing a new build from a remote session would be
+// installing software on someone else's machine, so the button only re-checks.
+async function loadAbout() {
+  let d;
+  try { d = await api('/about'); } catch (e) { $('about-hint').textContent = 'Unavailable'; return; }
+  let t = 'Opal v' + (d.version || '?');
+  if (d.checking) t += ' — checking…';
+  else if (d.has_update && d.latest) t += ' — v' + d.latest + ' available (update from the desktop app)';
+  else if (d.latest) t += ' — up to date';
+  if (d.error) t += ' — ' + d.error;
+  $('about-hint').textContent = t;
+}
+$('about-check').onclick = async () => {
+  await api('/about?action=check');
+  $('about-hint').textContent = 'Checking…';
+  setTimeout(loadAbout, 2000);
 };
 
 // ── Watch Party (Setup › Watch Party) ──

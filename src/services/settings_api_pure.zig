@@ -52,6 +52,14 @@ pub const KEYS = [_]Key{
     .{ .name = "translate", .kind = .boolean, .group = "Language", .label = "Live translation" },
     .{ .name = "translate_lang", .kind = .text, .group = "Language", .label = "Translate to (2-letter)", .max_len = 7 },
     .{ .name = "dubbing", .kind = .boolean, .group = "Language", .label = "AI dubbing" },
+    // General. The desktop General tab also holds the TMDB and OMDb API keys;
+    // those stay out deliberately — values in this registry ride in a query
+    // string, and the module header's rule is that nothing secret does.
+    .{ .name = "theme", .kind = .text, .group = "General", .label = "Theme preset", .max_len = 15 },
+    .{ .name = "ui_scale_auto", .kind = .boolean, .group = "General", .label = "Scale UI to display DPI" },
+    // Integer percent on the wire; f32 multiplier internally, same as tts_speed.
+    .{ .name = "ui_scale", .kind = .integer, .group = "General", .label = "UI scale (%)", .min = 50, .max = 300 },
+    .{ .name = "taste_enabled", .kind = .boolean, .group = "General", .label = "Personalized suggestions" },
     // Privacy
     .{ .name = "nsfw_filter", .kind = .boolean, .group = "Privacy", .label = "NSFW filter" },
     .{ .name = "incognito", .kind = .boolean, .group = "Privacy", .label = "Incognito (no history)" },
