@@ -213,7 +213,15 @@ pub fn playAction(busy: bool, idle_label: []const u8) PlayAction {
 pub fn recentEpisodeLabel(e: Ep, watched: bool, buf: []u8) []const u8 {
     var ep_buf: [16]u8 = undefined;
     const ep = episodeLabel(e, &ep_buf);
-    return std.fmt.bufPrint(buf, "{s} · {s}", .{ ep, if (watched) "Watched" else "Unwatched" }) catch ep;
+    return std.fmt.bufPrint(buf, "{s} · {s}", .{ ep, if (watched) "Watched" else "Unwatched" }) catch {
+        // `ep` points into ep_buf, which dies with this frame — returning it was
+        // a use-after-return. It happened to still read correctly on macOS and
+        // Linux and did not on Windows, which is how CI caught it. Degrade into
+        // the CALLER's buffer instead.
+        const n = @min(ep.len, buf.len);
+        @memcpy(buf[0..n], ep[0..n]);
+        return buf[0..n];
+    };
 }
 
 /// How many episodes of `s` have actually aired, given the frontier.
@@ -1147,7 +1155,14 @@ test "recentEpisodeLabel: zero-pads like the rest of the UI" {
 
 test "recentEpisodeLabel: tiny buffer degrades to the bare episode label" {
     var tiny: [8]u8 = undefined;
-    try std.testing.expectEqualStrings("S03E08", recentEpisodeLabel(.{ .season = 3, .episode = 8 }, true, &tiny));
+    const out = recentEpisodeLabel(.{ .season = 3, .episode = 8 }, true, &tiny);
+    try std.testing.expectEqualStrings("S03E08", out);
+    // The degraded result must live in the CALLER's buffer. Returning the
+    // function's own scratch buffer was a use-after-return that read correctly
+    // on macOS/Linux and failed only on Windows CI, so comparing the STRING
+    // alone cannot catch a regression here — check the address range.
+    try std.testing.expect(@intFromPtr(out.ptr) >= @intFromPtr(&tiny));
+    try std.testing.expect(@intFromPtr(out.ptr) + out.len <= @intFromPtr(&tiny) + tiny.len);
 }
 
 test "recent vs nextUp: the latest aired episode can already be watched" {

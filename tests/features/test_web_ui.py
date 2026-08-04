@@ -652,7 +652,11 @@ def test_transcode_route():
         # not move a pipe-blocked ffmpeg.
         "closes pipe to end encoder": "so.close(io_g.io())" in rs and "child.stdout = null" in rs,
         "reaps after closing": "child.wait() catch {}" in rs,
-        "watchdog uses SIGKILL": "std.posix.SIG.KILL" in rs,
+        # Was `std.posix.SIG.KILL` inline. That has no KILL member on Windows,
+        # so it did not compile there at all — the headless Windows build broke
+        # on it in CI. killProcess() is SIGKILL on POSIX, TerminateProcess on
+        # Windows; the requirement is a FORCEFUL kill, not that literal.
+        "watchdog force-kills": "io_g.killProcess(" in rs,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:

@@ -373,7 +373,7 @@ const TranscodeGuard = struct {
                 // SIGTERM is not enough for a pipe-blocked ffmpeg (it retries
                 // the interrupted write); the connection thread's stdout close
                 // is the real cure, this is the last-resort backstop.
-                std.posix.kill(self.pid, std.posix.SIG.KILL) catch {};
+                io_g.killProcess(self.pid);
                 var msg: [96]u8 = undefined;
                 const where: []const u8 = switch (if (self.phase) |ph| ph.* else 255) {
                     0 => "blocked reading ffmpeg stdout",

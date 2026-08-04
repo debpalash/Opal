@@ -672,3 +672,27 @@ def test_lan_ip_resolution():
     if bad:
         return "fail", "lanIp: " + ", ".join(bad)
     return "pass", "lanIp probes absolute paths on macOS and Linux and retries after a miss"
+
+
+@test("portability: no bare std.posix.SIG outside a guarded block", "Windows")
+def test_no_raw_posix_signals():
+    # `std.posix.SIG` has no KILL member on Windows — a bare
+    # `std.posix.kill(pid, std.posix.SIG.KILL)` is not merely wrong there, it
+    # fails to COMPILE, which is what broke the headless Windows build in CI on
+    # 2026-08-04 (remote_stream.zig:376). io_global.terminateProcess /
+    # killProcess wrap it: TerminateProcess on Windows, the signal on POSIX.
+    #
+    # headless.zig is exempt: its sigaction calls sit inside an explicit
+    # `builtin.os.tag == .linux or .macos` guard.
+    offenders = []
+    for rel, text in _zig_sources():
+        if rel.endswith("core/io_global.zig") or rel.endswith("headless.zig"):
+            continue
+        for i, ln in enumerate(_strip_comments(text).splitlines(), 1):
+            if "std.posix.SIG" in ln or "std.posix.kill(" in ln:
+                offenders.append(f"{rel}:{i}")
+    if offenders:
+        return "fail", ("bare POSIX signal use (does not compile on Windows): "
+                        + ", ".join(offenders)
+                        + " — use io_global.terminateProcess()/killProcess()")
+    return "pass", "signal delivery routes through the portable helpers"

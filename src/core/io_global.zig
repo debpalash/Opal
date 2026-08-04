@@ -529,3 +529,16 @@ pub fn terminateProcess(id: Child.Id) void {
     }
 }
 
+/// The forceful sibling of terminateProcess, for a child that has already
+/// ignored a polite stop. POSIX: SIGKILL. Windows: TerminateProcess, which is
+/// forceful either way — `std.posix.SIG` has no KILL member there at all, so a
+/// bare `std.posix.SIG.KILL` is not merely wrong on Windows, it fails to
+/// COMPILE. That is what broke the headless Windows build in CI.
+pub fn killProcess(id: Child.Id) void {
+    if (is_windows) {
+        _ = win.TerminateProcess(id, 1);
+    } else {
+        std.posix.kill(id, std.posix.SIG.KILL) catch {};
+    }
+}
+
