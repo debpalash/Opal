@@ -517,6 +517,14 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
         return;
     }
 
+    // Browsers request /favicon.ico on their own, unauthenticated. Falling
+    // through to the bearer gate answered 401 and put a red error in every
+    // console. 204 is the correct "there isn't one, stop asking".
+    if (std.mem.eql(u8, path, "/favicon.ico")) {
+        _ = io_g.streamWriteAll(stream, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nCache-Control: max-age=86400\r\n\r\n") catch {};
+        return;
+    }
+
     // Vendored browser deps, served next to the page. Unauthenticated for the
     // same reason index.html is: the login form itself needs them, and they are
     // public third-party libraries, not user data.

@@ -7,6 +7,7 @@ verticals reach the web UI for headless/desktop parity, add a row to VERTICALS.
 
 See tests/features/harness.py for the shared @test decorator + _src()."""
 from .harness import *  # noqa: F401,F403
+import os
 
 
 # Each vertical: the nav data-page id, the page section id, and route fragments
@@ -608,16 +609,20 @@ def test_torrent_files_and_hls():
             and ", f.name);" in ui,
         # Streaming a partial file can stall — say so rather than let it die.
         "warns on partial": "playback may stall" in ui,
-        # HLS shim is optional, never vendored into the page.
-        "hls pluggable not bundled": "window.Hls" in ui and "function openHls(" in ui
-            and "hls.js is NOT bundled" in ui,
+        # hls.js: vendored as a SEPARATE file and feature-tested.
+        "hls feature-tested": "window.Hls" in ui and "function openHls(" in ui,
+        "hls loaded from vendor": 'src="vendor/hls.min.js"' in ui,
+        # 543KB inlined would swamp the page — index.html must stay small.
+        "hls not inlined": len(ui) < 400_000,
+        "vendor file present": os.path.exists(os.path.join(PROJECT_DIR, "web/vendor/hls.min.js")),
+        "bundled into the app": "web/vendor" in _src("scripts/build-app.sh"),
         # A live shim must be torn down or it keeps fetching segments.
         "hls torn down on close": "v._hls.destroy()" in ui,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "torrent-files/hls incomplete: " + ", ".join(missing)
-    return "pass", "Torrent per-file play via /stream + optional hls.js shim (not vendored)"
+    return "pass", "Torrent per-file play via /stream + hls.js vendored separately (feature-tested)"
 
 
 @test("On-the-fly transcode route (KNOWN: leaks a blocked encoder)", "Web UI")
@@ -650,3 +655,69 @@ def test_transcode_route():
     if missing:
         return "fail", "transcode incomplete: " + ", ".join(missing)
     return "warn", "Transcode works; KNOWN leak — abandoned stream leaves a blocked ffmpeg"
+
+
+@test("web/index.html inline JavaScript parses", "Web UI")
+def test_web_ui_js_syntax():
+    """Every other web test here is a string match, so none of them can see a
+    SYNTAX error. A script tag was once spliced into the middle of a code
+    comment (an insertion matched a literal '<script>' *inside* a comment),
+    which shredded a function and left the whole page dead — `$ is not
+    defined`, nothing worked — and the suite stayed green.
+
+    Parses the inline blocks with node when available; falls back to a brace/
+    paren balance check so the test still means something without node."""
+    import re, shutil, subprocess, tempfile, os
+    ui = _src("web/index.html")
+    blocks = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", ui, re.S)
+    if not blocks:
+        return "fail", "no inline <script> blocks found in web/index.html"
+    js = "\n;\n".join(blocks)
+
+    node = shutil.which("node")
+    if node:
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+            f.write(js)
+            path = f.name
+        try:
+            r = subprocess.run([node, "--check", path], capture_output=True, text=True, timeout=30)
+            if r.returncode != 0:
+                first = (r.stderr or "").strip().splitlines()
+                detail = " | ".join(first[:3]) if first else "node --check failed"
+                return "fail", "inline JS syntax error: " + detail
+        finally:
+            os.unlink(path)
+        return "pass", f"{len(blocks)} inline script block(s), {len(js)} bytes — node --check clean"
+
+    # No node: a balance check still catches the splice-into-comment class of
+    # damage, which leaves brackets unmatched.
+    depth = {"{": 0, "(": 0, "[": 0}
+    pairs = {"}": "{", ")": "(", "]": "["}
+    in_s = None
+    i = 0
+    while i < len(js):
+        c = js[i]
+        if in_s:
+            if c == "\\":
+                i += 2
+                continue
+            if c == in_s:
+                in_s = None
+        elif c in "\"'`":
+            in_s = c
+        elif c == "/" and i + 1 < len(js) and js[i + 1] == "/":
+            i = js.find("\n", i)
+            if i < 0:
+                break
+        elif c == "/" and i + 1 < len(js) and js[i + 1] == "*":
+            i = js.find("*/", i) + 2
+            continue
+        elif c in depth:
+            depth[c] += 1
+        elif c in pairs:
+            depth[pairs[c]] -= 1
+        i += 1
+    bad = [k for k, v in depth.items() if v != 0]
+    if bad:
+        return "fail", "inline JS brackets unbalanced: " + ", ".join(bad)
+    return "warn", "node not installed — only a bracket-balance check ran"

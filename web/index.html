@@ -658,6 +658,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   <div class="bar"><div class="t" id="yt-embed-title"></div><button id="yt-embed-close">Close</button></div>
 </div>
 
+<!-- hls.js (Apache-2.0, https://github.com/video-dev/hls.js) — vendored under
+     web/vendor/ rather than inlined: 543KB uncompressed would swamp this
+     file. Only Chrome/Firefox need it (Safari plays HLS natively), and
+     openHls() feature-tests window.Hls, so removing the file degrades
+     gracefully instead of breaking the page. -->
+<script src="vendor/hls.min.js"></script>
 <script>
 'use strict';
 const BASE = location.origin.startsWith('http') ? location.origin : 'http://' + location.hostname + ':41595';
@@ -1202,16 +1208,11 @@ function dispatchPlay(url, title, fallback, classifyName){
 }
 
 // HLS. Safari demuxes it natively; everything else needs an MSE shim.
-// hls.js is NOT bundled — Opal ships one self-contained page and we do not
-// vendor a third-party minified blob into it. If you drop hls.js in (a <!-- hls.js (Apache-2.0, https://github.com/video-dev/hls.js) — vendored in
-     web/vendor/, NOT inlined: it is 543KB uncompressed and would swamp
-     this file. Only needed by Chrome/Firefox for Live TV; Safari plays
-     HLS natively. openHls() picks it up via window.Hls, so deleting the
-     file degrades to the honest "needs the desktop app" message. -->
-<script src="vendor/hls.min.js"></script>
-<script>
-// before this one, or via the extension dir), this picks it up automatically;
-// without it, Chrome/Firefox get the honest message instead of a dead player.
+// hls.js is vendored under web/vendor/ and loaded by a script tag in the head
+// of this file — kept as a separate file, not inlined, because it is 543KB
+// uncompressed. Deleting that file degrades this to the honest "needs the
+// desktop app" message rather than breaking the page, because the call site
+// tests window.Hls first.
 function openHls(url, title){
   if (NATIVE_HLS) return openStreamUrl(url, title);
   const v = $('video');
