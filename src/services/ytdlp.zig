@@ -21,6 +21,39 @@ pub fn getPath() ?[]const u8 {
     return null;
 }
 
+/// Confirm the binary at `bin_path_buf` actually executes, and disown it if
+/// not. Runs on its own thread: the macOS standalone build cold-starts ~20s.
+fn verifyWorker() void {
+    const io = @import("../core/io_global.zig");
+    const path = bin_path_buf[0..bin_path_len];
+    var child = io.Child.init(&.{ path, "--version" }, alloc);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    var ok = false;
+    if (child.spawn()) {
+        var buf: [64]u8 = undefined;
+        const n = if (child.stdout) |*so| io.readAll(so, &buf) catch 0 else 0;
+        // yt-dlp --version prints a bare date-ish version and exits 0. Requiring
+        // both guards against a truncated file that spawns and dies instantly.
+        if (child.wait()) |term| {
+            ok = n > 0 and term == .exited and term.exited == 0;
+        } else |_| {}
+    } else |_| {}
+    if (ok) return;
+    // Stand down: getPath() goes null, so binary() resolves to a PATH lookup
+    // and mpv gets a name it can find if the user installed one themselves.
+    is_ready = false;
+    bin_path_len = 0;
+    resolved_done = false;
+    logs.pushLog(
+        "error",
+        "ytdlp",
+        "Bundled yt-dlp will not run (truncated download, or blocked by the OS) — falling back to PATH",
+        true,
+    );
+}
+
 var resolved_buf: [512]u8 = undefined;
 var resolved_len: usize = 0;
 var resolved_done: bool = false;
@@ -158,10 +191,22 @@ pub fn ensureAvailable() void {
     const path = std.fmt.bufPrintZ(&bin_path_buf, "{s}/bin/{s}", .{ cfg, exe_name }) catch return;
     bin_path_len = path.len;
 
-    // Check if binary already exists
+    // Check if binary already exists. Existing is NOT the same as working: a
+    // download interrupted partway leaves a truncated file, and on Windows a
+    // freshly downloaded .exe can carry a mark-of-the-web that Defender blocks.
+    // Both look identical to cwdAccess. That is how issue #23 presented — Opal
+    // logged "yt-dlp binary found" while mpv's ytdl_hook reported "youtube-dl
+    // failed: not found or not enough permissions" on the very same path, and
+    // the user had to install yt-dlp by hand to get YouTube working.
+    //
+    // So mark it ready optimistically (the common case is a good binary, and
+    // the probe costs a process spawn) but verify off-thread and stand it back
+    // down if it will not run — binary() then falls through to a PATH lookup,
+    // which is exactly what unblocked that reporter.
     if (@import("../core/io_global.zig").cwdAccess(path, .{})) {
         is_ready = true;
         logs.pushLog("info", "ytdlp", "yt-dlp binary found", false);
+        if (std.Thread.spawn(.{}, verifyWorker, .{})) |t| t.detach() else |_| {}
         return;
     } else |_| {}
 

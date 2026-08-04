@@ -577,3 +577,36 @@ def test_no_raw_home_env():
                         "feature): " + ", ".join(offenders)
                         + " — use paths.homeDir()")
     return "pass", "all home-directory lookups route through paths.homeDir()"
+
+
+@test("yt-dlp: a present-but-unrunnable binary stands itself down", "Windows")
+def test_ytdlp_verifies_execution():
+    # Issue #23: Opal logged "yt-dlp binary found" while mpv's ytdl_hook
+    # reported "youtube-dl failed: not found or not enough permissions" for the
+    # same path, and the reporter had to install yt-dlp by hand. Existence and
+    # executability are different questions — a download interrupted partway
+    # leaves a truncated file, and a freshly downloaded .exe on Windows can
+    # carry a mark-of-the-web that Defender blocks. cwdAccess cannot tell those
+    # from a good binary.
+    src = _read("src/services/ytdlp.zig")
+    m = _re.search(r"fn verifyWorker\(\) void \{.*?\n\}", src, _re.S)
+    if not m:
+        return "fail", "ytdlp.zig has no verifyWorker() — existence is still treated as working"
+    body = m.group(0)
+    checks = {
+        "runs the binary": '"--version"' in body,
+        "requires a clean exit": "term.exited == 0" in body,
+        "requires actual output": "n > 0" in body,
+        # Standing down is the point: getPath() going null is what makes
+        # binary() fall through to a PATH lookup, which is what unblocked the
+        # reporter when they installed yt-dlp themselves.
+        "disowns the bad binary": "is_ready = false" in body and "bin_path_len = 0" in body,
+        "clears the binary() cache": "resolved_done = false" in body,
+        "tells the user": 'logs.pushLog(' in body,
+        # ~20s cold start on the macOS standalone build — never on the UI thread.
+        "verification runs off-thread": "std.Thread.spawn(.{}, verifyWorker" in src,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "verifyWorker missing: " + ", ".join(bad)
+    return "pass", "a bundled yt-dlp that will not run is disowned in favour of PATH"
