@@ -69,6 +69,11 @@ kill_running() {
         wait "$PID" 2>/dev/null || true
     fi
     pkill -f lang_server.py       2>/dev/null || true
+    # The DPI-bypass proxy only stops cleanly via main.zig's shutdown path, which
+    # a SIGKILL above never reaches. It binds SO_REUSEPORT, so a survivor keeps
+    # LISTENing alongside the next one instead of failing — 57 of them piled up
+    # over two days, splitting traffic across stale --mode settings.
+    pkill -f zig-bypassdpi        2>/dev/null || true
     PID=""
 }
 

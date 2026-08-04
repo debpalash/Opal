@@ -21,6 +21,28 @@ pub fn validMode(s: []const u8) bool {
 /// The default mode when config carries none / an invalid one.
 pub const default_mode = "sni";
 
+/// The sidecar's executable name. Shared by binaryPath() and the orphan reaper
+/// so the name we spawn is always the name we kill -- a rename that updated only
+/// one of them would leave orphans alive forever.
+pub const process_name = "zig-bypassdpi";
+
+/// Whether start() should reap stale sidecars before spawning one.
+///
+/// The sidecar binds with SO_REUSEPORT, so an orphan does NOT make the next
+/// spawn fail -- every one of them listens on the same port and the kernel
+/// load-balances connections across the whole set. Measured 2026-08-04: 57
+/// orphans left by dev.sh restarts, all LISTENing on 127.0.0.1:8881, the oldest
+/// two days old, so a fetch had roughly a 1-in-57 chance of going through the
+/// `--mode` the user actually selected. A bind conflict would have been
+/// self-healing; this silently isn't.
+///
+/// Safe only when we hold no child: stop() clears `child` and start() is latched
+/// against a concurrent spawn, so with `have_child` false every live sidecar on
+/// this machine is by definition an orphan.
+pub fn shouldReapOrphans(have_child: bool) bool {
+    return !have_child;
+}
+
 /// Build "127.0.0.1:<port>" into `buf`. Returns the written slice, or an empty
 /// slice if the buffer is somehow too small (never in practice — a u16 port is
 /// at most "127.0.0.1:65535" = 15 bytes).
@@ -65,4 +87,16 @@ test "shouldProxy gates on enabled AND running" {
 
 test "default_mode is a valid mode" {
     try std.testing.expect(validMode(default_mode));
+}
+
+test "shouldReapOrphans only when we own no child" {
+    // Holding a child means the running sidecar is ours -- reaping by name would
+    // kill the proxy we just started.
+    try std.testing.expect(!shouldReapOrphans(true));
+    try std.testing.expect(shouldReapOrphans(false));
+}
+
+test "process_name is what the reaper matches and the binary is named" {
+    // Regression guard for the 57-orphan leak: these must not drift apart.
+    try std.testing.expectEqualStrings("zig-bypassdpi", process_name);
 }

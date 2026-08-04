@@ -57,8 +57,25 @@ pub fn enabled() bool {
 /// zig-out/bin/zig-bypassdpi relative to the CWD.
 fn binaryPath(buf: []u8) []const u8 {
     if (state.resourceRoot()) |r|
-        return std.fmt.bufPrint(buf, "{s}/zig-bypassdpi", .{r}) catch "";
-    return "zig-out/bin/zig-bypassdpi";
+        return std.fmt.bufPrint(buf, "{s}/{s}", .{ r, pure.process_name }) catch "";
+    return "zig-out/bin/" ++ pure.process_name;
+}
+
+/// Kill sidecars we don't own, best-effort, before spawning ours.
+///
+/// The proxy binds SO_REUSEPORT, so a leftover from a killed session keeps
+/// LISTENing on the port and the kernel splits connections between it and the
+/// one we're about to start. It never announces itself: nothing fails, the mode
+/// the user picked just stops reliably applying. See
+/// `dpi_bypass_pure.shouldReapOrphans` for the measurement.
+///
+/// Only reachable with `child == null` (start() returns early otherwise), so
+/// every process this matches belongs to a dead session.
+fn reapOrphans() void {
+    // killByName, not a raw pkill: it is the portable helper (taskkill on
+    // Windows) and it matches the executable name exactly, so it can't reach
+    // past our own sidecar. A no-match is the normal case and is ignored.
+    io.killByName(pure.process_name);
 }
 
 /// The configured `--mode`, validated. Falls back to the default on an
@@ -99,6 +116,8 @@ pub fn start() void {
 
     child_mutex.lock();
     defer child_mutex.unlock();
+
+    if (pure.shouldReapOrphans(child != null)) reapOrphans();
 
     var c = io.Child.init(&.{
         bin,     "--port",      port_str,
