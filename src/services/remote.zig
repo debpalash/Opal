@@ -1340,11 +1340,17 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
 
         // ── Load URL/magnet ──
     } else if (std.mem.eql(u8, api_path, "/load")) {
-        if (getQueryParam(query, "url")) |raw| {
-            // Percent-decode first — magnet/http URLs arrive with & as %26 etc.;
-            // passing them raw corrupted the loaded URI.
-            var dec_buf: [2048]u8 = undefined;
-            const decoded = urlDecode(raw, &dec_buf) orelse raw;
+        // Body first, then query. A magnet is long and full of & and %; putting
+        // it in a POST body is what a non-browser client naturally does, and this
+        // route used to read the query ONLY — a POSTed url silently matched
+        // nothing and still answered ok:true, so the caller saw success and the
+        // player never moved.
+        var dec_buf: [2048]u8 = undefined;
+        if (credParam(body, query, "url", &dec_buf)) |decoded| {
+            if (decoded.len == 0) {
+                sendJson(stream, "{\"ok\":false,\"error\":\"empty url\"}");
+                return;
+            }
             // A magnet is not a file. This handed every magnet straight to mpv,
             // which treated the whole URI as a path and failed with "File name
             // too long" — so tapping ANY torrent search result in the web UI did
@@ -1359,8 +1365,15 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
                 const url_z = std.fmt.bufPrintZ(&url_buf, "{s}", .{decoded}) catch return;
                 ap.load_file(url_z.ptr);
             }
+            // This ran on the connection thread; the UI loop blocks when idle, so
+            // without a wake the loading screen (and, for a torrent, the whole
+            // handoff to mpv) waited for the user to move the mouse.
+            state.wakeUi();
+            sendJson(stream, "{\"ok\":true,\"action\":\"load\"}");
+            return;
         }
-        sendJson(stream, "{\"ok\":true,\"action\":\"load\"}");
+        // No url at all: say so rather than reporting a load that never happened.
+        sendJson(stream, "{\"ok\":false,\"error\":\"missing url\"}");
 
         // ── Status (enhanced) ──
     } else if (std.mem.eql(u8, api_path, "/status")) {
@@ -2644,7 +2657,8 @@ fn settingValueWrite(w: *std.Io.Writer, k: sap.Key) void {
         w.writeAll("\"") catch return;
         return;
     }
-    if (std.mem.eql(u8, k.name, "download_rate_limit")) return w.print("{d}", .{state.app.download_rate_limit}) catch {};
+    // KB/s on the wire, bytes/s in state — see settings_api_pure.rateBytesToKb.
+    if (std.mem.eql(u8, k.name, "download_rate_limit")) return w.print("{d}", .{sap.rateBytesToKb(state.app.download_rate_limit)}) catch {};
     if (std.mem.eql(u8, k.name, "lang_learn")) return w.writeAll(b.j(state.app.lang_learn_enabled)) catch {};
     if (std.mem.eql(u8, k.name, "translate")) return w.writeAll(b.j(state.app.translate_enabled)) catch {};
     if (std.mem.eql(u8, k.name, "dubbing")) return w.writeAll(b.j(state.app.dubbing_enabled)) catch {};
@@ -2727,7 +2741,12 @@ fn settingApply(k: sap.Key, raw: []const u8) bool {
         .integer => {
             const n = sap.parseInt(k, raw) orelse return false;
             if (std.mem.eql(u8, k.name, "download_rate_limit")) {
-                state.app.download_rate_limit = n;
+                // The field is KB/s; state and libtorrent are bytes/s.
+                state.app.download_rate_limit = sap.rateKbToBytes(n);
+                // Apply now: the desktop pickers call torrent_set_download_limit
+                // on click, so a limit set from the web that only landed in
+                // state would not take effect until the next session.
+                state.applyDownloadLimitIfReady();
             } else if (std.mem.eql(u8, k.name, "tts_speed")) {
                 state.app.tts_speed = @as(f32, @floatFromInt(n)) / 100.0;
             } else if (std.mem.eql(u8, k.name, "ui_scale")) {

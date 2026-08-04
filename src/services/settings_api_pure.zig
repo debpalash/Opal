@@ -93,6 +93,34 @@ pub fn parseInt(k: Key, s: []const u8) ?i32 {
     return n;
 }
 
+/// `download_rate_limit` crosses a unit boundary. Internally — state, config,
+/// the three desktop pickers, and libtorrent's settings_pack — it is BYTES/sec.
+/// On the wire it is KB/sec, because that is what the label above promises and
+/// what a person types.
+///
+/// These two functions exist because that boundary was previously uncrossed: the
+/// API stored the typed number raw. Entering 4096 in the field labelled "KB/s"
+/// set the session to 4096 BYTES/s — 4 KB/s, a 1024× throttle that looks exactly
+/// like a dead network. It was mistaken for one: a torrent measured at ~1 KB/s
+/// and blamed on DPI/peers was in fact this cap. Reading was wrong in the other
+/// direction — a desktop-set 1 MB/s came back as "1048576 KB/s".
+///
+/// Truncating division on read: only whole KB/s survive a round-trip, which is
+/// harmless because every value the UI can produce is a whole number of KB.
+pub fn rateBytesToKb(bytes: i32) i32 {
+    if (bytes <= 0) return 0;
+    return @divTrunc(bytes, 1024);
+}
+
+/// KB/s off the wire → bytes/sec for state. Saturates instead of overflowing:
+/// the registry caps at 1_000_000 KB/s, which is ~1.02e9 and fits i32, but the
+/// cap and this conversion should not be coupled by luck.
+pub fn rateKbToBytes(kb: i32) i32 {
+    if (kb <= 0) return 0;
+    const wide = @as(i64, kb) * 1024;
+    return if (wide > std.math.maxInt(i32)) std.math.maxInt(i32) else @intCast(wide);
+}
+
 /// Trimmed text value, or null when it exceeds the key's budget. Empty is
 /// allowed — it's how you clear a proxy.
 pub fn parseText(k: Key, s: []const u8) ?[]const u8 {
@@ -197,6 +225,39 @@ test "tts_speed is a percent, not a raw multiplier" {
     try std.testing.expectEqual(@as(?i32, 100), parseInt(k, "100"));
     try std.testing.expectEqual(@as(?i32, null), parseInt(k, "1"));
     try std.testing.expectEqual(@as(?i32, null), parseInt(k, "500"));
+}
+
+test "download limit converts KB/s on the wire to bytes/s in state" {
+    // The regression: 4096 in a field labelled KB/s must not become 4096 bytes/s.
+    try std.testing.expectEqual(@as(i32, 4096 * 1024), rateKbToBytes(4096));
+    // The desktop pickers are the values that must survive a round-trip.
+    for ([_]i32{ 0, 1024 * 1024, 2 * 1024 * 1024, 5 * 1024 * 1024, 10 * 1024 * 1024, 20 * 1024 * 1024 }) |bytes| {
+        try std.testing.expectEqual(bytes, rateKbToBytes(rateBytesToKb(bytes)));
+    }
+    // 1 MB/s reads back as 1024 KB/s, not as the raw byte count.
+    try std.testing.expectEqual(@as(i32, 1024), rateBytesToKb(1024 * 1024));
+}
+
+test "download limit: zero and negatives mean unlimited, never a throttle" {
+    // A negative reaching the wrapper would be "no limit" there but is a corrupt
+    // value here; collapsing to 0 keeps both ends agreeing on unlimited.
+    try std.testing.expectEqual(@as(i32, 0), rateKbToBytes(0));
+    try std.testing.expectEqual(@as(i32, 0), rateKbToBytes(-1));
+    try std.testing.expectEqual(@as(i32, 0), rateBytesToKb(0));
+    try std.testing.expectEqual(@as(i32, 0), rateBytesToKb(-4096));
+    // Sub-KB byte values round down to 0 = unlimited rather than reporting a
+    // fractional KB the field cannot express.
+    try std.testing.expectEqual(@as(i32, 0), rateBytesToKb(512));
+}
+
+test "download limit: the registry maximum cannot overflow the conversion" {
+    const k = find("download_rate_limit").?;
+    try std.testing.expectEqual(@as(i32, 1_000_000), k.max);
+    const bytes = rateKbToBytes(k.max);
+    try std.testing.expect(bytes > 0); // not wrapped negative
+    try std.testing.expectEqual(@as(i32, 1_000_000 * 1024), bytes);
+    // And a value past the rail still saturates rather than wrapping.
+    try std.testing.expect(rateKbToBytes(std.math.maxInt(i32)) == std.math.maxInt(i32));
 }
 
 test "save_path budget matches the state buffer" {

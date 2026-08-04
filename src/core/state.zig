@@ -1316,16 +1316,20 @@ pub fn setTorrentSession(s: c.mpv.TorrentSession) void {
     app.torrent_ses.store(s, .release);
 }
 
-/// Re-apply the persisted download rate limit to the torrent session, but only
-/// once BOTH the session AND a positive saved limit are ready. The session
-/// (torrent_init worker) and the config (config load worker) come up on
-/// independent threads, so this is called idempotently from both edges —
-/// whichever finishes last actually applies the cap. A fresh torrent_init()
-/// session defaults to unlimited, so without this the saved limit stayed
-/// inactive until the user re-touched the control.
+/// Re-apply the persisted download rate limit to the torrent session, once the
+/// session exists. The session (torrent_init worker) and the config (config load
+/// worker) come up on independent threads, so this is called idempotently from
+/// both edges — whichever finishes last actually applies the cap. A fresh
+/// torrent_init() session defaults to unlimited, so without this the saved limit
+/// stayed inactive until the user re-touched the control.
+///
+/// 0 is applied too, not skipped. It used to return early, which was harmless at
+/// startup (a new session is already unlimited) but wrong for the /api/settings
+/// path: choosing "unlimited" there left the previous cap in force, so the limit
+/// could be raised and lowered but never removed. The wrapper maps <= 0 to -1 =
+/// no limit, same as the desktop pickers passing 0 directly.
 pub fn applyDownloadLimitIfReady() void {
     const lim = @import("../player/av_pure.zig").sanitizeDownloadLimit(app.download_rate_limit);
-    if (lim <= 0) return;
     const ses = torrentSession();
     if (ses == null) return;
     c.mpv.torrent_set_download_limit(ses, lim);
@@ -1677,6 +1681,17 @@ pub fn showToastTyped(msg: []const u8, toast_type: ToastType) void {
 pub fn markConfigDirty() void {
     app.config_dirty = true;
 }
+
+/// Set while a player has a torrent attached that has not yet been handed to
+/// mpv. Written by the UI thread (updateTorrentBackgroundTasks, once per frame)
+/// and by whoever attaches a torrent off-frame; read by the stall watchdog
+/// thread, which calls wakeUi() while it is true.
+///
+/// The torrent handoff only runs on a rendered frame, and the dvui loop sleeps
+/// when idle — so without this a torrent added over the JSON API buffered to
+/// 100% and never started playing, because nothing ever asked for a frame. See
+/// torrent_stall_pure.awaitingHandoff.
+pub var torrent_handoff_pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 /// Wake the UI thread so a state change made off-frame (worker completion,
 /// deferred navigation) renders now instead of after the next mouse move.

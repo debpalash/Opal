@@ -114,6 +114,43 @@ static void add_extra_trackers(SessionContext* ctx, const std::shared_ptr<Torren
     }
 }
 
+// ─── Helper: write the metadata cache so its info-hash still matches ───
+//
+// The cache is keyed by info-hash and re-attached to a later add of the same
+// magnet, so the ONE property it must have is that its info-hash round-trips.
+// The old writer did `create_torrent(*ti).generate()`, which does not preserve
+// it: libtorrent 2.x REBUILDS the info dict and emits v2 ("file tree") structure
+// for a v1 torrent, yielding a different hash. Re-adding the magnet then failed
+// outright with "mismatching info-hash" — so playing anything a second time was
+// impossible until the user deleted the file by hand, and the UI blamed the link
+// ("invalid or duplicate magnet").
+//
+// info_section() is the original bencoded info dict, byte for byte as the swarm
+// hashed it. Wrapping it as `d4:info<...>e` is a complete, minimal .torrent that
+// by construction cannot drift.
+static bool write_metadata_cache(const std::string& path, const lt::torrent_info& ti) {
+    lt::span<char const> sec = ti.info_section();
+    if (sec.empty()) return false;
+    std::ofstream out(path, std::ios_base::binary);
+    if (!out) return false;
+    out.write("d4:info", 7);
+    out.write(sec.data(), static_cast<std::streamsize>(sec.size()));
+    out.write("e", 1);
+    return out.good();
+}
+
+// Does a cached .torrent actually describe the torrent we are adding?
+//
+// Compare only the hash versions the magnet itself pins: a v1 magnet leaves v2
+// zeroed, so a blanket operator== would reject a perfectly good hybrid cache.
+static bool cache_matches(const lt::add_torrent_params& atp, const lt::torrent_info& ti) {
+    const lt::info_hash_t& want = atp.info_hashes;
+    const lt::info_hash_t& got = ti.info_hashes();
+    if (want.has_v2() && got.has_v2()) return want.v2 == got.v2;
+    if (want.has_v1() && got.has_v1()) return want.v1 == got.v1;
+    return false;
+}
+
 // ─── Helper: Get file piece range ───
 static bool get_file_piece_range(const lt::torrent_handle& h, int file_idx,
                                   int& out_first, int& out_last, int& out_total) {
@@ -265,8 +302,15 @@ extern "C" int torrent_add_magnet(TorrentSession session, const char* magnet_url
     
     lt::error_code ec2;
     auto cached_ti = std::make_shared<lt::torrent_info>(cached_path, ec2);
-    if (!ec2) {
+    if (!ec2 && cached_ti && cache_matches(atp, *cached_ti)) {
         atp.ti = cached_ti;
+    } else if (!ec2) {
+        // A cache that parses but does not match is worse than none: add_torrent
+        // rejects the whole add, so the magnet becomes permanently unplayable.
+        // Every cache written before write_metadata_cache existed is in exactly
+        // that state, so delete it — the correct one is rewritten on the next
+        // poll, and the add proceeds as a plain magnet in the meantime.
+        std::remove(cached_path.c_str());
     }
 
     auto node = std::make_shared<TorrentNode>();
@@ -290,14 +334,20 @@ extern "C" int torrent_add_magnet(TorrentSession session, const char* magnet_url
         add_extra_trackers(ctx, node);
 
 
-        // If we have cached metadata, immediately set up initial streaming window
-        if (!ec2 && atp.ti) {
+        // If we have cached metadata, immediately set up initial streaming window.
+        // Keyed on atp.ti, which is set only when the cache matched the magnet.
+        if (atp.ti) {
             node->ready_flag = true;
             // Initial deadlines will be set on first torrent_poll/ensure_streaming_buffer call
         }
     }
     
-    if (ec) return -1;
+    if (ec) {
+#ifdef TORRENT_WRAPPER_DEBUG
+        std::cerr << "add_torrent failed: " << ec.message() << std::endl;
+#endif
+        return -1;
+    }
 
     // STABLE-ID model: assign a monotonic id that is NEVER reused or
     // renumbered. torrent_remove() erases the entry, but next_id only ever
@@ -440,12 +490,7 @@ extern "C" int torrent_poll(TorrentSession session, int torrent_id, int target_f
         std::ifstream test_f(node->cached_path);
         if (!test_f.good()) {
             try {
-                lt::create_torrent ct(*ti);
-                lt::entry e = ct.generate();
-                std::vector<char> buffer;
-                lt::bencode(std::back_inserter(buffer), e);
-                std::ofstream out(node->cached_path, std::ios_base::binary);
-                out.write(buffer.data(), buffer.size());
+                write_metadata_cache(node->cached_path, *ti);
             } catch(...) {}
         }
         
@@ -647,12 +692,23 @@ extern "C" float torrent_get_file_progress(TorrentSession session, int torrent_i
     return 0.0f;
 }
 
+// Global download cap, in BYTES per second. 0 = unlimited.
+//
+// It used to translate "no limit" into -1. That is the convention for
+// torrent_handle::set_download_limit(), but NOT for the settings_pack key this
+// function writes -- settings_pack.hpp is explicit: "A value of 0 means
+// unlimited." A negative value is not a documented input at all; it reaches the
+// bandwidth manager as a negative quota, which does not mean "no ceiling", it
+// means the limiter has nothing to hand out. So every user who picked "No Limit"
+// in Settings > Network, the footer cycle, or the Transfers row was choosing a
+// setting that throttled them to a trickle -- the opposite of the label, and
+// invisible because the UI happily showed "No Limit" the whole time.
 extern "C" void torrent_set_download_limit(TorrentSession session, int limit_bytes_per_sec) {
     if (!session) return;
     SessionContext* ctx = static_cast<SessionContext*>(session);
     try {
         lt::settings_pack pack;
-        pack.set_int(lt::settings_pack::download_rate_limit, limit_bytes_per_sec <= 0 ? -1 : limit_bytes_per_sec);
+        pack.set_int(lt::settings_pack::download_rate_limit, limit_bytes_per_sec > 0 ? limit_bytes_per_sec : 0);
         ctx->ses->apply_settings(pack);
     } catch(...) {}
 }

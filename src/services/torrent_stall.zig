@@ -121,6 +121,14 @@ pub fn tick() void {
     if (now_ms - last_tick_ms < 500) return;
     last_tick_ms = now_ms;
 
+    // Drive the torrent → mpv handoff. It runs on the UI thread, on rendered
+    // frames only, and the dvui loop sleeps when idle — so a torrent left alone
+    // finished downloading without ever starting to play. This thread is already
+    // awake at 2 Hz watching the same torrents, so it is the natural place to ask
+    // for the frames. Scoped to the waiting window (see awaitingHandoff) rather
+    // than "any live torrent", so background downloads still let the UI sleep.
+    if (state.torrent_handoff_pending.load(.acquire)) state.wakeUi();
+
     const ses = state.torrentSession() orelse return;
     const now_s = io_g.timestamp();
 

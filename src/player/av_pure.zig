@@ -149,6 +149,13 @@ pub fn picturePresetFromInt(v: usize) PicturePreset {
 /// Download rate limit (bytes/sec) sanitized for persistence + replay: negatives
 /// (corrupt/legacy config) collapse to 0 = "no limit". A value > 0 is an
 /// explicit cap that must be re-applied to a freshly-created torrent session.
+///
+/// 0 is not an arbitrary sentinel — it is libtorrent's own encoding for
+/// unlimited on settings_pack::download_rate_limit ("A value of 0 means
+/// unlimited"). Keeping the same encoding all the way from config to the FFI is
+/// what stops a second translation being invented at the boundary; the wrapper
+/// used to turn this into -1 there, which libtorrent reads as a negative quota
+/// rather than as "no ceiling".
 pub fn sanitizeDownloadLimit(v: i32) i32 {
     return if (v > 0) v else 0;
 }

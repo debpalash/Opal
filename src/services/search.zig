@@ -2237,6 +2237,14 @@ fn attachTorrentToPlayer(tid: c_int, source: []const u8) void {
 
         logs.pushLog("info", "search", "Torrent added, waiting for metadata...", false);
 
+        // Publish the handoff flag HERE, not only from the UI thread's per-frame
+        // recompute: this path also runs off-frame (JSON API /load, resolver
+        // callbacks). Waiting for a frame to set the flag that causes frames is
+        // circular — with an idle window the torrent downloaded to 100% and never
+        // started. wakeUi() gets the first frame; the watchdog keeps them coming.
+        state.torrent_handoff_pending.store(true, .release);
+        state.wakeUi();
+
         // Reveal the player so the user sees the stream start.
         state.gotoPlayer();
 

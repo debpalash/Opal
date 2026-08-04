@@ -1133,6 +1133,22 @@ fn getPropStringInto(ctx: ?*c.mpv.mpv_handle, name: [*:0]const u8, buf: []u8) []
 }
 
 pub fn updateTorrentBackgroundTasks() void {
+    // Republish the "a torrent is waiting to start playing" flag every frame.
+    // The stall watchdog wakes the UI while it is set, which is what keeps the
+    // handoff below running when nobody is touching the machine. Computed first
+    // so the `break`s inside the per-player work below cannot skip it.
+    {
+        const tsp = @import("../services/torrent_stall_pure.zig");
+        var awaiting = false;
+        for (state.app.players.items) |p| {
+            if (tsp.awaitingHandoff(p.current_torrent_id, p.torrent_is_ready)) {
+                awaiting = true;
+                break;
+            }
+        }
+        state.torrent_handoff_pending.store(awaiting, .release);
+    }
+
     for (state.app.players.items) |p| {
         // PUMP MPV EVENTS
         while (true) {

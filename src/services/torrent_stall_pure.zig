@@ -149,6 +149,25 @@ pub fn evaluate(w: *Watch, s: Sample, th: Thresholds) Action {
     return .reannounce;
 }
 
+/// Is this player sitting between "torrent attached" and "handed to mpv"?
+///
+/// The handoff — pick the file, wait for the container's index bytes, start the
+/// stream proxy, `loadfile` — runs in updateTorrentBackgroundTasks, which only
+/// executes on a RENDERED FRAME. The dvui loop is event-driven and blocks when
+/// idle, so a torrent added and then left alone would buffer to completion with
+/// nobody looking: the download finished, the loading screen stayed up, and the
+/// player reported "No media" forever. Any stray input woke it, which is why
+/// this hid on a desktop and reproduced instantly over the JSON API.
+///
+/// The stall watchdog (own thread, 2 Hz) polls this via the flag on state and
+/// wakes the UI while it is true, so the handoff is driven by the torrent making
+/// progress rather than by the user happening to move the mouse. It is scoped to
+/// the waiting window on purpose: waking a sleeping UI twice a second for the
+/// whole of a background download would burn power for nothing.
+pub fn awaitingHandoff(current_torrent_id: i32, torrent_is_ready: bool) bool {
+    return current_torrent_id >= 0 and !torrent_is_ready;
+}
+
 // ══════════════════════════════════════════════════════════
 // TESTS
 // ══════════════════════════════════════════════════════════
@@ -277,4 +296,16 @@ test "reset clears everything" {
     w.reset();
     try std.testing.expect(!w.started);
     try std.testing.expectEqual(@as(u8, 0), w.attempts);
+}
+
+test "awaitingHandoff is true only between attach and playback" {
+    // No torrent on this player: nothing to wake for.
+    try std.testing.expect(!awaitingHandoff(-1, false));
+    try std.testing.expect(!awaitingHandoff(-1, true));
+    // Attached, not yet handed to mpv — the window the watchdog must keep frames
+    // running through. This is the regression: it used to depend on user input.
+    try std.testing.expect(awaitingHandoff(0, false));
+    try std.testing.expect(awaitingHandoff(7, false));
+    // Playing: the handoff is done, so stop forcing frames.
+    try std.testing.expect(!awaitingHandoff(0, true));
 }

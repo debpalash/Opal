@@ -1342,3 +1342,129 @@ def test_playback_extras():
         return "fail", "playback extras incomplete: " + ", ".join(missing)
     return "pass", (f"3 upstream options (spdif={spdif.group(1)}), all default off, "
                     "no fork-only flags that would break a system mpv")
+
+
+@test("Download limit: 0 means unlimited all the way to libtorrent", "Torrents")
+def download_limit_unlimited_is_zero():
+    """"No Limit" used to throttle instead of removing the throttle.
+
+    settings_pack.hpp is explicit for `download_rate_limit`: "A value of 0 means
+    unlimited." The wrapper translated <= 0 into **-1** — the convention for
+    torrent_handle::set_download_limit(), not for this settings key. libtorrent
+    hands a negative figure to the bandwidth manager, which then has nothing to
+    hand out, so picking "No Limit" in any of the three pickers (Settings >
+    Network, the footer cycle, the Transfers row) silently crippled the session
+    while the UI kept showing "No Limit".
+
+    Zig keeps 0 as the encoding end to end (sanitizeDownloadLimit) so no second
+    translation gets invented at the FFI boundary again.
+    """
+    cpp = _src("src/torrent_wrapper.cpp")
+    av = _src("src/player/av_pure.zig")
+    st = _src("src/core/state.zig")
+
+    setter = _between(cpp, "void torrent_set_download_limit(", "\n}")
+    checks = {
+        "wrapper never sends -1": "-1" not in setter,
+        "wrapper passes 0 through as unlimited": "limit_bytes_per_sec > 0 ? limit_bytes_per_sec : 0" in setter,
+        "zig collapses negatives to 0": "return if (v > 0) v else 0;" in av,
+        # Applying 0 must reach the FFI, or "unlimited" can never clear a cap
+        # that is already in force.
+        "apply path does not skip zero": "if (lim <= 0) return;" not in st,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "unlimited-is-zero contract broken: " + ", ".join(missing)
+    return "pass", "0 = unlimited from config through state to settings_pack"
+
+
+@test("Download limit: the web API speaks KB/s, state speaks bytes/s", "Web UI")
+def download_limit_units_converted():
+    """The field is labelled KB/s and the value was stored as bytes/s.
+
+    Typing 4096 into "Download limit (KB/s)" set the session to 4096 BYTES/s — a
+    1024x throttle that looks exactly like a dead network, and reads back as
+    "1048576 KB/s" after the desktop sets 1 MB/s. Both directions now go through
+    the pure converters.
+    """
+    sap = _src("src/services/settings_api_pure.zig")
+    rm = _src("src/services/remote.zig")
+
+    checks = {
+        "converters exist": "pub fn rateBytesToKb(" in sap and "pub fn rateKbToBytes(" in sap,
+        "label still promises KB/s": "Download limit (KB/s" in sap,
+        "read converts to KB/s": "sap.rateBytesToKb(state.app.download_rate_limit)" in rm,
+        "write converts to bytes/s": "sap.rateKbToBytes(n)" in rm,
+        # A limit set from the web must take effect now, like the desktop
+        # pickers, not on the next launch.
+        "write applies to the live session": "state.applyDownloadLimitIfReady();" in rm,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "KB/s conversion incomplete: " + ", ".join(missing)
+    return "pass", "KB/s on the wire, bytes/s in state, applied live"
+
+
+@test("/api/load reports failure instead of a phantom success", "Web UI")
+def api_load_honest_result():
+    """It answered ok:true for a request it had ignored.
+
+    /load read `url` from the query string only, so a POSTed body matched
+    nothing — and it still replied {"ok":true,"action":"load"}. A client saw
+    success while the player never moved. It now reads body-then-query (same
+    helper as the credential routes) and says so when there is no url.
+    """
+    rm = _src("src/services/remote.zig")
+    body = _between(rm, 'api_path, "/load")', "// ── Status")
+    checks = {
+        "reads body then query": 'credParam(body, query, "url"' in body,
+        "missing url is an error": '"error\\":\\"missing url' in body.replace('\\"', '\\"') or "missing url" in body,
+        "empty url is an error": "empty url" in body,
+        # The connection thread mutates player state; the UI loop must be told.
+        "wakes the ui": "state.wakeUi();" in body,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "/load result handling incomplete: " + ", ".join(missing)
+    return "pass", "body-or-query url, honest ok:false, UI woken"
+
+
+@test("Torrent metadata cache round-trips its info-hash", "Torrents")
+def torrent_metadata_cache_hash_stable():
+    """Playing the same torrent twice used to be impossible.
+
+    torrent_add_magnet caches metadata at <save_path>/<info-hash>.torrent and
+    re-attaches it on a later add of the same magnet. The writer built that file
+    with `create_torrent(*ti).generate()`, which does NOT preserve the info-hash:
+    libtorrent 2.x rebuilds the info dict and emits v2 "file tree" structure for a
+    v1 torrent. add_torrent then rejected the add with "mismatching info-hash",
+    the Zig side reported "invalid or duplicate magnet", and that magnet stayed
+    unplayable until the user deleted the file by hand. Verified against a local
+    seeder: cold add plays, and the re-add with a cache present now plays too.
+
+    Two halves, both required: write the ORIGINAL info section so the hash cannot
+    drift, and refuse (and delete) a cache that does not match, so the caches
+    already written by the old code heal themselves.
+    """
+    cpp = _src("src/torrent_wrapper.cpp")
+    writer = _between(cpp, "static bool write_metadata_cache(", "\n}")
+    checks = {
+        "writer exists": bool(writer),
+        # The original bencoded info dict, verbatim — the only thing that hashes
+        # back to the same value.
+        "writes the original info section": "info_section()" in writer
+                                            and '"d4:info"' in writer,
+        "no regenerate on the write path": "create_torrent" not in writer
+                                           and "ct.generate()" not in cpp,
+        "cache is validated before use": "cache_matches(atp, *cached_ti)" in cpp,
+        "mismatched cache is deleted": "std::remove(cached_path.c_str())" in cpp,
+        # A v1 magnet leaves v2 zeroed; a blanket == would reject a good hybrid.
+        "match compares only the pinned versions": "want.has_v2() && got.has_v2()" in cpp
+                                                   and "want.has_v1() && got.has_v1()" in cpp,
+        # ready_flag must follow the metadata actually attached.
+        "ready flag keyed on attached metadata": "if (atp.ti) {" in cpp,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "metadata cache can still poison a re-add: " + ", ".join(missing)
+    return "pass", "cache writes the original info section and is verified on read"

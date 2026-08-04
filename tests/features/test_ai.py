@@ -269,10 +269,15 @@ def test_local_source():
 @test("Remote /load Percent-Decodes", "AI Models")
 def test_remote_load_decode():
     rm = open(os.path.join(PROJECT_DIR, "src/services/remote.zig")).read()
-    # The /load handler must urlDecode before load_file (was passing raw).
+    # The /load handler must percent-decode before load_file (was passing raw).
+    # credParam is the decoding reader — body first, then query — so asserting on
+    # it covers the same requirement as the older literal `urlDecode(raw` did,
+    # and keeps covering it now that /load accepts a POSTed url as well.
     idx = rm.find('"/load"')
-    if idx > 0 and "urlDecode(raw" in rm[idx:idx + 600]:
-        return "pass", "/load decodes percent-encoded URLs"
+    window = rm[idx:idx + 900] if idx > 0 else ""
+    decoder = _between(rm, "fn credParam(", "\n}")
+    if 'credParam(body, query, "url"' in window and "urlDecode(raw, out)" in decoder:
+        return "pass", "/load decodes percent-encoded URLs from body or query"
     return "fail", "/load still passes raw url"
 
 
