@@ -293,7 +293,7 @@ fn registerGroupBlocking(mimes: []const []const u8) void {
 
 fn unregisterGroupBlocking(mimes: []const []const u8) void {
     const allocator = @import("../core/alloc.zig").allocator;
-    const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
+    const home = @import("../core/paths.zig").homeDir();
     var pb: [512]u8 = undefined;
     const mp = std.fmt.bufPrintZ(&pb, "{s}/.config/mimeapps.list", .{home}) catch return;
     const data = @import("../core/io_global.zig").cwdReadFileAlloc(mp, allocator, 256 * 1024) catch return;
@@ -318,7 +318,7 @@ fn unregisterGroupBlocking(mimes: []const []const u8) void {
 }
 
 fn ensureDesktopFileBlocking() void {
-    const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
+    const home = @import("../core/paths.zig").homeDir();
     var exb: [512]u8 = undefined;
     const exe = @import("../core/io_global.zig").selfExePath(&exb) catch return;
     var db: [512]u8 = undefined;

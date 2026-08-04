@@ -133,7 +133,7 @@ fn loadListFromDb(list_name: []const u8, target: *std.ArrayListUnmanaged(state.T
 // ══════════════════════════════════════════════════════════
 
 pub fn migrateFromTsv() void {
-    const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
+    const home = paths.homeDir();
     var path_buf: [512]u8 = undefined;
     const path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/opal/tmdb_lists.tsv", .{home}) catch return;
 
@@ -186,7 +186,7 @@ pub fn migrateFromTsv() void {
 
 // Also migrate old separate tmdb.db if it exists
 pub fn migrateOldDb() void {
-    const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
+    const home = paths.homeDir();
     var path_buf: [512]u8 = undefined;
     const old_db_path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/opal/tmdb.db", .{home}) catch return;
     // Just delete it — data was already in tmdb_lists.tsv which we migrated above

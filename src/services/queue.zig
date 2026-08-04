@@ -49,7 +49,7 @@ var db_initialized: bool = false;
 pub fn initDb() void {
     if (db_initialized) return;
 
-    const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
+    const home = @import("../core/paths.zig").homeDir();
     var path_buf: [256]u8 = undefined;
     const db_path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/opal/queue.db", .{home}) catch return;
     

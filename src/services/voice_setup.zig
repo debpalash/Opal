@@ -53,11 +53,11 @@ pub fn statusMsg(out: []u8) []const u8 {
 /// bundle under ~/.config/opal/sherpa-onnx/bin, then Homebrew, then
 /// /usr/local. Null when nowhere.
 pub fn sherpaBin(comptime name: []const u8, buf: []u8) ?[]const u8 {
-    if (io_global.getenv("HOME")) |home| {
-        if (std.fmt.bufPrint(buf, "{s}/.config/opal/sherpa-onnx/bin/" ++ name, .{home})) |p| {
-            if (io_global.cwdAccess(p, .{})) |_| return p else |_| {}
-        } else |_| {}
-    }
+    var cfg_buf: [512]u8 = undefined;
+    const cfg = @import("../core/paths.zig").configDir(&cfg_buf);
+    if (std.fmt.bufPrint(buf, "{s}/sherpa-onnx/bin/" ++ name, .{cfg})) |p| {
+        if (io_global.cwdAccess(p, .{})) |_| return p else |_| {}
+    } else |_| {}
     if (io_global.cwdAccess("/opt/homebrew/bin/" ++ name, .{})) |_| {
         return "/opt/homebrew/bin/" ++ name;
     } else |_| {}
@@ -69,13 +69,13 @@ pub fn sherpaBin(comptime name: []const u8, buf: []u8) ?[]const u8 {
 
 /// ~/.config/opal/models/silero_vad.onnx, when present.
 pub fn sileroPath(buf: []u8) ?[]const u8 {
-    const home = io_global.getenv("HOME") orelse return null;
+    const home = @import("../core/paths.zig").homeDir();
     const p = std.fmt.bufPrint(buf, "{s}/.config/opal/models/silero_vad.onnx", .{home}) catch return null;
     if (io_global.cwdAccess(p, .{})) |_| return p else |_| return null;
 }
 
 fn parakeetPresent(dir_name: []const u8) bool {
-    const home = io_global.getenv("HOME") orelse return false;
+    const home = @import("../core/paths.zig").homeDir();
     var buf: [512]u8 = undefined;
     const p = std.fmt.bufPrint(&buf, "{s}/.config/opal/models/{s}/encoder.int8.onnx", .{ home, dir_name }) catch return false;
     if (io_global.cwdAccess(p, .{})) |_| return true else |_| return false;
@@ -150,7 +150,7 @@ fn installWorker() void {
         }
     }.f;
 
-    const home = io_global.getenv("HOME") orelse return fail("HOME not set");
+    const home = @import("../core/paths.zig").homeDir();
     var dir_buf: [512]u8 = undefined;
     const opal_dir = std.fmt.bufPrint(&dir_buf, "{s}/.config/opal", .{home}) catch return fail("path too long");
     var models_buf: [512]u8 = undefined;

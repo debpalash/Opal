@@ -71,7 +71,7 @@ fn realCheck() Status {
 
     // sherpa STT + TTS models — probe a canonical file per bundle.
     var sherpa_home_buf: [512]u8 = undefined;
-    const home2 = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+    const home2 = @import("paths.zig").homeDir();
     if (std.fmt.bufPrintZ(&sherpa_home_buf, "{s}/.config/opal/models/sherpa-whisper-tiny/tiny-tokens.txt", .{home2})) |p| {
         s.sherpa_model = have(p);
     } else |_| {}
@@ -99,7 +99,7 @@ fn realCheck() Status {
         have("/usr/local/bin/sherpa-onnx-microphone");
 
     var home_buf: [512]u8 = undefined;
-    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+    const home = @import("paths.zig").homeDir();
     if (std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models/ggml-tiny.en.bin", .{home})) |model_path| {
         s.whisper_model = have(model_path);
     } else |_| {}
@@ -187,7 +187,7 @@ pub fn fetchParakeetBlocking(is_v3: bool) bool {
         "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2";
 
     var home_buf: [512]u8 = undefined;
-    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return false;
+    const home = @import("paths.zig").homeDir();
     const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return false;
     io_global.makeDirAbsolute(models_dir) catch {};
 
@@ -252,7 +252,7 @@ pub fn fetchSherpaWhisperAsync() void {
         fn worker() void {
             defer sherpa_model_downloading = false;
             var home_buf: [512]u8 = undefined;
-            const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return;
+            const home = @import("paths.zig").homeDir();
             const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
             io_global.makeDirAbsolute(models_dir) catch {};
 
@@ -316,7 +316,7 @@ pub fn fetchSherpaTtsAsync() void {
         fn worker() void {
             defer sherpa_tts_downloading = false;
             var home_buf: [512]u8 = undefined;
-            const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return;
+            const home = @import("paths.zig").homeDir();
             const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
             io_global.makeDirAbsolute(models_dir) catch {};
 
@@ -377,7 +377,7 @@ pub fn fetchSherpaKokoroAsync() void {
         fn worker() void {
             defer sherpa_kokoro_downloading = false;
             var home_buf: [512]u8 = undefined;
-            const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return;
+            const home = @import("paths.zig").homeDir();
             const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
             io_global.makeDirAbsolute(models_dir) catch {};
 
@@ -434,7 +434,7 @@ pub fn fetchSherpaStreamAsync() void {
         fn worker() void {
             defer sherpa_stream_downloading = false;
             var home_buf: [512]u8 = undefined;
-            const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return;
+            const home = @import("paths.zig").homeDir();
             const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
             io_global.makeDirAbsolute(models_dir) catch {};
 
@@ -520,7 +520,7 @@ pub fn fetchWhisperModelAsync() void {
         fn worker() void {
             defer whisper_model_downloading.store(false, .release);
             var home_buf: [512]u8 = undefined;
-            const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return;
+            const home = @import("paths.zig").homeDir();
             const dir = std.fmt.bufPrintZ(&home_buf, "{s}/.config/opal/models", .{home}) catch return;
 
             // mkpath + check if already present
@@ -607,7 +607,7 @@ fn setStatus(comptime fmt: []const u8, args: anytype) void {
 /// Path to the managed mlx-whisper binary inside our uv venv.
 /// Returns null if not installed yet.
 pub fn mlxWhisperBinPath(buf: []u8) ?[]const u8 {
-    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return null;
+    const home = @import("paths.zig").homeDir();
     // Check managed venv first
     const venv_bin = std.fmt.bufPrintZ(buf, "{s}/.config/opal/mlx-venv/bin/mlx_whisper", .{home}) catch return null;
     if (io_global.cwdAccess(venv_bin, .{})) |_| return venv_bin else |_| {}
@@ -619,7 +619,7 @@ pub fn mlxWhisperBinPath(buf: []u8) ?[]const u8 {
 
 /// Find the uv binary. Checks common install locations.
 fn findUv(buf: []u8) ?[]const u8 {
-    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+    const home = @import("paths.zig").homeDir();
     // uv official installer puts it here
     const cargo_uv = std.fmt.bufPrintZ(buf, "{s}/.local/bin/uv", .{home}) catch return null;
     if (io_global.cwdAccess(cargo_uv, .{})) |_| return cargo_uv else |_| {}
@@ -636,7 +636,7 @@ pub fn fetchMlxWhisperModelAsync() void {
         fn worker() void {
             defer mlx_whisper_downloading = false;
 
-            const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return;
+            const home = @import("paths.zig").homeDir();
             const alloc = @import("alloc.zig").allocator;
 
             // ── Step 1: Ensure `uv` is installed ──

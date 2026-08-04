@@ -41,7 +41,7 @@ pub fn engineDisplayName(e: Engine) []const u8 {
 // Resolve the venv python under the Opal config dir (~/.config/opal/venv/bin/python3).
 // Returns null if $HOME is unset. Falls back to bare "python3" handled by callers.
 fn getVenvPython() ?[]const u8 {
-    const home = @import("../core/io_global.zig").getenv("HOME") orelse return null;
+    const home = @import("../core/paths.zig").homeDir();
     const S = struct {
         var buf: [512]u8 = undefined;
     };
@@ -187,7 +187,7 @@ fn installWorker() void {
     const engine = install_engine_target;
     const pkg = pure.enginePipPackage(engine);
 
-    const home = io_g.getenv("HOME") orelse return fail("HOME not set");
+    const home = @import("../core/paths.zig").homeDir();
     var venv_buf: [512]u8 = undefined;
     const venv = std.fmt.bufPrint(&venv_buf, "{s}/.config/opal/venv", .{home}) catch return fail("path too long");
     var py_buf: [512]u8 = undefined;
@@ -247,7 +247,7 @@ pub fn engineReady(e: Engine) bool {
 /// Does the Opal venv contain `pkg` in site-packages? Scans venv/lib for the
 /// python3.x dir (version varies across machines) — cheap, cached by caller.
 fn checkVenvPackage(pkg: []const u8) bool {
-    const home = io_g.getenv("HOME") orelse return false;
+    const home = @import("../core/paths.zig").homeDir();
     var py_buf: [512]u8 = undefined;
     const py = std.fmt.bufPrint(&py_buf, "{s}/.config/opal/venv/bin/python3", .{home}) catch return false;
     io_g.cwdAccess(py, .{}) catch return false;

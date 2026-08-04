@@ -70,7 +70,7 @@ fn jarPath(buf: []u8) ?[]const u8 {
 /// per-platform default that the server actually uses.
 fn dataDir(buf: []u8) ?[]const u8 {
     const builtin = @import("builtin");
-    const home = io.getenv("HOME") orelse io.getenv("USERPROFILE") orelse return null;
+    const home = paths.homeDir();
     return switch (builtin.os.tag) {
         .macos => std.fmt.bufPrint(buf, "{s}/Library/Application Support/Tachidesk", .{home}) catch null,
         .windows => blk: {

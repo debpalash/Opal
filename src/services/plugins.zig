@@ -130,10 +130,12 @@ fn endLoading() void {
 // ══════════════════════════════════════════════════════════
 
 pub fn getPluginDir(buf: *[512]u8) []const u8 {
-    if (@import("../core/io_global.zig").getenv("HOME")) |home| {
-        return std.fmt.bufPrint(buf, "{s}/.config/opal/plugins", .{home}) catch "";
-    }
-    return "";
+    // configDir(), not homeDir() + "/.config": on Windows the former is
+    // %APPDATA%\opal, so plugins land beside config.tsv instead of in a
+    // second, half-invented tree.
+    var cfg_buf: [512]u8 = undefined;
+    const cfg = paths.configDir(&cfg_buf);
+    return std.fmt.bufPrint(buf, "{s}/plugins", .{cfg}) catch "";
 }
 
 pub fn scanPlugins() void {

@@ -14,10 +14,23 @@ fn getenv(name: [*:0]const u8) ?[]const u8 {
 }
 
 /// Get the user's home directory ($HOME; %USERPROFILE% on Windows).
-fn getHome() []const u8 {
+///
+/// **Always use this instead of reading `HOME` directly.** Windows does not set
+/// `HOME` — it sets `%USERPROFILE%` — so a raw `getenv("HOME")` is null there,
+/// and every one of the ~40 call sites that read it did `orelse return` or
+/// `orelse "/tmp"`. That is how issue #23 presented: on Windows 11 the
+/// dependency and plugin install buttons did nothing at all (deps.zig and
+/// plugins.zig bailed before doing any work) and the browser install logged
+/// "HOME not set". Nothing failed loudly; the buttons were simply inert.
+///
+/// Enforced by tests/features/test_windows_portability.py.
+pub fn homeDir() []const u8 {
     if (is_windows) return getenv("USERPROFILE") orelse "C:/Temp";
     return getenv("HOME") orelse "/tmp";
 }
+
+/// Deprecated internal alias — kept so the rest of this file reads unchanged.
+const getHome = homeDir;
 
 /// Windows config base: %APPDATA% (Roaming). Fallback derives from the
 /// user profile so a bare env never lands us in a shared temp dir.

@@ -373,7 +373,10 @@ def test_suwayomi_data_dir():
         "macOS Application Support": "Library/Application Support" in body,
         "Windows APPDATA": "APPDATA" in body,
         "Linux XDG/.local": "XDG_DATA_HOME" in body and ".local/share" in body,
-        "USERPROFILE fallback": "USERPROFILE" in body,
+        # The %USERPROFILE% fallback now lives in paths.homeDir() rather than
+        # being hand-rolled here — one reader, tested once (see
+        # test_no_raw_home_env). Either spelling satisfies the requirement.
+        "USERPROFILE fallback": "USERPROFILE" in body or "homeDir()" in body,
     }
     bad = [k for k, v in checks.items() if not v]
     if bad:
@@ -549,3 +552,28 @@ def test_poster_cache_row():
     return "pass", ("poster art is its own removable Storage row (sized from the table, "
                     "cleared with DELETE) and the cache is capped at a byte budget with "
                     "oldest-first eviction, not just a 5000-row count")
+
+
+@test("portability: no raw HOME reads outside paths.zig", "Windows")
+def test_no_raw_home_env():
+    # Windows does not set HOME — it sets %USERPROFILE% — so every raw
+    # getenv("HOME") was null there and every call site did `orelse return` or
+    # `orelse "/tmp"`. That is issue #23: on Windows 11 the dependency and
+    # plugin install buttons did nothing at all (deps.zig/plugins.zig bailed
+    # before doing any work) and the browser install logged "HOME not set".
+    # Nothing crashed — the buttons were simply inert, which is why it read as
+    # "the app doesn't work" rather than as a bug with a stack trace.
+    #
+    # paths.homeDir() is the one sanctioned reader; it has the USERPROFILE arm.
+    offenders = []
+    for rel, text in _zig_sources():
+        if rel.endswith("core/paths.zig"):
+            continue  # the one sanctioned implementation
+        for i, ln in enumerate(_strip_comments(text).splitlines(), 1):
+            if 'getenv("HOME")' in ln:
+                offenders.append(f"{rel}:{i}")
+    if offenders:
+        return "fail", ("raw getenv(\"HOME\") (null on Windows, silently disables the "
+                        "feature): " + ", ".join(offenders)
+                        + " — use paths.homeDir()")
+    return "pass", "all home-directory lookups route through paths.homeDir()"

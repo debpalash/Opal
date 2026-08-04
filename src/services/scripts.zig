@@ -16,7 +16,7 @@ pub fn scanScripts() void {
 
     // Scan Opal scripts dir first
     var opal_dir_buf: [512]u8 = undefined;
-    const home = @import("../core/io_global.zig").getenv("HOME") orelse "";
+    const home = paths.homeDir();
     const opal_scripts = std.fmt.bufPrint(&opal_dir_buf, "{s}/.config/opal/scripts", .{home}) catch "";
     if (opal_scripts.len > 0) scanDir(opal_scripts);
 
@@ -165,7 +165,7 @@ pub fn installScript(rec_idx: usize) void {
     if (rec_idx >= recommended_scripts.len) return;
     const rec = recommended_scripts[rec_idx];
 
-    const home = @import("../core/io_global.zig").getenv("HOME") orelse return;
+    const home = paths.homeDir();
     var dir_buf: [512]u8 = undefined;
     const dir = std.fmt.bufPrint(&dir_buf, "{s}/.config/opal/scripts", .{home}) catch return;
     @import("../core/io_global.zig").cwdMakePath(dir) catch {};

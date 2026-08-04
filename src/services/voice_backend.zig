@@ -74,7 +74,7 @@ fn whisperCppTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
         if (io_global.cwdAccess("bin/whisper.cpp/models/ggml-base.en.bin", .{})) |_| break :blk "bin/whisper.cpp/models/ggml-base.en.bin" else |_| {}
         if (io_global.cwdAccess("bin/whisper.cpp/models/ggml-tiny.en.bin", .{})) |_| break :blk "bin/whisper.cpp/models/ggml-tiny.en.bin" else |_| {}
         // Check user config dir
-        const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+        const home = @import("../core/paths.zig").homeDir();
         var mb: [512]u8 = undefined;
         const mp = std.fmt.bufPrintZ(&mb, "{s}/.config/opal/models/ggml-tiny.en.bin", .{home}) catch return null;
         if (io_global.cwdAccess(mp, .{})) |_| break :blk mp else |_| {}
@@ -137,7 +137,7 @@ fn sherpaOnnxTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
     // Locate whisper-tiny model dir (sherpa-onnx bundles tokens.txt +
     // encoder/decoder.onnx). User-installed at ~/.config/opal/models/.
     var home_buf: [256]u8 = undefined;
-    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+    const home = @import("../core/paths.zig").homeDir();
     var enc_buf: [512]u8 = undefined;
     var dec_buf: [512]u8 = undefined;
     var tok_buf: [512]u8 = undefined;
@@ -209,7 +209,7 @@ fn parakeetTranscribe(dir_name: []const u8, wav_path: []const u8, out_buf: []u8)
         return null;
     };
 
-    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+    const home = @import("../core/paths.zig").homeDir();
     var enc_buf: [640]u8 = undefined;
     var dec_buf: [640]u8 = undefined;
     var joi_buf: [640]u8 = undefined;
@@ -301,7 +301,7 @@ fn sherpaOnnxSpeak(text: []const u8) void {
         return;
     };
 
-    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+    const home = @import("../core/paths.zig").homeDir();
     var out_buf: [512]u8 = undefined;
     const out_wav = std.fmt.bufPrintZ(&out_buf, "{s}/.config/opal/tts_out.wav", .{home}) catch {
         sayTtsSpeak(text);
@@ -353,7 +353,7 @@ fn sherpaOnnxSpeak(text: []const u8) void {
 }
 
 fn playPiperOrSay(bin: []const u8, out_arg: []const u8, out_wav: []const u8, text: []const u8) void {
-    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+    const home = @import("../core/paths.zig").homeDir();
     var vm_buf: [512]u8 = undefined;
     var lex_buf: [512]u8 = undefined;
     var tok_buf: [512]u8 = undefined;
@@ -701,7 +701,7 @@ pub fn spawnNemotronStreamingConvo() ?io_global.Child {
     const bin = vs.sherpaBin("sherpa-onnx-microphone", &bin_buf) orelse return null;
     if (!vs.nemotronPresent()) return null;
 
-    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return null;
+    const home = @import("../core/paths.zig").homeDir();
 
     var enc_arg: [640]u8 = undefined;
     var dec_arg: [640]u8 = undefined;
@@ -751,7 +751,7 @@ pub fn spawnParakeetVadConvo() ?io_global.Child {
         return null;
     };
 
-    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else return null;
+    const home = @import("../core/paths.zig").homeDir();
 
     var vad_arg: [640]u8 = undefined;
     var enc_arg: [640]u8 = undefined;
@@ -796,7 +796,7 @@ pub fn spawnStreamingConvo() ?io_global.Child {
 
     var home_buf: [64]u8 = undefined;
     _ = &home_buf;
-    const home = if (std.c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+    const home = @import("../core/paths.zig").homeDir();
 
     var enc_buf: [512]u8 = undefined;
     var dec_buf: [512]u8 = undefined;

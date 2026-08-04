@@ -14,7 +14,7 @@ fn firefoxProfileExists() bool {
     if (ff_checked) return ff_exists;
     ff_checked = true;
     const io = @import("../core/io_global.zig");
-    const home = io.getenv("HOME") orelse return false;
+    const home = @import("../core/paths.zig").homeDir();
     var buf: [512]u8 = undefined;
     const macos = std.fmt.bufPrint(&buf, "{s}/Library/Application Support/Firefox/Profiles", .{home}) catch return false;
     if (io.cwdAccess(macos, .{})) {
