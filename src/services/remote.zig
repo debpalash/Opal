@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const remote_url_pure = @import("remote_url_pure.zig");
 const state = @import("../core/state.zig");
 const c = @import("../core/c.zig");
 const player = @import("../player/player.zig");
@@ -214,29 +216,56 @@ var lan_ip_buf: [48]u8 = std.mem.zeroes([48]u8);
 var lan_ip_len: usize = 0;
 var lan_ip_checked: bool = false;
 
-/// Best-effort LAN IPv4 for "open this on your phone" (macOS: ipconfig
-/// getifaddr en0/en1; empty when undetermined). Cached after first call.
+/// Best-effort LAN IPv4 for "open this on your phone". Empty when undetermined.
+///
+/// Two bugs lived here. It spawned a bare `ipconfig`, which resolves only if
+/// the process PATH carries /usr/sbin -- true from a terminal, not true for a
+/// double-clicked .app, which is how users actually run this. And it latched
+/// `checked` BEFORE trying, so a single failure cached "no address" for the
+/// rest of the session with no way to retry. Measured 2026-08-04: en0 held
+/// 192.168.0.198 and /api/webui still reported "".
+///
+/// Now: absolute paths, every en* an Apple machine is likely to use, a Linux
+/// arm, and the latch is only set once an address is actually found.
 pub fn lanIp() []const u8 {
-    if (!lan_ip_checked) {
+    if (lan_ip_len > 0) return lan_ip_buf[0..lan_ip_len];
+    if (lan_ip_checked) return "";
+
+    const alloc_m = @import("../core/alloc.zig").allocator;
+    const Probe = struct { argv: []const []const u8 };
+    const probes: []const Probe = if (builtin.os.tag == .macos) &.{
+        // en0 is Wi-Fi on laptops and Ethernet on desktops; the rest cover
+        // Thunderbolt/USB adapters and a second NIC.
+        .{ .argv = &.{ "/usr/sbin/ipconfig", "getifaddr", "en0" } },
+        .{ .argv = &.{ "/usr/sbin/ipconfig", "getifaddr", "en1" } },
+        .{ .argv = &.{ "/usr/sbin/ipconfig", "getifaddr", "en2" } },
+        .{ .argv = &.{ "/usr/sbin/ipconfig", "getifaddr", "en3" } },
+    } else if (builtin.os.tag == .linux) &.{
+        // -I prints every address, space separated; take the first.
+        .{ .argv = &.{ "/usr/bin/hostname", "-I" } },
+        .{ .argv = &.{ "/bin/hostname", "-I" } },
+    } else &.{};
+
+    for (probes) |probe| {
+        var child = io_g.Child.init(probe.argv, alloc_m);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Ignore;
+        child.spawn() catch continue;
+        var buf: [128]u8 = undefined;
+        const n = if (child.stdout) |*so| io_g.readAll(so, &buf) catch 0 else 0;
+        _ = child.wait() catch {};
+        const addr = remote_url_pure.firstIpv4(buf[0..n]) orelse continue;
+        if (addr.len > lan_ip_buf.len) continue;
+        @memcpy(lan_ip_buf[0..addr.len], addr);
+        lan_ip_len = addr.len;
         lan_ip_checked = true;
-        const ifs = [_][]const u8{ "en0", "en1" };
-        for (ifs) |ifname| {
-            var child = io_g.Child.init(&.{ "ipconfig", "getifaddr", ifname }, @import("../core/alloc.zig").allocator);
-            child.stdout_behavior = .Pipe;
-            child.stderr_behavior = .Ignore;
-            child.spawn() catch continue;
-            var buf: [64]u8 = undefined;
-            const n = if (child.stdout) |*so| io_g.readAll(so, &buf) catch 0 else 0;
-            _ = child.wait() catch {};
-            const trimmed = std.mem.trim(u8, buf[0..n], " \r\n\t");
-            if (trimmed.len >= 7 and trimmed.len <= lan_ip_buf.len) {
-                @memcpy(lan_ip_buf[0..trimmed.len], trimmed);
-                lan_ip_len = trimmed.len;
-                break;
-            }
-        }
+        return lan_ip_buf[0..lan_ip_len];
     }
-    return lan_ip_buf[0..lan_ip_len];
+    // Only latch once every probe has been tried and none produced an address;
+    // a later call still gets a fresh attempt if the machine had no link yet.
+    lan_ip_checked = probes.len == 0;
+    return "";
 }
 
 pub fn start() void {
@@ -938,6 +967,42 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     // Installed source plugins + the debrid / repo integration config.
     if (std.mem.eql(u8, api_path, "/plugins")) {
         apiPlugins(stream, query, body);
+        return;
+    }
+    // Settings › Web UI. Read-mostly on purpose: the only write is the kill
+    // switch, and it needs confirm=1 because it ends the caller's own session.
+    if (std.mem.eql(u8, api_path, "/webui")) {
+        if (std.mem.eql(u8, getQueryParam(query, "action") orelse "", "disable")) {
+            if (!std.mem.eql(u8, getQueryParam(query, "confirm") orelse "", "1")) {
+                sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"disabling the web UI ends this session — pass confirm=1\"}");
+                return;
+            }
+            state.app.web_remote_enabled = false;
+            state.markConfigDirty();
+            // Answer BEFORE stopping: stop() tears down the listener this
+            // response is being written to, so the caller would otherwise see a
+            // dropped connection and not know whether it worked.
+            sendJson(stream, "{\"ok\":true,\"stopping\":true}");
+            stop();
+            return;
+        }
+        var out: [256]u8 = undefined;
+        var w = std.Io.Writer.fixed(&out);
+        w.print("{{\"enabled\":{s},\"running\":{s},\"port\":{d},\"address\":\"", .{
+            if (state.app.web_remote_enabled) "true" else "false",
+            if (isRunning()) "true" else "false",
+            port,
+        }) catch return;
+        escJsonWrite(&w, lanIp());
+        w.writeAll("\"}") catch return;
+        sendJson(stream, out[0..w.end]);
+        return;
+    }
+    // Live TV settings — the curated source list behind Settings › Live TV.
+    // The /livetv *browser* was already covered; this is the part that decides
+    // what is in the catalog at all.
+    if (std.mem.eql(u8, api_path, "/livetv/sources")) {
+        apiLiveTvSources(stream, query, body);
         return;
     }
     // Version + update state — the desktop Settings › About tab. GET only:
@@ -2211,6 +2276,105 @@ fn apiParty(stream: std.Io.net.Stream, query: []const u8) void {
 ///
 /// The debrid API key is never echoed back: it is a credential, and the page
 /// only needs to know whether one is set.
+/// `/api/livetv/sources` — Settings › Live TV, for the web UI.
+///
+/// GET lists the curated sources with their installed state and channel count.
+/// POST takes `?action=refresh`, or `?id=<source>&action=install|remove`, or a
+/// custom playlist via `?id=iptv-custom&url=<m3u>`.
+///
+/// Every id is matched against the compiled-in SOURCES table before use, so a
+/// caller cannot name an arbitrary source_config entry and have it written.
+fn apiLiveTvSources(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {
+    const iptv = @import("iptv.zig");
+    const sources = @import("iptv_sources.zig");
+    const source_config = @import("../core/source_config.zig");
+
+    var abuf: [16]u8 = undefined;
+    const action = credParam(body, query, "action", &abuf);
+    if (action) |a| {
+        if (std.mem.eql(u8, a, "refresh")) {
+            iptv.refreshAllSources(true);
+            sendJson(stream, "{\"ok\":true}");
+            return;
+        }
+    }
+    var ibuf: [64]u8 = undefined;
+    if (credParam(body, query, "id", &ibuf)) |id| {
+        // The custom playlist is the one entry whose URL comes from the caller.
+        if (std.mem.eql(u8, id, sources.CUSTOM_ID)) {
+            var ubuf: [512]u8 = undefined;
+            const url = credParam(body, query, "url", &ubuf) orelse "";
+            if (url.len == 0) {
+                iptv.uninstallSource(sources.CUSTOM_ID);
+                sendJson(stream, "{\"ok\":true}");
+                return;
+            }
+            if (!std.mem.startsWith(u8, url, "http://") and !std.mem.startsWith(u8, url, "https://")) {
+                sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"url must be http(s)\"}");
+                return;
+            }
+            var jb: [640]u8 = undefined;
+            var jw = std.Io.Writer.fixed(&jb);
+            jw.writeAll("{\"url\":\"") catch return;
+            escJsonWrite(&jw, url);
+            jw.writeAll("\"}") catch return;
+            const ok = source_config.install(sources.CUSTOM_ID, jb[0..jw.end]);
+            if (ok) iptv.refreshAllSources(true);
+            sendJson(stream, if (ok) "{\"ok\":true}" else "{\"ok\":false}");
+            return;
+        }
+        if (sources.byId(id) == null) {
+            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"unknown source\"}");
+            return;
+        }
+        const a = action orelse "";
+        if (std.mem.eql(u8, a, "install")) {
+            iptv.installSource(id);
+        } else if (std.mem.eql(u8, a, "remove")) {
+            iptv.uninstallSource(id);
+        } else {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"action must be install or remove\"}");
+            return;
+        }
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
+
+    const alloc = @import("../core/alloc.zig").allocator;
+    const out = alloc.alloc(u8, 16 * 1024) catch {
+        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(out);
+    var w = std.Io.Writer.fixed(out);
+    w.print("{{\"total\":{d},\"ingesting\":{s},\"custom_url\":\"", .{
+        iptv.catalogTotal(),
+        if (iptv.isIngesting()) "true" else "false",
+    }) catch return;
+    escJsonWrite(&w, source_config.get(sources.CUSTOM_ID, "url") orelse "");
+    w.writeAll("\",\"sources\":[") catch return;
+    var first = true;
+    for (sources.SOURCES) |src| {
+        if (std.mem.eql(u8, src.id, sources.CUSTOM_ID)) continue; // reported above
+        if (!first) w.writeAll(",") catch return;
+        first = false;
+        w.writeAll("{\"id\":\"") catch return;
+        escJsonWrite(&w, src.id);
+        w.writeAll("\",\"name\":\"") catch return;
+        escJsonWrite(&w, src.name);
+        w.writeAll("\",\"region\":\"") catch return;
+        escJsonWrite(&w, src.region);
+        w.writeAll("\",\"note\":\"") catch return;
+        escJsonWrite(&w, src.note);
+        w.print("\",\"installed\":{s},\"channels\":{d}}}", .{
+            if (source_config.has(src.id)) "true" else "false",
+            iptv.sourceChannelCount(src.id),
+        }) catch return;
+    }
+    w.writeAll("]}") catch return;
+    sendJson(stream, out[0..w.end]);
+}
+
 /// `/api/trakt` — the Plugins › Trakt tab, for the web UI.
 ///
 /// GET reports connection state. The access token is never sent: a remote

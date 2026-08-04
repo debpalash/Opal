@@ -637,3 +637,38 @@ def test_no_hardcoded_config_path():
                         "XDG_CONFIG_HOME): " + ", ".join(offenders)
                         + " — use paths.configDir()")
     return "pass", "every config path is built from paths.configDir()"
+
+
+@test("lanIp: absolute paths, no cached failure, non-macOS arm", "Windows")
+def test_lan_ip_resolution():
+    # The "open this on your phone" address. Two bugs, both verified live on
+    # 2026-08-04 with en0 holding 192.168.0.198 while /api/webui reported "":
+    #
+    #   1. It spawned a bare `ipconfig`. That resolves from a terminal, where
+    #      PATH carries /usr/sbin — not from a double-clicked .app, which is how
+    #      users actually launch it. (ytdlp.zig carries the same note about
+    #      /opt/homebrew/bin, so this is a known shape of bug here.)
+    #   2. It set the `checked` latch BEFORE probing, so one failure cached "no
+    #      address" for the rest of the session with no retry.
+    #
+    # And `ipconfig getifaddr` is macOS-only, so Linux never had an address.
+    src = _read("src/services/remote.zig")
+    m = _re.search(r"pub fn lanIp\(\) \[\]const u8 \{.*?\n\}", src, _re.S)
+    if not m:
+        return "fail", "remote.zig has no pub fn lanIp()"
+    body = m.group(0)
+    checks = {
+        "absolute ipconfig path": "/usr/sbin/ipconfig" in body,
+        "no bare ipconfig spawn": '"ipconfig", "getifaddr"' not in body,
+        "linux arm": "hostname" in body and ".linux" in body,
+        # The latch may only be set alongside a real result, or when there is
+        # nothing to probe at all.
+        "does not latch a failed probe":
+            "lan_ip_checked = true;\n        return lan_ip_buf" in body
+            or "lan_ip_checked = probes.len == 0;" in body,
+        "parsing routed through the pure helper": "remote_url_pure.firstIpv4(" in body,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "lanIp: " + ", ".join(bad)
+    return "pass", "lanIp probes absolute paths on macOS and Linux and retries after a miss"

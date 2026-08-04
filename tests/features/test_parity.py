@@ -80,6 +80,9 @@ COVERED = {
     # values ride in a query string and nothing secret may.
     "general settings":  ("setup", ["/settings"]),
     "about":             ("setup", ["/about"]),
+    # Closed 2026-08-04, the last two.
+    "live tv settings":  ("setup", ["/livetv/sources"]),
+    "web ui settings":   ("setup", ["/webui"]),
 }
 
 # Desktop capabilities with no web equivalent yet. `why` is what a user loses.
@@ -88,10 +91,7 @@ COVERED = {
 # either list before — the two lists were hand-maintained and nothing checked
 # them against router.zig / state.zig, so a desktop tab could exist with no web
 # equivalent and no entry here, and parity still read 98%. It was really 83%.
-GAPS = {
-    "live tv settings":  "Settings › Live TV (playlist/EPG sources). The /livetv *browser* is covered; its settings are not.",
-    "web ui settings":   "Settings › Web UI (port, bind address). Changing the port from the web UI disconnects the caller, so it needs a confirm flow rather than a registry row.",
-}
+GAPS = {}
 
 # Desktop capabilities a browser cannot have, by nature — counted separately so
 # the parity percentage measures *closable* distance rather than being pinned
@@ -186,6 +186,12 @@ def test_parity_gaps():
     if closed:
         return "warn", (f"parity {pct}% ({len(COVERED)}/{total}) — these gaps look CLOSED, "
                         f"promote them into COVERED: {', '.join(closed)}")
+    if not GAPS:
+        # Reached 2026-08-04. A warn here would be permanent noise; the covered
+        # test above is what stops any of this regressing, and the completeness
+        # test is what stops a NEW desktop surface landing unclassified.
+        return "pass", (f"parity {pct}% ({len(COVERED)}/{total}) — no gaps; "
+                        f"{len(NOT_APPLICABLE)} capabilities are desktop-only by nature")
     return "warn", (f"parity {pct}% ({len(COVERED)}/{total}) — {len(GAPS)} gaps remain: "
                     + ", ".join(sorted(GAPS)))
 
@@ -291,3 +297,35 @@ def test_new_plugin_routes():
     if bad:
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "trakt/suwayomi/about exposed, tokens and the updater withheld"
+
+
+@test("Web API: live tv sources + web ui kill switch", "Parity")
+def test_livetv_and_webui_routes():
+    # The last two gaps. Both write, so both need a guard the others did not:
+    # the source list may only name entries from the compiled-in SOURCES table,
+    # and turning the web UI off ends the caller's own session.
+    rm = _src("src/services/remote.zig")
+    ui = _src("web/index.html")
+    checks = {
+        "livetv sources route": 'api_path, "/livetv/sources"' in rm and "fn apiLiveTvSources(" in rm,
+        # Without this an arbitrary id would be written straight into
+        # source_config by a caller who picked the name.
+        "source ids validated against SOURCES": "sources.byId(id) == null" in rm,
+        "custom playlist requires http(s)":
+            'std.mem.startsWith(u8, url, "http://")' in rm and 'url must be http(s)' in rm,
+        "webui route": 'api_path, "/webui"' in rm,
+        "kill switch needs confirm": '"confirm"' in rm and "confirm=1" in rm,
+        # stop() tears down the listener the reply is being written to, so the
+        # order matters: answer, then stop.
+        "webui answers before stopping":
+            'stopping' in rm and rm.index('stopping') < rm.index("            stop();"),
+        "web UI has both cards": 'id="ltv-list"' in ui and 'id="webui-off"' in ui,
+        "web UI warns before self-disconnect": "lose its connection" in ui,
+        # The source rows are built from server data — build them as text nodes.
+        "source rows are not built with innerHTML":
+            "label.textContent = s.name" in ui,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "missing: " + ", ".join(bad)
+    return "pass", "live tv sources validated against the table; kill switch confirm-gated"

@@ -77,3 +77,53 @@ test "webUiTooltip: tiny buffer falls back instead of truncating" {
         webUiTooltip(true, "192.168.1.42", 41595, &tiny),
     );
 }
+
+
+/// First IPv4 dotted quad in `out`, or null. Used to read the LAN address out
+/// of `ipconfig getifaddr` (one address) and `hostname -I` (space separated,
+/// and the first entry is not always the one you want but is the best guess
+/// without a routing-table lookup).
+///
+/// Rejects loopback: `hostname -I` can lead with 127.0.0.1 on some setups, and
+/// printing "open http://127.0.0.1:41595 on your phone" is worse than printing
+/// nothing.
+pub fn firstIpv4(out: []const u8) ?[]const u8 {
+    var it = std.mem.tokenizeAny(u8, out, " \t\r\n");
+    while (it.next()) |tok| {
+        if (!isDottedQuad(tok)) continue;
+        if (std.mem.startsWith(u8, tok, "127.")) continue;
+        return tok;
+    }
+    return null;
+}
+
+fn isDottedQuad(s: []const u8) bool {
+    if (s.len < 7 or s.len > 15) return false;
+    var parts = std.mem.splitScalar(u8, s, '.');
+    var n: u8 = 0;
+    while (parts.next()) |part| {
+        n += 1;
+        if (n > 4 or part.len == 0 or part.len > 3) return false;
+        for (part) |ch| if (ch < '0' or ch > '9') return false;
+        if (std.fmt.parseInt(u16, part, 10) catch 999 > 255) return false;
+    }
+    return n == 4;
+}
+
+test "firstIpv4 reads ipconfig and hostname -I output" {
+    try std.testing.expectEqualStrings("192.168.0.198", firstIpv4("192.168.0.198\n").?);
+    try std.testing.expectEqualStrings("10.0.0.4", firstIpv4("10.0.0.4 172.17.0.1\n").?);
+    // Loopback is worse than nothing in "open this on your phone".
+    try std.testing.expectEqualStrings("192.168.1.5", firstIpv4("127.0.0.1 192.168.1.5").?);
+    try std.testing.expect(firstIpv4("127.0.0.1\n") == null);
+}
+
+test "firstIpv4 rejects things that only look like an address" {
+    try std.testing.expect(firstIpv4("") == null);
+    try std.testing.expect(firstIpv4("no address here") == null);
+    try std.testing.expect(firstIpv4("1.2.3") == null);          // three octets
+    try std.testing.expect(firstIpv4("1.2.3.4.5") == null);      // five
+    try std.testing.expect(firstIpv4("999.1.1.1") == null);      // out of range
+    try std.testing.expect(firstIpv4("1.2.3.a") == null);        // non-numeric
+    try std.testing.expect(firstIpv4("fe80::1") == null);        // v6
+}

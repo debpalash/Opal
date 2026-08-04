@@ -578,6 +578,21 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
     </div>
 
     <div class="acc-group">
+      <div class="acc-title">Live TV sources</div>
+      <div class="hint" id="ltv-hint">Loading…</div>
+      <div id="ltv-list"></div>
+      <div class="cfg-row"><span>Custom playlist (M3U)</span><input id="ltv-custom" placeholder="https://…/playlist.m3u"></div>
+      <button id="ltv-custom-save" class="quick-btn">Save playlist</button>
+      <button id="ltv-refresh" class="quick-btn">Refresh channels</button>
+    </div>
+
+    <div class="acc-group">
+      <div class="acc-title">Web UI</div>
+      <div class="hint" id="webui-hint">Loading…</div>
+      <button id="webui-off" class="quick-btn">Turn off remote access</button>
+    </div>
+
+    <div class="acc-group">
       <div class="acc-title">About</div>
       <div class="hint" id="about-hint">Loading…</div>
       <button id="about-check" class="quick-btn">Check for updates</button>
@@ -1184,6 +1199,8 @@ async function loadSetup(){
   loadTrakt();
   loadSuwayomi();
   loadAbout();
+  loadLiveTvSources();
+  loadWebUi();
   loadParty();
   loadAccess();
 }
@@ -1414,6 +1431,64 @@ $('suwa-stop').onclick = async () => {
   await fetch(BASE + '/api/suwayomi?action=stop',
     { method:'POST', headers:{ Authorization:'Bearer ' + TOKEN } });
   setTimeout(loadSuwayomi, 500);
+};
+
+// ── Live TV sources (Setup › Live TV) ──
+async function loadLiveTvSources() {
+  let d;
+  try { d = await api('/livetv/sources'); } catch (e) { $('ltv-hint').textContent = 'Unavailable'; return; }
+  $('ltv-hint').textContent = d.ingesting
+    ? 'Refreshing channels…'
+    : d.total + ' channels in your catalog';
+  if (!$('ltv-custom').value) $('ltv-custom').value = d.custom_url || '';
+  const list = $('ltv-list');
+  list.textContent = '';
+  for (const s of d.sources || []) {
+    const row = document.createElement('div');
+    row.className = 'cfg-row';
+    const label = document.createElement('span');
+    // textContent, not innerHTML: name/region/note are compiled in, but this
+    // list is the kind of thing that grows a user-supplied entry later.
+    label.textContent = s.name + ' — ' + s.region
+      + (s.channels ? ' (' + s.channels + ')' : '') + (s.note ? ' · ' + s.note : '');
+    const btn = document.createElement('button');
+    btn.textContent = s.installed ? 'On' : 'Off';
+    btn.onclick = async () => {
+      btn.disabled = true;
+      await api('/livetv/sources?id=' + encodeURIComponent(s.id)
+                + '&action=' + (s.installed ? 'remove' : 'install'));
+      loadLiveTvSources();
+    };
+    row.append(label, btn);
+    list.append(row);
+  }
+}
+$('ltv-custom-save').onclick = async () => {
+  await api('/livetv/sources?id=iptv-custom&url='
+            + encodeURIComponent($('ltv-custom').value.trim()));
+  $('ltv-hint').textContent = 'Saved ✓';
+  setTimeout(loadLiveTvSources, 1000);
+};
+$('ltv-refresh').onclick = async () => {
+  await api('/livetv/sources?action=refresh');
+  $('ltv-hint').textContent = 'Refreshing…';
+  setTimeout(loadLiveTvSources, 2000);
+};
+
+// ── Web UI (Setup › Web UI) ──
+async function loadWebUi() {
+  let d;
+  try { d = await api('/webui'); } catch (e) { $('webui-hint').textContent = 'Unavailable'; return; }
+  $('webui-hint').textContent = 'Serving on ' + (d.address || '?') + ':' + d.port
+    + (d.running ? '' : ' (stopped)');
+}
+$('webui-off').onclick = async () => {
+  // This ends the session making the request, so make that explicit rather than
+  // letting the page appear to hang when the connection drops.
+  if (!confirm('Turn off remote access? This device will lose its connection, '
+             + 'and it can only be switched back on from the desktop app.')) return;
+  await api('/webui?action=disable&confirm=1');
+  $('webui-hint').textContent = 'Remote access off — re-enable from the desktop app.';
 };
 
 // ── About (Setup › About) ──
