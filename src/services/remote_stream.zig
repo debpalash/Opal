@@ -354,6 +354,10 @@ const TranscodeGuard = struct {
     pid: io_g.Child.Id,
     last_progress_ms: std.atomic.Value(i64),
     done: std.atomic.Value(bool),
+    /// Points at the connection thread's loop phase (0=read 1=poll 2=write
+    /// 3=exited). Diagnostic only — logged when the watchdog reaps, so a stall
+    /// names the blocking call instead of needing another round of guesses.
+    phase: ?*const u8 = null,
 
     /// No write has landed in this long → nobody is watching.
     const STALL_LIMIT_MS: i64 = 60_000;
@@ -366,8 +370,20 @@ const TranscodeGuard = struct {
             if (idle > STALL_LIMIT_MS) {
                 // SIGTERM without reaping: the connection thread still owns the
                 // Child and its kill()/wait() must stay valid.
-                io_g.terminateProcess(self.pid);
-                @import("../core/logs.zig").pushLog("info", "transcode", "stalled encoder reaped by watchdog", false);
+                // SIGTERM is not enough for a pipe-blocked ffmpeg (it retries
+                // the interrupted write); the connection thread's stdout close
+                // is the real cure, this is the last-resort backstop.
+                std.posix.kill(self.pid, std.posix.SIG.KILL) catch {};
+                var msg: [96]u8 = undefined;
+                const where: []const u8 = switch (if (self.phase) |ph| ph.* else 255) {
+                    0 => "blocked reading ffmpeg stdout",
+                    1 => "blocked in poll(POLLOUT)",
+                    2 => "blocked in socket write",
+                    3 => "loop already exited",
+                    else => "unknown",
+                };
+                const m = std.fmt.bufPrint(&msg, "stalled encoder reaped — {s}", .{where}) catch "stalled encoder reaped";
+                @import("../core/logs.zig").pushLog("info", "transcode", m, false);
                 break;
             }
         }
@@ -393,16 +409,19 @@ const TRANSCODE_SEND_TIMEOUT_S: i32 = 20;
 
 /// `/transcode?file=<rel>&t=<token>[&start=<seconds>]`
 ///
-/// KNOWN BUG — an abandoned stream leaks its encoder.
-/// When the viewer disappears mid-stream the loop below never returns, so
-/// `child.kill()` is never reached and one ffmpeg stays alive (blocked, 0% CPU,
-/// not spinning) until Opal exits. Three fixes were tried and MEASURED as not
-/// working: SO_SNDTIMEO (no effect through the threaded Io), a stall watchdog
-/// thread (did not reap), and poll(POLLOUT)-gating with a 16 KB chunk (encoder
-/// still alive at +30s). The real blocking point has not been identified — it
-/// may be inside the Io writer rather than the raw socket. Do not assume the
-/// mitigations below work; they are retained because they are harmless, not
-/// because they were shown to help.
+/// Cleanup note, because three obvious fixes here were wrong.
+///
+/// An abandoned stream used to leave ffmpeg alive forever. The instinct is
+/// "the write is blocking, so bound the write" — SO_SNDTIMEO, a stall
+/// watchdog, and poll(POLLOUT) gating were all tried and all MEASURED as not
+/// working. Instrumenting the loop showed why: it exits perfectly fine. The
+/// blocked party was ffmpeg, not us.
+///
+/// ffmpeg blocked writing to a full stdout pipe cannot be signalled away: it
+/// takes SIGTERM, its handler sets a flag, it retries the interrupted write
+/// and blocks again, never reaching the flag check. The survivor ignored even
+/// a manual `kill -TERM`. Closing OUR read end is the cure — the next write
+/// gets EPIPE and it exits by itself. Verified: encoder gone within 5s.
 pub fn handleTranscode(stream: std.Io.net.Stream, rel: []const u8, start_s: u32) void {
     if (!haveFfmpeg()) {
         const body = "{\"error\":\"ffmpeg not installed — transcoding unavailable\"}";
@@ -481,16 +500,37 @@ pub fn handleTranscode(stream: std.Io.net.Stream, rel: []const u8, start_s: u32)
     }
     defer if (guard) |g| g.done.store(true, .release);
 
+    // Instrumented: three earlier fixes were guesses that did not work, so the
+    // loop records WHICH call it is sitting in. The watchdog logs that when it
+    // reaps, which is how we learn where this actually parks.
+    var phase: u8 = 0; // 0=read 1=poll 2=write 3=exited
+    if (guard) |g| g.phase = &phase;
+
     while (true) {
+        phase = 0;
         const n = if (child.stdout) |*so| (io_g.read(so, buf) catch 0) else 0;
         if (n == 0) break; // encoder finished or died
-        // A failed write means the tab closed. Kill the encoder rather than let
-        // it run to completion for nobody.
-        // Gate on writability first, so a departed viewer ends the stream
-        // instead of parking this thread forever.
+        // A departed viewer must end the stream rather than park this thread:
+        // gate on writability, then write.
+        phase = 1;
         if (!waitWritable(stream, TRANSCODE_SEND_TIMEOUT_S * 1000)) break;
+        phase = 2;
         if (!writeAll(stream, buf[0..n])) break;
         if (guard) |g| g.last_progress_ms.store(io_g.milliTimestamp(), .release);
     }
+    phase = 3;
+
+    // THE fix for the leaked encoder. Signals do not work here: ffmpeg blocked
+    // writing to a full stdout pipe takes SIGTERM, its handler sets a flag, it
+    // then RETRIES the interrupted write and blocks again — never reaching the
+    // flag check. Measured: the survivor ignored even a manual `kill -TERM`.
+    //
+    // Closing our read end is what actually ends it — the next write gets
+    // EPIPE and ffmpeg exits on its own. kill()/wait() afterwards just reaps.
+    if (child.stdout) |*so| {
+        so.close(io_g.io());
+        child.stdout = null;
+    }
     _ = child.kill() catch {};
+    _ = child.wait() catch {};
 }

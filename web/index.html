@@ -261,10 +261,14 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   <div class="logo" style="width:52px;height:52px;border-radius:14px"></div>
   <h1 id="auth-title">Welcome to Opal</h1>
   <p id="auth-sub">Create your account to get started.</p>
+  <!-- A real <form>: browsers refuse to offer password-manager save/fill for a
+       password field outside one, and warn about it in the console. -->
+  <form id="auth-form" autocomplete="on">
   <input id="auth-user" class="auth-input" placeholder="Username" autocapitalize="off" autocorrect="off" autocomplete="username">
   <input id="auth-pass" class="auth-input" type="password" placeholder="Password" autocomplete="current-password">
   <input id="auth-pass2" class="auth-input" type="password" placeholder="Confirm password" autocomplete="new-password" style="display:none">
-  <button id="pair-btn">Continue</button>
+  <button id="pair-btn" type="button">Continue</button>
+  </form>
   <div id="pair-err"></div>
 </div>
 
@@ -575,11 +579,13 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
     <div class="acc-group">
       <div class="acc-title">Password</div>
       <div class="hint" id="acc-pw-hint">Changing it signs out every other device.</div>
-      <input id="acc-pw-user" placeholder="Username to reset" autocapitalize="off" style="display:none">
+      <form id="acc-pw-form" autocomplete="on">
+      <input id="acc-pw-user" placeholder="Username to reset" autocapitalize="off" autocomplete="username" style="display:none">
       <input id="acc-pw-cur" type="password" placeholder="Current password" autocomplete="current-password">
       <input id="acc-pw-new" type="password" placeholder="New password (8+ characters)" autocomplete="new-password">
       <input id="acc-pw-conf" type="password" placeholder="Confirm new password" autocomplete="new-password">
-      <button id="acc-pw-save" class="quick-btn">Set password</button>
+      <button id="acc-pw-save" class="quick-btn" type="button">Set password</button>
+      </form>
     </div>
 
     <div class="acc-group">
@@ -654,7 +660,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 
 <!-- YouTube embed player (plays in the browser, hosted or companion) -->
 <div id="yt-embed">
-  <iframe id="yt-frame" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>
+  <!-- allowfullscreen is redundant next to allow="…fullscreen" and only earns a
+     console warning about which one wins. -->
+  <iframe id="yt-frame" allow="autoplay; encrypted-media; picture-in-picture; fullscreen"></iframe>
   <div class="bar"><div class="t" id="yt-embed-title"></div><button id="yt-embed-close">Close</button></div>
 </div>
 
@@ -1236,6 +1244,14 @@ function toast(msg){
   clearTimeout(toast._h); toast._h = setTimeout(() => t.className = '', 4000);
 }
 $('dest-toggle').onclick = () => setPlayHere(!PLAY_HERE);
+// Wrapping the credential fields in <form> gives password managers something
+// to attach to and silences the browser warning; these forward Enter to the
+// existing button handlers rather than ever navigating.
+[['auth-form', 'pair-btn'], ['acc-pw-form', 'acc-pw-save']].forEach(([f, b]) => {
+  const form = $(f);
+  if (form) form.addEventListener('submit', e => { e.preventDefault(); $(b).click(); });
+});
+
 function setPlayHere(on){
   PLAY_HERE = !!on;
   localStorage.setItem('opal_play_here', PLAY_HERE ? '1' : '0');

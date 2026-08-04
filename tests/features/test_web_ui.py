@@ -625,7 +625,7 @@ def test_torrent_files_and_hls():
     return "pass", "Torrent per-file play via /stream + hls.js vendored separately (feature-tested)"
 
 
-@test("On-the-fly transcode route (KNOWN: leaks a blocked encoder)", "Web UI")
+@test("On-the-fly transcode route", "Web UI")
 def test_transcode_route():
     """ffmpeg → fragmented MP4 so MKV/H.265 can play in a browser.
 
@@ -648,13 +648,16 @@ def test_transcode_route():
             and "/opt/homebrew/bin/ffmpeg" in rs,
         "availability advertised": '"/transcode/available"' in rm and "haveFfmpeg()" in rm,
         # Cleanup attempt is present even though it is not yet sufficient.
-        "cleanup attempted": "TranscodeGuard" in rs and "terminateProcess(self.pid)" in rs,
-        "limitation documented": "does not surface through the threaded Io" in rs,
+        # The actual cure: close our read end so ffmpeg gets EPIPE. Signals do
+        # not move a pipe-blocked ffmpeg.
+        "closes pipe to end encoder": "so.close(io_g.io())" in rs and "child.stdout = null" in rs,
+        "reaps after closing": "child.wait() catch {}" in rs,
+        "watchdog uses SIGKILL": "std.posix.SIG.KILL" in rs,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "transcode incomplete: " + ", ".join(missing)
-    return "warn", "Transcode works; KNOWN leak — abandoned stream leaves a blocked ffmpeg"
+    return "pass", "Transcode: fragmented MP4, seek-by-restart, encoder reaped via pipe close"
 
 
 @test("web/index.html inline JavaScript parses", "Web UI")
