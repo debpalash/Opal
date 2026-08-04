@@ -993,11 +993,19 @@ async function loadActivity(){
   } catch { $('queue').innerHTML = '<div class="empty">—</div>'; }
   try {
     const d = await api('/downloads');
-    $('downloads').innerHTML = (d.files || []).slice(0, 40).map(f => {
+    const files = d.files || [];
+    // Same rule as the source catalog: a bounded view states its bound. This
+    // silently showed the first 40 of however many, so a 41st download simply
+    // did not exist as far as the page was concerned.
+    const DL_CAP = 40;
+    const shown = files.slice(0, DL_CAP);
+    $('downloads').innerHTML = shown.map(f => {
       const name = typeof f === 'string' ? f : (f.name || '');
       return `<div class="file"><div class="n">${esc(name)}</div>
         <button class="play" data-n="${encodeURIComponent(name)}">Play</button></div>`;
-    }).join('') || '<div class="empty">No downloads</div>';
+    }).join('') + (files.length > shown.length
+        ? `<div class="empty">${files.length - shown.length} more not shown — newest ${DL_CAP} listed</div>`
+        : '') || '<div class="empty">No downloads</div>';
     $('downloads').querySelectorAll('.play').forEach(b => b.onclick = () => {
       const rel = decodeURIComponent(b.dataset.n);
       if (HOSTED) { openPlayer(rel); return; }
@@ -1775,11 +1783,22 @@ async function loadSources(){
     renderSources();
   } catch { $('srcs-hint').textContent = 'Could not load the source catalog.'; }
 }
-$('srcs-q').addEventListener('input', () => renderSources());
+// How many catalog rows to render at once. The list used to hard-slice at 40
+// and only mention the count when a filter was active, so unfiltered you saw 40
+// of 306 with nothing saying so and no way to reach the other 266 short of
+// guessing a name. It also made the Setup page ~12,000px tall. Now: a small
+// page, an explicit "showing X of Y", and a button for the rest.
+const SRC_PAGE = 12;
+let srcShown = SRC_PAGE;
+$('srcs-q').addEventListener('input', () => { srcShown = SRC_PAGE; renderSources(); });
 function renderSources(){
   const q = $('srcs-q').value.trim().toLowerCase();
-  const rows = (srcCatalog || []).filter(s => !q || (s.name || '').toLowerCase().includes(q)).slice(0, 40);
-  $('srcs-hint').textContent = (srcCatalog || []).length + ' sources in the catalog' + (q ? ` · ${rows.length} shown` : '');
+  const all = (srcCatalog || []).filter(s => !q || (s.name || '').toLowerCase().includes(q));
+  const rows = all.slice(0, srcShown);
+  const total = (srcCatalog || []).length;
+  $('srcs-hint').textContent = q
+    ? `${all.length} of ${total} match “${$('srcs-q').value.trim()}” · showing ${rows.length}`
+    : `${total} sources in the catalog · showing ${rows.length}`;
   $('srcs-list').innerHTML = rows.map(s => `
     <div class="result">
       <div class="t">${esc(s.name)}</div>
@@ -1787,6 +1806,14 @@ function renderSources(){
         ${s.lang ? `<span>${esc(s.lang)}</span>` : ''}
         <button class="play" data-fw="${esc(s.framework || '')}" data-base="${encodeURIComponent(s.base || '')}">Install</button></div>
     </div>`).join('') || '<div class="empty">No matches</div>';
+  // The remainder is reachable without having to guess a name.
+  if (all.length > rows.length) {
+    const more = document.createElement('button');
+    more.className = 'quick-btn';
+    more.textContent = `Show ${Math.min(SRC_PAGE, all.length - rows.length)} more of ${all.length - rows.length}`;
+    more.onclick = () => { srcShown += SRC_PAGE; renderSources(); };
+    $('srcs-list').append(more);
+  }
   $('srcs-list').querySelectorAll('.play').forEach(b => b.onclick = async () => {
     b.textContent = '…';
     try {

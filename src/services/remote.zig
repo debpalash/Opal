@@ -1345,9 +1345,20 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
             // passing them raw corrupted the loaded URI.
             var dec_buf: [2048]u8 = undefined;
             const decoded = urlDecode(raw, &dec_buf) orelse raw;
-            var url_buf: [2049]u8 = undefined;
-            const url_z = std.fmt.bufPrintZ(&url_buf, "{s}", .{decoded}) catch return;
-            ap.load_file(url_z.ptr);
+            // A magnet is not a file. This handed every magnet straight to mpv,
+            // which treated the whole URI as a path and failed with "File name
+            // too long" — so tapping ANY torrent search result in the web UI did
+            // nothing but log an error. The desktop has always branched here
+            // (ui/header.zig on drop/paste, services/search.zig on a result
+            // click); routing through the same entry point keeps the two in step
+            // rather than reimplementing the player/session setup.
+            if (std.mem.startsWith(u8, decoded, "magnet:")) {
+                @import("search.zig").loadTorrentToPlayer(decoded);
+            } else {
+                var url_buf: [2049]u8 = undefined;
+                const url_z = std.fmt.bufPrintZ(&url_buf, "{s}", .{decoded}) catch return;
+                ap.load_file(url_z.ptr);
+            }
         }
         sendJson(stream, "{\"ok\":true,\"action\":\"load\"}");
 

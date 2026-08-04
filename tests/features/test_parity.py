@@ -329,3 +329,59 @@ def test_livetv_and_webui_routes():
     if bad:
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "live tv sources validated against the table; kill switch confirm-gated"
+
+
+@test("Web UI: the source catalog never truncates silently", "Parity")
+def test_source_catalog_paging():
+    # It rendered `.slice(0, 40)` of 306 sources and appended "N shown" ONLY when
+    # a filter was active. Unfiltered you saw 40 rows with nothing saying they
+    # were a subset, and the other 266 were unreachable unless you guessed a
+    # name. It also made Setup ~12,000px tall, pushing every card below it out of
+    # reach. The rule in this repo is that a bounded view states its bound.
+    ui = _src("web/index.html")
+    checks = {
+        "catalog no longer hard-slices": "s.name || '').toLowerCase().includes(q)).slice(0, 40)" not in ui,
+        # The downloads list had the identical bug — first 40 of however many,
+        # with nothing saying so, so a 41st download did not exist to the page.
+        "downloads states its cap": "more not shown" in ui,
+        "pages through the catalog": "SRC_PAGE" in ui and "srcShown += SRC_PAGE" in ui,
+        # The unfiltered branch must carry the count too — that was the bug.
+        "states the bound when unfiltered": "sources in the catalog · showing" in ui,
+        "states the bound when filtered": "· showing ${rows.length}" in ui,
+        "remainder is reachable": "Show ${Math.min(SRC_PAGE" in ui,
+        # Typing a filter must go back to page one, or the old offset hides
+        # matches that are now near the top.
+        "filter resets paging": "srcShown = SRC_PAGE; renderSources();" in ui,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "catalog paging: " + ", ".join(bad)
+    return "pass", "catalog pages in chunks and always states how many of how many"
+
+
+@test("Web API: /load routes a magnet to the torrent engine, not mpv", "Parity")
+def test_load_magnet_routing():
+    # Verified live on 2026-08-04: POSTing a magnet to /api/load logged
+    #   [file] Cannot open file 'magnet:?xt=urn:btih:...': File name too long
+    # because the handler called ap.load_file() unconditionally, so mpv treated
+    # the whole URI as a path. Tapping ANY torrent result in the web UI did
+    # nothing at all — and the parity route check could not see it, because the
+    # route existed and answered {"ok":true} while doing nothing useful.
+    #
+    # The desktop has always branched on the scheme (ui/header.zig for
+    # drop/paste, services/search.zig for a result click). The fix routes
+    # through the same entry point rather than reimplementing player/session
+    # setup, so the two cannot drift.
+    rm = _src("src/services/remote.zig")
+    m = _re.search(r'api_path, "/load"\)\).*?\n    \} else if', rm, _re.S)
+    if not m:
+        return "fail", "remote.zig has no /load handler"
+    body = m.group(0)
+    if 'std.mem.startsWith(u8, decoded, "magnet:")' not in body:
+        return "fail", "/load does not branch on the magnet: scheme — mpv will get the URI as a path"
+    if "loadTorrentToPlayer(" not in body:
+        return "fail", "/load does not reuse search.loadTorrentToPlayer — the desktop path"
+    # The non-magnet branch must still exist; http(s) URLs go to the player.
+    if "ap.load_file(" not in body:
+        return "fail", "/load lost its plain-URL branch"
+    return "pass", "/load sends magnets to the torrent engine and everything else to the player"
