@@ -621,25 +621,26 @@ pub fn renderGrid() !void {
                             if (!over_controls and me.p.x >= img_rs.x and me.p.x <= img_rs.x + img_rs.w and me.p.y >= img_rs.y and me.p.y <= img_rs.y + img_rs.h) {
                                 if (me.action == .press and me.button == .left) {
                                     state.app.active_player_idx = i;
-                                    // Double-click detection → fullscreen toggle
+                                    // Double-click → fullscreen, single → pause.
+                                    // Shares input_pure.DoubleTap with the F F
+                                    // keyboard gesture so there is one window
+                                    // and one set of edge cases (target change,
+                                    // triple-click, backwards clock) rather than
+                                    // two hand-rolled copies.
                                     const DblClick = struct {
-                                        var last_click_ms: i64 = 0;
-                                        var last_click_cell: usize = 999;
+                                        var gesture: @import("input_pure.zig").DoubleTap = .{};
                                     };
+                                    const ip = @import("input_pure.zig");
                                     const now_ms = @import("../core/io_global.zig").milliTimestamp();
-                                    if (DblClick.last_click_cell == i and now_ms - DblClick.last_click_ms < 500) {
-                                        // Double-click: toggle fullscreen
+                                    if (DblClick.gesture.tap(now_ms, i, ip.DOUBLE_TAP_MS)) {
                                         if (state.app.fullscreen_player_idx == null) {
                                             state.app.fullscreen_player_idx = i;
                                         } else {
                                             state.app.fullscreen_player_idx = null;
                                         }
-                                        DblClick.last_click_ms = 0; // reset to prevent triple-click
                                     } else {
                                         // Single click: toggle pause
                                         p.togglePause();
-                                        DblClick.last_click_ms = now_ms;
-                                        DblClick.last_click_cell = i;
                                     }
                                 } else if (me.action == .release and me.button == .left) {
                                     if (state.app.dragging_magnet_len > 0) {

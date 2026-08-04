@@ -3978,7 +3978,7 @@ pub fn renderCheatSheet() void {
 
     const shortcuts = [_][2][]const u8{
         .{ "Space", "Play / Pause" },
-        .{ "F", "Toggle Fullscreen" },
+        .{ "F F", "Toggle Fullscreen (double-tap)" },
         .{ "Left / Right", "Seek -10s / +10s" },
         .{ "Up / Down", "Volume +5 / -5" },
         .{ "M", "Mute" },

@@ -1468,3 +1468,44 @@ def torrent_metadata_cache_hash_stable():
     if missing:
         return "fail", "metadata cache can still poison a re-add: " + ", ".join(missing)
     return "pass", "cache writes the original info section and is verified on read"
+
+
+@test("F F double-tap toggles fullscreen; one F does not", "Player")
+def fullscreen_needs_a_double_tap():
+    """A single F used to throw the window into fullscreen.
+
+    F sits under the left hand right next to the transport keys, so a stray
+    press was easy and the consequence was the whole window changing mode. It
+    now needs a deliberate double-tap, matching double-click on the video — and
+    sharing the same tracker, so the two gestures cannot drift apart in window
+    length or edge-case handling (target change, triple-tap, backwards clock).
+
+    Escape is deliberately untouched: leaving a mode should stay a single press.
+    """
+    ip = _src("src/ui/input_pure.zig")
+    inp = _src("src/ui/input.zig")
+    grid = _src("src/ui/grid.zig")
+    setg = _src("src/ui/settings.zig")
+    build = _src("build.zig")
+
+    f_branch = _between(inp, "                    .f => {", "                    },")
+    checks = {
+        "pure gesture module exists": "pub const DoubleTap = struct" in ip
+                                      and "pub const DOUBLE_TAP_MS" in ip,
+        "registered for unit tests": "src/ui/input_pure.zig" in build,
+        # The key handler must go through the tracker, not toggle directly.
+        "F routes through the gesture": "S.gesture.tap(" in f_branch,
+        "F only toggles on completion": "fullscreen_player_idx = state.app.active_player_idx"
+                                        in f_branch and "if (S.gesture.tap(" in f_branch,
+        # One implementation, not two.
+        "mouse path shares the tracker": "DblClick.gesture.tap(" in grid,
+        "no hand-rolled 500ms left": "now_ms - DblClick.last_click_ms < 500" not in grid,
+        # Escape still exits in one press.
+        "escape still single-press": "state.app.fullscreen_player_idx = null;" in
+                                     _between(inp, "if (key == .escape)", "continue;"),
+        "cheat sheet says double-tap": '"F F", "Toggle Fullscreen (double-tap)"' in setg,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "double-tap fullscreen incomplete: " + ", ".join(missing)
+    return "pass", "F F toggles fullscreen via the shared double-tap tracker"

@@ -495,6 +495,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_dropup_pure).step);
 
+    // Input gestures: the double-tap window shared by F F (ui/input.zig) and
+    // double-click-to-fullscreen (ui/grid.zig).
+    const test_input_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ui/input_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_input_pure).step);
+
     // Player control bar: clock formatting, scrub geometry (pointer→fraction,
     // fraction→gravity), torrent buffered-ahead analysis, seek throttle, volume
     // ramp, transport state, responsive collapse.

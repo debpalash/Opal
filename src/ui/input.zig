@@ -5,6 +5,7 @@ const ui = @import("ui.zig");
 const c = @import("../core/c.zig");
 const search = @import("../services/search.zig");
 const transfers = @import("../services/transfers.zig");
+const input_pure = @import("input_pure.zig");
 
 fn gracefulShutdown() void {
     // Save all player positions before exit
@@ -202,13 +203,32 @@ pub fn processGlobalInputs() void {
             // AND the stats overlay.
             if (!mod.shift() and !mod.control() and !mod.alt() and !mod.command()) {
                 switch (key) {
+                    // F F = fullscreen. Double-tap, not a single press: F sits
+                    // under the left hand next to the transport keys, and a
+                    // stray one used to throw the whole window into fullscreen.
+                    // Same gesture and same 500ms window as double-clicking the
+                    // video (see grid.zig), so the two feel identical.
+                    //
+                    // Escape still leaves fullscreen in one press — getting OUT
+                    // of a mode should never need a gesture.
+                    //
+                    // Auto-repeat cannot drive this: the loop above only accepts
+                    // action == .down, and dvui delivers a held key as .repeat.
+                    // Holding F therefore does nothing rather than flickering
+                    // fullscreen at the repeat rate.
                     .f => {
-                        if (state.app.fullscreen_player_idx == null) {
-                            state.app.fullscreen_player_idx = state.app.active_player_idx;
-                        } else {
-                            state.app.fullscreen_player_idx = null;
+                        const S = struct {
+                            var gesture: input_pure.DoubleTap = .{};
+                        };
+                        const now_ms = @import("../core/io_global.zig").milliTimestamp();
+                        if (S.gesture.tap(now_ms, @intFromEnum(key), input_pure.DOUBLE_TAP_MS)) {
+                            if (state.app.fullscreen_player_idx == null) {
+                                state.app.fullscreen_player_idx = state.app.active_player_idx;
+                            } else {
+                                state.app.fullscreen_player_idx = null;
+                            }
+                            dvui.refresh(null, @src(), null);
                         }
-                        dvui.refresh(null, @src(), null);
                         continue;
                     },
                     .s => {
