@@ -134,6 +134,12 @@ pub fn save() void {
     setKey("ai_model_id", ai_server.activeModelId());
     setKey("ai_cloud_provider", ai_server.cloudProvider().id);
     setKey("web_remote", if (state.app.web_remote_enabled) "1" else "0");
+    {
+        const remote = @import("../services/remote.zig");
+        setKey("web_bind", remote.bind_mode.id());
+        var port_buf: [8]u8 = undefined;
+        setKey("web_port", std.fmt.bufPrint(&port_buf, "{d}", .{remote.port}) catch "41595");
+    }
     setKey("custom_titlebar", if (state.app.custom_titlebar) "1" else "0");
     setKey("onboarded", if (state.app.onboarded) "1" else "0");
 
@@ -532,6 +538,18 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.web_remote_enabled = std.mem.eql(u8, val, "1");
         // Config loads AFTER appInit — honor a persisted enable now.
         if (state.app.web_remote_enabled) @import("../services/remote.zig").start();
+    } else if (std.mem.eql(u8, key, "web_bind") or std.mem.eql(u8, key, "web_port")) {
+        // applyBinding rather than a bare assignment: key order within the
+        // config is not guaranteed, so `web_remote` may already have started
+        // the server on the defaults by the time these load. applyBinding
+        // no-ops when nothing changed and restarts the listener when it did.
+        const remote = @import("../services/remote.zig");
+        const access_pure = @import("../services/access_pure.zig");
+        if (std.mem.eql(u8, key, "web_bind")) {
+            remote.applyBinding(access_pure.bindModeFromString(val), remote.port);
+        } else if (access_pure.parsePort(val)) |p| {
+            remote.applyBinding(remote.bind_mode, p);
+        }
     } else if (std.mem.eql(u8, key, "custom_titlebar")) {
         state.app.custom_titlebar = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "ai_model_id")) {

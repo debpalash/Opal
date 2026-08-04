@@ -76,6 +76,7 @@ from features import (  # noqa: F401
     test_trackers,
     test_source_layer,
     test_engine_health,
+    test_parity,
 )
 
 if __name__ == "__main__":

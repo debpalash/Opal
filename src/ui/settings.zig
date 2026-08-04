@@ -175,6 +175,7 @@ fn renderLeftNav(compact: bool) void {
         .{ .tab = .Subtitles, .label = "Subtitles", .icon = icons.tvg.lucide.captions },
         .{ .tab = .Network, .label = "Network", .icon = icons.tvg.lucide.wifi },
         .{ .tab = .Storage, .label = "Storage", .icon = icons.tvg.lucide.@"hard-drive" },
+        .{ .tab = .WebUi, .label = "Web UI", .icon = icons.tvg.lucide.globe },
         .{ .tab = .Scripts, .label = "AI & Scripts", .icon = icons.tvg.lucide.sparkles },
         .{ .tab = .AI, .label = "AI & Voice", .icon = icons.tvg.lucide.@"message-square-text" },
         .{ .tab = .LangLearn, .label = "Language", .icon = icons.tvg.lucide.languages },
@@ -228,7 +229,8 @@ fn sectionMatchesSearch(tab: state.SettingsTab) bool {
         .Subtitles => &.{ "OpenSubtitles", "Subdl", "Language", "Search", "API Key", "Font", "Delay", "Whisper" },
         .Network => &.{ "Download", "Trackers", "Proxy", "Speed", "Limit", "Port", "Browser", "Engine", "Camoufox", "CloakBrowser", "Audiobookshelf", "Audiobook", "OPDS", "Reading", "Komga", "Kavita", "Calibre" },
         .Storage => &.{ "Download Path", "Watch History", "Database", "Cache", "Clear" },
-        .Scripts => &.{ "SponsorBlock", "AI Backend", "Remote", "Watch Party", "Scripts", "Gemma", "Apple Intelligence", "Model", "Voice" },
+        .WebUi => &.{ "Web UI", "Web Remote", "Remote", "Access", "Password", "Sessions", "Devices", "API Token", "Token", "Port", "Bind", "LAN", "Loopback" },
+        .Scripts => &.{ "SponsorBlock", "AI Backend", "Watch Party", "Scripts", "Gemma", "Apple Intelligence", "Model", "Voice" },
         .AI => &.{ "Voice Backend", "STT", "TTS", "Whisper", "Kokoro", "MLX", "Sherpa", "Co-Watcher", "Models", "Dependencies" },
         .LangLearn => &.{ "Translate", "ASR", "Dubbing", "TTS", "Voice", "Speed", "Flashcard", "Transcribe" },
         .FileAssoc => &.{ "File Associations", "Default Handler", "Register", "Video", "Audio", "Torrent", "Playlist", "Comics" },
@@ -368,6 +370,7 @@ fn renderRightPane() void {
         .Subtitles => "Subtitle Settings",
         .Network => "Network Settings",
         .Storage => "Storage Settings",
+        .WebUi => "Web UI & Remote Access",
         .Scripts => "AI, Remote & Scripts",
         .AI => "AI & Voice",
         .LangLearn => "Language Learning",
@@ -382,6 +385,7 @@ fn renderRightPane() void {
         .Network => renderNetworkTab(),
         .Subtitles => renderSubtitlesTab(),
         .Storage => renderStorageTab(),
+        .WebUi => renderWebUiTab(),
         .Scripts => renderScriptsTab(),
         .AI => renderAIContentBody(),
         .LangLearn => renderLangLearnTab(),
@@ -3653,46 +3657,6 @@ fn renderScriptsTab() void {
         }
     }
 
-    // ── Web Remote Control ── (toggle row; phone URL + account sign-in hint)
-    {
-        const remote = @import("../services/remote.zig");
-        var hint_buf: [96]u8 = undefined;
-        const hint: []const u8 = if (!state.app.web_remote_enabled) "Off" else blk: {
-            const ip = remote.lanIp();
-            break :blk if (ip.len > 0)
-                (std.fmt.bufPrint(&hint_buf, "http://{s}:41595", .{ip}) catch "on :41595")
-            else
-                "on :41595";
-        };
-        const before = state.app.web_remote_enabled;
-        components.toggleRow(@src(), "Web Remote Control", hint, &state.app.web_remote_enabled);
-        if (state.app.web_remote_enabled != before) {
-            state.markConfigDirty(); // persisted (web_remote) — survives restarts
-            if (state.app.web_remote_enabled) {
-                remote.start();
-                state.showToast("Web Remote started on :41595");
-            } else {
-                remote.stop();
-                state.showToast("Web Remote stopped");
-            }
-        }
-
-        // Account hint — open the URL in a browser and sign in with an account
-        // created there (first visit creates the admin). No pairing code.
-        if (state.app.web_remote_enabled) {
-            var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal,
-                .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = theme.spacing.xs },
-            });
-            defer prow.deinit();
-            _ = dvui.label(@src(), "Open the address above in a browser and create an account to sign in.", .{}, .{
-                .color_text = theme.colors.text_secondary,
-                .gravity_y = 0.5,
-                .expand = .horizontal,
-            });
-        }
-    }
-
     // ── Watch Party ──
     settingRow("Watch Party (LAN Sync)", 73, @src());
     {
@@ -4631,4 +4595,259 @@ pub fn renderMediaInfo() void {
 fn renderFileAssocTab() void {
     sectionHeader("Default File Associations", "Register Opal as the default handler for media, torrents, and comics", 70, @src());
     fileassoc.render();
+}
+
+// ══════════════════════════════════════════════════════════
+// Web UI & Remote Access
+// ══════════════════════════════════════════════════════════
+//
+// The desktop half of the access controls that also live in the web UI
+// (Setup › Access). Both drive the SAME state — `state.app.web_remote_enabled`,
+// `remote.bind_mode`, `remote.port`, and the `users`/`sessions` tables — so
+// they can never disagree.
+//
+// This page exists because the web version is unreachable in exactly the case
+// you most need it: server off, password forgotten, or bound to a port you
+// can't guess. The desktop already implies physical access to the machine (and
+// to ~/.config/opal/api.token), so password reset here does NOT require the old
+// password — same trust model as the api.token route in remote.zig.
+
+/// Scratch input buffers for this page. Module-level fixed arrays per the
+/// project's no-alloc-in-UI convention; cleared after a successful action so a
+/// password never lingers in memory longer than the interaction.
+var webui_user_buf: [96]u8 = std.mem.zeroes([96]u8);
+var webui_pw_buf: [128]u8 = std.mem.zeroes([128]u8);
+var webui_pw2_buf: [128]u8 = std.mem.zeroes([128]u8);
+var webui_port_buf: [8]u8 = std.mem.zeroes([8]u8);
+var webui_port_seeded: bool = false;
+var webui_user_seeded: bool = false;
+var webui_token_revealed: bool = false;
+
+fn zLen(buf: []const u8) usize {
+    return std.mem.indexOfScalar(u8, buf, 0) orelse buf.len;
+}
+
+fn renderWebUiTab() void {
+    const remote = @import("../services/remote.zig");
+    const access = @import("../services/access_pure.zig");
+    const auth_store = @import("../services/auth_store.zig");
+
+    // ── Server ──
+    settingRow("Web UI Server", 90, @src());
+    {
+        var hint_buf: [96]u8 = undefined;
+        const hint: []const u8 = if (!state.app.web_remote_enabled) "Off" else blk: {
+            const ip = remote.lanIp();
+            break :blk if (ip.len > 0)
+                (std.fmt.bufPrint(&hint_buf, "http://{s}:{d}", .{ ip, remote.port }) catch "on")
+            else
+                "on";
+        };
+        const before = state.app.web_remote_enabled;
+        components.toggleRow(@src(), "Enable Web UI", hint, &state.app.web_remote_enabled);
+        if (state.app.web_remote_enabled != before) {
+            state.markConfigDirty(); // persisted (web_remote) — survives restarts
+            if (state.app.web_remote_enabled) {
+                remote.start();
+                state.showToast("Web UI started");
+            } else {
+                remote.stop();
+                state.showToast("Web UI stopped");
+            }
+        }
+
+        if (state.app.web_remote_enabled) {
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .expand = .horizontal,
+                .margin = .{ .x = 0, .y = 4, .w = 0, .h = 6 },
+            });
+            defer row.deinit();
+            if (components.actionButton(@src(), "Open in Browser", .primary, 9001)) {
+                var url_buf: [64]u8 = undefined;
+                if (@import("../services/remote_url_pure.zig").webUiUrl(remote.port, &url_buf)) |u|
+                    openExternal(u);
+            }
+            if (components.actionButton(@src(), "Copy Address", .secondary, 9002)) {
+                var addr_buf: [96]u8 = undefined;
+                const ip = remote.lanIp();
+                const addr = if (ip.len > 0)
+                    (std.fmt.bufPrint(&addr_buf, "http://{s}:{d}", .{ ip, remote.port }) catch "")
+                else
+                    (std.fmt.bufPrint(&addr_buf, "http://127.0.0.1:{d}", .{remote.port}) catch "");
+                dvui.clipboardTextSet(addr);
+                state.showToast("Address copied");
+            }
+        }
+    }
+
+    // ── Account ──
+    settingRow("Account", 91, @src());
+    {
+        var status_buf: [96]u8 = undefined;
+        const users = auth_store.userCount();
+        const status = if (users == 0)
+            "No account yet — set one here, or create it on first visit."
+        else
+            (std.fmt.bufPrint(&status_buf, "{d} account(s) · {d} signed-in device(s)", .{
+                users, auth_store.liveSessionCount(),
+            }) catch "");
+        _ = dvui.label(@src(), "{s}", .{status}, .{
+            .color_text = theme.colors.text_secondary,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+        });
+
+        // Prefill with the existing account. An empty field made "Set Password"
+        // a dead click unless you already knew the username — the button just
+        // toasted "Enter a username" and nothing happened.
+        if (!webui_user_seeded) {
+            webui_user_seeded = true;
+            if (auth_store.firstUsername(webui_user_buf[0 .. webui_user_buf.len - 1])) |n|
+                webui_user_buf[n.len] = 0;
+        }
+        absField("Username", &webui_user_buf, false, 9101);
+        absField("New password (8+ characters)", &webui_pw_buf, true, 9102);
+        absField("Confirm password", &webui_pw2_buf, true, 9103);
+
+        var brow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = 8, .w = 0, .h = 6 },
+        });
+        defer brow.deinit();
+
+        if (components.actionButton(@src(), if (users == 0) "Create Account" else "Set Password", .primary, 9003)) {
+            const uname = webui_user_buf[0..zLen(&webui_user_buf)];
+            const pw = webui_pw_buf[0..zLen(&webui_pw_buf)];
+            const pw2 = webui_pw2_buf[0..zLen(&webui_pw2_buf)];
+            // Same rules as the web page — one tested implementation. "current"
+            // is empty because the desktop is the recovery path (see header).
+            const verdict = access.checkPasswordChange("", pw, pw2);
+            if (uname.len == 0) {
+                state.showToast("Enter a username");
+            } else if (verdict != .ok) {
+                state.showToast(verdict.message());
+            } else if (auth_store.userIdByName(uname)) |uid| {
+                if (auth_store.setPassword(uid, pw)) {
+                    // A password change that left old logins alive would not
+                    // actually revoke anything.
+                    const dropped = auth_store.revokeAllSessions(null);
+                    var t_buf: [64]u8 = undefined;
+                    state.showToast(std.fmt.bufPrint(&t_buf, "Password set · {d} device(s) signed out", .{dropped}) catch "Password set");
+                    @memset(&webui_pw_buf, 0);
+                    @memset(&webui_pw2_buf, 0);
+                } else state.showToast("Could not set the password");
+            } else if (users == 0) {
+                // First run only — mirrors /api/auth/register, which closes
+                // registration once any account exists.
+                if (auth_store.createUser(uname, pw, true)) |_| {
+                    state.showToast("Account created");
+                    @memset(&webui_pw_buf, 0);
+                    @memset(&webui_pw2_buf, 0);
+                } else |e| state.showToast(switch (e) {
+                    error.Taken => "That username is taken",
+                    error.Invalid => "Username 3-32 chars [a-zA-Z0-9._-], password 8+",
+                    error.Db => "Database error",
+                });
+            } else {
+                // Previously this fell through to createUser, so a typo in the
+                // username silently made a SECOND admin account instead of
+                // resetting the one you meant.
+                var t_buf: [96]u8 = undefined;
+                state.showToast(std.fmt.bufPrint(&t_buf, "No account named \"{s}\"", .{uname}) catch "No such account");
+            }
+        }
+
+        if (components.actionButton(@src(), "Sign Out All Devices", .danger, 9004)) {
+            const dropped = auth_store.revokeAllSessions(null);
+            var t_buf: [64]u8 = undefined;
+            state.showToast(std.fmt.bufPrint(&t_buf, "{d} device(s) signed out", .{dropped}) catch "Signed out");
+        }
+    }
+
+    // ── API token ──
+    settingRow("API Token", 92, @src());
+    {
+        _ = dvui.label(@src(), "For the browser extension and automation. Rotating it breaks anything still using the old token.", .{}, .{
+            .color_text = theme.colors.text_secondary,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+        });
+        var mask_buf: [64]u8 = undefined;
+        const tok = remote.tokenHex();
+        const shown = if (webui_token_revealed) tok else access.maskToken(tok, &mask_buf);
+        _ = dvui.label(@src(), "{s}", .{if (shown.len > 0) shown else "unavailable"}, .{
+            .color_text = theme.colors.text_primary,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
+        });
+
+        var trow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
+        });
+        defer trow.deinit();
+        if (components.actionButton(@src(), if (webui_token_revealed) "Hide" else "Show", .secondary, 9005)) {
+            webui_token_revealed = !webui_token_revealed;
+        }
+        if (components.actionButton(@src(), "Copy", .secondary, 9006)) {
+            dvui.clipboardTextSet(tok);
+            state.showToast("API token copied");
+        }
+        if (components.actionButton(@src(), "Rotate", .danger, 9007)) {
+            if (remote.rotateToken()) {
+                state.showToast("Token rotated — re-pair the extension");
+            } else state.showToast("No entropy source — token unchanged");
+        }
+    }
+
+    // ── Network ──
+    settingRow("Network", 93, @src());
+    {
+        if (!webui_port_seeded) {
+            webui_port_seeded = true;
+            _ = std.fmt.bufPrintZ(&webui_port_buf, "{d}", .{remote.port}) catch {};
+        }
+
+        const lan = remote.bind_mode == .lan;
+        _ = dvui.label(@src(), "{s}", .{if (lan)
+            "LAN — any device on your network can reach Opal (sign-in still required)."
+        else
+            "This machine only — 127.0.0.1, not reachable from the network."}, .{
+            .color_text = if (lan) theme.colors.warning else theme.colors.text_secondary,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+        });
+
+        // components.segment, not two hand-rolled buttons: this is a
+        // single-select, and the shared control already handles the active
+        // fill, hover, keyboard focus and theme tokens. The hand-rolled pair
+        // also used a "●" bullet, which is not in the UI font and rendered
+        // as tofu (same class of bug as the old "▶"/"←" glyphs).
+        if (components.segment(@src(), &.{ "LAN", "This machine only" }, if (lan) 0 else 1)) |pick| {
+            const mode: access.BindMode = if (pick == 0) .lan else .loopback;
+            if (mode != remote.bind_mode) {
+                remote.applyBinding(mode, remote.port);
+                state.markConfigDirty();
+                state.showToast(if (mode == .lan) "Now reachable on your LAN" else "Now loopback-only");
+            }
+        }
+
+        // Field on its own line, button on the next — every other action group
+        // on this page wraps its buttons in a horizontal row, and a button
+        // dropped straight into the vertical column is exactly what mispositions
+        // (see the gravity_y note in components.actionButton).
+        absField("Port", &webui_port_buf, false, 9301);
+        {
+            var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .expand = .horizontal,
+                .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.xs },
+            });
+            defer prow.deinit();
+            if (components.actionButton(@src(), "Apply Port", .primary, 9008)) {
+                const txt_port = webui_port_buf[0..zLen(&webui_port_buf)];
+                if (access.parsePort(txt_port)) |p| {
+                    remote.applyBinding(remote.bind_mode, p);
+                    state.markConfigDirty();
+                    var t_buf: [48]u8 = undefined;
+                    state.showToast(std.fmt.bufPrint(&t_buf, "Now serving on port {d}", .{p}) catch "Port applied");
+                } else state.showToast("Port must be 1024-65535");
+            }
+        }
+    }
 }

@@ -276,6 +276,9 @@ fn renderTopNav(compact: bool, narrow: bool) void {
     if (components.iconButton(@src(), icons.tvg.lucide.@"scroll-text", "Logs", state.app.router.current == .system)) {
         state.app.router.navigate(.system);
     }
+    // Web UI (globe) — starts/stops the LAN server and opens it in a browser.
+    // Same persisted switch as Settings › Web Remote Control.
+    header.renderWebUiButton();
     if (components.iconButton(@src(), icons.tvg.lucide.settings, "Settings", state.app.router.current == .settings)) {
         state.app.router.navigate(.settings);
     }

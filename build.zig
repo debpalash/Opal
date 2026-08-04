@@ -375,6 +375,57 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_auth_pure).step);
 
+    // Web UI toggle: loopback URL construction + header tooltip states.
+    const test_remote_url_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/remote_url_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_remote_url_pure).step);
+
+    // Web UI access page: bind mode, port validation, token masking, password
+    // change rules.
+    const test_access_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/access_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_access_pure).step);
+
+    // Web settings API: key registry + value validation.
+    const test_settings_api_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/settings_api_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_settings_api_pure).step);
+
+    // Browser playability rules for the web UI's "Play here" destination.
+    const test_playback_target_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/playback_target_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_playback_target_pure).step);
+
+    // Failed-login throttling for the web auth routes.
+    const test_login_rate_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/login_rate_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_login_rate_pure).step);
+
     // Logs view: level-tag normalization + consecutive-duplicate collapsing.
     const test_logs_pure = b.addTest(.{
         .root_module = b.createModule(.{

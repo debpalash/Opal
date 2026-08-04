@@ -234,3 +234,59 @@ def test_browser_cloak_engine():
     if bad:
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "engine picker + find/zoom/downloads/history/reader wired"
+
+
+@test("Every widget follows the active theme (no bare-options dvui widgets)", "Theming")
+def test_no_unthemed_widgets():
+    """RULE (CLAUDE.md): a raw dvui widget with empty options paints with dvui's
+    built-in palette, not Opal's — near-invisible text on dark presets, and it
+    ignores theme switching. Use the themed helpers in ui/components.zig.
+
+    Regression: the Settings > Web UI page shipped six bare dvui.button calls
+    whose labels were unreadable on every dark preset."""
+    import re, os
+    # Bare options = both the widget-opts and layout-opts structs empty.
+    bare = re.compile(r"dvui\.(button|buttonIcon)\([^;]*?\.\{\},\s*\.\{\}\)", re.S)
+    offenders = []
+    for root, _dirs, files in os.walk(os.path.join(PROJECT_DIR, "src")):
+        for f in files:
+            if not f.endswith(".zig"):
+                continue
+            path = os.path.join(root, f)
+            rel = os.path.relpath(path, PROJECT_DIR)
+            for i, line in enumerate(open(path, encoding="utf-8", errors="replace"), 1):
+                # Doc comments legitimately quote the anti-pattern.
+                if line.lstrip().startswith("//"):
+                    continue
+                if bare.search(line):
+                    offenders.append(f"{rel}:{i}")
+    if offenders:
+        return "fail", "unthemed widgets (use components.actionButton/iconButton): " + ", ".join(offenders[:8])
+    return "pass", "no bare-options dvui widgets — all buttons route through themed helpers"
+
+
+@test("Theme colors are read per-frame, not cached at module scope", "Theming")
+def test_no_hardcoded_ui_colors():
+    """A `const c = theme.colors.x` at module scope freezes the color at load,
+    so switching theme leaves stale colors behind. Raw Color literals in UI code
+    are the same problem — they exist in exactly one preset's palette."""
+    import re, os
+    lit = re.compile(r"dvui\.Color\{\s*\.r\s*=")
+    offenders = []
+    for root, _dirs, files in os.walk(os.path.join(PROJECT_DIR, "src", "ui")):
+        for f in files:
+            if not f.endswith(".zig"):
+                continue
+            path = os.path.join(root, f)
+            rel = os.path.relpath(path, PROJECT_DIR)
+            for i, line in enumerate(open(path, encoding="utf-8", errors="replace"), 1):
+                if line.lstrip().startswith("//"):
+                    continue
+                # theme.zig IS the palette; transparent is colorless by design.
+                if rel.endswith("theme.zig") or ".a = 0 }" in line or "transparent" in line:
+                    continue
+                if lit.search(line):
+                    offenders.append(f"{rel}:{i}")
+    if offenders:
+        return "warn", f"{len(offenders)} raw Color literal(s) in ui/ — prefer theme.colors.*: " + ", ".join(offenders[:6])
+    return "pass", "no raw Color literals in ui/ — colors come from theme.colors.*"

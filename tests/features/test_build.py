@@ -148,7 +148,9 @@ def test_headless_mode():
         "pub fn headlessMain" in hl and "shutdown" in hl and "sigaction" in hl,
         "pub fn detect" in det,
         "is_headless" in st,
-        "0.0.0.0" in rem and "is_headless" in rem,            # T6 bind
+        # T6 bind. The literal moved into access_pure.BindMode when the bind
+        # address became configurable; headless still defaults to LAN.
+        "bind_mode.address()" in rem and "is_headless" in rem,
         '"headless"' in bld,                                    # -Dheadless option
     ]
     if all(checks):

@@ -147,13 +147,18 @@ pub fn renderDevLogWindow() void {
     var controls = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 10 } });
     {
         defer controls.deinit();
-        if (dvui.button(@src(), if (show_only_errors) "Showing: Errors Only" else "Showing: All Logs", .{}, .{})) {
+        if (@import("../ui/components.zig").actionButton(
+            @src(),
+            if (show_only_errors) "Showing: Errors Only" else "Showing: All Logs",
+            .secondary,
+            0,
+        )) {
             show_only_errors = !show_only_errors;
         }
-        if (dvui.button(@src(), "Clear", .{}, .{})) {
+        if (@import("../ui/components.zig").actionButton(@src(), "Clear", .secondary, 1)) {
             clear();
         }
-        if (dvui.button(@src(), "Close", .{}, .{})) {
+        if (@import("../ui/components.zig").actionButton(@src(), "Close", .secondary, 2)) {
             show_logs_ui = false;
         }
     }

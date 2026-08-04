@@ -684,6 +684,50 @@ pub fn loadingState(label: []const u8) void {
 /// Watch History" and "Clear cache" rendered over the Disk usage rows. Wrap the
 /// call in `dvui.box(@src(), .{ .dir = .horizontal }, …)` if the surrounding
 /// layout is a vertical stack.
+/// Themed text button. **Use this instead of a bare `dvui.button`.**
+///
+/// A raw `dvui.button(@src(), "x", .{}, .{})` renders with dvui's built-in
+/// palette, which is not Opal's — on a dark preset the label comes out near
+/// invisible on a pale fill, and it ignores theme switching entirely. Every
+/// call site used to re-specify the same six colour/radius/padding options by
+/// hand, so any site that forgot one broke silently.
+///
+///   .primary   — accent fill, the one affirmative action in a group
+///   .secondary — elevated fill, everything else
+///   .danger    — error-tinted text, destructive but not confirm-gated
+///     (for confirm-gated destruction use confirmDangerButton)
+pub fn actionButton(
+    src: std.builtin.SourceLocation,
+    label: []const u8,
+    kind: enum { primary, secondary, danger },
+    id_extra: usize,
+) bool {
+    return dvui.button(src, label, .{}, .{
+        .id_extra = id_extra,
+        .color_fill = switch (kind) {
+            .primary => tk.accent_primary(),
+            .secondary, .danger => tk.bg_elevated(),
+        },
+        .color_fill_hover = tk.bg_hover(),
+        .color_fill_press = tk.bg_surface(),
+        .color_text = switch (kind) {
+            .primary => tk.text_on_accent(),
+            .secondary => tk.text_primary(),
+            .danger => tk.semantic_error(),
+        },
+        .border = dvui.Rect.all(0),
+        .corner_radius = tk.rad_sm,
+        .padding = .{ .x = tk.sp_md, .y = tk.sp_xs, .w = tk.sp_md, .h = tk.sp_xs },
+        .margin = .{ .x = 0, .y = 0, .w = tk.sp_sm, .h = 0 },
+        // NO gravity_y here. gravity_y = 0.5 centers the widget across the
+        // FULL height of its parent, which is only what you want inside a
+        // horizontal row. Placed directly in a vertical column it floats to the
+        // middle of the whole panel and draws on top of unrelated widgets —
+        // "Apply Port" landed on the Confirm-password field that way. Callers
+        // that want vertical centering should put the button in a row box.
+    });
+}
+
 pub fn confirmDangerButton(src: std.builtin.SourceLocation, label: []const u8, id_extra: usize) bool {
     var bw: dvui.ButtonWidget = undefined;
     bw.init(src, .{}, .{

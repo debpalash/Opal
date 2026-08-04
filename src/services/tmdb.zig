@@ -1851,6 +1851,11 @@ fn playTvEpisode(episode: i32) void {
 /// Shows page, the Coming-up rail. Reads no open-detail state, so it works for a
 /// show that isn't on screen; that is what lets My Shows resume a season the
 /// detail page never had open.
+/// True from the moment a play button is clicked until the resolve worker
+/// finishes. Read by the Resume / Play-latest buttons each frame to render
+/// their "Finding…" state — see tv_pure.playAction.
+pub var episode_play_pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
 pub fn playEpisodeOf(
     tmdb_id: i32,
     name: []const u8,
@@ -1859,7 +1864,12 @@ pub fn playEpisodeOf(
     episode: i32,
     ep_overview: []const u8,
 ) void {
-    if (tmdb_id == 0 or episode < 1 or season < 0) return;
+    if (tmdb_id == 0 or episode < 1 or season < 0) {
+        // Was a silent no-op. A click that cannot possibly work still has to
+        // say so, or the button reads as broken.
+        state.showToast("No episode to play yet — still syncing this show");
+        return;
+    }
 
     // "S2E4" on the loading screen's meta line — the episode you are waiting
     // for, not just the show name.
@@ -1916,12 +1926,29 @@ pub fn playEpisodeOf(
         var query: [256]u8 = undefined;
         var qlen: usize = 0;
         fn worker() void {
-            defer @This().busy = false;
+            defer {
+                @This().busy = false;
+                episode_play_pending.store(false, .release);
+                dvui.refresh(null, @src(), null); // repaint the button back to idle
+            }
             smartPlayEpisode(@This().query[0..@This().qlen]);
         }
     };
-    if (S.busy) return;
+    if (S.busy) {
+        // Previously a bare `return` — the second click vanished with no toast,
+        // no button change, nothing. Single-flight is correct; silence isn't.
+        state.showToast("Already finding a stream…");
+        return;
+    }
     S.busy = true;
+    // Drives the Resume / Play-latest buttons' "Finding…" state. The toast
+    // expires after 3.5s but the resolve can run ~15s, so the button is the
+    // only feedback that survives the whole wait.
+    episode_play_pending.store(true, .release);
+    // The click is handled AFTER this frame's button already drew itself idle,
+    // so without an explicit repaint the busy state would not appear until the
+    // next incidental event — exactly the "no instant feedback" symptom.
+    dvui.refresh(null, @src(), null);
     @memset(&S.query, 0);
     @memcpy(S.query[0..q.len], q);
     S.qlen = q.len;
@@ -1929,6 +1956,7 @@ pub fn playEpisodeOf(
         th.detach();
     } else |_| {
         S.busy = false;
+        episode_play_pending.store(false, .release);
         // Spawn failed — degrade to the visible source picker.
         search.setUniversalQuery(q);
         state.navigateToTab(.Search);
@@ -2274,11 +2302,18 @@ fn renderTvDetail() void {
         });
         defer prow.deinit();
 
+        // While a resolve is in flight both buttons show "Finding…" and stop
+        // acting on clicks — the toast is gone after 3.5s but the resolve runs
+        // far longer, and a button that snaps back to idle reads as a dead click.
+        const play_busy = episode_play_pending.load(.acquire);
+        if (play_busy) dvui.refresh(null, @src(), null); // keep the spinner animating
+
         // Resume — lucide play + label (the "▶" glyph rendered as tofu).
         if (nxt) |next_ep| {
+            const act = @import("tv_pure.zig").playAction(play_busy, "Resume");
             var res = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .background = true,
-                .color_fill = theme.colors.accent,
+                .color_fill = if (play_busy) theme.colors.bg_elevated else theme.colors.accent,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 12, .y = 5, .w = 14, .h = 5 },
                 .margin = .{ .x = 0, .y = 0, .w = 12, .h = 0 },
@@ -2288,23 +2323,92 @@ fn renderTvDetail() void {
             var res_hover = false;
             const res_clicked = dvui.clicked(res.data(), .{ .hovered = &res_hover });
             res.drawBackground();
-            dvui.icon(@src(), "tv-resume", icons.tvg.lucide.play, .{}, .{
-                .color_text = theme.colors.text_on_accent,
-                .min_size_content = .{ .w = 13, .h = 13 },
+            if (play_busy) {
+                dvui.spinner(@src(), .{
+                    .color_text = theme.colors.text_secondary,
+                    .min_size_content = .{ .w = 13, .h = 13 },
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+                });
+            } else {
+                dvui.icon(@src(), "tv-resume", icons.tvg.lucide.play, .{}, .{
+                    .color_text = theme.colors.text_on_accent,
+                    .min_size_content = .{ .w = 13, .h = 13 },
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+                });
+            }
+            _ = dvui.label(@src(), "{s}", .{act.label}, .{
+                .color_text = if (play_busy) theme.colors.text_secondary else theme.colors.text_on_accent,
                 .gravity_y = 0.5,
-                .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
             });
-            _ = dvui.label(@src(), "Resume", .{}, .{
-                .color_text = theme.colors.text_on_accent,
-                .gravity_y = 0.5,
-            });
-            if (res_clicked) {
+            if (res_clicked and act.clickable) {
                 playEpisodeOf(
                     t.tv_id,
                     safeUtf8(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)]),
                     t.tv_poster_path[0..@min(t.tv_poster_path_len, t.tv_poster_path.len)],
                     next_ep.season,
                     next_ep.episode,
+                    "",
+                );
+            }
+        }
+
+        // ── Latest aired episode ──
+        // Separate from Resume on purpose. Resume answers "where was I?"; this
+        // answers "is the newest one out, and have I seen it?" — which Resume
+        // structurally cannot say, because once you are caught up it goes null
+        // and the finale you just watched disappears from the header entirely.
+        if (@import("tv_library.zig").lastAiredFor(t.tv_id)) |latest| {
+            var lat = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .background = true,
+                // Muted next to Resume's accent fill: this is the secondary
+                // action, and two accent buttons side by side read as a choice
+                // between equals when it isn't one.
+                .color_fill = theme.colors.bg_elevated,
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = 12, .y = 5, .w = 14, .h = 5 },
+                .margin = .{ .x = 0, .y = 0, .w = 12, .h = 0 },
+                .gravity_y = 0.5,
+            });
+            defer lat.deinit();
+            var lat_hover = false;
+            const lat_clicked = dvui.clicked(lat.data(), .{ .hovered = &lat_hover });
+            if (lat_hover and !play_busy) lat.data().options.color_fill = theme.colors.bg_hover;
+            lat.drawBackground();
+            if (play_busy) {
+                dvui.spinner(@src(), .{
+                    .color_text = theme.colors.text_secondary,
+                    .min_size_content = .{ .w = 13, .h = 13 },
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+                });
+            } else {
+                dvui.icon(@src(), "tv-latest", icons.tvg.lucide.play, .{}, .{
+                    .color_text = theme.colors.text_primary,
+                    .min_size_content = .{ .w = 13, .h = 13 },
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+                });
+            }
+            var lat_buf: [48]u8 = undefined;
+            const lat_act = @import("tv_pure.zig").playAction(
+                play_busy,
+                @import("tv_pure.zig").recentEpisodeLabel(latest.ep, latest.watched, &lat_buf),
+            );
+            _ = dvui.label(@src(), "{s}", .{lat_act.label}, .{
+                // Watched fades; unwatched stays primary so the new drop is what
+                // catches the eye.
+                .color_text = if (latest.watched or play_busy) theme.colors.text_secondary else theme.colors.text_primary,
+                .gravity_y = 0.5,
+            });
+            if (lat_clicked and lat_act.clickable) {
+                playEpisodeOf(
+                    t.tv_id,
+                    safeUtf8(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)]),
+                    t.tv_poster_path[0..@min(t.tv_poster_path_len, t.tv_poster_path.len)],
+                    latest.ep.season,
+                    latest.ep.episode,
                     "",
                 );
             }

@@ -7,6 +7,9 @@ const logs = @import("../core/logs.zig");
 const sync = @import("../core/sync.zig");
 const io_g = @import("../core/io_global.zig");
 const txt = @import("../core/text.zig");
+const access_pure = @import("access_pure.zig");
+const sap = @import("settings_api_pure.zig");
+const login_rate = @import("login_rate_pure.zig");
 
 // ══════════════════════════════════════════════════════════
 // Web Remote Control — JSON API + the web UI, both on :41595.
@@ -16,6 +19,10 @@ const txt = @import("../core/text.zig");
 
 var server_thread: ?std.Thread = null;
 var running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+/// True only once serverLoop's socket is actually bound and accepting.
+/// `running` flips in start() *before* the thread exists, so it cannot tell a
+/// caller whether a connection would succeed — see isListening().
+var listening: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 pub var port: u16 = 41595;
 
 // ── Bearer-token auth ──
@@ -108,6 +115,17 @@ fn loadOrCreateToken() void {
         return;
     }
     api_token_ready.store(true, .release);
+    persistToken();
+}
+
+/// Write `api_token` to <configDir>/api.token with 0600. Shared by first-run
+/// generation and rotateToken() so both paths get identical permissions —
+/// a rotation that dropped the mode would silently widen a 0600 secret.
+fn persistToken() void {
+    var path_buf: [768]u8 = undefined;
+    const tok_path = tokenPath(&path_buf);
+    var dir_buf: [512]u8 = undefined;
+    io_g.cwdMakePath(paths_mod.configDir(&dir_buf)) catch {};
 
     // Create with mode 0600; chmod again after write in case umask widened it.
     // Windows has no POSIX modes (Permissions there is an attributes enum with
@@ -133,7 +151,7 @@ fn loadOrCreateToken() void {
         file.setPermissions(io_g.io(), std.Io.File.Permissions.fromMode(0o600)) catch {};
 
     var msg_buf: [768]u8 = undefined;
-    const msg = std.fmt.bufPrint(&msg_buf, "API token generated at {s}", .{tok_path}) catch tok_path;
+    const msg = std.fmt.bufPrint(&msg_buf, "API token written to {s}", .{tok_path}) catch tok_path;
     logs.pushLog("info", "remote", msg, false);
 }
 
@@ -353,14 +371,69 @@ pub fn isRunning() bool {
     return running.load(.acquire);
 }
 
+/// Whether the listening socket is up, i.e. whether a browser pointed at
+/// `port` right now would connect. start() returns as soon as the thread is
+/// spawned, so anything that launches a client (the header Web UI button)
+/// must wait on this rather than on isRunning().
+pub fn isListening() bool {
+    return listening.load(.acquire);
+}
+
+/// Which interfaces serverLoop binds. Persisted as `web_bind` (see config.zig);
+/// changed from the web UI's Access page, which calls restart() after.
+pub var bind_mode: access_pure.BindMode = .lan;
+
+/// Apply a new bind mode / port. No-op when nothing changed. When the server is
+/// live it is stopped and restarted so the new socket takes effect immediately
+/// rather than at next launch.
+///
+/// stop() wakes accept() by connecting to 127.0.0.1:<old port>, so it must run
+/// BEFORE `port` is reassigned — otherwise the wakeup knocks on the new port,
+/// nothing is listening there, and the accept loop blocks until some unrelated
+/// connection arrives.
+pub fn applyBinding(new_mode: access_pure.BindMode, new_port: u16) void {
+    if (new_mode == bind_mode and new_port == port) return;
+    const was_running = running.load(.acquire);
+    if (was_running) stop();
+    bind_mode = new_mode;
+    port = new_port;
+    if (was_running) start();
+}
+
+/// The live bearer token, or "" if the CSPRNG never produced one.
+pub fn tokenHex() []const u8 {
+    if (!api_token_ready.load(.acquire)) return "";
+    return api_token[0..TOKEN_HEX_LEN];
+}
+
+/// Generate a fresh bearer token and persist it, invalidating the old one.
+/// Anything holding the previous token (browser extension, scripts) must be
+/// re-paired. Returns false if the CSPRNG is unavailable — in that case the
+/// existing token is left intact rather than being zeroed into an open door.
+pub fn rotateToken() bool {
+    var fresh: [TOKEN_HEX_LEN]u8 = undefined;
+    if (!fillRandomHex(&fresh)) return false;
+    @memcpy(&api_token, &fresh);
+    api_token_ready.store(true, .release);
+    persistToken();
+    logs.pushLog("info", "remote", "API token rotated — re-pair the browser extension", false);
+    return true;
+}
+
 fn serverLoop() void {
-    // Bind all interfaces: the server itself is OPT-IN (Settings › Web Remote,
-    // off by default) and its whole point is reaching Opal from a phone on the
-    // LAN. Auth: bearer token from account login (/api/auth) or the api.token file.
-    const ip = "0.0.0.0";
+    // Default binds all interfaces: the server itself is OPT-IN (Settings ›
+    // Web Remote / the header globe, off by default) and its whole point is
+    // reaching Opal from a phone on the LAN. Users who only drive it from this
+    // machine can switch to loopback in the web UI's Access page.
+    // Auth: bearer token from account login (/api/auth) or the api.token file.
+    const ip = bind_mode.address();
     const addr = std.Io.net.IpAddress.parseIp4(ip, port) catch return;
     var server = addr.listen(io_g.io(), .{ .reuse_address = true }) catch return;
     defer server.deinit(io_g.io());
+    // Only now is a connection possible. The header's Web UI button waits on
+    // this before launching the browser (see isListening()).
+    listening.store(true, .release);
+    defer listening.store(false, .release);
 
     std.debug.print("[remote] web UI + JSON API on http://{s}:{d}\n", .{ ip, port });
 
@@ -444,13 +517,42 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
         return;
     }
 
+    // Vendored browser deps, served next to the page. Unauthenticated for the
+    // same reason index.html is: the login form itself needs them, and they are
+    // public third-party libraries, not user data.
+    if (std.mem.eql(u8, path, "/vendor/hls.min.js")) {
+        var res_buf: [700]u8 = undefined;
+        const bundled: ?[]const u8 = if (state.resourceRoot()) |r|
+            (std.fmt.bufPrint(&res_buf, "{s}/web/vendor/hls.min.js", .{r}) catch null)
+        else
+            null;
+        if (bundled) |bp| {
+            if (io_g.cwdOpenFile(bp, .{})) |f| {
+                var fh = f;
+                fh.close(io_g.io());
+                serveStaticFile(stream, bp, "application/javascript");
+                return;
+            } else |_| {}
+        }
+        serveStaticFile(stream, "web/vendor/hls.min.js", "application/javascript");
+        return;
+    }
+
     // Media routes (/stream, /vtt, /poster): <video>/<img> can't attach an
     // Authorization header, so these take the token as ?t= instead. Same
     // constant-time check as the Bearer gate; dispatch lives in
     // remote_stream.zig to keep this file to routing/auth.
-    if (std.mem.eql(u8, path, "/events") or std.mem.eql(u8, path, "/stream") or std.mem.eql(u8, path, "/vtt") or std.mem.eql(u8, path, "/poster") or std.mem.eql(u8, path, "/api/jellyfin/poster") or std.mem.eql(u8, path, "/api/podcasts/poster") or std.mem.eql(u8, path, "/api/comics/page")) {
-        const t = getQueryParam(query, "t") orelse "";
-        if (!api_token_ready.load(.acquire) or !constantTimeEqual(t, api_token[0..])) {
+    if (std.mem.eql(u8, path, "/events") or std.mem.eql(u8, path, "/stream") or std.mem.eql(u8, path, "/transcode") or std.mem.eql(u8, path, "/vtt") or std.mem.eql(u8, path, "/poster") or std.mem.eql(u8, path, "/api/jellyfin/poster") or std.mem.eql(u8, path, "/api/podcasts/poster") or std.mem.eql(u8, path, "/api/comics/page")) {
+        // isAuthorized, not a bare api_token compare: the web UI authenticates
+        // with a SESSION token (there is no token injection into the page any
+        // more), so a logged-in user could not stream their own files — the
+        // "Play here" destination had nothing to point <video> at. A session
+        // token is already a full-power bearer for every /api/* route, so
+        // honouring it here is consistency, not a widening of access.
+        var t_dec: [96]u8 = undefined;
+        const t_raw = getQueryParam(query, "t") orelse "";
+        const t = urlDecode(t_raw, &t_dec) orelse t_raw;
+        if (!isAuthorized(t)) {
             sendUnauthorized(stream);
             return;
         }
@@ -476,6 +578,12 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
         if (std.mem.eql(u8, path, "/stream")) {
             const rel = urlDecode(getQueryParam(query, "file") orelse "", &dec_buf) orelse "";
             rs.handleStream(stream, request, rel);
+        } else if (std.mem.eql(u8, path, "/transcode")) {
+            const rel = urlDecode(getQueryParam(query, "file") orelse "", &dec_buf) orelse "";
+            // Seeking restarts the encode at an offset; there is no Range on a
+            // stream that does not exist yet.
+            const start_secs = std.fmt.parseInt(u32, getQueryParam(query, "start") orelse "0", 10) catch 0;
+            rs.handleTranscode(stream, rel, start_secs);
         } else if (std.mem.eql(u8, path, "/vtt")) {
             const rel = urlDecode(getQueryParam(query, "file") orelse "", &dec_buf) orelse "";
             rs.handleVtt(stream, rel);
@@ -552,10 +660,23 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
                 };
             }
 
+            // Throttle guessing. bcrypt is slow but not slow enough to make an
+            // unbounded loop pointless, and the server binds 0.0.0.0.
+            const wait = loginRetryAfter(username);
+            if (wait > 0) {
+                var rb: [96]u8 = undefined;
+                const r = std.fmt.bufPrint(&rb,
+                    "{{\"error\":\"too many attempts — try again in {d}s\"}}", .{wait}) catch
+                    "{\"error\":\"too many attempts\"}";
+                sendJsonStatus(stream, "429 Too Many Requests", r);
+                return;
+            }
             const uid = auth_store.authenticate(username, password) orelse {
+                loginNoteFailure(username);
                 sendUnauthorized(stream);
                 return;
             };
+            loginNoteSuccess(username);
             var tok: [auth_store.TOKEN_HEX]u8 = undefined;
             if (!auth_store.issueSession(uid, &tok)) {
                 sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"server error\"}");
@@ -579,6 +700,14 @@ fn handleRequest(stream: std.Io.net.Stream) !void {
     };
     if (!isAuthorized(presented)) {
         sendUnauthorized(stream);
+        return;
+    }
+
+    // ── Access control (web UI › Setup › Access) ──
+    // Deliberately after the Bearer gate: every one of these mutates auth
+    // state, so an unauthenticated caller must never reach them.
+    if (std.mem.startsWith(u8, path, "/api/access/")) {
+        handleAccess(stream, path["/api/access/".len..], query, request, presented);
         return;
     }
 
@@ -708,10 +837,6 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
         }
         return;
     }
-    if (std.mem.eql(u8, api_path, "/settings")) {
-        apiSettingsGet(stream);
-        return;
-    }
     // Host capabilities — lets the web client pick hosted (browser <video>)
     // vs companion (control the desktop player) behavior.
     if (std.mem.eql(u8, api_path, "/host")) {
@@ -765,6 +890,53 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     // the API key stays server-side; the client parses the standard TMDB shape.
     if (std.mem.eql(u8, api_path, "/tv")) {
         apiTvPassthrough(stream, query);
+        return;
+    }
+    // The Watching library — tracked TV, anime and movies with progress and
+    // what's next. Desktop parity for the `.watching` route.
+    if (std.mem.eql(u8, api_path, "/library")) {
+        apiLibrary(stream);
+        return;
+    }
+    // Most recently aired episode of a show + whether it has been watched.
+    // Backs the web show page's Play-latest button, and answers from the SAME
+    // tv_library/tv_pure path the desktop button uses so the two can't disagree.
+    if (std.mem.eql(u8, api_path, "/tv/recent")) {
+        apiTvRecent(stream, query);
+        return;
+    }
+    // Files inside a torrent, so the web player can stream one straight off
+    // disk via /stream while it is still downloading.
+    if (std.mem.eql(u8, api_path, "/transcode/available")) {
+        sendJson(stream, if (@import("remote_stream.zig").haveFfmpeg())
+            "{\"available\":true}"
+        else
+            "{\"available\":false}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/torrent/files")) {
+        apiTorrentFiles(stream, query);
+        return;
+    }
+    // Watch party (LAN sync) — desktop parity for the Scripts tab's host/join.
+    if (std.mem.eql(u8, api_path, "/party")) {
+        apiParty(stream, query);
+        return;
+    }
+    // Installed source plugins + the debrid / repo integration config.
+    if (std.mem.eql(u8, api_path, "/plugins")) {
+        apiPlugins(stream, query);
+        return;
+    }
+    // Home hub: at-a-glance counts + what to continue.
+    if (std.mem.eql(u8, api_path, "/home")) {
+        apiHome(stream);
+        return;
+    }
+    // Web settings: GET the whole registry with current values, POST one key.
+    // Desktop parity for the Playback / Subtitles / Network settings tabs.
+    if (std.mem.eql(u8, api_path, "/settings")) {
+        apiSettings(stream, query);
         return;
     }
     if (std.mem.eql(u8, api_path, "/settings/toggle")) {
@@ -1190,9 +1362,205 @@ fn requestBody(request: []const u8) []const u8 {
 
 /// A credential param from the POST body (form-encoded) then the query, decoded.
 /// Body-first keeps passwords out of the URL / access logs.
+/// Failed-login throttle state. Guarded because every connection runs on its
+/// own thread and they all touch the same table.
+var login_rate_table: login_rate.Table = .{};
+var login_rate_mutex: @import("../core/sync.zig").Mutex = .{};
+
+/// 0 when the attempt may proceed, else the seconds left on the lockout.
+fn loginRetryAfter(username: []const u8) i64 {
+    login_rate_mutex.lock();
+    defer login_rate_mutex.unlock();
+    return login_rate.retryAfter(&login_rate_table, username, io_g.timestamp());
+}
+
+fn loginNoteFailure(username: []const u8) void {
+    login_rate_mutex.lock();
+    defer login_rate_mutex.unlock();
+    _ = login_rate.recordFailure(&login_rate_table, username, io_g.timestamp());
+}
+
+fn loginNoteSuccess(username: []const u8) void {
+    login_rate_mutex.lock();
+    defer login_rate_mutex.unlock();
+    login_rate.recordSuccess(&login_rate_table, username);
+}
+
 fn credParam(body: []const u8, query: []const u8, key: []const u8, out: []u8) ?[]const u8 {
     const raw = getQueryParam(body, key) orelse getQueryParam(query, key) orelse return null;
     return urlDecode(raw, out) orelse raw;
+}
+
+/// `/api/access/*` — the web UI's Access page (Setup › Access).
+///
+/// Two classes of caller reach this, and they get different powers:
+///
+///   * A **session** token (someone logged into the web UI). Scoped to their
+///     own account, and must prove the current password to change it.
+///   * The **api.token** (machine-local, 0600 in ~/.config/opal). Its holder
+///     already has filesystem access to this machine, so they may reset ANY
+///     account's password without knowing the old one. That is deliberate: it
+///     is the only recovery path for a forgotten web password, which would
+///     otherwise permanently lock the account out with no reset mechanism.
+fn handleAccess(
+    stream: std.Io.net.Stream,
+    sub: []const u8,
+    query: []const u8,
+    request: []const u8,
+    presented: []const u8,
+) void {
+    const auth_store = @import("auth_store.zig");
+    const body = requestBody(request);
+    // Null when the caller authenticated with api.token rather than a login.
+    const caller_uid = auth_store.userIdForSession(presented);
+
+    // ── status: everything the Access page renders in one round trip.
+    if (std.mem.eql(u8, sub, "status")) {
+        var name_buf: [96]u8 = undefined;
+        const username = if (caller_uid) |uid| (auth_store.usernameForId(uid, &name_buf) orelse "") else "";
+        var mask_buf: [64]u8 = undefined;
+        const masked = access_pure.maskToken(tokenHex(), &mask_buf);
+        var jb: [512]u8 = undefined;
+        const j = std.fmt.bufPrint(&jb,
+            \\{{"username":"{s}","via_token":{s},"sessions":{d},"token_masked":"{s}","bind":"{s}","port":{d},"lan_ip":"{s}","running":{s}}}
+        , .{
+            username,
+            if (caller_uid == null) "true" else "false",
+            auth_store.liveSessionCount(),
+            masked,
+            bind_mode.id(),
+            port,
+            lanIp(),
+            if (isRunning()) "true" else "false",
+        }) catch return;
+        sendJson(stream, j);
+        return;
+    }
+
+    // ── password: change (session caller) or reset (api.token caller).
+    if (std.mem.eql(u8, sub, "password")) {
+        var cur_buf: [256]u8 = undefined;
+        var new_buf: [256]u8 = undefined;
+        var conf_buf: [256]u8 = undefined;
+        var user_buf: [96]u8 = undefined;
+        const current = credParam(body, query, "current", &cur_buf) orelse "";
+        const new_pw = credParam(body, query, "password", &new_buf) orelse {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"missing password\"}");
+            return;
+        };
+        const confirm = credParam(body, query, "confirm", &conf_buf) orelse new_pw;
+
+        const verdict = access_pure.checkPasswordChange(current, new_pw, confirm);
+        if (verdict != .ok) {
+            var eb: [160]u8 = undefined;
+            const e = std.fmt.bufPrint(&eb, "{{\"error\":\"{s}\"}}", .{verdict.message()}) catch return;
+            sendJsonStatus(stream, "400 Bad Request", e);
+            return;
+        }
+
+        const target_uid: i64 = if (caller_uid) |uid| blk: {
+            // Session caller: prove the current password before replacing it,
+            // so a stolen/left-open session cannot lock the owner out.
+            var nb: [96]u8 = undefined;
+            const uname = auth_store.usernameForId(uid, &nb) orelse {
+                sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"server error\"}");
+                return;
+            };
+            const wait = loginRetryAfter(uname);
+            if (wait > 0) {
+                sendJsonStatus(stream, "429 Too Many Requests", "{\"error\":\"too many attempts — wait a few minutes\"}");
+                return;
+            }
+            if (auth_store.authenticate(uname, current) == null) {
+                // Same throttle as login: this check is a password oracle too.
+                loginNoteFailure(uname);
+                sendJsonStatus(stream, "403 Forbidden", "{\"error\":\"current password is incorrect\"}");
+                return;
+            }
+            loginNoteSuccess(uname);
+            break :blk uid;
+        } else blk: {
+            // api.token caller: machine-local recovery, no old password needed.
+            const uname = credParam(body, query, "username", &user_buf) orelse {
+                sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"missing username\"}");
+                return;
+            };
+            break :blk auth_store.userIdByName(uname) orelse {
+                sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such user\"}");
+                return;
+            };
+        };
+
+        if (!auth_store.setPassword(target_uid, new_pw)) {
+            sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"could not set password\"}");
+            return;
+        }
+        // Every other device's session is now stale by intent — a password
+        // change that left old logins working would not actually revoke access.
+        const dropped = auth_store.revokeAllSessions(if (caller_uid == null) null else presented);
+        logs.pushLog("info", "remote", "Web UI password changed; other sessions revoked", false);
+        var jb: [96]u8 = undefined;
+        const j = std.fmt.bufPrint(&jb, "{{\"ok\":true,\"revoked\":{d}}}", .{dropped}) catch return;
+        sendJson(stream, j);
+        return;
+    }
+
+    // ── revoke-all: sign out every other device, keeping this one signed in.
+    if (std.mem.eql(u8, sub, "revoke-all")) {
+        const dropped = auth_store.revokeAllSessions(if (caller_uid == null) null else presented);
+        logs.pushLog("info", "remote", "Web UI sessions revoked", false);
+        var jb: [64]u8 = undefined;
+        const j = std.fmt.bufPrint(&jb, "{{\"ok\":true,\"revoked\":{d}}}", .{dropped}) catch return;
+        sendJson(stream, j);
+        return;
+    }
+
+    // ── token: reveal in full (caller is already authenticated) / rotate.
+    if (std.mem.eql(u8, sub, "token")) {
+        var jb: [96]u8 = undefined;
+        const j = std.fmt.bufPrint(&jb, "{{\"token\":\"{s}\"}}", .{tokenHex()}) catch return;
+        sendJson(stream, j);
+        return;
+    }
+    if (std.mem.eql(u8, sub, "token/rotate")) {
+        if (!rotateToken()) {
+            sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"no entropy source\"}");
+            return;
+        }
+        var jb: [96]u8 = undefined;
+        const j = std.fmt.bufPrint(&jb, "{{\"ok\":true,\"token\":\"{s}\"}}", .{tokenHex()}) catch return;
+        sendJson(stream, j);
+        return;
+    }
+
+    // ── bind: loopback-only vs LAN, and the port.
+    if (std.mem.eql(u8, sub, "bind")) {
+        var mode_buf: [32]u8 = undefined;
+        var port_buf: [16]u8 = undefined;
+        const mode = if (credParam(body, query, "mode", &mode_buf)) |m|
+            access_pure.bindModeFromString(m)
+        else
+            bind_mode;
+        const new_port: u16 = if (credParam(body, query, "port", &port_buf)) |p|
+            (access_pure.parsePort(p) orelse {
+                sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"port must be 1024-65535\"}");
+                return;
+            })
+        else
+            port;
+
+        // Respond BEFORE rebinding: applyBinding tears down the very listener
+        // this response is travelling over, so a reply written after it would
+        // never reach the browser.
+        var jb: [128]u8 = undefined;
+        const j = std.fmt.bufPrint(&jb, "{{\"ok\":true,\"bind\":\"{s}\",\"port\":{d}}}", .{ mode.id(), new_port }) catch return;
+        sendJson(stream, j);
+        applyBinding(mode, new_port);
+        state.markConfigDirty(); // persisted as web_bind / web_port
+        return;
+    }
+
+    sendJsonStatus(stream, "404 Not Found", "{\"error\":\"unknown access route\"}");
 }
 
 // Placeholder in the served HTML that the page reads to obtain its bearer
@@ -1208,7 +1576,7 @@ fn serveStaticFile(stream: std.Io.net.Stream, path: []const u8, content_type: []
         return;
     };
     defer file.close(@import("../core/io_global.zig").io());
-    const raw = @import("../core/io_global.zig").readToEndAlloc(file, alloc, 512 * 1024) catch return;
+    const raw = @import("../core/io_global.zig").readToEndAlloc(file, alloc, 4 * 1024 * 1024) catch return;
     defer alloc.free(raw);
 
     // No token injection: since the server binds the LAN (opt-in), a page
@@ -1693,16 +2061,420 @@ fn apiDownloadsPlay(stream: std.Io.net.Stream, query: []const u8) void {
     sendJson(stream, "{\"ok\":true}");
 }
 
-fn apiSettingsGet(stream: std.Io.net.Stream) void {
-    var json_buf: [1024]u8 = undefined;
-    var w = std.Io.Writer.fixed(&json_buf);
-    w.print("{{\"auto_advance\":{s},\"incognito\":{s},\"sponsorblock\":{s},\"nsfw_filter\":{s}}}", .{
+/// `/api/torrent/files?id=<idx>` → the playable files inside one torrent, with
+/// the `/stream?file=` relative path the browser should use.
+///
+/// libtorrent saves under the downloads root, and /stream serves anything under
+/// that root with Range support — so a partially-downloaded file streams as far
+/// as it has bytes. `progress` lets the page warn before you hit the edge.
+fn apiTorrentFiles(stream: std.Io.net.Stream, query: []const u8) void {
+    const idx = std.fmt.parseInt(c_int, getQueryParam(query, "id") orelse "", 10) catch {
+        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"missing id\"}");
+        return;
+    };
+    const ses = state.torrentSession();
+    if (idx < 0 or idx >= c.mpv.torrent_count(ses)) {
+        sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such torrent\"}");
+        return;
+    }
+
+    const alloc = @import("../core/alloc.zig").allocator;
+    const out = alloc.alloc(u8, 64 * 1024) catch {
+        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(out);
+    var w = std.Io.Writer.fixed(out);
+
+    // These accessors write into a caller buffer and return void — they do
+    // not hand back a pointer.
+    var tname_buf: [256]u8 = std.mem.zeroes([256]u8);
+    c.mpv.torrent_get_name(ses, idx, &tname_buf, tname_buf.len);
+    const tname = std.mem.sliceTo(&tname_buf, 0);
+    w.writeAll("{\"torrent\":\"") catch return;
+    escJsonWrite(&w, tname);
+    w.writeAll("\",\"files\":[") catch return;
+
+    const nfiles = c.mpv.torrent_get_file_count(ses, idx);
+    var emitted: usize = 0;
+    var i: c_int = 0;
+    while (i < nfiles) : (i += 1) {
+        var fname_buf: [512]u8 = std.mem.zeroes([512]u8);
+        c.mpv.torrent_get_file_name(ses, idx, i, &fname_buf, fname_buf.len);
+        const fname = std.mem.sliceTo(&fname_buf, 0);
+        if (fname.len == 0) continue;
+        if (emitted > 0) w.writeAll(",") catch return;
+        emitted += 1;
+        w.writeAll("{\"name\":\"") catch return;
+        escJsonWrite(&w, fname);
+        // The torrent's own folder is the first path segment under the root;
+        // single-file torrents have no folder, hence the two shapes.
+        w.writeAll("\",\"rel\":\"") catch return;
+        if (!std.mem.eql(u8, tname, fname) and tname.len > 0) {
+            escJsonWrite(&w, tname);
+            w.writeAll("/") catch return;
+        }
+        escJsonWrite(&w, fname);
+        w.print("\",\"progress\":{d:.0},\"size\":{d}}}", .{
+            c.mpv.torrent_get_file_progress(ses, idx, i) * 100,
+            c.mpv.torrent_get_file_size(ses, idx, i),
+        }) catch return;
+    }
+    w.writeAll("]}") catch return;
+    sendJson(stream, out[0..w.end]);
+}
+
+/// `/api/party` — GET status, or `?action=host|join|leave[&ip=]`.
+/// Mirrors the desktop Watch Party controls (Settings › AI, Remote & Scripts).
+fn apiParty(stream: std.Io.net.Stream, query: []const u8) void {
+    const party = @import("watch_party.zig");
+    var abuf: [16]u8 = undefined;
+    if (credParam("", query, "action", &abuf)) |action| {
+        if (std.mem.eql(u8, action, "host")) {
+            party.hostParty();
+        } else if (std.mem.eql(u8, action, "leave")) {
+            party.leaveParty();
+        } else if (std.mem.eql(u8, action, "join")) {
+            var ipbuf: [64]u8 = undefined;
+            const ip = credParam("", query, "ip", &ipbuf) orelse {
+                sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"missing ip\"}");
+                return;
+            };
+            if (ip.len < 7) {
+                sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"not an IPv4 address\"}");
+                return;
+            }
+            party.joinParty(ip);
+        } else {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"action must be host, join or leave\"}");
+            return;
+        }
+    }
+    var sbuf: [64]u8 = undefined;
+    const status = party.statusText(&sbuf);
+    var jb: [192]u8 = undefined;
+    var w = std.Io.Writer.fixed(&jb);
+    w.print("{{\"role\":\"{s}\",\"port\":{d},\"status\":\"", .{ @tagName(party.role), party.party_port }) catch return;
+    escJsonWrite(&w, status);
+    w.writeAll("\"}") catch return;
+    sendJson(stream, jb[0..w.end]);
+}
+
+/// `/api/plugins` — GET the installed source plugins plus integration config,
+/// or write one config key with `?key=&value=`.
+///
+/// The debrid API key is never echoed back: it is a credential, and the page
+/// only needs to know whether one is set.
+fn apiPlugins(stream: std.Io.net.Stream, query: []const u8) void {
+    const repo = @import("plugin_repo.zig");
+    var kbuf: [32]u8 = undefined;
+    if (credParam("", query, "key", &kbuf)) |key| {
+        var vbuf: [256]u8 = undefined;
+        const val = credParam("", query, "value", &vbuf) orelse "";
+        const Field = struct { name: []const u8, buf: []u8, len: *usize };
+        const fields = [_]Field{
+            .{ .name = "repo", .buf = &repo.repo_buf, .len = &repo.repo_len },
+            .{ .name = "token", .buf = &repo.token_buf, .len = &repo.token_len },
+            .{ .name = "debrid_provider", .buf = &repo.debrid_provider_buf, .len = &repo.debrid_provider_len },
+            .{ .name = "debrid_key", .buf = &repo.debrid_key_buf, .len = &repo.debrid_key_len },
+        };
+        for (fields) |f| {
+            if (!std.mem.eql(u8, f.name, key)) continue;
+            if (val.len > f.buf.len) {
+                sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"value too long\"}");
+                return;
+            }
+            @memset(f.buf, 0);
+            @memcpy(f.buf[0..val.len], val);
+            f.len.* = val.len;
+            state.markConfigDirty();
+            sendJson(stream, "{\"ok\":true}");
+            return;
+        }
+        sendJsonStatus(stream, "404 Not Found", "{\"error\":\"unknown plugin setting\"}");
+        return;
+    }
+
+    const alloc = @import("../core/alloc.zig").allocator;
+    const out = alloc.alloc(u8, 64 * 1024) catch {
+        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(out);
+    var w = std.Io.Writer.fixed(out);
+    w.writeAll("{\"installed\":[") catch return;
+    for (repo.plugins[0..@min(repo.plugin_count, repo.plugins.len)], 0..) |*p, i| {
+        if (i > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"id\":\"") catch return;
+        escJsonWrite(&w, p.id[0..@min(p.id_len, p.id.len)]);
+        w.writeAll("\",\"name\":\"") catch return;
+        escJsonWrite(&w, p.name[0..@min(p.name_len, p.name.len)]);
+        w.writeAll("\",\"kind\":\"") catch return;
+        escJsonWrite(&w, p.kind[0..@min(p.kind_len, p.kind.len)]);
+        w.writeAll("\",\"version\":\"") catch return;
+        escJsonWrite(&w, p.version[0..@min(p.version_len, p.version.len)]);
+        w.writeAll("\"}") catch return;
+    }
+    w.writeAll("],\"repo\":\"") catch return;
+    escJsonWrite(&w, repo.repo_buf[0..@min(repo.repo_len, repo.repo_buf.len)]);
+    w.writeAll("\",\"debrid_provider\":\"") catch return;
+    escJsonWrite(&w, repo.debrid_provider_buf[0..@min(repo.debrid_provider_len, repo.debrid_provider_buf.len)]);
+    // Credentials: report presence, never the value.
+    w.print("\",\"has_token\":{s},\"has_debrid_key\":{s}}}", .{
+        if (repo.token_len > 0) "true" else "false",
+        if (repo.debrid_key_len > 0) "true" else "false",
+    }) catch return;
+    sendJson(stream, out[0..w.end]);
+}
+
+/// `/api/home` — the numbers the desktop Home hub leads with, plus the few
+/// things worth continuing. The page composes this with /calendar, which
+/// already existed, rather than duplicating the coming-up rail here.
+fn apiHome(stream: std.Io.net.Stream) void {
+    const lib = @import("tv_library.zig");
+    const tp = @import("tv_pure.zig");
+    const alloc = @import("../core/alloc.zig").allocator;
+
+    const rowbuf = alloc.alloc(tp.Row, tp.MAX_SHOWS) catch {
+        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(rowbuf);
+    const n = lib.snapshotCopy(rowbuf);
+
+    var watching: usize = 0;
+    var caught_up: usize = 0;
+    var unstarted: usize = 0;
+    for (rowbuf[0..n]) |*r| {
+        switch (tp.effectiveStatus(r.user, r.status)) {
+            .watching => watching += 1,
+            .caught_up => caught_up += 1,
+            .unstarted => unstarted += 1,
+            else => {},
+        }
+    }
+
+    const out = alloc.alloc(u8, 32 * 1024) catch {
+        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(out);
+    var w = std.Io.Writer.fixed(out);
+    w.print("{{\"tracked\":{d},\"watching\":{d},\"caught_up\":{d},\"unstarted\":{d},\"torrents\":{d},\"continue\":[", .{
+        n, watching, caught_up, unstarted,
+        @as(i64, @intCast(c.mpv.torrent_count(state.torrentSession()))),
+    }) catch return;
+
+    // "Continue" = things with a next episode, in the library's own order, so
+    // the hub agrees with the Watching page rather than ranking differently.
+    var emitted: usize = 0;
+    for (rowbuf[0..n]) |*r| {
+        if (emitted >= 12) break;
+        if (!r.has_next and r.pct <= 0) continue;
+        if (emitted > 0) w.writeAll(",") catch return;
+        emitted += 1;
+        w.writeAll("{\"name\":\"") catch return;
+        escJsonWrite(&w, r.name[0..@min(r.name_len, r.name.len)]);
+        w.print("\",\"kind\":\"{s}\",\"tmdb_id\":{d},\"next_season\":{d},\"next_episode\":{d},\"has_next\":{s},\"poster\":\"", .{
+            @tagName(r.kind), r.tmdb_id, r.next.season, r.next.episode,
+            if (r.has_next) "true" else "false",
+        }) catch return;
+        escJsonWrite(&w, r.poster_url[0..@min(r.poster_url_len, r.poster_url.len)]);
+        w.writeAll("\"}") catch return;
+    }
+    w.writeAll("]}") catch return;
+    sendJson(stream, out[0..w.end]);
+}
+
+/// Current value of one registry key, written into `w` as a JSON value.
+fn settingValueWrite(w: *std.Io.Writer, k: sap.Key) void {
+    const b = struct {
+        fn j(x: bool) []const u8 {
+            return if (x) "true" else "false";
+        }
+    };
+    if (std.mem.eql(u8, k.name, "hwdec")) return w.writeAll(b.j(state.app.hwdec_enabled)) catch {};
+    if (std.mem.eql(u8, k.name, "auto_advance")) return w.writeAll(b.j(state.app.auto_advance)) catch {};
+    if (std.mem.eql(u8, k.name, "seek_sync")) return w.writeAll(b.j(state.app.seek_sync)) catch {};
+    if (std.mem.eql(u8, k.name, "sponsorblock")) return w.writeAll(b.j(state.app.sponsorblock_enabled)) catch {};
+    if (std.mem.eql(u8, k.name, "auto_download_subs")) return w.writeAll(b.j(state.app.auto_download_subs)) catch {};
+    if (std.mem.eql(u8, k.name, "nsfw_filter")) return w.writeAll(b.j(state.app.nsfw_filter_enabled)) catch {};
+    if (std.mem.eql(u8, k.name, "incognito")) return w.writeAll(b.j(state.app.incognito_mode)) catch {};
+    if (std.mem.eql(u8, k.name, "download_rate_limit")) return w.print("{d}", .{state.app.download_rate_limit}) catch {};
+    if (std.mem.eql(u8, k.name, "lang_learn")) return w.writeAll(b.j(state.app.lang_learn_enabled)) catch {};
+    if (std.mem.eql(u8, k.name, "translate")) return w.writeAll(b.j(state.app.translate_enabled)) catch {};
+    if (std.mem.eql(u8, k.name, "dubbing")) return w.writeAll(b.j(state.app.dubbing_enabled)) catch {};
+    // f32 multiplier internally, integer percent on the wire.
+    if (std.mem.eql(u8, k.name, "tts_speed")) return w.print("{d}", .{@as(i32, @intFromFloat(state.app.tts_speed * 100))}) catch {};
+    if (std.mem.eql(u8, k.name, "sub_lang")) {
+        w.writeAll("\"") catch return;
+        escJsonWrite(w, state.app.sub_lang_buf[0..@min(state.app.sub_lang_len, state.app.sub_lang_buf.len)]);
+        w.writeAll("\"") catch return;
+        return;
+    }
+    if (std.mem.eql(u8, k.name, "save_path")) {
+        w.writeAll("\"") catch return;
+        escJsonWrite(w, state.app.save_path_buf[0..@min(state.app.save_path_len, state.app.save_path_buf.len)]);
+        w.writeAll("\"") catch return;
+        return;
+    }
+    if (std.mem.eql(u8, k.name, "tts_voice")) {
+        w.writeAll("\"") catch return;
+        escJsonWrite(w, state.app.tts_voice_buf[0..@min(state.app.tts_voice_len, state.app.tts_voice_buf.len)]);
+        w.writeAll("\"") catch return;
+        return;
+    }
+    if (std.mem.eql(u8, k.name, "translate_lang")) {
+        w.writeAll("\"") catch return;
+        escJsonWrite(w, state.app.translate_lang_buf[0..@min(state.app.translate_lang_len, state.app.translate_lang_buf.len)]);
+        w.writeAll("\"") catch return;
+        return;
+    }
+    if (std.mem.eql(u8, k.name, "proxy_url")) {
+        w.writeAll("\"") catch return;
+        escJsonWrite(w, state.app.proxy_url[0..@min(state.app.proxy_url_len, state.app.proxy_url.len)]);
+        w.writeAll("\"") catch return;
+        return;
+    }
+    w.writeAll("null") catch {};
+}
+
+/// Apply one validated value. Returns false when the key has no writer — which
+/// would mean the registry and this switch drifted, so the route reports it
+/// rather than answering ok to a write that never happened.
+fn settingApply(k: sap.Key, raw: []const u8) bool {
+    switch (k.kind) {
+        .boolean => {
+            const v = sap.parseBool(raw) orelse return false;
+            if (std.mem.eql(u8, k.name, "hwdec")) {
+                state.app.hwdec_enabled = v;
+                // Push to every live player, exactly like the desktop toggle.
+                const hw: []const u8 = if (v) "auto" else "no";
+                for (state.app.players.items) |p| {
+                    var cmd: [64]u8 = undefined;
+                    if (std.fmt.bufPrintZ(&cmd, "set hwdec {s}", .{hw})) |z| {
+                        _ = c.mpv.mpv_command_string(p.mpv_ctx, z.ptr);
+                    } else |_| {}
+                }
+            } else if (std.mem.eql(u8, k.name, "auto_advance")) {
+                state.app.auto_advance = v;
+            } else if (std.mem.eql(u8, k.name, "seek_sync")) {
+                state.app.seek_sync = v;
+            } else if (std.mem.eql(u8, k.name, "sponsorblock")) {
+                state.app.sponsorblock_enabled = v;
+            } else if (std.mem.eql(u8, k.name, "auto_download_subs")) {
+                state.app.auto_download_subs = v;
+            } else if (std.mem.eql(u8, k.name, "nsfw_filter")) {
+                state.app.nsfw_filter_enabled = v;
+            } else if (std.mem.eql(u8, k.name, "incognito")) {
+                state.app.incognito_mode = v;
+            } else if (std.mem.eql(u8, k.name, "lang_learn")) {
+                state.app.lang_learn_enabled = v;
+            } else if (std.mem.eql(u8, k.name, "translate")) {
+                state.app.translate_enabled = v;
+            } else if (std.mem.eql(u8, k.name, "dubbing")) {
+                state.app.dubbing_enabled = v;
+            } else return false;
+        },
+        .integer => {
+            const n = sap.parseInt(k, raw) orelse return false;
+            if (std.mem.eql(u8, k.name, "download_rate_limit")) {
+                state.app.download_rate_limit = n;
+            } else if (std.mem.eql(u8, k.name, "tts_speed")) {
+                state.app.tts_speed = @as(f32, @floatFromInt(n)) / 100.0;
+            } else return false;
+        },
+        .text => {
+            const t = sap.parseText(k, raw) orelse return false;
+            if (std.mem.eql(u8, k.name, "sub_lang")) {
+                const n = @min(t.len, state.app.sub_lang_buf.len);
+                @memset(&state.app.sub_lang_buf, 0);
+                @memcpy(state.app.sub_lang_buf[0..n], t[0..n]);
+                state.app.sub_lang_len = n;
+            } else if (std.mem.eql(u8, k.name, "proxy_url")) {
+                const n = @min(t.len, state.app.proxy_url.len);
+                @memset(&state.app.proxy_url, 0);
+                @memcpy(state.app.proxy_url[0..n], t[0..n]);
+                state.app.proxy_url_len = n;
+            } else if (std.mem.eql(u8, k.name, "save_path")) {
+                // Leave room for the NUL state.zig writes at [save_path_len].
+                const n = @min(t.len, state.app.save_path_buf.len - 1);
+                @memset(&state.app.save_path_buf, 0);
+                @memcpy(state.app.save_path_buf[0..n], t[0..n]);
+                state.app.save_path_len = n;
+            } else if (std.mem.eql(u8, k.name, "tts_voice")) {
+                const n = @min(t.len, state.app.tts_voice_buf.len);
+                @memset(&state.app.tts_voice_buf, 0);
+                @memcpy(state.app.tts_voice_buf[0..n], t[0..n]);
+                state.app.tts_voice_len = n;
+            } else if (std.mem.eql(u8, k.name, "translate_lang")) {
+                const n = @min(t.len, state.app.translate_lang_buf.len);
+                @memset(&state.app.translate_lang_buf, 0);
+                @memcpy(state.app.translate_lang_buf[0..n], t[0..n]);
+                state.app.translate_lang_len = n;
+            } else return false;
+        },
+    }
+    state.markConfigDirty();
+    return true;
+}
+
+/// `/api/settings` — GET the registry with live values, or write one key with
+/// `?key=&value=`.
+///
+/// Values ride in the query string rather than a POST body (which handleApi
+/// does not receive): none of these are secrets. Credentials deliberately go
+/// the other way — see the /api/auth and /api/access handlers.
+fn apiSettings(stream: std.Io.net.Stream, query: []const u8) void {
+    var kbuf: [64]u8 = undefined;
+    if (credParam("", query, "key", &kbuf)) |key| {
+        const k = sap.find(key) orelse {
+            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"unknown setting\"}");
+            return;
+        };
+        var vbuf: [256]u8 = undefined;
+        const raw = credParam("", query, "value", &vbuf) orelse {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"missing value\"}");
+            return;
+        };
+        if (!settingApply(k, raw)) {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid value for this setting\"}");
+            return;
+        }
+        var jb: [256]u8 = undefined;
+        var w = std.Io.Writer.fixed(&jb);
+        w.print("{{\"ok\":true,\"key\":\"{s}\",\"value\":", .{k.name}) catch return;
+        settingValueWrite(&w, k);
+        w.writeAll("}") catch return;
+        sendJson(stream, jb[0..w.end]);
+        return;
+    }
+
+    var out: [8192]u8 = undefined;
+    var w = std.Io.Writer.fixed(&out);
+    w.writeAll("{\"settings\":[") catch return;
+    for (sap.KEYS, 0..) |k, i| {
+        if (i > 0) w.writeAll(",") catch return;
+        w.print("{{\"name\":\"{s}\",\"kind\":\"{s}\",\"group\":\"{s}\",\"label\":\"", .{
+            k.name, @tagName(k.kind), k.group,
+        }) catch return;
+        escJsonWrite(&w, k.label);
+        w.print("\",\"min\":{d},\"max\":{d},\"value\":", .{ k.min, k.max }) catch return;
+        settingValueWrite(&w, k);
+        w.writeAll("}") catch return;
+    }
+    w.writeAll("],")
+        catch return;
+    // Legacy top-level booleans from the original /settings shape, kept so an
+    // older client (see docs/headless-hosting-spec.md) is not broken by the
+    // registry being added alongside it.
+    w.print("\"auto_advance\":{s},\"incognito\":{s},\"sponsorblock\":{s},\"nsfw_filter\":{s}}}", .{
         if (state.app.auto_advance) "true" else "false",
         if (state.app.incognito_mode) "true" else "false",
         if (state.app.sponsorblock_enabled) "true" else "false",
         if (state.app.nsfw_filter_enabled) "true" else "false",
     }) catch return;
-    sendJson(stream, json_buf[0..w.end]);
+    sendJson(stream, out[0..w.end]);
 }
 
 fn apiSettingsToggle(query: []const u8) void {
@@ -3091,6 +3863,93 @@ fn apiCalendar(stream: std.Io.net.Stream) void {
     }
     w.writeAll("]}") catch return;
     sendJson(stream, jb[0..w.end]);
+}
+
+/// `/api/library` → the Watching library, in the same display order the desktop
+/// uses (tv_pure.sortOrder), so the two surfaces list shows identically.
+///
+/// Both the row buffer and the response are heap-allocated: a Row is ~600 bytes
+/// and 200 of them plus the JSON would blow a spawned thread's stack (CLAUDE.md).
+fn apiLibrary(stream: std.Io.net.Stream) void {
+    const lib = @import("tv_library.zig");
+    const tp = @import("tv_pure.zig");
+    const alloc = @import("../core/alloc.zig").allocator;
+
+    const buf = alloc.alloc(tp.Row, tp.MAX_SHOWS) catch {
+        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(buf);
+    const n = lib.snapshotCopy(buf);
+
+    const out = alloc.alloc(u8, 128 * 1024) catch {
+        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(out);
+    var w = std.Io.Writer.fixed(out);
+
+    w.writeAll("{\"items\":[") catch return;
+    for (buf[0..n], 0..) |*r, i| {
+        if (i > 0) w.writeAll(",") catch return;
+        var st_buf: [48]u8 = undefined;
+        const st = tp.statusLabel(r, &st_buf);
+        w.writeAll("{\"name\":\"") catch return;
+        escJsonWrite(&w, r.name[0..@min(r.name_len, r.name.len)]);
+        w.writeAll("\",\"id\":\"") catch return;
+        escJsonWrite(&w, r.id[0..@min(r.id_len, r.id.len)]);
+        // `status` is a human display string ("S01E01 · Next", "78% watched").
+        // `state` is the machine tag the desktop's filter chips use — the page
+        // must filter on that, not on the label, or "Watching" matches nothing.
+        w.print("\",\"kind\":\"{s}\",\"tmdb_id\":{d},\"watched\":{d},\"total\":{d}," ++
+            "\"has_next\":{s},\"next_season\":{d},\"next_episode\":{d},\"pct\":{d:.0}," ++
+            "\"state\":\"{s}\",\"status\":\"", .{
+            @tagName(r.kind),
+            r.tmdb_id,
+            r.prog.watched,
+            r.prog.total,
+            if (r.has_next) "true" else "false",
+            r.next.season,
+            r.next.episode,
+            r.pct,
+            @tagName(tp.effectiveStatus(r.user, r.status)),
+        }) catch return;
+        escJsonWrite(&w, st);
+        w.writeAll("\",\"poster\":\"") catch return;
+        escJsonWrite(&w, r.poster_url[0..@min(r.poster_url_len, r.poster_url.len)]);
+        w.writeAll("\"}") catch return;
+    }
+    w.writeAll("]}") catch return;
+    sendJson(stream, out[0..w.end]);
+}
+
+/// `/api/tv/recent?id=<tmdb_id>` → the latest aired episode + watched flag.
+///
+/// `{"found":false}` when the aired frontier is unknown (the show has not been
+/// synced yet) — deliberately NOT a 404 and not a guess: the web page hides its
+/// Play-latest button rather than offering one that would hunt for an episode
+/// nobody knows exists.
+fn apiTvRecent(stream: std.Io.net.Stream, query: []const u8) void {
+    const id = std.fmt.parseInt(i32, getQueryParam(query, "id") orelse "", 10) catch {
+        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"missing id\"}");
+        return;
+    };
+    const latest = @import("tv_library.zig").lastAiredFor(id) orelse {
+        sendJson(stream, "{\"found\":false}");
+        return;
+    };
+    var lbl_buf: [48]u8 = undefined;
+    const label = @import("tv_pure.zig").recentEpisodeLabel(latest.ep, latest.watched, &lbl_buf);
+    var jb: [192]u8 = undefined;
+    const j = std.fmt.bufPrint(&jb,
+        \\{{"found":true,"season":{d},"episode":{d},"watched":{s},"label":"{s}"}}
+    , .{
+        latest.ep.season,
+        latest.ep.episode,
+        if (latest.watched) "true" else "false",
+        label,
+    }) catch return;
+    sendJson(stream, j);
 }
 
 fn apiTorrents(stream: std.Io.net.Stream) void {

@@ -233,9 +233,20 @@ def test_web_companion():
         "no pair route": '"/pair"' not in rm and "regeneratePairCode" not in rm
             and "pairingCode" not in rm and "MAX_PAIR_FAILS" not in rm,
         "no token injection": "replaceOwned" not in rm,
-        "lan bind": '"0.0.0.0"' in rm and "127.0.0.1" not in _between(rm, "fn serverLoop", "std.debug.print"),
+        # The bind address is now selectable (web UI › Setup › Access), so the
+        # literal no longer lives in serverLoop — but LAN must stay the DEFAULT,
+        # since reaching Opal from a phone is the whole point of Web Remote.
+        # Assert that via the enum's default rather than a hardcoded string.
+        "lan bind": 'bind_mode: access_pure.BindMode = .lan' in rm
+            and "bind_mode.address()" in _between(rm, "fn serverLoop", "std.debug.print")
+            and '.lan => "0.0.0.0"' in open(os.path.join(PROJECT_DIR, "src/services/access_pure.zig")).read(),
         "bundled serving": "resourceRoot" in rm and "web/index.html" in rm,
-        "settings account hint": "lanIp" in stg and "create an account" in stg and "pairingCode" not in stg,
+        # Was: a hint telling you to go create an account in a browser. The
+        # desktop Settings › Web UI tab now creates it directly, which is
+        # strictly stronger — and is the only recovery path when the password
+        # is forgotten or the server is off. Still no pairing code anywhere.
+        "settings account controls": "lanIp" in stg and "pairingCode" not in stg
+            and "auth_store.createUser(" in stg and "Create Account" in stg,
         "build bundles web": "Resources/web" in sh,
         # The web UI authenticates via accounts, not a pairing code.
         "client uses accounts": "/api/auth/status" in web and "/api/auth/" in web

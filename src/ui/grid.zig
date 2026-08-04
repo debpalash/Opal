@@ -343,7 +343,7 @@ fn renderAudioNowPlaying(i: usize, p: *player.MediaPlayer) void {
     if (dvui.button(@src(), "", .{}, .{
         .id_extra = i + 8801,
         .expand = .both,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 255 },
+        .color_fill = theme.video_letterbox,
         .color_text = theme.colors.text_primary,
         .border = dvui.Rect.all(0),
         .corner_radius = theme.dims.rad_sm,
@@ -449,7 +449,7 @@ pub fn renderGrid() !void {
         // While a video is showing, the leftover space around the aspect-fit image
         // is letterbox — fill it BLACK (cinematic) instead of the navy app bg, so
         // it reads as proper bars, not a UI gap. Empty/loading cells keep bg_deep.
-        const cell_fill = if (p.texture != null) dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } else theme.colors.bg_deep;
+        const cell_fill = if (p.texture != null) theme.video_letterbox else theme.colors.bg_deep;
 
         // Fullscreen → edge-to-edge: drop the inset margin + rounded corners.
         const fs = state.app.fullscreen_player_idx != null;

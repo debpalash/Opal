@@ -248,6 +248,28 @@ pub fn nextUpFor(tmdb_id: i32) ?tp.Ep {
     return tp.nextUp(seasons[0..ns], watched[0..nw], last_aired);
 }
 
+/// The most recently AIRED episode of `tmdb_id`, and whether it has been
+/// watched. Null when the aired frontier is not known yet.
+///
+/// This is the "latest drop" the TV detail's Play-latest button targets, and is
+/// deliberately NOT nextUpFor: the newest episode can already be watched (in
+/// which case nextUp is null, or points at an older gap), and the button still
+/// has to name it and say so. Watched-ness goes through `tp.isWatched` so the
+/// button and the episode list can never disagree about the same episode.
+pub fn lastAiredFor(tmdb_id: i32) ?struct { ep: tp.Ep, watched: bool } {
+    var shows: [MAX_SHOWS]db.TvShowRow = undefined;
+    const n = db.tvGetShows(&shows);
+    var last_aired: ?tp.Ep = null;
+    for (shows[0..n]) |*sh| {
+        if (sh.tmdb_id == tmdb_id and sh.last_aired.season > 0) last_aired = sh.last_aired;
+    }
+    const la = last_aired orelse return null;
+
+    var watched: [tp.MAX_WATCHED]tp.Ep = undefined;
+    const nw = db.tvLoadWatchedAll(tmdb_id, &watched);
+    return .{ .ep = la, .watched = tp.isWatched(watched[0..nw], la) };
+}
+
 /// The user's hand-set status for one item, or `.none`.
 fn userStatusOf(kind: []const u8, id: []const u8) tp.UserStatus {
     var buf: [16]u8 = undefined;
@@ -308,7 +330,15 @@ pub fn playNeighborEpisode(delta: i32) void {
     }
 }
 
-fn buildSnapshot() void {
+/// Guards `rows` / `order` / `row_count`.
+///
+/// These were UI-thread-only until the web companion grew a Watching page:
+/// `/api/library` runs on a server thread, and the snapshot re-sorts on every
+/// watch commit, so an unguarded read there could walk a half-rebuilt array or
+/// an `order` pointing at rows that just moved.
+var snapshot_mutex: @import("../core/sync.zig").Mutex = .{};
+
+fn buildSnapshotLocked() void {
     if (!library_dirty.load(.acquire)) return;
     library_dirty.store(false, .release);
 
@@ -318,6 +348,24 @@ fn buildSnapshot() void {
     addMovieRows();
 
     _ = tp.sortOrder(rows[0..row_count], &order);
+}
+
+/// Copy the library snapshot, in display order, into `out`. Returns how many
+/// rows were written. Safe to call from any thread — the JSON API does.
+///
+/// Builds the snapshot itself when stale rather than relying on a render pass:
+/// headless mode has no UI thread calling renderContent, so the web page would
+/// otherwise see an empty library forever.
+///
+/// `out` is ~600 bytes/row — heap-allocate it. A 200-row buffer on a spawned
+/// thread's stack blows the budget (see CLAUDE.md).
+pub fn snapshotCopy(out: []tp.Row) usize {
+    snapshot_mutex.lock();
+    defer snapshot_mutex.unlock();
+    buildSnapshotLocked();
+    const n = @min(out.len, row_count);
+    for (0..n) |i| out[i] = rows[order[i]];
+    return n;
 }
 
 fn nextRow() ?*tp.Row {
@@ -478,7 +526,14 @@ const CARD_CHROME: f32 = 74; // title + status line + progress bar
 
 pub fn renderContent() void {
     syncOnce();
-    buildSnapshot();
+    // Hold the snapshot lock for the whole frame's read. buildSnapshot alone
+    // isn't enough: warmNextUp / renderControlBar / renderGrid all iterate
+    // `rows` and `order` afterwards, and /api/library on the server thread can
+    // trigger a rebuild (and re-sort) in between. Contention is effectively
+    // zero — one rare reader — and nothing below re-enters this module.
+    snapshot_mutex.lock();
+    defer snapshot_mutex.unlock();
+    buildSnapshotLocked();
     warmNextUp();
 
     // Release feed + live countdown. Periodically refreshed (15 min), and fully

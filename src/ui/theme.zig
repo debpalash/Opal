@@ -341,6 +341,16 @@ pub const dims = struct {
 // y-offset + fade at the call site.
 pub const shadow_soft: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 160 };
 
+// ── Letterbox — the fill behind video, and the one colour that is NOT themed ──
+//
+// Deliberately pure black in every preset, not `bg_deep`: a video that does not
+// fill its cell should read as proper cinematic bars, and the navy app
+// background reads as a UI gap instead. Expressed as a token rather than a
+// `dvui.Color{…}` literal so grid.zig obeys the "no raw colour literals in
+// ui/" rule while keeping the intent visible — this one is meant to stay black
+// when the theme changes.
+pub const video_letterbox: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
+
 // ── Transparent — the one spelling of "no fill" ──
 //
 // Ten files each hand-rolled `dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }`

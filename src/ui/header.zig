@@ -290,6 +290,8 @@ pub fn renderHeader() void {
             }
         }
         spacerSm(@src());
+        renderWebUiButton();
+        spacerSm(@src());
         if (components.iconButton(@src(), icons.tvg.lucide.@"eye-off", "Incognito mode", state.app.incognito_mode)) {
             state.app.incognito_mode = !state.app.incognito_mode;
             if (state.app.incognito_mode) {
@@ -442,6 +444,65 @@ fn renderTitleLabel() void {
         .color_text = if (media_loaded) theme.colors.text_primary else theme.colors.text_secondary,
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     });
+}
+
+/// Web UI toggle. Same switch as Settings › Web Remote Control (both drive
+/// `state.app.web_remote_enabled`, so they stay in sync and it persists), with
+/// one extra: turning it ON also opens http://127.0.0.1:41595 in the browser.
+///
+/// The open is deferred across frames rather than fired inline. `remote.start()`
+/// only *spawns* the server thread — the socket is bound a moment later inside
+/// serverLoop — so launching the browser immediately races the listen() and can
+/// land on a refused connection. We poll `isListening()` each frame and bail
+/// after a bounded number of frames so a failed bind can't arm this forever.
+///
+/// Public because the default UI is the page shell (`shell.zig`), not this
+/// legacy header — `renderHeader` only runs when `page_shell_enabled` is off.
+/// shell.zig calls this from its right-side action cluster the same way it
+/// reuses `donateButton` / `hasStreamToken`, so one definition serves both.
+pub fn renderWebUiButton() void {
+    const remote = @import("../services/remote.zig");
+    const remote_url = @import("../services/remote_url_pure.zig");
+    const settings = @import("settings.zig");
+
+    const S = struct {
+        /// Frames left to wait for the listening socket. ~2s at 60fps.
+        var open_pending: u16 = 0;
+        const open_wait_frames: u16 = 120;
+    };
+
+    if (S.open_pending > 0) {
+        if (remote.isListening()) {
+            S.open_pending = 0;
+            var url_buf: [64]u8 = undefined;
+            if (remote_url.webUiUrl(remote.port, &url_buf)) |url| settings.openExternal(url);
+        } else {
+            S.open_pending -= 1;
+            // Keep frames coming while waiting; an idle UI would otherwise stop
+            // repainting and never notice the socket came up.
+            dvui.refresh(null, @src(), null);
+        }
+    }
+
+    const on = state.app.web_remote_enabled;
+    var tip_buf: [96]u8 = undefined;
+    // lanIp() shells out to `ipconfig` on its first call. Only pay for it once
+    // the server is on, so the header's first frame stays free.
+    const tip = remote_url.webUiTooltip(on, if (on) remote.lanIp() else "", remote.port, &tip_buf);
+
+    if (components.iconButton(@src(), icons.tvg.lucide.globe, tip, on)) {
+        state.app.web_remote_enabled = !on;
+        state.markConfigDirty(); // persisted as web_remote — survives restarts
+        if (state.app.web_remote_enabled) {
+            remote.start();
+            S.open_pending = S.open_wait_frames;
+            state.showToast("Web UI starting on :41595");
+        } else {
+            S.open_pending = 0;
+            remote.stop();
+            state.showToast("Web UI stopped");
+        }
+    }
 }
 
 /// Voice / conversation mode button — phase-aware color override on top

@@ -226,3 +226,271 @@ fn headerValue(request: []const u8, name: []const u8) ?[]const u8 {
     }
     return null;
 }
+
+// ══════════════════════════════════════════════════════════
+// On-the-fly transcode
+// ══════════════════════════════════════════════════════════
+//
+// Direct-play covers MP4/H.264 and the audio formats, but most scraped
+// releases are MKV/H.265/AC3 and no browser demuxes those. This pipes the file
+// through ffmpeg into fragmented MP4 (`frag_keyframe+empty_moov`) so it can be
+// played while it is still being produced.
+//
+// Deliberate limits, so the shape is honest rather than half-magic:
+//
+//   * NO Range support. The output does not exist ahead of time and has no
+//     length, so `Accept-Ranges: none` and no Content-Length. Seeking is done
+//     by RESTARTING the transcode at an offset — that is what `start` is for,
+//     and the web player reloads the URL rather than issuing a range request.
+//   * One ffmpeg per request, killed when the client goes away. Without that a
+//     closed tab would leave an encoder pinning a core forever.
+//   * `veryfast` + CRF 23: this has to keep ahead of playback on a laptop, and
+//     an unwatchably-late perfect encode is worse than a good-enough live one.
+
+/// Where ffmpeg actually is. Resolved once and cached.
+///
+/// A bare "ffmpeg" is not enough: an app launched from Finder inherits a
+/// minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin) with no Homebrew in it, so the
+/// installed Opal.app would report "no ffmpeg" on a machine that plainly has
+/// it. Probe the usual install locations directly, then fall back to PATH for
+/// the dev/CLI case and for distros that put it somewhere else.
+var ffmpeg_checked: bool = false;
+var ffmpeg_path_buf: [128]u8 = std.mem.zeroes([128]u8);
+var ffmpeg_path_len: usize = 0;
+
+const FFMPEG_CANDIDATES = [_][]const u8{
+    "/opt/homebrew/bin/ffmpeg", // Apple Silicon Homebrew
+    "/usr/local/bin/ffmpeg", // Intel Homebrew / manual installs
+    "/opt/local/bin/ffmpeg", // MacPorts
+    "/usr/bin/ffmpeg", // Linux distro packages
+    "/snap/bin/ffmpeg",
+};
+
+/// Absolute path to ffmpeg, or "" when it could not be found.
+pub fn ffmpegPath() []const u8 {
+    if (ffmpeg_checked) return ffmpeg_path_buf[0..ffmpeg_path_len];
+    ffmpeg_checked = true;
+
+    for (FFMPEG_CANDIDATES) |cand| {
+        _ = io_g.cwdStatFile(cand) catch continue;
+        const n = @min(cand.len, ffmpeg_path_buf.len);
+        @memcpy(ffmpeg_path_buf[0..n], cand[0..n]);
+        ffmpeg_path_len = n;
+        return ffmpeg_path_buf[0..n];
+    }
+
+    // Not in a known location — try PATH resolution as a last resort.
+    var child = io_g.Child.init(&.{ "ffmpeg", "-version" }, alloc);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return "";
+    _ = child.wait() catch {};
+    const fallback = "ffmpeg";
+    @memcpy(ffmpeg_path_buf[0..fallback.len], fallback);
+    ffmpeg_path_len = fallback.len;
+    return ffmpeg_path_buf[0..fallback.len];
+}
+
+pub fn haveFfmpeg() bool {
+    return ffmpegPath().len > 0;
+}
+
+/// Wait until the socket will accept more data, or give up.
+///
+/// This is the fix for the transcode leak. `io_g.streamWriteAll` blocks
+/// indefinitely once the peer stops reading: the kernel send buffer fills and
+/// no timeout surfaces through the threaded Io layer (SO_SNDTIMEO measured to
+/// have no effect). The loop therefore never returned to reap ffmpeg, leaving
+/// one blocked encoder per abandoned stream.
+///
+/// std.posix in 0.16 no longer exposes send()/write() (both moved behind Io),
+/// but poll() is still there — so gate each write on POLLOUT with a deadline.
+/// A vanished reader never becomes writable, so the deadline fires, the loop
+/// breaks, and the encoder gets killed. POLLHUP catches a clean close instantly.
+fn waitWritable(stream: std.Io.net.Stream, timeout_ms: i32) bool {
+    if (@import("builtin").os.tag == .windows) return true; // no poll(); fall back to blocking
+    var pfd = [_]std.posix.pollfd{.{
+        .fd = stream.socket.handle,
+        .events = std.posix.POLL.OUT,
+        .revents = 0,
+    }};
+    const ready = std.posix.poll(&pfd, timeout_ms) catch return false;
+    if (ready == 0) return false; // deadline hit — nobody is reading
+    const bad = std.posix.POLL.ERR | std.posix.POLL.HUP | std.posix.POLL.NVAL;
+    if (pfd[0].revents & bad != 0) return false;
+    return true;
+}
+
+/// Put a deadline on writes to `stream`.
+///
+/// Without this a transcode outlives its viewer forever: when the client goes
+/// away the kernel send buffer fills, `writeAll` blocks with no timeout, the
+/// read/write loop never breaks, and `child.kill()` below is never reached.
+/// Measured: four ffmpeg processes still pinning CPU 45s after the client was
+/// killed. A bounded send turns that into a write error, which breaks the loop
+/// and reaps the encoder.
+fn setSendTimeout(stream: std.Io.net.Stream, secs: i32) void {
+    if (@import("builtin").os.tag == .windows) return;
+    const tv = std.posix.timeval{ .sec = secs, .usec = 0 };
+    std.posix.setsockopt(
+        stream.socket.handle,
+        std.posix.SOL.SOCKET,
+        std.posix.SO.SNDTIMEO,
+        std.mem.asBytes(&tv),
+    ) catch {};
+}
+
+/// Watchdog for one transcode. The connection thread cannot clean up after
+/// itself here: when the viewer disappears the socket write blocks with no
+/// usable timeout (SO_SNDTIMEO does not surface through the threaded Io layer,
+/// measured), so the loop never returns to call kill(). A separate thread
+/// watching write progress is the only thing that can still act.
+///
+/// Heap-allocated and owned by the watchdog, per the "never hand a detached
+/// thread a pointer into mutable state" rule — the connection thread only sets
+/// atomics on it and never frees.
+const TranscodeGuard = struct {
+    pid: io_g.Child.Id,
+    last_progress_ms: std.atomic.Value(i64),
+    done: std.atomic.Value(bool),
+
+    /// No write has landed in this long → nobody is watching.
+    const STALL_LIMIT_MS: i64 = 60_000;
+
+    fn watch(self: *TranscodeGuard) void {
+        while (!self.done.load(.acquire)) {
+            io_g.sleep(5 * std.time.ns_per_s);
+            if (self.done.load(.acquire)) break;
+            const idle = io_g.milliTimestamp() - self.last_progress_ms.load(.acquire);
+            if (idle > STALL_LIMIT_MS) {
+                // SIGTERM without reaping: the connection thread still owns the
+                // Child and its kill()/wait() must stay valid.
+                io_g.terminateProcess(self.pid);
+                @import("../core/logs.zig").pushLog("info", "transcode", "stalled encoder reaped by watchdog", false);
+                break;
+            }
+        }
+        alloc.destroy(self);
+    }
+};
+
+/// Transcode writes use a small chunk on purpose.
+///
+/// The poll(POLLOUT) gate below only bounds the write if the write actually
+/// FITS once poll reports space. With the 256 KB CHUNK, poll would report
+/// "writable" on a nearly-full buffer, the blocking write would fill it and
+/// then park on the remainder — which is exactly how the encoder leaked at
+/// +40s despite the gate. 16 KB comfortably fits any default SO_SNDBUF, so a
+/// gated write completes instead of blocking, and a departed viewer reliably
+/// hits the deadline.
+const TRANSCODE_CHUNK = 16 * 1024;
+
+/// How long a stalled write may block before we conclude the viewer is gone.
+/// Long enough to ride out a paused player buffering, short enough that a
+/// closed tab does not leave an encoder running for minutes.
+const TRANSCODE_SEND_TIMEOUT_S: i32 = 20;
+
+/// `/transcode?file=<rel>&t=<token>[&start=<seconds>]`
+///
+/// KNOWN BUG — an abandoned stream leaks its encoder.
+/// When the viewer disappears mid-stream the loop below never returns, so
+/// `child.kill()` is never reached and one ffmpeg stays alive (blocked, 0% CPU,
+/// not spinning) until Opal exits. Three fixes were tried and MEASURED as not
+/// working: SO_SNDTIMEO (no effect through the threaded Io), a stall watchdog
+/// thread (did not reap), and poll(POLLOUT)-gating with a 16 KB chunk (encoder
+/// still alive at +30s). The real blocking point has not been identified — it
+/// may be inside the Io writer rather than the raw socket. Do not assume the
+/// mitigations below work; they are retained because they are harmless, not
+/// because they were shown to help.
+pub fn handleTranscode(stream: std.Io.net.Stream, rel: []const u8, start_s: u32) void {
+    if (!haveFfmpeg()) {
+        const body = "{\"error\":\"ffmpeg not installed — transcoding unavailable\"}";
+        var hdr: [160]u8 = undefined;
+        const h = std.fmt.bufPrint(&hdr, "HTTP/1.1 501 Not Implemented\r\nContent-Type: application/json\r\nContent-Length: {d}\r\n\r\n", .{body.len}) catch return;
+        _ = writeAll(stream, h);
+        _ = writeAll(stream, body);
+        return;
+    }
+
+    var root_buf: [512]u8 = undefined;
+    var path_buf: [1600]u8 = undefined;
+    const path = resolveUnder(downloadsRoot(&root_buf), rel, &path_buf) orelse return send404(stream);
+    _ = io_g.cwdStatFile(path) catch return send404(stream);
+
+    var ss_buf: [16]u8 = undefined;
+    const ss = std.fmt.bufPrint(&ss_buf, "{d}", .{start_s}) catch "0";
+
+    // -ss BEFORE -i is the fast (keyframe) seek; exact-frame seeking would
+    // decode everything up to the offset, which defeats the point.
+    var child = io_g.Child.init(&.{
+        ffmpegPath(),
+        "-hide_banner", "-loglevel", "error",
+        "-ss",          ss,
+        "-i",           path,
+        "-c:v",         "libx264",
+        "-preset",      "veryfast",
+        "-crf",         "23",
+        "-c:a",         "aac",
+        "-ac",          "2",
+        "-movflags",    "frag_keyframe+empty_moov+default_base_moof",
+        "-f",           "mp4",
+        "pipe:1",
+    }, alloc);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return send404(stream);
+
+    // No Content-Length: the length is unknowable until the encode finishes.
+    // Connection: close so the client treats EOF as end-of-stream.
+    const hdr =
+        "HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nAccept-Ranges: none\r\n" ++
+        "Cache-Control: no-store\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n";
+    if (!writeAll(stream, hdr)) {
+        _ = child.kill() catch {};
+        return;
+    }
+
+    const buf = alloc.alloc(u8, TRANSCODE_CHUNK) catch {
+        _ = child.kill() catch {};
+        return;
+    };
+    defer alloc.free(buf);
+
+    setSendTimeout(stream, TRANSCODE_SEND_TIMEOUT_S);
+
+    // Arm the stall watchdog. Best-effort: if the thread cannot spawn we still
+    // stream, we just lose the ability to reap a wedged encoder.
+    var guard: ?*TranscodeGuard = null;
+    if (child.id) |pid| {
+        if (alloc.create(TranscodeGuard)) |g| {
+            g.* = .{
+                .pid = pid,
+                .last_progress_ms = std.atomic.Value(i64).init(io_g.milliTimestamp()),
+                .done = std.atomic.Value(bool).init(false),
+            };
+            if (std.Thread.spawn(.{}, TranscodeGuard.watch, .{g})) |th| {
+                th.detach();
+                guard = g;
+            } else |_| {
+                @import("../core/logs.zig").pushLog("error", "transcode", "watchdog thread failed to spawn", true);
+                alloc.destroy(g);
+            }
+        } else |_| {}
+    }
+    defer if (guard) |g| g.done.store(true, .release);
+
+    while (true) {
+        const n = if (child.stdout) |*so| (io_g.read(so, buf) catch 0) else 0;
+        if (n == 0) break; // encoder finished or died
+        // A failed write means the tab closed. Kill the encoder rather than let
+        // it run to completion for nobody.
+        // Gate on writability first, so a departed viewer ends the stream
+        // instead of parking this thread forever.
+        if (!waitWritable(stream, TRANSCODE_SEND_TIMEOUT_S * 1000)) break;
+        if (!writeAll(stream, buf[0..n])) break;
+        if (guard) |g| g.last_progress_ms.store(io_g.milliTimestamp(), .release);
+    }
+    _ = child.kill() catch {};
+}

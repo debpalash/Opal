@@ -93,6 +93,10 @@ fi
 if [ -f "$ROOT/web/index.html" ]; then
     mkdir -p "$APP_DIR/Contents/Resources/web"
     cp "$ROOT/web/index.html" "$APP_DIR/Contents/Resources/web/index.html"
+    # Vendored browser deps (hls.js). Kept beside the page rather than inlined.
+    if [ -d "$ROOT/web/vendor" ]; then
+        cp -R "$ROOT/web/vendor" "$APP_DIR/Contents/Resources/web/vendor"
+    fi
 fi
 
 # ── 3. Info.plist ──────────────────────────────────────────────

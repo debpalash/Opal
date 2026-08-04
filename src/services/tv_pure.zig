@@ -174,11 +174,46 @@ fn nextSeasonIdx(seasons: []const Season, after_n: i32) ?usize {
     return best;
 }
 
-fn isWatched(watched: []const Ep, e: Ep) bool {
+/// Is this exact episode in the watched set? Public because the "most recent
+/// episode" play button (desktop tv detail + the web show page) reports watched
+/// state for a specific episode rather than deriving a whole-show rollup — and
+/// it must use the SAME identity comparison as nextUp, or the button and the
+/// list can disagree about the same episode.
+pub fn isWatched(watched: []const Ep, e: Ep) bool {
     for (watched) |w| {
         if (w.eql(e)) return true;
     }
     return false;
+}
+
+/// What a play action (Resume / Play-latest) shows, and whether a click on it
+/// should do anything.
+pub const PlayAction = struct {
+    label: []const u8,
+    /// False while a resolve is already in flight. The worker behind these
+    /// buttons is single-flight, so a second click was previously swallowed in
+    /// silence — the button has to stop *looking* clickable instead.
+    clickable: bool,
+};
+
+/// Shared by both play buttons so they cannot drift.
+///
+/// The resolve behind them can run ~15s while the confirmation toast expires
+/// after 3.5s, so the button itself is the only durable progress indicator —
+/// it must carry the busy state rather than snapping straight back to idle.
+pub fn playAction(busy: bool, idle_label: []const u8) PlayAction {
+    if (busy) return .{ .label = "Finding…", .clickable = false };
+    return .{ .label = idle_label, .clickable = true };
+}
+
+/// Label for the "most recent episode" action: "S03E08 · Watched".
+///
+/// Deliberately says Unwatched rather than anything softer — the whole point of
+/// the button is telling you at a glance whether you have seen the latest drop.
+pub fn recentEpisodeLabel(e: Ep, watched: bool, buf: []u8) []const u8 {
+    var ep_buf: [16]u8 = undefined;
+    const ep = episodeLabel(e, &ep_buf);
+    return std.fmt.bufPrint(buf, "{s} · {s}", .{ ep, if (watched) "Watched" else "Unwatched" }) catch ep;
 }
 
 /// How many episodes of `s` have actually aired, given the frontier.
@@ -1077,4 +1112,80 @@ test "statusLabel" {
     try t.expectEqualStrings("Not started", statusLabel(&r, &buf));
     r.status = .dropped;
     try t.expectEqualStrings("Dropped", statusLabel(&r, &buf));
+}
+
+// ── "Most recent episode" play button (desktop tv detail + web show page) ──
+
+test "isWatched: exact episode identity, not a frontier compare" {
+    const watched = [_]Ep{ .{ .season = 1, .episode = 1 }, .{ .season = 1, .episode = 3 } };
+    try std.testing.expect(isWatched(&watched, .{ .season = 1, .episode = 1 }));
+    try std.testing.expect(isWatched(&watched, .{ .season = 1, .episode = 3 }));
+    // The gap is NOT watched — a frontier compare (last watched = S01E03, so
+    // "everything up to 3 is seen") is exactly the bug this module exists to
+    // avoid, per the header note.
+    try std.testing.expect(!isWatched(&watched, .{ .season = 1, .episode = 2 }));
+    try std.testing.expect(!isWatched(&watched, .{ .season = 2, .episode = 1 }));
+}
+
+test "isWatched: empty set watches nothing" {
+    const none = [_]Ep{};
+    try std.testing.expect(!isWatched(&none, .{ .season = 1, .episode = 1 }));
+}
+
+test "recentEpisodeLabel: watched and unwatched" {
+    var buf: [48]u8 = undefined;
+    try std.testing.expectEqualStrings("S03E08 · Watched", recentEpisodeLabel(.{ .season = 3, .episode = 8 }, true, &buf));
+    try std.testing.expectEqualStrings("S03E08 · Unwatched", recentEpisodeLabel(.{ .season = 3, .episode = 8 }, false, &buf));
+}
+
+test "recentEpisodeLabel: zero-pads like the rest of the UI" {
+    var buf: [48]u8 = undefined;
+    try std.testing.expectEqualStrings("S01E02 · Unwatched", recentEpisodeLabel(.{ .season = 1, .episode = 2 }, false, &buf));
+    // Double-digit seasons/episodes are not padded further.
+    try std.testing.expectEqualStrings("S10E12 · Watched", recentEpisodeLabel(.{ .season = 10, .episode = 12 }, true, &buf));
+}
+
+test "recentEpisodeLabel: tiny buffer degrades to the bare episode label" {
+    var tiny: [8]u8 = undefined;
+    try std.testing.expectEqualStrings("S03E08", recentEpisodeLabel(.{ .season = 3, .episode = 8 }, true, &tiny));
+}
+
+test "recent vs nextUp: the latest aired episode can already be watched" {
+    // Someone caught up the moment the finale dropped: nextUp is null (nothing
+    // to watch), but the "most recent episode" button must still resolve to the
+    // finale and report it as Watched rather than showing nothing.
+    const seasons = [_]Season{.{ .number = 1, .episode_count = 3 }};
+    const watched = [_]Ep{
+        .{ .season = 1, .episode = 1 },
+        .{ .season = 1, .episode = 2 },
+        .{ .season = 1, .episode = 3 },
+    };
+    const last_aired = Ep{ .season = 1, .episode = 3 };
+    try std.testing.expectEqual(@as(?Ep, null), nextUp(&seasons, &watched, last_aired));
+    try std.testing.expect(isWatched(&watched, last_aired));
+}
+
+test "playAction: busy swaps the label AND blocks the click" {
+    const busy = playAction(true, "Resume");
+    try std.testing.expectEqualStrings("Finding…", busy.label);
+    // The actual bug: a second click used to hit a silent `if (S.busy) return`.
+    try std.testing.expect(!busy.clickable);
+}
+
+test "playAction: idle keeps the caller's label and is clickable" {
+    const idle = playAction(false, "Resume");
+    try std.testing.expectEqualStrings("Resume", idle.label);
+    try std.testing.expect(idle.clickable);
+    // Both buttons share the rule, so the latest-episode label flows through
+    // unchanged too.
+    try std.testing.expectEqualStrings("S03E08 · Unwatched", playAction(false, "S03E08 · Unwatched").label);
+}
+
+test "playAction: busy label does not depend on which button asked" {
+    // Resume and Play-latest must show the SAME busy text — two different
+    // in-flight labels would read as two independent operations.
+    try std.testing.expectEqualStrings(
+        playAction(true, "Resume").label,
+        playAction(true, "S03E08 · Unwatched").label,
+    );
 }

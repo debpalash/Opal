@@ -125,6 +125,100 @@ pub fn revokeSession(token: []const u8) void {
     _ = db.step(stmt);
 }
 
+/// Which user a live session belongs to, or null if the token is unknown or
+/// expired. The `/api/access/*` routes need this to act on "the caller" —
+/// the Bearer gate only answers yes/no.
+pub fn userIdForSession(token: []const u8) ?i64 {
+    if (token.len == 0 or token.len > TOKEN_HEX) return null;
+    const stmt = db.prepare("SELECT user_id, expires_at FROM sessions WHERE token=?1") orelse return null;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, token);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return null;
+    if (db.columnInt64(stmt, 1) <= io.timestamp()) return null;
+    return db.columnInt64(stmt, 0);
+}
+
+/// Look a user up by name (case-insensitive, matching the UNIQUE COLLATE
+/// NOCASE index). Used by the api.token password-reset path, which names its
+/// target rather than deriving it from a session.
+pub fn userIdByName(username: []const u8) ?i64 {
+    const stmt = db.prepare("SELECT id FROM users WHERE username=?1 COLLATE NOCASE") orelse return null;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, username);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return null;
+    return db.columnInt64(stmt, 0);
+}
+
+/// Name of the first (lowest-id) account — in practice the admin created on
+/// first run. Used to prefill the desktop reset form: leaving that field blank
+/// made "Set Password" a dead click for anyone who didn't already know the
+/// username. Null when no accounts exist.
+pub fn firstUsername(out: []u8) ?[]const u8 {
+    const stmt = db.prepare("SELECT username FROM users ORDER BY id ASC LIMIT 1") orelse return null;
+    defer db.finalize(stmt);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return null;
+    const name = db.columnText(stmt, 0) orelse return null;
+    if (name.len == 0 or name.len > out.len) return null;
+    @memcpy(out[0..name.len], name);
+    return out[0..name.len];
+}
+
+/// Copy a user's name into `out`. Null if no such user or `out` is too small.
+pub fn usernameForId(user_id: i64, out: []u8) ?[]const u8 {
+    const stmt = db.prepare("SELECT username FROM users WHERE id=?1") orelse return null;
+    defer db.finalize(stmt);
+    db.bindInt64(stmt, 1, user_id);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return null;
+    const name = db.columnText(stmt, 0) orelse return null;
+    if (name.len > out.len) return null;
+    @memcpy(out[0..name.len], name);
+    return out[0..name.len];
+}
+
+/// Overwrite a user's password with a fresh bcrypt hash. Callers must have
+/// already verified the current password — this does not re-check it.
+pub fn setPassword(user_id: i64, password: []const u8) bool {
+    if (!auth.validPassword(password)) return false;
+    var salt: [auth.SALT_LEN]u8 = undefined;
+    if (!fillRandom(&salt)) return false;
+    var hbuf: [auth.HASH_BUF]u8 = undefined;
+    const hash = auth.hashWithSalt(password, salt, &hbuf) catch return false;
+
+    const stmt = db.prepare("UPDATE users SET pw_hash=?1 WHERE id=?2") orelse return false;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, hash);
+    db.bindInt64(stmt, 2, user_id);
+    return db.step(stmt) == db.c.SQLITE_DONE;
+}
+
+/// How many unexpired sessions exist — what "signed-in devices" shows.
+pub fn liveSessionCount() i64 {
+    const stmt = db.prepare("SELECT COUNT(*) FROM sessions WHERE expires_at > ?1") orelse return 0;
+    defer db.finalize(stmt);
+    db.bindInt64(stmt, 1, io.timestamp());
+    if (db.step(stmt) != db.c.SQLITE_ROW) return 0;
+    return db.columnInt64(stmt, 0);
+}
+
+/// Revoke every session, optionally sparing one token (the caller's own, so
+/// "sign out all devices" does not also sign out the browser that clicked it).
+/// Returns how many were dropped.
+pub fn revokeAllSessions(except: ?[]const u8) i64 {
+    const before = liveSessionCount();
+    if (except) |keep| {
+        const stmt = db.prepare("DELETE FROM sessions WHERE token<>?1") orelse return 0;
+        defer db.finalize(stmt);
+        db.bindText(stmt, 1, keep);
+        _ = db.step(stmt);
+    } else {
+        const stmt = db.prepare("DELETE FROM sessions") orelse return 0;
+        defer db.finalize(stmt);
+        _ = db.step(stmt);
+    }
+    const after = liveSessionCount();
+    return if (before > after) before - after else 0;
+}
+
 /// Drop expired sessions. Cheap; call on startup.
 pub fn pruneExpired() void {
     const stmt = db.prepare("DELETE FROM sessions WHERE expires_at <= ?1") orelse return;
