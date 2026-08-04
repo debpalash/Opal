@@ -924,3 +924,22 @@ def academictorrents_and_filter():
     except Exception as exc:
         return "fail", f"item with no title/description raised: {exc!r}"
     return "pass", "all terms required; empty terms dropped; single-term search intact"
+
+
+@test("torrents: adding before the engine is up says so", "Torrents")
+def test_torrent_session_not_ready_is_reported():
+    # The session is built on a background thread at startup — the comment in
+    # main.zig says DHT bootstrap takes 5-10s. Inside that window
+    # torrent_add_magnet gets a NULL session, returns -1, and the -1 branch
+    # reported "invalid or duplicate magnet". Observed 2026-08-04: a magnet
+    # posted to /api/load right after launch vanished with no torrent and no
+    # error, and re-posting the identical link seconds later worked. The message
+    # sent you off checking a link that was never the problem.
+    src = _src("src/services/search.zig")
+    guards = src.count("if (state.torrentSession() == null) {")
+    if guards < 2:
+        return "fail", (f"only {guards} of the 2 add paths (magnet, .torrent) check for a "
+                        "session — the other still reports a good link as invalid")
+    if "still starting" not in src:
+        return "fail", "the not-ready case has no user-facing message"
+    return "pass", "both add paths report a not-yet-ready engine instead of blaming the link"

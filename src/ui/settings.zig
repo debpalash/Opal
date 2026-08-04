@@ -2060,6 +2060,8 @@ fn renderNetworkTab() void {
 
         // Update proxy_url_len from null-terminated buffer
         state.app.proxy_url_len = std.mem.indexOfScalar(u8, &state.app.proxy_url, 0) orelse 0;
+        // Was a write-only field: stored, persisted, and read by nothing.
+        state.applyTorrentProxyIfReady();
         if (proxy_changed) state.markConfigDirty();
     }
     _ = dvui.label(@src(), "e.g. socks5://127.0.0.1:1080 — used for yt-dlp and playlist extraction", .{}, .{

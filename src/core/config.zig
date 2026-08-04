@@ -360,6 +360,9 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         if (val.len > 0 and val.len < state.app.proxy_url.len) {
             @memcpy(state.app.proxy_url[0..val.len], val);
             state.app.proxy_url_len = val.len;
+            // The session may not exist yet; applyTorrentProxyIfReady is
+            // idempotent and main.zig calls it again once it does.
+            state.applyTorrentProxyIfReady();
         }
     } else if (std.mem.eql(u8, key, "dpi_bypass_enabled")) {
         // The sidecar itself is started/stopped in main.coreInit (after this

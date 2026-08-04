@@ -657,6 +657,52 @@ extern "C" void torrent_set_download_limit(TorrentSession session, int limit_byt
     } catch(...) {}
 }
 
+// Route peer/tracker traffic through a proxy.
+//
+// The session had NO proxy configuration at all, while `proxy_url` sat in
+// Settings > Network, was persisted to config, and was read by nothing —
+// anywhere. Someone on a network that blocks BitTorrent would set it and see
+// no change and no explanation. This is the torrent half of making it mean
+// something.
+//
+// `scheme` is socks5 / socks4 / http; anything else clears the proxy. Hostname
+// resolution is pushed to the proxy (proxy_hostnames) so a DNS-level block on
+// the local resolver cannot leak the lookup, and the proxy is applied to peers
+// AND trackers — a proxy that covered trackers only would still expose every
+// peer connection.
+extern "C" void torrent_set_proxy(TorrentSession session, const char* scheme,
+                                  const char* host, int port,
+                                  const char* user, const char* pass) {
+    if (!session) return;
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+    try {
+        lt::settings_pack pack;
+        int type = lt::settings_pack::none;
+        const bool have_auth = user && *user && pass && *pass;
+        if (scheme && host && *host && port > 0) {
+            if (std::strcmp(scheme, "socks5") == 0)
+                type = have_auth ? lt::settings_pack::socks5_pw : lt::settings_pack::socks5;
+            else if (std::strcmp(scheme, "socks4") == 0)
+                type = lt::settings_pack::socks4;
+            else if (std::strcmp(scheme, "http") == 0)
+                type = have_auth ? lt::settings_pack::http_pw : lt::settings_pack::http;
+        }
+        pack.set_int(lt::settings_pack::proxy_type, type);
+        if (type != lt::settings_pack::none) {
+            pack.set_str(lt::settings_pack::proxy_hostname, host);
+            pack.set_int(lt::settings_pack::proxy_port, port);
+            if (have_auth) {
+                pack.set_str(lt::settings_pack::proxy_username, user);
+                pack.set_str(lt::settings_pack::proxy_password, pass);
+            }
+            pack.set_bool(lt::settings_pack::proxy_hostnames, true);
+            pack.set_bool(lt::settings_pack::proxy_peer_connections, true);
+            pack.set_bool(lt::settings_pack::proxy_tracker_connections, true);
+        }
+        ctx->ses->apply_settings(pack);
+    } catch(...) {}
+}
+
 extern "C" int torrent_get_piece_map(TorrentSession session, int torrent_id, char* out_map, int max_len) {
     if (!session || torrent_id < 0 || !out_map || max_len <= 0) return 0;
     SessionContext* ctx = static_cast<SessionContext*>(session);

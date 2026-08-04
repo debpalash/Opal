@@ -2164,6 +2164,17 @@ fn addMagnetToEngine(magnet_link: []const u8) void {
     const copy_len = @min(magnet_link.len, 4095);
     @memcpy(null_term_uri[0..copy_len], magnet_link[0..copy_len]);
 
+    // The session is built on a background thread at startup (DHT bootstrap
+    // takes 5-10s). Before it exists, torrent_add_magnet returns -1 and the old
+    // message for that was "invalid or duplicate magnet" — which is wrong, and
+    // sent people off checking a link that was fine. Clicking a result in the
+    // first few seconds after launch did nothing and blamed the link.
+    if (state.torrentSession() == null) {
+        @import("../core/logs.zig").pushLog("warn", "search", "Torrent engine still starting — magnet not added", true);
+        state.showToast("Torrent engine is still starting — try again in a moment");
+        return;
+    }
+
     const tid = c.mpv.torrent_add_magnet(state.torrentSession(), @ptrCast(&null_term_uri[0]), state.getSavePath());
     attachTorrentToPlayer(tid, magnet_link);
 }
@@ -2277,6 +2288,11 @@ pub fn addTorrentFileToEngine(path: []const u8) void {
     const copy_len = @min(path.len, 4095);
     @memcpy(null_term_path[0..copy_len], path[0..copy_len]);
 
+    if (state.torrentSession() == null) {
+        @import("../core/logs.zig").pushLog("warn", "search", "Torrent engine still starting — .torrent not added", true);
+        state.showToast("Torrent engine is still starting — try again in a moment");
+        return;
+    }
     const tid = c.mpv.torrent_add_file(state.torrentSession(), @ptrCast(&null_term_path[0]), state.getSavePath());
     if (tid < 0) {
         logs.pushLog("error", "search", "Failed to add torrent — invalid .torrent file or already added", true);

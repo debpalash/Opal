@@ -87,3 +87,45 @@ def test_dpi_bypass_orphan_reap():
     if bad:
         return "fail", "missing: " + ", ".join(bad)
     return "pass", "start() and dev.sh both reap stale sidecars before/around spawn"
+
+
+@test("proxy_url reaches the torrent session, not just the config file", "Network")
+def test_proxy_url_is_wired():
+    # `proxy_url` was a WRITE-ONLY setting. It had a text field in Settings >
+    # Network, a config key that round-tripped, a row in the web settings
+    # registry — and not one reader anywhere in src/. Someone on a network that
+    # blocks BitTorrent (the exact case the DPI-bypass feature exists for) would
+    # set it, see no change, and get no explanation. The torrent session had no
+    # settings_pack proxy configuration at all.
+    svc = _src("src/torrent_wrapper.cpp")
+    hdr = _src("src/torrent_wrapper.h")
+    st = _src("src/core/state.zig")
+    cfg = _src("src/core/config.zig")
+    settings = _src("src/ui/settings.zig")
+    rm = _src("src/services/remote.zig")
+    pure = _src("src/services/proxy_url_pure.zig")
+    bld = _src("build.zig")
+
+    checks = {
+        "wrapper exposes a proxy setter": "torrent_set_proxy" in svc and "torrent_set_proxy" in hdr,
+        "sets libtorrent proxy_type": "settings_pack::proxy_type" in svc,
+        # A proxy covering trackers but not peers would still expose every peer
+        # connection — which is the traffic actually being blocked.
+        "covers peers AND trackers":
+            "proxy_peer_connections" in svc and "proxy_tracker_connections" in svc,
+        # Resolving locally would leak the lookup past the proxy.
+        "resolves at the proxy": "proxy_hostnames" in svc,
+        "parsing lives in a tested pure module":
+            "pub fn parse(" in pure and "proxy_url_pure.zig" in bld,
+        "state applies it": "pub fn applyTorrentProxyIfReady()" in st,
+        # Every edit path, or the setting works from some screens and not others.
+        "config load applies": "applyTorrentProxyIfReady()" in cfg,
+        "desktop settings applies": "applyTorrentProxyIfReady()" in settings,
+        "web settings applies": "applyTorrentProxyIfReady()" in rm,
+        # Blanking the field must mean direct, not "keep the last proxy".
+        "empty value clears the proxy": 'torrent_set_proxy(ses, "", "", 0, "", "")' in st,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "proxy_url wiring: " + ", ".join(bad)
+    return "pass", "proxy_url parses, reaches libtorrent, covers peers+trackers, clears when blank"

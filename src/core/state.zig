@@ -1331,6 +1331,46 @@ pub fn applyDownloadLimitIfReady() void {
     c.mpv.torrent_set_download_limit(ses, lim);
 }
 
+/// Push `proxy_url` into the torrent session. Same both-edges idempotence as
+/// applyDownloadLimitIfReady: the session and the config load on independent
+/// threads, so whichever lands last is the one that applies.
+///
+/// Called on config load and whenever the setting changes. An empty or
+/// unparseable value CLEARS the proxy rather than leaving a stale one behind —
+/// a user who blanks the field expects direct connections, not the previous
+/// proxy still quietly in place.
+pub fn applyTorrentProxyIfReady() void {
+    const ses = torrentSession();
+    if (ses == null) return;
+    const raw = app.proxy_url[0..@min(app.proxy_url_len, app.proxy_url.len)];
+    const pure = @import("../services/proxy_url_pure.zig");
+    var host_buf: [128:0]u8 = undefined;
+    var user_buf: [64:0]u8 = undefined;
+    var pass_buf: [64:0]u8 = undefined;
+    if (pure.parse(raw)) |px| {
+        if (px.host.len >= host_buf.len or px.user.len >= user_buf.len or px.pass.len >= pass_buf.len) {
+            @import("logs.zig").pushLog("error", "torrent", "Proxy URL too long — ignored", true);
+            return;
+        }
+        @memcpy(host_buf[0..px.host.len], px.host);
+        host_buf[px.host.len] = 0;
+        @memcpy(user_buf[0..px.user.len], px.user);
+        user_buf[px.user.len] = 0;
+        @memcpy(pass_buf[0..px.pass.len], px.pass);
+        pass_buf[px.pass.len] = 0;
+        var scheme_buf: [8:0]u8 = undefined;
+        const st = px.scheme.text();
+        @memcpy(scheme_buf[0..st.len], st);
+        scheme_buf[st.len] = 0;
+        c.mpv.torrent_set_proxy(ses, &scheme_buf, &host_buf, @intCast(px.port), &user_buf, &pass_buf);
+        var msg: [160]u8 = undefined;
+        const line = std.fmt.bufPrint(&msg, "Torrent traffic routed via {s}://{s}:{d}", .{ st, px.host, px.port }) catch "Torrent proxy set";
+        @import("logs.zig").pushLog("info", "torrent", line, false);
+    } else {
+        c.mpv.torrent_set_proxy(ses, "", "", 0, "", "");
+    }
+}
+
 /// Serializes player teardown (UI thread frees players at frame top) against the
 /// remote API server thread, which captures a *MediaPlayer and drives mpv on it.
 /// Without this the remote thread can dereference a freed player → use-after-free.

@@ -2763,6 +2763,7 @@ fn settingApply(k: sap.Key, raw: []const u8) bool {
                 @memset(&state.app.proxy_url, 0);
                 @memcpy(state.app.proxy_url[0..n], t[0..n]);
                 state.app.proxy_url_len = n;
+                state.applyTorrentProxyIfReady();
             } else if (std.mem.eql(u8, k.name, "save_path")) {
                 // Leave room for the NUL state.zig writes at [save_path_len].
                 const n = @min(t.len, state.app.save_path_buf.len - 1);

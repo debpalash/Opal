@@ -720,6 +720,15 @@ pub fn build(b: *std.Build) void {
 
     // DPI-bypass sidecar: mode validation, the "127.0.0.1:<port>" builder, and
     // the enabled&&running proxy gate. dpi_bypass.zig routes through these.
+    const test_proxy_url_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/proxy_url_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_proxy_url_pure).step);
+
     const test_dpi_bypass_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/dpi_bypass_pure.zig"),

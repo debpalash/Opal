@@ -68,6 +68,10 @@ void torrent_destroy(TorrentSession session);
 void torrent_set_file_priority(TorrentSession session, int torrent_id, int file_idx, int priority);
 float torrent_get_file_progress(TorrentSession session, int torrent_id, int file_idx);
 void torrent_set_download_limit(TorrentSession session, int limit_bytes_per_sec);
+/// Route peer AND tracker traffic through a proxy. scheme: socks5|socks4|http;
+/// anything else (or an empty host / port <= 0) clears it. user/pass may be NULL.
+void torrent_set_proxy(TorrentSession session, const char* scheme, const char* host,
+                       int port, const char* user, const char* pass);
 int torrent_get_piece_map(TorrentSession session, int torrent_id, char* out_map, int max_len);
 int torrent_ensure_streaming_buffer(TorrentSession session, int torrent_id, int file_idx, double percent_pos);
 void torrent_seek_prioritize(TorrentSession session, int torrent_id, int file_idx, double percent_pos);

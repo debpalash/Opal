@@ -117,6 +117,7 @@ pub fn coreInit() !void {
             // if config already loaded (idempotent; config load covers the
             // reverse ordering).
             state.applyDownloadLimitIfReady();
+            state.applyTorrentProxyIfReady();
             logs.pushLog("info", "torrent", "Torrent session ready", false);
         }
     }.worker, .{})) |t| t.detach() else |_| {}
