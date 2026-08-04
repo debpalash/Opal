@@ -72,8 +72,56 @@ COVERED = {
 }
 
 # Desktop capabilities with no web equivalent yet. `why` is what a user loses.
+#
+# Audited 2026-08-04 against the source enums below. Seven of these were not in
+# either list before — the two lists were hand-maintained and nothing checked
+# them against router.zig / state.zig, so a desktop tab could exist with no web
+# equivalent and no entry here, and parity still read 98%. It was really 83%.
 GAPS = {
-    "file associations": "Desktop Settings › File Types (default handler registration). Desktop-only by nature.",
+    "suwayomi config":   "Plugins › Suwayomi (manga server URL, extension install). No /api route at all.",
+    "debrid link":       "Plugins › Debrid (Real-Debrid / AllDebrid account link). No /api route at all.",
+    "trakt sync":        "Plugins › Trakt (scrobbling, watch-status sync). No /api route at all.",
+    "general settings":  "Settings › General. Not in the web settings registry (settings_api_pure.KEYS).",
+    "scripts settings":  "Settings › Scripts (user script hooks). Not in the registry.",
+    "live tv settings":  "Settings › Live TV (playlist/EPG sources). The /livetv *browser* is covered; its settings are not.",
+    "web ui settings":   "Settings › Web UI (port, bind address). Chicken-and-egg from the web UI, but a remote user still can't see it.",
+    "about":             "Settings › About (version, build info). Cosmetic, but nothing surfaces it.",
+}
+
+# Desktop capabilities a browser cannot have, by nature — counted separately so
+# the parity percentage measures *closable* distance rather than being pinned
+# below 100% forever by something no amount of work can close.
+NOT_APPLICABLE = {
+    "file associations": "Registering the OS default handler for media files. A web page cannot do this.",
+}
+
+# Every desktop navigation surface, read out of the source enums, mapped to the
+# capability name it is classified under. The completeness test below fails if
+# an enum variant is missing here, or if its name lands in none of the three
+# buckets — which is exactly the rot that hid the seven gaps above.
+DESKTOP_SURFACES = {
+    # src/core/router.zig :: Route
+    "Route": {
+        "home": "home hub", "search": "search", "browse": "browse (TMDB)",
+        "watching": "watching library", "downloads": "downloads", "queue": "queue",
+        "history": "history", "player": "now playing", "assistant": "assistant (AI)",
+        "settings": "playback settings", "plugins": "plugins manager",
+        "system": "logs (system)",
+    },
+    # src/core/state.zig :: SettingsTab
+    "SettingsTab": {
+        "General": "general settings", "Playback": "playback settings",
+        "Network": "network settings", "Subtitles": "subtitle settings",
+        "Storage": "storage settings", "WebUi": "web ui settings",
+        "Scripts": "scripts settings", "AI": "ai & voice settings",
+        "LangLearn": "language learning", "FileAssoc": "file associations",
+        "LiveTv": "live tv settings", "About": "about",
+    },
+    # src/core/router.zig :: PluginTab
+    "PluginTab": {
+        "sources": "source catalog install", "suwayomi": "suwayomi config",
+        "debrid": "debrid link", "trakt": "trakt sync", "content": "plugins manager",
+    },
 }
 
 
@@ -123,6 +171,9 @@ def test_parity_gaps():
     }
     closed = [g for g, found in evidence.items() if found and g in GAPS]
 
+    # N/A items are excluded from the denominator: parity measures closable
+    # distance, and pinning the metric below 100% with something unclosable
+    # makes it useless as a target.
     total = len(COVERED) + len(GAPS)
     pct = round(100 * len(COVERED) / total)
     if closed:
@@ -130,3 +181,48 @@ def test_parity_gaps():
                         f"promote them into COVERED: {', '.join(closed)}")
     return "warn", (f"parity {pct}% ({len(COVERED)}/{total}) — {len(GAPS)} gaps remain: "
                     + ", ".join(sorted(GAPS)))
+
+
+def _enum_variants(src, name):
+    """Variant names of `pub const <name> = enum {...}` — one-line or block."""
+    m = re.search(r"pub const " + name + r" = enum \{(.*?)\}", src, re.S)
+    if not m:
+        return []
+    body = re.sub(r"//[^\n]*", "", m.group(1))          # strip doc/line comments
+    return [v.strip() for v in body.split(",") if v.strip()]
+
+
+@test("Desktop ⇄ web parity: every desktop surface is classified", "Parity")
+def test_parity_completeness():
+    # The guard the parity metric was missing. COVERED/GAPS are hand-written, so
+    # before this a new desktop tab could ship with no web equivalent and no
+    # entry in either list, leaving the percentage untouched. Audited 2026-08-04:
+    # seven surfaces were unclassified that way and the real figure was 83%, not
+    # 98%. Deriving the desktop side from the enums is what makes the number mean
+    # something.
+    router = _src("src/core/router.zig")
+    state = _src("src/core/state.zig")
+    known = set(COVERED) | set(GAPS) | set(NOT_APPLICABLE)
+
+    found = {
+        "Route": _enum_variants(router, "Route"),
+        "PluginTab": _enum_variants(router, "PluginTab"),
+        "SettingsTab": _enum_variants(state, "SettingsTab"),
+    }
+
+    problems = []
+    for enum_name, variants in found.items():
+        if not variants:
+            problems.append(f"{enum_name}: could not parse the enum from source")
+            continue
+        mapped = DESKTOP_SURFACES.get(enum_name, {})
+        for v in variants:
+            if v not in mapped:
+                problems.append(f"{enum_name}.{v} is unclassified — add it to DESKTOP_SURFACES")
+            elif mapped[v] not in known:
+                problems.append(f"{enum_name}.{v} → '{mapped[v]}' is in no bucket")
+    if problems:
+        return "fail", f"unclassified desktop surfaces ({len(problems)}): " + "; ".join(problems[:6])
+
+    n = sum(len(v) for v in found.values())
+    return "pass", f"all {n} desktop surfaces across 3 enums are classified"
