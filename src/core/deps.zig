@@ -549,7 +549,7 @@ pub fn fetchWhisperModelAsync() void {
                     return;
                 };
                 _ = curl.wait() catch {};
-                logs.pushLog("info", "deps", "Whisper model ready at ~/.config/opal/models/", false);
+                logs.pushLog("info", "deps", "Whisper model ready", false);
                 return;
             };
         }

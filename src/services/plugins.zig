@@ -1293,7 +1293,7 @@ fn renderContentPlugins() void {
             var hint_buf: [256]u8 = undefined;
             var dir_buf2: [512]u8 = undefined;
             const pd = getPluginDir(&dir_buf2);
-            const hint = std.fmt.bufPrintZ(&hint_buf, "Install plugins to: {s}", .{pd}) catch "~/.config/opal/plugins/";
+            const hint = std.fmt.bufPrintZ(&hint_buf, "Install plugins to: {s}", .{pd}) catch "Install plugins to the Opal plugins folder";
             _ = dvui.label(@src(), "{s}", .{hint}, .{
                 .color_text = theme.colors.text_tertiary, .expand = .horizontal,
             });

@@ -3834,7 +3834,7 @@ fn renderScriptsTab() void {
     settingRow("Installed Scripts", 71, @src());
 
     if (state.app.script_count == 0) {
-        _ = dvui.label(@src(), "No scripts found in ~/.config/mpv/scripts/ or ~/.config/opal/scripts/", .{}, .{
+        _ = dvui.label(@src(), "No scripts found in the mpv or Opal scripts folder", .{}, .{
             .color_text = theme.colors.text_tertiary,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
         });
@@ -4163,10 +4163,10 @@ pub fn renderDepsModal() void {
         .{ .name = "whisper-cpp", .desc = "STT engine (default)", .ok = s.whisper },
         .{ .name = "ggml-tiny.en", .desc = "whisper model (auto-downloading)", .ok = s.whisper_model, .pending = !s.whisper_model },
         .{ .name = "sherpa-onnx", .desc = "STT engine (optional — streaming + VITS TTS)", .ok = s.sherpa_onnx },
-        .{ .name = "sherpa STT model", .desc = if (sherpa_dl) "Downloading sherpa whisper-tiny…" else "~/.config/opal/models/sherpa-whisper-tiny/ (click Download)", .ok = s.sherpa_model, .pending = sherpa_dl },
-        .{ .name = "sherpa TTS model", .desc = if (tts_dl) "Downloading Piper-VITS en_US-lessac-medium…" else "~/.config/opal/models/sherpa-vits-piper/ (click Download)", .ok = s.sherpa_tts_model, .pending = tts_dl },
-        .{ .name = "sherpa streaming", .desc = if (deps_mod.sherpa_stream_downloading) "Downloading streaming Zipformer…" else "~/.config/opal/models/sherpa-stream-zipformer/ (live convo mode)", .ok = s.sherpa_stream_model, .pending = deps_mod.sherpa_stream_downloading },
-        .{ .name = "sherpa Kokoro", .desc = if (deps_mod.sherpa_kokoro_downloading) "Downloading Kokoro (~330MB)…" else "~/.config/opal/models/sherpa-kokoro/ (premium TTS, 53+ voices)", .ok = s.sherpa_kokoro_model, .pending = deps_mod.sherpa_kokoro_downloading },
+        .{ .name = "sherpa STT model", .desc = if (sherpa_dl) "Downloading sherpa whisper-tiny…" else "click Download", .ok = s.sherpa_model, .pending = sherpa_dl },
+        .{ .name = "sherpa TTS model", .desc = if (tts_dl) "Downloading Piper-VITS en_US-lessac-medium…" else "click Download", .ok = s.sherpa_tts_model, .pending = tts_dl },
+        .{ .name = "sherpa streaming", .desc = if (deps_mod.sherpa_stream_downloading) "Downloading streaming Zipformer…" else "click Download", .ok = s.sherpa_stream_model, .pending = deps_mod.sherpa_stream_downloading },
+        .{ .name = "sherpa Kokoro", .desc = if (deps_mod.sherpa_kokoro_downloading) "Downloading Kokoro (~330MB)…" else "premium TTS, 53+ voices", .ok = s.sherpa_kokoro_model, .pending = deps_mod.sherpa_kokoro_downloading },
     };
 
     for (rows, 0..) |r, i| {
