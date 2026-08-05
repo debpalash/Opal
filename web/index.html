@@ -1224,12 +1224,22 @@ async function loadSetup(){
 // every play handed the item to mpv and the page showed nothing. PLAY_HERE
 // makes the page a real player when the media is one a browser can decode.
 //
-// Opal has no transcoder, so `classifyPlayable` mirrors
-// services/playback_target_pure.zig: refuse with a reason rather than hand
-// <video> an MKV/H.265 and leave the user staring at a black rectangle.
+// Mirrors services/playback_target_pure.zig — keep the two tables in step.
+// Three outcomes, not two: the server transcodes (ffmpeg -> fragmented MP4 at
+// /transcode), so an MKV or an H.265 mp4 is a `transcode` candidate rather than
+// a refusal. `unsupported` is only for what nothing can play. This page used to
+// call every one of those `unsupported`, which meant "Play here" turned away
+// almost every real release while a working transcoder sat unused.
 let PLAY_HERE = localStorage.getItem('opal_play_here') === '1';
+// Set from /api/transcode/available at load: without ffmpeg on the server the
+// transcode branch has to degrade to the honest message instead of pointing
+// <video> at a 501.
+let TRANSCODE_OK = false;
 const DIRECT_EXT = ['mp4','m4v','webm','ogv','mp3','m4a','aac','oga','ogg','opus','wav','flac'];
-const NOPLAY_EXT = ['mkv','avi','wmv','flv','vob','rmvb','asf','mpg','mpeg','m2ts','mts','ts','divx','3gp','iso'];
+const TRANSCODE_EXT = ['mkv','avi','wmv','flv','vob','rmvb','asf','mpg','mpeg','m2ts','mts','ts','divx','3gp'];
+// A disc image is not a stream — ffmpeg cannot read one either, so offering to
+// transcode it would fail only after the user had waited.
+const NOPLAY_EXT = ['iso'];
 const BAD_CODEC = ['x265','h265','hevc','x266','av1','vc1','mpeg2','dts','truehd','eac3','ac3','atmos'];
 function classifyPlayable(name){
   if (!name) return 'unsupported';
@@ -1237,14 +1247,17 @@ function classifyPlayable(name){
   const ext = clean.includes('.') ? clean.slice(clean.lastIndexOf('.') + 1) : '';
   if (ext === 'm3u8') return 'hls';
   if (NOPLAY_EXT.includes(ext)) return 'unsupported';
+  if (TRANSCODE_EXT.includes(ext)) return 'transcode';
   if (DIRECT_EXT.includes(ext))
-    return BAD_CODEC.some(m => String(name).toLowerCase().includes(m)) ? 'unsupported' : 'direct';
+    return BAD_CODEC.some(m => String(name).toLowerCase().includes(m)) ? 'transcode' : 'direct';
   return /^https?:\/\//i.test(name) ? 'direct' : 'unsupported';
 }
 function playabilityReason(p){
-  return p === 'hls'
-    ? "Live streams play in Safari; other browsers need the desktop app."
-    : "This format can't play in a browser — open it on the desktop.";
+  if (p === 'hls') return "Live streams play in Safari; other browsers need the desktop app.";
+  if (p === 'transcode') return TRANSCODE_OK
+    ? "Only files in your library can be transcoded — open this one on the desktop."
+    : "This format needs transcoding — install ffmpeg on the Opal machine, or open it on the desktop.";
+  return "This format can't play in a browser — open it on the desktop.";
 }
 // Safari (and iOS) play HLS natively; nothing else does without an MSE shim,
 // which we do not bundle.
@@ -1268,9 +1281,72 @@ function dispatchPlay(url, title, fallback, classifyName){
   const cls = classifyPlayable(classifyName || url);
   if (cls === 'direct') return openStreamUrl(url, title);
   if (cls === 'hls' && (NATIVE_HLS || window.Hls)) return openHls(url, title);
+  if (cls === 'transcode') {
+    // The transcoder reads a file from the library by relative path, so it can
+    // only help when this play came from a /stream URL — a remote http URL is
+    // not something the server has on disk.
+    const rel = relFromStreamUrl(url);
+    if (TRANSCODE_OK && rel) return openTranscode(rel, title);
+  }
   toast(playabilityReason(cls));
   if (fallback) fallback();
 }
+
+/// The library-relative path inside a /stream URL, or '' for anything else.
+function relFromStreamUrl(url){
+  try {
+    const u = new URL(url, location.href);
+    if (!u.pathname.endsWith('/stream')) return '';
+    return u.searchParams.get('file') || '';
+  } catch { return ''; }
+}
+
+function transcodeUrl(rel, startSecs){
+  return BASE + '/transcode?file=' + encodeURIComponent(rel)
+       + '&t=' + encodeURIComponent(TOKEN)
+       + (startSecs ? '&start=' + Math.floor(startSecs) : '');
+}
+
+/// Play a library file through the server-side transcoder.
+///
+/// The output is a live fragmented MP4: it has no length and no Range support,
+/// so <video> cannot seek it the normal way — currentTime is always relative to
+/// wherever this encode began. Seeking therefore RESTARTS the encode at the new
+/// offset, and `_tcBase` carries how far in that restart was so the UI can show
+/// a real position. Without this the scrubber looks broken: it snaps back to 0
+/// and refuses to move.
+function openTranscode(rel, title, startSecs){
+  const v = $('video');
+  const base = Math.max(0, Math.floor(startSecs || 0));
+  $('player-title').textContent = (title || '') + ' — transcoding';
+  [...v.querySelectorAll('track')].forEach(tr => tr.remove());
+  try { if (v._hls) { v._hls.destroy(); v._hls = null; } } catch {}
+  v._tcRel = rel; v._tcTitle = title || ''; v._tcBase = base;
+  v.src = transcodeUrl(rel, base);
+  $('player').classList.add('on');
+  v.onerror = () => {
+    $('player-title').textContent = (title || '') + ' — transcode failed (is ffmpeg installed?)';
+  };
+  v.play().catch(()=>{});
+}
+
+// Seek on a transcoded stream = restart the encode at the target offset.
+// Guarded against the seek that our own restart triggers (`_tcSeeking`), which
+// would otherwise loop: set src -> seeked -> set src -> ...
+(function wireTranscodeSeek(){
+  const v = $('video');
+  if (!v) return;
+  v.addEventListener('seeking', () => {
+    if (!v._tcRel || v._tcSeeking) return;
+    const target = (v._tcBase || 0) + v.currentTime;
+    // A seek inside what the current encode already produced is real seeking —
+    // let the element do it rather than paying for a restart.
+    if (v.buffered.length && v.currentTime <= v.buffered.end(v.buffered.length - 1)) return;
+    v._tcSeeking = true;
+    openTranscode(v._tcRel, v._tcTitle, target);
+    setTimeout(() => { v._tcSeeking = false; }, 500);
+  });
+})();
 
 // HLS. Safari demuxes it natively; everything else needs an MSE shim.
 // hls.js is vendored under web/vendor/ and loaded by a script tag in the head
@@ -1315,6 +1391,13 @@ function setPlayHere(on){
   document.querySelectorAll('.dest-btn').forEach(b =>
     b.textContent = PLAY_HERE ? 'Playing here' : 'Playing on desktop');
 }
+
+// Is the server able to transcode? Asked once, and only used to choose between
+// transcoding and an honest message — never to hide the toggle, since direct
+// play works with or without ffmpeg.
+api('/transcode/available')
+  .then(r => { TRANSCODE_OK = !!(r && r.available); })
+  .catch(() => { TRANSCODE_OK = false; });
 
 // ── Home hub ──
 // Composes /api/home (counts + continue) with the pre-existing /calendar rail
