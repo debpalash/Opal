@@ -132,3 +132,47 @@ def test_watching_remove():
         return "fail", "movie removal does not guard hist_idx < 0"
     return "pass", ("all three kinds removable from Watching; watched flags "
                     "preserved so re-adding does not reset progress")
+
+
+@test("Watched/watching items can be removed one at a time", "Library")
+def watch_items_are_removable():
+    """There was no way to drop a single item — only Clear All.
+
+    watch_history.remove() existed and NOTHING called it: the "Jump back in"
+    rail on Home had no per-card affordance, and the only escape was Settings ›
+    Clear All, which takes the entire history. Separately, the Continue Watching
+    rail is built from renderPosterCard, and the watching toggle lived only in
+    the list-view card (renderCard) — so the one row where you want to say "done
+    with this" was the one row that could not.
+
+    The ordering assertion matters as much as the button: dvui.clicked() consumes
+    the press and a parent runs before its children, so a card that checks its
+    own click before drawing the X swallows every click inside it and the X can
+    never fire. Hover is read from the pointer position instead, and the card's
+    click is checked last.
+    """
+    home = _src("src/ui/home.zig")
+    tm = _src("src/services/tmdb.zig")
+    wh = _src("src/player/watch_history.zig")
+
+    rail = _between(home, "fn renderRecentlyPlayed()", "// ── Empty state ──")
+    poster = _between(tm, "pub fn renderPosterCard(", "\nfn renderCard(")
+
+    checks = {
+        "remove() is actually called now": "wh.remove(i);" in rail,
+        "remove() still deletes from the db": "DELETE FROM watch_history" in wh,
+        # Structural: the X must be reachable, so the card cannot eat the click
+        # first. Hover from geometry, click checked after the button.
+        "hover does not consume the click": "card_r.contains(dvui.currentWindow().mouse_pt)" in rail,
+        "card click checked after remove": rail.index("wh.remove(i);") < rail.index("dvui.clicked(card.data()"),
+        # Removing compacts the array — every later entry shifts down.
+        "iteration stops after removing": "break;" in rail[rail.index("wh.remove(i);"):rail.index("wh.remove(i);") + 200],
+        # Continue Watching is poster cards; it needs the toggle the list has.
+        "poster card can leave the watching list": "state.app.tmdb.watching" in poster
+                                                   and "toggleList(&state.app.tmdb.watching" in poster,
+        "the toggle persists": "store.saveLists();" in poster,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "per-item removal incomplete: " + ", ".join(missing)
+    return "pass", "history rows remove individually; posters can leave Continue Watching"

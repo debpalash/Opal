@@ -1252,10 +1252,17 @@ fn renderRecentlyPlayed() void {
         });
         defer card.deinit();
 
-        var hovered = false;
-        if (dvui.clicked(card.data(), .{ .hovered = &hovered })) {
-            if (e.link_len > 0) browser.resumePlayback(e.link[0..e.link_len]);
-        }
+        // Hover is computed from geometry, and the card's CLICK is checked at
+        // the bottom of the card instead of here.
+        //
+        // dvui.clicked() consumes the press and captures the mouse, and a parent
+        // runs before the children it contains. Asking the card first — as this
+        // did — meant the card swallowed every click inside it, so the remove
+        // button below could never fire: pressing X would resume playback.
+        // Reading the pointer position directly decides hover without taking the
+        // event, leaving the X first claim on clicks that land on it.
+        const card_r = card.data().borderRectScale().r;
+        const hovered = card_r.contains(dvui.currentWindow().mouse_pt);
         if (hovered) card.data().options.color_fill = theme.colors.bg_hover;
         card.drawBackground();
 
@@ -1281,58 +1288,96 @@ fn renderRecentlyPlayed() void {
             });
         }
 
-        var meta = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i + 70000, .gravity_y = 0.5 });
-        defer meta.deinit();
-        _ = dvui.label(@src(), "{s}", .{name}, .{
-            .id_extra = i + 70000,
-            .color_text = theme.colors.text_primary,
-            .padding = dvui.Rect.all(0),
-            .margin = dvui.Rect.all(0),
-        });
         {
-            var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            var meta = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i + 70000, .gravity_y = 0.5 });
+            defer meta.deinit();
+            _ = dvui.label(@src(), "{s}", .{name}, .{
                 .id_extra = i + 70000,
-                .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
+                .color_text = theme.colors.text_primary,
+                .padding = dvui.Rect.all(0),
+                .margin = dvui.Rect.all(0),
             });
-            defer prow.deinit();
-            const bar_w: f32 = 140;
             {
-                var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .id_extra = i + 70000,
-                    .min_size_content = .{ .w = bar_w, .h = 4 },
-                    .max_size_content = .{ .w = bar_w, .h = 4 },
-                    .background = true,
-                    .color_fill = theme.colors.bg_elevated,
-                    .corner_radius = dvui.Rect.all(theme.radius.pill),
-                    .gravity_y = 0.5,
+                    .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
                 });
-                defer bar.deinit();
-                const fill_w = bar_w * frac;
-                if (fill_w >= 1) {
-                    var fill = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                defer prow.deinit();
+                const bar_w: f32 = 140;
+                {
+                    var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
                         .id_extra = i + 70000,
-                        .min_size_content = .{ .w = fill_w, .h = 4 },
-                        .max_size_content = .{ .w = fill_w, .h = 4 },
+                        .min_size_content = .{ .w = bar_w, .h = 4 },
+                        .max_size_content = .{ .w = bar_w, .h = 4 },
                         .background = true,
-                        .color_fill = if (done) theme.colors.success else theme.colors.accent,
+                        .color_fill = theme.colors.bg_elevated,
                         .corner_radius = dvui.Rect.all(theme.radius.pill),
+                        .gravity_y = 0.5,
                     });
-                    fill.deinit();
+                    defer bar.deinit();
+                    const fill_w = bar_w * frac;
+                    if (fill_w >= 1) {
+                        var fill = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                            .id_extra = i + 70000,
+                            .min_size_content = .{ .w = fill_w, .h = 4 },
+                            .max_size_content = .{ .w = fill_w, .h = 4 },
+                            .background = true,
+                            .color_fill = if (done) theme.colors.success else theme.colors.accent,
+                            .corner_radius = dvui.Rect.all(theme.radius.pill),
+                        });
+                        fill.deinit();
+                    }
                 }
+                var small_font = dvui.themeGet().font_body;
+                small_font.size = theme.font_size.small;
+                var pb: [16]u8 = undefined;
+                if (std.fmt.bufPrint(&pb, "{d}%", .{pct})) |ps| {
+                    _ = dvui.label(@src(), "{s}", .{ps}, .{
+                        .id_extra = i + 70500,
+                        .color_text = if (done) theme.colors.success else theme.colors.text_tertiary,
+                        .font = small_font,
+                        .gravity_y = 0.5,
+                        .padding = dvui.Rect.all(0),
+                        .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
+                    });
+                } else |_| {}
             }
-            var small_font = dvui.themeGet().font_body;
-            small_font.size = theme.font_size.small;
-            var pb: [16]u8 = undefined;
-            if (std.fmt.bufPrint(&pb, "{d}%", .{pct})) |ps| {
-                _ = dvui.label(@src(), "{s}", .{ps}, .{
-                    .id_extra = i + 70500,
-                    .color_text = if (done) theme.colors.success else theme.colors.text_tertiary,
-                    .font = small_font,
-                    .gravity_y = 0.5,
-                    .padding = dvui.Rect.all(0),
-                    .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
-                });
-            } else |_| {}
+        }
+
+        // ── Remove this row from history ──
+        //
+        // watch_history.remove() has always existed and nothing ever called it:
+        // the only way to get rid of a finished film, a mis-click, or a torrent
+        // you abandoned was Settings › Clear All, which takes the whole history
+        // with it. So the rail filled up with things you were done with and
+        // there was no way to say so.
+        //
+        // Hover-revealed rather than always drawn — these cards are 250x44 and a
+        // permanent X next to every one turns a resume rail into a to-do list.
+        // Deleting the entry shifts every later entry down by one, so this is
+        // the LAST thing the card does and the loop stops immediately after: `e`
+        // and everything read from it are dangling once remove() compacts.
+        if (hovered) {
+            var sp = dvui.box(@src(), .{}, .{ .id_extra = i + 71000, .expand = .horizontal });
+            sp.deinit();
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
+                .id_extra = i + 71000,
+                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_text = theme.colors.text_tertiary,
+                .padding = dvui.Rect.all(2),
+                .min_size_content = theme.iconSize(.xs),
+                .gravity_y = 0.5,
+            })) {
+                wh.remove(i);
+                dvui.refresh(null, @src(), null);
+                break;
+            }
+        }
+
+        // Resume — checked AFTER the remove button so X wins a click that lands
+        // on it (see the hover note above). Anywhere else on the card resumes.
+        if (dvui.clicked(card.data(), .{})) {
+            if (e.link_len > 0) browser.resumePlayback(e.link[0..e.link_len]);
         }
     }
 }
@@ -1348,7 +1393,7 @@ fn renderEmptyState() void {
     });
     defer box.deinit();
 
-    dvui.icon(@src(), "empty", icons.tvg.lucide.@"clapperboard", .{}, .{
+    dvui.icon(@src(), "empty", icons.tvg.lucide.clapperboard, .{}, .{
         .color_text = theme.colors.accent_dim,
         .min_size_content = theme.iconSize(.hero),
         .gravity_x = 0.5,

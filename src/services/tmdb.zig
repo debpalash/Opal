@@ -957,6 +957,26 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
                 store.saveLists();
             }
         }
+        // Watching.
+        //
+        // The list-view card (renderCard) has always had this toggle; the poster
+        // card never did. The poster card is what "Continue Watching" on Home is
+        // built from, so the one row where you actually want to say "done with
+        // this" was the one row that could not. Removing it needed a trip to the
+        // TMDB list view to find the same title.
+        {
+            const wac = if (store.isInList(&state.app.tmdb.watching, item.id)) theme.colors.success else dim;
+            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.eye, .{}, .{}, .{
+                .id_extra = idx + 9000,
+                .color_fill = trans,
+                .color_text = wac,
+                .padding = dvui.Rect.all(1),
+                .min_size_content = theme.iconSize(.xs),
+            })) {
+                store.toggleList(&state.app.tmdb.watching, item);
+                store.saveLists();
+            }
+        }
         // Search
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.search, .{}, .{}, .{
             .id_extra = idx + 10000,
