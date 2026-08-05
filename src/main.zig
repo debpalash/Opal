@@ -186,8 +186,6 @@ pub fn coreInit() !void {
             // thing it measures would be a bad joke.
             @import("core/sysmon.zig").start();
 
-
-
             // Page-shell preview opt-in (redesign, WIP). Enable with
             // OPAL_PAGE_SHELL=1 to render the new website-like layout.
             if (@import("core/io_global.zig").getenv("OPAL_PAGE_SHELL")) |v| {

@@ -337,8 +337,13 @@ pub fn renderSection() void {
     var strip = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none, .horizontal_bar = .hide }, .{
         .expand = .horizontal,
         .background = false,
-        .min_size_content = .{ .w = 10, .h = media_card.POSTER_H + media_card.CHROME_H + 12 },
-        .max_size_content = .{ .w = std.math.floatMax(f32), .h = media_card.POSTER_H + media_card.CHROME_H + 12 },
+        // These cards carry an action button and no progress bar; ask the card
+        // for its height rather than restating it, so a change to the card's
+        // chrome cannot silently start clipping this rail.
+        .min_size_content = .{ .w = 10, .h = media_card.cardHeight(false, true) + 12 },
+        // Height is a floor, not a ceiling — same reason as the card itself: a
+        // hard max here would clip the very row it is sized to show.
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = std.math.floatMax(f32) },
         .padding = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = 0 },
     });
     defer strip.deinit();

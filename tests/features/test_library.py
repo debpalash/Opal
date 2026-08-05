@@ -176,3 +176,42 @@ def watch_items_are_removable():
     if missing:
         return "fail", "per-item removal incomplete: " + ", ".join(missing)
     return "pass", "history rows remove individually; posters can leave Continue Watching"
+
+
+@test("Card action row is never clipped out of its own card", "Library")
+def card_action_row_fits():
+    """The Watching page's Play and Remove controls were squeezed to zero height.
+
+    media_card pinned min == max at POSTER_H + CHROME_H, and CHROME_H was
+    documented as "title + status line + (progress bar | action button)" — an
+    EITHER/OR. Every Watching row asks for BOTH: a progress bar and a
+    Play/Remove row. The action row was laid out past the bottom of the box and
+    collapsed to nothing. Measured on the running app: the card spanned y
+    207..686 and the action row 686..686. That is why the page had no visible
+    way to remove a show even though removeRow() was wired and the button had a
+    tooltip. With the height sized for what the card carries, the same row
+    measures 690..732 inside a card of 207..732.
+
+    The rule that keeps it fixed: the height is a FLOOR, never a ceiling. If the
+    estimate is low, or a theme/font change makes a row taller, the card grows
+    instead of silently swallowing a control.
+    """
+    mc = _src("src/ui/media_card.zig")
+    ez = _src("src/services/eztv_calendar.zig")
+    render = _between(mc, "pub fn render(src: std.builtin.SourceLocation", "// ── Poster ──")
+
+    checks = {
+        "height depends on the card's contents": "pub fn cardHeight(has_progress: bool, has_actions: bool)" in mc,
+        "action row is budgeted": "ACTION_H" in mc and "if (has_actions) ACTION_H else 0" in mc,
+        "card height is a floor": ".min_size_content = .{ .w = CARD_W, .h = h }" in render,
+        "card height is not a ceiling": ".max_size_content = .{ .w = CARD_W, .h = std.math.floatMax(f32) }" in render,
+        # The rail that shows these cards must not re-impose the ceiling.
+        "release rail does not clamp height": "media_card.cardHeight(false, true) + 12" in ez
+                                              and ".max_size_content = .{ .w = std.math.floatMax(f32), .h = std.math.floatMax(f32) }" in ez,
+        # The Watching page still asks for the remove control.
+        "watching cards stay removable": ".removable = true," in _src("src/services/tv_library.zig"),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "card can still clip its action row: " + ", ".join(missing)
+    return "pass", "card sizes to its contents; action/remove row cannot be clipped"

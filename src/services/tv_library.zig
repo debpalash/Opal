@@ -522,7 +522,6 @@ fn addMovieRows() void {
 
 const CARD_W: f32 = 150;
 const POSTER_H: f32 = CARD_W * 1.5;
-const CARD_CHROME: f32 = 74; // title + status line + progress bar
 
 pub fn renderContent() void {
     syncOnce();

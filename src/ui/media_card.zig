@@ -19,8 +19,37 @@ const components = @import("components.zig");
 
 pub const CARD_W: f32 = 150;
 pub const POSTER_H: f32 = CARD_W * 1.5;
-/// Title + status line + (progress bar | action button).
-pub const CHROME_H: f32 = 74;
+
+/// Title + status line. Everything a card ALWAYS has.
+pub const CHROME_BASE_H: f32 = 48;
+/// Added when `progress` is set.
+pub const PROGRESS_H: f32 = 18;
+/// Added when there is an action button, a remove button, or both — they share
+/// one row, so the cost is the same whether a card has one or two.
+pub const ACTION_H: f32 = 30;
+
+/// Legacy alias: title + status + ONE of the two optional rows.
+///
+/// Kept because it is still the right size for a card that has exactly one of
+/// them, but do not reach for it when sizing a rail — use `cardHeight`, which
+/// asks what the card actually carries.
+pub const CHROME_H: f32 = CHROME_BASE_H + PROGRESS_H;
+
+/// Total height of a card that carries these parts.
+///
+/// This exists because the old flat CHROME_H described "title + status line +
+/// (progress bar | action button)" — an EITHER/OR — while render() draws both
+/// when both are asked for. The Watching page asks for both: every row there has
+/// a progress bar AND a Play/Remove row. The action row landed outside the
+/// card's max_size_content and was simply clipped away, so the page shipped with
+/// no visible way to play or remove anything. The remove control existed, was
+/// wired to removeRow(), and had a tooltip — it was just drawn past the bottom
+/// edge of its own card.
+pub fn cardHeight(has_progress: bool, has_actions: bool) f32 {
+    return POSTER_H + CHROME_BASE_H +
+        (if (has_progress) PROGRESS_H else 0) +
+        (if (has_actions) ACTION_H else 0);
+}
 
 pub const Click = enum { none, open, action, remove };
 
@@ -53,10 +82,25 @@ pub const Card = struct {
 pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbItem, card: Card) Click {
     var clicked: Click = .none;
 
+    // Sized for what THIS card carries. A fixed height clipped the action row
+    // off every card that also had a progress bar — see cardHeight.
+    // A FLOOR, not a ceiling.
+    //
+    // The card used to pin min == max, and the height it pinned described
+    // "title + status + (progress OR action row)". Ask for both — which every
+    // Watching row does — and the action row fell outside the box and was
+    // clipped away. That is how a Remove control that existed, was wired to
+    // removeRow() and even had a tooltip shipped invisible.
+    //
+    // The floor still gives a surface uniform pitch (every card on one surface
+    // carries the same parts, so they all size alike), but nothing is silently
+    // cut off if the estimate is low or a font/theme change makes a row taller.
+    // Getting this wrong now costs a few pixels of layout, not a missing button.
+    const h = cardHeight(card.progress != null, card.action_label != null or card.removable);
     var box = dvui.box(src, .{ .dir = .vertical }, .{
         .id_extra = id_extra,
-        .min_size_content = .{ .w = CARD_W, .h = POSTER_H + CHROME_H },
-        .max_size_content = .{ .w = CARD_W, .h = POSTER_H + CHROME_H },
+        .min_size_content = .{ .w = CARD_W, .h = h },
+        .max_size_content = .{ .w = CARD_W, .h = std.math.floatMax(f32) },
         .margin = dvui.Rect.all(6),
     });
     defer box.deinit();
@@ -206,5 +250,11 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
         }
     }
 
+    if (@import("builtin").mode == .Debug) {
+        const S = struct {
+            var n: usize = 0;
+        };
+        S.n += 1;
+    }
     return clicked;
 }
