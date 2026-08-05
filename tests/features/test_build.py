@@ -650,3 +650,49 @@ def test_workflow_shell_syntax():
     if checked == 0:
         return "fail", "no shell steps found to check — the walker is broken"
     return "pass", f"{checked} workflow shell step(s) parse under bash -n"
+
+
+@test("No AI attribution in commit trailers", "Build")
+def no_ai_coauthor_trailers():
+    """RULE (CLAUDE.md): commits carry no Co-Authored-By: Claude trailer.
+
+    The maintainer asked for this to stop for good. It is checked here rather
+    than left to memory because the instruction to add one is a DEFAULT that
+    every fresh agent starts with — the rule only holds if something fails when
+    it is ignored.
+
+    Scoped to commits made after the rule existed: 438 earlier commits carry the
+    trailer, and rewriting published history to strip them would be far worse
+    than leaving them. RULE_FROM is the first commit the rule applies to.
+    """
+    import subprocess
+    RULE_FROM = "3749b4a"  # last commit pushed before the rule was written
+    try:
+        rng = subprocess.run(["git", "log", "--format=%H", f"{RULE_FROM}..HEAD"],
+                             cwd=PROJECT_DIR, capture_output=True, text=True, timeout=20)
+        if rng.returncode != 0:
+            return "skip", "git range unavailable (shallow clone or rebased base)"
+        shas = [s for s in rng.stdout.split() if s]
+        if not shas:
+            return "pass", "no commits since the rule was introduced"
+        bad = []
+        for sha in shas:
+            body = subprocess.run(["git", "log", "-1", "--format=%B", sha],
+                                  cwd=PROJECT_DIR, capture_output=True, text=True, timeout=20).stdout
+            # Line-anchored: a trailer is a LINE, not a mention. This very
+            # commit's message discusses the trailer in prose, and a substring
+            # match flagged it — the guard has to tell "don't add this" apart
+            # from actually adding it.
+            for line in body.splitlines():
+                l = line.strip().lower()
+                if l.startswith("co-authored-by:") and "claude" in l:
+                    bad.append(sha[:7])
+                    break
+                if l.startswith("\U0001F916 generated with") or l.startswith("generated with [claude code]"):
+                    bad.append(sha[:7])
+                    break
+        if bad:
+            return "fail", "AI attribution in commit(s): " + ", ".join(bad)
+        return "pass", f"{len(shas)} commit(s) since the rule, none with AI attribution"
+    except Exception as exc:  # noqa: BLE001 — no git here is not a code fault
+        return "skip", f"git unavailable: {exc}"
