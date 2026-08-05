@@ -36,17 +36,52 @@ pub const Release = struct {
 
 // ── Feed URL ──
 
-/// `<api>?limit=N` — respects an api endpoint that already carries a query
-/// string. Null when the endpoint is empty or the result wouldn't fit `buf`
-/// (callers treat null as "stay inert" rather than truncating into a bad URL).
+/// `<api>?limit=N&page=P` — respects an api endpoint that already carries a
+/// query string. Null when the endpoint is empty, `page` is 0, or the result
+/// wouldn't fit `buf` (callers treat null as "stay inert" rather than
+/// truncating into a bad URL).
 ///
-/// `limit` is the only parameter and it's a plain integer, so there is nothing
-/// to percent-encode here; keep it that way (a caller-supplied string param
-/// would need encoding per the project's URL rule).
-pub fn buildFeedUrl(api: []const u8, limit: u32, buf: []u8) ?[]const u8 {
-    if (api.len == 0) return null;
+/// The calendar backfills YESTERDAY by paging backwards through the firehose
+/// (page 1 = newest). A single large `limit` is both rejected by the host and
+/// truncated by ISP DPI — a limit=200 fetch was measured arriving cut to 30
+/// rows — so the worker fetches many small pages instead. `limit` and `page`
+/// are plain integers, so there is nothing to percent-encode here; keep it that
+/// way (a caller-supplied string param would need encoding per the project's
+/// URL rule).
+pub fn buildPageUrl(api: []const u8, limit: u32, page: u32, buf: []u8) ?[]const u8 {
+    if (api.len == 0 or page == 0) return null;
     const sep: []const u8 = if (std.mem.indexOfScalar(u8, api, '?') != null) "&" else "?";
-    return std.fmt.bufPrint(buf, "{s}{s}limit={d}", .{ api, sep, limit }) catch null;
+    return std.fmt.bufPrint(buf, "{s}{s}limit={d}&page={d}", .{ api, sep, limit, page }) catch null;
+}
+
+/// Should the backfill fetch another page after the one just parsed?
+///
+/// The calendar needs everything back to yesterday's local midnight, and the
+/// feed only hands out small pages (page 1 = newest). This is the whole stop
+/// rule in one place so the worker is a loop with no policy in it.
+///
+/// Stops when ANY of these holds:
+///   * the page came back empty   — the feed is exhausted; another page cannot help
+///   * its oldest row predates the window — everything the calendar shows is now in hand
+///   * the store is full          — more rows would be dropped on the floor
+///   * the page cap is reached    — a hard bound on how much a quiet feed can cost
+///
+/// `oldest_in_page` is only meaningful when `rows_in_page > 0`, so the empty
+/// check comes first.
+pub fn morePages(
+    rows_in_page: usize,
+    oldest_in_page: i64,
+    window_start: i64,
+    kept: usize,
+    max_keep: usize,
+    page: u32,
+    max_pages: u32,
+) bool {
+    if (rows_in_page == 0) return false;
+    if (oldest_in_page <= window_start) return false;
+    if (kept >= max_keep) return false;
+    if (page >= max_pages) return false;
+    return true;
 }
 
 // ── String-aware JSON scanning ──
@@ -298,23 +333,77 @@ pub fn episodeTag(season: i32, episode: i32, buf: []u8) []const u8 {
     }) catch "";
 }
 
+// ── 3-day calendar window (Yesterday / Today / Tomorrow) ──
+//
+// The Watching page buckets releases into three LOCAL calendar days. Same
+// window/bucket math as anime_schedule_pure (which does a 7-day week), but
+// anchored at YESTERDAY's local midnight and 3 days wide. The tz shift happens
+// where the window is built; the bucket/weekday helpers stay pure integer math
+// (no clock read, no std.time.timestamp — banned in Zig 0.16).
+
+pub const SECS_PER_DAY: i64 = 86400;
+
+pub const DayWindow = struct { start: i64, end: i64 };
+
+/// The [start, end) window covering yesterday, today and tomorrow (local).
+/// `start` is the UTC INSTANT of yesterday's local midnight, so day buckets
+/// (dayIndexOf) line up with the user's calendar. `now_s` is the current unix
+/// (UTC) time and `tz_offset_s` the local UTC offset. Mirrors
+/// anime_schedule_pure.weekWindow, anchored one day earlier and 3 days wide.
+pub fn threeDayWindow(now_s: i64, tz_offset_s: i64) DayWindow {
+    const local = now_s + tz_offset_s;
+    const local_midnight = local - @mod(local, SECS_PER_DAY); // today's local midnight (local frame)
+    const start = local_midnight - SECS_PER_DAY - tz_offset_s; // yesterday's midnight, back to UTC
+    return .{ .start = start, .end = start + 3 * SECS_PER_DAY };
+}
+
+/// Which of the 3 window days (0 = yesterday, 1 = today, 2 = tomorrow) a release
+/// falls in, or null outside the window. `window_start` is the UTC instant of
+/// yesterday's local midnight (see threeDayWindow), so days are exact 86400s
+/// steps from it and no tz shift is needed here. Boundaries: exactly
+/// window_start → day 0; the last second of day 0 → day 0; the first second of
+/// day 1 → day 1.
+pub fn dayIndexOf(released_epoch: i64, window_start: i64) ?u8 {
+    if (released_epoch < window_start) return null;
+    const idx = @divFloor(released_epoch - window_start, SECS_PER_DAY);
+    if (idx < 0 or idx > 2) return null;
+    return @intCast(idx);
+}
+
+const WEEKDAYS = [_][]const u8{ "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday" };
+
+/// Weekday index (0=Monday … 6=Sunday) for a LOCAL epoch. 1970-01-01 was a
+/// Thursday (index 3 in the Mon=0 scheme), so day-number + 3 (mod 7) maps it.
+/// Same math as anime_schedule_pure.weekdayMon0.
+pub fn weekdayMon0(local_epoch_s: i64) u8 {
+    const day = @divFloor(local_epoch_s, SECS_PER_DAY);
+    return @intCast(@mod(day + 3, 7));
+}
+
+/// Human weekday name for a Mon=0 index (bounds-safe).
+pub fn weekdayName(mon0: u8) []const u8 {
+    return if (mon0 < WEEKDAYS.len) WEEKDAYS[mon0] else "?";
+}
 
 // ── Tests ──
 
-test "buildFeedUrl appends limit, respects an existing query" {
+test "buildPageUrl appends limit + page, respects an existing query" {
     var b: [128]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "https://example.test/api/get-torrents?limit=20",
-        buildFeedUrl("https://example.test/api/get-torrents", 20, &b).?,
+        "https://example.test/api/get-torrents?limit=20&page=1",
+        buildPageUrl("https://example.test/api/get-torrents", 20, 1, &b).?,
     );
     try std.testing.expectEqualStrings(
-        "https://example.test/api?x=1&limit=5",
-        buildFeedUrl("https://example.test/api?x=1", 5, &b).?,
+        "https://example.test/api?x=1&limit=5&page=3",
+        buildPageUrl("https://example.test/api?x=1", 5, 3, &b).?,
     );
-    // Inert inputs / no room → null, never a truncated URL.
-    try std.testing.expect(buildFeedUrl("", 20, &b) == null);
+    // Inert inputs / no room -> null, never a truncated URL.
+    try std.testing.expect(buildPageUrl("", 20, 1, &b) == null);
+    // Page 0 does not exist in the feed's 1-based paging; asking for it would
+    // silently return page 1 and the backfill would loop on the same rows.
+    try std.testing.expect(buildPageUrl("https://example.test/api", 20, 0, &b) == null);
     var tiny: [8]u8 = undefined;
-    try std.testing.expect(buildFeedUrl("https://example.test/api", 20, &tiny) == null);
+    try std.testing.expect(buildPageUrl("https://example.test/api", 20, 1, &tiny) == null);
 }
 
 // Shape copied verbatim from a real get-torrents response (2026-07): season,
@@ -450,7 +539,6 @@ test "episodeTag" {
     try std.testing.expectEqualStrings("S28E03", episodeTag(28, 3, &b));
     try std.testing.expectEqualStrings("", episodeTag(0, 0, &b));
     try std.testing.expectEqualStrings("", episodeTag(1, 0, &b));
-
 }
 
 // ══════════════════════════════════════════════════════════
@@ -462,7 +550,7 @@ test "episodeTag" {
 // same show.
 // ══════════════════════════════════════════════════════════
 
-pub const MAX_SHOW_CARDS = 20;
+pub const MAX_SHOW_CARDS = 40;
 
 pub const ShowCard = struct {
     /// Show name parsed out of the release title ("Rick and Morty").
@@ -798,4 +886,91 @@ test "eztv backoff: a dead endpoint is never polled harder than a healthy one" {
     // No overflow panic on an absurd failure count or base.
     try std.testing.expectEqual(refresh, nextDelayMs(std.math.maxInt(u32), 15_000, refresh));
     try std.testing.expectEqual(refresh, nextDelayMs(5, std.math.maxInt(i64), refresh));
+}
+
+// ── 3-day calendar window tests ──
+
+test "morePages: stops as soon as the window is covered" {
+    const win: i64 = 1_000_000;
+    // Oldest row still newer than the window start -> yesterday is not in hand yet.
+    try std.testing.expect(morePages(30, win + 60, win, 30, 60, 1, 6));
+    // Oldest row predates the window -> we have paged past yesterday, stop.
+    try std.testing.expect(!morePages(30, win - 1, win, 30, 60, 1, 6));
+    // Exactly ON the boundary counts as covered: window_start is yesterday's
+    // first second, so a row at that instant is the oldest one the calendar can
+    // ever show.
+    try std.testing.expect(!morePages(30, win, win, 30, 60, 1, 6));
+}
+
+test "morePages: every other stop condition" {
+    const win: i64 = 1_000_000;
+    // An empty page means the feed is exhausted — and its oldest_in_page is
+    // meaningless, so this must be checked before the window comparison.
+    try std.testing.expect(!morePages(0, 0, win, 5, 60, 1, 6));
+    // Store full: further rows would be parsed and then dropped.
+    try std.testing.expect(!morePages(30, win + 60, win, 60, 60, 1, 6));
+    try std.testing.expect(!morePages(30, win + 60, win, 61, 60, 1, 6));
+    // Page cap reached — the bound on what a quiet feed can cost.
+    try std.testing.expect(!morePages(30, win + 60, win, 30, 60, 6, 6));
+    try std.testing.expect(morePages(30, win + 60, win, 30, 60, 5, 6));
+}
+
+test "threeDayWindow: start is yesterday's local midnight, 3 days wide" {
+    const d = SECS_PER_DAY;
+    // Noon on day 2, UTC (tz = 0).
+    const w = threeDayWindow(2 * d + 12 * 3600, 0);
+    try std.testing.expectEqual(1 * d, w.start); // yesterday's midnight
+    try std.testing.expectEqual(4 * d, w.end);
+    // A +2h tz shift moves the UTC start so the LOCAL day boundary holds.
+    const w2 = threeDayWindow(2 * d + 12 * 3600, 2 * 3600);
+    try std.testing.expectEqual(1 * d - 2 * 3600, w2.start);
+}
+
+test "dayIndexOf: buckets into yesterday/today/tomorrow, null outside" {
+    const d = SECS_PER_DAY;
+    const start = 10 * d; // yesterday's midnight
+    try std.testing.expectEqual(@as(u8, 0), dayIndexOf(10 * d, start).?); // start of yesterday
+    try std.testing.expectEqual(@as(u8, 0), dayIndexOf(10 * d + 86399, start).?); // last sec of yesterday
+    try std.testing.expectEqual(@as(u8, 1), dayIndexOf(11 * d, start).?); // today
+    try std.testing.expectEqual(@as(u8, 1), dayIndexOf(11 * d + 3600, start).?);
+    try std.testing.expectEqual(@as(u8, 2), dayIndexOf(12 * d, start).?); // tomorrow
+    try std.testing.expectEqual(@as(u8, 2), dayIndexOf(13 * d - 1, start).?); // last sec of tomorrow
+    try std.testing.expect(dayIndexOf(10 * d - 1, start) == null); // before yesterday
+    try std.testing.expect(dayIndexOf(13 * d, start) == null); // after tomorrow
+}
+
+test "weekdayMon0 / weekdayName: known dates" {
+    const d = SECS_PER_DAY;
+    // 1970-01-01 was a Thursday (Mon=0 index 3).
+    try std.testing.expectEqual(@as(u8, 3), weekdayMon0(0));
+    try std.testing.expectEqualStrings("Thursday", weekdayName(weekdayMon0(0)));
+    // 1970-01-05 was a Monday (index 0): day 4.
+    try std.testing.expectEqual(@as(u8, 0), weekdayMon0(4 * d));
+    try std.testing.expectEqualStrings("Monday", weekdayName(weekdayMon0(4 * d)));
+    // 1970-01-04 was a Sunday (index 6): day 3.
+    try std.testing.expectEqual(@as(u8, 6), weekdayMon0(3 * d));
+    try std.testing.expectEqualStrings("Sunday", weekdayName(weekdayMon0(3 * d)));
+}
+
+test "calendar day labels: yesterday/today/tomorrow weekday names" {
+    const d = SECS_PER_DAY;
+    // now = day 0 (1970-01-01, Thursday) noon UTC, tz 0.
+    const now = 0 * d + 12 * 3600;
+    const w = threeDayWindow(now, 0);
+    // start = yesterday's midnight = day -1 (Wednesday).
+    try std.testing.expectEqual(-1 * d, w.start);
+    try std.testing.expectEqualStrings("Wednesday", weekdayName(weekdayMon0(w.start + 0 * d)));
+    try std.testing.expectEqualStrings("Thursday", weekdayName(weekdayMon0(w.start + 1 * d)));
+    try std.testing.expectEqualStrings("Friday", weekdayName(weekdayMon0(w.start + 2 * d)));
+}
+
+test "calendar day labels hold across a tz offset" {
+    const d = SECS_PER_DAY;
+    // now = day 0 (Thu) 23:00 UTC, tz = +5h → local is day 1 (Fri) 04:00.
+    const now = 0 * d + 23 * 3600;
+    const tz: i64 = 5 * 3600;
+    const w = threeDayWindow(now, tz);
+    try std.testing.expectEqualStrings("Thursday", weekdayName(weekdayMon0(w.start + 0 * d + tz)));
+    try std.testing.expectEqualStrings("Friday", weekdayName(weekdayMon0(w.start + 1 * d + tz)));
+    try std.testing.expectEqualStrings("Saturday", weekdayName(weekdayMon0(w.start + 2 * d + tz)));
 }

@@ -337,10 +337,12 @@ def test_eztv_calendar():
         # sizeLabel was dropped with the row layout -- a poster card has no place
         # for a file size, and a tested pure fn that nothing ships is dead weight.
         # groupShows/firstTvResult/encodeQuery are what the card path needs.
-        "pure fns used in prod":       all(f in svc for f in ("pure.buildFeedUrl", "pure.parseFeed",
+        "pure fns used in prod":       all(f in svc for f in ("pure.buildPageUrl", "pure.parseFeed",
                                                               "pure.releaseLabel", "pure.episodeTag",
                                                               "pure.groupShows", "pure.firstTvResult",
-                                                              "pure.encodeQuery")),
+                                                              "pure.encodeQuery", "pure.threeDayWindow",
+                                                              "pure.dayIndexOf", "pure.weekdayName",
+                                                              "pure.morePages")),
         "pure module has tests":       pur.count('test "') >= 5,
         "registered in build.zig":     "src/services/eztv_calendar_pure.zig" in build,
     }
@@ -348,3 +350,41 @@ def test_eztv_calendar():
     if missing:
         return "fail", "eztv calendar contract broken: " + ", ".join(missing[:4])
     return "pass", "neutral (source_config-gated), 15-min refresh, per-frame countdown"
+
+
+@test("EZTV calendar buckets into Yesterday/Today/Tomorrow", "Page Shell")
+def test_eztv_three_day_calendar():
+    # The Watching page's EZTV section is a 3-day release calendar (Yesterday /
+    # Today / Tomorrow), each day headed by its weekday name — "Today
+    # (Wednesday)". The day-window / bucket / weekday math is pure + unit-tested;
+    # this pins that the render routes through those helpers (tested logic IS the
+    # shipped logic) and that all three day rails are present.
+    svc = _src("src/services/eztv_calendar.zig")
+    pur = _src("src/services/eztv_calendar_pure.zig")
+    if not svc or not pur:
+        return "fail", "eztv_calendar.zig / eztv_calendar_pure.zig missing"
+    checks = {
+        # Pure window / bucket / weekday helpers exist.
+        "pure threeDayWindow":   "pub fn threeDayWindow(" in pur,
+        "pure dayIndexOf":       "pub fn dayIndexOf(" in pur,
+        "pure weekdayName":      "pub fn weekdayName(" in pur,
+        "pure weekdayMon0":      "pub fn weekdayMon0(" in pur,
+        # Render routes through the pure helpers (no second hand-rolled math).
+        "render uses window":    "pure.threeDayWindow(" in svc,
+        "render buckets":        "pure.dayIndexOf(" in svc,
+        "render names weekday":  "pure.weekdayName(" in svc and "pure.weekdayMon0(" in svc,
+        # All three day rails are present.
+        "three day labels":      all(s in svc for s in ('"Yesterday"', '"Today"', '"Tomorrow"')),
+        # Local-day boundaries need the tz offset (SQLite localtime; Zig 0.16
+        # std.time is UTC-only).
+        "tz-aware day bounds":   "localTzOffset()" in svc and "localtime" in svc,
+        # A quiet day still shows its header — the 3-day structure is stable and
+        # never silently collapses.
+        "empty day placeholder": '"No releases"' in svc,
+        # The window math is unit-tested on the pure side.
+        "window math tested":    'test "threeDayWindow' in pur and 'test "dayIndexOf' in pur,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "3-day calendar wiring broken: " + ", ".join(missing[:4])
+    return "pass", "Yesterday/Today/Tomorrow rails, tz-aware bucketing via tested pure fns"
