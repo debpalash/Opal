@@ -601,12 +601,20 @@ def test_release_notes():
         return "fail", f"CHANGELOG.md has no '## v{ver}' section — that release would ship with no highlights"
 
     # Run it. A generator that only exists is worth nothing; this is the same
-    # code path the release job takes, on a range that exists in any checkout
-    # (CI clones shallow and without tags, so a real tag cannot be assumed).
+    # code path the release job takes. The range has to be one that exists in
+    # ANY checkout: CI clones shallow (depth 1) and without tags, so neither a
+    # real tag nor HEAD~5 can be assumed — asking for either produced an empty
+    # commit list and failed this test on CI while passing locally.
+    def _git(*args):
+        return subprocess.run(["git", *args], cwd=PROJECT_DIR,
+                              capture_output=True, text=True).returncode == 0
+
+    prev = next((r for r in ("HEAD~5", "HEAD~1")
+                 if _git("rev-parse", "-q", "--verify", r + "^{commit}")), "")
+    argv = ["sh", "scripts/release-notes.sh", "v%s" % ver] + ([prev] if prev else [])
     try:
         out = subprocess.run(
-            ["sh", "scripts/release-notes.sh", "v%s" % ver, "HEAD~5"],
-            cwd=PROJECT_DIR, capture_output=True, text=True, timeout=60,
+            argv, cwd=PROJECT_DIR, capture_output=True, text=True, timeout=60,
         )
     except subprocess.TimeoutExpired:
         return "fail", "release-notes.sh timed out"
@@ -619,7 +627,9 @@ def test_release_notes():
         "highlights are the real ones, not the placeholder": "No highlights were written" not in body,
         "commit list present": "## Changes" in body,
         "commits carry a sha": bool(re.search(r"\(`[0-9a-f]{7,}`\)", body)),
-        "compare link present": "/compare/" in body,
+        # Only with a previous ref to compare against: a depth-1 clone has none,
+        # and the generator correctly omits the line rather than inventing it.
+        "compare link present": "/compare/" in body if prev else True,
     }
     bad = [k for k, v in produced.items() if not v]
     if bad:
