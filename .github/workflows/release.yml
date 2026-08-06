@@ -520,6 +520,12 @@ jobs:
     if: always() && needs.macos-arm64.result == 'success'
     runs-on: ubuntu-24.04
     steps:
+      # fetch-depth: 0 — the notes generator walks from the previous tag to
+      # this one. A shallow clone has neither the tags nor the history, and
+      # would silently produce an empty commit list.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -530,6 +536,14 @@ jobs:
           cd artifacts
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
+      - name: Build release notes
+        # `generate_release_notes: true` produced a one-line body — this repo
+        # has no PRs for GitHub to summarise, so every release read
+        # "Full Changelog: compare/v0.6.2...v0.6.3" and nothing else. Ours
+        # pairs the hand-written CHANGELOG.md section with the real commit list.
+        run: |
+          ./scripts/release-notes.sh "${GITHUB_REF_NAME}" > RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
       - uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -545,7 +559,7 @@ jobs:
             artifacts/Opal-*-windows-x86_64.msi
             artifacts/opal-connect-*.zip
             artifacts/SHA256SUMS.txt
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
           draft: false
 
   # ── AUR publish ─────────────────────────────────────────────────────────

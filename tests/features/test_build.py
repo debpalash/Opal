@@ -557,6 +557,78 @@ def test_version_single_source():
     return "pass", "APP_VERSION comes from build.zig.zon via build_options; no hand-maintained copy"
 
 
+@test("Every release ships highlights and a commit list", "Packaging")
+def test_release_notes():
+    """Every release through v0.6.4 published a body of exactly one line:
+
+        **Full Changelog**: https://github.com/debpalash/Opal/compare/v0.6.2...v0.6.3
+
+    The publish job set `generate_release_notes: true`, and this repo lands
+    work by direct commit rather than PR — so GitHub had nothing to summarise
+    and produced a compare link. Someone deciding whether to update had to read
+    54 commits of diff to find out what changed.
+
+    Two halves are asserted here because they fail differently: the generated
+    commit list cannot drift (it comes from git), but the hand-written
+    highlights CAN simply not be written before a tag — so the section for the
+    version in build.zig.zon must exist."""
+    import re
+    # Strip YAML comments before grepping — the step below EXPLAINS the old
+    # `generate_release_notes: true` in prose, and a test that greps prose
+    # tests nothing (the formula test learned this the same way).
+    wf = "\n".join(l for l in _src(".github/workflows/release.yml").splitlines()
+                   if not l.lstrip().startswith("#"))
+    sh = _src("scripts/release-notes.sh")
+    ch = _src("CHANGELOG.md")
+    zon = _src("build.zig.zon")
+
+    checks = {
+        # The bug, verbatim.
+        "publish no longer relies on GitHub's summariser": "generate_release_notes: true" not in wf,
+        "release body comes from the generator": "body_path: RELEASE_NOTES.md" in wf,
+        "the generator runs in the publish job": "scripts/release-notes.sh" in wf,
+        # Without full history the commit list comes out empty and nobody notices.
+        "publish checks out full history": "fetch-depth: 0" in wf,
+        "generator emits both halves": "## Highlights" in sh and "## Changes" in sh,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "release-notes wiring incomplete: " + ", ".join(missing)
+
+    m = re.search(r'\.version = "([^"]+)"', zon)
+    ver = m.group(1) if m else "?"
+    if not re.search(r"^## v%s\b" % re.escape(ver), ch, re.M):
+        return "fail", f"CHANGELOG.md has no '## v{ver}' section — that release would ship with no highlights"
+
+    # Run it. A generator that only exists is worth nothing; this is the same
+    # code path the release job takes, on a range that exists in any checkout
+    # (CI clones shallow and without tags, so a real tag cannot be assumed).
+    try:
+        out = subprocess.run(
+            ["sh", "scripts/release-notes.sh", "v%s" % ver, "HEAD~5"],
+            cwd=PROJECT_DIR, capture_output=True, text=True, timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        return "fail", "release-notes.sh timed out"
+    if out.returncode != 0:
+        return "fail", "release-notes.sh exited %d: %s" % (out.returncode, out.stderr[:160])
+
+    body = out.stdout
+    produced = {
+        "highlights section present": "## Highlights" in body,
+        "highlights are the real ones, not the placeholder": "No highlights were written" not in body,
+        "commit list present": "## Changes" in body,
+        "commits carry a sha": bool(re.search(r"\(`[0-9a-f]{7,}`\)", body)),
+        "compare link present": "/compare/" in body,
+    }
+    bad = [k for k, v in produced.items() if not v]
+    if bad:
+        return "fail", "generated notes are missing: " + ", ".join(bad)
+
+    sections = len(re.findall(r"^## v\d+\.\d+\.\d+\b", ch, re.M))
+    return "pass", f"notes = CHANGELOG highlights + generated commits; {sections} versions documented"
+
+
 @test("First-run onboarding actually runs on first run", "Build")
 def test_onboarding_first_run():
     """Issue #21: "its kinda confusing, the whole ui so maybe onboarding is
