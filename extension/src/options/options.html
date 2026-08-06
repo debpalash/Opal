@@ -3,38 +3,84 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Opal Connector — Settings</title>
+    <title>Opal Connect — Setup</title>
     <link rel="stylesheet" href="./options.css" />
   </head>
   <body>
     <div class="page">
       <header class="masthead">
         <div class="brand">
-          <span class="logo">◆</span>
+          <!-- The real Opal Connect mark. This was a "◆" text glyph, which is
+               not the logo, renders differently in every browser, and made the
+               settings page look like it belonged to something else. -->
+          <img class="logo" src="../../images/icon-128.png" alt="Opal Connect" width="48" height="48" />
           <div>
-            <h1>Opal Connector</h1>
+            <h1>Opal Connect</h1>
             <p class="tagline">Send the web to your local Opal — media, articles, downloads, and manga/novel sources.</p>
           </div>
         </div>
         <div id="conn-pill" class="pill probing"><span class="dot"></span><span id="conn-label">Checking…</span></div>
       </header>
 
-      <form id="form">
-        <!-- Connection -->
-        <section class="group">
-          <div class="group-head">
-            <h2>Connection</h2>
-            <p>Everything stays on your machine — requests go straight to Opal over localhost.</p>
+      <!-- ── Setup wizard ──────────────────────────────────────────────────
+           Shown until a working token exists. Setup used to be "open
+           ~/.config/opal/api.token in a text editor and paste it here", which
+           is not something a browser-extension user has any reason to be able
+           to do — on Windows the path is different, and on a headless box the
+           file is on another machine entirely. -->
+      <section id="setup" class="group setup">
+        <div class="group-head">
+          <h2>Connect to Opal</h2>
+          <p id="setup-sub">Opal needs to be running with the Web Remote enabled. This takes two clicks.</p>
+        </div>
+
+        <!-- Step 1: find it -->
+        <div class="step" id="step-find">
+          <div class="step-head"><span class="step-n">1</span><h3>Find your Opal</h3></div>
+          <div class="step-body">
+            <button type="button" id="discover" class="btn primary">Search for Opal</button>
+            <span id="discover-status" class="step-status">Not searched yet.</span>
           </div>
-          <div class="fields">
-            <label class="field">
-              <span class="field-label">Host</span>
-              <input id="host" type="text" placeholder="127.0.0.1" autocomplete="off" />
-            </label>
-            <label class="field">
-              <span class="field-label">Port</span>
-              <input id="port" type="number" placeholder="41595" min="1" max="65535" />
-            </label>
+          <details class="advanced">
+            <summary>It's on another machine</summary>
+            <div class="fields">
+              <label class="field">
+                <span class="field-label">Host</span>
+                <input id="host" type="text" placeholder="127.0.0.1" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span class="field-label">Port</span>
+                <input id="port" type="number" placeholder="41595" min="1" max="65535" />
+              </label>
+            </div>
+            <p class="help">
+              A non-loopback address needs one extra browser permission; the extension asks for it when you connect.
+            </p>
+          </details>
+        </div>
+
+        <!-- Step 2: sign in -->
+        <div class="step" id="step-auth">
+          <div class="step-head"><span class="step-n">2</span><h3 id="auth-title">Sign in</h3></div>
+          <div class="step-body column">
+            <p id="auth-help" class="help">Use the account you created in Opal.</p>
+            <div class="fields">
+              <label class="field">
+                <span class="field-label">Username</span>
+                <input id="username" type="text" autocomplete="username" />
+              </label>
+              <label class="field">
+                <span class="field-label">Password</span>
+                <input id="password" type="password" autocomplete="current-password" />
+              </label>
+            </div>
+            <div class="actions">
+              <button type="button" id="signin" class="btn primary">Connect</button>
+            </div>
+            <div id="setup-result" class="result" hidden></div>
+          </div>
+          <details class="advanced">
+            <summary>Use an API token instead</summary>
             <label class="field wide">
               <span class="field-label">API token</span>
               <div class="input-with-btn">
@@ -42,57 +88,80 @@
                 <button type="button" id="reveal" class="btn ghost small">Show</button>
               </div>
               <small class="help">
-                Find it in <code>~/.config/opal/api.token</code> (macOS/Linux) or
-                <code>%APPDATA%\opal\api.token</code> (Windows). Enable
-                <em>Settings → Web Remote</em> in Opal first.
+                From <code>~/.config/opal/api.token</code> (macOS/Linux) or
+                <code>%APPDATA%\opal\api.token</code> (Windows). Also what
+                scripts and other automation use.
               </small>
             </label>
-          </div>
-          <div class="actions">
-            <button type="submit" class="btn primary">Save</button>
-            <button type="button" id="test" class="btn">Test connection</button>
-          </div>
-          <div id="result" class="result" hidden></div>
-        </section>
+            <div class="actions">
+              <button type="button" id="save-token" class="btn">Save token</button>
+            </div>
+          </details>
+        </div>
+      </section>
 
-        <!-- Behavior -->
-        <section class="group">
-          <div class="group-head">
-            <h2>Behavior</h2>
-            <p>How the toolbar panel and the floating button send by default.</p>
-          </div>
-          <div class="fields">
-            <label class="field wide">
-              <span class="field-label">Default send action</span>
-              <select id="default-action">
-                <option value="play">Play in Opal</option>
-                <option value="queue">Add to queue</option>
-                <option value="download">Download</option>
-              </select>
-              <small class="help">
-                Per-site source defaults are detected automatically — visiting a Madara,
-                MangaThemesia, HeanCMS, LightNovel-WP or ReadWN site surfaces a one-click
-                <em>“Add as Opal source”</em> in the side panel.
-              </small>
-            </label>
-          </div>
-        </section>
+      <!-- ── Connected ───────────────────────────────────────────────────── -->
+      <section id="connected" class="group" hidden>
+        <div class="group-head">
+          <h2>Connection</h2>
+          <p id="connected-sub">Connected. Everything stays on your machine — requests go straight to Opal.</p>
+        </div>
+        <div class="actions">
+          <button type="button" id="test" class="btn">Test connection</button>
+          <button type="button" id="disconnect" class="btn ghost">Disconnect</button>
+        </div>
+        <div id="result" class="result" hidden></div>
+      </section>
 
-        <!-- About -->
-        <section class="group">
-          <div class="group-head">
-            <h2>About</h2>
-          </div>
-          <div class="about">
-            <p><strong>Opal Connector</strong> <span id="version" class="ver">v0.2.0</span></p>
-            <p class="muted">
-              The extension talks only to your locally-running Opal desktop app. It opens as
-              a side panel (Chrome/Edge) or sidebar (Firefox). Right-click any page or link to
-              play, queue, download, read, or add a site as a source.
-            </p>
-          </div>
-        </section>
-      </form>
+      <!-- ── Behavior ────────────────────────────────────────────────────── -->
+      <section class="group">
+        <div class="group-head">
+          <h2>Behavior</h2>
+          <p>How the toolbar panel and the floating button send by default.</p>
+        </div>
+        <div class="fields">
+          <label class="field wide">
+            <span class="field-label">Default send action</span>
+            <select id="default-action">
+              <option value="play">Play in Opal</option>
+              <option value="queue">Add to queue</option>
+              <option value="download">Download</option>
+            </select>
+            <small class="help">
+              Per-site source defaults are detected automatically — visiting a Madara,
+              MangaThemesia, HeanCMS, LightNovel-WP or ReadWN site surfaces a one-click
+              <em>“Add as Opal source”</em> in the side panel.
+            </small>
+          </label>
+        </div>
+      </section>
+
+      <!-- ── Shortcuts ───────────────────────────────────────────────────── -->
+      <section class="group">
+        <div class="group-head">
+          <h2>Keyboard shortcuts</h2>
+          <p>Send or pause without opening the panel. Re-bind them in your browser's shortcut settings.</p>
+        </div>
+        <ul class="shortcuts">
+          <li><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd><span>Send the current page to Opal</span></li>
+          <li><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd><span>Play / pause</span></li>
+        </ul>
+      </section>
+
+      <!-- ── About ───────────────────────────────────────────────────────── -->
+      <section class="group">
+        <div class="group-head">
+          <h2>About</h2>
+        </div>
+        <div class="about">
+          <p><strong>Opal Connect</strong> <span id="version" class="ver"></span></p>
+          <p class="muted">
+            The extension talks only to the Opal you connect it to. It opens as
+            a side panel (Chrome/Edge) or sidebar (Firefox). Right-click any page or link to
+            play, queue, download, read, or add a site as a source.
+          </p>
+        </div>
+      </section>
     </div>
 
     <script type="module" src="./options.ts"></script>

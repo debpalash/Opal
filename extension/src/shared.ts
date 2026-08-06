@@ -43,6 +43,22 @@ export function baseUrl(s: OpalSettings): string {
   return `http://${s.host}:${s.port}`;
 }
 
+/** Where to look for a running Opal before asking the user to type anything.
+ *  41595 is the default; the two neighbours cover a second instance started
+ *  while the first held the port. Probed against /health, which needs no auth. */
+export const DISCOVERY_TARGETS: Array<{ host: string; port: number }> = [
+  { host: "127.0.0.1", port: 41595 },
+  { host: "localhost", port: 41595 },
+  { host: "127.0.0.1", port: 41596 },
+  { host: "127.0.0.1", port: 41597 },
+];
+
+/** Loopback needs no permission prompt; anything else is an optional host
+ *  permission the user has to grant before fetch() will even be attempted. */
+export function isLoopback(host: string): boolean {
+  return host === "127.0.0.1" || host === "localhost" || host === "[::1]" || host === "::1";
+}
+
 // ── Framework detection (manga / novel source engines Opal understands) ──────
 // These IDs map 1:1 to Opal's source_config engine IDs (see comics.zig /
 // novels.zig), so "Add this site as an Opal source" can install them directly.
@@ -113,12 +129,23 @@ export type OpalAction =
   // ── Downloads ──
   | "downloadsList" // GET  /api/downloads?dir=
   | "downloadsPlay" // POST /api/downloads/play?file=
+  // ── Torrents ──
+  | "torrents" // GET  /api/torrents      — name, pct, rate, seeds
+  // ── Library / history ──
+  | "history" // GET  /api/history        — recently played, most recent first
   // ── Cast / watch-party ──
   | "castDevices" // GET  /api/cast/devices
   | "castStart" // POST /api/cast/start
+  | "castStop" // POST /api/cast/stop
   | "partyHost" // POST /api/party/host
   | "partyJoin" // POST /api/party/join?ip=
-  | "partyStatus"; // GET  /api/party/status
+  | "partyLeave" // POST /api/party/leave
+  | "partyStatus" // GET  /api/party/status
+  // ── Setup (see SetupRequest — these do NOT use the saved settings) ──
+  | "probe" // GET  /health          — unauthenticated: is Opal there at all?
+  | "authStatus" // GET  /api/auth/status — unauthenticated: does it need an account?
+  | "login" // POST /api/auth/login  — returns a session token
+  | "register"; // POST /api/auth/register — first account only
 
 export type OpalIngestType =
   | OpalPageType
@@ -150,6 +177,35 @@ export interface OpalRequest {
   device?: string;
   notify?: boolean;
   label?: string;
+  /** Setup actions only: talk to THIS host/port rather than the saved one.
+   *  Setup runs before anything is saved, so it cannot read settings. */
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string;
+}
+
+/** A row from GET /api/torrents. `pct` is 0-100, `rate` is bytes/sec. */
+export interface OpalTorrent {
+  name: string;
+  id: number;
+  pct: number;
+  rate: number;
+  seeds: number;
+  paused: boolean;
+}
+
+/** A row from GET /api/downloads. */
+export interface OpalFile {
+  name: string;
+  is_dir: boolean;
+  size: number;
+}
+
+/** GET /api/auth/status — the two facts that decide which setup path to offer. */
+export interface OpalAuthStatus {
+  needs_setup: boolean;
+  authed: boolean;
 }
 
 export interface OpalStatus {
@@ -187,4 +243,7 @@ export interface OpalResponse {
   status?: number;
   error?: string;
   data?: unknown;
+  /** True when the call failed only because setup has not been done — the UI
+   *  turns this into "Connect to Opal" rather than an error nobody can act on. */
+  needsSetup?: boolean;
 }

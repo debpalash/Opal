@@ -44,6 +44,11 @@ body {
 .page {
   max-width: 680px;
   margin: 0 auto;
+  /* Sections used to be children of a <form> that owned this gap. The form is
+     gone — setup is a wizard, not one submit — so the page owns it now. */
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
 
 /* ── Masthead ── */
@@ -59,13 +64,11 @@ body {
   gap: 14px;
   align-items: center;
 }
+/* The real mark, not a glyph standing in for one. */
 .logo {
-  font-size: 40px;
-  line-height: 1;
-  background: linear-gradient(135deg, var(--accent-2), var(--accent));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  width: 48px;
+  height: 48px;
+  display: block;
   filter: drop-shadow(0 4px 14px rgba(108, 76, 214, 0.4));
 }
 .brand h1 {
@@ -268,6 +271,109 @@ code {
   font-weight: 500;
   font-size: 12px;
   margin-left: 6px;
+}
+
+/* ── Setup wizard ── */
+.setup .step {
+  border-top: 1px solid var(--border);
+  padding-top: 18px;
+  margin-top: 18px;
+}
+.setup .step:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+  margin-top: 0;
+}
+.step-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.step-head h3 {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0;
+}
+.step-n {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent-2), var(--accent));
+}
+.step-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.step-body.column {
+  flex-direction: column;
+  align-items: stretch;
+}
+.step-body.column .actions {
+  margin-top: 0;
+}
+.step-body .fields {
+  width: 100%;
+}
+.step-status {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.step-status.ok {
+  color: var(--ok);
+}
+.step-status.err {
+  color: var(--err);
+}
+.advanced {
+  margin-top: 14px;
+}
+.advanced summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.advanced > *:not(summary) {
+  margin-top: 12px;
+}
+
+/* ── Shortcuts ── */
+.shortcuts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.shortcuts li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.shortcuts span {
+  color: var(--muted);
+  margin-left: 6px;
+}
+kbd {
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
 }
 
 /* ── Responsive ── */

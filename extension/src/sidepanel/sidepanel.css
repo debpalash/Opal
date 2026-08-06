@@ -47,12 +47,12 @@ body {
   gap: 10px;
   padding: 4px 2px 12px;
 }
+/* The mark itself, not a glyph approximating it. */
 .logo {
-  font-size: 22px;
-  background: linear-gradient(135deg, var(--accent-2), var(--accent));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  width: 26px;
+  height: 26px;
+  display: block;
+  flex: none;
 }
 .app-title {
   flex: 1;
@@ -458,4 +458,32 @@ body {
 }
 .hint {
   color: var(--muted);
+}
+
+/* ── Torrent progress ──
+   A percentage in text answers "how far"; the bar answers "is it moving" at a
+   glance, which is the question someone who just sent a magnet actually has. */
+.torrent .result-meta {
+  width: 100%;
+}
+.bar {
+  display: block;
+  height: 3px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
+}
+
+/* ── Watch-party status ── */
+.party-status {
+  font-size: 11.5px;
+  color: var(--muted);
+  padding: 6px 2px 0;
 }

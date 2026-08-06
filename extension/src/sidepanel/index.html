@@ -8,13 +8,27 @@
   </head>
   <body>
     <header class="app-header">
-      <span class="logo">◆</span>
+      <!-- The Opal Connect mark. Was a "◆" glyph — not the logo, and it
+           rendered as a different shape in every browser. -->
+      <img class="logo" src="../../images/icon-128.png" alt="" width="26" height="26" />
       <div class="app-title">
         <h1>Opal</h1>
         <span id="status-text" class="status-line">Checking…</span>
       </div>
       <span id="status-dot" class="dot probing"></span>
     </header>
+
+    <!-- Not connected yet. Everything below is useless until setup is done, so
+         say so once, with the button that fixes it, instead of letting every
+         section fail on its own with "Opal not reachable". -->
+    <section id="setup-card" class="card accent" hidden>
+      <div class="card-title">Connect to Opal</div>
+      <p class="card-body">
+        Opal Connect isn't paired with an Opal yet. Setup finds the app for you —
+        no token to copy.
+      </p>
+      <button id="setup-open" class="btn primary full">Set up in a few clicks</button>
+    </section>
 
     <!-- Add-this-site-as-a-source (shown only on recognised manga/novel sites) -->
     <section id="source-card" class="card accent" hidden>
@@ -91,16 +105,53 @@
       <ul id="queue-list" class="results"><li class="results-empty">Queue is empty.</li></ul>
     </section>
 
+    <!-- Torrents in flight.
+         Sending a magnet used to end at "Sent ✓" — whether it then downloaded,
+         stalled at 0% or found no seeds was invisible from the browser. -->
+    <section id="torrents-card" class="card" hidden>
+      <div class="card-head between">
+        <div class="card-title small">Torrents</div>
+        <button id="torrents-refresh" class="link-btn" title="Refresh torrents">↻</button>
+      </div>
+      <ul id="torrents-list" class="results"></ul>
+    </section>
+
+    <!-- Finished downloads on the Opal machine -->
+    <details class="card details">
+      <summary class="card-title small">Downloads</summary>
+      <div class="detail-body">
+        <ul id="downloads-list" class="results"><li class="results-empty">Not loaded.</li></ul>
+        <div class="btn-row">
+          <button id="downloads-refresh" class="btn ghost">↻ Refresh</button>
+          <button id="downloads-up" class="btn ghost" hidden>↰ Up</button>
+        </div>
+      </div>
+    </details>
+
+    <!-- Opal's search history: the queries typed in the app, re-runnable here -->
+    <details class="card details">
+      <summary class="card-title small">Recent searches</summary>
+      <div class="detail-body">
+        <ul id="history-list" class="results"><li class="results-empty">Not loaded.</li></ul>
+        <div class="btn-row">
+          <button id="history-refresh" class="btn ghost">↻ Refresh</button>
+        </div>
+      </div>
+    </details>
+
     <!-- Cast + watch party -->
     <details class="card details">
       <summary class="card-title small">Cast &amp; watch party</summary>
       <div class="detail-body">
         <div class="btn-row">
           <button id="cast-find" class="btn ghost">📡 Find devices</button>
+          <button id="cast-stop" class="btn ghost">■ Stop casting</button>
         </div>
         <ul id="cast-list" class="results"></ul>
+        <div class="party-status" id="party-status">Not in a watch party.</div>
         <div class="btn-row">
           <button id="party-host" class="btn ghost">🎉 Host party</button>
+          <button id="party-leave" class="btn ghost">Leave</button>
         </div>
         <div class="search-row">
           <input id="party-ip" class="text-input" type="text" placeholder="Host IP to join" />

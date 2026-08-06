@@ -364,14 +364,21 @@ function injectButton(d: Detection): void {
     button.secondary:hover { background: #33333d; }
     .close { background: transparent; color: #fff; opacity: .6; padding: 8px; box-shadow: none; }
     .close:hover { opacity: 1; background: transparent; filter: none; }
+    button img { width: 15px; height: 15px; vertical-align: -3px; margin-right: 6px; }
   `;
 
   const wrap = document.createElement("div");
   wrap.className = "wrap";
 
-  const label = d.pageType === "manga" || d.pageType === "novel" ? "◆ Read in Opal" : "◆ Opal";
   const play = document.createElement("button");
-  play.textContent = label;
+  // The mark, not a "◆" standing in for it. The icon is a web-accessible
+  // resource so the shadow DOM can load it from any page.
+  const mark = document.createElement("img");
+  mark.src = chrome.runtime.getURL("images/icon-32.png");
+  mark.alt = "";
+  play.append(mark, document.createTextNode(
+    d.pageType === "manga" || d.pageType === "novel" ? "Read in Opal" : "Opal",
+  ));
   play.title = "Send this to Opal";
   play.addEventListener("click", () => {
     chrome.runtime.sendMessage({

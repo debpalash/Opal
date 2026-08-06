@@ -29,7 +29,10 @@ async function opalFetch(
 ): Promise<OpalResponse> {
   const s = await getSettings();
   if (!s.token) {
-    return { ok: false, error: "No API token set. Open the extension Settings." };
+    // Actionable, not just true: the panel and the toast turn this into a
+    // button that opens setup. "No API token set" left people hunting through
+    // a config directory for a file they had no reason to know about.
+    return { ok: false, error: "Not connected to Opal yet — open Setup to connect.", needsSetup: true };
   }
   const url = `${baseUrl(s)}${path}`;
   try {
@@ -59,8 +62,69 @@ async function opalFetch(
 
 const enc = encodeURIComponent;
 
+// ── Setup: the three calls that run BEFORE there is a token ─────────────────
+//
+// Every one of these is unauthenticated server-side (remote.zig serves /health
+// and /api/auth/* before the Bearer gate, because a browser has no other way to
+// obtain a token), and every one takes an explicit host/port — setup happens
+// before anything is saved, so it cannot read the settings.
+//
+// This is what replaced "find api.token in ~/.config/opal and paste it": the
+// extension finds the running Opal itself, and the user signs in with the
+// account they already made in the app.
+
+async function setupFetch(
+  host: string,
+  port: number,
+  path: string,
+  method: "GET" | "POST",
+  body?: Record<string, string>,
+): Promise<OpalResponse> {
+  const url = `http://${host}:${port}${path}`;
+  const init: RequestInit = { method };
+  if (body) {
+    // Credentials go in the body, never the query string — a URL lands in
+    // access logs and history. Same rule the web UI follows.
+    init.body = new URLSearchParams(body).toString();
+    init.headers = { "Content-Type": "application/x-www-form-urlencoded" };
+  }
+  try {
+    // A wrong host would otherwise hang until the browser gives up.
+    const res = await fetch(url, { ...init, signal: AbortSignal.timeout(4000) });
+    const text = await res.text();
+    let data: unknown = undefined;
+    try {
+      data = text ? JSON.parse(text) : undefined;
+    } catch {
+      data = text;
+    }
+    return { ok: res.ok, status: res.status, data };
+  } catch {
+    return { ok: false, error: `No Opal answering on ${host}:${port}.` };
+  }
+}
+
 /** Route a high-level action to the right Opal endpoint. */
 async function sendToOpal(req: OpalRequest): Promise<OpalResponse> {
+  // Setup actions first: they must NOT go through opalFetch, which requires the
+  // very token they exist to obtain.
+  switch (req.action) {
+    case "probe":
+      return setupFetch(req.host ?? "127.0.0.1", req.port ?? 41595, "/health", "GET");
+    case "authStatus":
+      return setupFetch(req.host ?? "127.0.0.1", req.port ?? 41595, "/api/auth/status", "GET");
+    case "login":
+    case "register":
+      return setupFetch(
+        req.host ?? "127.0.0.1",
+        req.port ?? 41595,
+        req.action === "login" ? "/api/auth/login" : "/api/auth/register",
+        "POST",
+        { username: req.username ?? "", password: req.password ?? "" },
+      );
+    default:
+      break;
+  }
   switch (req.action) {
     case "open": {
       const parts = [`url=${enc(req.url ?? "")}`];
@@ -137,6 +201,15 @@ async function sendToOpal(req: OpalRequest): Promise<OpalResponse> {
       return opalFetch(`/api/downloads?dir=${enc(req.subdir ?? "")}`, "GET");
     case "downloadsPlay":
       return opalFetch(`/api/downloads/play?file=${enc(req.file ?? "")}`, "POST");
+    // ── Torrents ──
+    // A magnet sent from the browser used to vanish into the app: the panel
+    // reported "Sent ✓" and then had nothing to say about whether it was
+    // downloading, stalled, or seedless.
+    case "torrents":
+      return opalFetch(`/api/torrents`, "GET");
+    // ── Library / history ──
+    case "history":
+      return opalFetch(`/api/history`, "GET");
     // ── Cast / watch-party ──
     case "castDevices":
       return opalFetch(`/api/cast/devices`, "GET");
@@ -145,10 +218,14 @@ async function sendToOpal(req: OpalRequest): Promise<OpalResponse> {
         `/api/cast/start${req.device ? `?device=${enc(req.device)}` : ""}`,
         "POST",
       );
+    case "castStop":
+      return opalFetch(`/api/cast/stop`, "POST");
     case "partyHost":
       return opalFetch(`/api/party/host`, "POST");
     case "partyJoin":
       return opalFetch(`/api/party/join?ip=${enc(req.ip ?? "")}`, "POST");
+    case "partyLeave":
+      return opalFetch(`/api/party/leave`, "POST");
     case "partyStatus":
       return opalFetch(`/api/party/status`, "GET");
     default:
@@ -251,9 +328,15 @@ function buildContextMenus(): void {
   });
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
   buildContextMenus();
   enableSidePanelOnActionClick();
+  // Open setup the moment the extension is installed. Every other entry point
+  // (toolbar icon, context menu, shortcut) fails with "not connected" until a
+  // token exists, and nothing previously told the user where to fix that.
+  if (details.reason === "install") {
+    chrome.runtime.openOptionsPage().catch?.(() => {});
+  }
 });
 chrome.runtime.onStartup.addListener(() => {
   buildContextMenus();
@@ -356,6 +439,34 @@ async function addSourceAndNotify(d: Detection): Promise<OpalResponse> {
   else notify("Opal", `Add source failed: ${res.error ?? res.status ?? "error"}`);
   return res;
 }
+
+// ── Keyboard shortcuts ──────────────────────────────────────────────────────
+// Alt+Shift+O sends whatever page you are on; Alt+Shift+P is a play/pause that
+// works without leaving the page you are reading. Both are re-bindable at
+// chrome://extensions/shortcuts.
+
+chrome.commands?.onCommand.addListener(async (command) => {
+  if (command === "opal-playpause") {
+    await runAndNotify("Play/pause", { kind: "opal", action: "playpause" });
+    return;
+  }
+  if (command !== "opal-send-page") return;
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const d = tab?.id ? await detectTab(tab.id) : null;
+  if (!d) {
+    await runAndNotify("Send", { kind: "opal", action: "open", url: tab?.url ?? "" });
+    return;
+  }
+  await runAndNotify(smartLabel(d), {
+    kind: "opal",
+    action: "ingest",
+    ingestType: d.pageType,
+    url: d.url || tab?.url || "",
+    title: d.title,
+    art: d.art,
+    subtitle: d.subtitle,
+  });
+});
 
 // ── Messages from content script / side panel ───────────────────────────────
 

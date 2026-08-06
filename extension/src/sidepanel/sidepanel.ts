@@ -13,11 +13,13 @@
 
 import type {
   Detection,
+  OpalFile,
   OpalQueueItem,
   OpalRequest,
   OpalResponse,
   OpalSearchResult,
   OpalStatus,
+  OpalTorrent,
   OpalUnifiedResults,
 } from "../shared";
 
@@ -53,10 +55,23 @@ const searchResults = $<HTMLUListElement>("search-results");
 const queueList = $<HTMLUListElement>("queue-list");
 const queueRefresh = $<HTMLButtonElement>("queue-refresh");
 const castFind = $<HTMLButtonElement>("cast-find");
+const castStopBtn = $<HTMLButtonElement>("cast-stop");
 const castListEl = $<HTMLUListElement>("cast-list");
 const partyHostBtn = $<HTMLButtonElement>("party-host");
 const partyIp = $<HTMLInputElement>("party-ip");
 const partyJoinBtn = $<HTMLButtonElement>("party-join");
+const partyLeaveBtn = $<HTMLButtonElement>("party-leave");
+const partyStatusEl = $<HTMLElement>("party-status");
+const torrentsCard = $<HTMLElement>("torrents-card");
+const torrentsList = $<HTMLUListElement>("torrents-list");
+const torrentsRefresh = $<HTMLButtonElement>("torrents-refresh");
+const downloadsList = $<HTMLUListElement>("downloads-list");
+const downloadsRefresh = $<HTMLButtonElement>("downloads-refresh");
+const downloadsUp = $<HTMLButtonElement>("downloads-up");
+const historyList = $<HTMLUListElement>("history-list");
+const historyRefresh = $<HTMLButtonElement>("history-refresh");
+const setupCard = $<HTMLElement>("setup-card");
+const setupOpen = $<HTMLButtonElement>("setup-open");
 const recent = $<HTMLUListElement>("recent");
 const optionsLink = $<HTMLAnchorElement>("options");
 
@@ -334,6 +349,170 @@ async function loadQueue(): Promise<void> {
 
 queueRefresh.addEventListener("click", loadQueue);
 
+// ── Torrents in flight ───────────────────────────────────────────────────────
+//
+// The panel could start a torrent and then say nothing about it. This polls
+// only while there is something to show: the card hides itself when the list is
+// empty, so an Opal with no torrents costs one request per panel open.
+
+function fmtRate(bytesPerSec: number): string {
+  if (!isFinite(bytesPerSec) || bytesPerSec <= 0) return "0 KB/s";
+  if (bytesPerSec >= 1024 * 1024) return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
+  return `${Math.round(bytesPerSec / 1024)} KB/s`;
+}
+
+function fmtSize(bytes: number): string {
+  if (!isFinite(bytes) || bytes <= 0) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = bytes;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u += 1;
+  }
+  return `${v >= 10 || u === 0 ? Math.round(v) : v.toFixed(1)} ${units[u]}`;
+}
+
+async function loadTorrents(): Promise<void> {
+  const res = await send({ kind: "opal", action: "torrents" });
+  const items = res.ok ? ((res.data as { torrents?: OpalTorrent[] })?.torrents ?? []) : [];
+  torrentsCard.hidden = items.length === 0;
+  if (!items.length) return;
+  torrentsList.textContent = "";
+  for (const t of items) {
+    const li = document.createElement("li");
+    li.className = "result torrent";
+    const meta = document.createElement("div");
+    meta.className = "result-meta";
+    const pct = Math.max(0, Math.min(100, t.pct));
+    // The detail line answers the question a percentage alone cannot: is it
+    // moving? A torrent stuck at 3% with 0 seeds is not the same as one at 3%
+    // pulling 4 MB/s, and both read "3%".
+    meta.innerHTML =
+      `<span class="result-title">${escapeHtml(t.name)}</span>` +
+      `<span class="result-detail">${pct.toFixed(1)}% · ${fmtRate(t.rate)} · ${t.seeds} seed${t.seeds === 1 ? "" : "s"}${t.paused ? " · paused" : ""}</span>` +
+      `<span class="bar"><span class="bar-fill" style="width:${pct}%"></span></span>`;
+    li.append(meta);
+    torrentsList.append(li);
+  }
+}
+
+torrentsRefresh.addEventListener("click", loadTorrents);
+
+// ── Downloads on the Opal machine ────────────────────────────────────────────
+
+let downloadDir = "";
+
+async function loadDownloads(): Promise<void> {
+  const res = await send({ kind: "opal", action: "downloadsList", subdir: downloadDir });
+  downloadsList.textContent = "";
+  downloadsUp.hidden = downloadDir === "";
+  const files = res.ok ? ((res.data as { files?: OpalFile[] })?.files ?? []) : [];
+  if (!files.length) {
+    const li = document.createElement("li");
+    li.className = "results-empty";
+    li.textContent = res.ok ? "Nothing here." : "Opal not reachable.";
+    downloadsList.append(li);
+    return;
+  }
+  for (const f of files) {
+    const li = document.createElement("li");
+    li.className = "result";
+    const meta = document.createElement("div");
+    meta.className = "result-meta";
+    meta.innerHTML =
+      `<span class="result-title">${f.is_dir ? "📁 " : ""}${escapeHtml(f.name)}</span>` +
+      (f.is_dir ? "" : `<span class="result-detail">${fmtSize(f.size)}</span>`);
+    li.append(meta);
+    const btns = document.createElement("div");
+    btns.className = "result-btns";
+    const b = document.createElement("button");
+    b.className = f.is_dir ? "mini-btn" : "mini-btn primary";
+    b.textContent = f.is_dir ? "→" : "▶";
+    b.title = f.is_dir ? "Open folder" : "Play in Opal";
+    b.addEventListener("click", () => {
+      const rel = downloadDir ? `${downloadDir}/${f.name}` : f.name;
+      if (f.is_dir) {
+        downloadDir = rel;
+        loadDownloads();
+      } else {
+        act(`Playing ${f.name}`, { kind: "opal", action: "downloadsPlay", file: rel });
+      }
+    });
+    btns.append(b);
+    li.append(btns);
+    downloadsList.append(li);
+  }
+}
+
+downloadsRefresh.addEventListener("click", loadDownloads);
+downloadsUp.addEventListener("click", () => {
+  downloadDir = downloadDir.includes("/")
+    ? downloadDir.slice(0, downloadDir.lastIndexOf("/"))
+    : "";
+  loadDownloads();
+});
+
+// ── Recent searches ──────────────────────────────────────────────────────────
+//
+// /api/history is Opal's SEARCH history — the queries typed in the app, not
+// watched media. Clicking one re-runs it here, so a search started on the
+// desktop can be continued in the browser.
+
+async function loadHistory(): Promise<void> {
+  const res = await send({ kind: "opal", action: "history" });
+  historyList.textContent = "";
+  const items = res.ok ? ((res.data as { items?: string[] })?.items ?? []) : [];
+  if (!items.length) {
+    const li = document.createElement("li");
+    li.className = "results-empty";
+    li.textContent = res.ok ? "No searches yet." : "Opal not reachable.";
+    historyList.append(li);
+    return;
+  }
+  for (const q of items.slice(0, 20)) {
+    const li = document.createElement("li");
+    li.className = "result";
+    const meta = document.createElement("div");
+    meta.className = "result-meta";
+    meta.innerHTML = `<span class="result-title">${escapeHtml(q)}</span>`;
+    li.append(meta);
+    const btns = document.createElement("div");
+    btns.className = "result-btns";
+    const b = document.createElement("button");
+    b.className = "mini-btn primary";
+    b.textContent = "⌕";
+    b.title = `Search "${q}" again`;
+    b.addEventListener("click", () => {
+      searchQ.value = q;
+      runSearch();
+      searchQ.scrollIntoView({ block: "nearest" });
+    });
+    btns.append(b);
+    li.append(btns);
+    historyList.append(li);
+  }
+}
+
+historyRefresh.addEventListener("click", loadHistory);
+
+// Both lists are inside a collapsed <details>. Fetch on first open rather than
+// at panel load — a folder listing and a history read are wasted work for a
+// section nobody expanded.
+function loadOnFirstOpen(el: HTMLElement, load: () => void): void {
+  const d = el.closest("details");
+  if (!d) return;
+  let loaded = false;
+  d.addEventListener("toggle", () => {
+    if (d.open && !loaded) {
+      loaded = true;
+      load();
+    }
+  });
+}
+loadOnFirstOpen(downloadsList, loadDownloads);
+loadOnFirstOpen(historyList, loadHistory);
+
 // ── Cast + watch party ───────────────────────────────────────────────────────
 
 castFind.addEventListener("click", async () => {
@@ -365,27 +544,72 @@ castFind.addEventListener("click", async () => {
   });
 });
 
-partyHostBtn.addEventListener("click", () => act("Hosting watch party", { kind: "opal", action: "partyHost" }));
-partyJoinBtn.addEventListener("click", () => {
+castStopBtn.addEventListener("click", () => act("Stopped casting", { kind: "opal", action: "castStop" }));
+
+partyHostBtn.addEventListener("click", async () => {
+  await act("Hosting watch party", { kind: "opal", action: "partyHost" });
+  loadPartyStatus();
+});
+partyJoinBtn.addEventListener("click", async () => {
   const ip = partyIp.value.trim();
   if (!ip) return;
-  act(`Joining ${ip}`, { kind: "opal", action: "partyJoin", ip });
+  await act(`Joining ${ip}`, { kind: "opal", action: "partyJoin", ip });
+  loadPartyStatus();
 });
+partyLeaveBtn.addEventListener("click", async () => {
+  await act("Left the party", { kind: "opal", action: "partyLeave" });
+  loadPartyStatus();
+});
+
+/** Hosting or joining reported "✓" and then nothing — there was no way to see
+ *  whether anyone connected, or to get out again. */
+async function loadPartyStatus(): Promise<void> {
+  const res = await send({ kind: "opal", action: "partyStatus" });
+  if (!res.ok) {
+    partyStatusEl.textContent = "Not in a watch party.";
+    return;
+  }
+  const st = res.data as
+    | { role?: string; connected?: boolean; peers?: number; host_ip?: string; status?: string }
+    | undefined;
+  if (!st || !st.role || st.role === "none" || st.role === "off") {
+    partyStatusEl.textContent = "Not in a watch party.";
+    return;
+  }
+  const peers = st.peers ?? 0;
+  const where = st.host_ip ? ` · ${st.host_ip}` : "";
+  partyStatusEl.textContent =
+    `${st.role}${st.connected ? " · connected" : " · waiting"} · ${peers} peer${peers === 1 ? "" : "s"}${where}`;
+}
 
 // ── Status polling ────────────────────────────────────────────────────────────
 
 let pollTimer: number | undefined;
+
+let ticks = 0;
 
 async function poll(): Promise<void> {
   const res = await send({ kind: "opal", action: "status" });
   if (res.ok) {
     statusDot.className = "dot ok";
     statusText.textContent = "Connected";
+    setupCard.hidden = true;
     const st = res.data as OpalStatus | undefined;
     if (st && typeof st === "object") renderStatus(st);
+    // Torrents move; everything else in the panel is pull-to-refresh. Every
+    // 6th tick ≈ 9s — enough to watch a download climb without a request a
+    // second for a card that is usually hidden.
+    if (ticks % 6 === 0) loadTorrents();
+    ticks += 1;
+  } else if (res.needsSetup) {
+    // Never set up. Not an error — a step nobody has taken yet.
+    statusDot.className = "dot probing";
+    statusText.textContent = "Not connected";
+    setupCard.hidden = false;
   } else if (res.status === 401) {
     statusDot.className = "dot err";
-    statusText.textContent = "Token invalid — open Settings";
+    statusText.textContent = "Sign-in expired — open Settings";
+    setupCard.hidden = false;
   } else {
     statusDot.className = "dot err";
     statusText.textContent = "Opal not running";
@@ -405,6 +629,7 @@ optionsLink.addEventListener("click", (e) => {
   e.preventDefault();
   chrome.runtime.openOptionsPage();
 });
+setupOpen.addEventListener("click", () => chrome.runtime.openOptionsPage());
 
 // Re-detect when the active tab changes / navigates while the panel is open.
 chrome.tabs.onActivated.addListener(() => loadDetection());
@@ -414,6 +639,8 @@ chrome.tabs.onUpdated.addListener((_id, info, tab) => {
 
 loadDetection();
 loadQueue();
+loadTorrents();
+loadPartyStatus();
 poll();
 pollTimer = setInterval(poll, 1500) as unknown as number;
 window.addEventListener("unload", () => {

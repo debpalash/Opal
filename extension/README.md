@@ -26,9 +26,17 @@ generic "open URL".
     queue a result inline.
   - **Transport** — play/pause, ±10s, seek, volume, mute, fullscreen, next audio/sub.
   - **Queue** — view it live and reorder items.
-  - **Cast & watch-party** — find cast targets, host or join a LAN party.
+  - **Torrents** — live progress, rate and seed count for anything downloading,
+    so a magnet you sent from the browser does not vanish into the app.
+  - **Downloads** — browse the finished-downloads folder on the Opal machine and
+    play a file straight from it.
+  - **Continue watching** — recently played, one click to resume.
+  - **Cast & watch-party** — find cast targets, stop casting, host/join/leave a
+    LAN party with live peer status.
 - **Queue / Download / Read** — queue a link, hand a URL to Opal's downloader, or
   extract readable article text.
+- **Keyboard shortcuts** — <kbd>Alt+Shift+O</kbd> sends the current page,
+  <kbd>Alt+Shift+P</kbd> play/pauses, without opening the panel.
 
 Built with [extension.js](https://extension.js.org) (v3) + TypeScript.
 
@@ -42,7 +50,7 @@ Grab a build from the [latest release](../../../releases/latest) — the assets 
 - **Firefox**: `about:debugging` → *This Firefox* → *Load Temporary Add-on* →
   pick the zip (unsigned add-ons load per-session until signed on AMO).
 
-Then pair it — see *Get your API token* below.
+Then connect it — see *First run* below.
 
 ## Requirements
 
@@ -51,15 +59,24 @@ Then pair it — see *Get your API token* below.
   `http://127.0.0.1:41595` by default.
 - Node 18+ to build (`npm install` pulls `extension` + `typescript`).
 
-## Get your API token
+## First run
 
-Opal generates a bearer token on first launch and stores it (mode `0600`) at:
+Setup opens by itself the first time the extension is installed, and is two steps:
 
-- macOS / Linux: `~/.config/opal/api.token`
-- Windows: `%APPDATA%\opal\api.token`
+1. **Search for Opal** — probes `/health` on the usual local addresses and fills
+   in whatever answers. Nothing to type if Opal is on the same machine.
+2. **Sign in** — the account you made in Opal. If that Opal has no account yet
+   (a fresh headless box), step 2 offers to create the first one instead. The
+   session token is stored via `chrome.storage.sync`; you never see it.
 
-Copy its contents and paste it into the extension's **Settings** page, then hit
-**Test connection**. The token is stored via `chrome.storage.sync`.
+Opal on another machine: open *It's on another machine*, type host and port. A
+non-loopback address needs one extra browser permission, which the extension
+requests when you press Connect (Firefox grants `optional_host_permissions` from
+127; older builds are loopback-only).
+
+**Automation / advanced**: *Use an API token instead* takes the bearer token Opal
+writes on first launch (mode `0600`) at `~/.config/opal/api.token` (macOS/Linux)
+or `%APPDATA%\opal\api.token` (Windows). That is the same token scripts use.
 
 > The extension never fetches localhost from a web page. Every Opal request is
 > made by the background service worker, which holds `host_permissions` for
@@ -97,7 +114,10 @@ map lives in `src/shared.ts` (`OpalAction`).
 | Status     | `GET /api/status`                                                                            |
 | Queue      | `GET /api/queue` · `POST /api/queue/move?idx=&dir=up\|down`                                   |
 | Downloads  | `GET /api/downloads?dir=` · `POST /api/downloads/play?file=`                                  |
-| Cast/party | `GET /api/cast/devices` · `POST /api/cast/start` · `POST /api/party/host` · `/api/party/join?ip=` · `GET /api/party/status` |
+| Torrents   | `GET /api/torrents`                                                                          |
+| History    | `GET /api/history`                                                                           |
+| Cast/party | `GET /api/cast/devices` · `POST /api/cast/start` · `/api/cast/stop` · `POST /api/party/host` · `/api/party/join?ip=` · `/api/party/leave` · `GET /api/party/status` |
+| Setup      | `GET /health` · `GET /api/auth/status` · `POST /api/auth/login` · `/api/auth/register` — the only unauthenticated ones; they are how the extension obtains a token |
 
 `type` for `/api/ingest` is one of
 `video｜manga｜novel｜anime｜magnet｜media｜article｜chapters｜queue`.
@@ -114,7 +134,7 @@ extension/
 │   ├── content.ts          framework detection + page classify + shadow-DOM button
 │   ├── shared.ts           settings + types shared across contexts
 │   ├── sidepanel/          persistent panel: remote + send + add-source + recent
-│   └── options/            full-page settings (Connection / Behavior / About)
+│   └── options/            setup wizard + settings (Connect / Behavior / Shortcuts / About)
 └── images/                 extension icons
 ```
 
@@ -126,4 +146,5 @@ extension/
 - Madara serves both manga and novels; the extension guesses manga vs novel from
   the reading surface (image chapters vs prose). If it picks wrong, use the side
   panel's type to override.
-- Token pairing is manual (copy/paste from `api.token`).
+- Watch-party and cast need the machines to see each other on the LAN; the panel
+  reports the party role and peer count so a silent failure is visible.

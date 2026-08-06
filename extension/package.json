@@ -1,7 +1,7 @@
 {
   "name": "opal-connect",
-  "version": "0.1.0",
-  "description": "Opal Connect — send any website's media, articles, downloads and scraped page data to a locally-running Opal desktop app.",
+  "version": "0.4.0",
+  "description": "Opal Connect \u2014 send any website's media, articles, downloads and scraped page data to a locally-running Opal desktop app.",
   "private": true,
   "type": "module",
   "scripts": {
