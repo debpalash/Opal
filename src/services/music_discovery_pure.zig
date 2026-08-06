@@ -31,7 +31,7 @@ const std = @import("std");
 
 /// MusicBrainz *requires* a descriptive, contactable User-Agent; a generic
 /// browser UA is explicitly against their rules and gets you blocked.
-pub const USER_AGENT = "Opal/0.6.3 ( https://github.com/debpalash/Opal )";
+pub const USER_AGENT = "Opal/0.6.4 ( https://github.com/debpalash/Opal )";
 
 /// MusicBrainz enforces ~1 request/second per client. ListenBrainz labs is more
 /// forgiving but we stay polite.
