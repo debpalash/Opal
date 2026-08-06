@@ -118,3 +118,11 @@ dist/
 data/config/
 data/cache/
 data/media/
+
+# Astro landing page (site/) — build output + deps
+site/dist/
+site/.astro/
+site/node_modules/
+
+# wrangler local state
+.wrangler/

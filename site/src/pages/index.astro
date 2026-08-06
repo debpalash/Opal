@@ -1,0 +1,274 @@
+---
+// opal.palash.dev — the whole site is this one page.
+//
+// Astro renders it to static HTML at build time; the three React components
+// below are islands, hydrated on load, because each of them needs the browser:
+// the clipboard, the visitor's platform, and the newest release from the GitHub
+// API. Everything else — copy, screenshots, the comparison table — is HTML with
+// no JavaScript attached, which is why the page is readable before (and
+// without) hydration.
+import "../styles/global.css";
+import InstallCommand from "../components/InstallCommand.tsx";
+import DownloadGrid from "../components/DownloadGrid.tsx";
+import ReleaseBadge from "../components/ReleaseBadge.tsx";
+
+const REPO = "https://github.com/debpalash/Opal";
+
+const features = [
+  {
+    icon: "🔭",
+    title: "One search, every source",
+    body: "Disk, torrents, Jellyfin, Plex, Stremio, anime, YouTube, live TV, TMDB and manga — one ranked list, a play button on every row.",
+  },
+  {
+    icon: "🧲",
+    title: "Magnets behave like files",
+    body: "Press play on a torrent result and you are watching while it downloads. No separate client, no waiting for 100%.",
+  },
+  {
+    icon: "🤖",
+    title: "An AI that lives on your machine",
+    body: "A local model with tool use answers “what should I watch?” with playable picks. No API key, no bill, no feed.",
+  },
+  {
+    icon: "📡",
+    title: "~40,000 live channels",
+    body: "A full IPTV catalog, searchable as you type, sitting next to everything else rather than in its own app.",
+  },
+  {
+    icon: "📚",
+    title: "Manga on the desktop",
+    body: "Mihon / Tachiyomi extensions, with the Suwayomi server bundled and managed for you — plus novel and comic source engines.",
+  },
+  {
+    icon: "🎛️",
+    title: "Details that matter",
+    body: "Auto subtitles, watch-party, session restore, a phone remote and a JSON API on :41595, SponsorBlock, seven themes.",
+  },
+];
+
+const comparison = [
+  ["Stremio / Kodi + a pile of add-ons", "one search across every source, a play button on each row"],
+  ["an IPTV / live-TV app", "~40,000 live channels, searchable as you type"],
+  ["Jellyfin / Plex web clients", "your own media servers, browsed natively"],
+  ["Tachiyomi / Mihon stuck on your phone", "manga extensions on the desktop, server bundled"],
+  ["a torrent client + a player", "magnet → streaming while it downloads"],
+  ["ChatGPT for “what do I watch?”", "a local AI copilot — no key, no bill, no feed"],
+  ["SponsorBlock · subtitle sites · casting apps", "all built in"],
+];
+
+const title = "Opal — play everything, from one app";
+const description =
+  "A free, open-source, local-first media player and browser. Search and stream movies, TV, anime, live TV, YouTube, torrents and manga — plus your own Jellyfin and Plex — with an on-device AI copilot. No accounts, no cloud, no subscription.";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href="https://opal.palash.dev/" />
+    <link rel="icon" href="/assets/logo.svg" type="image/svg+xml" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://opal.palash.dev/" />
+    <meta property="og:title" content={title} />
+    <meta
+      property="og:description"
+      content="Movies, TV, anime, live TV, YouTube, torrents, manga, Jellyfin and Plex — one native app, on your machine. No accounts, no cloud, no subscription."
+    />
+    <meta property="og:image" content="https://opal.palash.dev/assets/social-preview.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+  </head>
+
+  <body>
+    <nav>
+      <div class="wrap">
+        <a class="brand" href="/"><img src="/assets/logo.svg" alt="" width="26" height="26" />Opal</a>
+        <span class="spacer"></span>
+        <a class="navlink hide-sm" href="#features">Features</a>
+        <a class="navlink hide-sm" href="#why">Why</a>
+        <a class="navlink" href="#download">Download</a>
+        <a class="navlink" href={REPO}>GitHub</a>
+      </div>
+    </nav>
+
+    <header class="hero">
+      <div class="wrap">
+        <img class="mark" src="/assets/logo.svg" alt="Opal logo" width="96" height="96" />
+        <ReleaseBadge client:load />
+        <h1>Play everything.<br />From one app.</h1>
+        <p class="tagline">
+          A local-first media player and browser. Movies, TV, anime, <b>live TV</b>,
+          YouTube, torrents and manga — plus your own <b>Jellyfin &amp; Plex</b> —
+          with an AI copilot that runs <b>on your machine</b>.
+        </p>
+        <div class="cta">
+          <a class="btn primary" href="#download">Download</a>
+          <a class="btn" href={REPO}>View source</a>
+        </div>
+        <p class="cta-note">macOS · Linux · Windows (alpha) — no account, nothing phones home.</p>
+
+        <InstallCommand client:load />
+
+        <div class="shot">
+          <img
+            src="/assets/home.png"
+            alt="Opal's home screen: a time-aware greeting, an ask-anything search box, and a trending row of movies and shows"
+            width="1600"
+            height="1000"
+            fetchpriority="high"
+          />
+        </div>
+      </div>
+    </header>
+
+    <section id="features">
+      <div class="wrap">
+        <p class="eyebrow">What you get</p>
+        <h2>One app instead of a stack</h2>
+        <p class="sub">
+          A player, a site for the show, a server front-end, a torrent client and a
+          feed — replaced by one native binary that remembers where you left off.
+        </p>
+
+        <div class="grid">
+          {
+            features.map((f) => (
+              <div class="card">
+                <div class="ico">{f.icon}</div>
+                <h3>{f.title}</h3>
+                <p>{f.body}</p>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </section>
+
+    <section class="alt">
+      <div class="wrap">
+        <div class="split">
+          <div>
+            <p class="eyebrow">Search</p>
+            <h3>Ask once, get everything</h3>
+            <p>
+              One query fans out across every source you have enabled and comes back
+              ranked — local files, swarms with seed counts, your servers, and the
+              web, in a single playable list.
+            </p>
+          </div>
+          <div class="shot">
+            <img
+              src="/assets/search.png"
+              alt="One query fanned out across every source, ranked, each row with a play button"
+              loading="lazy"
+            />
+          </div>
+        </div>
+
+        <div class="split flip">
+          <div class="shot">
+            <img
+              src="/assets/ask-the-ai.gif"
+              alt="A suggestion chip answered by the local AI with a rail of playable posters"
+              loading="lazy"
+            />
+          </div>
+          <div>
+            <p class="eyebrow">Copilot</p>
+            <h3>A recommendation engine you own</h3>
+            <p>
+              The copilot runs locally and can actually do things — search, queue,
+              play. Your history is a SQLite file on your disk, not a profile on
+              someone's server.
+            </p>
+          </div>
+        </div>
+
+        <div class="split">
+          <div>
+            <p class="eyebrow">Browser extension</p>
+            <h3>Opal Connect</h3>
+            <p>
+              Chrome, Edge and Firefox. Send or queue the video in the tab you are
+              on, add a manga or novel site as a source in one click, and drive
+              playback from a side-panel remote — with torrent progress, downloads
+              and search built in.
+            </p>
+          </div>
+          <div class="shot">
+            <img
+              src="/assets/extension-sidebar.png"
+              alt="The Opal Connect side panel: connection status, page actions, transport controls and a live cross-source search"
+              loading="lazy"
+            />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="why">
+      <div class="wrap">
+        <p class="eyebrow">Why</p>
+        <h2>Instead of ten things</h2>
+        <p class="sub">Every row is something you would otherwise install, sign into, or pay for.</p>
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr><th>Instead of…</th><th>Opal gives you</th></tr>
+            </thead>
+            <tbody>
+              {comparison.map(([was, now]) => (<tr><td>{was}</td><td>{now}</td></tr>))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="alt" id="download">
+      <div class="wrap">
+        <p class="eyebrow">Get it</p>
+        <h2>Download Opal</h2>
+        <p class="sub">
+          One command detects your platform, verifies checksums, and doubles as the
+          updater (<code>… -s -- update</code>). Or pick a file below — every build
+          is on <a href={`${REPO}/releases`}>Releases</a>.
+        </p>
+
+        <DownloadGrid client:load />
+
+        <div class="note">
+          <b>Homebrew:</b> <code>brew install debpalash/tap/opal</code> ·
+          <b>Arch:</b> <code>yay -S opal-bin</code> ·
+          <b>From source:</b> <code>git clone</code> → <code>zig build run</code>.
+          <br />
+          macOS may call the <code>.dmg</code> “damaged” — it is not notarized yet;
+          the one-command installer skips that dialog, or run
+          <code>sudo xattr -cr /Applications/Opal.app</code> once. Windows is
+          <b>alpha</b> and behind macOS and Linux.
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div class="wrap">
+        <div class="row">
+          <a class="brand" href="/"><img src="/assets/logo.svg" alt="" width="26" height="26" />Opal</a>
+          <span class="spacer" style="flex: 1"></span>
+          <a href={REPO}>GitHub</a>
+          <a href={`${REPO}/releases`}>Releases</a>
+          <a href={`${REPO}/issues`}>Issues</a>
+          <a href="https://ko-fi.com/debpalash">Ko-fi</a>
+          <a href="https://paypal.me/palashCoder">PayPal</a>
+        </div>
+        <p style="margin: 18px 0 0; font-size: 13px">
+          GPL-3.0. Opal is a player and a search front-end — it hosts no content and
+          ships with no sources enabled. Sintel clips © Blender Foundation, CC-BY 3.0.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>
