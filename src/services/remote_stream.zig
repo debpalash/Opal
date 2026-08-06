@@ -527,10 +527,21 @@ pub fn handleTranscode(stream: std.Io.net.Stream, rel: []const u8, start_s: u32)
     //
     // Closing our read end is what actually ends it — the next write gets
     // EPIPE and ffmpeg exits on its own. kill()/wait() afterwards just reaps.
-    if (child.stdout) |*so| {
-        so.close(io_g.io());
-        child.stdout = null;
-    }
-    _ = child.kill() catch {};
+    // closeStdout(), not a manual close: the wrapper holds a COPY of the handle
+    // and std's cleanup closes the original inside wait()/kill(). See its doc
+    // comment — the double close is what panicked Opal on every "Play here".
+    child.closeStdout();
+    // Signal by pid — NOT child.kill(). std's kill() also runs its own cleanup,
+    // which closes the child's stdio handles; we just closed stdout ourselves,
+    // so that second close lands on a freed descriptor. In a debug build the Io
+    // layer turns the EBADF into `reached unreachable code` and the whole app
+    // panics mid-stream (measured: "Play here" on a real MKV killed Opal and
+    // delivered 0 bytes). In a release build it is worse and quieter — close()
+    // on a recycled fd number, i.e. some other connection's socket.
+    //
+    // killProcess is a bare SIGKILL that touches no descriptors, and wait()
+    // then reaps. ffmpeg has usually exited on the EPIPE already; this is the
+    // backstop for one that has not.
+    if (child.id) |pid| io_g.killProcess(pid);
     _ = child.wait() catch {};
 }

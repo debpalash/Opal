@@ -511,6 +511,37 @@ pub const Child = struct {
         return error.NotSpawned;
     }
 
+    /// Close our read end of the child's stdout, exactly once.
+    ///
+    /// Streaming callers sometimes close the pipe as a way to STOP the child:
+    /// an ffmpeg blocked writing to a full stdout pipe ignores SIGTERM (its
+    /// handler sets a flag, then it retries the interrupted write and blocks
+    /// again), and EPIPE is what actually ends it.
+    ///
+    /// Doing that through `self.stdout` alone is a trap. `spawn()` COPIES the
+    /// File handles out of the real child, so nulling the wrapper's copy leaves
+    /// `real.stdout` pointing at the same descriptor — and std's own cleanup,
+    /// which runs inside both wait() and kill(), closes it a second time. That
+    /// second close lands on a freed fd: EBADF, which the debug Io turns into
+    /// `reached unreachable code` (it panicked Opal mid-stream on every web
+    /// "Play here"), and which in a release build closes whatever unrelated
+    /// descriptor — another client's socket — inherited the number.
+    pub fn closeStdout(self: *Child) void {
+        var closed = false;
+        if (self.stdout) |*so| {
+            so.close(io());
+            self.stdout = null;
+            closed = true;
+        }
+        // Take it away from std either way, so its cleanup cannot re-close.
+        if (self.real) |*r| {
+            if (r.stdout) |*ro| {
+                if (!closed) ro.close(io());
+                r.stdout = null;
+            }
+        }
+    }
+
     pub fn spawnAndWait(self: *Child) !Term {
         try self.spawn();
         return self.wait();
