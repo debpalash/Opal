@@ -135,7 +135,8 @@ extension/
 │   ├── shared.ts           settings + types shared across contexts
 │   ├── sidepanel/          persistent panel: remote + send + add-source + recent
 │   └── options/            setup wizard + settings (Connect / Behavior / Shortcuts / About)
-└── images/                 extension icons
+└── public/images/          extension icons (public/ is flattened onto the
+                            build output root, so pages can use /images/…)
 ```
 
 ## Caveats

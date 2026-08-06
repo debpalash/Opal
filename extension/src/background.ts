@@ -32,9 +32,16 @@ async function opalFetch(
     // Actionable, not just true: the panel and the toast turn this into a
     // button that opens setup. "No API token set" left people hunting through
     // a config directory for a file they had no reason to know about.
-    return { ok: false, error: "Not connected to Opal yet — open Setup to connect.", needsSetup: true };
+    const r: OpalResponse = {
+      ok: false,
+      error: "Not connected to Opal yet — open Setup to connect.",
+      needsSetup: true,
+    };
+    noteResponse(r, path);
+    return r;
   }
   const url = `${baseUrl(s)}${path}`;
+  let out: OpalResponse;
   try {
     const res = await fetch(url, {
       method,
@@ -47,17 +54,21 @@ async function opalFetch(
     } catch {
       data = text;
     }
-    if (res.status === 401) {
-      return { ok: false, status: 401, error: "Unauthorized — check the token in Settings." };
-    }
-    return { ok: res.ok, status: res.status, data };
+    out =
+      res.status === 401
+        ? { ok: false, status: 401, error: "Sign-in expired — connect again in Settings." }
+        : { ok: res.ok, status: res.status, data };
   } catch {
-    return {
+    out = {
       ok: false,
       error:
         "Opal is not reachable. Is the desktop app running with the Web Remote enabled?",
     };
   }
+  // Every call already learned whether Opal is there; the toolbar icon reads
+  // that rather than running a poll of its own.
+  noteResponse(out, path);
+  return out;
 }
 
 const enc = encodeURIComponent;
@@ -233,24 +244,121 @@ async function sendToOpal(req: OpalRequest): Promise<OpalResponse> {
   }
 }
 
+// ── Connection state on the toolbar icon ────────────────────────────────────
+//
+// The icon looked identical whether Opal was running, unreachable, or had never
+// been set up — you found out by clicking something and watching it fail. It
+// now carries the answer: full-colour mark when an Opal is connected, greyed
+// when not, with the reason in the tooltip.
+//
+// State is refreshed from traffic that was happening anyway (every call through
+// opalFetch already learns whether Opal answered) plus a one-minute alarm for
+// when nothing else is going on. No extra polling loop.
+
+type ConnState = "playing" | "connected" | "offline" | "unconfigured";
+
+const ICON_ON = {
+  16: "images/icon-16.png",
+  32: "images/icon-32.png",
+  48: "images/icon-48.png",
+  128: "images/icon-128.png",
+};
+const ICON_OFF = {
+  16: "images/icon-16-off.png",
+  32: "images/icon-32-off.png",
+  48: "images/icon-48-off.png",
+  128: "images/icon-128-off.png",
+};
+
+let lastState: ConnState | null = null;
+let lastTitle = "";
+
+function applyState(state: ConnState, nowPlaying: string): void {
+  if (state === lastState && nowPlaying === lastTitle) return;
+  lastState = state;
+  lastTitle = nowPlaying;
+  const on = state === "playing" || state === "connected";
+  try {
+    chrome.action.setIcon({ path: on ? ICON_ON : ICON_OFF });
+    // The badge carries what the icon cannot: playing vs merely connected, and
+    // "you have not set this up" vs "it is not running" — two different
+    // problems with two different fixes.
+    chrome.action.setBadgeText({ text: state === "playing" ? "▶" : state === "unconfigured" ? "!" : "" });
+    chrome.action.setBadgeBackgroundColor({
+      color: state === "unconfigured" ? "#d9822b" : "#6b4bd6",
+    });
+    chrome.action.setTitle({
+      title:
+        state === "playing"
+          ? `Opal — ${nowPlaying}`
+          : state === "connected"
+            ? "Opal — connected, nothing playing"
+            : state === "unconfigured"
+              ? "Opal Connect — not set up yet. Click to connect."
+              : "Opal — not reachable. Is the app running?",
+    });
+  } catch {
+    // action API unavailable (very old Firefox) — the panel still works.
+  }
+}
+
+/** Derive the state from a response the worker already had in its hands. */
+function noteResponse(res: OpalResponse, path: string): void {
+  if (res.needsSetup) return applyState("unconfigured", "");
+  if (!res.ok && !res.status) return applyState("offline", "");
+  if (res.status === 401) return applyState("unconfigured", "");
+  if (!res.ok) return; // a 404/500 from one endpoint says nothing about the rest
+  if (path !== "/api/status") return applyState("connected", lastTitle);
+  const st = res.data as { title?: string; paused?: boolean } | undefined;
+  const title = st?.title && st.title !== "No media" ? st.title : "";
+  applyState(title && !st?.paused ? "playing" : "connected", title);
+}
+
+/** Heartbeat for when nothing else is talking to Opal. */
+async function refreshConnection(): Promise<void> {
+  await sendToOpal({ kind: "opal", action: "status" });
+}
+
+chrome.alarms?.create("opal-connection", { periodInMinutes: 1 });
+chrome.alarms?.onAlarm.addListener((a) => {
+  if (a.name === "opal-connection") refreshConnection();
+});
+
 // ── Notifications ───────────────────────────────────────────────────────────
 
-function notify(title: string, message: string): void {
+/** Notifications whose click should open setup rather than do nothing. */
+const setupNotifications = new Set<string>();
+
+function notify(title: string, message: string, opensSetup = false): void {
   try {
-    chrome.notifications.create({
-      type: "basic",
-      iconUrl: chrome.runtime.getURL("images/icon-128.png"),
-      title,
-      message,
-    });
+    chrome.notifications.create(
+      {
+        type: "basic",
+        iconUrl: chrome.runtime.getURL("images/icon-128.png"),
+        title,
+        message,
+      },
+      (id) => {
+        if (opensSetup && id) setupNotifications.add(id);
+      },
+    );
   } catch {
     // notifications unavailable — non-fatal
   }
 }
 
+// A failure caused by "never set up" is the one toast that has an obvious next
+// step; make the toast itself the way to take it.
+chrome.notifications?.onClicked.addListener((id) => {
+  if (!setupNotifications.delete(id)) return;
+  chrome.runtime.openOptionsPage();
+  chrome.notifications.clear(id);
+});
+
 async function runAndNotify(label: string, req: OpalRequest): Promise<OpalResponse> {
   const res = await sendToOpal(req);
   if (res.ok) notify("Opal", `${label} ✓`);
+  else if (res.needsSetup) notify("Opal Connect", "Not connected yet — click to set it up.", true);
   else notify("Opal", `${label} failed: ${res.error ?? res.status ?? "error"}`);
   return res;
 }
@@ -341,9 +449,14 @@ chrome.runtime.onInstalled.addListener((details) => {
 chrome.runtime.onStartup.addListener(() => {
   buildContextMenus();
   enableSidePanelOnActionClick();
+  refreshConnection();
 });
 // Also run at worker load so behavior is set even without an install/startup event.
 enableSidePanelOnActionClick();
+// The worker is torn down and respawned constantly in MV3; each spawn re-states
+// the icon, otherwise it reverts to the manifest default and claims "connected"
+// while Opal is down.
+refreshConnection();
 
 /** Label a smart send by the detected page type so the toast reads naturally. */
 function smartLabel(d: Detection): string {

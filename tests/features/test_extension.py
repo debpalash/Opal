@@ -169,6 +169,31 @@ def test_extension_branding():
         problems.append("content.ts floating button still labels itself with ◆")
     if "getURL(" not in code:
         problems.append("content.ts does not load the icon as a runtime resource")
+
+    # Every runtime reference must resolve in the BUILT bundle, not the source
+    # tree. extension.js flattens `public/` onto the output root and rewrites
+    # manifest icon paths; a relative "../../images/x.png" from a page came out
+    # as "/../images/x.png" and rendered as a broken image on the setup page —
+    # the logo was "fixed" and still visibly missing. So: anything referenced as
+    # /images/… or getURL("images/…") must exist under public/images/.
+    refs = set()
+    for rel in ("src/sidepanel/index.html", "src/options/options.html",
+                "src/content.ts", "src/background.ts"):
+        text = open(os.path.join(ext_dir, rel)).read()
+        # A relative path is the exact shape of the original bug: the bundler
+        # rewrote "../../images/x.png" to "/../images/x.png", which resolves to
+        # nothing. Only root-absolute (or getURL-relative) paths survive it.
+        if _re.search(r"\.\./[A-Za-z0-9_./-]*images/[A-Za-z0-9_.-]+\.png", text):
+            problems.append(f"{rel} references an icon by a relative path — the bundler mangles those")
+        refs.update(_re.findall(r'["\'(]/?(images/[A-Za-z0-9_.-]+\.png)', text))
+    if not refs:
+        problems.append("no runtime icon references found at all")
+    for ref in sorted(refs):
+        if not os.path.exists(os.path.join(ext_dir, "public", ref)):
+            problems.append(f"{ref} is referenced at runtime but not in public/ — it will 404 in the build")
+    for rel in list(icons.values()) + list(action_icon.values()):
+        if not rel.startswith("public/"):
+            problems.append(f"manifest icon {rel} is outside public/ — pages cannot reference it by a stable path")
     # getURL only resolves in a page if the file is web-accessible.
     war = " ".join(
         r for entry in manifest.get("web_accessible_resources", []) for r in entry.get("resources", [])
@@ -179,6 +204,46 @@ def test_extension_branding():
     if problems:
         return "fail", "; ".join(problems)
     return "pass", f"toolbar + panel + options all use images/icon-*.png ({len(icons)} sizes declared)"
+
+
+@test("Opal Connect's icon says whether Opal is connected", "Integration")
+def test_extension_connection_indicator():
+    """The toolbar icon looked identical whether Opal was running, unreachable,
+    or had never been set up. You found out by clicking something and watching
+    it fail — and the two failures have completely different fixes (start the
+    app vs. connect the extension).
+
+    The icon now carries the state: full-colour when connected, greyed when not,
+    with the reason in the tooltip and a badge separating "not set up" from
+    "not running"."""
+    ext_dir = os.path.join(PROJECT_DIR, "extension")
+    bg = open(os.path.join(ext_dir, "src/background.ts")).read()
+    problems = []
+
+    for size in ("16", "32", "48", "128"):
+        for variant in (f"icon-{size}.png", f"icon-{size}-off.png"):
+            if not os.path.exists(os.path.join(ext_dir, "public/images", variant)):
+                problems.append(f"public/images/{variant} missing")
+
+    checks = {
+        "swaps the icon": "setIcon" in bg and "ICON_OFF" in bg,
+        "explains itself in the tooltip": "setTitle" in bg,
+        "separates not-set-up from not-running": "unconfigured" in bg and "offline" in bg,
+        # Reusing traffic that already happened beats a second polling loop.
+        "derives state from real responses": "noteResponse" in bg,
+        "has a heartbeat for idle periods": "alarms" in bg and "periodInMinutes" in bg,
+        # MV3 tears the worker down constantly; a state set once does not stick.
+        "restates the icon when the worker respawns": bg.rstrip().count("refreshConnection()") >= 2,
+    }
+    problems += [k for k, v in checks.items() if not v]
+
+    with open(os.path.join(ext_dir, "manifest.json")) as f:
+        if "alarms" not in f.read():
+            problems.append("alarms permission not declared — the heartbeat never fires")
+
+    if problems:
+        return "fail", "; ".join(problems)
+    return "pass", "colour/grey icon + badge + tooltip for playing|connected|offline|unconfigured"
 
 
 @test("Opal Connect sets itself up without a token hunt", "Integration")
