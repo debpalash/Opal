@@ -169,7 +169,13 @@ jobs:
           done
           [ "$ok" = 1 ] || { echo "::error::/health never came up"; diagnose; exit 1; }
           curl -fs http://127.0.0.1:41595/health | grep -q '"ok":true'
-          curl -fs http://127.0.0.1:41595/ | grep -qiE 'opal|<!doctype'
+          # -o a file, not a pipe into grep. `grep -q` exits on the first match
+          # and closes the pipe under curl, which then dies with a write error
+          # (exit 23) — and under `set -o pipefail` that fails the job. It only
+          # bites once the page outgrows the pipe buffer, which is why this
+          # passed for months and then started failing on unrelated commits.
+          curl -fs http://127.0.0.1:41595/ -o smoke-index.html
+          grep -qiE 'opal|<!doctype' smoke-index.html
           # Unauthenticated API must 401 — same contract as the container.
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:41595/api/status)" = 401 ]
           # The two Windows-only regressions this job exists to catch:
@@ -218,7 +224,13 @@ jobs:
             sleep 2
           done
           curl -fs http://127.0.0.1:41595/health | grep -q '"ok":true'
-          curl -fs http://127.0.0.1:41595/ | grep -qiE 'opal|<!doctype'
+          # -o a file, not a pipe into grep. `grep -q` exits on the first match
+          # and closes the pipe under curl, which then dies with a write error
+          # (exit 23) — and under `set -o pipefail` that fails the job. It only
+          # bites once the page outgrows the pipe buffer, which is why this
+          # passed for months and then started failing on unrelated commits.
+          curl -fs http://127.0.0.1:41595/ -o smoke-index.html
+          grep -qiE 'opal|<!doctype' smoke-index.html
           curl -fs http://127.0.0.1:41595/api/auth/status | grep -q '"needs_setup":true'
           TOKEN=$(curl -fs -X POST --data 'username=ci-admin&password=ci-smoke-pass' http://127.0.0.1:41595/api/auth/register | sed 's/.*"token":"//;s/".*//')
           [ "${#TOKEN}" -ge 32 ]

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 /**
- * "v0.6.4 · free & open source · GPL-3.0".
+ * "v0.6.4 · free & open source".
  *
  * Renders the licence line on the server and only adds the version once the
  * API answers — so the pill is never empty, never shifts layout by more than a
@@ -26,7 +26,7 @@ export default function ReleaseBadge() {
   return (
     <span className="pill">
       {tag ? <b>{tag}</b> : <b>Free &amp; open source</b>}
-      {tag ? " · free & open source · GPL-3.0" : " · GPL-3.0"}
+      {tag ? " · free & open source" : ""}
     </span>
   );
 }

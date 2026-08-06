@@ -605,11 +605,17 @@ def test_release_notes():
     # ANY checkout: CI clones shallow (depth 1) and without tags, so neither a
     # real tag nor HEAD~5 can be assumed — asking for either produced an empty
     # commit list and failed this test on CI while passing locally.
+    #
+    # `prev` must also be an ANCESTOR of the end of the range. The script ends
+    # at the tag when the tag exists, and once a few commits land after a
+    # release, `HEAD~5` is *newer* than that tag — `v0.6.4..HEAD~5` reversed is
+    # empty, and this test failed on a perfectly good generator.
     def _git(*args):
         return subprocess.run(["git", *args], cwd=PROJECT_DIR,
                               capture_output=True, text=True).returncode == 0
 
-    prev = next((r for r in ("HEAD~5", "HEAD~1")
+    end = "v%s" % ver if _git("rev-parse", "-q", "--verify", "v%s^{commit}" % ver) else "HEAD"
+    prev = next((r for r in ("%s~5" % end, "%s~1" % end)
                  if _git("rev-parse", "-q", "--verify", r + "^{commit}")), "")
     argv = ["sh", "scripts/release-notes.sh", "v%s" % ver] + ([prev] if prev else [])
     try:

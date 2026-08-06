@@ -88,22 +88,22 @@ nav a.navlink:hover { color: var(--fg); }
 header.hero {
   position: relative;
   overflow: hidden;
-  padding: 40px 0 36px;
+  padding: 26px 0 22px;
   text-align: center;
   background:
     radial-gradient(760px 380px at 50% -60px, color-mix(in srgb, var(--accent) 26%, transparent), transparent),
     radial-gradient(600px 300px at 88% 8%, color-mix(in srgb, var(--accent-3) 14%, transparent), transparent);
 }
-.hero img.mark { width: 66px; height: 66px; margin: 0 auto 12px; filter: drop-shadow(0 12px 32px color-mix(in srgb, var(--accent) 45%, transparent)); }
-h1 { font-size: clamp(32px, 5.6vw, 50px); line-height: 1.06; margin: 0 0 10px; letter-spacing: -1.4px; font-weight: 850; }
+.hero img.mark { width: 44px; height: 44px; margin: 0 auto 8px; filter: drop-shadow(0 12px 32px color-mix(in srgb, var(--accent) 45%, transparent)); }
+h1 { font-size: clamp(28px, 4.6vw, 40px); line-height: 1.06; margin: 0 0 6px; letter-spacing: -1.4px; font-weight: 850; }
 .tagline {
-  font-size: clamp(15.5px, 2vw, 18px);
+  font-size: clamp(15px, 2vw, 17px);
   color: var(--muted);
   max-width: 600px;
-  margin: 0 auto 20px;
+  margin: 0 auto 12px;
 }
 .tagline b { color: var(--fg); font-weight: 700; }
-.cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 10px; }
+.cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 6px; }
 .cta-note { font-size: 13px; color: var(--muted); }
 .cta-note code { font-size: 12.5px; }
 
@@ -113,8 +113,8 @@ h1 { font-size: clamp(32px, 5.6vw, 50px); line-height: 1.06; margin: 0 0 10px; l
   align-items: center;
   gap: 10px;
   max-width: 720px;
-  margin: 18px auto 0;
-  padding: 12px 12px 12px 18px;
+  margin: 12px auto 0;
+  padding: 9px 10px 9px 16px;
   border-radius: 12px;
   background: var(--bg-2);
   border: 1px solid var(--border);
@@ -164,7 +164,7 @@ h2 { font-size: clamp(26px, 4vw, 34px); letter-spacing: -0.6px; margin: 0 0 10px
 }
 /* The fold-breaker. A cap keeps the shot from eating the whole viewport on
    short screens; the top is what matters, so any overflow is cropped there. */
-.hero .shot { margin-top: 26px; max-height: 74vh; }
+.hero .shot { margin-top: 18px; max-height: 58vh; }
 .hero .shot img { object-fit: cover; object-position: top center; }
 
 /* ── Feature grid ── */
@@ -250,7 +250,7 @@ code {
   font-size: 12.5px;
   font-weight: 700;
   color: var(--muted);
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 .pill b { color: var(--fg); }
 
