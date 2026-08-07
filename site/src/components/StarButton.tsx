@@ -22,8 +22,10 @@ export default function StarButton() {
     };
   }, []);
 
+  // Links to the repo itself, not /stargazers: the ask is "go star it", and the
+  // stargazer list is a page about other people.
   return (
-    <a className="star" href={`${REPO}/stargazers`} title="Star Opal on GitHub">
+    <a className="star" href={REPO} title="Give Opal a star on GitHub">
       <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
         <path
           fill="currentColor"
