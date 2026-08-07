@@ -8,6 +8,7 @@ const footer_pure = @import("footer_pure.zig");
 const c = @import("../core/c.zig");
 const state = @import("../core/state.zig");
 const player = @import("../player/player.zig");
+const stream_gate = @import("../player/stream_gate.zig");
 const logs = @import("../core/logs.zig");
 const search = @import("../services/search.zig");
 const transfers = @import("../services/transfers.zig");
@@ -263,7 +264,15 @@ pub fn playlistDropdownMenu(p: *player.MediaPlayer) void {
                         c.mpv.torrent_set_file_priority(state.torrentSession(), p.current_torrent_id, old_idx, 0);
                     }
                     p.selected_file_idx = @as(i32, @intCast(i));
-                    c.mpv.torrent_set_file_priority(state.torrentSession(), p.current_torrent_id, @intCast(i), 4);
+                    // 7 = "play this now", the same priority the auto-pick path
+                    // uses. It is also the only value that clears ready_flag so
+                    // apply_streaming_window re-runs for the new file; at 4 the
+                    // file got no streaming window and started slowly.
+                    c.mpv.torrent_set_file_priority(state.torrentSession(), p.current_torrent_id, @intCast(i), 7);
+                    // Gates are keyed by (torrent, file) — release the old one so
+                    // repeated episode switching can't fill the 16-slot table and
+                    // make isReady() degrade to "ready" with nothing buffered.
+                    stream_gate.reset(p.current_torrent_id);
                     p.torrent_is_ready = false; // Re-trigger load poll
                 }
             }
