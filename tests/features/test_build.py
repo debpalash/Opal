@@ -2,7 +2,7 @@
 Byte-for-byte identical test bodies; see tests/features/harness.py for the
 shared @test decorator, helpers, and run_all()."""
 from .harness import *  # noqa: F401,F403
-import os, sys, subprocess, sqlite3, socket, time, json  # noqa: F401
+import os, sys, re, subprocess, sqlite3, socket, time, json  # noqa: F401
 
 def _built_binary():
     # zig names the exe `opal` on POSIX and `opal.exe` on Windows.
@@ -784,3 +784,232 @@ def no_ai_coauthor_trailers():
         return "pass", f"{len(shas)} commit(s) since the rule, none with AI attribution"
     except Exception as exc:  # noqa: BLE001 — no git here is not a code fault
         return "skip", f"git unavailable: {exc}"
+
+
+@test("The landing page's photographic bands are static and present", "Packaging")
+def test_site_hero_backdrop():
+    """Two photographs drawn by CSS — a tray of opals behind the hero, a single
+    lit one behind the download band. They replaced a WebGL island (ogl / React
+    Bits) that could fail to hydrate on a machine without a GL context, and then
+    a grain overlay the film stock made redundant.
+
+    What breaks silently here: a CSS `url()` whose file was never committed
+    (blank hero, build still green), a `url()` left pointing at a file that was
+    deleted (same), a full-resolution photo dropped in unoptimised (megabytes on
+    the critical path, and nothing warns), the scrim going missing (light type on
+    a bright sky), the hero losing its dark token overrides (unreadable in light
+    mode), or the shader creeping back in.
+
+    The page is also meant to carry no rules: the nav sits on the photograph
+    rather than in a bar, and sections change tone instead of being divided.
+    """
+    page = _src("site/src/pages/index.astro")
+    css = _src("site/src/styles/global.css")
+
+    photo = os.path.join(PROJECT_DIR, "site/public/assets/opal.jpg")
+    # Every url() in the stylesheet has to resolve to a file that is actually
+    # here — a dangling reference is invisible until someone loads the page.
+    refs = re.findall(r'url\("(/assets/[^"]+)"\)', css)
+    paths = {r: os.path.join(PROJECT_DIR, "site/public", r.lstrip("/")) for r in refs}
+    dangling = [r for r, p in paths.items() if not os.path.exists(p)]
+    # These are the page's only large assets and they are deliberately high
+    # quality — dark, detailed stones fall apart under hard compression. The
+    # ceiling catches a full-resolution original dropped in (both of these
+    # arrived over 2MB), not the encoder setting.
+    heavy = [r for r, p in paths.items() if os.path.exists(p) and os.path.getsize(p) > 800_000]
+
+    checks = {
+        "the backdrop photo exists": os.path.exists(photo),
+        "no dangling asset reference": not dangling,
+        "every backdrop is under 800KB": not heavy,
+        "the CSS points at the photo": "/assets/opal.jpg" in css,
+        # Two more photographic bands, both carrying dark tokens on a
+        # light-mode page and both fading to var(--bg) instead of ending on an
+        # edge.
+        "the download band has its backdrop":
+            "/assets/opal2.jpg" in css and 'section class="cta" id="download"' in page,
+        "the support band has its backdrop":
+            "/assets/donate.jpg" in css and 'section class="support"' in page,
+        # A CSS background is discovered late; the preload has to name the same
+        # file, or it is a second download instead of a head start.
+        "the photo is preloaded":
+            'rel="preload" as="image" href="/assets/opal.jpg"' in page,
+        "the page mounts the scrim": '<div class="veil"></div>' in page,
+        # Type sits on a photograph; the scrim is what keeps it legible.
+        "the copy has a floor under it": ".hero .veil" in css,
+        "hero keeps dark values in light mode": "--fg: #f4f2ec;" in css,
+        # The island is gone from the hero. `ogl` itself is back in
+        # package.json — the react-bits registry component pulls it — so the
+        # check is that the hero does not mount a WebGL backdrop, not that the
+        # dependency is absent.
+        "no WebGL island left behind in the hero": "HeroBackdrop" not in page,
+        # No grain layer: the photograph is film and brings its own.
+        "no leftover grain layer":
+            ".hero .grain" not in css and "grain.png" not in css
+            and 'class="grain"' not in page,
+        # No rules anywhere — the nav rides the photo, sections fade into the bg.
+        "the nav is inside the hero": page.find("<header class=\"hero\">") < page.find("<nav>"),
+        "nothing draws a divider":
+            "border-bottom: 1px solid" not in css
+            and "border-top: 1px solid" not in css
+            and "border-block:" not in css,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "hero backdrop: " + ", ".join(missing)
+    return "pass", "hero + download bands: both photos committed, no rules on the page, zero JS"
+
+
+@test("The landing page offers everything a release ships", "Packaging")
+def test_site_download_grid():
+    """The release job attaches a Chrome zip and a Firefox zip alongside the app
+    binaries, and the site has to offer both — it used to link the Chrome one
+    from a tile labelled "Chrome · Firefox", so Firefox users got the wrong
+    file. Download counts come from the whole release history: a total taken
+    from the newest tag alone resets to nearly zero every release day.
+    """
+    grid = _src("site/src/components/DownloadGrid.tsx")
+    menu = _src("site/src/components/DownloadMenu.tsx")
+    lib = _src("site/src/lib/releases.ts")
+    wf = _src(".github/workflows/release.yml")
+
+    # What the release actually uploads, so the tiles can't drift from it.
+    ships_chrome = "opal-connect-${VER}-chrome.zip" in wf
+    ships_firefox = "opal-connect-${VER}-firefox.zip" in wf
+
+    checks = {
+        "release ships both extension zips": ships_chrome and ships_firefox,
+        # The patterns live in the shared platform table now. Three surfaces
+        # resolve download links (grid, hero menu, nav menu) and they disagreed
+        # once already — that is how the Chrome zip ended up behind a tile
+        # labelled "Chrome · Firefox".
+        "the platform table resolves the chrome zip": '"opal-connect", "chrome"' in lib,
+        "the platform table resolves the firefox zip": '"opal-connect", "firefox"' in lib,
+        "the grid reads that table": "PLATFORMS" in grid and "fileFor" in grid,
+        # The extension zips moved to the Opal Connect section, next to the
+        # screenshot that explains them — same table, different placement, and
+        # the download section must not list them twice.
+        "the extension buttons read that table too":
+            "PLATFORMS" in _src("site/src/components/ExtensionDownloads.tsx"),
+        "the download section leaves the extension to that section":
+            'p.id !== "chrome"' in grid and "<ExtensionDownloads client:load />" in _src("site/src/pages/index.astro"),
+        # A release ships several files per platform — .dmg AND .app.zip AND a
+        # tarball, AppImage AND .deb AND .rpm. Offering only the first sent
+        # anyone who wanted a .deb off to the releases page to dig for it.
+        "every format is offered, not just the primary":
+            all(f in lib for f in ('".deb"', '".rpm"', '".msi"', '"AppImage"', '".app.zip"')),
+        "files show their size": "formatBytes" in lib and "formatBytes" in grid,
+        "checksums are linked": "sha256sums" in lib.lower() and "namedAsset" in grid,
+        "the menu reads that table": "PLATFORMS" in menu and "assetFor" in menu,
+        "counts come from every release, not just the newest":
+            "per_page=100" in lib and "flatMap" in lib,
+        "counts read download_count": "download_count" in lib,
+        "one shared fetch for the whole page": "getReleases" in lib and "inflight" in lib,
+        # Every island reads it; each one hitting api.github.com separately
+        # burns the 60/hour an unauthenticated IP gets.
+        "the badge shares that fetch": "getReleases" in _src("site/src/components/ReleaseBadge.tsx"),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "download grid: " + ", ".join(missing)
+    return "pass", "one platform table behind the grid and both menus; counts summed across all releases"
+
+
+@test("The landing page's download flow and social proof are wired", "Packaging")
+def test_site_download_flow():
+    """The download button picks the visitor's platform, the caret opens the
+    rest, and a click lands on /thanks with install steps.
+
+    Failure modes that look fine in a build: the menu with no way to dismiss it
+    (a trap on touch and on the keyboard), a click handler that navigates before
+    the transfer starts (download cancelled), /thanks indexed by search engines
+    as a dead-end page, and `?os=` interpolated instead of matched against the
+    platform table.
+    """
+    page = _src("site/src/pages/index.astro")
+    thanks_page = _src("site/src/pages/thanks.astro")
+    panel = _src("site/src/components/ThanksPanel.tsx")
+    menu = _src("site/src/components/DownloadMenu.tsx")
+    star = _src("site/src/components/StarButton.tsx")
+    lib = _src("site/src/lib/releases.ts")
+    css = _src("site/src/styles/global.css")
+
+    checks = {
+        "the hero and the nav both mount the menu":
+            '<DownloadMenu client:load />' in page
+            and '<DownloadMenu client:load variant="nav" />' in page,
+        "the button names the detected platform":
+            "detectOs" in lib and "Download for ${mine.short}" in menu,
+        "the menu can be dismissed": "Escape" in menu and "mousedown" in menu,
+        "the menu says it is a menu": 'aria-expanded' in menu and 'aria-haspopup' in menu,
+        # The href stays a real asset URL so it survives no-JS and copy-link.
+        "the anchor keeps a real asset href": "assetFor" in menu and "href={href ??" in menu,
+        "the download starts before the page moves":
+            "a.click()" in lib and "setTimeout" in lib and "/thanks?os=" in lib,
+        "the thanks page exists and is noindex":
+            bool(thanks_page) and 'name="robots" content="noindex' in thanks_page,
+        "?os= is matched, not interpolated": "platform(want)" in panel,
+        "the thanks page can restart a stalled download": "Start it again" in panel,
+        "star count comes from the repo endpoint":
+            "getRepoMeta" in lib and "stargazers_count" in star,
+        # GitHub's own button is an iframe on every visit; this is a link.
+        "the star button is not a third-party iframe": "iframe" not in star,
+        "the nav offers a way to donate": "donate" in page and "ko-fi.com" in page,
+        "the nav menus need no javascript": "<details" in page and ".menu summary" in css,
+        "the X profile is linked": "x.com/idebpalash" in page and 'rel="me"' in page,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "download flow: " + ", ".join(missing)
+    return "pass", "split download button + dismissible menu + /thanks flow + star/donate/X"
+
+
+@test("The landing page's comparison and SEO metadata hold up", "Packaging")
+def test_site_compare_and_seo():
+    """The comparison matrix names real products, so it has to stay honest and
+    say where its claims come from. The structured data has to describe what is
+    actually on the page — invented markup is what gets a site's rich results
+    pulled — and a JSON-LD blob that fails to parse is silently ignored by every
+    crawler while looking perfectly fine in the browser.
+    """
+    page = _src("site/src/pages/index.astro")
+    robots = _src("site/public/robots.txt")
+    sitemap = _src("site/public/sitemap.xml")
+    built = os.path.join(PROJECT_DIR, "site/dist/index.html")
+
+    rivals = ["Jellyfin", "Plex", "qBittorrent", "Stremio", "Kodi"]
+    # The rendered page is what a crawler sees; parse the JSON-LD out of it.
+    ld, ld_ok = None, False
+    if os.path.exists(built):
+        html = open(built).read()
+        m = re.search(r'<script type="application/ld\+json"[^>]*>(.*?)</script>', html, re.S)
+        if m:
+            try:
+                ld = json.loads(m.group(1))
+                ld_ok = True
+            except ValueError:
+                ld_ok = False
+
+    types = []
+    if isinstance(ld, dict):
+        types = [n.get("@type") for n in ld.get("@graph", []) if isinstance(n, dict)]
+
+    checks = {
+        "the matrix names the products it compares against":
+            all(r in page for r in rivals),
+        "the matrix says where its claims come from":
+            "each project's own documentation" in page,
+        "and offers a way to correct it": 'class="foot"' in page,
+        "the structured data parses": ld_ok,
+        "it describes the app on the page": "SoftwareApplication" in types,
+        "and does not invent a rating": "aggregateRating" not in page,
+        "robots points at the sitemap": "Sitemap: https://opal.palash.dev/sitemap.xml" in robots,
+        "robots keeps the flow page out": "Disallow: /thanks" in robots,
+        "the sitemap lists the canonical URL": "<loc>https://opal.palash.dev/</loc>" in sitemap,
+        "social cards name the author": 'name="twitter:site" content="@idebpalash"' in page,
+        "the API host is preconnected": 'rel="preconnect" href="https://api.github.com"' in page,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "compare/seo: " + ", ".join(missing)
+    return "pass", f"matrix vs {len(rivals)} products, sourced; JSON-LD parses ({', '.join(t for t in types if t)})"
