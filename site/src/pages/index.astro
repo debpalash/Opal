@@ -44,7 +44,11 @@ const matrix = [
   ["On-device AI copilot", "Yes", "—", "—", "—", "—", "—"],
   ["No server to set up", "Yes", "Needs a server", "Needs a server", "Yes", "Yes", "Yes"],
   ["No account", "Yes", "Local account", "Plex account", "Yes", "Account to sync", "Yes"],
-  ["Licence", "GPL-3.0", "GPL-2.0", "Proprietary", "GPL-2.0", "Partly open", "GPL-2.0"],
+  // Checked against each project's own LICENSE file, Aug 2026. qBittorrent's
+  // source is GPL-2.0+ but its binaries ship GPL-3.0+ (the OpenSSL exception);
+  // Stremio's core is MIT and its web client GPL-2.0, while the streaming
+  // server.js is a closed binary — hence "partly".
+  ["Licence", "GPL-3.0", "GPL-2.0", "Proprietary", "GPL-2.0+", "Partly open", "GPL-2.0+"],
 ];
 
 const title = "Opal — play everything, from one app";
