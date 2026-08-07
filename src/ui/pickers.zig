@@ -16,6 +16,7 @@ const dvui = @import("dvui");
 const c = @import("../core/c.zig");
 const state = @import("../core/state.zig");
 const player = @import("../player/player.zig");
+const stream_gate = @import("../player/stream_gate.zig");
 const theme = @import("theme.zig");
 const components = @import("components.zig");
 const footer = @import("footer.zig");
@@ -504,7 +505,17 @@ pub fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
                     c.mpv.torrent_set_file_priority(state.torrentSession(), active_p.current_torrent_id, old_idx, 0);
                 }
                 active_p.selected_file_idx = @as(i32, @intCast(i));
-                c.mpv.torrent_set_file_priority(state.torrentSession(), active_p.current_torrent_id, @intCast(i), 4);
+                // 7, not 4 (normal): this is "play THIS file now". Only priority
+                // 7 makes torrent_set_file_priority clear ready_flag, which is
+                // what re-runs apply_streaming_window for the new file — at 4 the
+                // episode downloaded with no head-first ordering at all and took
+                // far longer to start. Matches the auto-pick path in player.zig.
+                c.mpv.torrent_set_file_priority(state.torrentSession(), active_p.current_torrent_id, @intCast(i), 7);
+                // Drop the old file's gate: it is keyed by (torrent, file), so
+                // without this every switch burns a slot and the 16-slot table
+                // eventually fills — at which point isReady() degrades to "ready"
+                // and hands mpv a file with nothing buffered.
+                stream_gate.reset(active_p.current_torrent_id);
                 active_p.torrent_is_ready = false;
             }
             footer.open_picker = .none;
