@@ -202,6 +202,14 @@ jobs:
   windows-x86_64:
     runs-on: windows-2022
     continue-on-error: true
+    permissions:
+      contents: read
+      id-token: write # OIDC token for azure/login, used by the signing steps
+    env:
+      # Signing is opt-in: with no Azure secrets configured the signing steps
+      # skip and the job still produces (unsigned) artifacts, so forks and
+      # secret-less builds are unaffected.
+      SIGNING_ENABLED: ${{ secrets.AZURE_CLIENT_ID != '' }}
     defaults:
       run:
         # Build steps run inside the MSYS2 environment: zig build shells out
@@ -446,6 +454,82 @@ jobs:
           Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
           exit 0
 
+      # ── Code signing ─────────────────────────────────────────────────────
+      # Smart App Control is on by default for clean Windows 11 installs and
+      # has no "run anyway" — unlike SmartScreen, the user cannot click past
+      # it. Its decision order (per Microsoft's own SAC FAQ) is: ask the cloud;
+      # if the cloud has no confident verdict — which is every new release from
+      # a small publisher — fall back to the signature, and treat an unsigned
+      # file as untrusted. There is no allowlist, no per-app review, and no way
+      # to request an exception, so signing is the only lever that exists.
+      #
+      # SAC validates EVERY module it loads, not just the launched exe: the
+      # ~50 MSYS2 DLLs in the closure and the MSI itself all have to be signed
+      # too, which is why this signs the whole staged payload rather than
+      # opal.exe alone. Signing must also land BEFORE the zip and before heat
+      # harvests staging/, so both artifacts carry signed payloads.
+      #
+      # Trusted Signing issues RSA certificates. Do not switch to ECC: the
+      # Code Integrity path SAC uses does not accept ECC signatures.
+      - name: Set aside already-signed binaries
+        if: env.SIGNING_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          # onnxruntime and the VC++ runtime arrive signed by Microsoft, and
+          # those signatures already carry reputation. Re-signing REPLACES a
+          # signature rather than adding one, so swapping Microsoft's for ours
+          # would be a downgrade — they sit the signing step out.
+          New-Item -ItemType Directory -Force -Path sign-inbox | Out-Null
+          $queued = 0
+          Get-ChildItem staging -File |
+            Where-Object { $_.Extension -in '.exe', '.dll' } |
+            ForEach-Object {
+              if (-not (Get-AuthenticodeSignature $_.FullName).SignerCertificate) {
+                Move-Item $_.FullName (Join-Path 'sign-inbox' $_.Name)
+                $queued++
+              }
+            }
+          Write-Host "$queued unsigned binaries queued for signing"
+
+      - name: Azure login (OIDC)
+        if: env.SIGNING_ENABLED == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign the payload (Azure Artifact Signing)
+        if: env.SIGNING_ENABLED == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\sign-inbox
+          files-folder-filter: exe,dll
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Restore signed binaries and verify the closure
+        if: env.SIGNING_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          Get-ChildItem sign-inbox -File | Move-Item -Destination staging
+          Remove-Item sign-inbox -Recurse -Force
+          # One unsigned straggler is all SAC needs to block the app, and it
+          # would surface as an unreproducible "works for me" bug report. Fail
+          # the build here instead of shipping it.
+          $unsigned = Get-ChildItem staging -File |
+            Where-Object { $_.Extension -in '.exe', '.dll' } |
+            Where-Object { -not (Get-AuthenticodeSignature $_.FullName).SignerCertificate }
+          if ($unsigned) {
+            Write-Host "::error::unsigned binaries remain in the payload: $($unsigned.Name -join ', ')"
+            exit 1
+          }
+          Write-Host "every PE in staging/ is signed"
+
       - name: Package portable zip
         shell: pwsh
         run: Compress-Archive -Path staging\* -DestinationPath "opal-${env:VERSION}-windows-x86_64.zip"
@@ -479,6 +563,34 @@ jobs:
           & "$wix\light.exe" -nologo -sval opal.wixobj harvest.wixobj `
               -o "Opal-${env:VERSION}-windows-x86_64.msi"
           exit $LASTEXITCODE
+
+      # The installer is itself a module SAC evaluates, and it is the first
+      # thing a user runs — an unsigned MSI is blocked before any of the signed
+      # payload inside it is ever reached.
+      - name: Sign the MSI
+        if: env.SIGNING_ENABLED == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}
+          files-folder-filter: msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify the MSI is signed
+        if: env.SIGNING_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem "Opal-*-windows-x86_64.msi" | Select-Object -First 1
+          $sig = Get-AuthenticodeSignature $msi.FullName
+          if (-not $sig.SignerCertificate) {
+            Write-Host "::error::$($msi.Name) is unsigned"
+            exit 1
+          }
+          Write-Host "$($msi.Name) signed by $($sig.SignerCertificate.Subject)"
 
       - uses: actions/upload-artifact@v4
         with:
