@@ -460,7 +460,15 @@ actually works — and it's free.
       macos-arm64 release job (scripts/build-app.sh already honors them and
       handles signing before DMG creation). Result: no "could not verify"
       dialog, ever.
-- [ ] Windows: an OV/EV Authenticode certificate (or Azure Trusted Signing)
-      signs opal.exe + the .msi and retires SmartScreen's "unknown publisher"
-      interstitial. Until then reputation accrues per-file-hash, so each
-      release restarts it.
+- [~] Windows: the release job signs the entire staged closure + the .msi via
+      Azure Artifact Signing (formerly Trusted Signing), and hard-fails if any
+      PE in the payload is left unsigned. WIRED BUT DORMANT — it is gated on
+      `AZURE_CLIENT_ID`, so until that secret exists every release still ships
+      unsigned. See packaging/windows/README.md for the six secrets and the
+      identity validation needed to switch it on.
+      This matters more than the SmartScreen interstitial: Smart App Control
+      is default-on for clean Windows 11 installs and offers users NO way to
+      click past a block. It falls back to the signature whenever its cloud
+      has no confident verdict, which is the normal case for a new release —
+      and it checks every DLL and the MSI, not just opal.exe. Signing is the
+      only lever; there is no allowlist and no per-app review to appeal to.
