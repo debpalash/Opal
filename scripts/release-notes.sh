@@ -78,11 +78,27 @@ fi
 # changelog that silently omits commits is worse than an untidy one.
 log=$(git -C "$ROOT" log --no-merges --format='%h%x09%s' "$RANGE" 2>/dev/null || true)
 
+# Every type that gets a home of its own, either in a section above or in the
+# internal fold below. "Other" is defined as the complement of this set, so a
+# commit can only ever be listed once and can never fall through the gaps.
+KNOWN_TYPES='feat|fix|perf|revert|test|chore|refactor|docs|ci'
+
 # Scope handling stays in sed rather than awk: `match(str, re, arr)` is a gawk
 # extension and this script also runs on macOS's one-true-awk.
+select_types() {
+    # $1 = alternation of conventional types; $2 = "-v" to select the commits
+    # matching NONE of them (`grep .` first so an empty log cannot become one
+    # blank line that -v then happily "matches").
+    if [ "${2:-}" = "-v" ]; then
+        printf '%s\n' "$log" | grep . | grep -Ev "$(printf '\t')($1)(\(|!?:)" || true
+    else
+        printf '%s\n' "$log" | grep -E "$(printf '\t')($1)(\(|!?:)" || true
+    fi
+}
+
 bucket() {
-    # $1 = heading, $2 = alternation of conventional types
-    body=$(printf '%s\n' "$log" | grep -E "$(printf '\t')($2)(\(|!?:)" || true)
+    # $1 = heading, $2 = alternation of conventional types, $3 = "-v" to invert
+    body=$(select_types "$2" "${3:-}")
     [ -n "$body" ] || return 0
     printf '### %s\n\n' "$1"
     printf '%s\n' "$body" | while IFS="$(printf '\t')" read -r sha subject; do
@@ -107,11 +123,16 @@ else
     bucket "Fixes" "fix" ""
     bucket "Performance" "perf" ""
     bucket "Reverts" "revert" ""
-    bucket "Other" "build|style" ""
+    # Everything left over: `build`/`style`, and — the reason this is a
+    # complement rather than a list — commits with no conventional prefix at
+    # all. Those used to vanish: the generator claimed to catch them and did
+    # not, so a shallow checkout whose only commit is a merge ("Merge branch
+    # 'main' of …") produced a `## Changes` heading with nothing under it.
+    bucket "Other" "$KNOWN_TYPES" "-v"
 
     # Internal churn is real work but not release-note material; it goes in a
     # fold so the list stays complete without burying the two sections above.
-    internal=$(printf '%s\n' "$log" | grep -E "$(printf '\t')(test|chore|refactor|docs|ci)(\(|!?:)" || true)
+    internal=$(select_types "test|chore|refactor|docs|ci")
     if [ -n "$internal" ]; then
         n=$(printf '%s\n' "$internal" | grep -c .)
         if [ "$n" -eq 1 ]; then noun=commit; else noun=commits; fi
