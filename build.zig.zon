@@ -15,7 +15,11 @@
             .hash = "zig_bypassdpi-0.1.0-B1zpWLK3AAB8dEz0DqoVx8yGkR2IwlRsk2WD-wyrqcbF",
         },
     },
-    .minimum_zig_version = "0.15.2",
+    // build.zig and the pinned DVUI revision use the Zig 0.16 Build API
+    // (including Build.Graph.environ_map). Keeping this at 0.15.2 let an
+    // unsupported compiler enter the build and fail with misleading field
+    // errors deep inside DVUI.
+    .minimum_zig_version = "0.16.0",
     .paths = .{""},
     .fingerprint = 0x2e12278c22c5aa8b,
 }

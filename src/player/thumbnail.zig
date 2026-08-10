@@ -26,7 +26,6 @@ pub const ThumbnailState = struct {
     pub fn reset(self: *ThumbnailState) void {
         if (self.pid) |*child| {
             _ = child.kill() catch {};
-            _ = child.wait() catch {};
         }
         self.ready = false;
         self.generating = false;

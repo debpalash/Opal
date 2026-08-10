@@ -372,8 +372,6 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     Pre.set(&status_radio, .radio);
     Pre.set(&status_podcast, .podcast);
 
-
-
     // Fire every backend in parallel. Each handle is detached (never joined) —
     // discarding it via `_ =` leaks the pthread resource for the process life.
     const Spawn = struct {
@@ -1196,16 +1194,23 @@ fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
 
 // Main torrent thread: uses nova2.py (same proven engine as Torrent Only tab)
 fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
+    var failed = false;
     defer {
-        status_torrent.store(.done, .release);
+        status_torrent.store(if (failed) .failed else .done, .release);
         checkAllDone();
+        state.wakeUi();
     }
 
     const query = query_buf[0..qlen];
 
     // nova2.py requires running from the engines/ parent directory
+    const py = @import("../core/pybin.zig").python() orelse {
+        failed = true;
+        logs.pushLog("error", "resolver", @import("../core/pybin.zig").missingHint(), true);
+        return;
+    };
     const argv = [_][]const u8{
-        "python3", "engines/nova2.py", "all", "all", query,
+        py, "engines/nova2.py", "--timeout=6", "all", "all", query,
     };
     var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
     child.stdout_behavior = .Pipe;
@@ -1214,7 +1219,8 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
     // /Applications launch); null in dev keeps the inherited project-dir CWD.
     child.cwd = state.resourceRoot();
     _ = child.spawn() catch {
-        logs.pushLog("warn", "resolver", "nova2.py spawn failed", false);
+        failed = true;
+        logs.pushLog("error", "resolver", "nova2.py spawn failed", true);
         return;
     };
 
@@ -1338,7 +1344,13 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
         @memcpy(item.detail[0..dlen], dstr[0..dlen]);
         item.detail_len = dlen;
 
-        if (pushResult(item)) found += 1;
+        if (pushResult(item)) {
+            found += 1;
+            // The UI is event-driven. Wake it as soon as the first useful row
+            // lands (and occasionally after that) so streamed torrent results
+            // do not sit invisible until the user moves the mouse.
+            if (found == 1 or found % 8 == 0) state.wakeUi();
+        }
     }
 
     // Drain to EOF (above) and let nova2.py exit on its own, THEN reap. We used
@@ -1347,14 +1359,24 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
     // BrokenPipeError tracebacks and leaking semaphores. Draining is what the
     // torrent-mode search does too, and it tears down cleanly. (The earlier
     // deadlock came from NOT draining before wait(); now we always drain.)
-    _ = child.wait() catch {};
+    const term = child.wait() catch {
+        failed = true;
+        return;
+    };
+    switch (term) {
+        .exited => |code| if (code != 0 and found == 0) {
+            failed = true;
+        },
+        else => if (found == 0) {
+            failed = true;
+        },
+    }
     {
         var slog: [64]u8 = undefined;
         const m = std.fmt.bufPrint(&slog, "nova2 scanned={d} pushed={d}", .{ scanned, found }) catch "nova2";
         logs.pushLog("info", "resolver", m, false);
     }
 }
-
 
 // YTS API — fast movie search (runs in parallel)
 fn resolveYts(query_buf: [256]u8, qlen: usize) void {
@@ -1597,7 +1619,6 @@ fn resolveTorznab(query_buf: [256]u8, qlen: usize) void {
 }
 
 fn resolveTorznabId(src_id: []const u8, query_buf: [256]u8, qlen: usize) void {
-
     const query = query_buf[0..qlen];
     const sc = @import("../core/source_config.zig");
     const tz = @import("torznab_pure.zig");
@@ -2528,7 +2549,6 @@ fn resolveImdbId(query: []const u8, api_key: []const u8, out_imdb: []u8, out_is_
     // Fast path when intent="tv": we already know the TMDB TV ID from the detail
     // view — skip the text search, use the stored ID directly for external_ids.
 
-
     if (std.mem.eql(u8, intent, "tv") and tv_id > 0) {
         // Direct external_ids lookup — one fewer TMDB API call
         out_is_series.* = true;
@@ -2623,7 +2643,6 @@ fn resolveImdbId(query: []const u8, api_key: []const u8, out_imdb: []u8, out_is_
             @memcpy(out_imdb[0..imdb_len], imdb[0..imdb_len]);
         }
     }
-
 
     return imdb_len;
 }
@@ -2848,7 +2867,7 @@ pub fn playItem(idx: usize) void {
             podcasts.searchPodcasts(item.name[0..item.name_len]);
             state.navigateToTab(.Podcasts);
         },
-                .livetv => {
+        .livetv => {
             // Must replay the channel's own User-Agent/Referer (+ derived
             // Origin) — the same header set playChannel sends. Without it a
             // header-gated CDN 403s, so the channel would play from the Live TV

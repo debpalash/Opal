@@ -133,6 +133,17 @@ pub const EngineFilter = enum(u4) {
 };
 pub var engine_filter: EngineFilter = .all;
 
+/// Publish a terminal search failure instead of leaving the UI's spinner
+/// latched forever. Search startup used to `catch return` on allocation or
+/// child-spawn errors, which made a broken Python/resource path look exactly
+/// like a source with no results and gave the user no diagnostic.
+fn failSearch(my_gen: u64, message: []const u8) void {
+    if (search_generation.load(.acquire) != my_gen) return;
+    is_searching.store(false, .release);
+    @import("../core/logs.zig").pushLog("error", "search", message, true);
+    state.showToast("Search failed — see Logs for details");
+}
+
 // ── NSFW keyword detection ──
 const nsfw_keywords = [_][]const u8{
     "xxx",      "porn",     "hentai",  "erotic",    "nude",     "naked",     "adult",
@@ -242,11 +253,33 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
         is_searching.store(false, .release);
         return;
     };
-    argv.append(allocator, py) catch return;
-    argv.append(allocator, "engines/nova2.py") catch return;
-    argv.append(allocator, engine_filter.pyName()) catch return;
-    argv.append(allocator, "all") catch return;
-    argv.append(allocator, query) catch return;
+    argv.append(allocator, py) catch {
+        failSearch(my_gen, "Could not prepare Python search command");
+        return;
+    };
+    argv.append(allocator, "engines/nova2.py") catch {
+        failSearch(my_gen, "Could not prepare torrent engine path");
+        return;
+    };
+    // Stream fast engines immediately, then stop the fan-out at a firm bound.
+    // Without this, one dead scraper kept the whole search marked busy long
+    // after APIBay and other API sources had already returned hundreds of rows.
+    argv.append(allocator, "--timeout=6") catch {
+        failSearch(my_gen, "Could not prepare torrent search deadline");
+        return;
+    };
+    argv.append(allocator, engine_filter.pyName()) catch {
+        failSearch(my_gen, "Could not prepare source filter");
+        return;
+    };
+    argv.append(allocator, "all") catch {
+        failSearch(my_gen, "Could not prepare source category");
+        return;
+    };
+    argv.append(allocator, query) catch {
+        failSearch(my_gen, "Could not prepare search query");
+        return;
+    };
 
     var child = @import("../core/io_global.zig").Child.init(argv.items, allocator);
     child.stdout_behavior = .Pipe;
@@ -255,9 +288,17 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
     // (CWD is "/" from a /Applications launch); null keeps the dev CWD.
     child.cwd = state.resourceRoot();
 
-    child.spawn() catch return;
+    child.spawn() catch {
+        failSearch(my_gen, "Could not start Python torrent sources (check Python and the engines folder)");
+        return;
+    };
 
-    var child_reader_buf: [1024]u8 = undefined;
+    // Magnet URIs can carry a long tracker list. Real rows from the installed
+    // engines exceed 1 KiB; takeDelimiter reports StreamTooLong when its
+    // backing buffer cannot hold one row, and the old `catch null` then ended
+    // the entire search as if the source returned EOF. Keep parity with the
+    // universal resolver's generous line buffer.
+    var child_reader_buf: [16 * 1024]u8 = undefined;
     var reader = child.stdout.?.reader(@import("../core/io_global.zig").io(), &child_reader_buf);
 
     var aborted = false;
@@ -333,17 +374,32 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
             freeSearchResult(item, allocator);
             continue;
         };
+        const published_count = search_results.items.len;
         search_results_mutex.unlock();
+        if (published_count == 1 or published_count % 16 == 0) state.wakeUi();
     }
 
     const superseded = search_generation.load(.acquire) != my_gen;
 
     // Drained to EOF above (even when aborted) so nova2 exits on its own — no
     // kill(), which would leave its pool workers spewing BrokenPipe.
-    _ = child.wait() catch {};
+    const term = child.wait() catch null;
 
     // A superseded worker must not touch shared state any further.
     if (superseded) return;
+
+    if (term) |t| switch (t) {
+        .exited => |code| if (code != 0) {
+            search_results_mutex.lock();
+            const empty = search_results.items.len == 0;
+            search_results_mutex.unlock();
+            if (empty) {
+                failSearch(my_gen, "Torrent source process exited without results");
+                return;
+            }
+        },
+        else => {},
+    };
 
     // Also query EZTV JSON API directly (faster, no scraping)
     // Skip if engine filter is set to a non-EZTV specific engine
@@ -359,6 +415,7 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
     if (search_generation.load(.acquire) == my_gen) {
         is_searching.store(false, .release);
         search_thread = null;
+        state.wakeUi();
     }
 }
 
@@ -1575,16 +1632,12 @@ fn combinedTorrentStatus() @import("resolver.zig").SourceStatus {
 fn renderUniversalResults() void {
     const resolver = @import("resolver.zig");
 
-    // While resolving, the toolbar's status cluster (spinner · count · source
-    // icons) carries ALL the progress signal — the content area shows a quiet
-    // searching state instead of the old stacked header + chip rows.
-    if (resolver.isResolving()) {
-        const q = resolver.resolver_query[0..resolver.resolver_query_len];
-        var hb: [300]u8 = undefined;
-        const hs = std.fmt.bufPrint(&hb, "Searching \u{201c}{s}\u{201d} across every source\u{2026}", .{safeUtf8(q)}) catch "Searching…";
-        components.loadingState(hs);
-    } else if (resolver.result_count > 0) {
-        // Count + sort/filter row.
+    // The toolbar carries live progress; once any worker publishes a row the
+    // content area renders it immediately while the remaining sources finish.
+    if (resolver.result_count > 0) {
+        // Results are streamed. Render them while slower sources are still in
+        // flight instead of covering valid torrent rows with a loading screen.
+        // The toolbar spinner continues to show that the fan-out is active.
         var fr = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = 9050,
             .expand = .horizontal,
@@ -1593,7 +1646,8 @@ fn renderUniversalResults() void {
         defer fr.deinit();
 
         var count_buf: [320]u8 = undefined;
-        const clbl = std.fmt.bufPrintZ(&count_buf, "{d} results for “{s}”", .{ resolver.result_count, safeUtf8(resolver.resolver_query[0..resolver.resolver_query_len]) }) catch "Results";
+        const suffix: []const u8 = if (resolver.isResolving()) " so far" else "";
+        const clbl = std.fmt.bufPrintZ(&count_buf, "{d} results{s} for “{s}”", .{ resolver.result_count, suffix, safeUtf8(resolver.resolver_query[0..resolver.resolver_query_len]) }) catch "Results";
         _ = dvui.label(@src(), "{s}", .{clbl}, .{
             .id_extra = 9001,
             .color_text = theme.colors.text_secondary,
@@ -1603,15 +1657,16 @@ fn renderUniversalResults() void {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
         }
-        // Sort: relevance / quality / seeds
         const sorts = [_][]const u8{ "Relevance", "Quality", "Seeds" };
         if (components.segment(@src(), &sorts, @intFromEnum(uni_sort))) |clicked| {
             uni_sort = @enumFromInt(clicked);
             resolver.sortResultsBy(@intFromEnum(uni_sort));
         }
-        // NSFW is controlled from Settings only (Settings › NSFW Filter) — no
-        // per-tab toggle here. The card loop's is_nsfw check below still honors
-        // the global state.app.nsfw_filter_enabled flag.
+    } else if (resolver.isResolving()) {
+        const q = resolver.resolver_query[0..resolver.resolver_query_len];
+        var hb: [300]u8 = undefined;
+        const hs = std.fmt.bufPrint(&hb, "Searching \u{201c}{s}\u{201d} across every source\u{2026}", .{safeUtf8(q)}) catch "Searching…";
+        components.loadingState(hs);
     } else if (!resolver.isResolving() and resolver.resolver_query_len > 0) {
         // Canonical empty state — search-x icon + canonical copy.
         components.emptyState(
