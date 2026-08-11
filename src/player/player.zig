@@ -503,7 +503,14 @@ pub const MediaPlayer = struct {
         // the proxy stalls HTTP when pieces aren't ready, mpv shows "Buffering..."
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache-pause", "yes");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache-pause-initial", "yes");
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache-pause-wait", "3");
+        // 1s (mpv's own default), not 3. cache-pause-initial means mpv opens in
+        // the buffering state and will not start until this many seconds of
+        // media are demuxed — pulled through a proxy that blocks per piece. At 3
+        // that was a fixed multi-second wait bolted onto every torrent start,
+        // on top of the gate's own 4 MB and the demuxer's index seek. cache-pause
+        // still re-buffers if the swarm can't keep up, so the cost of starting
+        // earlier is a possible early re-buffer, not a stutter.
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache-pause-wait", "1");
         // Network timeouts — retry aggressively instead of giving up
         // 0 = never time out a network read.
         //
