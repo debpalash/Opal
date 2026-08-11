@@ -41,7 +41,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from enum import Enum
 from glob import glob
-from multiprocessing import Pool, cpu_count
+from multiprocessing import Pool, TimeoutError as PoolTimeoutError, cpu_count
 from os import path
 from typing import Optional
 
@@ -235,6 +235,21 @@ if __name__ == "__main__":
             AppError = 1
             ArgError = 2
 
+        # Opal asks a large set of independent plugins to search in parallel.
+        # A single scraper can still spend tens of seconds walking mirrors even
+        # after fast API engines have printed plenty of useful rows.  Accept an
+        # app-only deadline so the UI gets a bounded search without changing
+        # qBittorrent-compatible invocations of this script.
+        deadline: Optional[float] = None
+        argv = sys.argv[1:]
+        if argv and argv[0].startswith("--timeout="):
+            try:
+                deadline = max(1.0, float(argv[0].split("=", 1)[1]))
+            except ValueError:
+                print(f"Invalid timeout: {argv[0]}", file=sys.stderr)
+                return ExitCode.ArgError.value
+            argv = argv[1:]
+
         found_engines = list_engines()
 
         prog_name = sys.argv[0]
@@ -249,25 +264,25 @@ if __name__ == "__main__":
 
             print(get_capabilities(found_engines))
             return ExitCode.OK.value
-        elif len(sys.argv) < 4:
+        elif len(argv) < 3:
             print(prog_usage, file=sys.stderr)
             return ExitCode.ArgError.value
 
         # get unique engines
-        engs = set(arg.strip().lower() for arg in sys.argv[1].split(','))
+        engs = set(arg.strip().lower() for arg in argv[0].split(','))
         engines = found_engines if 'all' in engs else [e for e in found_engines if e in engs]
         # Neutral-player gate: only run engines the user has installed.
         installed = installed_engines()
         engines = [e for e in engines if e in installed]
 
-        cat = sys.argv[2].lower()
+        cat = argv[1].lower()
         try:
             category = Category[cat]
         except KeyError:
             print(f"Invalid category: {cat}", file=sys.stderr)
             return ExitCode.ArgError.value
 
-        what = urllib.parse.quote(' '.join(sys.argv[3:]))
+        what = urllib.parse.quote(' '.join(argv[2:]))
         params = ((engine_class, what, category, e)
                   for e in engines if (engine_class := import_engine(e)) is not None)
 
@@ -275,7 +290,17 @@ if __name__ == "__main__":
         if THREADED:
             processes = max(min(len(engines), MAX_THREADS), 1)
             with Pool(processes) as pool:
-                search_success = all(pool.map(run_search, params))
+                pending = pool.map_async(run_search, params)
+                try:
+                    search_success = all(pending.get(timeout=deadline))
+                except PoolTimeoutError:
+                    # Rows are streamed directly by workers, so everything
+                    # printed before the deadline remains usable.  Terminating
+                    # the pool here also guarantees nova2 itself exits instead
+                    # of leaving the Zig worker stuck waiting for EOF.
+                    pool.terminate()
+                    pool.join()
+                    search_success = True
         else:
             search_success = all(map(run_search, params))
 
