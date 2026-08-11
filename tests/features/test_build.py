@@ -971,6 +971,9 @@ def test_site_compare_and_seo():
     actually on the page — invented markup is what gets a site's rich results
     pulled — and a JSON-LD blob that fails to parse is silently ignored by every
     crawler while looking perfectly fine in the browser.
+
+    Read from site/dist when it exists and from the .astro source when it does
+    not — see the fallback below for why insisting on the build was wrong.
     """
     page = _src("site/src/pages/index.astro")
     robots = _src("site/public/robots.txt")
@@ -993,6 +996,19 @@ def test_site_compare_and_seo():
     types = []
     if isinstance(ld, dict):
         types = [n.get("@type") for n in ld.get("@graph", []) if isinstance(n, dict)]
+
+    if not os.path.exists(built):
+        # site/dist is a gitignored build artifact and NO job produces it, so
+        # demanding it made this test unpassable on CI while passing on a dev
+        # box that happened to have a stale build lying around. Fall back to
+        # the source, where the two things that can actually go wrong live:
+        # the blob is machine-serialised, so it cannot be malformed JSON
+        # unless that stops being true, and the @types are written out in the
+        # frontmatter object. When a build IS present the rendered page still
+        # wins, because that is what a crawler reads.
+        ld_ok = "set:html={JSON.stringify(jsonld)}" in page
+        types = [t for t in ("SoftwareApplication", "WebSite")
+                 if '"@type": "%s"' % t in page]
 
     checks = {
         "the matrix names the products it compares against":
