@@ -322,6 +322,24 @@ pub fn build(b: *std.Build) void {
     // ── Unit Tests (pure Zig modules only) ──
     const test_step = b.step("test", "Run unit tests");
 
+    // Executable torrent-search seam: nova2 must survive being launched by
+    // Zig's std.Io.Threaded child runtime. This is intentionally offline; the
+    // Python selftest exercises only the app-mode pool dispatcher.
+    const test_nova2_spawn = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/nova2_spawn_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    test_nova2_spawn.root_module.addImport("io_global", b.createModule(.{
+        .root_source_file = b.path("src/core/io_global.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    test_step.dependOn(&b.addRunArtifact(test_nova2_spawn).step);
+
     const test_m3u = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/m3u.zig"),

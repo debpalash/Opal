@@ -32,6 +32,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 import importlib
+import os
 import pathlib
 import sys
 import traceback
@@ -39,9 +40,10 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, wait
 from enum import Enum
 from glob import glob
-from multiprocessing import Pool, TimeoutError as PoolTimeoutError, cpu_count
+from multiprocessing import Pool as ProcessPool, TimeoutError as PoolTimeoutError, cpu_count
 from os import path
 from typing import Optional
 
@@ -227,6 +229,53 @@ def run_search(search_params: tuple[type[Engine], str, Category, EngineModuleNam
         return False
 
 
+def run_parallel(params, workers: int, deadline: Optional[float], runner=run_search) -> bool:
+    """Run search jobs using the pool compatible with the calling host.
+
+    Opal is identified by its app-only deadline and must stay entirely inside
+    this Python process. Plain nova2/qBittorrent calls retain the upstream
+    multiprocessing behaviour.
+    """
+    if deadline is not None:
+        # Opal launches nova2 through Zig 0.16's std.Io.Threaded child runtime.
+        # A Python process created that way cannot start multiprocessing's
+        # resource tracker reliably: its registration pipe is already broken by
+        # the time Pool creates its first lock, so nova2 exits immediately with
+        # BrokenPipeError and Opal scans zero rows. concurrent.futures is
+        # genuinely thread-only (multiprocessing.pool.ThreadPool is not on
+        # Python 3.14), and these engines are network-bound.
+        executor = ThreadPoolExecutor(max_workers=workers,
+                                      thread_name_prefix="nova2")
+        futures = [executor.submit(runner, p) for p in params]
+        done, unfinished = wait(futures, timeout=deadline)
+        search_success = all(f.result() for f in done)
+        if unfinished:
+            # Rows are streamed directly by workers, so everything printed
+            # before the deadline remains usable. Python cannot cancel a thread
+            # blocked in a socket call; os._exit is safe because nova2 is a
+            # disposable app subprocess. It preserves the hard deadline without
+            # waiting for ThreadPoolExecutor's non-daemon workers at shutdown.
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(0)
+        executor.shutdown(wait=True)
+        return search_success
+
+    with ProcessPool(workers) as pool:
+        pending = pool.map_async(runner, params)
+        try:
+            return all(pending.get(timeout=deadline))
+        except PoolTimeoutError:
+            pool.terminate()
+            pool.join()
+            return True
+
+
+def _pool_selftest_task(value: int) -> bool:
+    """Offline task used by the Zig-child regression test."""
+    return value * value >= 0
+
+
 if __name__ == "__main__":
     def main() -> int:
         # https://docs.python.org/3/library/sys.html#sys.exit
@@ -249,6 +298,20 @@ if __name__ == "__main__":
                 print(f"Invalid timeout: {argv[0]}", file=sys.stderr)
                 return ExitCode.ArgError.value
             argv = argv[1:]
+
+        # Offline executable regression seam. This deliberately runs through
+        # the same deadline-mode dispatcher as a real Opal search, so spawning
+        # it from Zig catches the Python resource-tracker BrokenPipe regression
+        # without touching any torrent site.
+        if argv == ["--pool-selftest"]:
+            if deadline is None:
+                print("--pool-selftest requires --timeout", file=sys.stderr)
+                return ExitCode.ArgError.value
+            ok = run_parallel(range(8), 2, deadline, _pool_selftest_task)
+            if ok:
+                print("NOVA2_APP_POOL_OK")
+                return ExitCode.OK.value
+            return ExitCode.AppError.value
 
         found_engines = list_engines()
 
@@ -289,18 +352,7 @@ if __name__ == "__main__":
         search_success = False
         if THREADED:
             processes = max(min(len(engines), MAX_THREADS), 1)
-            with Pool(processes) as pool:
-                pending = pool.map_async(run_search, params)
-                try:
-                    search_success = all(pending.get(timeout=deadline))
-                except PoolTimeoutError:
-                    # Rows are streamed directly by workers, so everything
-                    # printed before the deadline remains usable.  Terminating
-                    # the pool here also guarantees nova2 itself exits instead
-                    # of leaving the Zig worker stuck waiting for EOF.
-                    pool.terminate()
-                    pool.join()
-                    search_success = True
+            search_success = run_parallel(params, processes, deadline)
         else:
             search_success = all(map(run_search, params))
 

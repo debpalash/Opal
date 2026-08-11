@@ -25,6 +25,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 import re
+import threading
 from typing import TypedDict, Union
 
 SearchResults = TypedDict('SearchResults', {
@@ -39,19 +40,20 @@ SearchResults = TypedDict('SearchResults', {
 })
 
 
-# Rows printed by this process. nova2's mirror failover reads it to tell "this
-# host returned nothing" from "this host returned results" without having to
-# intercept stdout.
-results_printed: int = 0
+# Rows printed by the current search worker. nova2's mirror failover reads this
+# to tell "this host returned nothing" from "this host returned results"
+# without intercepting stdout. This must be thread-local: Opal's app-mode
+# fan-out uses threads, and a process-global counter lets a hit from engine A
+# make engine B falsely conclude that its dead primary host returned rows.
+_printed = threading.local()
 
 
 def printed_count() -> int:
-    return results_printed
+    return getattr(_printed, "count", 0)
 
 
 def prettyPrinter(dictionary: SearchResults) -> None:
-    global results_printed
-    results_printed += 1
+    _printed.count = printed_count() + 1
     outtext = "|".join((
         dictionary["link"],
         dictionary["name"].replace("|", " "),
