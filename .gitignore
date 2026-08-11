@@ -105,6 +105,11 @@ zig-pkg/
 # === AI assistant config ===
 CLAUDE.md
 .antigravitycli/
+# Claude Code skills tooling: .agents/skills is the installed-skill cache and
+# skills-lock.json pins their hashes. Both are regenerated per machine and turn
+# up as untracked noise in every `git status` on a checkout that uses them.
+.agents/
+skills-lock.json
 
 # === IDE config (machine-specific) ===
 zls.json
