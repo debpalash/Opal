@@ -848,7 +848,6 @@ fn micRecordWorker() void {
     }
 
     _ = record_child.kill() catch {};
-    _ = record_child.wait() catch {};
     logs.pushLog("info", "voice", "Mic: ffmpeg stopped, checking output", true);
 
     if (@import("../core/io_global.zig").cwdAccess(MIC_WAV_PATH, .{})) |_| {

@@ -324,8 +324,12 @@ fn localLoop() void {
         const conn = server.accept(io_g.io()) catch continue;
         const Handler = struct {
             fn run(c2: std.Io.net.Stream) void {
+                const workers = @import("../core/workers.zig");
+                workers.enter();
+                defer workers.leave();
                 var c3 = c2;
                 defer c3.close(io_g.io());
+                if (workers.isQuitting()) return;
                 handleLocalRequest(c3);
             }
         };
@@ -474,8 +478,12 @@ fn serverLoop() void {
         const conn = server.accept(io_g.io()) catch continue;
         const Handler = struct {
             fn run(c2: std.Io.net.Stream) void {
+                const workers = @import("../core/workers.zig");
+                workers.enter();
+                defer workers.leave();
                 var c3 = c2;
                 defer c3.close(io_g.io());
+                if (workers.isQuitting()) return;
                 handleRequest(c3) catch {};
             }
         };

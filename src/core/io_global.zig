@@ -167,6 +167,73 @@ pub fn killByCommandLine(pattern: []const u8, force: bool) void {
     }
 }
 
+/// Kill processes matching any of several command-line patterns with one
+/// process-table scan. Used during shutdown to avoid launching a scanner for
+/// every individual helper process.
+pub fn killAnyByCommandLine(patterns: []const []const u8, force: bool) void {
+    if (patterns.len == 0) return;
+    if (is_windows) {
+        var script_buf: [2048]u8 = undefined;
+        var n: usize = 0;
+        const prefix = "Get-CimInstance Win32_Process | Where-Object { ";
+        @memcpy(script_buf[n .. n + prefix.len], prefix);
+        n += prefix.len;
+        for (patterns, 0..) |pattern, i| {
+            const joiner: []const u8 = if (i == 0) "" else " -or ";
+            const clause = "$_.CommandLine -like '*";
+            if (n + joiner.len + clause.len >= script_buf.len) return;
+            @memcpy(script_buf[n .. n + joiner.len], joiner);
+            n += joiner.len;
+            @memcpy(script_buf[n .. n + clause.len], clause);
+            n += clause.len;
+            for (pattern) |ch| {
+                if (n + 2 >= script_buf.len) return;
+                if (ch == '\'') {
+                    script_buf[n] = '\'';
+                    n += 1;
+                }
+                script_buf[n] = ch;
+                n += 1;
+            }
+            script_buf[n] = '*';
+            script_buf[n + 1] = '\'';
+            n += 2;
+        }
+        const suffix = " } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
+        if (n + suffix.len > script_buf.len) return;
+        @memcpy(script_buf[n .. n + suffix.len], suffix);
+        n += suffix.len;
+        var child = Child.init(&.{ "powershell", "-NoProfile", "-NonInteractive", "-Command", script_buf[0..n] }, alloc_mod.allocator);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Ignore;
+        child.spawn() catch return;
+        _ = child.wait() catch {};
+    } else {
+        var regex_buf: [1024]u8 = undefined;
+        var n: usize = 0;
+        for (patterns, 0..) |pattern, i| {
+            const separator_len: usize = if (i == 0) 0 else 1;
+            if (n + pattern.len + separator_len > regex_buf.len) return;
+            if (i != 0) {
+                regex_buf[n] = '|';
+                n += 1;
+            }
+            @memcpy(regex_buf[n .. n + pattern.len], pattern);
+            n += pattern.len;
+        }
+        var child = if (force)
+            Child.init(&.{ "pkill", "-9", "-f", regex_buf[0..n] }, alloc_mod.allocator)
+        else
+            Child.init(&.{ "pkill", "-f", regex_buf[0..n] }, alloc_mod.allocator);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Ignore;
+        child.spawn() catch return;
+        _ = child.wait() catch {};
+    }
+}
+
 /// Kill processes by EXACT executable name (`pkill -x`) — not a command-line
 /// substring. Use when the name is unambiguous and matching a substring could
 /// hit unrelated processes. Windows matches the image name, where the `.exe`
@@ -511,6 +578,37 @@ pub const Child = struct {
         return error.NotSpawned;
     }
 
+    /// Close our read end of the child's stdout, exactly once.
+    ///
+    /// Streaming callers sometimes close the pipe as a way to STOP the child:
+    /// an ffmpeg blocked writing to a full stdout pipe ignores SIGTERM (its
+    /// handler sets a flag, then it retries the interrupted write and blocks
+    /// again), and EPIPE is what actually ends it.
+    ///
+    /// Doing that through `self.stdout` alone is a trap. `spawn()` COPIES the
+    /// File handles out of the real child, so nulling the wrapper's copy leaves
+    /// `real.stdout` pointing at the same descriptor — and std's own cleanup,
+    /// which runs inside both wait() and kill(), closes it a second time. That
+    /// second close lands on a freed fd: EBADF, which the debug Io turns into
+    /// `reached unreachable code` (it panicked Opal mid-stream on every web
+    /// "Play here"), and which in a release build closes whatever unrelated
+    /// descriptor — another client's socket — inherited the number.
+    pub fn closeStdout(self: *Child) void {
+        var closed = false;
+        if (self.stdout) |*so| {
+            so.close(io());
+            self.stdout = null;
+            closed = true;
+        }
+        // Take it away from std either way, so its cleanup cannot re-close.
+        if (self.real) |*r| {
+            if (r.stdout) |*ro| {
+                if (!closed) ro.close(io());
+                r.stdout = null;
+            }
+        }
+    }
+
     pub fn spawnAndWait(self: *Child) !Term {
         try self.spawn();
         return self.wait();
@@ -541,4 +639,3 @@ pub fn killProcess(id: Child.Id) void {
         std.posix.kill(id, std.posix.SIG.KILL) catch {};
     }
 }
-

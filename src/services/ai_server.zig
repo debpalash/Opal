@@ -618,13 +618,11 @@ pub fn stopServer() void {
 
     if (server_process) |*proc| {
         _ = proc.kill() catch {};
-        _ = proc.wait() catch {};
         server_process = null;
     }
 
     if (embed_server_process) |*proc| {
         _ = proc.kill() catch {};
-        _ = proc.wait() catch {};
         embed_server_process = null;
     }
 

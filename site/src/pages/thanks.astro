@@ -1,0 +1,67 @@
+---
+// /thanks — where a download click lands once the file is on its way.
+//
+// noindex: it is a step in a flow, not a page anyone should arrive at from a
+// search result, and its content only makes sense with a ?os= parameter.
+import "../styles/tailwind.css";
+import "../styles/global.css";
+import ThanksPanel from "../components/ThanksPanel.tsx";
+import StarButton from "../components/StarButton.tsx";
+
+const REPO = "https://github.com/debpalash/Opal";
+const X = "https://x.com/idebpalash";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Downloading Opal</title>
+    <meta name="description" content="Your Opal download is starting — and what to do with the file once it lands." />
+    <meta name="robots" content="noindex, follow" />
+    <link rel="icon" href="/assets/logo.svg" type="image/svg+xml" />
+    <meta name="theme-color" content="#05050a" />
+    <link rel="preconnect" href="https://api.github.com" crossorigin />
+  </head>
+
+  <body>
+    <header class="hero thanks">
+      <div class="veil"></div>
+
+      <nav>
+        <div class="wrap">
+          <a class="brand" href="/"><img src="/assets/logo.svg" alt="" width="26" height="26" />Opal</a>
+          <span class="spacer"></span>
+          <a class="navlink hide-sm" href="/#features">Features</a>
+          <a class="navlink" href="/#download">Downloads</a>
+          <a class="navlink hide-md" href={X} rel="me">X</a>
+          <StarButton client:load />
+        </div>
+      </nav>
+
+      <div class="wrap">
+        <img class="mark" src="/assets/logo.svg" alt="Opal logo" width="96" height="96" />
+        <ThanksPanel client:load />
+
+        <p class="cta-note">
+          Stuck? The <a href={`${REPO}#readme`}>readme</a> covers first run, and
+          <a href={`${REPO}/issues`}>issues</a> is where things get fixed.
+        </p>
+      </div>
+    </header>
+
+    <footer>
+      <div class="wrap">
+        <div class="row">
+          <a class="brand" href="/"><img src="/assets/logo.svg" alt="" width="26" height="26" />Opal</a>
+          <span class="spacer" style="flex: 1"></span>
+          <a href={REPO}>GitHub</a>
+          <a href={X} rel="me">X</a>
+          <a href="https://ko-fi.com/debpalash">Ko-fi</a>
+          <a href="https://paypal.me/palashCoder">PayPal</a>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

@@ -78,6 +78,12 @@ pub fn coreInit() !void {
     state.initPaths();
     state.loadTmdbTokenFromEnv();
 
+    // Source endpoints are tiny local JSON files, so load them before the
+    // first frame. Loading them only in the background init worker created a
+    // startup race: a fast search could run nova2 before the installed source
+    // list was visible and incorrectly return zero torrent rows.
+    @import("core/source_config.zig").reload();
+
     theme.setTheme();
     logs.logs_allocator = @import("core/alloc.zig").allocator;
 
@@ -123,7 +129,15 @@ pub fn coreInit() !void {
     }.worker, .{})) |t| t.detach() else |_| {}
 
     std.Io.Dir.cwd().createDirPath(@import("core/io_global.zig").io(), state.app.save_path_buf[0..state.app.save_path_len]) catch {};
-    try state.app.players.append(@import("core/alloc.zig").allocator, try player.MediaPlayer.init(@import("core/alloc.zig").allocator));
+    // Create libmpv only when something is actually played. Initializing it
+    // here loads scripts and starts internal threads before the first frame.
+    // Playback entry points already create a player on demand, and an empty
+    // player list is a supported UI state after closing the last cell.
+    // Headless has no UI interaction to create one later, so keep its control
+    // surface ready immediately.
+    if (state.app.is_headless) {
+        try state.app.players.append(@import("core/alloc.zig").allocator, try player.MediaPlayer.init(@import("core/alloc.zig").allocator));
+    }
 
     // Web Remote API is OPT-IN: nothing listens on app start unless the user
     // enabled it (Settings › Scripts › Web Remote Control, persisted as
@@ -134,6 +148,10 @@ pub fn coreInit() !void {
     // Move heavy DB/migration/loading work to background so UI renders instantly
     if (std.Thread.spawn(.{}, struct {
         fn worker() void {
+            const workers = @import("core/workers.zig");
+            workers.enter();
+            defer workers.leave();
+            if (workers.isQuitting()) return;
             // ── Unified SQLite Database ──
             const database = @import("core/db.zig");
             database.init();
@@ -176,6 +194,11 @@ pub fn coreInit() !void {
             // Load all persistent data from SQLite
             config.load();
 
+            // A quick close can arrive while the local DB/config work above is
+            // running. Do not start long-lived services or network warmups once
+            // teardown has begun.
+            if (workers.isQuitting()) return;
+
             // Encrypted persistent content cache: load (or generate) the local
             // key and sweep expired/oversized entries. Runs here on the bg init
             // thread so cold-start views can read cached copies immediately.
@@ -184,6 +207,7 @@ pub fn coreInit() !void {
             // Resource meters in the title bar. Samples on its own thread at 1 Hz
             // — every reading is a syscall, and a meter that costs more than the
             // thing it measures would be a bad joke.
+            if (workers.isQuitting()) return;
             @import("core/sysmon.zig").start();
 
             // Page-shell preview opt-in (redesign, WIP). Enable with
@@ -229,6 +253,7 @@ pub fn coreInit() !void {
             }
             @import("services/trakt.zig").init(); // load saved Trakt credentials/token
             @import("services/plex.zig").init(); // load saved Plex token/server
+            if (workers.isQuitting()) return;
             // DPI-bypass proxy sidecar: config.load() above restored the flag +
             // mode, so start the loopback proxy now if the user enabled it.
             if (state.app.dpi_bypass_enabled) @import("services/dpi_bypass.zig").start();
@@ -274,6 +299,28 @@ fn detectResourceRoot() void {
     const io_g = @import("core/io_global.zig");
     // Dev / launched-from-project: engines/ is already reachable from the CWD.
     if (io_g.cwdAccess("engines/nova2.py", .{})) |_| return else |_| {}
+
+    // A direct launch of zig-out/bin/opal (or a distro wrapper) does not have
+    // the repository/package root as its CWD. Probe the executable directory
+    // and its parents before falling back to SDL's bundle path; otherwise the
+    // child is started in zig-out/bin and `engines/nova2.py` cannot be found.
+    var exe_buf: [1024]u8 = undefined;
+    if (io_g.selfExeDirPath(&exe_buf)) |exe_dir| {
+        var dir = exe_dir;
+        var probe: [1200]u8 = undefined;
+        var depth: usize = 0;
+        while (depth < 3 and dir.len > 0) : (depth += 1) {
+            if (std.fmt.bufPrint(&probe, "{s}/engines/nova2.py", .{dir})) |p| {
+                if (io_g.cwdAccess(p, .{})) |_| {
+                    @memcpy(state.app.resource_root[0..dir.len], dir);
+                    state.app.resource_root_len = dir.len;
+                    logs.pushLog("info", "init", "Using executable-relative resource root", false);
+                    return;
+                } else |_| {}
+            } else |_| {}
+            dir = if (std.mem.lastIndexOfScalar(u8, dir, '/')) |slash| dir[0..slash] else break;
+        }
+    } else |_| {}
 
     // Bundled: SDL_GetBasePath() → "<App>/Contents/Resources/" (trailing slash).
     // Headless links no SDL (build.zig Phase S1) and is never run from a .app
@@ -414,6 +461,15 @@ fn forwardToRunningInstance(arg: []const u8) bool {
 }
 
 pub fn appDeinit() void {
+    // Publish shutdown before stopping services so the detached startup worker
+    // cannot bring one back after its stop call has already run.
+    @import("core/workers.zig").markQuitting();
+
+    // Stop listeners and samplers before releasing state they can still touch.
+    @import("services/remote.zig").stop();
+    @import("services/remote.zig").stopLocal();
+    @import("core/sysmon.zig").stop();
+
     // Join the stall watchdog before the torrent session goes away — it samples
     // that session every 250ms and must not outlive it.
     @import("services/torrent_stall.zig").stop();
@@ -486,9 +542,9 @@ pub fn appDeinit() void {
         "rec.*opal_ai_mic",
     };
 
-    for (kill_targets) |target| {
-        @import("core/io_global.zig").killByCommandLine(target, false);
-    }
+    // One process-table scan instead of seven serial scans. On Windows each
+    // old scan launched PowerShell + CIM, which dominated close latency.
+    @import("core/io_global.zig").killAnyByCommandLine(&kill_targets, false);
 
     // llama-server (AI backend)
     const server = @import("services/ai_server.zig");

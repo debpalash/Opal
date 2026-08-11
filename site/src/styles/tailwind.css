@@ -1,0 +1,21 @@
+/* Tailwind v4, deliberately without Preflight.
+ *
+ * The site is hand-written CSS (see global.css) and predates this. Preflight is
+ * Tailwind's own reset — it zeroes heading margins, strips list markers, and
+ * neutralises buttons — so importing the whole of `tailwindcss` would quietly
+ * restyle every existing page. Importing theme + utilities only gives the
+ * registry components (react-bits, shadcn) the utility classes they need and
+ * leaves the rest of the page exactly as it was.
+ *
+ * The layer order also matters: utilities land in a cascade layer, and layered
+ * rules always lose to unlayered ones, so global.css stays authoritative for
+ * anything both of them touch.
+ */
+@layer theme, base, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* Where the registry's components get scanned from — v4 has no config file. */
+@source "../components";
+@source "../pages";

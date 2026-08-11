@@ -629,11 +629,13 @@ def test_torrent_files_and_hls():
 def test_transcode_route():
     """ffmpeg → fragmented MP4 so MKV/H.265 can play in a browser.
 
-    KNOWN LIMITATION, verified not fixed: when the viewer disappears mid-stream
-    the socket write blocks (SO_SNDTIMEO does not surface through the threaded
-    Io layer), so the loop never reaches child.kill(). A watchdog thread was
-    added and did NOT reap it in testing. The orphan sits blocked at 0% CPU —
-    an fd/process leak, not a CPU leak. Do not treat this as done."""
+    Verified end to end on 2026-08-06 against a real HEVC/FLAC MKV: 531 KB of
+    H.264/AAC fMP4 in 1.4s, and a <video> element reached readyState 4 and
+    played it (1280x720, buffered ahead of playback).
+
+    KNOWN LIMITATION: when the viewer disappears mid-stream the socket write can
+    block (SO_SNDTIMEO does not surface through the threaded Io layer). The
+    watchdog force-kills a wedged encoder after 60s of no progress."""
     rm = _src("src/services/remote.zig")
     rs = _src("src/services/remote_stream.zig")
     checks = {
@@ -647,11 +649,19 @@ def test_transcode_route():
         "absolute ffmpeg path": "FFMPEG_CANDIDATES" in rs
             and "/opt/homebrew/bin/ffmpeg" in rs,
         "availability advertised": '"/transcode/available"' in rm and "haveFfmpeg()" in rm,
-        # Cleanup attempt is present even though it is not yet sufficient.
-        # The actual cure: close our read end so ffmpeg gets EPIPE. Signals do
-        # not move a pipe-blocked ffmpeg.
-        "closes pipe to end encoder": "so.close(io_g.io())" in rs and "child.stdout = null" in rs,
+        # The cure for the leaked encoder: close our read end so ffmpeg gets
+        # EPIPE. Signals do not move a pipe-blocked ffmpeg.
+        #
+        # It MUST go through closeStdout(). Closing `child.stdout` by hand and
+        # then calling wait()/kill() closed the same descriptor twice — the
+        # wrapper holds a copy, std's cleanup closes the original — and the
+        # debug Io turns that EBADF into a panic. Every web "Play here" killed
+        # Opal mid-stream and delivered a 200 with zero bytes.
+        "closes pipe to end encoder": "child.closeStdout()" in rs,
+        "no hand-rolled close beside it": "so.close(io_g.io());\n        child.stdout = null;" not in rs,
         "reaps after closing": "child.wait() catch {}" in rs,
+        # kill() would run std's cleanup a second time; signal by pid instead.
+        "signals by pid, not child.kill()": "if (child.id) |pid| io_g.killProcess(pid);" in rs,
         # Was `std.posix.SIG.KILL` inline. That has no KILL member on Windows,
         # so it did not compile there at all — the headless Windows build broke
         # on it in CI. killProcess() is SIGKILL on POSIX, TerminateProcess on
