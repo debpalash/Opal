@@ -82,6 +82,12 @@ pub fn build(b: *std.Build) void {
     // MINGW_PREFIX inside a MINGW64 shell (e.g. C:/msys64/mingw64); honor it
     // when set, analogous to HOMEBREW_PREFIX on macOS.
     const mingw_prefix = b.graph.environ_map.get("MINGW_PREFIX") orelse "C:/msys64/mingw64";
+    // MSYS2 install root (parent of the mingw64 prefix): `sh` lives in
+    // <root>/usr/bin while the compiler and runtime DLLs live in
+    // <prefix>/bin. Both are needed by build/run steps below because a plain
+    // PowerShell/cmd session has neither on its PATH.
+    const msys_root = std.fs.path.dirname(std.mem.trimEnd(u8, mingw_prefix, "/\\")) orelse "C:/msys64";
+    const msys_path_prefix = b.fmt("{s}/bin;{s}/usr/bin", .{ mingw_prefix, msys_root });
 
     const is_windows = target.result.os.tag == .windows;
 
@@ -113,6 +119,15 @@ pub fn build(b: *std.Build) void {
         // Force fortify off for every module that @cImports windows headers:
         // ours, dvui's (tinyfiledialogs), and dvui's sdl backend (SDL.h).
         exe.root_module.addCMacro("_FORTIFY_SOURCE", "0");
+        // Win32 window-procedure fixes the custom title bar can't get through
+        // SDL: work-area-aware maximize and caption double-click. Desktop only
+        // — it calls into SDL, which the headless build does not link.
+        if (!headless) {
+            exe.root_module.addCSourceFile(.{
+                .file = b.path("src/ui/win_titlebar.c"),
+                .flags = &[_][]const u8{"-O2"},
+            });
+        }
         const dvui_mod = dvui_dep.module("dvui_sdl2");
         dvui_mod.addCMacro("_FORTIFY_SOURCE", "0");
         if (dvui_mod.import_table.get("backend")) |backend_mod| {
@@ -233,7 +248,24 @@ pub fn build(b: *std.Build) void {
     // semantic-analysis check) would otherwise emit a host-ABI object under the
     // target's expected name and confuse the link.
     if (b.graph.host.result.os.tag == target.result.os.tag) {
-        const compile_wrapper = b.addSystemCommand(&.{ "sh", "-c", compile_cmd });
+        // Windows: sh, g++ and pkg-config all live inside MSYS2, which a plain
+        // PowerShell/cmd session does NOT have on its PATH — a bare "sh" then
+        // aborts the whole build with a bare `FileNotFound`. Locate the shell
+        // under the MSYS2 root (MINGW_PREFIX's parent) and hand the step a PATH
+        // carrying both MSYS2 bin dirs, so the toolchain resolves inside the
+        // script too (g++/pkg-config are in mingw64/bin, sh in usr/bin).
+        const shell: []const u8 = if (is_windows)
+            b.findProgram(&.{"sh"}, &.{b.fmt("{s}/usr/bin", .{msys_root})}) catch
+                std.debug.panic("MSYS2 shell not found: no `sh` on PATH and none at {s}/usr/bin. Install MSYS2 (see docs) or set MINGW_PREFIX to your mingw64 prefix.", .{msys_root})
+        else
+            "sh";
+        const compile_wrapper = b.addSystemCommand(&.{ shell, "-c", compile_cmd });
+        if (is_windows) {
+            compile_wrapper.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{
+                msys_path_prefix,
+                b.graph.environ_map.get("PATH") orelse "",
+            }));
+        }
         exe.step.dependOn(&compile_wrapper.step);
     }
 
@@ -307,6 +339,17 @@ pub fn build(b: *std.Build) void {
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
+    // opal.exe imports libmpv-2.dll / libsqlite3-0.dll, and torrent_wrapper.dll
+    // pulls in libtorrent, boost, openssl and libstdc++ — all MSYS2 DLLs. A GUI
+    // (subsystem:windows) exe that can't resolve them dies in a modal loader
+    // dialog with nothing on stderr, so give the child the MSYS2 bin dir even
+    // when the launching shell has no MSYS2 on PATH.
+    if (is_windows) {
+        run_cmd.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{
+            msys_path_prefix,
+            b.graph.environ_map.get("PATH") orelse "",
+        }));
+    }
 
     if (b.args) |args| {
         run_cmd.addArgs(args);
