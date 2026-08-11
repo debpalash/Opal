@@ -10,6 +10,41 @@ Add a section BEFORE tagging; a missing one ships a release that says so.
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
+## v0.6.5 — 2026-08-11
+
+- **Torrent search works from the desktop app again.** Python's process pool
+  crashed when nova2 was launched through Zig's child runtime, so every
+  installed torrent source appeared to return zero results. Opal's bounded
+  search path now uses network threads, while the qBittorrent-compatible CLI
+  keeps its process pool. A dedicated CI job executes this exact Zig-to-Python
+  seam so it cannot silently regress.
+- **Torrent files selected by hand start sooner and keep working.** A chosen
+  episode now gets the same head-first priority as the automatic pick, old
+  buffer gates are released when switching files, and mpv no longer adds a
+  second three-second startup buffer on top of Opal's readiness gate.
+- **Startup and shutdown are safer.** Background services and process watchers
+  now have explicit lifetimes, responsive stop paths, and one owner for each
+  child-process handle instead of detached workers racing teardown.
+- **Windows title-bar behaviour is native again.** Double-click maximizes and
+  restores, maximize respects the current monitor's work area instead of
+  covering the taskbar, and normal PowerShell builds locate their MSYS2 shell
+  and toolchain without hand-editing `PATH`.
+- **Windows releases can sign the whole payload.** When Azure Artifact Signing
+  is enabled, the pipeline signs every executable and DLL, verifies that none
+  were missed, then signs the MSI itself—covering the modules Windows 11 Smart
+  App Control evaluates, not only `opal.exe`.
+- **Opal Connect 0.4 has a real setup flow and a useful side panel.** It finds
+  a local Opal, signs in or creates the first account without asking users to
+  find a token file, and adds live torrents, downloads, recent searches,
+  casting and watch-party controls, keyboard shortcuts, and the real Opal logo.
+- **The new Opal website makes releases easier to install.** The download flow
+  exposes every published format, detects the visitor's platform, retains
+  no-JavaScript links, and adds install help, screenshots, comparisons, search
+  metadata, and a proper project home at opal.palash.dev.
+- **Browser transcoding no longer takes Opal down.** ffmpeg's stdout now has one
+  close owner, eliminating the double-close that could panic the app or close
+  an unrelated client socket during "Play here".
+
 ## v0.6.4 — 2026-08-06
 
 - **Torrents play a second time.** The metadata cache rebuilt the info dict on

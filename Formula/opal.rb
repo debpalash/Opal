@@ -12,10 +12,10 @@ class Opal < Formula
   # publish a compiled arm64 binary with every release, so install that.
   desc "Pure-Zig desktop media browser + AI copilot (dvui + mpv + apfel)"
   homepage "https://github.com/debpalash/Opal"
-  version "0.6.4"
+  version "0.6.5"
   license "GPL-3.0-only"
 
-  url "https://github.com/debpalash/Opal/releases/download/v0.6.4/opal-0.6.4-macos-arm64.tar.gz"
+  url "https://github.com/debpalash/Opal/releases/download/v0.6.5/opal-0.6.5-macos-arm64.tar.gz"
   sha256 "dc5129bd3495dd2fe889180bc65452b45b1c435c41dd94d1a93ec78d13904ead"
 
   # The published binary is Apple-silicon only (GitHub retired the Intel runners).
