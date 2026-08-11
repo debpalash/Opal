@@ -10,6 +10,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Keep this independent of `zig build`: the package graph includes the GUI
+  # dependency, so a remote DVUI fetch failure must not hide a regression in
+  # the Zig -> Python child-process seam used by every torrent search.
+  torrent-search-regression:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Exercise nova2 through Zig child runtime
+        run: >-
+          zig test -lc --dep io_global
+          -Mroot=tests/nova2_spawn_test.zig
+          -Mio_global=src/core/io_global.zig
+
   # Pure-Zig unit tests — no native deps needed (build.zig's test step compiles
   # only the *_pure.zig modules), so this runs fast on every platform.
   unit-tests:

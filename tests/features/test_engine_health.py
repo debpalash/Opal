@@ -570,6 +570,44 @@ def resolve_torrents_has_a_watchdog():
                     "SIGTERMs by pid; drain-then-wait still reaps")
 
 
+@test("nova2 app mode avoids nested multiprocessing", "Torrents")
+def nova2_app_mode_uses_threads():
+    """Zig 0.16 child processes cannot safely launch Python's resource tracker.
+
+    Opal's nova2 invocation is identified by its app-only ``--timeout`` flag.
+    It must use a thread pool for the network-bound engines; otherwise Pool's
+    first semaphore registration raises BrokenPipeError and every search ends
+    with ``scanned=0 pushed=0``.  The no-deadline qBittorrent CLI keeps the
+    upstream process-pool behaviour.
+    """
+    nv = open(os.path.join(PROJECT_DIR, "engines/nova2.py"),
+              encoding="utf-8").read()
+    checks = {
+        "imports process pool explicitly": "Pool as ProcessPool" in nv,
+        "uses a genuinely thread-only executor": "ThreadPoolExecutor" in nv,
+        "does not use multiprocessing ThreadPool": "multiprocessing.pool import ThreadPool" not in nv,
+        "app deadline selects threads": "def run_parallel(" in nv and "if deadline is not None:" in nv,
+        "still applies the deadline": "wait(futures, timeout=deadline)" in nv,
+        "timeout terminates the disposable child": "os._exit(0)" in nv,
+        "offline Zig-child selftest exists": (
+            'argv == ["--pool-selftest"]' in nv and
+            "NOVA2_APP_POOL_OK" in nv and
+            "tests/nova2_spawn_test.zig" in _src("build.zig")
+        ),
+    }
+    printer = open(os.path.join(PROJECT_DIR, "engines/novaprinter.py"),
+                   encoding="utf-8").read()
+    checks["mirror result counts are thread-local"] = (
+        "threading.local()" in printer and
+        'getattr(_printed, "count", 0)' in printer
+    )
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "nova2 pool-mode regression: " + ", ".join(missing)
+    return "pass", ("Opal --timeout mode uses network threads; the compatible "
+                    "no-deadline CLI retains multiprocessing")
+
+
 @test("nova2 fetch: a bot wall falls back to the anti-detect browser", "Torrents")
 def retrieve_url_routes_walls_to_the_browser():
     """A 403 is not retryable, so walled engines sat at a permanent zero.
