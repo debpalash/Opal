@@ -20,6 +20,19 @@ const state = @import("../core/state.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
+/// Win32 window-procedure subclass (src/ui/win_titlebar.c). Fixes two things
+/// SDL2 gets wrong for a borderless window and exposes no API for: maximize
+/// sized to the raw screen instead of the monitor work area (so it covered the
+/// taskbar), and caption double-click doing nothing. Stubbed off-Windows so
+/// this file still compiles everywhere.
+const native = if (is_windows) struct {
+    extern fn opal_titlebar_install_native(win: ?*anyopaque) void;
+} else struct {
+    fn opal_titlebar_install_native(win: ?*anyopaque) void {
+        _ = win;
+    }
+};
+
 /// Logical (unscaled) bar height, in dvui points. Compact — just tall enough
 /// for the logo + window controls.
 pub const HEIGHT: f32 = 30;
@@ -104,6 +117,7 @@ pub fn ensureEnabled(win: ?*c.sdl.SDL_Window) void {
     c.sdl.SDL_SetWindowBordered(win, c.sdl.SDL_FALSE);
     c.sdl.SDL_SetWindowResizable(win, c.sdl.SDL_TRUE);
     _ = c.sdl.SDL_SetWindowHitTest(win, hitTest, null);
+    native.opal_titlebar_install_native(win);
 }
 
 fn ctlButton(id: u32, icon_data: []const u8, danger: bool) bool {
