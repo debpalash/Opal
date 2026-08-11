@@ -101,7 +101,6 @@ pub fn startServer() void {
 pub fn stopServer() void {
     if (server_process) |*child| {
         _ = child.kill() catch {};
-        _ = child.wait() catch {};
         server_process = null;
         state.app.tts_server_ok = false;
         logs.pushLog("info", "tts", "TTS server stopped", false);

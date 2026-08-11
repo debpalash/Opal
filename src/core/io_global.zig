@@ -167,6 +167,73 @@ pub fn killByCommandLine(pattern: []const u8, force: bool) void {
     }
 }
 
+/// Kill processes matching any of several command-line patterns with one
+/// process-table scan. Used during shutdown to avoid launching a scanner for
+/// every individual helper process.
+pub fn killAnyByCommandLine(patterns: []const []const u8, force: bool) void {
+    if (patterns.len == 0) return;
+    if (is_windows) {
+        var script_buf: [2048]u8 = undefined;
+        var n: usize = 0;
+        const prefix = "Get-CimInstance Win32_Process | Where-Object { ";
+        @memcpy(script_buf[n .. n + prefix.len], prefix);
+        n += prefix.len;
+        for (patterns, 0..) |pattern, i| {
+            const joiner: []const u8 = if (i == 0) "" else " -or ";
+            const clause = "$_.CommandLine -like '*";
+            if (n + joiner.len + clause.len >= script_buf.len) return;
+            @memcpy(script_buf[n .. n + joiner.len], joiner);
+            n += joiner.len;
+            @memcpy(script_buf[n .. n + clause.len], clause);
+            n += clause.len;
+            for (pattern) |ch| {
+                if (n + 2 >= script_buf.len) return;
+                if (ch == '\'') {
+                    script_buf[n] = '\'';
+                    n += 1;
+                }
+                script_buf[n] = ch;
+                n += 1;
+            }
+            script_buf[n] = '*';
+            script_buf[n + 1] = '\'';
+            n += 2;
+        }
+        const suffix = " } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
+        if (n + suffix.len > script_buf.len) return;
+        @memcpy(script_buf[n .. n + suffix.len], suffix);
+        n += suffix.len;
+        var child = Child.init(&.{ "powershell", "-NoProfile", "-NonInteractive", "-Command", script_buf[0..n] }, alloc_mod.allocator);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Ignore;
+        child.spawn() catch return;
+        _ = child.wait() catch {};
+    } else {
+        var regex_buf: [1024]u8 = undefined;
+        var n: usize = 0;
+        for (patterns, 0..) |pattern, i| {
+            const separator_len: usize = if (i == 0) 0 else 1;
+            if (n + pattern.len + separator_len > regex_buf.len) return;
+            if (i != 0) {
+                regex_buf[n] = '|';
+                n += 1;
+            }
+            @memcpy(regex_buf[n .. n + pattern.len], pattern);
+            n += pattern.len;
+        }
+        var child = if (force)
+            Child.init(&.{ "pkill", "-9", "-f", regex_buf[0..n] }, alloc_mod.allocator)
+        else
+            Child.init(&.{ "pkill", "-f", regex_buf[0..n] }, alloc_mod.allocator);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Ignore;
+        child.spawn() catch return;
+        _ = child.wait() catch {};
+    }
+}
+
 /// Kill processes by EXACT executable name (`pkill -x`) — not a command-line
 /// substring. Use when the name is unambiguous and matching a substring could
 /// hit unrelated processes. Windows matches the image name, where the `.exe`
@@ -572,4 +639,3 @@ pub fn killProcess(id: Child.Id) void {
         std.posix.kill(id, std.posix.SIG.KILL) catch {};
     }
 }
-

@@ -1,7 +1,7 @@
 # === Zig ===
 zig-out/
 .zig-cache/
-
+.agent/
 # === Secrets ===
 .env
 

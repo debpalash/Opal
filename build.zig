@@ -61,9 +61,13 @@ pub fn build(b: *std.Build) void {
 
     // System SDL2 integration. On Wayland compositors (COSMIC DE, etc.) the bundled SDL2
     // only has X11 support (runs under XWayland) and window title updates are ignored.
-    // Build with: zig build -fsys=sdl2
-    // This uses the system's sdl2-compat (SDL3) with native Wayland support.
-    _ = b.systemIntegrationOption("sdl2", .{});
+    // Linux distributions provide a correctly linked SDL2 (and, on Wayland,
+    // native Wayland support). Prefer it by default: Zig 0.16's linker rejects
+    // the prebuilt SDL2 archive when it contains shared-library members such
+    // as libX11.so. Users can still opt out with `-fsys=sdl2=false`.
+    _ = b.systemIntegrationOption("sdl2", .{
+        .default = target.result.os.tag == .linux,
+    });
     const dvui_dep = b.dependency("dvui", .{
         .target = target,
         .optimize = optimize,
