@@ -453,8 +453,20 @@ def test_sysmeter():
         "no duplicate in-app strip": "renderTitleStrip" not in sh,
         # Every reading is a syscall. Sampling per-frame on the UI thread would
         # cost more than the thing it measures.
-        "sampled off-thread at 1Hz": ("std.Thread.spawn" in mon and ".detach()" in mon
-                                      and "io.sleep(1000 * std.time.ns_per_ms)" in mon),
+        "sampled off-thread at 1Hz": (
+            "std.Thread.spawn" in mon and
+            (
+                # Older lifecycle: a detached sampler slept for one full tick.
+                (".detach()" in mon and
+                 "io.sleep(1000 * std.time.ns_per_ms)" in mon) or
+                # Current lifecycle: retain and join the sampler at shutdown;
+                # ten short slices preserve 1 Hz while making stop responsive.
+                ("sampler_thread = std.Thread.spawn" in mon and
+                 "t.join()" in mon and
+                 "for (0..10)" in mon and
+                 "io.sleep(100 * std.time.ns_per_ms)" in mon)
+            )
+        ),
         # CPU is a RATE: it needs two samples. The first tick can only guess, so
         # the meters hide rather than show a confident zero (or a 100% spike).
         "no reading before a real delta": "valid" in mon and "snap.valid" in mn,
