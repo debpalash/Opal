@@ -544,7 +544,9 @@ def resolve_torrents_has_a_watchdog():
         "pid copied by value": "pid: io_glob.Child.Id" in block,
         # Must NOT reap the child itself — wait() below still owns that.
         "does not kill/reap": "child.kill()" not in block,
-        "still drains then waits": "_ = child.wait() catch {};" in block,
+        # The result is inspected now so a non-zero exit can surface as a
+        # failed source; retaining it is still the same drain-then-wait owner.
+        "still drains then waits": "child.wait()" in block and "const term" in block,
         # Joined before the frame dies, or `&watchdog` dangles.
         "joined before return": "t.join();" in block,
         "has a stop flag": "watchdog.done.store(true, .release)" in block,
