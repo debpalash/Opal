@@ -1,0 +1,41 @@
+---
+import PageLayout from "../layouts/PageLayout.astro";
+import { breadcrumbSchema, pageFor } from "../lib/site";
+
+const page = pageFor("/faq/");
+const questions = [
+  ["What is Opal?", "Opal is a free, open-source desktop media player that searches and plays across local files, torrents, Jellyfin, Plex, web video, live TV, anime and manga."],
+  ["Does Opal include torrent sources?", "No. Opal ships with no sources enabled and hosts no content. You decide which compatible plugins or sources to install and are responsible for using them lawfully."],
+  ["Can Opal stream a torrent before it finishes?", "Yes. Opal can begin playback while the required torrent pieces download, so a magnet behaves more like playable media than a completed file."],
+  ["Do I need a Plex or Jellyfin server?", "No. Both integrations are optional. If you already run Jellyfin or Plex, Opal can include those libraries in its search and playback experience."],
+  ["Does the AI send my history to the cloud?", "Opal's copilot is designed to run locally. Your session and watch history are stored in a SQLite database on your machine; connected third-party services still receive the requests needed to provide their features."],
+  ["Which operating systems are supported?", "Opal publishes Linux, macOS and Windows builds. Windows support is currently alpha, and unsigned macOS or Windows builds can show operating-system security warnings."],
+  ["What does the Opal Connect extension do?", "It connects Chrome, Edge or Firefox to the desktop app so you can send supported media, add compatible sites, search sources and control playback from a side panel."],
+  ["Is Opal free and open source?", "Yes. Opal is free software under GPL-3.0, with its source and release history available on GitHub."],
+];
+const faqSchema = {
+  "@type": "FAQPage",
+  mainEntity: questions.map(([name, text]) => ({
+    "@type": "Question",
+    name,
+    acceptedAnswer: { "@type": "Answer", text },
+  })),
+};
+---
+
+<PageLayout
+  path={page.path}
+  title={page.title}
+  description={page.description}
+  eyebrow="FAQ"
+  heading="Questions about Opal, answered"
+  lead="Torrent playback, servers, local AI, browser integration, supported platforms and privacy—without the fine-print fog."
+  jsonLd={[breadcrumbSchema("FAQ", page.path), faqSchema]}
+>
+  <section class="page-section">
+    <div class="wrap faq-list">
+      {questions.map(([question, answer], index) => <details open={index === 0}><summary>{question}</summary><p>{answer}</p></details>)}
+    </div>
+  </section>
+  <section class="page-cta"><div class="wrap"><h2>Ready to try it?</h2><p class="sub">Choose a package for Linux, macOS or Windows.</p><a class="btn primary" href="/download/">Download Opal</a><a class="btn" href="/privacy/">Read privacy details</a></div></section>
+</PageLayout>

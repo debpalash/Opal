@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
+    "check:seo": "node scripts/check-seo.mjs",
+    "test": "astro build && node scripts/check-seo.mjs",
     "preview": "astro preview",
     "check": "astro check",
     "deploy": "astro build && wrangler pages deploy dist --project-name opal"

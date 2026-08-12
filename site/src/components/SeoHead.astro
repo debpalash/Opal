@@ -1,0 +1,99 @@
+---
+import {
+  AUTHOR_URL,
+  SITE_NAME,
+  SITE_URL,
+  SOCIAL_IMAGE,
+  absoluteUrl,
+} from "../lib/site";
+
+interface Props {
+  title: string;
+  description: string;
+  path: string;
+  image?: string;
+  imageAlt?: string;
+  noindex?: boolean;
+  jsonLd?: Record<string, unknown> | Record<string, unknown>[];
+}
+
+const {
+  title,
+  description,
+  path,
+  image = SOCIAL_IMAGE,
+  imageAlt = "Opal media player showing universal search and trending media",
+  noindex = false,
+  jsonLd,
+} = Astro.props;
+
+const canonical = absoluteUrl(path);
+const socialImage = absoluteUrl(image);
+const graph = [
+  {
+    "@type": "WebSite",
+    "@id": `${SITE_URL}/#website`,
+    url: `${SITE_URL}/`,
+    name: SITE_NAME,
+    publisher: {
+      "@type": "Person",
+      name: "Palash Deb",
+      url: AUTHOR_URL,
+    },
+    inLanguage: "en",
+  },
+  {
+    "@type": "WebPage",
+    "@id": `${canonical}#webpage`,
+    url: canonical,
+    name: title,
+    description,
+    isPartOf: { "@id": `${SITE_URL}/#website` },
+    inLanguage: "en",
+  },
+  ...(jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : []),
+];
+const structuredData = {
+  "@context": "https://schema.org",
+  "@graph": graph,
+};
+---
+
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>{title}</title>
+<meta name="description" content={description} />
+<meta name="application-name" content={SITE_NAME} />
+<meta name="author" content="Palash Deb" />
+<meta name="theme-color" content="#05050a" />
+<meta name="color-scheme" content="dark light" />
+<meta name="referrer" content="strict-origin-when-cross-origin" />
+{noindex && <meta name="robots" content="noindex, follow" />}
+<link rel="canonical" href={canonical} />
+
+<link rel="icon" href="/favicon.ico" sizes="32x32" />
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="manifest" href="/site.webmanifest" />
+
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Opal" />
+<meta property="og:locale" content="en_US" />
+<meta property="og:url" content={canonical} />
+<meta property="og:title" content={title} />
+<meta property="og:description" content={description} />
+<meta property="og:image" content={socialImage} />
+<meta property="og:image:type" content="image/png" />
+<meta property="og:image:width" content="1280" />
+<meta property="og:image:height" content="640" />
+<meta property="og:image:alt" content={imageAlt} />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:site" content="@idebpalash" />
+<meta name="twitter:creator" content="@idebpalash" />
+<meta name="twitter:title" content={title} />
+<meta name="twitter:description" content={description} />
+<meta name="twitter:image" content={socialImage} />
+<meta name="twitter:image:alt" content={imageAlt} />
+<link rel="me" href={AUTHOR_URL} />
+
+<script type="application/ld+json" set:html={JSON.stringify(structuredData)} />

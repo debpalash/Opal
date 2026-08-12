@@ -1,0 +1,40 @@
+---
+import PageLayout from "../layouts/PageLayout.astro";
+import { REPO, breadcrumbSchema, pageFor } from "../lib/site";
+
+const page = pageFor("/privacy/");
+---
+
+<PageLayout
+  path={page.path}
+  title={page.title}
+  description={page.description}
+  eyebrow="Privacy"
+  heading="Your media activity stays local by default"
+  lead="Opal needs no Opal account, has no subscription backend and does not include product telemetry. Connections happen when a feature or source needs them."
+  jsonLd={breadcrumbSchema("Privacy", page.path)}
+>
+  <section class="page-section">
+    <div class="wrap prose">
+      <p class="eyebrow">Local first</p>
+      <h2>What Opal stores</h2>
+      <p>Settings, session state and watch history are stored on your computer. Watch history and session data use a local SQLite database you control. Removing the app's local data removes Opal's copy of that information.</p>
+
+      <h2>When Opal connects to the network</h2>
+      <p>Opal makes network requests when you ask it to check releases, use a connected server, search an enabled source, stream media, fetch metadata or subtitles, use Trakt sync, or access another explicitly enabled online feature. Those providers receive the network information needed to answer the request and apply their own privacy terms.</p>
+
+      <h2>Plugins and sources</h2>
+      <p>Opal ships with no content sources enabled. Plugins can run code and contact third-party services, so install only sources you trust and review their behavior independently. Opal does not turn a third-party plugin into a private or first-party service.</p>
+
+      <h2>Browser and LAN features</h2>
+      <p>Opal Connect communicates with the desktop app to deliver its browser actions. The LAN web interface and phone remote intentionally make Opal reachable to devices on your local network while enabled; use them only on networks you trust.</p>
+
+      <h2>Website data</h2>
+      <p>This static website has no Opal account flow. Interactive download widgets request public release information from GitHub, which means GitHub receives a request from your browser. Hosting infrastructure may retain ordinary access and security logs.</p>
+
+      <h2>Verify the implementation</h2>
+      <p>Opal is open source. You can inspect the application, website and issue history in the <a href={REPO}>public repository</a>. Privacy bugs should be reported through the repository's issue tracker without including personal media data.</p>
+    </div>
+  </section>
+  <section class="page-cta"><div class="wrap"><h2>Use only the sources you choose</h2><p class="sub">Install Opal, then configure the integrations that fit your setup.</p><a class="btn primary" href="/download/">Download Opal</a><a class="btn" href="/features/">Explore features</a></div></section>
+</PageLayout>
