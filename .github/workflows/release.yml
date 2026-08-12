@@ -117,6 +117,12 @@ jobs:
           cp zig-out/bin/opal opal-${VERSION}-linux-x86_64/
           cp libtorrent_wrapper.so opal-${VERSION}-linux-x86_64/ 2>/dev/null || true
           cp LICENSE docs/NOTICE.md README.md opal-${VERSION}-linux-x86_64/
+          mkdir -p opal-${VERSION}-linux-x86_64/scripts opal-${VERSION}-linux-x86_64/web
+          cp -r engines opal-${VERSION}-linux-x86_64/
+          cp scripts/camoufox_bridge.py opal-${VERSION}-linux-x86_64/scripts/
+          cp web/index.html opal-${VERSION}-linux-x86_64/web/
+          cp data/plugins-manifest.json data/manga-sources-sfw.json \
+            opal-${VERSION}-linux-x86_64/
           # Desktop entry + icon ride along so downstream repackagers
           # (AUR opal-bin, etc.) can install them from this one artifact.
           cp packaging/opal.desktop opal-${VERSION}-linux-x86_64/
@@ -136,12 +142,17 @@ jobs:
       - name: Package AppImage
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          # Assemble the AppDir by hand: binary + wrapper lib in a private
-          # libdir, desktop file + icon at the AppDir root (appimagetool
-          # requires those), .DirIcon for file managers.
-          mkdir -p AppDir/usr/bin AppDir/usr/lib/opal
-          cp zig-out/bin/opal AppDir/usr/bin/
+          # Keep the executable beside its private wrapper and runtime resources
+          # so main.zig's executable-relative lookup works without /usr paths.
+          # The resource tree is essential: torrent search shells out to nova2,
+          # Plugins reads its manifest, and Web Remote serves web/index.html.
+          mkdir -p AppDir/usr/lib/opal/scripts AppDir/usr/lib/opal/web
+          cp zig-out/bin/opal AppDir/usr/lib/opal/
           cp libtorrent_wrapper.so AppDir/usr/lib/opal/
+          cp -r engines AppDir/usr/lib/opal/
+          cp scripts/camoufox_bridge.py AppDir/usr/lib/opal/scripts/
+          cp web/index.html AppDir/usr/lib/opal/web/
+          cp data/plugins-manifest.json data/manga-sources-sfw.json AppDir/usr/lib/opal/
           cp packaging/opal.desktop AppDir/opal.desktop
           cp assets/logo.svg AppDir/opal.svg
           cp assets/logo.svg AppDir/.DirIcon
@@ -151,7 +162,7 @@ jobs:
           #!/bin/sh
           HERE="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
           export LD_LIBRARY_PATH="$HERE/usr/lib/opal${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          exec "$HERE/usr/bin/opal" "$@"
+          exec "$HERE/usr/lib/opal/opal" "$@"
           EOF
           chmod +x AppDir/AppRun
           # appimagetool itself ships as an AppImage; the runner has no FUSE,

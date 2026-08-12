@@ -438,6 +438,110 @@ def test_installer_no_xcode():
     return "pass", "install.sh installs the vendored .app; formula is a binary install at " + f_ver
 
 
+@test("Linux Installer Is Rootless By Default", "Packaging")
+def test_linux_installer_rootless_default():
+    # REGRESSION — distro detection used to force apt/dnf/zypper and sudo even
+    # though Linux releases already publish artifacts suitable for ~/.local.
+    import pathlib
+    import subprocess
+    import tempfile
+
+    sh = _src("scripts/install.sh")
+    release = _src(".github/workflows/release.yml")
+    aur_bin = _src("packaging/aur/opal-bin/PKGBUILD")
+    checks = {
+        "rootless installer exists": "install_linux_local()" in sh,
+        "default selects rootless installer": "0) install_linux_local" in sh,
+        "system install is explicit opt-in": "1) install_linux_system" in sh,
+        "system option is documented": "OPAL_SYSTEM=1" in sh,
+        "local install uses user prefix": '${OPAL_PREFIX:-$HOME/.local}' in sh,
+        "Debian package is unpacked without apt": 'dpkg-deb -x "$TMP/opal.deb"' in sh,
+        "torrent resources required": 'usr/lib/opal/engines/nova2.py' in sh,
+        "local receipt remembers whole prefix": 'receipt "local-prefix:$prefix"' in sh,
+        "desktop launcher uses absolute executable": "TryExec=$bindir/opal" in sh,
+        "future AppImage carries torrent engines": "cp -r engines AppDir/usr/lib/opal/" in release,
+        "AppImage executes beside its resources": 'exec "$HERE/usr/lib/opal/opal"' in release,
+        "tarball carries torrent engines": "cp -r engines opal-${VERSION}-linux-x86_64/" in release,
+        "AUR binary installs torrent engines": 'cp -r engines' in aur_bin,
+    }
+    bad = [name for name, ok in checks.items() if not ok]
+    if bad:
+        return "fail", "rootless Linux installer regression: " + ", ".join(bad)
+
+    # Exercise the default branch with deterministic fake release tools. sudo
+    # is deliberately present but fatal: merely having it on PATH must never
+    # make the rootless installer call it.
+    with tempfile.TemporaryDirectory(prefix="opal-rootless-test-") as td:
+        root = pathlib.Path(td)
+        fakebin = root / "fakebin"
+        home = root / "home"
+        prefix = home / ".local"
+        fakebin.mkdir()
+        home.mkdir()
+
+        def fake(name, body):
+            path = fakebin / name
+            path.write_text("#!/bin/sh\nset -eu\n" + body)
+            path.chmod(0o755)
+
+        fake("uname", 'case "${1:-}" in -m) echo x86_64 ;; *) echo Linux ;; esac\n')
+        fake("sha256sum", 'printf "testhash  %s\\n" "$1"\n')
+        fake("sudo", 'touch "$HOME/sudo-was-called"\nexit 99\n')
+        fake("curl", r'''
+out=""; url=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -o) shift; out="$1" ;;
+        http*) url="$1" ;;
+    esac
+    shift
+done
+case "$url" in
+    */SHA256SUMS.txt) printf 'testhash  opal_9.9.9_amd64.deb\n' > "$out" ;;
+    *) : > "$out" ;;
+esac
+''')
+        fake("dpkg-deb", r'''
+dest="$3"
+mkdir -p "$dest/usr/bin" "$dest/usr/lib/opal/engines" \
+         "$dest/usr/share/icons/hicolor/scalable/apps"
+printf '#!/bin/sh\nexit 0\n' > "$dest/usr/bin/opal"
+chmod +x "$dest/usr/bin/opal"
+printf '# nova2 fixture\n' > "$dest/usr/lib/opal/engines/nova2.py"
+printf 'fixture\n' > "$dest/usr/lib/opal/plugins-manifest.json"
+printf '<svg/>\n' > "$dest/usr/share/icons/hicolor/scalable/apps/opal.svg"
+''')
+
+        env = os.environ.copy()
+        env.update({
+            "HOME": str(home),
+            "OPAL_PREFIX": str(prefix),
+            "OPAL_VERSION": "v9.9.9",
+            "PATH": str(fakebin) + os.pathsep + env.get("PATH", ""),
+        })
+        proc = subprocess.run(
+            ["sh", os.path.join(PROJECT_DIR, "scripts/install.sh")],
+            cwd=PROJECT_DIR, env=env, text=True, capture_output=True,
+        )
+        dynamic = {
+            "rootless install exits successfully": proc.returncode == 0,
+            "sudo was not invoked": not (home / "sudo-was-called").exists(),
+            "launcher installed": (prefix / "bin/opal").is_file(),
+            "app installed beside resources": (prefix / "lib/opal/opal").is_file(),
+            "nova2 resource installed": (prefix / "lib/opal/engines/nova2.py").is_file(),
+        }
+        bad = [name for name, ok in dynamic.items() if not ok]
+        if bad:
+            detail = proc.stderr.strip() or proc.stdout.strip()
+            return "fail", "rootless execution failed: " + ", ".join(bad) + " — " + detail[-200:]
+
+        launched = subprocess.run([str(prefix / "bin/opal")], env=env)
+        if launched.returncode != 0:
+            return "fail", "installed user-local launcher did not execute"
+
+    return "pass", "default path calls no sudo and installs executable + nova2 under ~/.local"
+
+
 @test("File associations + single instance", "Packaging")
 def test_file_associations_single_instance():
     # OS default-player registration (macOS/Linux/Windows) + second-instance

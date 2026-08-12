@@ -60,10 +60,18 @@ you left off. One native binary — [Zig](https://ziglang.org) +
 ## 🚀 Get it
 
 One command — detects your platform, verifies checksums, doubles as the updater
-(`… -s -- update`) and version pin (`OPAL_VERSION=v0.1.0 …`):
+(`… -s -- update`) and version pin (`OPAL_VERSION=v0.1.0 …`). On Linux it
+installs to `~/.local` and never needs `sudo`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/debpalash/Opal/main/scripts/install.sh | sh
+```
+
+For a system-wide Linux install through `apt`, `dnf`, `zypper`, or an AUR
+helper, opt in explicitly (root or `sudo` is required):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/debpalash/Opal/main/scripts/install.sh | OPAL_SYSTEM=1 sh
 ```
 
 Or pick your row — every file is on [Releases](../../releases):

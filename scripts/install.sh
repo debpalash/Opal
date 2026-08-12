@@ -11,16 +11,16 @@
 #
 # Options / env:
 #   OPAL_VERSION=v0.1.0   pin any released version (default: latest)
-#   OPAL_PREFIX=~/.local  Linux install prefix for the AppImage (default)
+#   OPAL_PREFIX=~/.local  Linux install prefix (default)
+#   OPAL_SYSTEM=1        use the distro package manager instead (needs root/sudo)
 #
 # Per-platform behavior:
 #   macOS (Apple silicon)  Opal.app → /Applications  (Homebrew tap once live:
 #                          brew install debpalash/tap/opal)
-#   Debian/Ubuntu          installs the official .deb via apt
-#   Fedora/openSUSE        installs the official .rpm via dnf/zypper
-#   Arch                   yay/paru -S opal-bin when available on AUR,
-#                          otherwise falls through to the AppImage
-#   any other Linux        AppImage → $OPAL_PREFIX/bin + desktop entry
+#   Debian/Ubuntu          verified .deb extracted under $OPAL_PREFIX
+#   other Linux            AppImage → $OPAL_PREFIX/bin + desktop entry
+#                          (both paths require no root)
+#   Linux, OPAL_SYSTEM=1   native .deb/.rpm/AUR package (root/sudo required)
 #   Windows                not handled by this script (deliberately — a sh
 #                          installer is the wrong tool there). Download the
 #                          .msi installer or the portable .zip from
@@ -121,26 +121,33 @@ install_macos() {
     say "installed → $target/Opal.app"
 }
 
-install_linux() {
-    arch=$(uname -m)
-    [ "$arch" = "x86_64" ] || die "no prebuilt $arch Linux binaries yet — build from source: https://github.com/$REPO#get-it"
+as_root() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    elif have sudo; then
+        sudo "$@"
+    else
+        die "OPAL_SYSTEM=1 needs root or sudo; omit OPAL_SYSTEM for a user-local install"
+    fi
+}
 
+install_linux_system() {
     if have apt-get; then
         fetch "opal_${VER}_amd64.deb" "$TMP/opal.deb"
-        say "installing .deb (sudo required)"
-        sudo apt-get install -y "$TMP/opal.deb"
+        say "installing system .deb"
+        as_root apt-get install -y "$TMP/opal.deb"
         receipt deb; say "done — run: opal"; return
     fi
     if have dnf; then
         fetch "opal-$VER-1.x86_64.rpm" "$TMP/opal.rpm"
-        say "installing .rpm (sudo required)"
-        sudo dnf install -y "$TMP/opal.rpm"
+        say "installing system .rpm"
+        as_root dnf install -y "$TMP/opal.rpm"
         receipt rpm; say "done — run: opal"; return
     fi
     if have zypper; then
         fetch "opal-$VER-1.x86_64.rpm" "$TMP/opal.rpm"
-        say "installing .rpm (sudo required)"
-        sudo zypper --non-interactive install --allow-unsigned-rpm "$TMP/opal.rpm"
+        say "installing system .rpm"
+        as_root zypper --non-interactive install --allow-unsigned-rpm "$TMP/opal.rpm"
         receipt rpm; say "done — run: opal"; return
     fi
     if have pacman; then
@@ -151,28 +158,114 @@ install_linux() {
                 receipt aur; say "done — run: opal"; return
             fi
         done
-        say "AUR package not reachable — falling back to the AppImage"
+        die "opal-bin is not reachable through yay or paru; omit OPAL_SYSTEM for a user-local install"
     fi
 
-    # Universal fallback: AppImage into the user prefix, no root needed.
-    prefix="${OPAL_PREFIX:-$HOME/.local}"
-    bindir="$prefix/bin"; appdir="$prefix/share/applications"
-    mkdir -p "$bindir" "$appdir"
-    fetch "Opal-$VER-x86_64.AppImage" "$bindir/opal"
-    chmod +x "$bindir/opal"
+    die "no supported system package manager found; omit OPAL_SYSTEM for a user-local install"
+}
+
+write_linux_desktop() {
+    prefix="$1"
+    bindir="$prefix/bin"
+    appdir="$prefix/share/applications"
+    mkdir -p "$appdir"
     cat > "$appdir/opal.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Opal
 GenericName=Media Suite
-Comment=Play everything — the evolved media player
-Exec=$bindir/opal
+Comment=Play everything — media player, universal search, torrent streaming, local AI
+TryExec=$bindir/opal
+Exec=$bindir/opal %U
+Icon=opal
 Terminal=false
 Categories=AudioVideo;Video;Player;
+MimeType=video/x-matroska;video/mp4;video/webm;video/quicktime;video/x-msvideo;video/mpeg;video/mp2t;video/ogg;audio/mpeg;audio/flac;audio/mp4;audio/aac;audio/ogg;audio/opus;audio/x-wav;audio/x-matroska;audio/x-mpegurl;application/x-mpegURL;application/vnd.apple.mpegurl;application/x-bittorrent;x-scheme-handler/magnet;
+StartupWMClass=opal
 EOF
-    receipt "appimage:$bindir"
+    have update-desktop-database && update-desktop-database "$appdir" >/dev/null 2>&1 || true
+}
+
+install_linux_local_deb() {
+    prefix="$1"
+    root="$TMP/deb-root"
+    bindir="$prefix/bin"
+    libdir="$prefix/lib/opal"
+    icondir="$prefix/share/icons/hicolor/scalable/apps"
+
+    fetch "opal_${VER}_amd64.deb" "$TMP/opal.deb"
+    mkdir -p "$root"
+    dpkg-deb -x "$TMP/opal.deb" "$root" || die "could not unpack the .deb for a user-local install"
+    [ -x "$root/usr/bin/opal" ] || die "the .deb does not contain usr/bin/opal"
+    [ -f "$root/usr/lib/opal/engines/nova2.py" ] || die "the .deb is missing Opal's runtime resources"
+
+    mkdir -p "$bindir" "$icondir"
+    rm -rf "$libdir"
+    mkdir -p "$libdir"
+    cp "$root/usr/bin/opal" "$libdir/opal"
+    cp -R "$root/usr/lib/opal/." "$libdir/"
+    chmod +x "$libdir/opal"
+    if [ -f "$root/usr/share/icons/hicolor/scalable/apps/opal.svg" ]; then
+        cp "$root/usr/share/icons/hicolor/scalable/apps/opal.svg" "$icondir/opal.svg"
+    fi
+
+    # Keep the command on PATH while the actual executable sits beside its
+    # private library and resource tree. That layout lets Opal find nova2 and
+    # the plugin manifests without relying on /usr/lib/opal or the caller's CWD.
+    cat > "$bindir/opal" <<'EOF'
+#!/bin/sh
+bindir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+exec "$bindir/../lib/opal/opal" "$@"
+EOF
+    chmod +x "$bindir/opal"
+    write_linux_desktop "$prefix"
+}
+
+install_linux_local_appimage() {
+    prefix="$1"
+    bindir="$prefix/bin"
+    icondir="$prefix/share/icons/hicolor/scalable/apps"
+    mkdir -p "$bindir" "$icondir"
+    fetch "Opal-$VER-x86_64.AppImage" "$bindir/opal"
+    chmod +x "$bindir/opal"
+
+    # The release AppImage carries the same icon as the native packages.
+    # Extraction does not require FUSE; failure is harmless and leaves the
+    # desktop environment's generic application icon as a fallback.
+    if (cd "$TMP" && "$bindir/opal" --appimage-extract opal.svg >/dev/null 2>&1); then
+        cp "$TMP/squashfs-root/opal.svg" "$icondir/opal.svg"
+    fi
+    write_linux_desktop "$prefix"
+}
+
+install_linux_local() {
+    # Default on every distribution: install only below the user prefix.
+    prefix="${OPAL_PREFIX:-$HOME/.local}"
+    if have dpkg-deb; then
+        # Prefer extraction over the AppImage on Debian-family systems. The
+        # native package includes the complete engines/scripts/web resource
+        # tree and dpkg-deb only unpacks files; it never needs root.
+        install_linux_local_deb "$prefix"
+    else
+        install_linux_local_appimage "$prefix"
+    fi
+
+    receipt "local-prefix:$prefix"
+    bindir="$prefix/bin"
     case ":$PATH:" in *":$bindir:"*) ;; *) say "note: add $bindir to your PATH" ;; esac
-    say "installed → $bindir/opal (AppImage)"
+    say "installed without sudo → $bindir/opal"
+    say "run now: $bindir/opal"
+}
+
+install_linux() {
+    arch=$(uname -m)
+    [ "$arch" = "x86_64" ] || die "no prebuilt $arch Linux binaries yet — build from source: https://github.com/$REPO#get-it"
+
+    case "${OPAL_SYSTEM:-0}" in
+        0) install_linux_local ;;
+        1) install_linux_system ;;
+        *) die "OPAL_SYSTEM must be 0 or 1" ;;
+    esac
 }
 
 do_install() {
@@ -202,6 +295,20 @@ do_uninstall() {
         rpm)         { have dnf && sudo dnf remove -y opal; } || sudo zypper --non-interactive remove opal ;;
         aur)         sudo pacman -R --noconfirm opal-bin ;;
         app:*)       rm -rf "${method#app:}/Opal.app" ;;
+        local-prefix:*)
+            prefix="${method#local-prefix:}"
+            rm -f "$prefix/bin/opal" \
+                  "$prefix/share/applications/opal.desktop" \
+                  "$prefix/share/icons/hicolor/scalable/apps/opal.svg"
+            rm -rf "$prefix/lib/opal"
+            ;;
+        # Backward compatibility with receipts written by v0.6.5 and older.
+        appimage-prefix:*)
+            prefix="${method#appimage-prefix:}"
+            rm -f "$prefix/bin/opal" \
+                  "$prefix/share/applications/opal.desktop" \
+                  "$prefix/share/icons/hicolor/scalable/apps/opal.svg"
+            ;;
         appimage:*)  rm -f "${method#appimage:}/opal" \
                            "${XDG_DATA_HOME:-$HOME/.local/share}/applications/opal.desktop" ;;
         *) die "unknown install method: $method" ;;
