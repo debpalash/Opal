@@ -438,7 +438,7 @@ def test_stream_readiness_gate():
 
 @test("Title-bar resource meters", "Stability")
 def test_sysmeter():
-    # CPU / MEM / THR / NRG in the OS title bar, folded into the window title as
+    # CPU / MEM / THR / ENERGY in the OS title bar, folded into the window title as
     # text. There is no dvui widget: SDL2 gives no drawable surface up there.
     mon = _src("src/core/sysmon.zig")
     pur = _src("src/core/sysmon_pure.zig")
@@ -485,6 +485,8 @@ def test_sysmeter():
         # Energy has no public power API; deriving it from CPU alone would be a
         # plausible-but-wrong number, so wakeups go in and it's labelled a score.
         "energy is honest": "wakeups" in pur and "not watts" in pur,
+        "unsupported Linux energy hidden": "energy_supported = is_macos" in mon
+            and "sysmon.energy_supported" in mn,
         "clock via io_global": "std.time.timestamp" not in mon,
         # The meters render IN the OS title bar — as TEXT, folded into the window
         # title. SDL2 gives no drawable surface up there: the content view can be
@@ -492,8 +494,12 @@ def test_sysmeter():
         # shorter rect, so dvui's y=0 never moves (measured: SDL reported 1244x771
         # before AND after). What the OS does render there is the title string.
         "meters in the window title": "titleMeters" in _src("src/main.zig"),
-        "bar glyph per metric": "barGlyph" in pur,
-        # A partial run ("CPU ▃ 12%   MEM ▅ 1.2") would read as a bug, and the
+        # Native Linux title fonts/locales cannot reliably render Unicode gauges;
+        # every generated label and separator is printable ASCII instead.
+        "font-safe ASCII title": 'TITLE_METERS_SEP = " | "' in pur
+            and "barGlyph" not in pur and '"Opal - Play everything"' in mn,
+        "no proportional-font padding": "justifyTitle" not in pur,
+        # A partial run ("CPU 12% | MEM 1.2") would read as a bug, and the
         # title must survive regardless — so a short buffer yields nothing.
         "no truncated meter run": 'catch ""' in pur,
         # No confident "CPU 0%" before the first delta lands.
@@ -502,7 +508,7 @@ def test_sysmeter():
     missing = [k for k, v in checks.items() if not v]
     if missing:
         return "fail", "missing: " + ", ".join(missing)
-    return "pass", "CPU/MEM/THR/NRG meters: 1Hz off-thread sampler, tested thresholds"
+    return "pass", "ASCII CPU/MEM/THR meters: 1Hz sampler; supported energy only"
 
 
 @test("Search subprocesses reaped on shutdown", "Stability")
