@@ -36,7 +36,7 @@ var cli_open_done: bool = false;
 var device_scale_applied: bool = false;
 
 pub const dvui_app: dvui.App = .{
-    .config = .{ .options = .{ .size = .{ .w = 1400.0, .h = 820.0 }, .title = "Opal — Play everything" } },
+    .config = .{ .options = .{ .size = .{ .w = 1400.0, .h = 820.0 }, .title = "Opal - Play everything" } },
     .initFn = appInit,
     .frameFn = appFrame,
     .deinitFn = appDeinit,
@@ -1156,27 +1156,25 @@ fn appFrame() !dvui.App.Result {
                             meters = sp.titleMeters(
                                 snap.app_cpu_pct,
                                 snap.app_mem_rss,
-                                snap.sys_mem_total,
                                 snap.app_threads,
-                                snap.app_energy,
+                                if (sysmon.energy_supported) snap.app_energy else null,
                                 &meter_buf,
                             );
                         }
                     }
 
-                    // Media name LEFT, meters RIGHT, padded apart to the width of
-                    // the title bar. The title is one OS-rendered string, so the
-                    // only justification available is spaces between the halves
-                    // (see sysmon_pure.justifyTitle).
+                    // Keep the native title compact and ASCII-only. Unicode block
+                    // gauges and an em dash were decoded as Latin-1 by some Linux
+                    // window managers ("â..."); proportional-font space padding
+                    // also made the values appear detached from their labels.
                     var left_buf: [300]u8 = undefined;
                     const left: []const u8 = if (name_len > 0)
-                        (std.fmt.bufPrint(&left_buf, "{s} \xe2\x80\x94 Opal", .{name_buf[0..name_len]}) catch "Opal")
+                        (std.fmt.bufPrint(&left_buf, "{s} - Opal", .{name_buf[0..name_len]}) catch "Opal")
                     else
-                        "Opal \xe2\x80\x94 Play everything";
+                        "Opal - Play everything";
 
-                    var just_buf: [512]u8 = undefined;
-                    const sp2 = @import("core/sysmon_pure.zig");
-                    const joined = sp2.justifyTitle(left, sp2.metersBody(meters), sp2.titleCols(state.app.win_w), &just_buf);
+                    var joined_buf: [512]u8 = undefined;
+                    const joined = std.fmt.bufPrint(&joined_buf, "{s}{s}", .{ left, meters }) catch left;
 
                     var win_title: [520]u8 = undefined;
                     const wt: ?[:0]u8 = std.fmt.bufPrintZ(&win_title, "{s}", .{joined}) catch null;

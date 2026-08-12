@@ -23,6 +23,10 @@ const pure = @import("sysmon_pure.zig");
 const is_macos = builtin.os.tag == .macos;
 const is_linux = builtin.os.tag == .linux;
 pub const supported = is_macos or is_linux;
+/// macOS exposes wakeup counters through TASK_POWER_INFO. Linux /proc does not,
+/// so presenting its CPU-only fallback as a separate energy reading is
+/// misleading (and merely duplicates CPU in the title bar).
+pub const energy_supported = is_macos;
 
 const mach = if (is_macos) @cImport({
     @cInclude("mach/mach.h");
@@ -120,7 +124,6 @@ fn sampleLoop() void {
         snap_mutex.lock();
         snap = s;
         snap_mutex.unlock();
-
 
         // Short slices keep close responsive while preserving the 1 Hz rate.
         for (0..10) |_| {

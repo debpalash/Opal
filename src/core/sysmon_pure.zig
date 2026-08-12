@@ -129,34 +129,16 @@ pub fn fmtPct(pct: f32, buf: []u8) []const u8 {
 // dvui's y=0 never moves — measured). What the OS *does* render there is the title
 // string, so the meters are written INTO it.
 //
-// Text only, which is why each metric carries a single block glyph as its gauge:
-// one character that fills as the value climbs. Cheap, and it reads at a glance.
+// Keep this string strictly ASCII. Some Linux desktop/locale combinations
+// decode SDL's UTF-8 title bytes as a legacy encoding, turning the old em dash,
+// thin divider and block gauges into visible "â..." mojibake. Native title-bar
+// fonts are also proportional, so gauge glyphs and alignment spaces were never
+// a reliable layout mechanism.
 
-/// Eight levels of fill. Index by fraction — a bar in one character.
-const BARS = [_][]const u8{ "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" };
-
-/// Divider `titleMeters` prefixes, for the un-justified (name-then-meters)
-/// layout. Named so `metersBody` cannot drift from what titleMeters emits.
-pub const TITLE_METERS_SEP = "  \u{258F}  ";
-
-/// The meter run without its leading divider. When the two halves are justified
-/// to opposite edges of the title bar there is nothing between them to divide,
-/// and the glyph reads as a stray `|` hanging off the media name.
-pub fn metersBody(meters: []const u8) []const u8 {
-    if (std.mem.startsWith(u8, meters, TITLE_METERS_SEP)) return meters[TITLE_METERS_SEP.len..];
-    return meters;
-}
-
-/// A metric's fill level as a single block character.
-pub fn barGlyph(f: f32) []const u8 {
-    const c = if (std.math.isNan(f)) 0 else std.math.clamp(f, 0, 1);
-    // 1.0 must land on the last bar, not one past the end.
-    const i: usize = @intFromFloat(@min(c * @as(f32, BARS.len), @as(f32, BARS.len - 1)));
-    return BARS[i];
-}
+pub const TITLE_METERS_SEP = " | ";
 
 /// The meter run appended to the window title:
-///   "  ▏  CPU ▃ 12%   MEM ▅ 1.2 GB   THR ▂ 180   NRG ▁ 6%"
+///   " | CPU 12% | MEM 1.2 GB | THR 180 | ENERGY 6"
 ///
 /// Returns a slice of `buf`. On any formatting failure it returns an empty slice
 /// rather than a partial run — a half-written meter in the title bar would look
@@ -164,220 +146,63 @@ pub fn barGlyph(f: f32) []const u8 {
 pub fn titleMeters(
     cpu_pct: f32,
     mem_used: u64,
-    mem_total: u64,
     threads: u32,
-    energy: f32,
+    energy: ?f32,
     buf: []u8,
 ) []const u8 {
-    const cpu = cpuMetric(cpu_pct);
-    const mem = memMetric(mem_used, mem_total);
-    const thr = threadMetric(threads);
-    const nrg = energyMetric(energy);
-
+    var cpu_buf: [8]u8 = undefined;
     var mem_buf: [16]u8 = undefined;
+    const cpu_str = fmtPct(cpu_pct, &cpu_buf);
     const mem_str = fmtBytes(mem_used, &mem_buf);
+
+    if (energy) |raw_energy| {
+        const safe_energy = if (std.math.isNan(raw_energy)) 0 else std.math.clamp(raw_energy, 0, 999);
+        return std.fmt.bufPrint(
+            buf,
+            TITLE_METERS_SEP ++ "CPU {s} | MEM {s} | THR {d} | ENERGY {d:.0}",
+            .{ cpu_str, mem_str, threads, @round(safe_energy) },
+        ) catch "";
+    }
 
     return std.fmt.bufPrint(
         buf,
-        TITLE_METERS_SEP ++ "CPU {s} {d:.0}%   MEM {s} {s}   THR {s} {d}   NRG {s} {d:.0}%",
-        .{
-            barGlyph(cpu.frac), @round(std.math.clamp(cpu_pct, 0, 999)),
-            barGlyph(mem.frac), mem_str,
-            barGlyph(thr.frac), threads,
-            barGlyph(nrg.frac), @round(std.math.clamp(energy, 0, 100)),
-        },
+        TITLE_METERS_SEP ++ "CPU {s} | MEM {s} | THR {d}",
+        .{ cpu_str, mem_str, threads },
     ) catch "";
-}
-
-// ── Title justification ──────────────────────────────────────────────────────
-//
-// The window title is ONE string handed to SDL_SetWindowTitle and rendered by
-// the OS, so there is no layout engine up there and no second draw call: the
-// only way to push the meters to the right edge is to pad between the two
-// halves. macOS left-aligns a title too wide to centre without colliding with
-// the traffic lights, which is the case here once the meters are appended.
-//
-// The pad is measured in CHARACTERS, because that is all a text-only title can
-// express. `avg_advance_px` converts window width to a character budget; the
-// title font is proportional, so this lands close rather than exact, and the
-// meter run is deliberately monospace-ish digits so the right edge stays put as
-// values change.
-
-/// Characters that fit across a title bar `win_w` points wide.
-///
-/// `TITLE_CHROME_COLS` reserves the traffic lights and the right-hand window
-/// controls so the meters never slide underneath them.
-pub const TITLE_AVG_ADVANCE_PX: f32 = 7.0;
-pub const TITLE_CHROME_COLS: usize = 14;
-
-pub fn titleCols(win_w: i32) usize {
-    if (win_w <= 0) return 0;
-    const cols: f32 = @as(f32, @floatFromInt(win_w)) / TITLE_AVG_ADVANCE_PX;
-    if (!(cols > 0)) return 0;
-    const c: usize = @intFromFloat(@min(cols, 1000.0));
-    return if (c > TITLE_CHROME_COLS) c - TITLE_CHROME_COLS else 0;
-}
-
-/// Display width of `s` in characters, counting a UTF-8 sequence as one.
-/// Byte length would over-count the meter run badly — every bar glyph and the
-/// em dash are 3 bytes — and the pad would collapse to nothing.
-pub fn displayCols(s: []const u8) usize {
-    var n: usize = 0;
-    for (s) |b| {
-        if (b & 0xC0 != 0x80) n += 1; // count lead bytes only
-    }
-    return n;
-}
-
-/// Join `left` and `right` with enough spaces to push `right` to the right edge
-/// of a `cols`-wide title bar. Falls back to a single-space join when they can't
-/// both fit — a truncated title is worse than an unjustified one.
-///
-/// Returns a slice of `buf`, or just `left` if even that won't fit.
-pub fn justifyTitle(left: []const u8, right: []const u8, cols: usize, buf: []u8) []const u8 {
-    if (right.len == 0) return left;
-    const lw = displayCols(left);
-    const rw = displayCols(right);
-
-    // +1 so there is always at least one space between the halves.
-    const pad: usize = if (cols > lw + rw + 1) cols - lw - rw else 1;
-
-    if (left.len + pad + right.len > buf.len) {
-        // No room to justify. Join with one space rather than dropping a half.
-        if (left.len + 1 + right.len <= buf.len) {
-            @memcpy(buf[0..left.len], left);
-            buf[left.len] = ' ';
-            @memcpy(buf[left.len + 1 ..][0..right.len], right);
-            return buf[0 .. left.len + 1 + right.len];
-        }
-        return left;
-    }
-
-    @memcpy(buf[0..left.len], left);
-    @memset(buf[left.len..][0..pad], ' ');
-    @memcpy(buf[left.len + pad ..][0..right.len], right);
-    return buf[0 .. left.len + pad + right.len];
 }
 
 // ── Tests ──
 
 const t = std.testing;
 
-test "metersBody strips exactly the divider titleMeters emits" {
-    var buf: [160]u8 = undefined;
-    const run = titleMeters(12, 1288490188, 8589934592, 180, 6, &buf);
-    try t.expect(std.mem.startsWith(u8, run, TITLE_METERS_SEP));
-    const body = metersBody(run);
-    try t.expect(std.mem.startsWith(u8, body, "CPU"));
-    // Idempotent, and a run without the divider is returned untouched.
-    try t.expectEqualStrings(body, metersBody(body));
-    try t.expectEqualStrings("", metersBody(""));
-}
-
-test "displayCols counts characters, not bytes" {
-    try t.expectEqual(@as(usize, 3), displayCols("abc"));
-    // The bar glyphs and the em dash are 3 bytes each; byte length would treble
-    // the measured width of the meter run and collapse the pad to nothing.
-    try t.expectEqual(@as(usize, 1), displayCols("\u{258F}"));
-    try t.expectEqual(@as(usize, 1), displayCols("\u{2014}"));
-    try t.expectEqual(@as(usize, 5), displayCols("a\u{258F}b\u{2014}c"));
-    try t.expectEqual(@as(usize, 0), displayCols(""));
-}
-
-test "justifyTitle pushes the meters to the right edge" {
-    var buf: [300]u8 = undefined;
-    const s = justifyTitle("Movie.mkv \u{2014} Opal", "CPU 2%", 40, &buf);
-    try t.expectEqual(@as(usize, 40), displayCols(s));
-    try t.expect(std.mem.startsWith(u8, s, "Movie.mkv"));
-    try t.expect(std.mem.endsWith(u8, s, "CPU 2%"));
-    // The gap must be spaces only — anything else would show up in the bar.
-    const gap = s["Movie.mkv \u{2014} Opal".len .. s.len - "CPU 2%".len];
-    try t.expect(gap.len > 1);
-    for (gap) |ch| try t.expectEqual(@as(u8, ' '), ch);
-}
-
-test "justifyTitle: no room means one space, never a truncated title" {
-    var buf: [300]u8 = undefined;
-    // cols smaller than the two halves combined: must still contain both.
-    const s = justifyTitle("a-very-long-media-name", "CPU 2%", 5, &buf);
-    try t.expectEqualStrings("a-very-long-media-name CPU 2%", s);
-
-    // A buffer too small to justify still joins rather than dropping the meters.
-    var small: [30]u8 = undefined;
-    const s2 = justifyTitle("abcdefghij", "CPU 2%", 900, &small);
-    try t.expectEqualStrings("abcdefghij CPU 2%", s2);
-
-    // A buffer too small even to join returns the name alone — never a half-
-    // written meter run in the title bar.
-    var tiny: [12]u8 = undefined;
-    try t.expectEqualStrings("abcdefghij", justifyTitle("abcdefghij", "CPU 2%", 900, &tiny));
-}
-
-test "justifyTitle: empty meters are left exactly as they were" {
-    // Before the first sysmon delta lands there are no meters at all; the title
-    // must be the plain name, with no trailing pad.
-    var buf: [300]u8 = undefined;
-    try t.expectEqualStrings("Opal \u{2014} Play everything",
-        justifyTitle("Opal \u{2014} Play everything", "", 200, &buf));
-}
-
-test "titleCols: reserves the window chrome and never underflows" {
-    try t.expectEqual(@as(usize, 0), titleCols(0));
-    try t.expectEqual(@as(usize, 0), titleCols(-100));
-    // A window narrower than the reserved chrome yields 0, not a huge wrapped
-    // usize — that would produce a pad of thousands of spaces.
-    try t.expectEqual(@as(usize, 0), titleCols(10));
-    try t.expect(titleCols(1440) > 100);
-    try t.expect(titleCols(1440) < 1000);
-}
-
-test "barGlyph: spans the range, and 1.0 does not run off the end" {
-    // The clamp matters: @intFromFloat(1.0 * 8) is 8, one past the last bar.
-    try t.expectEqualStrings("▁", barGlyph(0));
-    try t.expectEqualStrings("█", barGlyph(1.0));
-    try t.expectEqualStrings("█", barGlyph(2.0)); // over-range clamps, not wraps
-    try t.expectEqualStrings("▁", barGlyph(-1)); // under-range too
-    try t.expectEqualStrings("▁", barGlyph(std.math.nan(f32)));
-
-    // Monotonic: a rising value never picks a shorter bar.
-    var prev: usize = 0;
-    var i: f32 = 0;
-    while (i <= 1.0) : (i += 0.05) {
-        const g = barGlyph(i);
-        var idx: usize = 0;
-        for (BARS, 0..) |b, n| if (std.mem.eql(u8, b, g)) {
-            idx = n;
-        };
-        try t.expect(idx >= prev);
-        prev = idx;
-    }
-}
-
 test "titleMeters: renders every metric into the title run" {
     var buf: [160]u8 = undefined;
-    const s = titleMeters(12, 1288490188, 8589934592, 180, 6, &buf);
+    const s = titleMeters(12, 1288490188, 180, 6, &buf);
+    try t.expectEqualStrings(" | CPU 12% | MEM 1.2 GB | THR 180 | ENERGY 6", s);
 
-    try t.expect(std.mem.indexOf(u8, s, "CPU") != null);
-    try t.expect(std.mem.indexOf(u8, s, "12%") != null);
-    try t.expect(std.mem.indexOf(u8, s, "MEM") != null);
-    try t.expect(std.mem.indexOf(u8, s, "1.2 GB") != null);
-    try t.expect(std.mem.indexOf(u8, s, "THR") != null);
-    try t.expect(std.mem.indexOf(u8, s, "180") != null);
-    try t.expect(std.mem.indexOf(u8, s, "NRG") != null);
+    // Every byte is printable ASCII. This is the actual regression: Unicode
+    // gauges became visible mojibake in the Linux native title bar.
+    for (s) |ch| try t.expect(ch >= 0x20 and ch <= 0x7e);
+}
+
+test "titleMeters: unsupported energy reading is omitted" {
+    var buf: [160]u8 = undefined;
+    const s = titleMeters(15, 191889408, 47, null, &buf);
+    try t.expectEqualStrings(" | CPU 15% | MEM 183 MB | THR 47", s);
+    try t.expect(std.mem.indexOf(u8, s, "ENERGY") == null);
 }
 
 test "titleMeters: a short buffer yields nothing, never a truncated run" {
     // The title must still render if the meters don't fit — better no meters than
-    // "Opal — Play everything  ▏  CPU ▃ 12%   MEM ▅ 1.2".
+    // "Opal - Play everything | CPU 12% | MEM 1.2".
     var tiny: [8]u8 = undefined;
-    try t.expectEqualStrings("", titleMeters(12, 1024, 8192, 4, 6, &tiny));
+    try t.expectEqualStrings("", titleMeters(12, 1024, 4, 6, &tiny));
 }
 
 test "titleMeters: garbage in cannot corrupt the window title" {
-    // A NaN CPU or a zero mem_total (before the first sample) must not produce
-    // "NaN%" or a divide-by-zero in the title bar.
+    // A NaN sample must not produce "NaN" in the title bar.
     var buf: [160]u8 = undefined;
-    const s = titleMeters(std.math.nan(f32), 0, 0, 0, std.math.nan(f32), &buf);
+    const s = titleMeters(std.math.nan(f32), 0, 0, std.math.nan(f32), &buf);
     try t.expect(s.len > 0);
     try t.expect(std.mem.indexOf(u8, s, "nan") == null);
     try t.expect(std.mem.indexOf(u8, s, "NaN") == null);
