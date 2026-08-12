@@ -908,6 +908,7 @@ def test_site_hero_backdrop():
     rather than in a bar, and sections change tone instead of being divided.
     """
     page = _src("site/src/pages/index.astro")
+    nav = _src("site/src/components/SiteNav.astro")
     css = _src("site/src/styles/global.css")
 
     photo = os.path.join(PROJECT_DIR, "site/public/assets/opal.jpg")
@@ -952,7 +953,9 @@ def test_site_hero_backdrop():
             ".hero .grain" not in css and "grain.png" not in css
             and 'class="grain"' not in page,
         # No rules anywhere — the nav rides the photo, sections fade into the bg.
-        "the nav is inside the hero": page.find("<header class=\"hero\">") < page.find("<nav>"),
+        "the nav is inside the hero":
+            page.find('<header class="hero">') < page.find('<SiteNav current="/" />')
+            and "<nav" in nav,
         "nothing draws a divider":
             "border-bottom: 1px solid" not in css
             and "border-top: 1px solid" not in css
@@ -996,7 +999,8 @@ def test_site_download_grid():
         "the extension buttons read that table too":
             "PLATFORMS" in _src("site/src/components/ExtensionDownloads.tsx"),
         "the download section leaves the extension to that section":
-            'p.id !== "chrome"' in grid and "<ExtensionDownloads client:load />" in _src("site/src/pages/index.astro"),
+            'p.id !== "chrome"' in grid
+            and "<ExtensionDownloads client:visible />" in _src("site/src/pages/index.astro"),
         # A release ships several files per platform — .dmg AND .app.zip AND a
         # tarball, AppImage AND .deb AND .rpm. Offering only the first sent
         # anyone who wanted a .deb off to the releases page to dig for it.
@@ -1032,6 +1036,8 @@ def test_site_download_flow():
     """
     page = _src("site/src/pages/index.astro")
     thanks_page = _src("site/src/pages/thanks.astro")
+    nav = _src("site/src/components/SiteNav.astro")
+    seo = _src("site/src/components/SeoHead.astro")
     panel = _src("site/src/components/ThanksPanel.tsx")
     menu = _src("site/src/components/DownloadMenu.tsx")
     star = _src("site/src/components/StarButton.tsx")
@@ -1041,7 +1047,7 @@ def test_site_download_flow():
     checks = {
         "the hero and the nav both mount the menu":
             '<DownloadMenu client:load />' in page
-            and '<DownloadMenu client:load variant="nav" />' in page,
+            and '<DownloadMenu client:load variant="nav" />' in nav,
         "the button names the detected platform":
             "detectOs" in lib and "Download for ${mine.short}" in menu,
         "the menu can be dismissed": "Escape" in menu and "mousedown" in menu,
@@ -1051,16 +1057,19 @@ def test_site_download_flow():
         "the download starts before the page moves":
             "a.click()" in lib and "setTimeout" in lib and "/thanks?os=" in lib,
         "the thanks page exists and is noindex":
-            bool(thanks_page) and 'name="robots" content="noindex' in thanks_page,
+            bool(thanks_page) and 'noindex={true}' in thanks_page
+            and 'name="robots" content="noindex, follow"' in seo,
         "?os= is matched, not interpolated": "platform(want)" in panel,
         "the thanks page can restart a stalled download": "Start it again" in panel,
         "star count comes from the repo endpoint":
             "getRepoMeta" in lib and "stargazers_count" in star,
         # GitHub's own button is an iframe on every visit; this is a link.
         "the star button is not a third-party iframe": "iframe" not in star,
-        "the nav offers a way to donate": "donate" in page and "ko-fi.com" in page,
-        "the nav menus need no javascript": "<details" in page and ".menu summary" in css,
-        "the X profile is linked": "x.com/idebpalash" in page and 'rel="me"' in page,
+        "the site offers a way to donate": "ko-fi.com" in page,
+        "the nav menus need no javascript": "<details" in nav and ".menu summary" in css,
+        "the X profile is linked":
+            "AUTHOR_URL" in nav and 'rel="me"' in nav
+            and "https://x.com/idebpalash" in _src("site/src/lib/site.ts"),
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
@@ -1081,7 +1090,11 @@ def test_site_compare_and_seo():
     """
     page = _src("site/src/pages/index.astro")
     robots = _src("site/public/robots.txt")
-    sitemap = _src("site/public/sitemap.xml")
+    sitemap = _src("site/src/pages/sitemap.xml.ts")
+    seo = _src("site/src/components/SeoHead.astro")
+    site_meta = _src("site/src/lib/site.ts")
+    seo_check = _src("site/scripts/check-seo.mjs")
+    package = _src("site/package.json")
     built = os.path.join(PROJECT_DIR, "site/dist/index.html")
 
     rivals = ["Jellyfin", "Plex", "qBittorrent", "Stremio", "Kodi"]
@@ -1110,9 +1123,12 @@ def test_site_compare_and_seo():
         # unless that stops being true, and the @types are written out in the
         # frontmatter object. When a build IS present the rendered page still
         # wins, because that is what a crawler reads.
-        ld_ok = "set:html={JSON.stringify(jsonld)}" in page
-        types = [t for t in ("SoftwareApplication", "WebSite")
-                 if '"@type": "%s"' % t in page]
+        ld_ok = "set:html={JSON.stringify(structuredData)}" in seo
+        types = []
+        if '"@type": "SoftwareApplication"' in page:
+            types.append("SoftwareApplication")
+        if '"@type": "WebSite"' in seo:
+            types.append("WebSite")
 
     checks = {
         "the matrix names the products it compares against":
@@ -1125,9 +1141,16 @@ def test_site_compare_and_seo():
         "and does not invent a rating": "aggregateRating" not in page,
         "robots points at the sitemap": "Sitemap: https://opal.palash.dev/sitemap.xml" in robots,
         "robots keeps the flow page out": "Disallow: /thanks" in robots,
-        "the sitemap lists the canonical URL": "<loc>https://opal.palash.dev/</loc>" in sitemap,
-        "social cards name the author": 'name="twitter:site" content="@idebpalash"' in page,
+        "the sitemap lists every canonical page":
+            "SITE_PAGES.map" in sitemap and "SITE_PAGES" in site_meta
+            and 'path: "/"' in site_meta,
+        "social cards name the author":
+            'name="twitter:site" content="@idebpalash"' in seo,
         "the API host is preconnected": 'rel="preconnect" href="https://api.github.com"' in page,
+        "SEO regressions fail the site test":
+            '"test": "astro build && node scripts/check-seo.mjs"' in package
+            and "duplicate ${label}" in seo_check
+            and "broken internal link" in seo_check,
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
