@@ -1,0 +1,37 @@
+---
+import "../styles/tailwind.css";
+import "../styles/global.css";
+import PageHero from "../components/PageHero.astro";
+import SeoHead from "../components/SeoHead.astro";
+import SiteFooter from "../components/SiteFooter.astro";
+
+interface Props {
+  path: string;
+  title: string;
+  description: string;
+  eyebrow: string;
+  heading: string;
+  lead: string;
+  jsonLd?: Record<string, unknown> | Record<string, unknown>[];
+  noindex?: boolean;
+}
+
+const { path, title, description, eyebrow, heading, lead, jsonLd, noindex } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <SeoHead {path} {title} {description} {jsonLd} {noindex} />
+    <link rel="preconnect" href="https://api.github.com" crossorigin />
+  </head>
+  <body>
+    <PageHero current={path} {eyebrow} title={heading} {lead}>
+      <slot name="hero" />
+    </PageHero>
+    <main class="page-main">
+      <slot />
+    </main>
+    <SiteFooter />
+  </body>
+</html>

@@ -1,5 +1,6 @@
 User-agent: *
 Allow: /
 Disallow: /thanks
+Disallow: /thanks/
 
 Sitemap: https://opal.palash.dev/sitemap.xml

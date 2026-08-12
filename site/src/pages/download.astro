@@ -1,0 +1,45 @@
+---
+import DownloadGrid from "../components/DownloadGrid.tsx";
+import InstallCommand from "../components/InstallCommand.tsx";
+import PageLayout from "../layouts/PageLayout.astro";
+import { REPO, breadcrumbSchema, pageFor } from "../lib/site";
+
+const page = pageFor("/download/");
+---
+
+<PageLayout
+  path={page.path}
+  title={page.title}
+  description={page.description}
+  eyebrow="Download"
+  heading="Install Opal on your computer"
+  lead="Choose Linux, macOS or Windows. Release files and checksums come directly from the project's GitHub releases."
+  jsonLd={breadcrumbSchema("Download", page.path)}
+>
+  <Fragment slot="hero"><div class="hero-command"><InstallCommand client:visible /></div></Fragment>
+
+  <section class="page-section">
+    <div class="wrap">
+      <p class="eyebrow">Latest release</p>
+      <h2>All available packages</h2>
+      <p class="sub">The matching package is highlighted after your browser identifies its platform. You can always choose another format.</p>
+      <DownloadGrid client:visible />
+      <p class="metalinks"><a href={`${REPO}/releases/latest`}>Release notes</a><a href={`${REPO}/releases/latest/download/SHA256SUMS.txt`}>SHA-256 checksums</a><a href={`${REPO}/issues`}>Installation help</a></p>
+    </div>
+  </section>
+
+  <section class="page-section alt">
+    <div class="wrap prose">
+      <p class="eyebrow">First run</p>
+      <h2>Platform notes</h2>
+      <h3>Linux</h3>
+      <p>Use the AppImage without a system-wide install, or install the DEB/RPM package through your package manager. The installer can place a user-local launcher when administrator access is unavailable.</p>
+      <h3>macOS</h3>
+      <p>Opal is not notarized. If Gatekeeper reports that the app is damaged, clear quarantine after moving it to Applications with <code>xattr -cr /Applications/Opal.app</code>.</p>
+      <h3>Windows</h3>
+      <p>Windows support is alpha and unsigned builds can trigger SmartScreen. Verify the checksum before continuing, or use the portable archive.</p>
+    </div>
+  </section>
+
+  <section class="page-cta"><div class="wrap"><h2>Before installing</h2><p class="sub">Review common setup, source and privacy questions.</p><a class="btn primary" href="/faq/">Read the FAQ</a><a class="btn" href="/privacy/">Privacy details</a></div></section>
+</PageLayout>

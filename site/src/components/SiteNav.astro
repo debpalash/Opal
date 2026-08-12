@@ -1,0 +1,51 @@
+---
+import DownloadMenu from "./DownloadMenu";
+import StarButton from "./StarButton";
+import { AUTHOR_URL, REPO } from "../lib/site";
+
+interface Props {
+  current?: string;
+  compact?: boolean;
+}
+
+const { current = "", compact = false } = Astro.props;
+const links = [
+  ["/features/", "Features"],
+  ["/compare/", "Compare"],
+  ["/extension/", "Extension"],
+  ["/download/", "Download"],
+];
+---
+
+<nav aria-label="Primary navigation">
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="Opal home">
+      <img src="/favicon.svg" alt="" width="26" height="26" />Opal
+    </a>
+    <span class="spacer"></span>
+    {
+      links.map(([href, label], index) => (
+        <a
+          class={`navlink ${index < 2 ? "hide-sm" : "hide-md"}`}
+          href={href}
+          aria-current={current === href ? "page" : undefined}
+        >
+          {label}
+        </a>
+      ))
+    }
+    <details class="menu hide-md">
+      <summary class="navlink">More</summary>
+      <div class="dlpanel">
+        <a href="/faq/"><span class="grow">FAQ<span class="meta">common questions</span></span></a>
+        <a href="/privacy/"><span class="grow">Privacy<span class="meta">local-first by design</span></span></a>
+        <a href={`${REPO}#readme`}><span class="grow">Documentation<span class="meta">setup and source</span></span></a>
+        <a href={`${REPO}/blob/main/CHANGELOG.md`}><span class="grow">Changelog<span class="meta">what changed</span></span></a>
+        <a href={`${REPO}/issues`}><span class="grow">Issues<span class="meta">report a bug</span></span></a>
+        <a href={AUTHOR_URL} rel="me"><span class="grow">Follow<span class="meta">@idebpalash</span></span></a>
+      </div>
+    </details>
+    <StarButton client:idle />
+    {!compact && <DownloadMenu client:load variant="nav" />}
+  </div>
+</nav>

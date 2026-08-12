@@ -1,8 +1,6 @@
 ---
-// opal.palash.dev — the whole site is this one page (plus /thanks).
-//
 // Astro renders it to static HTML at build time; the React components below are
-// islands, hydrated on load, because each of them needs the browser: the
+// islands, hydrated only when needed, because each of them needs the browser: the
 // clipboard, the visitor's platform, and the newest release from the GitHub
 // API. Everything else — copy, the photographic bands, screenshots, the
 // comparison matrix — is HTML and CSS with no JavaScript attached, which is why
@@ -15,9 +13,13 @@ import DownloadMenu from "../components/DownloadMenu.tsx";
 import ExtensionDownloads from "../components/ExtensionDownloads.tsx";
 import ReleaseBadge from "../components/ReleaseBadge.tsx";
 import StarButton from "../components/StarButton.tsx";
+import SeoHead from "../components/SeoHead.astro";
+import SiteFooter from "../components/SiteFooter.astro";
+import SiteNav from "../components/SiteNav.astro";
+import { AUTHOR_URL, REPO, pageFor } from "../lib/site";
 
-const REPO = "https://github.com/debpalash/Opal";
-const X = "https://x.com/idebpalash";
+const X = AUTHOR_URL;
+const page = pageFor("/");
 
 const features = [
   ["One search, every source", "Disk, torrents, Jellyfin, Plex, Stremio, anime, YouTube, live TV and manga — one ranked list."],
@@ -51,72 +53,36 @@ const matrix = [
   ["Licence", "GPL-3.0", "GPL-2.0", "Proprietary", "GPL-2.0+", "Partly open", "GPL-2.0+"],
 ];
 
-const title = "Opal — play everything, from one app";
-const description =
-  "A free, open-source, local-first media player and browser. Search and stream movies, TV, anime, live TV, YouTube, torrents and manga — plus your own Jellyfin and Plex — with an on-device AI copilot. No accounts, no cloud, no subscription.";
-
 // Structured data describes what is already on the page — nothing hidden, no
 // claims the page does not make. Google drops (and can penalise) markup that
 // has no visible counterpart.
 const jsonld = {
-  "@context": "https://schema.org",
-  "@graph": [
-    {
-      "@type": "SoftwareApplication",
-      name: "Opal",
-      applicationCategory: "MultimediaApplication",
-      operatingSystem: "macOS, Linux, Windows",
-      description,
-      url: "https://opal.palash.dev/",
-      downloadUrl: "https://opal.palash.dev/#download",
-      softwareVersion: "0.6.5",
-      license: "https://www.gnu.org/licenses/gpl-3.0.html",
-      isAccessibleForFree: true,
-      offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
-      author: { "@type": "Person", name: "Palash Deb", url: X },
-      codeRepository: REPO,
-    },
-    {
-      "@type": "WebSite",
-      name: "Opal",
-      url: "https://opal.palash.dev/",
-      publisher: { "@type": "Person", name: "Palash Deb", url: X },
-    },
-  ],
+  "@type": "SoftwareApplication",
+  name: "Opal",
+  applicationCategory: "MultimediaApplication",
+  operatingSystem: "macOS, Linux, Windows",
+  description: page.description,
+  url: "https://opal.palash.dev/",
+  downloadUrl: "https://opal.palash.dev/download/",
+  softwareVersion: "0.6.5",
+  license: "https://www.gnu.org/licenses/gpl-3.0.html",
+  isAccessibleForFree: true,
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+  author: { "@type": "Person", name: "Palash Deb", url: X },
+  codeRepository: REPO,
 };
 ---
 
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{title}</title>
-    <meta name="description" content={description} />
-    <link rel="canonical" href="https://opal.palash.dev/" />
-    <link rel="icon" href="/assets/logo.svg" type="image/svg+xml" />
-    <meta name="theme-color" content="#05050a" />
+    <SeoHead path={page.path} title={page.title} description={page.description} jsonLd={jsonld} />
     <!-- Every island's data comes from one host; the handshake can start now. -->
     <link rel="preconnect" href="https://api.github.com" crossorigin />
     <!-- The hero backdrop is a CSS background, so the browser only finds it
          after the stylesheet parses. Preloading pulls that forward. -->
     <link rel="preload" as="image" href="/assets/opal.jpg" />
 
-    <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="Opal" />
-    <meta property="og:locale" content="en" />
-    <meta property="og:url" content="https://opal.palash.dev/" />
-    <meta property="og:title" content={title} />
-    <meta
-      property="og:description"
-      content="Movies, TV, anime, live TV, YouTube, torrents, manga, Jellyfin and Plex — one native app, on your machine. No accounts, no cloud, no subscription."
-    />
-    <meta property="og:image" content="https://opal.palash.dev/assets/social-preview.png" />
-    <meta property="og:image:alt" content="Opal's home screen, with a search box and a row of trending films" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:site" content="@idebpalash" />
-    <meta name="twitter:creator" content="@idebpalash" />
-    <script type="application/ld+json" set:html={JSON.stringify(jsonld)} />
   </head>
 
   <body>
@@ -124,41 +90,11 @@ const jsonld = {
       <!-- Photograph and scrim, both CSS. See the hero block in global.css. -->
       <div class="veil"></div>
 
-      <!-- The nav sits inside the hero, on the photograph: no bar, no divider. -->
-      <nav>
-        <div class="wrap">
-          <a class="brand" href="/"><img src="/assets/logo.svg" alt="" width="26" height="26" />Opal</a>
-          <span class="spacer"></span>
-          <a class="navlink hide-sm" href="#features">Features</a>
-          <a class="navlink hide-sm" href="#why">Compare</a>
-          <a class="navlink hide-md" href="#extension">Extension</a>
-          <!-- Native disclosures: menus that need no JavaScript to open. -->
-          <details class="menu hide-md">
-            <summary class="navlink">More</summary>
-            <div class="dlpanel">
-              <a href={`${REPO}#readme`}><span class="os">📖</span><span class="grow">Docs<span class="meta">readme &amp; setup</span></span></a>
-              <a href={`${REPO}/blob/main/CHANGELOG.md`}><span class="os">📝</span><span class="grow">Changelog<span class="meta">what changed</span></span></a>
-              <a href={`${REPO}/releases`}><span class="os">🏷️</span><span class="grow">Releases<span class="meta">every version</span></span></a>
-              <a href={`${REPO}/issues`}><span class="os">🐞</span><span class="grow">Issues<span class="meta">report a bug</span></span></a>
-              <a href={X} rel="me"><span class="os">𝕏</span><span class="grow">Follow<span class="meta">@idebpalash</span></span></a>
-            </div>
-          </details>
-          <details class="menu donate hide-sm">
-            <summary class="navlink">Donate</summary>
-            <div class="dlpanel">
-              <a href="https://ko-fi.com/debpalash"><span class="os">☕</span><span class="grow">Ko-fi<span class="meta">one-off or monthly</span></span></a>
-              <a href="https://paypal.me/palashCoder"><span class="os">💸</span><span class="grow">PayPal<span class="meta">direct</span></span></a>
-              <a href={REPO}><span class="os">⭐</span><span class="grow">Or just star it<span class="meta">free, still helps</span></span></a>
-            </div>
-          </details>
-          <StarButton client:load />
-          <DownloadMenu client:load variant="nav" />
-        </div>
-      </nav>
+      <SiteNav current="/" />
 
       <div class="wrap">
         <img class="mark" src="/assets/logo.svg" alt="Opal logo" width="96" height="96" />
-        <ReleaseBadge client:load />
+        <ReleaseBadge client:idle />
         <h1>Play everything.<br />From one app.</h1>
         <p class="tagline">
           Movies, TV, anime, <b>live TV</b>, YouTube, torrents &amp; manga — plus
@@ -166,7 +102,7 @@ const jsonld = {
         </p>
         <div class="cta">
           <DownloadMenu client:load />
-          <StarButton client:load />
+          <StarButton client:idle />
         </div>
 
         <div class="shot">
@@ -174,7 +110,7 @@ const jsonld = {
             src="/assets/home.png"
             alt="Opal's home screen: a time-aware greeting, an ask-anything search box, and a trending row of movies and shows"
             width="1600"
-            height="1000"
+            height="1032"
             fetchpriority="high"
           />
         </div>
@@ -196,6 +132,7 @@ const jsonld = {
             ))
           }
         </div>
+        <p class="section-link"><a href="/features/">Explore every Opal feature →</a></p>
       </div>
     </section>
 
@@ -214,7 +151,10 @@ const jsonld = {
             <img
               src="/assets/search.png"
               alt="One query fanned out across every source, ranked, each row with a play button"
+              width="1600"
+              height="1032"
               loading="lazy"
+              decoding="async"
             />
           </div>
         </div>
@@ -224,7 +164,10 @@ const jsonld = {
             <img
               src="/assets/ask-the-ai.gif"
               alt="A suggestion chip answered by the local AI with a rail of playable posters"
+              width="840"
+              height="542"
               loading="lazy"
+              decoding="async"
             />
           </div>
           <div>
@@ -249,13 +192,17 @@ const jsonld = {
               Chrome, Edge and Firefox — packed into
               <a href={`${REPO}/releases/latest`}>every release</a>.
             </p>
-            <ExtensionDownloads client:load />
+            <p class="aside"><a href="/extension/">Opal Connect setup and details →</a></p>
+            <ExtensionDownloads client:visible />
           </div>
           <div class="shot">
             <img
               src="/assets/extension-sidebar.png"
               alt="The Opal Connect side panel: connection status, page actions, transport controls and a live cross-source search"
+              width="1280"
+              height="720"
               loading="lazy"
+              decoding="async"
             />
           </div>
         </div>
@@ -294,6 +241,7 @@ const jsonld = {
           built in. Compiled from each project's own documentation — if something
           here is out of date, <a href={`${REPO}/issues`}>tell me</a> and I'll fix it.
         </p>
+        <p class="section-link"><a href="/compare/">Read the full comparison →</a></p>
       </div>
     </section>
 
@@ -304,11 +252,11 @@ const jsonld = {
         <p class="sub">
           The one command detects your platform, verifies checksums, and doubles
           as the updater. Every format a release ships is below; the browser
-          extension is <a href="#extension">up with Opal Connect</a>.
+          extension has its own <a href="/extension/">Opal Connect page</a>.
         </p>
 
-        <InstallCommand client:load />
-        <DownloadGrid client:load />
+        <InstallCommand client:visible />
+        <DownloadGrid client:visible />
 
         <div class="note">
           macOS may call the <code>.dmg</code> “damaged” — it is not notarized;
@@ -340,7 +288,7 @@ const jsonld = {
           <div class="cta">
             <a class="btn primary" href="https://ko-fi.com/debpalash">Buy me a coffee</a>
             <a class="btn" href="https://paypal.me/palashCoder">PayPal</a>
-            <StarButton client:load />
+            <StarButton client:idle />
           </div>
           <p class="foot">
             Skint? Starring the repo, filing a good bug report or telling one
@@ -350,23 +298,6 @@ const jsonld = {
       </div>
     </section>
 
-    <footer>
-      <div class="wrap">
-        <div class="row">
-          <a class="brand" href="/"><img src="/assets/logo.svg" alt="" width="26" height="26" />Opal</a>
-          <span class="spacer" style="flex: 1"></span>
-          <a href={REPO}>GitHub</a>
-          <a href={X} rel="me">X</a>
-          <a href={`${REPO}/releases`}>Releases</a>
-          <a href={`${REPO}/issues`}>Issues</a>
-          <a href="https://ko-fi.com/debpalash">Ko-fi</a>
-          <a href="https://paypal.me/palashCoder">PayPal</a>
-        </div>
-        <p style="margin: 18px 0 0; font-size: 13px">
-          GPL-3.0. Opal hosts no content and ships with no sources enabled.<br />
-          Photographs by Nareeta Martin and FLY:D, via Unsplash.
-        </p>
-      </div>
-    </footer>
+    <SiteFooter />
   </body>
 </html>

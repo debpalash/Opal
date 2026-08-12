@@ -1,0 +1,55 @@
+---
+import ExtensionDownloads from "../components/ExtensionDownloads.tsx";
+import PageLayout from "../layouts/PageLayout.astro";
+import { REPO, breadcrumbSchema, pageFor } from "../lib/site";
+
+const page = pageFor("/extension/");
+---
+
+<PageLayout
+  path={page.path}
+  title={page.title}
+  description={page.description}
+  eyebrow="Browser extension"
+  heading="Connect the web to Opal"
+  lead="Opal Connect sends media from Chrome, Edge and Firefox to the desktop app and puts search and playback controls in a side panel."
+  jsonLd={breadcrumbSchema("Opal Connect", page.path)}
+>
+  <Fragment slot="hero"><ExtensionDownloads client:visible /></Fragment>
+
+  <section class="page-section">
+    <div class="wrap split">
+      <div>
+        <p class="eyebrow">Opal Connect</p>
+        <h2>Move from a browser tab to the player</h2>
+        <p class="sub">Send a video on the current page to Opal, search enabled sources without leaving the browser and control the active playback session.</p>
+        <ul class="check-list">
+          <li>Send supported page media to the desktop app.</li>
+          <li>Add compatible manga sites as Opal sources.</li>
+          <li>Search across enabled providers from the side panel.</li>
+          <li>Play, pause and seek the current session.</li>
+        </ul>
+      </div>
+      <div class="shot">
+        <img src="/assets/extension-sidebar.png" alt="Opal Connect browser side panel with connection status, page actions, search and playback controls" width="1280" height="720" loading="eager" decoding="async" />
+      </div>
+    </div>
+  </section>
+
+  <section class="page-section alt">
+    <div class="wrap prose">
+      <p class="eyebrow">Install</p>
+      <h2>Choose the build for your browser</h2>
+      <p>The latest Chrome/Edge and Firefox extension archives are attached to each Opal release. Download the matching archive above, extract it, then load the folder through your browser's extension developer tools.</p>
+      <ol>
+        <li>Install and launch the matching Opal desktop release.</li>
+        <li>Open your browser's extensions page and enable developer mode.</li>
+        <li>Choose <strong>Load unpacked</strong> (Chromium) or the temporary add-on option (Firefox), then select the extracted extension.</li>
+        <li>Open Opal Connect and confirm that it reports the desktop app as connected.</li>
+      </ol>
+      <p>For version-specific details, use the <a href={`${REPO}#readme`}>project documentation</a> included with the source.</p>
+    </div>
+  </section>
+
+  <section class="page-cta"><div class="wrap"><h2>Need the desktop app first?</h2><p class="sub">Opal Connect works with Opal running on your machine.</p><a class="btn primary" href="/download/">Download Opal</a><a class="btn" href="/faq/">Extension FAQ</a></div></section>
+</PageLayout>
