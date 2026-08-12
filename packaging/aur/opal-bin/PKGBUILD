@@ -35,6 +35,11 @@ package() {
     # resolves from /usr/lib/opal without ldconfig fiddling.
     install -Dm755 opal                  "$pkgdir/usr/bin/opal"
     install -Dm755 libtorrent_wrapper.so "$pkgdir/usr/lib/opal/libtorrent_wrapper.so"
+    cp -r engines                        "$pkgdir/usr/lib/opal/engines"
+    install -Dm755 scripts/camoufox_bridge.py "$pkgdir/usr/lib/opal/scripts/camoufox_bridge.py"
+    install -Dm644 web/index.html        "$pkgdir/usr/lib/opal/web/index.html"
+    install -Dm644 plugins-manifest.json "$pkgdir/usr/lib/opal/plugins-manifest.json"
+    install -Dm644 manga-sources-sfw.json "$pkgdir/usr/lib/opal/manga-sources-sfw.json"
     install -Dm644 opal.desktop          "$pkgdir/usr/share/applications/opal.desktop"
     install -Dm644 opal.svg              "$pkgdir/usr/share/icons/hicolor/scalable/apps/opal.svg"
     install -Dm644 LICENSE               "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
