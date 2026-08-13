@@ -210,7 +210,10 @@ def test_tv_calendar_and_hwdec():
         "click-through": "openTvDetailById" in hm,
         "hwdec default on": "hwdec_enabled: bool = true" in st,
         "hwdec migration": '"hwdec2"' in cfg,
-        "adaptive render size": "dwidth" in gr and "textureDestroyLater" in gr,
+        "adaptive render size": ("playbackSnapshot" in gr
+                                 and "renderSize" in gr
+                                 and "textureDestroyLater" in gr
+                                 and 'mpv_get_property(p.mpv_ctx, "dwidth"' not in gr),
     }
     missing = [k for k, v in checks.items() if not v]
     if not missing:

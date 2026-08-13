@@ -485,6 +485,7 @@ pub fn appDeinit() void {
     // leak check races their still-live tmp_buf/p_slice. Workers poll isQuitting
     // in their read loops, so this drains in well under the timeout.
     @import("core/workers.zig").beginShutdownAndDrain(800);
+    @import("player/drop_ingest.zig").deinit();
 
     // Drop the macOS Now Playing card before the players go away (no-op elsewhere).
     @import("player/media_remote.zig").clear();
@@ -568,47 +569,6 @@ fn hexVal(ch: u8) ?u8 {
     return null;
 }
 
-fn isDirectory(path: []const u8) bool {
-    if (path.len == 0) return false;
-    var dir = if (path[0] == '/')
-        @import("core/io_global.zig").openDirAbsolute(path, .{ .iterate = false }) catch return false
-    else
-        @import("core/io_global.zig").cwdOpenDir(path, .{ .iterate = false }) catch return false;
-    dir.close(@import("core/io_global.zig").io());
-    return true;
-}
-
-const media_exts = [_][]const u8{ ".mp4", ".mkv", ".avi", ".webm", ".mov", ".flv", ".ts", ".mp3", ".flac", ".wav", ".ogg", ".m4a", ".opus" };
-
-fn isMediaFile(name: []const u8) bool {
-    for (media_exts) |ext| {
-        if (name.len > ext.len and std.ascii.eqlIgnoreCase(name[name.len - ext.len ..], ext)) return true;
-    }
-    return false;
-}
-
-fn scanDirForMedia(pl: *@import("player/m3u.zig").M3UPlaylist, dir_path: []const u8) void {
-    var dir = if (dir_path.len > 0 and dir_path[0] == '/')
-        @import("core/io_global.zig").openDirAbsolute(dir_path, .{ .iterate = true }) catch return
-    else
-        @import("core/io_global.zig").cwdOpenDir(dir_path, .{ .iterate = true }) catch return;
-    defer dir.close(@import("core/io_global.zig").io());
-    var it = dir.iterate();
-    while (it.next(@import("core/io_global.zig").io()) catch null) |entry| {
-        if (entry.kind != .file) continue;
-        if (!isMediaFile(entry.name)) continue;
-        // Build full absolute path
-        var full_buf: [4096]u8 = undefined;
-        const full_path = std.fmt.bufPrint(&full_buf, "{s}/{s}", .{ dir_path, entry.name }) catch continue;
-        pl.entries.append(pl.allocator, .{
-            .title = pl.allocator.dupe(u8, entry.name) catch continue,
-            .url = pl.allocator.dupe(u8, full_path) catch continue,
-            .logoUrl = null,
-            .group = pl.allocator.dupe(u8, "Local") catch null,
-        }) catch {};
-    }
-}
-
 fn sdlEventWatch(_: ?*anyopaque, event: [*c]c.sdl.SDL_Event) callconv(.c) c_int {
     const t = event.*.type;
     // Log drops or unknown things to see what Wayland is sending
@@ -647,7 +607,7 @@ fn sdlEventWatch(_: ?*anyopaque, event: [*c]c.sdl.SDL_Event) callconv(.c) c_int 
             @memcpy(state.app.dropped_file_path[0..di], decoded[0..di]);
             state.app.dropped_file_path[di] = 0;
             state.app.dropped_file_len = di;
-            state.app.dropped_file_ready = true;
+            state.app.dropped_file_ready.store(true, .release);
             c.sdl.SDL_free(file_c_str);
         }
     }
@@ -887,75 +847,67 @@ fn appFrame() !dvui.App.Result {
         }
     }
 
-    // Process dropped files
-    state.app.dropped_file_lock.lock();
-    if (state.app.dropped_file_ready) {
-        state.app.dropped_file_ready = false;
-        if (state.app.dropped_file_len > 0 and state.app.active_player_idx < state.app.players.items.len) {
-            const fpath = state.app.dropped_file_path[0..state.app.dropped_file_len];
-            if (std.mem.endsWith(u8, fpath, ".m3u") or std.mem.endsWith(u8, fpath, ".m3u8")) {
-                // It's an M3U file, load it!
-                const m3u = @import("player/m3u.zig");
-                if (state.app.playlist) |pl| {
-                    const mut_pl = @constCast(pl);
-                    mut_pl.deinit();
-                    @import("core/alloc.zig").allocator.destroy(mut_pl);
-                }
-                const new_pl = @import("core/alloc.zig").allocator.create(m3u.M3UPlaylist) catch null;
-                if (new_pl) |pl| {
-                    pl.* = m3u.M3UPlaylist.init(@import("core/alloc.zig").allocator);
-                    pl.loadFile(@import("core/io_global.zig").io(), fpath) catch {};
-                    state.app.playlist = pl;
-                    state.app.playlist_drawer_open = true;
-                    logs.pushLog("info", "m3u", "Loaded M3U playlist", false);
-                    state.showToast("Playlist loaded!");
-                }
-            } else if (isDirectory(fpath)) {
-                // Folder drop — scan for media files and build auto-playlist
-                const m3u = @import("player/m3u.zig");
-                if (state.app.playlist) |pl| {
-                    const mut_pl = @constCast(pl);
-                    mut_pl.deinit();
-                    @import("core/alloc.zig").allocator.destroy(mut_pl);
-                }
-                const new_pl = @import("core/alloc.zig").allocator.create(m3u.M3UPlaylist) catch null;
-                if (new_pl) |pl| {
-                    pl.* = m3u.M3UPlaylist.init(@import("core/alloc.zig").allocator);
-                    scanDirForMedia(pl, fpath);
-                    if (pl.entries.items.len > 0) {
-                        state.app.playlist = pl;
-                        state.app.playlist_drawer_open = true;
-                        logs.pushLog("info", "folder", "Scanned folder for media", false);
-                        state.showToast("Folder loaded as playlist!");
-                    } else {
-                        pl.deinit();
-                        @import("core/alloc.zig").allocator.destroy(pl);
-                        state.app.playlist = null;
-                        logs.pushLog("warn", "folder", "No media files found", false);
-                    }
-                }
-            } else if (@import("services/browser_pure.zig").routeContent(fpath) == .torrent) {
-                // A dropped .torrent is metadata, not media — handing it to mpv
-                // just errors out. Only the torrent route is taken from the
-                // (unit-tested) router here; every other shape keeps the existing
-                // straight-to-mpv drop behavior below.
-                @import("services/search.zig").addTorrentFileToEngine(fpath);
-                logs.pushLog("info", "open", "Loaded dropped .torrent", false);
-                state.showToast("Adding torrent...");
-            } else {
-                // Clear resume position so dropped file starts fresh
-                _ = c.mpv.mpv_set_option_string(
-                    state.app.players.items[state.app.active_player_idx].mpv_ctx,
-                    "start",
-                    "0",
-                );
-                state.app.players.items[state.app.active_player_idx].load_file(@ptrCast(&state.app.dropped_file_path[0]));
-                logs.pushLog("info", "open", "Loaded dropped file", false);
-                state.showToast("Playing dropped file");
-            }
+    // Process dropped files. The atomic ready bit makes the idle frame path a
+    // single acquire-load instead of a mutex round trip. Snapshot under the
+    // lock, then release it before any filesystem or player work.
+    var dropped_buf: [2048:0]u8 = std.mem.zeroes([2048:0]u8);
+    var dropped_len: usize = 0;
+    if (state.app.dropped_file_ready.load(.acquire)) {
+        state.app.dropped_file_lock.lock();
+        if (state.app.dropped_file_ready.swap(false, .acq_rel)) {
+            dropped_len = @min(state.app.dropped_file_len, dropped_buf.len);
+            @memcpy(dropped_buf[0..dropped_len], state.app.dropped_file_path[0..dropped_len]);
+        }
+        state.app.dropped_file_lock.unlock();
+    }
+    if (dropped_len > 0) {
+        if (@import("player/drop_ingest.zig").start(dropped_buf[0..dropped_len])) {
+            state.showToast("Opening dropped item...");
+        } else {
+            logs.pushLog("error", "open", "Could not start dropped-item worker", true);
         }
     }
-    state.app.dropped_file_lock.unlock();
+
+    // Folder traversal and M3U parsing finish here, never in the render path.
+    if (@import("player/drop_ingest.zig").take()) |drop_const| {
+        var drop = drop_const;
+        defer drop.deinit();
+        switch (drop.kind) {
+            .playlist => if (drop.playlist) |playlist| {
+                if (state.app.playlist) |old| {
+                    old.deinit();
+                    @import("core/alloc.zig").allocator.destroy(old);
+                }
+                state.app.playlist = playlist;
+                drop.playlist = null; // ownership moved into AppState
+                state.app.playlist_drawer_open = true;
+                logs.pushLog("info", "playlist", "Loaded dropped playlist", false);
+                state.showToast("Playlist loaded!");
+            },
+            .empty_folder => {
+                logs.pushLog("warn", "folder", "No media files found", false);
+                state.showToast("No media files found");
+            },
+            .invalid_playlist => {
+                logs.pushLog("error", "m3u", "Could not read dropped playlist", true);
+                state.showToast("Could not read playlist");
+            },
+            .path => if (state.app.active_player_idx < state.app.players.items.len) {
+                const fpath = drop.pathSlice();
+                if (@import("services/browser_pure.zig").routeContent(fpath) == .torrent) {
+                    @import("services/search.zig").addTorrentFileToEngine(fpath);
+                    logs.pushLog("info", "open", "Loaded dropped .torrent", false);
+                    state.showToast("Adding torrent...");
+                } else {
+                    const active = state.app.players.items[state.app.active_player_idx];
+                    _ = c.mpv.mpv_set_option_string(active.mpv_ctx, "start", "0");
+                    active.load_file(@ptrCast(&drop.path[0]));
+                    logs.pushLog("info", "open", "Loaded dropped file", false);
+                    state.showToast("Playing dropped file");
+                }
+            },
+        }
+    }
 
     // Process CLI file argument (deferred from appInit)
     if (!cli_open_done and cli_open_len > 0 and state.app.players.items.len > 0) {
@@ -982,26 +934,27 @@ fn appFrame() !dvui.App.Result {
         var art_len: usize = 0;
         var sub_buf: [256]u8 = undefined;
         var sub_len: usize = 0;
-        state.app.remote_open_lock.lock();
-        if (state.app.remote_open_ready) {
-            state.app.remote_open_ready = false;
-            fwd_len = state.app.remote_open_len;
-            @memcpy(fwd_buf[0..fwd_len], state.app.remote_open_path[0..fwd_len]);
-            type_len = state.app.remote_open_type_len;
-            @memcpy(type_buf[0..type_len], state.app.remote_open_type[0..type_len]);
-            title_len = state.app.remote_open_title_len;
-            @memcpy(title_buf[0..title_len], state.app.remote_open_title[0..title_len]);
-            art_len = state.app.remote_open_art_len;
-            @memcpy(art_buf[0..art_len], state.app.remote_open_art[0..art_len]);
-            sub_len = state.app.remote_open_subtitle_len;
-            @memcpy(sub_buf[0..sub_len], state.app.remote_open_subtitle[0..sub_len]);
-            // One-shot: clear the meta so a later bare open doesn't reuse it.
-            state.app.remote_open_type_len = 0;
-            state.app.remote_open_title_len = 0;
-            state.app.remote_open_art_len = 0;
-            state.app.remote_open_subtitle_len = 0;
+        if (state.app.remote_open_ready.load(.acquire)) {
+            state.app.remote_open_lock.lock();
+            if (state.app.remote_open_ready.swap(false, .acq_rel)) {
+                fwd_len = state.app.remote_open_len;
+                @memcpy(fwd_buf[0..fwd_len], state.app.remote_open_path[0..fwd_len]);
+                type_len = state.app.remote_open_type_len;
+                @memcpy(type_buf[0..type_len], state.app.remote_open_type[0..type_len]);
+                title_len = state.app.remote_open_title_len;
+                @memcpy(title_buf[0..title_len], state.app.remote_open_title[0..title_len]);
+                art_len = state.app.remote_open_art_len;
+                @memcpy(art_buf[0..art_len], state.app.remote_open_art[0..art_len]);
+                sub_len = state.app.remote_open_subtitle_len;
+                @memcpy(sub_buf[0..sub_len], state.app.remote_open_subtitle[0..sub_len]);
+                // One-shot: clear the meta so a later bare open doesn't reuse it.
+                state.app.remote_open_type_len = 0;
+                state.app.remote_open_title_len = 0;
+                state.app.remote_open_art_len = 0;
+                state.app.remote_open_subtitle_len = 0;
+            }
+            state.app.remote_open_lock.unlock();
         }
-        state.app.remote_open_lock.unlock();
         if (fwd_len > 0) {
             const url = fwd_buf[0..fwd_len];
             const kind = type_buf[0..type_len];

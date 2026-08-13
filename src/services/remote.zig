@@ -818,7 +818,7 @@ fn stashRemoteOpen(url: []const u8, kind: []const u8, title: []const u8, art: []
     const sn = @min(subtitle.len, state.app.remote_open_subtitle.len);
     @memcpy(state.app.remote_open_subtitle[0..sn], subtitle[0..sn]);
     state.app.remote_open_subtitle_len = sn;
-    state.app.remote_open_ready = true;
+    state.app.remote_open_ready.store(true, .release);
     state.wakeUi(); // idle UI loop won't run a frame otherwise
 }
 
