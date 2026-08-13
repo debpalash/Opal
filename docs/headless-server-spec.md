@@ -116,13 +116,13 @@ XDG env. The S0 stopgap packages are **gone** (S1 made them unnecessary), leavin
 - **compose** — `deploy/docker-compose.yml` already points at the image build;
   add a `image: ghcr.io/debpalash/opal:latest` variant for pull-don't-build.
 
-## 5. Phase S4 — web UI: single canonical surface + parity tier 2
+## 5. Phase S4 — web UI: one canonical origin + parity tier 2
 
-**Consolidation — DONE.** The web UI is `web/index.html`, a single file served by
-`remote.zig` at `:41595/`. The vestigial `web/app/*` Zig project and
+**Consolidation — DONE.** The modular `web/` client is served by Opal itself at
+`:41595/`, alongside its API. The vestigial `web/app/*` Zig project and
 `web/build.zig*` are deleted, and the `:3000` references are gone from the docs
 and from `remote.zig`'s own header (which had claimed ":9876 + :3000" while the
-code listened on 41595). One process, one port, Jellyfin-shaped.
+code listened on 41595). One process and origin, no separate web toolchain.
 
 **Parity tier 2 (H4 carryover):**
 - Settings-over-API subset: sources starter-pack install, TMDB key, save path,

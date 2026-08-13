@@ -9,6 +9,38 @@
 const std = @import("std");
 const auth = @import("auth_pure.zig");
 
+// ── Caller capabilities ────────────────────────────────────────────────
+
+/// Authentication identifies more than "allowed or denied". The machine
+/// credential is a recovery/administration capability; a browser login is a
+/// user session and must never be silently promoted to that capability.
+pub const Principal = enum {
+    machine,
+    session,
+};
+
+pub const Capability = enum {
+    view_access,
+    change_own_password,
+    revoke_sessions,
+    reset_any_password,
+    reveal_machine_token,
+    rotate_machine_token,
+    change_binding,
+};
+
+pub fn allows(principal: Principal, capability: Capability) bool {
+    return switch (capability) {
+        .view_access, .revoke_sessions => true,
+        .change_own_password => principal == .session,
+        .reset_any_password,
+        .reveal_machine_token,
+        .rotate_machine_token,
+        .change_binding,
+        => principal == .machine,
+    };
+}
+
 // ── Bind mode ──────────────────────────────────────────────────────────────
 
 /// Which interfaces the web server listens on.
@@ -171,4 +203,24 @@ test "PasswordVerdict: every non-ok verdict has a message" {
         try std.testing.expect(v.message().len > 0);
     }
     try std.testing.expectEqualStrings("", PasswordVerdict.ok.message());
+}
+
+test "session capability never includes machine recovery or network authority" {
+    try std.testing.expect(allows(.session, .view_access));
+    try std.testing.expect(allows(.session, .change_own_password));
+    try std.testing.expect(allows(.session, .revoke_sessions));
+    try std.testing.expect(!allows(.session, .reset_any_password));
+    try std.testing.expect(!allows(.session, .reveal_machine_token));
+    try std.testing.expect(!allows(.session, .rotate_machine_token));
+    try std.testing.expect(!allows(.session, .change_binding));
+}
+
+test "machine credential carries only the intended recovery capabilities" {
+    try std.testing.expect(allows(.machine, .view_access));
+    try std.testing.expect(allows(.machine, .reset_any_password));
+    try std.testing.expect(allows(.machine, .reveal_machine_token));
+    try std.testing.expect(allows(.machine, .rotate_machine_token));
+    try std.testing.expect(allows(.machine, .change_binding));
+    try std.testing.expect(allows(.machine, .revoke_sessions));
+    try std.testing.expect(!allows(.machine, .change_own_password));
 }

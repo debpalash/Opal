@@ -1,14 +1,14 @@
 name: Release
 
 # Tag `vX.Y.Z` → build platform artifacts → publish a GitHub Release →
-# push `opal` + `opal-bin` PKGBUILDs to AUR.
+# push `opal-media-player` + `opal-media-player-bin` PKGBUILDs to AUR.
 #
 # Coverage today:
 #   • macos-arm64    — Opal.app bundle (zip) + bare binary tarball    [primary]
 #   • linux-x86_64   — binary tarball + .deb + .rpm + AppImage + .run [best-effort]
 #   • windows-x86_64 — portable .zip + .msi (MSYS2/MINGW64 build +   [ALPHA]
 #                      vendored MS onnxruntime; see the job for why)  [experimental]
-#   • aur            — opal (source from release tarball) + opal-bin  [gated]
+#   • aur            — opal-media-player source + prebuilt -bin      [gated]
 #                      (binary tarball repackage); gated on
 #                      AUR_PUBLISH_ENABLED='true' + AUR_SSH_PRIVATE_KEY secret.
 #
@@ -120,11 +120,12 @@ jobs:
           mkdir -p opal-${VERSION}-linux-x86_64/scripts opal-${VERSION}-linux-x86_64/web
           cp -r engines opal-${VERSION}-linux-x86_64/
           cp scripts/camoufox_bridge.py opal-${VERSION}-linux-x86_64/scripts/
-          cp web/index.html opal-${VERSION}-linux-x86_64/web/
+          cp -R web/. opal-${VERSION}-linux-x86_64/web/
+          cp assets/logo.svg opal-${VERSION}-linux-x86_64/web/icon.svg
           cp data/plugins-manifest.json data/manga-sources-sfw.json \
             opal-${VERSION}-linux-x86_64/
           # Desktop entry + icon ride along so downstream repackagers
-          # (AUR opal-bin, etc.) can install them from this one artifact.
+          # (AUR opal-media-player-bin, etc.) can install them from this artifact.
           cp packaging/opal.desktop opal-${VERSION}-linux-x86_64/
           cp assets/logo.svg opal-${VERSION}-linux-x86_64/opal.svg
           tar czf "opal-${VERSION}-linux-x86_64.tar.gz" opal-${VERSION}-linux-x86_64
@@ -151,7 +152,8 @@ jobs:
           cp libtorrent_wrapper.so AppDir/usr/lib/opal/
           cp -r engines AppDir/usr/lib/opal/
           cp scripts/camoufox_bridge.py AppDir/usr/lib/opal/scripts/
-          cp web/index.html AppDir/usr/lib/opal/web/
+          cp -R web/. AppDir/usr/lib/opal/web/
+          cp assets/logo.svg AppDir/usr/lib/opal/web/icon.svg
           cp data/plugins-manifest.json data/manga-sources-sfw.json AppDir/usr/lib/opal/
           cp packaging/opal.desktop AppDir/opal.desktop
           cp assets/logo.svg AppDir/opal.svg
@@ -401,7 +403,8 @@ jobs:
           find staging/engines -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
           mkdir -p staging/scripts staging/web
           cp scripts/camoufox_bridge.py staging/scripts/
-          cp web/index.html staging/web/
+          cp -R web/. staging/web/
+          cp assets/logo.svg staging/web/icon.svg
           cp data/plugins-manifest.json staging/
           cp data/manga-sources-sfw.json staging/ 2>/dev/null || true
           # DPI-bypass sidecar (services/dpi_bypass.zig resolves it from the
@@ -686,13 +689,16 @@ jobs:
           draft: false
 
   # ── AUR publish ─────────────────────────────────────────────────────────
-  # Auto-updates `opal` (source build from the release tarball) and `opal-bin`
-  # (repackage the official binary tarball) on every vX.Y.Z tag. Skipped until
-  # the `AUR_SSH_PRIVATE_KEY` repo secret is set; this lets the rest of the
-  # release ship even before AUR is wired up.
+  # Auto-updates the uniquely named `opal-media-player` source package and its
+  # `-bin` variant on every vX.Y.Z tag. `opal` itself is an unrelated VoIP
+  # library on AUR. Skipped until the deploy key is configured.
   aur:
     needs: publish
     runs-on: ubuntu-24.04
+    # The GitHub release is already public by this point. Keep a missing AUR
+    # deploy key or first-time namespace bootstrap visible without turning an
+    # otherwise successful release red.
+    continue-on-error: true
     # Arch container, not a bare Ubuntu runner: AUR rejects a push whose
     # .SRCINFO is missing or stale, and only `makepkg --printsrcinfo` can
     # produce it from a PKGBUILD. `updpkgsums` (pacman-contrib) likewise fills
@@ -704,7 +710,7 @@ jobs:
     if: ${{ vars.AUR_PUBLISH_ENABLED == 'true' }}
     steps:
       - name: Install Arch tooling
-        run: pacman -Syu --noconfirm --needed git openssh pacman-contrib
+        run: pacman -Syu --noconfirm --needed git openssh pacman-contrib sudo
       - uses: actions/checkout@v4
       - name: Create the makepkg user
         # makepkg (and updpkgsums, which shells out to it) refuse to run as
@@ -718,10 +724,13 @@ jobs:
       # build proof.
       - name: Push PKGBUILDs to AUR
         env:
+          AUR_CI: "1"
+          AUR_RELEASE_TAG: ${{ github.ref_name }}
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           AUR_USERNAME: ${{ vars.AUR_USERNAME }}
           AUR_EMAIL: ${{ vars.AUR_EMAIL }}
           AUR_SKIP_MAKEPKG: "1"
         run: |
-          sudo -u builder --preserve-env=AUR_SSH_PRIVATE_KEY,AUR_USERNAME,AUR_EMAIL,AUR_SKIP_MAKEPKG \
-            env HOME=/home/builder ./packaging/aur/push-to-aur.sh
+          sudo -H -u builder \
+            --preserve-env=AUR_CI,AUR_RELEASE_TAG,AUR_SSH_PRIVATE_KEY,AUR_USERNAME,AUR_EMAIL,AUR_SKIP_MAKEPKG \
+            ./packaging/aur/push-to-aur.sh

@@ -56,9 +56,9 @@ pub const KEYS = [_]Key{
     // those stay out deliberately — values in this registry ride in a query
     // string, and the module header's rule is that nothing secret does.
     .{ .name = "theme", .kind = .text, .group = "General", .label = "Theme preset", .max_len = 15 },
-    .{ .name = "ui_scale_auto", .kind = .boolean, .group = "General", .label = "Scale UI to display DPI" },
+    .{ .name = "ui_scale_auto", .kind = .boolean, .group = "General", .label = "Adaptive UI scale (minimum 100%)" },
     // Integer percent on the wire; f32 multiplier internally, same as tts_speed.
-    .{ .name = "ui_scale", .kind = .integer, .group = "General", .label = "UI scale (%)", .min = 50, .max = 300 },
+    .{ .name = "ui_scale", .kind = .integer, .group = "General", .label = "UI scale (%)", .min = 60, .max = 200 },
     .{ .name = "taste_enabled", .kind = .boolean, .group = "General", .label = "Personalized suggestions" },
     // Privacy
     .{ .name = "nsfw_filter", .kind = .boolean, .group = "Privacy", .label = "NSFW filter" },
@@ -225,6 +225,16 @@ test "tts_speed is a percent, not a raw multiplier" {
     try std.testing.expectEqual(@as(?i32, 100), parseInt(k, "100"));
     try std.testing.expectEqual(@as(?i32, null), parseInt(k, "1"));
     try std.testing.expectEqual(@as(?i32, null), parseInt(k, "500"));
+}
+
+test "ui_scale wire bounds match the persisted desktop contract" {
+    const k = find("ui_scale").?;
+    try std.testing.expectEqual(@as(i32, 60), k.min);
+    try std.testing.expectEqual(@as(i32, 200), k.max);
+    try std.testing.expectEqual(@as(?i32, 60), parseInt(k, "60"));
+    try std.testing.expectEqual(@as(?i32, 200), parseInt(k, "200"));
+    try std.testing.expectEqual(@as(?i32, null), parseInt(k, "59"));
+    try std.testing.expectEqual(@as(?i32, null), parseInt(k, "201"));
 }
 
 test "download limit converts KB/s on the wire to bytes/s in state" {

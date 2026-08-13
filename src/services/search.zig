@@ -8,6 +8,7 @@ const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
 const history = @import("history.zig");
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
+const bounded_process = @import("../core/bounded_process.zig");
 
 pub const SearchResult = struct {
     name: []const u8,
@@ -281,14 +282,19 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
         return;
     };
 
-    var child = @import("../core/io_global.zig").Child.init(argv.items, allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Inherit;
-    // Resolve engines/nova2.py from the bundled resource root when installed
-    // (CWD is "/" from a /Applications launch); null keeps the dev CWD.
-    child.cwd = state.resourceRoot();
-
-    child.spawn() catch {
+    // Keep incremental results, but put the multi-process Python scraper under
+    // a monotonic deadline and a POSIX process group / Windows Job. Advancing
+    // the generation wakes a stale worker even while its pipe read is blocked.
+    var process = bounded_process.StreamProcess.init(argv.items, .{
+        .timeout_ms = 180 * 1000,
+        .terminate_grace_ms = 500,
+        .max_output_bytes = 64 * 1024 * 1024,
+        .cwd = state.resourceRoot(),
+        .stderr_behavior = .Inherit,
+        .cancel_epoch = .{ .epoch64 = .{ .value = &search_generation, .expected = my_gen } },
+        .cancel_flag = &search_abort,
+    });
+    process.start() catch {
         failSearch(my_gen, "Could not start Python torrent sources (check Python and the engines folder)");
         return;
     };
@@ -299,15 +305,25 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
     // the entire search as if the source returned EOF. Keep parity with the
     // universal resolver's generous line buffer.
     var child_reader_buf: [16 * 1024]u8 = undefined;
-    var reader = child.stdout.?.reader(@import("../core/io_global.zig").io(), &child_reader_buf);
+    var reader = process.stdout().?.reader(@import("../core/io_global.zig").io(), &child_reader_buf);
 
     var aborted = false;
-    while (reader.interface.takeDelimiter('\n') catch null) |line| {
-        // On supersede/abort, stop PARSING but keep draining to EOF — nova2.py
-        // runs a multiprocessing pool, and killing it mid-write spews
-        // BrokenPipe + leaks semaphores. Draining lets it exit cleanly.
-        if (!aborted and (search_abort.load(.acquire) or search_generation.load(.acquire) != my_gen)) aborted = true;
-        if (aborted) continue;
+    var stream_failed = false;
+    while (true) {
+        const line = reader.interface.takeDelimiter('\n') catch {
+            stream_failed = true;
+            process.requestStop();
+            break;
+        } orelse break;
+        if (!process.noteOutput(line.len + 1)) {
+            stream_failed = true;
+            break;
+        }
+        if (search_abort.load(.acquire) or search_generation.load(.acquire) != my_gen) {
+            aborted = true;
+            process.requestStop();
+            break;
+        }
 
         if (line.len == 0) continue;
         var it = std.mem.splitScalar(u8, line, '|');
@@ -379,16 +395,32 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
         if (published_count == 1 or published_count % 16 == 0) state.wakeUi();
     }
 
+    // finish() drains anything the parser left behind, reaps the leader, kills
+    // lingering descendants, joins the watchdog, and closes the Job handle.
+    const run = process.finish();
     const superseded = search_generation.load(.acquire) != my_gen;
 
-    // Drained to EOF above (even when aborted) so nova2 exits on its own — no
-    // kill(), which would leave its pool workers spewing BrokenPipe.
-    const term = child.wait() catch null;
+    // A superseded or explicitly-aborted worker must not touch shared state any
+    // further. (The guard reports cancellation even when the reader was
+    // blocked and never got a chance to set the local `aborted` flag.)
+    if (superseded or run.cancelled or search_abort.load(.acquire)) return;
 
-    // A superseded worker must not touch shared state any further.
-    if (superseded) return;
+    if (run.timed_out or run.output_limited or stream_failed) {
+        search_results_mutex.lock();
+        const empty = search_results.items.len == 0;
+        search_results_mutex.unlock();
+        if (empty) {
+            failSearch(my_gen, if (run.timed_out)
+                "Torrent sources exceeded their deadline"
+            else if (run.output_limited)
+                "Torrent sources exceeded their output budget"
+            else
+                "Torrent source output could not be read");
+            return;
+        }
+    }
 
-    if (term) |t| switch (t) {
+    if (run.term) |t| switch (t) {
         .exited => |code| if (code != 0) {
             search_results_mutex.lock();
             const empty = search_results.items.len == 0;
@@ -399,7 +431,15 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
             }
         },
         else => {},
-    };
+    } else if (!aborted) {
+        search_results_mutex.lock();
+        const empty = search_results.items.len == 0;
+        search_results_mutex.unlock();
+        if (empty) {
+            failSearch(my_gen, "Torrent source process could not be reaped");
+            return;
+        }
+    }
 
     // Also query EZTV JSON API directly (faster, no scraping)
     // Skip if engine filter is set to a non-EZTV specific engine
@@ -848,7 +888,7 @@ pub fn renderSearchContent() void {
 
         // Clear button — inline inside pill
         const has_text = std.mem.indexOfScalar(u8, &search_buf, 0) != @as(?usize, 0);
-        if (has_text or search_results.items.len > 0 or resolver.result_count > 0) {
+        if (has_text or search_results.items.len > 0 or resolver.resultCount() > 0) {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
                 .color_fill = transparent,
                 .color_text = theme.colors.text_secondary,
@@ -1538,7 +1578,7 @@ fn renderSourceStatusCluster() void {
             .margin = .{ .x = 8, .y = 0, .w = 4, .h = 0 },
         });
         var cb: [16]u8 = undefined;
-        const cs = std.fmt.bufPrint(&cb, "{d}", .{resolver.result_count}) catch "0";
+        const cs = std.fmt.bufPrint(&cb, "{d}", .{resolver.resultCount()}) catch "0";
         _ = dvui.label(@src(), "{s}", .{cs}, .{
             .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
@@ -1556,7 +1596,7 @@ fn renderSourceStatusCluster() void {
         .{ .icon = icons.tvg.lucide.youtube, .name = "YouTube", .bit = .youtube, .st = resolver.status_yt.load(.acquire) },
         .{ .icon = icons.tvg.lucide.tv, .name = "Anime", .bit = .anime, .st = resolver.status_anime.load(.acquire) },
         .{ .icon = icons.tvg.lucide.image, .name = "Comics", .bit = .comics, .st = resolver.status_comics.load(.acquire) },
-        .{ .icon = icons.tvg.lucide.clapperboard, .name = "Stremio", .bit = .stremio, .st = resolver.status_stremio.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.clapperboard, .name = "Streams", .bit = .stremio, .st = combinedStreamStatus() },
         .{ .icon = icons.tvg.lucide.rss, .name = "RSS", .bit = .rss, .st = resolver.status_rss.load(.acquire) },
         .{ .icon = icons.tvg.lucide.tv, .name = "Live TV", .bit = .livetv, .st = resolver.status_livetv.load(.acquire) },
         .{ .icon = icons.tvg.lucide.music, .name = "Music", .bit = .music, .st = resolver.status_music.load(.acquire) },
@@ -1565,14 +1605,14 @@ fn renderSourceStatusCluster() void {
     };
     for (rows, 0..) |r, i| {
         const enabled = resolver.sourceOn(r.bit);
-        const tint = if (!enabled)
-            theme.colors.text_tertiary
-        else if (resolving) switch (r.st) {
+        const tint = if (!enabled) theme.colors.text_tertiary else switch (r.st) {
             .searching => theme.colors.accent,
             .done => theme.colors.success,
-            .failed => theme.colors.danger,
-            .idle => theme.colors.text_tertiary,
-        } else theme.colors.text_secondary;
+            .partial => theme.colors.warning,
+            .failed, .transport_failed, .parse_failed, .timed_out => theme.colors.danger,
+            .idle, .unavailable => theme.colors.text_tertiary,
+            .no_results => theme.colors.text_secondary,
+        };
 
         var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i + 9220,
@@ -1593,14 +1633,18 @@ fn renderSourceStatusCluster() void {
             .min_size_content = theme.iconSize(.sm),
             .gravity_y = 0.5,
         });
-        const state_name: []const u8 = if (!enabled)
-            "excluded — click to include"
-        else if (resolving) switch (r.st) {
+        const state_name: []const u8 = if (!enabled) "excluded — click to include" else switch (r.st) {
             .searching => "searching",
             .done => "done",
+            .no_results => "no results",
+            .unavailable => "unavailable",
+            .partial => "partial results",
             .failed => "failed",
-            .idle => "idle",
-        } else "included — click to exclude";
+            .transport_failed => "network error",
+            .parse_failed => "invalid response",
+            .timed_out => "timed out",
+            .idle => if (resolving) "idle" else "included — click to exclude",
+        };
         var tip_buf: [64]u8 = undefined;
         const tip_txt = std.fmt.bufPrint(&tip_buf, "{s} — {s}", .{ r.name, state_name }) catch r.name;
         components.tipId(@src(), chip.data().*, tip_txt, i);
@@ -1622,19 +1666,33 @@ fn renderSourceStatusCluster() void {
 /// torrent-search failure still rendered as "done". Removing it fixes that.
 fn combinedTorrentStatus() @import("resolver.zig").SourceStatus {
     const r = @import("resolver.zig");
-    const a = r.status_torrent.load(.acquire);
-    const c2 = r.status_yts.load(.acquire);
-    if (a == .searching or c2 == .searching) return .searching;
-    if (a == .failed and c2 == .failed) return .failed;
-    return .done;
+    const statuses = [_]r.SourceStatus{
+        r.status_torrent.load(.acquire),
+        r.status_yts.load(.acquire),
+        r.status_torznab.load(.acquire),
+        r.status_eztv.load(.acquire),
+    };
+    return r.combineManySourceStatuses(&statuses);
+}
+
+fn combinedStreamStatus() @import("resolver.zig").SourceStatus {
+    const r = @import("resolver.zig");
+    const statuses = [_]r.SourceStatus{
+        r.status_stremio.load(.acquire),
+        r.status_archive.load(.acquire),
+        r.status_nasa.load(.acquire),
+        r.status_commons.load(.acquire),
+    };
+    return r.combineManySourceStatuses(&statuses);
 }
 
 fn renderUniversalResults() void {
     const resolver = @import("resolver.zig");
+    const visible_count = resolver.resultCount();
 
     // The toolbar carries live progress; once any worker publishes a row the
     // content area renders it immediately while the remaining sources finish.
-    if (resolver.result_count > 0) {
+    if (visible_count > 0) {
         // Results are streamed. Render them while slower sources are still in
         // flight instead of covering valid torrent rows with a loading screen.
         // The toolbar spinner continues to show that the fan-out is active.
@@ -1647,7 +1705,7 @@ fn renderUniversalResults() void {
 
         var count_buf: [320]u8 = undefined;
         const suffix: []const u8 = if (resolver.isResolving()) " so far" else "";
-        const clbl = std.fmt.bufPrintZ(&count_buf, "{d} results{s} for “{s}”", .{ resolver.result_count, suffix, safeUtf8(resolver.resolver_query[0..resolver.resolver_query_len]) }) catch "Results";
+        const clbl = std.fmt.bufPrintZ(&count_buf, "{d} results{s} for “{s}”", .{ visible_count, suffix, safeUtf8(resolver.resolver_query[0..resolver.resolver_query_len]) }) catch "Results";
         _ = dvui.label(@src(), "{s}", .{clbl}, .{
             .id_extra = 9001,
             .color_text = theme.colors.text_secondary,
@@ -1774,7 +1832,7 @@ fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit
         .{ .name = "Anime", .src = .anime, .rss = false, .st = resolver.status_anime.load(.acquire), .bit = .anime },
         .{ .name = "YouTube", .src = .youtube, .rss = false, .st = resolver.status_yt.load(.acquire), .bit = .youtube },
         .{ .name = "Comics", .src = .comics, .rss = false, .st = resolver.status_comics.load(.acquire), .bit = .comics },
-        .{ .name = "Stremio", .src = .stremio, .rss = false, .st = resolver.status_stremio.load(.acquire), .bit = .stremio },
+        .{ .name = "Streams", .src = .stremio, .rss = false, .st = combinedStreamStatus(), .bit = .stremio },
         .{ .name = "RSS", .src = .torrent, .rss = true, .st = resolver.status_rss.load(.acquire), .bit = .rss },
         .{ .name = "On-disk", .src = .local, .rss = false, .st = resolver.status_local.load(.acquire), .bit = .local },
         .{ .name = "Live TV", .src = .livetv, .rss = false, .st = resolver.status_livetv.load(.acquire), .bit = .livetv },
@@ -1783,7 +1841,7 @@ fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit
         .{ .name = "Podcasts", .src = .podcast, .rss = false, .st = resolver.status_podcast.load(.acquire), .bit = .podcast },
     };
 
-    const append = struct {
+    const appendName = struct {
         fn f(buf: []u8, w: *usize, s: []const u8) void {
             if (w.* > 0) {
                 const sep = ", ";
@@ -1797,8 +1855,29 @@ fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit
         }
     }.f;
 
+    const appendGroup = struct {
+        fn raw(buf: []u8, w: *usize, text: []const u8) void {
+            if (w.* >= buf.len) return;
+            const n = @min(text.len, buf.len - w.*);
+            @memcpy(buf[w.*..][0..n], text[0..n]);
+            w.* += n;
+        }
+
+        fn f(buf: []u8, w: *usize, label: []const u8, names: []const u8) void {
+            if (names.len == 0) return;
+            if (w.* > 0) raw(buf, w, "  ·  ");
+            raw(buf, w, label);
+            raw(buf, w, ": ");
+            raw(buf, w, names);
+        }
+    }.f;
+
     var quiet_buf: [160]u8 = undefined;
     var qw: usize = 0;
+    var unavailable_buf: [160]u8 = undefined;
+    var uw: usize = 0;
+    var partial_buf: [160]u8 = undefined;
+    var pw: usize = 0;
     var failed_buf: [160]u8 = undefined;
     var fw: usize = 0;
 
@@ -1806,22 +1885,34 @@ fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit
         if (!resolver.sourceOn(en.bit)) continue;
         if (en.st == .searching) continue;
         if (source_has.contains(en.bit)) continue;
-        if (en.st == .failed) append(&failed_buf, &fw, en.name) else append(&quiet_buf, &qw, en.name);
+        if (resolver.sourceStatusIsFailure(en.st)) {
+            appendName(&failed_buf, &fw, en.name);
+        } else switch (en.st) {
+            .unavailable => appendName(&unavailable_buf, &uw, en.name),
+            .partial => appendName(&partial_buf, &pw, en.name),
+            .idle, .done, .no_results => appendName(&quiet_buf, &qw, en.name),
+            .searching, .failed, .transport_failed, .parse_failed, .timed_out => unreachable,
+        }
     }
 
-    if (qw == 0 and fw == 0) return;
+    if (qw == 0 and uw == 0 and pw == 0 and fw == 0) return;
 
-    var line_buf: [400]u8 = undefined;
-    const line = if (qw > 0 and fw > 0)
-        std.fmt.bufPrint(&line_buf, "No hits: {s}  ·  Failed: {s}", .{ quiet_buf[0..qw], failed_buf[0..fw] }) catch return
-    else if (fw > 0)
-        std.fmt.bufPrint(&line_buf, "Failed: {s}", .{failed_buf[0..fw]}) catch return
-    else
-        std.fmt.bufPrint(&line_buf, "No hits: {s}", .{quiet_buf[0..qw]}) catch return;
+    var line_buf: [704]u8 = undefined;
+    var line_len: usize = 0;
+    appendGroup(&line_buf, &line_len, "No hits", quiet_buf[0..qw]);
+    appendGroup(&line_buf, &line_len, "Unavailable", unavailable_buf[0..uw]);
+    appendGroup(&line_buf, &line_len, "Partial", partial_buf[0..pw]);
+    appendGroup(&line_buf, &line_len, "Failed", failed_buf[0..fw]);
+    const line = line_buf[0..line_len];
 
     _ = dvui.label(@src(), "{s}", .{line}, .{
         .id_extra = 12900,
-        .color_text = theme.colors.text_tertiary,
+        .color_text = if (fw > 0)
+            theme.colors.danger
+        else if (pw > 0 or uw > 0)
+            theme.colors.warning
+        else
+            theme.colors.text_tertiary,
         .padding = .{ .x = 14, .y = 8, .w = 12, .h = 6 },
     });
 

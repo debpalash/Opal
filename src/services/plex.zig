@@ -107,7 +107,7 @@ fn save() void {
     var b: [1024]u8 = undefined;
     const body = std.fmt.bufPrint(&b, "{{\"token\":\"{s}\",\"server\":\"{s}\",\"server_token\":\"{s}\",\"name\":\"{s}\"}}", .{ token(), server_uri[0..server_uri_len], serverTok(), server_name[0..server_name_len] }) catch return;
     var pb: [600]u8 = undefined;
-    io.cwdWriteFile(.{ .sub_path = cfgPath(&pb), .data = body }) catch {};
+    @import("../core/secret_file.zig").write(cfgPath(&pb), body) catch {};
 }
 fn loadStr(obj: Json, key: []const u8, buf: []u8, len: *usize) void {
     if (obj.object.get(key)) |v| if (v == .string and v.string.len <= buf.len) {
@@ -117,7 +117,9 @@ fn loadStr(obj: Json, key: []const u8, buf: []u8, len: *usize) void {
 }
 pub fn init() void {
     var pb: [600]u8 = undefined;
-    const body = io.cwdReadFileAlloc(cfgPath(&pb), alloc, 8192) catch return;
+    const path = cfgPath(&pb);
+    @import("../core/secret_file.zig").restrictExisting(path);
+    const body = io.cwdReadFileAlloc(path, alloc, 8192) catch return;
     defer alloc.free(body);
     var parsed = std.json.parseFromSlice(Json, alloc, body, .{}) catch return;
     defer parsed.deinit();
@@ -150,13 +152,13 @@ fn httpGet(url: []const u8, post: bool, tok: []const u8, buf: []u8) usize {
     var tok_hdr: [180]u8 = undefined;
     const th = std.fmt.bufPrint(&tok_hdr, "X-Plex-Token: {s}", .{tok}) catch return 0;
     var argv_storage = [_][]const u8{
-        "curl",                                       "-s",
-        "--connect-timeout",                          "3",
-        "-H",                                         "Accept: application/json",
-        "-H",                                         "X-Plex-Product: Opal",
-        "-H",                                         "X-Plex-Client-Identifier: " ++ CLIENT_ID,
-        "-H",                                         th,
-        "--max-time",                                 "15",
+        "curl",              "-s",
+        "--connect-timeout", "3",
+        "-H",                "Accept: application/json",
+        "-H",                "X-Plex-Product: Opal",
+        "-H",                "X-Plex-Client-Identifier: " ++ CLIENT_ID,
+        "--config",          "-",
+        "--max-time",        "15",
         url,
     };
     var child = if (post) blk: {
@@ -170,7 +172,7 @@ fn httpGet(url: []const u8, post: bool, tok: []const u8, buf: []u8) usize {
     } else io.Child.init(&argv_storage, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
-    child.spawn() catch return 0;
+    @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{th}) catch return 0;
     const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
     _ = child.wait() catch {};
     return n;

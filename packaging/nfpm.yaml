@@ -28,8 +28,10 @@ contents:
     dst: /usr/lib/opal/engines
   - src: scripts/camoufox_bridge.py
     dst: /usr/lib/opal/scripts/camoufox_bridge.py
-  - src: web/index.html
-    dst: /usr/lib/opal/web/index.html
+  - src: web
+    dst: /usr/lib/opal/web
+  - src: assets/logo.svg
+    dst: /usr/lib/opal/web/icon.svg
   - src: data/plugins-manifest.json
     dst: /usr/lib/opal/plugins-manifest.json
   - src: data/manga-sources-sfw.json

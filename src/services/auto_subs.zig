@@ -57,12 +57,12 @@ fn resolveWhisperModel(buf: *[512]u8) ?[]const u8 {
 
     // Try language-specific model first (e.g. ggml-tiny.en.bin for English)
     if (is_en) {
-        const p = std.fmt.bufPrintZ(buf, "{s}/models/ggml-{s}.en.bin", .{home, size}) catch return null;
+        const p = std.fmt.bufPrintZ(buf, "{s}/models/ggml-{s}.en.bin", .{ home, size }) catch return null;
         if (io.cwdAccess(p, .{})) |_| return p else |_| {}
     }
     // Try multilingual model (e.g. ggml-tiny.bin)
     {
-        const p = std.fmt.bufPrintZ(buf, "{s}/models/ggml-{s}.bin", .{home, size}) catch return null;
+        const p = std.fmt.bufPrintZ(buf, "{s}/models/ggml-{s}.bin", .{ home, size }) catch return null;
         if (io.cwdAccess(p, .{})) |_| return p else |_| {}
     }
     // Fallback: any tiny model
@@ -153,24 +153,39 @@ fn worker(args: *WorkerArgs) void {
         return;
     };
 
-    // Temp WAV next to the source. Using a dedicated /tmp path avoids write
-    // permission issues on read-only media folders.
-    // Unique-enough temp suffix: monotonic counter is fine — only one
-    // auto-subs run can be in flight at a time (guarded by in_progress).
-    const S = struct { var counter: u64 = 0; };
-    S.counter +%= 1;
-    var tmp_wav_buf: [512]u8 = undefined;
+    // Private per-run directory prevents another local user from predicting or
+    // replacing the extracted audio path with a symlink. Cleanup is centralized
+    // so every early return removes both WAV and transient SRT.
+    var nonce: [16]u8 = undefined;
+    if (!@import("../core/io_global.zig").randomSecure(&nonce)) {
+        setStatus("secure temp setup failed");
+        return;
+    }
+    var nonce_hex: [32]u8 = undefined;
+    const digits = "0123456789abcdef";
+    for (nonce, 0..) |byte, i| {
+        nonce_hex[i * 2] = digits[byte >> 4];
+        nonce_hex[i * 2 + 1] = digits[byte & 0x0f];
+    }
+    var run_dir_buf: [512]u8 = undefined;
     var tmp_dir_buf: [512]u8 = undefined;
-    const tmp_wav = std.fmt.bufPrintZ(&tmp_wav_buf, "{s}/opal_autosubs_{d}.wav", .{ @import("../core/io_global.zig").tmpDir(&tmp_dir_buf), S.counter }) catch {
+    const run_dir = std.fmt.bufPrint(&run_dir_buf, "{s}/opal-autosubs-{s}", .{ @import("../core/io_global.zig").tmpDir(&tmp_dir_buf), nonce_hex }) catch {
         setStatus("tmp path too long");
         return;
     };
+    @import("../core/io_global.zig").makeDirAbsolute(run_dir) catch {
+        setStatus("secure temp setup failed");
+        return;
+    };
+    defer @import("../core/io_global.zig").cwdDeleteTree(run_dir) catch {};
+    var tmp_wav_buf: [600]u8 = undefined;
+    const tmp_wav = std.fmt.bufPrintZ(&tmp_wav_buf, "{s}/audio.wav", .{run_dir}) catch return;
 
     setStatus("Extracting audio (ffmpeg)...");
     const ff_argv = [_][]const u8{
-        "ffmpeg", "-y", "-i", args.path,
-        "-ar", "16000", "-ac", "1", "-vn",
-        "-f", "wav", tmp_wav,
+        "ffmpeg", "-n",    "-i",  args.path,
+        "-ar",    "16000", "-ac", "1",
+        "-vn",    "-f",    "wav", tmp_wav,
     };
     var ff = @import("../core/io_global.zig").Child.init(&ff_argv, alloc);
     ff.stdout_behavior = .Ignore;
@@ -195,18 +210,25 @@ fn worker(args: *WorkerArgs) void {
     // whisper-cli writes <basename>.srt next to the WAV when -osrt passed.
     const wh_argv = if (use_lang) [_][]const u8{
         whisper_bin,
-        "-m", model_path,
-        "-f", tmp_wav,
+        "-m",
+        model_path,
+        "-f",
+        tmp_wav,
         "-osrt",
-        "-l", lang,
-        "-t", "4",
+        "-l",
+        lang,
+        "-t",
+        "4",
         "--no-prints",
     } else [_][]const u8{
         whisper_bin,
-        "-m", model_path,
-        "-f", tmp_wav,
+        "-m",
+        model_path,
+        "-f",
+        tmp_wav,
         "-osrt",
-        "-t", "4",
+        "-t",
+        "4",
         "--no-prints",
         "", "", // padding for array size match
     };
@@ -215,17 +237,14 @@ fn worker(args: *WorkerArgs) void {
     wh.stderr_behavior = .Ignore;
     wh.spawn() catch {
         setStatus("whisper-cli spawn failed");
-        _ = @import("../core/io_global.zig").deleteFileAbsolute(tmp_wav) catch {};
         return;
     };
     const wh_res = wh.wait() catch {
         setStatus("whisper crashed");
-        _ = @import("../core/io_global.zig").deleteFileAbsolute(tmp_wav) catch {};
         return;
     };
     if (wh_res.exited != 0) {
         setStatus("whisper failed");
-        _ = @import("../core/io_global.zig").deleteFileAbsolute(tmp_wav) catch {};
         return;
     }
 
@@ -241,10 +260,45 @@ fn worker(args: *WorkerArgs) void {
     var final_srt_buf: [600]u8 = undefined;
     const dot = std.mem.lastIndexOfScalar(u8, args.path, '.') orelse args.path.len;
     const final_srt = std.fmt.bufPrintZ(&final_srt_buf, "{s}.auto.srt", .{args.path[0..dot]}) catch srt_path;
-    _ = @import("../core/io_global.zig").renameAbsolute(srt_path, final_srt) catch {};
-
     const io = @import("../core/io_global.zig");
-    const load_target = if (io.cwdAccess(final_srt, .{})) |_| final_srt else |_| srt_path;
+    io.renameAbsolute(srt_path, final_srt) catch {
+        // Read-only media location: retain the generated subtitle in Opal's
+        // private cache, not the shared temp directory that is about to be
+        // removed. mpv loads asynchronously, so deleting its only path here
+        // would race the sub-add command.
+        var cache_dir_buf: [600]u8 = undefined;
+        const cache_dir = @import("../core/paths.zig").cacheFile(&cache_dir_buf, "auto-subs");
+        io.cwdMakePath(cache_dir) catch {
+            setStatus("could not retain generated subtitles");
+            return;
+        };
+        var fallback_buf: [700]u8 = undefined;
+        const fallback = std.fmt.bufPrintZ(&fallback_buf, "{s}/{s}.srt", .{ cache_dir, nonce_hex }) catch return;
+        io.renameAbsolute(srt_path, fallback) catch {
+            setStatus("could not retain generated subtitles");
+            return;
+        };
+        if (@import("builtin").os.tag != .windows) {
+            const kept = io.openFileAbsolute(fallback, .{ .mode = .read_write }) catch null;
+            if (kept) |file| {
+                file.setPermissions(io.io(), std.Io.File.Permissions.fromMode(0o600)) catch {};
+                file.close(io.io());
+            }
+        }
+        const target_len = @min(fallback.len, last_srt_path.len);
+        @memcpy(last_srt_path[0..target_len], fallback[0..target_len]);
+        last_srt_path_len = target_len;
+        setStatus("Loading subtitles...");
+        if (state.app.active_player_idx < state.app.players.items.len) {
+            const p = state.app.players.items[state.app.active_player_idx];
+            _ = c.mpvSubAdd(p.mpv_ctx, fallback);
+        }
+        setStatus("Auto-subtitles ready");
+        logs.pushLog("info", "subs", "Auto-subtitles generated via whisper", false);
+        state.showToast("Auto-subs loaded");
+        return;
+    };
+    const load_target = final_srt;
 
     // Track last generated SRT for export UI
     const target_len = @min(load_target.len, last_srt_path.len);
@@ -256,7 +310,6 @@ fn worker(args: *WorkerArgs) void {
         const p = state.app.players.items[state.app.active_player_idx];
         _ = c.mpvSubAdd(p.mpv_ctx, load_target);
     }
-    _ = @import("../core/io_global.zig").deleteFileAbsolute(tmp_wav) catch {};
     setStatus("Auto-subtitles ready");
     logs.pushLog("info", "subs", "Auto-subtitles generated via whisper", false);
     state.showToast("Auto-subs loaded");

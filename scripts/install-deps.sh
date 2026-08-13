@@ -6,7 +6,7 @@
 #   ./scripts/install-deps.sh             # install (asks for sudo if needed)
 #   ./scripts/install-deps.sh --check      # exit 0 if all present, 1 if missing
 #
-# The package list mirrors PKGBUILD depends/makedepends/optdepends. Note that
+# The package list mirrors packaging/aur/opal-media-player/PKGBUILD. Note that
 # OCR (ONNX Runtime) is OPTIONAL — `zig build -Docr=true` enables it. Without
 # -Docr, opal builds and runs without onnxruntime.
 set -euo pipefail
@@ -35,7 +35,7 @@ detect_distro() {
 
 # ─── Per-distro packages ──────────────────────────────────────────────────
 # build: needed to compile; runtime: needed to run; optional: nice-to-have.
-declare_arch_build=("zig>=0.15.2" gcc git)
+declare_arch_build=("zig>=0.16.0" gcc git)
 declare_arch_runtime=(mpv sdl2 sqlite libtorrent-rasterbar curl python python-pip ffmpeg yt-dlp)
 declare_arch_optional=(streamlink "onnxruntime-cpu: OCR (build with -Docr=true)")
 
@@ -133,7 +133,7 @@ install_suse() {
 install_unknown() {
   cat >&2 <<EOF
 warn: unknown distribution. Please install manually:
-  build:    zig>=0.15.2  gcc  git  pkg-config
+  build:    zig>=0.16.0  gcc  git  pkg-config
   runtime:  mpv  SDL2  sqlite3  libtorrent-rasterbar  curl  python3  python3-pip  ffmpeg  yt-dlp
   optional: streamlink  onnxruntime  camoufox (pip install camoufox)
 EOF

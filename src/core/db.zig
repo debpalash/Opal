@@ -67,6 +67,15 @@ pub fn init() void {
     exec("PRAGMA temp_store=MEMORY");
     exec("PRAGMA mmap_size=268435456"); // 256MB mmap
 
+    // The DB contains service tokens, server passwords, history, and AI memory.
+    // Restrict the database and SQLite sidecars even when an existing umask or
+    // older Opal version created them too broadly.
+    const secrets = @import("secret_file.zig");
+    secrets.restrictExisting(db_path);
+    var sidecar_buf: [540]u8 = undefined;
+    if (std.fmt.bufPrint(&sidecar_buf, "{s}-wal", .{db_path})) |p| secrets.restrictExisting(p) else |_| {}
+    if (std.fmt.bufPrint(&sidecar_buf, "{s}-shm", .{db_path})) |p| secrets.restrictExisting(p) else |_| {}
+
     // ── Create all tables ──
     createTables();
     initialized = true;

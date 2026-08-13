@@ -490,7 +490,45 @@ def test_breakpoints_in_points():
                     "actions stay reachable on narrow windows")
 
 
-@test("Auto UI scale adapts to the physical display by default", "Page Shell")
+@test("Auto UI scale defaults to 1x and preserves manual density", "Page Shell")
+def test_auto_scale_floor_and_persistence():
+    """Auto is a layout mode, not a compact-density preset. It stays at least
+    1.0x on every display while responsive breakpoints adapt in screen points;
+    an explicit manual sub-1.0x choice still survives config restore."""
+    sp = _src("src/core/scale_pure.zig")
+    st = _src("src/core/state.zig")
+    cfg = _src("src/core/config.zig")
+    sg = _src("src/ui/settings.zig")
+
+    checks = {
+        "Auto is the state default": "ui_scale: f32 = 1.0" in st
+            and "ui_scale_auto: bool = true" in st,
+        "Auto floor is 1x": "AUTO_MIN_SCALE: f32 = 1.0" in sp
+            and "return AUTO_MIN_SCALE" in sp,
+        "restore normalizes the preference pair": (
+            "pub fn restoredScale(" in sp
+            and 'scale_pure.zig").restoredScale(' in cfg
+            and "config restore upgrades old Auto values but preserves manual density" in sp
+        ),
+        "both values persist": 'setKey("ui_scale",' in cfg
+            and 'setKey("ui_scale_auto",' in cfg,
+        "Auto is segment zero": '"Auto ≥1.0x"' in sg
+            and "if (clicked == 0)" in sg,
+        "manual indices are offset": "sel = idx + 1" in sg
+            and "scales[clicked - 1]" in sg,
+        "manual choice disables Auto": "state.app.ui_scale_auto = false" in sg,
+        "manual sub-1x remains available": all(
+            label in sg for label in ('"0.6x"', '"0.7x"', '"0.8x"', '"0.9x"')
+        ),
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "adaptive scale contract incomplete: " + ", ".join(missing)
+    return "pass", ("Auto normalizes to a >=1.0x baseline; manual sub-1.0x choices "
+                    "remain explicit and settings indices preserve Auto at zero")
+
+
+@test("Auto UI scale adapts upward to the physical display", "Page Shell")
 def test_adaptive_default_scale():
     sp = _src("src/core/scale_pure.zig")
     di = _src("src/core/display_info.zig")
@@ -505,9 +543,11 @@ def test_adaptive_default_scale():
         ),
         "physical DPI validated": "pub fn physicalDpi(" in sp
                                   and "dpi < 40" in sp and "dpi > 800" in sp,
+        "automatic choices have a hard floor": "AUTO_MIN_SCALE: f32 = 1.0" in sp
+                                                and "never falls below 1x" in sp,
         "screen classes covered": all(label in sp for label in (
             "laptop_2560", "desktop_27", "laptop_4k",
-            "resolution when physical size is missing",
+            "uses resolution only to scale upward",
         )),
         "Linux reads connected display EDID": all(token in di for token in (
             'DRM_ROOT = "/sys/class/drm"', '"status"', '"modes"', '"edid"',
@@ -522,4 +562,4 @@ def test_adaptive_default_scale():
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
         return "fail", "adaptive-scale regression(s): " + ", ".join(missing)
-    return "pass", "Auto defaults on; OS scale + validated EDID/resolution fallbacks; manual override preserved"
+    return "pass", "Auto defaults on; validated panel data only scales upward from 1.0x; manual override preserved"

@@ -7,13 +7,16 @@ const logs = @import("../core/logs.zig");
 const player = @import("../player/player.zig");
 const paths = @import("../core/paths.zig");
 const sync = @import("../core/sync.zig");
+const bounded_process = @import("../core/bounded_process.zig");
+const source_repo = @import("plugin_repo.zig");
+const plugin_trust = @import("plugins_trust.zig");
 
 // ══════════════════════════════════════════════════════════
 // Opal Plugin System
 //
 // Plugins are external, user-installed modules that provide
 // content sources. The core app ships clean with no
-// scraping/piracy code. Plugins are language-agnostic 
+// scraping/piracy code. Plugins are language-agnostic
 // executables that communicate via JSON over stdin/stdout.
 //
 // Plugin directory: ~/.config/opal/plugins/<name>/
@@ -77,9 +80,9 @@ pub const Plugin = struct {
     enabled: bool = true,
     loaded: bool = false,
     allow_unsafe: bool = false,
-    // User-created trust marker (`<plugin_dir>/.trusted`). `allow_unsafe` is only
-    // honored when this is also set — the plugin can't forge it. See
-    // plugins_pure.runMode.
+    // Approval for this exact plugin content. The marker lives in Opal's
+    // app-owned trust directory, not in the distributable plugin directory;
+    // its name is a SHA-256 digest of the normalized complete plugin tree.
     user_trusted: bool = false,
 };
 
@@ -106,6 +109,7 @@ pub var search_buf: [256]u8 = std.mem.zeroes([256]u8);
 // category with a name/kind search + installed-only toggle — see plugins_pure.
 var src_filter_buf: [64]u8 = std.mem.zeroes([64]u8);
 var src_installed_only: bool = false;
+var source_catalog: [source_repo.MAX]source_repo.Plugin = undefined;
 
 /// Atomically claim the loading slot. Returns true if the caller now owns
 /// it (was idle), false if a worker is already running. Caller must release
@@ -140,37 +144,45 @@ pub fn getPluginDir(buf: *[512]u8) []const u8 {
 
 pub fn scanPlugins() void {
     plugin_count = 0;
-    
+
     var dir_buf: [512]u8 = undefined;
     const plugin_dir = getPluginDir(&dir_buf);
     if (plugin_dir.len == 0) return;
-    
+
     // Ensure plugin directory exists
     @import("../core/io_global.zig").cwdMakePath(plugin_dir) catch {};
-    
+    // Approval capabilities live beside, never inside, installed bundles.
+    // Create the app-owned parent so the review message's marker path is
+    // actionable without weakening the content-addressed check.
+    var trust_dir_buf: [600]u8 = undefined;
+    var config_buf: [512]u8 = undefined;
+    if (std.fmt.bufPrint(&trust_dir_buf, "{s}/plugin-trust", .{paths.configDir(&config_buf)})) |trust_dir| {
+        @import("../core/io_global.zig").cwdMakePath(trust_dir) catch {};
+    } else |_| {}
+
     var dir = @import("../core/io_global.zig").cwdOpenDir(plugin_dir, .{ .iterate = true }) catch return;
     defer dir.close(@import("../core/io_global.zig").io());
-    
+
     var it = dir.iterate();
     while (it.next(@import("../core/io_global.zig").io()) catch null) |entry| {
         if (entry.kind != .directory) continue;
         if (plugin_count >= MAX_PLUGINS) break;
-        
+
         // Check for manifest.json
         var manifest_path: [600]u8 = undefined;
-        const mp = std.fmt.bufPrint(&manifest_path, "{s}/{s}/manifest.json", .{plugin_dir, entry.name}) catch continue;
-        
+        const mp = std.fmt.bufPrint(&manifest_path, "{s}/{s}/manifest.json", .{ plugin_dir, entry.name }) catch continue;
+
         const file = @import("../core/io_global.zig").cwdOpenFile(mp, .{}) catch continue;
         defer file.close(@import("../core/io_global.zig").io());
-        
+
         var manifest_buf: [4096]u8 = undefined;
         const manifest_len = @import("../core/io_global.zig").readAll(file, &manifest_buf) catch continue;
         if (manifest_len < 5) continue;
         const json = manifest_buf[0..manifest_len];
-        
+
         var p = &plugins[plugin_count];
         p.* = std.mem.zeroes(Plugin);
-        
+
         // Parse manifest fields
         extractJsonString(json, "name", &p.name, &p.name_len);
         extractJsonString(json, "version", &p.version, &p.version_len);
@@ -179,48 +191,87 @@ pub fn scanPlugins() void {
         if (extractField(json, "allow_unsafe")) |v| {
             p.allow_unsafe = std.mem.eql(u8, v, "true");
         }
-        
+
         if (p.name_len == 0) {
             // Use directory name as fallback
             const nl = @min(entry.name.len, 64);
             @memcpy(p.name[0..nl], entry.name[0..nl]);
             p.name_len = nl;
         }
-        
+
         // Store path
         var full_path: [512]u8 = undefined;
-        const fp = std.fmt.bufPrint(&full_path, "{s}/{s}", .{plugin_dir, entry.name}) catch continue;
+        const fp = std.fmt.bufPrint(&full_path, "{s}/{s}", .{ plugin_dir, entry.name }) catch continue;
         const fpl = @min(fp.len, 512);
         @memcpy(p.path[0..fpl], fp[0..fpl]);
         p.path_len = fpl;
-        
+
         // Check which executables exist
         p.has_search = fileExists(p.path[0..p.path_len], "search");
         p.has_resolve = fileExists(p.path[0..p.path_len], "resolve");
         p.has_trending = fileExists(p.path[0..p.path_len], "trending");
 
-        // User trust marker: allow_unsafe (and unsandboxed native execution) is
-        // only honored when the user has created `<plugin_dir>/.trusted`.
-        p.user_trusted = fileExists(p.path[0..p.path_len], ".trusted");
-        
+        p.user_trusted = pluginContentApproved(p);
+
         p.enabled = true;
         p.loaded = true;
-        
+
         plugin_count += 1;
-        
+
         var log_buf: [128]u8 = undefined;
         const lm = std.fmt.bufPrintZ(&log_buf, "Plugin loaded: {s}", .{p.name[0..p.name_len]}) catch "Plugin loaded";
         logs.pushLog("info", "plugin", lm, false);
     }
-    
+
     scanned = true;
 }
 
 fn fileExists(dir: []const u8, name: []const u8) bool {
     var path_buf: [600]u8 = undefined;
-    const p = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{dir, name}) catch return false;
+    const p = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir, name }) catch return false;
     const f = @import("../core/io_global.zig").cwdOpenFile(p, .{}) catch return false;
     f.close(@import("../core/io_global.zig").io());
+    return true;
+}
+
+/// Return the approval marker for the exact plugin bytes. Trust is deliberately
+/// stored outside `<config>/plugins/<name>` so an installed bundle cannot ship
+/// its own approval, and the digest invalidates approval after any update.
+fn approvalMarkerPath(p: *const Plugin, out: []u8) ?[]const u8 {
+    var digest: [32]u8 = undefined;
+    if (!pluginDigest(p, &digest)) return null;
+    var hex: [64]u8 = undefined;
+    const digits = "0123456789abcdef";
+    for (digest, 0..) |byte, i| {
+        hex[i * 2] = digits[byte >> 4];
+        hex[i * 2 + 1] = digits[byte & 0x0f];
+    }
+    var cfg_buf: [512]u8 = undefined;
+    return std.fmt.bufPrint(out, "{s}/plugin-trust/{s}.trusted", .{ paths.configDir(&cfg_buf), hex }) catch null;
+}
+
+fn pluginContentApproved(p: *const Plugin) bool {
+    var marker_buf: [800]u8 = undefined;
+    const marker = approvalMarkerPath(p, &marker_buf) orelse return false;
+    const io = @import("../core/io_global.zig");
+    const file = io.cwdOpenFile(marker, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    }) catch return false;
+    defer file.close(io.io());
+    const stat = file.stat(io.io()) catch return false;
+    if (stat.kind != .file) return false;
+    return true;
+}
+
+fn pluginDigest(p: *const Plugin, out: *[32]u8) bool {
+    const io = @import("../core/io_global.zig");
+    var root = io.cwdOpenDir(p.path[0..p.path_len], .{
+        .iterate = true,
+        .follow_symlinks = false,
+    }) catch return false;
+    defer root.close(io.io());
+    plugin_trust.digestTree(io.io(), root, @import("../core/alloc.zig").allocator, out) catch return false;
     return true;
 }
 
@@ -301,10 +352,16 @@ fn logUnsafeWarn(name: []const u8) void {
     logs.pushLog("warn", "plugins", msg, false);
 }
 
-fn logUntrustedNative(name: []const u8) void {
-    var buf: [200]u8 = undefined;
-    const msg = std.fmt.bufPrintZ(&buf, "Running UNSANDBOXED native plugin (no .trusted marker): {s}", .{name}) catch "Unsandboxed native plugin";
-    logs.pushLog("warn", "plugins", msg, true);
+fn logUntrustedNative(p: *const Plugin) void {
+    var marker_buf: [800]u8 = undefined;
+    const marker = approvalMarkerPath(p, &marker_buf) orelse "the app-owned plugin trust directory";
+    var buf: [1100]u8 = undefined;
+    const msg = std.fmt.bufPrintZ(
+        &buf,
+        "Blocked untrusted native plugin: {s}. Review it, then create {s} to approve this exact version.",
+        .{ p.name[0..p.name_len], marker },
+    ) catch "Blocked untrusted native plugin";
+    logs.pushLog("error", "plugins", msg, true);
 }
 
 /// Surface a plugin/child-process spawn failure (e.g. missing `lua` or
@@ -312,6 +369,13 @@ fn logUntrustedNative(name: []const u8) void {
 fn logSpawnFail(argv0: []const u8) void {
     var buf: [256]u8 = undefined;
     const msg = std.fmt.bufPrintZ(&buf, "spawn failed: {s} not found or not executable", .{argv0}) catch "plugin spawn failed";
+    logs.pushLog("error", "plugin", msg, true);
+}
+
+fn logPluginProcessFailure(name: []const u8, result: bounded_process.Result) void {
+    var buf: [256]u8 = undefined;
+    const detail = if (result.truncated) "output limit exceeded" else @tagName(result.failure);
+    const msg = std.fmt.bufPrintZ(&buf, "Plugin {s} stopped: {s}", .{ name, detail }) catch "Plugin process failed";
     logs.pushLog("error", "plugin", msg, true);
 }
 
@@ -338,7 +402,11 @@ pub fn runPluginSearch(query: []const u8) void {
 
             const pp = @import("plugins_pure.zig");
             const is_lua = detectLuaScript(exec);
-            switch (pp.runMode(is_lua, p.allow_unsafe, p.user_trusted)) {
+            // Trust is content-addressed and is intentionally recomputed in
+            // the worker immediately before argv construction/spawn. The
+            // scan-time UI flag is only a snapshot and never an authority.
+            const trusted_now = pluginContentApproved(&p);
+            switch (pp.runMode(is_lua, p.allow_unsafe, trusted_now)) {
                 .sandbox_lua => {
                     var sandbox_argv: [8][]const u8 = undefined;
                     const extras = [_][]const u8{q};
@@ -347,11 +415,11 @@ pub fn runPluginSearch(query: []const u8) void {
                     executeAndParse(argv);
                 },
                 .direct => {
-                    if (p.allow_unsafe and p.user_trusted) logUnsafeWarn(p.name[0..p.name_len]);
-                    if (pp.untrustedNative(is_lua, p.user_trusted)) logUntrustedNative(p.name[0..p.name_len]);
+                    if (p.allow_unsafe and trusted_now) logUnsafeWarn(p.name[0..p.name_len]);
                     const argv = [_][]const u8{ exec, q };
                     executeAndParse(&argv);
                 },
+                .deny => logUntrustedNative(&p),
             }
         }
     }.worker, .{ q_buf, qlen, active_plugin })) |t| t.detach() else |_| {
@@ -374,7 +442,8 @@ pub fn runPluginTrending() void {
 
             const pp = @import("plugins_pure.zig");
             const is_lua = detectLuaScript(exec);
-            switch (pp.runMode(is_lua, p.allow_unsafe, p.user_trusted)) {
+            const trusted_now = pluginContentApproved(&p);
+            switch (pp.runMode(is_lua, p.allow_unsafe, trusted_now)) {
                 .sandbox_lua => {
                     var sandbox_argv: [8][]const u8 = undefined;
                     const argv = buildSandboxedLuaArgv(&sandbox_argv, exec, &.{});
@@ -382,11 +451,11 @@ pub fn runPluginTrending() void {
                     executeAndParse(argv);
                 },
                 .direct => {
-                    if (p.allow_unsafe and p.user_trusted) logUnsafeWarn(p.name[0..p.name_len]);
-                    if (pp.untrustedNative(is_lua, p.user_trusted)) logUntrustedNative(p.name[0..p.name_len]);
+                    if (p.allow_unsafe and trusted_now) logUnsafeWarn(p.name[0..p.name_len]);
                     const argv = [_][]const u8{exec};
                     executeAndParse(&argv);
                 },
+                .deny => logUntrustedNative(&p),
             }
         }
     }.worker, .{active_plugin})) |t| t.detach() else |_| {
@@ -397,7 +466,7 @@ pub fn runPluginTrending() void {
 pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
     if (active_plugin >= plugin_count) return;
     if (!plugins[active_plugin].has_resolve) return;
-    
+
     // ── Instant feedback: show loading on player immediately ──
     if (state.app.players.items.len > 0 and state.app.active_player_idx < state.app.players.items.len) {
         const pl = state.app.players.items[state.app.active_player_idx];
@@ -409,7 +478,7 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
         @memcpy(pl.loading_label[0..lbl.len], lbl);
         pl.loading_label_len = lbl.len;
     }
-    
+
     // Copy id/episode into fixed buffers passed *by value* — the caller's
     // slices alias `results[*]` (a live, worker-mutated array) and a stack
     // temporary that is gone the moment this function returns.
@@ -433,47 +502,51 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
             const direct_argv = [_][]const u8{ exec, rid, rep };
             var sandbox_argv: [8][]const u8 = undefined;
             const argv: []const []const u8 = blk: {
-                switch (pp.runMode(is_lua, p.allow_unsafe, p.user_trusted)) {
+                const trusted_now = pluginContentApproved(&p);
+                switch (pp.runMode(is_lua, p.allow_unsafe, trusted_now)) {
                     .sandbox_lua => {
                         const extras = [_][]const u8{ rid, rep };
                         logSandboxed(p.name[0..p.name_len]);
                         break :blk buildSandboxedLuaArgv(&sandbox_argv, exec, &extras);
                     },
                     .direct => {
-                        if (p.allow_unsafe and p.user_trusted) logUnsafeWarn(p.name[0..p.name_len]);
-                        if (pp.untrustedNative(is_lua, p.user_trusted)) logUntrustedNative(p.name[0..p.name_len]);
+                        if (p.allow_unsafe and trusted_now) logUnsafeWarn(p.name[0..p.name_len]);
                         break :blk &direct_argv;
+                    },
+                    .deny => {
+                        logUntrustedNative(&p);
+                        return;
                     },
                 }
             };
-            var child = @import("../core/io_global.zig").Child.init(argv, c_alloc);
-            child.stdout_behavior = .Pipe;
-            child.stderr_behavior = .Ignore;
-            _ = child.spawn() catch {
-                logSpawnFail(argv[0]);
-                return;
-            };
-
             var buf: [8192]u8 = undefined;
-            const len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &buf) catch 0 else 0;
-            _ = child.wait() catch {};
-            
+            const run = bounded_process.run(argv, &buf, .{ .timeout_ms = 30_000 });
+            if (!run.ok()) {
+                logPluginProcessFailure(p.name[0..p.name_len], run);
+                return;
+            }
+            const len = run.output.len;
+
             if (len < 5) {
                 logs.pushLog("error", "plugin", "Resolve returned no data", false);
                 return;
             }
-            
+
             const json = buf[0..len];
-            
+            if (!pp.validResponse(c_alloc, json, .resolve)) {
+                logs.pushLog("error", "plugin", "Resolve returned malformed JSON", false);
+                return;
+            }
+
             // Check if this is a manga response (images, not video)
             const is_manga = extractField(json, "type") != null and
                 std.mem.eql(u8, extractField(json, "type").?, "manga");
-            
+
             if (is_manga) {
                 // ── Manga: parse images array → comic viewer ──
                 const comics = @import("comics.zig");
                 _ = comics;
-                
+
                 // Set title
                 if (extractField(json, "title")) |title| {
                     const tlen = @min(title.len, 255);
@@ -490,7 +563,7 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                     @memcpy(state.app.comic.referer[0..rlen], ref[0..rlen]);
                     state.app.comic.referer_len = rlen;
                 }
-                
+
                 // Parse images array
                 var img_count: usize = 0;
                 if (std.mem.indexOf(u8, json, "\"images\"")) |img_start| {
@@ -504,19 +577,19 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                             if (abs_q1 >= json.len) break;
                             const q2 = std.mem.indexOfScalar(u8, json[abs_q1..], '"') orelse break;
                             const img_url = json[abs_q1 .. abs_q1 + q2];
-                            
+
                             if (img_url.len > 10 and img_url.len < 512) {
                                 @memcpy(state.app.comic.page_urls[img_count][0..img_url.len], img_url);
                                 state.app.comic.page_url_lens[img_count] = img_url.len;
                                 img_count += 1;
                             }
-                            
+
                             pos = abs_q1 + q2 + 1;
                             if (pos < json.len and json[pos] == ']') break;
                         }
                     }
                 }
-                
+
                 if (img_count > 0) {
                     // Clear old pages. This runs on a detached worker thread, so:
                     //  - GPU textures must be destroyed on the UI thread → queue them
@@ -536,23 +609,23 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                             state.app.comic.page_pixels[i] = null;
                         }
                     }
-                    
+
                     state.app.comic.page_count = img_count;
                     state.app.comic.current_page = 0;
                     state.app.comic.dl_progress.store(0, .release);
                     state.app.comic.is_loading.store(false, .release);
                     state.app.comic.next_url_len = 0;
                     state.app.comic.prev_url_len = 0;
-                    
+
                     // Switch to comic viewer
                     if (state.app.active_player_idx < state.app.players.items.len) {
                         const pl2 = state.app.players.items[state.app.active_player_idx];
                         pl2.provider = .comic_viewer;
                         pl2.is_loading = false;
                     }
-                    
+
                     logs.pushLog("info", "plugin", "Manga loaded — opening reader", false);
-                    
+
                     // Start downloading pages in background
                     if (std.Thread.spawn(.{}, struct {
                         fn dl() void {
@@ -561,12 +634,13 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                             var threads: [BATCH]?std.Thread = [_]?std.Thread{null} ** BATCH;
                             var page_i: usize = 0;
                             const page_alloc = @import("../core/alloc.zig").allocator;
-                            
+
                             while (page_i < state.app.comic.page_count) {
                                 var active: usize = 0;
                                 while (active < BATCH and page_i < state.app.comic.page_count) {
                                     if (state.app.comic.page_pixels[page_i] != null or
-                                        state.app.comic.page_url_lens[page_i] == 0) {
+                                        state.app.comic.page_url_lens[page_i] == 0)
+                                    {
                                         page_i += 1;
                                         continue;
                                     }
@@ -582,9 +656,9 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                                             var ref_buf: [600]u8 = undefined;
                                             const ref_hdr = @import("plugins_pure.zig").refererHeader(plugin_ref, u, &ref_buf) orelse "Referer:";
                                             const argv2 = [_][]const u8{
-                                                "curl", "-sL",
-                                                "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-                                                "-H", ref_hdr,
+                                                "curl",       "-sL",
+                                                "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+                                                "-H",         ref_hdr,
                                                 "--max-time", "15",
                                                 u,
                                             };
@@ -631,10 +705,10 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
             } else if (extractField(json, "url")) |url| {
                 // ── Video/stream: original handler ──
                 if (url.len < 5) return;
-                
+
                 const c = @import("../core/c.zig");
                 if (state.app.players.items.len == 0 or state.app.active_player_idx >= state.app.players.items.len) return;
-                
+
                 // Check if it's a magnet link → torrent engine
                 if (std.mem.startsWith(u8, url, "magnet:?")) {
                     if (state.torrentSession() == null) {
@@ -645,7 +719,7 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                     @memset(&null_term, 0);
                     const clen = @min(url.len, 4095);
                     @memcpy(null_term[0..clen], url[0..clen]);
-                    
+
                     const tid = c.mpv.torrent_add_magnet(state.torrentSession(), @ptrCast(&null_term[0]), state.getSavePath());
                     if (tid >= 0) {
                         const pl = state.app.players.items[state.app.active_player_idx];
@@ -672,13 +746,12 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                         state.showToast("Couldn't add torrent (invalid or duplicate magnet)");
                     }
                 } else {
-                    // Regular URL → mpv loadfile
-                    // Reject URLs containing quotes to prevent mpv command injection
-                    if (std.mem.indexOfScalar(u8, url, '"') != null) return;
+                    // Structured arguments in the typed seam avoid command-string
+                    // quoting/injection and clear credentials from the prior host.
                     const pl = state.app.players.items[state.app.active_player_idx];
-                    var cmd_buf2: [600]u8 = undefined;
-                    const cmd = std.fmt.bufPrintZ(&cmd_buf2, "loadfile \"{s}\"", .{url}) catch return;
-                    _ = c.mpv.mpv_command_string(pl.mpv_ctx, cmd.ptr);
+                    // This resolve callback runs off the UI thread. Preserve the
+                    // old command-only transition (no texture/UI mutation).
+                    pl.commitPlayback(.{ .url = url, .mode = .replace });
                     logs.pushLog("info", "plugin", "Playing resolved stream", false);
                 }
             } else {
@@ -689,20 +762,22 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
 }
 
 fn executeAndParse(argv: []const []const u8) void {
-    var child = @import("../core/io_global.zig").Child.init(argv, c_alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch {
-        if (argv.len > 0) logSpawnFail(argv[0]);
-        return;
-    };
-    
     var buf: [64 * 1024]u8 = undefined;
-    const len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    
+    const run = bounded_process.run(argv, &buf, .{ .timeout_ms = 30_000 });
+    if (!run.ok()) {
+        const name = if (active_plugin < plugin_count) plugins[active_plugin].name[0..plugins[active_plugin].name_len] else "plugin";
+        logPluginProcessFailure(name, run);
+        return;
+    }
+    const len = run.output.len;
+
     if (len < 5) return;
     const json = buf[0..len];
+    const pp = @import("plugins_pure.zig");
+    if (!pp.validResponse(c_alloc, json, .results)) {
+        logs.pushLog("error", "plugin", "Search/trending returned malformed JSON", false);
+        return;
+    }
 
     // Parse JSON array of results
     // Expected format: [{"id":"..","title":"..","overview":"..","poster":"..","episodes":N,"score":F},...]
@@ -716,30 +791,42 @@ fn executeAndParse(argv: []const []const u8) void {
     while (pos < json.len and result_count < MAX_RESULTS) {
         // Find next object boundary
         const obj_start = std.mem.indexOfScalarPos(u8, json, pos, '{') orelse break;
-        
+
         // Find matching closing brace (simple: count depth)
         var depth: usize = 0;
         var obj_end: usize = obj_start;
         var in_str = false;
         var esc = false;
         while (obj_end < json.len) : (obj_end += 1) {
-            if (esc) { esc = false; continue; }
-            if (json[obj_end] == '\\') { esc = true; continue; }
-            if (json[obj_end] == '"') { in_str = !in_str; continue; }
+            if (esc) {
+                esc = false;
+                continue;
+            }
+            if (json[obj_end] == '\\') {
+                esc = true;
+                continue;
+            }
+            if (json[obj_end] == '"') {
+                in_str = !in_str;
+                continue;
+            }
             if (in_str) continue;
             if (json[obj_end] == '{') depth += 1;
             if (json[obj_end] == '}') {
                 depth -= 1;
-                if (depth == 0) { obj_end += 1; break; }
+                if (depth == 0) {
+                    obj_end += 1;
+                    break;
+                }
             }
         }
-        
+
         if (depth != 0) break;
         const obj = json[obj_start..obj_end];
-        
+
         var r = &results[result_count];
         r.* = std.mem.zeroes(PluginResult);
-        
+
         extractJsonString(obj, "id", &r.id, &r.id_len);
         extractJsonString(obj, "title", &r.title, &r.title_len);
         extractJsonString(obj, "overview", &r.overview, &r.overview_len);
@@ -747,7 +834,7 @@ fn executeAndParse(argv: []const []const u8) void {
         extractJsonString(obj, "stream_url", &r.stream_url, &r.stream_url_len);
         extractJsonString(obj, "year", &r.year, &r.year_len);
         extractJsonString(obj, "type", &r.media_type, &r.media_type_len);
-        
+
         // Extract numeric fields
         if (extractField(obj, "episodes")) |eps_s| {
             r.episodes = std.fmt.parseInt(u16, eps_s, 10) catch 0;
@@ -755,11 +842,11 @@ fn executeAndParse(argv: []const []const u8) void {
         if (extractField(obj, "score")) |sc_s| {
             r.score = std.fmt.parseFloat(f32, sc_s) catch 0;
         }
-        
+
         if (r.title_len > 0 or r.id_len > 0) {
             result_count += 1;
         }
-        
+
         pos = obj_end;
     }
 }
@@ -772,22 +859,28 @@ fn extractField(json: []const u8, key: []const u8) ?[]const u8 {
     // Search for "key": or "key":
     var key_buf: [64]u8 = undefined;
     const search_key = std.fmt.bufPrint(&key_buf, "\"{s}\":", .{key}) catch return null;
-    
+
     const idx = std.mem.indexOf(u8, json, search_key) orelse return null;
     var start = idx + search_key.len;
-    
+
     // Skip whitespace
     while (start < json.len and (json[start] == ' ' or json[start] == '\t')) start += 1;
     if (start >= json.len) return null;
-    
+
     if (json[start] == '"') {
         // String value
         start += 1;
         var end = start;
         var esc = false;
         while (end < json.len) : (end += 1) {
-            if (esc) { esc = false; continue; }
-            if (json[end] == '\\') { esc = true; continue; }
+            if (esc) {
+                esc = false;
+                continue;
+            }
+            if (json[end] == '\\') {
+                esc = true;
+                continue;
+            }
             if (json[end] == '"') break;
         }
         return json[start..end];
@@ -873,7 +966,7 @@ pub fn fetchPoster(item: *PluginResult) void {
             const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
             const p_slice = c_alloc.alloc(u8, p_len) catch return;
             @memcpy(p_slice, pixels[0..p_len]);
-            
+
             results_mutex.lock();
             ptr.poster_w = @intCast(w);
             ptr.poster_h = @intCast(h);
@@ -914,7 +1007,7 @@ fn cardTitle(src: std.builtin.SourceLocation, text: []const u8, sub: []const u8)
 }
 
 fn renderSourcePlugins() void {
-    const pr = @import("plugin_repo.zig");
+    const pr = source_repo;
 
     // Auto-load on first view: show the bundled manifest instantly (offline, no
     // network) so the list is never empty, then kick a network refresh that
@@ -927,18 +1020,19 @@ fn renderSourcePlugins() void {
     if (!Auto.done) {
         Auto.done = true;
         pr.loadLocalManifest();
-        pr.refresh();
+        _ = pr.refresh();
     }
 
     const pp = @import("plugins_pure.zig");
+    const source_count = pr.snapshotCopy(&source_catalog);
 
     var card = cardBegin(@src(), 0);
     defer card.deinit();
 
     // Installed count for the summary line (also used by the installed-only filter).
     var installed_total: usize = 0;
-    for (0..pr.plugin_count) |i| {
-        if (pr.isInstalled(pr.plugins[i].idSlice())) installed_total += 1;
+    for (source_catalog[0..source_count]) |*plugin| {
+        if (pr.isInstalled(plugin.idSlice())) installed_total += 1;
     }
 
     // Header row: title + count summary + a small Refresh.
@@ -946,7 +1040,7 @@ fn renderSourcePlugins() void {
         var hrow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer hrow.deinit();
         _ = dvui.label(@src(), "Available plugins", .{}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_title, .gravity_y = 0.5 });
-        _ = dvui.label(@src(), "  {d} sources · {d} installed", .{ pr.plugin_count, installed_total }, .{ .color_text = theme.colors.text_tertiary, .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "  {d} sources · {d} installed", .{ source_count, installed_total }, .{ .color_text = theme.colors.text_tertiary, .gravity_y = 0.5 });
         {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
@@ -960,12 +1054,12 @@ fn renderSourcePlugins() void {
             // current list in place degrades gracefully: it stays until a
             // successful fetch replaces it. The spinner state below still shows
             // "Loading sources…" only when the list is genuinely empty.
-            pr.refresh();
+            _ = pr.apply(.refresh, "");
         }
     }
     _ = dvui.label(@src(), "Click Install to enable a source. Only install sources you trust.", .{}, .{ .color_text = theme.colors.text_tertiary, .expand = .horizontal, .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 } });
 
-    if (pr.plugin_count == 0) {
+    if (source_count == 0) {
         const fetching = pr.status.load(.acquire) == .fetching;
         _ = dvui.label(@src(), "{s}", .{if (fetching) "Loading sources…" else "No sources available."}, .{ .color_text = theme.colors.text_tertiary, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
         return;
@@ -977,17 +1071,23 @@ fn renderSourcePlugins() void {
         var frow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.sm } });
         defer frow.deinit();
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &src_filter_buf }, .placeholder = "Filter sources…" }, .{
-            .expand = .horizontal, .min_size_content = .{ .w = 160, .h = 18 },
-            .color_fill = theme.colors.bg_elevated, .color_border = theme.colors.border_subtle,
-            .color_text = theme.colors.text_primary, .border = dvui.Rect.all(1), .corner_radius = theme.dims.rad_sm,
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 160, .h = 18 },
+            .color_fill = theme.colors.bg_elevated,
+            .color_border = theme.colors.border_subtle,
+            .color_text = theme.colors.text_primary,
+            .border = dvui.Rect.all(1),
+            .corner_radius = theme.dims.rad_sm,
             .gravity_y = 0.5,
         });
         te.deinit();
         if (dvui.button(@src(), "Installed only", .{}, .{
             .color_fill = if (src_installed_only) theme.colors.accent else theme.colors.bg_elevated,
             .color_text = if (src_installed_only) dvui.Color.white else theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
-            .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 }, .gravity_y = 0.5,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+            .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
+            .gravity_y = 0.5,
         })) {
             src_installed_only = !src_installed_only;
         }
@@ -1004,8 +1104,7 @@ fn renderSourcePlugins() void {
     for (pp.ordered_categories) |cat| {
         // First pass: count matches in this category so we can skip empty groups.
         var cat_matches: usize = 0;
-        for (0..pr.plugin_count) |i| {
-            const p = &pr.plugins[i];
+        for (source_catalog[0..source_count]) |*p| {
             if (pp.categoryOf(p.kindSlice()) != cat) continue;
             if (pp.matches(p.nameSlice(), p.kindSlice(), query, src_installed_only, pr.isInstalled(p.idSlice()))) cat_matches += 1;
         }
@@ -1014,12 +1113,12 @@ fn renderSourcePlugins() void {
         // Category header with its match count.
         _ = dvui.label(@src(), "{s}  ({d})", .{ cat.label(), cat_matches }, .{
             .id_extra = @as(usize, @intFromEnum(cat)) + 82000,
-            .color_text = theme.colors.text_secondary, .font = dvui.themeGet().font_heading,
+            .color_text = theme.colors.text_secondary,
+            .font = dvui.themeGet().font_heading,
             .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 2 },
         });
 
-        for (0..pr.plugin_count) |i| {
-            const p = &pr.plugins[i];
+        for (source_catalog[0..source_count], 0..) |*p, i| {
             if (pp.categoryOf(p.kindSlice()) != cat) continue;
             const installed = pr.isInstalled(p.idSlice());
             if (!pp.matches(p.nameSlice(), p.kindSlice(), query, src_installed_only, installed)) continue;
@@ -1032,7 +1131,7 @@ fn renderSourcePlugins() void {
                 sp.deinit();
             }
             if (dvui.button(@src(), if (installed) "Uninstall" else "Install", .{}, .{ .id_extra = i + 81400, .color_fill = if (installed) theme.colors.bg_elevated else theme.colors.accent, .color_text = if (installed) theme.colors.text_secondary else dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 }, .gravity_y = 0.5 })) {
-                if (installed) pr.uninstall(i) else pr.install(i);
+                _ = pr.apply(if (installed) .uninstall else .install, p.idSlice());
             }
             shown_total += 1;
         }
@@ -1112,7 +1211,10 @@ fn renderSuwayomi() void {
         };
         _ = dvui.label(@src(), "{s}", .{label}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
 
-        { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
 
         const busy_now = st == .downloading or st == .starting;
         if (st == .running) {
@@ -1139,9 +1241,13 @@ fn renderSuwayomi() void {
         defer row.deinit();
 
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &suwa_url_buf }, .placeholder = "http://localhost:4567" }, .{
-            .expand = .horizontal, .gravity_y = 0.5,
-            .color_fill = theme.colors.bg_elevated, .color_border = theme.colors.border_subtle,
-            .color_text = theme.colors.text_primary, .border = dvui.Rect.all(1), .corner_radius = theme.dims.rad_sm,
+            .expand = .horizontal,
+            .gravity_y = 0.5,
+            .color_fill = theme.colors.bg_elevated,
+            .color_border = theme.colors.border_subtle,
+            .color_text = theme.colors.text_primary,
+            .border = dvui.Rect.all(1),
+            .corner_radius = theme.dims.rad_sm,
         });
         te.deinit();
 
@@ -1287,19 +1393,22 @@ fn renderContentPlugins() void {
 
         if (plugin_count == 0) {
             _ = dvui.label(@src(), "No content plugins installed", .{}, .{
-                .color_text = theme.colors.text_secondary, .expand = .horizontal,
+                .color_text = theme.colors.text_secondary,
+                .expand = .horizontal,
             });
-            
+
             var hint_buf: [256]u8 = undefined;
             var dir_buf2: [512]u8 = undefined;
             const pd = getPluginDir(&dir_buf2);
             const hint = std.fmt.bufPrintZ(&hint_buf, "Install plugins to: {s}", .{pd}) catch "Install plugins to the Opal plugins folder";
             _ = dvui.label(@src(), "{s}", .{hint}, .{
-                .color_text = theme.colors.text_tertiary, .expand = .horizontal,
+                .color_text = theme.colors.text_tertiary,
+                .expand = .horizontal,
             });
-            
+
             if (dvui.button(@src(), "Rescan", .{}, .{
-                .color_fill = theme.colors.accent, .color_text = dvui.Color.white,
+                .color_fill = theme.colors.accent,
+                .color_text = dvui.Color.white,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
             })) {
@@ -1307,26 +1416,26 @@ fn renderContentPlugins() void {
             }
             return;
         }
-        
+
         // Plugin tabs (scrollable for many extensions)
         {
             var tab_scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
-                .expand = .horizontal, 
+                .expand = .horizontal,
                 .max_size_content = .{ .w = std.math.floatMax(f32), .h = 32 },
                 .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
             });
             defer tab_scroll.deinit();
-            
+
             var tab_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
             });
             defer tab_row.deinit();
-            
+
             for (0..plugin_count) |pi| {
                 const p = plugins[pi];
                 const is_active = (pi == active_plugin);
                 const name = p.name[0..p.name_len];
-                
+
                 if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(name), .{}, .{
                     .id_extra = pi + 8000,
                     .color_fill = if (is_active) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -1346,25 +1455,30 @@ fn renderContentPlugins() void {
                 }
             }
         }
-        
+
         // Search bar
         {
             var search_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal, .padding = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
+                .expand = .horizontal,
+                .padding = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
             });
             defer search_row.deinit();
-            
+
             var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &search_buf } }, .{
-                .expand = .horizontal, .min_size_content = .{ .w = 200, .h = 20 },
-                .color_fill = theme.colors.bg_elevated, .color_border = theme.colors.border_subtle,
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 200, .h = 20 },
+                .color_fill = theme.colors.bg_elevated,
+                .color_border = theme.colors.border_subtle,
                 .color_text = theme.colors.text_primary,
-                .border = dvui.Rect.all(1), .corner_radius = theme.dims.rad_sm,
+                .border = dvui.Rect.all(1),
+                .corner_radius = theme.dims.rad_sm,
             });
             const enter_pressed = te.enter_pressed;
             te.deinit();
-            
+
             const clicked = dvui.button(@src(), "Search", .{}, .{
-                .color_fill = theme.colors.accent, .color_text = dvui.Color.white,
+                .color_fill = theme.colors.accent,
+                .color_text = dvui.Color.white,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
                 .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
@@ -1375,7 +1489,7 @@ fn renderContentPlugins() void {
             }
         }
     }
-    
+
     // Snapshot the worker-shared state under the lock so the rest of the
     // frame renders against a consistent (loading, count) pair.
     results_mutex.lock();
@@ -1422,76 +1536,84 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
     const hue: u32 = @as(u32, @intCast(idx * 7 + 42)) *% 2654435761;
     const h1: u8 = @truncate(hue & 0xFF);
     const h2: u8 = @truncate((hue >> 8) & 0xFF);
-    
+
     // Outer card — vertical so episode grid can go below
     var outer = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = idx + 1000, .expand = .horizontal, .background = true,
+        .id_extra = idx + 1000,
+        .expand = .horizontal,
+        .background = true,
         .color_fill = if (item.expanded) theme.colors.bg_hover else theme.colors.bg_surface,
         .color_border = if (item.expanded) theme.colors.accent_glow else theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .padding = .{ .x = 10, .y = 10, .w = 10, .h = 10 },
     });
     defer outer.deinit();
-    
+
     // Top row: poster + info
     {
         var card = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = idx + 1100, .expand = .horizontal,
+            .id_extra = idx + 1100,
+            .expand = .horizontal,
         });
         defer card.deinit();
-        
+
         // Poster
         {
             var poster = dvui.box(@src(), .{ .dir = .vertical }, .{
-                .id_extra = idx + 100, .background = true,
+                .id_extra = idx + 100,
+                .background = true,
                 .color_fill = dvui.Color{ .r = 20 + h1 / 6, .g = 25 + h2 / 8, .b = 35 + h1 / 5, .a = 255 },
                 .corner_radius = dvui.Rect.all(6),
-                .min_size_content = .{ .w = 60, .h = 90 }, .max_size_content = .{ .w = 60, .h = 90 },
+                .min_size_content = .{ .w = 60, .h = 90 },
+                .max_size_content = .{ .w = 60, .h = 90 },
             });
             defer poster.deinit();
-            
+
             if (item.poster_tex == null and item.poster_pixels != null) {
                 const num_pixels = item.poster_w * item.poster_h;
                 const pixels_pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(item.poster_pixels.?.ptr)))[0..num_pixels];
                 item.poster_tex = dvui.textureCreate(pixels_pma, item.poster_w, item.poster_h, .linear, .rgba_32) catch null;
-                if (item.poster_tex != null) { c_alloc.free(item.poster_pixels.?); item.poster_pixels = null; }
+                if (item.poster_tex != null) {
+                    c_alloc.free(item.poster_pixels.?);
+                    item.poster_pixels = null;
+                }
             }
-            
+
             if (item.poster_tex) |*tex| {
                 _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                    .id_extra = idx + 150, .expand = .both, .corner_radius = dvui.Rect.all(6),
+                    .id_extra = idx + 150,
+                    .expand = .both,
+                    .corner_radius = dvui.Rect.all(6),
                 });
             } else {
                 if (!item.poster_fetching and item.poster_url_len > 0) fetchPoster(item);
             }
             _ = &poster;
         }
-        
+
         // Info column
         {
             var info = dvui.box(@src(), .{ .dir = .vertical }, .{
-                .id_extra = idx + 200, .expand = .horizontal, .padding = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
+                .id_extra = idx + 200,
+                .expand = .horizontal,
+                .padding = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
             });
             defer info.deinit();
-            
+
             // Title — click to toggle episode selection
             if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(title), .{}, .{
-                .id_extra = idx + 500, .expand = .horizontal,
+                .id_extra = idx + 500,
+                .expand = .horizontal,
                 .color_text = if (item.expanded) theme.colors.accent else theme.colors.text_primary,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 .padding = dvui.Rect.all(0),
             })) {
                 // If stream_url is already set, play directly
                 if (item.stream_url_len > 0) {
-                    const cc = @import("../core/c.zig");
-                    // Reject URLs containing quotes to prevent mpv command injection
                     const stream_slice = item.stream_url[0..item.stream_url_len];
-                    if (std.mem.indexOfScalar(u8, stream_slice, '"') != null) return;
                     if (state.app.players.items.len > 0 and state.app.active_player_idx < state.app.players.items.len) {
                         const p = state.app.players.items[state.app.active_player_idx];
-                        var cmd_buf: [600]u8 = undefined;
-                        const cmd = std.fmt.bufPrintZ(&cmd_buf, "loadfile \"{s}\"", .{stream_slice}) catch "";
-                        if (cmd.len > 0) _ = cc.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
+                        p.load(.{ .url = stream_slice, .mode = .replace });
                     }
                 } else if (item.episodes > 0) {
                     // Toggle episode selector
@@ -1501,28 +1623,31 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                     runPluginResolve(item.id[0..item.id_len], "1");
                 }
             }
-            
+
             // Meta row
             {
                 var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .id_extra = idx + 600, .expand = .horizontal, .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+                    .id_extra = idx + 600,
+                    .expand = .horizontal,
+                    .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
                 });
                 defer meta.deinit();
-                
+
                 if (item.year_len > 0) {
                     _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(item.year[0..item.year_len])}, .{
-                        .id_extra = idx + 610, .color_text = theme.colors.text_secondary,
+                        .id_extra = idx + 610,
+                        .color_text = theme.colors.text_secondary,
                     });
                     _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 615, .color_text = theme.colors.text_secondary });
                 }
-                
+
                 if (item.episodes > 0) {
                     var ep_buf: [16]u8 = undefined;
                     if (std.fmt.bufPrintZ(&ep_buf, "{d} eps", .{item.episodes})) |eps| {
                         _ = dvui.label(@src(), "{s}", .{eps}, .{ .id_extra = idx + 620, .color_text = theme.colors.text_secondary });
                     } else |_| {}
                 }
-                
+
                 if (item.score > 0) {
                     _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 625, .color_text = theme.colors.text_secondary });
                     const pct = @as(u8, @intFromFloat(std.math.clamp(item.score * 10.0, 0.0, 100.0)));
@@ -1533,56 +1658,60 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                     } else |_| {}
                 }
             }
-            
+
             // Overview snippet
             if (item.overview_len > 0) {
                 const snip_len = @min(item.overview_len, 60);
                 const suffix: []const u8 = if (item.overview_len > 60) "..." else "";
                 var btn_buf: [128]u8 = undefined;
-                if (std.fmt.bufPrintZ(&btn_buf, "{s}{s}", .{item.overview[0..snip_len], suffix})) |snip| {
+                if (std.fmt.bufPrintZ(&btn_buf, "{s}{s}", .{ item.overview[0..snip_len], suffix })) |snip| {
                     _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(snip)}, .{
-                        .id_extra = idx + 650, .color_text = theme.colors.text_tertiary, .expand = .horizontal,
+                        .id_extra = idx + 650,
+                        .color_text = theme.colors.text_tertiary,
+                        .expand = .horizontal,
                         .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
                     });
                 } else |_| {}
             }
         }
     }
-    
+
     // ── Episode Grid (expanded) ──
     if (item.expanded and item.episodes > 0) {
         // Divider
         {
             var div = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = idx + 750, .expand = .horizontal, .background = true,
+                .id_extra = idx + 750,
+                .expand = .horizontal,
+                .background = true,
                 .color_fill = theme.colors.border_subtle,
                 .min_size_content = .{ .w = 0, .h = 1 },
                 .margin = .{ .x = 0, .y = 6, .w = 0, .h = 6 },
             });
             div.deinit();
         }
-        
+
         _ = dvui.label(@src(), "Select Episode", .{}, .{
             .id_extra = idx + 760,
             .color_text = theme.colors.accent,
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
-        
+
         // Episode number buttons in a wrapping grid
         const ep_count: usize = @intCast(item.episodes);
         const max_show: usize = @min(ep_count, 200); // cap at 200 for performance
-        
+
         var row_start: usize = 0;
         while (row_start < max_show) {
             const row_end = @min(row_start + 10, max_show); // 10 per row
-            
+
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = idx * 300 + row_start + 2000,
                 .expand = .horizontal,
                 .padding = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
             });
             defer row.deinit();
-            
+
             for (row_start..row_end) |ep_i| {
                 const ep_num = ep_i + 1;
                 var lbl: [8]u8 = undefined;
@@ -1608,9 +1737,8 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                     }
                 } else |_| {}
             }
-            
+
             row_start = row_end;
         }
     }
 }
-

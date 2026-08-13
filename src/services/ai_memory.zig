@@ -34,31 +34,22 @@ pub fn getEmbedding(text: []const u8, floats_out: *[EMBED_DIM]f32) bool {
     }
     writer.print("\"}}", .{}) catch return false;
 
-    // Use thread-unique temp files to avoid race conditions
-    var req_path_buf: [64]u8 = undefined;
-    const tid = std.Thread.getCurrentId();
-    var tmp_dir_buf: [512]u8 = undefined;
-    const req_path = std.fmt.bufPrintZ(&req_path_buf, "{s}/opal_embed_req_{d}.json", .{ @import("../core/io_global.zig").tmpDir(&tmp_dir_buf), tid }) catch return false;
-
-    var resp_path_buf: [64]u8 = undefined;
-    const resp_path = std.fmt.bufPrintZ(&resp_path_buf, "{s}/opal_embed_resp_{d}.json", .{ @import("../core/io_global.zig").tmpDir(&tmp_dir_buf), tid }) catch return false;
-
-    // Write request body to file
-    if (@import("../core/io_global.zig").cwdCreateFile(req_path, .{})) |req_file| {
-        @import("../core/io_global.zig").writeAll(req_file, fbs.buffered()) catch return false;
-        req_file.close(@import("../core/io_global.zig").io());
-    } else |_| return false;
+    // Both files live in one cryptographically random 0700 workspace. The
+    // response is pre-created 0600 so curl truncates a file we own.
+    const secure_temp = @import("../core/secure_temp.zig");
+    var scratch = secure_temp.Workspace.create("embedding") catch return false;
+    defer scratch.cleanup();
+    var req_path_buf: [secure_temp.max_path_len]u8 = undefined;
+    const req_path = scratch.writeFile("request.json", fbs.buffered(), &req_path_buf) catch return false;
+    var resp_path_buf: [secure_temp.max_path_len]u8 = undefined;
+    const resp_path = scratch.reserveFile("response.json", &resp_path_buf) catch return false;
 
     // Call embedding server
-    var data_arg_buf: [80]u8 = undefined;
-    const data_arg = std.fmt.bufPrintZ(&data_arg_buf, "@{s}", .{req_path}) catch return false;
-
-    var out_arg_buf: [80]u8 = undefined;
-    const out_arg = std.fmt.bufPrintZ(&out_arg_buf, "{s}", .{resp_path}) catch return false;
+    var data_arg_buf: [secure_temp.max_path_len + 1]u8 = undefined;
+    const data_arg = std.fmt.bufPrint(&data_arg_buf, "@{s}", .{req_path}) catch return false;
 
     var curl_child = @import("../core/io_global.zig").Child.init(
-        &.{ "curl", "-s", "-X", "POST", "-H", "Content-Type: application/json",
-            "--data-binary", data_arg, "-o", out_arg, "--max-time", "10", "http://127.0.0.1:41593/v1/embeddings" },
+        &.{ "curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", data_arg, "-o", resp_path, "--max-time", "10", "http://127.0.0.1:41593/v1/embeddings" },
         @import("../core/alloc.zig").allocator,
     );
     _ = curl_child.spawnAndWait() catch return false;
@@ -66,10 +57,6 @@ pub fn getEmbedding(text: []const u8, floats_out: *[EMBED_DIM]f32) bool {
     // Read response
     const resp_file = @import("../core/io_global.zig").openFileAbsolute(resp_path, .{}) catch return false;
     defer resp_file.close(@import("../core/io_global.zig").io());
-
-    // Clean up temp files
-    defer @import("../core/io_global.zig").deleteFileAbsolute(req_path) catch {};
-    defer @import("../core/io_global.zig").deleteFileAbsolute(resp_path) catch {};
 
     var resp_buf: [32768]u8 = undefined;
     const resp_len = @import("../core/io_global.zig").readAll(resp_file, &resp_buf) catch return false;
@@ -326,7 +313,7 @@ pub fn getRecentConversations(allocator: std.mem.Allocator) ?[]u8 {
         const content = db.columnText(stmt, 1) orelse continue;
         if (isJunkTurn(content)) continue; // belt-and-suspenders: skip legacy poison
         const ts = db.columnInt(stmt, 2);
-        
+
         // Time ago
         const now = @as(i32, @intCast(@min(@import("../core/io_global.zig").timestamp(), std.math.maxInt(i32))));
         const ago_mins = @divTrunc(now - ts, 60);
@@ -370,10 +357,10 @@ pub fn getProactiveSuggestion(buf: []u8, name_buf: []u8) ?[]const u8 {
                 const nlen = @min(name_raw.len, name_buf.len);
                 @memcpy(name_buf[0..nlen], name_raw[0..nlen]);
                 var clean: []const u8 = name_buf[0..nlen];
-                
+
                 // Extract filename from path
                 if (std.mem.lastIndexOfScalar(u8, clean, '/')) |slash| {
-                    clean = clean[slash + 1..];
+                    clean = clean[slash + 1 ..];
                 }
                 // Remove file extension
                 if (std.mem.lastIndexOfScalar(u8, clean, '.')) |dot| {

@@ -29,10 +29,8 @@ var cli_open_buf: [2048]u8 = std.mem.zeroes([2048]u8);
 var cli_open_len: usize = 0;
 var cli_open_done: bool = false;
 
-// One-shot latch: apply the device-aware default ui_scale on the first frame
-// after config has loaded (needs dvui.windowNaturalScale(), only valid inside a
-// frame). Runtime-only — recomputed each launch so moving to a different-DPI
-// display picks a fresh default.
+// One-shot latch: apply the adaptive 1.0× default after config has loaded while
+// preserving an explicit user-selected density override.
 var device_scale_applied: bool = false;
 
 pub const dvui_app: dvui.App = .{
@@ -546,6 +544,9 @@ pub fn appDeinit() void {
     // One process-table scan instead of seven serial scans. On Windows each
     // old scan launched PowerShell + CIM, which dominated close latency.
     @import("core/io_global.zig").killAnyByCommandLine(&kill_targets, false);
+    // Sidecars are gone; their random 0700 socket/audio workspace can now be
+    // removed without racing a writer.
+    voice.deinit();
 
     // llama-server (AI backend)
     const server = @import("services/ai_server.zig");
@@ -768,11 +769,10 @@ fn appFrame() !dvui.App.Result {
     // theme.setPreset on the background worker, which can't touch dvui directly).
     theme.reapplyIfPending();
 
-    // Device-aware default scale — applied once, after config load, when the
-    // user hasn't pinned a manual scale. dvui already multiplies by the display
-    // DPI (natural_scale); this picks a compact-but-readable density on top,
-    // biased denser on high-DPI panels. windowNaturalScale() is only valid
-    // inside a frame, so this can't live in appInit.
+    // Adaptive default scale — DVUI already applies a reported display scale,
+    // so Auto starts at 1.0× and never shrinks below it. A Linux panel probe
+    // may scale upward when the OS reports only a placeholder. Point-based
+    // breakpoints independently adapt the layout to screen/window size.
     if (!device_scale_applied and state.app.config_loaded.load(.acquire)) {
         device_scale_applied = true;
         if (state.app.ui_scale_auto) {

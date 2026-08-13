@@ -5,7 +5,8 @@
 //! on both, `scale_pure.deviceScale` trusts that number and never asks here.
 //! Linux is the gap: on a Wayland or X11 session with no `Xft.dpi` set, dvui's
 //! backend has nothing to read and reports exactly 1.0. That is a shrug, not a
-//! measurement, and it made a 2560x1600 190-DPI laptop default to a 0.8 scale.
+//! measurement, so a dense laptop panel may need an upward Auto adjustment.
+//! The user multiplier still has an unconditional 1.0× floor.
 //!
 //! The kernel already knows the answer. Every connected output exposes its
 //! current mode and its EDID under /sys/class/drm, which is the same data
@@ -29,8 +30,8 @@ pub fn defaultScale(natural_scale: f32) f32 {
 
 /// Best-effort panel geometry for the display Opal is most likely on, or null
 /// when nothing can be determined (non-Linux, no sysfs, headless, odd driver).
-/// Never returns an error: a missing display probe must degrade to the old
-/// resolution-blind default, not fail startup.
+/// Never returns an error: a missing display probe degrades to the neutral
+/// 1.0× baseline rather than failing startup.
 pub fn probe() ?scale_pure.Display {
     if (!is_linux) return null;
 
@@ -145,7 +146,7 @@ test "probe is analysed and never fails on any host" {
 
 test "defaultScale is always usable without panel metadata" {
     const value = defaultScale(1.0);
-    try std.testing.expect(value >= scale_pure.MIN_SCALE);
+    try std.testing.expect(value >= scale_pure.AUTO_MIN_SCALE);
     try std.testing.expect(value <= scale_pure.MAX_SCALE);
 }
 

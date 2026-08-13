@@ -16,6 +16,18 @@ pub fn webUiUrl(port: u16, buf: []u8) ?[]const u8 {
     return std.fmt.bufPrint(buf, "http://127.0.0.1:{d}/", .{port}) catch null;
 }
 
+/// First-admin bootstrap URL opened by the trusted desktop app. The setup
+/// capability lives in the fragment, which browsers do not send in the HTTP
+/// request or Referer. The bundled page captures and immediately removes it
+/// from browser history before submitting it in a dedicated request header.
+pub fn webUiSetupUrl(port: u16, setup_token: []const u8, buf: []u8) ?[]const u8 {
+    if (setup_token.len != 64) return null;
+    for (setup_token) |ch| {
+        if (!std.ascii.isDigit(ch) and !(ch >= 'a' and ch <= 'f')) return null;
+    }
+    return std.fmt.bufPrint(buf, "http://127.0.0.1:{d}/#setup={s}", .{ port, setup_token }) catch null;
+}
+
 /// Tooltip for the header Web UI button. `lan_ip` is only consulted when
 /// `running` — callers pass "" while off so the toggle never pays for the
 /// `ipconfig` probe behind `remote.lanIp()` on a cold first frame.
@@ -50,6 +62,18 @@ test "webUiUrl: buffer too small returns null" {
     try std.testing.expectEqual(@as(?[]const u8, null), webUiUrl(41595, &tiny));
 }
 
+test "webUiSetupUrl keeps one-time capability in a fragment" {
+    const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    var buf: [128]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "http://127.0.0.1:41595/#setup=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        webUiSetupUrl(41595, token, &buf).?,
+    );
+    try std.testing.expectEqual(@as(?[]const u8, null), webUiSetupUrl(41595, "short", &buf));
+    try std.testing.expectEqual(@as(?[]const u8, null), webUiSetupUrl(41595, "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", &buf));
+    try std.testing.expectEqual(@as(?[]const u8, null), webUiSetupUrl(41595, "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF", &buf));
+}
+
 test "webUiTooltip: off ignores lan ip" {
     var buf: [96]u8 = undefined;
     try std.testing.expectEqualStrings(
@@ -77,7 +101,6 @@ test "webUiTooltip: tiny buffer falls back instead of truncating" {
         webUiTooltip(true, "192.168.1.42", 41595, &tiny),
     );
 }
-
 
 /// First IPv4 dotted quad in `out`, or null. Used to read the LAN address out
 /// of `ipconfig getifaddr` (one address) and `hostname -I` (space separated,
@@ -121,9 +144,9 @@ test "firstIpv4 reads ipconfig and hostname -I output" {
 test "firstIpv4 rejects things that only look like an address" {
     try std.testing.expect(firstIpv4("") == null);
     try std.testing.expect(firstIpv4("no address here") == null);
-    try std.testing.expect(firstIpv4("1.2.3") == null);          // three octets
-    try std.testing.expect(firstIpv4("1.2.3.4.5") == null);      // five
-    try std.testing.expect(firstIpv4("999.1.1.1") == null);      // out of range
-    try std.testing.expect(firstIpv4("1.2.3.a") == null);        // non-numeric
-    try std.testing.expect(firstIpv4("fe80::1") == null);        // v6
+    try std.testing.expect(firstIpv4("1.2.3") == null); // three octets
+    try std.testing.expect(firstIpv4("1.2.3.4.5") == null); // five
+    try std.testing.expect(firstIpv4("999.1.1.1") == null); // out of range
+    try std.testing.expect(firstIpv4("1.2.3.a") == null); // non-numeric
+    try std.testing.expect(firstIpv4("fe80::1") == null); // v6
 }

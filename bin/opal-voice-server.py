@@ -6,7 +6,7 @@ utterance, and supports barge-in (interrupting TTS by speaking).
 
 Protocol (matches ai_voice.conversationLoopV2):
 
-    socket: /tmp/opal-voice.sock
+    socket: `--socket <private-runtime-path>`
     client -> server (newline-terminated commands):
         RESUME            start/continue listening
         PAUSE             stop listening
@@ -28,14 +28,45 @@ Dependencies: sounddevice + faster-whisper (and optionally webrtcvad for
 better VAD; falls back to an RMS energy gate). Exits non-zero if a hard
 dependency is missing so the Zig caller falls back to its ffmpeg path.
 """
+import atexit
 import difflib
 import os
+import shutil
 import socket
 import sys
+import tempfile
 import threading
 import time
 
-SOCK_PATH = "/tmp/opal-voice.sock"
+_default_runtime = None
+
+
+def _socket_path() -> str:
+    global _default_runtime
+    try:
+        idx = sys.argv.index("--socket")
+        return sys.argv[idx + 1]
+    except (ValueError, IndexError):
+        configured = os.environ.get("OPAL_VOICE_SOCKET")
+        if configured:
+            return configured
+        _default_runtime = tempfile.mkdtemp(prefix="opal-voice-")
+        return os.path.join(_default_runtime, "voice.sock")
+
+
+SOCK_PATH = _socket_path()
+
+
+def _cleanup_runtime():
+    try:
+        os.unlink(SOCK_PATH)
+    except FileNotFoundError:
+        pass
+    if _default_runtime:
+        shutil.rmtree(_default_runtime, ignore_errors=True)
+
+
+atexit.register(_cleanup_runtime)
 DEBUG = bool(os.environ.get("OPAL_VOICE_DEBUG"))
 SAMPLE_RATE = 16000
 FRAME_MS = 30
@@ -457,6 +488,7 @@ def main() -> int:
 
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(SOCK_PATH)
+    os.chmod(SOCK_PATH, 0o600)
     srv.listen(1)
     _eprint(f"opal-voice-server listening on {SOCK_PATH} (model={model_name})")
 

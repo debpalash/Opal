@@ -42,6 +42,7 @@ pub const NAME_LEN: usize = 256;
 pub const ERR_LEN: usize = 96;
 
 pub const Status = enum(u8) { empty, queued, probing, running, paused, failed, done, canceling };
+pub const Action = enum { pause, @"resume", cancel, dismiss };
 
 /// UI-facing statuses that occupy a scheduler slot.
 fn isActive(s: Status) bool {
@@ -262,55 +263,61 @@ pub fn restoreSidecar(meta: *const dp.PartMeta, dest: []const u8) bool {
 }
 
 /// Pause: stop workers, keep the sidecar + part file for resume.
-pub fn pause(idx: usize, token: u32) void {
+pub fn pause(idx: usize, token: u32) bool {
     mu.lock();
     if (idx >= MAX_DOWNLOADS or slots[idx].run_token.load(.acquire) != token) {
         mu.unlock();
-        return;
+        return false;
     }
     const d = &slots[idx];
     if (d.status == .queued) {
         d.status = .paused;
         mu.unlock();
-        return;
+        return true;
     }
     if (!isActive(d.status)) {
         mu.unlock();
-        return;
+        return false;
     }
     d.status = .paused;
     _ = d.run_token.fetchAdd(1, .acq_rel); // workers stop; coordinator persists
     mu.unlock();
     schedule();
+    return true;
 }
 
 /// Resume a paused or failed download (re-queues; scheduler picks it up).
 /// `token` is the value the UI snapshot carried — stale actions are ignored.
-pub fn resumeDl(idx: usize, token: u32) void {
+pub fn resumeDl(idx: usize, token: u32) bool {
     mu.lock();
     if (idx >= MAX_DOWNLOADS or slots[idx].run_token.load(.acquire) != token) {
         mu.unlock();
-        return;
+        return false;
     }
     const d = &slots[idx];
     if (d.status != .paused and d.status != .failed) {
         mu.unlock();
-        return;
+        return false;
     }
     d.status = .queued;
     d.err_len = 0;
     mu.unlock();
     schedule();
+    return true;
 }
 
 /// Cancel and forget. Removes the part file + sidecar.
-pub fn cancel(idx: usize, token: u32) void {
+pub fn cancel(idx: usize, token: u32) bool {
     mu.lock();
     if (idx >= MAX_DOWNLOADS or slots[idx].run_token.load(.acquire) != token) {
         mu.unlock();
-        return;
+        return false;
     }
     const d = &slots[idx];
+    if (d.status == .empty or d.status == .done or d.status == .canceling) {
+        mu.unlock();
+        return false;
+    }
     const was_active = isActive(d.status);
     _ = d.run_token.fetchAdd(1, .acq_rel);
     var dest_buf: [PATH_LEN]u8 = undefined;
@@ -323,6 +330,7 @@ pub fn cancel(idx: usize, token: u32) void {
 
     if (!was_active) removeArtifacts(dest_buf[0..dlen]);
     schedule();
+    return true;
 }
 
 fn removeArtifacts(dest: []const u8) void {
@@ -337,16 +345,16 @@ fn removeArtifacts(dest: []const u8) void {
 
 /// Clear a finished (done/failed) row from the list. Keeps disk bytes for
 /// .done; removes partials for .failed.
-pub fn dismiss(idx: usize, token: u32) void {
+pub fn dismiss(idx: usize, token: u32) bool {
     mu.lock();
     if (idx >= MAX_DOWNLOADS or slots[idx].run_token.load(.acquire) != token) {
         mu.unlock();
-        return;
+        return false;
     }
     const d = &slots[idx];
-    if (isActive(d.status) or d.status == .canceling) {
+    if (d.status != .done and d.status != .failed and d.status != .paused) {
         mu.unlock();
-        return;
+        return false;
     }
     const failed = d.status == .failed or d.status == .paused;
     var dest_buf: [PATH_LEN]u8 = undefined;
@@ -356,6 +364,18 @@ pub fn dismiss(idx: usize, token: u32) void {
     d.status = .empty;
     mu.unlock();
     if (failed) removeArtifacts(dest_buf[0..dlen]);
+    return true;
+}
+
+/// One typed mutation seam for non-UI clients; the native UI may keep calling
+/// the named operations when that reads more clearly at the button site.
+pub fn apply(idx: usize, token: u32, action: Action) bool {
+    return switch (action) {
+        .pause => pause(idx, token),
+        .@"resume" => resumeDl(idx, token),
+        .cancel => cancel(idx, token),
+        .dismiss => dismiss(idx, token),
+    };
 }
 
 // ── UI snapshot ──

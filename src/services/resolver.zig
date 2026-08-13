@@ -10,6 +10,8 @@ const alloc = @import("../core/alloc.zig").allocator;
 const io_glob = @import("../core/io_global.zig");
 const content_cache = @import("../core/content_cache.zig");
 const ccp = @import("../core/content_cache_pure.zig");
+const bounded_process = @import("../core/bounded_process.zig");
+const lifecycle = @import("resolver_lifecycle_pure.zig");
 
 // ══════════════════════════════════════════════════════════
 // Universal Resolver — one query, every source, ranked
@@ -112,8 +114,13 @@ pub var status_music = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_radio = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_podcast = std.atomic.Value(SourceStatus).init(.idle);
 
-// Explicit u8 backing so std.atomic.Value(SourceStatus) is byte-atomic.
-pub const SourceStatus = enum(u8) { idle, searching, done, failed };
+// Explicit u8 backing so std.atomic.Value(SourceStatus) is byte-atomic. The
+// richer terminal values make an empty source distinguishable from a network,
+// parse, timeout, configuration, or partial failure.
+pub const SourceStatus = lifecycle.SourceStatus;
+pub const combineSourceStatuses = lifecycle.combineSources;
+pub const combineManySourceStatuses = lifecycle.combineMany;
+pub const sourceStatusIsFailure = lifecycle.isFailure;
 
 /// UI source filter — one bit per Search-toolbar pill. Disabled sources are
 /// not spawned by resolve() (their status reads .idle) and their result
@@ -164,6 +171,15 @@ pub fn clearResults() void {
     results_mutex.lock();
     defer results_mutex.unlock();
     result_count = 0;
+}
+
+/// Snapshot the streamed result count without racing a worker insertion.
+/// Callers that need rows as well as the count must still hold `results_mutex`
+/// across the complete traversal.
+pub fn resultCount() usize {
+    results_mutex.lock();
+    defer results_mutex.unlock();
+    return result_count;
 }
 
 /// Normalize a search query for torrent compatibility:
@@ -306,13 +322,18 @@ fn normalizeQuery(raw: []const u8, buf: *[256]u8) []const u8 {
 /// Main entry: fire all backends in parallel
 pub fn resolve(query: []const u8, intent: []const u8) void {
     if (query.len == 0) return;
+    // A run transition and every live worker publication share this lock. A
+    // generation check without the lock has a TOCTOU window: an old worker can
+    // validate, the next run can clear/reset, and then the old worker can write
+    // into the new run. The lock makes generation + globals one transaction.
+    lifecycle_mutex.lock();
     // Supersede, don't drop: the old `is_resolving` early-return silently ate
     // every Enter/search-icon press while ANY slow source was still draining
     // (nova2 fans out to 20+ engines and can run a minute) — fast sources had
     // long since painted results, so the search looked idle but dead. Bumping
     // the generation orphans the in-flight wave: its pushResult calls no-op
     // (worker_gen mismatch) while this wave's workers own the fresh statuses.
-    _ = run_gen.fetchAdd(1, .acq_rel);
+    const this_run = run_gen.fetchAdd(1, .acq_rel) +% 1;
 
     // Save query — normalize "season X episode Y" → "SXXEYY"
     var norm_buf: [256]u8 = undefined;
@@ -379,17 +400,21 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
         // running the backend, so pushResult can drop pushes from a superseded
         // wave. Query still travels BY VALUE through the spawn tuple.
         fn go(comptime f: anytype, st: *std.atomic.Value(SourceStatus)) void {
+            const run_id = run_gen.load(.acquire);
             const Wrap = struct {
                 fn run(wq: [256]u8, wqlen: usize, wg: u32) void {
                     worker_gen = wg;
+                    worker_reported = .done;
+                    worker_produced = false;
                     f(wq, wqlen);
                 }
             };
-            if (std.Thread.spawn(.{}, Wrap.run, .{ resolver_query, resolver_query_len, run_gen.load(.acquire) })) |t| {
+            if (std.Thread.spawn(.{}, Wrap.run, .{ resolver_query, resolver_query_len, run_id })) |t| {
                 t.detach();
             } else |_| {
-                st.store(.failed, .release);
-                checkAllDone();
+                // resolve() owns lifecycle_mutex here, so this failure belongs
+                // to the run being initialized and cannot race a successor.
+                st.store(.unavailable, .release);
             }
         }
     };
@@ -422,7 +447,8 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
 
     // If filtering left nothing to spawn, close the resolve immediately —
     // no worker exists to call checkAllDone().
-    checkAllDone();
+    checkAllDoneLocked(this_run);
+    lifecycle_mutex.unlock();
 }
 
 /// Monotonic search generation. Each worker thread carries the generation it
@@ -430,6 +456,16 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
 /// bumps it, so superseded workers publish nothing and just wind down.
 var run_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 threadlocal var worker_gen: u32 = 0;
+threadlocal var worker_reported: SourceStatus = .done;
+threadlocal var worker_produced: bool = false;
+var lifecycle_mutex = @import("../core/sync.zig").Mutex{};
+
+/// Backends call this before returning from a known failure/configuration path.
+/// Multiple events keep the most informative reason; successful publication is
+/// observed separately by pushResult and turns a later failure into `.partial`.
+fn noteWorkerOutcome(outcome: SourceStatus) void {
+    worker_reported = lifecycle.mergeReported(worker_reported, outcome);
+}
 
 /// Where a backend's results land.
 ///
@@ -488,11 +524,26 @@ pub fn warmQuery(query: []const u8) void {
     var qbuf: [256]u8 = undefined;
     @memcpy(qbuf[0..query.len], query);
 
-    const prev = thread_sink;
+    // A warm may be called from any worker thread in the future. Preserve the
+    // complete thread-local publication context, not only the destination:
+    // failures and rows observed by speculative adapters must never turn the
+    // caller's live outcome into `.partial` (or make it look productive).
+    const prev_sink = thread_sink;
+    const prev_gen = worker_gen;
+    const prev_reported = worker_reported;
+    const prev_produced = worker_produced;
+    defer {
+        thread_sink = prev_sink;
+        worker_gen = prev_gen;
+        worker_reported = prev_reported;
+        worker_produced = prev_produced;
+    }
     thread_sink = &sink;
+    worker_gen = 0;
+    worker_reported = .done;
+    worker_produced = false;
     resolveEztv(qbuf, query.len);
     resolveTorznab(qbuf, query.len);
-    thread_sink = prev;
 
     if (sink.count == 0) return;
 
@@ -511,19 +562,25 @@ pub fn warmQuery(query: []const u8) void {
 }
 
 fn pushResult(item: ResolvedItem) bool {
-    // Superseded wave (user searched again mid-flight) — drop, don't mix
-    // stale rows for the previous query into the fresh result list. A warm has
-    // no wave to be superseded by, so this only guards the live path.
-    if (thread_sink == null and worker_gen != run_gen.load(.acquire)) return false;
-
     if (thread_sink) |s| {
         // Private buffer, single owner: no lock, and no contention with the UI
         // thread reading `results` every frame.
-        return pushInto(s.items, &s.count, &s.from_cache, item, s.query);
+        const accepted = pushInto(s.items, &s.count, &s.from_cache, item, s.query);
+        if (accepted) worker_produced = true;
+        return accepted;
     }
+
+    // Serialize the freshness decision with run initialization. Checking the
+    // generation before taking only results_mutex allowed a stale worker to
+    // validate, pause, and insert after a successor had cleared the list.
+    lifecycle_mutex.lock();
+    defer lifecycle_mutex.unlock();
+    if (thread_sink == null and worker_gen != run_gen.load(.acquire)) return false;
     results_mutex.lock();
     defer results_mutex.unlock();
-    return pushInto(&results, &result_count, &results_from_cache, item, "");
+    const accepted = pushInto(&results, &result_count, &results_from_cache, item, "");
+    if (accepted) worker_produced = true;
+    return accepted;
 }
 
 /// The insert itself: filter, dedup, score, insert sorted. Shared by both sinks
@@ -616,10 +673,7 @@ fn isLocalMedia(name: []const u8) bool {
 /// already have is findable straight from the omnibox.
 fn resolveLocalFiles(q: [256]u8, qlen: usize) void {
     const io_global = @import("../core/io_global.zig");
-    defer {
-        status_local.store(.done, .release);
-        checkAllDone();
-    }
+    defer finishWorker(&status_local, .done);
     if (qlen == 0) return;
 
     var ql: [256]u8 = undefined;
@@ -631,9 +685,15 @@ fn resolveLocalFiles(q: [256]u8, qlen: usize) void {
         state.app.save_path_buf[0..state.app.save_path_len]
     else
         @import("../core/paths.zig").defaultSavePath(&path_buf);
-    if (save_path.len == 0) return;
+    if (save_path.len == 0) {
+        noteWorkerOutcome(.unavailable);
+        return;
+    }
 
-    var dir = io_global.cwdOpenDir(save_path, .{ .iterate = true }) catch return;
+    var dir = io_global.cwdOpenDir(save_path, .{ .iterate = true }) catch {
+        noteWorkerOutcome(.unavailable);
+        return;
+    };
     defer dir.close(io_global.io());
 
     var iter = dir.iterate();
@@ -673,10 +733,7 @@ fn resolveLocalFiles(q: [256]u8, qlen: usize) void {
 /// torrent-source results (they carry magnet URIs → play via loadTorrentToPlayer).
 fn resolveRss(q: [256]u8, qlen: usize) void {
     const rss = @import("rss.zig");
-    defer {
-        status_rss.store(.done, .release);
-        checkAllDone();
-    }
+    defer finishWorker(&status_rss, .done);
     if (qlen == 0) return;
 
     var ql: [256]u8 = undefined;
@@ -716,10 +773,7 @@ fn resolveRss(q: [256]u8, qlen: usize) void {
 /// Reuses the exact search URL + book-link/title/latest-chapter href parse that
 /// comics.zig's buildSearchUrl/parseSearchResults use.
 fn resolveComics(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_comics.store(.done, .release);
-        checkAllDone();
-    }
+    defer finishWorker(&status_comics, .done);
     if (qlen == 0) return;
 
     const query = query_buf[0..qlen];
@@ -745,11 +799,17 @@ fn resolveComics(query_buf: [256]u8, qlen: usize) void {
     }
 
     // Endpoint migrated to opal-plugins — inert until the user installs "readallcomics".
-    _ = @import("../core/source_config.zig").get("readallcomics", "base") orelse return;
+    _ = @import("../core/source_config.zig").get("readallcomics", "base") orelse {
+        noteWorkerOutcome(.unavailable);
+        return;
+    };
 
     // readallcomics pages can be large — heap the fetch buffer (never on the
     // worker stack, per the >64KB rule).
-    const page = alloc.alloc(u8, 512 * 1024) catch return;
+    const page = alloc.alloc(u8, 512 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
     defer alloc.free(page);
 
     @import("../core/rate_limit.zig").acquire("readallcomics", 1.0);
@@ -764,9 +824,15 @@ fn resolveComics(query_buf: [256]u8, qlen: usize) void {
     const body = @import("../core/mirrors.zig").fetch("readallcomics", page, .{
         .timeout_secs = 6,
         .user_agent = "Mozilla/5.0",
-    }, enc[0..el], build) orelse return;
+    }, enc[0..el], build) orelse {
+        noteWorkerOutcome(.transport_failed);
+        return;
+    };
     const html = body;
-    if (html.len < 100) return;
+    if (html.len < 100) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
 
     // Parse: each result is a `class="book-link"` block carrying a title="…"
     // attribute and a following `class="latest-chapter"` anchor href (the
@@ -977,7 +1043,33 @@ fn storeToCache() void {
     }
 }
 
-fn checkAllDone() void {
+/// Publish one terminal source outcome. Warm workers deliberately bypass the
+/// live lifecycle, and stale live workers are rejected while holding the same
+/// mutex used to begin a new run. A prior failure is terminal and cannot be
+/// accidentally erased by a later `.done` completion.
+fn finishWorker(st: *std.atomic.Value(SourceStatus), outcome: SourceStatus) void {
+    if (thread_sink != null) return;
+
+    lifecycle_mutex.lock();
+    defer lifecycle_mutex.unlock();
+    const active_run = run_gen.load(.acquire);
+    if (!lifecycle.mayMutateLive(.live, worker_gen, active_run)) return;
+
+    const current = st.load(.acquire);
+    if (current == .searching or lifecycle.isFailure(current)) {
+        const reported = lifecycle.mergeReported(worker_reported, outcome);
+        var terminal = lifecycle.finalize(reported, worker_produced);
+        // A direct failure written before generic cleanup remains terminal.
+        if (lifecycle.isFailure(current)) terminal = lifecycle.mergeReported(terminal, current);
+        st.store(terminal, .release);
+    }
+    checkAllDoneLocked(worker_gen);
+}
+
+/// Caller holds lifecycle_mutex. `run` is explicit so only the run whose
+/// statuses were inspected may close `is_resolving` and persist its cache.
+fn checkAllDoneLocked(run: u32) void {
+    if (run != run_gen.load(.acquire)) return;
     if (status_jf.load(.acquire) != .searching and status_stremio.load(.acquire) != .searching and
         status_torrent.load(.acquire) != .searching and status_anime.load(.acquire) != .searching and
         status_yt.load(.acquire) != .searching and
@@ -1105,12 +1197,10 @@ fn computeMatchAgainst(item: ResolvedItem, query_override: []const u8) MatchInfo
 // ══════════════════════════════════════════════════════════
 
 fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_jf.store(.done, .release);
-        checkAllDone();
-    }
+    defer finishWorker(&status_jf, .done);
 
     if (!state.app.jf.connected or state.app.jf.server_url_len == 0) {
+        noteWorkerOutcome(.unavailable);
         return;
     }
 
@@ -1139,14 +1229,23 @@ fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
     var url_buf: [1024]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "{s}/Users/{s}/Items?searchTerm={s}&Limit=10&Recursive=true&Fields=Overview&api_key={s}", .{
         server, uid, enc_buf[0..enc_len], token,
-    }) catch return;
+    }) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
 
     var buf: [64 * 1024]u8 = undefined;
     @import("../core/rate_limit.zig").acquire("jellyfin", 5.0);
-    const body = @import("../core/http.zig").fetch(url, &buf, .{ .timeout_secs = 5 }) orelse return;
+    const body = @import("../core/http.zig").fetch(url, &buf, .{ .timeout_secs = 5 }) orelse {
+        noteWorkerOutcome(.transport_failed);
+        return;
+    };
     const n = body.len;
 
-    if (n < 10) return;
+    if (n < 10) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
 
     // Parse items
     var pos: usize = 0;
@@ -1194,10 +1293,9 @@ fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
 
 // Main torrent thread: uses nova2.py (same proven engine as Torrent Only tab)
 fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
-    var failed = false;
+    var outcome: SourceStatus = .done;
     defer {
-        status_torrent.store(if (failed) .failed else .done, .release);
-        checkAllDone();
+        finishWorker(&status_torrent, outcome);
         state.wakeUi();
     }
 
@@ -1205,21 +1303,34 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
 
     // nova2.py requires running from the engines/ parent directory
     const py = @import("../core/pybin.zig").python() orelse {
-        failed = true;
+        outcome = .unavailable;
         logs.pushLog("error", "resolver", @import("../core/pybin.zig").missingHint(), true);
         return;
     };
     const argv = [_][]const u8{
         py, "engines/nova2.py", "--timeout=6", "all", "all", query,
     };
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    // Run from the bundled resource root when installed (CWD is "/" from a
-    // /Applications launch); null in dev keeps the inherited project-dir CWD.
-    child.cwd = state.resourceRoot();
-    _ = child.spawn() catch {
-        failed = true;
+    const owned_generation = worker_gen;
+
+    // Keep nova2's incremental rows, but delegate its complete process-tree
+    // lifecycle to the shared streaming guard. The epoch is the generation
+    // this worker was spawned for: resolve() advances run_gen synchronously,
+    // so a replacement search interrupts even a worker blocked on stdout.
+    var process = bounded_process.StreamProcess.init(&argv, .{
+        .timeout_ms = 180 * 1000,
+        .terminate_grace_ms = 500,
+        .max_output_bytes = 64 * 1024 * 1024,
+        // Use the bundled resource root when installed (GUI launches can have
+        // "/" as CWD); null in development preserves the project directory.
+        .cwd = state.resourceRoot(),
+        .stderr_behavior = .Ignore,
+        .cancel_epoch = .{ .epoch32 = .{
+            .value = &run_gen,
+            .expected = owned_generation,
+        } },
+    });
+    process.start() catch {
+        outcome = .unavailable;
         logs.pushLog("error", "resolver", "nova2.py spawn failed", true);
         return;
     };
@@ -1229,62 +1340,34 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
     // rows reliably). Byte-by-byte reads via our shim were dropping data
     // on pipe WouldBlock + reader-buffer resets.
     var child_reader_buf: [8192]u8 = undefined;
-    var reader = child.stdout.?.reader(@import("../core/io_global.zig").io(), &child_reader_buf);
-
-    // Watchdog: a deadline of our own, so this search cannot hang forever.
-    //
-    // The real fix was on the Python side — every fetch is now bounded by
-    // helpers._FETCH_TIMEOUT — and before that a host which completed the
-    // handshake and then went silent held urlopen() open with no deadline at
-    // all, so nova2 never exited and this loop never returned. The search just
-    // never finished.
-    //
-    // It has to be a separate thread, not a check inside the read loop: the loop
-    // blocks in takeDelimiter() waiting for a line that never comes, so an
-    // in-loop deadline could never fire on precisely the case it exists for.
-    //
-    // SIGTERM by pid via terminateProcess() — it signals WITHOUT reaping, so the
-    // drain-then-wait() below still observes the exit and nova2's pool tears down
-    // through its own handlers. That matters: kill()ing it out from under the
-    // reader is what used to leave workers writing into a dead pipe. The pid is
-    // copied by value, never a pointer into this frame.
-    const Watchdog = struct {
-        pid: io_glob.Child.Id,
-        deadline_ms: i64,
-        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-        fired: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-
-        fn run(self: *@This()) void {
-            const start = io_glob.milliTimestamp();
-            while (!self.done.load(.acquire)) {
-                if (io_glob.milliTimestamp() - start > self.deadline_ms) {
-                    self.fired.store(true, .release);
-                    logs.pushLog("warn", "resolver", "nova2 passed its deadline — ending the search with what it returned", true);
-                    io_glob.terminateProcess(self.pid);
-                    return;
-                }
-                io_glob.sleep(250 * std.time.ns_per_ms);
-            }
-        }
-    };
-    // 180s: generous next to the bounded Python worst case (~46s per fetch, run
-    // in nova2's pool), so this only fires when something below has genuinely
-    // stopped making progress rather than merely being slow.
-    var watchdog = Watchdog{ .pid = child.id.?, .deadline_ms = 180 * 1000 };
-    const wd_thread: ?std.Thread = std.Thread.spawn(.{}, Watchdog.run, .{&watchdog}) catch null;
-    // Joined BEFORE this frame dies — `&watchdog` must not outlive it.
-    defer if (wd_thread) |t| {
-        watchdog.done.store(true, .release);
-        t.join();
-    };
+    var reader = process.stdout().?.reader(io_glob.io(), &child_reader_buf);
 
     var found: usize = 0;
     var scanned: usize = 0;
+    var stream_failed = false;
     while (true) {
-        const line = reader.interface.takeDelimiter('\n') catch break orelse break;
+        const line = reader.interface.takeDelimiter('\n') catch {
+            outcome = .parse_failed;
+            stream_failed = true;
+            process.requestStop();
+            break;
+        } orelse break;
         scanned += 1;
-        // Keep draining the pipe to EOF even after we have enough — see the
-        // wait() note below. We just stop parsing.
+        if (!process.noteOutput(line.len + 1) or scanned > 100_000) {
+            outcome = .parse_failed;
+            stream_failed = true;
+            logs.pushLog("warn", "resolver", "nova2 exceeded its output budget", true);
+            process.requestStop();
+            break;
+        }
+        // The watchdog is what wakes a blocked reader. This in-loop check
+        // avoids parsing or publishing one more buffered row after supersession.
+        if (run_gen.load(.acquire) != owned_generation) {
+            process.requestStop();
+            break;
+        }
+        // Keep consuming the pipe to EOF after the UI has enough rows; this
+        // lets nova2 wind down cleanly while process.finish owns final reaping.
         if (found >= 25 or line.len < 10) continue;
 
         // Parse pipe-delimited: link|name|size|seeds|leech|engine
@@ -1353,23 +1436,33 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
         }
     }
 
-    // Drain to EOF (above) and let nova2.py exit on its own, THEN reap. We used
-    // to kill() it once we had 25 rows, but nova2 runs a multiprocessing pool —
-    // SIGTERM mid-run left its workers writing into a dead pipe, spewing
-    // BrokenPipeError tracebacks and leaking semaphores. Draining is what the
-    // torrent-mode search does too, and it tears down cleanly. (The earlier
-    // deadlock came from NOT draining before wait(); now we always drain.)
-    const term = child.wait() catch {
-        failed = true;
-        return;
-    };
-    switch (term) {
-        .exited => |code| if (code != 0 and found == 0) {
-            failed = true;
-        },
-        else => if (found == 0) {
-            failed = true;
-        },
+    // finish() drains whatever remains, reaps the leader, fences descendants,
+    // joins the watchdog, and closes the Job/process-group handle exactly once.
+    const run = process.finish();
+
+    // A successor owns all live status and result state. finishWorker's locked
+    // generation gate is the final defense; returning here also avoids turning
+    // an expected cancellation into a noisy source error.
+    if (run.cancelled or run_gen.load(.acquire) != owned_generation) return;
+
+    if (run.timed_out) {
+        outcome = .timed_out;
+        logs.pushLog("warn", "resolver", "nova2 passed its deadline — ending the search with what it returned", true);
+    } else if (run.output_limited) {
+        outcome = .parse_failed;
+    } else if (run.wait_failed) {
+        if (!stream_failed) outcome = .failed;
+    } else if (run.term) |t| {
+        switch (t) {
+            .exited => |code| if (code != 0 and !stream_failed) {
+                outcome = .failed;
+            },
+            else => if (!stream_failed) {
+                outcome = .failed;
+            },
+        }
+    } else if (!stream_failed) {
+        outcome = .failed;
     }
     {
         var slog: [64]u8 = undefined;
@@ -1380,10 +1473,7 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
 
 // YTS API — fast movie search (runs in parallel)
 fn resolveYts(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_yts.store(.done, .release);
-        checkAllDone();
-    }
+    defer finishWorker(&status_yts, .done);
 
     const query = query_buf[0..qlen];
 
@@ -1392,22 +1482,34 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
     const enc_q = @import("../core/http.zig").urlEncode(query, &enc);
 
     // Endpoint migrated to opal-plugins — inert until the user installs "yts".
-    const api = @import("../core/source_config.zig").get("yts", "api") orelse return;
+    const api = @import("../core/source_config.zig").get("yts", "api") orelse {
+        noteWorkerOutcome(.unavailable);
+        return;
+    };
 
     var url_buf: [512]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "{s}?query_term={s}&limit=8&sort_by=seeds", .{
         api, enc_q,
-    }) catch return;
+    }) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
 
     var buf: [64 * 1024]u8 = undefined;
     @import("../core/rate_limit.zig").acquire("yts", 1.0);
     const body = @import("../core/http.zig").fetch(url, &buf, .{
         .timeout_secs = 6,
         .user_agent = "Opal/1.0",
-    }) orelse return;
+    }) orelse {
+        noteWorkerOutcome(.transport_failed);
+        return;
+    };
     const n = body.len;
 
-    if (n < 50) return;
+    if (n < 50) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
 
     // Parse YTS JSON: find "title_long" and "url" entries
     var pos: usize = 0;
@@ -1534,34 +1636,50 @@ const TORZNAB_IDS = [_][]const u8{ "torznab", "prowlarr" };
 // ══════════════════════════════════════════════════════════
 
 fn resolveEztv(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_eztv.store(.done, .release);
-        checkAllDone();
-    }
+    defer finishWorker(&status_eztv, .done);
 
     const sc = @import("../core/source_config.zig");
     const ez = @import("eztv_api_pure.zig");
 
     // Presence check only; mirrors.fetch re-reads base + mirrors itself.
-    const base_probe = sc.get("eztv", "base") orelse return;
-    if (base_probe.len == 0) return;
+    const base_probe = sc.get("eztv", "base") orelse {
+        noteWorkerOutcome(.unavailable);
+        return;
+    };
+    if (base_probe.len == 0) {
+        noteWorkerOutcome(.unavailable);
+        return;
+    }
 
     const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
-    if (api_key.len == 0) return; // no TMDB key -> no IMDb id -> nothing to ask
+    if (api_key.len == 0) {
+        noteWorkerOutcome(.unavailable);
+        return; // no TMDB key -> no IMDb id -> nothing to ask
+    }
 
     var imdb_buf: [16]u8 = undefined;
     var is_series = false;
-    const imdb_len = resolveImdbId(query_buf[0..qlen], api_key, &imdb_buf, &is_series);
-    if (imdb_len == 0) return;
+    var imdb_outcome: SourceStatus = .no_results;
+    const imdb_len = resolveImdbId(query_buf[0..qlen], api_key, &imdb_buf, &is_series, &imdb_outcome);
+    if (imdb_len == 0) {
+        noteWorkerOutcome(imdb_outcome);
+        return;
+    }
 
     // EZTV wants the bare number: `imdb_id=tt6048596` returns an empty list,
     // which reads exactly like "no releases" (see eztv_api_pure.stripTtPrefix).
     const numeric = ez.stripTtPrefix(imdb_buf[0..imdb_len]);
-    if (!ez.isNumericId(numeric)) return;
+    if (!ez.isNumericId(numeric)) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
 
     // Heap: a full season's feed runs to hundreds of KB, well past what belongs
     // on a spawned worker's stack (CLAUDE.md thread rules).
-    const page = alloc.alloc(u8, 512 * 1024) catch return;
+    const page = alloc.alloc(u8, 512 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
     defer alloc.free(page);
 
     @import("../core/rate_limit.zig").acquire("eztv", 1.0);
@@ -1577,8 +1695,14 @@ fn resolveEztv(query_buf: [256]u8, qlen: usize) void {
     const body = @import("../core/mirrors.zig").fetch("eztv", page, .{
         .timeout_secs = 12,
         .user_agent = "Opal/1.0",
-    }, ctx, build) orelse return;
-    if (body.len < 20) return;
+    }, ctx, build) orelse {
+        noteWorkerOutcome(.transport_failed);
+        return;
+    };
+    if (body.len < 20) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
 
     var items: [40]ez.Item = undefined;
     const n = ez.parseItems(body, &items);
@@ -1611,9 +1735,17 @@ fn resolveEztv(query_buf: [256]u8, qlen: usize) void {
 }
 
 fn resolveTorznab(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_torznab.store(.done, .release);
-        checkAllDone();
+    defer finishWorker(&status_torznab, .done);
+    const sc = @import("../core/source_config.zig");
+    var configured = false;
+    for (TORZNAB_IDS) |id| {
+        if (sc.get(id, "base")) |base| {
+            if (base.len > 0) configured = true;
+        }
+    }
+    if (!configured) {
+        noteWorkerOutcome(.unavailable);
+        return;
     }
     for (TORZNAB_IDS) |id| resolveTorznabId(id, query_buf, qlen);
 }
@@ -1668,7 +1800,10 @@ fn resolveTorznabId(src_id: []const u8, query_buf: [256]u8, qlen: usize) void {
 
     // Heap, not stack: a Torznab response with many indexers can be large; keep
     // it off this spawned worker's 512 KB stack.
-    const page_buf = alloc.alloc(u8, 256 * 1024) catch return;
+    const page_buf = alloc.alloc(u8, 256 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
     defer alloc.free(page_buf);
 
     @import("../core/rate_limit.zig").acquire("torznab", 1.0);
@@ -1692,9 +1827,15 @@ fn resolveTorznabId(src_id: []const u8, query_buf: [256]u8, qlen: usize) void {
     const body = @import("../core/mirrors.zig").fetch(src_id, page_buf, .{
         .timeout_secs = 12,
         .user_agent = "Opal/1.0",
-    }, ctx, build) orelse return;
+    }, ctx, build) orelse {
+        noteWorkerOutcome(.transport_failed);
+        return;
+    };
     const n = body.len;
-    if (n < 50) return;
+    if (n < 50) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
 
     var pos: usize = 0;
     var found: usize = 0;
@@ -1755,10 +1896,7 @@ fn resolveTorznabId(src_id: []const u8, query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 fn resolveArchive(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_archive.store(.done, .release);
-        checkAllDone();
-    }
+    defer finishWorker(&status_archive, .done);
     if (qlen == 0) return;
 
     const ap = @import("archive_pure.zig");
@@ -1778,9 +1916,15 @@ fn resolveArchive(query_buf: [256]u8, qlen: usize) void {
     // scoped to the two legal collections below.
     var q_raw: [512]u8 = undefined;
     const q_val = if (audio_mode)
-        std.fmt.bufPrint(&q_raw, "{s} AND (collection:(librivoxaudio) OR collection:(etree))", .{query}) catch return
+        std.fmt.bufPrint(&q_raw, "{s} AND (collection:(librivoxaudio) OR collection:(etree))", .{query}) catch {
+            noteWorkerOutcome(.failed);
+            return;
+        }
     else
-        std.fmt.bufPrint(&q_raw, "{s} AND mediatype:(movies)", .{query}) catch return;
+        std.fmt.bufPrint(&q_raw, "{s} AND mediatype:(movies)", .{query}) catch {
+            noteWorkerOutcome(.failed);
+            return;
+        };
     var q_enc: [1024]u8 = undefined;
     const enc_q = http.urlEncode(q_val, &q_enc);
 
@@ -1791,22 +1935,37 @@ fn resolveArchive(query_buf: [256]u8, qlen: usize) void {
         &url_buf,
         "https://archive.org/advancedsearch.php?q={s}&fl[]=identifier&fl[]=title&fl[]=year&rows=20&output=json",
         .{enc_q},
-    ) catch return;
+    ) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
 
     // Heap the response — keep it off this spawned worker's 512 KB stack.
-    const page = alloc.alloc(u8, 256 * 1024) catch return;
+    const page = alloc.alloc(u8, 256 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
     defer alloc.free(page);
 
     @import("../core/rate_limit.zig").acquire("archive", 1.0);
     const body = http.fetch(url, page, .{
         .timeout_secs = 8,
         .user_agent = "Opal/1.0",
-    }) orelse return;
-    if (body.len < 30) return;
+    }) orelse {
+        noteWorkerOutcome(.transport_failed);
+        return;
+    };
+    if (body.len < 30) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
 
     // Reused heap buffer for the per-item metadata fetch (bounded work: we only
     // resolve up to `max_hits` playable items, one extra fetch each).
-    const meta_buf = alloc.alloc(u8, 256 * 1024) catch return;
+    const meta_buf = alloc.alloc(u8, 256 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
     defer alloc.free(meta_buf);
 
     const max_hits = 8;
@@ -1826,8 +1985,14 @@ fn resolveArchive(query_buf: [256]u8, qlen: usize) void {
         const meta = http.fetch(murl, meta_buf, .{
             .timeout_secs = 8,
             .user_agent = "Opal/1.0",
-        }) orelse continue;
-        if (meta.len < 20) continue;
+        }) orelse {
+            noteWorkerOutcome(.transport_failed);
+            continue;
+        };
+        if (meta.len < 20) {
+            noteWorkerOutcome(.parse_failed);
+            continue;
+        }
 
         const file_name = if (audio_mode)
             ap.pickBestAudioFile(meta) orelse continue
@@ -1953,10 +2118,7 @@ fn writeSafeUrl(src: []const u8, out: []u8) usize {
 // ══════════════════════════════════════════════════════════
 
 fn resolveNasa(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_nasa.store(.done, .release);
-        checkAllDone();
-    }
+    defer finishWorker(&status_nasa, .done);
     if (qlen == 0) return;
 
     const np = @import("nasa_pure.zig");
@@ -1971,21 +2133,36 @@ fn resolveNasa(query_buf: [256]u8, qlen: usize) void {
         &url_buf,
         "https://images-api.nasa.gov/search?q={s}&media_type=video&page_size=10",
         .{enc_q},
-    ) catch return;
+    ) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
 
     // Heap the response — keep it off this spawned worker's 512 KB stack.
-    const page = alloc.alloc(u8, 256 * 1024) catch return;
+    const page = alloc.alloc(u8, 256 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
     defer alloc.free(page);
 
     @import("../core/rate_limit.zig").acquire("nasa", 1.0);
     const body = http.fetch(url, page, .{
         .timeout_secs = 8,
         .user_agent = "Opal/1.0 (https://github.com/debpalash/Opal)",
-    }) orelse return;
-    if (body.len < 30) return;
+    }) orelse {
+        noteWorkerOutcome(.transport_failed);
+        return;
+    };
+    if (body.len < 30) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
 
     // Reused heap buffer for the per-asset collection.json fetch (bounded work).
-    const coll_buf = alloc.alloc(u8, 128 * 1024) catch return;
+    const coll_buf = alloc.alloc(u8, 128 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
     defer alloc.free(coll_buf);
 
     const max_hits = 8;
@@ -2001,8 +2178,14 @@ fn resolveNasa(query_buf: [256]u8, qlen: usize) void {
         const coll = http.fetch(hit.href, coll_buf, .{
             .timeout_secs = 8,
             .user_agent = "Opal/1.0 (https://github.com/debpalash/Opal)",
-        }) orelse continue;
-        if (coll.len < 5) continue;
+        }) orelse {
+            noteWorkerOutcome(.transport_failed);
+            continue;
+        };
+        if (coll.len < 5) {
+            noteWorkerOutcome(.parse_failed);
+            continue;
+        }
 
         const mp4 = np.pickBestMp4(coll) orelse continue;
 
@@ -2052,10 +2235,7 @@ fn resolveNasa(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 fn resolveCommons(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_commons.store(.done, .release);
-        checkAllDone();
-    }
+    defer finishWorker(&status_commons, .done);
     if (qlen == 0) return;
 
     const cp = @import("commons_pure.zig");
@@ -2073,10 +2253,16 @@ fn resolveCommons(query_buf: [256]u8, qlen: usize) void {
             "&gsrsearch=filetype:video%20{s}&gsrnamespace=6&gsrlimit=10" ++
             "&prop=imageinfo&iiprop=url%7Csize%7Cmime&format=json",
         .{enc_q},
-    ) catch return;
+    ) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
 
     // Heap the response — off this spawned worker's 512 KB stack.
-    const page = alloc.alloc(u8, 256 * 1024) catch return;
+    const page = alloc.alloc(u8, 256 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
     defer alloc.free(page);
 
     @import("../core/rate_limit.zig").acquire("commons", 1.0);
@@ -2084,8 +2270,14 @@ fn resolveCommons(query_buf: [256]u8, qlen: usize) void {
         .timeout_secs = 8,
         // Wikimedia UA policy requires a descriptive, contactable agent.
         .user_agent = "Opal/1.0 (https://github.com/debpalash/Opal)",
-    }) orelse return;
-    if (body.len < 30) return;
+    }) orelse {
+        noteWorkerOutcome(.transport_failed);
+        return;
+    };
+    if (body.len < 30) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
 
     const max_hits = 10;
     var found: usize = 0;
@@ -2129,10 +2321,7 @@ fn resolveCommons(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_anime.store(.done, .release);
-        checkAllDone();
-    }
+    defer finishWorker(&status_anime, .done);
 
     const query = query_buf[0..qlen];
 
@@ -2141,7 +2330,10 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
     // the torrent engines, so it ships gated rather than hardcoded in the binary
     // (unlike the Jikan/AniList metadata APIs). No install → no allanime results.
     const sc = @import("../core/source_config.zig");
-    const aa_base = sc.get("allanime", "base") orelse return;
+    const aa_base = sc.get("allanime", "base") orelse {
+        noteWorkerOutcome(.unavailable);
+        return;
+    };
     const aa_referer = sc.get("allanime", "referer") orelse aa_base;
 
     // Escape quotes and backslashes for JSON safety
@@ -2174,7 +2366,10 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
         &vars_buf,
         "{{\"search\":{{\"allowAdult\":false,\"allowUnknown\":false,\"query\":\"{s}\"}},\"limit\":6,\"page\":1,\"translationType\":\"sub\",\"countryOrigin\":\"ALL\"}}",
         .{safe_q[0..si]},
-    ) catch return;
+    ) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
 
     var vars_enc_buf: [1024]u8 = undefined;
     const vars_enc = @import("../core/http.zig").urlEncode(vars, &vars_enc_buf);
@@ -2183,7 +2378,10 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
     const query_enc = @import("../core/http.zig").urlEncode(search_gql, &query_enc_buf);
 
     var final_url_buf: [2048]u8 = undefined;
-    const url = std.fmt.bufPrint(&final_url_buf, "{s}/api?variables={s}&query={s}", .{ std.mem.trimEnd(u8, aa_base, "/"), vars_enc, query_enc }) catch return;
+    const url = std.fmt.bufPrint(&final_url_buf, "{s}/api?variables={s}&query={s}", .{ std.mem.trimEnd(u8, aa_base, "/"), vars_enc, query_enc }) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
 
     var buf: [64 * 1024]u8 = undefined;
     @import("../core/rate_limit.zig").acquire("allanime", 1.0); // scrape-class — be gentle
@@ -2191,10 +2389,16 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
         .timeout_secs = 8,
         .referer = aa_referer,
         .user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
-    }) orelse return;
+    }) orelse {
+        noteWorkerOutcome(.transport_failed);
+        return;
+    };
     const n = body.len;
 
-    if (n < 10) return;
+    if (n < 10) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
 
     // Parse JSON: find "name":"..." entries
     var pos: usize = 0;
@@ -2246,32 +2450,39 @@ fn resolveAnime(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_yt.store(.done, .release);
-        checkAllDone();
-    }
+    defer finishWorker(&status_yt, .done);
 
     const query = query_buf[0..qlen];
     var search_arg: [300]u8 = undefined;
-    const sa = std.fmt.bufPrint(&search_arg, "ytsearch5:{s}", .{query}) catch return;
+    const sa = std.fmt.bufPrint(&search_arg, "ytsearch5:{s}", .{query}) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
 
     const ytdlp_bin = @import("ytdlp.zig").binary();
     const argv = [_][]const u8{
         ytdlp_bin, "--flat-playlist", "--dump-json", "--no-warnings", sa,
     };
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return;
-
     var buf: [64 * 1024]u8 = undefined;
-    const n = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &buf) catch 0 else 0;
-    _ = child.wait() catch {};
+    const execution = @import("../core/bounded_process.zig").run(&argv, &buf, .{ .timeout_ms = 20_000 });
+    if (!execution.ok()) {
+        noteWorkerOutcome(switch (execution.failure) {
+            .spawn => .unavailable,
+            .timeout => .timed_out,
+            .output_limit, .read => .parse_failed,
+            else => .failed,
+        });
+        return;
+    }
+    const n = execution.output.len;
 
-    if (n < 10) return;
+    if (n < 10) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
 
     // Each line is a JSON object with "title", "url", "id"
-    var lines = std.mem.splitScalar(u8, buf[0..n], '\n');
+    var lines = std.mem.splitScalar(u8, execution.output, '\n');
     var found: usize = 0;
     while (lines.next()) |line| {
         if (found >= 5 or line.len < 10) continue;
@@ -2326,17 +2537,21 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
 const AUDIO_MAX: usize = 6;
 
 fn resolveLiveTv(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_livetv.store(.done, .release);
-        checkAllDone();
-    }
+    defer finishWorker(&status_livetv, .done);
     const query = query_buf[0..qlen];
     if (query.len < 2) return;
 
     const iptv = @import("iptv.zig");
     const ipure = @import("iptv_pure.zig");
+    if (@import("../core/source_config.zig").get("iptv-org", "base") == null) {
+        noteWorkerOutcome(.unavailable);
+        return;
+    }
     // IptvChannel is a large fixed-buffer record — heap, not the worker stack.
-    const chans = alloc.alloc(ipure.IptvChannel, AUDIO_MAX) catch return;
+    const chans = alloc.alloc(ipure.IptvChannel, AUDIO_MAX) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
     defer alloc.free(chans);
     // searchInto is tab-INDEPENDENT: it parses into `chans` and never touches
     // state.app.iptv, so searching from the omnibox can't hijack the Live TV
@@ -2367,22 +2582,25 @@ fn resolveLiveTv(query_buf: [256]u8, qlen: usize) void {
 }
 
 fn resolveMusic(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_music.store(.done, .release);
-        checkAllDone();
-    }
+    defer finishWorker(&status_music, .done);
     const query = query_buf[0..qlen];
     if (query.len < 2) return;
 
     const jp = @import("music_jiosaavn_pure.zig");
     var url_buf: [640]u8 = undefined;
-    const url = jp.buildSearchUrl(&url_buf, query, 20) orelse return;
+    const url = jp.buildSearchUrl(&url_buf, query, 20) orelse {
+        noteWorkerOutcome(.failed);
+        return;
+    };
 
     // JioSaavn search payloads run large — heap, not the worker stack.
-    const buf = alloc.alloc(u8, 512 * 1024) catch return;
+    const buf = alloc.alloc(u8, 512 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
     defer alloc.free(buf);
     const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 }) orelse {
-        status_music.store(.failed, .release);
+        noteWorkerOutcome(.transport_failed);
         return;
     };
 
@@ -2411,10 +2629,7 @@ fn resolveMusic(query_buf: [256]u8, qlen: usize) void {
 }
 
 fn resolveRadio(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_radio.store(.done, .release);
-        checkAllDone();
-    }
+    defer finishWorker(&status_radio, .done);
     const query = query_buf[0..qlen];
     if (query.len < 2) return;
 
@@ -2423,12 +2638,18 @@ fn resolveRadio(query_buf: [256]u8, qlen: usize) void {
     const enc = @import("../core/http.zig").urlEncode(query, &enc_buf);
     var url_buf: [640]u8 = undefined;
     const url = rp.buildSearchUrl(enc, 20, 0, &url_buf);
-    if (url.len == 0) return;
+    if (url.len == 0) {
+        noteWorkerOutcome(.failed);
+        return;
+    }
 
-    const buf = alloc.alloc(u8, 512 * 1024) catch return;
+    const buf = alloc.alloc(u8, 512 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
     defer alloc.free(buf);
     const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 }) orelse {
-        status_radio.store(.failed, .release);
+        noteWorkerOutcome(.transport_failed);
         return;
     };
 
@@ -2461,10 +2682,7 @@ fn resolveRadio(query_buf: [256]u8, qlen: usize) void {
 }
 
 fn resolvePodcasts(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_podcast.store(.done, .release);
-        checkAllDone();
-    }
+    defer finishWorker(&status_podcast, .done);
     const query = query_buf[0..qlen];
     if (query.len < 2) return;
 
@@ -2476,16 +2694,25 @@ fn resolvePodcasts(query_buf: [256]u8, qlen: usize) void {
         &url_buf,
         "https://itunes.apple.com/search?media=podcast&limit=20&term={s}",
         .{enc},
-    ) catch return;
-
-    const buf = alloc.alloc(u8, 512 * 1024) catch return;
-    defer alloc.free(buf);
-    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 }) orelse {
-        status_podcast.store(.failed, .release);
+    ) catch {
+        noteWorkerOutcome(.failed);
         return;
     };
 
-    const shows = alloc.alloc(pp.Podcast, AUDIO_MAX) catch return;
+    const buf = alloc.alloc(u8, 512 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
+    defer alloc.free(buf);
+    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 }) orelse {
+        noteWorkerOutcome(.transport_failed);
+        return;
+    };
+
+    const shows = alloc.alloc(pp.Podcast, AUDIO_MAX) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
     defer alloc.free(shows);
     const n = pp.parseItunes(body, shows);
     var i: usize = 0;
@@ -2540,8 +2767,15 @@ fn parseSxxEyy(query: []const u8, out_season: *i32, out_episode: *i32) void {
 /// Extracted verbatim from resolveStremio so the EZTV backend can reuse it
 /// rather than carry a second copy — an IMDb lookup that drifted between two
 /// backends would send them after different titles for the same query.
-fn resolveImdbId(query: []const u8, api_key: []const u8, out_imdb: []u8, out_is_series: *bool) usize {
+fn resolveImdbId(
+    query: []const u8,
+    api_key: []const u8,
+    out_imdb: []u8,
+    out_is_series: *bool,
+    out_outcome: *SourceStatus,
+) usize {
     var imdb_len: usize = 0;
+    out_outcome.* = .no_results;
     const intent = resolver_intent[0..resolver_intent_len];
     const tv_id = state.app.tmdb.tv_id;
 
@@ -2553,11 +2787,21 @@ fn resolveImdbId(query: []const u8, api_key: []const u8, out_imdb: []u8, out_is_
         // Direct external_ids lookup — one fewer TMDB API call
         out_is_series.* = true;
         var ext_url: [256]u8 = undefined;
-        const eurl = std.fmt.bufPrint(&ext_url, "/3/tv/{d}/external_ids", .{tv_id}) catch return 0;
+        const eurl = std.fmt.bufPrint(&ext_url, "/3/tv/{d}/external_ids", .{tv_id}) catch {
+            out_outcome.* = .failed;
+            return 0;
+        };
         var buf2: [4096]u8 = undefined;
         @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
         const n2 = @import("tmdb_api.zig").tmdbApiInto(eurl, api_key, &buf2);
-        if (n2 < 10) return 0;
+        if (n2 == 0) {
+            out_outcome.* = .transport_failed;
+            return 0;
+        }
+        if (n2 < 10) {
+            out_outcome.* = .parse_failed;
+            return 0;
+        }
         if (extractStr(buf2[0..n2], "\"imdb_id\":\"")) |imdb| {
             imdb_len = @min(imdb.len, 15);
             @memcpy(out_imdb[0..imdb_len], imdb[0..imdb_len]);
@@ -2603,12 +2847,22 @@ fn resolveImdbId(query: []const u8, api_key: []const u8, out_imdb: []u8, out_is_
         }
 
         var tmdb_url: [512]u8 = undefined;
-        const turl = std.fmt.bufPrint(&tmdb_url, "/3/search/multi?query={s}&page=1", .{enc[0..el]}) catch return 0;
+        const turl = std.fmt.bufPrint(&tmdb_url, "/3/search/multi?query={s}&page=1", .{enc[0..el]}) catch {
+            out_outcome.* = .failed;
+            return 0;
+        };
 
         var buf: [32 * 1024]u8 = undefined;
         @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
         const n = @import("tmdb_api.zig").tmdbApiInto(turl, api_key, &buf);
-        if (n < 20) return 0;
+        if (n == 0) {
+            out_outcome.* = .transport_failed;
+            return 0;
+        }
+        if (n < 20) {
+            out_outcome.* = .parse_failed;
+            return 0;
+        }
 
         var tmdb_id: [16]u8 = undefined;
         var tmdb_id_len: usize = 0;
@@ -2625,18 +2879,33 @@ fn resolveImdbId(query: []const u8, api_key: []const u8, out_imdb: []u8, out_is_
             @memcpy(media_type[0..mtl], mt[0..mtl]);
             media_type_len = mtl;
         }
-        if (tmdb_id_len == 0) return 0;
+        if (tmdb_id_len == 0) {
+            const clean_empty = std.mem.indexOf(u8, buf[0..n], "\"results\":[]") != null or
+                std.mem.indexOf(u8, buf[0..n], "\"results\": []") != null;
+            out_outcome.* = if (clean_empty) .no_results else .parse_failed;
+            return 0;
+        }
 
         const mt_str = if (media_type_len > 0) media_type[0..media_type_len] else "movie";
         out_is_series.* = std.mem.eql(u8, mt_str, "tv");
 
         var ext_url: [256]u8 = undefined;
-        const eurl = std.fmt.bufPrint(&ext_url, "/3/{s}/{s}/external_ids", .{ mt_str, tmdb_id[0..tmdb_id_len] }) catch return 0;
+        const eurl = std.fmt.bufPrint(&ext_url, "/3/{s}/{s}/external_ids", .{ mt_str, tmdb_id[0..tmdb_id_len] }) catch {
+            out_outcome.* = .failed;
+            return 0;
+        };
 
         var buf2: [4096]u8 = undefined;
         @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
         const n2 = @import("tmdb_api.zig").tmdbApiInto(eurl, api_key, &buf2);
-        if (n2 < 10) return 0;
+        if (n2 == 0) {
+            out_outcome.* = .transport_failed;
+            return 0;
+        }
+        if (n2 < 10) {
+            out_outcome.* = .parse_failed;
+            return 0;
+        }
 
         if (extractStr(buf2[0..n2], "\"imdb_id\":\"")) |imdb| {
             imdb_len = @min(imdb.len, 15);
@@ -2644,24 +2913,28 @@ fn resolveImdbId(query: []const u8, api_key: []const u8, out_imdb: []u8, out_is_
         }
     }
 
+    if (imdb_len > 0) out_outcome.* = .done;
     return imdb_len;
 }
 
 fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
-    defer {
-        status_stremio.store(.done, .release);
-        checkAllDone();
-    }
+    defer finishWorker(&status_stremio, .done);
 
     const stremio = @import("stremio.zig");
     // Neutral: query only the Stremio addons the user has installed via the
     // plugin manager (re-read each search so installs/uninstalls take effect).
     stremio.loadInstalledAddons();
-    if (stremio.installed_count == 0) return;
+    if (stremio.installed_count == 0) {
+        noteWorkerOutcome(.unavailable);
+        return;
+    }
 
     const query = query_buf[0..qlen];
     const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
-    if (api_key.len == 0) return;
+    if (api_key.len == 0) {
+        noteWorkerOutcome(.unavailable);
+        return;
+    }
 
     // Parse season/episode from query (e.g. "from s01e05" → season=1, episode=5)
     var ep_season: i32 = 0;
@@ -2671,10 +2944,14 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
     // ── Resolve TMDB ID → IMDB ID (shared with the EZTV backend) ──
     var imdb_id: [16]u8 = undefined;
     var is_series = false;
-    const imdb_len = resolveImdbId(query, api_key, &imdb_id, &is_series);
+    var imdb_outcome: SourceStatus = .no_results;
+    const imdb_len = resolveImdbId(query, api_key, &imdb_id, &is_series, &imdb_outcome);
     const stremio_type: []const u8 = if (is_series) "series" else "movie";
 
-    if (imdb_len == 0) return;
+    if (imdb_len == 0) {
+        noteWorkerOutcome(imdb_outcome);
+        return;
+    }
 
     // ── Query each installed addon ──
     for (0..stremio.installed_count) |ai| {
@@ -2702,10 +2979,16 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
 
         var sbuf: [64 * 1024]u8 = undefined;
         @import("../core/rate_limit.zig").acquire("stremio", 1.0); // third-party addon — be gentle
-        const s_body = @import("../core/http.zig").fetch(surl, &sbuf, .{ .timeout_secs = 8 }) orelse continue;
+        const s_body = @import("../core/http.zig").fetch(surl, &sbuf, .{ .timeout_secs = 8 }) orelse {
+            noteWorkerOutcome(.transport_failed);
+            continue;
+        };
         const sn = s_body.len;
 
-        if (sn < 20) continue;
+        if (sn < 20) {
+            noteWorkerOutcome(.parse_failed);
+            continue;
+        }
 
         // Parse streams
         var spos: usize = 0;
@@ -2818,7 +3101,10 @@ pub fn playItem(idx: usize) void {
             // Central chokepoint for torrent playback from universal results —
             // row clicks and play buttons all land here, so a scam-flagged
             // name (exe/scr "movie", archive bait, …) is refused in one place.
-            const risk = @import("torrent_risk_pure.zig").assess(item.name[0..item.name_len], 0);
+            const risk = @import("torrent_risk_pure.zig").assess(
+                item.name[0..item.name_len],
+                @floatFromInt(item.size_bytes),
+            );
             if (risk.risk == .block) {
                 var tb: [160]u8 = undefined;
                 const msg = std.fmt.bufPrint(&tb, "Blocked scam torrent: {s}", .{risk.reason}) catch "Blocked scam torrent";
@@ -2893,17 +3179,11 @@ pub fn playItem(idx: usize) void {
             );
         },
         .youtube, .stremio, .local, .music, .radio => {
-            // Direct URL / local path — load into mpv.
-            if (state.app.active_player_idx < state.app.players.items.len) {
-                const p = state.app.players.items[state.app.active_player_idx];
-                p.provider = .mpv;
-                var url_z: [2049]u8 = undefined;
-                const ulen = item.url_len;
-                @memcpy(url_z[0..ulen], item.url[0..ulen]);
-                url_z[ulen] = 0;
-                p.load_file(@ptrCast(&url_z[0]));
-                state.gotoPlayer();
-            }
+            @import("browser.zig").playDirect(.{
+                .url = item.url[0..item.url_len],
+                .title = item.name[0..item.name_len],
+                .subtitle = item.detail[0..item.detail_len],
+            });
         },
     }
 }

@@ -5,13 +5,13 @@
 //!     backend per platform (SDL_GetDisplayContentScale on macOS / modern SDL,
 //!     `Xft.dpi`/`xrdb` on Linux, SDL_GetDisplayDPI on Windows). This already
 //!     makes physical size consistent across displays.
-//!   • ui_scale — the user-density multiplier this module picks a DEFAULT for.
+//!   • ui_scale — the user-density multiplier. Auto has a hard 1.0× floor.
 //!
-//! `deviceScale` chooses that default from the display's natural scale so a
-//! fresh install is compact on every device without manual tweaking: high-DPI
-//! panels render text crisply even when logically smaller, so they get a denser
-//! default; standard-DPI displays (1 logical px = 1 physical px) stay at 1.0 so
-//! text never drops below readable.
+//! The OS/DVUI natural scale already handles display DPI. Auto therefore keeps
+//! a 1.0× baseline, using validated panel data only to scale upward when Linux
+//! cannot report a useful content scale. Responsive navigation, grids, and
+//! controls independently adapt to the available on-screen points. Explicit
+//! manual density overrides remain available to users.
 
 const std = @import("std");
 
@@ -19,6 +19,7 @@ const std = @import("std");
 /// corrupt config row or an odd display report can't produce an unusable UI.
 pub const MIN_SCALE: f32 = 0.6;
 pub const MAX_SCALE: f32 = 2.0;
+pub const AUTO_MIN_SCALE: f32 = 1.0;
 
 pub fn clampScale(s: f32) f32 {
     if (!std.math.isFinite(s)) return 1.0;
@@ -47,48 +48,51 @@ pub fn physicalDpi(d: Display) ?f32 {
     return dpi;
 }
 
-/// Device-aware default ui_scale.
+/// Device-aware Auto multiplier with an unconditional 1.0× floor.
 ///
-/// `natural_scale` is the OS content scale and is authoritative WHEN THE OS
-/// ACTUALLY REPORTS ONE: macOS and Windows do, and second-guessing them would
-/// double-apply the same correction. Linux frequently does not — on a Wayland
-/// or X11 session with no `Xft.dpi` set, dvui's backend has nothing to read and
-/// falls back to exactly 1.0. That 1.0 is not a measurement, it is a shrug, and
-/// treating it as "standard DPI" is how a 2560x1600 190-DPI laptop panel ended
-/// up defaulting to 0.8 and rendering unreadably small.
-///
-/// So: trust a reported scale above ~1.15, and otherwise fall back to the panel
-/// itself — real DPI when the physical size is known, raw resolution when it is
-/// not.
+/// A useful OS content scale means DVUI already accounts for density, so Auto
+/// must not apply a second down-scaling correction. Linux frequently reports a
+/// placeholder 1.0; only then may validated EDID/resolution data increase the
+/// multiplier for a physically dense panel. No automatic path returns below
+/// `AUTO_MIN_SCALE`.
 pub fn deviceScale(natural_scale: f32, d: Display) f32 {
-    // Tiers are ~20% below a 1× baseline — the user runs Opal deliberately
-    // compact (see the compact type ramp); the chrome should stay quiet.
+    // macOS/Windows (and configured Linux desktops) already supply the density
+    // correction. Keep the user multiplier neutral.
     if (std.math.isFinite(natural_scale) and natural_scale > 0) {
-        if (natural_scale >= 1.9) return 0.68; // Retina / 200% (macOS, hi-res Win/Linux)
-        if (natural_scale >= 1.4) return 0.72; // ~150% displays
-        if (natural_scale >= 1.15) return 0.76; // ~125% displays
+        if (natural_scale >= 1.15) return AUTO_MIN_SCALE;
     }
 
-    // No usable OS scale. Derive density from the panel.
+    // No useful OS scale. Derive only upward adjustments from the panel.
     if (physicalDpi(d)) |dpi| {
         if (dpi >= 200) return 1.30; // 4K/5K laptop panels
         if (dpi >= 170) return 1.20; // ~190 DPI (2560x1600 14", 2880x1800 15")
-        if (dpi >= 140) return 1.00; // 1080p 14" and similar
-        if (dpi >= 115) return 0.90;
-        return 0.80; // ~96 DPI desktop monitor — the original baseline
+        return AUTO_MIN_SCALE;
     }
 
-    // Physical size unknown: resolution alone. Deliberately gentler than the
-    // DPI ramp, because width cannot distinguish a 14" 2560-wide laptop
-    // (~190 DPI) from a 27" 2560-wide desktop monitor (~109 DPI) — overshooting
-    // the desktop case is worse than undershooting the laptop one, which the
-    // Settings slider fixes in one drag.
+    // Physical size unknown: resolution alone can justify a conservative
+    // upward adjustment, never a smaller-than-default UI.
     if (std.math.isFinite(d.px_w)) {
         if (d.px_w >= 3840) return 1.20;
         if (d.px_w >= 2560) return 1.10;
-        if (d.px_w >= 1920) return 0.90;
     }
-    return 0.8; // standard DPI — floor for readability at 1 logical px = 1 physical
+    return AUTO_MIN_SCALE;
+}
+
+/// Resolve persisted scale preferences before publishing config as loaded.
+/// Older Auto installs may have saved the previous 0.68–0.9× policy. Normalize
+/// those immediately so no GUI or headless observer can see Auto below 1.0×;
+/// explicit manual density choices remain untouched.
+pub fn restoredScale(auto: bool, stored: f32) f32 {
+    if (auto) return @max(AUTO_MIN_SCALE, clampScale(stored));
+    return clampScale(stored);
+}
+
+/// A non-render caller cannot probe the active panel. Enabling Auto therefore
+/// publishes its safe 1.0× baseline immediately; the GUI's shared display seam
+/// may increase it on the next display-aware selection.
+pub fn scaleAfterAutoToggle(enabled: bool, current: f32) f32 {
+    if (!enabled) return clampScale(current);
+    return AUTO_MIN_SCALE;
 }
 
 // ── Responsive breakpoints ──────────────────────────────────────────────────
@@ -125,13 +129,14 @@ pub fn isNarrow(rect_w: f32, ui_scale: f32) bool {
     return pt > 1 and pt < NARROW_PT;
 }
 
-test "deviceScale trusts a reported OS content scale" {
-    // A display the OS described: the panel numbers must not perturb the tier.
+test "deviceScale keeps a 1x floor when the OS reports content scale" {
+    // A reported OS scale already accounts for DPI; panel numbers must not
+    // apply a second correction or shrink the user multiplier.
     const hidpi_panel = Display{ .px_w = 2560, .px_h = 1600, .mm_w = 340, .mm_h = 220 };
-    try std.testing.expectEqual(@as(f32, 0.68), deviceScale(2.0, hidpi_panel)); // Mac Retina
-    try std.testing.expectEqual(@as(f32, 0.68), deviceScale(3.0, .{})); // very high-DPI clamps to densest tier
-    try std.testing.expectEqual(@as(f32, 0.72), deviceScale(1.5, .{})); // 150% Windows
-    try std.testing.expectEqual(@as(f32, 0.76), deviceScale(1.25, .{})); // 125% Windows
+    try std.testing.expectEqual(@as(f32, 1.0), deviceScale(2.0, hidpi_panel));
+    try std.testing.expectEqual(@as(f32, 1.0), deviceScale(3.0, .{}));
+    try std.testing.expectEqual(@as(f32, 1.0), deviceScale(1.5, .{}));
+    try std.testing.expectEqual(@as(f32, 1.0), deviceScale(1.25, .{}));
 }
 
 test "deviceScale falls back to the panel when the OS reports no scale" {
@@ -141,23 +146,23 @@ test "deviceScale falls back to the panel when the OS reports no scale" {
     const laptop_2560 = Display{ .px_w = 2560, .px_h = 1600, .mm_w = 340, .mm_h = 220 };
     try std.testing.expectEqual(@as(f32, 1.20), deviceScale(1.0, laptop_2560));
 
-    // Same pixel width, 27" desktop monitor (~109 DPI) — must stay compact.
+    // Same pixel width, 27" desktop monitor (~109 DPI) — stays at the floor.
     const desktop_27 = Display{ .px_w = 2560, .px_h = 1440, .mm_w = 597, .mm_h = 336 };
-    try std.testing.expectEqual(@as(f32, 0.80), deviceScale(1.0, desktop_27));
+    try std.testing.expectEqual(@as(f32, 1.0), deviceScale(1.0, desktop_27));
 
     // 4K 15" laptop, ~294 DPI.
     const laptop_4k = Display{ .px_w = 3840, .px_h = 2160, .mm_w = 332, .mm_h = 187 };
     try std.testing.expectEqual(@as(f32, 1.30), deviceScale(1.0, laptop_4k));
 
-    // Nothing known at all → the historical default, unchanged.
-    try std.testing.expectEqual(@as(f32, 0.8), deviceScale(1.0, .{}));
+    // Nothing known at all → the neutral 1.0× baseline.
+    try std.testing.expectEqual(@as(f32, 1.0), deviceScale(1.0, .{}));
 }
 
-test "deviceScale uses resolution when physical size is missing" {
+test "deviceScale uses resolution only to scale upward" {
     try std.testing.expectEqual(@as(f32, 1.20), deviceScale(1.0, .{ .px_w = 3840 }));
     try std.testing.expectEqual(@as(f32, 1.10), deviceScale(1.0, .{ .px_w = 2560 }));
-    try std.testing.expectEqual(@as(f32, 0.90), deviceScale(1.0, .{ .px_w = 1920 }));
-    try std.testing.expectEqual(@as(f32, 0.80), deviceScale(1.0, .{ .px_w = 1366 }));
+    try std.testing.expectEqual(@as(f32, 1.0), deviceScale(1.0, .{ .px_w = 1920 }));
+    try std.testing.expectEqual(@as(f32, 1.0), deviceScale(1.0, .{ .px_w = 1366 }));
 }
 
 test "physicalDpi rejects implausible panel geometry" {
@@ -168,12 +173,25 @@ test "physicalDpi rejects implausible panel geometry" {
     try std.testing.expect(physicalDpi(.{ .px_w = 2560, .mm_w = 4000 }) == null);
 }
 
-test "deviceScale tolerates a garbage natural scale" {
-    try std.testing.expectEqual(@as(f32, 0.8), deviceScale(0, .{}));
-    try std.testing.expectEqual(@as(f32, 0.8), deviceScale(-1, .{}));
-    try std.testing.expectEqual(@as(f32, 0.8), deviceScale(std.math.nan(f32), .{}));
+test "automatic scale never falls below 1x" {
+    const reports = [_]f32{ -2.0, 0.0, 0.75, 1.0, 1.25, 2.0, 4.0, std.math.nan(f32) };
+    for (reports) |report| try std.testing.expect(deviceScale(report, .{}) >= AUTO_MIN_SCALE);
     // …and still consults the panel in that case.
     try std.testing.expectEqual(@as(f32, 1.20), deviceScale(std.math.nan(f32), .{ .px_w = 2560, .mm_w = 340 }));
+}
+
+test "config restore upgrades old Auto values but preserves manual density" {
+    try std.testing.expectEqual(@as(f32, 1.0), restoredScale(true, 0.68));
+    try std.testing.expectEqual(@as(f32, 1.0), restoredScale(true, 0.8));
+    try std.testing.expectEqual(@as(f32, 1.2), restoredScale(true, 1.2));
+    try std.testing.expectEqual(@as(f32, 0.6), restoredScale(false, 0.6));
+    try std.testing.expectEqual(@as(f32, 1.3), restoredScale(false, 1.3));
+}
+
+test "enabling automatic scale immediately clears a sub-1x manual scale" {
+    try std.testing.expectEqual(@as(f32, 1.0), scaleAfterAutoToggle(true, 0.6));
+    try std.testing.expect(scaleAfterAutoToggle(true, 0.6) >= AUTO_MIN_SCALE);
+    try std.testing.expectEqual(@as(f32, 0.6), scaleAfterAutoToggle(false, 0.6));
 }
 
 test "clampScale keeps values in the usable band" {
@@ -194,9 +212,9 @@ test "breakpoints measure on-screen points, not scaled layout units" {
     // Same window measured raw would have missed the breakpoint entirely.
     try std.testing.expect(!isNarrow(1118.8, 1.0));
 
-    // Retina auto-scale (0.68): a 700pt window must reach the mobile layout.
-    try std.testing.expect(isCompact(700.0 / 0.68, 0.68));
-    try std.testing.expect(isNarrow(700.0 / 0.68, 0.68));
+    // Adaptive 1.0×: a 700pt window must reach the mobile layout.
+    try std.testing.expect(isCompact(700.0, 1.0));
+    try std.testing.expect(isNarrow(700.0, 1.0));
 
     // Wide window stays wide at every scale.
     try std.testing.expect(!isNarrow(1600.0 / 0.8, 0.8));

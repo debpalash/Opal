@@ -474,8 +474,13 @@ pub fn renderWebUiButton() void {
     if (S.open_pending > 0) {
         if (remote.isListening()) {
             S.open_pending = 0;
-            var url_buf: [64]u8 = undefined;
-            if (remote_url.webUiUrl(remote.port, &url_buf)) |url| settings.openExternal(url);
+            var url_buf: [160]u8 = undefined;
+            var setup: [remote.SETUP_TOKEN_HEX_LEN]u8 = undefined;
+            const url = if (remote.setupToken(&setup))
+                remote_url.webUiSetupUrl(remote.port, &setup, &url_buf)
+            else
+                remote_url.webUiUrl(remote.port, &url_buf);
+            if (url) |open_url| settings.openExternal(open_url);
         } else {
             S.open_pending -= 1;
             // Keep frames coming while waiting; an idle UI would otherwise stop

@@ -52,19 +52,36 @@ def test_auth_store():
 
 @test("Auth routes + session Bearer gate", "Auth")
 def test_auth_routes():
-    rm = _src("src/services/remote.zig")
+    rm = _remote_api()
+    st = _src("src/services/auth_store.zig")
+    policy = _src("src/services/access_pure.zig")
     checks = {
         "auth route dispatch": '"/api/auth/"' in rm,
         "status/register/login/logout": all(f'"{s}"' in rm for s in ("status", "register", "login", "logout")),
-        # First account = admin; registration then closes.
-        "first-run gated register": "userCount() != 0" in rm and "registration closed" in rm,
+        # First account = admin; the empty-check and insert must be one DB
+        # statement, not a request-racy userCount() followed by createUser().
+        "atomic first-admin claim": (
+            "createFirstAdmin(username, password)" in rm
+            and "WHERE NOT EXISTS (SELECT 1 FROM users)" in st
+            and "error.SetupClosed" in rm
+        ),
         "issues session on success": "issueSession(uid" in rm and "TOKEN_HEX" in rm,
         # The Bearer gate accepts the static token OR a live session.
-        "session-aware gate": "fn isAuthorized(" in rm and "validSession(token)" in rm
-            and "if (!isAuthorized(presented))" in rm,
-        # Credentials from the POST body, not the URL.
-        "creds from body": "fn credParam(" in rm and "fn requestBody(" in rm,
-        "typed error codes": "409 Conflict" in rm and "403 Forbidden" in rm,
+        "session-aware gate": "fn principalForBearer(" in rm and "validSession(token)" in rm
+            and "const principal = principalForBearer(presented)" in rm,
+        # Machine recovery authority is explicit and tested, rather than being
+        # inferred from a failed session lookup.
+        "separate machine capability": (
+            "pub const Principal" in policy and "pub fn allows(" in policy
+            and "access_pure.allows(principal, .reveal_machine_token)" in rm
+            and "access_pure.allows(principal, .change_binding)" in rm
+        ),
+        # Credentials come from POST bodies only on authentication routes.
+        "post-only body credentials": (
+            'requireMethod(stream, method, "POST")' in rm
+            and 'credParam(body, "", "password"' in rm
+        ),
+        "typed error codes": "405 Method Not Allowed" in rm and "403 Forbidden" in rm,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
@@ -72,17 +89,82 @@ def test_auth_routes():
     return "pass", "auth routes: status/register/login/logout + session-aware Bearer gate"
 
 
+@test("Container first-admin credential lifecycle", "Auth")
+def test_container_first_admin_credential():
+    smoke = _src("scripts/docker-smoke.sh")
+    dockerfile = _src("Dockerfile")
+    remote = _remote_api()
+    compose = _src("deploy/docker-compose.yml")
+    deploy_doc = _src("docs/headless-deploy.md")
+    checks = {
+        "persistent config volume": '-v "$config_volume:/config"' in smoke,
+        "owner-only mounted credential": (
+            "/config/opal/setup.token" in smoke
+            and "setup_mode" in smoke and '"$setup_mode" != 600' in smoke
+            and "setup_owner" in smoke and '"$setup_owner" != 10001' in smoke
+        ),
+        "credential shape checked": "^[0-9a-f]{64}$" in smoke,
+        "registration rejects omission": (
+            "register-without-setup.json" in smoke and '"$code" != 403' in smoke
+        ),
+        "registration enforces local authority": (
+            "register-cross-origin.json" in smoke
+            and "register-dns-host.json" in smoke
+            and "rejected registration consumed" in smoke
+        ),
+        "credential sent in dedicated header": (
+            "X-Opal-Setup-Token" in smoke and '"@$smoke_dir/setup-header"' in smoke
+        ),
+        "one-time file removed": 'test -e "$setup_path"' in smoke
+            and "still exists after successful registration" in smoke,
+        "credential cannot be replayed": (
+            "register-replay.json" in smoke and "replayed first-admin credential" in smoke
+        ),
+        "logs disclose path only": (
+            'grep -Fq "$setup_path"' in smoke
+            and 'grep -Fq "$setup_token"' in smoke
+            and "credential leaked to container logs" in smoke
+        ),
+        "image documents mounted path": "/config/opal/setup.token" in dockerfile,
+        "headless stdout announces path only": (
+            "first-admin setup credential:" in remote
+            and "owner-only; value not logged" in remote
+            and "setupTokenPath" in remote
+        ),
+        "basic deployment is host-loopback only": "127.0.0.1:41595:41595" in compose,
+        "compose explains non-root config ownership": (
+            "10001:10001" in compose and "/config/opal/setup.token" in compose
+        ),
+        "operator bootstrap documented": (
+            "X-Opal-Setup-Token" in deploy_doc
+            and "deleted immediately" in deploy_doc
+            and "cross-authority browser Origin" in deploy_doc
+            and "Startup logs announce this" in deploy_doc and "path only" in deploy_doc
+        ),
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "container onboarding incomplete: " + ", ".join(missing)
+    return "pass", "mounted 0600 setup token is required, consumed once, and never logged"
+
+
 @test("Web UI account login/register (no pairing code)", "Auth")
 def test_auth_web_ui():
-    ui = _src("web/index.html")
+    ui = _web_app()
     checks = {
         # Account screen replaces the pairing screen (same #pair-screen overlay).
-        "account fields": 'id="auth-user"' in ui and 'id="auth-pass"' in ui and 'id="auth-pass2"' in ui,
+        "account fields": all(f'id="{field}"' in ui for field in (
+            "auth-user", "auth-pass", "auth-pass2", "auth-setup",
+        )),
         "status drives mode": "/api/auth/status" in ui and "needs_setup" in ui
             and "authMode" in ui,
         # routes are built as '/api/auth/' + (reg ? 'register' : 'login')
         "register + login POST": "'register' : 'login'" in ui and "function submitAuth(" in ui
             and "/api/auth/" in ui,
+        "one-time setup capability": (
+            "#setup=" in ui and "history.replaceState" in ui
+            and "X-Opal-Setup-Token" in ui and "/^[0-9a-f]{64}$/" in ui
+        ),
         "logout revokes session": "/api/auth/logout" in ui and "function unpair(" in ui,
         "sign-out button": 'id="signout"' in ui and "$('signout').onclick" in ui,
         "boot shows auth": "if (TOKEN) paired(); else showAuth();" in ui,
@@ -115,7 +197,17 @@ def test_deploy_profiles():
         # Opal not directly published in the TLS profile (Caddy is the face).
         "opal internal in tls": "expose:" in tls,
         "docs cover access": "docker-compose.tls.yml" in doc and "docker-compose.tailscale.yml" in doc
-            and "create an admin account" in doc,
+            and "First-admin bootstrap" in doc and "X-Opal-Setup-Token" in doc,
+        "proxy profiles require local bootstrap": (
+            "local first-admin bootstrap with docker-compose.yml" in tls
+            and "local first-admin bootstrap with docker-compose.yml" in ts
+            and "Never send the setup credential through the proxy" in tls
+            and "Never send the setup" in ts
+        ),
+        "proxy docs reuse bootstrapped config": (
+            doc.count("Both profiles reuse data/config") == 2
+            and doc.count("docker compose -f deploy/docker-compose.yml down") >= 2
+        ),
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:

@@ -38,16 +38,16 @@ pub fn renderDrawer() void {
 
     // Use same width as main drawer for consistency
     const w = state.app.drawer_width_px;
-    
+
     var drawer_box = dvui.box(@src(), .{ .dir = .vertical }, .{
         .background = true,
         .color_fill = theme.colors.bg_surface,
         .expand = .vertical,
         .min_size_content = .{ .w = 350, .h = 0 },
         .max_size_content = .{ .w = w, .h = std.math.floatMax(f32) },
-        .border = dvui.Rect{ .x=1, .y=0, .w=0, .h=0 },
+        .border = dvui.Rect{ .x = 1, .y = 0, .w = 0, .h = 0 },
         .color_border = theme.colors.border_subtle,
-        .box_shadow = .{ .color = dvui.Color{ .r=0, .g=0, .b=0, .a=160 }, .offset = .{ .x=-2, .y=0 }, .fade = 16.0 },
+        .box_shadow = .{ .color = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 }, .offset = .{ .x = -2, .y = 0 }, .fade = 16.0 },
     });
     defer drawer_box.deinit();
 
@@ -59,13 +59,13 @@ pub fn renderDrawer() void {
             .background = true,
             .color_fill = theme.colors.bg_app,
             .color_border = theme.colors.border_subtle,
-            .border = .{ .x=0, .y=0, .w=0, .h=1 },
+            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         });
         defer head.deinit();
 
         // Queue tab
         if (dvui.button(@src(), "Queue", .{}, .{
-            .color_fill = if (active_tab == .queue) theme.colors.accent else dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
+            .color_fill = if (active_tab == .queue) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = if (active_tab == .queue) theme.colors.bg_app else theme.colors.text_secondary,
             .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
             .corner_radius = theme.dims.rad_sm,
@@ -76,7 +76,7 @@ pub fn renderDrawer() void {
 
         // Playlist tab
         if (dvui.button(@src(), "Playlist", .{}, .{
-            .color_fill = if (active_tab == .playlist) theme.colors.accent else dvui.Color{ .r=0, .g=0, .b=0, .a=0 },
+            .color_fill = if (active_tab == .playlist) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = if (active_tab == .playlist) theme.colors.bg_app else theme.colors.text_secondary,
             .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
             .corner_radius = theme.dims.rad_sm,
@@ -84,9 +84,12 @@ pub fn renderDrawer() void {
             active_tab = .playlist;
         }
 
-        { var s = dvui.box(@src(), .{}, .{ .expand = .horizontal }); s.deinit(); }
-        
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"x", .{}, .{}, theme.optIconBtnDanger())) {
+        {
+            var s = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            s.deinit();
+        }
+
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, theme.optIconBtnDanger())) {
             state.app.playlist_drawer_open = false;
         }
     }
@@ -128,6 +131,22 @@ fn shuffleOrderSlice(count: usize) ?[]const u32 {
     if (shuffle_order.items.len != count) rebuildShuffleOrder(count);
     if (shuffle_order.items.len != count) return null; // resize failed
     return shuffle_order.items;
+}
+
+pub fn setShuffle(enabled: bool) void {
+    if (state.app.playlist_shuffle == enabled) return;
+    state.app.playlist_shuffle = enabled;
+    if (enabled) {
+        const count = if (state.app.playlist) |pl| pl.entries.items.len else 0;
+        rebuildShuffleOrder(count);
+    }
+    state.markConfigDirty();
+}
+
+pub fn setRepeat(mode: pure.RepeatMode) void {
+    if (state.app.playlist_repeat == mode) return;
+    state.app.playlist_repeat = mode;
+    state.markConfigDirty();
 }
 
 pub const AdvanceResult = enum { started, end_of_playlist, not_playlist };
@@ -241,8 +260,8 @@ fn renderPlaylistTab() void {
             .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
         });
         defer filter_row.deinit();
-        
-        dvui.icon(@src(), "", icons.tvg.lucide.@"search", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5, .margin = .{ .x=0, .y=0, .w=6, .h=0 } });
+
+        dvui.icon(@src(), "", icons.tvg.lucide.search, .{}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 } });
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &filter_buf } }, .{
             .expand = .horizontal,
             .color_fill = theme.colors.bg_elevated,
@@ -266,10 +285,7 @@ fn renderPlaylistTab() void {
             .color_text = if (state.app.playlist_shuffle) theme.colors.accent else theme.colors.text_secondary,
             .color_fill = transparent,
         })) {
-            state.app.playlist_shuffle = !state.app.playlist_shuffle;
-            // Fresh permutation each time shuffle turns on.
-            if (state.app.playlist_shuffle) rebuildShuffleOrder(pl.entries.items.len);
-            state.app.config_dirty = true;
+            setShuffle(!state.app.playlist_shuffle);
         }
 
         const rep = state.app.playlist_repeat;
@@ -278,8 +294,7 @@ fn renderPlaylistTab() void {
             .color_text = if (rep == .off) theme.colors.text_secondary else theme.colors.accent,
             .color_fill = transparent,
         })) {
-            state.app.playlist_repeat = rep.cycled();
-            state.app.config_dirty = true;
+            setRepeat(rep.cycled());
         }
 
         // Prev / Next — same pure advance path the auto-advance uses.
@@ -298,7 +313,10 @@ fn renderPlaylistTab() void {
                 _ = advance(state.app.players.items[state.app.active_player_idx], 1);
         }
 
-        { var s = dvui.box(@src(), .{}, .{ .expand = .horizontal }); s.deinit(); }
+        {
+            var s = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            s.deinit();
+        }
 
         if (dvui.buttonIcon(@src(), "pl-save", icons.tvg.lucide.save, .{}, .{}, .{
             .color_text = theme.colors.text_secondary,
@@ -381,10 +399,7 @@ fn renderPlaylistTab() void {
         v_title_trunc: {
             const safe_len = @min(entry.title.len, 80);
             const safe_grp = @min(group_str.len, 30);
-            const res = std.fmt.bufPrintZ(&label_buf, "{s}\n{s}", .{
-                entry.title[0..safe_len],
-                group_str[0..safe_grp]
-            }) catch {
+            const res = std.fmt.bufPrintZ(&label_buf, "{s}\n{s}", .{ entry.title[0..safe_len], group_str[0..safe_grp] }) catch {
                 label_buf[0] = 0;
                 break :v_title_trunc;
             };
@@ -394,7 +409,7 @@ fn renderPlaylistTab() void {
         const is_active = active_url.len > 0 and std.mem.eql(u8, active_url, entry.url);
         const bg_color = if (is_active) theme.colors.accent else theme.colors.bg_surface;
         const fg_color = if (is_active) theme.colors.bg_app else theme.colors.text_primary;
-        
+
         // Title/group are trimmed at byte boundaries (can cut a codepoint) and
         // come from untrusted M3U/IPTV playlists — validate before dvui draws it
         // (invalid UTF-8 panics the whole app).

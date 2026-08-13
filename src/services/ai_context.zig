@@ -265,11 +265,10 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
                         const trimmed = std.mem.trim(u8, res_buf[0..n], " \t\r\n");
                         if (trimmed.len > 10 and std.mem.startsWith(u8, trimmed, "http")) {
                             if (state.app.players.items.len > pi) {
-                                const mpv = @import("../core/c.zig").mpv;
-                                var load_z: [2048]u8 = std.mem.zeroes([2048]u8);
-                                @memcpy(load_z[0..trimmed.len], trimmed);
-                                var args2 = [_][*c]const u8{ "loadfile", @ptrCast(&load_z), null };
-                                _ = mpv.mpv_command(state.app.players.items[pi].mpv_ctx, @ptrCast(&args2));
+                                // Preserve the original streamlink page as the
+                                // playback identity while swapping its resolved
+                                // quality URL through the credential-safe seam.
+                                state.app.players.items[pi].commitPlayback(.{ .url = trimmed });
                             }
                         }
                     }
@@ -488,10 +487,29 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
             addInstantResponse(raw_input, "Incognito is on — this chat won't be saved anywhere.");
             return true;
         }
-        var path_buf: [128]u8 = undefined;
-        const ts = @import("../core/io_global.zig").timestamp();
-        const path = std.fmt.bufPrint(&path_buf, "/tmp/opal_chat_{d}.txt", .{ts}) catch "/tmp/opal_chat.txt";
-        if (@import("../core/io_global.zig").cwdCreateFile(path, .{})) |f| {
+        const io = @import("../core/io_global.zig");
+        var save_dir_buf: [512]u8 = undefined;
+        const save_dir = @import("../core/paths.zig").defaultSavePath(&save_dir_buf);
+        io.cwdMakePath(save_dir) catch {
+            addInstantResponse(raw_input, "Failed to create the chat export folder.");
+            return true;
+        };
+        var random: [8]u8 = undefined;
+        if (!io.randomSecure(&random)) {
+            addInstantResponse(raw_input, "Failed to create a safe chat export name.");
+            return true;
+        }
+        const suffix = std.fmt.bytesToHex(random, .lower);
+        var path_buf: [1024]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "{s}/opal_chat_{s}.txt", .{ save_dir, &suffix }) catch {
+            addInstantResponse(raw_input, "Failed to build the chat export path.");
+            return true;
+        };
+        const permissions = if (@import("builtin").os.tag == .windows)
+            std.Io.File.Permissions.default_file
+        else
+            std.Io.File.Permissions.fromMode(0o600);
+        if (io.createFileAbsolute(path, .{ .exclusive = true, .permissions = permissions })) |f| {
             defer f.close(@import("../core/io_global.zig").io());
             var i: usize = 0;
             while (i < chat.message_count) : (i += 1) {
@@ -507,7 +525,7 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
                 @import("../core/io_global.zig").writeAll(f, m.text[0..m.text_len]) catch {};
                 @import("../core/io_global.zig").writeAll(f, "\n\n") catch {};
             }
-            var resp: [128]u8 = undefined;
+            var resp: [1200]u8 = undefined;
             const msg = std.fmt.bufPrint(&resp, "Chat saved to {s}", .{path}) catch "Chat saved.";
             addInstantResponse(raw_input, msg);
         } else |_| {
@@ -1390,11 +1408,24 @@ pub fn generateResponse() void {
         return;
     };
 
-    // Write to temp file
-    if (@import("../core/io_global.zig").cwdCreateFile("/tmp/opal_ai_req.json", .{})) |f| {
-        @import("../core/io_global.zig").writeAll(f, json_str) catch {};
-        f.close(@import("../core/io_global.zig").io());
-    } else |_| {}
+    // Stage the conversation in a random owner-only workspace. This contains
+    // the system prompt and recent history, so it must never use a predictable
+    // shared-/tmp name and must be removed for normal as well as incognito use.
+    var request_temp = @import("../core/secure_temp.zig").Workspace.create("ai-request") catch {
+        chat.setAssistantError(assistant_idx, "Couldn't create private AI request storage.");
+        return;
+    };
+    defer request_temp.cleanup();
+    var req_path_buf: [@import("../core/secure_temp.zig").max_path_len]u8 = undefined;
+    const req_path = request_temp.writeFile("request.json", json_str, &req_path_buf) catch {
+        chat.setAssistantError(assistant_idx, "Couldn't stage the AI request.");
+        return;
+    };
+    var data_arg_buf: [@import("../core/secure_temp.zig").max_path_len + 1]u8 = undefined;
+    const data_arg = std.fmt.bufPrint(&data_arg_buf, "@{s}", .{req_path}) catch {
+        chat.setAssistantError(assistant_idx, "Couldn't stage the AI request.");
+        return;
+    };
 
     var url_buf: [256]u8 = undefined;
     const url = server.chatCompletionsUrl(&url_buf);
@@ -1432,27 +1463,34 @@ pub fn generateResponse() void {
 
     server.model_status = .checking;
 
-    // Cloud providers authenticate via a Bearer key (from .env); local
-    // servers take no auth header. curl ignores an empty -H "" cleanly, but
-    // build distinct argvs anyway so the local path is byte-identical.
+    // Cloud providers authenticate via a Bearer key (from .env). Feed that
+    // header through curl's config-on-stdin support so the key is absent from
+    // process listings and crash reports that capture argv.
     var auth_buf: [640]u8 = undefined;
     const auth = server.authHeader(&auth_buf);
-    var child = if (auth) |ah|
+    var child = if (auth != null)
         @import("../core/io_global.zig").Child.init(
-            &.{ "curl", "-s", "-N", "--max-time", "60", "-X", "POST", "-H", "Content-Type: application/json", "-H", ah, "--data-binary", "@/tmp/opal_ai_req.json", url },
+            &.{ "curl", "-s", "-N", "--max-time", "60", "-X", "POST", "-H", "Content-Type: application/json", "--config", "-", "--data-binary", data_arg, url },
             @import("../core/alloc.zig").allocator,
         )
     else
         @import("../core/io_global.zig").Child.init(
-            &.{ "curl", "-s", "-N", "--max-time", "60", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", "@/tmp/opal_ai_req.json", url },
+            &.{ "curl", "-s", "-N", "--max-time", "60", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", data_arg, url },
             @import("../core/alloc.zig").allocator,
         );
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
-    child.spawn() catch {
-        chat.setAssistantError(assistant_idx, "Can't reach the AI server. Start it (or set an API key) in Settings > AI.");
-        return;
-    };
+    if (auth) |ah| {
+        @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{ah}) catch {
+            chat.setAssistantError(assistant_idx, "Can't reach the AI server. Start it (or set an API key) in Settings > AI.");
+            return;
+        };
+    } else {
+        child.spawn() catch {
+            chat.setAssistantError(assistant_idx, "Can't reach the AI server. Start it (or set an API key) in Settings > AI.");
+            return;
+        };
+    }
 
     // Buffer to hold the incoming JSON response (for tool_call parsing)
     var resp_buf: [8192]u8 = undefined;
@@ -1597,13 +1635,6 @@ pub fn generateResponse() void {
 
     _ = child.wait() catch {};
     server.model_status = .online;
-
-    // Incognito: the request body (system prompt + last-8 history) was staged
-    // at /tmp/opal_ai_req.json for curl — don't leave a disk residue of a
-    // conversation the user asked us not to remember.
-    if (@import("../core/state.zig").app.incognito_mode) {
-        @import("../core/io_global.zig").deleteFileAbsolute("/tmp/opal_ai_req.json") catch {};
-    }
 
     // Aborted by barge-in / Stop — leave whatever partial text was streamed and
     // bail without surfacing a "no response" error or parsing tool calls on a

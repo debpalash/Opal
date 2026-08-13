@@ -107,3 +107,28 @@ def test_youtube_innertube():
     if not missing:
         return "pass", "InnerTube fast path wired: pure(body/iter/fields) -> reliable_fetch POST -> batched refresh; fallback InnerTube>yt-dlp>Piped; SWR content cache"
     return "fail", "InnerTube wiring incomplete: " + ", ".join(missing)
+
+
+@test("yt-dlp fallback has a bounded process-tree lifecycle", "YouTube")
+def ytdlp_fallback_is_contained():
+    svc = _src("src/services/youtube.zig")
+    block = svc[svc.index("fn runYtdlp("):]
+    block = block[:block.index("\nfn parseYtdlpLine", 10)]
+    checks = {
+        "shared streaming seam": "bounded_process.StreamProcess.init" in block,
+        "deadline": ".timeout_ms = 120 * 1000" in block,
+        "output budget": ".max_output_bytes = 16 * 1024 * 1024" in block
+            and "process.noteOutput" in block,
+        "generation cancellation": ".cancel_epoch" in block
+            and "&search_gen" in block and ".expected = gen" in block,
+        "incremental rows retained": "process.stdout()" in block
+            and "takeDelimiter('\\n')" in block and "parseYtdlpLine(line)" in block,
+        "supersede requests tree stop": "process.requestStop();" in block,
+        "owner finishes and reaps": "process.finish()" in block,
+        "no raw child spawn": "io.Child.init" not in block and ".spawn()" not in block,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "yt-dlp containment incomplete: " + ", ".join(missing)
+    return "pass", ("yt-dlp fallback remains incremental behind a 120s/16MiB "
+                    "generation-cancelled whole-tree guard")

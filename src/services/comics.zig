@@ -962,11 +962,11 @@ fn fetchPost(url: []const u8, body: []const u8, dst: []u8) usize {
     var ua_buf: [200]u8 = undefined;
     const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url)}) catch return 0;
     const argv = [_][]const u8{
-        "curl",              "-sL",
-        "-H",                ua,
-        "-H",                "X-Requested-With: XMLHttpRequest",
-        "--data",            body,
-        "--max-time",        "15",
+        "curl",       "-sL",
+        "-H",         ua,
+        "-H",         "X-Requested-With: XMLHttpRequest",
+        "--data",     body,
+        "--max-time", "15",
         url,
     };
     var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
@@ -1383,8 +1383,9 @@ fn downloadSinglePage(i: usize, gen: u32) void {
     else
         "";
 
-    // Build argv dynamically so the auth / referer headers are appended only when
-    // present. Worst case: curl -sL -H ua [-H auth] [-H referer -H accept]
+    // Build argv dynamically so optional headers are appended only when
+    // present. Authentication travels over config-on-stdin, never argv.
+    // Worst case: curl -sL -H ua [--config -] [-H referer -H accept]
     // --max-time 15 url → 14 slots. The Referer (chapter URL) is stashed by the
     // Madara/MangaThemesia loaders; empty for scraper/MangaDex/OPDS sources, so
     // the block below is inert for them.
@@ -1399,9 +1400,9 @@ fn downloadSinglePage(i: usize, gen: u32) void {
     argv_buf[ac] = ua;
     ac += 1;
     if (auth.len > 0) {
-        argv_buf[ac] = "-H";
+        argv_buf[ac] = "--config";
         ac += 1;
-        argv_buf[ac] = auth;
+        argv_buf[ac] = "-";
         ac += 1;
     }
     if (referer_hdr.len > 0) {
@@ -1425,7 +1426,11 @@ fn downloadSinglePage(i: usize, gen: u32) void {
     var child = @import("../core/io_global.zig").Child.init(argv, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return;
+    if (auth.len > 0) {
+        @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{auth}) catch return;
+    } else {
+        child.spawn() catch return;
+    }
 
     const max_img = 5 * 1024 * 1024;
     const tmp_buf = alloc.alloc(u8, max_img) catch return;

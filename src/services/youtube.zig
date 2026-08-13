@@ -10,6 +10,7 @@ const yt_pure = @import("youtube_pure.zig"); // unit-tested URL/format/suggestio
 const it_pure = @import("youtube_innertube_pure.zig"); // unit-tested InnerTube body/parse helpers
 const content_cache = @import("../core/content_cache.zig");
 const ccp = @import("../core/content_cache_pure.zig");
+const bounded_process = @import("../core/bounded_process.zig");
 
 pub const alloc = @import("../core/alloc.zig").allocator;
 
@@ -1009,23 +1010,39 @@ fn runYtdlp(target: []const u8, item_range: ?[]const u8, gen: u32) void {
     argc += 1;
     const argv = argv_buf[0..argc];
 
-    var child = io.Child.init(argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return;
+    // yt-dlp is only the fallback, but it still owns network extractors and
+    // may launch helpers. Keep its line-by-line UI publishing while bounding
+    // the entire process tree. A superseding generation interrupts a blocked
+    // stdout read rather than leaving a detached worker alive until yt-dlp's
+    // per-socket timeout happens to fire.
+    var process = bounded_process.StreamProcess.init(argv, .{
+        .timeout_ms = 120 * 1000,
+        .terminate_grace_ms = 500,
+        .max_output_bytes = 16 * 1024 * 1024,
+        .cancel_epoch = .{ .epoch32 = .{ .value = &search_gen, .expected = gen } },
+    });
+    process.start() catch return;
 
     var reader_buf: [8192]u8 = undefined;
-    var reader = child.stdout.?.reader(io.io(), &reader_buf);
+    var reader = process.stdout().?.reader(io.io(), &reader_buf);
 
-    while (reader.interface.takeDelimiter('\n') catch null) |line| {
+    while (true) {
+        const line = reader.interface.takeDelimiter('\n') catch {
+            process.requestStop();
+            break;
+        } orelse break;
+        if (!process.noteOutput(line.len + 1)) break;
         if (line.len == 0) continue;
-        if (!isCurrent(gen)) break; // superseded — stop feeding the grid
+        if (!isCurrent(gen)) {
+            process.requestStop();
+            break; // superseded — stop feeding the grid
+        }
         yt_mutex.lock();
         parseYtdlpLine(line);
         yt_mutex.unlock();
     }
 
-    _ = child.wait() catch {};
+    _ = process.finish();
 }
 
 /// Parse one tab-delimited row:
@@ -2081,12 +2098,10 @@ fn sendToPlayer(item: *state.YtItem, appendToPlaylist: bool) void {
     queue_svc.addToQueue(yt_url, item.title[0..item.title_len], "youtube");
 
     if (appendToPlaylist) {
-        const mpv = @import("../core/c.zig").mpv;
-        var args = [_][*c]const u8{ "loadfile", yt_url.ptr, "append", null };
-        _ = mpv.mpv_command(ap.mpv_ctx, @ptrCast(&args));
+        ap.load(.{ .url = yt_url, .mode = .append });
         state.showToast("Track queued!");
     } else {
-        ap.load_file(yt_url.ptr);
+        ap.load(.{ .url = yt_url, .mode = .replace });
         state.gotoPlayer(); // player route + drawer closed — user lands on the video
     }
 }

@@ -90,6 +90,7 @@ async function setupFetch(
   path: string,
   method: "GET" | "POST",
   body?: Record<string, string>,
+  setupToken?: string,
 ): Promise<OpalResponse> {
   const url = `http://${host}:${port}${path}`;
   const init: RequestInit = { method };
@@ -97,7 +98,10 @@ async function setupFetch(
     // Credentials go in the body, never the query string — a URL lands in
     // access logs and history. Same rule the web UI follows.
     init.body = new URLSearchParams(body).toString();
-    init.headers = { "Content-Type": "application/x-www-form-urlencoded" };
+    init.headers = {
+      "Content-Type": "application/x-www-form-urlencoded",
+      ...(setupToken ? { "X-Opal-Setup-Token": setupToken } : {}),
+    };
   }
   try {
     // A wrong host would otherwise hang until the browser gives up.
@@ -132,6 +136,7 @@ async function sendToOpal(req: OpalRequest): Promise<OpalResponse> {
         req.action === "login" ? "/api/auth/login" : "/api/auth/register",
         "POST",
         { username: req.username ?? "", password: req.password ?? "" },
+        req.action === "register" ? req.setupToken : undefined,
       );
     default:
       break;

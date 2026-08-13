@@ -4,6 +4,50 @@ shared @test decorator, helpers, and run_all()."""
 from .harness import *  # noqa: F401,F403
 import os, sys, subprocess, sqlite3, socket, time, json  # noqa: F401
 
+@test("Typed Playback Load Seam", "Player")
+def test_typed_playback_load_seam():
+    player = _src("src/player/player.zig")
+    pure = _src("src/player/playback_load_pure.zig")
+    browser = _src("src/services/browser.zig")
+    build = _src("build.zig")
+
+    # A raw mpv media command anywhere outside the production adapter bypasses
+    # the mandatory UA/header reset and can leak one host's Cookie/Referer into
+    # the next. Keep this source-wide so new integrations are covered too.
+    offenders = []
+    src_root = os.path.join(PROJECT_DIR, "src")
+    for root, _, files in os.walk(src_root):
+        for name in files:
+            if not name.endswith(".zig"):
+                continue
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, PROJECT_DIR)
+            text = open(path, encoding="utf-8").read()
+            if ('"loadfile"' in text or 'loadfile \\"' in text) and rel != "src/player/player.zig":
+                offenders.append(rel)
+
+    checks = {
+        "one raw implementation": player.count('"loadfile"') == 1,
+        "no bypassing callers": not offenders,
+        "typed modes": "pub const Mode = enum" in pure and "replace" in pure and "append" in pure,
+        "replace clears; every entry owns options": ('if (request.mode == .replace)' in pure
+                              and 'sink.setOption("user-agent", "libmpv")' in pure
+                              and 'sink.setOption("http-header-fields", "")' in pure
+                              and "sink.loadFile(request.url, request.mode" in pure
+                              and "FileOptions" in pure),
+        "append does not mutate current stream":
+            "append attaches entry options without mutating the current global options" in pure,
+        "production adapter": "playback_load.dispatch(&sink, request)" in player,
+        "browser request mode": "mode: player.LoadMode = .replace" in browser,
+        "central health hook": "health_kind" in browser and "link_health.zig" in browser,
+        "pure test registered": "src/player/playback_load_pure.zig" in build,
+    }
+    missing = [key for key, ok in checks.items() if not ok]
+    if not missing:
+        return "pass", "replace clears legacy globals; per-entry options preserve append isolation; no raw bypass"
+    return "fail", f"missing: {missing}; raw offenders: {offenders}"
+
+
 @test("Single-Media Mode", "Player")
 def test_single_media():
     main = _src("src/main.zig")
@@ -227,10 +271,10 @@ def test_web_companion():
     # This covers the rest of the companion story: server binds LAN when the
     # opt-in toggle is on, the page is served from Resources/web with a dev
     # fallback, Settings shows the LAN URL + an account hint, build bundles it.
-    rm = _src("src/services/remote.zig")
+    rm = _remote_api()
     stg = _src("src/ui/settings.zig")
     sh = open(os.path.join(PROJECT_DIR, "scripts/build-app.sh")).read()
-    web = open(os.path.join(PROJECT_DIR, "web/index.html")).read()
+    web = _web_app()
     checks = {
         # Pairing is fully removed server-side.
         "no pair route": '"/pair"' not in rm and "regeneratePairCode" not in rm
@@ -249,7 +293,7 @@ def test_web_companion():
         # strictly stronger — and is the only recovery path when the password
         # is forgotten or the server is off. Still no pairing code anywhere.
         "settings account controls": "lanIp" in stg and "pairingCode" not in stg
-            and "auth_store.createUser(" in stg and "Create Account" in stg,
+            and "auth_store.createFirstAdmin(" in stg and "Create Account" in stg,
         "build bundles web": "Resources/web" in sh,
         # The web UI authenticates via accounts, not a pairing code.
         "client uses accounts": "/api/auth/status" in web and "/api/auth/" in web
@@ -267,14 +311,15 @@ def test_hosted_mode_and_perf():
     # production CPU fixes from the 2026-07-10 profiling session.
     rs = _src("src/services/remote_stream.zig")
     rp = _src("src/services/remote_stream_pure.zig")
-    rm = _src("src/services/remote.zig")
+    rm = _remote_api()
     hl = _src("src/headless.zig")
     al = _src("src/core/alloc.zig")
     gr = _src("src/ui/grid.zig")
     pl = _src("src/player/player.zig")
     dk = open(os.path.join(PROJECT_DIR, "Dockerfile")).read()
     ci = open(os.path.join(PROJECT_DIR, ".github/workflows/ci.yml")).read()
-    web = open(os.path.join(PROJECT_DIR, "web/index.html")).read()
+    docker_smoke = _src("scripts/docker-smoke.sh")
+    web = _web_app()
     checks = {
         "range streaming": "parseRange" in rp and "206 Partial Content" in rs,
         "srt→vtt": "srtToVtt" in rp and "handleVtt" in rs,
@@ -284,11 +329,13 @@ def test_hosted_mode_and_perf():
         "thread-per-conn + api mutex": "api_mutex" in rm and "Thread.spawn(.{}, Handler.run" in rm,
         "headless serves web": "web_remote_enabled = true" in hl and "create your admin account" in hl,
         "docker headless build": "-Dheadless=true" in dk and "3000" not in dk,
-        "ci gate": "docker-headless" in ci and "/api/auth/register" in ci,
+        "ci gate": "docker-headless" in ci and "scripts/docker-smoke.sh" in ci
+            and "/api/auth/register" in docker_smoke,
         "hosted web player": "openPlayer" in web and "/stream?file=" in web and "/vtt?file=" in web,
-        "web torrent progress": "pollTorrents" in web,
+        "web transfer progress": "pollTransfers" in web,
         "browser-first setup": '"/setup/sources"' in rm and "installStarterPack" in rm and "loadSetup" in web,
-        "sse push": '"/events"' in rm and "text/event-stream" in rm and "buildStatusJson" in rm and "EventSource" in web,
+        "sse push": '"/events"' in rm and "text/event-stream" in rm
+            and 'remote_status.zig").build' in rm and "EventSource" in web,
         "queue reorder": '"/queue/move"' in rm and "moveQueueItem" in _src("src/services/queue.zig") and "qmv" in web,
         # Perf: release allocator, non-blocking mpv render, no built-in Lua VMs.
         "release allocator": "smp_allocator" in al,
@@ -1123,7 +1170,8 @@ def test_loading_screen_infotainment():
         # that was never picked up and never shown.
         "one stash consumer": "pub fn consumePendingPlay(" in st,
         "torrent path consumes": "state.consumePendingPlay(p);" in _src("src/services/search.zig"),
-        "direct path consumes": _src("src/services/browser.zig").count("state.consumePendingPlay(p);") >= 2,
+        "direct path consumes": "pub fn playDirect(" in _src("src/services/browser.zig")
+            and "state.consumePendingPlay(p);" in _src("src/services/browser.zig"),
         # Podcasts, radio, IPTV, Audiobookshelf and the browser extension all
         # already hand loadContentDirectMeta an art URL + title. Deriving the
         # loading context from those covers every one of them without editing
@@ -1391,7 +1439,7 @@ def download_limit_units_converted():
     the pure converters.
     """
     sap = _src("src/services/settings_api_pure.zig")
-    rm = _src("src/services/remote.zig")
+    rm = _remote_api()
 
     checks = {
         "converters exist": "pub fn rateBytesToKb(" in sap and "pub fn rateKbToBytes(" in sap,
@@ -1417,7 +1465,7 @@ def api_load_honest_result():
     success while the player never moved. It now reads body-then-query (same
     helper as the credential routes) and says so when there is no url.
     """
-    rm = _src("src/services/remote.zig")
+    rm = _remote_api()
     body = _between(rm, 'api_path, "/load")', "// ── Status")
     checks = {
         "reads body then query": 'credParam(body, query, "url"' in body,

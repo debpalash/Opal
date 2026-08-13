@@ -2,21 +2,40 @@
 Byte-for-byte identical test bodies; see tests/features/harness.py for the
 shared @test decorator, helpers, and run_all()."""
 from .harness import *  # noqa: F401,F403
-import os, sys, subprocess, sqlite3, socket, time, json  # noqa: F401
+import glob, os, sys, subprocess, sqlite3, socket, tempfile, time, json  # noqa: F401
 
 @test("Voice Server Socket", "Voice")
 def test_voice_socket():
-    sock_path = "/tmp/opal-voice.sock"
-    if os.path.exists(sock_path):
+    sockets = glob.glob(os.path.join(tempfile.gettempdir(), "opal-voice-runtime-*", "voice.sock"))
+    if sockets:
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.settimeout(1)
-            s.connect(sock_path)
+            s.connect(sockets[0])
             s.close()
             return "pass", "Connected to voice server"
         except:
             return "warn", "Socket exists but not accepting connections"
     return "skip", "Voice server not running"
+
+
+@test("Voice scratch paths are private and non-predictable", "Voice")
+def test_voice_private_runtime_paths():
+    voice = _src("src/services/ai_voice.zig")
+    helpers = "\n".join(_src(f"bin/{name}") for name in (
+        "opal-stt-server.py", "opal-tts-server.py", "opal-voice-server.py"))
+    checks = {
+        "Zig uses secure workspace": "Workspace.create(\"voice-runtime\")" in voice,
+        "managed socket args": voice.count('"--socket"') >= 3,
+        "managed output arg": '"--output"' in voice,
+        "no fixed voice tmp path": "/tmp/opal" not in voice,
+        "helpers accept explicit path": "sys.argv.index(\"--socket\")" in helpers,
+        "helpers lock socket mode": helpers.count("os.chmod(SOCK_PATH, 0o600)") == 3,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", f"missing: {missing}"
+    return "pass", "random 0700 runtime; explicit 0600 sidecar sockets/output"
 
 
 @test("Silero VAD Available", "Voice")

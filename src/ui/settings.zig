@@ -1064,13 +1064,14 @@ fn renderGeneralTab() void {
     // ── Interface ── (whitespace-separated, no card chrome)
     sectionHeader("Interface", "Customize how Opal looks and feels", 10, @src());
 
-    // UI Scale — "Auto" derives a density-aware scale from the OS and, when
-    // Linux reports only a placeholder 1×, the panel's EDID. Manual steps pin
-    // a fixed value. Sub-1× steps keep a compact option available.
+    // UI Scale — Auto is the default and never drops below 1.0×. DVUI handles
+    // a reported OS scale; when Linux reports only a placeholder 1×, validated
+    // panel data may scale upward. Sub-1× choices remain explicit manual
+    // density overrides, while point-based breakpoints adapt the layout.
     settingRow("UI Scale", 100, @src());
     {
         const scales = [_]f32{ 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 2.0 };
-        const scale_labels = [_][]const u8{ "Auto", "0.6x", "0.7x", "0.8x", "0.9x", "1.0x", "1.2x", "1.4x", "1.6x", "2.0x" };
+        const scale_labels = [_][]const u8{ "Auto ≥1.0x", "0.6x", "0.7x", "0.8x", "0.9x", "1.0x", "1.2x", "1.4x", "1.6x", "2.0x" };
         // Index 0 = Auto; manual values are offset by one.
         var sel: usize = 0;
         if (!state.app.ui_scale_auto) {
@@ -2124,180 +2125,180 @@ fn renderNetworkTab() void {
         });
     }
 
-        // ── Reading server (OPDS) — Komga / Kavita / Calibre-Web / LANraragi ──
-        // Mirrors the Jellyfin connection surface: catalog URL + Basic-auth creds +
-        // a Test Connection button (opds.connect fetches the root feed).
-        settingRow("Reading server (OPDS)", 34, @src());
-        _ = dvui.label(@src(), "Komga · Kavita · Calibre-Web · LANraragi — manga, comics & ebooks", .{}, .{
-            .id_extra = 3400,
-            .color_text = theme.colors.text_tertiary,
-        });
+    // ── Reading server (OPDS) — Komga / Kavita / Calibre-Web / LANraragi ──
+    // Mirrors the Jellyfin connection surface: catalog URL + Basic-auth creds +
+    // a Test Connection button (opds.connect fetches the root feed).
+    settingRow("Reading server (OPDS)", 34, @src());
+    _ = dvui.label(@src(), "Komga · Kavita · Calibre-Web · LANraragi — manga, comics & ebooks", .{}, .{
+        .id_extra = 3400,
+        .color_text = theme.colors.text_tertiary,
+    });
+    {
+        const opds = @import("../services/opds.zig");
+        // Catalog URL
+        _ = dvui.label(@src(), "Catalog URL", .{}, .{ .id_extra = 3401, .color_text = theme.colors.text_secondary });
         {
-            const opds = @import("../services/opds.zig");
-            // Catalog URL
-            _ = dvui.label(@src(), "Catalog URL", .{}, .{ .id_extra = 3401, .color_text = theme.colors.text_secondary });
-            {
-                var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.opds.server_url } }, .{
-                    .id_extra = 3402,
-                    .expand = .horizontal,
-                    .min_size_content = .{ .w = 250, .h = 20 },
-                    .color_fill = theme.colors.bg_elevated,
-                    .color_border = theme.colors.border_subtle,
-                    .color_text = theme.colors.text_primary,
-                    .border = dvui.Rect.all(1),
-                    .corner_radius = theme.dims.rad_sm,
-                });
-                const changed = te.text_changed;
-                te.deinit();
-                state.app.opds.server_url_len = std.mem.indexOfScalar(u8, &state.app.opds.server_url, 0) orelse state.app.opds.server_url.len;
-                if (changed) state.markConfigDirty();
-            }
-            // Username / Password
-            {
-                var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 3403, .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 26 } });
-                defer row.deinit();
-                var ute = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.opds.user_buf } }, .{
-                    .id_extra = 3404,
-                    .expand = .horizontal,
-                    .min_size_content = .{ .w = 120, .h = 20 },
-                    .color_fill = theme.colors.bg_elevated,
-                    .color_border = theme.colors.border_subtle,
-                    .color_text = theme.colors.text_primary,
-                    .border = dvui.Rect.all(1),
-                    .corner_radius = theme.dims.rad_sm,
-                });
-                const uchanged = ute.text_changed;
-                ute.deinit();
-                var pte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.opds.pass_buf }, .password_char = "•" }, .{
-                    .id_extra = 3405,
-                    .expand = .horizontal,
-                    .min_size_content = .{ .w = 120, .h = 20 },
-                    .color_fill = theme.colors.bg_elevated,
-                    .color_border = theme.colors.border_subtle,
-                    .color_text = theme.colors.text_primary,
-                    .border = dvui.Rect.all(1),
-                    .corner_radius = theme.dims.rad_sm,
-                    .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
-                });
-                const pchanged = pte.text_changed;
-                pte.deinit();
-                if (uchanged or pchanged) state.markConfigDirty();
-            }
-            // Test Connection + status
-            {
-                var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 3406, .expand = .horizontal });
-                defer row.deinit();
-                const busy = state.app.opds.is_loading.load(.acquire);
-                if (dvui.button(@src(), if (busy) "Connecting…" else "Test Connection", .{}, .{
-                    .id_extra = 3407,
-                    .color_fill = theme.colors.accent,
-                    .color_text = theme.colors.text_on_accent,
-                    .corner_radius = theme.dims.rad_sm,
-                    .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
-                }) and !busy) {
-                    state.markConfigDirty();
-                    opds.testConnection();
-                }
-                const status: []const u8 = if (state.app.opds.fetch_error and state.app.opds.error_msg_len > 0)
-                    state.app.opds.error_msg[0..state.app.opds.error_msg_len]
-                else if (state.app.opds.connected)
-                    "Connected"
-                else
-                    "Not connected";
-                _ = dvui.label(@src(), "{s}", .{status}, .{
-                    .id_extra = 3408,
-                    .color_text = if (state.app.opds.fetch_error) theme.colors.danger else theme.colors.text_secondary,
-                    .gravity_y = 0.5,
-                    .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
-                });
-            }
+            var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.opds.server_url } }, .{
+                .id_extra = 3402,
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 250, .h = 20 },
+                .color_fill = theme.colors.bg_elevated,
+                .color_border = theme.colors.border_subtle,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(1),
+                .corner_radius = theme.dims.rad_sm,
+            });
+            const changed = te.text_changed;
+            te.deinit();
+            state.app.opds.server_url_len = std.mem.indexOfScalar(u8, &state.app.opds.server_url, 0) orelse state.app.opds.server_url.len;
+            if (changed) state.markConfigDirty();
         }
-
-        // ── Music server (Subsonic / OpenSubsonic) — Navidrome / Airsonic / … ──
-        settingRow("Music server (Subsonic)", 35, @src());
-        _ = dvui.label(@src(), "Navidrome · Airsonic · Gonic · Funkwhale · Ampache — your music library", .{}, .{
-            .id_extra = 3500,
-            .color_text = theme.colors.text_tertiary,
-        });
+        // Username / Password
         {
-            const music = @import("../services/music_subsonic.zig");
-            music.prefillConfig();
-            // Server URL
-            _ = dvui.label(@src(), "Server URL", .{}, .{ .id_extra = 3501, .color_text = theme.colors.text_secondary });
-            {
-                var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_base }, .placeholder = "http://localhost:4533" }, .{
-                    .id_extra = 3502,
-                    .expand = .horizontal,
-                    .min_size_content = .{ .w = 250, .h = 20 },
-                    .color_fill = theme.colors.bg_elevated,
-                    .color_border = theme.colors.border_subtle,
-                    .color_text = theme.colors.text_primary,
-                    .border = dvui.Rect.all(1),
-                    .corner_radius = theme.dims.rad_sm,
-                });
-                te.deinit();
-            }
-            // Username / Password
-            {
-                var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 3503, .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 26 } });
-                defer row.deinit();
-                var ute = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_user }, .placeholder = "username" }, .{
-                    .id_extra = 3504,
-                    .expand = .horizontal,
-                    .min_size_content = .{ .w = 120, .h = 20 },
-                    .color_fill = theme.colors.bg_elevated,
-                    .color_border = theme.colors.border_subtle,
-                    .color_text = theme.colors.text_primary,
-                    .border = dvui.Rect.all(1),
-                    .corner_radius = theme.dims.rad_sm,
-                });
-                ute.deinit();
-                var pte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_pass }, .placeholder = "password", .password_char = "•" }, .{
-                    .id_extra = 3505,
-                    .expand = .horizontal,
-                    .min_size_content = .{ .w = 120, .h = 20 },
-                    .color_fill = theme.colors.bg_elevated,
-                    .color_border = theme.colors.border_subtle,
-                    .color_text = theme.colors.text_primary,
-                    .border = dvui.Rect.all(1),
-                    .corner_radius = theme.dims.rad_sm,
-                    .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
-                });
-                pte.deinit();
-            }
-            if (dvui.button(@src(), "Save", .{}, .{
-                .id_extra = 3506,
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 3403, .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 26 } });
+            defer row.deinit();
+            var ute = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.opds.user_buf } }, .{
+                .id_extra = 3404,
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 120, .h = 20 },
+                .color_fill = theme.colors.bg_elevated,
+                .color_border = theme.colors.border_subtle,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(1),
+                .corner_radius = theme.dims.rad_sm,
+            });
+            const uchanged = ute.text_changed;
+            ute.deinit();
+            var pte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.opds.pass_buf }, .password_char = "•" }, .{
+                .id_extra = 3405,
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 120, .h = 20 },
+                .color_fill = theme.colors.bg_elevated,
+                .color_border = theme.colors.border_subtle,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(1),
+                .corner_radius = theme.dims.rad_sm,
+                .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+            });
+            const pchanged = pte.text_changed;
+            pte.deinit();
+            if (uchanged or pchanged) state.markConfigDirty();
+        }
+        // Test Connection + status
+        {
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 3406, .expand = .horizontal });
+            defer row.deinit();
+            const busy = state.app.opds.is_loading.load(.acquire);
+            if (dvui.button(@src(), if (busy) "Connecting…" else "Test Connection", .{}, .{
+                .id_extra = 3407,
                 .color_fill = theme.colors.accent,
                 .color_text = theme.colors.text_on_accent,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
-            })) {
-                music.saveConfig();
+            }) and !busy) {
+                state.markConfigDirty();
+                opds.testConnection();
             }
+            const status: []const u8 = if (state.app.opds.fetch_error and state.app.opds.error_msg_len > 0)
+                state.app.opds.error_msg[0..state.app.opds.error_msg_len]
+            else if (state.app.opds.connected)
+                "Connected"
+            else
+                "Not connected";
+            _ = dvui.label(@src(), "{s}", .{status}, .{
+                .id_extra = 3408,
+                .color_text = if (state.app.opds.fetch_error) theme.colors.danger else theme.colors.text_secondary,
+                .gravity_y = 0.5,
+                .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
+            });
         }
+    }
 
-        // ── Music discovery (ListenBrainz + MusicBrainz) ──
-        // OFF by default. Every other music source only plays what you already
-        // have; this is the only one that suggests something new. No API key —
-        // ListenBrainz is keyless and its data is CC0 — but it does mean
-        // outbound requests, so the user opts in explicitly.
+    // ── Music server (Subsonic / OpenSubsonic) — Navidrome / Airsonic / … ──
+    settingRow("Music server (Subsonic)", 35, @src());
+    _ = dvui.label(@src(), "Navidrome · Airsonic · Gonic · Funkwhale · Ampache — your music library", .{}, .{
+        .id_extra = 3500,
+        .color_text = theme.colors.text_tertiary,
+    });
+    {
+        const music = @import("../services/music_subsonic.zig");
+        music.prefillConfig();
+        // Server URL
+        _ = dvui.label(@src(), "Server URL", .{}, .{ .id_extra = 3501, .color_text = theme.colors.text_secondary });
         {
-            const before = state.app.music_discovery_enabled;
-            components.toggleRow(
-                @src(),
-                "Music discovery",
-                "Suggest albums from artists similar to what you play, via ListenBrainz and MusicBrainz. No account or API key; off means no requests.",
-                &state.app.music_discovery_enabled,
-            );
-            if (before != state.app.music_discovery_enabled) {
-                @import("../core/config.zig").save();
-                if (state.app.music_discovery_enabled) @import("../services/music_discovery.zig").refresh();
-            }
+            var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_base }, .placeholder = "http://localhost:4533" }, .{
+                .id_extra = 3502,
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 250, .h = 20 },
+                .color_fill = theme.colors.bg_elevated,
+                .color_border = theme.colors.border_subtle,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(1),
+                .corner_radius = theme.dims.rad_sm,
+            });
+            te.deinit();
         }
+        // Username / Password
+        {
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 3503, .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 26 } });
+            defer row.deinit();
+            var ute = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_user }, .placeholder = "username" }, .{
+                .id_extra = 3504,
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 120, .h = 20 },
+                .color_fill = theme.colors.bg_elevated,
+                .color_border = theme.colors.border_subtle,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(1),
+                .corner_radius = theme.dims.rad_sm,
+            });
+            ute.deinit();
+            var pte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_pass }, .placeholder = "password", .password_char = "•" }, .{
+                .id_extra = 3505,
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 120, .h = 20 },
+                .color_fill = theme.colors.bg_elevated,
+                .color_border = theme.colors.border_subtle,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(1),
+                .corner_radius = theme.dims.rad_sm,
+                .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+            });
+            pte.deinit();
+        }
+        if (dvui.button(@src(), "Save", .{}, .{
+            .id_extra = 3506,
+            .color_fill = theme.colors.accent,
+            .color_text = theme.colors.text_on_accent,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+        })) {
+            music.saveConfig();
+        }
+    }
 
-        // The Live TV custom-playlist box moved to Settings → Live TV
-        // (renderLiveTvTab), which ingests it into the channel catalog rather
-        // than the retired public-directory override.
+    // ── Music discovery (ListenBrainz + MusicBrainz) ──
+    // OFF by default. Every other music source only plays what you already
+    // have; this is the only one that suggests something new. No API key —
+    // ListenBrainz is keyless and its data is CC0 — but it does mean
+    // outbound requests, so the user opts in explicitly.
+    {
+        const before = state.app.music_discovery_enabled;
+        components.toggleRow(
+            @src(),
+            "Music discovery",
+            "Suggest albums from artists similar to what you play, via ListenBrainz and MusicBrainz. No account or API key; off means no requests.",
+            &state.app.music_discovery_enabled,
+        );
+        if (before != state.app.music_discovery_enabled) {
+            @import("../core/config.zig").save();
+            if (state.app.music_discovery_enabled) @import("../services/music_discovery.zig").refresh();
+        }
+    }
+
+    // The Live TV custom-playlist box moved to Settings → Live TV
+    // (renderLiveTvTab), which ingests it into the channel catalog rather
+    // than the retired public-directory override.
 
     renderAudiobookshelfSection();
 }
@@ -4665,9 +4666,14 @@ fn renderWebUiTab() void {
             });
             defer row.deinit();
             if (components.actionButton(@src(), "Open in Browser", .primary, 9001)) {
-                var url_buf: [64]u8 = undefined;
-                if (@import("../services/remote_url_pure.zig").webUiUrl(remote.port, &url_buf)) |u|
-                    openExternal(u);
+                var url_buf: [160]u8 = undefined;
+                const remote_url = @import("../services/remote_url_pure.zig");
+                var setup: [remote.SETUP_TOKEN_HEX_LEN]u8 = undefined;
+                const url = if (remote.setupToken(&setup))
+                    remote_url.webUiSetupUrl(remote.port, &setup, &url_buf)
+                else
+                    remote_url.webUiUrl(remote.port, &url_buf);
+                if (url) |u| openExternal(u);
             }
             if (components.actionButton(@src(), "Copy Address", .secondary, 9002)) {
                 var addr_buf: [96]u8 = undefined;
@@ -4740,12 +4746,13 @@ fn renderWebUiTab() void {
             } else if (users == 0) {
                 // First run only — mirrors /api/auth/register, which closes
                 // registration once any account exists.
-                if (auth_store.createUser(uname, pw, true)) |_| {
+                if (auth_store.createFirstAdmin(uname, pw)) |_| {
+                    remote.invalidateSetupToken();
                     state.showToast("Account created");
                     @memset(&webui_pw_buf, 0);
                     @memset(&webui_pw2_buf, 0);
                 } else |e| state.showToast(switch (e) {
-                    error.Taken => "That username is taken",
+                    error.SetupClosed => "Account setup is already complete",
                     error.Invalid => "Username 3-32 chars [a-zA-Z0-9._-], password 8+",
                     error.Db => "Database error",
                 });
@@ -4755,6 +4762,16 @@ fn renderWebUiTab() void {
                 // resetting the one you meant.
                 var t_buf: [96]u8 = undefined;
                 state.showToast(std.fmt.bufPrint(&t_buf, "No account named \"{s}\"", .{uname}) catch "No such account");
+            }
+        }
+
+        if (users == 0 and components.actionButton(@src(), "Copy Setup Code", .secondary, 9005)) {
+            var setup: [remote.SETUP_TOKEN_HEX_LEN]u8 = undefined;
+            if (remote.setupToken(&setup)) {
+                dvui.clipboardTextSet(&setup);
+                state.showToast("One-time setup code copied");
+            } else {
+                state.showToast("Setup code unavailable");
             }
         }
 

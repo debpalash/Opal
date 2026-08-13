@@ -11,7 +11,7 @@ from .harness import *  # noqa: F401,F403
 
 @test("Recommendations route backed by the For You engine", "Remote API")
 def test_recommendations_route():
-    rm = _src("src/services/remote.zig")
+    rm = _remote_api()
     checks = {
         "calls the real engine": "fn apiRecommendations(" in rm
             and 'rec = @import("recommendations.zig")' in rm
@@ -35,7 +35,7 @@ def test_recommendations_route():
 
 @test("Watch party + cast routes backed by real services", "Remote API")
 def test_party_cast_routes():
-    rm = _src("src/services/remote.zig")
+    rm = _remote_api()
     wp = _src("src/services/watch_party.zig")
     cast = _src("src/services/cast.zig")
     checks = {
@@ -69,7 +69,7 @@ def test_party_cast_routes():
 
 @test("Comic page images served over HTTP", "Remote API")
 def test_comic_page_route():
-    rm = _src("src/services/remote.zig")
+    rm = _remote_api()
     rs = _src("src/services/remote_stream.zig")
     cm = _src("src/services/comics.zig")
     cp = _src("src/services/comics_pure.zig")

@@ -18,16 +18,36 @@ export const DEFAULT_SETTINGS: OpalSettings = {
   defaultAction: "play",
 };
 
-/** Read persisted settings (chrome.storage.sync), falling back to defaults. */
+/**
+ * Read persisted settings. Non-secret preferences sync between browsers, but
+ * the bearer token stays device-local: syncing it would upload control of a
+ * local/LAN Opal instance to the browser account's cloud storage.
+ */
 export async function getSettings(): Promise<OpalSettings> {
-  const stored = await chrome.storage.sync.get(
-    DEFAULT_SETTINGS as unknown as Record<string, unknown>,
-  );
+  const stored = await chrome.storage.sync.get({
+    host: DEFAULT_SETTINGS.host,
+    port: DEFAULT_SETTINGS.port,
+    defaultAction: DEFAULT_SETTINGS.defaultAction,
+  });
+  const local = await chrome.storage.local.get({ token: "" });
+
+  // One-time migration from versions that stored the credential in sync.
+  // Remove it only after the local write succeeds so an upgrade cannot unpair
+  // the extension if storage.local is temporarily unavailable.
+  let token = (local.token as string) || "";
+  if (!token) {
+    const legacy = await chrome.storage.sync.get({ token: "" });
+    token = (legacy.token as string) || "";
+    if (token) {
+      await chrome.storage.local.set({ token });
+      await chrome.storage.sync.remove("token");
+    }
+  }
   const da = stored.defaultAction as OpalSettings["defaultAction"];
   return {
     host: (stored.host as string) || DEFAULT_SETTINGS.host,
     port: Number(stored.port) || DEFAULT_SETTINGS.port,
-    token: (stored.token as string) || "",
+    token,
     defaultAction:
       da === "queue" || da === "download" || da === "play"
         ? da
@@ -36,7 +56,15 @@ export async function getSettings(): Promise<OpalSettings> {
 }
 
 export async function saveSettings(s: OpalSettings): Promise<void> {
-  await chrome.storage.sync.set(s);
+  await Promise.all([
+    chrome.storage.sync.set({
+      host: s.host,
+      port: s.port,
+      defaultAction: s.defaultAction,
+    }),
+    chrome.storage.local.set({ token: s.token }),
+    chrome.storage.sync.remove("token"),
+  ]);
 }
 
 export function baseUrl(s: OpalSettings): string {
@@ -183,6 +211,9 @@ export interface OpalRequest {
   port?: number;
   username?: string;
   password?: string;
+  /** First-admin registration only. Read from the trusted Opal device and
+   * sent in a dedicated header; never persisted with normal settings. */
+  setupToken?: string;
 }
 
 /** A row from GET /api/torrents. `pct` is 0-100, `rate` is bytes/sec. */

@@ -439,6 +439,29 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_plugins_pure).step);
 
+    // Untrusted plugin process lifecycle: process-tree containment, output
+    // cap, deadline, exit status, and watchdog failure cleanup.
+    const test_bounded_process = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/bounded_process.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_bounded_process).step);
+
+    // Native/unsafe plugin approval hashes the deterministic complete tree and
+    // rejects symlinks or other special files.
+    const test_plugins_trust = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/plugins_trust.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_plugins_trust).step);
+
     // Headless account auth: bcrypt hash/verify + credential validation.
     const test_auth_pure = b.addTest(.{
         .root_module = b.createModule(.{
@@ -480,6 +503,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_settings_api_pure).step);
 
+    // Rich web player interface: action allowlist and bounded values. Keeping
+    // this pure means the security contract is tested without linking mpv.
+    const test_player_api_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/player_api_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_player_api_pure).step);
+
     // Browser playability rules for the web UI's "Play here" destination.
     const test_playback_target_pure = b.addTest(.{
         .root_module = b.createModule(.{
@@ -500,6 +534,28 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_login_rate_pure).step);
 
+    // Fixed-memory per-client/global request budgets. The table deliberately
+    // fails closed under identity spray and excludes normal media polling.
+    const test_remote_limits_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/remote_limits_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_remote_limits_pure).step);
+
+    // First-admin bootstrap: IP/localhost Host allowlist and same-authority
+    // Origin policy, isolated from the socket/database implementation.
+    const test_setup_policy_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/setup_policy_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_setup_policy_pure).step);
+
     // Logs view: level-tag normalization + consecutive-duplicate collapsing.
     const test_logs_pure = b.addTest(.{
         .root_module = b.createModule(.{
@@ -509,6 +565,42 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_logs_pure).step);
+
+    // Log ingestion is the single seam for mpv/curl/plugin diagnostics. Keep
+    // signed URLs, userinfo, bearer headers and tracker passkeys out of both
+    // the in-app ring and the authenticated /api/logs response.
+    const test_log_redact_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/log_redact_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_log_redact_pure).step);
+
+    // Sensitive scratch data: random private workspaces, exclusive owner-only
+    // files, traversal rejection, and recursive cleanup.
+    const test_secure_temp = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/secure_temp.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_secure_temp).step);
+
+    // Authenticated curl calls feed config headers over a closed stdin pipe so
+    // bearer/API keys never become process-list-visible argv entries.
+    const test_curl_secret = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/curl_secret.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_curl_secret).step);
 
     const test_deps = b.addTest(.{
         .root_module = b.createModule(.{
@@ -803,6 +895,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_http_headers_pure).step);
 
+    // Typed mpv load seam: replace clears persistent HTTP state; every queue
+    // entry receives its own UA/headers without append mutating current media.
+    const test_playback_load_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/playback_load_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_playback_load_pure).step);
+
     // DPI-bypass sidecar: mode validation, the "127.0.0.1:<port>" builder, and
     // the enabled&&running proxy gate. dpi_bypass.zig routes through these.
     const test_proxy_url_pure = b.addTest(.{
@@ -1036,7 +1139,8 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_wikipedia_pure).step);
 
-    // Device-aware display scale: DPI-tier → default ui_scale + clamp bounds.
+    // Device-aware Auto scale: neutral 1.0× floor, upward panel adjustment,
+    // persisted legacy normalization, and manual clamp bounds.
     const test_scale_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/scale_pure.zig"),
@@ -1642,6 +1746,14 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/services/resolver_dedup_pure.zig"), .target = target, .optimize = optimize }),
     });
     test_step.dependOn(&b.addRunArtifact(test_resolver_dedup_pure).step);
+    const test_resolver_lifecycle_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/resolver_lifecycle_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_resolver_lifecycle_pure).step);
 
     // Anti-block scrape fetch — pure block detection (Cloudflare / DDoS-Guard /
     // captcha interstitial recognition). Keyed on challenge-only markers so a

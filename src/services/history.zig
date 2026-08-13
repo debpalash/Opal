@@ -2,6 +2,25 @@ const std = @import("std");
 const state = @import("../core/state.zig");
 const db = @import("../core/db.zig");
 
+/// Legacy builds wrote history into fixed shared-temp paths. Migration must
+/// not follow a planted symlink or ingest a file owned/readable by another
+/// account. The descriptor checks happen after the no-follow open, avoiding a
+/// check/use race.
+fn openPrivateLegacyFile(path: []const u8) ?std.Io.File {
+    if (comptime @import("builtin").os.tag == .windows) return null;
+    const io = @import("../core/io_global.zig");
+    const file = io.cwdOpenFile(path, .{ .follow_symlinks = false }) catch return null;
+    const stat = file.stat(io.io()) catch {
+        file.close(io.io());
+        return null;
+    };
+    if (stat.kind != .file or (stat.permissions.toMode() & 0o077) != 0) {
+        file.close(io.io());
+        return null;
+    }
+    return file;
+}
+
 // ══════════════════════════════════════════════════════════
 // Search History (SQLite-backed, in-memory cache)
 // ══════════════════════════════════════════════════════════
@@ -151,7 +170,6 @@ pub fn clearPlaybackPosition(url: []const u8) void {
     _ = db.step(stmt);
 }
 
-
 // ══════════════════════════════════════════════════════════
 // Download History (SQLite-backed, in-memory cache)
 // ══════════════════════════════════════════════════════════
@@ -232,7 +250,7 @@ pub fn migrateSearchHistory() void {
     };
 
     for (old_paths) |old_path| {
-        const file = @import("../core/io_global.zig").cwdOpenFile(old_path, .{}) catch continue;
+        const file = openPrivateLegacyFile(old_path) orelse continue;
         defer file.close(@import("../core/io_global.zig").io());
 
         var buf: [8192]u8 = undefined;
@@ -260,7 +278,7 @@ pub fn migrateDownloadHistory() void {
     };
 
     for (old_paths) |old_path| {
-        const file = @import("../core/io_global.zig").cwdOpenFile(old_path, .{}) catch continue;
+        const file = openPrivateLegacyFile(old_path) orelse continue;
         defer file.close(@import("../core/io_global.zig").io());
 
         var buf: [65536]u8 = undefined;

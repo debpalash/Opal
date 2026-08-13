@@ -10,7 +10,7 @@ class Opal < Formula
   #
   # Nobody should need a 15 GB Xcode download to install a media player. We already
   # publish a compiled arm64 binary with every release, so install that.
-  desc "Pure-Zig desktop media browser + AI copilot (dvui + mpv + apfel)"
+  desc "Pure-Zig desktop media browser and AI copilot"
   homepage "https://github.com/debpalash/Opal"
   version "0.6.5"
   license "GPL-3.0-only"
@@ -30,9 +30,6 @@ class Opal < Formula
   depends_on "mpv"
   depends_on "onnxruntime"
   depends_on "sqlite"
-
-  # AI copilot.
-  depends_on "apfel" => :recommended
 
   # Voice pipeline (all optional; voice mode degrades gracefully if missing).
   depends_on "ffmpeg" => :recommended      # mic capture via avfoundation

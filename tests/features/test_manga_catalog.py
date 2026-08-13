@@ -71,7 +71,7 @@ def test_manga_source_catalog():
 
     # 5) Remote API exposes the catalog (GET /source/catalog) + install path
     #    reuses the existing /source/add (which calls source_config.install).
-    remote = _src("src/services/remote.zig")
+    remote = _remote_api()
     if '"/source/catalog"' not in remote or "readMangaCatalog()" not in remote:
         problems.append("remote /source/catalog endpoint missing")
     if '"/source/add"' not in remote or "source_config.zig\").install(framework" not in remote:

@@ -5,10 +5,13 @@
 # it to Opal. Only devices on your tailnet can reach it (use Tailscale Funnel
 # if you want it public).
 #
-# 1. Get a reusable auth key: https://login.tailscale.com/admin/settings/keys
-# 2. From the repo root:
+# 1. Complete the local first-admin bootstrap with docker-compose.yml; both
+#    profiles use the same ../data/config mount.
+# 2. Get a reusable auth key: https://login.tailscale.com/admin/settings/keys
+# 3. From the repo root:
 #      TS_AUTHKEY=tskey-auth-xxxx docker compose -f deploy/docker-compose.tailscale.yml up --build -d
-# 3. Open https://opal.<your-tailnet>.ts.net and create your admin account.
+# 4. Open https://opal.<your-tailnet>.ts.net and sign in. Never send the setup
+#    credential through the Tailscale proxy.
 #
 # Opal shares the sidecar's network namespace, so `tailscale serve` reaches it
 # at 127.0.0.1:41595. Opal binds no host port of its own.

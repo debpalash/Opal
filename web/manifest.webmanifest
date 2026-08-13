@@ -1,0 +1,27 @@
+{
+  "id": "/",
+  "name": "Opal — Play everything",
+  "short_name": "Opal",
+  "description": "Your media library, discovery, playback, queue, and downloads in one app.",
+  "start_url": "/#home",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "background_color": "#0c0c11",
+  "theme_color": "#0c0c11",
+  "orientation": "any",
+  "categories": ["entertainment", "music", "video"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    { "name": "Search", "short_name": "Search", "url": "/#search" },
+    { "name": "Now Playing", "short_name": "Playing", "url": "/#np" },
+    { "name": "Watching", "short_name": "Watching", "url": "/#watch" }
+  ]
+}

@@ -16,6 +16,8 @@ def test_universal_search_fanout():
     res = _src("src/services/resolver.zig")
     srch = _src("src/services/search.zig")
     chat = _src("src/services/ai_chat.zig")
+    lifecycle = _src("src/services/resolver_lifecycle_pure.zig")
+    build = _src("build.zig")
 
     checks = {
         # ── Source identity ──
@@ -85,6 +87,19 @@ def test_universal_search_fanout():
             f'.bit = .{b} }}' in srch or f'.bit = .{b},' in srch
             for b in ("livetv", "music", "radio", "podcast")
         ),
+        # One typed outcome policy drives workers, grouped chips and the summary.
+        "typed terminal outcomes": all(f"    {s}," in lifecycle for s in (
+            "no_results", "unavailable", "partial", "transport_failed",
+            "parse_failed", "timed_out")),
+        "outcome fold is tested": "outcome folding is order independent" in lifecycle
+            and "finalize(.unavailable, true)" in lifecycle,
+        "lifecycle test registered": 'b.path("src/services/resolver_lifecycle_pure.zig")' in build,
+        "all torrent adapters grouped": all(f"r.status_{s}.load(.acquire)" in srch
+            for s in ("torrent", "yts", "torznab", "eztv")),
+        "all stream adapters grouped": all(f"r.status_{s}.load(.acquire)" in srch
+            for s in ("stremio", "archive", "nasa", "commons")),
+        "summary uses typed failure predicate": "resolver.sourceStatusIsFailure(en.st)" in srch
+            and '"Unavailable"' in srch and '"Partial"' in srch,
         "sourceBitOf maps them": all(f".{s} => .{s}," in srch for s in ("livetv", "music", "radio", "podcast")),
         "ai chat labels": all(f'.{s} => "{s.capitalize()}"' in chat for s in ("music", "radio")),
     }
@@ -140,6 +155,7 @@ def test_synced_lyrics():
 def test_mpv_http_headers():
     pure = _src("src/player/http_headers_pure.zig")
     player = _src("src/player/player.zig")
+    playback_load = _src("src/player/playback_load_pure.zig")
     iptv = _src("src/services/iptv.zig")
     build = _src("build.zig")
 
@@ -155,7 +171,8 @@ def test_mpv_http_headers():
 
         "generalized loader": "pub fn loadStreamWithHttpHeaders" in player,
         "single code path": player.count('mpv_set_option_string(ctx, "http-header-fields"') <= 2,
-        "routes through pure": "buildHeaderFields(" in player,
+        "routes through pure": ("playback_load.dispatch" in player
+                                and "buildHeaderFields(" in playback_load),
         "legacy signatures kept": "pub fn loadStreamWithHttp(" in player and "pub fn loadStreamWithHeaders(" in player,
 
         "iptv sends origin": "originFromReferer(" in iptv,

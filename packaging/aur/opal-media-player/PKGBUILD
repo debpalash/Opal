@@ -1,9 +1,9 @@
 # Maintainer: Palash <via github.com/debpalash>
 # AUR source package for Opal — builds from the release tarball.
-# Checksums: run `updpkgsums` (or packaging/aur/push-to-aur.sh, which does it
-# for you) once the tag is public — GitHub archive URLs 404 while private.
-pkgname=opal
-pkgver=0.1.2
+# push-to-aur.sh replaces pkgver from the release tag before publication and
+# updpkgsums fills the checksum once that tag is public.
+pkgname=opal-media-player
+pkgver=0.6.5
 pkgrel=1
 pkgdesc="Play everything — media player, universal search, torrent streaming, local AI, one native binary"
 arch=('x86_64')
@@ -27,7 +27,7 @@ optdepends=(
     'onnxruntime: OCR bubble detection'
     'python: voice helper scripts (STT/TTS servers)'
 )
-source=("$pkgname-$pkgver.tar.gz::https://github.com/debpalash/Opal/archive/refs/tags/v$pkgver.tar.gz")
+source=("Opal-$pkgver.tar.gz::https://github.com/debpalash/Opal/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP') # filled by updpkgsums at submission time
 
 build() {
@@ -41,8 +41,8 @@ build() {
 
     # 2. The app. -fsys=sdl2 links the system SDL2 (Wayland support);
     #    the binary carries $ORIGIN/../lib/opal in its rpath, matching the
-    #    install layout below.
-    zig build -Doptimize=ReleaseSafe -fsys=sdl2
+    #    install layout below. Pin x86_64_v2 so AUR builds stay portable.
+    zig build -Doptimize=ReleaseSafe -fsys=sdl2 -Dcpu=x86_64_v2
 }
 
 package() {

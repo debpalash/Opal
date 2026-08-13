@@ -88,15 +88,13 @@ if [ -f "$ROOT/zig-out/bin/zig-bypassdpi" ]; then
     chmod +x "$APP_DIR/Contents/Resources/zig-bypassdpi"
 fi
 
-# Bundle the web companion (single self-contained page) — remote.zig serves
-# it at / from Resources/web when Web Remote is enabled.
+# Bundle the web companion — remote.zig serves it from Resources/web when Web
+# Remote is enabled. Keep the directory whole so the manifest/service worker
+# and vendored player dependency cannot drift out of release artifacts.
 if [ -f "$ROOT/web/index.html" ]; then
     mkdir -p "$APP_DIR/Contents/Resources/web"
-    cp "$ROOT/web/index.html" "$APP_DIR/Contents/Resources/web/index.html"
-    # Vendored browser deps (hls.js). Kept beside the page rather than inlined.
-    if [ -d "$ROOT/web/vendor" ]; then
-        cp -R "$ROOT/web/vendor" "$APP_DIR/Contents/Resources/web/vendor"
-    fi
+    cp -R "$ROOT/web/." "$APP_DIR/Contents/Resources/web/"
+    cp "$ROOT/assets/logo.svg" "$APP_DIR/Contents/Resources/web/icon.svg"
 fi
 
 # ── 3. Info.plist ──────────────────────────────────────────────

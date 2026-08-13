@@ -16,9 +16,8 @@ const std = @import("std");
 const dvui = @import("dvui");
 const db = @import("../core/db.zig");
 const state = @import("../core/state.zig");
-const io = @import("../core/io_global.zig");
 const Mutex = @import("../core/sync.zig").Mutex;
-const alloc = @import("../core/alloc.zig").allocator;
+const reliable_fetch = @import("reliable_fetch.zig");
 
 pub const pure = @import("link_health_pure.zig");
 pub const Status = pure.Status;
@@ -45,7 +44,7 @@ pub fn urlHash(url: []const u8) i64 {
 // leak gate (the pattern iptv.zig/poster.zig already use).
 const map_alloc = std.heap.c_allocator;
 
-const MAX_KINDS = 8;
+const MAX_KINDS = 16;
 const KIND_NAME_MAX = 16;
 
 const KindState = struct {
@@ -127,10 +126,16 @@ pub fn probe(kind: []const u8, url: []const u8) void {
         mtx.unlock(); // over cap — retry next frame
         return;
     }
-    k.probe_attempted.put(map_alloc, h, {}) catch {};
+    k.probe_attempted.put(map_alloc, h, {}) catch {
+        mtx.unlock();
+        return;
+    };
+    // The check, reservation, and attempted marker are one transaction under
+    // `mtx`. Incrementing after unlock let simultaneous verticals all observe
+    // five in flight and oversubscribe the six-worker global ceiling.
+    _ = probe_inflight.fetchAdd(1, .acq_rel);
     mtx.unlock();
 
-    _ = probe_inflight.fetchAdd(1, .acq_rel);
     // Copy BOTH inputs by value — the caller's url may alias a results[] row a
     // fetch worker can rewrite mid-frame.
     const Args = struct {
@@ -146,6 +151,11 @@ pub fn probe(kind: []const u8, url: []const u8) void {
         t.detach();
     } else |_| {
         _ = probe_inflight.fetchSub(1, .acq_rel);
+        // A failed spawn is not an attempt. Remove the marker so the next
+        // frame can retry instead of leaving this URL permanently unknown.
+        mtx.lock();
+        if (slotLocked(kind)) |retry_kind| _ = retry_kind.probe_attempted.remove(h);
+        mtx.unlock();
     }
 }
 
@@ -169,52 +179,15 @@ const ProbeRes = struct { code: u32, latency_ms: u32, body: []const u8 };
 /// curl the first 2 KB with the HTTP status + total time on stderr (keeps stdout
 /// = body). Routes through the DPI-bypass proxy when enabled. Returns null only
 /// on spawn failure (a connect/DNS failure still returns code 0).
-fn curlProbe(url: []const u8, body_buf: []u8, meta_buf: []u8) ?ProbeRes {
-    var argv: [18][]const u8 = undefined;
-    var n: usize = 0;
-    // Use the reliable-fetch backend (curl-impersonate when installed) so a
-    // Cloudflare-fingerprint-walled stream probes as its real status instead of
-    // a false 403→dead. `-w %{stderr}%{http_code}` keeps stdout = body.
-    const be = @import("reliable_fetch.zig").backend();
-    argv[n] = be.bin;
-    n += 1;
-    if (be.token.len > 0) {
-        argv[n] = "--impersonate";
-        n += 1;
-        argv[n] = be.token;
-        n += 1;
-    }
-    const base = [_][]const u8{ "-s", "--max-time", "6", "-r", "0-2047", "-A", agent, "-w", "%{stderr}%{http_code} %{time_total}" };
-    inline for (base) |x| {
-        argv[n] = x;
-        n += 1;
-    }
-    if (@import("dpi_bypass.zig").proxyArgs()) |pa| {
-        for (pa) |x| {
-            if (n >= argv.len - 1) break;
-            argv[n] = x;
-            n += 1;
-        }
-    }
-    argv[n] = url;
-    n += 1;
-
-    var child = io.Child.init(argv[0..n], alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    child.spawn() catch return null;
-    const bn = if (child.stdout) |*so| io.readAll(so, body_buf) catch 0 else 0;
-    const mn = if (child.stderr) |*se| io.readAll(se, meta_buf) catch 0 else 0;
-    _ = child.wait() catch {};
-
-    var it = std.mem.tokenizeScalar(u8, meta_buf[0..mn], ' ');
-    const code = std.fmt.parseInt(u32, std.mem.trim(u8, it.next() orelse "0", " \r\n"), 10) catch 0;
-    var latency_ms: u32 = 0;
-    if (it.next()) |t_s| {
-        const secs = std.fmt.parseFloat(f64, std.mem.trim(u8, t_s, " \r\n")) catch 0;
-        if (secs > 0) latency_ms = @intFromFloat(secs * 1000.0);
-    }
-    return .{ .code = code, .latency_ms = latency_ms, .body = body_buf[0..bn] };
+fn curlProbe(url: []const u8, body_buf: []u8) ?ProbeRes {
+    var headers: [4096]u8 = undefined;
+    const result = reliable_fetch.request(url, body_buf, &headers, .{
+        .user_agent = agent,
+        .range = "0-2047",
+        .timeout_secs = 6,
+    });
+    if (result.status == 0) return null;
+    return .{ .code = result.status, .latency_ms = result.latency_ms, .body = result.body };
 }
 
 fn probeWorker(a: anytype) void {
@@ -223,10 +196,9 @@ fn probeWorker(a: anytype) void {
     const kind = a.kind[0..a.kind_len];
 
     var body_buf: [4096]u8 = undefined;
-    var meta_buf: [64]u8 = undefined;
     var status: Status = .dead;
     var latency_ms: u32 = 0;
-    if (curlProbe(url, &body_buf, &meta_buf)) |res| {
+    if (curlProbe(url, &body_buf)) |res| {
         // m3u8 → require a valid playlist; other targets → a 2xx/3xx is enough.
         const playable = if (pure.isM3u8(url)) pure.looksLikePlaylist(res.body) else (res.code >= 200 and res.code < 400);
         status = pure.classify(res.code, playable, res.latency_ms);

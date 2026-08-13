@@ -16,6 +16,7 @@ def test_anime_extractors():
     drv = _src("src/services/anime_extractors.zig")
     anime = _src("src/services/anime.zig")
     player = _src("src/player/player.zig")
+    playback_load = _src("src/player/playback_load_pure.zig")
     build = _src("build.zig")
 
     checks = {
@@ -69,7 +70,8 @@ def test_anime_extractors():
 
         # ── Wiring: playEmbed → Referer via http-header-fields → loadfile → subs ──
         "player loadStreamWithHeaders": "pub fn loadStreamWithHeaders(" in player,
-        "player sets http-header-fields": '"http-header-fields"' in player,
+        "player sets http-header-fields": ('playback_load.dispatch' in player
+                                             and '"http-header-fields"' in playback_load),
         "anime playEmbed public": "pub fn playEmbed(" in anime,
         "playEmbed calls resolveEmbed": "resolveEmbed(embed)" in anime,
         "playEmbed loads with referer": "loadStreamWithHeaders(" in anime,

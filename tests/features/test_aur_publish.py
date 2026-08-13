@@ -28,7 +28,7 @@ def test_aur_pkg_list_regression():
     code = [ln for ln in sh.splitlines() if not ln.lstrip().startswith("#")]
     if any('PKGS=("${@:-' in ln for ln in code):
         return "fail", 'PKGS=("${@:-…}") collapses the default list into one element'
-    if "PKGS=(opal opal-bin)" not in sh or 'PKGS=("$@")' not in sh:
+    if "PKGS=(opal-media-player opal-media-player-bin)" not in sh or 'PKGS=("$@")' not in sh:
         return "fail", "expected an explicit $#-guarded default package list"
 
     # Prove it, don't just grep for it: run the same shell snippet.
@@ -39,9 +39,9 @@ def test_aur_pkg_list_regression():
     snippet = m.group(0) + '\nprintf "%s\\n" "${PKGS[@]}"'
     out = subprocess.run(["bash", "-c", snippet, "_"], capture_output=True, text=True)
     got = out.stdout.split()
-    if got != ["opal", "opal-bin"]:
-        return "fail", f"default package list expands to {got!r}, want ['opal', 'opal-bin']"
-    return "pass", "default expands to 2 packages (opal, opal-bin) — v0.5.0 regression covered"
+    if got != ["opal-media-player", "opal-media-player-bin"]:
+        return "fail", f"default package list expands to {got!r}, want the two Opal media packages"
+    return "pass", "default expands to the two uniquely named Opal media packages"
 
 
 @test("AUR publish runs where makepkg exists", "Packaging")
@@ -55,10 +55,9 @@ def test_aur_needs_makepkg():
         # On Ubuntu that line aborted under `set -e` right after the clone.
         "missing makepkg is a clear error": "error: makepkg not found" in sh,
         "job runs in an arch container": "container: archlinux:base-devel" in wf,
-        "arch tooling installed": "pacman -Syu --noconfirm --needed git openssh pacman-contrib" in wf,
+        "arch tooling installed": "pacman -Syu --noconfirm --needed git openssh pacman-contrib sudo" in wf,
         # makepkg and updpkgsums refuse to run as root.
-        "non-root makepkg user": "useradd -m builder" in wf and "sudo -u builder" in wf
-            and "HOME=/home/builder" in wf,
+        "non-root makepkg user": "useradd -m builder" in wf and "sudo -H -u builder" in wf,
         # The key is materialised into $HOME — builder must own it.
         "workspace owned by builder": 'chown -R builder "$GITHUB_WORKSPACE"' in wf,
     }

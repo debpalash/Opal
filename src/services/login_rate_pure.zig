@@ -14,6 +14,11 @@
 //! The cost is that an attacker can lock a known username — which is why this
 //! is a short backoff, not a durable lockout, and why the desktop reset path
 //! (Settings › Web UI) bypasses it entirely.
+//!
+//! Usernames use SQLite's `NOCASE` identity: ASCII A-Z are folded and every
+//! other byte is unchanged. The fixed table never evicts a live entry. Once it
+//! fills, previously unseen usernames share a fail-closed overflow bucket,
+//! preventing a spray of throwaway names from erasing a victim's lockout.
 
 const std = @import("std");
 
@@ -23,7 +28,7 @@ pub const MAX_FAILS: u8 = 5;
 pub const WINDOW_S: i64 = 300;
 /// How long a lockout lasts once tripped.
 pub const LOCKOUT_S: i64 = 300;
-/// Tracked usernames. Beyond this the oldest slot is recycled.
+/// Individually tracked usernames; overflow shares one fail-closed bucket.
 pub const SLOTS: usize = 32;
 
 pub const Slot = struct {
@@ -38,12 +43,17 @@ pub const Slot = struct {
 
 pub const Table = struct {
     slots: [SLOTS]Slot = [_]Slot{.{}} ** SLOTS,
+    /// Shared by new usernames while every named slot is still live.
+    overflow: Slot = .{},
 };
 
 /// Non-zero hash so `key == 0` can mean "free".
 pub fn keyOf(username: []const u8) u64 {
     var h = std.hash.Wyhash.init(0x0a1_5eed);
-    h.update(username);
+    for (username) |ch| {
+        const folded = if (ch >= 'A' and ch <= 'Z') ch + ('a' - 'A') else ch;
+        h.update(&.{folded});
+    }
     const v = h.final();
     return if (v == 0) 1 else v;
 }
@@ -55,26 +65,33 @@ fn find(t: *Table, key: u64) ?*Slot {
     return null;
 }
 
-/// Free slot, else the one that expires soonest — a full table must not make
-/// the limiter fail open.
+fn live(s: *const Slot, now: i64) bool {
+    if (s.key == 0) return false;
+    if (s.locked_until > now) return true;
+    // Treat clock rollback conservatively instead of expiring protection.
+    return s.fails > 0 and (now < s.window_start or now - s.window_start <= WINDOW_S);
+}
+
+/// Claim a free/expired slot. A full table must neither fail open nor evict a
+/// live victim record, so new usernames share `overflow` until its window ends.
 fn claim(t: *Table, key: u64, now: i64) *Slot {
-    var oldest: *Slot = &t.slots[0];
+    if (live(&t.overflow, now)) return &t.overflow;
     for (&t.slots) |*s| {
-        if (s.key == 0) {
+        if (!live(s, now)) {
             s.* = .{ .key = key, .window_start = now };
             return s;
         }
-        const s_end = @max(s.locked_until, s.window_start + WINDOW_S);
-        const o_end = @max(oldest.locked_until, oldest.window_start + WINDOW_S);
-        if (s_end < o_end) oldest = s;
     }
-    oldest.* = .{ .key = key, .window_start = now };
-    return oldest;
+    t.overflow = .{ .key = 1, .window_start = now };
+    return &t.overflow;
 }
 
 /// Seconds the caller must wait, or 0 when the attempt may proceed.
 pub fn retryAfter(t: *Table, username: []const u8, now: i64) i64 {
-    const s = find(t, keyOf(username)) orelse return 0;
+    const s = find(t, keyOf(username)) orelse blk: {
+        if (!live(&t.overflow, now)) return 0;
+        break :blk &t.overflow;
+    };
     if (s.locked_until > now) return s.locked_until - now;
     return 0;
 }
@@ -182,7 +199,10 @@ test "keyOf is never zero (zero means free slot)" {
     // silently untracked.
     try std.testing.expect(keyOf("") != 0);
     try std.testing.expect(keyOf("admin") != 0);
-    try std.testing.expect(keyOf("admin") != keyOf("Admin"));
+    try std.testing.expectEqual(keyOf("admin"), keyOf("Admin"));
+    try std.testing.expectEqual(keyOf("ADMIN"), keyOf("Admin"));
+    // SQLite NOCASE is ASCII-only; non-ASCII bytes are not Unicode-folded.
+    try std.testing.expect(keyOf("\xc3\x84dmin") != keyOf("\xc3\xa4dmin"));
 }
 
 test "unknown usernames are allowed and still get throttled" {
@@ -192,4 +212,46 @@ test "unknown usernames are allowed and still get throttled" {
     var i: u8 = 0;
     while (i < MAX_FAILS) : (i += 1) _ = recordFailure(&t, "nobody", 1000);
     try std.testing.expect(!allowed(&t, "nobody", 1000));
+}
+
+test "case variants share one SQLite NOCASE lockout" {
+    var t = Table{};
+    var i: u8 = 0;
+    while (i < MAX_FAILS) : (i += 1) _ = recordFailure(&t, if (i % 2 == 0) "Admin" else "aDMIN", 1000);
+    try std.testing.expect(!allowed(&t, "ADMIN", 1000));
+    try std.testing.expectEqual(LOCKOUT_S, retryAfter(&t, "admin", 1000));
+}
+
+test "username spray cannot evict a live victim lockout" {
+    var t = Table{};
+    var i: u8 = 0;
+    while (i < MAX_FAILS) : (i += 1) _ = recordFailure(&t, "victim", 1000);
+    try std.testing.expect(!allowed(&t, "victim", 1000));
+
+    // Fill every remaining named slot, then exercise the overflow bucket with
+    // more unique names than the table could ever hold.
+    var n: usize = 0;
+    while (n < SLOTS * 3) : (n += 1) {
+        var buf: [32]u8 = undefined;
+        const name = std.fmt.bufPrint(&buf, "spray-{d}", .{n}) catch "spray";
+        _ = recordFailure(&t, name, 1000);
+    }
+    try std.testing.expect(!allowed(&t, "ViCtIm", 1000));
+}
+
+test "full live table uses a fail-closed overflow bucket" {
+    var t = Table{};
+    var n: usize = 0;
+    while (n < SLOTS) : (n += 1) {
+        var buf: [24]u8 = undefined;
+        _ = recordFailure(&t, std.fmt.bufPrint(&buf, "known-{d}", .{n}) catch "known", 1000);
+    }
+    var i: u8 = 0;
+    while (i < MAX_FAILS) : (i += 1) {
+        var buf: [24]u8 = undefined;
+        _ = recordFailure(&t, std.fmt.bufPrint(&buf, "new-{d}", .{i}) catch "new", 1000);
+    }
+    try std.testing.expect(!allowed(&t, "another-new-name", 1000));
+    // Named entries remain independent from overflow pressure.
+    try std.testing.expect(allowed(&t, "known-0", 1000));
 }

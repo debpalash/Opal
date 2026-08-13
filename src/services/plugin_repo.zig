@@ -14,6 +14,7 @@ const source_config = @import("../core/source_config.zig");
 const logs = @import("../core/logs.zig");
 const pure = @import("../core/source_config_pure.zig");
 const state = @import("../core/state.zig");
+const sync = @import("../core/sync.zig");
 
 // Cap on parsed manifest entries. The bundled plugins-manifest.json already
 // exceeds 32 (47 entries), so a low cap silently drops sources past the limit
@@ -51,12 +52,26 @@ pub const Plugin = struct {
 };
 
 pub const Status = enum(u8) { idle, fetching, ok, err };
+pub const Action = enum { refresh, install, uninstall, update };
+pub const ApplyResult = enum { applied, accepted, unchanged, busy, not_found, failed };
 pub var status: std.atomic.Value(Status) = std.atomic.Value(Status).init(.idle);
 pub var status_msg: [128]u8 = std.mem.zeroes([128]u8);
 pub var status_msg_len: usize = 0;
 
 pub var plugins: [MAX]Plugin = undefined;
 pub var plugin_count: usize = 0;
+var catalog_mutex: sync.Mutex = .{};
+
+/// Copy an immutable catalog view for UI/API callers. Remote refresh publishes
+/// under the same lock, so a client never pairs half of one manifest with half
+/// of another or acts on an index that changed underneath it.
+pub fn snapshotCopy(out: []Plugin) usize {
+    catalog_mutex.lock();
+    defer catalog_mutex.unlock();
+    const n = @min(out.len, plugin_count);
+    for (0..n) |i| out[i] = plugins[i];
+    return n;
+}
 
 // User-editable in the Plugins UI. `repo` is "owner/name"; `token` is a GitHub PAT
 // (needed only for a private repo).
@@ -105,6 +120,7 @@ fn debridPath(buf: []u8) []const u8 {
 pub fn init() void {
     var pb: [600]u8 = undefined;
     const tp = tokenPath(&pb);
+    @import("../core/secret_file.zig").restrictExisting(tp);
     if (io.cwdReadFileAlloc(tp, alloc, 4096)) |body| {
         defer alloc.free(body);
         const t = std.mem.trim(u8, body, " \r\n\t");
@@ -119,6 +135,7 @@ pub fn init() void {
 fn loadDebrid() void {
     var pb: [600]u8 = undefined;
     const dp = debridPath(&pb);
+    @import("../core/secret_file.zig").restrictExisting(dp);
     const body = io.cwdReadFileAlloc(dp, alloc, 4096) catch return;
     defer alloc.free(body);
     var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return;
@@ -143,7 +160,7 @@ pub fn saveDebrid() void {
     var body_buf: [400]u8 = undefined;
     const body = std.fmt.bufPrint(&body_buf, "{{\"provider\":\"{s}\",\"key\":\"{s}\"}}", .{ debridProvider(), debridKey() }) catch return;
     var pb: [600]u8 = undefined;
-    io.cwdWriteFile(.{ .sub_path = debridPath(&pb), .data = body }) catch {};
+    @import("../core/secret_file.zig").write(debridPath(&pb), body) catch {};
 }
 
 /// Persist the token entered in the UI.
@@ -154,7 +171,7 @@ pub fn saveToken() void {
     io.cwdMakePath(dir) catch {};
     var pb: [600]u8 = undefined;
     const tp = tokenPath(&pb);
-    io.cwdWriteFile(.{ .sub_path = tp, .data = token_buf[0..token_len] }) catch {};
+    @import("../core/secret_file.zig").write(tp, token_buf[0..token_len]) catch {};
 }
 
 // ── Fetch manifest ───────────────────────────────────────────────────────────
@@ -163,7 +180,10 @@ pub fn saveToken() void {
 /// Plugins page shows everything immediately. Bundled into the .app at build time
 /// (Resources/plugins-manifest.json); in dev it's read from the project root.
 pub fn loadLocalManifest() void {
-    if (plugin_count > 0) return;
+    catalog_mutex.lock();
+    const loaded = plugin_count > 0;
+    catalog_mutex.unlock();
+    if (loaded) return;
     var path_buf: [700]u8 = undefined;
     const path: []const u8 = if (state.resourceRoot()) |r|
         (std.fmt.bufPrint(&path_buf, "{s}/plugins-manifest.json", .{r}) catch return)
@@ -174,15 +194,24 @@ pub fn loadLocalManifest() void {
     parseManifest(body);
 }
 
-pub fn refresh() void {
-    if (status.load(.acquire) == .fetching) return;
+pub fn refresh() ApplyResult {
+    // Checking then storing an atomic in two separate operations still lets two
+    // HTTP workers launch refreshes together. Use the catalog lock as the short
+    // admission gate; the network request itself runs after it is released.
+    catalog_mutex.lock();
+    if (status.load(.acquire) == .fetching) {
+        catalog_mutex.unlock();
+        return .busy;
+    }
     status.store(.fetching, .release);
+    catalog_mutex.unlock();
     setMsg("Fetching…", .{});
     const t = std.Thread.spawn(.{}, refreshWorker, .{}) catch {
         fail("spawn failed");
-        return;
+        return .failed;
     };
     t.detach();
+    return .accepted;
 }
 
 fn fail(comptime msg: []const u8) void {
@@ -208,29 +237,24 @@ fn refreshWorker() void {
     else
         "";
 
-    var child = if (have_token)
-        io.Child.init(&.{ "curl", "-sL", "-H", "Accept: application/vnd.github.raw", "-H", "User-Agent: Opal", "-H", auth, "--max-time", "15", url }, alloc)
-    else
-        io.Child.init(&.{ "curl", "-sL", "-H", "Accept: application/vnd.github.raw", "-H", "User-Agent: Opal", "--max-time", "15", url }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch {
-        fail("curl failed");
-        return;
-    };
     const buf = alloc.alloc(u8, 256 * 1024) catch {
-        _ = child.wait() catch {};
         fail("oom");
         return;
     };
     defer alloc.free(buf);
-    const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    if (n == 0) {
+    // Native HTTP keeps the PAT out of the process table. Passing it through
+    // curl's `-H` argv made private-repo credentials visible to every local
+    // process that can inspect command lines.
+    const body = @import("../core/http.zig").fetch(url, buf, .{
+        .timeout_secs = 15,
+        .user_agent = "Opal",
+        .accept = "application/vnd.github.raw",
+        .auth_header = if (have_token) auth else null,
+    }) orelse {
         fail("empty (check repo/token)");
         return;
-    }
-    parseManifest(buf[0..n]);
+    };
+    parseManifest(body);
 }
 
 fn copyField(dst: []u8, dst_len: *usize, v: ?std.json.Value) void {
@@ -241,6 +265,15 @@ fn copyField(dst: []u8, dst_len: *usize, v: ?std.json.Value) void {
         @memcpy(dst[0..c], s[0..c]);
         dst_len.* = c;
     };
+}
+
+fn copyId(dst: []u8, dst_len: *usize, v: ?std.json.Value) bool {
+    const val = v orelse return false;
+    if (val != .string or val.string.len == 0 or val.string.len > dst.len) return false;
+    if (!pure.validId(val.string)) return false;
+    @memcpy(dst[0..val.string.len], val.string);
+    dst_len.* = val.string.len;
+    return true;
 }
 
 fn parseManifest(body: []const u8) void {
@@ -262,16 +295,20 @@ fn parseManifest(body: []const u8) void {
         return;
     }
 
+    catalog_mutex.lock();
+    defer catalog_mutex.unlock();
     plugin_count = 0;
     for (arr_v.array.items) |p| {
         if (plugin_count >= MAX or p != .object) continue;
         var pl = Plugin{};
-        copyField(&pl.id, &pl.id_len, p.object.get("id"));
+        // IDs become file names and remote command targets. Reject malformed
+        // or overlong values instead of truncating them into a different ID.
+        if (!copyId(&pl.id, &pl.id_len, p.object.get("id"))) continue;
         copyField(&pl.name, &pl.name_len, p.object.get("name"));
         copyField(&pl.kind, &pl.kind_len, p.object.get("type"));
         copyField(&pl.version, &pl.version_len, p.object.get("version"));
         copyField(&pl.file, &pl.file_len, p.object.get("file"));
-        if (pl.id_len == 0) continue;
+        if (findPluginLocked(pl.idSlice()) != null) continue;
 
         // Serialize the endpoints object verbatim for writing on install.
         if (p.object.get("endpoints")) |ep| if (ep == .object) {
@@ -329,6 +366,41 @@ fn parseManifest(body: []const u8) void {
 
 // ── Install / uninstall ──────────────────────────────────────────────────────
 
+fn findPluginLocked(id: []const u8) ?usize {
+    for (plugins[0..plugin_count], 0..) |*plugin, i| {
+        if (std.mem.eql(u8, plugin.idSlice(), id)) return i;
+    }
+    return null;
+}
+
+/// Operate on a stable source id, never a catalog index supplied by a client.
+/// Refresh/update are catalog-wide; install/uninstall are idempotent and report
+/// whether work completed synchronously or was accepted by the fetch worker.
+pub fn apply(action: Action, id: []const u8) ApplyResult {
+    switch (action) {
+        .refresh => {
+            return refresh();
+        },
+        .update => return if (migrateStaleSources() > 0) .applied else .unchanged,
+        .install, .uninstall => {},
+    }
+
+    catalog_mutex.lock();
+    defer catalog_mutex.unlock();
+    const idx = findPluginLocked(id) orelse return .not_found;
+    const installed = isInstalled(id);
+    if (action == .install) {
+        if (installed) return .unchanged;
+        const async_install = plugins[idx].endpoints_len == 0 and plugins[idx].file_len > 0;
+        install(idx);
+        if (async_install) return .accepted;
+        return if (isInstalled(id)) .applied else .failed;
+    }
+    if (!installed) return .unchanged;
+    uninstall(idx);
+    return if (isInstalled(id)) .failed else .applied;
+}
+
 /// Installed == the source file exists on disk.
 ///
 /// This used to ask the parsed endpoint table (`source_config.has`), which is a
@@ -359,16 +431,13 @@ fn fetchRepoFile(repo_path: []const u8, out: []u8) usize {
     var auth_buf: [320]u8 = undefined;
     const have_token = token_len > 0;
     const auth = if (have_token) (std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{token_buf[0..token_len]}) catch return 0) else "";
-    var child = if (have_token)
-        io.Child.init(&.{ "curl", "-s", "-H", "Accept: application/vnd.github.raw", "-H", "User-Agent: Opal", "-H", auth, "--max-time", "15", url }, alloc)
-    else
-        io.Child.init(&.{ "curl", "-s", "-H", "Accept: application/vnd.github.raw", "-H", "User-Agent: Opal", "--max-time", "15", url }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return 0;
-    const n = if (child.stdout) |*so| io.readAll(so, out) catch 0 else 0;
-    _ = child.wait() catch {};
-    return n;
+    const body = @import("../core/http.zig").fetch(url, out, .{
+        .timeout_secs = 15,
+        .user_agent = "Opal",
+        .accept = "application/vnd.github.raw",
+        .auth_header = if (have_token) auth else null,
+    }) orelse return 0;
+    return body.len;
 }
 
 fn writeSource(id: []const u8, data: []const u8) bool {
@@ -421,6 +490,8 @@ fn writeSourceVersioned(id: []const u8, data: []const u8, version: []const u8) b
 /// disk, so a user's own edits to an up-to-date source are never clobbered.
 /// Returns how many were migrated.
 pub fn migrateStaleSources() usize {
+    catalog_mutex.lock();
+    defer catalog_mutex.unlock();
     var migrated: usize = 0;
     for (plugins[0..plugin_count]) |*pl| {
         if (pl.endpoints_len == 0) continue;
@@ -550,10 +621,12 @@ pub fn uninstall(idx: usize) void {
 /// and region-specific trackers. Returns how many were installed.
 pub fn installStarterPack() usize {
     loadLocalManifest();
+    catalog_mutex.lock();
+    defer catalog_mutex.unlock();
     const starter_ids = [_][]const u8{
-        "apibay",      "one337x",      "yts",     "eztv",
+        "apibay",      "one337x",       "yts",      "eztv",
         "bitsearch",   "solidtorrents", "therarbg", "torrentgalaxy",
-        "torrentscsv", "limetorrents", "torlock", "glotorrents",
+        "torrentscsv", "limetorrents",  "torlock",  "glotorrents",
         "nyaa",        "torrentio",
     };
     var installed: usize = 0;

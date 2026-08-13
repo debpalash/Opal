@@ -225,6 +225,15 @@ pub fn load() void {
         applyConfig(key, val);
     }
 
+    // Normalize the pair only after reading every row: SQLite does not promise
+    // SELECT order, so ui_scale may be applied before or after ui_scale_auto.
+    // This also migrates Auto installs that persisted the old 0.68-0.8x policy.
+    // Explicit manual sub-1x choices remain valid.
+    state.app.ui_scale = @import("scale_pure.zig").restoredScale(
+        state.app.ui_scale_auto,
+        state.app.ui_scale,
+    );
+
     // Start this session's usage clock now that the lifetime total is loaded.
     const now = @import("io_global.zig").timestamp();
     state.app.session_start_s = now;
@@ -345,8 +354,7 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         // Routed through the pure mapping so a corrupt value lands on `auto`
         // rather than whatever integer happened to be stored.
         const avp = @import("../player/av_pure.zig");
-        state.app.picture_preset = @intFromEnum(avp.picturePresetFromInt(
-            std.fmt.parseInt(usize, val, 10) catch 0));
+        state.app.picture_preset = @intFromEnum(avp.picturePresetFromInt(std.fmt.parseInt(usize, val, 10) catch 0));
     } else if (std.mem.eql(u8, key, "download_rate_limit")) {
         state.app.download_rate_limit = @import("../player/av_pure.zig").sanitizeDownloadLimit(std.fmt.parseInt(i32, val, 10) catch 0);
         // Session may already be up (torrent_init worker) — apply now; if not,

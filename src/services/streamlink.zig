@@ -142,22 +142,15 @@ pub fn resolveStreamUrlAsync(url: []const u8, player_idx: usize) void {
         // raw index, which the frame-top collapse can reorder or invalidate.
         var target: ?*playermod.MediaPlayer = null;
 
-        // Static buffers for mpv — must outlive the mpv_command call
-        var load_buf: [2048]u8 = std.mem.zeroes([2048]u8);
-        var args_load: [3][*c]const u8 = undefined;
-
         fn worker() void {
             defer @This().busy = false;
             const p = @This().target orelse return;
-            std.log.info("[streamlink] Resolving: {s}", .{url_copy[0..url_len]});
             if (resolveStreamUrl(url_copy[0..url_len])) |stream_url| {
-                @memset(&load_buf, 0);
-                @memcpy(load_buf[0..stream_url.len], stream_url);
-                const mpv = @import("../core/c.zig").mpv;
-                args_load = .{ "loadfile", @ptrCast(&load_buf), null };
-                // Use synchronous mpv_command — we're on a bg thread, safe to block
-                const ret = mpv.mpv_command(p.mpv_ctx, @ptrCast(&args_load));
-                std.log.info("[streamlink] mpv_command returned {d}", .{ret});
+                // `load()` already staged the original page URL as the stable
+                // playback identity. Commit only the resolved HLS command, but
+                // still cross the typed seam so prior host credentials clear.
+                p.commitPlayback(.{ .url = stream_url });
+                std.log.info("[streamlink] resolved stream committed", .{});
             } else {
                 std.log.warn("[streamlink] Failed to resolve stream", .{});
                 // Clear the stuck "Resolving live stream..." state — mpv never gets

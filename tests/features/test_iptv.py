@@ -26,6 +26,7 @@ def test_iptv_tab():
     build = _src("build.zig")
     lhp = _src("src/services/link_health_pure.zig")
     lh = _src("src/services/link_health.zig")
+    playback_load = _src("src/player/playback_load_pure.zig")
 
     checks = {
         # ── Pure module: URL builder, m3u8/NSFW/accept decisions, parser ──
@@ -122,8 +123,9 @@ def test_iptv_tab():
         # Per-stream HTTP hints (user_agent/referrer) captured + sent to mpv, so
         # CDNs that 400/403 the default UA / need a Referer still play.
         "captures play hints": "user_agent" in pure and "referrer" in pure,
-        "sends hints to mpv": "loadStreamWithHttp(" in _src("src/player/player.zig")
-            and "user-agent" in _src("src/player/player.zig"),
+        "sends hints to mpv": ("loadContentDirectMetaHeaders(" in svc
+                                and "playback_load.dispatch" in _src("src/player/player.zig")
+                                and "user-agent" in playback_load),
         "render entry": "pub fn renderContent" in svc,
         # Thread discipline (mirrors radio.zig).
         "atomic loading flag": "is_loading.store" in svc,

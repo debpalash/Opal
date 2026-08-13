@@ -85,8 +85,8 @@ fn whisperCppTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
 
     const alloc = @import("../core/alloc.zig").allocator;
     var child = io_global.Child.init(&.{
-        whisper_bin, "-m", model, "-f", wav_path,
-        "-t", "4", "--no-timestamps", "--no-prints",
+        whisper_bin, "-m", model,             "-f",          wav_path,
+        "-t",        "4",  "--no-timestamps", "--no-prints",
     }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
@@ -474,10 +474,9 @@ fn speachesTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
     const url = std.fmt.bufPrintZ(&url_buf, "{s}/v1/audio/transcriptions", .{base}) catch return null;
 
     var child = io_global.Child.init(&.{
-        "curl", "-s", "-X", "POST", url,
-        "-F", "model=whisper-1",
-        "-F", "response_format=text",
-        "-F", blk: {
+        "curl", "-s",              "-X", "POST",                 url,
+        "-F",   "model=whisper-1", "-F", "response_format=text", "-F",
+        blk: {
             var file_arg_buf: [2200]u8 = undefined;
             break :blk std.fmt.bufPrintZ(&file_arg_buf, "file=@{s}", .{wav_path}) catch return null;
         },
@@ -508,7 +507,11 @@ fn speachesSpeak(text: []const u8) void {
     const base = speachesBaseUrl();
     var url_buf: [256]u8 = undefined;
     const url = std.fmt.bufPrintZ(&url_buf, "{s}/v1/audio/speech", .{base}) catch return;
-    const out_path = "/tmp/opal_speaches_tts.wav";
+    const secure_temp = @import("../core/secure_temp.zig");
+    var scratch = secure_temp.Workspace.create("speaches-tts") catch return;
+    defer scratch.cleanup();
+    var out_path_buf: [secure_temp.max_path_len]u8 = undefined;
+    const out_path = scratch.reserveFile("speech.wav", &out_path_buf) catch return;
 
     // Build JSON body
     var json_buf: [1024]u8 = undefined;
@@ -517,17 +520,25 @@ fn speachesSpeak(text: []const u8) void {
     var ei: usize = 0;
     for (text) |ch| {
         if (ei + 2 >= escaped.len) break;
-        if (ch == '"') { escaped[ei] = '\\'; ei += 1; escaped[ei] = '"'; ei += 1; }
-        else if (ch == '\n') { escaped[ei] = ' '; ei += 1; }
-        else { escaped[ei] = ch; ei += 1; }
+        if (ch == '"') {
+            escaped[ei] = '\\';
+            ei += 1;
+            escaped[ei] = '"';
+            ei += 1;
+        } else if (ch == '\n') {
+            escaped[ei] = ' ';
+            ei += 1;
+        } else {
+            escaped[ei] = ch;
+            ei += 1;
+        }
     }
     const json = std.fmt.bufPrintZ(&json_buf, "{{\"model\":\"tts-1\",\"input\":\"{s}\",\"voice\":\"alloy\",\"response_format\":\"wav\"}}", .{escaped[0..ei]}) catch return;
 
     var child = io_global.Child.init(&.{
-        "curl", "-s", "-X", "POST", url,
-        "-H", "Content-Type: application/json",
-        "-d", json,
-        "-o", out_path,
+        "curl",   "-s",                             "-X", "POST", url,
+        "-H",     "Content-Type: application/json", "-d", json,   "-o",
+        out_path,
     }, alloc);
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
@@ -555,21 +566,24 @@ fn mlxWhisperTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
         return whisperCppTranscribe(wav_path, out_buf);
     };
 
-    // mlx_whisper outputs a .txt file in --output_dir.
-    // Usage: mlx_whisper --model mlx-community/whisper-large-v3-turbo \
-    //                    --output_format txt --output_dir /tmp \
-    //                    --language en \
-    //                    <wav_path>
-    const out_dir = "/tmp/opal_mlx_whisper";
-    // Ensure output dir exists
-    io_global.makeDirAbsolute(out_dir) catch {};
+    // mlx_whisper outputs a transcript file in --output_dir. Give each call a
+    // random owner-only directory so concurrent runs cannot collide and the
+    // transcript is removed on every return path.
+    var scratch = @import("../core/secure_temp.zig").Workspace.create("mlx-whisper") catch
+        return whisperCppTranscribe(wav_path, out_buf);
+    defer scratch.cleanup();
+    const out_dir = scratch.dirPath();
 
     var child = io_global.Child.init(&.{
         mlx_bin,
-        "--model", "mlx-community/whisper-large-v3-turbo",
-        "--output_format", "txt",
-        "--output_dir", out_dir,
-        "--language", "en",
+        "--model",
+        "mlx-community/whisper-large-v3-turbo",
+        "--output_format",
+        "txt",
+        "--output_dir",
+        out_dir,
+        "--language",
+        "en",
         wav_path,
     }, alloc_mod.allocator);
     child.stdout_behavior = .Pipe;
@@ -584,8 +598,7 @@ fn mlxWhisperTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
         return whisperCppTranscribe(wav_path, out_buf);
     };
 
-    // mlx_whisper creates a .txt file named after the input:
-    // e.g. /tmp/opal_mlx_whisper/opal_ai_mic.txt
+    // mlx_whisper creates a .txt file named after the input.
     // Extract basename from wav_path, change extension to .txt
     var txt_path_buf: [512]u8 = undefined;
     const basename = blk: {
@@ -606,6 +619,8 @@ fn mlxWhisperTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
     // Read the output text file
     const file = io_global.openFileAbsolute(txt_path, .{}) catch return null;
     defer file.close(io_global.io());
+    if (@import("builtin").os.tag != .windows)
+        file.setPermissions(io_global.io(), std.Io.File.Permissions.fromMode(0o600)) catch return null;
     var read_buf: [4096]u8 = undefined;
     const n = io_global.readAll(file, &read_buf) catch 0;
     if (n == 0) return null;
@@ -825,7 +840,10 @@ pub fn spawnStreamingConvo() ?io_global.Child {
 
     var child = io_global.Child.init(&.{
         "/opt/homebrew/bin/sherpa-onnx-microphone",
-        a_tok, a_enc, a_dec, a_join,
+        a_tok,
+        a_enc,
+        a_dec,
+        a_join,
     }, @import("../core/alloc.zig").allocator);
     child.stdout_behavior = .Ignore;
     // sherpa mic tools print results via a stderr Display helper — piping

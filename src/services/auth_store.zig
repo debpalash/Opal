@@ -52,14 +52,57 @@ pub fn ensureTables() void {
 }
 
 /// How many accounts exist. Zero → first-run (the web UI shows "create admin").
+/// This is display/status information only. Callers must not use a separate
+/// count followed by `createUser` to claim the first-admin slot: two requests
+/// can both observe zero. Use `createFirstAdmin`, whose predicate and insert
+/// are one SQLite statement.
 pub fn userCount() i64 {
-    const stmt = db.prepare("SELECT COUNT(*) FROM users") orelse return 0;
+    return userCountMaybe() orelse 0;
+}
+
+/// Distinguish an empty account table from a database/table that is not ready
+/// yet. Bootstrap credential generation must fail closed on the latter; treating
+/// prepare failure as zero can create a fresh setup capability for an existing
+/// profile during asynchronous startup.
+pub fn userCountMaybe() ?i64 {
+    const stmt = db.prepare("SELECT COUNT(*) FROM users") orelse return null;
     defer db.finalize(stmt);
-    if (db.step(stmt) != db.c.SQLITE_ROW) return 0;
+    if (db.step(stmt) != db.c.SQLITE_ROW) return null;
     return db.columnInt64(stmt, 0);
 }
 
 pub const CreateError = error{ Invalid, Taken, Db };
+
+pub const FirstAdminError = error{ Invalid, SetupClosed, Db };
+
+/// Atomically claim the one-time first-admin slot.
+///
+/// `WHERE NOT EXISTS` is evaluated as part of the INSERT while SQLite holds
+/// the connection/database write lock. Concurrent registration requests can
+/// therefore never both pass a check-then-insert window: exactly one inserts,
+/// and every later contender receives `error.SetupClosed` regardless of the
+/// username it chose.
+pub fn createFirstAdmin(username: []const u8, password: []const u8) FirstAdminError!void {
+    if (!auth.validUsername(username) or !auth.validPassword(password)) return error.Invalid;
+    var salt: [auth.SALT_LEN]u8 = undefined;
+    if (!fillRandom(&salt)) return error.Db;
+    var hbuf: [auth.HASH_BUF]u8 = undefined;
+    const hash = auth.hashWithSalt(password, salt, &hbuf) catch return error.Db;
+
+    const stmt = db.prepare(
+        \\INSERT INTO users(username,pw_hash,is_admin,created_at)
+        \\SELECT ?1,?2,1,?3 WHERE NOT EXISTS (SELECT 1 FROM users)
+        \\RETURNING id
+    ) orelse return error.Db;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, username);
+    db.bindText(stmt, 2, hash);
+    db.bindInt64(stmt, 3, io.timestamp());
+    const rc = db.step(stmt);
+    if (rc == db.c.SQLITE_ROW) return;
+    if (rc == db.c.SQLITE_DONE) return error.SetupClosed;
+    return error.Db;
+}
 
 /// Create a user (bcrypt-hashed). `error.Taken` if the username exists,
 /// `error.Invalid` if username/password fail validation.

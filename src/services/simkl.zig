@@ -28,8 +28,15 @@ pub fn checkin(title: []const u8, media_type: []const u8) void {
             var ei: usize = 0;
             for (t) |ch| {
                 if (ei + 2 >= esc.len) break;
-                if (ch == '"') { esc[ei] = '\\'; ei += 1; esc[ei] = '"'; ei += 1; }
-                else { esc[ei] = ch; ei += 1; }
+                if (ch == '"') {
+                    esc[ei] = '\\';
+                    ei += 1;
+                    esc[ei] = '"';
+                    ei += 1;
+                } else {
+                    esc[ei] = ch;
+                    ei += 1;
+                }
             }
 
             var json_buf: [512]u8 = undefined;
@@ -47,15 +54,13 @@ pub fn checkin(title: []const u8, media_type: []const u8) void {
             const cid = std.fmt.bufPrintZ(&cid_buf, "simkl-api-key: {s}", .{api_key[0..api_key_len]}) catch return;
 
             var child = io_global.Child.init(&.{
-                "curl", "-s", "-X", "POST", url,
-                "-H", "Content-Type: application/json",
-                "-H", cid,
-                "-H", auth,
-                "-d", json,
+                "curl", "-s",                             "-X",       "POST", url,
+                "-H",   "Content-Type: application/json", "--config", "-",    "-d",
+                json,
             }, alloc);
             child.stdout_behavior = .Ignore;
             child.stderr_behavior = .Ignore;
-            child.spawn() catch return;
+            @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{ cid, auth }) catch return;
             const result = child.wait() catch return;
             if (result.exited == 0) {
                 logs.pushLog("info", "simkl", "SIMKL history synced", false);
@@ -76,8 +81,15 @@ pub fn addToWatchlist(title: []const u8) void {
             var ei: usize = 0;
             for (t) |ch| {
                 if (ei + 2 >= esc.len) break;
-                if (ch == '"') { esc[ei] = '\\'; ei += 1; esc[ei] = '"'; ei += 1; }
-                else { esc[ei] = ch; ei += 1; }
+                if (ch == '"') {
+                    esc[ei] = '\\';
+                    ei += 1;
+                    esc[ei] = '"';
+                    ei += 1;
+                } else {
+                    esc[ei] = ch;
+                    ei += 1;
+                }
             }
 
             var json_buf: [512]u8 = undefined;
@@ -95,15 +107,13 @@ pub fn addToWatchlist(title: []const u8) void {
             const cid = std.fmt.bufPrintZ(&cid_buf, "simkl-api-key: {s}", .{api_key[0..api_key_len]}) catch return;
 
             var child = io_global.Child.init(&.{
-                "curl", "-s", "-X", "POST", url,
-                "-H", "Content-Type: application/json",
-                "-H", cid,
-                "-H", auth,
-                "-d", json,
+                "curl", "-s",                             "-X",       "POST", url,
+                "-H",   "Content-Type: application/json", "--config", "-",    "-d",
+                json,
             }, alloc);
             child.stdout_behavior = .Ignore;
             child.stderr_behavior = .Ignore;
-            child.spawn() catch return;
+            @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{ cid, auth }) catch return;
             _ = child.wait() catch {};
         }
     }.worker, .{title})) |t| t.detach() else |_| {}
