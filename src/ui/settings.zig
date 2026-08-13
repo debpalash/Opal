@@ -1064,9 +1064,9 @@ fn renderGeneralTab() void {
     // ── Interface ── (whitespace-separated, no card chrome)
     sectionHeader("Interface", "Customize how Opal looks and feels", 10, @src());
 
-    // UI Scale — "Auto" derives a compact, DPI-aware scale from the display
-    // each launch (see scale_pure.deviceScale); the manual steps pin a fixed
-    // value. Sub-1× steps let users go denser than the compact type ramp alone.
+    // UI Scale — "Auto" derives a density-aware scale from the OS and, when
+    // Linux reports only a placeholder 1×, the panel's EDID. Manual steps pin
+    // a fixed value. Sub-1× steps keep a compact option available.
     settingRow("UI Scale", 100, @src());
     {
         const scales = [_]f32{ 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 2.0 };
@@ -1084,7 +1084,7 @@ fn renderGeneralTab() void {
         if (components.segment(@src(), &scale_labels, sel)) |clicked| {
             if (clicked == 0) {
                 state.app.ui_scale_auto = true;
-                state.app.ui_scale = @import("../core/scale_pure.zig").deviceScale(dvui.windowNaturalScale());
+                state.app.ui_scale = @import("../core/display_info.zig").defaultScale(dvui.windowNaturalScale());
             } else {
                 state.app.ui_scale_auto = false;
                 state.app.ui_scale = scales[clicked - 1];

@@ -488,3 +488,38 @@ def test_breakpoints_in_points():
     return "pass", ("compact/narrow breakpoints convert scaled layout units to "
                     "on-screen points via scale_pure, so the right-hand nav "
                     "actions stay reachable on narrow windows")
+
+
+@test("Auto UI scale adapts to the physical display by default", "Page Shell")
+def test_adaptive_default_scale():
+    sp = _src("src/core/scale_pure.zig")
+    di = _src("src/core/display_info.zig")
+    st = _src("src/core/state.zig")
+    mn = _src("src/main.zig")
+    settings = _src("src/ui/settings.zig")
+    bz = _src("build.zig")
+    checks = {
+        "auto is the default": "ui_scale_auto: bool = true" in st,
+        "panel model includes pixels and millimetres": all(
+            field in sp for field in ("px_w", "px_h", "mm_w", "mm_h")
+        ),
+        "physical DPI validated": "pub fn physicalDpi(" in sp
+                                  and "dpi < 40" in sp and "dpi > 800" in sp,
+        "screen classes covered": all(label in sp for label in (
+            "laptop_2560", "desktop_27", "laptop_4k",
+            "resolution when physical size is missing",
+        )),
+        "Linux reads connected display EDID": all(token in di for token in (
+            'DRM_ROOT = "/sys/class/drm"', '"status"', '"modes"', '"edid"',
+        )),
+        "one shared runtime seam": "pub fn defaultScale(" in di
+                                   and 'display_info.zig").defaultScale' in mn
+                                   and 'display_info.zig").defaultScale' in settings,
+        "manual scale remains a hard override": "if (state.app.ui_scale_auto)" in mn
+                                                and "state.app.ui_scale_auto = false" in settings,
+        "probe registered in unit suite": "test_display_info" in bz,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "adaptive-scale regression(s): " + ", ".join(missing)
+    return "pass", "Auto defaults on; OS scale + validated EDID/resolution fallbacks; manual override preserved"

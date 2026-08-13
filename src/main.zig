@@ -776,7 +776,10 @@ fn appFrame() !dvui.App.Result {
     if (!device_scale_applied and state.app.config_loaded.load(.acquire)) {
         device_scale_applied = true;
         if (state.app.ui_scale_auto) {
-            state.app.ui_scale = @import("core/scale_pure.zig").deviceScale(dvui.windowNaturalScale());
+            // The panel probe is Linux-only; macOS and Windows keep using the
+            // authoritative OS content scale. This runs once after config load
+            // so the first layout is stable and a manual choice still wins.
+            state.app.ui_scale = @import("core/display_info.zig").defaultScale(dvui.windowNaturalScale());
         }
     }
 
