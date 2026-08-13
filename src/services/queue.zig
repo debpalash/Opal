@@ -13,7 +13,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 // ══════════════════════════════════════════════════════════
 
 pub const QueueItem = struct {
-    id: i64 = 0,  // SQLite rowid
+    id: i64 = 0, // SQLite rowid
     url: [2048]u8 = std.mem.zeroes([2048]u8),
     url_len: usize = 0,
     title: [256]u8 = std.mem.zeroes([256]u8),
@@ -37,6 +37,7 @@ pub const QueueItem = struct {
 };
 
 const MAX_QUEUE: usize = 200;
+pub const Action = enum { @"clear-played", clear, @"move-up", @"move-down", remove, play };
 pub var queue_items: [MAX_QUEUE]QueueItem = undefined;
 pub var queue_count: usize = 0;
 var db: ?*c.sqlite.sqlite3 = null;
@@ -53,12 +54,12 @@ pub fn initDb() void {
     const home = @import("../core/paths.zig").configDir(&__cfg_buf_0);
     var path_buf: [256]u8 = undefined;
     const db_path = std.fmt.bufPrintZ(&path_buf, "{s}/queue.db", .{home}) catch return;
-    
+
     // Ensure directory exists
     var dir_buf: [256]u8 = undefined;
     const dir_path = std.fmt.bufPrintZ(&dir_buf, "{s}", .{home}) catch return;
     _ = @import("../core/io_global.zig").makeDirAbsolute(dir_path) catch {};
-    
+
     if (c.sqlite.sqlite3_open(db_path.ptr, &db) != c.sqlite.SQLITE_OK) {
         db = null;
         return;
@@ -77,12 +78,12 @@ pub fn initDb() void {
         "played INTEGER DEFAULT 0" ++
         ");";
     _ = c.sqlite.sqlite3_exec(db.?, sql, null, null, null);
-    
+
     // Migration: add thumb_url column if missing
     const migrate_sql = "ALTER TABLE queue ADD COLUMN thumb_url TEXT DEFAULT '';";
     _ = c.sqlite.sqlite3_exec(db.?, migrate_sql, null, null, null);
     // (table creation moved above)
-    
+
     loadFromDb();
 }
 
@@ -262,24 +263,30 @@ pub fn renderContent() void {
         defer hdr.deinit();
 
         dvui.icon(@src(), "", icons.tvg.lucide.@"list-music", .{}, .{
-            .color_text = theme.colors.accent, .gravity_y = 0.5,
+            .color_text = theme.colors.accent,
+            .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
         });
         // Capped for the same reason as the row titles: this label sits before
         // three text buttons in a horizontal box, and dvui starves later
         // siblings rather than shrinking earlier ones.
         _ = dvui.label(@src(), "Play Queue", .{}, .{
-            .color_text = theme.colors.text_primary, .gravity_y = 0.5,
+            .color_text = theme.colors.text_primary,
+            .gravity_y = 0.5,
             .font = dvui.themeGet().font_heading,
             .max_size_content = .{ .w = 140, .h = std.math.floatMax(f32) },
         });
 
-        { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
 
         if (dvui.button(@src(), if (thumb_backfill_active.load(.acquire)) "Stop Fetch" else "Fetch Thumbs", .{}, .{
             .color_fill = if (thumb_backfill_active.load(.acquire)) dvui.Color{ .r = 80, .g = 30, .b = 30, .a = 200 } else theme.colors.accent,
             .color_text = if (thumb_backfill_active.load(.acquire)) theme.colors.danger else dvui.Color.white,
-            .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
             .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
         })) {
             if (thumb_backfill_active.load(.acquire)) {
@@ -290,16 +297,20 @@ pub fn renderContent() void {
         }
 
         if (dvui.button(@src(), "Clear All", .{}, .{
-            .color_fill = dvui.Color{ .r = 80, .g = 30, .b = 30, .a = 200 }, .color_text = theme.colors.danger,
-            .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            .color_fill = dvui.Color{ .r = 80, .g = 30, .b = 30, .a = 200 },
+            .color_text = theme.colors.danger,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
             .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
         })) {
             clearAll();
         }
 
         if (dvui.button(@src(), "Clear Played", .{}, .{
-            .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_secondary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
         })) {
             clearPlayed();
         }
@@ -311,9 +322,11 @@ pub fn renderContent() void {
     // ── Separator ──
     {
         var sep = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal, .background = true,
+            .expand = .horizontal,
+            .background = true,
             .color_fill = theme.colors.border_subtle,
-            .min_size_content = .{ .w = 0, .h = 1 }, .max_size_content = .{ .w = 0, .h = 1 },
+            .min_size_content = .{ .w = 0, .h = 1 },
+            .max_size_content = .{ .w = 0, .h = 1 },
             .margin = .{ .x = 0, .y = 8, .w = 0, .h = 8 },
         });
         sep.deinit();
@@ -322,7 +335,9 @@ pub fn renderContent() void {
     // ── Persisted Queue Items ──
     if (queue_count == 0) {
         _ = dvui.label(@src(), "Queue is empty. Add tracks from Tunes or paste a link.", .{}, .{
-            .color_text = theme.colors.text_secondary, .gravity_x = 0.5, .margin = dvui.Rect.all(24),
+            .color_text = theme.colors.text_secondary,
+            .gravity_x = 0.5,
+            .margin = dvui.Rect.all(24),
         });
         return;
     }
@@ -342,12 +357,13 @@ fn renderNowPlaying() void {
     // Get media-title from mpv
     var title_ptr: [*c]u8 = null;
     _ = c.mpv.mpv_get_property(ap.mpv_ctx, "media-title", c.mpv.MPV_FORMAT_STRING, @ptrCast(&title_ptr));
-    
+
     const title: []const u8 = if (title_ptr) |ptr| std.mem.span(ptr) else if (ap.source_url_len > 0) ap.source_url[0..ap.source_url_len] else "Nothing playing";
     defer if (title_ptr != null) c.mpv.mpv_free(title_ptr);
 
     var np = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .horizontal, .background = true,
+        .expand = .horizontal,
+        .background = true,
         .color_fill = dvui.Color{ .r = 0, .g = 200, .b = 200, .a = 15 },
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
@@ -355,7 +371,8 @@ fn renderNowPlaying() void {
     defer np.deinit();
 
     dvui.icon(@src(), "", icons.tvg.lucide.@"disc-3", .{}, .{
-        .color_text = theme.colors.accent, .gravity_y = 0.5,
+        .color_text = theme.colors.accent,
+        .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = 10, .h = 0 },
     });
 
@@ -367,7 +384,8 @@ fn renderNowPlaying() void {
             .color_text = theme.colors.accent,
         });
         _ = dvui.labelNoFmt(@src(), title, .{}, .{
-            .color_text = theme.colors.text_primary, .expand = .horizontal,
+            .color_text = theme.colors.text_primary,
+            .expand = .horizontal,
         });
     }
 }
@@ -396,7 +414,9 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
     const leading_w: f32 = if (item.thumb_url_len > 0) CARD_THUMB_W else CARD_GLYPH_W;
 
     var card = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .id_extra = idx, .expand = .horizontal, .background = true,
+        .id_extra = idx,
+        .expand = .horizontal,
+        .background = true,
         .color_fill = if (item.played) dvui.Color{ .r = 20, .g = 22, .b = 28, .a = 120 } else theme.colors.bg_surface,
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
@@ -407,48 +427,59 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
     // ── Thumbnail ──
     if (item.thumb_url_len > 0) {
         var poster = dvui.box(@src(), .{}, .{
-            .id_extra = idx + 500, .background = true,
+            .id_extra = idx + 500,
+            .background = true,
             .color_fill = theme.colors.bg_app,
             .corner_radius = dvui.Rect.all(4),
-            .min_size_content = .{ .w = 80, .h = 45 }, .max_size_content = .{ .w = 80, .h = 45 },
+            .min_size_content = .{ .w = 80, .h = 45 },
+            .max_size_content = .{ .w = 80, .h = 45 },
             .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
             .gravity_y = 0.5,
         });
         defer poster.deinit();
-        
+
         // Create GPU texture from decoded pixels (must be on main thread)
         if (item.thumb_tex == null and item.thumb_pixels != null) {
             const num_pixels = item.thumb_w * item.thumb_h;
             const pixels_pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(item.thumb_pixels.?.ptr)))[0..num_pixels];
             item.thumb_tex = dvui.textureCreate(pixels_pma, item.thumb_w, item.thumb_h, .linear, .rgba_32) catch null;
-            if (item.thumb_tex != null) { alloc.free(item.thumb_pixels.?); item.thumb_pixels = null; }
+            if (item.thumb_tex != null) {
+                alloc.free(item.thumb_pixels.?);
+                item.thumb_pixels = null;
+            }
         }
-        
+
         if (item.thumb_tex) |*tex| {
             _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                .id_extra = idx + 510, .expand = .both, .corner_radius = dvui.Rect.all(4),
+                .id_extra = idx + 510,
+                .expand = .both,
+                .corner_radius = dvui.Rect.all(4),
             });
         } else {
             // Trigger background fetch (skip items already fetching or that
             // have terminally failed, so we don't respawn threads each frame)
             if (!item.thumb_fetching and !item.thumb_failed and item.thumb_url_len > 0) fetchQueueThumb(item);
-            dvui.icon(@src(), "", icons.tvg.lucide.@"image", .{}, .{
-                .id_extra = idx + 510, .gravity_x = 0.5, .gravity_y = 0.5,
+            dvui.icon(@src(), "", icons.tvg.lucide.image, .{}, .{
+                .id_extra = idx + 510,
+                .gravity_x = 0.5,
+                .gravity_y = 0.5,
                 .color_text = theme.colors.bg_elevated,
             });
         }
     } else {
         // Source icon when no thumbnail
         const src_icon = if (std.mem.eql(u8, source, "youtube"))
-            icons.tvg.lucide.@"music"
+            icons.tvg.lucide.music
         else if (std.mem.eql(u8, source, "magnet"))
-            icons.tvg.lucide.@"magnet"
+            icons.tvg.lucide.magnet
         else
-            icons.tvg.lucide.@"link";
+            icons.tvg.lucide.link;
 
         dvui.icon(@src(), "", src_icon, .{}, .{
-            .id_extra = idx + 600, .color_text = if (item.played) theme.colors.text_secondary else theme.colors.accent,
-            .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 10, .h = 0 },
+            .id_extra = idx + 600,
+            .color_text = if (item.played) theme.colors.text_secondary else theme.colors.accent,
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = 10, .h = 0 },
         });
     }
 
@@ -470,7 +501,8 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
     {
         const title_w = layout.titleCapW(row_w, leading_w, acts_w, CARD_CHROME_W);
         var info = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 700, .expand = .horizontal,
+            .id_extra = idx + 700,
+            .expand = .horizontal,
             .max_size_content = .{ .w = title_w, .h = std.math.floatMax(f32) },
         });
         defer info.deinit();
@@ -482,7 +514,8 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         });
 
         _ = dvui.label(@src(), "{s}", .{source}, .{
-            .id_extra = idx + 720, .color_text = theme.colors.border_subtle,
+            .id_extra = idx + 720,
+            .color_text = theme.colors.border_subtle,
             .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
             .max_size_content = .{ .w = title_w, .h = std.math.floatMax(f32) },
         });
@@ -494,7 +527,8 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
     // and did not grow at all with UI scale.
     {
         var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = idx + 800, .gravity_y = 0.5,
+            .id_extra = idx + 800,
+            .gravity_y = 0.5,
             .min_size_content = .{ .w = acts_w, .h = 0 },
         });
         defer acts.deinit();
@@ -518,7 +552,7 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         }
 
         // Play button
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"play", .{}, .{}, .{
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = idx + 810,
             .color_text = theme.colors.accent,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -552,6 +586,35 @@ fn playQueueItem(item: *QueueItem) void {
     ap.load_file(@ptrCast(&url_z[0]));
     markPlayed(item.id);
     state.showToast("Playing from queue");
+}
+
+/// Non-UI adapters use indices from a freshly-read queue snapshot. Keep the
+/// actual normalization, player handoff, played marker, and toast behind the
+/// same implementation as the native Queue drawer.
+pub fn playQueueIndex(idx: usize) bool {
+    if (idx >= queue_count) return false;
+    playQueueItem(&queue_items[idx]);
+    return true;
+}
+
+pub fn removeQueueIndex(idx: usize) bool {
+    if (idx >= queue_count) return false;
+    removeFromQueue(queue_items[idx].id);
+    return true;
+}
+
+/// Typed non-UI entry point. The caller owns player lifetime because only the
+/// `play` case touches it; queue persistence remains centralized here.
+pub fn apply(action: Action, idx: ?usize) bool {
+    switch (action) {
+        .@"clear-played" => clearPlayed(),
+        .clear => clearAll(),
+        .@"move-up" => moveQueueItem(idx orelse return false, -1),
+        .@"move-down" => moveQueueItem(idx orelse return false, 1),
+        .remove => return removeQueueIndex(idx orelse return false),
+        .play => return playQueueIndex(idx orelse return false),
+    }
+    return true;
 }
 
 /// Run a single UPDATE inside an already-open transaction. Returns true on
@@ -682,7 +745,10 @@ fn fetchQueueThumb(item: *QueueItem) void {
                     alloc.free(cached);
                     break :blk null;
                 };
-                if (n <= 100) { alloc.free(cached); break :blk null; }
+                if (n <= 100) {
+                    alloc.free(cached);
+                    break :blk null;
+                }
                 break :blk cached[0..n];
             };
 
@@ -697,7 +763,7 @@ fn fetchQueueThumb(item: *QueueItem) void {
             defer client.deinit();
 
             const uri = std.Uri.parse(url) catch return;
-            var req = client.request(.GET, uri, .{ .extra_headers = &.{ .{ .name = "Accept", .value = "image/jpeg, image/webp" } } }) catch return;
+            var req = client.request(.GET, uri, .{ .extra_headers = &.{.{ .name = "Accept", .value = "image/jpeg, image/webp" }} }) catch return;
             defer req.deinit();
             req.sendBodiless() catch return;
 
@@ -820,13 +886,13 @@ fn startThumbBackfill() void {
                     return;
                 }
                 const url = urls[i][0..url_lens[i]];
-                
+
                 // yt-dlp --get-thumbnail <url> (bundled/system binary — bare
                 // "yt-dlp" isn't on the GUI process PATH).
                 const argv = [_][]const u8{
                     @import("ytdlp.zig").binary(), "--get-thumbnail",
-                    "--no-warnings", "--no-check-certificates",
-                    "--cookies-from-browser", "firefox",
+                    "--no-warnings",               "--no-check-certificates",
+                    "--cookies-from-browser",      "firefox",
                     url,
                 };
 

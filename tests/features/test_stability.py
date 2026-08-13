@@ -108,8 +108,10 @@ def test_stream_resource_root():
     checks = {
         "state.resourceRoot helper": "pub fn resourceRoot()" in st,
         "startup detection": "detectResourceRoot" in mn and "SDL_GetBasePath" in mn,
-        "resolver uses cwd": "child.cwd = state.resourceRoot()" in rv,
-        "search uses cwd": "child.cwd = state.resourceRoot()" in sr,
+        "resolver uses contained cwd": ".cwd = state.resourceRoot()" in rv
+            and "bounded_process.StreamProcess.init" in rv,
+        "search uses contained cwd": ".cwd = state.resourceRoot()" in sr
+            and "bounded_process.StreamProcess.init" in sr,
         "bundle copies engines/": "Contents/Resources/engines" in sh_txt,
     }
     missing = [k for k, v in checks.items() if not v]
@@ -209,18 +211,20 @@ def test_plugin_sandbox_hardened():
     prelude_hardened = all(
         s in pg for s in ("debug=nil", "os.getenv=nil", 'package.path=""', 'package.cpath=""')
     )
-    # allow_unsafe now gated behind a user-created marker, routed via pure runMode.
+    # allow_unsafe is gated by an app-owned, content-hash approval marker, and
+    # untrusted native code is denied rather than merely warned.
     gated = (
         "user_trusted" in pg
-        and '".trusted"' in pg
+        and '"{s}/plugin-trust/{s}.trusted"' in pg
+        and "pluginDigest(" in pg
         and "runMode(" in pg
-        and "untrustedNative(" in pg
-        and "and p.user_trusted" in pg  # allow_unsafe honored only WITH user trust
+        and ".deny =>" in pg
+        and "if (!is_lua and !user_trusted) return .deny" in pgp
     )
     # Pure decision + regression tests present.
     pure_ok = (
         "pub fn runMode(" in pgp
-        and "pub fn untrustedNative(" in pgp
+        and "deny" in pgp
         and 'test "runMode sandboxes Lua' in pgp
     )
     if not prelude_hardened:
@@ -229,7 +233,7 @@ def test_plugin_sandbox_hardened():
         return "fail", "allow_unsafe not gated behind user trust marker via runMode"
     if not pure_ok:
         return "fail", "plugins_pure runMode/tests missing"
-    return "pass", "user-trust gate + hardened prelude + native warn, pure-tested"
+    return "pass", "content-hash trust gate + hardened prelude + native deny, pure-tested"
 
 
 @test("Playback Repaint Gated + Async UI Wakes", "Stability")

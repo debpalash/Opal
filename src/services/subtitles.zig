@@ -78,7 +78,9 @@ pub fn searchByQuery(query: []const u8, lang: []const u8) void {
 
     if (std.Thread.spawn(.{}, struct {
         fn work() void {
-            defer { is_searching.store(false, .release); }
+            defer {
+                is_searching.store(false, .release);
+            }
             doSearch(S.q_buf[0..S.q_len], S.l_buf[0..S.l_len]);
         }
     }.work, .{})) |t| t.detach() else |_| {
@@ -140,16 +142,12 @@ fn doSearch(query: []const u8, lang: []const u8) void {
     const url_slice: []const u8 = url_buf[0..url_len];
 
     var child = @import("../core/io_global.zig").Child.init(
-        &.{ "curl", "-s", "--max-time", "10",
-             "-H", "Content-Type: application/json",
-             "-H", hdr_slice,
-             "-H", "User-Agent: " ++ USER_AGENT,
-             url_slice },
+        &.{ "curl", "-s", "--max-time", "10", "-H", "Content-Type: application/json", "--config", "-", "-H", "User-Agent: " ++ USER_AGENT, url_slice },
         @import("../core/alloc.zig").allocator,
     );
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
-    child.spawn() catch {
+    @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{hdr_slice}) catch {
         setError("Failed to spawn curl");
         return;
     };
@@ -319,12 +317,16 @@ pub fn downloadSubtitle(file_id: i64) void {
     // closing the UI-thread check-then-spawn race.
     if (is_downloading.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
 
-    const S = struct { var fid: i64 = 0; };
+    const S = struct {
+        var fid: i64 = 0;
+    };
     S.fid = file_id;
 
     if (std.Thread.spawn(.{}, struct {
         fn work() void {
-            defer { is_downloading.store(false, .release); }
+            defer {
+                is_downloading.store(false, .release);
+            }
             doDownload(S.fid);
         }
     }.work, .{})) |t| t.detach() else |_| {
@@ -356,17 +358,12 @@ fn doDownload(file_id: i64) void {
     const body_slice: []const u8 = body;
 
     var child = @import("../core/io_global.zig").Child.init(
-        &.{ "curl", "-s", "--max-time", "15", "-X", "POST",
-             "-H", "Content-Type: application/json",
-             "-H", hdr_slice,
-             "-H", "User-Agent: " ++ USER_AGENT,
-             "-d", body_slice,
-             API_BASE ++ "/download" },
+        &.{ "curl", "-s", "--max-time", "15", "-X", "POST", "-H", "Content-Type: application/json", "--config", "-", "-H", "User-Agent: " ++ USER_AGENT, "-d", body_slice, API_BASE ++ "/download" },
         @import("../core/alloc.zig").allocator,
     );
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
-    child.spawn() catch {
+    @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{hdr_slice}) catch {
         state.showToast("Download failed (curl)");
         return;
     };
@@ -411,8 +408,7 @@ fn doDownload(file_id: i64) void {
     const link_slice: []const u8 = link_z[0..link_len];
 
     var dl_child = @import("../core/io_global.zig").Child.init(
-        &.{ "curl", "-s", "--max-time", "15", "-L", "-o", sub_path,
-             link_slice },
+        &.{ "curl", "-s", "--max-time", "15", "-L", "-o", sub_path, link_slice },
         @import("../core/alloc.zig").allocator,
     );
     dl_child.stdout_behavior = .Ignore;

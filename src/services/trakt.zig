@@ -34,7 +34,7 @@ pub fn save() void {
     var b: [900]u8 = undefined;
     const body = std.fmt.bufPrint(&b, "{{\"client_id\":\"{s}\",\"client_secret\":\"{s}\",\"access_token\":\"{s}\"}}", .{ client_id[0..client_id_len], client_secret[0..client_secret_len], access_token[0..access_token_len] }) catch return;
     var pb: [600]u8 = undefined;
-    io_global.cwdWriteFile(.{ .sub_path = cfgPath(&pb), .data = body }) catch {};
+    @import("../core/secret_file.zig").write(cfgPath(&pb), body) catch {};
 }
 
 fn loadStr(obj: std.json.Value, key: []const u8, buf: []u8, len: *usize) void {
@@ -48,7 +48,10 @@ fn loadStr(obj: std.json.Value, key: []const u8, buf: []u8, len: *usize) void {
 pub fn init() void {
     const alloc = @import("../core/alloc.zig").allocator;
     var pb: [600]u8 = undefined;
-    const body = io_global.cwdReadFileAlloc(cfgPath(&pb), alloc, 8192) catch return;
+    const path = cfgPath(&pb);
+    // Upgrade credentials written by older builds before exposing their bytes.
+    @import("../core/secret_file.zig").restrictExisting(path);
+    const body = io_global.cwdReadFileAlloc(path, alloc, 8192) catch return;
     defer alloc.free(body);
     var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return;
     defer parsed.deinit();
@@ -127,8 +130,15 @@ pub fn scrobbleStart(title: []const u8, progress: f64) void {
     var ei: usize = 0;
     for (title) |ch| {
         if (ei + 2 >= esc.len) break;
-        if (ch == '"') { esc[ei] = '\\'; ei += 1; esc[ei] = '"'; ei += 1; }
-        else { esc[ei] = ch; ei += 1; }
+        if (ch == '"') {
+            esc[ei] = '\\';
+            ei += 1;
+            esc[ei] = '"';
+            ei += 1;
+        } else {
+            esc[ei] = ch;
+            ei += 1;
+        }
     }
     const json = std.fmt.bufPrintZ(&json_buf,
         \\{{"movie":{{"title":"{s}"}},"progress":{d:.1}}}
@@ -145,8 +155,15 @@ pub fn scrobblePause(title: []const u8, progress: f64) void {
     var ei: usize = 0;
     for (title) |ch| {
         if (ei + 2 >= esc.len) break;
-        if (ch == '"') { esc[ei] = '\\'; ei += 1; esc[ei] = '"'; ei += 1; }
-        else { esc[ei] = ch; ei += 1; }
+        if (ch == '"') {
+            esc[ei] = '\\';
+            ei += 1;
+            esc[ei] = '"';
+            ei += 1;
+        } else {
+            esc[ei] = ch;
+            ei += 1;
+        }
     }
     const json = std.fmt.bufPrintZ(&json_buf,
         \\{{"movie":{{"title":"{s}"}},"progress":{d:.1}}}
@@ -162,8 +179,15 @@ pub fn scrobbleStop(title: []const u8, progress: f64) void {
     var ei: usize = 0;
     for (title) |ch| {
         if (ei + 2 >= esc.len) break;
-        if (ch == '"') { esc[ei] = '\\'; ei += 1; esc[ei] = '"'; ei += 1; }
-        else { esc[ei] = ch; ei += 1; }
+        if (ch == '"') {
+            esc[ei] = '\\';
+            ei += 1;
+            esc[ei] = '"';
+            ei += 1;
+        } else {
+            esc[ei] = ch;
+            ei += 1;
+        }
     }
     const json = std.fmt.bufPrintZ(&json_buf,
         \\{{"movie":{{"title":"{s}"}},"progress":{d:.1}}}
@@ -183,16 +207,13 @@ fn postScrobble(endpoint: []const u8, json_body: []const u8) void {
     const cid_hdr = std.fmt.bufPrintZ(&cid_buf, "trakt-api-key: {s}", .{client_id[0..client_id_len]}) catch return;
 
     var child = io_global.Child.init(&.{
-        "curl", "-s", "-X", "POST", url,
-        "-H", "Content-Type: application/json",
-        "-H", "trakt-api-version: 2",
-        "-H", cid_hdr,
-        "-H", auth,
-        "-d", json_body,
+        "curl", "-s",                             "-X",      "POST",                 url,
+        "-H",   "Content-Type: application/json", "-H",      "trakt-api-version: 2", "--config",
+        "-",    "-d",                             json_body,
     }, alloc);
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
-    child.spawn() catch {
+    @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{ cid_hdr, auth }) catch {
         logs.pushLog("warn", "trakt", "Failed to send scrobble", false);
         return;
     };
@@ -231,10 +252,9 @@ fn deviceAuthWorker() void {
     const body = std.fmt.bufPrintZ(&json_buf, "{{\"client_id\":\"{s}\"}}", .{client_id[0..client_id_len]}) catch return;
 
     var child = io_global.Child.init(&.{
-        "curl", "-s", "-X", "POST",
-        TRAKT_API_URL ++ "/oauth/device/code",
-        "-H", "Content-Type: application/json",
-        "-d", body,
+        "curl",                                "-s", "-X",                             "POST",
+        TRAKT_API_URL ++ "/oauth/device/code", "-H", "Content-Type: application/json", "-d",
+        body,
     }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
@@ -271,10 +291,9 @@ fn deviceAuthWorker() void {
         }) catch return;
 
         var poll = io_global.Child.init(&.{
-            "curl", "-s", "-X", "POST",
-            TRAKT_API_URL ++ "/oauth/device/token",
-            "-H", "Content-Type: application/json",
-            "-d", pb,
+            "curl",                                 "-s", "-X",                             "POST",
+            TRAKT_API_URL ++ "/oauth/device/token", "-H", "Content-Type: application/json", "-d",
+            pb,
         }, alloc);
         poll.stdout_behavior = .Pipe;
         poll.stderr_behavior = .Ignore;

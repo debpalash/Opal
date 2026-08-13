@@ -142,8 +142,8 @@ def _api_routes(rm):
 
 @test("Desktop ⇄ web parity: covered capabilities stay covered", "Parity")
 def test_parity_covered():
-    ui = _src("web/index.html")
-    rm = _src("src/services/remote.zig")
+    ui = _web_app()
+    rm = _remote_api()
     pages, routes = _web_pages(ui), _api_routes(rm)
 
     broken = []
@@ -163,8 +163,8 @@ def test_parity_covered():
 
 @test("Desktop ⇄ web parity: remaining gaps (tracked)", "Parity")
 def test_parity_gaps():
-    ui = _src("web/index.html")
-    rm = _src("src/services/remote.zig")
+    ui = _web_app()
+    rm = _remote_api()
     pages, routes = _web_pages(ui), _api_routes(rm)
 
     # A gap that has quietly been closed should be promoted into COVERED rather
@@ -252,8 +252,8 @@ def test_plugin_credentials():
     #    markConfigDirty() did nothing for them — saveDebrid() was called only
     #    from the desktop UI and saveToken() had no caller anywhere. A key
     #    entered from the web UI survived until the next restart and no further.
-    rm = _src("src/services/remote.zig")
-    ui = _src("web/index.html")
+    rm = _remote_api()
+    ui = _web_app()
     checks = {
         "handleApi receives the request":
             "fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8, request: []const u8)" in rm,
@@ -274,8 +274,8 @@ def test_plugin_credentials():
 def test_new_plugin_routes():
     # Each of these closes a parity gap, and each withholds something on
     # purpose — the pattern the /plugins GET already followed for the debrid key.
-    rm = _src("src/services/remote.zig")
-    ui = _src("web/index.html")
+    rm = _remote_api()
+    ui = _web_app()
     checks = {
         "trakt route": 'api_path, "/trakt"' in rm and "fn apiTrakt(" in rm,
         "suwayomi route": 'api_path, "/suwayomi"' in rm and "fn apiSuwayomi(" in rm,
@@ -304,8 +304,8 @@ def test_livetv_and_webui_routes():
     # The last two gaps. Both write, so both need a guard the others did not:
     # the source list may only name entries from the compiled-in SOURCES table,
     # and turning the web UI off ends the caller's own session.
-    rm = _src("src/services/remote.zig")
-    ui = _src("web/index.html")
+    rm = _remote_api()
+    ui = _web_app()
     checks = {
         "livetv sources route": 'api_path, "/livetv/sources"' in rm and "fn apiLiveTvSources(" in rm,
         # Without this an arbitrary id would be written straight into
@@ -338,7 +338,7 @@ def test_source_catalog_paging():
     # were a subset, and the other 266 were unreachable unless you guessed a
     # name. It also made Setup ~12,000px tall, pushing every card below it out of
     # reach. The rule in this repo is that a bounded view states its bound.
-    ui = _src("web/index.html")
+    ui = _web_app()
     checks = {
         "catalog no longer hard-slices": "s.name || '').toLowerCase().includes(q)).slice(0, 40)" not in ui,
         # The downloads list had the identical bug — first 40 of however many,
@@ -372,7 +372,7 @@ def test_load_magnet_routing():
     # drop/paste, services/search.zig for a result click). The fix routes
     # through the same entry point rather than reimplementing player/session
     # setup, so the two cannot drift.
-    rm = _src("src/services/remote.zig")
+    rm = _remote_api()
     m = _re.search(r'api_path, "/load"\)\).*?\n    \} else if', rm, _re.S)
     if not m:
         return "fail", "remote.zig has no /load handler"
@@ -401,8 +401,8 @@ def test_setup_folding_and_pct():
     # ~1 KB/s that read "0%" for the first 1.3 MB — about twenty minutes — while
     # pieces were genuinely landing, so a slow torrent and a dead one looked
     # identical. That distinction is the entire job of the number.
-    ui = _src("web/index.html")
-    rm = _src("src/services/remote.zig")
+    ui = _web_app()
+    rm = _remote_api()
     checks = {
         "fold helper exists": "function foldSetup(" in ui,
         "fold runs on the setup page": "foldSetup();" in ui,

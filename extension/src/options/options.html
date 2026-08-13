@@ -73,6 +73,11 @@
                 <span class="field-label">Password</span>
                 <input id="password" type="password" autocomplete="current-password" />
               </label>
+              <label class="field" id="setup-code-field" hidden>
+                <span class="field-label">One-time setup code</span>
+                <input id="setup-code" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="64-character code" />
+                <small class="help">Shown by the desktop app, or stored in <code>setup.token</code> on a headless server.</small>
+              </label>
             </div>
             <div class="actions">
               <button type="button" id="signin" class="btn primary">Connect</button>

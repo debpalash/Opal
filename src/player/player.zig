@@ -4,9 +4,91 @@ const c = @import("../core/c.zig");
 const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
 const http_headers = @import("http_headers_pure.zig");
+const playback_load = @import("playback_load_pure.zig");
 const playback_snapshot = @import("playback_snapshot_pure.zig");
 pub const HttpHeader = http_headers.HttpHeader;
+pub const LoadMode = playback_load.Mode;
+pub const LoadRequest = playback_load.Request;
 pub const PlaybackSnapshot = playback_snapshot.Snapshot;
+
+const MAX_LOAD_URL = 8192;
+
+/// Production adapter for the typed playback-command seam.  This is the only
+/// implementation allowed to issue mpv's media-load command; the pure module
+/// drives the same two-method interface against an in-memory fake in tests.
+const MpvPlaybackSink = struct {
+    ctx: *c.mpv.mpv_handle,
+
+    fn stringNode(value: [*:0]const u8) c.mpv.mpv_node {
+        return .{
+            .u = .{ .string = @constCast(value) },
+            .format = c.mpv.MPV_FORMAT_STRING,
+        };
+    }
+
+    fn intNode(value: i64) c.mpv.mpv_node {
+        return .{
+            .u = .{ .int64 = value },
+            .format = c.mpv.MPV_FORMAT_INT64,
+        };
+    }
+
+    pub fn setOption(self: *MpvPlaybackSink, name: []const u8, value: []const u8) void {
+        var name_buf: [64]u8 = undefined;
+        const name_z = std.fmt.bufPrintZ(&name_buf, "{s}", .{name}) catch return;
+        var value_buf: [2049]u8 = undefined;
+        const value_z = std.fmt.bufPrintZ(&value_buf, "{s}", .{value}) catch return;
+        _ = c.mpv.mpv_set_option_string(self.ctx, name_z.ptr, value_z.ptr);
+    }
+
+    pub fn loadFile(self: *MpvPlaybackSink, url: []const u8, mode: LoadMode, options: playback_load.FileOptions) void {
+        var url_buf: [MAX_LOAD_URL + 1]u8 = undefined;
+        const url_z = std.fmt.bufPrintZ(&url_buf, "{s}", .{url}) catch return;
+        var user_agent_buf: [2049]u8 = undefined;
+        const user_agent_z = std.fmt.bufPrintZ(&user_agent_buf, "{s}", .{options.user_agent}) catch return;
+        var header_fields_buf: [2049]u8 = undefined;
+        const header_fields_z = std.fmt.bufPrintZ(&header_fields_buf, "{s}", .{options.header_fields}) catch return;
+
+        // `loadfile`'s final argument is a native key/value map when invoked
+        // through mpv_command_node. This avoids comma/string escaping and,
+        // crucially, stores HTTP identity on the playlist entry instead of
+        // changing the options of media that is already playing.
+        var option_values = [_]c.mpv.mpv_node{
+            stringNode(user_agent_z.ptr),
+            stringNode(header_fields_z.ptr),
+        };
+        var option_keys = [_][*c]u8{
+            @constCast("user-agent"),
+            @constCast("http-header-fields"),
+        };
+        var option_list: c.mpv.mpv_node_list = .{
+            .num = option_values.len,
+            .values = @ptrCast(&option_values),
+            .keys = @ptrCast(&option_keys),
+        };
+        const options_node: c.mpv.mpv_node = .{
+            .u = .{ .list = &option_list },
+            .format = c.mpv.MPV_FORMAT_NODE_MAP,
+        };
+
+        var arg_values = [_]c.mpv.mpv_node{
+            stringNode("loadfile"),
+            stringNode(url_z.ptr),
+            stringNode(mode.mpvArg().ptr),
+            intNode(-1),
+            options_node,
+        };
+        var arg_list: c.mpv.mpv_node_list = .{
+            .num = arg_values.len,
+            .values = @ptrCast(&arg_values),
+        };
+        var command_node: c.mpv.mpv_node = .{
+            .u = .{ .list = &arg_list },
+            .format = c.mpv.MPV_FORMAT_NODE_ARRAY,
+        };
+        _ = c.mpv.mpv_command_node(self.ctx, &command_node, null);
+    }
+};
 
 /// True if a Firefox profile dir exists, so yt-dlp's --cookies-from-browser
 /// firefox won't abort. Checked once and cached.
@@ -681,13 +763,22 @@ pub const MediaPlayer = struct {
     }
 
     pub fn load_file(self: *MediaPlayer, path: [*c]const u8) void {
+        self.load(.{ .url = std.mem.span(path) });
+    }
+
+    /// Start a typed media load. Replace performs the full playback transition;
+    /// append deliberately changes only mpv's playlist. Both modes ultimately
+    /// cross `commitPlayback`, which owns per-entry HTTP options and the sole
+    /// raw media-load command.
+    pub fn load(self: *MediaPlayer, request: LoadRequest) void {
         // Guard the mpv boundary. Every play path funnels through here, and
         // mpv does two hostile things with junk input: loadfile("") logs a
         // "Cannot open file ''" error, and loadfile(<directory>) expands the
         // directory into a recursive playlist walk of the entire tree (saw it
         // march through ~/Desktop/github trying every .sol/.ts file). Reject
         // both before touching player state.
-        const guard_span = std.mem.span(path);
+        const guard_span = request.url;
+        if (guard_span.len > MAX_LOAD_URL) return;
         if (!@import("resume_pure.zig").plausibleMediaPath(guard_span)) {
             @import("../core/logs.zig").pushLog("warn", "player", "Ignored empty media path", true);
             return;
@@ -701,6 +792,14 @@ pub const MediaPlayer = struct {
                     return;
                 }
             } else |_| {}
+        }
+
+        // Queueing a file must not reset the current title/resume/visual state.
+        // It still crosses the same command seam, but its credentials are
+        // attached to the queued entry without touching the current stream.
+        if (request.mode == .append) {
+            self.commitPlayback(request);
+            return;
         }
 
         // Save position of current video before switching
@@ -724,7 +823,7 @@ pub const MediaPlayer = struct {
         }
         // Set loading state for UI feedback
         self.is_loading = true;
-        const path_span = std.mem.span(path);
+        const path_span = request.url;
         const copy_len = @min(path_span.len, self.loading_label.len);
         @memcpy(self.loading_label[0..copy_len], path_span[0..copy_len]);
         self.loading_label_len = copy_len;
@@ -768,8 +867,7 @@ pub const MediaPlayer = struct {
         self.vis_applied = false;
         _ = c.mpv.mpv_set_property_string(self.mpv_ctx, "lavfi-complex", "");
 
-        var args = [_][*c]const u8{ "loadfile", path, null };
-        _ = c.mpv.mpv_command(self.mpv_ctx, @ptrCast(&args));
+        self.commitPlayback(request);
 
         // ── Memory hooks: record playback for cross-session intelligence ──
         {
@@ -790,38 +888,29 @@ pub const MediaPlayer = struct {
         }
     }
 
+    /// Execute an already-prepared replace/append command without beginning a
+    /// second UI/resume transition. Async resolvers use this after `load()` has
+    /// staged the original source identity. All other callers should use
+    /// `load()`. This remains the same typed seam: replace resets persistent
+    /// HTTP state, while append only configures its new playlist entry.
+    pub fn commitPlayback(self: *MediaPlayer, request: LoadRequest) void {
+        if (request.url.len == 0 or request.url.len > MAX_LOAD_URL) return;
+        var sink: MpvPlaybackSink = .{ .ctx = self.mpv_ctx };
+        _ = playback_load.dispatch(&sink, request);
+    }
+
     /// Load a direct network stream with an explicit User-Agent and an arbitrary
     /// set of per-request HTTP headers (Referer, Origin, Cookie, …).
     ///
-    /// This is the single code path behind every headers-aware load. Both mpv
-    /// options persist on the ctx, so they are ALWAYS set here: the UA to the
-    /// caller's value or a browser default (never left stale from a prior
-    /// stream), and `http-header-fields` set-or-cleared so an unrelated later
-    /// load isn't tagged with someone else's Referer/Cookie.
+    /// This is the single code path behind every headers-aware load. The UA and
+    /// `http-header-fields` are attached to the file's playlist entry; replace
+    /// also clears context-wide leftovers so an unrelated later load cannot be
+    /// tagged with another host's Referer/Cookie.
     ///
     /// Header joining/sanitizing lives in `http_headers_pure.buildHeaderFields`
     /// (mpv splits the option on `,`, so unsafe values are dropped there).
     pub fn loadStreamWithHttpHeaders(self: *MediaPlayer, url: []const u8, user_agent: []const u8, headers: []const HttpHeader) void {
-        const default_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
-        var ua_buf: [512]u8 = undefined;
-        if (std.fmt.bufPrintZ(&ua_buf, "{s}", .{if (user_agent.len > 0) user_agent else default_ua})) |ua| {
-            _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "user-agent", ua.ptr);
-        } else |_| {}
-
-        var join_buf: [2048]u8 = undefined;
-        const fields = http_headers.buildHeaderFields(headers, &join_buf);
-        if (fields.len > 0) {
-            var z_buf: [2049]u8 = undefined;
-            @memcpy(z_buf[0..fields.len], fields);
-            z_buf[fields.len] = 0;
-            _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "http-header-fields", @ptrCast(&z_buf[0]));
-        } else {
-            _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "http-header-fields", "");
-        }
-
-        var url_buf: [2048]u8 = undefined;
-        const url_z = std.fmt.bufPrintZ(&url_buf, "{s}", .{url}) catch return;
-        self.load_file(url_z.ptr);
+        self.load(.{ .url = url, .user_agent = user_agent, .headers = headers });
     }
 
     /// Load a direct network stream (m3u8/mp4) with an HTTP Referer header.

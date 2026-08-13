@@ -59,15 +59,23 @@ COPY . .
 # Headless entry (compile-time). Phase S1: -Dheadless swaps dvui for
 # src/core/dvui_headless.zig and links no SDL2/X11/GL at all. ReleaseSafe keeps
 # runtime safety checks on for the server.
-# Pinned ISA baseline: the image must run on any x86-64 host, not just one
-# matching the machine that built it (see issue #22 / release.yml).
-RUN zig build -Dheadless=true -Doptimize=ReleaseSafe -Dcpu=x86_64_v2
+# Pin a portable ISA baseline derived from the base image architecture, so
+# Buildx and a plain `docker build` get the same result. Passing x86_64_v2
+# unconditionally made the native arm64 job ask Zig for an x86 CPU model and
+# prevented the multi-arch image from shipping.
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in \
+        amd64) cpu=x86_64_v2 ;; \
+        arm64) cpu=baseline ;; \
+        *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac; \
+    zig build -Dheadless=true -Doptimize=ReleaseSafe -Dcpu="$cpu"
 
 # Artifacts to copy out of the builder into the runtime stage:
 #   - the opal binary              (zig-out/bin/opal)
 #   - libtorrent_wrapper.so        (built by build.zig from src/torrent_wrapper.cpp)
 #   - any ort/ shared lib          (PP-OCR ONNX pipeline, if produced as a .so)
-#   - web/index.html               (web UI served by opal itself at :41595/)
+#   - web/                         (modular web UI served by opal at :41595/)
 #   - ONNX / whisper model assets  (model files the runtime loads)
 # Exact output paths depend on build.zig install steps; verify on a real build.
 
@@ -86,17 +94,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         # python3 only needed if the voice/TTS/STT sidecars are wanted:
         python3 \
     # No X11/GL/pulse/asound: Phase S1 removed the SDL2 link entirely, so the
-    # binary has no DT_NEEDED entry for any of them. CI asserts this (the
-    # docker smoke greps `ldd` for SDL|X11) — if it ever fails, the fix is to
+    # binary has no DT_NEEDED entry for any of them. CI asserts this from the
+    # binary's direct ELF dependencies — if it ever fails, the fix is to
     # find what re-introduced the GUI link, not to reinstate these packages.
     && rm -rf /var/lib/apt/lists/*
 
-# Copy build artifacts. The app resolves web/index.html, engines/ and the
+# Copy build artifacts. The app resolves web/, engines/ and the
 # plugin manifest relative to its working directory in dev layout, so keep
 # that layout under /opt/opal and run from there.
 COPY --from=builder /src/zig-out/bin/opal /usr/local/bin/opal
 COPY --from=builder /src/libtorrent_wrapper.so /usr/local/lib/
-COPY --from=builder /src/web/index.html /opt/opal/web/index.html
+COPY --from=builder /src/web /opt/opal/web
 COPY --from=builder /src/data/plugins-manifest.json /opt/opal/plugins-manifest.json
 # browser.zig resolves camoufox_bridge.py from the resource root; without it
 # every scraper-backed source logs "camoufox_bridge.py not found" and is dead.
@@ -113,8 +121,9 @@ ENV XDG_CONFIG_HOME=/config \
     HOME=/config \
     OPAL_HEADLESS=1
 
-# One port: web UI + JSON API, served by opal itself. On first visit the web UI
-# prompts you to create an admin account (username + password) — no pairing code.
+# One port: web UI + JSON API, served by opal itself. First-admin creation also
+# requires the one-time, owner-only /config/opal/setup.token credential. The
+# startup log announces that mounted path but never prints the credential.
 EXPOSE 41595
 
 # Non-root + liveness.

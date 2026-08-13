@@ -11,8 +11,8 @@ from .harness import *  # noqa: F401,F403
 
 @test("Server logs exposed over HTTP", "Web UI")
 def test_logs_route():
-    rm = _src("src/services/remote.zig")
-    ui = _src("web/index.html")
+    rm = _remote_api()
+    ui = _web_app()
     checks = {
         "route + clear": "fn apiLogs(" in rm and '"/logs/clear"' in rm,
         # logCount()/getLog() are UNLOCKED accessors — a worker's pushLog evicts
@@ -62,7 +62,7 @@ def test_headless_pumps_seams():
 def test_service_read_apis():
     cm = _src("src/services/comics.zig")
     nv = _src("src/services/novels.zig")
-    rm = _src("src/services/remote.zig")
+    rm = _remote_api()
     checks = {
         # comics: sr_* stay private (they also own cover pixels + GPU textures).
         "comics search accessors": "pub fn searchRow(" in cm and "pub fn searchCount(" in cm
@@ -85,8 +85,8 @@ def test_service_read_apis():
 
 @test("Self-hosted server verticals (ABS, OPDS, Plex)", "Web UI")
 def test_server_verticals():
-    rm = _src("src/services/remote.zig")
-    ui = _src("web/index.html")
+    rm = _remote_api()
+    ui = _web_app()
     checks = {
         "routes exist": all(f"fn api{n}(" in rm for n in ("Abs", "Opds", "Plex")),
         "abs flow": all(f'"/abs/{s}"' in rm for s in ("login", "logout", "libraries", "open", "back", "play")),
@@ -109,8 +109,8 @@ def test_server_verticals():
 
 @test("Comics reader + Drama/VNDB/Novels tabs", "Web UI")
 def test_reader_tabs():
-    rm = _src("src/services/remote.zig")
-    ui = _src("web/index.html")
+    rm = _remote_api()
+    ui = _web_app()
     checks = {
         # Page <img> must carry the token in the query — it can't set a header.
         "reader uses token-in-query": "/api/comics/page?i=${i}&t=${encodeURIComponent(TOKEN)}" in ui,
@@ -151,18 +151,21 @@ def test_opds_curl_fetch():
         # OPDS catalogs redirect constantly (Komga /opds → /opds/v1.2, http→https).
         "follows redirects": '"-sL"' in op,
         "request is bounded": '"--max-time"' in op,
-        # basicAuthHeader yields a whole header line, which is what curl -H takes.
+        # Keep the Basic credential out of argv: curl reads its authenticated
+        # header through a closed stdin config pipe.
         "basic auth preserved": "pure.basicAuthHeader(user, pass, &auth_buf)" in op
-            and '"-H",         a,' in op,
+            and '"--config",   "-"' in op
+            and "curl_secret.zig" in op
+            and "spawnWithHeaders(&child" in op,
         "atom accept header": "Accept: application/atom+xml" in op,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "opds fetch incomplete: " + ", ".join(missing)
-    return "pass", "OPDS over curl (-sL, bounded, Basic auth) — verified live against Gutenberg"
+    return "pass", "OPDS over curl (-sL, bounded, Basic auth via stdin) — verified live against Gutenberg"
 
 
-@test("Web UI consolidated to one file on one port", "Web UI")
+@test("Web UI consolidated to one origin without a second build", "Web UI")
 def test_web_consolidation():
     import os as _os
     checks = {
@@ -171,7 +174,7 @@ def test_web_consolidation():
         "web build files deleted": not _os.path.exists(_os.path.join(PROJECT_DIR, "web/build.zig")),
         "index.html kept": _os.path.exists(_os.path.join(PROJECT_DIR, "web/index.html")),
         # remote.zig's header used to claim ":9876 + :3000" while listening on 41595.
-        "remote header truthful": ":9876" not in _src("src/services/remote.zig"),
+        "remote header truthful": ":9876" not in _remote_api(),
     }
     # CLAUDE.md is gitignored, so it is absent on CI — a bare open() here raised
     # FileNotFoundError and failed the whole suite on every CI run. Check it only
@@ -182,7 +185,7 @@ def test_web_consolidation():
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "web consolidation incomplete: " + ", ".join(missing)
-    return "pass", "one file (web/index.html), one port (:41595), no :3000 project"
+    return "pass", "modular web assets, one port (:41595), no :3000 project or second build"
 
 
 @test("Container runs as a pinned non-root UID", "Headless")
@@ -218,7 +221,7 @@ def test_calendar_proxy_routing():
         # URL must stay LAST in the argv, after any injected proxy flags.
         "url appended last": ez.count("argv[argc] = url;") == 1 and tv.count("argv[argc] = url;") == 1,
         # Same shape as the module that already did this correctly.
-        "matches link_health pattern": '@import("dpi_bypass.zig").proxyArgs()' in lh,
+        "matches link_health pattern": 'reliable_fetch.request(' in lh,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:

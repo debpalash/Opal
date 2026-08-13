@@ -33,6 +33,7 @@ pub const SPECIALS_SEASON: i32 = 0;
 pub const MAX_SEASONS: usize = 60;
 pub const MAX_WATCHED: usize = 2000;
 pub const MAX_SHOWS: usize = 200;
+pub const MAX_EPISODES_PER_SEASON: i32 = 512;
 
 pub const Season = struct {
     number: i32 = 0,
@@ -53,6 +54,16 @@ pub const Ep = struct {
         return a.episode > b.episode;
     }
 };
+
+/// Whether an episode identity is safe to accept from a user-facing command.
+/// Season zero is TMDB's specials bucket and is deliberately outside normal
+/// watch progress. The upper bounds keep malformed remote requests from
+/// creating unbounded, meaningless rows while leaving ample room for long
+/// daily shows.
+pub fn validUserEpisode(e: Ep) bool {
+    return e.season > SPECIALS_SEASON and e.season <= 999 and
+        e.episode > 0 and e.episode <= MAX_EPISODES_PER_SEASON;
+}
 
 pub const Progress = struct {
     watched: u32 = 0,
@@ -1138,6 +1149,14 @@ test "isWatched: exact episode identity, not a frontier compare" {
 test "isWatched: empty set watches nothing" {
     const none = [_]Ep{};
     try std.testing.expect(!isWatched(&none, .{ .season = 1, .episode = 1 }));
+}
+
+test "user episode commands reject specials and absurd identities" {
+    try std.testing.expect(validUserEpisode(.{ .season = 1, .episode = 1 }));
+    try std.testing.expect(validUserEpisode(.{ .season = 99, .episode = MAX_EPISODES_PER_SEASON }));
+    try std.testing.expect(!validUserEpisode(.{ .season = 0, .episode = 1 }));
+    try std.testing.expect(!validUserEpisode(.{ .season = 1, .episode = 0 }));
+    try std.testing.expect(!validUserEpisode(.{ .season = 1, .episode = MAX_EPISODES_PER_SEASON + 1 }));
 }
 
 test "recentEpisodeLabel: watched and unwatched" {

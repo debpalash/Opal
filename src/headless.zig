@@ -98,6 +98,10 @@ pub fn headlessMain() !void {
         // and the RENDER path commits them. No render path here, so the parse
         // succeeded and result_count stayed 0.
         @import("services/drama.zig").pumpPending();
+        // TMDB browse/search pages stage the same way (main.appFrame swaps
+        // them in on desktop). Without this pump, /api/tmdb and the unified
+        // search's TMDB rows stayed empty forever on a headless box.
+        @import("services/tmdb_api.zig").applyPendingResults();
 
         const now_ms = io.milliTimestamp();
         if (now_ms - last_tick_ms >= tick_interval_ms) {

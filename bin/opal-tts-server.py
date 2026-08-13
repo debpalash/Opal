@@ -4,8 +4,8 @@
 Synthesizes speech to a WAV the Zig side then plays with afplay/aplay.
 Protocol (matches ai_voice.speakViaServer):
 
-    socket: /tmp/opal-tts.sock
-    output: /tmp/opal_ai_tts.wav
+    socket: `--socket <private-runtime-path>`
+    output: `--output <private-runtime-path>`
     client -> server : "<text to speak>"
     server -> client : "OK"                on success (WAV written)
                        "ERROR: <reason>"    on failure
@@ -17,13 +17,45 @@ Backend order:
 Voice/speed come from env (OPAL_TTS_VOICE / OPAL_TTS_SPEED) so the
 Zig settings can influence output without changing the protocol.
 """
+import atexit
 import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 
-SOCK_PATH = "/tmp/opal-tts.sock"
-OUT_WAV = "/tmp/opal_ai_tts.wav"
+_default_runtime = None
+
+
+def _option_path(flag: str, env_name: str, leaf: str) -> str:
+    global _default_runtime
+    try:
+        idx = sys.argv.index(flag)
+        return sys.argv[idx + 1]
+    except (ValueError, IndexError):
+        configured = os.environ.get(env_name)
+        if configured:
+            return configured
+        if _default_runtime is None:
+            _default_runtime = tempfile.mkdtemp(prefix="opal-tts-")
+        return os.path.join(_default_runtime, leaf)
+
+
+SOCK_PATH = _option_path("--socket", "OPAL_TTS_SOCKET", "tts.sock")
+OUT_WAV = _option_path("--output", "OPAL_TTS_OUTPUT", "speech.wav")
+
+
+def _cleanup_runtime():
+    try:
+        os.unlink(SOCK_PATH)
+    except FileNotFoundError:
+        pass
+    if _default_runtime:
+        shutil.rmtree(_default_runtime, ignore_errors=True)
+
+
+atexit.register(_cleanup_runtime)
 
 
 def _eprint(*a):
@@ -48,6 +80,7 @@ def _load_kitten():
     def synth(text: str) -> bool:
         try:
             tts.generate_to_file(text, OUT_WAV, voice=voice, speed=speed)
+            os.chmod(OUT_WAV, 0o600)
             return os.path.exists(OUT_WAV)
         except Exception as e:  # noqa: BLE001
             _eprint(f"kitten synth failed: {e}")
@@ -67,6 +100,7 @@ def _say_synth(text: str) -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        os.chmod(OUT_WAV, 0o600)
         return os.path.exists(OUT_WAV)
     except Exception as e:  # noqa: BLE001
         _eprint(f"say synth failed: {e}")
@@ -92,6 +126,7 @@ def main() -> int:
 
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(SOCK_PATH)
+    os.chmod(SOCK_PATH, 0o600)
     srv.listen(4)
     _eprint(f"opal-tts-server listening on {SOCK_PATH}")
 

@@ -335,7 +335,7 @@ def scrape_endpoint_is_always_reachable():
     whether or not the user opted in, so its surface stays one route, and it
     still requires the same bearer token.
     """
-    rm = _src("src/services/remote.zig")
+    rm = _remote_api()
     mn = _src("src/main.zig")
     hp = _src("engines/helpers.py")
 
@@ -347,7 +347,9 @@ def scrape_endpoint_is_always_reachable():
         "not behind web_remote": "web_remote_enabled) @import(\"services/remote.zig\").startLocal"
                                  not in mn,
         "serves only /api/scrape": 'if (!std.mem.eql(u8, path, "/api/scrape"))' in rm,
-        "still requires the token": "isAuthorized(presented)" in rm.split("fn handleLocalRequest")[1],
+        # Authorization now resolves an explicit Principal rather than folding
+        # session and machine credentials into the old boolean isAuthorized.
+        "still requires authorization": "principalForBearer(presented)" in rm.split("fn handleLocalRequest")[1],
         "does not reuse handleApi": "handleApi(" not in rm.split("fn handleLocalRequest")[1].split("\n}")[0],
         # Client prefers the always-on port, falls back to the opt-in one.
         "client tries loopback port first": "OPAL_SCRAPE_PORT" in hp and
@@ -509,65 +511,94 @@ def walled_engine_parsers_match_real_markup():
                     "(class lists, href-before-class), and both fetch via helpers")
 
 
-@test("nova2 spawn: the torrent search has a deadline of its own", "Torrents")
+@test("universal-search nova2 is generation-cancelled and contained", "Torrents")
 def resolve_torrents_has_a_watchdog():
-    """The search could hang forever waiting on nova2, and did.
+    """A superseded universal search must stop nova2 immediately.
 
-    `resolveTorrentsNova2` drains nova2's stdout to EOF and then `wait()`s, with
-    no deadline anywhere. Before `helpers._FETCH_TIMEOUT` existed, a host that
-    completed the handshake and then went silent held urlopen() open with no
-    bound, so nova2 never exited, the drain loop never returned, and
-    `status_torrent` never left `.searching` — the search simply never finished.
-
-    Two properties matter, and both are structural rather than something a unit
-    test can drive (this is a GUI/thread path — see CLAUDE.md's rule 3):
-
-    1. The deadline must live on a SEPARATE thread. The read loop blocks inside
-       takeDelimiter() waiting for a line that never arrives, so an in-loop
-       elapsed-time check could never fire on the one case it exists for.
-    2. It must signal by pid via terminateProcess (SIGTERM, no reap) rather than
-       child.kill(). nova2 runs a multiprocessing pool; reaping it out from under
-       the reader is what left workers writing into a dead pipe, spewing
-       BrokenPipeError and leaking semaphores. The drain-then-wait() must still be
-       the thing that observes the exit.
+    The shared StreamProcess watchdog observes run_gen independently of the
+    stdout reader, so resolve() advancing the generation wakes a worker blocked
+    in takeDelimiter rather than leaving it alive until the 180-second bound.
+    bounded_process's Zig test drives that cancellation against a blocked child
+    and descendant; this feature test locks down the resolver-specific wiring.
     """
     rv = open(os.path.join(PROJECT_DIR, "src/services/resolver.zig"),
               encoding="utf-8").read()
     block = rv[rv.index("fn resolveTorrentsNova2("):]
     block = block[:block.index("\nfn ", 10)]
+    guard = open(os.path.join(PROJECT_DIR, "src/core/bounded_process.zig"),
+                 encoding="utf-8").read()
 
     checks = {
-        "watchdog exists": "Watchdog" in block,
-        "runs on its own thread": "std.Thread.spawn(.{}, Watchdog.run" in block,
-        # pid by value, not a pointer into the frame (CLAUDE.md thread rules).
-        "signals by pid": "io_glob.terminateProcess(self.pid)" in block,
-        "pid copied by value": "pid: io_glob.Child.Id" in block,
-        # Must NOT reap the child itself — wait() below still owns that.
-        "does not kill/reap": "child.kill()" not in block,
-        # The result is inspected now so a non-zero exit can surface as a
-        # failed source; retaining it is still the same drain-then-wait owner.
-        "still drains then waits": "child.wait()" in block and "const term" in block,
-        # Joined before the frame dies, or `&watchdog` dangles.
-        "joined before return": "t.join();" in block,
-        "has a stop flag": "watchdog.done.store(true, .release)" in block,
-        # Why a thread and not an in-loop check — the trap this replaced.
-        "explains the blocking read": "takeDelimiter" in block and "in-loop" in block,
+        "shared seam imported":
+            'bounded_process = @import("../core/bounded_process.zig")' in rv,
+        "streaming guard starts": "bounded_process.StreamProcess.init" in block
+            and "process.start()" in block,
+        "finite monotonic deadline": ".timeout_ms = 180 * 1000" in block,
+        "hard output budget": ".max_output_bytes = 64 * 1024 * 1024" in block
+            and "process.noteOutput" in block,
+        "worker generation captured": "const owned_generation = worker_gen;" in block,
+        "replacement-run cancellation": ".cancel_epoch" in block
+            and ".value = &run_gen" in block
+            and ".expected = owned_generation" in block,
+        "buffered rows stop after replacement":
+            "run_gen.load(.acquire) != owned_generation" in block
+            and "process.requestStop()" in block,
+        "streamed rows preserved": "process.stdout()" in block
+            and "takeDelimiter('\\n')" in block,
+        "single lifecycle finish": "const run = process.finish();" in block
+            and "run.cancelled" in block,
+        "no duplicate raw process lifecycle": "Child.init" not in block
+            and ".spawn()" not in block and "Watchdog" not in block,
+        "behavioral cancellation regression exists":
+            'test "stream generation cancellation interrupts a blocked reader and tree"' in guard,
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
-        return "fail", "nova2 watchdog incomplete: " + ", ".join(missing)
+        return "fail", "universal nova2 cancellation incomplete: " + ", ".join(missing)
 
-    deadline = _re.search(r"\.deadline_ms = (\d+)\s*\*\s*1000", block)
+    deadline = _re.search(r"\.timeout_ms = (\d+)\s*\*\s*1000", block)
     if not deadline:
-        return "fail", "no deadline_ms literal — cannot tell what the bound is"
+        return "fail", "no timeout_ms literal — cannot tell what the bound is"
     secs = int(deadline.group(1))
     # Must exceed the bounded Python worst case (_FETCH_TIMEOUT * attempts +
     # backoff, ~46s) or it would fire on merely-slow searches, and stay finite.
     if not 60 <= secs <= 600:
         return "fail", (f"deadline is {secs}s — must clear the ~46s bounded Python "
                         "worst case without being effectively infinite")
-    return "pass", (f"nova2 bounded at {secs}s by a separate watchdog thread that "
-                    "SIGTERMs by pid; drain-then-wait still reaps")
+    return "pass", (f"universal nova2 is bounded at {secs}s and run_gen cancels "
+                    "a superseded blocked process tree immediately")
+
+
+@test("torrent-only nova2 uses the contained streaming process seam", "Torrents")
+def torrent_only_nova2_is_contained():
+    """The dedicated torrent tab streams rows too, so it cannot use the
+    fixed-buffer process runner. It must still get the same deadline, output
+    budget, generation cancellation, whole-tree termination, and final reap.
+    """
+    src = open(os.path.join(PROJECT_DIR, "src/services/search.zig"),
+               encoding="utf-8").read()
+    block = src[src.index("pub fn asyncSearchTask("):]
+    block = block[:block.index("\nfn freeSearchResult", 10)]
+    checks = {
+        "shared seam imported": 'bounded_process = @import("../core/bounded_process.zig")' in src,
+        "streaming guard starts": "bounded_process.StreamProcess.init" in block
+            and "process.start()" in block,
+        "finite monotonic deadline": ".timeout_ms = 180 * 1000" in block,
+        "hard output budget": ".max_output_bytes = 64 * 1024 * 1024" in block
+            and "process.noteOutput" in block,
+        "generation cancellation": ".cancel_epoch" in block
+            and "&search_generation" in block,
+        "explicit shutdown cancellation": ".cancel_flag = &search_abort" in block,
+        "streamed rows preserved": "process.stdout()" in block
+            and "takeDelimiter('\\n')" in block,
+        "single lifecycle finish": "const run = process.finish();" in block,
+        "no raw child spawn": "Child.init" not in block and ".spawn()" not in block,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "torrent-only containment incomplete: " + ", ".join(missing)
+    return "pass", ("torrent-only nova2 streams through one bounded guard: "
+                    "180s deadline, 64MiB cap, generation/abort cancellation, tree reap")
 
 
 @test("nova2 app mode avoids nested multiprocessing", "Torrents")

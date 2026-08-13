@@ -32,6 +32,8 @@ const portEl = $<HTMLInputElement>("port");
 const tokenEl = $<HTMLInputElement>("token");
 const usernameEl = $<HTMLInputElement>("username");
 const passwordEl = $<HTMLInputElement>("password");
+const setupCodeEl = $<HTMLInputElement>("setup-code");
+const setupCodeField = $<HTMLElement>("setup-code-field");
 const defaultActionEl = $<HTMLSelectElement>("default-action");
 const discoverBtn = $<HTMLButtonElement>("discover");
 const discoverStatus = $<HTMLElement>("discover-status");
@@ -120,13 +122,15 @@ async function refreshAuthMode(): Promise<void> {
   if (needsAccount) {
     authTitle.textContent = "Create your account";
     authHelp.textContent =
-      "This Opal has no account yet. The first one you create is the admin.";
+      "This Opal has no account yet. Enter its one-time setup code to create the admin account.";
     passwordEl.autocomplete = "new-password";
+    setupCodeField.hidden = false;
     signinBtn.textContent = "Create account & connect";
   } else {
     authTitle.textContent = "Sign in";
     authHelp.textContent = "Use the account you created in Opal.";
     passwordEl.autocomplete = "current-password";
+    setupCodeField.hidden = true;
     signinBtn.textContent = "Connect";
   }
 }
@@ -155,6 +159,11 @@ async function connect(): Promise<void> {
     show(setupResult, "err", "Enter a username and password.");
     return;
   }
+  const setupToken = setupCodeEl.value.trim();
+  if (needsAccount && !/^[0-9a-f]{64}$/.test(setupToken)) {
+    show(setupResult, "err", "Enter the 64-character lowercase setup code from Opal.");
+    return;
+  }
   if (!(await ensureHostPermission(t.host))) {
     show(setupResult, "err", `The browser did not grant access to ${t.host}.`);
     return;
@@ -167,6 +176,7 @@ async function connect(): Promise<void> {
     port: t.port,
     username,
     password,
+    setupToken,
   });
   signinBtn.disabled = false;
 
@@ -178,6 +188,7 @@ async function connect(): Promise<void> {
   }
   await saveSettings({ ...(await currentSettings()), token });
   passwordEl.value = "";
+  setupCodeEl.value = "";
   show(setupResult, "ok", "Connected ✓");
   await probe();
 }
@@ -249,6 +260,9 @@ discoverBtn.addEventListener("click", discover);
 signinBtn.addEventListener("click", connect);
 saveTokenBtn.addEventListener("click", saveToken);
 passwordEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") needsAccount ? setupCodeEl.focus() : connect();
+});
+setupCodeEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter") connect();
 });
 

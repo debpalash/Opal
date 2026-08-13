@@ -139,7 +139,7 @@ def test_headless_mode():
     hl = _src("src/headless.zig")
     det = _src("src/core/headless_detect.zig")
     st = _src("src/core/state.zig")
-    rem = _src("src/services/remote.zig")
+    rem = _remote_api()
     bld = _src("build.zig")
     checks = [
         '@import("build_options").headless' in main,  # compile-time entry select
@@ -448,7 +448,7 @@ def test_linux_installer_rootless_default():
 
     sh = _src("scripts/install.sh")
     release = _src(".github/workflows/release.yml")
-    aur_bin = _src("packaging/aur/opal-bin/PKGBUILD")
+    aur_bin = _src("packaging/aur/opal-media-player-bin/PKGBUILD")
     checks = {
         "rootless installer exists": "install_linux_local()" in sh,
         "default selects rootless installer": "0) install_linux_local" in sh,

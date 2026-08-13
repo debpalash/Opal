@@ -37,7 +37,36 @@ pub fn refererHeader(plugin_referer: []const u8, image_url: []const u8, buf: []u
 
 // ── Sandbox invocation decision ──────────────────────────────────────────────
 
-pub const RunMode = enum { sandbox_lua, direct };
+pub const RunMode = enum { sandbox_lua, direct, deny };
+
+pub const ResponseKind = enum { results, resolve };
+
+/// Parse and validate the top-level plugin protocol envelope before the
+/// compatibility parser in plugins.zig inspects individual fields. This keeps
+/// arbitrary text containing a stray `{` from being accepted as a result and
+/// rejects arrays containing non-object values.
+pub fn validResponse(allocator: std.mem.Allocator, input: []const u8, kind: ResponseKind) bool {
+    const trimmed = std.mem.trim(u8, input, " \t\r\n");
+    if (trimmed.len == 0) return false;
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{}) catch return false;
+    defer parsed.deinit();
+    return switch (kind) {
+        .results => switch (parsed.value) {
+            .array => |items| blk: {
+                for (items.items) |item| switch (item) {
+                    .object => {},
+                    else => break :blk false,
+                };
+                break :blk true;
+            },
+            else => false,
+        },
+        .resolve => switch (parsed.value) {
+            .object => true,
+            else => false,
+        },
+    };
+}
 
 /// Decide how to invoke a content-plugin executable.
 ///
@@ -48,18 +77,13 @@ pub const RunMode = enum { sandbox_lua, direct };
 /// malicious plugin could self-declare its way out. Trust now requires a user
 /// action the plugin can't forge.
 ///
-/// Non-Lua/native executables can't be prelude-sandboxed, so they always run
-/// direct — callers must warn (see `untrustedNative`) when the user hasn't
-/// trusted them, since they run with the app's full privileges.
+/// Non-Lua/native executables cannot be prelude-sandboxed, so they fail closed
+/// until the user approves the exact plugin content through the app-owned trust
+/// store. A manifest flag is never an execution capability.
 pub fn runMode(is_lua: bool, manifest_allow_unsafe: bool, user_trusted: bool) RunMode {
     if (is_lua and !(manifest_allow_unsafe and user_trusted)) return .sandbox_lua;
+    if (!is_lua and !user_trusted) return .deny;
     return .direct;
-}
-
-/// True when a native/non-Lua plugin is about to run with no sandbox and no user
-/// trust marker — the caller should surface a prominent warning.
-pub fn untrustedNative(is_lua: bool, user_trusted: bool) bool {
-    return !is_lua and !user_trusted;
 }
 
 test "runMode sandboxes Lua unless user-trusted + manifest allow_unsafe" {
@@ -71,14 +95,22 @@ test "runMode sandboxes Lua unless user-trusted + manifest allow_unsafe" {
     try std.testing.expectEqual(RunMode.sandbox_lua, runMode(true, false, true));
     // Both → direct (the only escape).
     try std.testing.expectEqual(RunMode.direct, runMode(true, true, true));
-    // Native always runs direct (can't be prelude-sandboxed).
-    try std.testing.expectEqual(RunMode.direct, runMode(false, false, false));
+    // Native fails closed until the exact plugin content is approved.
+    try std.testing.expectEqual(RunMode.deny, runMode(false, false, false));
+    try std.testing.expectEqual(RunMode.direct, runMode(false, false, true));
 }
 
-test "untrustedNative flags only unsandboxed, untrusted native code" {
-    try std.testing.expect(untrustedNative(false, false)); // native, untrusted → warn
-    try std.testing.expect(!untrustedNative(false, true)); // native, trusted → ok
-    try std.testing.expect(!untrustedNative(true, false)); // lua is sandboxed, not "native"
+test "plugin response envelopes reject malformed JSON and wrong roots" {
+    const allocator = std.testing.allocator;
+    try std.testing.expect(validResponse(allocator, "[]", .results));
+    try std.testing.expect(validResponse(allocator, " [{\"id\":\"a\"}] \n", .results));
+    try std.testing.expect(!validResponse(allocator, "prefix {\"id\":\"a\"}", .results));
+    try std.testing.expect(!validResponse(allocator, "[1,2,3]", .results));
+    try std.testing.expect(!validResponse(allocator, "{}", .results));
+
+    try std.testing.expect(validResponse(allocator, "{\"url\":\"https://example.test/v\"}", .resolve));
+    try std.testing.expect(!validResponse(allocator, "[{\"url\":\"x\"}]", .resolve));
+    try std.testing.expect(!validResponse(allocator, "{\"url\":", .resolve));
 }
 
 test "originOf extracts scheme+host, rejects non-http / empty host" {

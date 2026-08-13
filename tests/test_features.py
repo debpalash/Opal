@@ -66,6 +66,7 @@ from features import (  # noqa: F401
     test_universal_search,
     test_youtube_innertube,
     test_library,
+    test_web_shell,
     test_web_ui,
     test_headless_auth,
     test_remote_stubs,

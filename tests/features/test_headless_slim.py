@@ -101,6 +101,7 @@ def test_docker_slim_runtime():
         return open(fp).read() if _os.path.exists(fp) else ""
     df = rd("Dockerfile")
     wf = rd(".github/workflows/docker.yml")
+    smoke = rd("scripts/docker-smoke.sh")
     gui_pkgs = ["libx11-6", "libxext6", "libxrandr2", "libxcursor1", "libpulse0", "libasound2", "libgl1"]
     still_there = [p for p in gui_pkgs if p in df]
     checks = {
@@ -114,10 +115,10 @@ def test_docker_slim_runtime():
         # could never pass once the image actually built (verified against a
         # real aarch64 image: 8 GUI libs via libmpv, 0 in the binary's own
         # DT_NEEDED). The gate now reads DT_NEEDED via scripts/elf-needed.py.
-        "S1 gate checks DT_NEEDED": "elf-needed.py" in wf,
-        "S1 gate not ldd-based": "ldd /usr/local/bin/opal" not in wf
-            and "sdl|libx11|libxext|libgl|libpulse|libasound" in wf
-            and "exit 1" in wf,
+        "S1 gate checks DT_NEEDED": "scripts/docker-smoke.sh" in wf and "elf-needed.py" in smoke,
+        "S1 gate not ldd-based": "ldd /usr/local/bin/opal" not in smoke
+            and "sdl|libx11|libxext|libgl|libpulse|libasound" in smoke
+            and "exit 1" in smoke,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
@@ -133,6 +134,7 @@ def test_docker_multiarch():
     import os as _os
     fp = _os.path.join(PROJECT_DIR, ".github/workflows/docker.yml")
     wf = open(fp).read() if _os.path.exists(fp) else ""
+    smoke = open(_os.path.join(PROJECT_DIR, "scripts/docker-smoke.sh")).read()
     checks = {
         # NATIVE arm, not QEMU: this image compiles the whole Zig app plus
         # libtorrent from source, which is where emulated multi-arch builds
@@ -140,8 +142,9 @@ def test_docker_multiarch():
         "native arm runner": "ubuntu-24.04-arm" in wf and "linux/arm64" in wf,
         "no qemu": "setup-qemu-action" not in wf,
         # Each arch smokes its OWN image before anything is published.
-        "per-arch smoke": "SMOKE OK (${{ matrix.arch }})" in wf
-            and "docker exec opal uname -m" in wf,
+        "per-arch smoke": "scripts/docker-smoke.sh" in wf
+            and "SMOKE OK ($expected_arch)" in smoke
+            and 'docker exec "$container" uname -m' in smoke,
         # Two jobs pushing the same tag would race and overwrite rather than
         # join, so both push by digest and one merge job does the tagging.
         "push by digest": "push-by-digest=true" in wf and "digest-${{ matrix.arch }}" in wf,
@@ -154,3 +157,24 @@ def test_docker_multiarch():
     if missing:
         return "fail", "multi-arch build incomplete: " + ", ".join(missing)
     return "pass", "amd64 + arm64 on native runners, smoked per-arch, merged to one manifest"
+
+
+@test("Docker manual repair publishes an explicit release tag", "Headless")
+def test_docker_manual_version():
+    """A failed release image must be repairable from fixed main without
+    moving/recreating the immutable Git tag. Manual dispatch therefore accepts
+    a validated semver and feeds both vX.Y.Z and X.Y.Z metadata tags."""
+    import os as _os
+    wf = open(_os.path.join(PROJECT_DIR, ".github/workflows/docker.yml")).read()
+    checks = {
+        "version input": "version:" in wf and "Optional release tag to publish" in wf,
+        "semver validated": "Validate manual release tag" in wf
+            and "version must be a semver tag" in wf,
+        "raw version tag": "type=raw,value=${{ inputs.version }}" in wf,
+        "normalized semver tag": "type=semver,pattern={{version}},value=${{ inputs.version }}" in wf,
+        "only manual nonempty": "github.event_name == 'workflow_dispatch' && inputs.version != ''" in wf,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "manual Docker release repair incomplete: " + ", ".join(missing)
+    return "pass", "fixed main can republish vX.Y.Z + X.Y.Z without moving the release tag"

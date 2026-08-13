@@ -368,6 +368,121 @@ pub fn snapshotCopy(out: []tp.Row) usize {
     return n;
 }
 
+// ══════════════════════════════════════════════════════════
+// Commands — shared by native and web library surfaces
+// ══════════════════════════════════════════════════════════
+
+pub const ItemRef = struct {
+    kind: tp.Kind,
+    id: []const u8,
+};
+
+pub const Action = enum { status, watched, remove, refresh };
+
+/// A small typed seam over the source-specific persistence below. HTTP callers
+/// never choose a table or issue SQL, and future clients can reuse the same
+/// validation and semantics.
+pub const Command = union(Action) {
+    status: struct { item: ItemRef, value: tp.UserStatus },
+    watched: struct { item: ItemRef, episode: tp.Ep, value: bool },
+    remove: ItemRef,
+    refresh,
+};
+
+pub const CommandError = error{ ItemNotFound, InvalidEpisode, Unsupported };
+pub const MAX_EPISODES_PER_SEASON: usize = @intCast(tp.MAX_EPISODES_PER_SEASON);
+
+fn itemExistsLocked(item: ItemRef) bool {
+    if (item.id.len == 0 or item.id.len > (tp.Row{}).id.len) return false;
+    buildSnapshotLocked();
+    for (rows[0..row_count]) |*r| {
+        if (r.kind == item.kind and std.mem.eql(u8, r.idSlice(), item.id)) return true;
+    }
+    return false;
+}
+
+fn tvId(item: ItemRef) CommandError!i32 {
+    const id = std.fmt.parseInt(i32, item.id, 10) catch return error.ItemNotFound;
+    if (id <= 0) return error.ItemNotFound;
+    return id;
+}
+
+/// Apply one authenticated library mutation. Episode watched state is allowed
+/// for an untracked TV show because the native detail view permits the same
+/// action; status/removal require a current library row so stale browser cards
+/// cannot mutate an item that has since disappeared.
+pub fn apply(command: Command) CommandError!void {
+    switch (command) {
+        .watched => |cmd| {
+            if (cmd.item.id.len == 0 or cmd.item.id.len > (tp.Row{}).id.len)
+                return error.ItemNotFound;
+            if (!tp.validUserEpisode(cmd.episode)) return error.InvalidEpisode;
+            switch (cmd.item.kind) {
+                .tv => db.tvMarkWatched(
+                    try tvId(cmd.item),
+                    @intCast(cmd.episode.season),
+                    @intCast(cmd.episode.episode),
+                    cmd.value,
+                ),
+                .anime => {
+                    if (cmd.episode.season != 1) return error.InvalidEpisode;
+                    db.animeMarkWatched(cmd.item.id, @intCast(cmd.episode.episode), cmd.value);
+                },
+                .movie => return error.Unsupported,
+            }
+            markDirty();
+        },
+        .status => |cmd| {
+            snapshot_mutex.lock();
+            defer snapshot_mutex.unlock();
+            if (!itemExistsLocked(cmd.item)) return error.ItemNotFound;
+            db.librarySetStatus(@tagName(cmd.item.kind), cmd.item.id, tp.userStatusToStr(cmd.value));
+            markDirty();
+        },
+        .remove => |item| {
+            snapshot_mutex.lock();
+            defer snapshot_mutex.unlock();
+            if (!itemExistsLocked(item)) return error.ItemNotFound;
+            switch (item.kind) {
+                .tv => db.tvSetTracked(try tvId(item), false),
+                .anime => db.animeRemoveContinue(item.id),
+                // watch_history's cache is UI-thread-owned. Mutating it from an
+                // HTTP worker would race the native grid, so movie history stays
+                // unavailable here until that store owns a synchronized command.
+                .movie => return error.Unsupported,
+            }
+            markDirty();
+        },
+        .refresh => resync(),
+    }
+}
+
+/// Copy watched episode numbers for one season. The fixed bound matches the
+/// command validator and the app's anime tracking capacity.
+pub fn watchedEpisodes(kind: tp.Kind, id: []const u8, season: i32, out: []u32) CommandError!usize {
+    if (id.len == 0 or id.len > (tp.Row{}).id.len) return error.ItemNotFound;
+    if (!tp.validUserEpisode(.{ .season = season, .episode = 1 })) return error.InvalidEpisode;
+    if (kind == .movie) return error.Unsupported;
+
+    var flags: [MAX_EPISODES_PER_SEASON]bool = std.mem.zeroes([MAX_EPISODES_PER_SEASON]bool);
+    switch (kind) {
+        .tv => db.tvLoadWatched(try tvId(.{ .kind = kind, .id = id }), @intCast(season), &flags),
+        .anime => {
+            if (season != 1) return error.InvalidEpisode;
+            db.animeLoadWatched(id, &flags);
+        },
+        .movie => unreachable,
+    }
+
+    var n: usize = 0;
+    for (flags, 0..) |is_watched, i| {
+        if (!is_watched or n >= out.len) continue;
+        out[n] = @intCast(i + 1);
+        n += 1;
+    }
+    return n;
+}
+
 fn nextRow() ?*tp.Row {
     if (row_count >= rows.len) return null;
     const r = &rows[row_count];

@@ -17,7 +17,12 @@
 name: Docker (GHCR)
 
 on:
-  workflow_dispatch: {}          # manual "build a release image now"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional release tag to publish (for example v0.6.5)"
+        required: false
+        type: string
   release:
     types: [published]           # every published GitHub release
   push:
@@ -44,6 +49,16 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     steps:
+      - name: Validate manual release tag
+        if: github.event_name == 'workflow_dispatch' && inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || {
+            echo "version must be a semver tag such as v0.6.5" >&2
+            exit 2
+          }
+
       - uses: actions/checkout@v4
 
       - name: Log in to GHCR
@@ -72,54 +87,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
       - name: Smoke test the container (/health, account auth, web UI)
-        run: |
-          set -euo pipefail
-          docker run -d --name opal -p 41595:41595 opal:ci
-          echo "── Phase S1 acceptance: the server binary links NO GUI stack ──"
-          # Check the binary's OWN DT_NEEDED entries, NOT `ldd`. ldd resolves the
-          # whole transitive closure, and libmpv legitimately pulls in SDL2, X11,
-          # GL and friends — so an `ldd | grep -q sdl` gate can never come back
-          # clean, and it failed the moment the image actually built. See
-          # scripts/elf-needed.py, which exits non-zero if it cannot read the
-          # table so a broken probe fails loudly instead of passing vacuously.
-          docker cp opal:/usr/local/bin/opal /tmp/opal-bin
-          needed=$(python3 scripts/elf-needed.py /tmp/opal-bin)
-          echo "$needed"
-          if printf '%s\n' "$needed" | grep -Eiq 'sdl|libx11|libxext|libgl|libpulse|libasound'; then
-            echo "FAIL: GUI libraries crept back into the headless binary."
-            echo "Fix what re-introduced the dvui/SDL link — do NOT reinstate the runtime packages."
-            exit 1
-          fi
-          echo "no SDL/X11/GL/pulse/asound in DT_NEEDED — slim build intact"
-          echo "── the image really is ${{ matrix.arch }} ──"
-          got=$(docker exec opal uname -m)
-          case "${{ matrix.arch }}:$got" in
-            amd64:x86_64|arm64:aarch64) echo "arch OK ($got)" ;;
-            *) echo "FAIL: expected ${{ matrix.arch }}, container reports $got"; exit 1 ;;
-          esac
-          echo "── wait for /health ──"
-          ok=""
-          for i in $(seq 1 30); do
-            if curl -fsS -o /dev/null http://localhost:41595/health; then ok=1; break; fi
-            sleep 2
-          done
-          if [ -z "$ok" ]; then echo "FAIL: /health never came up"; docker logs opal; exit 1; fi
-          echo "health OK"
-          echo "── account: first-run register → session token ──"
-          curl -fsS http://localhost:41595/api/auth/status | grep -q '"needs_setup":true' || { echo "FAIL: expected first-run"; exit 1; }
-          TOKEN=$(curl -fsS -X POST --data 'username=ci-admin&password=ci-smoke-pass' http://localhost:41595/api/auth/register | sed 's/.*"token":"//;s/".*//')
-          [ "${#TOKEN}" -ge 32 ] || { echo "FAIL: register (token='$TOKEN')"; docker logs opal; exit 1; }
-          echo "── session token authorizes an API route ──"
-          curl -fsS -H "Authorization: Bearer $TOKEN" -o /dev/null http://localhost:41595/api/status || { echo "FAIL: session auth"; exit 1; }
-          code=$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:41595/api/status)
-          [ "$code" = 401 ] || { echo "FAIL: expected 401 without token, got $code"; exit 1; }
-          echo "── logs route (the headless operator's window into the app) ──"
-          curl -fsS -H "Authorization: Bearer $TOKEN" http://localhost:41595/api/logs?limit=5 | grep -q '"entries"' || { echo "FAIL: /api/logs"; exit 1; }
-          echo "── web UI ──"
-          curl -fsS http://localhost:41595/ | grep -qiE 'opal|<!doctype' || { echo "FAIL: web UI"; exit 1; }
-          echo "SMOKE OK (${{ matrix.arch }})"
-          docker logs opal | tail -20
-          docker rm -f opal
+        run: ./scripts/docker-smoke.sh opal:ci "${{ matrix.arch }}"
 
       # Push WITHOUT a tag and record the digest. Tagging happens once, in the
       # merge job — two jobs pushing the same tag would race and the second
@@ -185,6 +153,8 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=tag
             type=semver,pattern={{version}}
+            type=raw,value=${{ inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.version != '' }}
+            type=semver,pattern={{version}},value=${{ inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.version != '' }}
             type=sha,format=short
 
       - name: Create the manifest list

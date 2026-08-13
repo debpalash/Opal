@@ -10,6 +10,64 @@ const is_windows = builtin.os.tag == .windows;
 const win = if (is_windows) struct {
     extern "kernel32" fn Sleep(dwMilliseconds: u32) callconv(.winapi) void;
     extern "kernel32" fn TerminateProcess(hProcess: ?*anyopaque, uExitCode: c_uint) callconv(.winapi) c_int;
+    extern "kernel32" fn CreateJobObjectW(lpJobAttributes: ?*anyopaque, lpName: ?[*:0]const u16) callconv(.winapi) ?*anyopaque;
+    extern "kernel32" fn SetInformationJobObject(
+        hJob: ?*anyopaque,
+        jobObjectInformationClass: c_int,
+        lpJobObjectInformation: *const anyopaque,
+        cbJobObjectInformationLength: u32,
+    ) callconv(.winapi) c_int;
+    extern "kernel32" fn AssignProcessToJobObject(hJob: ?*anyopaque, hProcess: ?*anyopaque) callconv(.winapi) c_int;
+    extern "kernel32" fn TerminateJobObject(hJob: ?*anyopaque, uExitCode: c_uint) callconv(.winapi) c_int;
+    extern "kernel32" fn ResumeThread(hThread: ?*anyopaque) callconv(.winapi) u32;
+    extern "kernel32" fn CloseHandle(hObject: ?*anyopaque) callconv(.winapi) c_int;
+
+    const job_object_extended_limit_information: c_int = 9;
+    const job_object_limit_kill_on_job_close: u32 = 0x00002000;
+
+    const IoCounters = extern struct {
+        read_operation_count: u64,
+        write_operation_count: u64,
+        other_operation_count: u64,
+        read_transfer_count: u64,
+        write_transfer_count: u64,
+        other_transfer_count: u64,
+    };
+
+    const BasicLimitInformation = extern struct {
+        per_process_user_time_limit: i64,
+        per_job_user_time_limit: i64,
+        limit_flags: u32,
+        minimum_working_set_size: usize,
+        maximum_working_set_size: usize,
+        active_process_limit: u32,
+        affinity: usize,
+        priority_class: u32,
+        scheduling_class: u32,
+    };
+
+    const ExtendedLimitInformation = extern struct {
+        basic_limit_information: BasicLimitInformation,
+        io_info: IoCounters,
+        process_memory_limit: usize,
+        job_memory_limit: usize,
+        peak_process_memory_used: usize,
+        peak_job_memory_used: usize,
+    };
+
+    fn createKillOnCloseJob() !*anyopaque {
+        const job = CreateJobObjectW(null, null) orelse return error.ProcessContainmentUnavailable;
+        errdefer _ = CloseHandle(job);
+        var limits = std.mem.zeroes(ExtendedLimitInformation);
+        limits.basic_limit_information.limit_flags = job_object_limit_kill_on_job_close;
+        if (SetInformationJobObject(
+            job,
+            job_object_extended_limit_information,
+            &limits,
+            @sizeOf(ExtendedLimitInformation),
+        ) == 0) return error.ProcessContainmentUnavailable;
+        return job;
+    }
 } else struct {};
 
 /// Global io instance for zig 0.16 migration. Lazy-initialized on first call.
@@ -55,7 +113,6 @@ pub fn io() std.Io {
     }
     return threaded.io();
 }
-
 
 /// Replacement for removed std.posix.getenv.
 pub fn getenv(name: [*:0]const u8) ?[]const u8 {
@@ -273,6 +330,12 @@ pub fn milliTimestamp() i64 {
     var tv: std.c.timeval = undefined;
     _ = std.c.gettimeofday(&tv, null);
     return @as(i64, @intCast(tv.sec)) * 1000 + @divTrunc(@as(i64, @intCast(tv.usec)), 1000);
+}
+
+/// Milliseconds from a monotonic clock. Use for security/resource deadlines:
+/// unlike wall time, this cannot jump backwards after an NTP or clock change.
+pub fn monotonicMilliTimestamp() i64 {
+    return std.Io.Clock.awake.now(io()).toMilliseconds();
 }
 
 /// Replacement for removed std.Thread.sleep (ns to nanosleep; kernel32
@@ -499,6 +562,11 @@ pub const Child = struct {
     stderr_behavior: StdIo = .Inherit,
     cwd: ?[]const u8 = null,
     env_map: ?*std.process.Environ.Map = null,
+    /// Put this child and every descendant it creates in an independently
+    /// killable OS process tree. POSIX uses a new process group; Windows uses
+    /// a kill-on-close Job Object and starts the child suspended until it has
+    /// been assigned. Failure to establish containment fails the spawn.
+    new_process_group: bool = false,
 
     // Post-spawn fields:
     real: ?std.process.Child = null,
@@ -507,6 +575,7 @@ pub const Child = struct {
     stderr: ?std.Io.File = null,
     /// POSIX: pid. Windows: process HANDLE. null until spawned.
     id: ?Id = null,
+    job_handle: ?*anyopaque = null,
 
     pub const Id = std.process.Child.Id;
     pub const StdIo = enum { Inherit, Ignore, Pipe, Close };
@@ -531,7 +600,15 @@ pub const Child = struct {
             .{ .path = c }
         else
             .inherit;
-        const real = try std.process.spawn(i, .{
+        const job_handle = if (is_windows and self.new_process_group)
+            try win.createKillOnCloseJob()
+        else
+            null;
+        errdefer if (is_windows) {
+            if (job_handle) |job| _ = win.CloseHandle(job);
+        };
+
+        var real = try std.process.spawn(i, .{
             .argv = self.argv,
             .stdin = mapBehavior(self.stdin_behavior),
             .stdout = mapBehavior(self.stdout_behavior),
@@ -541,16 +618,48 @@ pub const Child = struct {
             // etc.) to inherit, so without this each spawn would flash its own
             // console window. CREATE_NO_WINDOW suppresses that. No-op elsewhere.
             .create_no_window = is_windows,
+            // On POSIX, pgid=0 means setpgid(0, 0): the child becomes leader
+            // of a fresh process group before exec. On Windows, suspend until
+            // the fresh process is safely inside its Job Object.
+            .pgid = if (!is_windows and self.new_process_group) 0 else null,
+            .start_suspended = is_windows and self.new_process_group,
             // The process environment comes from `Threaded.environ` (set in
             // io()), which is what processSpawn actually uses; only override it
             // here when a caller supplied an explicit map.
             .environ_map = self.env_map,
         });
+        errdefer real.kill(i);
+
+        if (is_windows and self.new_process_group) {
+            const job = job_handle orelse return error.ProcessContainmentUnavailable;
+            if (win.AssignProcessToJobObject(job, real.id) == 0)
+                return error.ProcessContainmentUnavailable;
+            if (win.ResumeThread(real.thread_handle) == std.math.maxInt(u32))
+                return error.ProcessContainmentUnavailable;
+        }
         self.stdin = real.stdin;
         self.stdout = real.stdout;
         self.stderr = real.stderr;
         self.id = real.id;
+        self.job_handle = job_handle;
         self.real = real;
+    }
+
+    pub fn processTree(self: *const Child) ?ProcessTree {
+        if (!self.new_process_group) return null;
+        const child_id = self.id orelse return null;
+        if (is_windows and self.job_handle == null) return null;
+        return .{ .id = child_id, .job_handle = self.job_handle };
+    }
+
+    /// Release the OS process-tree handle after every waiter/watchdog has
+    /// stopped using its snapshot. Closing a Windows Job Object is also a
+    /// final kill fence because it carries KILL_ON_JOB_CLOSE.
+    pub fn closeProcessTree(self: *Child) void {
+        if (is_windows) {
+            if (self.job_handle) |job| _ = win.CloseHandle(job);
+        }
+        self.job_handle = null;
     }
 
     pub fn wait(self: *Child) !Term {
@@ -609,11 +718,57 @@ pub const Child = struct {
         }
     }
 
+    /// Close the write end of a piped stdin exactly once.  Curl config-on-stdin
+    /// callers need EOF before curl starts the request; clearing both copies
+    /// mirrors closeStdout and prevents std.process cleanup from double-closing
+    /// a descriptor that may already have been reused.
+    pub fn closeStdin(self: *Child) void {
+        var closed = false;
+        if (self.stdin) |*si| {
+            si.close(io());
+            self.stdin = null;
+            closed = true;
+        }
+        if (self.real) |*r| {
+            if (r.stdin) |*ri| {
+                if (!closed) ri.close(io());
+                r.stdin = null;
+            }
+        }
+    }
+
     pub fn spawnAndWait(self: *Child) !Term {
         try self.spawn();
         return self.wait();
     }
 };
+
+/// Stable snapshot used by a watchdog while the owning thread drains stdout.
+/// The owner must keep the Child's Job Object open until the watchdog joins.
+pub const ProcessTree = struct {
+    id: Child.Id,
+    job_handle: ?*anyopaque,
+};
+
+/// Gracefully stop a contained child tree without reaping its leader. Windows
+/// has no reliable cross-process graceful signal, so TerminateJobObject is the
+/// safest equivalent and terminates every process assigned to the job.
+pub fn terminateProcessTree(tree: ProcessTree) void {
+    if (is_windows) {
+        if (tree.job_handle) |job| _ = win.TerminateJobObject(job, 1);
+    } else {
+        std.posix.kill(-tree.id, std.posix.SIG.TERM) catch {};
+    }
+}
+
+/// Forcefully stop every process in a contained child tree.
+pub fn killProcessTree(tree: ProcessTree) void {
+    if (is_windows) {
+        if (tree.job_handle) |job| _ = win.TerminateJobObject(job, 1);
+    } else {
+        std.posix.kill(-tree.id, std.posix.SIG.KILL) catch {};
+    }
+}
 
 /// Ask a running child (identified by its snapshotted `Child.Id`) to stop,
 /// WITHOUT reaping it — the owning worker's wait() still observes the exit.

@@ -5,13 +5,12 @@
 //!     backend per platform (SDL_GetDisplayContentScale on macOS / modern SDL,
 //!     `Xft.dpi`/`xrdb` on Linux, SDL_GetDisplayDPI on Windows). This already
 //!     makes physical size consistent across displays.
-//!   • ui_scale — the user-density multiplier this module picks a DEFAULT for.
+//!   • ui_scale — the user-density multiplier. Its adaptive default is 1.0×.
 //!
-//! `deviceScale` chooses that default from the display's natural scale so a
-//! fresh install is compact on every device without manual tweaking: high-DPI
-//! panels render text crisply even when logically smaller, so they get a denser
-//! default; standard-DPI displays (1 logical px = 1 physical px) stay at 1.0 so
-//! text never drops below readable.
+//! The OS/DVUI natural scale already handles display DPI. Keeping the default
+//! multiplier at 1.0 avoids a second DPI correction while the responsive shell
+//! independently adapts navigation, grids, and controls to the available
+//! on-screen points. Explicit density overrides remain available to users.
 
 const std = @import("std");
 
@@ -19,22 +18,37 @@ const std = @import("std");
 /// corrupt config row or an odd display report can't produce an unusable UI.
 pub const MIN_SCALE: f32 = 0.6;
 pub const MAX_SCALE: f32 = 2.0;
+pub const AUTO_MIN_SCALE: f32 = 1.0;
 
 pub fn clampScale(s: f32) f32 {
     if (!std.math.isFinite(s)) return 1.0;
     return std.math.clamp(s, MIN_SCALE, MAX_SCALE);
 }
 
-/// Device-aware default ui_scale for a display whose DPI content scale is
-/// `natural_scale`. Denser on high-DPI, readable-safe on standard-DPI.
+/// Adaptive default UI multiplier. `natural_scale` is intentionally ignored:
+/// DVUI already applies it, and responsive layout is driven by screen points.
 pub fn deviceScale(natural_scale: f32) f32 {
-    // Tiers are ~20% below a 1× baseline — the user runs Opal deliberately
-    // compact (see the compact type ramp); the chrome should stay quiet.
-    if (!std.math.isFinite(natural_scale) or natural_scale <= 0) return 0.8;
-    if (natural_scale >= 1.9) return 0.68; // Retina / 200% (macOS, hi-res Win/Linux)
-    if (natural_scale >= 1.4) return 0.72; // ~150% displays
-    if (natural_scale >= 1.15) return 0.76; // ~125% displays
-    return 0.8; // standard DPI — floor for readability at 1 logical px = 1 physical
+    _ = natural_scale;
+    return AUTO_MIN_SCALE;
+}
+
+/// Resolve persisted scale preferences before publishing config as loaded.
+/// Older Auto installs may have saved the previous adaptive value (0.68-0.8x),
+/// while manual sub-1x choices must remain untouched. Keeping this policy pure
+/// makes the distinction explicit and prevents a below-1x Auto value from being
+/// observable between config load and the first GUI frame (or forever in a
+/// headless process).
+pub fn restoredScale(auto: bool, stored: f32) f32 {
+    if (auto) return deviceScale(1.0);
+    return clampScale(stored);
+}
+
+/// Apply an Auto toggle from a non-render thread. Such callers cannot query
+/// DVUI's windowNaturalScale(), but the adaptive multiplier is deliberately
+/// DPI-independent, so enabling Auto can take effect immediately and safely.
+pub fn scaleAfterAutoToggle(enabled: bool, current: f32) f32 {
+    if (!enabled) return clampScale(current);
+    return deviceScale(1.0);
 }
 
 // ── Responsive breakpoints ──────────────────────────────────────────────────
@@ -71,18 +85,36 @@ pub fn isNarrow(rect_w: f32, ui_scale: f32) bool {
     return pt > 1 and pt < NARROW_PT;
 }
 
-test "deviceScale is denser on high-DPI, readable on standard-DPI" {
-    try std.testing.expectEqual(@as(f32, 0.68), deviceScale(2.0)); // Mac Retina
-    try std.testing.expectEqual(@as(f32, 0.68), deviceScale(3.0)); // very high-DPI clamps to densest tier
-    try std.testing.expectEqual(@as(f32, 0.72), deviceScale(1.5)); // 150% Windows
-    try std.testing.expectEqual(@as(f32, 0.76), deviceScale(1.25)); // 125% Windows
-    try std.testing.expectEqual(@as(f32, 0.8), deviceScale(1.0)); // standard DPI Linux/Win
+test "adaptive scale defaults to 1x on every display density" {
+    try std.testing.expectEqual(@as(f32, 1.0), deviceScale(1.0));
+    try std.testing.expectEqual(@as(f32, 1.0), deviceScale(1.25));
+    try std.testing.expectEqual(@as(f32, 1.0), deviceScale(1.5));
+    try std.testing.expectEqual(@as(f32, 1.0), deviceScale(2.0));
+    try std.testing.expectEqual(@as(f32, 1.0), deviceScale(3.0));
+}
+
+test "automatic scale never falls below 1x" {
+    const reports = [_]f32{ -2.0, 0.0, 0.75, 1.0, 1.25, 2.0, 4.0, std.math.nan(f32) };
+    for (reports) |report| try std.testing.expect(deviceScale(report) >= AUTO_MIN_SCALE);
+}
+
+test "config restore upgrades old Auto values but preserves manual density" {
+    try std.testing.expectEqual(@as(f32, 1.0), restoredScale(true, 0.68));
+    try std.testing.expectEqual(@as(f32, 1.0), restoredScale(true, 0.8));
+    try std.testing.expectEqual(@as(f32, 0.6), restoredScale(false, 0.6));
+    try std.testing.expectEqual(@as(f32, 1.3), restoredScale(false, 1.3));
+}
+
+test "enabling automatic scale immediately clears a sub-1x manual scale" {
+    try std.testing.expectEqual(@as(f32, 1.0), scaleAfterAutoToggle(true, 0.6));
+    try std.testing.expect(scaleAfterAutoToggle(true, 0.6) >= AUTO_MIN_SCALE);
+    try std.testing.expectEqual(@as(f32, 0.6), scaleAfterAutoToggle(false, 0.6));
 }
 
 test "deviceScale rejects bogus display reports" {
-    try std.testing.expectEqual(@as(f32, 0.8), deviceScale(0));
-    try std.testing.expectEqual(@as(f32, 0.8), deviceScale(-2.0));
-    try std.testing.expectEqual(@as(f32, 0.8), deviceScale(std.math.nan(f32)));
+    try std.testing.expectEqual(@as(f32, 1.0), deviceScale(0));
+    try std.testing.expectEqual(@as(f32, 1.0), deviceScale(-2.0));
+    try std.testing.expectEqual(@as(f32, 1.0), deviceScale(std.math.nan(f32)));
 }
 
 test "clampScale keeps values in the usable band" {
@@ -103,9 +135,9 @@ test "breakpoints measure on-screen points, not scaled layout units" {
     // Same window measured raw would have missed the breakpoint entirely.
     try std.testing.expect(!isNarrow(1118.8, 1.0));
 
-    // Retina auto-scale (0.68): a 700pt window must reach the mobile layout.
-    try std.testing.expect(isCompact(700.0 / 0.68, 0.68));
-    try std.testing.expect(isNarrow(700.0 / 0.68, 0.68));
+    // Adaptive 1.0×: a 700pt window must reach the mobile layout.
+    try std.testing.expect(isCompact(700.0, 1.0));
+    try std.testing.expect(isNarrow(700.0, 1.0));
 
     // Wide window stays wide at every scale.
     try std.testing.expect(!isNarrow(1600.0 / 0.8, 0.8));

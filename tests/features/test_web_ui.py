@@ -40,7 +40,7 @@ VERTICALS = {
 
 @test("Web UI vertical parity wiring", "Web UI")
 def test_web_ui_verticals():
-    ui = _src("web/index.html")
+    ui = _web_app()
     if not ui:
         return "fail", "web/index.html missing"
 
@@ -62,7 +62,7 @@ def test_web_ui_verticals():
 
 @test("Web UI YouTube tab", "Web UI")
 def test_web_ui_youtube():
-    ui = _src("web/index.html")
+    ui = _web_app()
     checks = {
         "nav button": 'data-page="yt"' in ui,
         "page section": 'id="page-yt"' in ui,
@@ -82,8 +82,8 @@ def test_web_ui_youtube():
 
 @test("Web UI Live TV tab + /api/livetv route", "Web UI")
 def test_web_ui_livetv():
-    ui = _src("web/index.html")
-    rm = _src("src/services/remote.zig")
+    ui = _web_app()
+    rm = _remote_api()
     checks = {
         # Server: pages the SQLite catalog, NSFW-filtered like the desktop tab.
         "route dispatch": '"/livetv"' in rm and "fn apiLiveTv(" in rm,
@@ -110,8 +110,8 @@ def test_web_ui_livetv():
 
 @test("Web UI add-download + source catalog", "Web UI")
 def test_web_ui_downloads_and_sources():
-    ui = _src("web/index.html")
-    rm = _src("src/services/remote.zig")
+    ui = _web_app()
+    rm = _remote_api()
     checks = {
         # Activity: paste a URL or magnet. Magnets -> /load (torrent session),
         # plain URLs -> the segmented HTTP downloader.
@@ -134,8 +134,8 @@ def test_web_ui_downloads_and_sources():
 
 @test("Web UI AI copilot tab + /api/ai route", "Web UI")
 def test_web_ui_ai():
-    ui = _src("web/index.html")
-    rm = _src("src/services/remote.zig")
+    ui = _web_app()
+    rm = _remote_api()
     checks = {
         # Server: async send + poll, mirroring the other verticals.
         "route dispatch": '"/ai"' in rm and "fn apiAi(" in rm,
@@ -159,8 +159,8 @@ def test_web_ui_ai():
 
 @test("Web UI Music + Radio tabs and routes", "Web UI")
 def test_web_ui_music_radio():
-    ui = _src("web/index.html")
-    rm = _src("src/services/remote.zig")
+    ui = _web_app()
+    rm = _remote_api()
     checks = {
         # Routes: async search + poll + play-by-index, like the other verticals.
         "music route": "fn apiMusic(" in rm and '"/music/search"' in rm and '"/music/play"' in rm
@@ -194,7 +194,7 @@ def test_web_ui_music_radio():
 def test_header_web_ui_button():
     hdr = _src("src/ui/header.zig")
     sh = _src("src/ui/shell.zig")
-    rm = _src("src/services/remote.zig")
+    rm = _remote_api()
     pure = _src("src/services/remote_url_pure.zig")
     bz = _src("build.zig")
     checks = {
@@ -217,7 +217,9 @@ def test_header_web_ui_button():
         "listening flag exists": "pub fn isListening() bool" in rm and "listening.store(true, .release)" in rm,
         "defers open until listening": "remote.isListening()" in hdr and "open_pending" in hdr,
         "bounded wait": "open_wait_frames" in hdr and "dvui.refresh(" in hdr,
-        "opens a browser": "settings.openExternal(url)" in hdr,
+        # The setup-token path returns an optional URL, so the local binding is
+        # intentionally named `open_url`; assert the action, not that variable.
+        "opens a browser": "settings.openExternal(" in hdr,
         # URL/label logic lives in the tested pure module, not inline in the UI.
         "routes through pure module": "remote_url.webUiUrl(" in hdr and "remote_url.webUiTooltip(" in hdr,
         "pure url is loopback": '"http://127.0.0.1:{d}/"' in pure,
@@ -231,8 +233,8 @@ def test_header_web_ui_button():
 
 @test("Web UI Access page: password, sessions, token, bind", "Web UI")
 def test_web_ui_access_page():
-    ui = _src("web/index.html")
-    rm = _src("src/services/remote.zig")
+    ui = _web_app()
+    rm = _remote_api()
     st = _src("src/services/auth_store.zig")
     pure = _src("src/services/access_pure.zig")
     cfg = _src("src/core/config.zig")
@@ -242,7 +244,8 @@ def test_web_ui_access_page():
         # state, so reaching them unauthenticated would be the whole ballgame.
         "access routes": 'startsWith(u8, path, "/api/access/")' in rm and "fn handleAccess(" in rm,
         "gated after bearer check": (
-            0 <= rm.find("if (!isAuthorized(presented))") < rm.find('startsWith(u8, path, "/api/access/")')
+            0 <= rm.find("const principal = principalForBearer(presented)")
+            < rm.find('startsWith(u8, path, "/api/access/")')
         ),
         "all five sub-routes": all(
             f'sub, "{s}"' in rm for s in ("status", "password", "revoke-all", "token", "token/rotate", "bind")
@@ -257,9 +260,20 @@ def test_web_ui_access_page():
         # machine-local recovery path and may reset without it.
         "session proves current pw": "current password is incorrect" in rm,
         "token caller resets by name": "userIdByName(uname)" in rm,
+        "session cannot inherit machine powers": all(
+            f"access_pure.allows(principal, .{cap})" in rm
+            for cap in ("reset_any_password", "reveal_machine_token",
+                        "rotate_machine_token", "change_binding")
+        ),
+        "capability policy has denial tests": (
+            "session capability never includes machine recovery" in pure
+            and "!allows(.session, .reveal_machine_token)" in pure
+            and "!allows(.session, .change_binding)" in pure
+        ),
         # A password change that left old logins alive would not revoke access.
         "pw change revokes others": (
-            0 <= rm.find("setPassword(target_uid") < rm.find("revokeAllSessions(if (caller_uid == null)")
+            0 <= rm.find("setPassword(target_uid")
+            < rm.find("revokeAllSessions(if (principal == .machine)")
         ),
         # Rotation must not silently widen the 0600 token file.
         "rotate reuses persistToken": "fn persistToken() void" in rm and "persistToken();" in rm
@@ -272,7 +286,7 @@ def test_web_ui_access_page():
         # Decision logic lives in the tested pure module.
         "routes through pure module": all(
             f"access_pure.{f}" in rm
-            for f in ("maskToken", "checkPasswordChange", "bindModeFromString", "parsePort")
+            for f in ("allows", "maskToken", "checkPasswordChange", "bindModeFromString", "parsePort")
         ),
         "pure module tested": "test_access_pure" in bz,
         # Web page: markup + handlers for each group.
@@ -292,8 +306,8 @@ def test_web_ui_access_page():
 
 @test("Play-latest button: TV show page (desktop + web)", "Web UI")
 def test_play_latest_episode():
-    ui = _src("web/index.html")
-    rm = _src("src/services/remote.zig")
+    ui = _web_app()
+    rm = _remote_api()
     tmdb = _src("src/services/tmdb.zig")
     lib = _src("src/services/tv_library.zig")
     pure = _src("src/services/tv_pure.zig")
@@ -311,10 +325,10 @@ def test_play_latest_episode():
             and "recentEpisodeLabel(latest.ep, latest.watched" in tmdb,
         "desktop plays the episode": 0 <= tmdb.find("latest.ep.season") and "playEpisodeOf(" in tmdb,
         # Web: route + top row.
-        "route": '"/tv/recent"' in rm and "fn apiTvRecent(" in rm,
-        "route reports watched": '"watched":{s}' in rm and "lastAiredFor(id)" in rm,
+        "route": '"/tv/recent"' in rm and "fn recentEpisode(" in rm,
+        "route reports watched": '\\"watched\\":{s}' in rm and "lastAiredFor(id)" in rm,
         # Unknown frontier is an honest {"found":false}, not a guessed episode.
-        "unknown frontier honest": '{"found":false}' in rm,
+        "unknown frontier honest": '{\\"found\\":false}' in rm,
         "web row": 'id="show-latest"' in ui and "async function loadLatest(" in ui
             and "latest-badge" in ui,
         "web hides when not found": "if (!d || !d.found) return;" in ui,
@@ -384,7 +398,7 @@ def test_desktop_webui_settings_tab():
         # Every control the web Access page has, mirrored.
         "enable + open": "remote.start()" in sg and "remote.stop()" in sg
             and "Open in Browser" in sg and "webUiUrl(remote.port" in sg,
-        "account ops": "auth_store.createUser(" in sg and "auth_store.setPassword(" in sg
+        "account ops": "auth_store.createFirstAdmin(" in sg and "auth_store.setPassword(" in sg
             and "auth_store.revokeAllSessions(null)" in sg,
         "token ops": "remote.tokenHex()" in sg and "remote.rotateToken()" in sg
             and "access.maskToken(" in sg,
@@ -426,7 +440,7 @@ def test_webui_password_reset_usable():
             and "auth_store.firstUsername(" in sg,
         # Creation only on a genuinely empty install, matching /api/auth/register.
         "create only on first run": "} else if (users == 0) {" in sg
-            and "auth_store.createUser(uname, pw, true)" in sg,
+            and "auth_store.createFirstAdmin(uname, pw)" in sg,
         "unknown name reports, never creates": 'No account named' in sg,
         # No mid-render return in the error path.
         "no mid-render return": "error.Db => \"Database error\",\n                });\n                return;" not in sg,
@@ -442,22 +456,22 @@ def test_webui_password_reset_usable():
 
 @test("Web Watching library (desktop .watching parity)", "Web UI")
 def test_web_watching_library():
-    ui = _src("web/index.html")
-    rm = _src("src/services/remote.zig")
+    ui = _web_app()
+    rm = _remote_api()
     lib = _src("src/services/tv_library.zig")
     checks = {
-        "route": '"/library"' in rm and "fn apiLibrary(" in rm,
+        "route": '"/library"' in rm and "fn library(" in rm,
         # rows/order were UI-thread-owned; the server thread must copy under a lock.
         "thread-safe snapshot": "pub fn snapshotCopy(" in lib
             and "snapshot_mutex" in lib
             and "buildSnapshotLocked()" in lib,
         # A Row is ~600B x 200 — never on a spawned thread's stack.
-        "heap-allocated": "alloc.alloc(tp.Row, tp.MAX_SHOWS)" in rm,
+        "heap-allocated": "alloc.alloc(model.Row, model.MAX_SHOWS)" in rm,
         # Same order as the desktop, so the two lists agree.
         "desktop display order": "rows[order[i]]" in lib,
         # The filter chips need the status TAG, not the display label.
         "emits status tag": r'\"state\":\"{s}\"' in rm
-            and "effectiveStatus(r.user, r.status)" in rm,
+            and "effectiveStatus(row.user, row.status)" in rm,
         "page filters on tag": "r.state === watchFilter" in ui,
         "page + nav": 'id="page-watch"' in ui and 'data-page="watch"' in ui
             and "async function loadWatch(" in ui,
@@ -471,11 +485,48 @@ def test_web_watching_library():
     return "pass", "Watching: /api/library (locked snapshot, desktop order) + filter chips + drill-down"
 
 
+@test("Movies and shows share one details panel with real metadata", "Web UI")
+def test_unified_details_model():
+    ui = _web_app()
+    lib = _src("src/services/remote_library_api.zig")
+    rm = _src("src/services/remote.zig")
+    checks = {
+        # Server: movie details join the TV route through one TMDB proxy seam,
+        # so the browser never holds the TMDB key for either kind.
+        "movie details route": '"/movie"' in lib and "fn movieDetails(" in lib
+            and "/3/movie/{d}" in lib,
+        "one tmdb proxy seam": "fn sendTmdbJson(" in lib
+            and lib.count("tmdbApiInto(") == 1,
+        # Search rows say which kind they are; the web routes on it.
+        "search rows carry media kind": '\\"media\\":\\"' in rm
+            and "item.media_type[0..item.media_type_len]" in rm,
+        # Web: one entry point and one shared panel reset for both kinds, so
+        # movie and TV details cannot drift apart.
+        "one entry point": "function openDetails(" in ui and "function openMovie(" in ui,
+        "shared panel reset": ui.count("resetDetailsPanel(") >= 3,
+        "browse funnels through details": "openDetails(c.dataset.type === 'tv' ? 'tv' : 'movie'" in ui
+            and "prefillSearch(c.dataset.title" not in ui,
+        "search funnels through details": "openDetails(r.media === 'tv'" in ui,
+        "overview + action row": 'id="show-overview"' in ui and 'id="show-actions"' in ui
+            and ui.count("renderOverview(d.overview)") == 2,
+        # Streams stay one action away, and a metadata failure still leaves an
+        # honest path to them instead of a dead panel.
+        "streams one action away": "prefillSearch(normQuery(title))" in ui
+            and "Find streams" in ui,
+        "metadata failure stays playable": "you can still find streams" in ui,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "unified details incomplete: " + ", ".join(missing)
+    return "pass", "one details panel: /api/movie + /api/tv, media-typed search rows, action row"
+
+
 @test("Web Settings page (registry-driven, desktop parity)", "Web UI")
 def test_web_settings_page():
-    ui = _src("web/index.html")
-    rm = _src("src/services/remote.zig")
+    ui = _web_app()
+    rm = _remote_api()
     pure = _src("src/services/settings_api_pure.zig")
+    scale = _src("src/core/scale_pure.zig")
     bz = _src("build.zig")
     checks = {
         "pure registry + tests": "pub const KEYS = [_]Key{" in pure
@@ -487,6 +538,16 @@ def test_web_settings_page():
             and "sap.find(key)" in rm,
         "validates via pure fns": "sap.parseBool(" in rm and "sap.parseInt(" in rm
             and "sap.parseText(" in rm,
+        "auto scale applies immediately": (
+            "pub fn scaleAfterAutoToggle(" in scale
+            and "state.app.ui_scale = scale_pure.scaleAfterAutoToggle(v, state.app.ui_scale);" in rm
+            and "enabling automatic scale immediately clears a sub-1x manual scale" in scale
+        ),
+        "scale API matches desktop bounds": (
+            '.name = "ui_scale"' in pure
+            and '.min = 60, .max = 200' in pure
+            and 'test "ui_scale wire bounds match the persisted desktop contract"' in pure
+        ),
         # Rejecting beats clamping: storing something other than what was asked
         # for and reporting success is a silent data bug.
         # The JSON literals are escaped in the Zig source (\"…\"), so match
@@ -513,8 +574,8 @@ def test_web_settings_page():
 
 @test("Web Home hub, Plugins manager and Watch Party (desktop parity)", "Web UI")
 def test_web_home_plugins_party():
-    ui = _src("web/index.html")
-    rm = _src("src/services/remote.zig")
+    ui = _web_app()
+    rm = _remote_api()
     checks = {
         # Home: counts + continue, composed with the pre-existing calendar rail.
         "home route": '"/home"' in rm and "fn apiHome(" in rm,
@@ -553,8 +614,8 @@ def test_web_play_here():
     """The browser used to be a remote control whenever the desktop app was up:
     every play handed off to mpv and the page showed nothing. PLAY_HERE makes
     the page a real player for media a browser can actually decode."""
-    ui = _src("web/index.html")
-    rm = _src("src/services/remote.zig")
+    ui = _web_app()
+    rm = _remote_api()
     pure = _src("src/services/playback_target_pure.zig")
     bz = _src("build.zig")
     checks = {
@@ -590,8 +651,8 @@ def test_web_play_here():
 
 @test("Torrent per-file streaming + pluggable HLS", "Web UI")
 def test_torrent_files_and_hls():
-    ui = _src("web/index.html")
-    rm = _src("src/services/remote.zig")
+    ui = _web_app()
+    rm = _remote_api()
     checks = {
         # Route + its refusals.
         "route": '"/torrent/files"' in rm and "fn apiTorrentFiles(" in rm,
@@ -615,7 +676,7 @@ def test_torrent_files_and_hls():
         # 543KB inlined would swamp the page — index.html must stay small.
         "hls not inlined": len(ui) < 400_000,
         "vendor file present": os.path.exists(os.path.join(PROJECT_DIR, "web/vendor/hls.min.js")),
-        "bundled into the app": "web/vendor" in _src("scripts/build-app.sh"),
+        "bundled into the app": 'cp -R "$ROOT/web/."' in _src("scripts/build-app.sh"),
         # A live shim must be torn down or it keeps fetching segments.
         "hls torn down on close": "v._hls.destroy()" in ui,
     }
@@ -636,7 +697,7 @@ def test_transcode_route():
     KNOWN LIMITATION: when the viewer disappears mid-stream the socket write can
     block (SO_SNDTIMEO does not surface through the threaded Io layer). The
     watchdog force-kills a wedged encoder after 60s of no progress."""
-    rm = _src("src/services/remote.zig")
+    rm = _remote_api()
     rs = _src("src/services/remote_stream.zig")
     checks = {
         "route + auth family": '"/transcode"' in rm and "handleTranscode(stream, rel, start_secs)" in rm,
@@ -674,22 +735,13 @@ def test_transcode_route():
     return "pass", "Transcode: fragmented MP4, seek-by-restart, encoder reaped via pipe close"
 
 
-@test("web/index.html inline JavaScript parses", "Web UI")
+@test("web feature bundles parse", "Web UI")
 def test_web_ui_js_syntax():
-    """Every other web test here is a string match, so none of them can see a
-    SYNTAX error. A script tag was once spliced into the middle of a code
-    comment (an insertion matched a literal '<script>' *inside* a comment),
-    which shredded a function and left the whole page dead — `$ is not
-    defined`, nothing worked — and the suite stayed green.
-
-    Parses the inline blocks with node when available; falls back to a brace/
-    paren balance check so the test still means something without node."""
-    import re, shutil, subprocess, tempfile, os
-    ui = _src("web/index.html")
-    blocks = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", ui, re.S)
-    if not blocks:
-        return "fail", "no inline <script> blocks found in web/index.html"
-    js = "\n;\n".join(blocks)
+    """String-based feature checks cannot see a JavaScript syntax error."""
+    import shutil, subprocess, tempfile, os
+    js = _web_js()
+    if not js.strip():
+        return "fail", "web/js feature bundles are missing"
 
     node = shutil.which("node")
     if node:
@@ -704,7 +756,7 @@ def test_web_ui_js_syntax():
                 return "fail", "inline JS syntax error: " + detail
         finally:
             os.unlink(path)
-        return "pass", f"{len(blocks)} inline script block(s), {len(js)} bytes — node --check clean"
+        return "pass", f"8 feature bundles, {len(js)} bytes — node --check clean"
 
     # No node: a balance check still catches the splice-into-comment class of
     # damage, which leaves brackets unmatched.

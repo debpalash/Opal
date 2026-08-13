@@ -316,16 +316,12 @@ fn initTranslateLangBuf() [8]u8 {
 pub const AppState = struct {
     // ── UI ──
     incognito_mode: bool = false,
-    // Compact-first default (the type ramp is already dense; a >1× scale
-    // over-magnifies and overflows the top-nav row so the omnibox + right-side
-    // action icons clip off the window edge). Users who want larger chrome can
-    // raise it in Settings › General › UI Scale.
+    // Adaptive 1.0× default. DVUI handles display DPI; the shell adapts its
+    // navigation/grid breakpoints to available on-screen points.
     ui_scale: f32 = 1.0,
-    // When true (the default), ui_scale is DERIVED from the display's DPI each
-    // launch via scale_pure.deviceScale (compact on high-DPI, readable on
-    // standard-DPI) instead of using a saved fixed value. Picking a specific
-    // scale in Settings sets this false so the manual choice sticks. See
-    // main.zig's first-frame application and config load/save.
+    // When true (the default), 1.0× is the adaptive density: screen-size
+    // responsiveness remains automatic. Picking another scale makes it a
+    // persistent manual override.
     ui_scale_auto: bool = true,
     // Set true once config.load() has run, so the first frame can safely
     // decide whether to apply the auto device scale (config load is async on

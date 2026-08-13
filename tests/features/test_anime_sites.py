@@ -7,6 +7,28 @@ tests/features/harness.py for the shared @test decorator + helpers."""
 from .harness import *  # noqa: F401,F403
 
 
+@test("Anime subprocesses are bounded and contained", "Network")
+def test_anime_process_containment():
+    anime = _src("src/services/anime.zig")
+    search = _between(anime, "fn searchThread", "// ═════════════════════════")
+    curl_sites = anime.count('"curl"')
+    bounded_sites = anime.count("boundedCurl(") - 1  # exclude helper definition
+    checks = {
+        "typed bounded seam imported": '@import("../core/bounded_process.zig")' in anime,
+        "bounded seam owns lifecycle": "bounded_process.run(argv, output" in anime,
+        "no raw Child lifecycle remains": "Child.init" not in anime,
+        "every curl site is bounded": curl_sites > 0 and bounded_sites == curl_sites,
+        "Jikan search has both deadlines": '"--connect-timeout"' in search
+            and '"--max-time"' in search and "boundedCurl(" in search,
+        "predictable Jikan temp file removed": "jikan_{d}.json" not in anime
+            and "tmp_seq" not in anime and '"-o", path' not in anime,
+    }
+    bad = [name for name, ok in checks.items() if not ok]
+    if bad:
+        return "fail", "anime containment regression: " + ", ".join(bad)
+    return "pass", f"{curl_sites} anime curl sites use bounded process-tree execution"
+
+
 @test("Anime site frameworks (DooPlay + AnimeStream)", "Player")
 def test_anime_site_frameworks():
     build = _src("build.zig")

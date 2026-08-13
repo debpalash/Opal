@@ -333,12 +333,10 @@ fn applyCommand(cmd: []const u8) void {
         // Validate URL scheme to prevent loading arbitrary protocols
         if (!std.mem.startsWith(u8, url, "http://") and !std.mem.startsWith(u8, url, "https://")) return;
         if (url.len > 5) {
-            var url_z: [2049]u8 = undefined;
-            const ulen = @min(url.len, 2048);
-            @memcpy(url_z[0..ulen], url[0..ulen]);
-            url_z[ulen] = 0;
-            var load_args = [_][*c]const u8{ "loadfile", @ptrCast(&url_z[0]), "replace", null };
-            _ = c.mpv.mpv_command(ap.mpv_ctx, @ptrCast(&load_args));
+            // Party commands arrive on the client worker. Issue only the typed
+            // mpv transition while holding players_mutex; UI state remains on
+            // the UI thread, matching this path's prior behavior.
+            ap.commitPlayback(.{ .url = url, .mode = .replace });
             pushChat(">> Loading synced video...");
         }
     } else if (std.mem.startsWith(u8, cmd, "CHAT ")) {

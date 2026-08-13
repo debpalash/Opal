@@ -101,7 +101,7 @@ export default function DownloadGrid() {
         </div>
         <div className="files pkgs">
           <code>brew install debpalash/tap/opal</code>
-          <code>yay -S opal-bin</code>
+          <code>yay -S opal-media-player-bin</code>
         </div>
       </div>
 

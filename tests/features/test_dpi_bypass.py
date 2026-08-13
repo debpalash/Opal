@@ -102,7 +102,7 @@ def test_proxy_url_is_wired():
     st = _src("src/core/state.zig")
     cfg = _src("src/core/config.zig")
     settings = _src("src/ui/settings.zig")
-    rm = _src("src/services/remote.zig")
+    rm = _remote_api()
     pure = _src("src/services/proxy_url_pure.zig")
     bld = _src("build.zig")
 

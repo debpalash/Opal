@@ -183,9 +183,36 @@ pub fn handlePodcastPoster(stream: std.Io.net.Stream, idx: usize) void {
     serveProxied(stream, url, url);
 }
 
+/// GET /now-playing/art?t=<token>&k=<revision> — proxy the active player's
+/// artwork without exposing its source URL to the browser. Plex/Jellyfin cover
+/// URLs can carry credentials; status JSON reports only a hash used for cache
+/// busting, while this handler snapshots the real URL under players_mutex.
+pub fn handleNowPlayingArt(stream: std.Io.net.Stream) void {
+    var raw_buf: [512]u8 = undefined;
+    var raw_len: usize = 0;
+    state.players_mutex.lock();
+    if (state.app.active_player_idx < state.app.players.items.len) {
+        const p = state.app.players.items[state.app.active_player_idx];
+        const raw = if (p.np_art_url_len > 0)
+            p.np_art_url[0..@min(p.np_art_url_len, p.np_art_url.len)]
+        else
+            p.loading_art[0..@min(p.loading_art_len, p.loading_art.len)];
+        raw_len = @min(raw.len, raw_buf.len);
+        @memcpy(raw_buf[0..raw_len], raw[0..raw_len]);
+    }
+    state.players_mutex.unlock();
+    if (raw_len == 0) return send404(stream);
+
+    var url_buf: [640]u8 = undefined;
+    const url = @import("../ui/loading_pure.zig").posterUrl(raw_buf[0..raw_len], &url_buf);
+    if (!(std.mem.startsWith(u8, url, "https://") or std.mem.startsWith(u8, url, "http://")))
+        return send404(stream);
+    serveProxied(stream, url, url);
+}
+
 /// Serve `fetch_url` as an image, backed by the shared poster disk cache keyed
-/// by `cache_key`. Cache hit → serve the stored encoded bytes; miss → curl
-/// once, store, serve. Runs on the connection thread (blocking curl ok).
+/// by `cache_key`. Cache hit → serve the stored encoded bytes; miss → fetch
+/// once, store, serve. Runs on the connection thread (blocking fetch ok).
 fn serveProxied(stream: std.Io.net.Stream, fetch_url: []const u8, cache_key: []const u8) void {
     const poster = @import("../core/poster.zig");
     // Two ownership paths, two frees: the cache hands back c_alloc bytes
@@ -197,15 +224,17 @@ fn serveProxied(stream: std.Io.net.Stream, fetch_url: []const u8, cache_key: []c
     }
     const buf = alloc.alloc(u8, 512 * 1024) catch return send404(stream);
     defer alloc.free(buf);
-    var child = io_g.Child.init(&.{ "curl", "-s", "--max-time", "10", fetch_url }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return send404(stream);
-    const n = if (child.stdout) |*so| io_g.readAll(so, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    if (n < 100) return send404(stream);
-    poster.cacheStoreForUrl(cache_key, buf[0..n], 0, 0);
-    sendImage(stream, buf[0..n]);
+    // Native HTTP keeps credential-bearing Plex/Jellyfin artwork URLs out of
+    // the process table, where a subprocess argv would be readable by other
+    // local processes.
+    const body = @import("../core/http.zig").fetch(fetch_url, buf, .{
+        .timeout_secs = 10,
+        .max_response = buf.len,
+        .accept = "image/*",
+    }) orelse return send404(stream);
+    if (body.len < 100) return send404(stream);
+    poster.cacheStoreForUrl(cache_key, body, 0, 0);
+    sendImage(stream, body);
 }
 
 fn sendImage(stream: std.Io.net.Stream, body: []const u8) void {
@@ -444,16 +473,27 @@ pub fn handleTranscode(stream: std.Io.net.Stream, rel: []const u8, start_s: u32)
     // decode everything up to the offset, which defeats the point.
     var child = io_g.Child.init(&.{
         ffmpegPath(),
-        "-hide_banner", "-loglevel", "error",
-        "-ss",          ss,
-        "-i",           path,
-        "-c:v",         "libx264",
-        "-preset",      "veryfast",
-        "-crf",         "23",
-        "-c:a",         "aac",
-        "-ac",          "2",
-        "-movflags",    "frag_keyframe+empty_moov+default_base_moof",
-        "-f",           "mp4",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-ss",
+        ss,
+        "-i",
+        path,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-c:a",
+        "aac",
+        "-ac",
+        "2",
+        "-movflags",
+        "frag_keyframe+empty_moov+default_base_moof",
+        "-f",
+        "mp4",
         "pipe:1",
     }, alloc);
     child.stdin_behavior = .Ignore;

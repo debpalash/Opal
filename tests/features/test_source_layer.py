@@ -657,7 +657,8 @@ def test_eztv_api_backend():
         "spawned": "Spawn.go(resolveEztv, &status_eztv)" in rv,
         "awaited in checkAllDone": "status_eztv.load(.acquire) != .searching" in rv,
         # Neutral-ship: inert until the user installs the source.
-        "inert without the source": 'sc.get("eztv", "base") orelse return' in rv,
+        "inert without the source": ('sc.get("eztv", "base") orelse {' in rv and
+                                      "noteWorkerOutcome(.unavailable)" in rv),
         # Carries the fields the result row now shows.
         "fills size and leech": "item.size_bytes = it.size_bytes;" in rv and "item.leech = it.peers;" in rv,
         # Heap, not a spawned worker's stack (CLAUDE.md thread rules).
@@ -717,6 +718,14 @@ def test_resolver_sink():
         "warm is narrow": "resolveEztv(qbuf, query.len)" in rv and "resolveTorznab(qbuf" in rv,
         # Superseded-wave guard applies to the live path only; a warm has no wave.
         "wave guard is live-only": "if (thread_sink == null and worker_gen != run_gen" in rv,
+        # Speculative adapters run on arbitrary worker threads. Their failures /
+        # publication flag must not leak into a live worker's terminal outcome.
+        "warm preserves outcome context": all(s in rv for s in (
+            "const prev_gen = worker_gen", "const prev_reported = worker_reported",
+            "const prev_produced = worker_produced", "worker_reported = prev_reported",
+            "worker_produced = prev_produced")),
+        # Both result and terminal-status publication reject superseded waves.
+        "terminal status has the generation gate": "lifecycle.mayMutateLive(.live, worker_gen, active_run)" in rv,
         # Trigger, bounded.
         "triggered from Watching": "warmNextUp();" in lib,
         "one show, once": "if (S.done or S.busy) return;" in lib,

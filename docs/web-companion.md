@@ -1,67 +1,75 @@
-# Opal Anywhere — web companion spec
+# Opal web client architecture
 
-Goal: the phone-on-the-couch companion for a desktop Opal. Browse, queue,
-and control playback from any device on the LAN — one Settings toggle, one
-6-digit pairing code, zero manual servers.
+The browser is a first-class Opal client. Product scope, parity levels, and the
+remaining operation ledger live in [`WEB-UI-PARITY.md`](WEB-UI-PARITY.md); this
+document records the runtime shape and security boundaries.
 
-## Phase 1 — foundation (SHIPPED)
+## Runtime
 
-**Serving.** `remote.zig` serves the single-file web app at `/` from
-`Resources/web/index.html` (bundled by `scripts/build-app.sh`), falling back
-to `web/index.html` in dev. No separate `cd web && zig build dev` needed.
+`remote.zig` owns the listener, authentication, and top-level dispatch.
+Feature-owned modules handle static assets, Now Playing status, library state,
+and transfers. Installed builds read `web/` from Opal's resource root; source
+checkouts fall back to the repository files. There is no separate web build or
+package manager.
 
-**Reachability.** When Web Remote is enabled (Settings › Scripts — OFF by
-default, persisted as `web_remote`), the server binds `0.0.0.0:41595` so
-phones can reach it. Off = nothing listens (the neutral-ship posture).
+The browser is also split by ownership: semantic markup in `index.html`, shared
+styles in `styles/app.css`, and bounded classic-script feature bundles in
+`js/`. `boot.js` is the only startup entry point, after every feature bundle is
+loaded. This keeps the no-toolchain deployment while avoiding an inline
+application monolith.
 
-**Pairing.** Bearer token is never injected into the page (the old
-loopback-only injection is removed — with a LAN bind it would be a takeover
-vector). Instead:
+The shell is responsive and route-aware:
 
-- A 6-digit pairing code is generated (crypto RNG) each time the server
-  starts, shown in Settings next to the toggle with the LAN URL.
-- The page's first-run screen asks for the code → `GET /pair?code=NNNNNN`
-  (unauthenticated) → `{"token":"<32-hex>"}` → stored in `localStorage`.
-- Brute-force guard: 300ms delay per failed attempt; 10 failures rotates
-  the code.
-- All `/api/*` routes stay behind `Authorization: Bearer`.
+- four stable phone destinations plus a grouped More sheet;
+- a persistent grouped sidebar on wide screens;
+- hash routes with browser back/forward;
+- keyboard shortcuts, spatial arrow-key focus, and overlay Back/Escape;
+- hosted browser playback or companion control of the native player.
 
-**Client (web/index.html, self-contained).** Mobile-first, theme tokens
-ported to CSS variables (midnight palette). Three tabs:
-- **Now Playing** — 1s polling of `/api/status`; seek bar (`/seek_pct`),
-  play/pause (`/toggle`), ±10s (`/back`, `/fwd`), volume (`/vol`), mute.
-- **Search** — `/api/search?q=` (universal), results with size/seeds/source,
-  tap → `/api/load?url=` (plays on the desktop).
-- **Activity** — `/api/downloads` (torrent progress) + `/api/queue`.
+The web app manifest and service worker make the shell installable when served
+from a secure context. The service worker caches only public UI assets. It
+never caches `/api/*`, credentials, event streams, Now Playing artwork,
+posters, subtitles, or media.
+Offline mode therefore preserves navigation and reconnect guidance without
+showing stale account data.
 
-## Phase 2 — push + richer surfaces (NEXT)
+## Authentication and transport
 
-- `GET /events` — SSE stream (status ticks, download progress, toast
-  mirror) replacing polling; falls back to polling when absent.
-- `/api/calendar` — expose tv_calendar entries (Coming-up on the phone).
-- `/api/continue` — TV continue-watching rail with poster proxy
-  (`/api/poster?path=` streaming the cached poster blobs; never hotlink
-  TMDB from the phone).
-- Audio/subtitle track pickers (`/next_sub`, `/next_audio` exist; add
-  listing endpoints).
-- PWA: `/manifest.json` + service worker → installable, home-screen icon.
-- QR pairing: render the pair URL + code as a QR in Settings (needs a small
-  pure-Zig QR encoder; the 6-digit flow stays as fallback).
+The static shell, manifest, icon, service worker, and `/health` are public so a
+new browser can bootstrap. User data and mutations require an authenticated
+account session in `Authorization: Bearer …`.
 
-## Phase 3 — native app polish track (parallel)
+First-admin registration additionally requires the one-time owner-only setup
+capability created on the Opal host. Credentials are sent in POST bodies, never
+query strings. Session and setup tokens are not injected into HTML, serialized
+by status APIs, or logged.
 
-1. Consistency sweep: all paddings/radii through theme tokens; one
-   segment/empty-state idiom everywhere.
-2. Cmd+K command palette reusing omnibox intent classification.
-3. Poster-grid keyboard navigation; `?` shortcut cheatsheet.
-4. Seek-hover thumbnail previews.
-5. Continue-watching progress bars on posters; skeleton shimmer.
-6. ReleaseFast allocator switch; startup profiling.
+Now Playing exposes only a non-secret artwork revision key. The browser loads
+the current image through an authenticated same-origin route; the source URL
+stays server-side because Plex and Jellyfin artwork URLs may carry credentials.
+The proxy uses bounded native HTTP so those URLs do not appear in process
+arguments.
 
-## Security posture
+Plain LAN HTTP is suitable only on a trusted network. Installability and secure
+remote access require HTTPS, typically through the deployment/Tailscale setup.
 
-- OFF by default; explicit opt-in, persisted.
-- LAN bind only while enabled; disable tears the listener down.
-- Token in `~/.config/opal/api.token` (0600), never served, never logged.
-- Pairing code rotates on every server start and after 10 failed attempts.
-- `/health` and `/` + `/pair` are the only unauthenticated routes.
+## Command boundary
+
+Browser mutations are authenticated POST requests into typed domain commands:
+
+- player snapshot/action;
+- queue snapshot/action;
+- direct-download and torrent actions;
+- library status and episode watched state.
+
+The server owns validation, bounds, stale-item checks, and destructive
+confirmation. The browser never submits raw mpv commands, SQL, filesystem
+paths outside a bounded download root, or source implementation details.
+
+## Reliability contract
+
+API work is serialized at the server boundary to preserve shared-state
+invariants. Long media streams and static assets bypass that lock. Pollers are
+bounded and stopped when their page is hidden; playback status prefers SSE and
+falls back to polling. The UI exposes loading, empty, error, offline, and
+reconnecting states rather than treating a rendered page as proof of parity.

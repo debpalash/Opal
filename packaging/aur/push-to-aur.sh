@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Publish/refresh the AUR packages (opal, opal-bin).
+# Publish/refresh the AUR packages (opal-media-player and its -bin variant).
 #
 # Two modes:
 #
 # 1) Local Arch box (interactive, for first-time bootstrap):
 #      ./push-to-aur.sh                # both packages
-#      ./push-to-aur.sh opal-bin       # just one
+#      ./push-to-aur.sh opal-media-player-bin  # just one
 #    Requires: an AUR account with your SSH key registered, `pacman-contrib`
 #    (for updpkgsums), `pkgconf`. Run on an Arch host so `makepkg -f` proves
 #    the build actually works before pushing.
@@ -15,6 +15,7 @@
 #                            on the AUR account
 #      AUR_USERNAME         — AUR username (used for git commit identity only)
 #      AUR_EMAIL            — AUR email   (used for git commit identity only)
+#      AUR_RELEASE_TAG      — exact GitHub tag being published (vX.Y.Z)
 #      AUR_SKIP_MAKEPKG=1   — skip the `makepkg -f` build-verification step
 #                            (CI runners for the release job are Ubuntu; the
 #                            Arch-only deps would have to be installed there.
@@ -22,29 +23,39 @@
 #                            separately; AUR publish just needs the metadata.)
 #    Then:
 #      AUR_SSH_PRIVATE_KEY=… AUR_USERNAME=… AUR_EMAIL=… \
-#        AUR_SKIP_MAKEPKG=1 ./push-to-aur.sh
+#        AUR_RELEASE_TAG=v0.6.5 AUR_SKIP_MAKEPKG=1 ./push-to-aur.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# NOT `PKGS=("${@:-opal opal-bin}")` — with no args that expands to a SINGLE
-# element "opal opal-bin", and the loop below then tries to clone
-# aur:"opal opal-bin".git. That is exactly what the v0.5.0 release job did.
+# `opal` belongs to the Open Phone Abstraction Library on AUR. Use a unique,
+# product-specific namespace rather than trying to overwrite that package.
 if [[ $# -gt 0 ]]; then
   PKGS=("$@")
 else
-  PKGS=(opal opal-bin)
+  PKGS=(opal-media-player opal-media-player-bin)
+fi
+
+release_tag=${AUR_RELEASE_TAG:-${GITHUB_REF_NAME:-}}
+release_version=""
+if [[ -n "$release_tag" ]]; then
+  if [[ ! "$release_tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    echo "error: AUR_RELEASE_TAG must be a stable vX.Y.Z tag, got '$release_tag'." >&2
+    exit 2
+  fi
+  release_version=${BASH_REMATCH[1]}
 fi
 
 # ─── CI mode: materialise the SSH key + identity into a sandbox ──────────
-if [[ -n "${AUR_SSH_PRIVATE_KEY:-}" ]]; then
-  : "${AUR_USERNAME:?AUR_USERNAME required in CI mode}"
-  : "${AUR_EMAIL:?AUR_EMAIL required in CI mode}"
-  if [[ -z "${AUR_SSH_PRIVATE_KEY// }" ]]; then
+aur_ssh_private_key=${AUR_SSH_PRIVATE_KEY:-}
+if [[ "${AUR_CI:-0}" == "1" && -z "${aur_ssh_private_key//[[:space:]]/}" ]]; then
     echo "::notice::AUR_SSH_PRIVATE_KEY is empty — AUR publish is a no-op. Register a deploy key on your AUR account and set the repository secret."
     exit 0
-  fi
+fi
+if [[ -n "$aur_ssh_private_key" ]]; then
+  : "${AUR_USERNAME:?AUR_USERNAME required in CI mode}"
+  : "${AUR_EMAIL:?AUR_EMAIL required in CI mode}"
   export GIT_SSH_COMMAND="ssh -i $HOME/.aur_id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-  printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$HOME/.aur_id_ed25519"
+  printf '%s\n' "$aur_ssh_private_key" > "$HOME/.aur_id_ed25519"
   chmod 600 "$HOME/.aur_id_ed25519"
   ssh-keyscan -t ed25519 aur.archlinux.org >> "$HOME/.aur_known_hosts" 2>/dev/null || true
   export GIT_SSH_COMMAND="ssh -i $HOME/.aur_id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=$HOME/.aur_known_hosts"
@@ -56,6 +67,14 @@ skip_makepkg=0
 [[ "${AUR_SKIP_MAKEPKG:-0}" == "1" ]] && skip_makepkg=1
 
 for pkg in "${PKGS[@]}"; do
+  case "$pkg" in
+    opal-media-player|opal-media-player-bin) ;;
+    *) echo "error: unknown AUR package '$pkg'." >&2; exit 2 ;;
+  esac
+  if [[ ! -f "$pkg/PKGBUILD" ]]; then
+    echo "error: $pkg/PKGBUILD is missing." >&2
+    exit 2
+  fi
   echo "── $pkg ──"
   workdir=$(mktemp -d)
   # AUR repo (empty on first publish — pushing creates the package).
@@ -74,6 +93,9 @@ for pkg in "${PKGS[@]}"; do
   fi
   cp "$pkg/PKGBUILD" "$workdir/"
   pushd "$workdir" >/dev/null
+  if [[ -n "$release_version" ]]; then
+    sed -i "s/^pkgver=.*/pkgver=$release_version/" PKGBUILD
+  fi
   # Fill sha256sums from the live URLs (now that the tag is public). On an
   # Arch host this Just Works; on the CI Ubuntu runner we skip (sources
   # aren't downloadable until the release artifacts are uploaded, and we
@@ -105,4 +127,4 @@ for pkg in "${PKGS[@]}"; do
   rm -rf "$workdir"
   echo "✓ $pkg pushed"
 done
-echo "Done. yay -S opal (or opal-bin) should now resolve."
+echo "Done. yay -S opal-media-player-bin (or opal-media-player) should now resolve."

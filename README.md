@@ -82,7 +82,7 @@ Or pick your row — every file is on [Releases](../../releases):
 | 🍺 | **Homebrew** | `brew install debpalash/tap/opal` |
 | 📦 | **Debian / Ubuntu** | `sudo apt install ./opal_*_amd64.deb` |
 | 🎩 | **Fedora / openSUSE** | `sudo dnf install ./opal-*.x86_64.rpm` |
-| 🏹 | **Arch** | `yay -S opal-bin` (or `opal` to build) |
+| 🏹 | **Arch** | `yay -S opal-media-player-bin` (or `opal-media-player` to build) |
 | 🐧 | **Any Linux** | `chmod +x Opal-*.AppImage` and run it |
 | 🪟 | **Windows** (x64) — **alpha** | run the `.msi` — or unzip the portable `.zip` |
 | 🛠 | **From source** | `git clone` → `zig build run` |

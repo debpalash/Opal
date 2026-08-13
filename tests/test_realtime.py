@@ -8,9 +8,11 @@ Requirements: ZigZag must be running (zig build run)
 """
 
 import json
+import glob
 import time
 import sys
 import os
+import tempfile
 import urllib.request
 import urllib.error
 import sqlite3
@@ -112,9 +114,12 @@ def test_voice_socket():
     import socket as sock
     t0 = time.time()
     try:
+        sockets = glob.glob(os.path.join(tempfile.gettempdir(), "opal-voice-runtime-*", "voice.sock"))
+        if not sockets:
+            raise FileNotFoundError("private voice socket not found")
         s = sock.socket(sock.AF_UNIX, sock.SOCK_STREAM)
         s.settimeout(1)
-        s.connect("/tmp/opal-voice.sock")
+        s.connect(sockets[0])
         s.close()
         dt = int((time.time() - t0) * 1000)
         add_result("Voice Server Socket", "Connectivity", "pass", "Connected to voice server", dt)

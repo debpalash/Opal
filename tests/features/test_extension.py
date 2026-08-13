@@ -99,7 +99,7 @@ def test_opal_browser_extension():
             problems.append(f"content.ts missing framework marker '{marker}'")
 
     # ── Zig side: new endpoints + source_config install path ──
-    remote = _src("src/services/remote.zig")
+    remote = _remote_api()
     if '"/ingest"' not in remote:
         problems.append("remote.zig missing the /api/ingest handler")
     if '"/source/add"' not in remote:
@@ -269,6 +269,10 @@ def test_extension_setup_flow():
         "asks whether an account exists": "/api/auth/status" in bg,
         "signs in for a token": "/api/auth/login" in bg,
         "can create the first account": "/api/auth/register" in bg,
+        "first account needs out-of-band setup capability": (
+            "X-Opal-Setup-Token" in bg and "setupToken?: string" in shared
+            and 'id="setup-code"' in opts_html and "/^[0-9a-f]{64}$/" in opts_ts
+        ),
         # Credentials in a URL land in logs and history; the server reads them
         # from the body via credParam for the same reason.
         "credentials travel in the body": "URLSearchParams" in bg and "init.body" in bg,
@@ -288,7 +292,7 @@ def test_extension_setup_flow():
 
     # Server side: these four must stay reachable without a Bearer token, or the
     # whole flow deadlocks (you need a token to get a token).
-    remote = _src("src/services/remote.zig")
+    remote = _remote_api()
     gate = remote.index("All other endpoints require Bearer auth")
     before = remote[:gate]
     for ep in ('"/health"', '"/api/auth/"'):
@@ -308,7 +312,7 @@ def test_extension_feature_coverage():
     bg = open(os.path.join(ext_dir, "src/background.ts")).read()
     panel_ts = open(os.path.join(ext_dir, "src/sidepanel/sidepanel.ts")).read()
     panel_html = open(os.path.join(ext_dir, "src/sidepanel/index.html")).read()
-    remote = _src("src/services/remote.zig")
+    remote = _remote_api()
 
     # Each row: (label, endpoint the worker must call, id the panel must render)
     features = [
@@ -328,8 +332,10 @@ def test_extension_feature_coverage():
         if element.split("-")[0] not in panel_ts:
             problems.append(f"{label}: panel has no code for it")
         # Every endpoint the extension calls must actually exist server-side.
+        # Feature-owned API modules receive the already-stripped path from the
+        # central router, so the handler may compare `path`, not `api_path`.
         api = endpoint[len("/api"):]
-        if f'api_path, "{api}"' not in remote:
+        if f'api_path, "{api}"' not in remote and f'path, "{api}"' not in remote:
             problems.append(f"{label}: remote.zig has no {endpoint} handler")
 
     # Shortcuts: a send that does not need the panel open.

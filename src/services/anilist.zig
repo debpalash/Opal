@@ -32,15 +32,13 @@ pub fn updateProgress(media_id: i64, episode: i32) void {
             const auth = std.fmt.bufPrintZ(&auth_buf, "Authorization: Bearer {s}", .{access_token[0..access_token_len]}) catch return;
 
             var child = io_global.Child.init(&.{
-                "curl", "-s", "-X", "POST", ANILIST_API,
-                "-H", "Content-Type: application/json",
-                "-H", "Accept: application/json",
-                "-H", auth,
-                "-d", gql,
+                "curl", "-s",                             "-X", "POST",                     ANILIST_API,
+                "-H",   "Content-Type: application/json", "-H", "Accept: application/json", "--config",
+                "-",    "-d",                             gql,
             }, alloc);
             child.stdout_behavior = .Ignore;
             child.stderr_behavior = .Ignore;
-            child.spawn() catch {
+            @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{auth}) catch {
                 logs.pushLog("warn", "anilist", "Failed to update progress", false);
                 return;
             };
@@ -71,9 +69,9 @@ pub fn fetchMetaByMalIds(ids_csv: []const u8, sfw: bool, out: []u8) usize {
     , .{ ids_csv, anilist_pure.adultGate(sfw) }) catch return 0;
 
     var child = io_global.Child.init(&.{
-        "curl",   "-s",                          "-X",                   "POST", ANILIST_API,
-        "-H",     "Content-Type: application/json", "-H",                "Accept: application/json",
-        "-d",     gql,
+        "curl", "-s",                             "-X", "POST",                     ANILIST_API,
+        "-H",   "Content-Type: application/json", "-H", "Accept: application/json", "-d",
+        gql,
     }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
@@ -93,8 +91,15 @@ pub fn searchAnime(title: []const u8, out_id: *i64) void {
     var ei: usize = 0;
     for (title) |ch| {
         if (ei + 2 >= esc.len) break;
-        if (ch == '"') { esc[ei] = '\\'; ei += 1; esc[ei] = '"'; ei += 1; }
-        else { esc[ei] = ch; ei += 1; }
+        if (ch == '"') {
+            esc[ei] = '\\';
+            ei += 1;
+            esc[ei] = '"';
+            ei += 1;
+        } else {
+            esc[ei] = ch;
+            ei += 1;
+        }
     }
 
     var gql_buf: [512]u8 = undefined;
@@ -103,10 +108,9 @@ pub fn searchAnime(title: []const u8, out_id: *i64) void {
     , .{esc[0..ei]}) catch return;
 
     var child = io_global.Child.init(&.{
-        "curl", "-s", "-X", "POST", ANILIST_API,
-        "-H", "Content-Type: application/json",
-        "-H", "Accept: application/json",
-        "-d", gql,
+        "curl", "-s",                             "-X", "POST",                     ANILIST_API,
+        "-H",   "Content-Type: application/json", "-H", "Accept: application/json", "-d",
+        gql,
     }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;

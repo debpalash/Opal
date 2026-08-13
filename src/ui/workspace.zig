@@ -84,7 +84,7 @@ pub fn saveWorkspaceNamed(allocator: std.mem.Allocator, raw_name: []const u8) vo
     var ws_players = std.ArrayListUnmanaged(WorkspacePlayer).empty;
     defer ws_players.deinit(allocator);
 
-    for (state.app.players.items, 0..) |p, pi| {
+    for (state.app.players.items) |p| {
         // Try multiple sources for the URL
         var url: []const u8 = "";
 
@@ -108,9 +108,6 @@ pub fn saveWorkspaceNamed(allocator: std.mem.Allocator, raw_name: []const u8) vo
                 }
             }
         }
-
-        std.debug.print("[workspace] player {d}: source_url_len={d} current_url_len={d} url='{s}'\n",
-            .{ pi, p.source_url_len, p.current_url_len, url });
 
         if (url.len == 0) continue;
 

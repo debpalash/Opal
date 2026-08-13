@@ -13,8 +13,21 @@ const anilist = @import("anilist.zig");
 const anilist_pure = @import("anilist_pure.zig");
 const anime_schedule = @import("anime_schedule.zig");
 const anime_schedule_pure = @import("anime_schedule_pure.zig");
+const bounded_process = @import("../core/bounded_process.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
+
+/// Run a one-shot anime helper with an independent outer deadline and a hard
+/// output ceiling. curl's own --max-time remains useful transport policy, but
+/// it cannot guarantee that a wedged helper (or a descendant retaining stdout)
+/// is reaped. bounded_process owns that complete lifecycle on every platform.
+fn boundedCurl(argv: []const []const u8, output: []u8, timeout_ms: i64) ?[]const u8 {
+    const result = bounded_process.run(argv, output, .{
+        .timeout_ms = timeout_ms,
+        .terminate_grace_ms = 250,
+    });
+    return if (result.ok()) result.output else null;
+}
 
 // dvui texture ops MUST run on the UI thread (they touch current_window / the
 // frame texture-trash list). The Jikan parse WORKER threads overwrite results[]
@@ -236,21 +249,14 @@ fn loadMoreGridWorker(my_gen: u32, mode: state.AnimeMode) void {
 
     const argv = [_][]const u8{ "curl", "-s", "--connect-timeout", "3", "-A", agent, "--max-time", "10", url };
 
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return;
-
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
-    const bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-
-    if (bytes == 0) return;
+    const body = boundedCurl(&argv, buf, 12_000) orelse return;
+    if (body.len == 0) return;
     // Bail if a newer fetch (mode switch / fresh search) superseded us mid-curl.
     if (search_gen.load(.acquire) != my_gen) return;
 
-    const json = buf[0..bytes];
+    const json = body;
     const added = parseJikanDataEx(json, my_gen, mode == .calendar, state.app.anime.result_count);
     if (added == 0) {
         more_available = false;
@@ -561,32 +567,26 @@ fn listsThread() void {
     if (have_cached and !stale) return; // fresh cache — done, zero requests
 
     // ── 2. Refresh from the plugin's endpoint. ──
-    const argv = [_][]const u8{ "curl", "-sL", "-A", agent, "--max-time", "20", url };
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch {
-        if (!have_cached) logs.pushLog("error", "anime", "Lists: curl failed", true);
-        return;
-    };
-
     const buf = alloc.alloc(u8, LISTS_MAX_BYTES) catch {
-        _ = child.wait() catch {};
+        if (!have_cached) logs.pushLog("error", "anime", "Lists: response allocation failed", true);
         return;
     };
     defer alloc.free(buf);
-    const bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
-    _ = child.wait() catch {};
+    const argv = [_][]const u8{ "curl", "-sL", "-A", agent, "--max-time", "20", url };
+    const body = boundedCurl(&argv, buf, 22_000) orelse {
+        if (!have_cached) logs.pushLog("error", "anime", "Lists: bounded fetch failed", true);
+        return;
+    };
 
     // Empty / error page → keep whatever the cache already put on screen.
-    if (bytes < 32) {
+    if (body.len < 32) {
         if (!have_cached) logs.pushLog("error", "anime", "Lists: empty response", true);
         return;
     }
     // Superseded by a newer fetch (mode switch, chip change) while we were in curl.
     if (search_gen.load(.acquire) != my_gen) return;
 
-    const json = buf[0..bytes];
+    const json = body;
     const n = publishListsJson(json, my_gen);
     if (n == 0) {
         if (!have_cached) logs.pushLog("error", "anime", "Lists: no usable entries", true);
@@ -667,56 +667,17 @@ fn publishListsJson(json: []const u8, my_gen: u32) usize {
     return n;
 }
 
-/// GET `url` with curl into `buf`; returns bytes read (0 on failure). Bounded:
-/// --connect-timeout so a dead/flaky Jikan can't stall the worker, --max-time
-/// as a hard ceiling (the argv previously had NEITHER — a hung Jikan hung the
-/// whole anime tab).
-/// Curl `url` into `buf`, staging through a temp FILE rather than a pipe.
-///
-/// WINDOWS DEADLOCK THIS AVOIDS: a piped child blocks in write() once its
-/// output fills the OS pipe buffer (~64KB). Jikan's top-anime page is ~94KB, so
-/// curl stalled mid-write while the app sat in readAll() — neither side moved,
-/// the child never exited (observed: curl alive 56s at 0.1s CPU despite
-/// --max-time 10), and the anime grid stayed empty forever. Small responses
-/// (podcasts, radio) fit the buffer, so they always worked — which is exactly
-/// the split that made this look source-specific. A regular file has no such
-/// bound: curl writes it all, exits, and we read it back with no interleaving.
+/// GET `url` into `buf`; returns bytes read (0 on failure). The bounded process
+/// seam drains stdout while curl runs, enforces the caller's output capacity,
+/// and terminates/reaps the whole tree if curl or an inheriting descendant
+/// wedges. This replaces the former predictable on-disk staging file.
 fn jikanGet(url: []const u8, buf: []u8) usize {
-    const io_g = @import("../core/io_global.zig");
-
-    // Unique per call — concurrent workers must not share a staging path.
-    const seq = tmp_seq.fetchAdd(1, .monotonic);
-    var cfg_buf: [512]u8 = undefined;
-    const cfg = @import("../core/paths.zig").configDir(&cfg_buf);
-    var dir_buf: [600]u8 = undefined;
-    const dir = std.fmt.bufPrint(&dir_buf, "{s}/tmp", .{cfg}) catch return 0;
-    io_g.cwdMakePath(dir) catch {};
-    var path_buf: [700]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_buf, "{s}/jikan_{d}.json", .{ dir, seq }) catch return 0;
-
     const argv = [_][]const u8{
-        "curl", "-s", "--connect-timeout", "3", "--max-time", "10", "-A", agent, "-o", path, url,
+        "curl", "-s", "--connect-timeout", "3", "--max-time", "10", "-A", agent, url,
     };
-    var child = io_g.Child.init(&argv, alloc);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return 0;
-    _ = child.wait() catch return 0;
-
-    const body = io_g.cwdReadFileAlloc(path, alloc, buf.len) catch {
-        io_g.cwdDeleteFile(path) catch {};
-        return 0;
-    };
-    defer alloc.free(body);
-    io_g.cwdDeleteFile(path) catch {};
-    const n = @min(body.len, buf.len);
-    @memcpy(buf[0..n], body[0..n]);
-    return n;
+    const body = boundedCurl(&argv, buf, 12_000) orelse return 0;
+    return body.len;
 }
-
-/// Serial number for jikanGet's staging files (see above).
-var tmp_seq = std.atomic.Value(u32).init(0);
 
 fn trendingThread() void {
     defer state.app.anime.is_loading.store(false, .release);
@@ -847,24 +808,16 @@ fn searchThread(my_gen: u32) void {
     var url_buf: [512]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "{s}?q={s}&limit=25&page={d}{s}", .{ jikan_api, enc_buf[0..enc_len], grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }) catch return;
 
-    const argv = [_][]const u8{
-        "curl", "-s", "-A", agent, url,
-    };
-
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return;
-
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
-    const bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
-    _ = child.wait() catch {};
+    const argv = [_][]const u8{
+        "curl", "-s", "--connect-timeout", "3", "--max-time", "10", "-A", agent, url,
+    };
+    const body = boundedCurl(&argv, buf, 12_000) orelse return;
+    if (body.len == 0) return;
 
-    if (bytes == 0) return;
-
-    _ = parseJikanData(buf[0..bytes], my_gen);
-    if (search_gen.load(.acquire) == my_gen) more_available = parsePagination(buf[0..bytes]);
+    _ = parseJikanData(body, my_gen);
+    if (search_gen.load(.acquire) == my_gen) more_available = parsePagination(body);
     logs.pushLog("info", "anime", "Search done (Jikan API)", false);
 }
 
@@ -906,19 +859,12 @@ fn seasonalThread(my_gen: u32) void {
 
     const argv = [_][]const u8{ "curl", "-s", "--connect-timeout", "3", "-A", agent, "--max-time", "10", url };
 
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return;
-
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
-    const bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-
-    if (bytes == 0) return;
-    _ = parseJikanData(buf[0..bytes], my_gen);
-    if (search_gen.load(.acquire) == my_gen) more_available = parsePagination(buf[0..bytes]);
+    const body = boundedCurl(&argv, buf, 12_000) orelse return;
+    if (body.len == 0) return;
+    _ = parseJikanData(body, my_gen);
+    if (search_gen.load(.acquire) == my_gen) more_available = parsePagination(body);
     logs.pushLog("info", "anime", "Seasonal loaded (Jikan API)", false);
 }
 
@@ -955,21 +901,14 @@ fn calendarThread(my_gen: u32) void {
 
     const argv = [_][]const u8{ "curl", "-s", "--connect-timeout", "3", "-A", agent, "--max-time", "10", url };
 
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return;
-
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
-    const bytes = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-
-    if (bytes == 0) return;
+    const body = boundedCurl(&argv, buf, 12_000) orelse return;
+    if (body.len == 0) return;
     // parseJikanData handles the cards; pass with_broadcast so it also extracts
     // each item's broadcast.string into anime.broadcast[] (aligned to index).
-    _ = parseJikanDataEx(buf[0..bytes], my_gen, true, 0);
-    if (search_gen.load(.acquire) == my_gen) more_available = parsePagination(buf[0..bytes]);
+    _ = parseJikanDataEx(body, my_gen, true, 0);
+    if (search_gen.load(.acquire) == my_gen) more_available = parsePagination(body);
     logs.pushLog("info", "anime", "Calendar loaded (Jikan API)", false);
 }
 
@@ -1468,17 +1407,10 @@ fn fetchEpisodeDataThread(idx: usize) void {
         const argv = [_][]const u8{
             "curl", "-s", "-A", agent, "--max-time", "10", url,
         };
-        var child = @import("../core/io_global.zig").Child.init(&argv, std.heap.c_allocator);
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Ignore;
-        _ = child.spawn() catch break;
-
         var buf: [64 * 1024]u8 = undefined;
-        const len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &buf) catch 0 else 0;
-        _ = child.wait() catch {};
-
-        if (len < 10) break;
-        const json = buf[0..len];
+        const body = boundedCurl(&argv, &buf, 12_000) orelse break;
+        if (body.len < 10) break;
+        const json = body;
 
         // Parse each episode in the data array
         var pos: usize = 0;
@@ -1589,20 +1521,13 @@ pub fn loadRelations(idx: usize) void {
             const url = std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/anime/{s}/relations", .{mal_id}) catch return;
 
             const argv = [_][]const u8{ "curl", "-s", "-A", agent, "--max-time", "10", url };
-            var child = @import("../core/io_global.zig").Child.init(&argv, std.heap.c_allocator);
-            child.stdout_behavior = .Pipe;
-            child.stderr_behavior = .Ignore;
-            _ = child.spawn() catch return;
-
             const buf = @import("../core/alloc.zig").allocator.alloc(u8, 128 * 1024) catch {
-                _ = child.wait() catch {};
                 return;
             };
             defer @import("../core/alloc.zig").allocator.free(buf);
-            const len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
-            _ = child.wait() catch {};
-            if (len < 10) return;
-            parseRelations(buf[0..len]);
+            const body = boundedCurl(&argv, buf, 12_000) orelse return;
+            if (body.len < 10) return;
+            parseRelations(body);
         }
     };
 
@@ -1744,24 +1669,17 @@ pub fn jumpToAnime(mal_id: []const u8) void {
             const url = std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/anime/{s}", .{id}) catch return;
 
             const argv = [_][]const u8{ "curl", "-s", "-A", agent, "--max-time", "12", url };
-            var child = @import("../core/io_global.zig").Child.init(&argv, std.heap.c_allocator);
-            child.stdout_behavior = .Pipe;
-            child.stderr_behavior = .Ignore;
-            _ = child.spawn() catch return;
-
             const buf = @import("../core/alloc.zig").allocator.alloc(u8, 128 * 1024) catch {
-                _ = child.wait() catch {};
                 return;
             };
             defer @import("../core/alloc.zig").allocator.free(buf);
-            const len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
-            _ = child.wait() catch {};
-            if (len < 10) return;
+            const body = boundedCurl(&argv, buf, 14_000) orelse return;
+            if (body.len < 10) return;
 
             // The single-anime endpoint wraps one object in {"data":{...}} — the
             // same field shape parseJikanData walks, so reuse it (it caps at the
             // first mal_id object → exactly one card in results[0]).
-            _ = parseJikanData(buf[0..len], @This().gen);
+            _ = parseJikanData(body, @This().gen);
 
             // If still current, select it and load its episodes on this thread.
             if (search_gen.load(.acquire) == @This().gen and state.app.anime.result_count > 0) {
@@ -1954,8 +1872,6 @@ fn fetchStreamThread(ep_buf: [8]u8, ep_len: usize) void {
 }
 
 fn tryAnimePaheDDL(name: []const u8, ep_no: []const u8) bool {
-    const c_alloc = std.heap.c_allocator;
-
     // URL-encode the anime name for search
     var enc_buf: [256]u8 = undefined;
     var enc_len: usize = 0;
@@ -1988,17 +1904,10 @@ fn tryAnimePaheDDL(name: []const u8, ep_no: []const u8) bool {
         "-H",       "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0", "-H",         referer,
         search_url,
     };
-    var child = @import("../core/io_global.zig").Child.init(&argv_search, c_alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return false;
-
     var buf: [32 * 1024]u8 = undefined;
-    const len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &buf) catch 0 else 0;
-    _ = child.wait() catch {};
-
-    if (len < 10) return false;
-    const json = buf[0..len];
+    const body = boundedCurl(&argv_search, &buf, 12_000) orelse return false;
+    if (body.len < 10) return false;
+    const json = body;
 
     // Extract first matching session from search results
     // Format: {"data":[{"session":"xxxx-xxxx","title":"...","episodes":N},...]}
@@ -2023,13 +1932,12 @@ fn tryAnimePaheDDL(name: []const u8, ep_no: []const u8) bool {
 
     logs.pushLog("info", "anime", "DDL: Loading via AnimePahe...", false);
 
-    // Load directly via mpv (it will use ytdl-hook or we can try yt-dlp extraction)
-    const c = @import("../core/c.zig");
+    // Load through the typed player seam; mpv's ytdl-hook resolves this page.
     if (state.app.players.items.len > 0 and state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
-        var cmd_buf: [300]u8 = undefined;
-        const cmd_str = std.fmt.bufPrintZ(&cmd_buf, "loadfile \"{s}\"", .{watch_url}) catch return false;
-        _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd_str.ptr);
+        // The AnimePahe fallback runs on a resolver thread, so keep its former
+        // command-only semantics rather than touching UI-owned textures here.
+        p.commitPlayback(.{ .url = watch_url, .mode = .replace });
         return true;
     }
 
@@ -2147,22 +2055,16 @@ fn scraperGet(url: []const u8, buf: []u8) usize {
 /// POST `body` to the DooPlay admin-ajax endpoint with the Referer + AJAX marker
 /// the WordPress handler requires. Returns bytes read into `dst` (0 on failure).
 fn scraperPost(url: []const u8, referer: []const u8, body: []const u8, dst: []u8) usize {
-    const io_g = @import("../core/io_global.zig");
     var ref_buf: [320]u8 = undefined;
     const ref_hdr = std.fmt.bufPrint(&ref_buf, "Referer: {s}", .{referer}) catch return 0;
     const argv = [_][]const u8{
-        "curl",       "-sL",           "-A",   agent,
-        "-H",         "X-Requested-With: XMLHttpRequest",
-        "-H",         ref_hdr,         "--data", body,
-        "--max-time", "15",            url,
+        "curl",   "-sL",                              "-A",         agent,
+        "-H",     "X-Requested-With: XMLHttpRequest", "-H",         ref_hdr,
+        "--data", body,                               "--max-time", "15",
+        url,
     };
-    var child = io_g.Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return 0;
-    const n = if (child.stdout) |*so| io_g.readAll(so, dst) catch 0 else 0;
-    _ = child.wait() catch {};
-    return n;
+    const response = boundedCurl(&argv, dst, 17_000) orelse return 0;
+    return response.len;
 }
 
 /// Fetch + parse a scraper search (or popular) grid and publish into results[].
@@ -4372,24 +4274,16 @@ pub fn fetchPoster(item: *state.AnimeResult) void {
             const u = url_buf[0..url_len];
 
             const argv = [_][]const u8{ "curl", "-sL", "--max-time", "10", u };
-            var child = @import("../core/io_global.zig").Child.init(&argv, std.heap.c_allocator);
-            child.stdout_behavior = .Pipe;
-            child.stderr_behavior = .Ignore;
-            _ = child.spawn() catch {
-                markDone(result_idx, u);
-                return;
-            };
-
             const img_buf = @import("../core/alloc.zig").allocator.alloc(u8, 512 * 1024) catch {
-                _ = child.wait() catch {};
                 markDone(result_idx, u);
                 return;
             };
             defer @import("../core/alloc.zig").allocator.free(img_buf);
-            const img_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, img_buf) catch 0 else 0;
-            _ = child.wait() catch {};
-
-            if (img_len < 100) {
+            const body = boundedCurl(&argv, img_buf, 12_000) orelse {
+                markDone(result_idx, u);
+                return;
+            };
+            if (body.len < 100) {
                 markDone(result_idx, u);
                 return;
             }
@@ -4397,7 +4291,7 @@ pub fn fetchPoster(item: *state.AnimeResult) void {
             var w: c_int = 0;
             var h: c_int = 0;
             var comp: c_int = 0;
-            const pixels = dvui.c.stbi_load_from_memory(img_buf[0..img_len].ptr, @intCast(img_len), &w, &h, &comp, 4);
+            const pixels = dvui.c.stbi_load_from_memory(body.ptr, @intCast(body.len), &w, &h, &comp, 4);
             if (pixels == null) {
                 markDone(result_idx, u);
                 return;
@@ -4480,24 +4374,16 @@ pub fn fetchContinuePoster(item: *state.ContinueItem) void {
             const url = url_buf[0..url_len];
 
             const argv = [_][]const u8{ "curl", "-sL", "--max-time", "10", url };
-            var child = @import("../core/io_global.zig").Child.init(&argv, std.heap.c_allocator);
-            child.stdout_behavior = .Pipe;
-            child.stderr_behavior = .Ignore;
-            _ = child.spawn() catch {
-                markDone(idx, url);
-                return;
-            };
-
             const img_buf = @import("../core/alloc.zig").allocator.alloc(u8, 512 * 1024) catch {
-                _ = child.wait() catch {};
                 markDone(idx, url);
                 return;
             };
             defer @import("../core/alloc.zig").allocator.free(img_buf);
-            const img_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, img_buf) catch 0 else 0;
-            _ = child.wait() catch {};
-
-            if (img_len < 100) {
+            const body = boundedCurl(&argv, img_buf, 12_000) orelse {
+                markDone(idx, url);
+                return;
+            };
+            if (body.len < 100) {
                 markDone(idx, url);
                 return;
             }
@@ -4505,7 +4391,7 @@ pub fn fetchContinuePoster(item: *state.ContinueItem) void {
             var w: c_int = 0;
             var h: c_int = 0;
             var comp: c_int = 0;
-            const pixels = dvui.c.stbi_load_from_memory(img_buf[0..img_len].ptr, @intCast(img_len), &w, &h, &comp, 4);
+            const pixels = dvui.c.stbi_load_from_memory(body.ptr, @intCast(body.len), &w, &h, &comp, 4);
             if (pixels == null) {
                 markDone(idx, url);
                 return;

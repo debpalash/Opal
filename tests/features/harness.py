@@ -40,7 +40,7 @@ RESULTS_FILE = os.path.join(PROJECT_DIR, "tests", "results.json")
 
 __all__ = [
     "test", "TestResult", "results", "REGISTRY", "run_all",
-    "get_db", "_src", "_between", "_parse_catalog",
+    "get_db", "_src", "_web_app", "_web_js", "_remote_api", "_between", "_parse_catalog",
     "DB_PATH", "PROJECT_DIR", "RESULTS_FILE", "_EMOJI", "_re",
 ]
 
@@ -102,6 +102,29 @@ def get_db():
 def _src(rel):
     p = os.path.join(PROJECT_DIR, rel)
     return open(p).read() if os.path.exists(p) else ""
+
+
+def _web_js():
+    """The ordered browser bundle as served by web/index.html."""
+    names = (
+        "core.js", "now-playing.js", "catalog.js", "playback.js", "integrations.js",
+        "media.js", "discovery.js", "boot.js",
+    )
+    return "\n".join(_src(f"web/js/{name}") for name in names)
+
+
+def _web_app():
+    """Web feature source across markup, styles, and ordered JS bundles."""
+    return "\n".join((_src("web/index.html"), _src("web/styles/app.css"), _web_js()))
+
+
+def _remote_api():
+    """Remote HTTP subsystem across its feature-owned modules."""
+    names = (
+        "remote.zig", "remote_http.zig", "remote_static.zig",
+        "remote_status.zig", "remote_library_api.zig", "remote_transfer_api.zig",
+    )
+    return "\n".join(_src(f"src/services/{name}") for name in names)
 
 
 def _between(src, start, end):

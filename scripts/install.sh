@@ -152,13 +152,13 @@ install_linux_system() {
     fi
     if have pacman; then
         for helper in yay paru; do
-            if have "$helper" && "$helper" -Si opal-bin >/dev/null 2>&1; then
+            if have "$helper" && "$helper" -Si opal-media-player-bin >/dev/null 2>&1; then
                 say "installing from the AUR via $helper"
-                "$helper" -S --noconfirm opal-bin
+                "$helper" -S --noconfirm opal-media-player-bin
                 receipt aur; say "done — run: opal"; return
             fi
         done
-        die "opal-bin is not reachable through yay or paru; omit OPAL_SYSTEM for a user-local install"
+        die "opal-media-player-bin is not reachable through yay or paru; omit OPAL_SYSTEM for a user-local install"
     fi
 
     die "no supported system package manager found; omit OPAL_SYSTEM for a user-local install"
@@ -293,7 +293,7 @@ do_uninstall() {
         brew)        brew uninstall opal ;;
         deb)         sudo apt-get remove -y opal ;;
         rpm)         { have dnf && sudo dnf remove -y opal; } || sudo zypper --non-interactive remove opal ;;
-        aur)         sudo pacman -R --noconfirm opal-bin ;;
+        aur)         sudo pacman -R --noconfirm opal-media-player-bin ;;
         app:*)       rm -rf "${method#app:}/Opal.app" ;;
         local-prefix:*)
             prefix="${method#local-prefix:}"

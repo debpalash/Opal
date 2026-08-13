@@ -4,7 +4,7 @@
 Keeps a faster-whisper model warm so repeated transcriptions skip the
 cold-start cost. Protocol (matches ai_voice.transcribeViaServer):
 
-    socket: /tmp/opal-stt.sock
+    socket: `--socket <private-runtime-path>`
     client -> server : "<path-to-wav>"          (one write, no newline needed)
     server -> client : "<transcript>"           on success
                        "ERROR: <reason>"         on failure
@@ -12,11 +12,42 @@ cold-start cost. Protocol (matches ai_voice.transcribeViaServer):
 Exits cleanly (non-zero) if faster-whisper is unavailable, so the Zig
 caller never starts depending on a socket that won't appear.
 """
+import atexit
 import os
+import shutil
 import socket
 import sys
+import tempfile
 
-SOCK_PATH = "/tmp/opal-stt.sock"
+_default_runtime = None
+
+
+def _socket_path() -> str:
+    global _default_runtime
+    try:
+        idx = sys.argv.index("--socket")
+        return sys.argv[idx + 1]
+    except (ValueError, IndexError):
+        configured = os.environ.get("OPAL_STT_SOCKET")
+        if configured:
+            return configured
+        _default_runtime = tempfile.mkdtemp(prefix="opal-stt-")
+        return os.path.join(_default_runtime, "stt.sock")
+
+
+SOCK_PATH = _socket_path()
+
+
+def _cleanup_runtime():
+    try:
+        os.unlink(SOCK_PATH)
+    except FileNotFoundError:
+        pass
+    if _default_runtime:
+        shutil.rmtree(_default_runtime, ignore_errors=True)
+
+
+atexit.register(_cleanup_runtime)
 
 
 def _eprint(*a):
@@ -49,6 +80,7 @@ def main() -> int:
 
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(SOCK_PATH)
+    os.chmod(SOCK_PATH, 0o600)
     srv.listen(4)
     _eprint(f"opal-stt-server listening on {SOCK_PATH} (model={model_name})")
 

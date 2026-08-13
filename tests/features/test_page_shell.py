@@ -142,8 +142,8 @@ def test_podcasts_wired():
     shell = _src("src/ui/shell.zig")
     svc = _src("src/services/podcasts.zig")
     pure = _src("src/services/podcasts_pure.zig")
-    rem = _src("src/services/remote.zig")
-    web = _src("web/index.html")
+    rem = _remote_api()
+    web = _web_app()
     checks = {
         # REGRESSION — a 6.9 MB feed against a 1 MB cap hung the app permanently.
         # readAll() stops when the buffer is full and leaves the rest in the pipe;
@@ -353,7 +353,7 @@ def test_brand_is_opal():
     # User-facing brand unified to "Opal — Play everything". Guard the display
     # surfaces against regressing to the old "ZigZag Media Console" wording.
     main = _src("src/main.zig")
-    web = _src("web/index.html")
+    web = _web_app()
     tools = _src("src/services/ai_tools.zig")
     checks = {
         "window title": 'title = "Opal' in main and "ZigZag Media Console" not in main,
@@ -370,7 +370,7 @@ def test_brand_is_opal():
 def test_web_api_base_port():
     # Web UI is served on :3000 but the JSON API lives on :41595 — index.html
     # must target the API port, not location.origin (which is the :3000 server).
-    html = _src("web/index.html")
+    html = _web_app()
     if not html:
         return "skip", "web/index.html not present"
     if ":41595" in html and "const API = location.origin;" not in html:

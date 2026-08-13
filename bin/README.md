@@ -16,9 +16,14 @@ and the Zig caller falls back to the next strategy in its chain.
 | Script | Role | Socket / output |
 | --- | --- | --- |
 | `opal-stt.py` | One-shot transcription of a WAV → stdout | — |
-| `opal-stt-server.py` | Warm STT server (model stays loaded) | `/tmp/opal-stt.sock` |
-| `opal-tts-server.py` | Warm TTS server (text → WAV) | `/tmp/opal-tts.sock` → `/tmp/opal_ai_tts.wav` |
-| `opal-voice-server.py` | Continuous VAD conversation + barge-in | `/tmp/opal-voice.sock` |
+| `opal-stt-server.py` | Warm STT server (model stays loaded) | App-provided private `--socket` path |
+| `opal-tts-server.py` | Warm TTS server (text → WAV) | App-provided private `--socket` / `--output` paths |
+| `opal-voice-server.py` | Continuous VAD conversation + barge-in | App-provided private `--socket` path |
+
+Managed helpers run inside a cryptographically random `0700` runtime directory;
+their socket files are `0600`. Standalone helper launches create an equivalent
+private directory automatically unless an explicit path/environment override is
+provided.
 
 ## Voice paths (no Python required)
 
@@ -52,3 +57,7 @@ conversation server with barge-in.
 | `OPAL_STT_MODEL` | `base.en` | faster-whisper model size (`tiny.en`, `small.en`, …) |
 | `OPAL_TTS_VOICE` | `Bella` | KittenTTS voice |
 | `OPAL_TTS_SPEED` | `1.0` | KittenTTS speed multiplier |
+| `OPAL_STT_SOCKET` | private random path | Standalone STT socket override |
+| `OPAL_TTS_SOCKET` | private random path | Standalone TTS socket override |
+| `OPAL_TTS_OUTPUT` | private random path | Standalone TTS WAV override |
+| `OPAL_VOICE_SOCKET` | private random path | Standalone conversation socket override |

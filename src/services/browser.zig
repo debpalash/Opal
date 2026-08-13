@@ -7,6 +7,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 const pure = @import("browser_pure.zig");
 const io_g = @import("../core/io_global.zig");
+const player = @import("../player/player.zig");
 
 // Keep the anti-block scrape-fetch layer (services/scrape_fetch.zig) in the
 // build graph and compile-checked even before any scraper is wired through it
@@ -2305,12 +2306,27 @@ fn maybeSyncViewport(w_in: f32, h_in: f32) void {
 pub const ContentRoute = pure.ContentRoute;
 pub const routeContent = pure.routeContent;
 
-/// Load a URL directly into mpv without content-type routing.
-/// Use for URLs already known to be video streams (e.g. Stremio debrid links,
-/// direct CDN streams) where routeContent() would misidentify them as web pages.
-pub fn loadContentDirect(url: []const u8) void {
+/// One direct-play interface. It owns player creation, metadata ordering,
+/// network option set-or-clear, provider selection, and navigation so callers
+/// cannot accidentally implement only part of a playback transition.
+pub const PlaybackRequest = struct {
+    url: []const u8,
+    mode: player.LoadMode = .replace,
+    art_url: []const u8 = "",
+    title: []const u8 = "",
+    subtitle: []const u8 = "",
+    user_agent: []const u8 = "",
+    headers: []const player.HttpHeader = &.{},
+    /// Optional cache namespace for a best-effort remote health probe. Keeping
+    /// this on the request makes candidate health a property of the playback
+    /// seam instead of forcing each card/view to invent its own hook.
+    health_kind: []const u8 = "",
+};
+
+pub fn playDirect(request: PlaybackRequest) void {
+    if (request.url.len == 0) return;
     if (state.app.players.items.len == 0) {
-        if (@import("../player/player.zig").MediaPlayer.init(alloc)) |np| {
+        if (player.MediaPlayer.init(alloc)) |np| {
             state.app.players.append(alloc, np) catch {
                 np.deinit(alloc);
                 return;
@@ -2321,12 +2337,36 @@ pub fn loadContentDirect(url: []const u8) void {
     if (state.app.active_player_idx >= state.app.players.items.len) return;
     const p = state.app.players.items[state.app.active_player_idx];
     p.provider = .mpv;
-    var url_z: [2049]u8 = undefined;
-    const len = @min(url.len, 2048);
-    @memcpy(url_z[0..len], url[0..len]);
-    url_z[len] = 0;
-    p.load_file(@as([*c]const u8, @ptrCast(&url_z[0])));
-    state.gotoPlayer();
+
+    if (request.mode == .replace) {
+        stashFromNowPlaying(request.art_url, request.title, request.subtitle);
+        state.consumePendingPlay(p);
+    }
+
+    if (request.health_kind.len > 0 and
+        (std.mem.startsWith(u8, request.url, "http://") or std.mem.startsWith(u8, request.url, "https://")))
+    {
+        @import("link_health.zig").probe(request.health_kind, request.url);
+    }
+
+    p.load(.{
+        .url = request.url,
+        .mode = request.mode,
+        .user_agent = request.user_agent,
+        .headers = request.headers,
+    });
+
+    if (request.mode == .replace) {
+        p.setNowPlaying(request.art_url, request.title, request.subtitle);
+        state.gotoPlayer();
+    }
+}
+
+/// Load a URL directly into mpv without content-type routing.
+/// Use for URLs already known to be video streams (e.g. Stremio debrid links,
+/// direct CDN streams) where routeContent() would misidentify them as web pages.
+pub fn loadContentDirect(url: []const u8) void {
+    playDirect(.{ .url = url });
 }
 
 /// Like `loadContentDirect`, but attaches now-playing metadata (cover art URL,
@@ -2336,27 +2376,7 @@ pub fn loadContentDirect(url: []const u8) void {
 /// bottom bar. load_file clears any prior metadata first; setNowPlaying re-sets
 /// it after, so the order is clear-then-populate.
 pub fn loadContentDirectMeta(url: []const u8, art_url: []const u8, title: []const u8, subtitle: []const u8) void {
-    if (state.app.players.items.len == 0) {
-        if (@import("../player/player.zig").MediaPlayer.init(alloc)) |np| {
-            state.app.players.append(alloc, np) catch {
-                np.deinit(alloc);
-                return;
-            };
-            state.app.active_player_idx = 0;
-        } else |_| return;
-    }
-    if (state.app.active_player_idx >= state.app.players.items.len) return;
-    const p = state.app.players.items[state.app.active_player_idx];
-    p.provider = .mpv;
-    var url_z: [2049]u8 = undefined;
-    const len = @min(url.len, 2048);
-    @memcpy(url_z[0..len], url[0..len]);
-    url_z[len] = 0;
-    stashFromNowPlaying(art_url, title, subtitle);
-    state.consumePendingPlay(p);
-    p.load_file(@as([*c]const u8, @ptrCast(&url_z[0])));
-    p.setNowPlaying(art_url, title, subtitle);
-    state.gotoPlayer();
+    playDirect(.{ .url = url, .art_url = art_url, .title = title, .subtitle = subtitle });
 }
 
 /// Fall back to the now-playing card's own art/title for the loading screen
@@ -2383,25 +2403,9 @@ pub fn loadContentDirectMetaHeaders(
     title: []const u8,
     subtitle: []const u8,
     user_agent: []const u8,
-    headers: []const @import("../player/player.zig").HttpHeader,
+    headers: []const player.HttpHeader,
 ) void {
-    if (state.app.players.items.len == 0) {
-        if (@import("../player/player.zig").MediaPlayer.init(alloc)) |np| {
-            state.app.players.append(alloc, np) catch {
-                np.deinit(alloc);
-                return;
-            };
-            state.app.active_player_idx = 0;
-        } else |_| return;
-    }
-    if (state.app.active_player_idx >= state.app.players.items.len) return;
-    const p = state.app.players.items[state.app.active_player_idx];
-    p.provider = .mpv;
-    stashFromNowPlaying(art_url, title, subtitle);
-    state.consumePendingPlay(p);
-    p.loadStreamWithHttpHeaders(url, user_agent, headers);
-    p.setNowPlaying(art_url, title, subtitle);
-    state.gotoPlayer();
+    playDirect(.{ .url = url, .art_url = art_url, .title = title, .subtitle = subtitle, .user_agent = user_agent, .headers = headers });
 }
 
 /// Load content with automatic provider routing
@@ -2461,31 +2465,9 @@ pub fn loadContent(url: []const u8) void {
         return;
     }
 
-    // Video/audio → the MPV player pane. Create a player if none exists yet, so
-    // cold-start opens work too (Continue Watching, the launch resume prompt,
-    // deep links) — previously these silently no-op'd with no player present.
-    if (state.app.players.items.len == 0) {
-        if (@import("../player/player.zig").MediaPlayer.init(alloc)) |np| {
-            state.app.players.append(alloc, np) catch np.deinit(alloc);
-            if (state.app.players.items.len > 0) state.app.active_player_idx = state.app.players.items.len - 1;
-        } else |_| {}
-    }
-
-    if (state.app.active_player_idx < state.app.players.items.len) {
-        const p = state.app.players.items[state.app.active_player_idx];
-        p.provider = .mpv;
-
-        var url_z: [2049]u8 = undefined;
-        const len = @min(norm_url.len, 2048);
-        @memcpy(url_z[0..len], norm_url[0..len]);
-        url_z[len] = 0;
-        p.load_file(@ptrCast(&url_z[0]));
-
-        // Reveal the player page (and close the legacy drawer) so the user
-        // actually sees what they just loaded. Centralized here so search,
-        // resolver, queue, drag-drop and Resume all inherit it.
-        state.gotoPlayer();
-    }
+    // Video/audio → the typed direct-play seam. It creates the player on a
+    // cold start, clears persistent HTTP state, and reveals the player page.
+    playDirect(.{ .url = norm_url });
 }
 
 /// Resume a previously-played item in the PLAYER. Unlike `loadContent` — which

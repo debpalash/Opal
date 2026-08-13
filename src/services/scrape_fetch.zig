@@ -1,10 +1,9 @@
 const std = @import("std");
-const alloc = @import("../core/alloc.zig").allocator;
 const logs = @import("../core/logs.zig");
 const state = @import("../core/state.zig");
-const io_g = @import("../core/io_global.zig");
 const browser = @import("browser.zig");
 const pure = @import("scrape_fetch_pure.zig");
+const reliable_fetch = @import("reliable_fetch.zig");
 
 // ══════════════════════════════════════════════════════════
 // Anti-block scrape fetch — the "never blocked" fetch layer
@@ -51,95 +50,30 @@ fn browserFallbackAvailable() bool {
 ///
 /// curl writes headers to stderr (`-D /dev/stderr`) and the body to stdout, so
 /// the two streams come back on separate pipes with no interleaving to untangle.
-fn plainFetch(url: []const u8, post_body: ?[]const u8, out_buf: []u8, hdr_buf: []u8, hdr_len: *usize, status: *u16) ?[]const u8 {
+fn plainFetch(
+    url: []const u8,
+    post_body: ?[]const u8,
+    out_buf: []u8,
+    hdr_buf: []u8,
+    hdr_len: *usize,
+    status: *u16,
+    succeeded: *bool,
+) ?[]const u8 {
     hdr_len.* = 0;
     status.* = 0;
-
-    // Route through the reliable-fetch backend: curl-impersonate (browser
-    // JA3/JA4) when installed, else plain curl, PLUS the DPI-bypass proxy when
-    // enabled — this scrape path previously had neither (a real gap). We build
-    // the argv here (not reliable_fetch.fetch) because we also need curl's
-    // response headers on stderr (`-D /dev/stderr`) for the block detector.
-    const be = @import("reliable_fetch.zig").backend();
-    var argv: [28][]const u8 = undefined;
-    var an: usize = 0;
-    argv[an] = be.bin;
-    an += 1;
-    if (post_body) |b| {
-        // --data-binary, not -d: -d strips newlines and CRs, which silently
-        // corrupts any body that is not a single form line.
-        argv[an] = "--data-binary";
-        an += 1;
-        argv[an] = b;
-        an += 1;
-        argv[an] = "-H";
-        an += 1;
-        argv[an] = "Content-Type: application/x-www-form-urlencoded";
-        an += 1;
-    }
-    if (be.token.len > 0) {
-        argv[an] = "--impersonate";
-        an += 1;
-        argv[an] = be.token;
-        an += 1;
-    }
-    for ([_][]const u8{ "-s", "-L", "--compressed", "-A", BROWSER_UA, "--max-time", "20", "-D", "/dev/stderr", "-o", "-" }) |a| {
-        argv[an] = a;
-        an += 1;
-    }
-    if (@import("dpi_bypass.zig").proxyArgs()) |pa| {
-        for (pa) |a| {
-            if (an >= argv.len - 1) break;
-            argv[an] = a;
-            an += 1;
-        }
-    }
-    argv[an] = url;
-    an += 1;
-
-    var child = io_g.Child.init(argv[0..an], alloc);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    _ = child.spawn() catch return null;
-
-    // Read the body (stdout) to completion first. curl emits the (small)
-    // header block to stderr before the body, so it is already buffered in the
-    // stderr pipe — reading stdout fully cannot deadlock against it.
-    var body_len: usize = 0;
-    if (child.stdout) |*stdout| {
-        while (body_len < out_buf.len) {
-            const r = io_g.read(stdout, out_buf[body_len..]) catch break;
-            if (r == 0) break;
-            body_len += r;
-        }
-        // Drain any excess so curl never blocks on a full stdout pipe.
-        var junk: [4096]u8 = undefined;
-        while (true) {
-            const r = io_g.read(stdout, &junk) catch break;
-            if (r == 0) break;
-        }
-    }
-
-    if (child.stderr) |*stderr| {
-        var hl: usize = 0;
-        while (hl < hdr_buf.len) {
-            const r = io_g.read(stderr, hdr_buf[hl..]) catch break;
-            if (r == 0) break;
-            hl += r;
-        }
-        var junk: [4096]u8 = undefined;
-        while (true) {
-            const r = io_g.read(stderr, &junk) catch break;
-            if (r == 0) break;
-        }
-        hdr_len.* = hl;
-    }
-
-    _ = child.wait() catch {};
-
-    status.* = pure.parseStatus(hdr_buf[0..hdr_len.*]);
-    return out_buf[0..body_len];
+    succeeded.* = false;
+    const form_headers = [_]reliable_fetch.Header{.{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" }};
+    const result = reliable_fetch.request(url, out_buf, hdr_buf, .{
+        .user_agent = BROWSER_UA,
+        .headers = if (post_body != null) &form_headers else &.{},
+        .post_body = post_body,
+        .timeout_secs = 20,
+    });
+    hdr_len.* = result.headers.len;
+    status.* = result.status;
+    succeeded.* = result.ok();
+    if (result.body.len == 0 and result.status == 0) return null;
+    return result.body;
 }
 
 /// Fetch `url` into `out_buf`, transparently defeating Cloudflare/DDoS-Guard/
@@ -166,20 +100,23 @@ fn scrapeFetchBody(url: []const u8, post_body: ?[]const u8, out_buf: []u8) ?[]co
     var hdr_buf: [16 * 1024]u8 = undefined;
     var hdr_len: usize = 0;
     var status: u16 = 0;
-    const body = plainFetch(url, post_body, out_buf, &hdr_buf, &hdr_len, &status);
+    var plain_succeeded = false;
+    const body = plainFetch(url, post_body, out_buf, &hdr_buf, &hdr_len, &status, &plain_succeeded);
 
     const body_head = if (body) |b| b[0..@min(b.len, 16 * 1024)] else "";
     const headers = hdr_buf[0..hdr_len];
 
     // Not blocked → the fast path result stands.
     if (!pure.needsBrowser(status, headers, body_head)) {
-        return body;
+        // The typed fetch may intentionally expose an error body for challenge
+        // classification, but a 4xx/5xx document is never scraper content.
+        return if (plain_succeeded) body else null;
     }
 
     // Blocked. Fall back to the anti-detect browser if it is available.
     if (!browserFallbackAvailable()) {
-        logs.pushLog("warn", "scrape", "Blocked page and browser fallback is off/unavailable — returning plain body", false);
-        return body; // best-effort (may be the challenge page)
+        logs.pushLog("warn", "scrape", "Blocked page and browser fallback is off/unavailable", false);
+        return null;
     }
 
     logs.pushLog("info", "scrape", "Blocked — retrying through the anti-detect browser", true);
@@ -189,8 +126,7 @@ fn scrapeFetchBody(url: []const u8, post_body: ?[]const u8, out_buf: []u8) ?[]co
         browser.fetchHtmlBlocking(url, out_buf);
     if (unblocked) |html| return html;
 
-    // Browser path failed/timed out — best-effort plain body. `out_buf` may
-    // have been overwritten by fetchHtmlBlocking on partial failure, so re-run
-    // the plain fetch to hand back a clean (if blocked) body rather than junk.
-    return plainFetch(url, post_body, out_buf, &hdr_buf, &hdr_len, &status);
+    // Browser path failed/timed out. Never hand the original challenge/error
+    // document to a parser as though it were the requested content.
+    return null;
 }

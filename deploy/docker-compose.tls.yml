@@ -1,13 +1,14 @@
 # Opal headless server behind Caddy — automatic HTTPS (Let's Encrypt).
 #
-# From the repo root, with DNS for your domain pointed at this host and ports
-# 80 + 443 reachable from the internet:
+# First complete the local first-admin bootstrap with docker-compose.yml; both
+# profiles use the same ../data/config mount. Then, with DNS for your domain
+# pointed at this host and ports 80 + 443 reachable from the internet:
 #
 #   DOMAIN=opal.example.com docker compose -f deploy/docker-compose.tls.yml up --build -d
 #
-# Then open https://opal.example.com and create your admin account on first
-# visit. Opal never binds a public port — Caddy is the only public face and
-# terminates TLS, proxying to opal:41595 on the internal network.
+# Then sign in at https://opal.example.com. Opal never binds a public port —
+# Caddy is the only public face and terminates TLS, proxying to opal:41595 on
+# the internal network. Never send the setup credential through the proxy.
 services:
   opal:
     build:

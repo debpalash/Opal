@@ -51,7 +51,8 @@ def test_scrape_fetch():
         # ── Production routes through the pure detector (no drift) ──
         "service present": bool(svc),
         "service routes through needsBrowser": "pure.needsBrowser(" in svc,
-        "service routes through parseStatus": "pure.parseStatus(" in svc,
+        "service gets typed response status": "reliable_fetch.request(" in svc
+            and "result.status" in svc,
         "public scrapeFetch api": "pub fn scrapeFetch(" in svc,
         "browser fallback gated on config": "state.app.scrape_use_browser" in svc,
         "browser fallback gated on engine": "browser.engineReady(" in svc,

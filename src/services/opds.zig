@@ -88,8 +88,8 @@ fn opdsAuthHeader(buf: []u8) []const u8 {
 /// through curl; this was one of the last holdouts.
 fn opdsGet(url: []const u8, user: []const u8, pass: []const u8) ?[]u8 {
     var auth_buf: [512]u8 = undefined;
-    // basicAuthHeader yields a full header LINE ("Authorization: Basic …"),
-    // which is exactly what curl -H wants.
+    // basicAuthHeader yields a full header line. Feed it through curl's stdin
+    // config so the credential is not visible in the subprocess command line.
     const auth: ?[]const u8 = if (user.len > 0 or pass.len > 0)
         pure.basicAuthHeader(user, pass, &auth_buf)
     else
@@ -99,11 +99,11 @@ fn opdsGet(url: []const u8, user: []const u8, pass: []const u8) ?[]u8 {
     // -L: OPDS catalogs routinely redirect (Komga /opds → /opds/v1.2, trailing
     // slashes, http→https). --max-time bounds the whole request the way the old
     // watchdog did.
-    var child = if (auth) |a|
+    var child = if (auth != null)
         io_g.Child.init(&.{
             "curl",       "-sL",
             "-H",         "Accept: application/atom+xml,application/xml",
-            "-H",         a,
+            "--config",   "-",
             "--max-time", "15",
             url,
         }, alloc)
@@ -116,7 +116,11 @@ fn opdsGet(url: []const u8, user: []const u8, pass: []const u8) ?[]u8 {
         }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
-    child.spawn() catch return null;
+    if (auth) |a| {
+        @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{a}) catch return null;
+    } else {
+        child.spawn() catch return null;
+    }
 
     const resp_buf = alloc.alloc(u8, 256 * 1024) catch {
         _ = child.wait() catch {};

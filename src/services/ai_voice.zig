@@ -1,5 +1,6 @@
 const std = @import("std");
 const logs = @import("../core/logs.zig");
+const secure_temp = @import("../core/secure_temp.zig");
 
 // ══════════════════════════════════════════════════════════
 //  AI Voice — Mic Recording, ASR (Whisper), TTS
@@ -7,11 +8,55 @@ const logs = @import("../core/logs.zig");
 
 const MAX_INPUT_LEN = 512;
 pub const LANG_SERVER_PORT: u16 = 41594;
-pub const MIC_WAV_PATH = "/tmp/opal_ai_mic.wav";
-pub const TTS_WAV_PATH = "/tmp/opal_ai_tts.wav";
-const STT_SOCKET = "/tmp/opal-stt.sock";
-const TTS_SOCKET = "/tmp/opal-tts.sock";
-const VOICE_SOCKET = "/tmp/opal-voice.sock";
+
+/// Long-lived socket/output paths share one random owner-only workspace. Mic
+/// recordings and one-shot TTS files use shorter-lived workspaces in their
+/// workers below. The Python sidecars receive these paths explicitly.
+const RuntimePaths = struct {
+    workspace: secure_temp.Workspace,
+    stt_socket_buf: [secure_temp.max_path_len]u8,
+    stt_socket_len: usize,
+    tts_socket_buf: [secure_temp.max_path_len]u8,
+    tts_socket_len: usize,
+    voice_socket_buf: [secure_temp.max_path_len]u8,
+    voice_socket_len: usize,
+    tts_wav_buf: [secure_temp.max_path_len]u8,
+    tts_wav_len: usize,
+
+    fn init() !RuntimePaths {
+        var result: RuntimePaths = undefined;
+        result.workspace = try secure_temp.Workspace.create("voice-runtime");
+        errdefer result.workspace.cleanup();
+        result.stt_socket_len = (try result.workspace.path("stt.sock", &result.stt_socket_buf)).len;
+        result.tts_socket_len = (try result.workspace.path("tts.sock", &result.tts_socket_buf)).len;
+        result.voice_socket_len = (try result.workspace.path("voice.sock", &result.voice_socket_buf)).len;
+        result.tts_wav_len = (try result.workspace.reserveFile("tts.wav", &result.tts_wav_buf)).len;
+        return result;
+    }
+
+    fn sttSocket(self: *const RuntimePaths) []const u8 {
+        return self.stt_socket_buf[0..self.stt_socket_len];
+    }
+    fn ttsSocket(self: *const RuntimePaths) []const u8 {
+        return self.tts_socket_buf[0..self.tts_socket_len];
+    }
+    fn voiceSocket(self: *const RuntimePaths) []const u8 {
+        return self.voice_socket_buf[0..self.voice_socket_len];
+    }
+    fn ttsWav(self: *const RuntimePaths) []const u8 {
+        return self.tts_wav_buf[0..self.tts_wav_len];
+    }
+};
+
+var runtime_paths: ?RuntimePaths = null;
+var runtime_mutex: @import("../core/sync.zig").Mutex = .{};
+
+fn runtimePaths() ?*RuntimePaths {
+    runtime_mutex.lock();
+    defer runtime_mutex.unlock();
+    if (runtime_paths == null) runtime_paths = RuntimePaths.init() catch return null;
+    return &runtime_paths.?;
+}
 
 // ── Voice state (shared with ai_chat.zig) ──
 // Thread safety: conv_phase mutations must go through setPhase() which
@@ -151,10 +196,6 @@ var server_start_mutex: @import("../core/sync.zig").Mutex = .{};
 /// Kill any leftover voice/tts server processes from a previous run.
 /// Call once at startup to prevent duplicate server accumulation.
 pub fn killStaleServers() void {
-    // Remove stale sockets so ensureXxx doesn't think they're alive
-    @import("../core/io_global.zig").deleteFileAbsolute(VOICE_SOCKET) catch {};
-    @import("../core/io_global.zig").deleteFileAbsolute(TTS_SOCKET) catch {};
-    @import("../core/io_global.zig").deleteFileAbsolute(STT_SOCKET) catch {};
     // Kill any running python server processes by script name
     @import("../core/io_global.zig").killByCommandLine("opal-voice-server.py", false);
     @import("../core/io_global.zig").killByCommandLine("opal-tts-server.py", false);
@@ -166,6 +207,19 @@ pub fn killStaleServers() void {
     tts_server_started = false;
     stt_server_started = false;
     logs.pushLog("info", "voice", "Stale servers killed", true);
+}
+
+/// Called after voice workers/sidecars have been stopped during app shutdown.
+/// Removes sockets, generated audio, and the random runtime directory.
+pub fn deinit() void {
+    clearVoiceSocket();
+    runtime_mutex.lock();
+    defer runtime_mutex.unlock();
+    if (runtime_paths) |*paths| paths.workspace.cleanup();
+    // Keep the struct itself stable until process exit. Detached voice/TTS
+    // workers may still hold slices into these fixed buffers during shutdown;
+    // they will see ordinary file-not-found errors after cleanup, never a
+    // dangling pointer or concurrently moved optional payload.
 }
 
 /// Call early (e.g. when AI tab first renders) to pre-load STT/TTS models in background
@@ -223,7 +277,8 @@ fn serverDepsReady(script: []const u8) bool {
 /// event loop ahead of the finals-only sherpa loop.
 pub fn voiceServerReady() bool {
     const io = @import("../core/io_global.zig");
-    if (io.cwdAccess(VOICE_SOCKET, .{})) |_| return true else |_| {}
+    const socket_path = (runtimePaths() orelse return false).voiceSocket();
+    if (io.cwdAccess(socket_path, .{})) |_| return true else |_| {}
     if (!scriptExists("bin/opal-voice-server.py")) return false;
     return serverDepsReady("bin/opal-voice-server.py");
 }
@@ -247,7 +302,8 @@ fn ensureVoiceServer() void {
     server_start_mutex.lock();
     defer server_start_mutex.unlock();
     if (voice_server_started) return;
-    if (@import("../core/io_global.zig").cwdAccess(VOICE_SOCKET, .{})) |_| {
+    const socket_path = (runtimePaths() orelse return).voiceSocket();
+    if (@import("../core/io_global.zig").cwdAccess(socket_path, .{})) |_| {
         voice_server_started = true;
         return;
     } else |_| {}
@@ -260,7 +316,7 @@ fn ensureVoiceServer() void {
         return;
     }
     var child = @import("../core/io_global.zig").Child.init(
-        &.{ "python3", "bin/opal-voice-server.py" },
+        &.{ "python3", "bin/opal-voice-server.py", "--socket", socket_path },
         @import("../core/alloc.zig").allocator,
     );
     child.stdout_behavior = .Ignore;
@@ -272,7 +328,7 @@ fn ensureVoiceServer() void {
     var attempts: usize = 0;
     while (attempts < 300) : (attempts += 1) {
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
-        if (@import("../core/io_global.zig").cwdAccess(VOICE_SOCKET, .{})) |_| break else |_| {}
+        if (@import("../core/io_global.zig").cwdAccess(socket_path, .{})) |_| break else |_| {}
     }
     if (attempts >= 300) return;
     voice_server_started = true;
@@ -280,14 +336,15 @@ fn ensureVoiceServer() void {
 
 pub fn ensureSttServer() void {
     if (stt_server_started) return;
-    if (@import("../core/io_global.zig").cwdAccess(STT_SOCKET, .{})) |_| {
+    const socket_path = (runtimePaths() orelse return).sttSocket();
+    if (@import("../core/io_global.zig").cwdAccess(socket_path, .{})) |_| {
         stt_server_started = true;
         return;
     } else |_| {}
     if (!scriptExists("bin/opal-stt-server.py")) return;
     if (!serverDepsReady("bin/opal-stt-server.py")) return;
     var child = @import("../core/io_global.zig").Child.init(
-        &.{ "python3", "bin/opal-stt-server.py" },
+        &.{ "python3", "bin/opal-stt-server.py", "--socket", socket_path },
         @import("../core/alloc.zig").allocator,
     );
     child.stdout_behavior = .Ignore;
@@ -299,21 +356,24 @@ pub fn ensureSttServer() void {
     var attempts: usize = 0;
     while (attempts < 150) : (attempts += 1) {
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
-        if (@import("../core/io_global.zig").cwdAccess(STT_SOCKET, .{})) |_| break else |_| {}
+        if (@import("../core/io_global.zig").cwdAccess(socket_path, .{})) |_| break else |_| {}
     }
     stt_server_started = (attempts < 150);
 }
 
 pub fn ensureTtsServer() void {
     if (tts_server_started) return;
-    if (@import("../core/io_global.zig").cwdAccess(TTS_SOCKET, .{})) |_| {
+    const paths = runtimePaths() orelse return;
+    const socket_path = paths.ttsSocket();
+    const output_path = paths.ttsWav();
+    if (@import("../core/io_global.zig").cwdAccess(socket_path, .{})) |_| {
         tts_server_started = true;
         return;
     } else |_| {}
     if (!scriptExists("bin/opal-tts-server.py")) return;
     if (!serverDepsReady("bin/opal-tts-server.py")) return;
     var child = @import("../core/io_global.zig").Child.init(
-        &.{ "python3", "bin/opal-tts-server.py" },
+        &.{ "python3", "bin/opal-tts-server.py", "--socket", socket_path, "--output", output_path },
         @import("../core/alloc.zig").allocator,
     );
     child.stdout_behavior = .Ignore;
@@ -325,7 +385,7 @@ pub fn ensureTtsServer() void {
     var attempts: usize = 0;
     while (attempts < 150) : (attempts += 1) {
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
-        if (@import("../core/io_global.zig").cwdAccess(TTS_SOCKET, .{})) |_| break else |_| {}
+        if (@import("../core/io_global.zig").cwdAccess(socket_path, .{})) |_| break else |_| {}
     }
     tts_server_started = (attempts < 150);
 }
@@ -561,7 +621,12 @@ fn conversationLoopV2() void {
     logs.pushLog("info", "voice", "Conv thread: servers ready, connecting socket...", true);
 
     // Connect to voice server
-    const v_addr = std.Io.net.UnixAddress.init(VOICE_SOCKET) catch {
+    const socket_path = (runtimePaths() orelse {
+        logs.pushLog("warn", "voice", "Private voice runtime unavailable", true);
+        conversationLoopV1();
+        return;
+    }).voiceSocket();
+    const v_addr = std.Io.net.UnixAddress.init(socket_path) catch {
         logs.pushLog("warn", "voice", "UnixAddress.init failed", true);
         conversationLoopV1();
         return;
@@ -729,6 +794,16 @@ fn conversationLoopV1() void {
         @import("../core/io_global.zig").sleep(80 * std.time.ns_per_ms);
         if (!conversation_active.load(.acquire)) break;
 
+        var recording_temp = secure_temp.Workspace.create("voice-record") catch {
+            setError("Couldn't create private voice recording storage");
+            break;
+        };
+        defer recording_temp.cleanup();
+        var mic_path_buf: [secure_temp.max_path_len]u8 = undefined;
+        const mic_path = recording_temp.reserveFile("capture.wav", &mic_path_buf) catch break;
+        var transcript_path_buf: [secure_temp.max_path_len]u8 = undefined;
+        const transcript_path = recording_temp.reserveFile("capture.wav.txt", &transcript_path_buf) catch break;
+
         const has_player = state.app.players.items.len > 0;
         var saved_vol: f64 = 100.0;
         if (has_player) {
@@ -750,7 +825,7 @@ fn conversationLoopV1() void {
         const input_fmt = if (is_macos) "avfoundation" else "pulse";
         const input_dev = if (is_macos) ":0" else "default";
         var record_child = @import("../core/io_global.zig").Child.init(
-            &.{ "ffmpeg", "-y", "-f", input_fmt, "-i", input_dev, "-ar", "16000", "-ac", "1", "-t", "12", MIC_WAV_PATH },
+            &.{ "ffmpeg", "-y", "-f", input_fmt, "-i", input_dev, "-ar", "16000", "-ac", "1", "-t", "12", mic_path },
             @import("../core/alloc.zig").allocator,
         );
         record_child.stdout_behavior = .Ignore;
@@ -794,10 +869,12 @@ fn conversationLoopV1() void {
             }
         }
         if (!conversation_active.load(.acquire)) break;
+        const recording_stat = @import("../core/io_global.zig").cwdStatFile(mic_path) catch continue;
+        if (recording_stat.size < 44) continue;
 
         setPhase(.transcribing);
         is_transcribing.store(true, .release);
-        transcribeAndSend();
+        transcribeAndSend(mic_path, transcript_path);
         is_transcribing.store(false, .release);
         if (!conversation_active.load(.acquire)) break;
 
@@ -826,9 +903,19 @@ fn micRecordWorker() void {
     const input_fmt = if (is_macos) "avfoundation" else "pulse";
     const input_dev = if (is_macos) ":0" else "default";
 
+    var recording_temp = secure_temp.Workspace.create("voice-record") catch {
+        setError("Couldn't create private voice recording storage");
+        return;
+    };
+    defer recording_temp.cleanup();
+    var mic_path_buf: [secure_temp.max_path_len]u8 = undefined;
+    const mic_path = recording_temp.reserveFile("capture.wav", &mic_path_buf) catch return;
+    var transcript_path_buf: [secure_temp.max_path_len]u8 = undefined;
+    const transcript_path = recording_temp.reserveFile("capture.wav.txt", &transcript_path_buf) catch return;
+
     logs.pushLog("info", "voice", "Mic: starting ffmpeg capture", true);
     var record_child = @import("../core/io_global.zig").Child.init(
-        &.{ "ffmpeg", "-y", "-f", input_fmt, "-i", input_dev, "-ar", "16000", "-ac", "1", "-t", "15", MIC_WAV_PATH },
+        &.{ "ffmpeg", "-y", "-f", input_fmt, "-i", input_dev, "-ar", "16000", "-ac", "1", "-t", "15", mic_path },
         @import("../core/alloc.zig").allocator,
     );
     // stderr piped so ffmpeg errors surface in logs (permission denials,
@@ -850,13 +937,14 @@ fn micRecordWorker() void {
     _ = record_child.kill() catch {};
     logs.pushLog("info", "voice", "Mic: ffmpeg stopped, checking output", true);
 
-    if (@import("../core/io_global.zig").cwdAccess(MIC_WAV_PATH, .{})) |_| {
+    const recording_stat = @import("../core/io_global.zig").cwdStatFile(mic_path) catch null;
+    if (recording_stat != null and recording_stat.?.size >= 44) {
         is_transcribing.store(true, .release);
         defer {
             is_transcribing.store(false, .release);
         }
-        transcribeAndSend();
-    } else |_| {
+        transcribeAndSend(mic_path, transcript_path);
+    } else {
         setError("No audio recorded — check mic permission in System Settings → Privacy & Security → Microphone");
     }
 }
@@ -865,13 +953,14 @@ pub const isHallucination = @import("voice_filter.zig").isHallucination;
 
 // ── ASR via persistent server (Unix socket) ──
 
-fn transcribeViaServer() ?[]const u8 {
-    const stt_addr = std.Io.net.UnixAddress.init(STT_SOCKET) catch return null;
+fn transcribeViaServer(mic_path: []const u8) ?[]const u8 {
+    const socket_path = (runtimePaths() orelse return null).sttSocket();
+    const stt_addr = std.Io.net.UnixAddress.init(socket_path) catch return null;
     const stream = stt_addr.connect(@import("../core/io_global.zig").io()) catch return null;
     defer stream.close(@import("../core/io_global.zig").io());
 
     // Send WAV path
-    @import("../core/io_global.zig").streamWriteAll(stream, MIC_WAV_PATH) catch return null;
+    @import("../core/io_global.zig").streamWriteAll(stream, mic_path) catch return null;
 
     // Read response
     var buf: [4096]u8 = undefined;
@@ -885,14 +974,14 @@ fn transcribeViaServer() ?[]const u8 {
     return result;
 }
 
-fn transcribeAndSend() void {
+fn transcribeAndSend(mic_path: []const u8, out_txt_path: []const u8) void {
     const server = @import("ai_server.zig");
     server.inference_mutex.lock();
     defer server.inference_mutex.unlock();
 
     // Try persistent server first (fast — model already loaded)
     if (stt_server_started) {
-        if (transcribeViaServer()) |transcribed| {
+        if (transcribeViaServer(mic_path)) |transcribed| {
             if (transcribed.len > 0 and !isHallucination(transcribed)) {
                 logs.pushLog("info", "voice", "STT server transcribed", false);
                 if (on_transcribed_fn) |f| f(transcribed);
@@ -902,11 +991,8 @@ fn transcribeAndSend() void {
     }
 
     // Fallback: spawn one-shot Faster-Whisper process
-    const out_txt_path = "/tmp/opal_ai_mic.wav.txt";
-    _ = @import("../core/io_global.zig").deleteFileAbsolute(out_txt_path) catch {};
-
     var fw_child = @import("../core/io_global.zig").Child.init(
-        &.{ "python3", "bin/opal-stt.py", MIC_WAV_PATH },
+        &.{ "python3", "bin/opal-stt.py", mic_path },
         @import("../core/alloc.zig").allocator,
     );
     fw_child.stdout_behavior = .Pipe;
@@ -956,7 +1042,7 @@ fn transcribeAndSend() void {
     };
 
     var w_child = @import("../core/io_global.zig").Child.init(
-        &.{ whisper_bin, "-m", model, "-f", MIC_WAV_PATH, "-t", "4", "--no-timestamps", "--no-prints", "-otxt" },
+        &.{ whisper_bin, "-m", model, "-f", mic_path, "-t", "4", "--no-timestamps", "--no-prints", "-otxt" },
         @import("../core/alloc.zig").allocator,
     );
     w_child.stdout_behavior = .Ignore;
@@ -1001,7 +1087,8 @@ fn transcribeAndSend() void {
 // ── TTS via persistent server (Unix socket) ──
 
 fn speakViaServer(text: []const u8) bool {
-    const tts_addr = std.Io.net.UnixAddress.init(TTS_SOCKET) catch return false;
+    const socket_path = (runtimePaths() orelse return false).ttsSocket();
+    const tts_addr = std.Io.net.UnixAddress.init(socket_path) catch return false;
     const stream = tts_addr.connect(@import("../core/io_global.zig").io()) catch return false;
     defer stream.close(@import("../core/io_global.zig").io());
 
@@ -1104,9 +1191,10 @@ fn ttsWorker() void {
 
     // Strategy 1: Persistent TTS server (instant — model already loaded)
     if (tts_server_started and speakViaServer(text)) {
+        const tts_wav_path = (runtimePaths() orelse return).ttsWav();
         // WAV generated, play it
         var play = @import("../core/io_global.zig").Child.init(
-            &.{ if (@import("builtin").os.tag == .macos) "afplay" else "aplay", TTS_WAV_PATH },
+            &.{ if (@import("builtin").os.tag == .macos) "afplay" else "aplay", tts_wav_path },
             @import("../core/alloc.zig").allocator,
         );
         _ = play.spawnAndWait() catch {};
@@ -1114,10 +1202,12 @@ fn ttsWorker() void {
     }
 
     // Strategy 2: One-shot KittenTTS (cold start fallback)
-    if (@import("../core/io_global.zig").cwdCreateFile("/tmp/opal_tts_input.txt", .{})) |f| {
-        @import("../core/io_global.zig").writeAll(f, text) catch {};
-        f.close(@import("../core/io_global.zig").io());
-    } else |_| {}
+    var tts_temp = secure_temp.Workspace.create("voice-tts") catch return;
+    defer tts_temp.cleanup();
+    var input_path_buf: [secure_temp.max_path_len]u8 = undefined;
+    const input_path = tts_temp.writeFile("input.txt", text, &input_path_buf) catch return;
+    var output_path_buf: [secure_temp.max_path_len]u8 = undefined;
+    const output_path = tts_temp.reserveFile("speech.wav", &output_path_buf) catch return;
 
     // Build TTS command with configurable voice
     const voice_name = if (state.app.tts_voice_len > 0 and state.app.tts_voice_len <= 16)
@@ -1125,17 +1215,14 @@ fn ttsWorker() void {
     else
         "Bella";
 
-    var tts_cmd_buf: [512]u8 = undefined;
-    const tts_cmd = std.fmt.bufPrintZ(
-        &tts_cmd_buf,
-        "from kittentts import KittenTTS; " ++
-            "text = open('/tmp/opal_tts_input.txt').read().strip(); " ++
-            "tts = KittenTTS(); tts.generate_to_file(text, '/tmp/opal_ai_tts.wav', voice='{s}', speed={d:.1})",
-        .{ voice_name, state.app.tts_speed },
-    ) catch return;
+    var speed_buf: [32]u8 = undefined;
+    const speed = std.fmt.bufPrint(&speed_buf, "{d:.1}", .{state.app.tts_speed}) catch return;
+    const tts_cmd = "import sys; from kittentts import KittenTTS; " ++
+        "text=open(sys.argv[1], encoding='utf-8').read().strip(); " ++
+        "KittenTTS().generate_to_file(text, sys.argv[2], voice=sys.argv[3], speed=float(sys.argv[4]))";
 
     var kitten = @import("../core/io_global.zig").Child.init(
-        &.{ "python3", "-c", tts_cmd },
+        &.{ "python3", "-c", tts_cmd, input_path, output_path, voice_name, speed },
         @import("../core/alloc.zig").allocator,
     );
     kitten.stdout_behavior = .Ignore;
@@ -1161,15 +1248,18 @@ fn ttsWorker() void {
         }) catch return;
 
         var curl_child = @import("../core/io_global.zig").Child.init(
-            &.{ "curl", "-s", "-o", TTS_WAV_PATH, "--max-time", "30", url },
+            &.{ "curl", "-s", "-o", output_path, "--max-time", "30", url },
             @import("../core/alloc.zig").allocator,
         );
         _ = curl_child.spawnAndWait() catch return;
     }
 
+    const output_stat = @import("../core/io_global.zig").cwdStatFile(output_path) catch return;
+    if (output_stat.size < 44) return;
+
     // Play the generated audio
     var play = @import("../core/io_global.zig").Child.init(
-        &.{ if (@import("builtin").os.tag == .macos) "afplay" else "aplay", TTS_WAV_PATH },
+        &.{ if (@import("builtin").os.tag == .macos) "afplay" else "aplay", output_path },
         @import("../core/alloc.zig").allocator,
     );
     _ = play.spawnAndWait() catch {};

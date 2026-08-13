@@ -49,6 +49,8 @@ var last_build_ms: i64 = 0;
 var expanded_key: [256]u8 = std.mem.zeroes([256]u8);
 var expanded_key_len: usize = 0;
 
+pub const TorrentAction = enum { pause, @"resume", priority, cancel };
+
 // Staging rows live at module scope, not on the UI stack: a tp.Row is ~700B and
 // three arrays of them would be ~350KB of stack per frame.
 var stage_t: [64]tp.Row = undefined;
@@ -665,9 +667,9 @@ fn renderRow(r: *const tp.Row, i: usize) bool {
         })) {
             if (c.mpv.torrent_is_alive(state.torrentSession(), r.torrent_id) != 0) {
                 if (r.paused)
-                    c.mpv.torrent_resume(state.torrentSession(), r.torrent_id)
+                    _ = setTorrentPaused(r.torrent_id, false)
                 else
-                    c.mpv.torrent_pause(state.torrentSession(), r.torrent_id);
+                    _ = setTorrentPaused(r.torrent_id, true);
             }
             rows_dirty.store(true, .release);
         }
@@ -724,29 +726,91 @@ fn removeRow(r: *const tp.Row) void {
         const id = r.torrent_id;
         // Don't duplicate an existing history record for the same item.
         if (!r.hasHistory()) history.addDownloadHistory(r.nameSlice(), "");
-        c.mpv.torrent_remove(state.torrentSession(), id);
-        // STABLE-SLOT model: torrent ids are never renumbered on remove, so
-        // other handles stay valid — only clear the one that was deleted.
-        for (state.app.players.items) |p| {
-            if (p.current_torrent_id == id) {
-                p.current_torrent_id = -1;
-                p.torrent_is_ready = false;
-                p.has_metadata = false;
-                _ = c.mpv.mpv_command_string(p.mpv_ctx, "stop");
-                // Also tear down the stream proxy — otherwise its accept-loop
-                // thread + port linger after the torrent is deleted.
-                const stream_proxy = @import("../player/stream_proxy.zig");
-                if (p.proxy_handle.isValid()) {
-                    stream_proxy.stopProxy(p.proxy_handle);
-                    p.proxy_handle = stream_proxy.INVALID_HANDLE;
-                }
-            }
-        }
+        dropLiveTorrent(id);
     } else if (r.hasHistory()) {
         history.removeDownloadHistory(@intCast(r.hist_idx));
     }
     rows_dirty.store(true, .release);
     expanded_key_len = 0;
+}
+
+/// Remote/web adapters share the native transfer implementation. Stable
+/// torrent IDs are validated at the boundary; removed slots stay dead rather
+/// than causing every later ID to shift.
+pub fn setTorrentPaused(id: c_int, paused: bool) bool {
+    const ses = state.torrentSession();
+    if (!liveTorrent(ses, id)) return false;
+    if (paused)
+        c.mpv.torrent_pause(ses, id)
+    else
+        c.mpv.torrent_resume(ses, id);
+    rows_dirty.store(true, .release);
+    return true;
+}
+
+pub fn setTorrentFilePriority(id: c_int, file_idx: c_int, priority: c_int) bool {
+    const ses = state.torrentSession();
+    if (!liveTorrent(ses, id)) return false;
+    if (file_idx < 0 or file_idx >= c.mpv.torrent_get_file_count(ses, id)) return false;
+    if (priority != 0 and priority != 7) return false;
+    c.mpv.torrent_set_file_priority(ses, id, file_idx, priority);
+    rows_dirty.store(true, .release);
+    return true;
+}
+
+pub fn removeTorrentById(id: c_int) bool {
+    const ses = state.torrentSession();
+    if (!liveTorrent(ses, id)) return false;
+    var name_buf: [256]u8 = std.mem.zeroes([256]u8);
+    c.mpv.torrent_get_name(ses, id, &name_buf, name_buf.len);
+    const name = std.mem.sliceTo(&name_buf, 0);
+    if (name.len > 0 and !downloadHistoryHasName(name)) history.addDownloadHistory(name, "");
+    dropLiveTorrent(id);
+    rows_dirty.store(true, .release);
+    expanded_key_len = 0;
+    return true;
+}
+
+/// Typed adapter used by the web/API boundary. `file_idx` and `priority` are
+/// read only by the priority case; callers must hold players_mutex for cancel.
+pub fn applyTorrentAction(id: c_int, action: TorrentAction, file_idx: c_int, priority: c_int) bool {
+    return switch (action) {
+        .pause => setTorrentPaused(id, true),
+        .@"resume" => setTorrentPaused(id, false),
+        .priority => setTorrentFilePriority(id, file_idx, priority),
+        .cancel => removeTorrentById(id),
+    };
+}
+
+fn liveTorrent(ses: c.mpv.TorrentSession, id: c_int) bool {
+    return id >= 0 and id < c.mpv.torrent_count(ses) and c.mpv.torrent_is_alive(ses, id) != 0;
+}
+
+fn downloadHistoryHasName(name: []const u8) bool {
+    for (0..state.app.dl_history_count) |i| {
+        const existing = state.app.dl_history_names[i][0..state.app.dl_history_name_lens[i]];
+        if (std.mem.eql(u8, existing, name)) return true;
+    }
+    return false;
+}
+
+fn dropLiveTorrent(id: c_int) void {
+    c.mpv.torrent_remove(state.torrentSession(), id);
+    // STABLE-SLOT model: torrent ids are never renumbered on remove, so other
+    // handles stay valid — only clear the one that was deleted.
+    for (state.app.players.items) |p| {
+        if (p.current_torrent_id == id) {
+            p.current_torrent_id = -1;
+            p.torrent_is_ready = false;
+            p.has_metadata = false;
+            _ = c.mpv.mpv_command_string(p.mpv_ctx, "stop");
+            const stream_proxy = @import("../player/stream_proxy.zig");
+            if (p.proxy_handle.isValid()) {
+                stream_proxy.stopProxy(p.proxy_handle);
+                p.proxy_handle = stream_proxy.INVALID_HANDLE;
+            }
+        }
+    }
 }
 
 /// Expanded panel. Returns true if it performed a mutation that invalidates the
@@ -1051,7 +1115,7 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
         })) {
-            httpdl.engine.pause(s.idx, s.token);
+            _ = httpdl.engine.pause(s.idx, s.token);
         }
     } else if (st == .paused or st == .failed) {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
@@ -1061,7 +1125,7 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
         })) {
-            httpdl.engine.resumeDl(s.idx, s.token);
+            _ = httpdl.engine.resumeDl(s.idx, s.token);
         }
     }
 
@@ -1069,9 +1133,9 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
     // keeps the completed file on disk, drops partials of paused/failed).
     if (components.confirmDangerButton(@src(), "Remove", rid)) {
         if (active or st == .queued)
-            httpdl.engine.cancel(s.idx, s.token)
+            _ = httpdl.engine.cancel(s.idx, s.token)
         else
-            httpdl.engine.dismiss(s.idx, s.token);
+            _ = httpdl.engine.dismiss(s.idx, s.token);
         rows_dirty.store(true, .release);
     }
 }
@@ -1192,7 +1256,7 @@ fn renderExpandedFiles(torrent_id: i32) void {
             .margin = .{ .x = 4, .y = 0, .w = 2, .h = 0 },
             .gravity_y = 0.5,
         })) {
-            c.mpv.torrent_set_file_priority(state.torrentSession(), torrent_id, f_idx, 0);
+            _ = setTorrentFilePriority(torrent_id, f_idx, 0);
         }
 
         if (dvui.button(@src(), "High", .{}, .{
@@ -1204,7 +1268,7 @@ fn renderExpandedFiles(torrent_id: i32) void {
             .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
             .gravity_y = 0.5,
         })) {
-            c.mpv.torrent_set_file_priority(state.torrentSession(), torrent_id, f_idx, 7);
+            _ = setTorrentFilePriority(torrent_id, f_idx, 7);
         }
     }
 }

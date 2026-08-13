@@ -21,6 +21,10 @@ if ! gh repo view "$TAP_REPO" >/dev/null 2>&1; then
 fi
 
 git clone "https://github.com/$TAP_REPO.git" "$workdir"
+# Release runners and fresh developer machines may have no global Git identity.
+# Keep publication self-contained instead of mutating the user's global config.
+git -C "$workdir" config user.name "debpalash"
+git -C "$workdir" config user.email "4178343+debpalash@users.noreply.github.com"
 mkdir -p "$workdir/Formula"
 cp Formula/opal.rb "$workdir/Formula/opal.rb"
 cat > "$workdir/README.md" <<'EOF'

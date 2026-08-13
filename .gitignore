@@ -79,6 +79,14 @@ screenshot_demo.png
 # === Built binaries (root-level) ===
 /main
 /zigzag
+/probe
+/probe2
+/probe3
+/probe4
+/probe.zig
+/probe2.zig
+/probe3.zig
+/probe4.zig
 
 # === Test binaries ===
 tests/test_ocr

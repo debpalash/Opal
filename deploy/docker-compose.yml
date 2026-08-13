@@ -1,7 +1,15 @@
 # Opal — headless server
 #
 # NOT verifiable on macOS dev. Run on a real Linux/Docker host, from repo root:
+#   install -d data/config data/cache data/media
+#   sudo chown -R 10001:10001 data/config data/cache data/media
 #   docker compose -f deploy/docker-compose.yml up --build -d
+#
+# First-admin creation is deliberately a local-operator action. Read the
+# owner-only data/config/opal/setup.token file and paste it into the local web
+# setup form, or send it in the X-Opal-Setup-Token registration header. The
+# one-time file is deleted after successful registration; logs print its path,
+# never its value.
 services:
   opal:
     build:
@@ -13,9 +21,12 @@ services:
       # Triggers state.app.is_headless -> JSON API binds 0.0.0.0 (see T6).
       OPAL_HEADLESS: "1"
     ports:
-      - "41595:41595" # web UI + JSON API (single port; pairing code in `docker compose logs`)
+      # Host-loopback by default. Put Caddy/Tailscale in front for remote use.
+      - "127.0.0.1:41595:41595" # web UI + JSON API (single port)
     volumes:
-      # Mount config.json + api.token under /config/opal/ (XDG_CONFIG_HOME=/config).
+      # Mount config.json, api.token and the one-time setup.token under
+      # /config/opal/ (XDG_CONFIG_HOME=/config). Host dirs must be writable by
+      # the image's non-root uid 10001; setup.token itself is mode 0600.
       # Paths are relative to this file; ../ keeps runtime data at the repo root.
       - ../data/config:/config
       - ../data/cache:/cache

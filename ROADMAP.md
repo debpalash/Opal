@@ -138,22 +138,26 @@
 - [x] Manga/comics: client for a self-hosted extension server (reach the full
       community extension ecosystem), + more catalog engines
 - [x] NSFW controls centralized to Settings (never per-tab)
-- [ ] Music maturity — **local downloads** to a music dir, **synced lyrics**,
-      **waveform seekbar**, and **multi-region** sources via a data-driven
-      (pluggable) source interface, not a tab per source
-- [ ] Auto-managed extension server (spawned/health-checked in-app, so users
+- [x] Music local downloads, synced lyrics, and a data-driven source interface
+- [ ] Music waveform seekbar and broader multi-region source coverage
+- [x] Auto-managed extension server (spawned/health-checked in-app, so users
       don't run a second app)
 
 ### 6.2 — Reliability ("what you click actually plays")
-- [ ] One unified fetch path with browser-grade TLS fingerprinting + on-path
-      DPI bypass, so anti-bot walls stop silently breaking playback
-- [ ] App-wide live/dead surfacing (status dots + auto-skip to the next working
-      candidate), generalized from the Live TV health model
-- [ ] First-class per-request headers (Origin/Cookie) into the player
+- [x] Shared reliable-fetch interface with browser-grade TLS fingerprinting,
+      DPI bypass, response status/headers/latency, and typed failures
+- [ ] Migrate remaining legacy curl/native HTTP callers onto reliable-fetch
+- [ ] App-wide persisted live/dead probing (the shared, race-safe probe/cache
+      seam exists; PlaybackRequest integration and remaining vertical coverage
+      are still in progress)
+- [ ] Candidate groups with auto-skip to the next working stream
+- [x] First-class per-request headers (Origin/Cookie) into the player, cleared
+      between unrelated loads
 
 ### 6.3 — Glue (one app, not fifteen tabs)
-- [ ] Universal search that spans **every** vertical at once (finish the
-      resolver fan-out; unified result model + posters + dedup)
+- [x] Universal resolver fan-out across video, local, torrent, comics, live TV,
+      music, radio, podcasts, and catalog sources
+- [ ] Logical result groups with posters, semantic dedup, and fallback candidates
 - [ ] Unified "Continue / Your Library" home across all verticals
 - [ ] Cross-device progress + favorites sync over the local API
 
@@ -166,8 +170,8 @@
 ## 📝 Technical Debt & Cleanup
 - [ ] Fix `linker_options` lint in build.zig
 - [ ] Clean up dvui deinit warnings
-- [ ] Improve error handling across resolver backends
-- [ ] Add test suite for resolver/search logic
+- [x] Run-scoped resolver lifecycle with typed terminal source outcomes
+- [x] Add test suite for resolver/search lifecycle and ranking logic
 - [ ] Documentation (README, build guide, architecture)
 - [x] Fix TemporaryUserAgent in OpenSubtitles requests
 - [x] Clean sqlite-vec.h TODO

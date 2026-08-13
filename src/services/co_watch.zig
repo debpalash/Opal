@@ -164,16 +164,18 @@ const S = struct {
         const pct_u8: u8 = if (percent <= 0) 0 else if (percent >= 100) 100 else @intFromFloat(percent);
         const clamp_text = @import("spoiler.zig").clampLine(pct_u8, &clamp_buf);
 
-        const sys_text = std.fmt.bufPrint(sys_buf,
+        const sys_text = std.fmt.bufPrint(
+            sys_buf,
             "You are a quiet co-watching companion. {s} " ++
-            "Reply with ONE short, spoiler-safe sentence of at most 14 words. " ++
-            "If there is no genuinely worthwhile remark to make, reply with exactly SILENT.",
+                "Reply with ONE short, spoiler-safe sentence of at most 14 words. " ++
+                "If there is no genuinely worthwhile remark to make, reply with exactly SILENT.",
             .{clamp_text},
         ) catch return;
 
-        const user_text = std.fmt.bufPrint(user_buf,
+        const user_text = std.fmt.bufPrint(
+            user_buf,
             "{s}\n\nOn-screen text (OCR): {s}\nRecent dialogue:\n{s}\n\n" ++
-            "Make at most one brief, spoiler-safe observation, or reply SILENT.",
+                "Make at most one brief, spoiler-safe observation, or reply SILENT.",
             .{
                 reason,
                 if (on > 0) ocr_text else "(none)",
@@ -196,22 +198,23 @@ const S = struct {
 
         const body_buf = alloc.alloc(u8, 16384) catch return;
         defer alloc.free(body_buf);
-        const body = std.fmt.bufPrint(body_buf,
+        const body = std.fmt.bufPrint(
+            body_buf,
             "{{\"model\":\"{s}\",\"messages\":[" ++
-            "{{\"role\":\"system\",\"content\":\"{s}\"}}," ++
-            "{{\"role\":\"user\",\"content\":\"{s}\"}}]," ++
-            "\"max_tokens\":40,\"temperature\":0.3,\"top_p\":0.9,\"stream\":false}}",
+                "{{\"role\":\"system\",\"content\":\"{s}\"}}," ++
+                "{{\"role\":\"user\",\"content\":\"{s}\"}}]," ++
+                "\"max_tokens\":40,\"temperature\":0.3,\"top_p\":0.9,\"stream\":false}}",
             .{ model, sys_esc, user_esc },
         ) catch return;
 
-        // Write to a SEPARATE temp file (must not collide with ai_req.json).
-        var tmp_buf: [512]u8 = undefined;
-        var req_buf: [640]u8 = undefined;
-        const req_path = std.fmt.bufPrintZ(&req_buf, "{s}/opal_cowatch_req.json", .{@import("../core/io_global.zig").tmpDir(&tmp_buf)}) catch return;
-        if (io.cwdCreateFile(req_path, .{})) |f| {
-            io.writeAll(f, body) catch {};
-            f.close(io.io());
-        } else |_| return;
+        // Keep OCR/dialogue out of predictable shared-temp files. Every
+        // remark gets an independent private workspace and unconditional
+        // cleanup, including curl spawn/read failures.
+        const secure_temp = @import("../core/secure_temp.zig");
+        var scratch = secure_temp.Workspace.create("co-watch") catch return;
+        defer scratch.cleanup();
+        var req_buf: [secure_temp.max_path_len]u8 = undefined;
+        const req_path = scratch.writeFile("request.json", body, &req_buf) catch return;
 
         // ── Build URL ───────────────────────────────────────────────────────
         var srv_buf: [128]u8 = undefined;
@@ -221,8 +224,8 @@ const S = struct {
 
         // curl's --data-binary wants "@<path>". req_path is runtime now (it was
         // a comptime literal), so build the argument at runtime too.
-        var at_buf: [648]u8 = undefined;
-        const at_req = std.fmt.bufPrintZ(&at_buf, "@{s}", .{req_path}) catch return;
+        var at_buf: [secure_temp.max_path_len + 1]u8 = undefined;
+        const at_req = std.fmt.bufPrint(&at_buf, "@{s}", .{req_path}) catch return;
 
         // ── ONE completion via curl ──────────────────────────────────────────
         var child = io.Child.init(
