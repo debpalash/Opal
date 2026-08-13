@@ -107,15 +107,28 @@ const KillControl = struct {
     mutex: sync.Mutex = .{},
     tree: io.ProcessTree,
     active: bool = true,
+    skip_first_group_kill_for_test: bool = false,
 
     fn signalIfActive(self: *KillControl, force: bool) bool {
         self.mutex.lock();
         defer self.mutex.unlock();
         if (!self.active) return false;
-        if (force)
-            io.killProcessTree(self.tree)
-        else
+        if (force) {
+            if (builtin.is_test and self.skip_first_group_kill_for_test) {
+                self.skip_first_group_kill_for_test = false;
+            } else {
+                io.killProcessTree(self.tree);
+            }
+            // A POSIX process-group signal is best-effort and io_global
+            // intentionally hides its error. Always force the still-waitable
+            // leader by PID as a second route. It cannot be PID-reused before
+            // its owner reaps it, so this fallback is safe here; finish()
+            // deliberately remains group-only
+            // because it runs after wait() and must not signal a recycled PID.
+            io.killProcess(self.tree.id);
+        } else {
             io.terminateProcessTree(self.tree);
+        }
         return true;
     }
 
@@ -231,6 +244,14 @@ const StreamWatchdog = struct {
 };
 
 var fail_watchdog_spawn_for_test = false;
+var skip_first_group_kill_for_test = false;
+
+fn newKillControl(tree: io.ProcessTree) KillControl {
+    return .{
+        .tree = tree,
+        .skip_first_group_kill_for_test = builtin.is_test and skip_first_group_kill_for_test,
+    };
+}
 
 fn spawnWatchdog(watchdog: Watchdog) !std.Thread {
     if (builtin.is_test and fail_watchdog_spawn_for_test)
@@ -278,7 +299,7 @@ pub fn run(argv: []const []const u8, output: []u8, options: Options) Result {
 
     var done = std.atomic.Value(bool).init(false);
     var timed_out = std.atomic.Value(bool).init(false);
-    var control = KillControl{ .tree = tree };
+    var control = newKillControl(tree);
     const watchdog = spawnWatchdog(.{
         .control = &control,
         .done = &done,
@@ -319,18 +340,15 @@ pub fn run(argv: []const []const u8, output: []u8, options: Options) Result {
                 _ = control.signalIfActive(true);
             }
         }
-
-        // Once the tree has been killed, drain to EOF so std's child cleanup
-        // never races a still-active read handle. This also covers descendants
-        // that inherited stdout; process-group/Job termination closes theirs.
-        if (truncated or read_failed) {
-            var drain: [4096]u8 = undefined;
-            while (true) {
-                const n = io.read(stdout, &drain) catch break;
-                if (n == 0) break;
-            }
-        }
     }
+
+    // A fatal read/output-limit path has already force-signaled the tree. Do
+    // not then trust every inherited writer to close before we can reap and
+    // issue the final group fence: close both copies of our read handle first.
+    // This is also the bounded fallback if the first process-group signal is
+    // missed. closeStdout clears std.process.Child's duplicate,
+    // avoiding its cleanup double-closing a descriptor that has been reused.
+    if (truncated or read_failed) child.closeStdout();
 
     const term = child.wait() catch null;
     done.store(true, .release);
@@ -427,7 +445,7 @@ pub const StreamProcess = struct {
             self.lifecycle.store(.finished, .release);
             return error.ContainmentFailed;
         };
-        self.control = .{ .tree = tree };
+        self.control = newKillControl(tree);
 
         const thread = spawnStreamWatchdog(.{
             .control = &self.control,
@@ -568,6 +586,29 @@ test "bounded process stops tree as soon as output exceeds capacity" {
     const before = io.monotonicMilliTimestamp();
     const result = run(
         &.{ "/bin/sh", "-c", "printf '12345'; trap '' TERM; sleep 10" },
+        &output,
+        .{ .timeout_ms = 2_000, .terminate_grace_ms = 20 },
+    );
+    const elapsed = io.monotonicMilliTimestamp() - before;
+    try std.testing.expectEqual(Failure.output_limit, result.failure);
+    try std.testing.expect(result.truncated);
+    try std.testing.expectEqualStrings("1234", result.output);
+    try std.testing.expect(elapsed < 1_500);
+}
+
+test "output limit stays bounded when the first group kill is missed" {
+    try requirePosix();
+    skip_first_group_kill_for_test = true;
+    defer skip_first_group_kill_for_test = false;
+
+    var output: [4]u8 = undefined;
+    const before = io.monotonicMilliTimestamp();
+    const result = run(
+        // The leader and descendant both ignore TERM, and the descendant owns
+        // stdout. The injected missed group signal therefore exercises both
+        // fallbacks: direct leader kill and closing our pipe before the final
+        // process-group fence retires the descendant.
+        &.{ "/bin/sh", "-c", "trap '' TERM; (trap '' TERM; sleep 10) & printf '12345'; wait" },
         &output,
         .{ .timeout_ms = 2_000, .terminate_grace_ms = 20 },
     );

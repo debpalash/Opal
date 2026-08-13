@@ -6,6 +6,7 @@
 //! swap the reviewed target before execution.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const MAX_TREE_ENTRIES: usize = 4096;
 pub const MAX_TREE_BYTES: u64 = 64 * 1024 * 1024;
@@ -41,6 +42,21 @@ const Inventory = struct {
         self.entries.deinit(allocator);
     }
 };
+
+/// Keep Zig 0.16's logical file mode aligned with the Windows handle mode used
+/// for no-follow opens. `Threaded.dirOpenFileWtf16` requests
+/// `IO.ASYNCHRONOUS` whenever `follow_symlinks=false`, but currently returns a
+/// `File` marked `nonblocking=false`. Both streaming and positional readers
+/// then select the synchronous NtReadFile path, where a legitimate `.PENDING`
+/// result is treated as unreachable. Marking the wrapper accurately makes the
+/// standard positional reader use its APC completion path.
+///
+/// This is deliberately limited to the already-open no-follow handle. It does
+/// not reopen by path or enable symlink following, so the reviewed file remains
+/// anchored across stat/read/stat validation.
+fn correctNoFollowReadMode(file: *std.Io.File) void {
+    if (builtin.os.tag == .windows) file.flags.nonblocking = true;
+}
 
 /// Digest an already-open plugin root. `root` must have sub-path access and
 /// iteration enabled. The directory handle stays owned by the caller.
@@ -78,6 +94,7 @@ pub fn digestTree(
             .resolve_beneath = true,
         });
         defer file.close(system_io);
+        correctNoFollowReadMode(&file);
         const before = try file.stat(system_io);
         if (before.kind != .file) return error.PathSetChanged;
         file_bytes = std.math.add(u64, file_bytes, before.size) catch return error.TreeTooLarge;
@@ -88,8 +105,7 @@ pub fn digestTree(
         while (true) {
             // Plugin entries are regular files, so use explicit positional
             // reads. Besides avoiding shared cursor state during revalidation,
-            // this is portable to Windows where Zig 0.16's streaming read on a
-            // no-follow directory-relative handle can return INVALID_PARAMETER.
+            // this uses the corrected Windows APC path above for async handles.
             const n = try file.readPositionalAll(system_io, &read_buf, read_total);
             if (n == 0) break;
             read_total = std.math.add(u64, read_total, n) catch return error.TreeTooLarge;
@@ -217,6 +233,15 @@ fn addFixture(root: std.Io.Dir, system_io: std.Io, reverse: bool) !void {
         try root.writeFile(system_io, .{ .sub_path = "search", .data = "#!/bin/sh\n" });
         try root.writeFile(system_io, .{ .sub_path = "assets/nested/data.txt", .data = "payload" });
     }
+}
+
+test "no-follow read mode matches the Windows asynchronous handle" {
+    var file: std.Io.File = .{
+        .handle = undefined,
+        .flags = .{ .nonblocking = false },
+    };
+    correctNoFollowReadMode(&file);
+    try std.testing.expectEqual(builtin.os.tag == .windows, file.flags.nonblocking);
 }
 
 test "full-tree digest is deterministic across filesystem iteration order" {
