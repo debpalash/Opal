@@ -26,6 +26,8 @@
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
+::selection { background: color-mix(in srgb, var(--accent) 75%, transparent); color: #fff; }
+h1, h2, h3 { text-wrap: balance; }
 [id] { scroll-margin-top: 24px; }
 body {
   margin: 0;
@@ -568,12 +570,30 @@ section.support .foot { margin-top: 20px; }
   }
 }
 
-/* ── Footer ── */
-footer { padding: 56px 0 72px; color: var(--muted); font-size: 14px; }
-footer .row { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+/* ── Footer ──
+   Columns, but still no rules: the brand block anchors the left, three quiet
+   link stacks fill the right, and the legal line closes the page on its own. */
+footer { padding: 64px 0 72px; color: var(--muted); font-size: 14px; }
+footer .cols { display: grid; grid-template-columns: 1.7fr 1fr 1fr 1fr; gap: 36px; align-items: start; }
+footer .about p { margin: 14px 0 0; font-size: 13.5px; max-width: 300px; line-height: 1.55; }
+footer .about .follow { margin-top: 10px; }
+footer .col-title {
+  margin: 0 0 4px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  font-size: 11px;
+  font-weight: 800;
+  color: color-mix(in srgb, var(--muted) 75%, transparent);
+}
+footer nav a { display: block; margin-top: 9px; font-size: 13.5px; }
 footer a { color: var(--muted); text-decoration: none; font-weight: 600; }
 footer a:hover { color: var(--fg); }
-footer .legal { margin: 18px 0 0; font-size: 13px; }
+footer .brand { color: var(--fg); }
+footer .legal { margin: 44px 0 0; font-size: 13px; }
+@media (max-width: 760px) {
+  footer .cols { grid-template-columns: 1fr 1fr; }
+  footer .about { grid-column: 1 / -1; }
+}
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   background: color-mix(in srgb, var(--accent) 12%, transparent);
@@ -643,10 +663,61 @@ header.page-hero {
 .check-list li + li { margin-top: 9px; }
 .hero-command { max-width: 720px; margin-top: 28px; }
 .hero-command .oneliner { margin-bottom: 0; }
-.compare-notes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
-.compare-notes article { padding: 24px; border-radius: var(--radius); background: color-mix(in srgb, var(--fg) 5%, transparent); }
-.compare-notes h2 { font-size: 20px; }
-.compare-notes p { color: var(--muted); margin-bottom: 0; }
+/* ── Head-to-head pages (/compare/<app>/) ── */
+/* Two columns and prose-length cells, so the duel table wraps instead of
+   scrolling — the wide-matrix rules assume six rivals, not one. */
+.duel .matrix { min-width: 560px; }
+.duel .matrix th, .duel .matrix td { white-space: normal; }
+.duel .matrix td:first-child, .duel .matrix th:first-child { width: 34%; }
+.choose { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 38px; }
+@media (max-width: 720px) { .choose { grid-template-columns: 1fr; } }
+.choose .card h3 { font-size: 18px; margin-bottom: 12px; }
+.choose .check-list { margin: 0; font-size: 14.5px; }
+/* The verdict is the paragraph the page exists for — a tinted standfirst,
+   not another card in the grid. */
+.verdict {
+  margin: 26px 0 0;
+  max-width: 760px;
+  padding: 22px 26px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--muted);
+  font-size: 16px;
+}
+.versus .card { color: inherit; text-decoration: none; transition: background 0.15s ease; }
+.versus .card:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.versus .card .text-link { display: inline-block; margin-top: 12px; font-size: 14px; }
+.versus .card h3 { font-size: 18px; }
+/* ── Changelog ──
+   A single reading column. Each release is a heading pair — version and date
+   on one baseline — over its notes; the newest carries the only accent. */
+.changelog { max-width: 760px; }
+.release + .release { margin-top: 72px; }
+.release header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.release h2 { margin: 0; font-size: 23px; letter-spacing: -0.4px; }
+.release h2 a { color: inherit; text-decoration: none; }
+.release h2 a:hover { color: var(--accent-2); }
+.release .tag {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent-2), var(--accent));
+  padding: 3px 9px;
+  border-radius: 999px;
+  vertical-align: 3px;
+  margin-left: 10px;
+}
+.release .date { margin: 0; color: var(--muted); font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.release p { margin: 14px 0 0; color: var(--muted); font-size: 15px; }
+.release ul { margin: 14px 0 0; padding-left: 20px; color: var(--muted); font-size: 15px; }
+.release li + li { margin-top: 8px; }
+.release li b, .release p b { color: var(--fg); }
+.release a { color: var(--accent-2); font-weight: 650; }
+.release h2 a { color: inherit; font-weight: inherit; }
+.changelog .foot { margin-top: 64px; }
+
 .faq-list { max-width: 820px; }
 .faq-list details { padding: 22px 24px; border-radius: 14px; background: color-mix(in srgb, var(--fg) 5%, transparent); }
 .faq-list details + details { margin-top: 12px; }

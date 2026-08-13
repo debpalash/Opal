@@ -4,14 +4,17 @@ import { breadcrumbSchema, pageFor } from "../lib/site";
 
 const page = pageFor("/faq/");
 const questions = [
-  ["What is Opal?", "Opal is a free, open-source desktop media player that searches and plays across local files, torrents, Jellyfin, Plex, web video, live TV, anime and manga."],
-  ["Does Opal include torrent sources?", "No. Opal ships with no sources enabled and hosts no content. You decide which compatible plugins or sources to install and are responsible for using them lawfully."],
-  ["Can Opal stream a torrent before it finishes?", "Yes. Opal can begin playback while the required torrent pieces download, so a magnet behaves more like playable media than a completed file."],
-  ["Do I need a Plex or Jellyfin server?", "No. Both integrations are optional. If you already run Jellyfin or Plex, Opal can include those libraries in its search and playback experience."],
-  ["Does the AI send my history to the cloud?", "Opal's copilot is designed to run locally. Your session and watch history are stored in a SQLite database on your machine; connected third-party services still receive the requests needed to provide their features."],
-  ["Which operating systems are supported?", "Opal publishes Linux, macOS and Windows builds. Windows support is currently alpha, and unsigned macOS or Windows builds can show operating-system security warnings."],
-  ["What does the Opal Connect extension do?", "It connects Chrome, Edge or Firefox to the desktop app so you can send supported media, add compatible sites, search sources and control playback from a side panel."],
-  ["Is Opal free and open source?", "Yes. Opal is free software under GPL-3.0, with its source and release history available on GitHub."],
+  ["What is Opal?", "A free, open-source desktop media player that searches and plays across local files, torrents, Jellyfin, Plex, web video, live TV, anime and manga."],
+  ["Does Opal include torrent sources?", "No. Opal ships with no sources enabled and hosts no content. You choose which compatible plugins or sources to install."],
+  ["Is Opal legal?", "The app is: it's a GPL-3.0 player that, like a browser, ships with no content. Streaming copyrighted material without permission may be illegal where you live — you are responsible for the sources you add and how you use them."],
+  ["Can Opal stream a torrent before it finishes?", "Yes. Playback starts while the needed pieces download, so a magnet behaves like playable media rather than a download job."],
+  ["Do I need a Plex or Jellyfin server?", "No, both are optional. If you already run one, Opal signs in and folds that library into its search and playback."],
+  ["Does the AI send my history to the cloud?", "The copilot runs locally, and session and watch history live in a SQLite database on your machine. Third-party services you connect still receive the requests their features need."],
+  ["Does Opal work offline?", "For anything on your disk, yes — local files play with subtitles, resume and history intact. Network sources like torrents, IPTV, YouTube, Jellyfin and Plex need a connection."],
+  ["Which operating systems are supported?", "Linux, macOS and Windows builds are published for every release. Windows is currently alpha, and unsigned builds can trigger OS security warnings."],
+  ["How do I update Opal?", "Re-run the install one-liner — it detects your platform, verifies checksums and doubles as the updater. Every build is also on the GitHub releases page."],
+  ["What does the Opal Connect extension do?", "It links Chrome, Edge or Firefox to the desktop app: send the tab's media, add compatible sites as sources, search, and control playback from a side panel."],
+  ["Is Opal free and open source?", "Yes — GPL-3.0, with the full source and release history on GitHub. No account, no subscription, no telemetry."],
 ];
 const faqSchema = {
   "@type": "FAQPage",
@@ -29,7 +32,7 @@ const faqSchema = {
   description={page.description}
   eyebrow="FAQ"
   heading="Questions about Opal, answered"
-  lead="Torrent playback, servers, local AI, browser integration, supported platforms and privacy—without the fine-print fog."
+  lead="Torrents, servers, local AI, platforms and privacy — the short answers."
   jsonLd={[breadcrumbSchema("FAQ", page.path), faqSchema]}
 >
   <section class="page-section">

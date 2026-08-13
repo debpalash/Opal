@@ -6,39 +6,39 @@ const page = pageFor("/features/");
 const groups = [
   {
     title: "Find everything from one search",
-    body: "Search local files, torrents, Jellyfin, Plex, Stremio sources, anime, YouTube, live TV and manga together. Results stay labelled by source so you always know where a result came from.",
+    body: "One query covers local files, torrents, Jellyfin, Plex, Stremio sources, anime, YouTube, live TV and manga — every result labelled with where it came from.",
   },
   {
     title: "Stream torrents like ordinary media",
-    body: "Open a magnet link and start watching while pieces download. Opal keeps torrent discovery separate from playback and ships with no sources enabled.",
+    body: "Open a magnet and start watching while the pieces download. Opal ships with no sources enabled and hosts nothing.",
   },
   {
     title: "Bring your existing libraries",
-    body: "Connect Jellyfin and Plex instead of rebuilding a library. Local files, remote libraries and web sources can appear in the same search experience.",
+    body: "Sign in to Jellyfin and Plex and their libraries join the same search — no rebuilding, no migration.",
   },
   {
     title: "Watch live TV and web video",
-    body: "Search a large IPTV catalogue, play YouTube with SponsorBlock support and use subtitles that can be fetched, synchronized and styled per file.",
+    body: "A searchable IPTV catalog, YouTube with SponsorBlock, and subtitles fetched, synced and styled per file.",
   },
   {
     title: "Read manga on the desktop",
-    body: "Use Mihon and Tachiyomi-compatible extensions through the bundled Suwayomi server, alongside the media you already watch and listen to.",
+    body: "Mihon and Tachiyomi-compatible extensions through the bundled Suwayomi server, beside everything you watch.",
   },
   {
     title: "Ask a local AI copilot",
-    body: "Get recommendations and ask Opal to search, queue or play without sending your watch history to an Opal account or telemetry service.",
+    body: "A model on your machine recommends, searches, queues and plays — no Opal account, no telemetry.",
   },
   {
     title: "Continue on another screen",
-    body: "Use the LAN web interface, a phone remote or a watch party. Browser-incompatible formats can be transcoded for playback.",
+    body: "A LAN web UI, a phone remote and watch parties, with transcoding for whatever a browser can't decode.",
   },
   {
     title: "Keep your history under your control",
-    body: "Session restore and watch history live in a local SQLite database. Trakt sync is available when you deliberately connect it.",
+    body: "Session restore and watch history live in one local SQLite file; Trakt sync only when you connect it.",
   },
   {
     title: "Connect the browser",
-    body: "Opal Connect can send the current video to Opal, add compatible sites as sources and expose playback controls from a browser side panel.",
+    body: "Opal Connect sends the tab's video to Opal, adds compatible sites as sources and drives playback from a side panel.",
   },
 ];
 ---
@@ -49,7 +49,7 @@ const groups = [
   description={page.description}
   eyebrow="Features"
   heading="One media app instead of a stack"
-  lead="Search, stream, read and control your media across local files, servers and sources—from one native, local-first interface."
+  lead="Search, stream and read across local files, servers and the web — from one native, local-first app."
   jsonLd={breadcrumbSchema("Features", page.path)}
 >
   <section class="page-section" aria-labelledby="feature-list">
@@ -67,7 +67,7 @@ const groups = [
       <div>
         <p class="eyebrow">Universal search</p>
         <h2>One query, clearly sourced results</h2>
-        <p class="sub">Opal fans a query out to your enabled providers and ranks the responses together. Source badges and media types keep the combined result set understandable.</p>
+        <p class="sub">A query fans out to every enabled provider and comes back as a single ranked list, badged by source.</p>
         <a class="text-link" href="/compare/">Compare Opal with other media apps →</a>
       </div>
       <div class="shot">

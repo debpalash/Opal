@@ -1,0 +1,62 @@
+---
+import PageLayout from "../layouts/PageLayout.astro";
+import { humanDate, loadChangelog } from "../lib/changelog";
+import { REPO, breadcrumbSchema, pageFor } from "../lib/site";
+
+// Rendered from the repository's CHANGELOG.md at build time — the same file
+// that feeds the GitHub release notes, so the two can never disagree.
+const page = pageFor("/changelog/");
+const releases = loadChangelog();
+const latest = releases[0];
+---
+
+<PageLayout
+  path={page.path}
+  title={page.title}
+  description={page.description}
+  eyebrow="Changelog"
+  heading="What changed, release by release"
+  lead={`Every release since ${humanDate(releases[releases.length - 1].date)}, in the terms a user would notice. Currently v${latest.version}.`}
+  jsonLd={breadcrumbSchema("Changelog", page.path)}
+>
+  <section class="page-section">
+    <div class="wrap changelog">
+      {
+        releases.map((release, index) => (
+          <article class="release" id={`v${release.version}`}>
+            <header>
+              <h2>
+                <a href={`#v${release.version}`}>v{release.version}</a>
+                {index === 0 && <span class="tag">Latest</span>}
+              </h2>
+              <p class="date">{humanDate(release.date)}</p>
+            </header>
+            {release.paragraphs.map((paragraph) => (
+              <p set:html={paragraph} />
+            ))}
+            {release.items.length > 0 && (
+              <ul>
+                {release.items.map((item) => (
+                  <li set:html={item} />
+                ))}
+              </ul>
+            )}
+          </article>
+        ))
+      }
+      <p class="foot">
+        Full commit history and downloadable builds live on
+        <a href={`${REPO}/releases`}>GitHub releases</a>.
+      </p>
+    </div>
+  </section>
+
+  <section class="page-cta">
+    <div class="wrap">
+      <h2>Running an older build?</h2>
+      <p class="sub">The install one-liner doubles as the updater and verifies checksums.</p>
+      <a class="btn primary" href="/download/">Get v{latest.version}</a>
+      <a class="btn" href={`${REPO}/releases/latest`}>Release notes on GitHub</a>
+    </div>
+  </section>
+</PageLayout>

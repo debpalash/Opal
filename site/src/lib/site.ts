@@ -32,6 +32,42 @@ export const SITE_PAGES: SitePage[] = [
       "Compare Opal with Jellyfin, Plex, Stremio, Kodi and qBittorrent for universal search, torrent streaming, live TV, manga, local AI and privacy.",
   },
   {
+    path: "/compare/jellyfin/",
+    title: "Opal vs Jellyfin — Client and Server, Compared",
+    description:
+      "Jellyfin serves a library you host; Opal plays it alongside torrents, live TV, anime, YouTube and manga. When to run one, the other, or both.",
+  },
+  {
+    path: "/compare/plex/",
+    title: "Opal vs Plex — A Free, Local-First Alternative",
+    description:
+      "Plex is a polished proprietary media server tied to an account. Opal is a GPL-3.0 player that reads your Plex library with no account of its own.",
+  },
+  {
+    path: "/compare/stremio/",
+    title: "Opal vs Stremio — Streaming Without Add-on Roulette",
+    description:
+      "Stremio aggregates streams through add-ons; Opal builds torrent playback, live TV, manga and a local AI into one GPL-3.0 binary. Compare them here.",
+  },
+  {
+    path: "/compare/kodi/",
+    title: "Opal vs Kodi — One App Instead of an Add-on Stack",
+    description:
+      "Kodi is an endlessly extensible home-theater shell; Opal ships search, torrents, live TV, manga and local AI working out of the box. Compare the two.",
+  },
+  {
+    path: "/compare/qbittorrent/",
+    title: "Opal vs qBittorrent — Stream Torrents Instead of Waiting",
+    description:
+      "qBittorrent manages downloads; Opal treats a magnet as playable media and streams it while it downloads. See which fits, or why many keep both.",
+  },
+  {
+    path: "/changelog/",
+    title: "Opal Changelog — Release Notes & Version History",
+    description:
+      "Every Opal release in order, in the terms a user would notice: new features, fixes and platform changes across Linux, macOS and Windows builds.",
+  },
+  {
     path: "/extension/",
     title: "Opal Connect Extension — Chrome, Edge & Firefox",
     description:
@@ -67,22 +103,19 @@ export function pageFor(path: string): SitePage {
   return page;
 }
 
-export function breadcrumbSchema(name: string, path: string) {
+export function breadcrumbSchema(name: string, path: string, parent?: { name: string; path: string }) {
+  const trail = [
+    { name: "Opal", path: "/" },
+    ...(parent ? [parent] : []),
+    { name, path },
+  ];
   return {
     "@type": "BreadcrumbList",
-    itemListElement: [
-      {
-        "@type": "ListItem",
-        position: 1,
-        name: "Opal",
-        item: absoluteUrl("/"),
-      },
-      {
-        "@type": "ListItem",
-        position: 2,
-        name,
-        item: absoluteUrl(path),
-      },
-    ],
+    itemListElement: trail.map((crumb, index) => ({
+      "@type": "ListItem",
+      position: index + 1,
+      name: crumb.name,
+      item: absoluteUrl(crumb.path),
+    })),
   };
 }

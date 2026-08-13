@@ -1,0 +1,25 @@
+# Opal
+
+> Opal is a free, open-source (GPL-3.0), local-first desktop media player for Linux, macOS and Windows (alpha). One app searches and plays movies, TV, anime, live TV/IPTV, YouTube, torrents and manga — plus existing Jellyfin and Plex libraries — with an on-device AI copilot, no account and no telemetry.
+
+Opal ships with no content sources enabled and hosts no content.
+
+## Pages
+
+- [Home](https://opal.palash.dev/): overview, screenshots and downloads
+- [Features](https://opal.palash.dev/features/): universal search, torrent streaming, live TV, manga, local AI
+- [Compare](https://opal.palash.dev/compare/): capability matrix vs Jellyfin, Plex, Stremio, Kodi and qBittorrent
+- [Opal vs Jellyfin](https://opal.palash.dev/compare/jellyfin/)
+- [Opal vs Plex](https://opal.palash.dev/compare/plex/)
+- [Opal vs Stremio](https://opal.palash.dev/compare/stremio/)
+- [Opal vs Kodi](https://opal.palash.dev/compare/kodi/)
+- [Opal vs qBittorrent](https://opal.palash.dev/compare/qbittorrent/)
+- [Opal Connect extension](https://opal.palash.dev/extension/): browser extension for Chrome, Edge and Firefox
+- [Download](https://opal.palash.dev/download/): AppImage, DEB, RPM, DMG, MSI and portable builds
+- [Changelog](https://opal.palash.dev/changelog/): release notes and version history
+- [FAQ](https://opal.palash.dev/faq/)
+- [Privacy](https://opal.palash.dev/privacy/)
+
+## Source
+
+- [GitHub repository](https://github.com/debpalash/Opal): source code, issues and releases

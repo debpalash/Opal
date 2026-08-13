@@ -2,8 +2,22 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const dist = new URL("../dist/", import.meta.url);
-const expected = ["/", "/features/", "/compare/", "/extension/", "/download/", "/faq/", "/privacy/"];
-const requiredAssets = ["favicon.ico", "favicon.svg", "apple-touch-icon.png", "icon-192.png", "icon-512.png", "site.webmanifest", "robots.txt", "sitemap.xml"];
+const expected = [
+  "/",
+  "/features/",
+  "/compare/",
+  "/compare/jellyfin/",
+  "/compare/plex/",
+  "/compare/stremio/",
+  "/compare/kodi/",
+  "/compare/qbittorrent/",
+  "/extension/",
+  "/download/",
+  "/changelog/",
+  "/faq/",
+  "/privacy/",
+];
+const requiredAssets = ["favicon.ico", "favicon.svg", "apple-touch-icon.png", "icon-192.png", "icon-512.png", "site.webmanifest", "robots.txt", "sitemap.xml", "llms.txt"];
 const errors = [];
 const seenTitles = new Map();
 const seenDescriptions = new Map();
@@ -21,6 +35,15 @@ if (!existsSync(dist)) errors.push("dist/ does not exist; run the build first");
 for (const asset of requiredAssets) {
   const url = new URL(asset, dist);
   if (!existsSync(url) || statSync(url).size === 0) errors.push(`missing required asset: /${asset}`);
+}
+
+// Google Search only shows favicons of 48px or larger, so the ICO must carry
+// a 48x48 layer (a width byte of 0 in the ICO directory means 256).
+const icoUrl = new URL("favicon.ico", dist);
+if (existsSync(icoUrl)) {
+  const ico = readFileSync(icoUrl);
+  const layers = Array.from({ length: ico.readUInt16LE(4) }, (_, i) => ico[6 + i * 16] || 256);
+  if (!layers.some((size) => size >= 48)) errors.push(`favicon.ico largest layer is ${Math.max(...layers)}px; Google Search needs 48px+`);
 }
 
 const sitemapUrl = new URL("sitemap.xml", dist);

@@ -1,0 +1,93 @@
+---
+import PageLayout from "../../layouts/PageLayout.astro";
+import { RIVALS } from "../../lib/compare";
+import { REPO, breadcrumbSchema, pageFor } from "../../lib/site";
+
+export function getStaticPaths() {
+  return RIVALS.map((rival) => ({ params: { rival: rival.slug }, props: { rival } }));
+}
+
+const { rival } = Astro.props;
+const page = pageFor(`/compare/${rival.slug}/`);
+const others = RIVALS.filter((candidate) => candidate.slug !== rival.slug);
+---
+
+<PageLayout
+  path={page.path}
+  title={page.title}
+  description={page.description}
+  eyebrow={rival.name}
+  heading={`Opal vs ${rival.name}`}
+  lead={rival.lead}
+  parent={{ href: "/compare/", label: "Compare" }}
+  jsonLd={breadcrumbSchema(rival.name, page.path, { name: "Compare", path: "/compare/" })}
+>
+  <section class="page-section">
+    <div class="wrap">
+      <p class="eyebrow">At a glance</p>
+      <h2>The short version</h2>
+      <div class="tablewrap duel">
+        <table class="matrix">
+          <thead><tr><th>Capability</th><th class="me">Opal</th><th>{rival.name}</th></tr></thead>
+          <tbody>
+            {
+              rival.rows.map(([capability, opal, theirs]) => (
+                <tr>
+                  <td>{capability}</td>
+                  <td class={`me ${opal === "—" ? "no" : ""}`}>{opal}</td>
+                  <td class={theirs === "—" ? "no" : ""}>{theirs}</td>
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+      </div>
+      <p class="foot">Compiled from each project's own documentation and licenses. Out of date? <a href={`${REPO}/issues`}>Open an issue</a>.</p>
+    </div>
+  </section>
+
+  <section class="page-section alt">
+    <div class="wrap">
+      <p class="eyebrow">Which one?</p>
+      <h2>Pick by how you actually watch</h2>
+      <div class="choose">
+        <article class="card">
+          <h3>Choose Opal if…</h3>
+          <ul class="check-list">{rival.chooseOpal.map((reason) => <li>{reason}</li>)}</ul>
+        </article>
+        <article class="card">
+          <h3>Choose {rival.name} if…</h3>
+          <ul class="check-list">{rival.chooseRival.map((reason) => <li>{reason}</li>)}</ul>
+        </article>
+      </div>
+      <p class="verdict" set:html={rival.verdict} />
+    </div>
+  </section>
+
+  <section class="page-section">
+    <div class="wrap">
+      <p class="eyebrow">More comparisons</p>
+      <h2>Opal against the rest</h2>
+      <div class="grid page-links versus">
+        {
+          others.map((other) => (
+            <a class="card" href={`/compare/${other.slug}/`}>
+              <h3>Opal vs {other.name}</h3>
+              <p>{other.lead}</p>
+              <span class="text-link">Read the comparison →</span>
+            </a>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="page-cta">
+    <div class="wrap">
+      <h2>The cheapest way to decide is to run both</h2>
+      <p class="sub">Opal is GPL-3.0, needs no account, and installs in about a minute.</p>
+      <a class="btn primary" href="/download/">Download Opal</a>
+      <a class="btn" href="/compare/">Full comparison matrix</a>
+    </div>
+  </section>
+</PageLayout>

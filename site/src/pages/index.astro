@@ -17,9 +17,11 @@ import SeoHead from "../components/SeoHead.astro";
 import SiteFooter from "../components/SiteFooter.astro";
 import SiteNav from "../components/SiteNav.astro";
 import { AUTHOR_URL, REPO, pageFor } from "../lib/site";
+import { loadChangelog } from "../lib/changelog";
 
 const X = AUTHOR_URL;
 const page = pageFor("/");
+const latestVersion = loadChangelog()[0].version;
 
 const features = [
   ["One search, every source", "Disk, torrents, Jellyfin, Plex, Stremio, anime, YouTube, live TV and manga — one ranked list."],
@@ -64,7 +66,7 @@ const jsonld = {
   description: page.description,
   url: "https://opal.palash.dev/",
   downloadUrl: "https://opal.palash.dev/download/",
-  softwareVersion: "0.6.5",
+  softwareVersion: latestVersion,
   license: "https://www.gnu.org/licenses/gpl-3.0.html",
   isAccessibleForFree: true,
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
@@ -267,7 +269,7 @@ const jsonld = {
         </div>
 
         <p class="metalinks">
-          <a href={`${REPO}/releases/latest`}>Release notes</a>
+          <a href="/changelog/">Changelog</a>
           <a href={`${REPO}#readme`}>Docs</a>
           <a href={`${REPO}/issues`}>Report a bug</a>
           <a href={X} rel="me">Follow the build</a>

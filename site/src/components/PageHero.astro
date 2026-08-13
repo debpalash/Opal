@@ -6,9 +6,10 @@ interface Props {
   eyebrow: string;
   title: string;
   lead: string;
+  parent?: { href: string; label: string };
 }
 
-const { current, eyebrow, title, lead } = Astro.props;
+const { current, eyebrow, title, lead, parent } = Astro.props;
 ---
 
 <header class="hero page-hero">
@@ -16,7 +17,9 @@ const { current, eyebrow, title, lead } = Astro.props;
   <SiteNav current={current} />
   <div class="wrap">
     <nav class="breadcrumbs" aria-label="Breadcrumb">
-      <a href="/">Opal</a><span aria-hidden="true">/</span><span>{eyebrow}</span>
+      <a href="/">Opal</a><span aria-hidden="true">/</span>
+      {parent && <><a href={parent.href}>{parent.label}</a><span aria-hidden="true">/</span></>}
+      <span>{eyebrow}</span>
     </nav>
     <p class="eyebrow">{eyebrow}</p>
     <h1>{title}</h1>

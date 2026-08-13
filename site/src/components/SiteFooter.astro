@@ -1,20 +1,55 @@
 ---
 import { AUTHOR_URL, REPO } from "../lib/site";
+
+const columns: [string, [string, string][]][] = [
+  [
+    "Product",
+    [
+      ["/features/", "Features"],
+      ["/download/", "Download"],
+      ["/extension/", "Opal Connect"],
+      ["/changelog/", "Changelog"],
+    ],
+  ],
+  [
+    "Compare",
+    [
+      ["/compare/", "All apps"],
+      ["/compare/jellyfin/", "vs Jellyfin"],
+      ["/compare/plex/", "vs Plex"],
+      ["/compare/stremio/", "vs Stremio"],
+    ],
+  ],
+  [
+    "Project",
+    [
+      [REPO, "GitHub"],
+      [`${REPO}/issues`, "Report a bug"],
+      ["/faq/", "FAQ"],
+      ["/privacy/", "Privacy"],
+    ],
+  ],
+];
 ---
 
 <footer>
   <div class="wrap">
-    <div class="row">
-      <a class="brand" href="/"><img src="/favicon.svg" alt="" width="26" height="26" />Opal</a>
-      <span class="spacer" style="flex: 1"></span>
-      <a href="/features/">Features</a>
-      <a href="/compare/">Compare</a>
-      <a href="/extension/">Extension</a>
-      <a href="/download/">Download</a>
-      <a href="/faq/">FAQ</a>
-      <a href="/privacy/">Privacy</a>
-      <a href={REPO}>GitHub</a>
-      <a href={AUTHOR_URL} rel="me">X</a>
+    <div class="cols">
+      <div class="about">
+        <a class="brand" href="/"><img src="/favicon.svg" alt="" width="26" height="26" />Opal</a>
+        <p>A free, open-source, local-first media player. One app for movies, TV, anime, live TV, torrents, manga — and your Jellyfin &amp; Plex.</p>
+        <p class="follow"><a href="https://ko-fi.com/debpalash">Support on Ko-fi</a> · <a href={AUTHOR_URL} rel="me">Follow the build</a></p>
+      </div>
+      {
+        columns.map(([title, links]) => (
+          <nav aria-label={`${title} links`}>
+            <p class="col-title">{title}</p>
+            {links.map(([href, label]) => (
+              <a href={href}>{label}</a>
+            ))}
+          </nav>
+        ))
+      }
     </div>
     <p class="legal">
       GPL-3.0. Opal hosts no content and ships with no sources enabled.<br />

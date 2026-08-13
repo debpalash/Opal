@@ -14,9 +14,10 @@ interface Props {
   lead: string;
   jsonLd?: Record<string, unknown> | Record<string, unknown>[];
   noindex?: boolean;
+  parent?: { href: string; label: string };
 }
 
-const { path, title, description, eyebrow, heading, lead, jsonLd, noindex } = Astro.props;
+const { path, title, description, eyebrow, heading, lead, jsonLd, noindex, parent } = Astro.props;
 ---
 
 <!doctype html>
@@ -26,7 +27,7 @@ const { path, title, description, eyebrow, heading, lead, jsonLd, noindex } = As
     <link rel="preconnect" href="https://api.github.com" crossorigin />
   </head>
   <body>
-    <PageHero current={path} {eyebrow} title={heading} {lead}>
+    <PageHero current={path} {eyebrow} title={heading} {lead} {parent}>
       <slot name="hero" />
     </PageHero>
     <main class="page-main">
