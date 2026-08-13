@@ -18,7 +18,7 @@ pub const DigestError = error{
     UnsupportedFileType,
     TreeTooLarge,
     PathSetChanged,
-} || std.mem.Allocator.Error || std.Io.Dir.Iterator.Error || std.Io.Dir.OpenError || std.Io.File.OpenError || std.Io.File.StatError || std.Io.File.ReadStreamingError;
+} || std.mem.Allocator.Error || std.Io.Dir.Iterator.Error || std.Io.Dir.OpenError || std.Io.File.OpenError || std.Io.File.StatError || std.Io.File.ReadPositionalError;
 
 const EntryKind = enum(u8) {
     directory = 'd',
@@ -86,11 +86,11 @@ pub fn digestTree(
 
         var read_total: u64 = 0;
         while (true) {
-            var vec: [1][]u8 = .{&read_buf};
-            const n = file.readStreaming(system_io, &vec) catch |err| switch (err) {
-                error.EndOfStream => 0,
-                else => return err,
-            };
+            // Plugin entries are regular files, so use explicit positional
+            // reads. Besides avoiding shared cursor state during revalidation,
+            // this is portable to Windows where Zig 0.16's streaming read on a
+            // no-follow directory-relative handle can return INVALID_PARAMETER.
+            const n = try file.readPositionalAll(system_io, &read_buf, read_total);
             if (n == 0) break;
             read_total = std.math.add(u64, read_total, n) catch return error.TreeTooLarge;
             if (read_total > before.size or read_total > MAX_TREE_BYTES)
