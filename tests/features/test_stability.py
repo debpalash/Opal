@@ -4,6 +4,43 @@ shared @test decorator, helpers, and run_all()."""
 from .harness import *  # noqa: F401,F403
 import os, sys, subprocess, sqlite3, socket, time, json  # noqa: F401
 
+
+@test("Render hot paths are event-fed; dropped paths are backgrounded", "Stability")
+def test_render_hot_paths_and_drop_ingest():
+    player = _src("src/player/player.zig")
+    footer = _src("src/ui/footer.zig")
+    grid = _src("src/ui/grid.zig")
+    main = _src("src/main.zig")
+    state = _src("src/core/state.zig")
+    drop = _src("src/player/drop_ingest.zig")
+    overlay = _between(footer, "pub fn renderLiquidGlassOverlay", "fn activeMediaPlayer")
+    now_playing = _between(footer, "fn renderNowPlayingBar", "pub fn renderMediaTray")
+    observed = (
+        "duration", "volume", "speed", "mute", "paused-for-cache",
+        "playlist-count", "playlist-pos", "dwidth", "dheight",
+    )
+    checks = {
+        "all UI properties observed": all(f'"{name}"' in player for name in observed),
+        "full controls use snapshot": "playbackSnapshot()" in overlay,
+        "now-playing uses snapshot": "playbackSnapshot()" in now_playing,
+        "critical footer IPC removed": all(
+            f'"{name}"' not in overlay and f'"{name}"' not in now_playing
+            for name in ("percent-pos", "time-pos", "duration", "volume")
+        ),
+        "video sizing uses snapshot": "playbackSnapshot()" in grid and "renderSize(" in grid,
+        "video sizing IPC removed": 'mpv_get_property(p.mpv_ctx, "dwidth"' not in grid,
+        "drop IO runs on worker": "std.Thread.spawn" in drop and "scanDirectory" in drop,
+        "drop scan is bounded": "max_folder_entries" in drop and "workers.isQuitting()" in drop,
+        "old frame scan removed": "scanDirForMedia" not in main and "isDirectory" not in main,
+        "frame mailboxes atomic": "std.atomic.Value(bool)" in state
+                                  and "dropped_file_ready.load(.acquire)" in main
+                                  and "remote_open_ready.load(.acquire)" in main,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "hot-path regression(s): " + ", ".join(missing)
+    return "pass", "mpv render state cached; drop IO bounded+backgrounded; idle locks gated"
+
 @test("Log Severity By Level", "Stability")
 def test_log_severity_by_level():
     # Info/debug/warn logs must not render red: pushLog derives the error flag

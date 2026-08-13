@@ -601,14 +601,14 @@ pub const AppState = struct {
     pending_source_url_len: usize = 0,
     dropped_file_path: [2048]u8 = std.mem.zeroes([2048]u8),
     dropped_file_len: usize = 0,
-    dropped_file_ready: bool = false,
+    dropped_file_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     dropped_file_lock: @import("sync.zig").Mutex = .{},
     // Path/URL forwarded by a second `opal <file>` launch (remote /api/open,
     // written on an API connection thread). appFrame consumes it on the UI
     // thread via browser.loadContent — the same route a direct CLI open takes.
     remote_open_path: [2048]u8 = std.mem.zeroes([2048]u8),
     remote_open_len: usize = 0,
-    remote_open_ready: bool = false,
+    remote_open_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     remote_open_lock: @import("sync.zig").Mutex = .{},
     // Typed routing + rich metadata for a remote open/ingest (browser extension).
     // Populated under remote_open_lock alongside remote_open_path; consumed once

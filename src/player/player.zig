@@ -4,7 +4,9 @@ const c = @import("../core/c.zig");
 const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
 const http_headers = @import("http_headers_pure.zig");
+const playback_snapshot = @import("playback_snapshot_pure.zig");
 pub const HttpHeader = http_headers.HttpHeader;
+pub const PlaybackSnapshot = playback_snapshot.Snapshot;
 
 /// True if a Firefox profile dir exists, so yt-dlp's --cookies-from-browser
 /// firefox won't abort. Checked once and cached.
@@ -74,6 +76,15 @@ pub const MediaPlayer = struct {
     // path doesn't issue synchronous IPC (or per-frame allocations) for these.
     cached_paused: bool = true, // mirror of mpv "pause"
     last_seen_pos: f64 = 0, // last valid mpv time-pos seen in the event loop (co-watch rewind detect)
+    cached_duration: f64 = 0,
+    cached_volume: f64 = 100,
+    cached_speed: f64 = 1,
+    cached_muted: bool = false,
+    cached_paused_for_cache: bool = false,
+    cached_playlist_count: i64 = 0,
+    cached_playlist_pos: i64 = 0,
+    cached_video_width: i64 = 0,
+    cached_video_height: i64 = 0,
     // True only when this player is playing ANIME-sourced media (armed by the
     // anime play flow via services/anime_skip.zig). Gates auto-skip so we
     // don't apply crowdsourced anime timestamps to arbitrary files.
@@ -159,6 +170,25 @@ pub const MediaPlayer = struct {
     // free the stale texture and re-fetch the correct art once the worker lands
     // (same leak-free swap the podcasts cover slots use).
     np_art_url_hash: u64 = 0,
+
+    /// Allocation-free render snapshot. All fields are mirrors maintained by
+    /// mpv property-change events, so callers never synchronously cross into
+    /// libmpv while laying out a frame.
+    pub fn playbackSnapshot(self: *const MediaPlayer) PlaybackSnapshot {
+        return .{
+            .paused = self.cached_paused,
+            .paused_for_cache = self.cached_paused_for_cache,
+            .time_pos = self.last_seen_pos,
+            .duration = self.cached_duration,
+            .volume = self.cached_volume,
+            .speed = self.cached_speed,
+            .muted = self.cached_muted,
+            .playlist_count = self.cached_playlist_count,
+            .playlist_pos = self.cached_playlist_pos,
+            .video_width = self.cached_video_width,
+            .video_height = self.cached_video_height,
+        };
+    }
 
     /// Set (or clear, with empty args) the now-playing audio metadata + cover
     /// art. UI-thread only. Copies the strings in (clamped) and releases any
@@ -354,6 +384,15 @@ pub const MediaPlayer = struct {
         // when the sub-text mirror is drawn. Initialize them to their defaults.
         self.cached_paused = true;
         self.last_seen_pos = 0;
+        self.cached_duration = 0;
+        self.cached_volume = 100;
+        self.cached_speed = 1;
+        self.cached_muted = false;
+        self.cached_paused_for_cache = false;
+        self.cached_playlist_count = 0;
+        self.cached_playlist_pos = 0;
+        self.cached_video_width = 0;
+        self.cached_video_height = 0;
         self.anime_skip_active = false;
         self.cached_vid_no = false;
         self.vis_applied = false;
@@ -591,6 +630,15 @@ pub const MediaPlayer = struct {
         // time-pos drives co-watch rewind detection even during silent stretches
         // (no subtitle change). Value arrives in the event payload — no per-frame IPC.
         _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "time-pos", c.mpv.MPV_FORMAT_DOUBLE);
+        _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "duration", c.mpv.MPV_FORMAT_DOUBLE);
+        _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "volume", c.mpv.MPV_FORMAT_DOUBLE);
+        _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "speed", c.mpv.MPV_FORMAT_DOUBLE);
+        _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "mute", c.mpv.MPV_FORMAT_FLAG);
+        _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "paused-for-cache", c.mpv.MPV_FORMAT_FLAG);
+        _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "playlist-count", c.mpv.MPV_FORMAT_INT64);
+        _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "playlist-pos", c.mpv.MPV_FORMAT_INT64);
+        _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "dwidth", c.mpv.MPV_FORMAT_INT64);
+        _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "dheight", c.mpv.MPV_FORMAT_INT64);
 
         // Load enabled user scripts individually (must happen after mpv_initialize)
         for (0..state.app.script_count) |si| {
@@ -1139,6 +1187,22 @@ fn getPropStringInto(ctx: ?*c.mpv.mpv_handle, name: [*:0]const u8, buf: []u8) []
     return buf[0..n];
 }
 
+fn eventDouble(pc: *const c.mpv.mpv_event_property, fallback: f64) f64 {
+    if (pc.format != c.mpv.MPV_FORMAT_DOUBLE or pc.data == null) return fallback;
+    const value = @as(*const f64, @ptrCast(@alignCast(pc.data))).*;
+    return if (std.math.isFinite(value)) value else fallback;
+}
+
+fn eventInt64(pc: *const c.mpv.mpv_event_property) i64 {
+    if (pc.format != c.mpv.MPV_FORMAT_INT64 or pc.data == null) return 0;
+    return @as(*const i64, @ptrCast(@alignCast(pc.data))).*;
+}
+
+fn eventFlag(pc: *const c.mpv.mpv_event_property) bool {
+    if (pc.format != c.mpv.MPV_FORMAT_FLAG or pc.data == null) return false;
+    return @as(*const c_int, @ptrCast(@alignCast(pc.data))).* != 0;
+}
+
 pub fn updateTorrentBackgroundTasks() void {
     // Republish the "a torrent is waiting to start playing" flag every frame.
     // The stall watchdog wakes the UI while it is set, which is what keeps the
@@ -1164,6 +1228,15 @@ pub fn updateTorrentBackgroundTasks() void {
 
             if (ev.*.event_id == c.mpv.MPV_EVENT_START_FILE) {
                 p.provider = .mpv;
+                // Do not show the previous item's time/size while the new file
+                // is opening, and do not misclassify its first timestamp as a
+                // co-watch rewind.
+                p.last_seen_pos = 0;
+                p.cached_duration = 0;
+                p.cached_paused_for_cache = false;
+                p.cached_video_width = 0;
+                p.cached_video_height = 0;
+                p.cached_sub_text_len = 0;
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_FILE_LOADED) {
                 // Colour metadata is known now, which is the earliest the `auto`
                 // picture preset can decide anything — before this, video-params
@@ -1337,9 +1410,7 @@ pub fn updateTorrentBackgroundTasks() void {
                         // (Rewind detection now lives in the "time-pos" branch so
                         // it fires during silent stretches too.)
                         if (txt.len > 0) {
-                            var pos: f64 = 0;
-                            _ = c.mpv.mpv_get_property(p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &pos);
-                            p.updateDialogueRing(txt, pos);
+                            p.updateDialogueRing(txt, p.last_seen_pos);
                         }
                     } else {
                         p.cached_sub_text_len = 0;
@@ -1377,6 +1448,24 @@ pub fn updateTorrentBackgroundTasks() void {
                             }
                         }
                     }
+                } else if (std.mem.eql(u8, pname, "duration")) {
+                    p.cached_duration = eventDouble(pc, 0);
+                } else if (std.mem.eql(u8, pname, "volume")) {
+                    p.cached_volume = eventDouble(pc, 100);
+                } else if (std.mem.eql(u8, pname, "speed")) {
+                    p.cached_speed = eventDouble(pc, 1);
+                } else if (std.mem.eql(u8, pname, "mute")) {
+                    p.cached_muted = eventFlag(pc);
+                } else if (std.mem.eql(u8, pname, "paused-for-cache")) {
+                    p.cached_paused_for_cache = eventFlag(pc);
+                } else if (std.mem.eql(u8, pname, "playlist-count")) {
+                    p.cached_playlist_count = eventInt64(pc);
+                } else if (std.mem.eql(u8, pname, "playlist-pos")) {
+                    p.cached_playlist_pos = eventInt64(pc);
+                } else if (std.mem.eql(u8, pname, "dwidth")) {
+                    p.cached_video_width = eventInt64(pc);
+                } else if (std.mem.eql(u8, pname, "dheight")) {
+                    p.cached_video_height = eventInt64(pc);
                 }
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_LOG_MESSAGE) {
                 const log_msg = @as(*c.mpv.mpv_event_log_message, @ptrCast(@alignCast(ev.*.data)));

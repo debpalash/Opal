@@ -28,6 +28,32 @@ pub const M3UPlaylist = struct {
         self.entries.deinit(self.allocator);
     }
 
+    /// Append a fully-owned entry with rollback on every allocation failure.
+    /// Centralizing this prevents partially-built playlist rows from leaking.
+    pub fn appendCopy(
+        self: *M3UPlaylist,
+        title: []const u8,
+        url: []const u8,
+        logo_url: ?[]const u8,
+        group: ?[]const u8,
+    ) !void {
+        const owned_title = try self.allocator.dupe(u8, title);
+        errdefer self.allocator.free(owned_title);
+        const owned_url = try self.allocator.dupe(u8, url);
+        errdefer self.allocator.free(owned_url);
+        const owned_logo = if (logo_url) |value| try self.allocator.dupe(u8, value) else null;
+        errdefer if (owned_logo) |value| self.allocator.free(value);
+        const owned_group = if (group) |value| try self.allocator.dupe(u8, value) else null;
+        errdefer if (owned_group) |value| self.allocator.free(value);
+
+        try self.entries.append(self.allocator, .{
+            .title = owned_title,
+            .url = owned_url,
+            .logoUrl = owned_logo,
+            .group = owned_group,
+        });
+    }
+
     /// Caller passes io so this file stays self-contained (unit tests
     /// build m3u.zig as a standalone module — imports outside its
     /// dir would violate module boundaries).
@@ -107,12 +133,7 @@ pub const M3UPlaylist = struct {
                     }
                 }
 
-                try self.entries.append(self.allocator, .{
-                    .title = try self.allocator.dupe(u8, current_title.?),
-                    .url = try self.allocator.dupe(u8, line),
-                    .logoUrl = if (current_logo) |cl| try self.allocator.dupe(u8, cl) else null,
-                    .group = if (current_group) |cg| try self.allocator.dupe(u8, cg) else null,
-                });
+                try self.appendCopy(current_title.?, line, current_logo, current_group);
 
                 // Reset for next entry
                 current_title = null;

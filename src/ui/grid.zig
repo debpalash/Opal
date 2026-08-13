@@ -500,28 +500,15 @@ pub fn renderGrid() !void {
                     // 8.3MB per frame and upload all of it to the GPU even
                     // for a 720p file (3.7MB) — a large share of the playback
                     // CPU. The GPU upscales the smaller texture for free.
-                    var vw: i64 = 0;
-                    var vh: i64 = 0;
-                    _ = c.mpv.mpv_get_property(p.mpv_ctx, "dwidth", c.mpv.MPV_FORMAT_INT64, &vw);
-                    _ = c.mpv.mpv_get_property(p.mpv_ctx, "dheight", c.mpv.MPV_FORMAT_INT64, &vh);
-                    var rw: c_int = player.video_w;
-                    var rh: c_int = player.video_h;
-                    if (vw > 0 and vh > 0) {
-                        if (vw <= player.video_w and vh <= player.video_h) {
-                            rw = @intCast(vw);
-                            rh = @intCast(vh);
-                        } else {
-                            // >1080p source: scale down to fit, keep aspect.
-                            const sc = @min(
-                                @as(f64, @floatFromInt(player.video_w)) / @as(f64, @floatFromInt(vw)),
-                                @as(f64, @floatFromInt(player.video_h)) / @as(f64, @floatFromInt(vh)),
-                            );
-                            rw = @intFromFloat(@as(f64, @floatFromInt(vw)) * sc);
-                            rh = @intFromFloat(@as(f64, @floatFromInt(vh)) * sc);
-                        }
-                        rw = @max(2, rw);
-                        rh = @max(2, rh);
-                    }
+                    const playback = p.playbackSnapshot();
+                    const render_size = @import("../player/playback_snapshot_pure.zig").renderSize(
+                        playback.video_width,
+                        playback.video_height,
+                        player.video_w,
+                        player.video_h,
+                    );
+                    const rw: c_int = @intCast(render_size.width);
+                    const rh: c_int = @intCast(render_size.height);
                     const size = [2]c_int{ rw, rh };
                     const img_format = "rgba";
                     const pitch: usize = @as(usize, @intCast(rw)) * 4;

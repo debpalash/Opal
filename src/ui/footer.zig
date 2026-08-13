@@ -1419,37 +1419,11 @@ pub fn renderLiquidGlassOverlay() void {
         }
     }
 
-    // Query mpv properties — seekbar-critical props every frame, slow props cached.
-    var percent_pos: f64 = 0.0;
-    _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "percent-pos", c.mpv.MPV_FORMAT_DOUBLE, &percent_pos);
-    var time_pos: f64 = 0.0;
-    _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &time_pos);
-    var duration: f64 = 0.0;
-    _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &duration);
-
-    const SlowProps = struct {
-        var frame_ctr: u32 = 0;
-        var speed: f64 = 1.0;
-        var is_muted: i64 = 0;
-        var volume: f64 = 100.0;
-        var pl_count: i64 = 0;
-        var pl_pos: i64 = 0;
-        var paused_for_cache: i64 = 0;
-        var last_player_idx: usize = 0;
-    };
-    if (SlowProps.last_player_idx != state.app.active_player_idx) {
-        SlowProps.last_player_idx = state.app.active_player_idx;
-        SlowProps.frame_ctr = 8; // force refresh on next frame
-    }
-    SlowProps.frame_ctr +%= 1;
-    if (SlowProps.frame_ctr % 8 == 0) {
-        _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "speed", c.mpv.MPV_FORMAT_DOUBLE, &SlowProps.speed);
-        _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "mute", c.mpv.MPV_FORMAT_FLAG, &SlowProps.is_muted);
-        _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "volume", c.mpv.MPV_FORMAT_DOUBLE, &SlowProps.volume);
-        _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "playlist-count", c.mpv.MPV_FORMAT_INT64, &SlowProps.pl_count);
-        _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "playlist-pos", c.mpv.MPV_FORMAT_INT64, &SlowProps.pl_pos);
-        _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "paused-for-cache", c.mpv.MPV_FORMAT_FLAG, &SlowProps.paused_for_cache);
-    }
+    // One coherent event-fed snapshot: the render path never blocks on mpv IPC.
+    const playback = active_p.playbackSnapshot();
+    const percent_pos = playback.percent();
+    const time_pos = playback.time_pos;
+    const duration = playback.duration;
 
     // What the bar SAYS it is doing, decided in one tested place. Previously
     // the only signal was the play/pause glyph, so a file still opening and a
@@ -1458,7 +1432,7 @@ pub fn renderLiquidGlassOverlay() void {
     const transport = footer_pure.transportState(
         active_p.is_loading,
         is_paused,
-        SlowProps.paused_for_cache == 1,
+        playback.paused_for_cache,
     );
     const toggle_icon = if (is_paused) icons.tvg.lucide.play else icons.tvg.lucide.pause;
 
@@ -1493,7 +1467,7 @@ pub fn renderLiquidGlassOverlay() void {
         const fit = footer_pure.barLayout(bar_pt);
 
         var wd: dvui.WidgetData = undefined;
-        const has_playlist = SlowProps.pl_count > 1 and fit.skip_buttons;
+        const has_playlist = playback.playlist_count > 1 and fit.skip_buttons;
 
         // ── Previous episode ──
         //
@@ -1526,7 +1500,7 @@ pub fn renderLiquidGlassOverlay() void {
             if (dvui.buttonIcon(@src(), "skip-prev", icons.tvg.lucide.@"skip-back", .{}, .{}, .{
                 .data_out = &wd,
                 .color_fill = transparent,
-                .color_text = if (SlowProps.pl_pos > 0) theme.colors.text_primary else theme.colors.text_tertiary,
+                .color_text = if (playback.playlist_pos > 0) theme.colors.text_primary else theme.colors.text_tertiary,
                 .border = dvui.Rect.all(0),
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .gravity_y = 0.5,
@@ -1666,7 +1640,7 @@ pub fn renderLiquidGlassOverlay() void {
             if (dvui.buttonIcon(@src(), "skip-next", icons.tvg.lucide.@"skip-forward", .{}, .{}, .{
                 .data_out = &wd,
                 .color_fill = transparent,
-                .color_text = if (SlowProps.pl_pos + 1 < SlowProps.pl_count) theme.colors.text_primary else theme.colors.text_tertiary,
+                .color_text = if (playback.playlist_pos + 1 < playback.playlist_count) theme.colors.text_primary else theme.colors.text_tertiary,
                 .border = dvui.Rect.all(0),
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .gravity_y = 0.5,
@@ -1736,16 +1710,16 @@ pub fn renderLiquidGlassOverlay() void {
             // Playlist position / Speed / Loop badges.
             if (has_playlist) {
                 var pl_buf: [16]u8 = undefined;
-                if (std.fmt.bufPrintZ(&pl_buf, " \xC2\xB7 {d}/{d}", .{ SlowProps.pl_pos + 1, SlowProps.pl_count })) |pl_str| {
+                if (std.fmt.bufPrintZ(&pl_buf, " \xC2\xB7 {d}/{d}", .{ playback.playlist_pos + 1, playback.playlist_count })) |pl_str| {
                     _ = dvui.label(@src(), "{s}", .{pl_str}, .{
                         .color_text = theme.colors.text_tertiary,
                         .gravity_y = 0.5,
                     });
                 } else |_| {}
             }
-            if (@abs(SlowProps.speed - 1.0) > 0.01) {
+            if (@abs(playback.speed - 1.0) > 0.01) {
                 var spd_buf: [16]u8 = undefined;
-                if (std.fmt.bufPrintZ(&spd_buf, " \xC2\xB7 {d:.1}\xC3\x97", .{SlowProps.speed})) |sp| {
+                if (std.fmt.bufPrintZ(&spd_buf, " \xC2\xB7 {d:.1}\xC3\x97", .{playback.speed})) |sp| {
                     _ = dvui.label(@src(), "{s}", .{sp}, .{
                         .color_text = theme.colors.text_tertiary,
                         .gravity_y = 0.5,
@@ -1767,8 +1741,8 @@ pub fn renderLiquidGlassOverlay() void {
         // The glyph tracks the LEVEL, not just the mute flag: volume 0, a
         // whisper and full blast all wore the same "volume-2" speaker before,
         // so the icon carried no information unless you were muted.
-        const is_muted = SlowProps.is_muted == 1;
-        const m_icon = switch (footer_pure.volumeLevel(SlowProps.volume, is_muted)) {
+        const is_muted = playback.muted;
+        const m_icon = switch (footer_pure.volumeLevel(playback.volume, is_muted)) {
             .muted => icons.tvg.lucide.@"volume-x",
             .off => icons.tvg.lucide.volume,
             .low => icons.tvg.lucide.@"volume-1",
@@ -1794,67 +1768,66 @@ pub fn renderLiquidGlassOverlay() void {
         // chrome: faint trough, secondary (non-accent) fill. First group to go
         // when the bar narrows; the mute button (the essential control) stays.
         if (fit.volume_slider) {
-        var slider_host = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .min_size_content = .{ .w = 120, .h = 20 },
-            .max_size_content = .{ .w = 120, .h = 20 },
-            .gravity_y = 0.5,
-        });
-        const slider_rect = slider_host.data().contentRectScale().r;
-        const slider_hover = mouseOverRect(slider_rect);
-
-        // Wheel over the volume group = ±5 volume (the scrubber band already
-        // seeks on wheel; the volume slider ignored it).
-        for (dvui.events()) |*ev| {
-            if (ev.handled or ev.evt != .mouse) continue;
-            const me = ev.evt.mouse;
-            if (me.floating_win != dvui.subwindowCurrentId()) continue;
-            switch (me.action) {
-                .wheel_y => |wy| {
-                    if (me.p.x >= slider_rect.x and me.p.x <= slider_rect.x + slider_rect.w and
-                        me.p.y >= slider_rect.y and me.p.y <= slider_rect.y + slider_rect.h)
-                    {
-                        _ = c.mpv.mpv_command_string(active_p.mpv_ctx, if (wy > 0) "add volume 5" else "add volume -5");
-                        SlowProps.frame_ctr = 7; // refresh cached volume next frame
-                        ev.handled = true;
-                    }
-                },
-                else => {},
-            }
-        }
-
-        const vol_f64: f64 = SlowProps.volume;
-        var vol_val: f32 = footer_pure.volumeFraction(vol_f64);
-        if (dvui.slider(@src(), .{ .fraction = &vol_val }, .{
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 120, .h = 4 },
-            .max_size_content = .{ .w = 120, .h = 4 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
-            .corner_radius = dvui.Rect.all(2),
-            .gravity_y = 0.5,
-            .background = true,
-        })) {
-            var set_vol_cmd: [64]u8 = undefined;
-            if (std.fmt.bufPrintZ(&set_vol_cmd, "set volume {d}", .{footer_pure.volumePercent(@as(f64, vol_val) * 100.0)})) |cmd| {
-                _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cmd.ptr);
-            } else |_| {}
-        }
-        slider_host.deinit();
-
-        // Hover-only percentage label.
-        if (slider_hover) {
-            const vol_pct = @as(i32, @intFromFloat(@max(0.0, @min(100.0, vol_f64))));
-            var vol_pct_buf: [8]u8 = undefined;
-            const vol_pct_str = std.fmt.bufPrint(&vol_pct_buf, "{d}%", .{vol_pct}) catch "0%";
-            _ = dvui.label(@src(), "{s}", .{vol_pct_str}, .{
-                .color_text = theme.colors.text_tertiary,
+            var slider_host = dvui.box(@src(), .{ .dir = .vertical }, .{
+                .min_size_content = .{ .w = 120, .h = 20 },
+                .max_size_content = .{ .w = 120, .h = 20 },
                 .gravity_y = 0.5,
-                .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
             });
-        } else {
-            var gap = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 4, .h = 0 } });
-            gap.deinit();
-        }
+            const slider_rect = slider_host.data().contentRectScale().r;
+            const slider_hover = mouseOverRect(slider_rect);
+
+            // Wheel over the volume group = ±5 volume (the scrubber band already
+            // seeks on wheel; the volume slider ignored it).
+            for (dvui.events()) |*ev| {
+                if (ev.handled or ev.evt != .mouse) continue;
+                const me = ev.evt.mouse;
+                if (me.floating_win != dvui.subwindowCurrentId()) continue;
+                switch (me.action) {
+                    .wheel_y => |wy| {
+                        if (me.p.x >= slider_rect.x and me.p.x <= slider_rect.x + slider_rect.w and
+                            me.p.y >= slider_rect.y and me.p.y <= slider_rect.y + slider_rect.h)
+                        {
+                            _ = c.mpv.mpv_command_string(active_p.mpv_ctx, if (wy > 0) "add volume 5" else "add volume -5");
+                            ev.handled = true;
+                        }
+                    },
+                    else => {},
+                }
+            }
+
+            const vol_f64: f64 = playback.volume;
+            var vol_val: f32 = footer_pure.volumeFraction(vol_f64);
+            if (dvui.slider(@src(), .{ .fraction = &vol_val }, .{
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 120, .h = 4 },
+                .max_size_content = .{ .w = 120, .h = 4 },
+                .color_fill = theme.colors.bg_elevated,
+                .color_text = theme.colors.text_secondary,
+                .corner_radius = dvui.Rect.all(2),
+                .gravity_y = 0.5,
+                .background = true,
+            })) {
+                var set_vol_cmd: [64]u8 = undefined;
+                if (std.fmt.bufPrintZ(&set_vol_cmd, "set volume {d}", .{footer_pure.volumePercent(@as(f64, vol_val) * 100.0)})) |cmd| {
+                    _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cmd.ptr);
+                } else |_| {}
+            }
+            slider_host.deinit();
+
+            // Hover-only percentage label.
+            if (slider_hover) {
+                const vol_pct = @as(i32, @intFromFloat(@max(0.0, @min(100.0, vol_f64))));
+                var vol_pct_buf: [8]u8 = undefined;
+                const vol_pct_str = std.fmt.bufPrint(&vol_pct_buf, "{d}%", .{vol_pct}) catch "0%";
+                _ = dvui.label(@src(), "{s}", .{vol_pct_str}, .{
+                    .color_text = theme.colors.text_tertiary,
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
+                });
+            } else {
+                var gap = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 4, .h = 0 } });
+                gap.deinit();
+            }
         } // fit.volume_slider
 
         // ── Spacer pushes pickers + close to the right edge ──
@@ -2198,15 +2171,12 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     // ── Transport state (cheap, every frame) ──
     // Pause mirrors mpv "pause" via the player worker (cached_paused) — no
     // per-frame mpv IPC read.
-    const is_paused: bool = p.cached_paused;
-    var percent_pos: f64 = 0.0;
-    _ = c.mpv.mpv_get_property(p.mpv_ctx, "percent-pos", c.mpv.MPV_FORMAT_DOUBLE, &percent_pos);
-    var time_pos: f64 = 0.0;
-    _ = c.mpv.mpv_get_property(p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &time_pos);
-    var duration: f64 = 0.0;
-    _ = c.mpv.mpv_get_property(p.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &duration);
-    var volume: f64 = 100.0;
-    _ = c.mpv.mpv_get_property(p.mpv_ctx, "volume", c.mpv.MPV_FORMAT_DOUBLE, &volume);
+    const playback = p.playbackSnapshot();
+    const is_paused = playback.paused;
+    const percent_pos = playback.percent();
+    const time_pos = playback.time_pos;
+    const duration = playback.duration;
+    const volume = playback.volume;
 
     // ── Bar panel: bg_surface + 1px top border, ~84px tall (compact) ──
     var bar = dvui.box(@src(), .{ .dir = .vertical }, .{
