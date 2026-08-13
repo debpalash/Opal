@@ -524,5 +524,42 @@ def test_auto_scale_floor_and_persistence():
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
         return "fail", "adaptive scale contract incomplete: " + ", ".join(missing)
-    return "pass", ("Auto defaults/restores to 1.0x; manual sub-1.0x choices "
+    return "pass", ("Auto normalizes to a >=1.0x baseline; manual sub-1.0x choices "
                     "remain explicit and settings indices preserve Auto at zero")
+
+
+@test("Auto UI scale adapts upward to the physical display", "Page Shell")
+def test_adaptive_default_scale():
+    sp = _src("src/core/scale_pure.zig")
+    di = _src("src/core/display_info.zig")
+    st = _src("src/core/state.zig")
+    mn = _src("src/main.zig")
+    settings = _src("src/ui/settings.zig")
+    bz = _src("build.zig")
+    checks = {
+        "auto is the default": "ui_scale_auto: bool = true" in st,
+        "panel model includes pixels and millimetres": all(
+            field in sp for field in ("px_w", "px_h", "mm_w", "mm_h")
+        ),
+        "physical DPI validated": "pub fn physicalDpi(" in sp
+                                  and "dpi < 40" in sp and "dpi > 800" in sp,
+        "automatic choices have a hard floor": "AUTO_MIN_SCALE: f32 = 1.0" in sp
+                                                and "never falls below 1x" in sp,
+        "screen classes covered": all(label in sp for label in (
+            "laptop_2560", "desktop_27", "laptop_4k",
+            "uses resolution only to scale upward",
+        )),
+        "Linux reads connected display EDID": all(token in di for token in (
+            'DRM_ROOT = "/sys/class/drm"', '"status"', '"modes"', '"edid"',
+        )),
+        "one shared runtime seam": "pub fn defaultScale(" in di
+                                   and 'display_info.zig").defaultScale' in mn
+                                   and 'display_info.zig").defaultScale' in settings,
+        "manual scale remains a hard override": "if (state.app.ui_scale_auto)" in mn
+                                                and "state.app.ui_scale_auto = false" in settings,
+        "probe registered in unit suite": "test_display_info" in bz,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "adaptive-scale regression(s): " + ", ".join(missing)
+    return "pass", "Auto defaults on; validated panel data only scales upward from 1.0x; manual override preserved"

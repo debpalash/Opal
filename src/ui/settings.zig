@@ -1065,8 +1065,9 @@ fn renderGeneralTab() void {
     sectionHeader("Interface", "Customize how Opal looks and feels", 10, @src());
 
     // UI Scale — Auto is the default and never drops below 1.0×. DVUI handles
-    // DPI while the shell responds to available screen points. Sub-1× choices
-    // remain available only as explicit manual density overrides.
+    // a reported OS scale; when Linux reports only a placeholder 1×, validated
+    // panel data may scale upward. Sub-1× choices remain explicit manual
+    // density overrides, while point-based breakpoints adapt the layout.
     settingRow("UI Scale", 100, @src());
     {
         const scales = [_]f32{ 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 2.0 };
@@ -1084,7 +1085,7 @@ fn renderGeneralTab() void {
         if (components.segment(@src(), &scale_labels, sel)) |clicked| {
             if (clicked == 0) {
                 state.app.ui_scale_auto = true;
-                state.app.ui_scale = @import("../core/scale_pure.zig").deviceScale(dvui.windowNaturalScale());
+                state.app.ui_scale = @import("../core/display_info.zig").defaultScale(dvui.windowNaturalScale());
             } else {
                 state.app.ui_scale_auto = false;
                 state.app.ui_scale = scales[clicked - 1];

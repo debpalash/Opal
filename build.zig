@@ -1139,7 +1139,8 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_wikipedia_pure).step);
 
-    // Device-aware display scale: DPI-tier → default ui_scale + clamp bounds.
+    // Device-aware Auto scale: neutral 1.0× floor, upward panel adjustment,
+    // persisted legacy normalization, and manual clamp bounds.
     const test_scale_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/scale_pure.zig"),
@@ -1148,6 +1149,18 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_scale_pure).step);
+
+    // Runtime display probe: Linux EDID/sysfs fallback plus the shared Auto
+    // scale seam used by startup and Settings.
+    const test_display_info = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/display_info.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_display_info).step);
 
     // Media file classification: playable vs executable/archive (torrent
     // file auto-selection safety).

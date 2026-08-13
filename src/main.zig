@@ -769,13 +769,17 @@ fn appFrame() !dvui.App.Result {
     // theme.setPreset on the background worker, which can't touch dvui directly).
     theme.reapplyIfPending();
 
-    // Adaptive default scale — DVUI already applies display DPI, so the default
-    // multiplier stays exactly 1.0× on every display. The shell's point-based
-    // breakpoints adapt the actual layout to screen/window size.
+    // Adaptive default scale — DVUI already applies a reported display scale,
+    // so Auto starts at 1.0× and never shrinks below it. A Linux panel probe
+    // may scale upward when the OS reports only a placeholder. Point-based
+    // breakpoints independently adapt the layout to screen/window size.
     if (!device_scale_applied and state.app.config_loaded.load(.acquire)) {
         device_scale_applied = true;
         if (state.app.ui_scale_auto) {
-            state.app.ui_scale = @import("core/scale_pure.zig").deviceScale(dvui.windowNaturalScale());
+            // The panel probe is Linux-only; macOS and Windows keep using the
+            // authoritative OS content scale. This runs once after config load
+            // so the first layout is stable and a manual choice still wins.
+            state.app.ui_scale = @import("core/display_info.zig").defaultScale(dvui.windowNaturalScale());
         }
     }
 
