@@ -4,6 +4,12 @@
   "exclude": ["dist"],
   "compilerOptions": {
     "jsx": "react-jsx",
-    "jsxImportSource": "react"
+    "jsxImportSource": "react",
+    // Registry components (react-bits / shadcn) are published with "@/..."
+    // imports; without this alias the CLI refuses to init.
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
   }
 }

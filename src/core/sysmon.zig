@@ -62,6 +62,8 @@ var snap: Snapshot = .{};
 
 var running = std.atomic.Value(bool).init(false);
 var stop_flag = std.atomic.Value(bool).init(false);
+var sampler_thread: ?std.Thread = null;
+var lifecycle_mutex: @import("sync.zig").Mutex = .{};
 
 pub fn get() Snapshot {
     snap_mutex.lock();
@@ -71,17 +73,25 @@ pub fn get() Snapshot {
 
 /// Start the sampler. Idempotent; a no-op on an unsupported OS.
 pub fn start() void {
+    lifecycle_mutex.lock();
+    defer lifecycle_mutex.unlock();
     if (!supported) return;
     if (running.swap(true, .acq_rel)) return;
     stop_flag.store(false, .release);
-    (std.Thread.spawn(.{}, sampleLoop, .{}) catch {
+    sampler_thread = std.Thread.spawn(.{}, sampleLoop, .{}) catch {
         running.store(false, .release);
         return;
-    }).detach();
+    };
 }
 
 pub fn stop() void {
+    lifecycle_mutex.lock();
+    defer lifecycle_mutex.unlock();
     stop_flag.store(true, .release);
+    if (sampler_thread) |t| {
+        t.join();
+        sampler_thread = null;
+    }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -112,7 +122,11 @@ fn sampleLoop() void {
         snap_mutex.unlock();
 
 
-        io.sleep(1000 * std.time.ns_per_ms);
+        // Short slices keep close responsive while preserving the 1 Hz rate.
+        for (0..10) |_| {
+            if (stop_flag.load(.acquire)) break;
+            io.sleep(100 * std.time.ns_per_ms);
+        }
     }
 }
 

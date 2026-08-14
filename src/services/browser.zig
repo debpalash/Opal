@@ -1223,7 +1223,6 @@ pub fn killBridge() void {
         }
         @import("../core/io_global.zig").sleep(500 * std.time.ns_per_ms);
         _ = proc.kill() catch {};
-        _ = proc.wait() catch {};
         bridge_process = null;
     }
     bridge_ready.store(false, .release);

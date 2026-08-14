@@ -1949,7 +1949,11 @@ pub fn playEpisodeOf(
             defer {
                 @This().busy = false;
                 episode_play_pending.store(false, .release);
-                dvui.refresh(null, @src(), null); // repaint the button back to idle
+                // This runs on the resolver thread; passing null asks DVUI to
+                // discover a current window on the wrong thread and emits a
+                // warning (or can race during shutdown). Route through the
+                // thread-safe explicit-window helper instead.
+                state.wakeUi(); // repaint the button back to idle
             }
             smartPlayEpisode(@This().query[0..@This().qlen]);
         }
