@@ -127,6 +127,66 @@ pub fn devNull() []const u8 {
 ///
 /// Best-effort by design: callers use this for cleanup and must not depend on
 /// the process actually being gone.
+/// Same contract as `killByCommandLine`, for a whole set of patterns at once.
+///
+/// Exists purely for shutdown latency on Windows. Each `killByCommandLine`
+/// there pays for a PowerShell startup plus a `Get-CimInstance Win32_Process`
+/// enumeration of every process on the machine — measured at ~420ms. appDeinit
+/// sweeps seven patterns, so the obvious loop cost ~3s, and Opal's window sat
+/// on screen for that whole time after the user clicked close. One spawn, one
+/// WMI enumeration, seven `-like` tests against the rows it already has.
+///
+/// The match is character-for-character what the per-pattern version does
+/// (`-like '*pattern*'`, OR'd) — this is a spawn-count fix, not a semantic one.
+/// POSIX keeps the plain loop: `pkill` costs a few milliseconds.
+pub fn killByCommandLineAny(patterns: []const []const u8, force: bool) void {
+    if (patterns.len == 0) return;
+    if (!is_windows) {
+        for (patterns) |p| killByCommandLine(p, force);
+        return;
+    }
+
+    // ($c -like '*a*') -or ($c -like '*b*') -or …
+    var clause: [1536]u8 = undefined;
+    var n: usize = 0;
+    for (patterns) |pattern| {
+        const prefix = if (n == 0) "($c -like '*" else " -or ($c -like '*";
+        if (n + prefix.len > clause.len) break;
+        @memcpy(clause[n..][0..prefix.len], prefix);
+        n += prefix.len;
+        // Single-quoted in PowerShell: escape an embedded quote by doubling.
+        for (pattern) |ch| {
+            if (n + 2 > clause.len) break;
+            if (ch == '\'') {
+                clause[n] = '\'';
+                n += 1;
+            }
+            clause[n] = ch;
+            n += 1;
+        }
+        const suffix = "*')";
+        if (n + suffix.len > clause.len) break;
+        @memcpy(clause[n..][0..suffix.len], suffix);
+        n += suffix.len;
+    }
+    if (n == 0) return;
+
+    var script_buf: [2048]u8 = undefined;
+    const script = std.fmt.bufPrint(
+        &script_buf,
+        "Get-CimInstance Win32_Process | Where-Object {{ $c = $_.CommandLine; {s} }} | " ++
+            "ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
+        .{clause[0..n]},
+    ) catch return;
+
+    var c = Child.init(&.{ "powershell", "-NoProfile", "-NonInteractive", "-Command", script }, alloc_mod.allocator);
+    c.stdin_behavior = .Ignore;
+    c.stdout_behavior = .Ignore;
+    c.stderr_behavior = .Ignore;
+    c.spawn() catch return;
+    _ = c.wait() catch {};
+}
+
 pub fn killByCommandLine(pattern: []const u8, force: bool) void {
     if (is_windows) {
         var script_buf: [512]u8 = undefined;

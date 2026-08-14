@@ -1,6 +1,9 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const state = @import("../core/state.zig");
+// Only reached past applyToDvui's comptime headless guard, so the server build
+// never analyzes it (and never needs dvui.addFont on the stub).
+const system_font = @import("system_font.zig");
 
 // ══════════════════════════════════════════════════════════
 // Opal Global Theming System
@@ -312,6 +315,12 @@ pub const radius = struct {
 // render at the dvui default 10 while components.zig used 13 — two visibly
 // different "body" sizes side by side. Unified DOWN to the compact end: a
 // media player's chrome should stay quiet at 1× scale.
+// Sizes are LOGICAL points; the rasterizer sees `pt × natural_scale ×
+// ui_scale`. On a 175% display that puts body at 13px — the same size VS Code
+// draws its UI at — so this ramp is right where it is and does not need to
+// grow. It does get thin on a STANDARD-DPI display, where ui_scale's 0.8 floor
+// (core/scale_pure.zig) drops body to 8px; that is a scale-floor question, not
+// a type-ramp one.
 pub const font_size = struct {
     pub const micro: f32 = 9;
     pub const small: f32 = 10;
@@ -441,9 +450,13 @@ fn applyToDvui() void {
     // use themeGet().font_heading / font_title (home, discovery, settings big
     // titles, compact tab labels) previously rendered on dvui's DEFAULT sizes,
     // disconnected from theme.font_size — two typography systems in one app.
-    t.font_body = t.font_body.withSize(font_size.body);
-    t.font_heading = t.font_heading.withSize(font_size.title);
-    t.font_title = t.font_title.withSize(font_size.display);
+    // Native UI face before the sizes are stamped on — see ui/system_font.zig.
+    // A no-op on a machine with none of the candidates installed.
+    system_font.install();
+    t.font_body = system_font.ui(t.font_body).withSize(font_size.body);
+    t.font_heading = system_font.uiBold(t.font_heading).withSize(font_size.title);
+    t.font_title = system_font.uiBold(t.font_title).withSize(font_size.display);
+    t.font_mono = system_font.mono(t.font_mono);
     dvui.themeSet(t);
 }
 

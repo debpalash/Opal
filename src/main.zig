@@ -486,9 +486,10 @@ pub fn appDeinit() void {
         "rec.*opal_ai_mic",
     };
 
-    for (kill_targets) |target| {
-        @import("core/io_global.zig").killByCommandLine(target, false);
-    }
+    // One sweep, not one per pattern: on Windows each call is a PowerShell
+    // startup plus a full WMI process enumeration (~420ms), so looping here
+    // held the window on screen for ~3s after the user clicked close.
+    @import("core/io_global.zig").killByCommandLineAny(&kill_targets, false);
 
     // llama-server (AI backend)
     const server = @import("services/ai_server.zig");
