@@ -861,7 +861,7 @@ fn fetchViaPiped(query: []const u8, gen: u32) bool {
         var req = client.request(.GET, uri, .{
             .extra_headers = &.{
                 .{ .name = "Accept", .value = "application/json" },
-                .{ .name = "User-Agent", .value = "Mozilla/5.0 (X11; Linux x86_64) Opal/1.0" },
+                .{ .name = "User-Agent", .value = @import("../core/app_meta.zig").browser_user_agent },
             },
         }) catch continue;
         defer req.deinit();
@@ -1681,7 +1681,7 @@ fn fireSuggest(query: []const u8) void {
             var req = client.request(.GET, uri, .{
                 .extra_headers = &.{
                     .{ .name = "Accept", .value = "application/json" },
-                    .{ .name = "User-Agent", .value = "Mozilla/5.0 (X11; Linux x86_64) Opal/1.0" },
+                    .{ .name = "User-Agent", .value = @import("../core/app_meta.zig").browser_user_agent },
                 },
             }) catch return;
             defer req.deinit();

@@ -140,7 +140,8 @@ def test_scrapers_routed_through_scrapefetch():
         "mangadex at-home on fetchUrl": "fetchUrl(ah_url, ah_buf)" in comics,
         "mangadex not browser-routed": "fetchMaybeUnblocked(feed_url" not in comics
             and "fetchMaybeUnblocked(ah_url" not in comics,
-        "per-host UA preserved": "pure.userAgentFor(url)" in comics,
+        "per-host UA preserved": "pure.userAgentFor(url, " in comics
+            and "app_meta.zig" in comics,
         # HeanCms JSON API likewise stays on fetchUrl.
         "heancms detail on fetchUrl": "fetchUrl(detail_url, detail_buf)" in comics,
 

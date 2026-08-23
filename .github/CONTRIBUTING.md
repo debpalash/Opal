@@ -83,6 +83,12 @@ Linked at build time — failures here usually mean a missing system package:
 
 Build options: `-Dheadless`, `-fsys=sdl2`.
 
+Development builds report the exact version declared in `build.zig.zon`, the
+same value used by release builds. They do not add an implicit `-dev` suffix;
+use the commit hash alongside the reported version when identifying a local
+build. Application user agents and API version fields must come from
+`src/core/app_meta.zig`, never from release-looking string literals.
+
 The companion **web UI** lives in `web/` as an independent Zig project (`zig build dev`, serves on `:3000`, talks to the remote JSON API on `:41595`).
 
 ---

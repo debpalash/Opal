@@ -575,7 +575,7 @@ fn fetchComicThread(gen: u32) void {
 fn fetchUrl(url: []const u8, dst: []u8) usize {
     // Per-host UA: MangaDex 400s a spoofed browser UA (see pure.userAgentFor).
     var ua_buf: [200]u8 = undefined;
-    const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url)}) catch return 0;
+    const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url)}) catch return 0;
     const argv = [_][]const u8{
         "curl",       "-sL",
         "-H",         ua,
@@ -960,7 +960,7 @@ fn loadThemesiaPages(detail_url: []const u8) bool {
 /// which WordPress only answers to an `X-Requested-With: XMLHttpRequest` POST.
 fn fetchPost(url: []const u8, body: []const u8, dst: []u8) usize {
     var ua_buf: [200]u8 = undefined;
-    const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url)}) catch return 0;
+    const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url)}) catch return 0;
     const argv = [_][]const u8{
         "curl",       "-sL",
         "-H",         ua,
@@ -1364,7 +1364,7 @@ fn downloadSinglePage(i: usize, gen: u32) void {
     // but routing through the one selector keeps every comics fetch consistent
     // and means a future MangaDex host can't silently regress to a 400.
     var ua_buf: [200]u8 = undefined;
-    const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url)}) catch return;
+    const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url)}) catch return;
 
     // OPDS-PSE page streams (Komga/Kavita) require HTTP Basic auth on EVERY page
     // fetch. loadPseBook stashes the full "Authorization: Basic …" line here; it
@@ -2764,7 +2764,7 @@ fn coverWorker(idx: usize) void {
     // browser UA — every cover would render as a blank placeholder. The scrapers'
     // blogspot CDN still gets the browser UA. See pure.userAgentFor.
     var ua_buf: [200]u8 = undefined;
-    const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url)}) catch return;
+    const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url)}) catch return;
     const argv = [_][]const u8{
         "curl",       "-sL",
         "-H",         ua,

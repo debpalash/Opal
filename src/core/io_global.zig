@@ -737,6 +737,16 @@ pub const Child = struct {
         }
     }
 
+    /// Transfer ownership of a piped stdin handle out of the child wrapper.
+    /// The caller must close the returned file. Clearing both copies prevents
+    /// wait()/kill() from closing a descriptor used by a concurrent feeder.
+    pub fn takeStdin(self: *Child) ?std.Io.File {
+        const pipe = self.stdin orelse return null;
+        self.stdin = null;
+        if (self.real) |*r| r.stdin = null;
+        return pipe;
+    }
+
     pub fn spawnAndWait(self: *Child) !Term {
         try self.spawn();
         return self.wait();

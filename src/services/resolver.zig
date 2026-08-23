@@ -1499,7 +1499,7 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
     @import("../core/rate_limit.zig").acquire("yts", 1.0);
     const body = @import("../core/http.zig").fetch(url, &buf, .{
         .timeout_secs = 6,
-        .user_agent = "Opal/1.0",
+        .user_agent = @import("../core/app_meta.zig").user_agent,
     }) orelse {
         noteWorkerOutcome(.transport_failed);
         return;
@@ -1694,7 +1694,7 @@ fn resolveEztv(query_buf: [256]u8, qlen: usize) void {
 
     const body = @import("../core/mirrors.zig").fetch("eztv", page, .{
         .timeout_secs = 12,
-        .user_agent = "Opal/1.0",
+        .user_agent = @import("../core/app_meta.zig").user_agent,
     }, ctx, build) orelse {
         noteWorkerOutcome(.transport_failed);
         return;
@@ -1826,7 +1826,7 @@ fn resolveTorznabId(src_id: []const u8, query_buf: [256]u8, qlen: usize) void {
 
     const body = @import("../core/mirrors.zig").fetch(src_id, page_buf, .{
         .timeout_secs = 12,
-        .user_agent = "Opal/1.0",
+        .user_agent = @import("../core/app_meta.zig").user_agent,
     }, ctx, build) orelse {
         noteWorkerOutcome(.transport_failed);
         return;
@@ -1950,7 +1950,7 @@ fn resolveArchive(query_buf: [256]u8, qlen: usize) void {
     @import("../core/rate_limit.zig").acquire("archive", 1.0);
     const body = http.fetch(url, page, .{
         .timeout_secs = 8,
-        .user_agent = "Opal/1.0",
+        .user_agent = @import("../core/app_meta.zig").user_agent,
     }) orelse {
         noteWorkerOutcome(.transport_failed);
         return;
@@ -1984,7 +1984,7 @@ fn resolveArchive(query_buf: [256]u8, qlen: usize) void {
         @import("../core/rate_limit.zig").acquire("archive", 1.0);
         const meta = http.fetch(murl, meta_buf, .{
             .timeout_secs = 8,
-            .user_agent = "Opal/1.0",
+            .user_agent = @import("../core/app_meta.zig").user_agent,
         }) orelse {
             noteWorkerOutcome(.transport_failed);
             continue;
@@ -2148,7 +2148,7 @@ fn resolveNasa(query_buf: [256]u8, qlen: usize) void {
     @import("../core/rate_limit.zig").acquire("nasa", 1.0);
     const body = http.fetch(url, page, .{
         .timeout_secs = 8,
-        .user_agent = "Opal/1.0 (https://github.com/debpalash/Opal)",
+        .user_agent = @import("../core/app_meta.zig").user_agent_with_url,
     }) orelse {
         noteWorkerOutcome(.transport_failed);
         return;
@@ -2177,7 +2177,7 @@ fn resolveNasa(query_buf: [256]u8, qlen: usize) void {
         @import("../core/rate_limit.zig").acquire("nasa", 1.0);
         const coll = http.fetch(hit.href, coll_buf, .{
             .timeout_secs = 8,
-            .user_agent = "Opal/1.0 (https://github.com/debpalash/Opal)",
+            .user_agent = @import("../core/app_meta.zig").user_agent_with_url,
         }) orelse {
             noteWorkerOutcome(.transport_failed);
             continue;
@@ -2269,7 +2269,7 @@ fn resolveCommons(query_buf: [256]u8, qlen: usize) void {
     const body = http.fetch(url, page, .{
         .timeout_secs = 8,
         // Wikimedia UA policy requires a descriptive, contactable agent.
-        .user_agent = "Opal/1.0 (https://github.com/debpalash/Opal)",
+        .user_agent = @import("../core/app_meta.zig").user_agent_with_url,
     }) orelse {
         noteWorkerOutcome(.transport_failed);
         return;
