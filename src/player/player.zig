@@ -149,7 +149,9 @@ pub const MediaPlayer = struct {
     current_url: [2048]u8 = std.mem.zeroes([2048]u8),
     current_url_len: usize = 0,
     resume_seeked: bool = false,
-    save_counter: u32 = 0, // periodic save every N frames
+    /// Monotonic deadline for playback-position persistence. Database writes
+    /// must follow elapsed time, not video/UI frame rate.
+    last_position_save_ms: i64 = 0,
     provider: state.ContentProvider = .mpv,
 
     // ── Cached mpv properties (A4) ──
@@ -449,7 +451,7 @@ pub const MediaPlayer = struct {
         @memset(&self.current_url, 0);
         self.current_url_len = 0;
         self.resume_seeked = false;
-        self.save_counter = 0;
+        self.last_position_save_ms = 0;
         self.is_loading = false;
         self.loading_label_len = 0;
         self.provider = .mpv;
@@ -703,6 +705,12 @@ pub const MediaPlayer = struct {
 
         _ = c.mpv.mpv_initialize(self.mpv_ctx);
 
+        // The render callback only fires for video frames. Wake dvui for every
+        // queued client event too, so audio-only playback, pause changes and
+        // late metadata cannot sit unprocessed until unrelated pointer input.
+        // mpv requires this callback to remain notification-only.
+        c.mpv.mpv_set_wakeup_callback(self.mpv_ctx, &mpvWakeupCallback, null);
+
         // ── Observe properties so the render hot path can read cached fields
         // instead of issuing synchronous mpv_get_property IPC every frame (A4).
         // Updates arrive as MPV_EVENT_PROPERTY_CHANGE in the event loop.
@@ -804,6 +812,7 @@ pub const MediaPlayer = struct {
 
         // Save position of current video before switching
         self.saveCurrentPosition();
+        self.last_position_save_ms = @import("../core/io_global.zig").monotonicMilliTimestamp();
 
         @memset(self.pixels, dvui.Color.PMA.black);
         if (self.texture) |*tex| {
@@ -1209,6 +1218,16 @@ pub const MediaPlayer = struct {
 /// the video freezes while audio continues. dvui.refresh is explicitly
 /// thread-safe when a *Window is passed (see dvui/src/dvui.zig).
 fn mpvRenderUpdateCallback(_: ?*anyopaque) callconv(.c) void {
+    wakeDvuiFromMpv();
+}
+
+/// Invoked for every queued mpv client event, including audio-only streams and
+/// property changes that do not produce a render frame.
+fn mpvWakeupCallback(_: ?*anyopaque) callconv(.c) void {
+    wakeDvuiFromMpv();
+}
+
+fn wakeDvuiFromMpv() void {
     if (state.app.dvui_win) |win| {
         dvui.refresh(win, @src(), null);
     }
@@ -1293,6 +1312,8 @@ fn eventFlag(pc: *const c.mpv.mpv_event_property) bool {
 }
 
 pub fn updateTorrentBackgroundTasks() void {
+    const now_ms = @import("../core/io_global.zig").monotonicMilliTimestamp();
+
     // Republish the "a torrent is waiting to start playing" flag every frame.
     // The stall watchdog wakes the UI while it is set, which is what keeps the
     // handoff below running when nobody is touching the machine. Computed first
@@ -1787,9 +1808,12 @@ pub fn updateTorrentBackgroundTasks() void {
                 // so we no longer need to pause/unpause mpv — it buffers naturally via HTTP.
                 _ = c.mpv.torrent_ensure_streaming_buffer(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, percent_pos);
 
-                // Save position to watch history every ~300 frames (~5s at 60fps)
-                p.save_counter +%= 1;
-                if (percent_pos > 0.5 and p.save_counter % 300 == 0) {
+                // Five-second wall-time cadence keeps synchronous property
+                // queries and SQLite writes out of the render cadence.
+                if (percent_pos > 0.5 and
+                    (p.last_position_save_ms == 0 or now_ms - p.last_position_save_ms >= 5000))
+                {
+                    p.last_position_save_ms = now_ms;
                     const watch = @import("watch_history.zig");
                     var t_name3: [256]u8 = undefined;
                     c.mpv.torrent_get_name(state.torrentSession(), p.current_torrent_id, &t_name3, 256);
@@ -1819,9 +1843,12 @@ pub fn updateTorrentBackgroundTasks() void {
                 }
             }
 
-            // Periodic position save every ~120 frames (~2s at 60fps)
-            p.save_counter +%= 1;
-            if (p.save_counter % 120 == 0) {
+            // Five-second wall-time cadence. Explicit close/switch paths still
+            // save immediately, so a quieter hot path does not lose progress.
+            if (p.current_url_len > 0 and
+                (p.last_position_save_ms == 0 or now_ms - p.last_position_save_ms >= 5000))
+            {
+                p.last_position_save_ms = now_ms;
                 p.saveCurrentPosition();
             }
         }

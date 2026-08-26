@@ -320,6 +320,25 @@ pub const font_size = struct {
     pub const display: f32 = 20;
 };
 
+// Noto Sans replaces dvui's Bitstream Vera fallback for application text.
+// Vera's small-size metrics are visibly uneven at modern 1.25×/1.5×
+// compositor scales. Noto's hinted TrueType outlines stay crisp with dvui's
+// pixel snapping and cover the multilingual media metadata Opal renders.
+// Regular + bold are distinct sources so headings use real outlines rather
+// than a synthetic weight.
+const app_font_family = "Noto Sans";
+const app_font_sources = [_]dvui.Font.Source{
+    .{
+        .family = dvui.Font.array(app_font_family),
+        .bytes = @embedFile("../assets/fonts/NotoSans-Regular.ttf"),
+    },
+    .{
+        .family = dvui.Font.array(app_font_family),
+        .weight = .bold,
+        .bytes = @embedFile("../assets/fonts/NotoSans-Bold.ttf"),
+    },
+};
+
 // ── Dimensions (legacy dvui.Rect helpers) ──
 
 pub const dims = struct {
@@ -437,13 +456,15 @@ fn applyToDvui() void {
     // built-ins. Without this it stays dvui's default BLUE — which is why the
     // scrubber and volume slider rendered blue instead of the theme accent.
     t.focus = colors.accent;
-    // Route dvui's own type ramp through the Opal font tokens. Surfaces that
+    // Route dvui's own type ramp through Opal's embedded font + size tokens.
+    // Surfaces that
     // use themeGet().font_heading / font_title (home, discovery, settings big
     // titles, compact tab labels) previously rendered on dvui's DEFAULT sizes,
     // disconnected from theme.font_size — two typography systems in one app.
-    t.font_body = t.font_body.withSize(font_size.body);
-    t.font_heading = t.font_heading.withSize(font_size.title);
-    t.font_title = t.font_title.withSize(font_size.display);
+    t.embedded_fonts = &app_font_sources;
+    t.font_body = .find(.{ .family = app_font_family, .size = font_size.body });
+    t.font_heading = .find(.{ .family = app_font_family, .size = font_size.title, .weight = .bold });
+    t.font_title = .find(.{ .family = app_font_family, .size = font_size.display, .weight = .bold });
     dvui.themeSet(t);
 }
 

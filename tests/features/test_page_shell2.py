@@ -144,17 +144,20 @@ def test_color_alias_collapse():
 
 @test("Compact Type Ramp Drives dvui Fonts", "Page Shell")
 def test_typography_unified():
-    # Phase 4: one type ramp. applyToDvui routes dvui's font_body/heading/title
-    # through theme.font_size, so labels that use themeGet() fonts and
-    # components that use fontAt() finally agree; ramp is the compact one.
+    # One embedded, hinted font family and one type ramp. Labels that use
+    # themeGet() fonts and components that use fontAt() must agree.
     th = _src("src/ui/theme.zig")
-    if "font_body.withSize(font_size.body)" not in th:
+    if "t.embedded_fonts = &app_font_sources" not in th or 'app_font_family = "Noto Sans"' not in th:
+        return "fail", "hinted application font is not embedded in the dvui theme"
+    if ".size = font_size.body" not in th:
         return "fail", "dvui font_body not routed through the token ramp"
-    if "font_heading.withSize(font_size.title)" not in th or "font_title.withSize(font_size.display)" not in th:
+    if ".size = font_size.title" not in th or ".size = font_size.display" not in th:
         return "fail", "dvui heading/title fonts not routed through tokens"
+    if "NotoSans-Regular.ttf" not in th or "NotoSans-Bold.ttf" not in th:
+        return "fail", "regular/bold font sources are incomplete"
     if "body: f32 = 11" not in th:
         return "fail", "type ramp is not the compact one (body should be 11)"
-    return "pass", "compact ramp drives dvui + component fonts"
+    return "pass", "embedded Noto Sans + compact ramp drive dvui/component fonts"
 
 
 @test("Browse Sub-Tabs Own Their Row", "Page Shell")

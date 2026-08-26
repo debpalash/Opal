@@ -555,12 +555,6 @@ pub fn renderGrid() !void {
                     }
                 }
 
-                // Periodic position save (every ~120 frames ≈ 4 sec)
-                p.save_counter +%= 1;
-                if (p.save_counter % 120 == 0) {
-                    p.saveCurrentPosition();
-                }
-
                 if (p.np_title_len > 0 and p.texture == null) {
                     // ── Audio now-playing pane (podcast / radio) ──
                     // No video frame + rich metadata set → show cover art +

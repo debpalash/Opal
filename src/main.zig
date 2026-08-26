@@ -33,8 +33,28 @@ var cli_open_done: bool = false;
 // preserving an explicit user-selected density override.
 var device_scale_applied: bool = false;
 
+const app_start_options: dvui.App.StartOptions = .{
+    .size = .{ .w = 1400.0, .h = 820.0 },
+    .title = "Opal",
+    .vsync = true,
+};
+
+/// SDL consumes desktop identity hints before it creates the Wayland surface.
+/// Using a startFn is the only dvui.App seam that runs early enough. Keep the
+/// app id aligned with opal.desktop and StartupWMClass so launchers/compositors
+/// group every Opal window under the installed desktop entry.
+fn linuxStartOptions() dvui.App.StartOptions {
+    _ = c.sdl.SDL_SetHint("SDL_APP_NAME", "Opal");
+    _ = c.sdl.SDL_SetHint("SDL_APP_ID", "opal");
+    _ = c.sdl.SDL_SetHint("SDL_VIDEO_WAYLAND_WMCLASS", "opal");
+    return app_start_options;
+}
+
 pub const dvui_app: dvui.App = .{
-    .config = .{ .options = .{ .size = .{ .w = 1400.0, .h = 820.0 }, .title = "Opal - Play everything" } },
+    .config = if (builtin.os.tag == .linux)
+        .{ .startFn = &linuxStartOptions }
+    else
+        .{ .options = app_start_options },
     .initFn = appInit,
     .frameFn = appFrame,
     .deinitFn = appDeinit,
@@ -201,12 +221,6 @@ pub fn coreInit() !void {
             // key and sweep expired/oversized entries. Runs here on the bg init
             // thread so cold-start views can read cached copies immediately.
             @import("core/content_cache.zig").init();
-
-            // Resource meters in the title bar. Samples on its own thread at 1 Hz
-            // — every reading is a syscall, and a meter that costs more than the
-            // thing it measures would be a bad joke.
-            if (workers.isQuitting()) return;
-            @import("core/sysmon.zig").start();
 
             // Page-shell preview opt-in (redesign, WIP). Enable with
             // OPAL_PAGE_SHELL=1 to render the new website-like layout.
@@ -463,10 +477,9 @@ pub fn appDeinit() void {
     // cannot bring one back after its stop call has already run.
     @import("core/workers.zig").markQuitting();
 
-    // Stop listeners and samplers before releasing state they can still touch.
+    // Stop listeners before releasing state they can still touch.
     @import("services/remote.zig").stop();
     @import("services/remote.zig").stopLocal();
-    @import("core/sysmon.zig").stop();
 
     // Join the stall watchdog before the torrent session goes away — it samples
     // that session every 250ms and must not outlive it.
@@ -740,25 +753,6 @@ fn renderSlashMenu() void {
     }
 }
 
-/// One-shot: open the window centered and at a comfortable, non-fullscreen size
-/// (~72%×82% of the display work area). The dvui default (a fixed 1400×820) is
-/// nearly full-width on a HiDPI panel whose logical desktop is small, so it read
-/// as "fullscreen". Runs once, on the first frame the SDL window is available.
-var window_centered = false;
-fn centerWindowOnce(sdl_win: ?*c.sdl.SDL_Window) void {
-    if (window_centered) return;
-    const sw = sdl_win orelse return;
-    window_centered = true;
-    c.sdl.SDL_RestoreWindow(sw); // never start maximized
-    const di = c.sdl.SDL_GetWindowDisplayIndex(sw);
-    var b: c.sdl.SDL_Rect = undefined;
-    if (c.sdl.SDL_GetDisplayUsableBounds(di, &b) != 0) return;
-    const tw: c_int = @intFromFloat(@as(f32, @floatFromInt(b.w)) * 0.72);
-    const th: c_int = @intFromFloat(@as(f32, @floatFromInt(b.h)) * 0.82);
-    c.sdl.SDL_SetWindowSize(sw, tw, th);
-    c.sdl.SDL_SetWindowPosition(sw, b.x + @divTrunc(b.w - tw, 2), b.y + @divTrunc(b.h - th, 2));
-}
-
 fn appFrame() !dvui.App.Result {
     // Suppress dvui's debug widget outline (red 1px rect) — shows when
     // debug.widget_id matches a rendered widget. Can get stuck if user
@@ -781,6 +775,20 @@ fn appFrame() !dvui.App.Result {
             // so the first layout is stable and a manual choice still wins.
             state.app.ui_scale = @import("core/display_info.zig").defaultScale(dvui.windowNaturalScale());
         }
+    }
+
+    // Keep the few legacy layout consumers on the live dvui window size. Do
+    // not query/persist SDL position here: Wayland positions are compositor
+    // owned, and the old first-frame restore/resize path fought tiling WMs and
+    // mixed physical display bounds with logical window units at fractional
+    // scale. The OS now owns placement on every platform.
+    {
+        const wr = dvui.windowRect();
+        if (wr.w > 100 and wr.h > 100) {
+            state.app.win_w = @intFromFloat(wr.w);
+            state.app.win_h = @intFromFloat(wr.h);
+        }
+        state.app.win_restore_pending = false;
     }
 
     // Reset the per-frame widget-id sequence counters (sectionHeader / divider /
@@ -1041,49 +1049,33 @@ fn appFrame() !dvui.App.Result {
         state.app.active_player_idx = 0;
     }
 
-    // Auto-save config every ~2 seconds (frame-counter throttled, no per-frame syscall)
+    // Config persistence is wall-clock debounced inside saveIfDirty(). While a
+    // change is pending, arm a cheap one-shot so an otherwise idle dvui loop
+    // wakes to flush it; repaint rate no longer controls whether preferences
+    // reach disk.
     {
-        const S = struct {
-            var frame_ctr: u32 = 0;
-        };
-        S.frame_ctr +%= 1;
-        if (S.frame_ctr % 120 == 0) {
-            const config = @import("core/config.zig");
-            config.saveIfDirty();
-
-            // Window state: capture periodically for config save (not every frame)
-            if (dvui_win) |win| {
-                const sdl_win: ?*c.sdl.SDL_Window = @ptrCast(win.backend.impl.window);
-                state.app.win_restore_pending = false;
-                var wx: c_int = 0;
-                var wy: c_int = 0;
-                var ww: c_int = 0;
-                var wh: c_int = 0;
-                c.sdl.SDL_GetWindowPosition(sdl_win, &wx, &wy);
-                c.sdl.SDL_GetWindowSize(sdl_win, &ww, &wh);
-                if (ww > 100 and wh > 100) {
-                    state.app.win_x = wx;
-                    state.app.win_y = wy;
-                    state.app.win_w = ww;
-                    state.app.win_h = wh;
-                }
-            }
+        const config = @import("core/config.zig");
+        config.saveIfDirty();
+        if (state.app.config_dirty) {
+            const save_tick_id = dvui.Id.extendId(null, @src(), 0);
+            if (dvui.timerDoneOrNone(save_tick_id)) dvui.timer(save_tick_id, 250_000);
         }
     }
-    // Update window title with now-playing media name (checked ~2x per second,
-    // but SDL_SetWindowTitle — a real window-property round-trip on macOS/X11 —
-    // only fires when the formatted title actually changed).
+
+    // Stable semantic window title. Resource telemetry does not belong in the
+    // task switcher or compositor tree: it made titles jitter once a second,
+    // broke launcher grouping on some desktops, and kept a sampler thread alive
+    // solely to mutate native chrome. Media titles remain useful and SDL only
+    // receives a property update when the final string really changes.
     {
         const TitleState = struct {
-            var title_ctr: u32 = 0;
-            // Sized to win_title below. The justified title is padded out to the
-            // full bar width, so it is far longer than the old "name — Opal" run
-            // and a 300-byte cache here would overflow on @memcpy.
-            var last_title: [520]u8 = std.mem.zeroes([520]u8);
+            var last_check_ms: i64 = 0;
+            var last_title: [300]u8 = std.mem.zeroes([300]u8);
             var last_len: usize = 0;
         };
-        TitleState.title_ctr +%= 1;
-        if (TitleState.title_ctr % 30 == 0) {
+        const now_ms = @import("core/io_global.zig").monotonicMilliTimestamp();
+        if (TitleState.last_check_ms == 0 or now_ms - TitleState.last_check_ms >= 1000) {
+            TitleState.last_check_ms = now_ms;
             if (dvui_win) |win| {
                 const sdl_win: ?*c.sdl.SDL_Window = @ptrCast(win.backend.impl.window);
                 if (sdl_win) |sw| {
@@ -1095,45 +1087,12 @@ fn appFrame() !dvui.App.Result {
 
                         name_len = active_p.getMediaTitle(&name_buf);
                     }
-
-                    // The resource meters go IN the title bar — as text, because
-                    // SDL2 gives us no drawable surface up there (see
-                    // sysmon_pure.titleMeters). The OS renders the title string in
-                    // that bar, so the meters ride along with it.
-                    var meter_buf: [160]u8 = undefined;
-                    var meters: []const u8 = "";
-                    {
-                        const sysmon = @import("core/sysmon.zig");
-                        const sp = @import("core/sysmon_pure.zig");
-                        const snap = sysmon.get();
-                        // Not until the first delta lands: a confident "CPU 0%" is
-                        // worse than no meter at all.
-                        if (snap.valid) {
-                            meters = sp.titleMeters(
-                                snap.app_cpu_pct,
-                                snap.app_mem_rss,
-                                snap.app_threads,
-                                if (sysmon.energy_supported) snap.app_energy else null,
-                                &meter_buf,
-                            );
-                        }
-                    }
-
-                    // Keep the native title compact and ASCII-only. Unicode block
-                    // gauges and an em dash were decoded as Latin-1 by some Linux
-                    // window managers ("â..."); proportional-font space padding
-                    // also made the values appear detached from their labels.
-                    var left_buf: [300]u8 = undefined;
-                    const left: []const u8 = if (name_len > 0)
-                        (std.fmt.bufPrint(&left_buf, "{s} - Opal", .{name_buf[0..name_len]}) catch "Opal")
+                    const safe_name = @import("core/text.zig").safeUtf8(name_buf[0..name_len]);
+                    var win_title: [300]u8 = undefined;
+                    const wt: ?[:0]u8 = if (safe_name.len > 0)
+                        (std.fmt.bufPrintZ(&win_title, "{s} - Opal", .{safe_name}) catch null)
                     else
-                        "Opal - Play everything";
-
-                    var joined_buf: [512]u8 = undefined;
-                    const joined = std.fmt.bufPrint(&joined_buf, "{s}{s}", .{ left, meters }) catch left;
-
-                    var win_title: [520]u8 = undefined;
-                    const wt: ?[:0]u8 = std.fmt.bufPrintZ(&win_title, "{s}", .{joined}) catch null;
+                        (std.fmt.bufPrintZ(&win_title, "Opal", .{}) catch null);
                     if (wt) |t| {
                         if (!std.mem.eql(u8, t, TitleState.last_title[0..TitleState.last_len])) {
                             c.sdl.SDL_SetWindowTitle(sw, t.ptr);
@@ -1143,6 +1102,21 @@ fn appFrame() !dvui.App.Result {
                     }
                 }
             }
+        }
+
+        // A paused/audio stream may not produce video render callbacks. A slow
+        // title tick covers late metadata (radio track changes) without forcing
+        // the full UI to run continuously when no media is loaded.
+        var has_media = false;
+        for (state.app.players.items) |p| {
+            if (p.current_url_len > 0) {
+                has_media = true;
+                break;
+            }
+        }
+        if (has_media) {
+            const title_tick_id = dvui.Id.extendId(null, @src(), 0);
+            if (dvui.timerDoneOrNone(title_tick_id)) dvui.timer(title_tick_id, 1_000_000);
         }
     }
 
@@ -1218,32 +1192,27 @@ fn appFrame() !dvui.App.Result {
     // is left on the UI thread is showing a toast the watchdog queued.
     @import("services/torrent_stall.zig").drainToast();
 
-    // Screensaver inhibit: mpv's stop-screensaver requires a VO; we use SW render,
-    // so SDL handles it. Toggle when any player is actively playing (not paused).
+    // Screensaver inhibit: mpv's stop-screensaver requires a VO; we use SW
+    // render, so SDL handles it. cached_paused is event-driven, which removes a
+    // synchronous mpv property query and a repaint-count throttle from this hot
+    // path. Pause/play changes now take effect on their very next UI wake.
     {
         const S = struct {
             var disabled: bool = false;
-            var tick: u8 = 0;
         };
-        S.tick +%= 1;
-        if (S.tick % 30 == 0) {
-            var any_playing = false;
-            for (state.app.players.items) |p| {
-                if (p.current_url_len == 0) continue;
-                var paused: c_int = 1;
-                _ = c.mpv.mpv_get_property(p.mpv_ctx, "pause", c.mpv.MPV_FORMAT_FLAG, &paused);
-                if (paused == 0) {
-                    any_playing = true;
-                    break;
-                }
+        var any_playing = false;
+        for (state.app.players.items) |p| {
+            if (p.current_url_len > 0 and !p.cached_paused) {
+                any_playing = true;
+                break;
             }
-            if (any_playing and !S.disabled) {
-                c.sdl.SDL_DisableScreenSaver();
-                S.disabled = true;
-            } else if (!any_playing and S.disabled) {
-                c.sdl.SDL_EnableScreenSaver();
-                S.disabled = false;
-            }
+        }
+        if (any_playing and !S.disabled) {
+            c.sdl.SDL_DisableScreenSaver();
+            S.disabled = true;
+        } else if (!any_playing and S.disabled) {
+            c.sdl.SDL_EnableScreenSaver();
+            S.disabled = false;
         }
     }
 
@@ -1325,7 +1294,6 @@ fn appFrame() !dvui.App.Result {
         const titlebar = @import("ui/titlebar.zig");
         if (dvui_win) |win| {
             const sdl_win: ?*c.sdl.SDL_Window = @ptrCast(win.backend.impl.window);
-            centerWindowOnce(sdl_win);
             titlebar.ensureEnabled(sdl_win);
         }
         titlebar.render();
@@ -1456,15 +1424,15 @@ fn appFrame() !dvui.App.Result {
     }
 
     // Keep the on-screen scrubber/overlay ticking during playback — but only
-    // while the control chrome is actually visible, and THROTTLED to ~30fps.
+    // while the control chrome is actually visible, synchronized at ~60fps.
     // Video FRAMES already repaint on their own via mpv's render-update callback
     // (player.mpvRenderUpdateCallback → thread-safe dvui.refresh); this tick just
     // keeps the scrubber/hover animating between frames (and drives audio-only
     // playback, which has no video frames). The old code called dvui.refresh
     // EVERY frame, so on a 120Hz ProMotion display the whole UI tree was
     // re-laid-out 120×/s while the mouse was active — ~1800 idle wake-ups and
-    // the bulk of the playback CPU. A 33ms re-arming timer caps it to 30fps
-    // (plenty smooth for chrome) and lets the loop idle between ticks. Once the
+    // the bulk of the playback CPU. A 16.7ms re-arming timer targets 60fps and
+    // lets the loop idle between ticks. Once the
     // chrome auto-hides (mouse idle > 2.5s) it stops entirely → pure video-fps.
     // `cached_paused` is observer-cached (no per-frame IPC).
     const chrome_live = (@import("core/io_global.zig").milliTimestamp() - state.app.last_mouse_move_ms) < @import("ui/chrome_autohide.zig").DEFAULT_THRESHOLD_MS;
@@ -1472,7 +1440,7 @@ fn appFrame() !dvui.App.Result {
         for (state.app.players.items) |p| {
             if (p.provider == .mpv and !p.cached_paused) {
                 const tick_id = dvui.Id.extendId(null, @src(), 0);
-                if (dvui.timerDoneOrNone(tick_id)) dvui.timer(tick_id, 33_000);
+                if (dvui.timerDoneOrNone(tick_id)) dvui.timer(tick_id, 16_667);
                 break;
             }
         }

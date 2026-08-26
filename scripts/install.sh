@@ -181,6 +181,7 @@ Icon=opal
 Terminal=false
 Categories=AudioVideo;Video;Player;
 MimeType=video/x-matroska;video/mp4;video/webm;video/quicktime;video/x-msvideo;video/mpeg;video/mp2t;video/ogg;audio/mpeg;audio/flac;audio/mp4;audio/aac;audio/ogg;audio/opus;audio/x-wav;audio/x-matroska;audio/x-mpegurl;application/x-mpegURL;application/vnd.apple.mpegurl;application/x-bittorrent;x-scheme-handler/magnet;
+StartupNotify=true
 StartupWMClass=opal
 EOF
     have update-desktop-database && update-desktop-database "$appdir" >/dev/null 2>&1 || true

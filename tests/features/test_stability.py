@@ -477,79 +477,27 @@ def test_stream_readiness_gate():
     return "pass", "head+index gate, per-container tail (mkv/mp4/avi/ts), no truncation"
 
 
-@test("Title-bar resource meters", "Stability")
+@test("Stable semantic window title", "Stability")
 def test_sysmeter():
-    # CPU / MEM / THR / ENERGY in the OS title bar, folded into the window title as
-    # text. There is no dvui widget: SDL2 gives no drawable surface up there.
-    mon = _src("src/core/sysmon.zig")
-    pur = _src("src/core/sysmon_pure.zig")
-    sh = _src("src/ui/shell.zig")
+    # Native titles are desktop identity, not a live telemetry dashboard. Keep
+    # them stable for task switchers/tiling rules and stop the sampler that used
+    # to exist solely to append CPU/MEM/THR once a second.
     mn = _src("src/main.zig")
-    bz = _src("build.zig")
     checks = {
-        "sampler exists": "pub fn start() void" in mon and "pub fn get() Snapshot" in mon,
-        "started at launch": 'core/sysmon.zig").start()' in mn,
-        # The meters are NOT a dvui widget any more — they're text in the window
-        # title, so there is no in-app strip to mount (and no duplicate row).
-        "no duplicate in-app strip": "renderTitleStrip" not in sh,
-        # Every reading is a syscall. Sampling per-frame on the UI thread would
-        # cost more than the thing it measures.
-        "sampled off-thread at 1Hz": (
-            "std.Thread.spawn" in mon and
-            (
-                # Older lifecycle: a detached sampler slept for one full tick.
-                (".detach()" in mon and
-                 "io.sleep(1000 * std.time.ns_per_ms)" in mon) or
-                # Current lifecycle: retain and join the sampler at shutdown;
-                # ten short slices preserve 1 Hz while making stop responsive.
-                ("sampler_thread = std.Thread.spawn" in mon and
-                 "t.join()" in mon and
-                 "for (0..10)" in mon and
-                 "io.sleep(100 * std.time.ns_per_ms)" in mon)
-            )
-        ),
-        # CPU is a RATE: it needs two samples. The first tick can only guess, so
-        # the meters hide rather than show a confident zero (or a 100% spike).
-        "no reading before a real delta": "valid" in mon and "snap.valid" in mn,
-        # Thresholds/clamping/formatting are decided in the tested pure module.
-        "decisions are pure + tested": all(f in pur for f in
-                                           ("pub fn frac(", "pub fn levelOf(", "pub fn energyImpact(",
-                                            "pub fn fmtBytes(")),
-        "title routes through pure": all(f in pur for f in ("cpuMetric(", "memMetric(", "titleMeters(")),
-        "pure registered": "sysmon_pure.zig" in bz,
-        # mach hands us VM-allocated arrays and thread ports. Leaking them every
-        # second inside the thing that MEASURES leaks would be quite the own goal.
-        "mach allocations freed": ("vm_deallocate" in mon and "mach_port_deallocate" in mon),
-        # Real syscalls, not a stub.
-        "real syscalls": all(f in mon for f in ("host_statistics64", "host_processor_info",
-                                                "task_threads", "TASK_POWER_INFO")),
-        # Energy has no public power API; deriving it from CPU alone would be a
-        # plausible-but-wrong number, so wakeups go in and it's labelled a score.
-        "energy is honest": "wakeups" in pur and "not watts" in pur,
-        "unsupported Linux energy hidden": "energy_supported = is_macos" in mon
-            and "sysmon.energy_supported" in mn,
-        "clock via io_global": "std.time.timestamp" not in mon,
-        # The meters render IN the OS title bar — as TEXT, folded into the window
-        # title. SDL2 gives no drawable surface up there: the content view can be
-        # extended under the title bar, but SDL keeps rendering into the old,
-        # shorter rect, so dvui's y=0 never moves (measured: SDL reported 1244x771
-        # before AND after). What the OS does render there is the title string.
-        "meters in the window title": "titleMeters" in _src("src/main.zig"),
-        # Native Linux title fonts/locales cannot reliably render Unicode gauges;
-        # every generated label and separator is printable ASCII instead.
-        "font-safe ASCII title": 'TITLE_METERS_SEP = " | "' in pur
-            and "barGlyph" not in pur and '"Opal - Play everything"' in mn,
-        "no proportional-font padding": "justifyTitle" not in pur,
-        # A partial run ("CPU 12% | MEM 1.2") would read as a bug, and the
-        # title must survive regardless — so a short buffer yields nothing.
-        "no truncated meter run": 'catch ""' in pur,
-        # No confident "CPU 0%" before the first delta lands.
-        "hidden until first sample": "snap.valid" in _src("src/main.zig"),
+        "stable initial title": '.title = "Opal"' in mn,
+        "semantic media title": '"{s} - Opal"' in mn,
+        "no telemetry in native title": "titleMeters" not in mn and "sysmon.get" not in mn,
+        "sampler not started": 'core/sysmon.zig").start()' not in mn,
+        "property update deduplicated": "SDL_SetWindowTitle" in mn and "std.mem.eql" in mn,
+        "wall-clock cadence": "monotonicMilliTimestamp" in mn and "last_check_ms" in mn,
+        "no frame-count cadence": "title_ctr" not in mn,
+        "Wayland desktop identity": all(s in mn for s in
+                                         ("SDL_APP_NAME", "SDL_APP_ID", "SDL_VIDEO_WAYLAND_WMCLASS")),
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
         return "fail", "missing: " + ", ".join(missing)
-    return "pass", "ASCII CPU/MEM/THR meters: 1Hz sampler; supported energy only"
+    return "pass", "stable Opal/media title; no telemetry churn or sampler"
 
 
 @test("Search subprocesses reaped on shutdown", "Stability")

@@ -240,8 +240,11 @@ pub fn build(b: *std.Build) void {
         // as the exe's DT_NEEDED — which breaks the moment the binary runs
         // anywhere but the build dir (the Docker runtime stage failed exactly
         // this way). With a SONAME the NEEDED is just the name, resolved via
-        // rpath / ldconfig (/usr/local/lib) wherever it's installed.
-        "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -Wl,-soname,libtorrent_wrapper.so $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar; fi";
+        // rpath / ldconfig (/usr/local/lib) wherever it's installed. The
+        // wrapper's own $ORIGIN runpath also lets a rootless/private bundle put
+        // libtorrent beside it; an executable RUNPATH is not transitive through
+        // dependent DSOs.
+        "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -Wl,-soname,libtorrent_wrapper.so -Wl,-rpath,'$ORIGIN' $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar; fi";
 
     // Only invoke the host g++ when it can actually produce a wrapper for the
     // target (native builds). Cross-compiling (e.g. windows from macOS for a
@@ -269,11 +272,23 @@ pub fn build(b: *std.Build) void {
         exe.step.dependOn(&compile_wrapper.step);
     }
 
-    exe.root_module.addLibraryPath(b.path("."));
-    exe.root_module.linkSystemLibrary("torrent_wrapper", .{});
-    // rpath is ELF/Mach-O only; PE resolves DLLs next to the exe at runtime.
-    if (!is_windows) {
-        exe.root_module.addRPath(b.path(".")); // Ensure the binary can find the locally compiled wrapper
+    if (target.result.os.tag == .linux) {
+        // Link the ELF DSO directly. addLibraryPath() makes Zig automatically
+        // append that absolute directory to DT_RUNPATH, even when explicit
+        // portable $ORIGIN paths are also present. The wrapper has a SONAME, so
+        // the resulting DT_NEEDED remains the portable basename.
+        exe.root_module.addObjectFile(b.path("libtorrent_wrapper.so"));
+    } else {
+        exe.root_module.addLibraryPath(b.path("."));
+        exe.root_module.linkSystemLibrary("torrent_wrapper", .{});
+    }
+    // An absolute checkout RUNPATH is useful for an unbundled Debug dev run,
+    // but must never leak into distributed Linux binaries: on a developer
+    // machine it shadows the installed wrapper, and on every other machine it
+    // is a dead/non-reproducible path. macOS's bundle rewrite still needs the
+    // build-tree lookup before install_name_tool lays out Frameworks.
+    if (!is_windows and (target.result.os.tag == .macos or optimize == .Debug)) {
+        exe.root_module.addRPath(b.path("."));
     }
     // Packaged-install layouts (deb/rpm/.run/tarball): let the installed
     // binary find libtorrent_wrapper.so relative to itself — next to the
