@@ -188,7 +188,7 @@ fn urlEncode(input: []const u8, out: *[512]u8) []const u8 {
 fn httpGet(url_str: []const u8, extra_headers: []const std.http.Header, response_buf: []u8) ![]const u8 {
     const alloc = @import("../core/alloc.zig").allocator;
     const io = @import("../core/io_global.zig");
-    var ua: []const u8 = "Opal/1.0";
+    var ua: []const u8 = @import("../core/app_meta.zig").user_agent;
     for (extra_headers) |h| {
         if (std.ascii.eqlIgnoreCase(h.name, "User-Agent")) ua = h.value;
     }
@@ -225,7 +225,7 @@ fn searchThread(engine: *SubtitleEngine) void {
     
     // HTTP GET with User-Agent header
     const headers = [_]std.http.Header{
-        .{ .name = "User-Agent", .value = "Opal/1.0" },
+        .{ .name = "User-Agent", .value = @import("../core/app_meta.zig").user_agent },
     };
     
     var response_buf: [128 * 1024]u8 = undefined;
@@ -304,7 +304,7 @@ fn gestdownAppend(engine: *SubtitleEngine, base: usize) usize {
     const p = sp.parse(engine.query_buf[0..engine.query_len], &q_buf, &show_buf);
     if (!p.is_tv or p.show.len == 0) return base;
 
-    const headers = [_]std.http.Header{.{ .name = "User-Agent", .value = "Opal/1.0" }};
+    const headers = [_]std.http.Header{.{ .name = "User-Agent", .value = @import("../core/app_meta.zig").user_agent }};
     var enc: [512]u8 = undefined;
 
     // 1) show search → first show id (a UUID)
@@ -424,7 +424,7 @@ fn stremioOsAppend(engine: *SubtitleEngine, base: usize) usize {
     else
         std.fmt.bufPrint(&url3, "https://opensubtitles-v3.strem.io/subtitles/movie/{s}.json", .{imdb_id}) catch return base;
 
-    const headers = [_]std.http.Header{.{ .name = "User-Agent", .value = "Opal/1.0" }};
+    const headers = [_]std.http.Header{.{ .name = "User-Agent", .value = @import("../core/app_meta.zig").user_agent }};
     @import("../core/rate_limit.zig").acquire("stremio", 1.0); // third-party addon — be gentle
     const json = httpGet(endpoint, &headers, buf) catch return base;
 
@@ -488,7 +488,7 @@ fn downloadThread(engine: *SubtitleEngine) void {
     
     // Download the subtitle file via HTTP
     const headers = [_]std.http.Header{
-        .{ .name = "User-Agent", .value = "Opal/1.0" },
+        .{ .name = "User-Agent", .value = @import("../core/app_meta.zig").user_agent },
     };
     
     const alloc = @import("../core/alloc.zig").allocator;

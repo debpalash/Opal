@@ -1124,9 +1124,11 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     // vs companion (control the desktop player) behavior.
     if (std.mem.eql(u8, api_path, "/host")) {
         var jb: [128]u8 = undefined;
-        const j = std.fmt.bufPrint(&jb, "{{\"headless\":{s},\"version\":\"0.1.2\"}}", .{
-            if (state.app.is_headless) "true" else "false",
-        }) catch return;
+        const j = @import("remote_host_pure.zig").build(
+            &jb,
+            state.app.is_headless,
+            @import("../core/app_meta.zig").version,
+        ) orelse return;
         sendJson(stream, j);
         return;
     }

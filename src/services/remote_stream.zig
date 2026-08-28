@@ -12,6 +12,7 @@ const std = @import("std");
 const state = @import("../core/state.zig");
 const io_g = @import("../core/io_global.zig");
 const pure = @import("remote_stream_pure.zig");
+const secure_path = @import("remote_stream_path.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 
 const CHUNK = 256 * 1024;
@@ -30,25 +31,32 @@ fn downloadsRoot(buf: []u8) []const u8 {
     return @import("../core/paths.zig").defaultSavePath(buf);
 }
 
-fn resolveUnder(root: []const u8, rel: []const u8, buf: []u8) ?[]const u8 {
-    if (!pure.safeRelPath(rel)) return null;
-    return std.fmt.bufPrint(buf, "{s}/{s}", .{ root, rel }) catch null;
+/// Open one regular file beneath the configured downloads directory without
+/// ever resolving a request-controlled pathname from the process cwd.
+fn openServedFile(rel: []const u8) ?std.Io.File {
+    var root_buf: [512]u8 = undefined;
+    // The configured root is trusted and may itself intentionally be a
+    // symlink (for example Downloads on another volume). Once opened, its
+    // directory handle is the immutable containment anchor.
+    var root = io_g.cwdOpenDir(downloadsRoot(&root_buf), .{}) catch return null;
+    defer root.close(io_g.io());
+    return secure_path.openRegularAt(io_g.io(), root, rel) catch |err| {
+        switch (err) {
+            error.UnsafePath, error.SymLinkLoop, error.UnsupportedFileType, error.AccessDenied, error.NotDir => @import("../core/logs.zig").pushLog("warn", "remote", "rejected unsafe download file request", false),
+            else => {},
+        }
+        return null;
+    };
 }
 
 /// GET /stream?file=<rel>[&t=token] — Range-aware file streaming from the
 /// downloads dir. Works mid-download (reads whatever bytes exist; the
 /// torrent path already prioritizes sequential pieces for streaming).
 pub fn handleStream(stream: std.Io.net.Stream, request: []const u8, rel: []const u8) void {
-    var root_buf: [512]u8 = undefined;
-    var path_buf: [1600]u8 = undefined;
-    const path = resolveUnder(downloadsRoot(&root_buf), rel, &path_buf) orelse return send404(stream);
-
-    const st = io_g.cwdStatFile(path) catch return send404(stream);
-    const size: u64 = st.size;
-
-    const file = io_g.cwdOpenFile(path, .{}) catch return send404(stream);
-    var fh = file;
+    var fh = openServedFile(rel) orelse return send404(stream);
     defer fh.close(io_g.io());
+    const st = fh.stat(io_g.io()) catch return send404(stream);
+    const size: u64 = st.size;
 
     // Range header (if any). Absent/garbage → whole file, 200.
     var range: ?pure.Range = null;
@@ -81,12 +89,14 @@ pub fn handleStream(stream: std.Io.net.Stream, request: []const u8, rel: []const
 
 /// GET /vtt?file=<rel .srt/.vtt>[&t=] — subtitle sidecar as WebVTT.
 pub fn handleVtt(stream: std.Io.net.Stream, rel: []const u8) void {
-    var root_buf: [512]u8 = undefined;
-    var path_buf: [1600]u8 = undefined;
-    const path = resolveUnder(downloadsRoot(&root_buf), rel, &path_buf) orelse return send404(stream);
-
-    const raw = io_g.cwdReadFileAlloc(path, alloc, 2 * 1024 * 1024) catch return send404(stream);
+    var file = openServedFile(rel) orelse return send404(stream);
+    defer file.close(io_g.io());
+    const size = file.length(io_g.io()) catch return send404(stream);
+    if (size > 2 * 1024 * 1024) return send404(stream);
+    const raw = alloc.alloc(u8, @intCast(size)) catch return send404(stream);
     defer alloc.free(raw);
+    const read = file.readPositionalAll(io_g.io(), raw, 0) catch return send404(stream);
+    if (read != raw.len) return send404(stream);
 
     var body: []const u8 = raw;
     var converted: ?[]u8 = null;
@@ -436,6 +446,24 @@ const TRANSCODE_CHUNK = 16 * 1024;
 /// closed tab does not leave an encoder running for minutes.
 const TRANSCODE_SEND_TIMEOUT_S: i32 = 20;
 
+const TranscodeInput = struct {
+    source: std.Io.File,
+    pipe: std.Io.File,
+
+    fn pump(self: *TranscodeInput) void {
+        defer self.source.close(io_g.io());
+        defer self.pipe.close(io_g.io());
+        var buf: [64 * 1024]u8 = undefined;
+        var offset: u64 = 0;
+        while (true) {
+            const n = self.source.readPositionalAll(io_g.io(), &buf, offset) catch return;
+            if (n == 0) return;
+            io_g.writeAll(self.pipe, buf[0..n]) catch return;
+            offset += n;
+        }
+    }
+};
+
 /// `/transcode?file=<rel>&t=<token>[&start=<seconds>]`
 ///
 /// Cleanup note, because three obvious fixes here were wrong.
@@ -461,25 +489,25 @@ pub fn handleTranscode(stream: std.Io.net.Stream, rel: []const u8, start_s: u32)
         return;
     }
 
-    var root_buf: [512]u8 = undefined;
-    var path_buf: [1600]u8 = undefined;
-    const path = resolveUnder(downloadsRoot(&root_buf), rel, &path_buf) orelse return send404(stream);
-    _ = io_g.cwdStatFile(path) catch return send404(stream);
+    var source = openServedFile(rel) orelse return send404(stream);
+    var source_owned = true;
+    defer if (source_owned) source.close(io_g.io());
 
     var ss_buf: [16]u8 = undefined;
     const ss = std.fmt.bufPrint(&ss_buf, "{d}", .{start_s}) catch "0";
 
-    // -ss BEFORE -i is the fast (keyframe) seek; exact-frame seeking would
-    // decode everything up to the offset, which defeats the point.
+    // Feed the already-opened file through stdin. Passing its pathname would
+    // let an attacker swap in a symlink between validation and ffmpeg's open.
+    // -ss follows -i because a pipe is intentionally non-seekable.
     var child = io_g.Child.init(&.{
         ffmpegPath(),
         "-hide_banner",
         "-loglevel",
         "error",
+        "-i",
+        "pipe:0",
         "-ss",
         ss,
-        "-i",
-        path,
         "-c:v",
         "libx264",
         "-preset",
@@ -496,10 +524,24 @@ pub fn handleTranscode(stream: std.Io.net.Stream, rel: []const u8, start_s: u32)
         "mp4",
         "pipe:1",
     }, alloc);
-    child.stdin_behavior = .Ignore;
+    child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     child.spawn() catch return send404(stream);
+
+    const child_stdin = child.takeStdin() orelse {
+        _ = child.kill() catch {};
+        return send404(stream);
+    };
+    var input = TranscodeInput{ .source = source, .pipe = child_stdin };
+    source_owned = false;
+    const input_thread = std.Thread.spawn(.{}, TranscodeInput.pump, .{&input}) catch {
+        input.pipe.close(io_g.io());
+        input.source.close(io_g.io());
+        _ = child.kill() catch {};
+        return send404(stream);
+    };
+    defer input_thread.join();
 
     // No Content-Length: the length is unknowable until the encode finishes.
     // Connection: close so the client treats EOF as end-of-stream.

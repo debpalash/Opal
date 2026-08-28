@@ -180,7 +180,7 @@ def test_legal_directplay_sources():
         "commons spawned under stremio": "Spawn.go(resolveCommons, &status_commons)" in rv,
         "commons in checkAllDone": "status_commons.load(.acquire) != .searching" in rv,
         "commons endpoint": "commons.wikimedia.org/w/api.php" in rv,
-        "commons UA policy": "https://github.com/debpalash/Opal" in rv,
+        "commons UA policy": "user_agent_with_url" in rv,
         "commons_pure iteratePages": "pub fn iteratePages(" in cpu and "stripFilePrefix" in cpu,
         "commons_pure registered": "commons_pure.zig" in bz,
         # IA audio: intent-aware, no new worker, librivox/etree, VBR>ogg>flac

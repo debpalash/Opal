@@ -67,8 +67,17 @@ pub fn contentType(name: []const u8) []const u8 {
 pub fn safeRelPath(rel: []const u8) bool {
     if (rel.len == 0 or rel.len > 1024) return false;
     if (rel[0] == '/' or rel[0] == '\\') return false;
-    if (std.mem.indexOf(u8, rel, "..") != null) return false;
     if (std.mem.indexOfScalar(u8, rel, 0) != null) return false;
+    // Only '/' is accepted as a separator on every platform. Rejecting '\\'
+    // and ':' also closes Windows drive, UNC, device, and alternate-stream
+    // spellings when a request was produced on a different host OS.
+    if (std.mem.indexOfScalar(u8, rel, '\\') != null) return false;
+    if (std.mem.indexOfScalar(u8, rel, ':') != null) return false;
+    var parts = std.mem.splitScalar(u8, rel, '/');
+    while (parts.next()) |part| {
+        if (part.len == 0) return false;
+        if (std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..")) return false;
+    }
     return true;
 }
 
@@ -141,6 +150,10 @@ test "safeRelPath blocks traversal and absolutes" {
     try std.testing.expect(!safeRelPath("/etc/passwd"));
     try std.testing.expect(!safeRelPath(""));
     try std.testing.expect(!safeRelPath("a/../b"));
+    try std.testing.expect(!safeRelPath("a\\..\\b"));
+    try std.testing.expect(!safeRelPath("C:/Windows/win.ini"));
+    try std.testing.expect(!safeRelPath("a//b"));
+    try std.testing.expect(safeRelPath("Show..Name/Episode.mkv"));
 }
 
 test "srtToVtt: header, comma→dot, index lines dropped, text preserved" {

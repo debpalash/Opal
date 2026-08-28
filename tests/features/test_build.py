@@ -661,6 +661,35 @@ def test_version_single_source():
     return "pass", "APP_VERSION comes from build.zig.zon via build_options; no hand-maintained copy"
 
 
+@test("Host API and application user agents use the canonical version", "Build")
+def test_version_reaches_host_api_and_user_agents():
+    meta = _src("src/core/app_meta.zig")
+    remote = _src("src/services/remote.zig")
+    host = _src("src/services/remote_host_pure.zig")
+    all_zig = "\n".join(
+        _src(os.path.relpath(os.path.join(root, name), PROJECT_DIR))
+        for root, _, names in os.walk(os.path.join(PROJECT_DIR, "src"))
+        for name in names
+        if name.endswith(".zig")
+    )
+    contributing = _src(".github/CONTRIBUTING.md")
+    checks = {
+        "metadata reads build option": '@import("build_options").app_version' in meta,
+        "host reports metadata version": 'remote_host_pure.zig' in remote
+            and '@import("../core/app_meta.zig").version' in remote
+            and '@import("build_options").app_version' in host
+            and r'\"version\":\"{s}\"' in host,
+        "release user agent is derived": '"Opal/" ++ version' in meta,
+        "legacy host literal removed": '"0.1.2"' not in remote,
+        "legacy user agents removed": "Opal/1.0" not in all_zig,
+        "development representation documented": "do not add an implicit `-dev` suffix" in contributing,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "canonical version does not reach every release identity: " + ", ".join(missing)
+    return "pass", "/api/host and Opal user agents derive from build.zig.zon"
+
+
 @test("Every release ships highlights and a commit list", "Packaging")
 def test_release_notes():
     """Every release through v0.6.4 published a body of exactly one line:

@@ -529,6 +529,13 @@ pub fn visible(r: *const Row, f: Filter, k: KindFilter) bool {
     return matchesFilter(r, f) and matchesKind(r, k);
 }
 
+/// The default Watching view promotes only active work. Everything else stays
+/// available in the library below without competing with the next thing to
+/// play.
+pub fn isUpNext(r: *const Row) bool {
+    return r.status == .watching;
+}
+
 /// Counts per status chip, indexed by `@intFromEnum(Filter)`. Counted WITHIN the
 /// active kind filter, so the numbers always add up to what is on screen — a
 /// count that disagrees with the list is worse than no count.
@@ -935,6 +942,18 @@ test "counts are scoped to the OTHER chip row (they must add up to the list)" {
 
     try t.expect(visible(&rows[1], .watching, .anime));
     try t.expect(!visible(&rows[1], .watching, .tv));
+}
+
+test "up next contains active work only" {
+    var active: Row = .{};
+    active.status = .watching;
+    try t.expect(isUpNext(&active));
+
+    inline for (.{ Status.caught_up, Status.unstarted, Status.completed, Status.dropped }) |status| {
+        var row: Row = .{};
+        row.status = status;
+        try t.expect(!isUpNext(&row));
+    }
 }
 
 test "user status always beats the derived one" {

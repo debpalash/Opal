@@ -29,6 +29,7 @@ pub fn build(b: *std.Build) void {
 
     build_options.addOption([]const u8, "tmdb_default_token", embeddedKey(b, &.{ "OPAL_TMDB_TOKEN", "TMDB_API_TOKEN" }));
     build_options.addOption([]const u8, "omdb_default_key", embeddedKey(b, &.{ "OPAL_OMDB_KEY", "OMDB_API_KEY" }));
+    const build_options_module = build_options.createModule();
 
     const exe = b.addExecutable(.{
         .name = "opal",
@@ -166,7 +167,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Expose -Dheadless to the app code via @import("build_options").
-    exe.root_module.addImport("build_options", build_options.createModule());
+    exe.root_module.addImport("build_options", build_options_module);
 
     // Fetch and bind TVG Icons library
     const icons_dep = b.dependency("icons", .{
@@ -1207,6 +1208,48 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_remote_stream_pure).step);
+
+    // Download-root confinement: component-by-component no-follow opens and
+    // regular-file enforcement for stream/subtitle/transcode endpoints.
+    const test_remote_stream_path = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/remote_stream_path.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_remote_stream_path).step);
+
+    // Canonical application version and release-derived user-agent strings.
+    const test_app_meta = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/app_meta.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_app_meta.root_module.addImport("build_options", build_options_module);
+    test_step.dependOn(&b.addRunArtifact(test_app_meta).step);
+
+    const test_display_name = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/display_name_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_display_name).step);
+
+    // /api/host must expose the same version injected from build.zig.zon.
+    const test_remote_host = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/remote_host_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_remote_host.root_module.addImport("build_options", build_options_module);
+    test_step.dependOn(&b.addRunArtifact(test_remote_host).step);
 
     // TV calendar: air-date math, countdown labels, TMDB next-episode parse,
     // EZTV availability extraction.

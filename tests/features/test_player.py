@@ -323,7 +323,7 @@ def test_hosted_mode_and_perf():
     checks = {
         "range streaming": "parseRange" in rp and "206 Partial Content" in rs,
         "srt→vtt": "srtToVtt" in rp and "handleVtt" in rs,
-        "traversal guard": "safeRelPath" in rp and "safeRelPath" in rs,
+        "traversal guard": "safeRelPath" in rp and "secure_path.openRegularAt" in rs,
         "query-token media auth": '"/stream"' in rm and 'getQueryParam(query, "t")' in rm,
         "parity routes": '"/calendar"' in rm and '"/tv"' in rm and '"/host"' in rm and '"/torrents"' in rm,
         "thread-per-conn + api mutex": "api_mutex" in rm and "Thread.spawn(.{}, Handler.run" in rm,

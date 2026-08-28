@@ -10,6 +10,7 @@ const transfers = @import("../services/transfers.zig");
 const theme = @import("theme.zig");
 const metadata_dialog = @import("metadata_dialog.zig");
 const components = @import("components.zig");
+const display_name_pure = @import("../core/display_name_pure.zig");
 
 /// Normalize a path / URL into a user-facing display name:
 ///   1. basename (after last `/` or `\\`)
@@ -19,50 +20,7 @@ const components = @import("components.zig");
 /// Writes into `out` (capacity = `out.len`) and returns the populated
 /// slice. Returns `raw` unchanged if cleanup would produce an empty
 /// string.
-pub fn cleanDisplayName(out: []u8, raw: []const u8) []const u8 {
-    if (out.len == 0) return raw;
-
-    // Step 1: basename
-    var basename_start: usize = 0;
-    for (raw, 0..) |ch, ci| {
-        if (ch == '/' or ch == '\\') basename_start = ci + 1;
-    }
-    const basename = raw[basename_start..];
-
-    // Step 2: strip short extension
-    var name_end: usize = basename.len;
-    {
-        var last_dot: ?usize = null;
-        for (basename, 0..) |ch, ci| {
-            if (ch == '.') last_dot = ci;
-        }
-        if (last_dot) |dot| {
-            if (basename.len - dot <= 6) name_end = dot;
-        }
-    }
-    const stripped = basename[0..name_end];
-
-    // Step 3: replace dots/underscores with spaces, collapse multiples
-    var written: usize = 0;
-    for (stripped) |ch| {
-        if (written >= out.len - 1) break;
-        const out_ch: u8 = if (ch == '.' or ch == '_') ' ' else ch;
-        if (out_ch == ' ' and written > 0 and out[written - 1] == ' ') continue;
-        out[written] = out_ch;
-        written += 1;
-    }
-
-    // Step 4: trim trailing then leading spaces
-    while (written > 0 and out[written - 1] == ' ') written -= 1;
-    var trim_start: usize = 0;
-    while (trim_start < written and out[trim_start] == ' ') trim_start += 1;
-    if (trim_start > 0 and trim_start < written) {
-        std.mem.copyForwards(u8, out[0 .. written - trim_start], out[trim_start..written]);
-        written -= trim_start;
-    }
-
-    return if (written > 0) out[0..written] else raw;
-}
+pub const cleanDisplayName = display_name_pure.clean;
 
 /// The chat transcript: inline result cards + message bubbles + phase label.
 /// NO scroll wrapper — the host (home.zig's chat mode) owns the page scroll,

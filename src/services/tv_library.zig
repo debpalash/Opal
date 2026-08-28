@@ -38,6 +38,8 @@ const icons = @import("icons");
 const tp = @import("tv_pure.zig");
 const cal_pure = @import("tv_calendar_pure.zig");
 const tmdb_api = @import("tmdb_api.zig");
+const components = @import("../ui/components.zig");
+const display_name = @import("../core/display_name_pure.zig");
 
 pub const MAX_SHOWS = tp.MAX_SHOWS;
 
@@ -618,7 +620,8 @@ fn addMovieRows() void {
 
         const r = nextRow() orelse return;
         r.kind = .movie;
-        r.setName(name);
+        var display_buf: [256]u8 = undefined;
+        r.setName(display_name.clean(&display_buf, name));
         r.setId(name);
         r.hist_idx = @intCast(i);
         r.pct = @floatCast(e.percent);
@@ -661,118 +664,260 @@ pub fn renderContent() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = theme.colors.bg_app,
+        .gravity_y = 0,
     });
     defer scroll.deinit();
 
-    // Renders nothing when the plugin is absent or the feed is empty.
-    eztv.renderSection();
-
     if (row_count == 0) {
         renderEmpty();
-        return;
+    } else {
+        renderLibrary();
     }
-    renderGrid();
+
+    // Discovery is useful, but it is not the user's library. Keep the optional
+    // release feed below personal progress so opening Watching always answers
+    // "what should I continue?" first.
+    eztv.renderSection();
 }
 
 fn renderControlBar() void {
     var bar = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+        .color_fill = theme.colors.bg_app,
+        .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.sm },
     });
     defer bar.deinit();
 
-    // Counts are cross-scoped: the status counts are computed WITHIN the active
-    // kind and vice-versa, so both rows always add up to what's actually on
-    // screen. A count that disagrees with the list is worse than no count.
     var counts: [6]usize = .{ 0, 0, 0, 0, 0, 0 };
     tp.countsFor(rows[0..row_count], kind_filter, &counts);
-    var kcounts: [4]usize = .{ 0, 0, 0, 0 };
-    tp.kindCountsFor(rows[0..row_count], filter, &kcounts);
 
-    // ── Kind row: All / TV / Anime / Movies ──
+    // Page identity + one useful summary. Counts no longer repeat inside every
+    // chip, which made the old toolbar read like a diagnostic panel.
     {
-        var krow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-        defer krow.deinit();
-
-        const kinds = [_]tp.KindFilter{ .all, .tv, .anime, .movie };
-        const knames = [_][]const u8{ "All", "TV", "Anime", "Movies" };
-        for (kinds, 0..) |k, i| {
-            var lbuf: [32]u8 = undefined;
-            const lbl = std.fmt.bufPrint(&lbuf, "{s} ({d})", .{ knames[i], kcounts[i] }) catch knames[i];
-            const sel = kind_filter == k;
-            if (dvui.button(@src(), lbl, .{}, .{
-                .id_extra = i + 60800,
-                .background = true,
-                .color_fill = if (sel) theme.colors.accent else theme.colors.bg_elevated,
-                .color_text = if (sel) theme.colors.text_on_accent else theme.colors.text_secondary,
-                .corner_radius = dvui.Rect.all(theme.radius.pill),
-                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
-                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-            })) kind_filter = k;
+        var mast = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        defer mast.deinit();
+        {
+            var copy = dvui.box(@src(), .{ .dir = .vertical }, .{});
+            defer copy.deinit();
+            _ = dvui.label(@src(), "Watching", .{}, .{
+                .color_text = theme.colors.text_primary,
+                .font = dvui.themeGet().font_heading,
+            });
+            var summary_buf: [96]u8 = undefined;
+            const summary = std.fmt.bufPrint(&summary_buf, "{d} titles · {d} ready to continue", .{
+                counts[@intFromEnum(tp.Filter.all)],
+                counts[@intFromEnum(tp.Filter.watching)],
+            }) catch "Your saved progress";
+            _ = dvui.label(@src(), "{s}", .{summary}, .{
+                .color_text = theme.colors.text_tertiary,
+                .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+            });
         }
-
+        {
+            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            spacer.deinit();
+        }
         if (isSyncing()) {
-            _ = dvui.label(@src(), "Syncing...", .{}, .{
-                .id_extra = 61500,
+            _ = dvui.label(@src(), "Refreshing metadata…", .{}, .{
                 .color_text = theme.colors.text_tertiary,
                 .gravity_y = 0.5,
-                .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
             });
+        } else if (dvui.button(@src(), "Refresh", .{}, .{
+            .background = true,
+            .color_fill = theme.colors.bg_elevated,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_text = theme.colors.text_secondary,
+            .border = dvui.Rect.all(0),
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+            .gravity_y = 0.5,
+        })) {
+            resync();
         }
     }
 
-    // ── Status row: All / Watching / Caught up / Not started / Completed / Dropped ──
+    // One calm toolbar. Each control is a segmented group rather than ten
+    // unrelated pills, and the pair wraps as units on narrow windows.
+    var filters = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
+        .expand = .horizontal,
+        .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
+    });
+    defer filters.deinit();
     {
-        var srow = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
+        var group = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .max_size_content = .{ .w = 340, .h = std.math.floatMax(f32) },
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.md, .h = theme.spacing.xs },
         });
-        defer srow.deinit();
-
-        const chips = [_]tp.Filter{ .all, .watching, .caught_up, .unstarted, .completed, .dropped };
-        const names = [_][]const u8{ "All", "Watching", "Caught up", "Not started", "Completed", "Dropped" };
-        for (chips, 0..) |f, k| {
-            var lbuf: [40]u8 = undefined;
-            const lbl = std.fmt.bufPrint(&lbuf, "{s} ({d})", .{ names[k], counts[k] }) catch names[k];
-            const sel = filter == f;
-            if (dvui.button(@src(), lbl, .{}, .{
-                .id_extra = k + 61000,
-                .background = true,
-                .color_fill = if (sel) theme.colors.bg_hover else theme.colors.bg_surface,
-                .color_text = if (sel) theme.colors.text_primary else theme.colors.text_tertiary,
-                .corner_radius = dvui.Rect.all(theme.radius.pill),
-                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
-                .padding = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 2 },
-            })) filter = f;
-        }
+        defer group.deinit();
+        _ = dvui.label(@src(), "TYPE", .{}, .{ .color_text = theme.colors.text_tertiary });
+        const labels = [_][]const u8{ "All", "TV", "Anime", "Movies" };
+        if (components.segment(@src(), &labels, @intFromEnum(kind_filter))) |picked|
+            kind_filter = @enumFromInt(picked);
+    }
+    {
+        var group = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .max_size_content = .{ .w = 620, .h = std.math.floatMax(f32) },
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xs },
+        });
+        defer group.deinit();
+        _ = dvui.label(@src(), "PROGRESS", .{}, .{ .color_text = theme.colors.text_tertiary });
+        const labels = [_][]const u8{ "All", "In progress", "Caught up", "Planned", "Done", "Dropped" };
+        if (components.segment(@src(), &labels, @intFromEnum(filter))) |picked|
+            filter = @enumFromInt(picked);
     }
 }
 
 fn renderEmpty() void {
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .expand = .both,
-        .gravity_x = 0.5,
-        .gravity_y = 0.5,
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .padding = dvui.Rect.all(theme.spacing.lg),
+        .margin = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.lg },
     });
     defer box.deinit();
 
-    _ = dvui.label(@src(), "Nothing tracked yet", .{}, .{
+    _ = dvui.label(@src(), "Nothing here yet", .{}, .{
         .id_extra = 62000,
         .color_text = theme.colors.text_primary,
         .font = dvui.themeGet().font_heading,
-        .gravity_x = 0.5,
     });
-    _ = dvui.label(@src(), "Play an episode, or set a status on any show or movie — it lands here with your progress.", .{}, .{
+    _ = dvui.label(@src(), "Save a show or movie and your next episode and progress will appear here.", .{}, .{
         .id_extra = 62001,
         .color_text = theme.colors.text_tertiary,
-        .gravity_x = 0.5,
+        .padding = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.md },
+    });
+
+    if (dvui.button(@src(), "Browse movies & TV", .{}, .{
+        .id_extra = 62002,
+        .background = true,
+        .color_fill = theme.colors.accent,
+        .color_text = theme.colors.text_on_accent,
+        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+    })) {
+        state.app.browse_source = .TMDB;
+        state.app.router.navigate(.browse);
+    }
+}
+
+const LibraryBucket = enum { all, up_next, saved };
+
+fn inBucket(r: *const tp.Row, bucket: LibraryBucket) bool {
+    return switch (bucket) {
+        .all => true,
+        .up_next => tp.isUpNext(r),
+        .saved => !tp.isUpNext(r),
+    };
+}
+
+fn visibleCount(bucket: LibraryBucket) usize {
+    var count: usize = 0;
+    for (order[0..row_count]) |idx| {
+        if (tp.visible(&rows[idx], filter, kind_filter) and inBucket(&rows[idx], bucket)) count += 1;
+    }
+    return count;
+}
+
+fn renderLibrary() void {
+    const is_default = filter == .all and kind_filter == .all;
+    if (!is_default) {
+        const count = visibleCount(.all);
+        if (count == 0) {
+            renderFilteredEmpty();
+            return;
+        }
+        renderSectionHeading("Filtered library", count, "titles");
+        renderGrid(.all);
+        return;
+    }
+
+    const up_next = visibleCount(.up_next);
+    const saved = visibleCount(.saved);
+
+    if (up_next > 0) {
+        renderSectionHeading("Up next", up_next, "ready");
+        renderUpNextRail();
+    }
+    if (saved > 0) {
+        renderSectionHeading("Your library", saved, "saved");
+        renderGrid(.saved);
+    }
+}
+
+fn renderSectionHeading(title: []const u8, count: usize, suffix: []const u8) void {
+    var heading = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.xs },
+    });
+    defer heading.deinit();
+
+    _ = dvui.label(@src(), "{s}", .{title}, .{
+        .color_text = theme.colors.text_primary,
+        .font = dvui.themeGet().font_body.withSize(theme.font_size.title),
+        .gravity_y = 0.5,
+    });
+    _ = dvui.label(@src(), "{d} {s}", .{ count, suffix }, .{
+        .color_text = theme.colors.text_tertiary,
+        .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+        .gravity_y = 0.5,
+        .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
     });
 }
 
-fn renderGrid() void {
+fn renderUpNextRail() void {
+    const media_card = @import("../ui/media_card.zig");
+    var rail = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none, .horizontal_bar = .hide }, .{
+        .expand = .horizontal,
+        .background = false,
+        .min_size_content = .{ .w = 10, .h = media_card.cardHeight(true, true) + 12 },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = std.math.floatMax(f32) },
+        .padding = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = 0 },
+        .gravity_y = 0,
+    });
+    defer rail.deinit();
+
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0 });
+    defer row.deinit();
+    for (order[0..row_count]) |idx| {
+        if (!tp.visible(&rows[idx], filter, kind_filter) or !inBucket(&rows[idx], .up_next)) continue;
+        renderCard(idx, idx);
+    }
+}
+
+fn renderFilteredEmpty() void {
+    var box = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .padding = dvui.Rect.all(theme.spacing.lg),
+        .margin = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.lg },
+    });
+    defer box.deinit();
+
+    _ = dvui.label(@src(), "No titles match these filters", .{}, .{
+        .color_text = theme.colors.text_primary,
+        .font = dvui.themeGet().font_heading,
+    });
+    if (dvui.button(@src(), "Clear filters", .{}, .{
+        .color_fill = theme.colors.bg_elevated,
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_text = theme.colors.text_primary,
+        .border = dvui.Rect.all(0),
+        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+        .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
+    })) {
+        filter = .all;
+        kind_filter = .all;
+    }
+}
+
+fn renderGrid(bucket: LibraryBucket) void {
     const avail_w = dvui.parentGet().data().contentRect().w;
     const per_card = CARD_W + 12;
     const cols: usize = @max(1, @as(usize, @intFromFloat(@max(1, avail_w / per_card))));
@@ -780,6 +925,7 @@ fn renderGrid() void {
     var grid = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .padding = dvui.Rect.all(theme.spacing.sm),
+        .gravity_y = 0,
     });
     defer grid.deinit();
 
@@ -787,18 +933,9 @@ fn renderGrid() void {
     var visible: [MAX_SHOWS]u16 = undefined;
     var vn: usize = 0;
     for (order[0..row_count]) |idx| {
-        if (!tp.visible(&rows[idx], filter, kind_filter)) continue;
+        if (!tp.visible(&rows[idx], filter, kind_filter) or !inBucket(&rows[idx], bucket)) continue;
         visible[vn] = idx;
         vn += 1;
-    }
-
-    if (vn == 0) {
-        _ = dvui.label(@src(), "Nothing in this filter.", .{}, .{
-            .id_extra = 62100,
-            .color_text = theme.colors.text_tertiary,
-            .gravity_x = 0.5,
-        });
-        return;
     }
 
     var i: usize = 0;
@@ -807,12 +944,15 @@ fn renderGrid() void {
         var hrow = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = row_i + 63000,
             .expand = .horizontal,
+            .gravity_y = 0,
         });
         defer hrow.deinit();
 
         var col: usize = 0;
         while (col < cols and i < vn) : (col += 1) {
-            renderCard(visible[i], i);
+            // Row identity is unique across the Up-next rail and this grid;
+            // a per-section ordinal can collide with a card rendered above.
+            renderCard(visible[i], visible[i]);
             i += 1;
         }
     }

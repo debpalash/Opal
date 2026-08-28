@@ -64,7 +64,7 @@ def test_tv_tracking():
         # The Watching library is not TV-only.
         "all kinds aggregated": ("fn addTvRows(" in lib and "fn addAnimeRows(" in lib
                                  and "fn addMovieRows(" in lib),
-        "kind chips": "tp.kindCountsFor(" in lib and "kind_filter" in lib,
+        "kind filters": "components.segment(" in lib and "kind_filter" in lib,
         # A TV episode also lands in watch_history under its release name; listing
         # it as a "movie" would duplicate the show under a worse identity.
         "episodes excluded from movies": "subs.parse(name, &qbuf, &showbuf).is_tv" in lib,
@@ -92,6 +92,33 @@ def test_tv_tracking():
     if missing:
         return "fail", "missing: " + ", ".join(missing)
     return "pass", "TV+anime+movies in one library; aired-clamped next-up; user-set status"
+
+
+@test("Watching page: progress-first layout", "Page Shell")
+def test_watching_progress_first_layout():
+    lib = _src("src/services/tv_library.zig")
+    pure = _src("src/services/tv_pure.zig")
+    names = _src("src/core/display_name_pure.zig")
+    build = _src("build.zig")
+    checks = {
+        "personal library before releases": lib.index("renderLibrary();") < lib.index("eztv.renderSection();"),
+        "up-next rail": ("fn renderUpNextRail()" in lib
+                         and "tp.isUpNext(" in lib
+                         and "pub fn isUpNext(" in pure),
+        "saved library section": ('renderSectionHeading("Your library"' in lib
+                                  and "renderGrid(.saved)" in lib),
+        "top-aligned content": ".gravity_y = 0" in _between(lib, "pub fn renderContent", "fn renderControlBar"),
+        "quiet segmented filters": "components.segment(" in lib,
+        "useful empty states": ('"Browse movies & TV"' in lib
+                                and '"Clear filters"' in lib),
+        "local filenames cleaned": ("display_name.clean(" in lib
+                                    and "pub fn clean(" in names
+                                    and "display_name_pure.zig" in build),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "watching layout incomplete: " + ", ".join(missing)
+    return "pass", "up next first; saved library and releases follow; no centered dead space"
 
 
 @test("Player control bar: drop-ups + FF fullscreen", "Page Shell")

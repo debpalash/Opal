@@ -296,12 +296,11 @@ pub const MD_SCHEME = "mangadex:";
 // So the UA is per-HOST, not global: keep the browser UA for the HTML scrapers,
 // send an identifying UA to MangaDex (which is also what its docs ask for).
 pub const UA_BROWSER = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-pub const UA_OPAL = "Opal/1.0 (+https://github.com/debpalash/Opal)";
 
 /// The User-Agent to send for `url`. MangaDex hosts get the identifying UA; every
 /// other host keeps the browser UA the scrapers rely on.
-pub fn userAgentFor(url: []const u8) []const u8 {
-    if (std.mem.indexOf(u8, url, "mangadex.") != null) return UA_OPAL;
+pub fn userAgentFor(url: []const u8, opal_user_agent: []const u8) []const u8 {
+    if (std.mem.indexOf(u8, url, "mangadex.") != null) return opal_user_agent;
     return UA_BROWSER;
 }
 
@@ -601,18 +600,19 @@ test "regression: MangaDex hosts get the API UA, scrapers keep the browser UA" {
     // bot), so search returned nothing and every cover was blank. Verified live.
     var buf: [768]u8 = undefined;
     const id = "801513ba-a712-498c-8f57-cae55b38cc92";
+    const app_ua = "Opal/test-version (+https://github.com/debpalash/Opal)";
 
-    try std.testing.expectEqualStrings(UA_OPAL, userAgentFor(buildSearchUrl(&buf, "x", 20, 0).?));
-    try std.testing.expectEqualStrings(UA_OPAL, userAgentFor(buildFeedUrl(&buf, id, 1, 0).?));
-    try std.testing.expectEqualStrings(UA_OPAL, userAgentFor(buildAtHomeUrl(&buf, id).?));
-    try std.testing.expectEqualStrings(UA_OPAL, userAgentFor(buildCoverUrl(&buf, id, "c.jpg").?));
+    try std.testing.expectEqualStrings(app_ua, userAgentFor(buildSearchUrl(&buf, "x", 20, 0).?, app_ua));
+    try std.testing.expectEqualStrings(app_ua, userAgentFor(buildFeedUrl(&buf, id, 1, 0).?, app_ua));
+    try std.testing.expectEqualStrings(app_ua, userAgentFor(buildAtHomeUrl(&buf, id).?, app_ua));
+    try std.testing.expectEqualStrings(app_ua, userAgentFor(buildCoverUrl(&buf, id, "c.jpg").?, app_ua));
     // The page CDN is a different host (…mangadex.network) — it accepts either,
     // but it is still MangaDex, so it gets the honest UA too.
-    try std.testing.expectEqualStrings(UA_OPAL, userAgentFor("https://cmdxd98sb0x3yprd.mangadex.network/data/h/1.png"));
+    try std.testing.expectEqualStrings(app_ua, userAgentFor("https://cmdxd98sb0x3yprd.mangadex.network/data/h/1.png", app_ua));
     // Everything else — the HTML scrapers and their blogspot CDN — MUST keep the
     // browser UA (they rely on it to get past Cloudflare).
-    try std.testing.expectEqualStrings(UA_BROWSER, userAgentFor("https://readallcomics.com/invincible-001/"));
-    try std.testing.expectEqualStrings(UA_BROWSER, userAgentFor("https://1.bp.blogspot.com/x.jpg"));
+    try std.testing.expectEqualStrings(UA_BROWSER, userAgentFor("https://readallcomics.com/invincible-001/", app_ua));
+    try std.testing.expectEqualStrings(UA_BROWSER, userAgentFor("https://1.bp.blogspot.com/x.jpg", app_ua));
 }
 
 test "buildSearchUrl: empty query yields no request" {
