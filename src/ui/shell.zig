@@ -706,12 +706,34 @@ const BROWSE_SOURCES = [_]state.DrawerTab{ .TMDB, .YouTube, .Iptv, .Anime, .Podc
 /// Browse is one task with a source filter, not seventeen permanent navigation
 /// tabs. Connectors remain reachable from the command palette even when their
 /// setup is incomplete; Plugins/Settings owns configuration.
+fn browseSourceAvailable(source: state.DrawerTab) bool {
+    return switch (source) {
+        .Iptv => @import("../core/source_config.zig").has("iptv-org"),
+        .RSS => @import("../services/rss.zig").feed_count > 0,
+        .Jellyfin => @import("../services/jellyfin.zig").connectionSnapshot().connected,
+        .Plex => @import("../services/plex.zig").conn_state.load(.acquire) == .connected,
+        .Audiobooks => state.app.abs.connected,
+        .Opds => state.app.opds.connected,
+        else => true,
+    };
+}
+
 fn browseSourcePicker() void {
     var labels: [BROWSE_SOURCES.len][]const u8 = undefined;
+    var available: [BROWSE_SOURCES.len]state.DrawerTab = undefined;
+    var available_count: usize = 0;
     var selected: usize = 0;
-    for (BROWSE_SOURCES, 0..) |source, i| {
-        labels[i] = tabLabel(source);
-        if (source == state.app.browse_source) selected = i;
+    for (BROWSE_SOURCES) |source| {
+        if (!browseSourceAvailable(source)) continue;
+        available[available_count] = source;
+        labels[available_count] = tabLabel(source);
+        if (source == state.app.browse_source) selected = available_count;
+        available_count += 1;
+    }
+    if (!browseSourceAvailable(state.app.browse_source)) {
+        state.app.browse_source = available[0];
+        state.app.drawer_tab = available[0];
+        selected = 0;
     }
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -724,13 +746,13 @@ fn browseSourcePicker() void {
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
     });
-    if (dvui.dropdown(@src(), &labels, .{ .choice = &selected }, .{}, .{
+    if (dvui.dropdown(@src(), labels[0..available_count], .{ .choice = &selected }, .{}, .{
         .color_fill = theme.colors.bg_surface,
         .color_text = theme.colors.text_primary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = theme.spacing.sm, .y = 4, .w = theme.spacing.sm, .h = 4 },
     })) {
-        state.app.browse_source = BROWSE_SOURCES[selected];
+        state.app.browse_source = available[selected];
         state.app.drawer_tab = state.app.browse_source;
     }
 }
@@ -779,7 +801,7 @@ pub fn iconForTab(t: state.DrawerTab) []const u8 {
         .Vndb => icons.tvg.lucide.@"gamepad-2",
         .Web => icons.tvg.lucide.globe,
         .Anime => icons.tvg.lucide.tv,
-        .Drama => icons.tvg.lucide.@"clapperboard",
+        .Drama => icons.tvg.lucide.clapperboard,
         .Podcasts => icons.tvg.lucide.podcast,
         .Radio => icons.tvg.lucide.radio,
         .Iptv => icons.tvg.lucide.@"monitor-play",

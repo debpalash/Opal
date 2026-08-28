@@ -18,11 +18,12 @@ and filters, not permanent primary destinations.
 | Settings | `settings` | `setup` | Application and access settings |
 | Logs | `system` | `logs` | Diagnostics |
 
-Browse presents one source selector. Built-in and configured capabilities may
+Browse presents one source selector. Built-in and currently configured capabilities may
 include Movies & TV, YouTube, Live TV, anime, podcasts, radio, music, comics,
 Web/RSS, Jellyfin, Plex, Audiobookshelf, OPDS, novels, visual novels, and Asian
-drama. Their configuration belongs under Plugins or Settings. Ctrl/Cmd+K keeps
-direct command-palette access for keyboard users.
+drama. Disconnected server integrations, empty RSS, and uninstalled Live TV do
+not occupy that selector. Their setup remains directly reachable through
+Plugins/Settings and Ctrl/Cmd+K command-palette access.
 
 `DrawerTab` remains only as a compatibility identifier used by feature commands
 and the legacy shell. New product navigation must use `router.Route`; new

@@ -43,6 +43,8 @@ def test_navigation_and_docs_freshness():
         )),
         "browse source filter": "browseSourcePicker()" in shell
             and "subTabs(&.{ .TMDB" not in shell,
+        "unconfigured sources hidden": "browseSourceAvailable" in shell
+            and "if (!browseSourceAvailable(source)) continue" in shell,
         "power-user access": "command-palette" in navigation.lower(),
     }
     missing = [name for name, ok in checks.items() if not ok]
