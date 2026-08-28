@@ -87,6 +87,17 @@ jobs:
       - name: Run tests/test_features.py
         run: python3 tests/test_features.py
 
+  # Behavior-level browser security tier. GitHub's Ubuntu image includes
+  # Google Chrome; fail explicitly if that supported dependency disappears.
+  browser-dom:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Locate Chromium
+        run: command -v google-chrome || command -v chromium
+      - name: Exercise hostile provider markup in a real browser
+        run: python3 tests/test_web_dom_live.py
+
   # Headless Docker image: the ONLY reliable gate for the hosted deployment
   # (macOS dev hosts cannot validate a Linux image). Builds the image, boots
   # it, checks the unauthenticated /health liveness surface, and exercises the
