@@ -11,7 +11,6 @@ const theme = @import("theme.zig");
 const metadata_dialog = @import("metadata_dialog.zig");
 const components = @import("components.zig");
 
-
 pub const renderHeader = @import("header.zig").renderHeader;
 pub const renderTabBar = @import("header.zig").renderTabBar;
 pub const handleClipboardPaste = @import("header.zig").handleClipboardPaste;
@@ -67,8 +66,7 @@ const FileOpenState = struct {
         } else blk: {
             // Linux: zenity file chooser
             break :blk io_global.Child.init(
-                &.{ "zenity", "--file-selection", "--title=Open Media File",
-                     "--file-filter=Media files|*.mp4 *.mkv *.avi *.webm *.mov *.flv *.m3u *.m3u8 *.ts *.mp3 *.flac *.wav *.ogg *.m4a *.opus" },
+                &.{ "zenity", "--file-selection", "--title=Open Media File", "--file-filter=Media files|*.mp4 *.mkv *.avi *.webm *.mov *.flv *.m3u *.m3u8 *.ts *.mp3 *.flac *.wav *.ogg *.m4a *.opus" },
                 alloc,
             );
         };
@@ -129,7 +127,7 @@ const FileOpenState = struct {
 pub fn triggerFileOpen() void {
     if (!FileOpenState.running.load(.acquire)) {
         FileOpenState.running.store(true, .release);
-        FileOpenState.thread = std.Thread.spawn(.{}, FileOpenState.dialogWorker, .{}) catch blk: {
+        FileOpenState.thread = @import("../core/workers.zig").spawnLegacy(FileOpenState.dialogWorker, .{}) catch blk: {
             FileOpenState.running.store(false, .release);
             break :blk null;
         };
@@ -146,7 +144,10 @@ pub fn pollFileOpen() void {
             logs.pushLog("info", "open", "Loaded local file", false);
         }
         FileOpenState.pending.store(false, .release);
-        if (FileOpenState.thread) |t| { t.join(); FileOpenState.thread = null; }
+        if (FileOpenState.thread) |t| {
+            t.join();
+            FileOpenState.thread = null;
+        }
     }
 }
 

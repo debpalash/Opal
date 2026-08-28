@@ -31,7 +31,7 @@ pub const PjavTorrent = struct {
     date_len: usize = 0,
     // Metadata from libtorrent probe
     probe_tid: i32 = -1,
-    total_size: i64 = 0,     // bytes, 0 = not yet fetched
+    total_size: i64 = 0, // bytes, 0 = not yet fetched
     torrent_name: [256]u8 = std.mem.zeroes([256]u8),
     torrent_name_len: usize = 0,
     probe_done: bool = false,
@@ -75,7 +75,7 @@ pub fn fetchTorrents(url: []const u8) void {
     S.url_buf[copy_len] = 0;
     S.url_len = copy_len;
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn worker() void {
             defer is_fetching.store(false, .release);
 
@@ -83,8 +83,8 @@ pub fn fetchTorrents(url: []const u8) void {
 
             // Fetch HTML via curl
             const argv = [_][]const u8{
-                "curl", "-sL",
-                "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "curl",       "-sL",
+                "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "--max-time", "15",
                 fetch_url,
             };
@@ -138,7 +138,7 @@ pub fn fetchTorrents(url: []const u8) void {
             }
         }
     }.worker, .{})) |t| {
-        t.detach();
+        @import("../core/workers.zig").release(t);
     } else |_| {
         is_fetching.store(false, .release);
         logs.pushLog("error", "pjav", "Failed to spawn fetch thread", false);
@@ -531,7 +531,10 @@ pub fn renderModal() void {
             .color_text = theme.colors.text_secondary,
         });
 
-        { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
 
         // Probing status
         var all_done = true;
@@ -549,7 +552,10 @@ pub fn renderModal() void {
     }
 
     // Divider
-    { var d = dvui.box(@src(), .{}, theme.optDivider()); d.deinit(); }
+    {
+        var d = dvui.box(@src(), .{}, theme.optDivider());
+        d.deinit();
+    }
 
     // Torrent list
     var scroll = dvui.scrollArea(@src(), .{}, .{
@@ -710,7 +716,10 @@ pub fn renderModal() void {
             }
 
             // Spacer
-            { var sp = dvui.box(@src(), .{}, .{ .id_extra = idx + 5900, .expand = .horizontal }); sp.deinit(); }
+            {
+                var sp = dvui.box(@src(), .{}, .{ .id_extra = idx + 5900, .expand = .horizontal });
+                sp.deinit();
+            }
 
             // Play button — accent style
             if (dvui.button(@src(), "▶ Play", .{}, .{

@@ -60,8 +60,8 @@ fn clearError() void {
 pub fn checkAsync() void {
     if (is_checking) return;
     is_checking = true;
-    if (std.Thread.spawn(.{}, checkWorker, .{})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(checkWorker, .{})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         is_checking = false;
     }
@@ -242,8 +242,8 @@ pub fn downloadAndOpenAsync() void {
         return;
     }
     is_downloading = true;
-    if (std.Thread.spawn(.{}, downloadWorker, .{})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(downloadWorker, .{})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         is_downloading = false;
     }

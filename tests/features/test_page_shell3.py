@@ -345,7 +345,7 @@ def test_eztv_calendar():
 
         # ── Threading / memory ──
         "busy guard":                  "loading.load(.acquire)" in svc and "loading.store(true, .release)" in svc,
-        "detached worker":             "std.Thread.spawn" in svc and ".detach()" in svc,
+        "managed worker":              "spawnLegacy(" in svc and "release(" in svc,
         "big body on the heap":        "alloc.alloc(u8, BODY_CAP)" in svc and "defer alloc.free(body)" in svc,
         "publish count last":          "front.store(back, .release); // publish LAST" in svc,
         # The invalid-free trap: alloc(cap) then returning buf[0..n] is an

@@ -151,11 +151,11 @@ fn kickHealthProbe() void {
     if (HealthProbe.busy.load(.acquire)) return; // one probe in flight
     HealthProbe.busy.store(true, .release);
     HealthProbe.last_check.store(now, .release);
-    const t = std.Thread.spawn(.{}, HealthProbe.worker, .{}) catch {
+    const t = @import("../core/workers.zig").spawnLegacy(HealthProbe.worker, .{}) catch {
         HealthProbe.busy.store(false, .release);
         return;
     };
-    t.detach();
+    @import("../core/workers.zig").release(t);
 }
 
 /// Poll current subtitle text from mpv and tokenize into words.
@@ -183,7 +183,7 @@ pub fn pollSubtitle() void {
                     last_translated_hash = hash;
                     translated_len = 0; // Clear while translating
                     translate_busy = true;
-                    translate_thread = std.Thread.spawn(.{}, translateWorker, .{}) catch {
+                    translate_thread = @import("../core/workers.zig").spawnLegacy(translateWorker, .{}) catch {
                         translate_busy = false;
                         return;
                     };
@@ -284,7 +284,7 @@ pub fn speakWord(word_idx: usize) void {
     speaking_word_idx = @intCast(word_idx);
     tts_busy = true;
 
-    tts_thread = std.Thread.spawn(.{}, ttsWorker, .{word_idx}) catch {
+    tts_thread = @import("../core/workers.zig").spawnLegacy(ttsWorker, .{word_idx}) catch {
         tts_busy = false;
         speaking_word_idx = -1;
         return;
@@ -342,7 +342,7 @@ pub fn speakFullLine() void {
     tts_busy = true;
     speaking_word_idx = -2;
 
-    tts_thread = std.Thread.spawn(.{}, ttsLineWorker, .{}) catch {
+    tts_thread = @import("../core/workers.zig").spawnLegacy(ttsLineWorker, .{}) catch {
         tts_busy = false;
         speaking_word_idx = -1;
         return;
@@ -451,7 +451,7 @@ pub fn triggerASR() void {
     if (!state.app.tts_server_ok) return;
 
     state.app.asr_busy = true;
-    asr_thread = std.Thread.spawn(.{}, asrWorker, .{}) catch {
+    asr_thread = @import("../core/workers.zig").spawnLegacy(asrWorker, .{}) catch {
         state.app.asr_busy = false;
         return;
     };
@@ -572,7 +572,7 @@ pub fn pollDubbing() void {
     state.app.dub_last_hash = hash;
 
     state.app.dub_busy = true;
-    dub_thread = std.Thread.spawn(.{}, dubWorker, .{}) catch {
+    dub_thread = @import("../core/workers.zig").spawnLegacy(dubWorker, .{}) catch {
         state.app.dub_busy = false;
         return;
     };

@@ -90,7 +90,7 @@ var thread: ?std.Thread = null;
 /// Start the watchdog thread. Idempotent — safe to call from init more than once.
 pub fn start() void {
     if (running.swap(true, .acq_rel)) return;
-    thread = std.Thread.spawn(.{}, loop, .{}) catch {
+    thread = @import("../core/workers.zig").spawnLegacy(loop, .{}) catch {
         running.store(false, .release);
         return;
     };

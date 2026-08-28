@@ -1331,7 +1331,7 @@ fn downloadPages(gen: u32) void {
                 page_idx += 1;
                 continue;
             }
-            threads[active] = std.Thread.spawn(.{}, downloadSinglePage, .{ page_idx, gen }) catch null;
+            threads[active] = @import("../core/workers.zig").spawnLegacy(downloadSinglePage, .{ page_idx, gen }) catch null;
             active += 1;
             page_idx += 1;
         }
@@ -3841,7 +3841,7 @@ pub fn toggleNarration() void {
         state.app.comic.narrate_page = state.app.comic.current_page;
 
         if (state.app.comic.narrate_thread) |t| t.join();
-        state.app.comic.narrate_thread = std.Thread.spawn(.{}, narrationThread, .{}) catch {
+        state.app.comic.narrate_thread = @import("../core/workers.zig").spawnLegacy(narrationThread, .{}) catch {
             state.app.comic.narrating = false;
             logs.pushLog("error", "comics", "Failed to start narration thread", true);
             return;
@@ -4079,7 +4079,7 @@ pub fn ocrCurrentPage() void {
     if (state.app.comic.ocr_thread) |t| t.join();
     state.app.comic.ocr_thread = null;
     ocr_busy.store(true, .release);
-    state.app.comic.ocr_thread = std.Thread.spawn(.{}, struct {
+    state.app.comic.ocr_thread = @import("../core/workers.zig").spawnLegacy(struct {
         fn run(page: usize) void {
             defer ocr_busy.store(false, .release);
             ocrPage(page);

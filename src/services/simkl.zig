@@ -20,7 +20,7 @@ pub var enabled: bool = false;
 pub fn checkin(title: []const u8, media_type: []const u8) void {
     if (!enabled or access_token_len == 0 or api_key_len == 0) return;
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn worker(t: []const u8, mt: []const u8) void {
             const alloc = @import("../core/alloc.zig").allocator;
 
@@ -66,14 +66,14 @@ pub fn checkin(title: []const u8, media_type: []const u8) void {
                 logs.pushLog("info", "simkl", "SIMKL history synced", false);
             }
         }
-    }.worker, .{ title, media_type })) |t| t.detach() else |_| {}
+    }.worker, .{ title, media_type })) |t| @import("../core/workers.zig").release(t) else |_| {}
 }
 
 /// Add to watchlist
 pub fn addToWatchlist(title: []const u8) void {
     if (!enabled or access_token_len == 0) return;
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn worker(t: []const u8) void {
             const alloc = @import("../core/alloc.zig").allocator;
 
@@ -116,5 +116,5 @@ pub fn addToWatchlist(title: []const u8) void {
             @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{ cid, auth }) catch return;
             _ = child.wait() catch {};
         }
-    }.worker, .{title})) |t| t.detach() else |_| {}
+    }.worker, .{title})) |t| @import("../core/workers.zig").release(t) else |_| {}
 }

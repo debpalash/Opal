@@ -533,7 +533,7 @@ pub fn handleTranscode(stream: std.Io.net.Stream, rel: []const u8, start_s: u32)
     };
     var input = TranscodeInput{ .source = source, .pipe = child_stdin };
     source_owned = false;
-    const input_thread = std.Thread.spawn(.{}, TranscodeInput.pump, .{&input}) catch {
+    const input_thread = @import("../core/workers.zig").spawnLegacy(TranscodeInput.pump, .{&input}) catch {
         input.pipe.close(io_g.io());
         input.source.close(io_g.io());
         _ = child.kill() catch {};
@@ -569,8 +569,8 @@ pub fn handleTranscode(stream: std.Io.net.Stream, rel: []const u8, start_s: u32)
                 .last_progress_ms = std.atomic.Value(i64).init(io_g.milliTimestamp()),
                 .done = std.atomic.Value(bool).init(false),
             };
-            if (std.Thread.spawn(.{}, TranscodeGuard.watch, .{g})) |th| {
-                th.detach();
+            if (@import("../core/workers.zig").spawnLegacy(TranscodeGuard.watch, .{g})) |th| {
+                @import("../core/workers.zig").release(th);
                 guard = g;
             } else |_| {
                 @import("../core/logs.zig").pushLog("error", "transcode", "watchdog thread failed to spawn", true);

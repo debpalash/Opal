@@ -1335,8 +1335,8 @@ fn fetchSeasons(tmdb_id: i32) void {
     state.app.tmdb.tv_seasons_loading = true;
     const my_gen = tv_gen.load(.acquire);
 
-    if (std.Thread.spawn(.{}, fetchSeasonsThread, .{ tmdb_id, my_gen })) |th| {
-        th.detach(); // never joined — detach to avoid leaking the handle
+    if (@import("../core/workers.zig").spawnLegacy(fetchSeasonsThread, .{ tmdb_id, my_gen })) |th| {
+        @import("../core/workers.zig").release(th); // never joined — detach to avoid leaking the handle
     } else |_| {
         state.app.tmdb.tv_seasons_loading = false;
     }
@@ -1541,8 +1541,8 @@ fn fetchEpisodes(tmdb_id: i32, season_number: i32) void {
     state.app.tmdb.tv_episode_count = 0;
     const my_gen = tv_gen.load(.acquire);
 
-    if (std.Thread.spawn(.{}, fetchEpisodesThread, .{ tmdb_id, season_number, my_gen })) |th| {
-        th.detach(); // never joined — detach to avoid leaking the handle
+    if (@import("../core/workers.zig").spawnLegacy(fetchEpisodesThread, .{ tmdb_id, season_number, my_gen })) |th| {
+        @import("../core/workers.zig").release(th); // never joined — detach to avoid leaking the handle
     } else |_| {
         state.app.tmdb.tv_episodes_loading = false;
     }
@@ -1962,8 +1962,8 @@ pub fn playEpisodeOf(
     @memset(&S.query, 0);
     @memcpy(S.query[0..q.len], q);
     S.qlen = q.len;
-    if (std.Thread.spawn(.{}, S.worker, .{})) |th| {
-        th.detach();
+    if (@import("../core/workers.zig").spawnLegacy(S.worker, .{})) |th| {
+        @import("../core/workers.zig").release(th);
     } else |_| {
         S.busy = false;
         episode_play_pending.store(false, .release);

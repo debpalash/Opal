@@ -131,8 +131,8 @@ pub fn loadPopularOnce() void {
     const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
     query_len = 0; // empty query → popular body
 
-    if (std.Thread.spawn(.{}, fetchWorker, .{ my_gen, true })) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(fetchWorker, .{ my_gen, true })) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         state.app.vndb.is_loading.store(false, .release);
     }
@@ -165,8 +165,8 @@ pub fn searchVndb(query: []const u8) void {
     @memcpy(query_buf[0..n], query[0..n]);
     query_len = n;
 
-    if (std.Thread.spawn(.{}, fetchWorker, .{ my_gen, false })) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(fetchWorker, .{ my_gen, false })) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         state.app.vndb.is_loading.store(false, .release);
     }
@@ -194,8 +194,8 @@ pub fn loadMore() void {
     const my_gen = search_gen.load(.acquire); // stay within the current generation
     const is_popular = current_is_popular;
     const next = current_page + 1;
-    if (std.Thread.spawn(.{}, loadMoreWorker, .{ my_gen, is_popular, next })) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{ my_gen, is_popular, next })) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         loading_more.store(false, .release);
     }
@@ -323,10 +323,10 @@ fn searchTorrents(idx: usize) void {
 /// SEGVs on some ISP TLS resets (see comics.zig).
 fn curlPost(url: []const u8, body: []const u8, cap: usize) ?[]u8 {
     const argv = [_][]const u8{
-        "curl",           "-sL",   "-X",   "POST",
-        "-H",             "Content-Type: application/json",
-        "-A",             agent,   "-d",   body,
-        "--max-time",     "15",    url,
+        "curl", "-sL",                            "-X",         "POST",
+        "-H",   "Content-Type: application/json", "-A",         agent,
+        "-d",   body,                             "--max-time", "15",
+        url,
     };
     var child = io.Child.init(&argv, alloc);
     child.stdout_behavior = .Pipe;

@@ -27,6 +27,14 @@ Rules:
 6. Process work is admitted through the owned supervisor and joined before
    services, shared I/O, or the allocator are destroyed.
 
+`workers.spawn` is the default bounded, joinable path. `workers.spawnLegacy`
+is the single documented compatibility exception for code that still needs a
+native thread handle: callers either join it or relinquish it through
+`workers.release`, while bounded admission and the shutdown barrier track the
+task through its actual completion. Application modules must not call
+`std.Thread.spawn` or raw `.detach()` directly; those operations live only in
+the supervisor and its fixed work-pool implementation.
+
 The headless build may depend on domain, store, adapter, and application
 modules. It must not require DVUI or desktop presentation modules for feature
 logic; presentation selection belongs at the executable composition boundary.

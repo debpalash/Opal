@@ -94,8 +94,8 @@ const Fetch = struct {
         @memcpy(@This().name_buf[0..n], episode_name[0..n]);
         @This().name_len = n;
 
-        if (std.Thread.spawn(.{}, @This().run, .{})) |t| {
-            t.detach();
+        if (@import("../core/workers.zig").spawnLegacy(@This().run, .{})) |t| {
+            @import("../core/workers.zig").release(t);
         } else |_| {
             @This().busy = false;
         }

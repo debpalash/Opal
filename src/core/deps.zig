@@ -243,7 +243,7 @@ pub fn fetchParakeetAsync(v3: bool) void {
             _ = fetchParakeetBlocking(is_v3);
         }
     };
-    if (std.Thread.spawn(.{}, S.worker, .{v3})) |t| t.detach() else |_| {
+    if (@import("workers.zig").spawnLegacy(S.worker, .{v3})) |t| @import("workers.zig").release(t) else |_| {
         flag.store(false, .release);
     }
 }
@@ -304,7 +304,7 @@ pub fn fetchSherpaWhisperAsync() void {
             logs.pushLog("info", "deps", "Sherpa whisper-tiny ready", true);
         }
     };
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {
+    if (@import("workers.zig").spawnLegacy(S.worker, .{})) |t| @import("workers.zig").release(t) else |_| {
         sherpa_model_downloading = false;
     }
 }
@@ -365,7 +365,7 @@ pub fn fetchSherpaTtsAsync() void {
             logs.pushLog("info", "deps", "Sherpa TTS model ready", true);
         }
     };
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {
+    if (@import("workers.zig").spawnLegacy(S.worker, .{})) |t| @import("workers.zig").release(t) else |_| {
         sherpa_tts_downloading = false;
     }
 }
@@ -424,7 +424,7 @@ pub fn fetchSherpaKokoroAsync() void {
             logs.pushLog("info", "deps", "Kokoro model ready (53+ voices)", true);
         }
     };
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {
+    if (@import("workers.zig").spawnLegacy(S.worker, .{})) |t| @import("workers.zig").release(t) else |_| {
         sherpa_kokoro_downloading = false;
     }
 }
@@ -512,7 +512,7 @@ pub fn fetchSherpaStreamAsync() void {
             logs.pushLog("info", "deps", "Streaming Zipformer model ready", true);
         }
     };
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {
+    if (@import("workers.zig").spawnLegacy(S.worker, .{})) |t| @import("workers.zig").release(t) else |_| {
         sherpa_stream_downloading = false;
     }
 }
@@ -555,7 +555,7 @@ pub fn fetchWhisperModelAsync() void {
         }
     };
     if (whisper_model_downloading.swap(true, .acq_rel)) return; // already running
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {
+    if (@import("workers.zig").spawnLegacy(S.worker, .{})) |t| @import("workers.zig").release(t) else |_| {
         whisper_model_downloading.store(false, .release);
     }
 }
@@ -785,7 +785,7 @@ pub fn fetchMlxWhisperModelAsync() void {
             logs.pushLog("info", "deps", "MLX Whisper model ready", true);
         }
     };
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {
+    if (@import("workers.zig").spawnLegacy(S.worker, .{})) |t| @import("workers.zig").release(t) else |_| {
         mlx_whisper_downloading = false;
     }
 }

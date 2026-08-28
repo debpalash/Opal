@@ -46,7 +46,7 @@ def test_anime_schedule():
             for f in ("asp.dayIndexOf(", "asp.weekdayMon0(", "asp.fmtTime(", "asp.weekdayName(")
         ),
         # ── Service: off-thread fetch, mutex publish, atomic loading flag ──
-        "async worker": "fn worker()" in svc and "std.Thread.spawn" in svc and ".detach()" in svc,
+        "async worker": "fn worker()" in svc and "spawnLegacy(" in svc and "release(" in svc,
         "atomic loading flag": "sched_loading.store(true, .release)" in svc,
         "publishes under mutex": "parse_mutex.lock()" in svc,
         "heap fetch buffer": "alloc.alloc(u8," in svc,

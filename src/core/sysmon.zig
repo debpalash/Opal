@@ -82,7 +82,7 @@ pub fn start() void {
     if (!supported) return;
     if (running.swap(true, .acq_rel)) return;
     stop_flag.store(false, .release);
-    sampler_thread = std.Thread.spawn(.{}, sampleLoop, .{}) catch {
+    sampler_thread = @import("workers.zig").spawnLegacy(sampleLoop, .{}) catch {
         running.store(false, .release);
         return;
     };

@@ -723,7 +723,7 @@ pub fn triggerSearch(query_text: []const u8) void {
 
     if (is_searching.load(.acquire)) {
         search_abort.store(true, .release);
-        if (search_thread) |t| t.detach();
+        if (search_thread) |t| @import("../core/workers.zig").release(t);
         search_thread = null;
         is_searching.store(false, .release);
     }
@@ -749,7 +749,7 @@ pub fn triggerSearch(query_text: []const u8) void {
 
     history.addSearchHistory(query_text);
     const query = @import("../core/alloc.zig").allocator.dupe(u8, query_text) catch return;
-    search_thread = std.Thread.spawn(.{}, asyncSearchTask, .{ query, new_gen }) catch {
+    search_thread = @import("../core/workers.zig").spawnLegacy(asyncSearchTask, .{ query, new_gen }) catch {
         @import("../core/alloc.zig").allocator.free(query);
         return;
     };
@@ -2167,7 +2167,7 @@ pub fn loadTorrentToPlayer(magnet_link: []const u8) void {
         };
         const ctx_store = ThreadContext{ .url = url_copy, .url_len = ulen };
 
-        if (std.Thread.spawn(.{}, struct {
+        if (@import("../core/workers.zig").spawnLegacy(struct {
             // Clear the loading flag on the CURRENT active player via a bounds-guarded
             // re-lookup. Never deref a captured *MediaPlayer — it may have been
             // destroy()'d by teardown / single-player collapse during the resolve.
@@ -2271,7 +2271,7 @@ pub fn loadTorrentToPlayer(magnet_link: []const u8) void {
                 logs2.pushLog("error", "search", "No magnet found on detail page", true);
                 @This().clearLoading();
             }
-        }.worker, .{ctx_store})) |t| t.detach() else |_| {
+        }.worker, .{ctx_store})) |t| @import("../core/workers.zig").release(t) else |_| {
             logs.pushLog("error", "search", "Failed to spawn resolver thread", true);
         }
         return;

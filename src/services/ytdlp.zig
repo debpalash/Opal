@@ -105,8 +105,8 @@ var version_busy = std.atomic.Value(bool).init(false);
 pub fn ensureVersion() void {
     if (version_ready.load(.acquire)) return;
     if (version_busy.swap(true, .acq_rel)) return; // one in flight already
-    if (std.Thread.spawn(.{}, versionWorker, .{})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(versionWorker, .{})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         version_busy.store(false, .release);
     }
@@ -206,7 +206,7 @@ pub fn ensureAvailable() void {
     if (@import("../core/io_global.zig").cwdAccess(path, .{})) {
         is_ready = true;
         logs.pushLog("info", "ytdlp", "yt-dlp binary found", false);
-        if (std.Thread.spawn(.{}, verifyWorker, .{})) |t| t.detach() else |_| {}
+        if (@import("../core/workers.zig").spawnLegacy(verifyWorker, .{})) |t| @import("../core/workers.zig").release(t) else |_| {}
         return;
     } else |_| {}
 
@@ -214,7 +214,7 @@ pub fn ensureAvailable() void {
     is_downloading = true;
     logs.pushLog("info", "ytdlp", "Downloading yt-dlp binary...", true);
 
-    download_thread = std.Thread.spawn(.{}, downloadWorker, .{}) catch {
+    download_thread = @import("../core/workers.zig").spawnLegacy(downloadWorker, .{}) catch {
         is_downloading = false;
         return;
     };
@@ -230,7 +230,7 @@ pub fn update() void {
     is_downloading = true;
     is_ready = false;
     logs.pushLog("info", "ytdlp", "Updating yt-dlp...", true);
-    download_thread = std.Thread.spawn(.{}, downloadWorker, .{}) catch {
+    download_thread = @import("../core/workers.zig").spawnLegacy(downloadWorker, .{}) catch {
         is_downloading = false;
         return;
     };

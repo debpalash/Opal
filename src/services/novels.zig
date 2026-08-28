@@ -226,8 +226,8 @@ pub fn searchNovels(query: []const u8) void {
     madara_more.store(true, .release);
     lnwp_more.store(true, .release);
 
-    if (std.Thread.spawn(.{}, searchWorker, .{my_gen})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(searchWorker, .{my_gen})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         state.app.novels.is_loading.store(false, .release);
     }
@@ -497,8 +497,8 @@ pub fn loadMore() void {
     if (loading_more.swap(true, .acq_rel)) return; // lost the race — append already running
     const my_gen = search_gen.load(.acquire);
     const next = current_page + 1;
-    if (std.Thread.spawn(.{}, loadMoreWorker, .{ my_gen, next })) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{ my_gen, next })) |t| {
+        @import("../core/workers.zig").release(t);
         current_page = next; // UI-thread-only write; the worker got `next` by value
     } else |_| {
         loading_more.store(false, .release);
@@ -582,8 +582,8 @@ pub fn openNovel(idx: usize) void {
     parse_mutex.unlock();
 
     const my_gen = chapters_gen.fetchAdd(1, .acq_rel) + 1;
-    if (std.Thread.spawn(.{}, chaptersWorker, .{my_gen})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(chaptersWorker, .{my_gen})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         state.app.novels.chapters_loading.store(false, .release);
     }
@@ -857,8 +857,8 @@ pub fn openChapter(idx: usize) void {
     saveResume(idx);
 
     const my_gen = text_gen.fetchAdd(1, .acq_rel) + 1;
-    if (std.Thread.spawn(.{}, textWorker, .{my_gen})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(textWorker, .{my_gen})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         state.app.novels.text_loading.store(false, .release);
     }
@@ -1035,8 +1035,8 @@ pub fn openDeepLink(link: []const u8) void {
     state.app.router.navigate(.browse);
 
     const my_gen = chapters_gen.fetchAdd(1, .acq_rel) + 1;
-    if (std.Thread.spawn(.{}, chaptersWorker, .{my_gen})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(chaptersWorker, .{my_gen})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         state.app.novels.chapters_loading.store(false, .release);
     }
@@ -1415,7 +1415,7 @@ fn renderReaderView() void {
         });
         defer bar.deinit();
 
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"list", .{}, .{}, .{
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.list, .{}, .{}, .{
             .id_extra = 1,
             .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,

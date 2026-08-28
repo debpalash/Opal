@@ -66,12 +66,12 @@ pub fn onPlaybackEvent(kind: EventKind) void {
     // Copy the trigger into a module static for the detached worker.
     S.trigger_kind = kind;
 
-    const t = std.Thread.spawn(.{}, S.worker, .{}) catch {
+    const t = @import("../core/workers.zig").spawnLegacy(S.worker, .{}) catch {
         // Couldn't spawn — release the slot so future events can try.
         S.busy.store(false, .release);
         return;
     };
-    t.detach();
+    @import("../core/workers.zig").release(t);
 }
 
 // ── Internals ──────────────────────────────────────────────────────────────

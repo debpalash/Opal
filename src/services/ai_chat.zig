@@ -365,7 +365,7 @@ pub fn stopAll() void {
     // Kill audio playback + recording in a background thread to avoid blocking
     // render. stopAllAudio targets the real players (say/afplay/aplay), which
     // the old `pkill -f say` missed for Kokoro/Piper backends.
-    const t = std.Thread.spawn(.{}, struct {
+    const t = @import("../core/workers.zig").spawnLegacy(struct {
         fn run() void {
             voice.stopAllAudio();
             @import("../core/io_global.zig").killByCommandLine("rec.*opal_ai_mic", false);
@@ -373,7 +373,7 @@ pub fn stopAll() void {
     }.run, .{}) catch {
         return;
     };
-    t.detach();
+    @import("../core/workers.zig").release(t);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1274,13 +1274,13 @@ pub fn regenerateFrom(assistant_idx: usize) void {
     phase = .waiting_server;
     last_error_len = 0;
 
-    llm_thread = std.Thread.spawn(.{}, ai_context.generateResponse, .{}) catch {
+    llm_thread = @import("../core/workers.zig").spawnLegacy(ai_context.generateResponse, .{}) catch {
         is_generating.store(false, .release);
         phase = .idle;
         setError("Regenerate: failed to spawn thread");
         return;
     };
-    llm_thread.?.detach();
+    @import("../core/workers.zig").release(llm_thread.?);
 }
 
 pub fn trySendMessage() void {
@@ -1355,13 +1355,13 @@ pub fn sendMessage() void {
     is_generating.store(true, .release);
     last_error_len = 0;
 
-    llm_thread = std.Thread.spawn(.{}, ai_context.generateResponse, .{}) catch {
+    llm_thread = @import("../core/workers.zig").spawnLegacy(ai_context.generateResponse, .{}) catch {
         is_generating.store(false, .release);
         if (message_count > 0) message_count -= 1;
         setError("Failed to start AI thread");
         return;
     };
-    llm_thread.?.detach();
+    @import("../core/workers.zig").release(llm_thread.?);
 }
 
 pub fn setError(err: []const u8) void {

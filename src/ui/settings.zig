@@ -37,11 +37,11 @@ const TerminalLauncher = struct {
         const n = @min(script.len, TerminalLauncher.script_buf.len);
         @memcpy(TerminalLauncher.script_buf[0..n], script[0..n]);
         TerminalLauncher.script_len = n;
-        const t = std.Thread.spawn(.{}, worker, .{}) catch {
+        const t = @import("../core/workers.zig").spawnLegacy(worker, .{}) catch {
             busy.store(false, .release);
             return false;
         };
-        t.detach();
+        @import("../core/workers.zig").release(t);
         return true;
     }
 };

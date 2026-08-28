@@ -111,7 +111,7 @@ def test_utf8_guard():
     renderers = {
         "src/services/tmdb.zig": "safeUtf8(item.title",
         "src/services/youtube.zig": "safeUtf8(item.title",
-        "src/ui/jellyfin_ui.zig": "safeUtf8(item.name",
+        "src/ui/jellyfin_ui.zig": "safeUtf8Buf(item.name",
         "src/services/comics.zig": "safeUtf8(state.app.comic.title",
         "src/services/search.zig": "safeUtf8(item.name",
     }
@@ -240,7 +240,7 @@ def test_podcasts_radio_default_content():
         "radio routes through pure": "pure.buildPopularUrl(" in rad,
         "radio reuses parseStations": "pure.parseStations(" in rad,
         "radio one-shot latch": "popular_fetched" in rad and "pub fn loadPopularOnce" in rad,
-        "radio fetch is backgrounded": "std.Thread.spawn(.{}, popularWorker" in rad,
+        "radio fetch is backgrounded": "spawnLegacy(popularWorker" in rad,
         # Both curl helpers allocate `cap` bytes and hand back only what was read.
         # Returning `buf[0..n]` is an INVALID FREE under the global DebugAllocator
         # (it checks free size against alloc size) and aborts the process on launch

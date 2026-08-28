@@ -42,7 +42,7 @@ pub fn hostParty() void {
     host_running.store(true, .release);
     client_count = 0;
     chat_count = 0;
-    host_thread = std.Thread.spawn(.{}, hostLoop, .{}) catch null;
+    host_thread = @import("../core/workers.zig").spawnLegacy(hostLoop, .{}) catch null;
     state.showToast("Watch Party hosting on :41596");
     pushChat(">> Party started");
 }
@@ -58,7 +58,7 @@ pub fn joinParty(host_ip: []const u8) void {
     @memcpy(ip_buf[0..host_ip.len], host_ip);
     ip_buf[host_ip.len] = 0;
 
-    client_thread = std.Thread.spawn(.{}, clientLoop, .{ ip_buf, host_ip.len }) catch null;
+    client_thread = @import("../core/workers.zig").spawnLegacy(clientLoop, .{ ip_buf, host_ip.len }) catch null;
 }
 
 pub fn leaveParty() void {
@@ -234,7 +234,7 @@ fn hostLoop() void {
                 }
 
                 // Start reader thread for this client (for chat messages from clients)
-                if (std.Thread.spawn(.{}, hostClientReader, .{conn})) |t| t.detach() else |_| {}
+                if (@import("../core/workers.zig").spawnLegacy(hostClientReader, .{conn})) |t| @import("../core/workers.zig").release(t) else |_| {}
                 break;
             }
         } else {

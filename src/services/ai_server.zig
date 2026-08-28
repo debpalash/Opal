@@ -658,12 +658,12 @@ pub fn startModelDownload() void {
     @memcpy(download_progress_buf[0..dl_str.len], dl_str);
     download_progress_len = dl_str.len;
 
-    const t = std.Thread.spawn(.{}, downloadModelThread, .{}) catch {
+    const t = @import("../core/workers.zig").spawnLegacy(downloadModelThread, .{}) catch {
         model_downloading = false;
         setError("Failed to start download thread");
         return;
     };
-    t.detach();
+    @import("../core/workers.zig").release(t);
 }
 
 fn downloadModelThread() void {
@@ -728,12 +728,12 @@ pub fn installLlamaServer() void {
     if (server_installing) return;
     server_installing = true;
 
-    const t = std.Thread.spawn(.{}, installThread, .{}) catch {
+    const t = @import("../core/workers.zig").spawnLegacy(installThread, .{}) catch {
         server_installing = false;
         setError("Failed to start install thread");
         return;
     };
-    t.detach();
+    @import("../core/workers.zig").release(t);
     state.showToast("Downloading llama-server...");
 }
 
@@ -899,8 +899,8 @@ fn downloadLlamaServer(comptime bin_dir: []const u8, bin_path: []const u8) void 
 }
 
 pub fn doHealthCheck() void {
-    const t = std.Thread.spawn(.{}, healthThread, .{}) catch return;
-    t.detach();
+    const t = @import("../core/workers.zig").spawnLegacy(healthThread, .{}) catch return;
+    @import("../core/workers.zig").release(t);
 }
 
 fn healthThread() void {

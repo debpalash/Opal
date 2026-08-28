@@ -38,7 +38,7 @@ pub fn fetchTrivia(title: []const u8, is_tv: bool, out_buf: *[400]u8, out_len: *
     ctx.out_len = out_len;
     ctx.fetching_flag = fetching_flag;
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn worker(c: Ctx) void {
             defer c.fetching_flag.* = false;
             const t = c.title[0..c.title_len];
@@ -52,7 +52,7 @@ pub fn fetchTrivia(title: []const u8, is_tv: bool, out_buf: *[400]u8, out_len: *
             }
         }
     }.worker, .{ctx})) |th| {
-        th.detach();
+        @import("../core/workers.zig").release(th);
     } else |_| {
         fetching_flag.* = false;
     }

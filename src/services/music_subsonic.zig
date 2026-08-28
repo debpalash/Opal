@@ -258,8 +258,8 @@ pub fn searchMusic(query: []const u8) void {
 
     if (state.app.music.source == SRC_JIOSAAVN) {
         // JioSaavn — public, keyless.
-        if (std.Thread.spawn(.{}, jiosaavnWorker, .{my_gen})) |t| {
-            t.detach();
+        if (@import("../core/workers.zig").spawnLegacy(jiosaavnWorker, .{my_gen})) |t| {
+            @import("../core/workers.zig").release(t);
         } else |_| {
             state.app.music.is_loading.store(false, .release);
         }
@@ -300,8 +300,8 @@ pub fn searchMusic(query: []const u8) void {
 }
 
 fn spawnWorker(comptime f: fn (u32) void, my_gen: u32) void {
-    if (std.Thread.spawn(.{}, f, .{my_gen})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(f, .{my_gen})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         state.app.music.is_loading.store(false, .release);
     }
@@ -645,13 +645,13 @@ pub fn downloadSong(idx: usize) void {
                 var out_tmpl: [256]u8 = undefined;
                 const otmpl = std.fmt.bufPrint(&out_tmpl, "{s}.%(ext)s", .{namep[0..name_len]}) catch return;
                 const argv = [_][]const u8{
-                    ytdlp.binary(),      "-x",
-                    "--audio-format",    "mp3",
-                    "--audio-quality",   "0",
-                    "--embed-metadata",  "--embed-thumbnail",
-                    "--no-playlist",     "--paths",
-                    dirp[0..dir_len],    "-o",
-                    otmpl,               url[0..url_len],
+                    ytdlp.binary(),     "-x",
+                    "--audio-format",   "mp3",
+                    "--audio-quality",  "0",
+                    "--embed-metadata", "--embed-thumbnail",
+                    "--no-playlist",    "--paths",
+                    dirp[0..dir_len],   "-o",
+                    otmpl,              url[0..url_len],
                 };
                 var child = io.Child.init(&argv, alloc);
                 child.stdin_behavior = .Ignore;
@@ -677,8 +677,8 @@ pub fn downloadSong(idx: usize) void {
         @memcpy(S.dirp[0..S.dir_len], dir[0..S.dir_len]);
         S.name_len = @min(name.len, S.namep.len);
         @memcpy(S.namep[0..S.name_len], name[0..S.name_len]);
-        if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
-            t.detach();
+        if (@import("../core/workers.zig").spawnLegacy(S.worker, .{})) |t| {
+            @import("../core/workers.zig").release(t);
             state.showToast("Downloading…");
         } else |_| {
             S.busy = false;

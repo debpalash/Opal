@@ -686,7 +686,7 @@ def test_remote_response_concurrency_boundary():
     wire = _src("src/services/remote_http.zig")
     checks = {
         "global API mutex removed": "api_mutex" not in remote,
-        "connection handlers remain independent": "std.Thread.spawn(.{}, Handler.run" in remote,
+        "connection handlers remain independent": "spawnLegacy(Handler.run" in remote,
         "ordinary writes have deadline": "RESPONSE_WRITE_TIMEOUT_S" in wire
             and "std.Io.Select(WriteEvent)" in wire and "API response write timed out" in wire,
         "player snapshots unlock before SSE writes": "state.players_mutex.unlock();" in remote

@@ -137,7 +137,7 @@ pub fn installEngine() void {
     install_engine_target = active_engine; // snapshot input before spawn
     install_state.store(@intFromEnum(InstallState.running), .release);
     setInstallMsg("Preparing…");
-    if (std.Thread.spawn(.{}, installWorker, .{})) |t| t.detach() else |_| {
+    if (@import("../core/workers.zig").spawnLegacy(installWorker, .{})) |t| @import("../core/workers.zig").release(t) else |_| {
         install_state.store(@intFromEnum(InstallState.failed), .release);
         setInstallMsg("Could not start the installer thread");
     }
@@ -364,8 +364,8 @@ pub fn ensureBridge() void {
     if (bridge_ready.load(.acquire) or bridge_starting.load(.acquire)) return;
     bridge_starting.store(true, .release);
 
-    if (std.Thread.spawn(.{}, startBridgeThread, .{})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(startBridgeThread, .{})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         bridge_starting.store(false, .release);
         logs.pushLog("error", "browser", "Failed to spawn bridge thread", false);
@@ -411,7 +411,7 @@ fn startBridgeThread() void {
     bridge_process = child;
 
     // Start reader thread to process stdout
-    bridge_reader_thread = std.Thread.spawn(.{}, bridgeReaderThread, .{}) catch null;
+    bridge_reader_thread = @import("../core/workers.zig").spawnLegacy(bridgeReaderThread, .{}) catch null;
 
     // Wait for ready signal (up to 15 seconds)
     var waited: usize = 0;
@@ -1050,7 +1050,7 @@ fn enqueueBrowserDownload(url: []const u8, filename: []const u8) void {
     S.path_len = full.len;
 
     S.busy.store(true, .release);
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {
+    if (@import("../core/workers.zig").spawnLegacy(S.worker, .{})) |t| @import("../core/workers.zig").release(t) else |_| {
         S.busy.store(false, .release);
         logs.pushLog("error", "browser", "Could not start the download thread", false);
         return;

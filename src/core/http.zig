@@ -42,7 +42,7 @@ pub const HttpResponse = struct {
     body: []u8,
     len: usize,
     ok: bool,
-    
+
     pub fn deinit(self: *HttpResponse) void {
         _ = self;
         // body points into caller's buffer, no-op
@@ -199,15 +199,15 @@ pub fn fetch(url: []const u8, buf: []u8, opts: HttpOptions) ?[]const u8 {
     // Build headers
     var headers_buf: [8]std.http.Header = undefined;
     var header_count: usize = 0;
-    
+
     headers_buf[header_count] = .{ .name = "User-Agent", .value = opts.user_agent };
     header_count += 1;
-    
+
     if (opts.referer) |ref| {
         headers_buf[header_count] = .{ .name = "Referer", .value = ref };
         header_count += 1;
     }
-    
+
     if (opts.accept) |acc| {
         headers_buf[header_count] = .{ .name = "Accept", .value = acc };
         header_count += 1;
@@ -219,7 +219,7 @@ pub fn fetch(url: []const u8, buf: []u8, opts: HttpOptions) ?[]const u8 {
     }
 
     if (opts.auth_header) |auth| {
-        // e.g. "Authorization: Bearer xxx" -> We construct it inside or split? 
+        // e.g. "Authorization: Bearer xxx" -> We construct it inside or split?
         // We will assume auth_header provides ONLY the value and we use name="Authorization". Wait, Jellyfin uses "X-Emby-Authorization"!
         // Let's assume auth_header is the raw header line like "X-Emby-Authorization: xxx"
         if (std.mem.indexOfScalar(u8, auth, ':')) |colon| {
@@ -230,7 +230,7 @@ pub fn fetch(url: []const u8, buf: []u8, opts: HttpOptions) ?[]const u8 {
             header_count += 1;
         }
     }
-    
+
     // Shared, keep-alive client (see sharedClient). Never deinit'd here.
     const client = sharedClient();
 
@@ -246,7 +246,7 @@ pub fn fetch(url: []const u8, buf: []u8, opts: HttpOptions) ?[]const u8 {
     var wd = Watchdog{ .timeout_ms = @as(i64, effectiveTimeoutSecs(opts.timeout_secs)) * 1000 };
     var wd_thread: ?std.Thread = null;
     if (comptime !is_windows) {
-        wd_thread = std.Thread.spawn(.{}, Watchdog.run, .{&wd}) catch null;
+        wd_thread = @import("workers.zig").spawnLegacy(Watchdog.run, .{&wd}) catch null;
     }
     defer {
         wd.done.store(true, .release);
@@ -281,21 +281,21 @@ pub fn fetch(url: []const u8, buf: []u8, opts: HttpOptions) ?[]const u8 {
             return null;
         };
     }
-    
+
     var redirect_buf: [8 * 1024]u8 = undefined;
     var response = req.receiveHead(&redirect_buf) catch {
         logs.pushLog("warn", "http", "HTTP receive failed", true);
         return null;
     };
-    
+
     if (response.head.status != .ok and response.head.status != .created) {
         return null;
     }
-    
+
     // Read body
     var transfer_buf: [16 * 1024]u8 = undefined;
     const reader = response.reader(&transfer_buf);
-    
+
     // Clamp the read limit to the caller's buffer — never allocate/download more
     // than we can return (a huge response otherwise allocs then gets discarded).
     const read_limit = @min(opts.max_response, buf.len);
@@ -307,7 +307,7 @@ pub fn fetch(url: []const u8, buf: []u8, opts: HttpOptions) ?[]const u8 {
     if (body.len < 2 or body.len > buf.len) {
         return null;
     }
-    
+
     @memcpy(buf[0..body.len], body);
     return buf[0..body.len];
 }
@@ -316,7 +316,7 @@ pub fn fetch(url: []const u8, buf: []u8, opts: HttpOptions) ?[]const u8 {
 pub fn fetchAlloc(url: []const u8, opts: HttpOptions) ?[]u8 {
     var stack_buf: [256 * 1024]u8 = undefined;
     const resp = fetch(url, &stack_buf, opts) orelse return null;
-    
+
     const result = std.heap.c_allocator.alloc(u8, resp.len) catch return null;
     @memcpy(result, resp);
     return result;
@@ -334,10 +334,10 @@ pub fn fetchImage(url: []const u8, buf: []u8) ?[]const u8 {
     // Route through the DPI-bypass proxy (--socks5-hostname 127.0.0.1:<port>)
     // when enabled+running, so image/poster CDNs blocked by SNI still load.
     const base = [_][]const u8{
-        "curl",              "-s",
-        "-L",                "--connect-timeout",
-        "3",                 "--max-time",
-        "15",                "-A",
+        "curl",                                                                                                  "-s",
+        "-L",                                                                                                    "--connect-timeout",
+        "3",                                                                                                     "--max-time",
+        "15",                                                                                                    "-A",
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     };
     var argv: [16][]const u8 = undefined;
@@ -368,19 +368,25 @@ pub fn fetchImage(url: []const u8, buf: []u8) ?[]const u8 {
 pub fn jsonStr(json: []const u8, key: []const u8) ?[]const u8 {
     var kb: [64]u8 = undefined;
     const needle = std.fmt.bufPrint(&kb, "\"{s}\":", .{key}) catch return null;
-    
+
     const idx = std.mem.indexOf(u8, json, needle) orelse return null;
     var start = idx + needle.len;
     while (start < json.len and (json[start] == ' ' or json[start] == '\t')) start += 1;
     if (start >= json.len) return null;
-    
+
     if (json[start] == '"') {
         start += 1;
         var end = start;
         var esc = false;
         while (end < json.len) : (end += 1) {
-            if (esc) { esc = false; continue; }
-            if (json[end] == '\\') { esc = true; continue; }
+            if (esc) {
+                esc = false;
+                continue;
+            }
+            if (json[end] == '\\') {
+                esc = true;
+                continue;
+            }
             if (json[end] == '"') break;
         }
         return json[start..end];

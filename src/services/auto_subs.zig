@@ -125,7 +125,7 @@ pub fn transcribeCurrent() void {
     };
     args.* = .{ .path = media_path };
 
-    if (std.Thread.spawn(.{}, worker, .{args})) |t| t.detach() else |_| {
+    if (@import("../core/workers.zig").spawnLegacy(worker, .{args})) |t| @import("../core/workers.zig").release(t) else |_| {
         alloc.free(args.path);
         alloc.destroy(args);
         in_progress.store(false, .release);

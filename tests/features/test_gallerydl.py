@@ -44,7 +44,7 @@ def test_gallerydl_backend():
         # ── Async worker discipline ──
         "busy guard": "busy: std.atomic.Value(bool)" in svc,
         "copies inputs before spawn": "S.url_len = url.len;" in svc,
-        "thread detached": "t.detach();" in svc,
+        "thread supervised": "release(t);" in svc,
         "never bare spawn": "_ = std.Thread.spawn(" not in svc,
         "heap output buffer": "alloc.alloc(u8," in svc,
         # ── Completion registered into download history ──

@@ -282,11 +282,11 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
                 S.u_len = ul;
                 S.pi = p_idx;
                 S.busy = true;
-                const t = std.Thread.spawn(.{}, S.worker, .{}) catch {
+                const t = @import("../core/workers.zig").spawnLegacy(S.worker, .{}) catch {
                     S.busy = false;
                     return true;
                 };
-                t.detach();
+                @import("../core/workers.zig").release(t);
 
                 var resp_buf2: [64]u8 = undefined;
                 const resp = std.fmt.bufPrint(&resp_buf2, "Switching to {s} quality...", .{quality}) catch "Switching quality...";
@@ -696,11 +696,11 @@ fn dispatchFastPath(raw_input: []const u8, query: []const u8, action: FastPathAc
     @memcpy(t_buf[0..qlen], query[0..qlen]);
 
     // Spawn fast-path thread
-    const t = std.Thread.spawn(.{}, fastPathResolve, .{ t_buf, qlen, chat.message_count - 1, action }) catch {
+    const t = @import("../core/workers.zig").spawnLegacy(fastPathResolve, .{ t_buf, qlen, chat.message_count - 1, action }) catch {
         chat.is_generating.store(false, .release);
         return false;
     };
-    t.detach();
+    @import("../core/workers.zig").release(t);
 
     return true;
 }
@@ -912,8 +912,8 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
                 chat.messages[chat.message_count] = .{ .role = .assistant, .text_len = 0 };
                 chat.message_count += 1;
 
-                const gen_thread = std.Thread.spawn(.{}, generateResponse, .{}) catch return;
-                gen_thread.detach();
+                const gen_thread = @import("../core/workers.zig").spawnLegacy(generateResponse, .{}) catch return;
+                @import("../core/workers.zig").release(gen_thread);
                 return;
             }
         } else if (action == .play_best) {

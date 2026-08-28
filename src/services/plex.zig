@@ -189,10 +189,10 @@ pub fn connect() void {
     if (conn_state.load(.acquire) == .awaiting) return;
     conn_state.store(.awaiting, .release);
     setStatus("Requesting PIN…", .{});
-    (std.Thread.spawn(.{}, pinWorker, .{}) catch {
+    @import("../core/workers.zig").release(@import("../core/workers.zig").spawnLegacy(pinWorker, .{}) catch {
         conn_state.store(.err, .release);
         return;
-    }).detach();
+    });
 }
 
 fn pinWorker() void {
@@ -314,10 +314,10 @@ pub fn fetchSections() void {
     if (!isConnected()) return;
     if (sections_loading.swap(true, .acq_rel)) return; // a worker is already in flight
     sections_last_attempt_s.store(io.timestamp(), .release);
-    (std.Thread.spawn(.{}, fetchSectionsSync, .{}) catch {
+    @import("../core/workers.zig").release(@import("../core/workers.zig").spawnLegacy(fetchSectionsSync, .{}) catch {
         sections_loading.store(false, .release);
         return;
-    }).detach();
+    });
 }
 fn fetchSectionsSync() void {
     defer sections_loading.store(false, .release);
@@ -400,8 +400,8 @@ pub fn fetchItems(section_idx: usize) void {
     };
     S.idx = section_idx;
     S.gen = new_gen;
-    if (std.Thread.spawn(.{}, S.run, .{})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(S.run, .{})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         is_loading.store(false, .release); // never strand the tab "loading"
     }
@@ -517,8 +517,8 @@ pub fn loadMore() void {
     S.start = current_start;
     // Capture (not bump) — an append belongs to the load that's already live.
     S.gen = view_gen.load(.acquire);
-    if (std.Thread.spawn(.{}, S.run, .{})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(S.run, .{})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         loading_more.store(false, .release);
     }

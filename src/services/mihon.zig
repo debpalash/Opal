@@ -199,7 +199,7 @@ pub fn loadRepoUrl(url: []const u8) void {
     if (std.fmt.bufPrint(&body, "{{\"repo\":\"{s}\"}}", .{url[0..n]})) |b| {
         _ = source_config.install("mihon", b);
     } else |_| {}
-    if (std.Thread.spawn(.{}, S.go, .{})) |t| t.detach() else |_| {
+    if (@import("../core/workers.zig").spawnLegacy(S.go, .{})) |t| @import("../core/workers.zig").release(t) else |_| {
         S.busy = false;
     }
 }
@@ -342,7 +342,7 @@ fn setInstalled(pkg: []const u8, want: bool) void {
     Job.pkg_len = k;
     Job.want_install = want;
     Job.busy = true;
-    if (std.Thread.spawn(.{}, Job.go, .{})) |t| t.detach() else |_| {
+    if (@import("../core/workers.zig").spawnLegacy(Job.go, .{})) |t| @import("../core/workers.zig").release(t) else |_| {
         Job.busy = false;
     }
 }
@@ -359,9 +359,12 @@ pub fn renderPanel() void {
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 } });
         defer hdr.deinit();
-        dvui.icon(@src(), "", icons.tvg.lucide.@"puzzle", .{}, .{ .color_text = theme.colors.accent, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 } });
+        dvui.icon(@src(), "", icons.tvg.lucide.puzzle, .{}, .{ .color_text = theme.colors.accent, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 } });
         _ = dvui.label(@src(), "Mihon Extensions", .{}, .{ .color_text = theme.colors.text_primary, .gravity_y = 0.5, .font = dvui.themeGet().font_heading });
-        { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
         if (dvui.button(@src(), "Close", .{}, .{
             .color_fill = theme.colors.bg_elevated,
             .color_text = theme.colors.text_secondary,
@@ -444,7 +447,10 @@ pub fn renderPanel() void {
             .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
         });
-        { var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal }); sp.deinit(); }
+        {
+            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            sp.deinit();
+        }
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &filter_buf }, .placeholder = "Filter…" }, .{
             .min_size_content = .{ .w = 160, .h = 0 },
             .color_fill = theme.colors.bg_elevated,

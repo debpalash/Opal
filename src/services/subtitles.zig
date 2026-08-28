@@ -76,14 +76,14 @@ pub fn searchByQuery(query: []const u8, lang: []const u8) void {
     S.l_len = @min(lang.len, S.l_buf.len);
     @memcpy(S.l_buf[0..S.l_len], lang[0..S.l_len]);
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn work() void {
             defer {
                 is_searching.store(false, .release);
             }
             doSearch(S.q_buf[0..S.q_len], S.l_buf[0..S.l_len]);
         }
-    }.work, .{})) |t| t.detach() else |_| {
+    }.work, .{})) |t| @import("../core/workers.zig").release(t) else |_| {
         is_searching.store(false, .release);
     }
 }
@@ -322,14 +322,14 @@ pub fn downloadSubtitle(file_id: i64) void {
     };
     S.fid = file_id;
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn work() void {
             defer {
                 is_downloading.store(false, .release);
             }
             doDownload(S.fid);
         }
-    }.work, .{})) |t| t.detach() else |_| {
+    }.work, .{})) |t| @import("../core/workers.zig").release(t) else |_| {
         is_downloading.store(false, .release);
     }
 }
@@ -500,12 +500,12 @@ pub fn subdlSearch(query: []const u8, lang: []const u8) void {
     S.l_len = @min(lang.len, S.l_buf.len);
     @memcpy(S.l_buf[0..S.l_len], lang[0..S.l_len]);
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn work() void {
             defer subdl_is_searching.store(false, .release);
             doSubdlSearch(S.q_buf[0..S.q_len], S.l_buf[0..S.l_len]);
         }
-    }.work, .{})) |t| t.detach() else |_| {
+    }.work, .{})) |t| @import("../core/workers.zig").release(t) else |_| {
         subdl_is_searching.store(false, .release);
     }
 }
@@ -622,12 +622,12 @@ pub fn subdlDownload(idx: usize) void {
     S.url_len = r.url_len;
     @memcpy(S.url[0..S.url_len], r.url[0..S.url_len]);
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn work() void {
             defer subdl_is_downloading.store(false, .release);
             doSubdlDownload(S.url[0..S.url_len]);
         }
-    }.work, .{})) |t| t.detach() else |_| {
+    }.work, .{})) |t| @import("../core/workers.zig").release(t) else |_| {
         subdl_is_downloading.store(false, .release);
     }
 }

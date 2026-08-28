@@ -138,7 +138,7 @@ pub fn installAsync() void {
     }
     if (setup_state.swap(@intFromEnum(SetupState.running), .acq_rel) == @intFromEnum(SetupState.running)) return;
     setMsg("Preparing voice setup…");
-    if (std.Thread.spawn(.{}, installWorker, .{})) |t| t.detach() else |_| {
+    if (@import("../core/workers.zig").spawnLegacy(installWorker, .{})) |t| @import("../core/workers.zig").release(t) else |_| {
         setup_state.store(@intFromEnum(SetupState.failed), .release);
         setMsg("Could not start the voice installer");
     }

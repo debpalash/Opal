@@ -57,12 +57,12 @@ pub fn start(path: []const u8) bool {
     // Register before spawning so shutdown cannot observe zero active workers
     // in the gap between spawn and the new thread entering its body.
     workers.enter();
-    const thread = std.Thread.spawn(.{}, run, .{args}) catch {
+    const thread = @import("../core/workers.zig").spawnLegacy(run, .{args}) catch {
         workers.leave();
         allocator.destroy(args);
         return false;
     };
-    thread.detach();
+    @import("../core/workers.zig").release(thread);
     return true;
 }
 

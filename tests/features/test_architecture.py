@@ -3,6 +3,8 @@
 These checks are deliberately labelled as source-wiring tests. Runtime and
 socket behavior belongs to the opt-in live test tier.
 """
+import os
+
 from .harness import *  # noqa: F401,F403
 
 
@@ -61,6 +63,26 @@ def test_owned_worker_supervisor():
         name: _src(f"src/services/{name}.zig")
         for name in ("podcasts", "jellyfin", "anime", "comics", "youtube")
     }
+    unmanaged_spawns = []
+    detached_without_seam = []
+    src_root = os.path.join(PROJECT_DIR, "src")
+    raw_spawn_allowlist = {
+        os.path.normpath(os.path.join(src_root, "core/workers.zig")),
+        os.path.normpath(os.path.join(src_root, "core/work_pool.zig")),
+        # Pure unit-test fixture: all six handles are joined in the test itself.
+        os.path.normpath(os.path.join(src_root, "services/resolver_lifecycle_pure.zig")),
+    }
+    for root, _, files in os.walk(src_root):
+        for filename in files:
+            if not filename.endswith(".zig"):
+                continue
+            path = os.path.normpath(os.path.join(root, filename))
+            source = open(path).read()
+            code_lines = [line for line in source.splitlines() if not line.lstrip().startswith("//")]
+            if path not in raw_spawn_allowlist and any("std.Thread.spawn" in line for line in code_lines):
+                unmanaged_spawns.append(os.path.relpath(path, PROJECT_DIR))
+            if path not in raw_spawn_allowlist and ".detach()" in source:
+                detached_without_seam.append(os.path.relpath(path, PROJECT_DIR))
     checks = {
         "initialized before services": 'workers.zig").init()' in main,
         "admission is bounded": "MAX_OWNED_THREADS" in workers and "error.WorkQueueFull" in workers,
@@ -69,6 +91,10 @@ def test_owned_worker_supervisor():
         "slow diagnostic": "waiting for {d} owned" in workers,
         "critical verticals migrated": all(".detach()" not in source for source in verticals.values()),
         "startup migrated": ")) |t| t.detach()" not in main,
+        "no unmanaged application spawns": not unmanaged_spawns,
+        "detach compatibility is tracked": not detached_without_seam,
+        "legacy admission bounded": "MAX_LEGACY_TASKS" in workers
+            and "previous >= MAX_LEGACY_TASKS" in workers,
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:

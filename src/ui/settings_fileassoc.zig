@@ -10,44 +10,44 @@ const TRANSPARENT: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
 const is_macos = builtin.os.tag == .macos;
 
 const DESKTOP_ID = "opal.desktop";
-const BUNDLE_ID  = "com.debpalash.opal";
+const BUNDLE_ID = "com.debpalash.opal";
 
 const MimeGroup = struct {
-    label:   []const u8,
-    desc:    []const u8,
-    mimes:   []const []const u8,      // Linux MIME types
-    utis:    []const []const u8,      // macOS UTI identifiers
+    label: []const u8,
+    desc: []const u8,
+    mimes: []const []const u8, // Linux MIME types
+    utis: []const []const u8, // macOS UTI identifiers
     id_base: usize,
 };
 
 // ── Linux MIME types ──────────────────────────────────────
-const VIDEO_MIMES    = &[_][]const u8{ "video/mp4","video/x-matroska","video/x-msvideo","video/webm","video/quicktime","video/mpeg","video/ogg","video/x-flv","video/x-ms-wmv","video/3gpp" };
-const AUDIO_MIMES    = &[_][]const u8{ "audio/mpeg","audio/flac","audio/ogg","audio/wav","audio/x-wav","audio/aac","audio/mp4","audio/x-m4a","audio/opus","audio/webm" };
-const TORRENT_MIMES  = &[_][]const u8{ "application/x-bittorrent","x-scheme-handler/magnet" };
-const PLAYLIST_MIMES = &[_][]const u8{ "audio/x-mpegurl","application/x-mpegurl","audio/mpegurl","application/vnd.apple.mpegurl" };
-const COMICS_MIMES   = &[_][]const u8{ "application/x-cbz","application/x-cbr","application/x-cb7","application/x-cbt","application/vnd.comicbook+zip","application/vnd.comicbook-rar" };
+const VIDEO_MIMES = &[_][]const u8{ "video/mp4", "video/x-matroska", "video/x-msvideo", "video/webm", "video/quicktime", "video/mpeg", "video/ogg", "video/x-flv", "video/x-ms-wmv", "video/3gpp" };
+const AUDIO_MIMES = &[_][]const u8{ "audio/mpeg", "audio/flac", "audio/ogg", "audio/wav", "audio/x-wav", "audio/aac", "audio/mp4", "audio/x-m4a", "audio/opus", "audio/webm" };
+const TORRENT_MIMES = &[_][]const u8{ "application/x-bittorrent", "x-scheme-handler/magnet" };
+const PLAYLIST_MIMES = &[_][]const u8{ "audio/x-mpegurl", "application/x-mpegurl", "audio/mpegurl", "application/vnd.apple.mpegurl" };
+const COMICS_MIMES = &[_][]const u8{ "application/x-cbz", "application/x-cbr", "application/x-cb7", "application/x-cbt", "application/vnd.comicbook+zip", "application/vnd.comicbook-rar" };
 
 // ── macOS UTI identifiers ─────────────────────────────────
-const VIDEO_UTIS    = &[_][]const u8{ "public.movie","public.video","public.mpeg-4","com.apple.quicktime-movie","public.avi","org.matroska.mkv","org.webmproject.webm","com.adobe.flash.video","public.mpeg","public.mpeg-2-video","com.microsoft.windows-media-wmv","public.mpeg-2-transport-stream" };
-const AUDIO_UTIS    = &[_][]const u8{ "public.audio","public.mp3","public.mpeg-4-audio","com.apple.m4a-audio","org.xiph.flac","org.xiph.ogg-vorbis","org.xiph.opus","com.microsoft.waveform-audio","public.aiff-audio","com.microsoft.windows-media-wma" };
-const TORRENT_UTIS  = &[_][]const u8{ "org.bittorrent.torrent" };
-const PLAYLIST_UTIS = &[_][]const u8{ "public.m3u-playlist","public.pls-playlist" };
-const COMICS_UTIS   = &[_][]const u8{ "com.yacreader.cbz","com.yacreader.cbr" };
+const VIDEO_UTIS = &[_][]const u8{ "public.movie", "public.video", "public.mpeg-4", "com.apple.quicktime-movie", "public.avi", "org.matroska.mkv", "org.webmproject.webm", "com.adobe.flash.video", "public.mpeg", "public.mpeg-2-video", "com.microsoft.windows-media-wmv", "public.mpeg-2-transport-stream" };
+const AUDIO_UTIS = &[_][]const u8{ "public.audio", "public.mp3", "public.mpeg-4-audio", "com.apple.m4a-audio", "org.xiph.flac", "org.xiph.ogg-vorbis", "org.xiph.opus", "com.microsoft.waveform-audio", "public.aiff-audio", "com.microsoft.windows-media-wma" };
+const TORRENT_UTIS = &[_][]const u8{"org.bittorrent.torrent"};
+const PLAYLIST_UTIS = &[_][]const u8{ "public.m3u-playlist", "public.pls-playlist" };
+const COMICS_UTIS = &[_][]const u8{ "com.yacreader.cbz", "com.yacreader.cbr" };
 
 const mime_groups = [_]MimeGroup{
-    .{ .label = "Video",            .desc = "mp4, mkv, avi, webm, mov",    .mimes = VIDEO_MIMES,    .utis = VIDEO_UTIS,    .id_base = 70000 },
-    .{ .label = "Audio",            .desc = "mp3, flac, ogg, wav, aac",    .mimes = AUDIO_MIMES,    .utis = AUDIO_UTIS,    .id_base = 71000 },
-    .{ .label = "Torrent / Magnet", .desc = ".torrent + magnet: links",    .mimes = TORRENT_MIMES,  .utis = TORRENT_UTIS,  .id_base = 72000 },
-    .{ .label = "Playlists (M3U)",  .desc = "m3u, m3u8 playlist files",    .mimes = PLAYLIST_MIMES, .utis = PLAYLIST_UTIS, .id_base = 73000 },
-    .{ .label = "Comics",           .desc = "cbz, cbr archives",           .mimes = COMICS_MIMES,   .utis = COMICS_UTIS,   .id_base = 74000 },
+    .{ .label = "Video", .desc = "mp4, mkv, avi, webm, mov", .mimes = VIDEO_MIMES, .utis = VIDEO_UTIS, .id_base = 70000 },
+    .{ .label = "Audio", .desc = "mp3, flac, ogg, wav, aac", .mimes = AUDIO_MIMES, .utis = AUDIO_UTIS, .id_base = 71000 },
+    .{ .label = "Torrent / Magnet", .desc = ".torrent + magnet: links", .mimes = TORRENT_MIMES, .utis = TORRENT_UTIS, .id_base = 72000 },
+    .{ .label = "Playlists (M3U)", .desc = "m3u, m3u8 playlist files", .mimes = PLAYLIST_MIMES, .utis = PLAYLIST_UTIS, .id_base = 73000 },
+    .{ .label = "Comics", .desc = "cbz, cbr archives", .mimes = COMICS_MIMES, .utis = COMICS_UTIS, .id_base = 74000 },
 };
 
 // ── Background-thread state ────────────────────────────────
 const AssocState = struct {
-    mutex:          @import("../core/sync.zig").Mutex = .{},
-    status:         [mime_groups.len]bool = [_]bool{false} ** mime_groups.len,
-    checking:       bool = false,
-    last_check_ms:  i64  = 0,
+    mutex: @import("../core/sync.zig").Mutex = .{},
+    status: [mime_groups.len]bool = [_]bool{false} ** mime_groups.len,
+    checking: bool = false,
+    last_check_ms: i64 = 0,
     action_pending: bool = false,
 };
 
@@ -120,51 +120,71 @@ fn bgGroupAction(act: GroupAction) void {
 
 fn triggerCheck() void {
     g.mutex.lock();
-    if (g.checking) { g.mutex.unlock(); return; }
+    if (g.checking) {
+        g.mutex.unlock();
+        return;
+    }
     g.checking = true;
     g.mutex.unlock();
-    const t = std.Thread.spawn(.{}, bgCheckAll, .{{}}) catch {
-        g.mutex.lock(); g.checking = false; g.mutex.unlock();
+    const t = @import("../core/workers.zig").spawnLegacy(bgCheckAll, .{{}}) catch {
+        g.mutex.lock();
+        g.checking = false;
+        g.mutex.unlock();
         return;
     };
-    t.detach();
+    @import("../core/workers.zig").release(t);
 }
 
 fn triggerRegisterAll() void {
     g.mutex.lock();
-    if (g.action_pending) { g.mutex.unlock(); return; }
+    if (g.action_pending) {
+        g.mutex.unlock();
+        return;
+    }
     g.action_pending = true;
     g.mutex.unlock();
-    const t = std.Thread.spawn(.{}, bgRegisterAll, .{{}}) catch {
-        g.mutex.lock(); g.action_pending = false; g.mutex.unlock();
+    const t = @import("../core/workers.zig").spawnLegacy(bgRegisterAll, .{{}}) catch {
+        g.mutex.lock();
+        g.action_pending = false;
+        g.mutex.unlock();
         return;
     };
-    t.detach();
+    @import("../core/workers.zig").release(t);
 }
 
 fn triggerUnregisterAll() void {
     g.mutex.lock();
-    if (g.action_pending) { g.mutex.unlock(); return; }
+    if (g.action_pending) {
+        g.mutex.unlock();
+        return;
+    }
     g.action_pending = true;
     g.mutex.unlock();
-    const t = std.Thread.spawn(.{}, bgUnregisterAll, .{{}}) catch {
-        g.mutex.lock(); g.action_pending = false; g.mutex.unlock();
+    const t = @import("../core/workers.zig").spawnLegacy(bgUnregisterAll, .{{}}) catch {
+        g.mutex.lock();
+        g.action_pending = false;
+        g.mutex.unlock();
         return;
     };
-    t.detach();
+    @import("../core/workers.zig").release(t);
 }
 
 fn triggerGroupAction(idx: usize, register: bool) void {
     g.mutex.lock();
-    if (g.action_pending) { g.mutex.unlock(); return; }
+    if (g.action_pending) {
+        g.mutex.unlock();
+        return;
+    }
     g.action_pending = true;
     g.mutex.unlock();
     const act = GroupAction{ .idx = idx, .register = register };
-    const t = std.Thread.spawn(.{}, bgGroupAction, .{act}) catch {
-        g.mutex.lock(); g.action_pending = false; g.mutex.unlock();
+    const t = @import("../core/workers.zig").spawnLegacy(bgGroupAction, .{act}) catch {
+        g.mutex.lock();
+        g.action_pending = false;
+        g.mutex.unlock();
         return;
     };
-    t.detach();
+    @import("../core/workers.zig").release(t);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -175,9 +195,7 @@ fn checkGroupBlockingMac(utis: []const []const u8) bool {
     const allocator = @import("../core/alloc.zig").allocator;
     for (utis) |uti| {
         var script_buf: [512]u8 = undefined;
-        const script = std.fmt.bufPrint(&script_buf,
-            "import Foundation;import CoreServices;let h=LSCopyDefaultRoleHandlerForContentType(\"{s}\" as CFString,.all);print((h?.takeRetainedValue() as String?) ?? \"\")",
-            .{uti}) catch continue;
+        const script = std.fmt.bufPrint(&script_buf, "import Foundation;import CoreServices;let h=LSCopyDefaultRoleHandlerForContentType(\"{s}\" as CFString,.all);print((h?.takeRetainedValue() as String?) ?? \"\")", .{uti}) catch continue;
 
         var child = @import("../core/io_global.zig").Child.init(
             &.{ "swift", "-e", script },
@@ -206,9 +224,7 @@ fn registerGroupBlockingMac(utis: []const []const u8) void {
     const allocator = @import("../core/alloc.zig").allocator;
     for (utis) |uti| {
         var script_buf: [512]u8 = undefined;
-        const script = std.fmt.bufPrint(&script_buf,
-            "import Foundation;import CoreServices;LSSetDefaultRoleHandlerForContentType(\"{s}\" as CFString,.all,\"{s}\" as CFString)",
-            .{ uti, BUNDLE_ID }) catch continue;
+        const script = std.fmt.bufPrint(&script_buf, "import Foundation;import CoreServices;LSSetDefaultRoleHandlerForContentType(\"{s}\" as CFString,.all,\"{s}\" as CFString)", .{ uti, BUNDLE_ID }) catch continue;
 
         var child = @import("../core/io_global.zig").Child.init(
             &.{ "swift", "-e", script },
@@ -226,9 +242,7 @@ fn unregisterGroupBlockingMac(utis: []const []const u8) void {
     const allocator = @import("../core/alloc.zig").allocator;
     for (utis) |uti| {
         var script_buf: [512]u8 = undefined;
-        const script = std.fmt.bufPrint(&script_buf,
-            "import Foundation;import CoreServices;LSSetDefaultRoleHandlerForContentType(\"{s}\" as CFString,.all,\"\" as CFString)",
-            .{uti}) catch continue;
+        const script = std.fmt.bufPrint(&script_buf, "import Foundation;import CoreServices;LSSetDefaultRoleHandlerForContentType(\"{s}\" as CFString,.all,\"\" as CFString)", .{uti}) catch continue;
 
         var child = @import("../core/io_global.zig").Child.init(
             &.{ "swift", "-e", script },
@@ -327,14 +341,12 @@ fn ensureDesktopFileBlocking() void {
     var fb: [512]u8 = undefined;
     const fp = std.fmt.bufPrintZ(&fb, "{s}/opal.desktop", .{dp}) catch return;
     const ml = "video/mp4;video/x-matroska;video/x-msvideo;video/webm;video/quicktime;video/mpeg;video/ogg;video/x-flv;video/x-ms-wmv;video/3gpp;" ++
-               "audio/mpeg;audio/flac;audio/ogg;audio/wav;audio/x-wav;audio/aac;audio/mp4;audio/x-m4a;audio/opus;audio/webm;" ++
-               "application/x-bittorrent;x-scheme-handler/magnet;" ++
-               "audio/x-mpegurl;application/x-mpegurl;audio/mpegurl;application/vnd.apple.mpegurl;" ++
-               "application/x-cbz;application/x-cbr;application/x-cb7;application/x-cbt;application/vnd.comicbook+zip;application/vnd.comicbook-rar;";
+        "audio/mpeg;audio/flac;audio/ogg;audio/wav;audio/x-wav;audio/aac;audio/mp4;audio/x-m4a;audio/opus;audio/webm;" ++
+        "application/x-bittorrent;x-scheme-handler/magnet;" ++
+        "audio/x-mpegurl;application/x-mpegurl;audio/mpegurl;application/vnd.apple.mpegurl;" ++
+        "application/x-cbz;application/x-cbr;application/x-cb7;application/x-cbt;application/vnd.comicbook+zip;application/vnd.comicbook-rar;";
     var cb: [2560]u8 = undefined;
-    const ct = std.fmt.bufPrint(&cb,
-        "[Desktop Entry]\nName=Opal\nComment=Opal — Play everything\nExec={s} %U\nIcon=opal\nTerminal=false\nType=Application\nCategories=AudioVideo;Video;Audio;Player;\nMimeType={s}\nStartupNotify=true\n",
-        .{ exe, ml }) catch return;
+    const ct = std.fmt.bufPrint(&cb, "[Desktop Entry]\nName=Opal\nComment=Opal — Play everything\nExec={s} %U\nIcon=opal\nTerminal=false\nType=Application\nCategories=AudioVideo;Video;Audio;Player;\nMimeType={s}\nStartupNotify=true\n", .{ exe, ml }) catch return;
     @import("../core/io_global.zig").cwdWriteFile(.{ .sub_path = fp, .data = ct }) catch {};
 }
 
@@ -445,7 +457,10 @@ pub fn render() void {
             // Flexible spacer absorbs the slack so the status + button keep
             // their natural size (label was expanding and squeezing the button
             // to a clipped sliver for long labels like "Torrent / Magnet").
-            { var sp = dvui.box(@src(), .{}, .{ .id_extra = grp.id_base + 6, .expand = .horizontal }); sp.deinit(); }
+            {
+                var sp = dvui.box(@src(), .{}, .{ .id_extra = grp.id_base + 6, .expand = .horizontal });
+                sp.deinit();
+            }
 
             {
                 // Status as quiet text — success only when set, secondary

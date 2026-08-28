@@ -90,7 +90,7 @@ pub fn fetchFeed(idx: usize) void {
     active_feed_idx = idx;
     is_fetching = true;
     fetch_error = false;
-    fetch_thread = std.Thread.spawn(.{}, fetchWorker, .{idx}) catch null;
+    fetch_thread = @import("../core/workers.zig").spawnLegacy(fetchWorker, .{idx}) catch null;
 }
 
 fn fetchWorker(idx: usize) void {

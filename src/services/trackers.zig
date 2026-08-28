@@ -78,11 +78,11 @@ pub fn tick() void {
     if (!needsRefresh()) return;
     if (busy.swap(true, .acq_rel)) return; // a fetch is already running
 
-    const th = std.Thread.spawn(.{}, refreshWorker, .{}) catch {
+    const th = @import("../core/workers.zig").spawnLegacy(refreshWorker, .{}) catch {
         busy.store(false, .release);
         return;
     };
-    th.detach();
+    @import("../core/workers.zig").release(th);
 }
 
 fn cachePath(buf: []u8) []const u8 {

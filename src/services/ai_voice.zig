@@ -226,12 +226,12 @@ pub fn deinit() void {
 pub fn preWarmServers() void {
     if (servers_warming or (voice_server_started and tts_server_started)) return;
     servers_warming = true;
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn run() void {
             ensureVoiceServer();
             ensureTtsServer();
         }
-    }.run, .{})) |t| t.detach() else |_| {}
+    }.run, .{})) |t| @import("../core/workers.zig").release(t) else |_| {}
 }
 
 /// Fast preflight: run `python3 <script> --check`, which verifies the server's
@@ -401,12 +401,12 @@ pub fn toggleMicRecording() void {
         // dropped its transcript into a null callback otherwise.
         @import("ai_chat.zig").ensureInit();
         is_recording.store(true, .release);
-        mic_thread = std.Thread.spawn(.{}, micRecordWorker, .{}) catch {
+        mic_thread = @import("../core/workers.zig").spawnLegacy(micRecordWorker, .{}) catch {
             is_recording.store(false, .release);
             setError("Failed to start mic recording");
             return;
         };
-        mic_thread.?.detach();
+        @import("../core/workers.zig").release(mic_thread.?);
     }
 }
 
@@ -468,13 +468,13 @@ pub fn toggleConversation() void {
         // Loop choice is made on the worker thread by conversationLoopAuto so
         // the (blocking) voice-server deps probe never runs on the UI thread.
         // It prefers the full-duplex event loop, then sherpa streaming, then V1.
-        conv_thread = std.Thread.spawn(.{}, conversationLoopAuto, .{}) catch {
+        conv_thread = @import("../core/workers.zig").spawnLegacy(conversationLoopAuto, .{}) catch {
             conversation_active.store(false, .release);
             setPhase(.idle);
             setError("Failed to start conversation mode");
             return;
         };
-        conv_thread.?.detach();
+        @import("../core/workers.zig").release(conv_thread.?);
     }
 }
 
@@ -757,7 +757,7 @@ fn conversationLoopV2() void {
                             }
                         }
                     };
-                    if (std.Thread.spawn(.{}, S.waiter, .{})) |t| t.detach() else |_| {}
+                    if (@import("../core/workers.zig").spawnLegacy(S.waiter, .{})) |t| @import("../core/workers.zig").release(t) else |_| {}
                 }
             }
         } else {
@@ -1139,11 +1139,11 @@ pub fn speakResponse(text: []const u8) void {
     tts_text_len = slen;
 
     is_speaking.store(true, .release);
-    tts_thread = std.Thread.spawn(.{}, ttsWorker, .{}) catch {
+    tts_thread = @import("../core/workers.zig").spawnLegacy(ttsWorker, .{}) catch {
         is_speaking.store(false, .release);
         return;
     };
-    tts_thread.?.detach();
+    @import("../core/workers.zig").release(tts_thread.?);
 }
 
 fn ttsWorker() void {

@@ -230,7 +230,7 @@ fn spawnFetch(mark_connected: bool) void {
     // see its generation is stale and drop its publish (see fetchMoreSync).
     const my_gen = fetch_gen.fetchAdd(1, .acq_rel) + 1;
 
-    state.app.opds.thread = std.Thread.spawn(.{}, struct {
+    state.app.opds.thread = @import("../core/workers.zig").spawnLegacy(struct {
         fn worker(mc: bool, gen: u32) void {
             defer state.app.opds.is_loading.store(false, .release);
             fetchFeedSync(mc, gen);
@@ -240,7 +240,7 @@ fn spawnFetch(mark_connected: bool) void {
         break :blk null;
     };
     // Detach: the result is observed via state.app.opds, never joined.
-    if (state.app.opds.thread) |t| t.detach();
+    if (state.app.opds.thread) |t| @import("../core/workers.zig").release(t);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -270,8 +270,8 @@ pub fn loadMore() void {
 
     const my_gen = fetch_gen.load(.acquire); // stay within the current generation
 
-    if (std.Thread.spawn(.{}, loadMoreWorker, .{my_gen})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{my_gen})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         loading_more.store(false, .release);
     }

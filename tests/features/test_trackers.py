@@ -113,7 +113,7 @@ def test_stall_reannounce():
         # background was never sampled at all — measured 2026-08-01, over two
         # minutes at 0 bytes with no watchdog activity. A rescue mechanism cannot
         # be gated on the user looking at the window.
-        "runs on its own thread": "std.Thread.spawn(.{}, loop" in svc,
+        "runs on its own thread": "spawnLegacy(loop" in svc,
         "started at init": 'torrent_stall.zig").start()' in main,
         "joined at shutdown": 'torrent_stall.zig").stop()' in main,
         "not ticked from appFrame": 'services/torrent_stall.zig").tick()' not in main,

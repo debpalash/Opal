@@ -256,13 +256,13 @@ fn newKillControl(tree: io.ProcessTree) KillControl {
 fn spawnWatchdog(watchdog: Watchdog) !std.Thread {
     if (builtin.is_test and fail_watchdog_spawn_for_test)
         return error.ThreadQuotaExceeded;
-    return std.Thread.spawn(.{}, Watchdog.run, .{watchdog});
+    return @import("workers.zig").spawnLegacy(Watchdog.run, .{watchdog});
 }
 
 fn spawnStreamWatchdog(watchdog: StreamWatchdog) !std.Thread {
     if (builtin.is_test and fail_watchdog_spawn_for_test)
         return error.ThreadQuotaExceeded;
-    return std.Thread.spawn(.{}, StreamWatchdog.run, .{watchdog});
+    return @import("workers.zig").spawnLegacy(StreamWatchdog.run, .{watchdog});
 }
 
 /// Force the entire tree and synchronously reap its leader. Used specifically
@@ -711,7 +711,7 @@ test "cross-thread stop remains valid after finish starts draining" {
     try process.start();
 
     var observed_finishing = std.atomic.Value(bool).init(false);
-    const stopper = try std.Thread.spawn(.{}, struct {
+    const stopper = try @import("workers.zig").spawnLegacy(struct {
         fn run(p: *StreamProcess, observed: *std.atomic.Value(bool)) void {
             // Synchronize on the atomic transition made at the very start of
             // finish(), then stop while its owner is blocked draining stdout.

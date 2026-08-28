@@ -1163,7 +1163,7 @@ pub const MediaPlayer = struct {
 
         state.showToast("Exporting clip...");
 
-        if (std.Thread.spawn(.{}, struct {
+        if (@import("../core/workers.zig").spawnLegacy(struct {
             fn worker(ec: *ExportCtx) void {
                 defer ctx_alloc.destroy(ec);
                 const io_global = @import("../core/io_global.zig");
@@ -1190,7 +1190,7 @@ pub const MediaPlayer = struct {
                     state.showToast("Clip export failed (ffmpeg error)");
                 }
             }
-        }.worker, .{ectx})) |t| t.detach() else |_| {
+        }.worker, .{ectx})) |t| @import("../core/workers.zig").release(t) else |_| {
             ctx_alloc.destroy(ectx);
             state.showToast("Failed to spawn export thread");
         }

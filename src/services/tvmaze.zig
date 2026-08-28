@@ -86,8 +86,8 @@ pub fn onTvDetailOpen(tmdb_id: i32, title: []const u8) void {
     @memcpy(S.title_buf[0..tl], title[0..tl]);
     S.title_len = tl;
 
-    if (std.Thread.spawn(.{}, worker, .{ S.id, S.g, S.title_buf[0..S.title_len] })) |t| {
-        t.detach(); // never joined — detach to avoid leaking the handle
+    if (@import("../core/workers.zig").spawnLegacy(worker, .{ S.id, S.g, S.title_buf[0..S.title_len] })) |t| {
+        @import("../core/workers.zig").release(t); // never joined — detach to avoid leaking the handle
     } else |_| {
         busy.store(false, .release);
     }

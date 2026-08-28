@@ -114,10 +114,10 @@ pub fn syncOnce() void {
     if (state.app.tmdb.api_key_len == 0) return;
     synced_once = true;
     if (syncing.swap(true, .acq_rel)) return;
-    (std.Thread.spawn(.{}, syncWorker, .{}) catch {
+    @import("../core/workers.zig").release(@import("../core/workers.zig").spawnLegacy(syncWorker, .{}) catch {
         syncing.store(false, .release);
         return;
-    }).detach();
+    });
 }
 
 /// Force a refresh (Settings / manual retry). Ignores the once-per-session latch
@@ -125,10 +125,10 @@ pub fn syncOnce() void {
 pub fn resync() void {
     if (state.app.tmdb.api_key_len == 0) return;
     if (syncing.swap(true, .acq_rel)) return;
-    (std.Thread.spawn(.{}, syncWorker, .{}) catch {
+    @import("../core/workers.zig").release(@import("../core/workers.zig").spawnLegacy(syncWorker, .{}) catch {
         syncing.store(false, .release);
         return;
-    }).detach();
+    });
 }
 
 fn syncWorker() void {
@@ -1040,8 +1040,8 @@ fn warmNextUp() void {
         S.qlen = q.len;
         S.done = true;
         S.busy = true;
-        if (std.Thread.spawn(.{}, S.run, .{})) |t| {
-            t.detach();
+        if (@import("../core/workers.zig").spawnLegacy(S.run, .{})) |t| {
+            @import("../core/workers.zig").release(t);
         } else |_| {
             S.busy = false;
         }

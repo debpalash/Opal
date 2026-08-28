@@ -102,7 +102,7 @@ pub fn authenticate() void {
     state.app.abs.is_loading.store(true, .release);
     state.app.abs.login_error_len = 0;
 
-    state.app.abs.thread = std.Thread.spawn(.{}, struct {
+    state.app.abs.thread = @import("../core/workers.zig").spawnLegacy(struct {
         fn worker() void {
             defer state.app.abs.is_loading.store(false, .release);
 
@@ -173,7 +173,7 @@ pub fn authenticate() void {
         state.app.abs.is_loading.store(false, .release);
         break :blk null;
     };
-    if (state.app.abs.thread) |t| t.detach();
+    if (state.app.abs.thread) |t| @import("../core/workers.zig").release(t);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -183,7 +183,7 @@ pub fn authenticate() void {
 pub fn fetchLibraries() void {
     if (state.app.abs.is_loading.load(.acquire) or !state.app.abs.connected) return;
     state.app.abs.is_loading.store(true, .release);
-    state.app.abs.thread = std.Thread.spawn(.{}, struct {
+    state.app.abs.thread = @import("../core/workers.zig").spawnLegacy(struct {
         fn worker() void {
             defer state.app.abs.is_loading.store(false, .release);
             fetchLibrariesSync();
@@ -192,7 +192,7 @@ pub fn fetchLibraries() void {
         state.app.abs.is_loading.store(false, .release);
         break :blk null;
     };
-    if (state.app.abs.thread) |t| t.detach();
+    if (state.app.abs.thread) |t| @import("../core/workers.zig").release(t);
 }
 
 fn fetchLibrariesSync() void {
@@ -230,7 +230,7 @@ pub fn openLibrary(idx: usize) void {
     current_page = 0;
     more_available = true;
 
-    state.app.abs.thread = std.Thread.spawn(.{}, struct {
+    state.app.abs.thread = @import("../core/workers.zig").spawnLegacy(struct {
         fn worker() void {
             defer state.app.abs.is_loading.store(false, .release);
             const server = state.app.abs.server_url[0..state.app.abs.server_url_len];
@@ -253,7 +253,7 @@ pub fn openLibrary(idx: usize) void {
         state.app.abs.is_loading.store(false, .release);
         break :blk null;
     };
-    if (state.app.abs.thread) |t| t.detach();
+    if (state.app.abs.thread) |t| @import("../core/workers.zig").release(t);
 }
 
 pub fn goToLibraries() void {
@@ -287,8 +287,8 @@ pub fn loadMore() void {
     @memcpy(lib_id_buf[0..lib_id_len], state.app.abs.selected_lib_id[0..lib_id_len]);
     const next_page = current_page + 1;
 
-    if (std.Thread.spawn(.{}, loadMoreWorker, .{ lib_id_buf, lib_id_len, next_page })) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{ lib_id_buf, lib_id_len, next_page })) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         loading_more.store(false, .release);
     }
@@ -427,8 +427,8 @@ const ResumeFetch = struct {
     fn spawn() void {
         if (@This().busy) return; // a fetch is in flight; it already reads the latest id
         @This().busy = true;
-        if (std.Thread.spawn(.{}, @This().run, .{})) |t| {
-            t.detach();
+        if (@import("../core/workers.zig").spawnLegacy(@This().run, .{})) |t| {
+            @import("../core/workers.zig").release(t);
         } else |_| {
             @This().busy = false;
             resume_decided.store(true, .release); // nothing else will resolve it

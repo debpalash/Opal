@@ -30,7 +30,7 @@ pub fn scanDevices() void {
     is_scanning.store(true, .release);
     device_count = 0;
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn worker() void {
             defer is_scanning.store(false, .release);
 
@@ -78,7 +78,7 @@ pub fn scanDevices() void {
                 state.showToast("No cast devices found");
             }
         }
-    }.worker, .{})) |t| t.detach() else |_| {}
+    }.worker, .{})) |t| @import("../core/workers.zig").release(t) else |_| {}
 }
 
 /// Cast `url` to a discovered device.
@@ -102,7 +102,7 @@ pub fn castTo(device_idx: usize, url: []const u8) void {
     const url_copy = alloc.dupe(u8, url) catch return;
     const name_copy = alloc.dupe(u8, device_name) catch return;
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn worker(u: []const u8, dev: []const u8) void {
             defer {
                 is_casting.store(false, .release);
@@ -122,7 +122,7 @@ pub fn castTo(device_idx: usize, url: []const u8) void {
             state.showToast("Casting...");
             _ = child.wait() catch {};
         }
-    }.worker, .{ url_copy, name_copy })) |t| t.detach() else |_| {}
+    }.worker, .{ url_copy, name_copy })) |t| @import("../core/workers.zig").release(t) else |_| {}
 }
 
 /// Cast whatever the active player is showing. CALLER MUST HOLD
@@ -138,7 +138,7 @@ pub fn castActive(device_idx: usize) void {
 
 /// Stop casting
 pub fn stopCast() void {
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn worker() void {
             const argv = [_][]const u8{ "catt", "stop" };
             var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
@@ -148,5 +148,5 @@ pub fn stopCast() void {
             active_device_idx = null;
             state.showToast("Cast stopped");
         }
-    }.worker, .{})) |t| t.detach() else |_| {}
+    }.worker, .{})) |t| @import("../core/workers.zig").release(t) else |_| {}
 }

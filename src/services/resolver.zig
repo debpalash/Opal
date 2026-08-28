@@ -409,8 +409,8 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
                     f(wq, wqlen);
                 }
             };
-            if (std.Thread.spawn(.{}, Wrap.run, .{ resolver_query, resolver_query_len, run_id })) |t| {
-                t.detach();
+            if (@import("../core/workers.zig").spawnLegacy(Wrap.run, .{ resolver_query, resolver_query_len, run_id })) |t| {
+                @import("../core/workers.zig").release(t);
             } else |_| {
                 // resolve() owns lifecycle_mutex here, so this failure belongs
                 // to the run being initialized and cannot race a successor.

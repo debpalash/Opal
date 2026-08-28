@@ -175,7 +175,7 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
         S.q_len = 0;
     }
 
-    state.app.tmdb.thread = std.Thread.spawn(.{}, struct {
+    state.app.tmdb.thread = @import("../core/workers.zig").spawnLegacy(struct {
         fn worker() void {
             defer {
                 state.app.tmdb.is_loading.store(false, .release);
@@ -218,7 +218,7 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
         state.app.tmdb.is_loading.store(false, .release);
         break :blk null;
     };
-    if (state.app.tmdb.thread) |t| t.detach(); // never joined — detach to avoid leaking the handle
+    if (state.app.tmdb.thread) |t| @import("../core/workers.zig").release(t); // never joined — detach to avoid leaking the handle
 }
 
 fn buildCinemetaUrl(buf: *[512]u8, content_type: []const u8, mode: FetchMode, query: []const u8, cat: state.TmdbCategory, genre_idx: usize, page: u32) ?[]const u8 {

@@ -29,7 +29,7 @@ def test_render_hot_paths_and_drop_ingest():
         ),
         "video sizing uses snapshot": "playbackSnapshot()" in grid and "renderSize(" in grid,
         "video sizing IPC removed": 'mpv_get_property(p.mpv_ctx, "dwidth"' not in grid,
-        "drop IO runs on worker": "std.Thread.spawn" in drop and "scanDirectory" in drop,
+        "drop IO runs on worker": "spawnLegacy(" in drop and "scanDirectory" in drop,
         "drop scan is bounded": "max_folder_entries" in drop and "workers.isQuitting()" in drop,
         "old frame scan removed": "scanDirForMedia" not in main and "isDirectory" not in main,
         "frame mailboxes atomic": "std.atomic.Value(bool)" in state

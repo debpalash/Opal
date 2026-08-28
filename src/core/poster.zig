@@ -118,7 +118,6 @@ fn cacheBytesLocked() u64 {
     return if (v > 0) @intCast(v) else 0;
 }
 
-
 /// Drop the oldest posters until the cache fits `budget`. Deletes in batches
 /// rather than one statement per row, and re-measures between batches so a run
 /// of unusually large blobs can't leave it still over budget.
@@ -205,7 +204,7 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
     var url_buf: [1024]u8 = undefined;
     @memcpy(url_buf[0..url.len], url);
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("workers.zig").spawnLegacy(struct {
         fn worker(args: Args) void {
             defer args.flag.* = false;
             defer _ = in_flight.fetchSub(1, .acq_rel);
@@ -271,7 +270,7 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
             if (@import("state.zig").app.dvui_win) |win| dvui.refresh(win, @src(), null);
         }
     }.worker, .{Args{ .url_buf = url_buf, .url_len = url.len, .pix = pixels_out, .w = w_out, .h = h_out, .flag = fetching_flag }})) |t| {
-        t.detach();
+        @import("workers.zig").release(t);
     } else |_| {
         fetching_flag.* = false;
         _ = in_flight.fetchSub(1, .acq_rel); // spawn failed — release the slot we reserved

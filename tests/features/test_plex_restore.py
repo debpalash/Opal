@@ -86,7 +86,7 @@ def test_plex_restored_session_loads_library():
     fetch_items = svc.split("pub fn fetchItems(")[1].split("\npub fn ")[0] if "pub fn fetchItems(" in svc else ""
     checks["fetchItems resets before spawning (not in the worker)"] = (
         "beginSectionLoad()" in fetch_items
-        and fetch_items.index("beginSectionLoad()") < fetch_items.index("Thread.spawn")
+        and fetch_items.index("beginSectionLoad()") < fetch_items.index("spawnLegacy(")
     )
     checks["reset claims is_loading synchronously"] = "is_loading.store(true" in svc.split("fn beginSectionLoad()")[1][:200]
     checks["a failed spawn doesn't strand the tab loading"] = (

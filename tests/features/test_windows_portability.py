@@ -460,7 +460,7 @@ def test_storage_scan_is_async():
     m = _re.search(r"pub fn scanAsync\(\) void \{(.*?)\n\}", svc, _re.S)
     if not m:
         return "fail", "storage_usage has no scanAsync()"
-    if "Thread.spawn" not in m.group(1):
+    if "spawnLegacy(" not in m.group(1):
         return "fail", "scanAsync does not spawn a worker — it would block the frame"
     if "scanning.load(.acquire)" not in m.group(1):
         return "fail", "scanAsync has no in-flight guard; a rescan could stack walks"
@@ -604,7 +604,7 @@ def test_ytdlp_verifies_execution():
         "clears the binary() cache": "resolved_done = false" in body,
         "tells the user": 'logs.pushLog(' in body,
         # ~20s cold start on the macOS standalone build — never on the UI thread.
-        "verification runs off-thread": "std.Thread.spawn(.{}, verifyWorker" in src,
+        "verification runs off-thread": "spawnLegacy(verifyWorker" in src,
     }
     bad = [k for k, v in checks.items() if not v]
     if bad:

@@ -209,8 +209,8 @@ pub fn fetch(url: []const u8) bool {
     S.dest_len = dest.len;
 
     S.busy.store(true, .release);
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(S.worker, .{})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         S.busy.store(false, .release);
         logs.pushLog("error", "gallerydl", "Could not start gallery-dl thread", true);

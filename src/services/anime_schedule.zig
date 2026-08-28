@@ -34,8 +34,8 @@ pub fn loadSchedule() void {
     if (busy) return;
     busy = true;
     state.app.anime.sched_loading.store(true, .release);
-    if (std.Thread.spawn(.{}, worker, .{})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(worker, .{})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         state.app.anime.sched_loading.store(false, .release);
         busy = false;
@@ -76,10 +76,10 @@ fn worker() void {
     defer alloc.free(buf);
 
     var child = io.Child.init(&.{
-        "curl",   "-s",                             "--max-time", "15",
-        "-X",     "POST",                           ANILIST_API,  "-H",
-        "Content-Type: application/json",           "-H",         "Accept: application/json",
-        "-d",     gql,
+        "curl",                           "-s",   "--max-time",               "15",
+        "-X",                             "POST", ANILIST_API,                "-H",
+        "Content-Type: application/json", "-H",   "Accept: application/json", "-d",
+        gql,
     }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;

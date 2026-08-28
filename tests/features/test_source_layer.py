@@ -729,7 +729,7 @@ def test_resolver_sink():
         # Trigger, bounded.
         "triggered from Watching": "warmNextUp();" in lib,
         "one show, once": "if (S.done or S.busy) return;" in lib,
-        "off the UI thread": "std.Thread.spawn(.{}, S.run" in lib,
+        "off the UI thread": "spawnLegacy(S.run" in lib,
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:

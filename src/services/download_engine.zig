@@ -495,13 +495,13 @@ fn schedule() void {
         const token = slots[idx].run_token.load(.acquire);
         mu.unlock();
 
-        const t = std.Thread.spawn(.{}, coordinate, .{ idx, token }) catch {
+        const t = @import("../core/workers.zig").spawnLegacy(coordinate, .{ idx, token }) catch {
             mu.lock();
             slots[idx].status = .queued;
             mu.unlock();
             return;
         };
-        t.detach();
+        @import("../core/workers.zig").release(t);
     }
 }
 
@@ -694,7 +694,7 @@ fn coordinate(idx: usize, token: u32) void {
     // ── Spawn segment workers ──
     var threads: [dp.MAX_SEGMENTS]?std.Thread = @splat(null);
     for (0..seg_count) |si| {
-        threads[si] = std.Thread.spawn(.{}, segmentWorker, .{ idx, token, si }) catch null;
+        threads[si] = @import("../core/workers.zig").spawnLegacy(segmentWorker, .{ idx, token, si }) catch null;
         if (threads[si] == null) d.seg_failed[si].store(true, .release);
     }
 

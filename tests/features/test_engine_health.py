@@ -381,7 +381,7 @@ def stall_watchdog_is_not_frame_driven():
     mn = _src("src/main.zig")
 
     checks = {
-        "has its own thread": "std.Thread.spawn(.{}, loop" in ts,
+        "has its own thread": "spawnLegacy(loop" in ts,
         "started at init": "torrent_stall.zig\").start();" in mn,
         "joined at shutdown": "torrent_stall.zig\").stop();" in mn,
         "stop joins the thread": "t.join();" in ts,

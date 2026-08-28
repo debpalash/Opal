@@ -147,8 +147,8 @@ pub fn probe(kind: []const u8, url: []const u8) void {
     var a: Args = .{ .buf = undefined, .len = url.len, .kind = undefined, .kind_len = @min(kind.len, KIND_NAME_MAX) };
     @memcpy(a.buf[0..url.len], url);
     @memcpy(a.kind[0..a.kind_len], kind[0..a.kind_len]);
-    if (std.Thread.spawn(.{}, probeWorker, .{a})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(probeWorker, .{a})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         _ = probe_inflight.fetchSub(1, .acq_rel);
         // A failed spawn is not an attempt. Remove the marker so the next

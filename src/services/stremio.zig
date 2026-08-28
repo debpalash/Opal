@@ -18,7 +18,7 @@ pub const Addon = struct {
     desc_len: usize = 0,
     url: [256]u8 = std.mem.zeroes([256]u8),
     url_len: usize = 0,
-    types: [64]u8 = std.mem.zeroes([64]u8),  // "movie,series"
+    types: [64]u8 = std.mem.zeroes([64]u8), // "movie,series"
     types_len: usize = 0,
     installed: bool = false,
 };
@@ -50,7 +50,7 @@ pub fn fetchCatalog() void {
     is_loading = true;
     addon_count = 0;
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn worker() void {
             defer is_loading = false;
 
@@ -135,7 +135,7 @@ pub fn fetchCatalog() void {
 
             logs.pushLog("info", "stremio", "Catalog loaded", false);
         }
-    }.worker, .{})) |t| t.detach() else |_| {}
+    }.worker, .{})) |t| @import("../core/workers.zig").release(t) else |_| {}
 }
 
 /// Ensure at least the well-known addons are installed so streaming sources
@@ -329,7 +329,7 @@ pub fn queryStreams(imdb_id: []const u8, media_type: []const u8) void {
     const type_len = @min(media_type.len, 15);
     @memcpy(type_buf[0..type_len], media_type[0..type_len]);
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn worker(id: [32]u8, idl: usize, mt: [16]u8, mtl: usize) void {
             defer stream_loading = false;
 
@@ -411,5 +411,5 @@ pub fn queryStreams(imdb_id: []const u8, media_type: []const u8) void {
                 logs.pushLog("info", "stremio", "No streams found", false);
             }
         }
-    }.worker, .{ id_buf, id_len, type_buf, type_len })) |t| t.detach() else |_| {}
+    }.worker, .{ id_buf, id_len, type_buf, type_len })) |t| @import("../core/workers.zig").release(t) else |_| {}
 }

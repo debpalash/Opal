@@ -206,11 +206,11 @@ pub fn refresh() ApplyResult {
     status.store(.fetching, .release);
     catalog_mutex.unlock();
     setMsg("Fetching…", .{});
-    const t = std.Thread.spawn(.{}, refreshWorker, .{}) catch {
+    const t = @import("../core/workers.zig").spawnLegacy(refreshWorker, .{}) catch {
         fail("spawn failed");
         return .failed;
     };
-    t.detach();
+    @import("../core/workers.zig").release(t);
     return .accepted;
 }
 
@@ -584,10 +584,10 @@ pub fn install(idx: usize) void {
         S.file_len = pl.file_len;
         @memcpy(S.name[0..pl.name_len], pl.nameSlice());
         S.name_len = pl.name_len;
-        (std.Thread.spawn(.{}, S.worker, .{}) catch {
+        @import("../core/workers.zig").release(@import("../core/workers.zig").spawnLegacy(S.worker, .{}) catch {
             S.busy = false;
             return;
-        }).detach();
+        });
         state.showToastTyped("Installing", .info);
         return;
     }

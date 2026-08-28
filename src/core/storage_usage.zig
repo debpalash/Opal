@@ -110,7 +110,7 @@ fn add(built: *usize, label: []const u8, path: []const u8, note: []const u8, kin
 /// is a no-op rather than a second walk of a multi-GB tree.
 pub fn scanAsync() void {
     if (scanning.load(.acquire)) return;
-    if (std.Thread.spawn(.{}, worker, .{})) |t| t.detach() else |_| {}
+    if (@import("workers.zig").spawnLegacy(worker, .{})) |t| @import("workers.zig").release(t) else |_| {}
 }
 
 fn worker() void {

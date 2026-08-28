@@ -30,7 +30,7 @@ pub fn setEnabled(on: bool) void {
 
 pub fn start() void {
     if (running.swap(true, .acq_rel)) return; // already running
-    if (std.Thread.spawn(.{}, worker, .{})) |t| t.detach() else |_| {
+    if (@import("../core/workers.zig").spawnLegacy(worker, .{})) |t| @import("../core/workers.zig").release(t) else |_| {
         running.store(false, .release);
     }
 }

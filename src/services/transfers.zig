@@ -1566,12 +1566,12 @@ fn startVtHash(path: []const u8) void {
     const plen = @min(path.len, VtHash.path_buf.len);
     @memcpy(VtHash.path_buf[0..plen], path[0..plen]);
     VtHash.path_len = plen;
-    const t = std.Thread.spawn(.{}, VtHash.worker, .{}) catch {
+    const t = @import("../core/workers.zig").spawnLegacy(VtHash.worker, .{}) catch {
         VtHash.busy.store(false, .release);
         state.showToast("Could not start hashing");
         return;
     };
-    t.detach();
+    @import("../core/workers.zig").release(t);
     state.showToast("Hashing for VirusTotal…");
 }
 
@@ -1761,13 +1761,13 @@ fn triggerFileScan(path: []const u8) void {
     @memcpy(files_scan_path_buf[0..plen], path[0..plen]);
     files_scan_path_len = plen;
     files_mutex.unlock();
-    const t = std.Thread.spawn(.{}, bgRefreshFiles, .{{}}) catch {
+    const t = @import("../core/workers.zig").spawnLegacy(bgRefreshFiles, .{{}}) catch {
         files_mutex.lock();
         files_scanning = false;
         files_mutex.unlock();
         return;
     };
-    t.detach();
+    @import("../core/workers.zig").release(t);
 }
 
 // Watch history is now unified in player/watch_history.zig (persistent, shared

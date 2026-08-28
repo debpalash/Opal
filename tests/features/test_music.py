@@ -200,7 +200,7 @@ def test_music_discovery():
         "atomic busy flag": "busy = std.atomic.Value(bool)" in s and "busy.load(.acquire)" in s,
         "mutex on published rows": "pub_mutex" in s and "sync.Mutex" in s,
         "worker buffers on the heap": "alloc.create(Work)" in s and "alloc.destroy(w)" in s,
-        "inputs snapshotted before spawn": "w_seed_count = currentSeeds(" in s and "std.Thread.spawn(.{}, worker" in s,
+        "inputs snapshotted before spawn": "w_seed_count = currentSeeds(" in s and "spawnLegacy(worker" in s,
         "io_global wrappers only": "std.fs.cwd()" not in s and "std.time.timestamp()" not in s and "std.Thread.sleep(" not in s,
         "cache under the cache dir": "paths.cacheFile(" in s,
 

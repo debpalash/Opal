@@ -78,7 +78,7 @@ def test_audiobookshelf():
 
         # ── Threading: atomic loading flag + detached worker + mutex publish ──
         "atomic loading flag": "is_loading.load(.acquire)" in svc and "is_loading.store(true, .release)" in svc,
-        "detached worker": "std.Thread.spawn" in svc and ".detach()" in svc,
+        "managed worker": "spawnLegacy(" in svc and "release(" in svc,
         "publish under mutex": "parse_mutex.lock()" in svc,
         # Player access is guarded via the shared browser helper's len check.
 

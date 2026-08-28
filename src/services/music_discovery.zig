@@ -312,8 +312,8 @@ pub fn refresh() void {
     fetch_error.store(false, .release);
     busy.store(true, .release);
     const my_gen = run_gen.fetchAdd(1, .acq_rel) + 1;
-    if (std.Thread.spawn(.{}, worker, .{my_gen})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(worker, .{my_gen})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         busy.store(false, .release);
     }

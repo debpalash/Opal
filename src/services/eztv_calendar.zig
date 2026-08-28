@@ -332,10 +332,10 @@ pub fn refreshTick() void {
     // this with the real deadline as soon as it knows the outcome.
     next_fetch_ms.store(now + REFRESH_INTERVAL_MS, .release);
 
-    (std.Thread.spawn(.{}, Fetch.worker, .{}) catch {
+    @import("../core/workers.zig").release(@import("../core/workers.zig").spawnLegacy(Fetch.worker, .{}) catch {
         loading.store(false, .release);
         return;
-    }).detach();
+    });
 }
 
 // ── Render ──

@@ -53,7 +53,7 @@ pub fn generateRecommendations() void {
         seed_current_pos = p.last_seen_pos;
     }
 
-    const rec_thread = std.Thread.spawn(.{}, struct {
+    const rec_thread = @import("../core/workers.zig").spawnLegacy(struct {
         fn worker() void {
             defer {
                 is_loading.store(false, .release);
@@ -201,5 +201,5 @@ pub fn generateRecommendations() void {
         is_loading.store(false, .release);
         return;
     };
-    rec_thread.detach(); // detach so the pthread handle isn't leaked
+    @import("../core/workers.zig").release(rec_thread); // detach so the pthread handle isn't leaked
 }

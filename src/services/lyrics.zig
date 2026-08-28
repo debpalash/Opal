@@ -160,8 +160,8 @@ pub fn requestFor(artist: []const u8, title: []const u8, album: []const u8, dura
     S.duration = duration_secs;
 
     fetching.store(true, .release);
-    if (std.Thread.spawn(.{}, S.worker, .{})) |th| {
-        th.detach(); // never joined — detach to avoid leaking the handle
+    if (@import("../core/workers.zig").spawnLegacy(S.worker, .{})) |th| {
+        @import("../core/workers.zig").release(th); // never joined — detach to avoid leaking the handle
     } else |_| {
         fetching.store(false, .release);
     }

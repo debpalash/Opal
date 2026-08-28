@@ -833,8 +833,8 @@ fn fetchQueueThumb(item: *QueueItem) void {
     @memcpy(S.url_buf[0..url.len], url);
     S.url_len = url.len;
 
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(S.worker, .{})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         item.thumb_fetching = false;
         _ = thumb_threads_active.fetchSub(1, .acq_rel);
@@ -855,7 +855,7 @@ fn startThumbBackfill() void {
     thumb_backfill_cancel.store(false, .release);
     state.showToast("Fetching thumbnails...");
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn worker() void {
             defer {
                 thumb_backfill_active.store(false, .release);
@@ -919,7 +919,7 @@ fn startThumbBackfill() void {
             }
         }
     }.worker, .{})) |t| {
-        t.detach();
+        @import("../core/workers.zig").release(t);
     } else |_| {
         thumb_backfill_active.store(false, .release);
     }

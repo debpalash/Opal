@@ -329,7 +329,7 @@ def test_hosted_mode_and_perf():
             and 'getQueryParam(query, "t")' not in rm,
         "parity routes": '"/calendar"' in rm and '"/tv"' in rm and '"/host"' in rm and '"/torrents"' in rm,
         "thread-per-conn without global API lock": "api_mutex" not in rm
-            and "Thread.spawn(.{}, Handler.run" in rm,
+            and "spawnLegacy(Handler.run" in rm,
         "headless serves web": "web_remote_enabled = true" in hl and "create your admin account" in hl,
         "docker headless build": "-Dheadless=true" in dk and "3000" not in dk,
         "ci gate": "docker-headless" in ci and "scripts/docker-smoke.sh" in ci

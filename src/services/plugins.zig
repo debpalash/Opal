@@ -391,7 +391,7 @@ pub fn runPluginSearch(query: []const u8) void {
     const qlen = @min(query.len, q_buf.len);
     @memcpy(q_buf[0..qlen], query[0..qlen]);
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn worker(q_owned: [256]u8, q_len: usize, pidx: usize) void {
             defer endLoading();
             const q = q_owned[0..q_len];
@@ -422,7 +422,7 @@ pub fn runPluginSearch(query: []const u8) void {
                 .deny => logUntrustedNative(&p),
             }
         }
-    }.worker, .{ q_buf, qlen, active_plugin })) |t| t.detach() else |_| {
+    }.worker, .{ q_buf, qlen, active_plugin })) |t| @import("../core/workers.zig").release(t) else |_| {
         endLoading();
     }
 }
@@ -432,7 +432,7 @@ pub fn runPluginTrending() void {
     if (!plugins[active_plugin].has_trending) return;
     if (!beginLoading()) return;
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn worker(pidx: usize) void {
             defer endLoading();
 
@@ -458,7 +458,7 @@ pub fn runPluginTrending() void {
                 .deny => logUntrustedNative(&p),
             }
         }
-    }.worker, .{active_plugin})) |t| t.detach() else |_| {
+    }.worker, .{active_plugin})) |t| @import("../core/workers.zig").release(t) else |_| {
         endLoading();
     }
 }
@@ -489,7 +489,7 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
     const ep_len = @min(episode.len, ep_buf.len);
     @memcpy(ep_buf[0..ep_len], episode[0..ep_len]);
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn worker(rid_buf: [128]u8, rid_len: usize, rep_buf: [32]u8, rep_len: usize, pidx: usize) void {
             const rid = rid_buf[0..rid_len];
             const rep = rep_buf[0..rep_len];
@@ -627,7 +627,7 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                     logs.pushLog("info", "plugin", "Manga loaded — opening reader", false);
 
                     // Start downloading pages in background
-                    if (std.Thread.spawn(.{}, struct {
+                    if (@import("../core/workers.zig").spawnLegacy(struct {
                         fn dl() void {
                             // Download pages in parallel batches of 8
                             const BATCH = 8;
@@ -645,7 +645,7 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                                         continue;
                                     }
                                     const pi = page_i;
-                                    threads[active] = std.Thread.spawn(.{}, struct {
+                                    threads[active] = @import("../core/workers.zig").spawnLegacy(struct {
                                         fn fetch(idx: usize) void {
                                             const u = state.app.comic.page_urls[idx][0..state.app.comic.page_url_lens[idx]];
                                             if (u.len == 0) return;
@@ -698,7 +698,7 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                             }
                             _ = page_alloc;
                         }
-                    }.dl, .{})) |t| t.detach() else |_| {}
+                    }.dl, .{})) |t| @import("../core/workers.zig").release(t) else |_| {}
                 } else {
                     logs.pushLog("error", "plugin", "Manga: no images found", false);
                 }
@@ -758,7 +758,7 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                 logs.pushLog("error", "plugin", "Resolve: no URL in response", false);
             }
         }
-    }.worker, .{ id_buf, id_len, ep_buf, ep_len, active_plugin })) |t| t.detach() else |_| {}
+    }.worker, .{ id_buf, id_len, ep_buf, ep_len, active_plugin })) |t| @import("../core/workers.zig").release(t) else |_| {}
 }
 
 fn executeAndParse(argv: []const []const u8) void {
@@ -911,7 +911,7 @@ pub fn fetchPoster(item: *PluginResult) void {
     if (!@import("../core/poster.zig").tryClaimSlot()) return;
     item.poster_fetching = true;
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn worker(ptr: *PluginResult) void {
             defer ptr.poster_fetching = false;
             defer @import("../core/poster.zig").releaseSlot();
@@ -973,7 +973,7 @@ pub fn fetchPoster(item: *PluginResult) void {
             ptr.poster_pixels = p_slice;
             results_mutex.unlock();
         }
-    }.worker, .{item})) |t| t.detach() else |_| {
+    }.worker, .{item})) |t| @import("../core/workers.zig").release(t) else |_| {
         item.poster_fetching = false;
         @import("../core/poster.zig").releaseSlot(); // spawn failed — release the slot
     }

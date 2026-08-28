@@ -178,7 +178,7 @@ fn setBaseUrl() void {
 /// already up it just re-points the base URL. UI calls this from a Start button.
 pub fn startEmbedded() void {
     if (busy.load(.acquire)) return;
-    if (std.Thread.spawn(.{}, worker, .{})) |t| t.detach() else |_| {}
+    if (@import("../core/workers.zig").spawnLegacy(worker, .{})) |t| @import("../core/workers.zig").release(t) else |_| {}
 }
 
 fn worker() void {

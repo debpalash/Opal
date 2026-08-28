@@ -175,7 +175,7 @@ pub fn resolveStreamUrlAsync(url: []const u8, player_idx: usize) void {
     @memcpy(S.url_copy[0..url.len], url);
     S.url_len = url.len;
 
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| t.detach() else |_| {
+    if (@import("../core/workers.zig").spawnLegacy(S.worker, .{})) |t| @import("../core/workers.zig").release(t) else |_| {
         S.busy = false;
         std.log.warn("[streamlink] Failed to spawn resolver thread", .{});
     }
@@ -210,7 +210,7 @@ pub fn startRecording(url: []const u8) void {
     @memcpy(recording_url[0..url.len], url);
     recording_url_len = url.len;
 
-    if (std.Thread.spawn(.{}, recordWorker, .{})) |t| t.detach() else |_| {
+    if (@import("../core/workers.zig").spawnLegacy(recordWorker, .{})) |t| @import("../core/workers.zig").release(t) else |_| {
         std.log.warn("[streamlink] Failed to spawn recording thread", .{});
     }
 }

@@ -19,7 +19,7 @@ pub var enabled: bool = false;
 pub fn updateProgress(media_id: i64, episode: i32) void {
     if (!enabled or access_token_len == 0 or media_id <= 0) return;
 
-    if (std.Thread.spawn(.{}, struct {
+    if (@import("../core/workers.zig").spawnLegacy(struct {
         fn worker(mid: i64, ep: i32) void {
             const alloc = @import("../core/alloc.zig").allocator;
 
@@ -47,7 +47,7 @@ pub fn updateProgress(media_id: i64, episode: i32) void {
                 logs.pushLog("info", "anilist", "AniList progress updated", false);
             }
         }
-    }.worker, .{ media_id, episode })) |t| t.detach() else |_| {}
+    }.worker, .{ media_id, episode })) |t| @import("../core/workers.zig").release(t) else |_| {}
 }
 
 /// Fetch AniList metadata for a batch of MAL ids in ONE keyless GraphQL query.

@@ -10,6 +10,7 @@ const io = @import("io_global.zig");
 const sync = @import("sync.zig");
 
 const MAX_OWNED_THREADS: usize = 256;
+const MAX_LEGACY_TASKS: i64 = 256;
 
 const Slot = struct {
     thread: ?std.Thread = null,
@@ -75,6 +76,51 @@ pub fn spawn(comptime function: anytype, args: anytype) !void {
     context.* = .{ .args = args, .slot_index = selected };
     slots[selected].finished.store(false, .release);
     slots[selected].thread = try std.Thread.spawn(.{}, Context.run, .{context});
+}
+
+/// Compatibility admission seam for code that still needs a native Thread
+/// handle (for an explicit join, platform API, or staged migration). The task
+/// is nevertheless counted from admission through completion, so process
+/// shutdown cannot destroy shared state while it is running. New fire-and-
+/// forget work should use `spawn`, which additionally retains and joins the
+/// handle in the bounded slot table.
+pub fn spawnLegacy(comptime function: anytype, args: anytype) !std.Thread {
+    if (isQuitting()) return error.ShuttingDown;
+
+    // This compatibility path is bounded too. Reserving before allocation and
+    // spawn gives callers immediate backpressure instead of recreating the old
+    // unbounded detached-thread storm under a different name.
+    const previous = active.fetchAdd(1, .acq_rel);
+    if (previous >= MAX_LEGACY_TASKS) {
+        _ = active.fetchSub(1, .acq_rel);
+        return error.WorkQueueFull;
+    }
+    errdefer leave();
+
+    const Args = @TypeOf(args);
+    const Context = struct {
+        args: Args,
+
+        fn run(ctx: *@This()) void {
+            @call(.auto, function, ctx.args);
+            std.heap.c_allocator.destroy(ctx);
+            leave();
+        }
+    };
+
+    const context = try std.heap.c_allocator.create(Context);
+    errdefer std.heap.c_allocator.destroy(context);
+    context.* = .{ .args = args };
+    return std.Thread.spawn(.{}, Context.run, .{context}) catch |err| {
+        return err;
+    };
+}
+
+/// Relinquish a compatibility handle after `spawnLegacy` has registered its
+/// completion with the shutdown barrier. Keeping the raw detach operation here
+/// makes unmanaged detaches mechanically rejectable in application modules.
+pub fn release(thread: std.Thread) void {
+    thread.detach();
 }
 
 /// Register entry into a tracked worker. Pair with `leave()` via `defer`.
@@ -150,6 +196,23 @@ test "owned tasks are accepted and joined before shutdown returns" {
     try spawn(T.run, .{});
     beginShutdownAndDrain(1_000);
     try std.testing.expect(T.ran.load(.acquire));
+}
+
+test "legacy native handles remain behind the shutdown barrier after detach" {
+    const T = struct {
+        var ran: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+        fn run() void {
+            io.sleep(2 * std.time.ns_per_ms);
+            ran.store(true, .release);
+        }
+    };
+    init();
+    T.ran.store(false, .release);
+    const thread = try spawnLegacy(T.run, .{});
+    thread.detach();
+    beginShutdownAndDrain(1_000);
+    try std.testing.expect(T.ran.load(.acquire));
+    try std.testing.expectEqual(@as(i64, 0), activeCount());
 }
 
 test "quitting flag flips and drain returns immediately when idle" {

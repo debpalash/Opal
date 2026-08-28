@@ -14,7 +14,7 @@ pub fn normalizeUrl(url: []const u8, buf: *[2048]u8) []const u8 {
     const rewrites = [_]struct { from: []const u8, to: []const u8 }{
         .{ .from = "pornhub.com", .to = "pornhub.org" },
     };
-    
+
     for (rewrites) |rw| {
         if (std.mem.indexOf(u8, url, rw.from)) |pos| {
             const before = url[0..pos];
@@ -74,7 +74,7 @@ pub fn extractPlaylist(url: []const u8) void {
     @memcpy(extract_url_buf[0..len], url[0..len]);
     extract_url_len = len;
 
-    extract_thread = std.Thread.spawn(.{}, extractThread, .{}) catch {
+    extract_thread = @import("../core/workers.zig").spawnLegacy(extractThread, .{}) catch {
         state.showToast("Failed to start extraction thread");
         return;
     };
@@ -94,24 +94,22 @@ fn extractThread() void {
     // If proxy is configured, also pass --proxy
     const has_proxy = state.app.proxy_url_len > 0;
     const proxy_str = state.app.proxy_url[0..state.app.proxy_url_len];
-    
+
     const ytdlp_bin = @import("ytdlp.zig").binary();
     // No youtube:player_client pin here — the `tv` client this used to force now
     // returns storyboard-only formats, which broke every YouTube resolve. yt-dlp
     // maintains its own client-fallback chain; let it choose. See
     // src/player/ytdl_opts_pure.zig for the full history.
     const argv_proxy = [_][]const u8{
-        ytdlp_bin, "--flat-playlist", "-j",
-        "--no-warnings",
-        "--cookies-from-browser", "firefox",
-        "--proxy", proxy_str,
-        "--", url,
+        ytdlp_bin,       "--flat-playlist",        "-j",
+        "--no-warnings", "--cookies-from-browser", "firefox",
+        "--proxy",       proxy_str,                "--",
+        url,
     };
     const argv_direct = [_][]const u8{
-        ytdlp_bin, "--flat-playlist", "-j",
-        "--no-warnings",
-        "--cookies-from-browser", "firefox",
-        "--", url,
+        ytdlp_bin,       "--flat-playlist",        "-j",
+        "--no-warnings", "--cookies-from-browser", "firefox",
+        "--",            url,
     };
     const argv: []const []const u8 = if (has_proxy) &argv_proxy else &argv_direct;
 
@@ -140,13 +138,11 @@ fn extractThread() void {
     };
     defer alloc.free(out_buf);
     const total_read = @import("../core/io_global.zig").readAll(stdout, out_buf) catch 0;
-    
+
     // Also read stderr for error reporting
     var err_buf: [4096]u8 = undefined;
     const err_read = if (child.stderr) |*stderr| @import("../core/io_global.zig").readAll(stderr, &err_buf) catch 0 else 0;
     _ = child.wait() catch {};
-
-
 
     if (total_read == 0) {
         if (err_read > 0) {
@@ -163,10 +159,10 @@ fn extractThread() void {
     while (remaining.len > 0) {
         const nl = std.mem.indexOfScalar(u8, remaining, '\n') orelse remaining.len;
         const line = remaining[0..nl];
-        remaining = if (nl < remaining.len) remaining[nl + 1..] else remaining[remaining.len..];
-        
+        remaining = if (nl < remaining.len) remaining[nl + 1 ..] else remaining[remaining.len..];
+
         if (line.len < 10) continue;
-        
+
         // Extract "url" and "title" from JSON line
         // Use "webpage_url" first (canonical), fall back to "url" key
         var video_url = extractJsonField(line, "\"webpage_url\"");
@@ -226,19 +222,19 @@ fn extractThread() void {
 fn extractJsonField(json: []const u8, field: []const u8) []const u8 {
     const field_pos = std.mem.indexOf(u8, json, field) orelse return "";
     const after_field = field_pos + field.len;
-    
+
     // Skip ": " or ":"
     var pos = after_field;
     while (pos < json.len and (json[pos] == ':' or json[pos] == ' ')) pos += 1;
     if (pos >= json.len or json[pos] != '"') return "";
     pos += 1; // skip opening quote
-    
+
     const val_start = pos;
     while (pos < json.len and json[pos] != '"') {
         if (json[pos] == '\\') pos += 1; // skip escaped chars
         pos += 1;
     }
-    
+
     if (pos > val_start) return json[val_start..pos];
     return "";
 }

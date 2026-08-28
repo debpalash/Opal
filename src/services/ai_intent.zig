@@ -38,7 +38,7 @@ pub fn handleRecommendation(raw_input: []const u8) bool {
     chat.is_generating.store(true, .release);
     chat.last_error_len = 0;
 
-    if (std.Thread.spawn(.{}, recommendationWorker, .{chat.message_count - 1})) |t| t.detach() else |_| {
+    if (@import("../core/workers.zig").spawnLegacy(recommendationWorker, .{chat.message_count - 1})) |t| @import("../core/workers.zig").release(t) else |_| {
         chat.is_generating.store(false, .release);
         return false;
     }

@@ -238,8 +238,8 @@ pub fn loadPopularOnce() void {
     // results[].
     const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
 
-    if (std.Thread.spawn(.{}, popularWorker, .{my_gen})) |t| {
-        t.detach(); // never joined — detach to avoid leaking the handle
+    if (@import("../core/workers.zig").spawnLegacy(popularWorker, .{my_gen})) |t| {
+        @import("../core/workers.zig").release(t); // never joined — detach to avoid leaking the handle
     } else |_| {
         state.app.radio.is_loading.store(false, .release);
     }
@@ -309,8 +309,8 @@ pub fn searchRadio(query: []const u8) void {
     @memcpy(query_buf[0..n], query[0..n]);
     query_len = n;
 
-    if (std.Thread.spawn(.{}, searchWorker, .{my_gen})) |t| {
-        t.detach(); // never joined — detach to avoid leaking the handle
+    if (@import("../core/workers.zig").spawnLegacy(searchWorker, .{my_gen})) |t| {
+        @import("../core/workers.zig").release(t); // never joined — detach to avoid leaking the handle
     } else |_| {
         state.app.radio.is_loading.store(false, .release);
     }
@@ -378,8 +378,8 @@ pub fn loadMore() void {
     const offset = state.app.radio.result_count;
     const popular = state.app.radio.showing_popular;
 
-    if (std.Thread.spawn(.{}, loadMoreWorker, .{ my_gen, offset, popular })) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{ my_gen, offset, popular })) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         loading_more.store(false, .release);
     }
@@ -537,8 +537,8 @@ pub fn playStation(idx: usize) void {
 fn pingClick(uuid: []const u8) void {
     if (uuid.len == 0) return;
     const owned = alloc.dupe(u8, uuid) catch return;
-    if (std.Thread.spawn(.{}, clickWorker, .{owned})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(clickWorker, .{owned})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         alloc.free(owned);
     }

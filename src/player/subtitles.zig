@@ -8,7 +8,6 @@ const logs = @import("../core/logs.zig");
 /// No external dependencies (no curl, no subprocess).
 ///
 /// Architecture: state machine polled by main loop, work done in background threads.
-
 pub const SubState = enum {
     idle,
     searching,
@@ -93,7 +92,7 @@ pub const SubtitleEngine = struct {
 
     pub fn reset(self: *SubtitleEngine) void {
         if (self.thread) |t| {
-            t.detach();
+            @import("../core/workers.zig").release(t);
         }
         self.state = .idle;
         self.result_count = 0;
@@ -111,21 +110,21 @@ pub const SubtitleEngine = struct {
 fn cleanTorrentName(raw: []const u8, out: *[256]u8) []const u8 {
     var i: usize = 0;
     var out_i: usize = 0;
-    
+
     while (i < raw.len and out_i < 250) : (i += 1) {
         const ch = raw[i];
-        
+
         // Stop at common quality/codec markers
         if (i > 0) {
             const remaining = raw[i..];
             const stop_words = [_][]const u8{
-                "1080p", "720p", "2160p", "480p", "4K",
-                "BluRay", "WEBRip", "WEB-DL", "HDTV", "DVDRip", "BDRip",
-                "x264", "x265", "H.264", "H264", "HEVC", "XviD",
-                "PROPER", "REMASTERED", "EXTENDED", "IMAX",
-                "AAC", "AC3", "DTS", "FLAC", "MP3",
-                "YTS", "RARBG", "FGT", "NTb", "TGx",
-                "[", "(", "AMZN",
+                "1080p",  "720p",   "2160p",  "480p",       "4K",
+                "BluRay", "WEBRip", "WEB-DL", "HDTV",       "DVDRip",
+                "BDRip",  "x264",   "x265",   "H.264",      "H264",
+                "HEVC",   "XviD",   "PROPER", "REMASTERED", "EXTENDED",
+                "IMAX",   "AAC",    "AC3",    "DTS",        "FLAC",
+                "MP3",    "YTS",    "RARBG",  "FGT",        "NTb",
+                "TGx",    "[",      "(",      "AMZN",
             };
             var should_stop = false;
             for (stop_words) |sw| {
@@ -136,7 +135,7 @@ fn cleanTorrentName(raw: []const u8, out: *[256]u8) []const u8 {
             }
             if (should_stop) break;
         }
-        
+
         // Replace dots and underscores with spaces
         if (ch == '.' or ch == '_' or ch == '-') {
             if (out_i > 0 and out[out_i - 1] != ' ') {
@@ -148,10 +147,10 @@ fn cleanTorrentName(raw: []const u8, out: *[256]u8) []const u8 {
             out_i += 1;
         }
     }
-    
+
     // Trim trailing spaces
     while (out_i > 0 and out[out_i - 1] == ' ') out_i -= 1;
-    
+
     return out[0..out_i];
 }
 
@@ -193,8 +192,8 @@ fn httpGet(url_str: []const u8, extra_headers: []const std.http.Header, response
         if (std.ascii.eqlIgnoreCase(h.name, "User-Agent")) ua = h.value;
     }
     var child = io.Child.init(&.{
-        "curl", "-s", "-L", "--compressed", "--max-time", "20",
-        "-A", ua, url_str,
+        "curl", "-s", "-L",    "--compressed", "--max-time", "20",
+        "-A",   ua,   url_str,
     }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
@@ -209,38 +208,38 @@ fn httpGet(url_str: []const u8, extra_headers: []const std.http.Header, response
 /// Background thread: search OpenSubtitles REST API (pure Zig, no curl)
 fn searchThread(engine: *SubtitleEngine) void {
     const query = engine.query_buf[0..engine.query_len];
-    
+
     // Build URL
     var url_buf: [768]u8 = undefined;
     var encoded_buf: [512]u8 = undefined;
     const encoded = urlEncode(query, &encoded_buf);
-    
+
     const lang = state.app.sub_lang_buf[0..state.app.sub_lang_len];
-    const url = std.fmt.bufPrintZ(&url_buf, "https://rest.opensubtitles.org/search/query-{s}/sublanguageid-{s}", .{encoded, lang}) catch {
+    const url = std.fmt.bufPrintZ(&url_buf, "https://rest.opensubtitles.org/search/query-{s}/sublanguageid-{s}", .{ encoded, lang }) catch {
         engine.state = .failed;
         return;
     };
-    
+
     logs.pushLog("info", "subs", "Searching subtitles (native)...", false);
-    
+
     // HTTP GET with User-Agent header
     const headers = [_]std.http.Header{
         .{ .name = "User-Agent", .value = @import("../core/app_meta.zig").user_agent },
     };
-    
+
     var response_buf: [128 * 1024]u8 = undefined;
     const json_data = httpGet(url, &headers, &response_buf) catch {
         engine.state = .failed;
         logs.pushLog("error", "subs", "HTTP request failed", true);
         return;
     };
-    
+
     if (json_data.len < 10) {
         engine.state = .failed;
         logs.pushLog("warn", "subs", "Empty subtitle response", true);
         return;
     }
-    
+
     // Parse via the pure (unit-tested) extractor — primary provider first.
     const sp = @import("../services/subtitles_pure.zig");
     var primary: [MAX_PRIMARY]sp.OsRestSub = undefined;
@@ -469,11 +468,11 @@ fn downloadThread(engine: *SubtitleEngine) void {
         engine.state = .failed;
         return;
     }
-    
+
     engine.state = .downloading;
     const r = &engine.results[engine.selected_idx];
     const url = r.download_url[0..r.download_url_len];
-    
+
     // Cross-platform cache path (was hardcoded /tmp/opal_subs, which doesn't
     // exist on Windows). Resolves to ~/.cache/opal/subs on POSIX and
     // %LOCALAPPDATA%\opal\cache\subs on Windows.
@@ -485,12 +484,12 @@ fn downloadThread(engine: *SubtitleEngine) void {
         return;
     };
     engine.srt_path_len = srt_path.len;
-    
+
     // Download the subtitle file via HTTP
     const headers = [_]std.http.Header{
         .{ .name = "User-Agent", .value = @import("../core/app_meta.zig").user_agent },
     };
-    
+
     const alloc = @import("../core/alloc.zig").allocator;
     const response_buf = alloc.alloc(u8, 512 * 1024) catch {
         engine.state = .failed;
@@ -503,13 +502,13 @@ fn downloadThread(engine: *SubtitleEngine) void {
         logs.pushLog("error", "subs", "Failed to download subtitle", true);
         return;
     };
-    
+
     if (data.len < 20) {
         engine.state = .failed;
         logs.pushLog("warn", "subs", "Downloaded subtitle is empty", true);
         return;
     }
-    
+
     // Check if it's gzip-compressed (magic bytes 0x1F 0x8B)
     if (data.len >= 2 and data[0] == 0x1F and data[1] == 0x8B) {
         // Decompress in-process (Zig 0.16 std.compress.flate, gzip container) —
@@ -541,7 +540,7 @@ fn downloadThread(engine: *SubtitleEngine) void {
             return;
         };
     }
-    
+
     // Verify the .srt file exists and has content
     const stat = @import("../core/io_global.zig").cwdStatFile(srt_path) catch {
         engine.state = .failed;
@@ -578,7 +577,7 @@ fn fire(engine: *SubtitleEngine, raw_name: []const u8, auto_load: bool) void {
 
     engine.state = .searching;
 
-    engine.thread = std.Thread.spawn(.{}, searchThread, .{engine}) catch {
+    engine.thread = @import("../core/workers.zig").spawnLegacy(searchThread, .{engine}) catch {
         engine.state = .failed;
         logs.pushLog("error", "subs", "Failed to spawn search thread", true);
         return;
@@ -667,8 +666,8 @@ pub fn downloadIndex(engine: *SubtitleEngine, idx: usize) void {
     engine.selected_idx = idx;
     engine.state = .downloading;
 
-    if (engine.thread) |t| t.detach();
-    engine.thread = std.Thread.spawn(.{}, downloadThread, .{engine}) catch {
+    if (engine.thread) |t| @import("../core/workers.zig").release(t);
+    engine.thread = @import("../core/workers.zig").spawnLegacy(downloadThread, .{engine}) catch {
         engine.state = .failed;
         logs.pushLog("error", "subs", "Failed to spawn download thread", true);
         return;

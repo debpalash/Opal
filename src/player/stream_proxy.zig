@@ -188,7 +188,7 @@ pub fn startProxy(torrent_id: i32, file_idx: i32) ?Handle {
     s.port = bound;
 
     const slot_u8: u8 = @intCast(idx);
-    s.thread = std.Thread.spawn(.{}, acceptLoop, .{slot_u8}) catch {
+    s.thread = @import("../core/workers.zig").spawnLegacy(acceptLoop, .{slot_u8}) catch {
         if (s.listener) |*l| l.deinit(io_g.io());
         s.listener = null;
         s.port = 0;
@@ -304,8 +304,8 @@ fn acceptLoop(slot: u8) void {
         }
 
         const args = ConnArgs{ .slot = slot, .stream_id = id_now, .conn = conn };
-        if (std.Thread.spawn(.{}, handleConnectionThread, .{args})) |t| {
-            t.detach();
+        if (@import("../core/workers.zig").spawnLegacy(handleConnectionThread, .{args})) |t| {
+            @import("../core/workers.zig").release(t);
         } else |_| {
             handleConnection(args) catch {};
             var c2 = conn;
@@ -424,12 +424,13 @@ fn handleConnection(args: ConnArgs) !void {
 
     var hdr_buf: [512]u8 = undefined;
     const status_line = if (has_range) "206 Partial Content" else "200 OK";
-    const hdr = std.fmt.bufPrint(&hdr_buf,
+    const hdr = std.fmt.bufPrint(
+        &hdr_buf,
         "HTTP/1.1 {s}\r\n" ++
-        "Content-Type: {s}\r\n" ++
-        "Accept-Ranges: bytes\r\n" ++
-        "Content-Length: {d}\r\n" ++
-        "Connection: close\r\n",
+            "Content-Type: {s}\r\n" ++
+            "Accept-Ranges: bytes\r\n" ++
+            "Content-Length: {d}\r\n" ++
+            "Connection: close\r\n",
         // No CORS on purpose: mpv ignores it, and a wildcard would let any
         // local browser page fetch the user's private torrent stream.
         .{ status_line, mime, content_length },

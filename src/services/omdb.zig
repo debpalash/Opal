@@ -87,8 +87,8 @@ pub fn onDetailOpen(tmdb_id: i32, media_type: []const u8) void {
     @memcpy(S.mt_buf[0..ml], media_type[0..ml]);
     S.mt_len = ml;
 
-    if (std.Thread.spawn(.{}, worker, .{ S.id, S.g, S.mt_buf[0..S.mt_len] })) |t| {
-        t.detach(); // never joined — detach to avoid leaking the handle
+    if (@import("../core/workers.zig").spawnLegacy(worker, .{ S.id, S.g, S.mt_buf[0..S.mt_len] })) |t| {
+        @import("../core/workers.zig").release(t); // never joined — detach to avoid leaking the handle
     } else |_| {
         busy.store(false, .release);
     }

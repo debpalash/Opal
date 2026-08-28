@@ -448,7 +448,7 @@ pub fn start() void {
     if (running.load(.acquire)) return;
     loadOrCreateToken();
     running.store(true, .release);
-    server_thread = std.Thread.spawn(.{}, serverLoop, .{}) catch null;
+    server_thread = @import("../core/workers.zig").spawnLegacy(serverLoop, .{}) catch null;
 }
 
 /// Loopback-only companion listener, ALWAYS on, serving exactly one route:
@@ -470,7 +470,7 @@ var local_thread: ?std.Thread = null;
 pub fn startLocal() void {
     if (local_running.swap(true, .acq_rel)) return;
     loadOrCreateToken();
-    local_thread = std.Thread.spawn(.{}, localLoop, .{}) catch {
+    local_thread = @import("../core/workers.zig").spawnLegacy(localLoop, .{}) catch {
         local_running.store(false, .release);
         return;
     };
@@ -517,8 +517,8 @@ fn localLoop() void {
                 handleLocalRequest(c3);
             }
         };
-        if (std.Thread.spawn(.{}, Handler.run, .{conn})) |t| {
-            t.detach();
+        if (@import("../core/workers.zig").spawnLegacy(Handler.run, .{conn})) |t| {
+            @import("../core/workers.zig").release(t);
         } else |_| {
             _ = local_connections.fetchSub(1, .acq_rel);
             var c4 = conn;
@@ -698,8 +698,8 @@ fn serverLoop() void {
                 handleRequest(c3, clientKey(c3.socket.address)) catch {};
             }
         };
-        if (std.Thread.spawn(.{}, Handler.run, .{conn})) |t| {
-            t.detach();
+        if (@import("../core/workers.zig").spawnLegacy(Handler.run, .{conn})) |t| {
+            @import("../core/workers.zig").release(t);
         } else |_| {
             _ = remote_connections.fetchSub(1, .acq_rel);
             var c4 = conn;

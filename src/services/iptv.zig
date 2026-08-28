@@ -385,8 +385,8 @@ fn pollLiveSearch() void {
 /// is already running.
 pub fn refreshAllSources(force: bool) void {
     if (ingesting.load(.acquire)) return;
-    if (std.Thread.spawn(.{}, ingestWorker, .{force})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(ingestWorker, .{force})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {}
 }
 
@@ -508,7 +508,6 @@ fn ingestM3u(url: []const u8, buf: []pure.IptvChannel) usize {
 }
 
 /// Settings-page helpers ──────────────────────────────────────────────────────
-
 /// Install a curated source by id and ingest it immediately (forced).
 pub fn installSource(id: []const u8) void {
     const s = sources.byId(id) orelse return;

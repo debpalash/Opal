@@ -83,8 +83,8 @@ pub fn loadCatalog() void {
     more_available = true;
     const my_gen = fetch_gen.fetchAdd(1, .acq_rel) + 1;
 
-    if (std.Thread.spawn(.{}, fetchWorker, .{my_gen})) |t| {
-        t.detach(); // never joined — detach to avoid leaking the handle
+    if (@import("../core/workers.zig").spawnLegacy(fetchWorker, .{my_gen})) |t| {
+        @import("../core/workers.zig").release(t); // never joined — detach to avoid leaking the handle
     } else |_| {
         state.app.drama.is_loading.store(false, .release);
     }
@@ -108,8 +108,8 @@ pub fn loadMore() void {
     if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
     const my_gen = fetch_gen.load(.acquire); // stay within the current generation
     const next = current_page + 1;
-    if (std.Thread.spawn(.{}, loadMoreWorker, .{ my_gen, next })) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{ my_gen, next })) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         loading_more.store(false, .release);
     }
@@ -300,8 +300,8 @@ pub fn playSelected() void {
     @memcpy(S.name_buf[0..nl], r.name[0..nl]);
     S.name_len = nl;
 
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(S.worker, .{})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         state.app.drama.stream_loading.store(false, .release);
     }
@@ -350,7 +350,7 @@ pub fn renderContent() void {
     defer page.deinit();
 
     if (state.app.tmdb.api_key_len == 0) {
-        components.emptyState(icons.tvg.lucide.@"clapperboard", "TMDB key required", "Add a TMDB API key in Settings to browse Asian dramas.");
+        components.emptyState(icons.tvg.lucide.clapperboard, "TMDB key required", "Add a TMDB API key in Settings to browse Asian dramas.");
         return;
     }
 
@@ -360,11 +360,11 @@ pub fn renderContent() void {
     }
 
     if (state.app.drama.is_loading.load(.acquire) and state.app.drama.result_count == 0) {
-        components.emptyState(icons.tvg.lucide.@"clapperboard", "Loading…", "Fetching the catalog from TMDB.");
+        components.emptyState(icons.tvg.lucide.clapperboard, "Loading…", "Fetching the catalog from TMDB.");
         return;
     }
     if (state.app.drama.result_count == 0) {
-        components.emptyState(icons.tvg.lucide.@"clapperboard", "Nothing here yet", "Check back later.");
+        components.emptyState(icons.tvg.lucide.clapperboard, "Nothing here yet", "Check back later.");
         return;
     }
 
@@ -448,7 +448,7 @@ fn renderCard(item: *state.DramaResult, idx: usize) void {
             });
         } else {
             ensurePoster(item);
-            dvui.icon(@src(), "", icons.tvg.lucide.@"clapperboard", .{}, .{
+            dvui.icon(@src(), "", icons.tvg.lucide.clapperboard, .{}, .{
                 .id_extra = idx + 150,
                 .gravity_x = 0.5,
                 .gravity_y = 0.5,

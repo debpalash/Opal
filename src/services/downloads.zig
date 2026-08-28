@@ -68,8 +68,8 @@ pub fn startUrl(url: []const u8) bool {
 fn restoreSidecarsAsync() void {
     if (restore_spawned) return;
     restore_spawned = true;
-    const t = std.Thread.spawn(.{}, restoreWorker, .{{}}) catch return;
-    t.detach();
+    const t = @import("../core/workers.zig").spawnLegacy(restoreWorker, .{{}}) catch return;
+    @import("../core/workers.zig").release(t);
 }
 
 fn restoreWorker(_: void) void {

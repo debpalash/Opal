@@ -89,10 +89,10 @@ pub fn markWatchedEpisode(show_tmdb: i32, season: i32, episode: i32) void {
     S.sid = show_tmdb;
     S.sn = season;
     S.ep = episode;
-    (std.Thread.spawn(.{}, S.worker, .{}) catch {
+    @import("../core/workers.zig").release(@import("../core/workers.zig").spawnLegacy(S.worker, .{}) catch {
         S.busy = false;
         return;
-    }).detach();
+    });
 }
 
 /// Mark a movie watched in the user's Trakt history.
@@ -111,10 +111,10 @@ pub fn markWatchedMovie(tmdb_id: i32) void {
     if (S.busy) return;
     S.busy = true;
     S.id = tmdb_id;
-    (std.Thread.spawn(.{}, S.worker, .{}) catch {
+    @import("../core/workers.zig").release(@import("../core/workers.zig").spawnLegacy(S.worker, .{}) catch {
         S.busy = false;
         return;
-    }).detach();
+    });
 }
 
 /// Called when playback starts — POST /scrobble/start
@@ -236,8 +236,8 @@ pub fn startDeviceAuth() void {
         return;
     }
     auth_pending = true;
-    if (std.Thread.spawn(.{}, deviceAuthWorker, .{})) |t| {
-        t.detach();
+    if (@import("../core/workers.zig").spawnLegacy(deviceAuthWorker, .{})) |t| {
+        @import("../core/workers.zig").release(t);
     } else |_| {
         auth_pending = false;
     }
