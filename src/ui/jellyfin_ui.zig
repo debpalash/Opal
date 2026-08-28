@@ -1,31 +1,50 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
-const state = @import("../core/state.zig");
 const theme = @import("theme.zig");
 const components = @import("components.zig");
 const jf = @import("../services/jellyfin.zig");
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
+const poster_util = @import("../core/poster.zig");
+
+var frame_view: jf.DesktopSnapshot = undefined;
+
+const PosterSlot = struct {
+    pixels: ?[]u8 = null,
+    tex: ?dvui.Texture = null,
+    w: u32 = 0,
+    h: u32 = 0,
+    fetching: bool = false,
+    id_hash: u64 = 0,
+};
+var poster_slots: [336]PosterSlot = [_]PosterSlot{.{}} ** 336;
+
+var login_initialized = false;
+var login_server: [256]u8 = std.mem.zeroes([256]u8);
+var login_user: [128]u8 = std.mem.zeroes([128]u8);
+var login_pass: [128]u8 = std.mem.zeroes([128]u8);
+var search_buf: [256]u8 = std.mem.zeroes([256]u8);
 
 // ══════════════════════════════════════════════════════════
 // Main Entry Point
 // ══════════════════════════════════════════════════════════
 
 pub fn renderContent() void {
-    if (!state.app.jf.connected) {
+    frame_view = jf.desktopSnapshot();
+    if (!frame_view.connected) {
         renderLoginForm();
         return;
     }
 
     // Auto-fetch libraries + resume on first load
-    if (state.app.jf.library_count == 0 and !state.app.jf.is_loading.load(.acquire)) {
+    if (frame_view.library_count == 0 and !frame_view.loading) {
         jf.fetchLibraries();
     }
-    if (!state.app.jf.resume_loaded.load(.acquire)) {
+    if (!frame_view.resume_loaded) {
         jf.fetchResume();
     }
 
-    switch (state.app.jf.view) {
+    switch (frame_view.view) {
         .Libraries => renderLibraries(),
         .Browse => renderItems(),
         .Search => renderSearch(),
@@ -38,6 +57,14 @@ pub fn renderContent() void {
 // ══════════════════════════════════════════════════════════
 
 fn renderLoginForm() void {
+    if (!login_initialized) {
+        const initial = if (frame_view.server_len > 0)
+            frame_view.server[0..frame_view.server_len]
+        else
+            "http://localhost:8096";
+        @memcpy(login_server[0..initial.len], initial);
+        login_initialized = true;
+    }
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
@@ -75,14 +102,8 @@ fn renderLoginForm() void {
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
 
-        if (state.app.jf.server_url_len == 0) {
-            const default = "http://localhost:8096";
-            @memcpy(state.app.jf.server_url[0..default.len], default);
-            state.app.jf.server_url_len = default.len;
-        }
-
         var url_te = dvui.textEntry(@src(), .{
-            .text = .{ .buffer = &state.app.jf.server_url },
+            .text = .{ .buffer = &login_server },
         }, .{
             .expand = .horizontal,
             .background = true,
@@ -100,7 +121,7 @@ fn renderLoginForm() void {
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
         var user_te = dvui.textEntry(@src(), .{
-            .text = .{ .buffer = &state.app.jf.login_user_buf },
+            .text = .{ .buffer = &login_user },
         }, .{
             .expand = .horizontal,
             .background = true,
@@ -118,7 +139,7 @@ fn renderLoginForm() void {
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
         var pass_te = dvui.textEntry(@src(), .{
-            .text = .{ .buffer = &state.app.jf.login_pass_buf },
+            .text = .{ .buffer = &login_pass },
         }, .{
             .expand = .horizontal,
             .background = true,
@@ -132,14 +153,14 @@ fn renderLoginForm() void {
         const login_enter = pass_te.enter_pressed;
         pass_te.deinit();
 
-        if (state.app.jf.login_error_len > 0) {
-            _ = dvui.label(@src(), "{s}", .{state.app.jf.login_error[0..state.app.jf.login_error_len]}, .{
+        if (frame_view.login_error_len > 0) {
+            _ = dvui.label(@src(), "{s}", .{frame_view.login_error[0..frame_view.login_error_len]}, .{
                 .color_text = theme.colors.danger,
                 .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
             });
         }
 
-        if (!state.app.jf.is_loading.load(.acquire)) {
+        if (!frame_view.loading) {
             const clicked_connect = dvui.button(@src(), "Connect", .{}, .{
                 .expand = .horizontal,
                 .color_fill = theme.colors.accent,
@@ -148,6 +169,11 @@ fn renderLoginForm() void {
                 .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.sm },
             });
             if (clicked_connect or login_enter) {
+                jf.configureLogin(
+                    std.mem.sliceTo(&login_server, 0),
+                    std.mem.sliceTo(&login_user, 0),
+                    std.mem.sliceTo(&login_pass, 0),
+                );
                 jf.authenticate();
             }
         } else {
@@ -182,7 +208,7 @@ fn renderLibraries() void {
             .padding = dvui.Rect.all(5),
             .corner_radius = theme.dims.rad_sm,
         })) {
-            state.app.jf.view = .Search;
+            jf.openSearch();
         }
 
         {
@@ -210,7 +236,7 @@ fn renderLibraries() void {
         }
     }
 
-    if (state.app.jf.is_loading.load(.acquire) and state.app.jf.library_count == 0) {
+    if (frame_view.loading and frame_view.library_count == 0) {
         renderSkeletonRows();
         return;
     }
@@ -223,7 +249,7 @@ fn renderLibraries() void {
     defer scroll.deinit();
 
     // Fully-empty state — connected, nothing loading, nothing to show.
-    if (state.app.jf.library_count == 0 and state.app.jf.resume_count == 0) {
+    if (frame_view.library_count == 0 and frame_view.resume_count == 0) {
         components.emptyState(
             icons.tvg.lucide.@"library-big",
             "No items yet",
@@ -233,7 +259,7 @@ fn renderLibraries() void {
     }
 
     // ── Continue Watching Section ──
-    if (state.app.jf.resume_count > 0) {
+    if (frame_view.resume_count > 0) {
         _ = dvui.label(@src(), "Continue Watching", .{}, .{
             .color_text = theme.colors.text_primary,
             .padding = .{ .x = 12, .y = 10, .w = 0, .h = 4 },
@@ -251,22 +277,22 @@ fn renderLibraries() void {
         var resume_row = dvui.box(@src(), .{ .dir = .horizontal }, .{});
         defer resume_row.deinit();
 
-        for (0..state.app.jf.resume_count) |i| {
-            const item = &state.app.jf.resume_items[i];
-            renderPosterCard(item, i + 5000, 130, true);
+        for (0..frame_view.resume_count) |i| {
+            const item = &frame_view.resume_items[i];
+            renderPosterCard(item, i, i + 5000, 130, true);
         }
     }
 
     // ── Library Rows ──
-    if (state.app.jf.library_count > 0) {
+    if (frame_view.library_count > 0) {
         _ = dvui.label(@src(), "Libraries", .{}, .{
             .color_text = theme.colors.text_primary,
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 4 },
         });
     }
 
-    for (0..state.app.jf.library_count) |i| {
-        const lib = &state.app.jf.libraries[i];
+    for (0..frame_view.library_count) |i| {
+        const lib = &frame_view.libraries[i];
         var lib_name_buf: [128]u8 = undefined;
         const name = @import("../core/text.zig").safeUtf8Buf(lib.name[0..lib.name_len], &lib_name_buf);
         const ct = lib.collection_type[0..lib.collection_type_len];
@@ -296,12 +322,7 @@ fn renderLibraries() void {
             .padding = dvui.Rect.all(0),
         })) {
             const id = lib.id[0..lib.id_len];
-            state.app.jf.nav_depth = 0;
-            const plen = @min(name.len, state.app.jf.parent_name.len);
-            @memcpy(state.app.jf.parent_name[0..plen], name[0..plen]);
-            state.app.jf.parent_name_len = plen;
-            state.app.jf.view = .Browse;
-            jf.fetchItems(id);
+            jf.openLibrary(id, name);
         }
 
         dvui.icon(@src(), "", icons.tvg.lucide.@"chevron-right", .{}, .{
@@ -337,9 +358,9 @@ fn renderItems() void {
             jf.popNav();
         }
 
-        if (state.app.jf.parent_name_len > 0) {
+        if (frame_view.parent_name_len > 0) {
             var pn_buf: [128]u8 = undefined;
-            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(state.app.jf.parent_name[0..state.app.jf.parent_name_len], &pn_buf)}, .{
+            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(frame_view.parent_name[0..frame_view.parent_name_len], &pn_buf)}, .{
                 .color_text = theme.colors.text_primary,
                 .gravity_y = 0.5,
                 .padding = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
@@ -351,7 +372,7 @@ fn renderItems() void {
             sp.deinit();
         }
 
-        if (state.app.jf.is_loading.load(.acquire)) {
+        if (frame_view.loading) {
             _ = dvui.label(@src(), "Loading...", .{}, .{
                 .color_text = theme.colors.text_secondary,
                 .gravity_y = 0.5,
@@ -359,13 +380,13 @@ fn renderItems() void {
         }
     }
 
-    if (state.app.jf.is_loading.load(.acquire) and state.app.jf.item_count == 0) {
+    if (frame_view.loading and frame_view.item_count == 0) {
         renderSkeletonRows();
         return;
     }
 
-    if (state.app.jf.item_count == 0 and !state.app.jf.is_loading.load(.acquire)) {
-        if (state.app.jf.view == .Search) {
+    if (frame_view.item_count == 0 and !frame_view.loading) {
+        if (frame_view.view == .Search) {
             components.emptyState(
                 icons.tvg.lucide.@"search-x",
                 "No matches",
@@ -396,7 +417,7 @@ fn renderItems() void {
 
     // ── Virtualization (same shape as tmdb.zig renderGallery) ──
     // Uniform cards → fixed row pitch: poster + footer + 3px margins each way.
-    const total = state.app.jf.item_count;
+    const total = frame_view.item_count;
     const row_h: f32 = card_w * 1.45 + CARD_FOOTER_H + 6;
     const total_rows = (total + cols - 1) / cols;
     const win = @import("../services/tmdb_pure.zig").visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
@@ -416,7 +437,7 @@ fn renderItems() void {
         defer row.deinit();
         var col: usize = 0;
         while (col < cols and base + col < total) : (col += 1) {
-            renderPosterCard(&state.app.jf.items[base + col], base + col, card_w, true);
+            renderPosterCard(&frame_view.items[base + col], 16 + base + col, base + col, card_w, true);
         }
     }
 
@@ -440,8 +461,8 @@ fn renderItems() void {
         const loading = jf.loading_more.load(.acquire);
         const max_y = scroll.si.scrollMax(.vertical);
         const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
-        const underfilled = max_y <= 0 and state.app.jf.item_count > 0;
-        if ((near_bottom or underfilled) and !loading and !state.app.jf.is_loading.load(.acquire)) {
+        const underfilled = max_y <= 0 and frame_view.item_count > 0;
+        if ((near_bottom or underfilled) and !loading and !frame_view.loading) {
             jf.loadMore();
         }
         if (loading or underfilled) {
@@ -526,222 +547,6 @@ fn renderSkeletonRows() void {
 // Item Card — horizontal card with poster + info + actions
 // ══════════════════════════════════════════════════════════
 
-fn renderItemCard(item: *state.JfItem, idx: usize) void {
-    const name = safeUtf8(item.name[0..item.name_len]);
-
-    var card = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .id_extra = idx,
-        .expand = .horizontal,
-        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
-    });
-    defer card.deinit();
-
-    // Poster thumbnail — flat token placeholder.
-    {
-        var poster = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 100,
-            .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .min_size_content = .{ .w = 50, .h = 75 },
-            .max_size_content = .{ .w = 50, .h = 75 },
-        });
-        defer poster.deinit();
-
-        // Lazy-load poster texture
-        if (item.poster_tex == null and item.poster_pixels != null) {
-            const num_pixels = item.poster_w * item.poster_h;
-            const pixels_pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(item.poster_pixels.?.ptr)))[0..num_pixels];
-            item.poster_tex = dvui.textureCreate(pixels_pma, item.poster_w, item.poster_h, .linear, .rgba_32) catch null;
-            if (item.poster_tex != null) {
-                @import("../core/alloc.zig").allocator.free(item.poster_pixels.?);
-                item.poster_pixels = null;
-            }
-        }
-
-        if (item.poster_tex) |*tex| {
-            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                .id_extra = idx + 150,
-                .expand = .both,
-                .corner_radius = dvui.Rect.all(theme.radius.sm),
-            });
-        } else {
-            if (item.poster_fetching) {
-                item.poster_attempted = true;
-            } else if (item.poster_attempted and item.poster_pixels == null and item.poster_tex == null) {
-                // Worker ran but produced no pixels — latch failure so we stop
-                // re-spawning a fetch every frame.
-                item.poster_failed = true;
-            } else if (!item.poster_failed and item.poster_pixels == null and item.id_len > 0) {
-                jf.fetchPoster(item);
-                if (item.poster_fetching) item.poster_attempted = true;
-            }
-            dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
-                .id_extra = idx + 150,
-                .gravity_x = 0.5,
-                .gravity_y = 0.5,
-                .color_text = theme.colors.text_tertiary,
-            });
-        }
-    }
-
-    // Info column
-    {
-        var info = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 200,
-            .expand = .horizontal,
-            .padding = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
-            .gravity_y = 0.5,
-        });
-        defer info.deinit();
-
-        // Truncated name
-        var name_trunc: [64]u8 = undefined;
-        const display = if (name.len > 50) blk: {
-            @memcpy(name_trunc[0..50], name[0..50]);
-            @memcpy(name_trunc[50..53], "...");
-            break :blk name_trunc[0..53];
-        } else name;
-
-        _ = dvui.label(@src(), "{s}", .{display}, .{
-            .id_extra = idx + 210,
-            .color_text = theme.colors.text_primary,
-        });
-
-        // Meta row: type badge + year
-        {
-            var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = idx + 300,
-                .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
-            });
-            defer meta.deinit();
-
-            const mt = item.media_type[0..item.media_type_len];
-            if (mt.len > 0) {
-                // Media-type is metadata, not an affordance — quiet text.
-                _ = dvui.label(@src(), "{s}", .{mt}, .{
-                    .id_extra = idx + 310,
-                    .color_text = theme.colors.text_secondary,
-                });
-            }
-
-            if (item.year > 0) {
-                _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 320, .color_text = theme.colors.text_secondary });
-                var yr_buf: [8]u8 = undefined;
-                const yr = std.fmt.bufPrintZ(&yr_buf, "{d}", .{item.year}) catch "?";
-                _ = dvui.label(@src(), "{s}", .{yr}, .{ .id_extra = idx + 330, .color_text = theme.colors.text_secondary });
-            }
-
-            // Runtime
-            if (item.runtime_ticks > 0) {
-                const mins = @divTrunc(item.runtime_ticks, 600000000);
-                if (mins > 0) {
-                    _ = dvui.label(@src(), " · ", .{}, .{ .id_extra = idx + 340, .color_text = theme.colors.text_secondary });
-                    var rt_buf: [16]u8 = undefined;
-                    const rt = std.fmt.bufPrintZ(&rt_buf, "{d}m", .{mins}) catch "?";
-                    _ = dvui.label(@src(), "{s}", .{rt}, .{ .id_extra = idx + 350, .color_text = theme.colors.text_secondary });
-                }
-            }
-        }
-
-        // Progress bar for partially-watched items — thin accent slider.
-        if (item.played_ticks > 0 and item.runtime_ticks > 0) {
-            const pct = @as(f32, @floatFromInt(item.played_ticks)) / @as(f32, @floatFromInt(item.runtime_ticks));
-            const clamped = std.math.clamp(pct, 0.0, 1.0);
-            components.ProgressBar(@src(), clamped, "", idx + 400);
-        }
-
-        // Expandable overview
-        if (item.overview_len > 0 and item.expanded) {
-            var ov_buf: [512]u8 = undefined;
-            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(item.overview[0..item.overview_len], &ov_buf)}, .{
-                .id_extra = idx + 500,
-                .color_text = theme.colors.text_secondary,
-                .expand = .horizontal,
-                .padding = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
-            });
-        }
-    }
-
-    // Action buttons
-    {
-        var acts = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = idx + 600,
-            .gravity_y = 0.5,
-        });
-        defer acts.deinit();
-
-        if (item.is_folder) {
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-right", .{}, .{}, .{
-                .id_extra = idx + 610,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = theme.colors.text_secondary,
-                .padding = dvui.Rect.all(4),
-            })) {
-                // Push current state before navigating deeper
-                jf.pushNav();
-                const id = item.id[0..item.id_len];
-                const plen = @min(name.len, state.app.jf.parent_name.len);
-                @memcpy(state.app.jf.parent_name[0..plen], name[0..plen]);
-                state.app.jf.parent_name_len = plen;
-                jf.fetchItems(id);
-            }
-        } else {
-            // Play button
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
-                .id_extra = idx + 620,
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.text_on_accent,
-                .padding = dvui.Rect.all(theme.spacing.xs),
-                .corner_radius = theme.dims.rad_sm,
-                .min_size_content = theme.iconSize(.sm),
-            })) {
-                const id = item.id[0..item.id_len];
-                const mt = item.media_type[0..item.media_type_len];
-                if (std.mem.eql(u8, mt, "Audio")) {
-                    jf.playAudioItem(id);
-                } else {
-                    jf.playItem(id);
-                }
-            }
-        }
-
-        // Info toggle
-        if (item.overview_len > 0) {
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.info, .{}, .{}, .{
-                .id_extra = idx + 630,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = if (item.expanded) theme.colors.accent else theme.colors.text_secondary,
-                .padding = dvui.Rect.all(3),
-                .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
-            })) {
-                item.expanded = !item.expanded;
-            }
-        }
-    }
-
-    // ── Right-click context menu ──
-    {
-        const ctext = dvui.context(@src(), .{ .rect = card.data().borderRectScale().r }, .{ .id_extra = idx + 800 });
-        defer ctext.deinit();
-
-        if (ctext.activePoint()) |cp| {
-            var fw = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(cp) }, .{
-                .id_extra = idx + 800,
-                .color_fill = theme.colors.bg_surface,
-                .color_border = theme.colors.border_subtle,
-            });
-            defer fw.deinit();
-
-            if ((dvui.menuItemLabel(@src(), "Copy Name", .{}, .{ .expand = .horizontal, .id_extra = idx + 810 })) != null) {
-                dvui.clipboardTextSet(name);
-                state.showToast("Name copied");
-                fw.close();
-            }
-        }
-    }
-}
-
 // ══════════════════════════════════════════════════════════
 // Poster Card — compact vertical card for horizontal scrolling
 // ══════════════════════════════════════════════════════════
@@ -750,7 +555,27 @@ fn renderItemCard(item: *state.JfItem, idx: usize) void {
 /// sizing AND the grid's virtualization row pitch. Keep single-sourced.
 const CARD_FOOTER_H: f32 = 32;
 
-fn renderPosterCard(item: *state.JfItem, idx: usize, card_w: f32, show_progress: bool) void {
+fn updatePoster(slot_idx: usize, item: *const jf.PresentationItem) *PosterSlot {
+    const slot = &poster_slots[slot_idx];
+    const id = item.id[0..item.id_len];
+    const hash = std.hash.Fnv1a_64.hash(id);
+    if (slot.id_hash != hash and !slot.fetching) {
+        poster_util.deinitPoster(&slot.pixels, &slot.tex);
+        slot.w = 0;
+        slot.h = 0;
+        slot.id_hash = hash;
+    }
+    _ = poster_util.uploadIfReady(&slot.pixels, slot.w, slot.h, &slot.tex);
+    if (item.has_image and slot.tex == null and slot.pixels == null and !slot.fetching) {
+        var url_buf: [512]u8 = undefined;
+        if (jf.primaryImageUrl(id, &url_buf)) |url| {
+            poster_util.fetchAsync(url, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
+        }
+    }
+    return slot;
+}
+
+fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usize, card_w: f32, show_progress: bool) void {
     const poster_h: f32 = card_w * 1.45;
     // min == max height → uniform row pitch for the virtualized grid.
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -775,18 +600,8 @@ fn renderPosterCard(item: *state.JfItem, idx: usize, card_w: f32, show_progress:
             .max_size_content = .{ .w = card_w, .h = poster_h },
         });
 
-        // Texture from pixels
-        if (item.poster_tex == null and item.poster_pixels != null) {
-            const num_pixels = item.poster_w * item.poster_h;
-            const pixels_pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(item.poster_pixels.?.ptr)))[0..num_pixels];
-            item.poster_tex = dvui.textureCreate(pixels_pma, item.poster_w, item.poster_h, .linear, .rgba_32) catch null;
-            if (item.poster_tex != null) {
-                @import("../core/alloc.zig").allocator.free(item.poster_pixels.?);
-                item.poster_pixels = null;
-            }
-        }
-
-        if (item.poster_tex) |*tex| {
+        const slot = updatePoster(slot_idx, item);
+        if (slot.tex) |*tex| {
             // Clickable poster to play
             if (dvui.button(@src(), "", .{}, .{
                 .id_extra = idx + 60,
@@ -801,16 +616,6 @@ fn renderPosterCard(item: *state.JfItem, idx: usize, card_w: f32, show_progress:
                 .expand = .both,
             });
         } else {
-            if (item.poster_fetching) {
-                item.poster_attempted = true;
-            } else if (item.poster_attempted and item.poster_pixels == null and item.poster_tex == null) {
-                // Worker ran but produced no pixels — latch failure so we stop
-                // re-spawning a fetch every frame.
-                item.poster_failed = true;
-            } else if (!item.poster_failed and item.poster_pixels == null and item.id_len > 0) {
-                jf.fetchPoster(item);
-                if (item.poster_fetching) item.poster_attempted = true;
-            }
             // Play button as placeholder
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
                 .id_extra = idx + 60,
@@ -883,11 +688,11 @@ fn renderSearch() void {
             .padding = dvui.Rect.all(5),
             .corner_radius = theme.dims.rad_sm,
         })) {
-            state.app.jf.view = .Libraries;
+            jf.goToLibraries();
         }
 
         var te = dvui.textEntry(@src(), .{
-            .text = .{ .buffer = &state.app.jf.search_buf },
+            .text = .{ .buffer = &search_buf },
         }, .{
             .expand = .horizontal,
             .background = true,
@@ -908,7 +713,7 @@ fn renderSearch() void {
             .corner_radius = theme.dims.rad_sm,
         });
         if (clicked_search or search_enter) {
-            jf.searchItems();
+            jf.searchFor(std.mem.sliceTo(&search_buf, 0));
         }
     }
 

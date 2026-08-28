@@ -9,7 +9,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 var store_mutex: @import("../core/sync.zig").Mutex = .{};
 var publication_gen: u64 = 0;
 
-pub const RemoteItem = struct {
+pub const PresentationItem = struct {
     id: [64]u8,
     id_len: usize,
     name: [256]u8,
@@ -17,10 +17,79 @@ pub const RemoteItem = struct {
     media_type: [32]u8,
     media_type_len: usize,
     year: u16,
+    overview: [512]u8,
+    overview_len: usize,
     is_folder: bool,
     has_image: bool,
     runtime_ticks: i64,
+    played_ticks: i64,
 };
+
+pub const RemoteItem = PresentationItem;
+
+fn copyPresentationItem(item: state.JfItem) PresentationItem {
+    return .{
+        .id = item.id,
+        .id_len = @min(item.id_len, item.id.len),
+        .name = item.name,
+        .name_len = @min(item.name_len, item.name.len),
+        .media_type = item.media_type,
+        .media_type_len = @min(item.media_type_len, item.media_type.len),
+        .year = item.year,
+        .overview = item.overview,
+        .overview_len = @min(item.overview_len, item.overview.len),
+        .is_folder = item.is_folder,
+        .has_image = item.has_image,
+        .runtime_ticks = item.runtime_ticks,
+        .played_ticks = item.played_ticks,
+    };
+}
+
+pub const DesktopSnapshot = struct {
+    generation: u64,
+    connected: bool,
+    loading: bool,
+    resume_loaded: bool,
+    view: state.JfView,
+    server: [256]u8,
+    server_len: usize,
+    login_error: [128]u8,
+    login_error_len: usize,
+    parent_name: [128]u8,
+    parent_name_len: usize,
+    libraries: [16]state.JfLibrary,
+    library_count: usize,
+    items: [320]PresentationItem,
+    item_count: usize,
+    resume_items: [16]PresentationItem,
+    resume_count: usize,
+};
+
+/// Desktop presentation value. No GPU handle, heap slice, or pointer into a
+/// worker-owned buffer crosses the feature-store boundary.
+pub fn desktopSnapshot() DesktopSnapshot {
+    store_mutex.lock();
+    defer store_mutex.unlock();
+    var out: DesktopSnapshot = undefined;
+    out.generation = publication_gen;
+    out.connected = state.app.jf.connected;
+    out.loading = state.app.jf.is_loading.load(.acquire);
+    out.resume_loaded = state.app.jf.resume_loaded.load(.acquire);
+    out.view = state.app.jf.view;
+    out.server = state.app.jf.server_url;
+    out.server_len = @min(state.app.jf.server_url_len, out.server.len);
+    out.login_error = state.app.jf.login_error;
+    out.login_error_len = @min(state.app.jf.login_error_len, out.login_error.len);
+    out.parent_name = state.app.jf.parent_name;
+    out.parent_name_len = @min(state.app.jf.parent_name_len, out.parent_name.len);
+    out.libraries = state.app.jf.libraries;
+    out.library_count = @min(state.app.jf.library_count, out.libraries.len);
+    out.item_count = @min(state.app.jf.item_count, out.items.len);
+    for (0..out.item_count) |i| out.items[i] = copyPresentationItem(state.app.jf.items[i]);
+    out.resume_count = @min(state.app.jf.resume_count, out.resume_items.len);
+    for (0..out.resume_count) |i| out.resume_items[i] = copyPresentationItem(state.app.jf.resume_items[i]);
+    return out;
+}
 
 pub const RemoteSnapshot = struct {
     generation: u64,
@@ -50,18 +119,7 @@ pub fn remoteSnapshot() RemoteSnapshot {
     out.item_count = @min(state.app.jf.item_count, out.items.len);
     for (0..out.item_count) |i| {
         const item = state.app.jf.items[i];
-        out.items[i] = .{
-            .id = item.id,
-            .id_len = item.id_len,
-            .name = item.name,
-            .name_len = item.name_len,
-            .media_type = item.media_type,
-            .media_type_len = item.media_type_len,
-            .year = item.year,
-            .is_folder = item.is_folder,
-            .has_image = item.has_image,
-            .runtime_ticks = item.runtime_ticks,
-        };
+        out.items[i] = copyPresentationItem(item);
     }
     return out;
 }
@@ -84,6 +142,59 @@ pub fn connectionSnapshot() ConnectionSnapshot {
         .token = state.app.jf.token,
         .token_len = @min(state.app.jf.token_len, state.app.jf.token.len),
     };
+}
+
+/// Build an authenticated poster URL from a locked credential snapshot. The
+/// returned bytes live only in the caller's buffer and never expose a slice of
+/// mutable feature state.
+pub fn primaryImageUrl(item_id: []const u8, out: *[512]u8) ?[]const u8 {
+    const connection = connectionSnapshot();
+    if (!connection.connected) return null;
+    return @import("jellyfin_pure.zig").primaryImageUrl(
+        connection.server[0..connection.server_len],
+        item_id,
+        connection.token[0..connection.token_len],
+        out,
+    );
+}
+
+pub fn openSearch() void {
+    store_mutex.lock();
+    defer store_mutex.unlock();
+    state.app.jf.view = .Search;
+    publication_gen +%= 1;
+}
+
+pub fn searchFor(query: []const u8) void {
+    store_mutex.lock();
+    @memset(&state.app.jf.search_buf, 0);
+    const n = @min(query.len, state.app.jf.search_buf.len - 1);
+    @memcpy(state.app.jf.search_buf[0..n], query[0..n]);
+    store_mutex.unlock();
+    searchItems();
+}
+
+pub fn openLibrary(id: []const u8, name: []const u8) void {
+    store_mutex.lock();
+    state.app.jf.nav_depth = 0;
+    const n = @min(name.len, state.app.jf.parent_name.len);
+    @memcpy(state.app.jf.parent_name[0..n], name[0..n]);
+    state.app.jf.parent_name_len = n;
+    state.app.jf.view = .Browse;
+    publication_gen +%= 1;
+    store_mutex.unlock();
+    fetchItems(id);
+}
+
+pub fn openFolder(id: []const u8, name: []const u8) void {
+    pushNav();
+    store_mutex.lock();
+    const n = @min(name.len, state.app.jf.parent_name.len);
+    @memcpy(state.app.jf.parent_name[0..n], name[0..n]);
+    state.app.jf.parent_name_len = n;
+    publication_gen +%= 1;
+    store_mutex.unlock();
+    fetchItems(id);
 }
 
 // On refetch/disconnect the old JfItems own a GPU poster_tex + heap
@@ -254,8 +365,6 @@ pub fn authenticate() void {
                 setLoginError("Failed to connect or no response");
                 return;
             };
-
-
 
             // Extract AccessToken
             const token = extractJsonString(resp, "\"AccessToken\":\"") orelse {
@@ -662,9 +771,12 @@ pub fn disconnect() void {
 
 /// Navigate back to libraries view
 pub fn goToLibraries() void {
+    store_mutex.lock();
+    defer store_mutex.unlock();
     state.app.jf.view = .Libraries;
     state.app.jf.parent_id_len = 0;
     state.app.jf.parent_name_len = 0;
+    publication_gen +%= 1;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -766,11 +878,14 @@ pub fn fetchResume() void {
             const body = jfGet(url) orelse return;
             defer alloc.free(body);
 
-            // Parse into resume items
-            state.app.jf.resume_count = 0;
+            // Parse into a worker-private generation, then publish the complete
+            // set in one locked swap so desktop/HTTP snapshots cannot observe a
+            // half-filled resume rail.
+            var next_items: [16]state.JfItem = std.mem.zeroes([16]state.JfItem);
+            var next_count: usize = 0;
             var pos: usize = 0;
 
-            while (pos < body.len and state.app.jf.resume_count < 16) {
+            while (pos < body.len and next_count < next_items.len) {
                 const id_key = "\"Id\":\"";
                 const next_id = std.mem.indexOf(u8, body[pos..], id_key) orelse break;
                 const abs = pos + next_id;
@@ -785,8 +900,7 @@ pub fn fetchResume() void {
 
                 const obj_end = findObjEnd(body, obj_start);
                 const obj = body[obj_start..obj_end];
-                const item = &state.app.jf.resume_items[state.app.jf.resume_count];
-                item.* = std.mem.zeroes(state.JfItem);
+                const item = &next_items[next_count];
 
                 if (extractJsonString(obj, "\"Id\":\"")) |id| {
                     const ilen = @min(id.len, item.id.len);
@@ -814,16 +928,24 @@ pub fn fetchResume() void {
                     }
                 }
 
-                state.app.jf.resume_count += 1;
+                next_count += 1;
                 pos = obj_end;
             }
+            if (workers.isQuitting()) return;
+            store_mutex.lock();
+            state.app.jf.resume_items = next_items;
+            state.app.jf.resume_count = next_count;
             state.app.jf.resume_loaded.store(true, .release);
+            publication_gen +%= 1;
+            store_mutex.unlock();
         }
     }.worker, .{}) catch {};
 }
 
 /// Push current browse state onto nav stack before navigating deeper
 pub fn pushNav() void {
+    store_mutex.lock();
+    defer store_mutex.unlock();
     if (state.app.jf.nav_depth >= 8) return;
     var entry = &state.app.jf.nav_stack[state.app.jf.nav_depth];
     const plen = state.app.jf.parent_id_len;
@@ -833,11 +955,14 @@ pub fn pushNav() void {
     @memcpy(entry.name[0..nlen], state.app.jf.parent_name[0..nlen]);
     entry.name_len = nlen;
     state.app.jf.nav_depth += 1;
+    publication_gen +%= 1;
 }
 
 /// Pop nav stack and navigate back
 pub fn popNav() void {
+    store_mutex.lock();
     if (state.app.jf.nav_depth == 0) {
+        store_mutex.unlock();
         goToLibraries();
         return;
     }
@@ -849,7 +974,11 @@ pub fn popNav() void {
     const nlen = entry.name_len;
     @memcpy(state.app.jf.parent_name[0..nlen], entry.name[0..nlen]);
     state.app.jf.parent_name_len = nlen;
-    fetchItems(state.app.jf.parent_id[0..plen]);
+    var parent: [64]u8 = undefined;
+    @memcpy(parent[0..plen], state.app.jf.parent_id[0..plen]);
+    publication_gen +%= 1;
+    store_mutex.unlock();
+    fetchItems(parent[0..plen]);
 }
 
 // ══════════════════════════════════════════════════════════

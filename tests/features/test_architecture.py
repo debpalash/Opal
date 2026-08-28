@@ -81,6 +81,7 @@ def test_feature_store_snapshots():
     podcasts = _src("src/services/podcasts.zig")
     podcasts_ui = _src("src/ui/podcasts_ui.zig")
     jellyfin = _src("src/services/jellyfin.zig")
+    jellyfin_ui = _src("src/ui/jellyfin_ui.zig")
     remote = _src("src/services/remote.zig")
     stream = _src("src/services/remote_stream.zig")
     checks = {
@@ -96,6 +97,9 @@ def test_feature_store_snapshots():
             and 'podcasts.zig").copyArtwork' in stream,
         "Jellyfin projection excludes pointers": "pub const RemoteItem" in jellyfin
             and "poster_pixels" not in _between(jellyfin, "pub const RemoteItem", "pub const RemoteSnapshot"),
+        "Jellyfin desktop snapshot": "jf.desktopSnapshot()" in jellyfin_ui
+            and "frame_view.items" in jellyfin_ui and "state.app.jf.items" not in jellyfin_ui
+            and "pub const DesktopSnapshot" in jellyfin,
         "Jellyfin remote snapshot": "jf.remoteSnapshot()" in remote
             and 'jellyfin.zig").connectionSnapshot' in stream,
         "commands own credential mutation": "pub fn configureLogin(" in jellyfin
