@@ -840,7 +840,9 @@ pub fn lyricsHave() bool {
     return lyrics.hasLyrics();
 }
 
-pub fn renderLyricsPanel() void {
+pub const LyricsPanelPlacement = enum { side, bottom };
+
+pub fn renderLyricsPanel(placement: LyricsPanelPlacement) void {
     if (!lyrics.hasLyrics()) return;
 
     var snap: [400]lyrics.LyricLine = undefined;
@@ -850,24 +852,27 @@ pub fn renderLyricsPanel() void {
     const pos_ms = playbackMs() orelse 0;
     const active = lyrics.currentIndex(pos_ms);
 
-    // Docked right column: fixed 320px width, fills the route height. It is
-    // placed in a real layout slot beside the player grid (shell.zig), so it
-    // never floats over the video/waveform cell.
+    // Wide layouts dock a bounded column beside the player. Narrow layouts put
+    // a shallow lyrics tray below it, so a 320px sidebar can never consume most
+    // of a small window or crush the video to a sliver.
     //
     // `.expand = .vertical` is load-bearing: in the horizontal split this makes
     // the panel a full-height slot (placeIn's vertical branch fills the split's
     // cross axis) AND makes BOTH split children vertically-expanding, so the
-    // horizontal box's cross-axis height is unambiguous. Width stays pinned at
-    // 320 because min==max and `.vertical` carries no horizontal weight.
+    // horizontal box's cross-axis height is unambiguous. The bottom placement
+    // mirrors this on the other axis.
+    const win = dvui.windowRect();
+    const panel_w = std.math.clamp(win.w * 0.28, 240.0, 320.0);
+    const panel_h = std.math.clamp(win.h * 0.26, 120.0, 190.0);
     var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .expand = .vertical,
-        .min_size_content = .{ .w = 320, .h = 0 },
-        .max_size_content = .{ .w = 320, .h = std.math.floatMax(f32) },
+        .expand = if (placement == .side) .vertical else .horizontal,
+        .min_size_content = if (placement == .side) .{ .w = panel_w, .h = 0 } else .{ .w = 0, .h = panel_h },
+        .max_size_content = if (placement == .side) .{ .w = panel_w, .h = std.math.floatMax(f32) } else .{ .w = std.math.floatMax(f32), .h = panel_h },
         .background = true,
         .color_fill = theme.colors.bg_surface,
         .color_border = theme.colors.border_subtle,
-        .border = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
-        .padding = .{ .x = 16, .y = 12, .w = 16, .h = 12 },
+        .border = if (placement == .side) .{ .x = 1, .y = 0, .w = 0, .h = 0 } else .{ .x = 0, .y = 1, .w = 0, .h = 0 },
+        .padding = if (placement == .side) .{ .x = 16, .y = 12, .w = 16, .h = 12 } else .{ .x = 10, .y = 6, .w = 10, .h = 6 },
     });
     defer panel.deinit();
 

@@ -44,7 +44,7 @@ const TOUR = [_]TourPage{
         .intro = "Opal pulls from many places at once — you search, it plays.",
         .features = &.{
             .{ .icon = icons.tvg.lucide.search, .label = "Universal search", .desc = "One bar queries every installed source; play or download any result." },
-            .{ .icon = icons.tvg.lucide.clapperboard, .label = "Movies & TV", .desc = "Browse trending, posters, full seasons and episodes (uses your TMDB key)." },
+            .{ .icon = icons.tvg.lucide.clapperboard, .label = "Movies & TV", .desc = "Browse movie and TV feeds with posters — no catalog API key required." },
         },
     },
     .{
@@ -98,12 +98,13 @@ pub fn render() void {
     page = nav.clamp(page, PAGE_COUNT);
 
     var open = true;
+    const dialog_size = theme.fitWindowSize(.{ .w = 480, .h = 0 }, .{ .w = 260, .h = 0 });
     var win = dvui.floatingWindow(@src(), .{
         .modal = true,
         .open_flag = &open,
     }, .{
-        .min_size_content = .{ .w = 480, .h = 0 },
-        .max_size_content = dvui.Options.MaxSize.width(520),
+        .min_size_content = dialog_size,
+        .max_size_content = dvui.Options.MaxSize.width(dialog_size.w),
         .color_fill = theme.colors.bg_surface,
         .border = dvui.Rect.all(1),
         .color_border = theme.colors.border_subtle,
@@ -169,15 +170,15 @@ fn setupPage() void {
         }
     }
 
-    // ── 2. TMDB (posters, seasons, trending) ──
+    // ── 2. Optional TMDB enrichment ──
     {
         var card = stepCard(@src(), 2000);
         defer card.deinit();
-        stepHeader(200, "TMDB catalog key");
+        stepHeader(200, "TMDB details (optional)");
         if (state.app.tmdb.api_key_len > 0) {
-            doneRow(210, "TMDB key found — Movies & TV browsing is live.");
+            doneRow(210, "TMDB key found — season and episode details are enabled.");
         } else {
-            descLabel(201, "Free key from themoviedb.org/settings/api — powers posters, seasons and trending.");
+            descLabel(201, "Movie and TV feeds work without a key. Add a free TMDB key only for richer season and episode details.");
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = 202,
                 .expand = .horizontal,
@@ -222,7 +223,6 @@ fn setupPage() void {
             descLabel(301, "Add a cloud key to .env, or install a local model later — both in Settings › AI. Nothing downloads without you asking.");
         }
     }
-
 }
 
 /// A feature-tour page — heading, one-line intro, then one card per capability.

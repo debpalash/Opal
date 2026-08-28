@@ -1196,7 +1196,7 @@ fn renderGeneralTab() void {
     }
 
     // ── TMDB Integration ──
-    sectionHeader("TMDB Integration", "Connect to The Movie Database for rich metadata", 14, @src());
+    sectionHeader("TMDB Integration", "Optional: add richer season and episode metadata", 14, @src());
 
     settingRow("API Key", 140, @src());
     {
@@ -1223,7 +1223,7 @@ fn renderGeneralTab() void {
         _ = dvui.label(@src(), "{s}", .{if (tmdb_was_default and !tmdb_changed)
             "Using Opal's built-in key — paste your own to override."
         else
-            "Free key from themoviedb.org/settings/api"}, .{
+            "Optional — movie and TV feeds work without a key"}, .{
             .id_extra = 143,
             .color_text = theme.colors.text_tertiary,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
@@ -1413,7 +1413,7 @@ fn renderAboutTab() void {
             .id_extra = 2546,
             .color_text = theme.colors.text_secondary,
         });
-        _ = dvui.label(@src(), "Metadata from TMDB — this product uses the TMDB API but is not endorsed or certified by TMDB.", .{}, .{
+        _ = dvui.label(@src(), "Catalog feeds from Cinemeta. Optional metadata from TMDB — this product uses the TMDB API but is not endorsed or certified by TMDB.", .{}, .{
             .id_extra = 2547,
             .color_text = theme.colors.text_tertiary,
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.xs },
@@ -3955,11 +3955,13 @@ fn renderScriptsTab() void {
 pub fn renderCheatSheet() void {
     if (!state.app.cheatsheet_open) return;
 
+    const dialog_size = theme.fitWindowSize(.{ .w = 650, .h = 520 }, .{ .w = 280, .h = 200 });
+
     var win = dvui.floatingWindow(@src(), .{
         .modal = true,
         .open_flag = &state.app.cheatsheet_open,
     }, .{
-        .min_size_content = .{ .w = 650, .h = 520 },
+        .min_size_content = dialog_size,
         .color_fill = theme.colors.bg_surface,
         .color_border = theme.colors.border_subtle,
     });
@@ -4118,11 +4120,12 @@ pub fn renderDepsModal() void {
         return;
     }
 
+    const dialog_size = theme.fitWindowSize(.{ .w = 580, .h = 400 }, .{ .w = 280, .h = 200 });
     var win = dvui.floatingWindow(@src(), .{
         .modal = true,
         .open_flag = &state.app.deps_modal_open,
     }, .{
-        .min_size_content = .{ .w = 580, .h = 400 },
+        .min_size_content = dialog_size,
         .color_fill = theme.colors.bg_surface,
         .color_border = theme.colors.accent,
         .corner_radius = theme.dims.rad_xl,
@@ -4503,10 +4506,11 @@ pub fn renderMediaInfo() void {
 
     const p = state.app.players.items[state.app.active_player_idx];
 
+    const dialog_size = theme.fitWindowSize(.{ .w = 420, .h = 320 }, .{ .w = 240, .h = 180 });
     var win = dvui.floatingWindow(@src(), .{
         .open_flag = &state.app.media_info_open,
     }, .{
-        .min_size_content = .{ .w = 420, .h = 320 },
+        .min_size_content = dialog_size,
         .color_fill = theme.colors.bg_surface,
         .color_border = theme.colors.border_subtle,
     });

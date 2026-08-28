@@ -529,11 +529,12 @@ fn renderVoiceButton() void {
 /// Stream-key reveal popover.  Renders a small modal floating window with
 /// the 16-hex token + Copy button.  Closes on click-out via `open_flag`.
 fn renderStreamKeyPopover() void {
+    const dialog_size = theme.fitWindowSize(.{ .w = 320, .h = 130 }, .{ .w = 230, .h = 110 });
     var win = dvui.floatingWindow(@src(), .{
         .modal = true,
         .open_flag = &HeaderState.stream_key_open,
     }, .{
-        .min_size_content = .{ .w = 320, .h = 130 },
+        .min_size_content = dialog_size,
         .color_fill = theme.colors.bg_surface,
         .corner_radius = dvui.Rect.all(theme.radius.lg),
     });
@@ -622,8 +623,9 @@ pub fn renderUrlInput(is_large: bool) void {
         .margin = .{ .x = 1, .y = 0, .w = 1, .h = 0 },
     };
     if (is_large) {
-        box_opts.min_size_content = .{ .w = 480, .h = 56 };
-        box_opts.max_size_content = .{ .w = 620, .h = 56 };
+        const large_size = theme.fitWindowSize(.{ .w = 480, .h = 56 }, .{ .w = 220, .h = 56 });
+        box_opts.min_size_content = large_size;
+        box_opts.max_size_content = dvui.Options.MaxSize.size(large_size);
         box_opts.padding = .{ .x = 10, .y = 6, .w = 8, .h = 6 };
         box_opts.margin = .{ .x = 0, .y = 10, .w = 0, .h = 0 };
         box_opts.gravity_x = 0.5;

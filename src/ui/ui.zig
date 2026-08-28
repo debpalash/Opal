@@ -162,11 +162,12 @@ pub fn renderWorkspaceModals() void {
     // bg_surface + radius.lg (matches the stream-key popover / sub picker).
     // ═══════════════════════════════════════════════════════
     if (state.app.ws_save_open) {
+        const dialog_size = theme.fitWindowSize(.{ .w = 360, .h = 120 }, .{ .w = 230, .h = 110 });
         var win = dvui.floatingWindow(@src(), .{
             .modal = true,
             .open_flag = &state.app.ws_save_open,
         }, .{
-            .min_size_content = .{ .w = 360, .h = 120 },
+            .min_size_content = dialog_size,
             .color_fill = theme.colors.bg_surface,
             .corner_radius = dvui.Rect.all(theme.radius.lg),
         });
@@ -250,11 +251,12 @@ pub fn renderWorkspaceModals() void {
     // LOAD WORKSPACE MODAL
     // ═══════════════════════════════════════════════════════
     if (state.app.ws_load_open) {
+        const dialog_size = theme.fitWindowSize(.{ .w = 360, .h = 120 }, .{ .w = 230, .h = 110 });
         var win = dvui.floatingWindow(@src(), .{
             .modal = true,
             .open_flag = &state.app.ws_load_open,
         }, .{
-            .min_size_content = .{ .w = 360, .h = 120 },
+            .min_size_content = dialog_size,
             .color_fill = theme.colors.bg_surface,
             .corner_radius = dvui.Rect.all(theme.radius.lg),
         });

@@ -160,6 +160,59 @@ def test_typography_unified():
     return "pass", "embedded Noto Sans + compact ramp drive dvui/component fonts"
 
 
+@test("Responsive Shell Covers Tiny + Short Windows", "Page Shell")
+def test_responsive_shell_tiers():
+    sc = _src("src/core/scale_pure.zig")
+    sh = _src("src/ui/shell.zig")
+    ly = _src("src/services/music_subsonic.zig")
+    checks = {
+        "tiny width tier": "TINY_PT" in sc and "isTiny(" in sc,
+        "short height tier": "SHORT_PT" in sc and "isShort(" in sc,
+        "compact header sheds inline search": "if (!compact) omnibox(narrow)" in sh,
+        "resize reads live window": "const window_rect = dvui.windowRect()" in sh
+            and "root.data().rect.w" not in sh,
+        "breakpoint swap converges": "last_tier" in sh and "dvui.refresh(null" in sh,
+        "compact destinations remain reachable": all(label in sh for label in
+            ('"Watching"', '"Queue"', '"History"', '"Plugins"', '"Logs"', '"Settings"')),
+        "dense bottom navigation": "renderBottomTabs(tiny or short)" in sh and "if (!dense)" in sh,
+        "lyrics stack below narrow player": "lyrics_below" in sh and ".bottom else .side" in sh,
+        "lyrics panel adapts both axes": "LyricsPanelPlacement" in ly and "panel_h" in ly and "panel_w" in ly,
+        "dialogs fit the live window": "pub fn fitWindowSize(" in _src("src/ui/theme.zig")
+            and "fitWindowSize(" in _src("src/ui/command_palette.zig")
+            and "fitWindowSize(" in _src("src/ui/metadata_dialog.zig"),
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "missing: " + ", ".join(missing)
+    return "pass", "tiny/short shell, complete compact navigation, adaptive lyrics"
+
+
+@test("Movies & TV Feed Needs No User API Key", "Page Shell")
+def test_keyless_movie_tv_feed():
+    api = _src("src/services/tmdb_api.zig")
+    page = _src("src/services/tmdb.zig")
+    parser = _src("src/services/tmdb_parse.zig")
+    onboarding = _src("src/ui/onboarding.zig")
+    checks = {
+        "catalog render has no key gate": "renderNoApiKey" not in page,
+        "fetch has no key gate": "if (state.app.tmdb.api_key_len == 0) return;" not in _between(
+            api, "pub fn fetchCurrentView", "fn browseCacheKey"
+        ),
+        "zero-key Cinemeta fallback": "v3-cinemeta.strem.io/catalog" in api
+            and "fetchCinemetaInto" in api,
+        "movies and series supported": '"movie"' in api and '"series"' in api,
+        "Cinemeta cards parsed": "parseCinemetaResponse" in parser
+            and '\\"imdbRating\\":' in parser and '\\"moviedb_id\\":' in parser,
+        "absolute poster URLs supported": 'startsWith(u8, path, "https://")' in api,
+        "setup says key optional": "no catalog API key required" in onboarding
+            and "TMDB details (optional)" in onboarding,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "missing: " + ", ".join(missing)
+    return "pass", "Cinemeta powers keyless movie/TV cards; TMDB remains optional"
+
+
 @test("Browse Sub-Tabs Own Their Row", "Page Shell")
 def test_subtab_layout():
     # Phase 4 regression guard: the route fade (AnimateWidget) wraps a SINGLE

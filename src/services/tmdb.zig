@@ -85,11 +85,6 @@ pub fn renderTmdbContent() void {
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = dvui.Rect.all(8) });
     defer content.deinit();
 
-    if (state.app.tmdb.api_key_len == 0) {
-        renderNoApiKey();
-        return;
-    }
-
     // TV drill-down takes over the whole view (Netflix/Apple-TV+ style). The
     // normal Trending/Search/etc. gallery is suppressed until the user backs out.
     if (state.app.tmdb.tv_detail_open) {
@@ -140,24 +135,6 @@ fn activeList() *std.ArrayListUnmanaged(state.TmdbItem) {
 // Sub-Tabs
 // ══════════════════════════════════════════════════════════
 
-fn renderNoApiKey() void {
-    var box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .gravity_x = 0.5, .gravity_y = 0.4, .padding = dvui.Rect.all(24) });
-    defer box.deinit();
-    _ = dvui.label(@src(), "TMDB API Key Required", .{}, .{ .color_text = theme.colors.text_primary, .gravity_x = 0.5 });
-    _ = dvui.label(@src(), "Add your free API key in Settings > General", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_x = 0.5 });
-    _ = dvui.label(@src(), "Get one at: themoviedb.org/settings/api", .{}, .{ .color_text = theme.colors.accent, .gravity_x = 0.5 });
-    if (dvui.button(@src(), "Open Settings", .{}, .{
-        .gravity_x = 0.5,
-        .margin = .{ .x = 0, .y = 12, .w = 0, .h = 0 },
-        .color_fill = theme.colors.accent,
-        .color_text = theme.colors.bg_app,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 16, .y = 8, .w = 16, .h = 8 },
-    })) {
-        state.app.settings_open = true;
-    }
-}
-
 /// One compact, full-width toolbar replacing the old 3–4 stacked filter rows.
 /// Wraps gracefully on narrow widths via flexbox.
 fn renderToolbar(count: usize) void {
@@ -190,20 +167,26 @@ fn renderToolbar(count: usize) void {
             renderCatChip(0, .trending, "Trending");
             renderCatChip(1, .popular, "Popular");
             renderCatChip(2, .top_rated, "Top Rated");
-            renderCatChip(3, .now_playing, "In Cinemas");
-            renderCatChip(4, .upcoming, "Upcoming");
+            if (state.app.tmdb.api_key_len > 0) {
+                renderCatChip(3, .now_playing, "In Cinemas");
+                renderCatChip(4, .upcoming, "Upcoming");
+            } else {
+                // Cinemeta exposes a newest-by-year catalog, but does not make
+                // theatrical-window claims. Keep the zero-key label honest.
+                renderCatChip(3, .now_playing, "New");
+            }
             toolbarDivider(902);
             renderFilterChip(10, .all, "All");
             renderFilterChip(11, .movie, "Movies");
             renderFilterChip(12, .tv, "TV");
-            if (state.app.tmdb.category == .trending and state.app.tmdb.genre_idx == 0) {
+            if (state.app.tmdb.api_key_len > 0 and state.app.tmdb.category == .trending and state.app.tmdb.genre_idx == 0) {
                 toolbarDivider(903);
                 renderTimeChip(20, .week, "Week");
                 renderTimeChip(21, .day, "Today");
             }
             toolbarDivider(904);
             renderGenreDropdown();
-            if (state.app.tmdb.genre_idx != 0) {
+            if (state.app.tmdb.api_key_len > 0 and state.app.tmdb.genre_idx != 0) {
                 toolbarDivider(905);
                 renderSortChip(30, 0, "Popular");
                 renderSortChip(31, 1, "Top rated");
@@ -257,7 +240,7 @@ fn renderGenreDropdown() void {
             // /discover has no "multi" endpoint — with the filter on All, a
             // genre pick would silently return movies while "All" stayed
             // highlighted. Reflect reality in the UI instead.
-            if (sel != 0 and state.app.tmdb.media_filter == .all) {
+            if (sel != 0 and state.app.tmdb.media_filter == .all and state.app.tmdb.api_key_len > 0) {
                 state.app.tmdb.media_filter = .movie;
             }
             state.app.tmdb.page = 1;
@@ -1341,7 +1324,10 @@ fn closeTvDetail() void {
 /// title so clicking either part of a TV card shows its episodes.
 fn openOrSearch(item: *state.TmdbItem) void {
     const mt = item.media_type[0..@min(item.media_type_len, item.media_type.len)];
-    if (std.mem.eql(u8, mt, "tv")) openTvDetail(item) else sendToSearch(item);
+    if (std.mem.eql(u8, mt, "tv") and state.app.tmdb.api_key_len > 0)
+        openTvDetail(item)
+    else
+        sendToSearch(item);
 }
 
 fn fetchSeasons(tmdb_id: i32) void {

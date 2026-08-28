@@ -283,6 +283,21 @@ pub fn iconSize(s: IconSize) dvui.Size {
     };
 }
 
+/// Clamp a preferred dialog/overlay size to the live content area while
+/// retaining a useful floor whenever that floor actually fits. On genuinely
+/// smaller windows, fitting on-screen wins over the nominal minimum.
+pub fn fitWindowSize(preferred: dvui.Size, minimum: dvui.Size) dvui.Size {
+    const wr = dvui.windowRect();
+    if (wr.w <= 1 or wr.h <= 1) return preferred;
+    const scale = if (std.math.isFinite(state.app.ui_scale) and state.app.ui_scale > 0) state.app.ui_scale else 1.0;
+    const avail_w = @max(1.0, wr.w / scale - 24.0);
+    const avail_h = @max(1.0, wr.h / scale - 24.0);
+    return .{
+        .w = if (avail_w >= minimum.w) @max(minimum.w, @min(preferred.w, avail_w)) else avail_w,
+        .h = if (avail_h >= minimum.h) @max(minimum.h, @min(preferred.h, avail_h)) else avail_h,
+    };
+}
+
 // ── Spacing tokens — 4px-based scale ──
 
 pub const spacing = struct {
@@ -512,4 +527,3 @@ pub fn optDivider() dvui.Options {
         .margin = .{ .x = 0, .y = 6, .w = 0, .h = 6 },
     };
 }
-

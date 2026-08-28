@@ -81,11 +81,13 @@ fn runCommand(cmd: Command) void {
 pub fn render() void {
     if (!state.app.command_palette_open) return;
 
+    const dialog_size = theme.fitWindowSize(.{ .w = 460, .h = 360 }, .{ .w = 240, .h = 180 });
+
     var win = dvui.floatingWindow(@src(), .{
         .modal = true,
         .open_flag = &state.app.command_palette_open,
     }, .{
-        .min_size_content = .{ .w = 460, .h = 360 },
+        .min_size_content = dialog_size,
         .color_fill = theme.colors.bg_surface,
         .color_border = theme.colors.border_subtle,
         .border = dvui.Rect.all(1),

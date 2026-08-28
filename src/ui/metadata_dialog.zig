@@ -9,6 +9,7 @@ const TRANSPARENT: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
 pub fn renderMetadataDialog() void {
     if (state.app.pending_magnet_tid < 0) return;
+    const dialog_size = theme.fitWindowSize(.{ .w = 600, .h = 400 }, .{ .w = 260, .h = 180 });
 
     // Full screen blocker to disable click-through
     var backdrop = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -26,7 +27,7 @@ pub fn renderMetadataDialog() void {
         .corner_radius = theme.dims.rad_lg,
         .margin = dvui.Rect.all(theme.spacing.xl),
         .padding = dvui.Rect.all(theme.spacing.md),
-        .min_size_content = .{ .w = 600, .h = 400 },
+        .min_size_content = dialog_size,
         .expand = .both,
         .box_shadow = .{
             .color = theme.colors.overlay,

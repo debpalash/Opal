@@ -1107,6 +1107,16 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_tmdb_pure).step);
 
+    // Zero-key Cinemeta catalog response splitting and stable fallback ids.
+    const test_cinemeta_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/cinemeta_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_cinemeta_pure).step);
+
     // Internet Archive JSON parsing: advancedsearch docs[] iteration
     // (order-independent id/title/year) + metadata files[] best-video pick +
     // a malformed-JSON regression case.

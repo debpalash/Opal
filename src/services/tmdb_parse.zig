@@ -10,19 +10,19 @@ pub const alloc = @import("../core/alloc.zig").allocator;
 
 const GenreEntry = struct { id: i32, name: []const u8 };
 const genre_map = [_]GenreEntry{
-    .{ .id = 28, .name = "Action" },      .{ .id = 12, .name = "Adventure" },
-    .{ .id = 16, .name = "Animation" },    .{ .id = 35, .name = "Comedy" },
-    .{ .id = 80, .name = "Crime" },        .{ .id = 99, .name = "Documentary" },
-    .{ .id = 18, .name = "Drama" },        .{ .id = 10751, .name = "Family" },
-    .{ .id = 14, .name = "Fantasy" },      .{ .id = 36, .name = "History" },
-    .{ .id = 27, .name = "Horror" },       .{ .id = 10402, .name = "Music" },
-    .{ .id = 9648, .name = "Mystery" },    .{ .id = 10749, .name = "Romance" },
-    .{ .id = 878, .name = "Sci-Fi" },      .{ .id = 53, .name = "Thriller" },
-    .{ .id = 10752, .name = "War" },       .{ .id = 37, .name = "Western" },
+    .{ .id = 28, .name = "Action" },                .{ .id = 12, .name = "Adventure" },
+    .{ .id = 16, .name = "Animation" },             .{ .id = 35, .name = "Comedy" },
+    .{ .id = 80, .name = "Crime" },                 .{ .id = 99, .name = "Documentary" },
+    .{ .id = 18, .name = "Drama" },                 .{ .id = 10751, .name = "Family" },
+    .{ .id = 14, .name = "Fantasy" },               .{ .id = 36, .name = "History" },
+    .{ .id = 27, .name = "Horror" },                .{ .id = 10402, .name = "Music" },
+    .{ .id = 9648, .name = "Mystery" },             .{ .id = 10749, .name = "Romance" },
+    .{ .id = 878, .name = "Sci-Fi" },               .{ .id = 53, .name = "Thriller" },
+    .{ .id = 10752, .name = "War" },                .{ .id = 37, .name = "Western" },
     .{ .id = 10759, .name = "Action & Adventure" }, .{ .id = 10762, .name = "Kids" },
-    .{ .id = 10763, .name = "News" },      .{ .id = 10764, .name = "Reality" },
+    .{ .id = 10763, .name = "News" },               .{ .id = 10764, .name = "Reality" },
     .{ .id = 10765, .name = "Sci-Fi & Fantasy" },   .{ .id = 10766, .name = "Soap" },
-    .{ .id = 10767, .name = "Talk" },      .{ .id = 10768, .name = "War & Politics" },
+    .{ .id = 10767, .name = "Talk" },               .{ .id = 10768, .name = "War & Politics" },
 };
 
 fn genreName(id: i32) ?[]const u8 {
@@ -38,7 +38,7 @@ fn genreName(id: i32) ?[]const u8 {
 
 pub fn extractJsonString(json: []const u8, key: []const u8) ?[]const u8 {
     const ki = std.mem.indexOf(u8, json, key) orelse return null;
-    const after = json[ki + key.len..];
+    const after = json[ki + key.len ..];
     var i: usize = 0;
     while (i < after.len and (after[i] == ' ' or after[i] == ':')) i += 1;
     if (i >= after.len or after[i] != '"') return null;
@@ -53,7 +53,7 @@ pub fn extractJsonString(json: []const u8, key: []const u8) ?[]const u8 {
 
 pub fn extractJsonInt(json: []const u8, key: []const u8) i32 {
     const ki = std.mem.indexOf(u8, json, key) orelse return 0;
-    const after = json[ki + key.len..];
+    const after = json[ki + key.len ..];
     var i: usize = 0;
     while (i < after.len and (after[i] == ' ')) i += 1;
     var result: i32 = 0;
@@ -65,7 +65,7 @@ pub fn extractJsonInt(json: []const u8, key: []const u8) i32 {
 
 pub fn extractJsonFloat(json: []const u8, key: []const u8) f32 {
     const ki = std.mem.indexOf(u8, json, key) orelse return 0;
-    const after = json[ki + key.len..];
+    const after = json[ki + key.len ..];
     var i: usize = 0;
     while (i < after.len and (after[i] == ' ')) i += 1;
     const start = i;
@@ -105,6 +105,79 @@ pub fn parseTmdbResponse(body: []const u8, out: *std.ArrayListUnmanaged(state.Tm
     for (objs[0..n]) |obj| parseAndAddItem(obj, out) catch {};
 }
 
+/// Parse Cinemeta catalog records into the existing catalog-card model. This
+/// keeps favorites, watchlists, grid rendering, and poster loading provider
+/// agnostic while allowing a zero-key movie/TV feed.
+pub fn parseCinemetaResponse(body: []const u8, out: *std.ArrayListUnmanaged(state.TmdbItem)) void {
+    var objs: [64][]const u8 = undefined;
+    const n = @import("cinemeta_pure.zig").splitMetaObjects(body, &objs);
+    for (objs[0..n]) |obj| parseAndAddCinemetaItem(obj, out);
+}
+
+fn copyInto(dst: []u8, len: *usize, src: []const u8) void {
+    const n = @min(dst.len, src.len);
+    @memcpy(dst[0..n], src[0..n]);
+    len.* = n;
+}
+
+fn parseCinemetaGenres(json: []const u8, item: *state.TmdbItem) void {
+    const key = "\"genre\":[";
+    const ki = std.mem.indexOf(u8, json, key) orelse return;
+    const after = json[ki + key.len ..];
+    const end = std.mem.indexOfScalar(u8, after, ']') orelse return;
+    var pos: usize = 0;
+    var i: usize = 0;
+    while (i < end and pos < item.genre_text.len) {
+        if (after[i] != '"') {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        const start = i;
+        while (i < end and after[i] != '"') : (i += 1) {}
+        if (i <= start) continue;
+        if (pos > 0 and pos + 2 <= item.genre_text.len) {
+            @memcpy(item.genre_text[pos .. pos + 2], ", ");
+            pos += 2;
+        }
+        const take = @min(i - start, item.genre_text.len - pos);
+        @memcpy(item.genre_text[pos .. pos + take], after[start .. start + take]);
+        pos += take;
+        i += 1;
+    }
+    item.genre_text_len = pos;
+}
+
+fn parseAndAddCinemetaItem(json: []const u8, out: *std.ArrayListUnmanaged(state.TmdbItem)) void {
+    var item = state.TmdbItem{};
+    const imdb_id = extractJsonString(json, "\"imdb_id\":") orelse
+        extractJsonString(json, "\"id\":") orelse "";
+    item.id = extractJsonInt(json, "\"moviedb_id\":");
+    if (item.id == 0 and imdb_id.len > 0) item.id = @import("cinemeta_pure.zig").stableId(imdb_id);
+
+    if (extractJsonString(json, "\"name\":")) |name| copyInto(&item.title, &item.title_len, name);
+    if (extractJsonString(json, "\"year\":")) |year| copyInto(&item.year, &item.year_len, year);
+    if (extractJsonString(json, "\"released\":")) |released| {
+        if (item.year_len == 0 and released.len >= 4) copyInto(&item.year, &item.year_len, released[0..4]);
+        if (released.len >= 10) {
+            var date_buf: [16]u8 = undefined;
+            copyInto(&item.release_date, &item.release_date_len, formatDate(&date_buf, released[0..10]));
+        }
+    }
+    if (extractJsonString(json, "\"imdbRating\":")) |rating|
+        item.rating = std.fmt.parseFloat(f32, rating) catch 0;
+    if (extractJsonString(json, "\"description\":")) |desc| copyInto(&item.overview, &item.overview_len, desc);
+    if (extractJsonString(json, "\"type\":")) |kind| {
+        if (std.mem.eql(u8, kind, "series"))
+            copyInto(&item.media_type, &item.media_type_len, "tv")
+        else
+            copyInto(&item.media_type, &item.media_type_len, "movie");
+    }
+    parseCinemetaGenres(json, &item);
+    if (extractJsonString(json, "\"poster\":")) |poster| copyInto(&item.poster_path, &item.poster_path_len, poster);
+    if (item.title_len > 0 and item.id != 0) out.append(alloc, item) catch {};
+}
+
 fn parseAndAddItem(json_obj: []const u8, out: *std.ArrayListUnmanaged(state.TmdbItem)) !void {
     var item = state.TmdbItem{};
 
@@ -121,7 +194,10 @@ fn parseAndAddItem(json_obj: []const u8, out: *std.ArrayListUnmanaged(state.Tmdb
     }
 
     if (extractJsonString(json_obj, "\"release_date\":")) |date| {
-        if (date.len >= 4) { @memcpy(item.year[0..4], date[0..4]); item.year_len = 4; }
+        if (date.len >= 4) {
+            @memcpy(item.year[0..4], date[0..4]);
+            item.year_len = 4;
+        }
         if (date.len >= 10) {
             var date_buf: [16]u8 = undefined;
             const fdate = formatDate(&date_buf, date[0..10]);
@@ -130,7 +206,10 @@ fn parseAndAddItem(json_obj: []const u8, out: *std.ArrayListUnmanaged(state.Tmdb
             item.release_date_len = flen;
         }
     } else if (extractJsonString(json_obj, "\"first_air_date\":")) |date| {
-        if (date.len >= 4) { @memcpy(item.year[0..4], date[0..4]); item.year_len = 4; }
+        if (date.len >= 4) {
+            @memcpy(item.year[0..4], date[0..4]);
+            item.year_len = 4;
+        }
         if (date.len >= 10) {
             var date_buf2: [16]u8 = undefined;
             const fdate = formatDate(&date_buf2, date[0..10]);
@@ -178,7 +257,7 @@ fn parseAndAddItem(json_obj: []const u8, out: *std.ArrayListUnmanaged(state.Tmdb
 fn parseGenreIds(json: []const u8, item: *state.TmdbItem) void {
     const key = "\"genre_ids\":[";
     const ki = std.mem.indexOf(u8, json, key) orelse return;
-    const after = json[ki + key.len..];
+    const after = json[ki + key.len ..];
     const end = std.mem.indexOfScalar(u8, after, ']') orelse return;
     const arr = after[0..end];
 
@@ -192,12 +271,12 @@ fn parseGenreIds(json: []const u8, item: *state.TmdbItem) void {
         const gid = std.fmt.parseInt(i32, trimmed, 10) catch continue;
         if (genreName(gid)) |name| {
             if (!first and gpos + 2 < genre_buf.len) {
-                @memcpy(genre_buf[gpos..gpos + 2], ", ");
+                @memcpy(genre_buf[gpos .. gpos + 2], ", ");
                 gpos += 2;
             }
             const nlen = @min(name.len, genre_buf.len - gpos);
             if (nlen == 0) break;
-            @memcpy(genre_buf[gpos..gpos + nlen], name[0..nlen]);
+            @memcpy(genre_buf[gpos .. gpos + nlen], name[0..nlen]);
             gpos += nlen;
             first = false;
         }

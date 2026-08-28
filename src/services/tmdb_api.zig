@@ -22,7 +22,6 @@ const TMDB_MAX_CACHED_ITEMS: usize = 100;
 
 pub fn fetchCurrentView(append: bool) void {
     if (state.app.tmdb.is_loading.load(.acquire)) return;
-    if (state.app.tmdb.api_key_len == 0) return;
 
     // SWR: stamp the cache time on a fresh (non-append) load so revisits within
     // the TTL skip the network (see browse_cache + renderTmdbContent).
@@ -52,7 +51,8 @@ pub fn fetchCurrentView(append: bool) void {
 
 fn browseCacheKey(buf: []u8) []const u8 {
     const t = &state.app.tmdb;
-    return std.fmt.bufPrint(buf, "tmdb:browse:{d}:{d}:{d}:{d}:{d}", .{
+    return std.fmt.bufPrint(buf, "catalog:browse:{d}:{d}:{d}:{d}:{d}:{d}", .{
+        @intFromBool(t.api_key_len > 0),
         @intFromEnum(t.category),
         @intFromEnum(t.media_filter),
         @intFromEnum(t.time_window),
@@ -183,19 +183,22 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
 
             const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
 
-            var url_buf: [512]u8 = undefined;
-            const url = buildApiUrl(&url_buf, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.time_window, S.genre_idx, S.discover_sort, S.page) orelse return;
-
-            const body = httpGet(url, key) orelse return;
-            defer alloc.free(body);
-
             // Parse into a LOCAL list and stage it — never mutate the live
             // `results` the UI thread is iterating mid-frame (that race was
             // the renderCatalogRail out-of-bounds crash). The UI thread swaps
             // staged pages in at frame start via applyPendingResults().
             var staged: std.ArrayListUnmanaged(state.TmdbItem) = .empty;
-            const total_pages: u32 = @intCast(@max(1, parse.extractJsonInt(body, "\"total_pages\":")));
-            parse.parseTmdbResponse(body, &staged);
+            var total_pages: u32 = 100;
+            if (key.len > 0) {
+                var url_buf: [512]u8 = undefined;
+                const url = buildApiUrl(&url_buf, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.time_window, S.genre_idx, S.discover_sort, S.page) orelse return;
+                const body = httpGet(url, key) orelse return;
+                defer alloc.free(body);
+                total_pages = @intCast(@max(1, parse.extractJsonInt(body, "\"total_pages\":")));
+                parse.parseTmdbResponse(body, &staged);
+            } else {
+                fetchCinemetaInto(&staged, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.genre_idx, S.page);
+            }
 
             // SWR write: persist the fresh default browse grid (page 1 only) so
             // the next cold start paints instantly. Search + infinite-scroll
@@ -216,6 +219,49 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
         break :blk null;
     };
     if (state.app.tmdb.thread) |t| t.detach(); // never joined — detach to avoid leaking the handle
+}
+
+fn buildCinemetaUrl(buf: *[512]u8, content_type: []const u8, mode: FetchMode, query: []const u8, cat: state.TmdbCategory, genre_idx: usize, page: u32) ?[]const u8 {
+    const catalog = if (mode == .search or genre_idx != 0) "top" else switch (cat) {
+        .top_rated => "imdbRating",
+        .now_playing, .upcoming => "year",
+        else => "top",
+    };
+    var value_buf: [256]u8 = undefined;
+    const value = if (mode == .search)
+        http.urlEncode(query, &value_buf)
+    else if (genre_idx < @import("tmdb_pure.zig").GENRE_NAMES.len)
+        http.urlEncode(@import("tmdb_pure.zig").GENRE_NAMES[genre_idx], &value_buf)
+    else
+        "";
+    const extra_name: []const u8 = if (mode == .search) "search" else if (genre_idx != 0) "genre" else "";
+    const skip = (page -| 1) * 50;
+    if (extra_name.len > 0 and skip > 0)
+        return std.fmt.bufPrint(buf, "https://v3-cinemeta.strem.io/catalog/{s}/{s}/{s}={s}&skip={d}.json", .{ content_type, catalog, extra_name, value, skip }) catch null;
+    if (extra_name.len > 0)
+        return std.fmt.bufPrint(buf, "https://v3-cinemeta.strem.io/catalog/{s}/{s}/{s}={s}.json", .{ content_type, catalog, extra_name, value }) catch null;
+    if (skip > 0)
+        return std.fmt.bufPrint(buf, "https://v3-cinemeta.strem.io/catalog/{s}/{s}/skip={d}.json", .{ content_type, catalog, skip }) catch null;
+    return std.fmt.bufPrint(buf, "https://v3-cinemeta.strem.io/catalog/{s}/{s}.json", .{ content_type, catalog }) catch null;
+}
+
+fn fetchCinemetaType(out: *std.ArrayListUnmanaged(state.TmdbItem), content_type: []const u8, mode: FetchMode, query: []const u8, cat: state.TmdbCategory, genre_idx: usize, page: u32) void {
+    var url_buf: [512]u8 = undefined;
+    const url = buildCinemetaUrl(&url_buf, content_type, mode, query, cat, genre_idx, page) orelse return;
+    const body = httpGet(url, "") orelse return;
+    defer alloc.free(body);
+    parse.parseCinemetaResponse(body, out);
+}
+
+fn fetchCinemetaInto(out: *std.ArrayListUnmanaged(state.TmdbItem), mode: FetchMode, query: []const u8, cat: state.TmdbCategory, mf: state.TmdbMediaFilter, genre_idx: usize, page: u32) void {
+    switch (mf) {
+        .movie => fetchCinemetaType(out, "movie", mode, query, cat, genre_idx, page),
+        .tv => fetchCinemetaType(out, "series", mode, query, cat, genre_idx, page),
+        .all => {
+            fetchCinemetaType(out, "movie", mode, query, cat, genre_idx, page);
+            fetchCinemetaType(out, "series", mode, query, cat, genre_idx, page);
+        },
+    }
 }
 
 /// UI-THREAD ONLY — called once per frame (main.appFrame, next to
@@ -323,8 +369,12 @@ pub fn fetchPoster(item: *state.TmdbItem) void {
     // cap (no fetch storm when the infinite-scroll grid is flung), usize-first
     // pixel math (no i32 w*h*4 overflow), and the torn-publish guard — all of
     // which this provider's hand-rolled worker was missing.
+    const path = item.poster_path[0..item.poster_path_len];
     var url_buf: [256]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w185{s}", .{item.poster_path[0..item.poster_path_len]}) catch return;
+    const url = if (std.mem.startsWith(u8, path, "https://") or std.mem.startsWith(u8, path, "http://"))
+        path
+    else
+        std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w185{s}", .{path}) catch return;
     @import("../core/poster.zig").fetchAsync(url, &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
 }
 
@@ -450,10 +500,15 @@ pub fn tmdbApiInto(path_query: []const u8, key: []const u8, buf: []u8) usize {
 
 fn httpGet(url: []const u8, bearer_token: []const u8) ?[]u8 {
     var auth_buf: [320]u8 = undefined;
-    const auth = std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{bearer_token}) catch return null;
+    const auth: []const u8 = if (bearer_token.len > 0)
+        (std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{bearer_token}) catch return null)
+    else
+        "";
     // Route through the shared HTTPS→HTTP fallback so the browse tab gets the same
     // JSON validation (rejects ISP block pages) + sticky-flag self-heal.
-    const buf = alloc.alloc(u8, 256 * 1024) catch return null;
+    // Cinemeta series catalogs include episode summaries and can exceed the
+    // old 256 KiB TMDB-page ceiling.
+    const buf = alloc.alloc(u8, 1024 * 1024) catch return null;
     defer alloc.free(buf);
     // Bounded retry (3x / 400ms) mirroring tmdbApiInto above: a single cold-start
     // DNS/TLS blip used to permanently fail the one-shot browse/trending fetch

@@ -105,15 +105,28 @@ pub fn scaleAfterAutoToggle(enabled: bool, current: f32) f32 {
 // edge. Convert back to points first.
 
 /// Below this many on-screen points, the top nav links move to a bottom tab bar.
-pub const COMPACT_PT: f32 = 760;
+pub const COMPACT_PT: f32 = 900;
+/// Below this, even the compact toolbar cannot safely carry an inline search
+/// field plus desktop actions. The shell switches to its smallest complete
+/// navigation: essential icon actions on top, destinations in More, and an
+/// icon-first bottom bar.
+pub const TINY_PT: f32 = 520;
 /// Below this, the nav stays on top but labels collapse to icons and the
 /// omnibox tightens so the row still fits.
 pub const NARROW_PT: f32 = 950;
+/// Short windows need the same space-saving bottom navigation as tiny ones.
+pub const SHORT_PT: f32 = 560;
 
 /// Scaled layout units → on-screen points.
 pub fn layoutPoints(rect_w: f32, ui_scale: f32) f32 {
     if (!std.math.isFinite(rect_w) or !std.math.isFinite(ui_scale) or ui_scale <= 0) return rect_w;
     return rect_w * ui_scale;
+}
+
+/// On-screen natural points → layout units inside Opal's ScaleWidget.
+pub fn layoutUnits(points: f32, ui_scale: f32) f32 {
+    if (!std.math.isFinite(points) or !std.math.isFinite(ui_scale) or ui_scale <= 0) return points;
+    return points / ui_scale;
 }
 
 /// `rect_w` is the shell root's width in scaled units. A width of 0 (first
@@ -122,6 +135,16 @@ pub fn layoutPoints(rect_w: f32, ui_scale: f32) f32 {
 pub fn isCompact(rect_w: f32, ui_scale: f32) bool {
     const pt = layoutPoints(rect_w, ui_scale);
     return pt > 1 and pt < COMPACT_PT;
+}
+
+pub fn isTiny(rect_w: f32, ui_scale: f32) bool {
+    const pt = layoutPoints(rect_w, ui_scale);
+    return pt > 1 and pt < TINY_PT;
+}
+
+pub fn isShort(rect_h: f32, ui_scale: f32) bool {
+    const pt = layoutPoints(rect_h, ui_scale);
+    return pt > 1 and pt < SHORT_PT;
 }
 
 pub fn isNarrow(rect_w: f32, ui_scale: f32) bool {
@@ -206,15 +229,22 @@ test "breakpoints measure on-screen points, not scaled layout units" {
     // window reported rect.w = 1118.8 at ui_scale 0.8. Against the raw
     // thresholds that read as "wide", the nav kept full-width labels + the
     // Donate chip, and the right-hand action cluster (Now playing / Plugins /
-    // Logs / Settings / ⋯) was pushed off the window edge.
+    // Logs / Settings / ⋯) was pushed off the window edge. At 895pt the safe
+    // result is now the compact shell, not merely the old icon-only tier.
     try std.testing.expect(isNarrow(1118.8, 0.8));
-    try std.testing.expect(!isCompact(1118.8, 0.8));
+    try std.testing.expect(isCompact(1118.8, 0.8));
     // Same window measured raw would have missed the breakpoint entirely.
     try std.testing.expect(!isNarrow(1118.8, 1.0));
 
     // Adaptive 1.0×: a 700pt window must reach the mobile layout.
     try std.testing.expect(isCompact(700.0, 1.0));
     try std.testing.expect(isNarrow(700.0, 1.0));
+
+    // Phone-sized and short windows select the densest complete shell.
+    try std.testing.expect(isTiny(480.0, 1.0));
+    try std.testing.expect(!isTiny(600.0, 1.0));
+    try std.testing.expect(isShort(500.0, 1.0));
+    try std.testing.expect(!isShort(700.0, 1.0));
 
     // Wide window stays wide at every scale.
     try std.testing.expect(!isNarrow(1600.0 / 0.8, 0.8));
@@ -225,6 +255,8 @@ test "breakpoints are inert on a degenerate first frame" {
     // rect.w is 0 before layout converges — must report "wide", not "mobile".
     try std.testing.expect(!isCompact(0, 0.8));
     try std.testing.expect(!isNarrow(0, 0.8));
+    try std.testing.expect(!isTiny(0, 0.8));
+    try std.testing.expect(!isShort(0, 0.8));
     // A bogus scale must not turn a wide window into a phone.
     try std.testing.expect(!isCompact(2000, 0));
     try std.testing.expect(!isNarrow(2000, std.math.nan(f32)));
@@ -232,4 +264,5 @@ test "breakpoints are inert on a degenerate first frame" {
 
 test "layoutPoints round-trips a known window" {
     try std.testing.expectApproxEqAbs(@as(f32, 895.0), layoutPoints(1118.75, 0.8), 0.1);
+    try std.testing.expectApproxEqAbs(@as(f32, 1118.75), layoutUnits(895.0, 0.8), 0.1);
 }

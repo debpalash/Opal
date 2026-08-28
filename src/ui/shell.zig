@@ -35,18 +35,36 @@ pub fn render() !void {
     });
     defer root.deinit();
 
-    // Responsive breakpoints (one-frame lag acceptable; 0 on first paint → wide).
-    //   compact (< 760pt): mobile layout — top nav links move to a bottom tab bar.
+    // Responsive breakpoints use the live OS window, not this root widget's
+    // previous-frame rect. The latter could leave the old navbar mounted after
+    // resize and push More off-screen until some unrelated repaint happened.
+    //   compact (< 900pt): mobile layout — top nav links move to a bottom tab bar.
     //   narrow  (< 950pt): still a top nav, but nav-link text collapses to
     //     icons-only and the omnibox tightens so everything fits as you resize.
     // The thresholds are ON-SCREEN POINTS. This shell renders inside
     // dvui.scale(ui_scale), so root.rect.w is in scaled units — scale_pure
     // converts. Comparing the raw value fired the breakpoints ~1/ui_scale too
     // late and pushed the right-hand nav actions off the window edge.
-    const w = root.data().rect.w;
     const scale_pure = @import("../core/scale_pure.zig");
+    const window_rect = dvui.windowRect();
+    const w = scale_pure.layoutUnits(window_rect.w, state.app.ui_scale);
+    const h = scale_pure.layoutUnits(window_rect.h, state.app.ui_scale);
     const compact = scale_pure.isCompact(w, state.app.ui_scale);
     const narrow = scale_pure.isNarrow(w, state.app.ui_scale);
+    const tiny = scale_pure.isTiny(w, state.app.ui_scale);
+    const short = scale_pure.isShort(h, state.app.ui_scale);
+
+    // A breakpoint swap changes the navbar's child set and therefore its
+    // measured minimum size. Give dvui one explicit convergence frame so a
+    // resize cannot stop with the outgoing layout's cached width.
+    const ResponsiveState = struct {
+        var last_tier: u3 = 7;
+    };
+    const tier: u3 = if (tiny) 3 else if (compact) 2 else if (narrow) 1 else 0;
+    if (ResponsiveState.last_tier != tier) {
+        ResponsiveState.last_tier = tier;
+        dvui.refresh(null, @src(), null);
+    }
 
     // Immersive playback: on the Player route, give the video the whole window by
     // hiding the top nav (and compact bottom tabs) once the viewer goes idle or
@@ -103,7 +121,7 @@ pub fn render() !void {
         const r = state.app.router.current;
         // Tight gutter so content fills the window (Browse/grids especially);
         // the player still bleeds edge-to-edge.
-        const gutter: f32 = if (r == .player) 0 else theme.spacing.sm;
+        const gutter: f32 = if (r == .player) 0 else if (tiny) theme.spacing.xs else theme.spacing.sm;
         var content = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .both,
             .background = true,
@@ -149,7 +167,7 @@ pub fn render() !void {
 
     // Compact: bottom tab bar (mobile-style) below everything — also hidden in
     // immersive playback so the video reaches the bottom edge.
-    if (compact and !immersive) renderBottomTabs();
+    if (compact and !immersive) renderBottomTabs(tiny or short);
 
     // Stream-key popover — floating, opened from the overflow menu. (Its
     // legacy render site is the header, which never runs in the shell.)
@@ -167,7 +185,6 @@ fn anyHasMedia() bool {
 
 // ── Top navigation ──
 
-
 fn renderTopNav(compact: bool, narrow: bool) void {
     // Transparent title bar — the nav floats over the app background (no solid
     // fill) for a lighter, content-focused feel; a hairline bottom border keeps
@@ -179,7 +196,7 @@ fn renderTopNav(compact: bool, narrow: bool) void {
         .color_fill = transparent,
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        .padding = .{ .x = theme.spacing.md, .y = 1, .w = theme.spacing.md, .h = 1 },
+        .padding = .{ .x = if (compact) theme.spacing.xs else theme.spacing.md, .y = 1, .w = if (compact) theme.spacing.xs else theme.spacing.md, .h = 1 },
     });
     defer bar.deinit();
 
@@ -230,8 +247,10 @@ fn renderTopNav(compact: bool, narrow: bool) void {
     if (components.iconButtonEx(@src(), icons.tvg.lucide.@"chevron-left", "Back", false, state.app.router.canGoBack())) {
         state.app.router.goBack();
     }
-    if (components.iconButtonEx(@src(), icons.tvg.lucide.@"chevron-right", "Forward", false, state.app.router.canGoForward())) {
-        state.app.router.goForward();
+    if (!compact) {
+        if (components.iconButtonEx(@src(), icons.tvg.lucide.@"chevron-right", "Forward", false, state.app.router.canGoForward())) {
+            state.app.router.goForward();
+        }
     }
 
     // Primary nav links — hidden in compact (bottom tab bar takes over).
@@ -249,7 +268,9 @@ fn renderTopNav(compact: bool, narrow: bool) void {
         navLink(.history, "History", icons.tvg.lucide.history, 6, true);
     }
 
-    omnibox(narrow);
+    // At phone-like widths Search already has a persistent bottom destination.
+    // Keeping the 200pt field here squeezed or clipped every action beside it.
+    if (!compact) omnibox(narrow);
 
     // Flexible spacer — absorbs the leftover nav width so the omnibox stays a
     // fixed size and the right-side actions sit at the window edge.
@@ -272,13 +293,15 @@ fn renderTopNav(compact: bool, narrow: bool) void {
     // "Logs & Plugins" icon, which meant two clicks and no hint that Suwayomi /
     // Debrid / Trakt lived there at all. The dropdown lists every section, so
     // each is one click from anywhere.
-    pluginsMenu();
-    if (components.iconButton(@src(), icons.tvg.lucide.@"scroll-text", "Logs", state.app.router.current == .system)) {
-        state.app.router.navigate(.system);
+    if (!compact) {
+        pluginsMenu();
+        if (components.iconButton(@src(), icons.tvg.lucide.@"scroll-text", "Logs", state.app.router.current == .system)) {
+            state.app.router.navigate(.system);
+        }
+        // Web UI (globe) — starts/stops the LAN server and opens it in a browser.
+        // Same persisted switch as Settings › Web Remote Control.
+        header.renderWebUiButton();
     }
-    // Web UI (globe) — starts/stops the LAN server and opens it in a browser.
-    // Same persisted switch as Settings › Web Remote Control.
-    header.renderWebUiButton();
     if (components.iconButton(@src(), icons.tvg.lucide.settings, "Settings", state.app.router.current == .settings)) {
         state.app.router.navigate(.settings);
     }
@@ -307,6 +330,7 @@ fn renderTopNav(compact: bool, narrow: bool) void {
                 .corner_radius = dvui.Rect.all(theme.radius.md),
             });
             defer col.deinit();
+            if (compact) renderCompactDestinations();
             renderOverflowItems();
         }
     }
@@ -361,6 +385,19 @@ fn pluginsMenu() void {
 
 /// Body of the top-nav overflow menu. Each item is a leaf menuItemLabel; dvui
 /// closes the floating menu on activation.
+fn renderCompactDestinations() void {
+    const item_opts = dvui.Options{ .expand = .horizontal, .color_text = theme.colors.text_primary };
+    // The compact shell deliberately removes the desktop link row. Keep every
+    // destination reachable instead of treating "mobile" as five hand-picked
+    // pages and silently losing the rest of the application.
+    if (dvui.menuItemLabel(@src(), "Watching", .{}, item_opts) != null) state.app.router.navigate(.watching);
+    if (dvui.menuItemLabel(@src(), "Queue", .{}, item_opts) != null) state.app.router.navigate(.queue);
+    if (dvui.menuItemLabel(@src(), "History", .{}, item_opts) != null) state.app.router.navigate(.history);
+    if (dvui.menuItemLabel(@src(), "Plugins", .{}, item_opts) != null) state.app.router.navigate(.plugins);
+    if (dvui.menuItemLabel(@src(), "Logs", .{}, item_opts) != null) state.app.router.navigate(.system);
+    if (dvui.menuItemLabel(@src(), "Settings", .{}, item_opts) != null) state.app.router.navigate(.settings);
+}
+
 fn renderOverflowItems() void {
     const item_opts = dvui.Options{ .expand = .horizontal, .color_text = theme.colors.text_primary };
     const voice = @import("../services/ai_voice.zig");
@@ -610,6 +647,7 @@ fn renderPage(r: Route) !void {
             };
 
             if (show_lyrics) {
+                const lyrics_below = dvui.windowRect().w < 720;
                 // Horizontal split: video/waveform grid (flex) + docked lyrics
                 // column (fixed 320px). renderGrid()'s own grid_wrapper is
                 // `.expand = .both`, so it IS the flex child directly — no extra
@@ -623,10 +661,10 @@ fn renderPage(r: Route) !void {
                 // height, collapsing the ratio image to a min-sized box. Fewer
                 // levels + both split children vertically-expanding (see the
                 // panel's `.expand = .vertical`) keeps the height unambiguous.
-                var split = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+                var split = dvui.box(@src(), .{ .dir = if (lyrics_below) .vertical else .horizontal }, .{ .expand = .both });
                 defer split.deinit();
                 try @import("grid.zig").renderGrid();
-                @import("../services/music_subsonic.zig").renderLyricsPanel();
+                @import("../services/music_subsonic.zig").renderLyricsPanel(if (lyrics_below) .bottom else .side);
             } else {
                 try @import("grid.zig").renderGrid();
             }
@@ -819,26 +857,26 @@ fn pluginTabIcon(t: router.PluginTab) []const u8 {
 
 // ── Compact bottom tab bar (mobile) ──
 
-fn renderBottomTabs() void {
+fn renderBottomTabs(dense: bool) void {
     var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = 52 },
+        .min_size_content = .{ .w = 0, .h = if (dense) 40 else 52 },
         .background = true,
         .color_fill = theme.colors.bg_surface,
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
-        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+        .padding = .{ .x = if (dense) 2 else theme.spacing.sm, .y = if (dense) 2 else theme.spacing.xs, .w = if (dense) 2 else theme.spacing.sm, .h = if (dense) 2 else theme.spacing.xs },
     });
     defer bar.deinit();
 
-    bottomTab(.home, "Home", icons.tvg.lucide.house, 401);
-    bottomTab(.search, "Search", icons.tvg.lucide.search, 402);
-    bottomTab(.browse, "Browse", icons.tvg.lucide.compass, 403);
-    bottomTab(.downloads, "Downloads", icons.tvg.lucide.download, 404);
-    bottomTab(.player, "Player", icons.tvg.lucide.play, 405);
+    bottomTab(.home, "Home", icons.tvg.lucide.house, 401, dense);
+    bottomTab(.search, "Search", icons.tvg.lucide.search, 402, dense);
+    bottomTab(.browse, "Browse", icons.tvg.lucide.compass, 403, dense);
+    bottomTab(.downloads, "Downloads", icons.tvg.lucide.download, 404, dense);
+    bottomTab(.player, "Player", icons.tvg.lucide.play, 405, dense);
 }
 
-fn bottomTab(r: Route, label: []const u8, icon: []const u8, id_extra: usize) void {
+fn bottomTab(r: Route, label: []const u8, icon: []const u8, id_extra: usize, dense: bool) void {
     const active = state.app.router.current == r;
     var col = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = id_extra,
@@ -846,7 +884,7 @@ fn bottomTab(r: Route, label: []const u8, icon: []const u8, id_extra: usize) voi
         .background = true,
         .color_fill = if (active) theme.colors.bg_elevated else transparent,
         .corner_radius = dvui.Rect.all(theme.radius.sm),
-        .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = theme.spacing.xs, .h = theme.spacing.xs },
+        .padding = .{ .x = 2, .y = if (dense) 2 else theme.spacing.xs, .w = 2, .h = if (dense) 2 else theme.spacing.xs },
     });
     defer col.deinit();
     if (navRowInteract(col)) state.app.router.navigate(r);
@@ -858,12 +896,16 @@ fn bottomTab(r: Route, label: []const u8, icon: []const u8, id_extra: usize) voi
         .min_size_content = theme.iconSize(.md),
         .gravity_x = 0.5,
     });
-    var f = dvui.themeGet().font_body;
-    f.size = theme.font_size.micro;
-    _ = dvui.label(@src(), "{s}", .{label}, .{
-        .id_extra = id_extra,
-        .color_text = fg,
-        .font = f,
-        .gravity_x = 0.5,
-    });
+    if (!dense) {
+        var f = dvui.themeGet().font_body;
+        f.size = theme.font_size.micro;
+        _ = dvui.label(@src(), "{s}", .{label}, .{
+            .id_extra = id_extra,
+            .color_text = fg,
+            .font = f,
+            .gravity_x = 0.5,
+        });
+    } else {
+        components.tipId(@src(), col.data().*, label, id_extra);
+    }
 }
