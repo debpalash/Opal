@@ -73,7 +73,7 @@ def test_vndb_catalog():
         "rail nav entry": "renderRailTab(.Vndb" in drawer,
         "shell label": '.Vndb => "Visual Novels"' in shell,
         "shell icon (exists in pack)": '.Vndb => icons.tvg.lucide.@"gamepad-2"' in shell,
-        "browse subtab": ".Vndb" in shell and "subTabs(&.{" in shell,
+        "browse source picker": ".Vndb" in shell and "browseSourcePicker()" in shell,
 
         # ── Pure module registered in the `zig build test` step ──
         "test registered": 'b.path("src/services/vndb_pure.zig")' in build,

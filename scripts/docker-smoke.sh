@@ -160,12 +160,16 @@ fi
 
 curl -fsS -X POST \
   -H "@$smoke_dir/setup-header" \
+  -c "$smoke_dir/session.cookies" \
   --data 'username=ci-admin' \
   --data 'password=ci-smoke-pass' \
   "$base_url/api/auth/register" -o "$smoke_dir/register.json"
-token=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["token"])' "$smoke_dir/register.json")
-if [[ ${#token} -lt 32 ]]; then
-  echo "FAIL: registration returned an invalid session token" >&2
+if ! python3 -c 'import json,sys; assert json.load(open(sys.argv[1], encoding="utf-8")) == {"ok": True}' "$smoke_dir/register.json"; then
+  echo "FAIL: registration did not return the cookie-session success contract" >&2
+  exit 1
+fi
+if ! grep -q 'opal_session' "$smoke_dir/session.cookies"; then
+  echo "FAIL: registration did not issue a browser session cookie" >&2
   exit 1
 fi
 if docker exec "$container" test -e "$setup_path"; then
@@ -180,7 +184,7 @@ if [[ "$code" != 403 ]]; then
   echo "FAIL: replayed first-admin credential returned $code, expected 403" >&2
   exit 1
 fi
-curl -fsS -H "Authorization: Bearer $token" \
+curl -fsS -b "$smoke_dir/session.cookies" \
   "$base_url/api/status" -o "$smoke_dir/api-status.json"
 code=$(curl -sS -o /dev/null -w '%{http_code}' "$base_url/api/status")
 if [[ "$code" != 401 ]]; then
@@ -189,7 +193,7 @@ if [[ "$code" != 401 ]]; then
 fi
 
 echo "── logs route and web UI ──"
-curl -fsS -H "Authorization: Bearer $token" \
+curl -fsS -b "$smoke_dir/session.cookies" \
   "$base_url/api/logs?limit=5" -o "$smoke_dir/logs.json"
 grep -q '"entries"' "$smoke_dir/logs.json"
 curl -fsS "$base_url/" -o "$smoke_dir/index.html"

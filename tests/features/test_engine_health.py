@@ -782,11 +782,8 @@ def retrieve_url_routes_walls_to_the_browser():
     # interstitial with no cookies.
     if bridge.index("wait_for_challenge_clear(sp, wait_ms)\n                text = sp.evaluate") < 0:
         return "fail", "fetchpost posts before clearing the challenge"
-    # Ordering: the route must be handled BEFORE the api_mutex block, or a 45s
-    # browser fetch freezes every other endpoint including playback control.
-    if rm.index('"/api/scrape"') > rm.index("api_mutex.lock();\n        defer api_mutex.unlock();\n        handleApi"):
-        return "fail", ("/api/scrape is dispatched under api_mutex — a 45s browser "
-                        "fetch would freeze the whole API")
+    if "api_mutex" in rm:
+        return "fail", "remote API serialization returned; scrape can freeze unrelated controls"
     return "pass", ("403/503 and 200-interstitials fall back to /api/scrape once; "
                     "resets and 429 do not; route is off the api_mutex")
 

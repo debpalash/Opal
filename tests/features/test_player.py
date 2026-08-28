@@ -325,9 +325,11 @@ def test_hosted_mode_and_perf():
         "range streaming": "parseRange" in rp and "206 Partial Content" in rs,
         "srt→vtt": "srtToVtt" in rp and "handleVtt" in rs,
         "traversal guard": "safeRelPath" in rp and "secure_path.openRegularAt" in rs,
-        "query-token media auth": '"/stream"' in rm and 'getQueryParam(query, "t")' in rm,
+        "cookie media auth": '"/stream"' in rm and "extractCredential(request)" in rm
+            and 'getQueryParam(query, "t")' not in rm,
         "parity routes": '"/calendar"' in rm and '"/tv"' in rm and '"/host"' in rm and '"/torrents"' in rm,
-        "thread-per-conn + api mutex": "api_mutex" in rm and "Thread.spawn(.{}, Handler.run" in rm,
+        "thread-per-conn without global API lock": "api_mutex" not in rm
+            and "Thread.spawn(.{}, Handler.run" in rm,
         "headless serves web": "web_remote_enabled = true" in hl and "create your admin account" in hl,
         "docker headless build": "-Dheadless=true" in dk and "3000" not in dk,
         "ci gate": "docker-headless" in ci and "scripts/docker-smoke.sh" in ci

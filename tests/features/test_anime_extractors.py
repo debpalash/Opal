@@ -80,7 +80,7 @@ def test_anime_extractors():
         "playEmbed attaches subs": "mpvSubAdd(" in anime,
         "playEmbed reveals player": "state.gotoPlayer()" in anime,
         "playEmbed player-idx guard": "active_player_idx < state.app.players.items.len" in anime,
-        "playEmbed off UI thread": "std.Thread.spawn(.{}, S.worker" in anime,
+        "playEmbed off UI thread": "workers.spawn(S.worker" in anime,
     }
 
     missing = [k for k, ok in checks.items() if not ok]

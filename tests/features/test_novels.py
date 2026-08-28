@@ -58,7 +58,7 @@ def test_novels_reader():
         "render dispatch": '.Novels => @import("../services/novels.zig").renderContent()' in drawer,
         "rail nav entry": "renderRailTab(.Novels" in drawer,
         "shell label+icon": '.Novels => "Novels"' in shell and "book-marked" in shell,
-        "browse subtab": ".Novels" in shell and "subTabs(&.{" in shell,
+        "browse source picker": ".Novels" in shell and "browseSourcePicker()" in shell,
         # ── Service: async workers, chapter nav, resume ──
         "search worker": "pub fn searchNovels" in svc and "fn searchWorker" in svc,
         "chapter-list worker": "pub fn openNovel" in svc and "fn chaptersWorker" in svc,

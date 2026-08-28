@@ -293,7 +293,7 @@ def test_extension_setup_flow():
     # Server side: these four must stay reachable without a Bearer token, or the
     # whole flow deadlocks (you need a token to get a token).
     remote = _remote_api()
-    gate = remote.index("All other endpoints require Bearer auth")
+    gate = remote.index("All other endpoints accept an HttpOnly browser session cookie")
     before = remote[:gate]
     for ep in ('"/health"', '"/api/auth/"'):
         if ep not in before:

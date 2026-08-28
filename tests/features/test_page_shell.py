@@ -228,7 +228,7 @@ def test_podcasts_radio_default_content():
         # so the EXISTING parser must be what fills results[] (no 2nd parser).
         "podcast reuses parseItunes": "pure.parseItunes(" in pod,
         "podcast one-shot latch": "popular_fetched" in pod and "pub fn loadPopularOnce" in pod,
-        "podcast fetch is backgrounded": "std.Thread.spawn(.{}, popularWorker" in pod,
+        "podcast fetch is backgrounded": "workers.spawn(popularWorker" in pod,
         # ── Radio: RadioBrowser votes-descending window → the same parseStations.
         # The legacy /topvote/{N} path form has no offset slot, so infinite
         # scroll uses the /stations/search query form ordered by votes instead —
