@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
@@ -11,6 +13,7 @@ import signal
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 
 
@@ -23,10 +26,9 @@ class WebDomLiveTest(unittest.TestCase):
         if CHROMIUM is None:
             self.skipTest("Chromium is not installed; browser tier dependency is explicit")
 
-        core_uri = (REPO_ROOT / "web/js/core.js").as_uri()
         document = f"""<!doctype html><meta charset=utf-8>
 <div id=probe></div><pre id=result></pre>
-<script src=\"{core_uri}\"></script>
+<script src=\"/core.js\"></script>
 <script>
 window.__opalExecuted = false;
 const provider = `<img src=x onerror=\"window.__opalExecuted=true\">` +
@@ -53,6 +55,18 @@ document.getElementById('result').textContent = JSON.stringify({{
         with tempfile.TemporaryDirectory(prefix="opal-dom-live-") as root:
             page = Path(root) / "case.html"
             page.write_text(document, encoding="utf-8")
+            shutil.copy(REPO_ROOT / "web/js/core.js", Path(root) / "core.js")
+
+            class QuietHandler(SimpleHTTPRequestHandler):
+                def log_message(self, format: str, *args: object) -> None:
+                    pass
+
+            server = ThreadingHTTPServer(
+                ("127.0.0.1", 0), partial(QuietHandler, directory=root)
+            )
+            server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+            server_thread.start()
+            page_url = f"http://127.0.0.1:{server.server_port}/case.html"
             proc = subprocess.Popen(
                 [
                     CHROMIUM,
@@ -69,10 +83,9 @@ document.getElementById('result').textContent = JSON.stringify({{
                     "--metrics-recording-only",
                     "--no-first-run",
                     f"--user-data-dir={Path(root) / 'chrome-profile'}",
-                    "--allow-file-access-from-files",
                     "--virtual-time-budget=1500",
                     "--dump-dom",
-                    page.as_uri(),
+                    page_url,
                 ],
                 text=True,
                 stdout=subprocess.PIPE,
@@ -80,19 +93,24 @@ document.getElementById('result').textContent = JSON.stringify({{
                 start_new_session=True,
             )
             try:
-                stdout, stderr = proc.communicate(timeout=15)
-            except subprocess.TimeoutExpired as expired:
-                # Ubuntu's Chromium package occasionally leaves a zygote alive
-                # after --dump-dom has already emitted the complete document.
-                # Reap the whole private process group and validate that output
-                # instead of turning a successful browser assertion into a CI
-                # infrastructure timeout.
-                os.killpg(proc.pid, signal.SIGKILL)
-                tail_out, tail_err = proc.communicate()
-                def as_text(value: str | bytes | None) -> str:
-                    return value.decode("utf-8", "replace") if isinstance(value, bytes) else (value or "")
-                stdout = as_text(expired.stdout) + as_text(tail_out)
-                stderr = as_text(expired.stderr) + as_text(tail_err)
+                try:
+                    stdout, stderr = proc.communicate(timeout=15)
+                except subprocess.TimeoutExpired as expired:
+                    # Ubuntu's Chromium package occasionally leaves a zygote
+                    # alive after --dump-dom emitted the complete document.
+                    # Reap the private process group and validate that output.
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    tail_out, tail_err = proc.communicate()
+
+                    def as_text(value: str | bytes | None) -> str:
+                        return value.decode("utf-8", "replace") if isinstance(value, bytes) else (value or "")
+
+                    stdout = as_text(expired.stdout) + as_text(tail_out)
+                    stderr = as_text(expired.stderr) + as_text(tail_err)
+            finally:
+                server.shutdown()
+                server.server_close()
+                server_thread.join(timeout=2)
             if proc.returncode not in (0, -signal.SIGKILL) and '<pre id="result">' not in stdout:
                 self.fail(f"Chromium exited with {proc.returncode}:\n{stderr[-2000:]}")
         marker = '<pre id="result">'
