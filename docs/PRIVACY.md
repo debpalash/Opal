@@ -32,11 +32,25 @@ Everything else in this document is user-initiated.
 
 ## User-initiated features
 
-### Metadata — TMDB
+### Metadata: Cinemeta
+- **Hosts:** `v3-cinemeta.strem.io`, `images.metahub.space`
+- **Trigger:** User opens Movies & TV without a TMDB token, changes its catalog
+  filters, searches, or opens a series.
+- **URL patterns:**
+  - `https://v3-cinemeta.strem.io/catalog/{movie|series}/{catalog}/...json`
+  - `https://v3-cinemeta.strem.io/meta/series/{imdb_id}.json`
+  - `https://images.metahub.space/...` for poster images
+- **Data:** Catalog type, category, genre, pagination offset, search text, or the
+  IMDb ID of the opened series, depending on the action.
+- **Auth:** None.
+- **Toggle:** Configure a TMDB token to use TMDB for catalog metadata, or do not
+  open Movies & TV.
+
+### Metadata: TMDB
 - **Hosts:** `api.themoviedb.org`, `image.tmdb.org`
-- **Trigger:** User opens the TMDB drawer / searches / scrolls a list. Requires the user
-  to paste a TMDB v4 bearer token into Settings → General; without it the entire feature
-  is dark (`src/services/tmdb.zig:26-29`, "TMDB API Key Required" empty state).
+- **Trigger:** With a TMDB v4 bearer token configured in Settings, the user opens
+  Movies & TV, searches, changes a catalog filter, or scrolls a list. Without the
+  token, the keyless Cinemeta path above supplies the catalog.
 - **URL patterns** (`src/services/tmdb_api.zig:107-138`):
   - `https://api.themoviedb.org/3/search/{multi|movie|tv}?query=<URL-encoded>&page=N`
   - `https://api.themoviedb.org/3/trending/{type}/{day|week}?page=N`
@@ -53,8 +67,7 @@ Everything else in this document is user-initiated.
   per-account history.
 - **Posters:** `https://image.tmdb.org/t/p/w185{poster_path}` fetched per item once on
   scroll (`src/services/tmdb_api.zig:166`). No auth.
-- **Toggle:** Don't paste a key → feature stays off. There is no setting labelled
-  "disable TMDB"; absence of the key is the toggle.
+- **Toggle:** Remove the TMDB token to use the keyless Cinemeta catalog instead.
 
 ### Subtitles — OpenSubtitles
 Two distinct endpoints in two distinct code paths.

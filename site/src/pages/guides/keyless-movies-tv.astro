@@ -1,0 +1,127 @@
+---
+import { Picture } from "astro:assets";
+import proofImage from "../../assets/opal-v066-keyless-search-frame.png";
+import PageLayout from "../../layouts/PageLayout.astro";
+import { REPO, breadcrumbSchema, pageFor } from "../../lib/site";
+
+const page = pageFor("/guides/keyless-movies-tv/");
+---
+
+<PageLayout
+  path={page.path}
+  title={page.title}
+  description={page.description}
+  eyebrow="Catalog guide"
+  heading="Browse Movies and TV without a TMDB key"
+  lead="Opal 0.6.6 uses Cinemeta for browsing and search. TMDB remains optional for richer metadata."
+  parent={{ href: "/features/", label: "Features" }}
+  jsonLd={breadcrumbSchema("Movies and TV without a catalog key", page.path, { name: "Features", path: "/features/" })}
+>
+  <section class="page-section">
+    <div class="wrap">
+      <div class="prose guide-copy">
+        <p class="eyebrow">Available in v0.6.6</p>
+        <h2>What works without a catalog key</h2>
+        <p>Open Movies &amp; TV after installing Opal. Cinemeta supplies trending, popular, top-rated, genre-filtered and search results without a setup token.</p>
+        <p>Opening a TV result shows its seasons and episodes in the same desktop and web drill-down used by TMDB-backed results. Episode names, summaries, dates and thumbnails come from the catalog response.</p>
+      </div>
+
+      <figure class="guide-proof">
+        <Picture
+          src={proofImage}
+          widths={[480, 800, 1080, 1600]}
+          sizes="(max-width: 1120px) calc(100vw - 40px), 1080px"
+          formats={["avif", "webp"]}
+          alt="Opal 0.6.6 Movies and TV search results for Breaking Bad, with keyless catalog status and eight titles visible"
+          loading="lazy"
+          decoding="async"
+        />
+        <figcaption>
+          Recorded on Opal 0.6.6 with the TMDB field empty. Cinemeta returned eight titles for this query; catalog results can change.
+          <a href={proofImage.src}>Open the full-size frame.</a>
+        </figcaption>
+      </figure>
+
+      <div class="prose guide-copy guide-copy-after">
+        <h2>Try the flow</h2>
+        <ol>
+          <li>Leave the TMDB v4 token field empty in Settings.</li>
+          <li>Open Movies &amp; TV.</li>
+          <li>Browse the catalog or enter a title in search. The type, category and genre filters remain available.</li>
+          <li>Open a TV result, choose a season and inspect its episodes.</li>
+        </ol>
+
+        <h2>Cinemeta and TMDB have different roles</h2>
+        <p>Cinemeta is the built-in catalog used when no TMDB token is configured. Add a TMDB v4 token in Settings when you want TMDB metadata instead. The token is an optional metadata upgrade, not a first-launch requirement.</p>
+
+        <h2>Network and playback limits</h2>
+        <p>The keyless catalog is online. Opening it contacts <code>v3-cinemeta.strem.io</code>, and poster requests can contact <code>images.metahub.space</code>. Search text, filters, pagination or an opened series' IMDb ID can be included in those requests.</p>
+        <p>Catalog metadata does not guarantee a playback source. Opal hosts no content, and source availability, safety and legality vary by title and region. Use sources you trust and have permission to access.</p>
+
+        <h2>Verify the release</h2>
+        <p>The public <a href={`${REPO}/releases/tag/v0.6.6`}>v0.6.6 release notes</a> describe the keyless catalog and season browser. The implementation is available in the <a href={REPO}>Opal source repository</a>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="page-cta">
+    <div class="wrap">
+      <h2>Use the keyless catalog in Opal 0.6.6</h2>
+      <p class="sub">Install the current release, then open Movies &amp; TV without adding a TMDB token.</p>
+      <a class="btn primary" href="/download/">Download Opal</a>
+      <a class="btn" href={`${REPO}/releases/tag/v0.6.6`}>Read the v0.6.6 notes</a>
+    </div>
+  </section>
+</PageLayout>
+
+<style>
+  .guide-copy {
+    max-width: 760px;
+  }
+
+  .guide-proof {
+    margin: 42px 0 0;
+  }
+
+  .guide-proof :global(picture) {
+    display: block;
+  }
+
+  .guide-proof :global(img) {
+    width: 100%;
+    border-radius: var(--radius);
+    background: var(--bg-2);
+    box-shadow: 0 18px 54px color-mix(in srgb, #000 24%, transparent);
+  }
+
+  .guide-proof figcaption {
+    max-width: 760px;
+    margin-top: 14px;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .guide-proof figcaption a {
+    color: var(--accent-2);
+    font-weight: 700;
+  }
+
+  .guide-copy-after {
+    margin-top: 54px;
+  }
+
+  .guide-copy ol {
+    padding-left: 22px;
+  }
+
+  @media (max-width: 560px) {
+    .guide-proof {
+      margin-top: 30px;
+    }
+
+    .guide-copy-after {
+      margin-top: 44px;
+    }
+  }
+</style>

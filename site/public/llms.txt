@@ -8,6 +8,7 @@ Opal ships with no content sources enabled and hosts no content.
 
 - [Home](https://opal.palash.dev/): overview, screenshots and downloads
 - [Features](https://opal.palash.dev/features/): universal search, torrent streaming, live TV, manga, local AI
+- [Keyless Movies and TV guide](https://opal.palash.dev/guides/keyless-movies-tv/): browse, search, seasons and episodes without a TMDB key
 - [Compare](https://opal.palash.dev/compare/): capability matrix vs Jellyfin, Plex, Stremio, Kodi and qBittorrent
 - [Opal vs Jellyfin](https://opal.palash.dev/compare/jellyfin/)
 - [Opal vs Plex](https://opal.palash.dev/compare/plex/)

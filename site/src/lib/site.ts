@@ -26,6 +26,12 @@ export const SITE_PAGES: SitePage[] = [
       "Explore Opal's universal search, torrent streaming, Jellyfin and Plex playback, live TV, manga, subtitles, local AI, watch parties and browser UI.",
   },
   {
+    path: "/guides/keyless-movies-tv/",
+    title: "Browse Movies & TV Without a TMDB Key in Opal",
+    description:
+      "Use Opal 0.6.6 to browse, search and open TV seasons and episodes through Cinemeta without configuring a TMDB catalog key.",
+  },
+  {
     path: "/compare/",
     title: "Opal vs Jellyfin, Plex, Stremio, Kodi & qBittorrent",
     description:

@@ -27,10 +27,11 @@ const { path, title, description, eyebrow, heading, lead, jsonLd, noindex, paren
     <link rel="preconnect" href="https://api.github.com" crossorigin />
   </head>
   <body>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
     <PageHero current={path} {eyebrow} title={heading} {lead} {parent}>
       <slot name="hero" />
     </PageHero>
-    <main class="page-main">
+    <main id="main-content" class="page-main" tabindex="-1">
       <slot />
     </main>
     <SiteFooter />

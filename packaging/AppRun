@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+HERE="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
+export LD_LIBRARY_PATH="$HERE/usr/lib/opal:$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$HERE/usr/lib/opal/opal" "$@"

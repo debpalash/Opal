@@ -5,6 +5,7 @@ const dist = new URL("../dist/", import.meta.url);
 const expected = [
   "/",
   "/features/",
+  "/guides/keyless-movies-tv/",
   "/compare/",
   "/compare/jellyfin/",
   "/compare/plex/",

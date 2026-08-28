@@ -78,7 +78,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential g++ pkg-config \
             libmpv-dev libsqlite3-dev libsdl2-dev libtorrent-rasterbar-dev ffmpeg \
-            makeself
+            makeself xauth xvfb
       - name: Vendor ONNX Runtime
         run: |
           ORT_VER=1.20.1
@@ -148,7 +148,6 @@ jobs:
           # The resource tree is essential: torrent search shells out to nova2,
           # Plugins reads its manifest, and Web Remote serves web/index.html.
           mkdir -p AppDir/usr/lib/opal/scripts AppDir/usr/lib/opal/web
-          cp zig-out/bin/opal AppDir/usr/lib/opal/
           cp libtorrent_wrapper.so AppDir/usr/lib/opal/
           cp -r engines AppDir/usr/lib/opal/
           cp scripts/camoufox_bridge.py AppDir/usr/lib/opal/scripts/
@@ -158,21 +157,77 @@ jobs:
           cp packaging/opal.desktop AppDir/opal.desktop
           cp assets/logo.svg AppDir/opal.svg
           cp assets/logo.svg AppDir/.DirIcon
-          # AppRun: the AppImage runtime sets $APPDIR to the mount point; point
-          # the loader at the bundled wrapper lib, then exec the binary.
-          cat > AppDir/AppRun <<'EOF'
-          #!/bin/sh
-          HERE="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
-          export LD_LIBRARY_PATH="$HERE/usr/lib/opal${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          exec "$HERE/usr/lib/opal/opal" "$@"
-          EOF
+          cp packaging/AppRun AppDir/AppRun
           chmod +x AppDir/AppRun
+
+          # linuxdeploy scans every ELF already in the AppDir. Keep the main
+          # executable out of that scan and deploy only the private torrent
+          # wrapper's runtime closure. Pulling in Opal's entire desktop and
+          # media graph makes the artifact larger and more prone to loader
+          # conflicts without addressing the missing torrent SONAME.
+          LINUXDEPLOY_VER=1-alpha-20251107-1
+          curl -fsSL -o linuxdeploy \
+            "https://github.com/linuxdeploy/linuxdeploy/releases/download/${LINUXDEPLOY_VER}/linuxdeploy-x86_64.AppImage"
+          chmod +x linuxdeploy
+          NO_STRIP=1 ./linuxdeploy --appimage-extract-and-run \
+            --appdir AppDir \
+            --deploy-deps-only AppDir/usr/lib/opal/libtorrent_wrapper.so \
+            --custom-apprun packaging/AppRun
+
+          # Add Opal after dependency deployment so linuxdeploy cannot rewrite
+          # its runpath or recursively bundle the host's media stack.
+          cp zig-out/bin/opal AppDir/usr/lib/opal/
+
+          # Test the bundle itself. A launch on this runner is not enough
+          # because apt installed the same library into the host filesystem.
+          TORRENT_SONAME="$(python3 scripts/elf-needed.py \
+            AppDir/usr/lib/opal/libtorrent_wrapper.so | \
+            awk '/^libtorrent-rasterbar\.so/{print; exit}')"
+          test -n "$TORRENT_SONAME"
+          find -L AppDir/usr/lib -name "$TORRENT_SONAME" -type f -print -quit | grep -q .
+
           # appimagetool itself ships as an AppImage; the runner has no FUSE,
           # so --appimage-extract-and-run unpacks it to a temp dir first.
           curl -fsSL -o appimagetool \
             "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
           chmod +x appimagetool
           ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir "Opal-${VERSION}-x86_64.AppImage"
+      - name: Verify AppImage runtime
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          APPIMAGE="Opal-${VERSION}-x86_64.AppImage"
+          chmod +x "$APPIMAGE"
+          "$APPIMAGE" --appimage-extract >/dev/null
+
+          # Recheck the packaged filesystem before launch. This prevents a
+          # runner-installed libtorrent from turning a broken artifact green.
+          TORRENT_SONAME="$(python3 scripts/elf-needed.py \
+            squashfs-root/usr/lib/opal/libtorrent_wrapper.so | \
+            awk '/^libtorrent-rasterbar\.so/{print; exit}')"
+          test -n "$TORRENT_SONAME"
+          find -L squashfs-root/usr/lib -name "$TORRENT_SONAME" -type f -print -quit | grep -q .
+
+          SMOKE_ROOT="$RUNNER_TEMP/opal-appimage-smoke"
+          install -d "$SMOKE_ROOT/home" "$SMOKE_ROOT/config" \
+            "$SMOKE_ROOT/data" "$SMOKE_ROOT/cache"
+          install -d -m 700 "$SMOKE_ROOT/runtime"
+          set +e
+          env \
+            HOME="$SMOKE_ROOT/home" \
+            XDG_CONFIG_HOME="$SMOKE_ROOT/config" \
+            XDG_DATA_HOME="$SMOKE_ROOT/data" \
+            XDG_CACHE_HOME="$SMOKE_ROOT/cache" \
+            XDG_RUNTIME_DIR="$SMOKE_ROOT/runtime" \
+            SDL_AUDIODRIVER=dummy \
+            timeout --signal=TERM 5s xvfb-run -a squashfs-root/AppRun \
+            >"$SMOKE_ROOT/opal.log" 2>&1
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 124 ]; then
+            cat "$SMOKE_ROOT/opal.log"
+            echo "AppImage exited before the five-second smoke window (status $STATUS)" >&2
+            exit 1
+          fi
       - name: Package .run installer (makeself)
         run: |
           VERSION="${GITHUB_REF_NAME#v}"

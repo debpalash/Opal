@@ -99,9 +99,10 @@ yet. The one-command installer skips the dialog, or run `sudo xattr -cr
 > [file issues](https://github.com/debpalash/Opal/issues); they are what moves it
 > forward. macOS (Apple silicon) and Linux x86_64 are the supported platforms.
 
-**First launch:** open **Settings** (<kbd>⌘</kbd><kbd>,</kbd>) and paste a free
-**TMDB v4 token** to light up movie/TV browsing. Voice and AI models are opt-in
-downloads — one button each, nothing installs itself.
+**First launch:** Movies & TV browsing uses the built-in Cinemeta catalog without
+a setup key. Add a free **TMDB v4 token** in **Settings**
+(<kbd>⌘</kbd><kbd>,</kbd>) for richer metadata. Voice and AI models are opt-in
+downloads; one button each, nothing installs itself.
 
 <details>
 <summary><b>🧱 Building from source</b></summary>

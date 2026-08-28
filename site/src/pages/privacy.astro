@@ -22,6 +22,7 @@ const page = pageFor("/privacy/");
 
       <h2>When Opal connects to the network</h2>
       <p>Opal makes network requests when you ask it to check releases, use a connected server, search an enabled source, stream media, fetch metadata or subtitles, use Trakt sync, or access another explicitly enabled online feature. Those providers receive the network information needed to answer the request and apply their own privacy terms.</p>
+      <p>Movies &amp; TV browsing without a TMDB token contacts <code>v3-cinemeta.strem.io</code>. Poster requests can contact <code>images.metahub.space</code>. Depending on the action, those requests can include catalog filters, search text, pagination, or the IMDb ID of an opened series.</p>
 
       <h2>Plugins and sources</h2>
       <p>Opal ships with no content sources enabled. Plugins can run code and contact third-party services, so install only sources you trust and review their behavior independently. Opal does not turn a third-party plugin into a private or first-party service.</p>

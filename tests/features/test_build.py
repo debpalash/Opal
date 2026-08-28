@@ -463,7 +463,25 @@ def test_linux_installer_rootless_default():
         "local receipt remembers whole prefix": 'receipt "local-prefix:$prefix"' in sh,
         "desktop launcher uses absolute executable": "TryExec=$bindir/opal" in sh,
         "future AppImage carries torrent engines": "cp -r engines AppDir/usr/lib/opal/" in release,
-        "AppImage executes beside its resources": 'exec "$HERE/usr/lib/opal/opal"' in release,
+        "AppImage executes beside its resources":
+            'exec "$HERE/usr/lib/opal/opal"' in _src("packaging/AppRun"),
+        "AppImage loader searches deployed libraries":
+            '$HERE/usr/lib/opal:$HERE/usr/lib' in _src("packaging/AppRun"),
+        "AppImage limits dependency deployment to the wrapper":
+            release.count("--deploy-deps-only") == 1
+            and "--deploy-deps-only AppDir/usr/lib/opal/libtorrent_wrapper.so" in release,
+        "AppImage stages the executable after dependency deployment":
+            release.count("cp zig-out/bin/opal AppDir/usr/lib/opal/") == 1
+            and release.index("--deploy-deps-only AppDir/usr/lib/opal/libtorrent_wrapper.so")
+            < release.index("cp zig-out/bin/opal AppDir/usr/lib/opal/"),
+        "AppImage deployment skips fragile bundled strip":
+            "NO_STRIP=1 ./linuxdeploy --appimage-extract-and-run" in release,
+        "AppImage requires its exact torrent SONAME":
+            release.count('find -L AppDir/usr/lib -name "$TORRENT_SONAME"') == 1
+            and release.count('find -L squashfs-root/usr/lib -name "$TORRENT_SONAME"') == 1,
+        "AppImage gets a headless launch smoke":
+            "timeout --signal=TERM 5s xvfb-run -a squashfs-root/AppRun" in release
+            and 'if [ "$STATUS" -ne 124 ]' in release,
         "tarball carries torrent engines": "cp -r engines opal-${VERSION}-linux-x86_64/" in release,
         "AUR binary installs torrent engines": 'cp -r engines' in aur_bin,
     }

@@ -20,8 +20,8 @@
     --fg: #16161c;
     --muted: #5f5f70;
     --accent: #6b4bd6;
-    --accent-2: #7c5cff;
-    --accent-3: #0ea5c6;
+    --accent-2: #7553ee;
+    --accent-3: #0c97b5;
   }
 }
 * { box-sizing: border-box; }
@@ -38,6 +38,20 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 a { color: inherit; }
+.skip-link {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 1000;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--fg);
+  color: var(--bg);
+  font-weight: 700;
+  text-decoration: none;
+  transform: translateY(-160%);
+}
+.skip-link:focus { transform: translateY(0); }
 a:focus-visible, button:focus-visible, summary:focus-visible {
   outline: 3px solid var(--accent-3);
   outline-offset: 3px;
@@ -45,6 +59,15 @@ a:focus-visible, button:focus-visible, summary:focus-visible {
 }
 img { max-width: 100%; height: auto; display: block; }
 .wrap { max-width: var(--max); margin: 0 auto; padding: 0 20px; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
 
 /* ── Nav ──
    No bar of its own: it lives inside the hero and sits directly on the
