@@ -87,21 +87,21 @@ jobs:
       - name: Run tests/test_features.py
         run: python3 tests/test_features.py
 
-  # Behavior-level browser security tier. Use a pinned Chrome-for-Testing
-  # binary: both the runner launcher and Chrome 152 can hang in --dump-dom,
-  # which tests the browser image rather than our DOM boundary.
+  # Behavior-level browser security tier. Use Google's purpose-built headless
+  # shell: desktop Chrome starts background D-Bus/GCM services on the runner
+  # and can hang in --dump-dom before returning the tested document.
   browser-dom:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install pinned Chrome for Testing
+      - name: Install pinned Chrome headless shell
         id: setup-chrome
         run: |
           curl --fail --location --retry 3 \
-            https://storage.googleapis.com/chrome-for-testing-public/151.0.7922.173/linux64/chrome-linux64.zip \
+            https://storage.googleapis.com/chrome-for-testing-public/151.0.7922.173/linux64/chrome-headless-shell-linux64.zip \
             --output "$RUNNER_TEMP/chrome.zip"
           unzip -q "$RUNNER_TEMP/chrome.zip" -d "$RUNNER_TEMP/chrome"
-          echo "chrome-path=$RUNNER_TEMP/chrome/chrome-linux64/chrome" >> "$GITHUB_OUTPUT"
+          echo "chrome-path=$RUNNER_TEMP/chrome/chrome-headless-shell-linux64/chrome-headless-shell" >> "$GITHUB_OUTPUT"
       - name: Exercise hostile provider markup in a real browser
         run: python3 tests/test_web_dom_live.py --chromium "${{ steps.setup-chrome.outputs.chrome-path }}"
 
