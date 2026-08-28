@@ -87,9 +87,9 @@ jobs:
       - name: Run tests/test_features.py
         run: python3 tests/test_features.py
 
-  # Behavior-level browser security tier. Use an isolated Chrome-for-Testing
-  # binary: the runner's /usr/bin/google-chrome launcher can hang before main()
-  # and emit no diagnostics, which tests the image rather than our DOM boundary.
+  # Behavior-level browser security tier. Use a pinned Chrome-for-Testing
+  # binary: both the runner launcher and Chrome 152 can hang in --dump-dom,
+  # which tests the browser image rather than our DOM boundary.
   browser-dom:
     runs-on: ubuntu-24.04
     steps:
@@ -97,7 +97,7 @@ jobs:
       - uses: browser-actions/setup-chrome@v2
         id: setup-chrome
         with:
-          chrome-version: stable
+          chrome-version: 151.0.7922.173
       - name: Exercise hostile provider markup in a real browser
         run: python3 tests/test_web_dom_live.py --chromium "${{ steps.setup-chrome.outputs.chrome-path }}"
 
