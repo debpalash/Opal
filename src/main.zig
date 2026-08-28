@@ -88,6 +88,10 @@ pub const std_options: std.Options = .{ .logFn = dvui.App.logFn, .log_level = .w
 /// remote JSON API, and the background DB/library load thread. Nothing here
 /// reads dvui_win / state.app.dvui_win, so the window may be assigned after.
 pub fn coreInit() !void {
+    // The supervisor must accept work before any service/bootstrap helper can
+    // spawn, and is drained before shared state in appDeinit.
+    @import("core/workers.zig").init();
+
     // One-time legacy rename: ~/.config/zigzag → ~/.config/opal (+ cache + the
     // db file). MUST run before any path is read. Idempotent.
     @import("core/paths.zig").migrateLegacyDir();
@@ -134,7 +138,7 @@ pub fn coreInit() !void {
 
     // Init torrent session in background — DHT bootstrap takes 5-10s
     state.setTorrentSession(null);
-    if (std.Thread.spawn(.{}, struct {
+    @import("core/workers.zig").spawn(struct {
         fn worker() void {
             state.setTorrentSession(c.mpv.torrent_init());
             // Fresh session defaults to unlimited — re-apply the persisted cap
@@ -144,7 +148,7 @@ pub fn coreInit() !void {
             state.applyTorrentProxyIfReady();
             logs.pushLog("info", "torrent", "Torrent session ready", false);
         }
-    }.worker, .{})) |t| t.detach() else |_| {}
+    }.worker, .{}) catch {};
 
     std.Io.Dir.cwd().createDirPath(@import("core/io_global.zig").io(), state.app.save_path_buf[0..state.app.save_path_len]) catch {};
     // Create libmpv only when something is actually played. Initializing it
@@ -164,7 +168,7 @@ pub fn coreInit() !void {
     // the toggle is on.
 
     // Move heavy DB/migration/loading work to background so UI renders instantly
-    if (std.Thread.spawn(.{}, struct {
+    @import("core/workers.zig").spawn(struct {
         fn worker() void {
             const workers = @import("core/workers.zig");
             workers.enter();
@@ -300,7 +304,7 @@ pub fn coreInit() !void {
 
             logs.pushLog("info", "init", "Background init complete", false);
         }
-    }.worker, .{})) |t| t.detach() else |_| {}
+    }.worker, .{}) catch {};
 }
 
 /// Find the directory holding bundled runtime resources (engines/, scripts/, …).
@@ -491,10 +495,9 @@ pub fn appDeinit() void {
     voice.is_recording.store(false, .release);
     voice.is_speaking.store(false, .release);
 
-    // Settle in-flight download/decode workers (comic pages, comic covers, yt
-    // thumbnails) before we free the buffers they publish into — otherwise the
-    // leak check races their still-live tmp_buf/p_slice. Workers poll isQuitting
-    // in their read loops, so this drains in well under the timeout.
+    // Join all owned work before any buffers, services, HTTP state, or the
+    // allocator it may publish into are released. 800 ms is the diagnostic
+    // threshold, not permission for a worker to outlive shared state.
     @import("core/workers.zig").beginShutdownAndDrain(800);
     @import("player/drop_ingest.zig").deinit();
 

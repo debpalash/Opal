@@ -255,7 +255,7 @@ pub fn loadComic(url: []const u8) void {
 
     // Comics read inside the Browse › Comics tab now (the player route is for
     // playback only) — no player pane is claimed here.
-    state.app.comic.thread = std.Thread.spawn(.{}, fetchComicThread, .{my_gen}) catch null;
+    workers.spawn(fetchComicThread, .{my_gen}) catch {};
 }
 
 /// Drive the reader from a pre-enumerated OPDS-PSE (Page Streaming Extension)
@@ -327,7 +327,7 @@ pub fn loadPseBook(title: []const u8, template: []const u8, count: u32, auth: []
     logs.pushLog("info", "opds", "OPDS-PSE page stream staged", false);
 
     // downloadPages() joins its worker batches, so run it OFF the UI thread.
-    state.app.comic.thread = std.Thread.spawn(.{}, psePageDownloadThread, .{my_gen}) catch null;
+    workers.spawn(psePageDownloadThread, .{my_gen}) catch {};
 }
 
 /// Worker wrapper: drive the shared page-download pipeline for an OPDS-PSE load,
@@ -1787,11 +1787,10 @@ pub fn searchComics(query: []const u8) void {
     @memcpy(last_fired_query[0..query.len], query);
     last_fired_len = query.len;
     const gen = search_gen.fetchAdd(1, .acq_rel) + 1;
-    const t = std.Thread.spawn(.{}, searchWorker, .{gen}) catch {
+    workers.spawn(searchWorker, .{gen}) catch {
         sr_searching_v.store(false, .release);
         return;
     };
-    t.detach();
 }
 
 /// Build the readallcomics search URL for `query` at WordPress page `paged`
@@ -2061,11 +2060,10 @@ pub fn loadMoreResults() void {
     if (!more_available or loading_more.load(.acquire) or sr_searching_v.load(.acquire)) return;
     if (sr_count == 0 or sr_count >= MAX_SEARCH_RESULTS or sr_query_len == 0) return;
     if (loading_more.swap(true, .acq_rel)) return;
-    const t = std.Thread.spawn(.{}, loadMoreWorker, .{search_gen.load(.acquire)}) catch {
+    workers.spawn(loadMoreWorker, .{search_gen.load(.acquire)}) catch {
         loading_more.store(false, .release);
         return;
     };
-    t.detach();
 }
 
 fn loadMoreWorker(gen: u32) void {
@@ -2695,12 +2693,11 @@ fn fetchCover(idx: usize) void {
     }
     _ = cover_in_flight.fetchAdd(1, .acq_rel);
 
-    const t = std.Thread.spawn(.{}, coverWorker, .{idx}) catch {
+    workers.spawn(coverWorker, .{idx}) catch {
         _ = cover_in_flight.fetchSub(1, .acq_rel);
         sr_cover_fetching[idx].store(false, .release);
         return;
     };
-    t.detach();
 }
 
 /// Rewrite a cover URL to a thumbnail-sized variant where the host supports it.

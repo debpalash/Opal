@@ -24,6 +24,7 @@ const pure = @import("podcasts_pure.zig");
 const io = @import("../core/io_global.zig");
 const poster = @import("../core/poster.zig");
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
+const workers = @import("../core/workers.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -191,11 +192,9 @@ pub fn loadPopularOnce() void {
     // chart is in flight supersedes it instead of racing it into results[].
     const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
 
-    if (std.Thread.spawn(.{}, popularWorker, .{my_gen})) |t| {
-        t.detach(); // never joined — detach to avoid leaking the handle
-    } else |_| {
+    workers.spawn(popularWorker, .{my_gen}) catch {
         state.app.podcasts.is_loading.store(false, .release);
-    }
+    };
 }
 
 fn popularWorker(my_gen: u32) void {
@@ -273,11 +272,9 @@ pub fn searchPodcasts(query: []const u8) void {
     @memcpy(query_buf[0..n], query[0..n]);
     query_len = n;
 
-    if (std.Thread.spawn(.{}, searchWorker, .{my_gen})) |t| {
-        t.detach(); // never joined — detach to avoid leaking the handle
-    } else |_| {
+    workers.spawn(searchWorker, .{my_gen}) catch {
         state.app.podcasts.is_loading.store(false, .release);
-    }
+    };
 }
 
 fn searchWorker(my_gen: u32) void {
@@ -366,11 +363,9 @@ pub fn loadEpisodes(idx: usize) void {
     @memcpy(S.feed[0..flen], p.feed_url[0..flen]);
     S.feed_len = flen;
 
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
-        t.detach(); // never joined — detach to avoid leaking the handle
-    } else |_| {
+    workers.spawn(S.worker, .{}) catch {
         state.app.podcasts.episodes_loading.store(false, .release);
-    }
+    };
 }
 
 // ══════════════════════════════════════════════════════════

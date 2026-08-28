@@ -462,7 +462,7 @@ pub fn fetchYoutube(query: []const u8) void {
     // out from under fetchThumb workers holding *YtItem (cf. the TMDB crash).
     state.app.yt.results.ensureTotalCapacity(alloc, 256) catch {};
 
-    state.app.yt.thread = std.Thread.spawn(.{}, struct {
+    workers.spawn(struct {
         fn worker() void {
             defer {
                 state.app.yt.is_loading.store(false, .release);
@@ -499,13 +499,9 @@ pub fn fetchYoutube(query: []const u8) void {
             // cached rows on screen and the stored entry untouched.
             if (!pending_clear and isCurrent(S.gen)) storeYtToCache(q);
         }
-    }.worker, .{}) catch blk: {
+    }.worker, .{}) catch {
         state.app.yt.is_loading.store(false, .release);
-        break :blk null;
     };
-    // Detach: the handle is never joined, so without this each search leaks a
-    // thread handle/resources for the life of the process.
-    if (state.app.yt.thread) |t| t.detach();
 }
 
 /// Enter channel mode: swap the grid to `channel_id`'s uploads (seamless —
@@ -550,7 +546,7 @@ pub fn openChannel(channel_id: []const u8, name: []const u8) void {
     @memcpy(S.name_buf[0..S.name_len], channel_name_buf[0..S.name_len]);
     S.gen = my_gen;
 
-    const t = std.Thread.spawn(.{}, struct {
+    workers.spawn(struct {
         fn worker() void {
             defer state.app.yt.is_loading.store(false, .release);
             yt_mutex.lock();
@@ -574,7 +570,6 @@ pub fn openChannel(channel_id: []const u8, name: []const u8) void {
         state.app.yt.is_loading.store(false, .release);
         return;
     };
-    t.detach();
 }
 
 /// Leave channel mode and restore the last search (or the default feed).
@@ -625,7 +620,7 @@ pub fn fetchMore() void {
     S.name_len = channel_name_len;
     @memcpy(S.name_buf[0..S.name_len], channel_name_buf[0..S.name_len]);
 
-    const t = std.Thread.spawn(.{}, struct {
+    workers.spawn(struct {
         fn worker() void {
             defer loading_more.store(false, .release);
 
@@ -672,7 +667,6 @@ pub fn fetchMore() void {
         loading_more.store(false, .release);
         return;
     };
-    t.detach();
 }
 
 /// True while `gen` is still the newest search. A stale worker bails so its
@@ -1196,7 +1190,7 @@ pub fn fetchThumb(item: *state.YtItem) void {
     if (!@import("../core/poster.zig").tryClaimSlot()) return;
     item.thumb_fetching = true;
 
-    if (std.Thread.spawn(.{}, struct {
+    workers.spawn(struct {
         fn worker(ptr: *state.YtItem) void {
             workers.enter();
             defer workers.leave();
@@ -1274,10 +1268,10 @@ pub fn fetchThumb(item: *state.YtItem) void {
             ptr.thumb_h = @intCast(h);
             ptr.thumb_pixels = p_slice;
         }
-    }.worker, .{item})) |t| t.detach() else |_| {
+    }.worker, .{item}) catch {
         item.thumb_fetching = false; // spawn failed — reset so the card isn't stuck on placeholder
         @import("../core/poster.zig").releaseSlot();
-    }
+    };
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1667,7 +1661,7 @@ fn fireSuggest(query: []const u8) void {
     @memcpy(S.q_buf[0..S.q_len], query[0..S.q_len]);
     S.gen = my_gen;
 
-    const t = std.Thread.spawn(.{}, struct {
+    workers.spawn(struct {
         fn worker() void {
             defer sugg_busy.store(false, .release);
 
@@ -1720,7 +1714,6 @@ fn fireSuggest(query: []const u8) void {
         sugg_busy.store(false, .release);
         return;
     };
-    t.detach();
 }
 
 fn renderCatChip(idx: usize, chip: CatChip, current: []const u8) void {

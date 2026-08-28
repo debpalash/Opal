@@ -14,6 +14,7 @@ const anilist_pure = @import("anilist_pure.zig");
 const anime_schedule = @import("anime_schedule.zig");
 const anime_schedule_pure = @import("anime_schedule_pure.zig");
 const bounded_process = @import("../core/bounded_process.zig");
+const workers = @import("../core/workers.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -233,11 +234,9 @@ pub fn loadMoreGrid() void {
     if (!more_available or grid_loading_more.load(.acquire) or state.app.anime.is_loading.load(.acquire)) return;
     if (state.app.anime.result_count == 0 or state.app.anime.result_count >= state.app.anime.results.len) return;
     if (grid_loading_more.swap(true, .acq_rel)) return;
-    if (std.Thread.spawn(.{}, loadMoreGridWorker, .{ search_gen.load(.acquire), state.app.anime.mode })) |t| {
-        t.detach(); // never joined — detach to avoid leaking the handle
-    } else |_| {
+    workers.spawn(loadMoreGridWorker, .{ search_gen.load(.acquire), state.app.anime.mode }) catch {
         grid_loading_more.store(false, .release);
-    }
+    };
 }
 
 fn loadMoreGridWorker(my_gen: u32, mode: state.AnimeMode) void {
@@ -430,19 +429,17 @@ pub fn loadTrendingAnime() void {
 
     // The Lists chip swaps the source: same grid, same results[], different fetch.
     if (usesLists()) {
-        state.app.anime.thread = std.Thread.spawn(.{}, listsThread, .{}) catch {
+        workers.spawn(listsThread, .{}) catch {
             state.app.anime.is_loading.store(false, .release);
             return;
         };
-        if (state.app.anime.thread) |t| t.detach();
         return;
     }
 
-    state.app.anime.thread = std.Thread.spawn(.{}, trendingThread, .{}) catch {
+    workers.spawn(trendingThread, .{}) catch {
         state.app.anime.is_loading.store(false, .release);
         return;
     };
-    if (state.app.anime.thread) |t| t.detach(); // never joined — detach to avoid leaking the handle
 }
 
 // ══════════════════════════════════════════════════════════
@@ -753,17 +750,15 @@ pub fn searchAnime(query: []const u8) void {
     // Jikan (source_config-gated; INERT by default). See the DooPlay/AnimeStream
     // section below.
     if (activeScraper() != .none) {
-        if (std.Thread.spawn(.{}, scraperSearchThread, .{my_gen})) |t| {
-            t.detach();
-        } else |_| state.app.anime.is_loading.store(false, .release);
+        workers.spawn(scraperSearchThread, .{my_gen}) catch {
+            state.app.anime.is_loading.store(false, .release);
+        };
         return;
     }
 
-    if (std.Thread.spawn(.{}, searchThread, .{my_gen})) |t| {
-        t.detach(); // never joined — detach to avoid leaking the handle
-    } else |_| {
+    workers.spawn(searchThread, .{my_gen}) catch {
         state.app.anime.is_loading.store(false, .release);
-    }
+    };
 }
 
 var search_query_buf: [256]u8 = undefined;
@@ -837,11 +832,10 @@ pub fn loadSeasonal() void {
     more_available = false;
     const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
 
-    state.app.anime.thread = std.Thread.spawn(.{}, seasonalThread, .{my_gen}) catch {
+    workers.spawn(seasonalThread, .{my_gen}) catch {
         state.app.anime.is_loading.store(false, .release);
         return;
     };
-    if (state.app.anime.thread) |t| t.detach();
 }
 
 fn seasonalThread(my_gen: u32) void {
@@ -882,11 +876,10 @@ pub fn loadCalendar() void {
     more_available = false;
     const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
 
-    state.app.anime.thread = std.Thread.spawn(.{}, calendarThread, .{my_gen}) catch {
+    workers.spawn(calendarThread, .{my_gen}) catch {
         state.app.anime.is_loading.store(false, .release);
         return;
     };
-    if (state.app.anime.thread) |t| t.detach();
 }
 
 fn calendarThread(my_gen: u32) void {
@@ -1279,7 +1272,7 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
 // per settled query ever reaches curl — no busy flag needed.
 
 fn spawnAniListEnrich(my_gen: u32) void {
-    if (std.Thread.spawn(.{}, anilistEnrichThread, .{my_gen})) |t| t.detach() else |_| {}
+    workers.spawn(anilistEnrichThread, .{my_gen}) catch {};
 }
 
 fn anilistEnrichThread(my_gen: u32) void {
@@ -1383,11 +1376,9 @@ pub fn loadEpisodes(idx: usize) void {
     // Now kick off Jikan episodes enrichment in background
     if (!state.app.anime.episodes_loading) {
         state.app.anime.episodes_loading = true;
-        if (std.Thread.spawn(.{}, fetchEpisodeDataThread, .{idx})) |t| {
-            t.detach(); // never joined — detach so the handle isn't leaked
-        } else |_| {
+        workers.spawn(fetchEpisodeDataThread, .{idx}) catch {
             state.app.anime.episodes_loading = false;
-        }
+        };
     }
 }
 
@@ -1536,12 +1527,10 @@ pub fn loadRelations(idx: usize) void {
     @memcpy(S.mal_id_buf[0..n], mal[0..n]);
     S.mal_id_len = n;
 
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
-        t.detach();
-    } else |_| {
+    workers.spawn(S.worker, .{}) catch {
         state.app.anime.relations_loading = false;
         relations_busy.store(false, .release);
-    }
+    };
 }
 
 /// Relation types worth surfacing in the rail (skip Character/Adaptation/Summary).
@@ -1694,12 +1683,10 @@ pub fn jumpToAnime(mal_id: []const u8) void {
     S.id_len = n;
     S.gen = my_gen;
 
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
-        t.detach();
-    } else |_| {
+    workers.spawn(S.worker, .{}) catch {
         state.app.anime.is_loading.store(false, .release);
         jump_busy.store(false, .release);
-    }
+    };
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1807,17 +1794,15 @@ pub fn playEpisode(ep_no: []const u8) void {
     // Scraper cards resolve the episode's EMBED URL from the site and hand it to
     // playEmbed (→ the shared extractor stack), instead of the torrent/AnimePahe path.
     if (results_are_scraper) {
-        if (std.Thread.spawn(.{}, scraperPlayThread, .{ ep_copy, ep_len })) |t| {
-            t.detach();
-        } else |_| state.app.anime.stream_loading = false;
+        workers.spawn(scraperPlayThread, .{ ep_copy, ep_len }) catch {
+            state.app.anime.stream_loading = false;
+        };
         return;
     }
 
-    if (std.Thread.spawn(.{}, fetchStreamThread, .{ ep_copy, ep_len })) |t| {
-        t.detach(); // never joined — detach so the handle isn't leaked
-    } else |_| {
+    workers.spawn(fetchStreamThread, .{ ep_copy, ep_len }) catch {
         state.app.anime.stream_loading = false;
-    }
+    };
 }
 
 fn fetchStreamThread(ep_buf: [8]u8, ep_len: usize) void {
@@ -2040,9 +2025,9 @@ pub fn loadScraperPopular() void {
     grid_page = 1;
     more_available = false;
     search_query_len = 0; // empty query → popular
-    if (std.Thread.spawn(.{}, scraperSearchThread, .{my_gen})) |t| {
-        t.detach();
-    } else |_| state.app.anime.is_loading.store(false, .release);
+    workers.spawn(scraperSearchThread, .{my_gen}) catch {
+        state.app.anime.is_loading.store(false, .release);
+    };
 }
 
 /// GET a page through the anti-block scrape layer into a fresh heap buffer.
@@ -2216,9 +2201,9 @@ fn loadEpisodesScraper(idx: usize) void {
     state.app.anime.selected_idx = idx;
     state.app.anime.episode_count = 0;
     state.app.anime.is_loading.store(true, .release);
-    if (std.Thread.spawn(.{}, episodesScraperThread, .{idx})) |t| {
-        t.detach();
-    } else |_| state.app.anime.is_loading.store(false, .release);
+    workers.spawn(episodesScraperThread, .{idx}) catch {
+        state.app.anime.is_loading.store(false, .release);
+    };
 }
 
 fn episodesScraperThread(idx: usize) void {
@@ -2466,11 +2451,9 @@ pub fn playEmbed(embed_url: []const u8) void {
     @memcpy(S.url_buf[0..embed_url.len], embed_url);
     S.url_len = embed_url.len;
 
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
-        t.detach();
-    } else |_| {
+    workers.spawn(S.worker, .{}) catch {
         S.busy = false;
-    }
+    };
 }
 
 // ══════════════════════════════════════════════════════════
@@ -4328,11 +4311,9 @@ pub fn fetchPoster(item: *state.AnimeResult) void {
         }
     };
 
-    if (std.Thread.spawn(.{}, S.worker, .{ url_copy, url.len, idx })) |t| {
-        t.detach(); // never joined — detach so the handle isn't leaked
-    } else |_| {
+    workers.spawn(S.worker, .{ url_copy, url.len, idx }) catch {
         item.poster_fetching = false;
-    }
+    };
 }
 
 // ══════════════════════════════════════════════════════════
@@ -4455,9 +4436,7 @@ pub fn fetchContinuePoster(item: *state.ContinueItem) void {
     var url_copy: [512]u8 = undefined;
     @memcpy(url_copy[0..url.len], url);
 
-    if (std.Thread.spawn(.{}, S.worker, .{ url_copy, url.len, idx })) |t| {
-        t.detach();
-    } else |_| {
+    workers.spawn(S.worker, .{ url_copy, url.len, idx }) catch {
         item.poster_fetching = false;
-    }
+    };
 }

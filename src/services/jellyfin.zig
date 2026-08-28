@@ -2,6 +2,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 const player = @import("../player/player.zig");
+const workers = @import("../core/workers.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -87,7 +88,7 @@ pub fn authenticate() void {
     state.app.jf.is_loading.store(true, .release);
     state.app.jf.login_error_len = 0;
 
-    state.app.jf.thread = std.Thread.spawn(.{}, struct {
+    workers.spawn(struct {
         fn worker() void {
             defer {
                 state.app.jf.is_loading.store(false, .release);
@@ -199,13 +200,9 @@ pub fn authenticate() void {
             // Immediately fetch libraries
             fetchLibrariesSync();
         }
-    }.worker, .{}) catch blk: {
+    }.worker, .{}) catch {
         state.app.jf.is_loading.store(false, .release);
-        break :blk null;
     };
-    // Detach: the result is observed via state.app.jf, never joined — otherwise the
-    // joinable thread handle leaks on every login/library/search.
-    if (state.app.jf.thread) |t| t.detach();
 }
 
 // ══════════════════════════════════════════════════════════
@@ -216,20 +213,16 @@ pub fn fetchLibraries() void {
     if (state.app.jf.is_loading.load(.acquire) or !state.app.jf.connected) return;
     state.app.jf.is_loading.store(true, .release);
 
-    state.app.jf.thread = std.Thread.spawn(.{}, struct {
+    workers.spawn(struct {
         fn worker() void {
             defer {
                 state.app.jf.is_loading.store(false, .release);
             }
             fetchLibrariesSync();
         }
-    }.worker, .{}) catch blk: {
+    }.worker, .{}) catch {
         state.app.jf.is_loading.store(false, .release);
-        break :blk null;
     };
-    // Detach: the result is observed via state.app.jf, never joined — otherwise the
-    // joinable thread handle leaks on every login/library/search.
-    if (state.app.jf.thread) |t| t.detach();
 }
 
 fn fetchLibrariesSync() void {
@@ -297,20 +290,16 @@ pub fn fetchItems(parent_id: []const u8) void {
     more_available = true;
     const my_gen = paging_gen.fetchAdd(1, .acq_rel) + 1;
 
-    state.app.jf.thread = std.Thread.spawn(.{}, struct {
+    workers.spawn(struct {
         fn worker(gen: u32) void {
             defer {
                 state.app.jf.is_loading.store(false, .release);
             }
             fetchItemsSync(state.app.jf.parent_id[0..state.app.jf.parent_id_len], false, gen, false);
         }
-    }.worker, .{my_gen}) catch blk: {
+    }.worker, .{my_gen}) catch {
         state.app.jf.is_loading.store(false, .release);
-        break :blk null;
     };
-    // Detach: the result is observed via state.app.jf, never joined — otherwise the
-    // joinable thread handle leaks on every login/library/search.
-    if (state.app.jf.thread) |t| t.detach();
 }
 
 pub fn searchItems() void {
@@ -332,20 +321,16 @@ pub fn searchItems() void {
     more_available = true;
     const my_gen = paging_gen.fetchAdd(1, .acq_rel) + 1;
 
-    state.app.jf.thread = std.Thread.spawn(.{}, struct {
+    workers.spawn(struct {
         fn worker(gen: u32) void {
             defer {
                 state.app.jf.is_loading.store(false, .release);
             }
             searchItemsSync(current_query[0..current_query_len], gen, false);
         }
-    }.worker, .{my_gen}) catch blk: {
+    }.worker, .{my_gen}) catch {
         state.app.jf.is_loading.store(false, .release);
-        break :blk null;
     };
-    // Detach: the result is observed via state.app.jf, never joined — otherwise the
-    // joinable thread handle leaks on every login/library/search.
-    if (state.app.jf.thread) |t| t.detach();
 }
 
 /// One StartIndex/Limit window of a Jellyfin Search fetch. `append=false`
@@ -590,7 +575,7 @@ pub fn fetchPoster(item: *state.JfItem) void {
     if (!@import("../core/poster.zig").tryClaimSlot()) return;
     item.poster_fetching = true;
 
-    if (std.Thread.spawn(.{}, struct {
+    workers.spawn(struct {
         fn worker(ptr: *state.JfItem) void {
             defer ptr.poster_fetching = false;
             defer @import("../core/poster.zig").releaseSlot();
@@ -650,10 +635,10 @@ pub fn fetchPoster(item: *state.JfItem) void {
             ptr.poster_h = @intCast(h);
             ptr.poster_pixels = p_slice;
         }
-    }.worker, .{item})) |t| t.detach() else |_| {
+    }.worker, .{item}) catch {
         item.poster_fetching = false;
         @import("../core/poster.zig").releaseSlot(); // spawn failed — release the slot
-    }
+    };
 }
 
 // ══════════════════════════════════════════════════════════
@@ -663,7 +648,7 @@ pub fn fetchPoster(item: *state.JfItem) void {
 pub fn fetchResume() void {
     if (state.app.jf.is_loading.load(.acquire) or !state.app.jf.connected) return;
 
-    if (std.Thread.spawn(.{}, struct {
+    workers.spawn(struct {
         fn worker() void {
             const server = state.app.jf.server_url[0..state.app.jf.server_url_len];
             const uid = state.app.jf.user_id[0..state.app.jf.user_id_len];
@@ -727,7 +712,7 @@ pub fn fetchResume() void {
             }
             state.app.jf.resume_loaded.store(true, .release);
         }
-    }.worker, .{})) |t| t.detach() else |_| {}
+    }.worker, .{}) catch {};
 }
 
 /// Push current browse state onto nav stack before navigating deeper
@@ -941,11 +926,9 @@ pub fn loadMore() void {
     S.gen = my_gen;
     S.source = src;
 
-    if (std.Thread.spawn(.{}, S.worker, .{})) |t| {
-        t.detach();
-    } else |_| {
+    workers.spawn(S.worker, .{}) catch {
         loading_more.store(false, .release);
-    }
+    };
 }
 
 fn setLoginError(msg: []const u8) void {

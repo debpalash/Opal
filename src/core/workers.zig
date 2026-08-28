@@ -1,18 +1,81 @@
 const std = @import("std");
 const io = @import("io_global.zig");
 
-// Lightweight barrier for the detached download/decode workers (comic pages,
-// comic covers, youtube thumbnails). Each worker brackets its body with
-// `enter()`/`leave()`. At shutdown `beginShutdownAndDrain()` flips `quitting`
-// and spins until the in-flight count hits zero, so the DebugAllocator leak
-// check doesn't race a worker's still-live `tmp_buf`/`p_slice` (which the worker
-// would free or publish on completion). Workers also poll `isQuitting()` inside
-// their read loops to bail fast, and skip publishing a result once we're
-// quitting — otherwise a late completion would store into an array the deinit
-// path has already torn down.
+// Process-owned worker supervisor. New work is admitted through `spawn`, which
+// keeps every thread handle and joins it before shared application state is
+// destroyed. The older enter/leave counter remains while legacy call sites are
+// migrated; shutdown waits for both populations and never frees state while a
+// worker can still publish into it.
+
+const sync = @import("sync.zig");
+
+const MAX_OWNED_THREADS: usize = 256;
+
+const Slot = struct {
+    thread: ?std.Thread = null,
+    finished: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+};
+
+var slots: [MAX_OWNED_THREADS]Slot = [_]Slot{.{}} ** MAX_OWNED_THREADS;
+var slots_mutex: sync.Mutex = .{};
 
 var active: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
 var quitting: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+/// Initialize admission before any service is allowed to start work.
+pub fn init() void {
+    quitting.store(false, .release);
+}
+
+fn reapFinishedLocked() void {
+    for (&slots) |*slot| {
+        if (slot.thread != null and slot.finished.load(.acquire)) {
+            slot.thread.?.join();
+            slot.thread = null;
+            slot.finished.store(false, .release);
+        }
+    }
+}
+
+/// Submit one bounded, owned, joinable task. The function's argument tuple is
+/// copied into private storage, so callers must still copy any borrowed slices
+/// before submission. `isQuitting()` is the cooperative cancellation token.
+pub fn spawn(comptime function: anytype, args: anytype) !void {
+    if (isQuitting()) return error.ShuttingDown;
+
+    const Args = @TypeOf(args);
+    const Context = struct {
+        args: Args,
+        slot_index: usize,
+
+        fn run(ctx: *@This()) void {
+            @call(.auto, function, ctx.args);
+            const index = ctx.slot_index;
+            std.heap.c_allocator.destroy(ctx);
+            slots[index].finished.store(true, .release);
+        }
+    };
+
+    const context = try std.heap.c_allocator.create(Context);
+    errdefer std.heap.c_allocator.destroy(context);
+
+    slots_mutex.lock();
+    defer slots_mutex.unlock();
+    if (isQuitting()) return error.ShuttingDown;
+    reapFinishedLocked();
+
+    var index: ?usize = null;
+    for (&slots, 0..) |*slot, i| {
+        if (slot.thread == null) {
+            index = i;
+            break;
+        }
+    }
+    const selected = index orelse return error.WorkQueueFull;
+    context.* = .{ .args = args, .slot_index = selected };
+    slots[selected].finished.store(false, .release);
+    slots[selected].thread = try std.Thread.spawn(.{}, Context.run, .{context});
+}
 
 /// Register entry into a tracked worker. Pair with `leave()` via `defer`.
 pub fn enter() void {
@@ -40,13 +103,26 @@ pub fn markQuitting() void {
     quitting.store(true, .release);
 }
 
-/// Mark shutdown, then spin (bounded by `timeout_ms`) until tracked workers
-/// drain. Returns early once the count reaches zero. A worker wedged in a
-/// single blocking syscall past the deadline is the accepted residual.
-pub fn beginShutdownAndDrain(timeout_ms: i64) void {
+/// Stop admission, request cooperative cancellation, and join every owned
+/// worker. `diagnostic_ms` controls when a visible slow-shutdown warning is
+/// emitted; it is not a use-after-free timeout.
+pub fn beginShutdownAndDrain(diagnostic_ms: i64) void {
     markQuitting();
-    const deadline = io.milliTimestamp() + timeout_ms;
-    while (active.load(.acquire) > 0 and io.milliTimestamp() < deadline) {
+    const started = io.milliTimestamp();
+    var warned = false;
+    while (true) {
+        slots_mutex.lock();
+        reapFinishedLocked();
+        var owned: usize = 0;
+        for (&slots) |*slot| if (slot.thread != null) {
+            owned += 1;
+        };
+        slots_mutex.unlock();
+        if (owned == 0 and active.load(.acquire) == 0) return;
+        if (!warned and io.milliTimestamp() - started >= diagnostic_ms) {
+            std.debug.print("[workers] waiting for {d} owned + {d} legacy worker(s) during shutdown\n", .{ owned, active.load(.acquire) });
+            warned = true;
+        }
         io.sleep(5 * std.time.ns_per_ms);
     }
 }
@@ -62,7 +138,22 @@ test "enter/leave track the in-flight count" {
     try std.testing.expectEqual(@as(i64, 0), activeCount());
 }
 
+test "owned tasks are accepted and joined before shutdown returns" {
+    const T = struct {
+        var ran: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+        fn run() void {
+            ran.store(true, .release);
+        }
+    };
+    init();
+    T.ran.store(false, .release);
+    try spawn(T.run, .{});
+    beginShutdownAndDrain(1_000);
+    try std.testing.expect(T.ran.load(.acquire));
+}
+
 test "quitting flag flips and drain returns immediately when idle" {
+    init();
     try std.testing.expect(!isQuitting());
     // No workers in flight → drain must not block for the full timeout.
     const before = io.milliTimestamp();

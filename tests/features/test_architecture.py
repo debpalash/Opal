@@ -49,3 +49,26 @@ def test_navigation_and_docs_freshness():
     if missing:
         return "fail", "navigation/docs drift: " + ", ".join(missing)
     return "pass", f"task map and docs match version {version_match.group(1)} and {route_count} routes"
+
+
+@test("Critical background work uses the owned supervisor", "Architecture")
+def test_owned_worker_supervisor():
+    workers = _src("src/core/workers.zig")
+    main = _src("src/main.zig")
+    verticals = {
+        name: _src(f"src/services/{name}.zig")
+        for name in ("podcasts", "jellyfin", "anime", "comics", "youtube")
+    }
+    checks = {
+        "initialized before services": 'workers.zig").init()' in main,
+        "admission is bounded": "MAX_OWNED_THREADS" in workers and "error.WorkQueueFull" in workers,
+        "shutdown stops admission": "error.ShuttingDown" in workers and "markQuitting();" in workers,
+        "shutdown joins": ".join();" in workers and "beginShutdownAndDrain" in main,
+        "slow diagnostic": "waiting for {d} owned" in workers,
+        "critical verticals migrated": all(".detach()" not in source for source in verticals.values()),
+        "startup migrated": ")) |t| t.detach()" not in main,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "worker ownership regression(s): " + ", ".join(missing)
+    return "pass", "bounded owned supervisor covers startup and five critical verticals"
