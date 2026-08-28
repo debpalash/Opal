@@ -87,16 +87,19 @@ jobs:
       - name: Run tests/test_features.py
         run: python3 tests/test_features.py
 
-  # Behavior-level browser security tier. GitHub's Ubuntu image includes
-  # Google Chrome; fail explicitly if that supported dependency disappears.
+  # Behavior-level browser security tier. Use an isolated Chrome-for-Testing
+  # binary: the runner's /usr/bin/google-chrome launcher can hang before main()
+  # and emit no diagnostics, which tests the image rather than our DOM boundary.
   browser-dom:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Locate Chromium
-        run: command -v google-chrome || command -v chromium
+      - uses: browser-actions/setup-chrome@v2
+        id: setup-chrome
+        with:
+          chrome-version: stable
       - name: Exercise hostile provider markup in a real browser
-        run: python3 tests/test_web_dom_live.py
+        run: python3 tests/test_web_dom_live.py --chromium "${{ steps.setup-chrome.outputs.chrome-path }}"
 
   # Headless Docker image: the ONLY reliable gate for the hosted deployment
   # (macOS dev hosts cannot validate a Linux image). Builds the image, boots
