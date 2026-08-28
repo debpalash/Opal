@@ -513,10 +513,45 @@ def test_search_workers_reaped():
         # wasn't linux/macos, so Windows orphaned a python process per search.
         # It now routes through the portable io_global helper with no OS gate.
         "portable kill, no OS gate": "killByCommandLine(" in sr,
-        "appDeinit calls it": "search.reapWorkers()" in mn,
+        "appDeinit cancels search": "search.shutdown()" in mn,
+        "shutdown reaps workers": "pub fn shutdown()" in sr and "reapWorkers();" in sr,
         "dev.sh reaps too": "pkill -f engines/nova2.py" in dev,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "reap wiring incomplete: " + ", ".join(missing)
     return "pass", "nova2.py search workers reaped on clean shutdown (appDeinit + dev.sh)"
+
+
+@test("Shutdown cancels blocking media/network work before drain", "Stability")
+def test_shutdown_cancellation_order():
+    mn = _src("src/main.zig")
+    http = _src("src/core/http.zig")
+    resolver = _src("src/services/resolver.zig")
+    vndb = _src("src/services/vndb.zig")
+    drop_ingest = _src("src/player/drop_ingest.zig")
+    service_refresh_offenders = []
+    services_dir = os.path.join(PROJECT_DIR, "src", "services")
+    for root, _, files in os.walk(services_dir):
+        for name in files:
+            if not name.endswith(".zig"):
+                continue
+            path = os.path.join(root, name)
+            if "dvui.refresh(null" in open(path, encoding="utf-8").read():
+                service_refresh_offenders.append(os.path.relpath(path, PROJECT_DIR))
+    drain = mn.find("beginShutdownAndDrain(")
+    checks = {
+        "resolver cancellation exists": "pub fn cancel()" in resolver and "run_gen.fetchAdd" in resolver,
+        "resolver cancelled before drain": 0 <= mn.find('services/resolver.zig").cancel()') < drain,
+        "search cancelled before drain": 0 <= mn.find("search.shutdown()") < drain,
+        "stream listeners stopped before drain": 0 <= mn.find('player/stream_proxy.zig").stopAll()') < drain,
+        "HTTP watchdog observes quit": "if (workers.isQuitting()) break;" in http,
+        "image curl observes quit": ".cancel_flag = workers.quittingSignal()" in http,
+        "VNDB worker uses window-safe wake": "state.wakeUi();" in vndb,
+        "service refreshes always carry a window": not service_refresh_offenders,
+        "drop worker counted once": "workers.enter()" not in drop_ingest and "workers.leave()" not in drop_ingest,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "shutdown cancellation regression: " + ", ".join(missing)
+    return "pass", "blocking searches, streams, HTTP, and poster curl cancel before worker drain"

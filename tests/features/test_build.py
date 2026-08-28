@@ -199,8 +199,11 @@ def test_fetchimage_curl():
     # loaded. fetchImage must shell out to curl (which fetches them fine).
     h = _src("src/core/http.zig")
     fn = _between(h, "pub fn fetchImage", "\n}")
-    if '"curl"' in fn and "io_global.Child" in fn:
-        return "pass", "fetchImage fetches images via curl (MAL CDN + TMDB both work)"
+    # The process may be owned directly or through bounded_process; both still
+    # execute curl. The bounded seam additionally cancels it during shutdown.
+    owns_curl = "io_global.Child" in fn or "bounded.StreamProcess" in fn
+    if '"curl"' in fn and owns_curl:
+        return "pass", "fetchImage fetches images via bounded curl (MAL CDN + TMDB both work)"
     return "fail", "fetchImage still routes images through std.http (anime posters return NULL)"
 
 

@@ -1295,7 +1295,7 @@ fn renderResults() void {
 
     // Slide the loaded window to cover the visible catalog rows. Bounded views
     // (fav/recent) are already fully in results[] at win_base 0, so skip.
-    if (is_catalog and ensureWindow(first_ch, last_ch)) dvui.refresh(null, @src(), null);
+    if (is_catalog and ensureWindow(first_ch, last_ch)) state.wakeUi();
 
     if (win.first > 0) {
         var sp = dvui.box(@src(), .{}, .{

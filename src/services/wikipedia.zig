@@ -2,6 +2,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const http = @import("../core/http.zig");
 const pure = @import("wikipedia_pure.zig");
+const state = @import("../core/state.zig");
 
 // ══════════════════════════════════════════════════════════
 // Trivia blurb for the torrent-buffering loading screen.
@@ -48,7 +49,7 @@ pub fn fetchTrivia(title: []const u8, is_tv: bool, out_buf: *[400]u8, out_len: *
                 const n = @min(extract.len, c.out_buf.len);
                 @memcpy(c.out_buf[0..n], extract[0..n]);
                 c.out_len.* = n;
-                dvui.refresh(null, @src(), null);
+                state.wakeUi();
             }
         }
     }.worker, .{ctx})) |th| {

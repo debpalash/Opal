@@ -1502,7 +1502,7 @@ const VtHash = struct {
         defer {
             Self.done.store(true, .release);
             Self.busy.store(false, .release);
-            dvui.refresh(null, @src(), null);
+            state.wakeUi();
         }
 
         const path = Self.path_buf[0..Self.path_len];

@@ -1073,7 +1073,7 @@ fn removeRow(r: *const tp.Row) void {
     // card stays on screen until an unrelated change happens to invalidate it.
     library_dirty.store(true, .release);
     state.showToast("Removed from Watching");
-    dvui.refresh(null, @src(), null);
+    state.wakeUi();
 }
 
 /// The play button's label, or null when this row has nothing playable.

@@ -281,7 +281,9 @@ fn fetchPage(my_gen: u32, is_popular: bool, page: u32, append: bool) void {
         var lb: [64]u8 = undefined;
         logs.pushLog("info", "vndb", std.fmt.bufPrint(&lb, "Loaded {d} more VNs (VNDB p{d})", .{ count, page }) catch "Loaded more VNs", false);
     }
-    dvui.refresh(null, @src(), null); // wake the frame so the new cards paint
+    // This runs on a fetch worker. Cross-thread refresh must carry the real
+    // window; the null form is only valid inside window.begin()/end().
+    state.wakeUi();
 }
 
 // ══════════════════════════════════════════════════════════
@@ -638,7 +640,7 @@ fn renderResults() void {
                 .gravity_x = 0.5,
                 .margin = dvui.Rect.all(12),
             });
-            dvui.refresh(null, @src(), null); // wake until the worker's items land
+            state.wakeUi(); // wake until the worker's items land
         }
     }
 }

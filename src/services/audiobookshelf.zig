@@ -344,7 +344,7 @@ fn loadMoreWorker(lib_id_buf: [64]u8, lib_id_len: usize, page: u32) void {
 
     var lb: [48]u8 = undefined;
     logs.pushLog("info", "audiobookshelf", std.fmt.bufPrint(&lb, "Loaded {d} more books (p{d})", .{ n, page }) catch "Loaded more books", false);
-    dvui.refresh(null, @src(), null);
+    state.wakeUi();
 }
 
 // ══════════════════════════════════════════════════════════
@@ -853,7 +853,7 @@ fn renderBooks() void {
                 .gravity_x = 0.5,
                 .margin = dvui.Rect.all(12),
             });
-            dvui.refresh(null, @src(), null); // wake until the worker's items land
+            state.wakeUi(); // wake until the worker's items land
         }
     }
 }

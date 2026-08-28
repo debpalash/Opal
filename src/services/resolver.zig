@@ -460,6 +460,16 @@ threadlocal var worker_reported: SourceStatus = .done;
 threadlocal var worker_produced: bool = false;
 var lifecycle_mutex = @import("../core/sync.zig").Mutex{};
 
+/// Supersede every live resolver wave. Bounded subprocess guards observe the
+/// generation change and terminate their process trees; native HTTP workers
+/// observe the global workers.isQuitting() token during app shutdown.
+pub fn cancel() void {
+    lifecycle_mutex.lock();
+    defer lifecycle_mutex.unlock();
+    _ = run_gen.fetchAdd(1, .acq_rel);
+    is_resolving.store(false, .release);
+}
+
 /// Backends call this before returning from a known failure/configuration path.
 /// Multiple events keep the most informative reason; successful publication is
 /// observed separately by pushResult and turns a later failure into `.partial`.

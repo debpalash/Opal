@@ -144,6 +144,12 @@ pub fn isQuitting() bool {
     return quitting.load(.acquire);
 }
 
+/// Stable cancellation token for process watchdogs that must interrupt a
+/// blocked child as soon as application teardown begins.
+pub fn quittingSignal() *const std.atomic.Value(bool) {
+    return &quitting;
+}
+
 /// Set the quitting flag only (no wait). Split out for unit testing.
 pub fn markQuitting() void {
     quitting.store(true, .release);

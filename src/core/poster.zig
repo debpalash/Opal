@@ -209,6 +209,9 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
             defer args.flag.* = false;
             defer _ = in_flight.fetchSub(1, .acq_rel);
 
+            const workers = @import("workers.zig");
+            if (workers.isQuitting()) return;
+
             const worker_url = args.url_buf[0..args.url_len];
             const key = cacheKey(worker_url);
 
@@ -234,6 +237,7 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
                     if (net_buf == null) net_buf = c_alloc.alloc(u8, 512 * 1024) catch return;
                     break :blk http.fetchImage(worker_url, net_buf.?) orelse return;
                 };
+                if (workers.isQuitting()) return;
                 var comp: c_int = 0;
                 w = 0;
                 h = 0;
@@ -258,6 +262,11 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
             const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
             const p_slice = c_alloc.alloc(u8, p_len) catch return;
             @memcpy(p_slice, pixels[0..p_len]);
+
+            if (workers.isQuitting()) {
+                c_alloc.free(p_slice);
+                return;
+            }
 
             args.w.* = @intCast(w);
             args.h.* = @intCast(h);

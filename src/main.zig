@@ -171,8 +171,6 @@ pub fn coreInit() !void {
     @import("core/workers.zig").spawn(struct {
         fn worker() void {
             const workers = @import("core/workers.zig");
-            workers.enter();
-            defer workers.leave();
             if (workers.isQuitting()) return;
             // ── Unified SQLite Database ──
             const database = @import("core/db.zig");
@@ -495,6 +493,13 @@ pub fn appDeinit() void {
     voice.is_recording.store(false, .release);
     voice.is_speaking.store(false, .release);
 
+    // Cancel blocking work before waiting for the worker barrier. Resolver and
+    // search subprocess guards need their generation/abort signals to reap
+    // children, and stream-proxy accept loops need their listeners kicked.
+    @import("services/resolver.zig").cancel();
+    search.shutdown();
+    @import("player/stream_proxy.zig").stopAll();
+
     // Join all owned work before any buffers, services, HTTP state, or the
     // allocator it may publish into are released. 800 ms is the diagnostic
     // threshold, not permission for a worker to outlive shared state.
@@ -531,14 +536,6 @@ pub fn appDeinit() void {
     @import("services/youtube.zig").deinit();
     // Playlist drawer caches (filter match flags + shuffle order).
     @import("player/playlist.zig").deinitModule();
-
-    // Join search thread so its defers (free query, deinit argv) run cleanly
-    search.search_abort.store(true, .release);
-    if (search.search_thread) |t| t.join();
-    search.search_thread = null;
-    // Reap any superseded/detached nova2.py search subprocesses so no orphaned
-    // Python multiprocessing pool is left behind after a clean exit.
-    search.reapWorkers();
 
     search.clearResults();
     search.search_results.deinit(@import("core/alloc.zig").allocator);

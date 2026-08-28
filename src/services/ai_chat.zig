@@ -1033,7 +1033,7 @@ fn renderCatalogRail() void {
                 .color_text = theme.colors.text_tertiary,
                 .gravity_y = 0.5,
             });
-            dvui.refresh(null, @src(), null);
+            state.wakeUi();
         }
         return;
     }

@@ -368,7 +368,7 @@ def test_play_button_feedback():
         # Must repaint right after arming, or the busy state waits for an
         # incidental event — the original symptom. Window-scoped rather than
         # whitespace-exact so reformatting doesn't break the check.
-        "repaints on click": "dvui.refresh(" in tmdb[
+        "repaints on click": "state.wakeUi()" in tmdb[
             tmdb.find("episode_play_pending.store(true, .release)"):
             tmdb.find("episode_play_pending.store(true, .release)") + 400
         ],

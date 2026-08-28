@@ -54,11 +54,7 @@ pub fn start(path: []const u8) bool {
     args.path_len = @min(path.len, args.path.len);
     @memcpy(args.path[0..args.path_len], path[0..args.path_len]);
 
-    // Register before spawning so shutdown cannot observe zero active workers
-    // in the gap between spawn and the new thread entering its body.
-    workers.enter();
     const thread = @import("../core/workers.zig").spawnLegacy(run, .{args}) catch {
-        workers.leave();
         allocator.destroy(args);
         return false;
     };
@@ -86,7 +82,6 @@ pub fn deinit() void {
 }
 
 fn run(args: *Args) void {
-    defer workers.leave();
     defer allocator.destroy(args);
 
     var result = classify(args.path[0..args.path_len]);

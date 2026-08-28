@@ -1770,7 +1770,7 @@ pub fn renderContent() void {
     // read as a stuck red line.
     if (b.is_loading.load(.acquire) and (bridge_ready.load(.acquire) or bridge_starting.load(.acquire))) {
         renderLoadingBar();
-        dvui.refresh(null, @src(), null);
+        state.wakeUi();
     }
 
     // ── Frame rendering or landing page ──
@@ -2217,7 +2217,7 @@ fn renderReaderOverlay() void {
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 20, .w = 0, .h = 0 },
         });
-        dvui.refresh(null, @src(), null);
+        state.wakeUi();
         return;
     }
 
@@ -2285,11 +2285,11 @@ fn maybeSyncViewport(w_in: f32, h_in: f32) void {
         S.pend_w = w;
         S.pend_h = h;
         S.pend_since = now_ms;
-        dvui.refresh(null, @src(), null);
+        state.wakeUi();
         return;
     }
     if (now_ms - S.pend_since < 300) {
-        dvui.refresh(null, @src(), null);
+        state.wakeUi();
         return;
     }
     S.sent_w = w;

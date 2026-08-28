@@ -514,7 +514,7 @@ fn processGridKeys(items: *std.ArrayListUnmanaged(state.TmdbItem), cols: usize, 
                 if (grid_focus != null) {
                     grid_focus = null;
                     e.handled = true;
-                    dvui.refresh(null, @src(), null);
+                    state.wakeUi();
                 }
                 continue;
             },
@@ -531,7 +531,7 @@ fn processGridKeys(items: *std.ArrayListUnmanaged(state.TmdbItem), cols: usize, 
         if (tmdb_pure.scrollOffsetForRow(row, row_h, gallery_si.viewport.y, gallery_si.viewport.h)) |off| {
             gallery_si.scrollToOffset(.vertical, off);
         }
-        dvui.refresh(null, @src(), null);
+        state.wakeUi();
     }
 }
 
@@ -659,7 +659,7 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
                 .gravity_x = 0.5,
                 .margin = dvui.Rect.all(12),
             });
-            dvui.refresh(null, @src(), null); // wake until the worker's items land
+            state.wakeUi(); // wake until the worker's items land
         }
     }
 }
@@ -707,7 +707,7 @@ fn renderSkeletonRows(cols: usize, card_w: f32, poster_h: f32) void {
             tile.deinit();
         }
     }
-    dvui.refresh(null, @src(), null); // keep waking until the worker's items land
+    state.wakeUi(); // keep waking until the worker's items land
 }
 
 /// Dimmed scrim + metadata shown over a poster while hovered.
@@ -2058,7 +2058,7 @@ pub fn playEpisodeOf(
     // The click is handled AFTER this frame's button already drew itself idle,
     // so without an explicit repaint the busy state would not appear until the
     // next incidental event — exactly the "no instant feedback" symptom.
-    dvui.refresh(null, @src(), null);
+    state.wakeUi();
     @memset(&S.query, 0);
     @memcpy(S.query[0..q.len], q);
     S.qlen = q.len;
@@ -2416,7 +2416,7 @@ fn renderTvDetail() void {
         // acting on clicks — the toast is gone after 3.5s but the resolve runs
         // far longer, and a button that snaps back to idle reads as a dead click.
         const play_busy = episode_play_pending.load(.acquire);
-        if (play_busy) dvui.refresh(null, @src(), null); // keep the spinner animating
+        if (play_busy) state.wakeUi(); // keep the spinner animating
 
         // Resume — lucide play + label (the "▶" glyph rendered as tofu).
         if (nxt) |next_ep| {

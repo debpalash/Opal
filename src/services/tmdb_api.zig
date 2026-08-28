@@ -283,7 +283,7 @@ pub fn applyPendingResults() void {
     t.results.appendSlice(alloc, t.pending_results.items) catch {};
     t.pending_results.clearRetainingCapacity();
     t.total_pages = t.pending_total_pages;
-    dvui.refresh(null, @src(), null);
+    state.wakeUi();
 }
 
 fn buildApiUrl(buf: *[512]u8, mode: FetchMode, query: []const u8, cat: state.TmdbCategory, mf: state.TmdbMediaFilter, tw: state.TmdbTimeWindow, genre_idx: usize, discover_sort: u8, page: u32) ?[]const u8 {

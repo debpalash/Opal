@@ -1233,7 +1233,7 @@ fn renderSearchView() void {
                 .gravity_x = 0.5,
                 .margin = dvui.Rect.all(12),
             });
-            dvui.refresh(null, @src(), null); // wake until the appended rows land
+            state.wakeUi(); // wake until the appended rows land
         }
     }
 }
@@ -1478,7 +1478,7 @@ fn renderReaderView() void {
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 24, .w = 0, .h = 0 },
         });
-        dvui.refresh(null, @src(), null);
+        state.wakeUi();
         return;
     }
 

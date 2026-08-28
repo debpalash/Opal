@@ -712,6 +712,18 @@ pub fn reapWorkers() void {
     @import("../core/io_global.zig").killByCommandLine("engines/nova2.py", false);
 }
 
+/// Cancel and reap all search work before the global worker barrier. Waiting
+/// first would deadlock shutdown behind a child process that has not yet been
+/// told to exit.
+pub fn shutdown() void {
+    search_abort.store(true, .release);
+    _ = search_generation.fetchAdd(1, .acq_rel);
+    reapWorkers();
+    if (search_thread) |t| t.join();
+    search_thread = null;
+    is_searching.store(false, .release);
+}
+
 pub fn triggerSearch(query_text: []const u8) void {
     if (query_text.len == 0) return;
 

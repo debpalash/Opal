@@ -222,7 +222,7 @@ fn applyPending() void {
     } else if (!append) {
         more_available = true;
     }
-    dvui.refresh(null, @src(), null);
+    state.wakeUi();
 }
 
 // ══════════════════════════════════════════════════════════
@@ -400,7 +400,7 @@ pub fn renderContent() void {
                 .gravity_x = 0.5,
                 .margin = dvui.Rect.all(12),
             });
-            dvui.refresh(null, @src(), null); // wake until the worker's items land
+            state.wakeUi(); // wake until the worker's items land
         }
     }
 }

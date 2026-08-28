@@ -912,7 +912,7 @@ fn renderResults() void {
         if ((near_bottom or underfilled) and !loading and !state.app.radio.is_loading.load(.acquire)) loadMore();
         if (loading or underfilled) {
             dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.lg), .gravity_x = 0.5, .margin = dvui.Rect.all(12) });
-            dvui.refresh(null, @src(), null);
+            state.wakeUi();
         }
     }
 }

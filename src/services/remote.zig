@@ -509,8 +509,6 @@ fn localLoop() void {
             fn run(c2: std.Io.net.Stream) void {
                 defer _ = local_connections.fetchSub(1, .acq_rel);
                 const workers = @import("../core/workers.zig");
-                workers.enter();
-                defer workers.leave();
                 var c3 = c2;
                 defer c3.close(io_g.io());
                 if (workers.isQuitting()) return;
@@ -690,8 +688,6 @@ fn serverLoop() void {
             fn run(c2: std.Io.net.Stream) void {
                 defer _ = remote_connections.fetchSub(1, .acq_rel);
                 const workers = @import("../core/workers.zig");
-                workers.enter();
-                defer workers.leave();
                 var c3 = c2;
                 defer c3.close(io_g.io());
                 if (workers.isQuitting()) return;

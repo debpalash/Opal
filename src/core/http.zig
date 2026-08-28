@@ -4,6 +4,7 @@ const logs = @import("logs.zig");
 const alloc = @import("alloc.zig");
 const io_global = @import("io_global.zig");
 const sync = @import("sync.zig");
+const workers = @import("workers.zig");
 
 // ══════════════════════════════════════════════════════════
 // Opal v3 — Native HTTP Client (no curl)
@@ -179,6 +180,11 @@ const Watchdog = struct {
     fn run(self: *Watchdog) void {
         const deadline = io_global.milliTimestamp() + self.timeout_ms;
         while (!self.done.load(.acquire)) {
+            // App teardown must not sit behind the normal 10-20 second network
+            // timeout. shutdown(2) wakes the blocking std.http read through its
+            // normal EOF path, so use the global worker cancellation token as
+            // an immediate deadline.
+            if (workers.isQuitting()) break;
             const now = io_global.milliTimestamp();
             if (now >= deadline) break;
             // Poll in short steps so the happy path (fetch sets done, then
@@ -196,6 +202,10 @@ const Watchdog = struct {
 
 /// Fetch URL into caller-provided buffer. Returns slice of response body.
 pub fn fetch(url: []const u8, buf: []u8, opts: HttpOptions) ?[]const u8 {
+    // Do not start an unguarded request after shutdown has closed admission to
+    // watchdog threads. Existing requests are interrupted by Watchdog.run.
+    if (workers.isQuitting()) return null;
+
     // Build headers
     var headers_buf: [8]std.http.Header = undefined;
     var header_count: usize = 0;
@@ -354,13 +364,22 @@ pub fn fetchImage(url: []const u8, buf: []u8) ?[]const u8 {
     }
     argv[argc] = url;
     argc += 1;
-    var child = io_global.Child.init(argv[0..argc], alloc.allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return null;
-    const n = if (child.stdout) |*so| io_global.readAll(so, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    if (n < 2) return null;
+    // Keep curl because image CDNs are less consistent with std.http, but own
+    // its complete process tree and cancellation. The old direct child.wait()
+    // ignored app shutdown and made closing wait for curl's full 15s timeout.
+    const bounded = @import("bounded_process.zig");
+    var process = bounded.StreamProcess.init(argv[0..argc], .{
+        .timeout_ms = 15_000,
+        .terminate_grace_ms = 150,
+        .max_output_bytes = buf.len,
+        .stderr_behavior = .Ignore,
+        .cancel_flag = workers.quittingSignal(),
+    });
+    process.start() catch return null;
+    const n = if (process.stdout()) |so| io_global.readAll(so, buf) catch 0 else 0;
+    _ = process.noteOutput(n);
+    const result = process.finish();
+    if (!result.ok() or n < 2) return null;
     return buf[0..n];
 }
 
