@@ -33,6 +33,9 @@ const provider = `<img src=x onerror=\"window.__opalExecuted=true\">` +
   `<svg><a xlink:href=\"javascript:window.__opalExecuted=true\">bad</a></svg>`;
 document.getElementById('probe').innerHTML = provider;
 const probe = document.getElementById('probe');
+const quoted = `title'\" data-action=\"delete\" onclick=\"window.__opalExecuted=true`;
+probe.insertAdjacentHTML('beforeend', `<button title="${{escAttr(quoted)}}">${{escText(quoted)}}</button>`);
+const encodedButton = probe.querySelector('button');
 const executable = probe.querySelector('script,iframe,object,embed,form') ||
   [...probe.querySelectorAll('*')].some(node => [...node.attributes].some(attr =>
     attr.name.toLowerCase().startsWith('on') || /^(?:javascript|vbscript):/i.test(attr.value)));
@@ -40,6 +43,8 @@ document.getElementById('result').textContent = JSON.stringify({{
   executed: window.__opalExecuted,
   executable: Boolean(executable),
   text: probe.textContent,
+  title: encodedButton && encodedButton.title,
+  injectedAction: encodedButton && encodedButton.hasAttribute('data-action'),
 }});
 </script>"""
 
@@ -69,6 +74,8 @@ document.getElementById('result').textContent = JSON.stringify({{
         result = json.loads(payload.replace("&quot;", '"').replace("&amp;", "&"))
         self.assertFalse(result["executed"])
         self.assertFalse(result["executable"])
+        self.assertFalse(result["injectedAction"])
+        self.assertEqual(result["title"], "title'\" data-action=\"delete\" onclick=\"window.__opalExecuted=true")
         self.assertIn("quoted ' value", result["text"])
 
 

@@ -1,7 +1,6 @@
 'use strict';
 
 // ── Search ──
-const esc = s => { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; };
 let searchWatch = null;
 $('go').onclick = () => runSearch();
 $('q').addEventListener('keydown', e => { if (e.key === 'Enter') { runSearch(); $('q').blur(); } });

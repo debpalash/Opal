@@ -26,6 +26,20 @@ if (location.hash.startsWith('#setup=')) {
 
 const $ = id => document.getElementById(id);
 
+// Context-specific serialization for the legacy compact renderers below.
+// Attribute encoding is intentionally stricter than text encoding: quotes must
+// remain data when a provider value appears inside a quoted attribute. URL
+// attributes receive a second protocol/origin review in safeDomFragment().
+const escText = value => String(value ?? '').replace(/[&<>]/g, ch => ({
+  '&':'&amp;', '<':'&lt;', '>':'&gt;',
+})[ch]);
+const escAttr = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
+  '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;',
+})[ch]);
+// Existing renderers may use a value in either text or attribute context, so
+// their compatibility helper takes the stricter attribute-safe form.
+const esc = escAttr;
+
 // Provider metadata is never assigned to the live DOM through the browser's
 // raw HTML parser. Legacy renderers still produce compact template strings, so
 // intercept both HTML insertion APIs, parse into a detached template, remove
@@ -44,6 +58,9 @@ function safeDomFragment(markup){
     [...node.attributes].forEach(attribute => {
       const name = attribute.name.toLowerCase(), value = attribute.value.trim();
       if (name.startsWith('on') || name === 'srcdoc' || name === 'nonce') {
+        node.removeAttribute(attribute.name); return;
+      }
+      if (name === 'id' && document.getElementById(value)) {
         node.removeAttribute(attribute.name); return;
       }
       if (name === 'style' && /(?:url\s*\(|expression\s*\(|@import)/i.test(value)) {
