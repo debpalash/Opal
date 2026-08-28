@@ -708,7 +708,7 @@ fn downloadModelThread() void {
         return;
     };
 
-    if (result.exited == 0) {
+    if (result == .exited and result.exited == 0) {
         model_exists = true;
         const done = "Download complete!";
         @memcpy(download_progress_buf[0..done.len], done);
@@ -789,7 +789,7 @@ fn installLlamaServerMac() void {
         setError("brew install failed");
         return;
     };
-    if (result.exited != 0) {
+    if (result != .exited or result.exited != 0) {
         setError("brew install llama.cpp exited non-zero");
         return;
     }
@@ -841,7 +841,7 @@ fn installLlamaServerShimmy() void {
             downloadLlamaServer(bin_dir, bin_path);
             return;
         };
-        if (which_result.exited == 0) {
+        if (which_result == .exited and which_result.exited == 0) {
             applyFoundPath(bin_path);
             state.showToast("llama-server found!");
             return;
@@ -873,7 +873,7 @@ fn downloadLlamaServer(comptime bin_dir: []const u8, bin_path: []const u8) void 
         setError("Download failed");
         return;
     };
-    if (dl_result.exited != 0) {
+    if (dl_result != .exited or dl_result.exited != 0) {
         setError("Download failed (curl error)");
         return;
     }
@@ -933,7 +933,7 @@ fn healthThread() void {
         return;
     };
 
-    if (result.exited == 0 and stdout.len > 0) {
+    if (result == .exited and result.exited == 0 and stdout.len > 0) {
         model_status = .online;
 
         if (cached_model_name_len == 0) {

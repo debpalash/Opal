@@ -266,3 +266,11 @@ jobs:
             --workdir /workspace \
             opal:headless \
             tests/test_remote_resource_limits_live.py --binary /usr/local/bin/opal
+      - name: Shutdown while network work is active
+        run: |
+          docker run --rm \
+            --entrypoint python3 \
+            --volume "$PWD:/workspace:ro" \
+            --workdir /workspace \
+            opal:headless \
+            tests/test_shutdown_live.py --binary /usr/local/bin/opal

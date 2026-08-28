@@ -1232,7 +1232,7 @@ fn ttsWorker() void {
     if (kitten.spawn()) |_| {
         const result = kitten.wait() catch null;
         if (result) |r| {
-            kitten_ok = (r.exited == 0);
+            kitten_ok = (r == .exited and r.exited == 0);
         }
     } else |_| {}
 

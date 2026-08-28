@@ -198,7 +198,7 @@ fn worker(args: *WorkerArgs) void {
         setStatus("ffmpeg crashed");
         return;
     };
-    if (ff_res.exited != 0) {
+    if (ff_res != .exited or ff_res.exited != 0) {
         setStatus("ffmpeg failed (unsupported media?)");
         return;
     }
@@ -243,7 +243,7 @@ fn worker(args: *WorkerArgs) void {
         setStatus("whisper crashed");
         return;
     };
-    if (wh_res.exited != 0) {
+    if (wh_res != .exited or wh_res.exited != 0) {
         setStatus("whisper failed");
         return;
     }

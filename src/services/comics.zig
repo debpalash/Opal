@@ -1166,7 +1166,7 @@ fn tryPluginsInDir(dir_path: []const u8, url: []const u8) bool {
         const term = child.wait() catch continue;
 
         // Plugin exited non-zero = "not my domain", try next
-        if (term.exited != 0 or json_len < 10) continue;
+        if (term != .exited or term.exited != 0 or json_len < 10) continue;
 
         // Parse JSON response
         if (parsePluginJson(json_buf[0..json_len])) {

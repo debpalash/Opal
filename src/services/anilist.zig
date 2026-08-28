@@ -43,7 +43,7 @@ pub fn updateProgress(media_id: i64, episode: i32) void {
                 return;
             };
             const result = child.wait() catch return;
-            if (result.exited == 0) {
+            if (result == .exited and result.exited == 0) {
                 logs.pushLog("info", "anilist", "AniList progress updated", false);
             }
         }

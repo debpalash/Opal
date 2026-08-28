@@ -62,7 +62,7 @@ pub fn checkin(title: []const u8, media_type: []const u8) void {
             child.stderr_behavior = .Ignore;
             @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{ cid, auth }) catch return;
             const result = child.wait() catch return;
-            if (result.exited == 0) {
+            if (result == .exited and result.exited == 0) {
                 logs.pushLog("info", "simkl", "SIMKL history synced", false);
             }
         }

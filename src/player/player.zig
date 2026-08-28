@@ -1183,7 +1183,7 @@ pub const MediaPlayer = struct {
                     state.showToast("Clip export failed");
                     return;
                 };
-                if (term.exited == 0) {
+                if (term == .exited and term.exited == 0) {
                     state.showToast("Clip exported!");
                     logs.pushLog("info", "clip", "Clip exported successfully", false);
                 } else {

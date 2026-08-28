@@ -125,7 +125,7 @@ pub fn pollGeneration(thumb: *ThumbnailState) void {
             return;
         };
         
-        if (result.exited == 0) {
+        if (result == .exited and result.exited == 0) {
             thumb.ready = true;
             logs.pushLog("info", "thumbs", "Thumbnails ready!", false);
         } else {

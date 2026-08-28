@@ -286,7 +286,7 @@ fn downloadWorker() void {
         return;
     };
 
-    if (result.exited != 0) {
+    if (result != .exited or result.exited != 0) {
         logs.pushLog("error", "ytdlp", "yt-dlp download failed (non-zero exit)", true);
         return;
     }

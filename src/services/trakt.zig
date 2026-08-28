@@ -218,7 +218,7 @@ fn postScrobble(endpoint: []const u8, json_body: []const u8) void {
         return;
     };
     const result = child.wait() catch return;
-    if (result.exited == 0) {
+    if (result == .exited and result.exited == 0) {
         logs.pushLog("info", "trakt", "Scrobble sent", false);
     }
 }
