@@ -232,6 +232,23 @@ class RemoteResourceLimitsLiveTest(unittest.TestCase):
     def test_media_sse_and_concurrent_snapshot_contracts(self) -> None:
         cookie = self.claim_admin("snapshot-admin")
 
+        # Start a rich player response and deliberately do not consume it.
+        # Player state must already be unlocked before response bytes are sent,
+        # so an independent status request cannot queue behind this socket.
+        stalled = socket.create_connection(("127.0.0.1", DEFAULT_PORT), timeout=4)
+        try:
+            stalled.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
+            stalled.sendall((
+                "GET /api/player HTTP/1.1\r\n"
+                f"Host: {self.opal.loopback_authority}\r\n"
+                f"Cookie: {cookie}\r\n"
+                "Connection: close\r\n\r\n"
+            ).encode("ascii"))
+            status = self.authenticated("/api/status", cookie)
+            self.assertEqual(status.status, 200, status.body)
+        finally:
+            stalled.close()
+
         unauth = setup_live.request(
             "GET", "/api/podcasts/poster?idx=999",
             host=self.opal.loopback_authority,

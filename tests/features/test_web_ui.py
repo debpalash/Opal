@@ -691,6 +691,8 @@ def test_remote_response_concurrency_boundary():
             and "std.Io.Select(WriteEvent)" in wire and "API response write timed out" in wire,
         "player snapshots unlock before SSE writes": "state.players_mutex.unlock();" in remote
             and "io_g.streamWriteAll(stream, ev)" in remote,
+        "player API unlocks before JSON writes": "sendJsonUnlockPlayers" in remote
+            and "var players_locked = true" in remote,
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:

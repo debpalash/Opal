@@ -1502,14 +1502,19 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     }
 
     // ── Player-dependent endpoints ──
+    if ((std.mem.eql(u8, api_path, "/load") or std.mem.eql(u8, api_path, "/player/action")) and
+        !requireMethod(stream, method, "POST")) return;
+    if (std.mem.eql(u8, api_path, "/player") and !requireMethod(stream, method, "GET")) return;
+
     // Hold players_mutex across the whole dispatch below: the UI thread frees
     // players at frame top (main.zig), so without this the captured `ap` could
     // become a dangling *MediaPlayer mid-mpv-call → use-after-free. defer covers
     // every exit path of this tail section (the chain runs to the function end).
     state.players_mutex.lock();
-    defer state.players_mutex.unlock();
+    var players_locked = true;
+    defer if (players_locked) state.players_mutex.unlock();
     if (state.app.active_player_idx >= state.app.players.items.len) {
-        sendJson(stream, "{\"error\":\"no player\"}");
+        sendJsonUnlockPlayers(stream, "{\"error\":\"no player\"}", &players_locked);
         return;
     }
     const ap = state.app.players.items[state.app.active_player_idx];
@@ -1517,43 +1522,43 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     // ── Player controls ──
     if (std.mem.eql(u8, api_path, "/toggle")) {
         _ = c.mpv.mpv_command_string(ap.mpv_ctx, "cycle pause");
-        sendJson(stream, "{\"ok\":true,\"action\":\"toggle\"}");
+        sendJsonUnlockPlayers(stream, "{\"ok\":true,\"action\":\"toggle\"}", &players_locked);
     } else if (std.mem.eql(u8, api_path, "/playpause")) {
         // Browser-extension side-panel remote: toggle the active player's pause.
         // Held under players_mutex (this whole tail section) so the UI thread
         // can't free the player mid-call.
         _ = c.mpv.mpv_command_string(ap.mpv_ctx, "cycle pause");
-        sendJson(stream, "{\"ok\":true,\"action\":\"playpause\"}");
+        sendJsonUnlockPlayers(stream, "{\"ok\":true,\"action\":\"playpause\"}", &players_locked);
     } else if (std.mem.eql(u8, api_path, "/fwd")) {
         _ = c.mpv.mpv_command_string(ap.mpv_ctx, "seek 10");
-        sendJson(stream, "{\"ok\":true,\"action\":\"fwd\"}");
+        sendJsonUnlockPlayers(stream, "{\"ok\":true,\"action\":\"fwd\"}", &players_locked);
     } else if (std.mem.eql(u8, api_path, "/back")) {
         _ = c.mpv.mpv_command_string(ap.mpv_ctx, "seek -10");
-        sendJson(stream, "{\"ok\":true,\"action\":\"back\"}");
+        sendJsonUnlockPlayers(stream, "{\"ok\":true,\"action\":\"back\"}", &players_locked);
     } else if (std.mem.eql(u8, api_path, "/vol_up")) {
         _ = c.mpv.mpv_command_string(ap.mpv_ctx, "add volume 5");
-        sendJson(stream, "{\"ok\":true,\"action\":\"vol_up\"}");
+        sendJsonUnlockPlayers(stream, "{\"ok\":true,\"action\":\"vol_up\"}", &players_locked);
     } else if (std.mem.eql(u8, api_path, "/vol_down")) {
         _ = c.mpv.mpv_command_string(ap.mpv_ctx, "add volume -5");
-        sendJson(stream, "{\"ok\":true,\"action\":\"vol_down\"}");
+        sendJsonUnlockPlayers(stream, "{\"ok\":true,\"action\":\"vol_down\"}", &players_locked);
     } else if (std.mem.eql(u8, api_path, "/mute")) {
         _ = c.mpv.mpv_command_string(ap.mpv_ctx, "cycle mute");
-        sendJson(stream, "{\"ok\":true,\"action\":\"mute\"}");
+        sendJsonUnlockPlayers(stream, "{\"ok\":true,\"action\":\"mute\"}", &players_locked);
     } else if (std.mem.eql(u8, api_path, "/fullscreen")) {
         state.app.fullscreen_player_idx = if (state.app.fullscreen_player_idx == null) state.app.active_player_idx else null;
-        sendJson(stream, "{\"ok\":true,\"action\":\"fullscreen\"}");
+        sendJsonUnlockPlayers(stream, "{\"ok\":true,\"action\":\"fullscreen\"}", &players_locked);
     } else if (std.mem.eql(u8, api_path, "/next_audio")) {
         _ = c.mpv.mpv_command_string(ap.mpv_ctx, "cycle audio");
-        sendJson(stream, "{\"ok\":true,\"action\":\"next_audio\"}");
+        sendJsonUnlockPlayers(stream, "{\"ok\":true,\"action\":\"next_audio\"}", &players_locked);
     } else if (std.mem.eql(u8, api_path, "/next_sub")) {
         _ = c.mpv.mpv_command_string(ap.mpv_ctx, "cycle sub");
-        sendJson(stream, "{\"ok\":true,\"action\":\"next_sub\"}");
+        sendJsonUnlockPlayers(stream, "{\"ok\":true,\"action\":\"next_sub\"}", &players_locked);
     } else if (std.mem.eql(u8, api_path, "/flip")) {
         ap.toggleFlip();
-        sendJson(stream, "{\"ok\":true,\"action\":\"flip\"}");
+        sendJsonUnlockPlayers(stream, "{\"ok\":true,\"action\":\"flip\"}", &players_locked);
     } else if (std.mem.eql(u8, api_path, "/rotate")) {
         ap.cycleRotation();
-        sendJson(stream, "{\"ok\":true,\"action\":\"rotate\"}");
+        sendJsonUnlockPlayers(stream, "{\"ok\":true,\"action\":\"rotate\"}", &players_locked);
 
         // ── Volume set ──
     } else if (std.mem.eql(u8, api_path, "/volume")) {
@@ -1564,7 +1569,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
             const cmd = std.fmt.bufPrintZ(&cmd_buf, "set volume {d:.1}", .{vol}) catch return;
             _ = c.mpv.mpv_command_string(ap.mpv_ctx, cmd.ptr);
         }
-        sendJson(stream, "{\"ok\":true,\"action\":\"volume\"}");
+        sendJsonUnlockPlayers(stream, "{\"ok\":true,\"action\":\"volume\"}", &players_locked);
 
         // ── Seek by percentage ──
     } else if (std.mem.eql(u8, api_path, "/seek_pct")) {
@@ -1579,11 +1584,10 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
                 _ = c.mpv.mpv_command_string(ap.mpv_ctx, cmd.ptr);
             }
         }
-        sendJson(stream, "{\"ok\":true,\"action\":\"seek_pct\"}");
+        sendJsonUnlockPlayers(stream, "{\"ok\":true,\"action\":\"seek_pct\"}", &players_locked);
 
         // ── Load URL/magnet ──
     } else if (std.mem.eql(u8, api_path, "/load")) {
-        if (!requireMethod(stream, method, "POST")) return;
         // Body first, then query. A magnet is long and full of & and %; putting
         // it in a POST body is what a non-browser client naturally does, and this
         // route used to read the query ONLY — a POSTed url silently matched
@@ -1592,7 +1596,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
         var dec_buf: [2048]u8 = undefined;
         if (credParam(body, query, "url", &dec_buf)) |decoded| {
             if (decoded.len == 0) {
-                sendJson(stream, "{\"ok\":false,\"error\":\"empty url\"}");
+                sendJsonUnlockPlayers(stream, "{\"ok\":false,\"error\":\"empty url\"}", &players_locked);
                 return;
             }
             // A magnet is not a file. This handed every magnet straight to mpv,
@@ -1613,22 +1617,20 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
             // without a wake the loading screen (and, for a torrent, the whole
             // handoff to mpv) waited for the user to move the mouse.
             state.wakeUi();
-            sendJson(stream, "{\"ok\":true,\"action\":\"load\"}");
+            sendJsonUnlockPlayers(stream, "{\"ok\":true,\"action\":\"load\"}", &players_locked);
             return;
         }
         // No url at all: say so rather than reporting a load that never happened.
-        sendJson(stream, "{\"ok\":false,\"error\":\"missing url\"}");
+        sendJsonUnlockPlayers(stream, "{\"ok\":false,\"error\":\"missing url\"}", &players_locked);
 
         // ── Typed full player interface ──
         // GET returns one coherent snapshot (controls + chapters + tracks +
         // output devices). Mutations are POST-only and cross the pure action
         // allowlist; browser input is never interpolated into an mpv command.
     } else if (std.mem.eql(u8, api_path, "/player")) {
-        if (!requireMethod(stream, method, "GET")) return;
-        apiPlayerSnapshot(stream, ap);
+        apiPlayerSnapshot(stream, ap, &players_locked);
     } else if (std.mem.eql(u8, api_path, "/player/action")) {
-        if (!requireMethod(stream, method, "POST")) return;
-        apiPlayerAction(stream, ap, query);
+        apiPlayerAction(stream, ap, query, &players_locked);
 
         // ── Queue ──
     } else if (std.mem.eql(u8, api_path, "/queue/move")) {
@@ -1636,13 +1638,21 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
         const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
         const dir: i32 = if (std.mem.eql(u8, getQueryParam(query, "dir") orelse "", "up")) -1 else 1;
         q.moveQueueItem(idx, dir);
-        sendJson(stream, "{\"ok\":true}");
+        sendJsonUnlockPlayers(stream, "{\"ok\":true}", &players_locked);
 
         // Watch party + cast dispatch earlier (apiPartyCast) — they must work
         // with no player loaded, so they never reach this tail.
     } else {
-        sendJson(stream, "{\"error\":\"unknown\"}");
+        sendJsonUnlockPlayers(stream, "{\"error\":\"unknown\"}", &players_locked);
     }
+}
+
+fn sendJsonUnlockPlayers(stream: std.Io.net.Stream, json: []const u8, lock_held: *bool) void {
+    if (lock_held.*) {
+        lock_held.* = false;
+        state.players_mutex.unlock();
+    }
+    sendJson(stream, json);
 }
 
 /// GET /api/scrape?url=<percent-encoded> → the page body, fetched through
@@ -2045,34 +2055,36 @@ fn apiSearch(stream: std.Io.net.Stream, query: []const u8) void {
         search_svc.triggerSearch(dq);
     }
     const search_svc = @import("search.zig");
-    search_svc.search_results_mutex.lock();
-    defer search_svc.search_results_mutex.unlock();
     var json_buf: [128 * 1024]u8 = undefined;
     var w = std.Io.Writer.fixed(&json_buf);
-    w.writeAll("{\"results\":[") catch return;
-    var count: usize = 0;
-    for (search_svc.search_results.items) |r| {
-        // Reserve tail space so the closing `],"searching":…}` always fits —
-        // stop adding items rather than truncate into invalid JSON mid-array.
-        if (w.end + 2048 > json_buf.len) break;
-        if (count > 0) w.writeAll(",") catch return;
-        w.writeAll("{\"title\":\"") catch return;
-        escJsonWrite(&w, r.name);
-        w.writeAll("\",\"size\":\"") catch return;
-        escJsonWrite(&w, r.size);
-        w.writeAll("\",\"seeds\":\"") catch return;
-        escJsonWrite(&w, r.seeds);
-        w.writeAll("\",\"source\":\"") catch return;
-        escJsonWrite(&w, r.engine);
-        w.writeAll("\",\"magnet\":\"") catch return;
-        escJsonWrite(&w, r.link);
-        w.writeAll("\"}") catch return;
-        count += 1;
-        if (count >= 50) break;
+    {
+        search_svc.search_results_mutex.lock();
+        defer search_svc.search_results_mutex.unlock();
+        w.writeAll("{\"results\":[") catch return;
+        var count: usize = 0;
+        for (search_svc.search_results.items) |r| {
+            // Reserve tail space so the closing `],"searching":…}` always fits —
+            // stop adding items rather than truncate into invalid JSON mid-array.
+            if (w.end + 2048 > json_buf.len) break;
+            if (count > 0) w.writeAll(",") catch return;
+            w.writeAll("{\"title\":\"") catch return;
+            escJsonWrite(&w, r.name);
+            w.writeAll("\",\"size\":\"") catch return;
+            escJsonWrite(&w, r.size);
+            w.writeAll("\",\"seeds\":\"") catch return;
+            escJsonWrite(&w, r.seeds);
+            w.writeAll("\",\"source\":\"") catch return;
+            escJsonWrite(&w, r.engine);
+            w.writeAll("\",\"magnet\":\"") catch return;
+            escJsonWrite(&w, r.link);
+            w.writeAll("\"}") catch return;
+            count += 1;
+            if (count >= 50) break;
+        }
+        w.writeAll("],\"searching\":") catch return;
+        w.writeAll(if (search_svc.is_searching.load(.acquire)) "true" else "false") catch return;
+        w.writeAll("}") catch return;
     }
-    w.writeAll("],\"searching\":") catch return;
-    w.writeAll(if (search_svc.is_searching.load(.acquire)) "true" else "false") catch return;
-    w.writeAll("}") catch return;
     sendJson(stream, json_buf[0..w.end]);
 }
 
@@ -3296,34 +3308,36 @@ fn apiTmdb(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) v
     var json_buf: [32768]u8 = undefined;
     var w = std.Io.Writer.fixed(&json_buf);
     w.writeAll("{\"items\":[") catch return;
-    state.app.tmdb.results_mutex.lock();
-    defer state.app.tmdb.results_mutex.unlock();
-    const items = &state.app.tmdb.results;
-    for (items.items, 0..) |item, idx| {
-        // Cap BEFORE the separator: writing the comma first emits a trailing
-        // comma on the 30th row, producing JSON the web UI can't parse. Latent
-        // until a grid actually exceeded 30 rows (YouTube channel pages do).
-        if (idx >= 30) break;
-        if (idx > 0) w.writeAll(",") catch return;
-        const rating_pct = @as(u8, @intFromFloat(std.math.clamp(item.rating * 10.0, 0.0, 100.0)));
-        w.print("{{\"id\":{d},\"title\":\"", .{item.id}) catch return;
-        escJsonWrite(&w, item.title[0..item.title_len]);
-        w.writeAll("\",\"year\":\"") catch return;
-        escJsonWrite(&w, item.year[0..item.year_len]);
-        w.print("\",\"rating\":{d},\"type\":\"", .{rating_pct}) catch return;
-        escJsonWrite(&w, item.media_type[0..item.media_type_len]);
-        w.writeAll("\",\"overview\":\"") catch return;
-        escJsonWrite(&w, item.overview[0..@min(item.overview_len, 200)]);
-        // poster_path feeds the web client's /poster?path= cache proxy.
-        w.writeAll("\",\"poster\":\"") catch return;
-        escJsonWrite(&w, item.poster_path[0..item.poster_path_len]);
-        w.writeAll("\"}") catch return;
+    {
+        state.app.tmdb.results_mutex.lock();
+        defer state.app.tmdb.results_mutex.unlock();
+        const items = &state.app.tmdb.results;
+        for (items.items, 0..) |item, idx| {
+            // Cap BEFORE the separator: writing the comma first emits a trailing
+            // comma on the 30th row, producing JSON the web UI can't parse. Latent
+            // until a grid actually exceeded 30 rows (YouTube channel pages do).
+            if (idx >= 30) break;
+            if (idx > 0) w.writeAll(",") catch return;
+            const rating_pct = @as(u8, @intFromFloat(std.math.clamp(item.rating * 10.0, 0.0, 100.0)));
+            w.print("{{\"id\":{d},\"title\":\"", .{item.id}) catch return;
+            escJsonWrite(&w, item.title[0..item.title_len]);
+            w.writeAll("\",\"year\":\"") catch return;
+            escJsonWrite(&w, item.year[0..item.year_len]);
+            w.print("\",\"rating\":{d},\"type\":\"", .{rating_pct}) catch return;
+            escJsonWrite(&w, item.media_type[0..item.media_type_len]);
+            w.writeAll("\",\"overview\":\"") catch return;
+            escJsonWrite(&w, item.overview[0..@min(item.overview_len, 200)]);
+            // poster_path feeds the web client's /poster?path= cache proxy.
+            w.writeAll("\",\"poster\":\"") catch return;
+            escJsonWrite(&w, item.poster_path[0..item.poster_path_len]);
+            w.writeAll("\"}") catch return;
+        }
+        w.writeAll("],\"loading\":") catch return;
+        w.writeAll(if (state.app.tmdb.is_loading.load(.acquire)) "true" else "false") catch return;
+        w.writeAll(",\"has_key\":") catch return;
+        w.writeAll(if (state.app.tmdb.api_key_len > 0) "true" else "false") catch return;
+        w.writeAll("}") catch return;
     }
-    w.writeAll("],\"loading\":") catch return;
-    w.writeAll(if (state.app.tmdb.is_loading.load(.acquire)) "true" else "false") catch return;
-    w.writeAll(",\"has_key\":") catch return;
-    w.writeAll(if (state.app.tmdb.api_key_len > 0) "true" else "false") catch return;
-    w.writeAll("}") catch return;
     sendJson(stream, json_buf[0..w.end]);
 }
 
@@ -4637,12 +4651,13 @@ fn apiQueueAction(stream: std.Io.net.Stream, query: []const u8) void {
     }
     const lock_players = action == .play;
     if (lock_players) state.players_mutex.lock();
-    defer if (lock_players) state.players_mutex.unlock();
     if (lock_players and state.app.active_player_idx >= state.app.players.items.len) {
+        state.players_mutex.unlock();
         sendJsonStatus(stream, "409 Conflict", "{\"error\":\"no player\"}");
         return;
     }
     _ = q.apply(action, idx);
+    if (lock_players) state.players_mutex.unlock();
     state.wakeUi();
     sendJson(stream, "{\"ok\":true}");
 }
@@ -4750,9 +4765,13 @@ fn writePlayerAudioDevices(w: *std.Io.Writer, ap: *player.MediaPlayer, active: [
 /// A single rich player snapshot. This is the deep interface for every browser
 /// player surface: controls do not independently rediscover tracks, chapters,
 /// output devices, filter state, or loop state through shallow routes.
-fn apiPlayerSnapshot(stream: std.Io.net.Stream, ap: *player.MediaPlayer) void {
+fn apiPlayerSnapshot(stream: std.Io.net.Stream, ap: *player.MediaPlayer, players_locked: *bool) void {
     const alloc = @import("../core/alloc.zig").allocator;
     const out = alloc.alloc(u8, 128 * 1024) catch {
+        if (players_locked.*) {
+            players_locked.* = false;
+            state.players_mutex.unlock();
+        }
         sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"player snapshot unavailable\"}");
         return;
     };
@@ -4825,7 +4844,7 @@ fn apiPlayerSnapshot(stream: std.Io.net.Stream, ap: *player.MediaPlayer) void {
     w.writeAll("]},\"audio_devices\":[") catch return;
     writePlayerAudioDevices(&w, ap, active_device);
     w.writeAll("]}") catch return;
-    sendJson(stream, out[0..w.end]);
+    sendJsonUnlockPlayers(stream, out[0..w.end], players_locked);
 }
 
 fn setPlayerDouble(ap: *player.MediaPlayer, name: [*:0]const u8, value: f64) void {
@@ -4866,9 +4885,13 @@ fn advancePlayerPlaylist(ap: *player.MediaPlayer, dir: i32) void {
 /// player_api_pure's finite/range/allowlist validation. Fixed mpv commands are
 /// literals; arbitrary strings use direct property setters, never the command
 /// parser.
-fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []const u8) void {
+fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []const u8, players_locked: *bool) void {
     var action_buf: [64]u8 = undefined;
     const action_raw = getQueryParam(query, "action") orelse {
+        if (players_locked.*) {
+            players_locked.* = false;
+            state.players_mutex.unlock();
+        }
         sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"player action required\"}");
         return;
     };
@@ -4876,6 +4899,10 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
     var value_buf: [256]u8 = undefined;
     const value: ?[]const u8 = if (getQueryParam(query, "value")) |raw| (urlDecode(raw, &value_buf) orelse raw) else null;
     const action = player_api.parse(action_name, value) catch {
+        if (players_locked.*) {
+            players_locked.* = false;
+            state.players_mutex.unlock();
+        }
         sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid player action or value\"}");
         return;
     };
@@ -4891,6 +4918,10 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
             var count: i64 = 0;
             _ = c.mpv.mpv_get_property(ap.mpv_ctx, "chapter-list/count", c.mpv.MPV_FORMAT_INT64, &count);
             if (idx >= @as(usize, @intCast(@max(@as(i64, 0), count)))) {
+                if (players_locked.*) {
+                    players_locked.* = false;
+                    state.players_mutex.unlock();
+                }
                 sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"chapter out of range\"}");
                 return;
             }
@@ -4941,5 +4972,5 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
         .close_player => state.app.pending_remove_player_idx = @intCast(state.app.active_player_idx),
     }
     state.wakeUi();
-    sendJson(stream, "{\"ok\":true}");
+    sendJsonUnlockPlayers(stream, "{\"ok\":true}", players_locked);
 }
