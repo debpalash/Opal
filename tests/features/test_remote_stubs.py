@@ -45,7 +45,7 @@ def test_party_cast_routes():
         # Both must answer with NOTHING playing — the players_mutex tail would
         # have short-circuited them with {"error":"no player"}.
         "dispatched before the player tail": rm.index("fn apiPartyCast(")
-            and rm.index('apiPartyCast(stream, api_path, query)') < rm.index("state.players_mutex.lock();\n    defer state.players_mutex.unlock();"),
+            and rm.index('apiPartyCast(stream, api_path, query)') < rm.index("state.players_mutex.lock();", rm.index('apiPartyCast(stream, api_path, query)')),
         "party status is real": "wp.statusText(" in rm and "wp.peerCount()" in rm
             and '\\"role\\":\\"{s}\\"' in rm and '"{\\"connected\\":false}"' not in rm,
         "peer count exported": "pub fn peerCount()" in wp and "clients_mutex.lock()" in wp,

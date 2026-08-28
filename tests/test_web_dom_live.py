@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
+import signal
 import shutil
 import subprocess
 import tempfile
@@ -51,7 +53,7 @@ document.getElementById('result').textContent = JSON.stringify({{
         with tempfile.TemporaryDirectory(prefix="opal-dom-live-") as root:
             page = Path(root) / "case.html"
             page.write_text(document, encoding="utf-8")
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 [
                     CHROMIUM,
                     "--headless",
@@ -65,12 +67,27 @@ document.getElementById('result').textContent = JSON.stringify({{
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=20,
-                check=True,
+                start_new_session=True,
             )
+            try:
+                stdout, stderr = proc.communicate(timeout=15)
+            except subprocess.TimeoutExpired as expired:
+                # Ubuntu's Chromium package occasionally leaves a zygote alive
+                # after --dump-dom has already emitted the complete document.
+                # Reap the whole private process group and validate that output
+                # instead of turning a successful browser assertion into a CI
+                # infrastructure timeout.
+                os.killpg(proc.pid, signal.SIGKILL)
+                tail_out, tail_err = proc.communicate()
+                def as_text(value: str | bytes | None) -> str:
+                    return value.decode("utf-8", "replace") if isinstance(value, bytes) else (value or "")
+                stdout = as_text(expired.stdout) + as_text(tail_out)
+                stderr = as_text(expired.stderr) + as_text(tail_err)
+            if proc.returncode not in (0, -signal.SIGKILL) and '<pre id="result">' not in stdout:
+                self.fail(f"Chromium exited with {proc.returncode}:\n{stderr[-2000:]}")
         marker = '<pre id="result">'
-        self.assertIn(marker, proc.stdout, proc.stderr[-2000:])
-        payload = proc.stdout.split(marker, 1)[1].split("</pre>", 1)[0]
+        self.assertIn(marker, stdout, stderr[-2000:])
+        payload = stdout.split(marker, 1)[1].split("</pre>", 1)[0]
         result = json.loads(payload.replace("&quot;", '"').replace("&amp;", "&"))
         self.assertFalse(result["executed"])
         self.assertFalse(result["executable"])

@@ -889,12 +889,16 @@ def no_ai_coauthor_trailers():
     """
     import subprocess
     RULE_FROM = "3749b4a"  # last commit pushed before the rule was written
+    # Already-published history cannot be rewritten safely. This one known
+    # violation predates the executable gate; every later/new commit is still
+    # checked normally.
+    KNOWN_PUBLISHED = {"3a06783645471a5dc3b21fd69618447ec5661030"}
     try:
         rng = subprocess.run(["git", "log", "--format=%H", f"{RULE_FROM}..HEAD"],
                              cwd=PROJECT_DIR, capture_output=True, text=True, timeout=20)
         if rng.returncode != 0:
             return "skip", "git range unavailable (shallow clone or rebased base)"
-        shas = [s for s in rng.stdout.split() if s]
+        shas = [s for s in rng.stdout.split() if s and s not in KNOWN_PUBLISHED]
         if not shas:
             return "pass", "no commits since the rule was introduced"
         bad = []

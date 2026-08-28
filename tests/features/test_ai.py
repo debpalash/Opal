@@ -273,8 +273,8 @@ def test_remote_load_decode():
     # credParam is the decoding reader — body first, then query — so asserting on
     # it covers the same requirement as the older literal `urlDecode(raw` did,
     # and keeps covering it now that /load accepts a POSTed url as well.
-    idx = rm.find('"/load"')
-    window = rm[idx:idx + 900] if idx > 0 else ""
+    idx = rm.find('else if (std.mem.eql(u8, api_path, "/load"))')
+    window = rm[idx:idx + 1400] if idx > 0 else ""
     decoder = _between(rm, "fn credParam(", "\n}")
     if 'credParam(body, query, "url"' in window and "urlDecode(raw, out)" in decoder:
         return "pass", "/load decodes percent-encoded URLs from body or query"
